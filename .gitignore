@@ -1,0 +1,27 @@
+# Binaries
+bin/
+muxterm
+*.exe
+*.dll
+*.so
+
+# Frontend
+node_modules/
+web/dist/
+web/package-lock.json
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build/Test
+.superpowers-checkpoint.json
+.pytest_cache/
+__pycache__/
+
+# OS
+.DS_Store
+Thumbs.db
