@@ -490,21 +490,6 @@ func (h *Hub) HandleTmuxDisconnect(ctrl *tmux.ControlMode, readErr error) {
 	}
 }
 
-// BroadcastPaneCapture runs CapturePaneContent for paneID and broadcasts the
-// result to all connected clients as a binary pane-output frame. Used when
-// the active window changes so clients immediately see existing terminal content
-// rather than waiting for the next live %output event.
-func (h *Hub) BroadcastPaneCapture(paneID string) {
-	if h.engine == nil {
-		return
-	}
-	content, err := h.engine.CapturePaneContent(paneID)
-	if err != nil || len(content) == 0 {
-		return
-	}
-	h.BroadcastPaneOutput(paneID, content)
-}
-
 // BroadcastPaneOutput encodes pane output as a binary frame and broadcasts
 // it to all connected clients. Clients that fail to receive are removed.
 func (h *Hub) BroadcastPaneOutput(paneID string, data []byte) {

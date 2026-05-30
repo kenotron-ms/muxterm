@@ -885,13 +885,13 @@ func wireEvents(events <-chan tmux.Event, hub *server.Hub, ctrl *tmux.Controller
 			sync.trigger()
 		case tmux.SessionWindowChangedEvent:
 			sync.trigger()
-			// Capture pane content for the newly active window off the hot path
-			// so wireEvents never blocks draining the events channel.
-			go func(windowID string) {
-				for _, paneID := range ctrl.State().PanesForWindow(windowID) {
-					hub.BroadcastPaneCapture(paneID)
-				}
-			}(e.WindowID)
+			// NOTE: We intentionally do NOT capture-pane on window switch.
+			// Clients keep a persistent xterm terminal per pane (the terminal
+			// registry), seeded once on connect via sendStateSync and kept
+			// current by the continuous %output feed (tmux -CC streams output
+			// for ALL panes regardless of active window). Re-capturing here
+			// would write a screenful on top of an already-populated terminal,
+			// duplicating content on every tab switch.
 
 		case tmux.PaneModeChangedEvent:
 			// Pane mode (copy-mode etc.) — structural enough to resync.
