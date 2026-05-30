@@ -218,7 +218,6 @@ export class MuxApp extends LitElement {
               active-pane-id=${activePaneId}
               @pane-input=${this._onPaneInput}
               @pane-resize=${this._onPaneResize}
-              @pane-scroll=${this._onPaneScroll}
               @pane-focus=${this._onPaneSelect}
             ></mux-layout>
           `}
@@ -281,30 +280,17 @@ export class MuxApp extends LitElement {
   private _onPaneResize = (
     e: CustomEvent<{ paneId: number; cols: number; rows: number }>,
   ): void => {
-    // This handler fires ONLY when the size genuinely changed — pane.ts gates
-    // every dispatch through an idempotent check (_emitResize). So it is safe
-    // to both resize AND request fresh content here: it runs once per real
-    // resize and cannot loop. (The old storm came from full-sync re-triggering
-    // a resize, which re-requested a sync, which sent another full-sync...)
+    // Resize only — tell tmux the new size and let it reflow naturally. We do
+    // NOT clear+recapture (request-sync) here: under a fast resize that fires
+    // many times, the overlapping clear+recapture cycles race with each other
+    // and with tmux's live reflow output, stacking duplicate content on screen.
+    // The initial connect already gets a full-sync; ongoing resizes ride on
+    // tmux's own reflow %output. xterm.js reflows its own buffer to match.
     this._socket?.sendControl({
       type: 'resize-pane',
       paneId: e.detail.paneId,
       cols: e.detail.cols,
       rows: e.detail.rows,
-    });
-    // Re-fetch content at the new dimensions (tmux content was wrapped at the
-    // old size). Safe because this only runs on a genuine size change.
-    this._socket?.sendControl({ type: 'request-sync' });
-  };
-
-  private _onPaneScroll = (
-    e: CustomEvent<{ paneId: number; up: boolean; lines: number }>,
-  ): void => {
-    this._socket?.sendControl({
-      type: 'pane-scroll',
-      paneId: e.detail.paneId,
-      up: e.detail.up,
-      lines: e.detail.lines,
     });
   };
 

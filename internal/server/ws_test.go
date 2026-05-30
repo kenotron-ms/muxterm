@@ -93,10 +93,10 @@ func (m *mockEngine) SplitWindow(targetPaneID string, horizontal bool) error {
 	m.commandCalls = append(m.commandCalls, commandCall{Method: "SplitWindow", Args: []interface{}{targetPaneID, horizontal}})
 	return nil
 }
-func (m *mockEngine) ResizePane(paneID, direction string, amount int) error {
+func (m *mockEngine) ResizePane(paneID string, cols, rows int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.commandCalls = append(m.commandCalls, commandCall{Method: "ResizePane", Args: []interface{}{paneID, direction, amount}})
+	m.commandCalls = append(m.commandCalls, commandCall{Method: "ResizePane", Args: []interface{}{paneID, cols, rows}})
 	return nil
 }
 func (m *mockEngine) NewWindow(sessionID string) error {
@@ -109,6 +109,12 @@ func (m *mockEngine) KillPane(paneID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.commandCalls = append(m.commandCalls, commandCall{Method: "KillPane", Args: []interface{}{paneID}})
+	return nil
+}
+func (m *mockEngine) CloseWindow(windowID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.commandCalls = append(m.commandCalls, commandCall{Method: "CloseWindow", Args: []interface{}{windowID}})
 	return nil
 }
 func (m *mockEngine) RenameWindow(windowID, name string) error {
@@ -340,10 +346,11 @@ func TestStateSyncOnConnect(t *testing.T) {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
 
-	// Assert 'state' key exists
-	stateRaw, ok := msg["state"]
+	// Assert 'full-sync' key exists (on-connect sync uses "full-sync";
+	// the "state" key is reserved for periodic syncs).
+	stateRaw, ok := msg["full-sync"]
 	if !ok {
-		t.Fatalf("message has no 'state' key, got keys: %v", keysOf(msg))
+		t.Fatalf("message has no 'full-sync' key, got keys: %v", keysOf(msg))
 	}
 
 	// Unmarshal state to tmux.TmuxState

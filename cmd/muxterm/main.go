@@ -175,6 +175,16 @@ func runUninstall() error {
 	return nil
 }
 
+// runWithGracefulShutdown blocks until srv stops or a SIGINT/SIGTERM is received,
+// then performs a graceful shutdown. This consolidates the signal-handling pattern
+// shared by runLocal and runServe and is the canonical way to start the server
+// in a signal-aware manner from a *server.Server value.
+func runWithGracefulShutdown(srv *server.Server) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return srv.ListenAndServe(ctx)
+}
+
 // periodicStateSync pushes the live tmux state to all connected clients every 5s.
 // Using LiveState() (direct tmux query) ensures the browser always converges to
 // ground truth even if %window-close or other structural events were dropped.
@@ -228,8 +238,9 @@ func openBrowser(url string) {
 func applyMuxtermConfig(ctrl *tmux.Controller) error {
 	cmds := ctrl.Commands()
 	settings := []struct{ key, val string }{
-		{"mouse", "on"},          // mouse wheel, click, drag — required for scroll forwarding
-		{"focus-events", "on"},   // terminal focus in/out events (nice-to-have)
+		{"mouse", "on"},            // mouse wheel, click, drag — required for scroll forwarding
+		{"focus-events", "on"},     // terminal focus in/out events (nice-to-have)
+		{"history-limit", "10000"}, // tmux owns scrollback; ensure enough depth for capture-pane replay
 	}
 	var errs []string
 	for _, s := range settings {
@@ -253,7 +264,7 @@ func startTmuxControl(sessionName string) (*tmux.Controller, *os.File, chan tmux
 		return nil, nil, nil, nil, fmt.Errorf("start tmux with pty: %w", err)
 	}
 
-	events := make(chan tmux.Event, 1000)
+	events := make(chan tmux.Event, 4096)
 	ctrl := tmux.NewController(tmux.ControllerConfig{
 		Reader: ptmx, // reads tmux event stream from PTY master
 		Writer: ptmx, // writes commands to tmux via PTY master
@@ -271,6 +282,9 @@ func startTmuxControl(sessionName string) (*tmux.Controller, *os.File, chan tmux
 	go ctrl.Run()
 
 	cleanup := func() {
+		// Stop the controller first so any in-progress blocking send in Run()
+		// unblocks via the done channel before we close the PTY beneath it.
+		ctrl.Stop()
 		ptmx.Close()
 		if cmd.Process != nil {
 			cmd.Process.Kill()
@@ -417,6 +431,13 @@ type sessionManager struct {
 	ctrl     *tmux.Controller
 	ptmx     *os.File
 	recreate chan struct{} // signalled to ask the supervisor to (re)attach
+
+	// Last terminal size the browser reported. Remembered so a freshly attached
+	// session can be sized to match immediately — the browser only sends a
+	// resize when ITS size changes, which doesn't happen on a server-side
+	// re-attach, leaving a new session stuck at tmux's 80x24 default.
+	lastCols int
+	lastRows int
 }
 
 func newSessionManager() *sessionManager {
@@ -454,6 +475,24 @@ func (m *sessionManager) requestRecreate() {
 	case m.recreate <- struct{}{}:
 	default:
 	}
+}
+
+// rememberSize records the browser's terminal size so a future re-attach can
+// size the new session to match without waiting for a client resize.
+func (m *sessionManager) rememberSize(cols, rows int) {
+	if cols <= 0 || rows <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.lastCols, m.lastRows = cols, rows
+	m.mu.Unlock()
+}
+
+// size returns the last-known browser terminal size (0,0 if never set).
+func (m *sessionManager) size() (cols, rows int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.lastCols, m.lastRows
 }
 
 type controllerAdapter struct {
@@ -504,32 +543,22 @@ func (a *controllerAdapter) SplitWindow(targetPaneID string, horizontal bool) er
 }
 
 func (a *controllerAdapter) ResizePane(paneID string, cols, rows int) error {
+	// Remember the size even if there's no live session — so the next attached
+	// session can be sized to match the browser immediately.
+	a.mgr.rememberSize(cols, rows)
+
 	c := a.mgr.controller()
 	if c == nil {
 		return errNoSession
 	}
-	// 1. Resize the PTY so tmux's client-size constraint is updated.
-	if ptmx := a.mgr.pty(); ptmx != nil {
-		_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
-	}
 
-	// 2. Use resize-window to set the window size directly.
-	//    resize-pane only adjusts within a window; the window itself is capped
-	//    by the client PTY size in control mode. resize-window overrides that.
-	windowID := c.State().WindowForPane(paneID)
-	if windowID != "" {
-		return c.Commands().ResizeWindow(windowID, cols, rows)
-	}
-	// Fallback: resize-pane if we can't resolve the window
-	return c.Commands().ResizePane(paneID, cols, rows)
-}
-
-func (a *controllerAdapter) ScrollPane(paneID string, up bool, lines int) error {
-	c := a.mgr.controller()
-	if c == nil {
-		return errNoSession
-	}
-	return c.Commands().ScrollPane(paneID, up, lines)
+	// In control mode (-CC), tmux does NOT read the PTY winsize for the client —
+	// it learns the client size from `refresh-client -C WxH`. With
+	// `window-size latest` (set in applyMuxtermConfig), the window then follows
+	// this client size. So refresh-client is the ONE lever that resizes the
+	// window. (resize-window gets clamped to the client size; pty.Setsize is
+	// ignored by control-mode clients — both appeared to "do nothing".)
+	return c.Commands().RefreshClientSize(cols, rows)
 }
 
 func (a *controllerAdapter) NewWindow(name string) error {
@@ -594,10 +623,10 @@ func (a *controllerAdapter) LiveState() (*tmux.TmuxState, error) {
 }
 
 // captureScrollbackLines is how many lines of tmux history to replay on
-// connect/refresh. xterm.js keeps a scrollback buffer (configured to match in
-// pane.ts), so writing these lines lets the user scroll up after a refresh
-// instead of losing everything above the current screen.
-const captureScrollbackLines = 1000
+// connect/refresh. tmux owns the scrollback buffer (history-limit 10000);
+// replaying this many lines on reconnect restores what the user could previously
+// scroll through. Must be ≤ history-limit set in applyMuxtermConfig.
+const captureScrollbackLines = 10000
 
 func (a *controllerAdapter) CapturePaneContent(paneID string) ([]byte, error) {
 	// Capture scrollback history + the current screen. With xterm.js (a real
@@ -773,6 +802,17 @@ func attachAndRun(ctx context.Context, mgr *sessionManager, hub *server.Hub, syn
 	}
 
 	mgr.set(ctrl, ptmx)
+
+	// Size the fresh session to the browser's last-known dimensions. The browser
+	// only emits a resize when ITS size changes, which doesn't happen on a
+	// server-side re-attach — so without this the new session is stuck at tmux's
+	// 80x24 default (and zsh's PROMPT_SP partial-line marker, a stray "%", leaks
+	// because the shell's COLUMNS no longer matches what the browser renders).
+	// refresh-client -C is the only mechanism that resizes a control-mode client.
+	if cols, rows := mgr.size(); cols > 0 && rows > 0 {
+		_ = ctrl.Commands().RefreshClientSize(cols, rows)
+	}
+
 	syncer.trigger() // push the fresh session's state to all clients
 	log.Printf("supervisor: attached to session %q", sessionName)
 

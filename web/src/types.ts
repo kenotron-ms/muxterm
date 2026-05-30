@@ -70,7 +70,6 @@ export type ClientMessage =
   | { type: 'close-window'; windowId: number }
   | { type: 'rename-window'; windowId: number; name: string }
   | { type: 'create-session'; name: string }
-  | { type: 'pane-scroll'; paneId: number; up: boolean; lines: number }
   | { type: 'request-sync' };
 
 export interface MuxStoreEvents {

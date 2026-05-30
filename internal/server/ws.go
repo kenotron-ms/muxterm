@@ -29,7 +29,6 @@ type TmuxEngine interface {
 	SelectPane(paneID string) error
 	SplitWindow(targetPaneID string, horizontal bool) error
 	ResizePane(paneID string, cols, rows int) error
-	ScrollPane(paneID string, up bool, lines int) error
 	NewWindow(sessionID string) error
 	KillPane(paneID string) error
 	CloseWindow(windowID string) error
@@ -48,6 +47,31 @@ type Client struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	writeMu sync.Mutex
+
+	// syncTimer coalesces rapid full-sync requests (see scheduleSync). A burst
+	// of resizes would otherwise fire many overlapping sendStateSync calls,
+	// each clearing + replaying captured content, stacking duplicate output.
+	syncMu    sync.Mutex
+	syncTimer *time.Timer
+}
+
+// scheduleSync requests a full-sync, coalescing rapid calls into one. Each call
+// resets a short debounce timer, so only the LAST request in a burst (e.g. a
+// fast resize back-and-forth) actually runs sendStateSync. This prevents
+// overlapping capture-replays from stacking duplicate content on the terminal.
+func (c *Client) scheduleSync() {
+	c.syncMu.Lock()
+	defer c.syncMu.Unlock()
+	if c.syncTimer != nil {
+		c.syncTimer.Stop()
+	}
+	c.syncTimer = time.AfterFunc(120*time.Millisecond, func() {
+		select {
+		case <-c.ctx.Done():
+		default:
+			c.hub.sendStateSync(c)
+		}
+	})
 }
 
 // newClient creates a new Client with a cancellable context.
@@ -375,17 +399,6 @@ func (h *Hub) dispatchAction(action string, payload json.RawMessage) error {
 		}
 		return h.engine.ResizePane(p.ID, p.Cols, p.Rows)
 
-	case "pane-scroll":
-		var p struct {
-			ID    string `json:"id"`
-			Up    bool   `json:"up"`
-			Lines int    `json:"lines"`
-		}
-		if err := json.Unmarshal(payload, &p); err != nil {
-			return fmt.Errorf("pane-scroll: %w", err)
-		}
-		return h.engine.ScrollPane(p.ID, p.Up, p.Lines)
-
 	case "new-window":
 		return h.engine.NewWindow("")
 
@@ -440,17 +453,10 @@ func (c *Client) handleTextInput(data []byte) {
 	// content is re-delivered at the correct terminal dimensions instead of the stale
 	// dimensions tmux had before the browser reported its size.
 	if action == "request-sync" {
-		go func() {
-			// Brief pause so tmux has time to finish processing the preceding
-			// resize-pane command before we call capture-pane.
-			timer := time.NewTimer(50 * time.Millisecond)
-			select {
-			case <-timer.C:
-				c.hub.sendStateSync(c)
-			case <-c.ctx.Done():
-				timer.Stop()
-			}
-		}()
+		// Coalesced + debounced: a burst of resizes collapses into a single
+		// full-sync after the resize settles, so overlapping capture-replays
+		// can't stack duplicate content on the terminal.
+		c.scheduleSync()
 		_ = payload
 		return
 	}

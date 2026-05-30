@@ -62,11 +62,16 @@ func (c *CommandWriter) ResizePane(paneID string, width, height int) error {
 }
 
 // ResizeWindow resizes a window to the given width and height.
-// In control mode, resize-window is the reliable way to change dimensions —
-// resize-pane works within a window but the window itself is constrained by
-// the client's PTY size. resize-window overrides that constraint.
 func (c *CommandWriter) ResizeWindow(windowID string, width, height int) error {
 	return c.send("resize-window -t %s -x %d -y %d", windowID, width, height)
+}
+
+// RefreshClientSize tells tmux the size of THIS control-mode client. This is the
+// only mechanism that actually resizes a `-CC` client: tmux does not read the
+// PTY winsize for control-mode clients, and with `window-size latest` the window
+// follows the client size. So `refresh-client -C WxH` is what drives resize.
+func (c *CommandWriter) RefreshClientSize(width, height int) error {
+	return c.send("refresh-client -C %dx%d", width, height)
 }
 
 // SetOption applies a tmux option (set [-g] key value).
@@ -76,25 +81,6 @@ func (c *CommandWriter) SetOption(global bool, key, value string) error {
 		return c.send("set -g %s %s", key, value)
 	}
 	return c.send("set %s %s", key, value)
-}
-
-// ScrollPane scrolls the pane using tmux copy-mode commands.
-// lines controls how many lines to scroll per call.
-// Scroll-up enters copy-mode (idempotent) then scrolls up.
-// Scroll-down uses scroll-down-and-cancel so tmux exits copy-mode
-// automatically when the bottom of the history is reached.
-func (c *CommandWriter) ScrollPane(paneID string, up bool, lines int) error {
-	if lines < 1 {
-		lines = 3
-	}
-	// Enter copy-mode first (safe to call even if already in copy-mode).
-	if err := c.send("copy-mode -t %s", paneID); err != nil {
-		return err
-	}
-	if up {
-		return c.send("send-keys -t %s -X -N %d scroll-up", paneID, lines)
-	}
-	return c.send("send-keys -t %s -X -N %d scroll-down-and-cancel", paneID, lines)
 }
 
 // NewWindow creates a new window, optionally with a name.

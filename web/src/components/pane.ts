@@ -51,7 +51,6 @@ export class MuxPane extends LitElement {
         height: 100%;
       }
       #container .xterm-viewport {
-        overflow-y: hidden !important;
         /* xterm.js default CSS sets this to #000; override with theme color so
            the viewport background always matches the terminal theme. */
         background-color: ${unsafeCSS(THEME.background)} !important;
@@ -68,6 +67,7 @@ export class MuxPane extends LitElement {
   private _term: Terminal | null = null;
   private _fitAddon: FitAddon | null = null;
   private _resizeObserver: ResizeObserver | null = null;
+  private _resizeTimer: ReturnType<typeof setTimeout> | undefined;
   private _encoder = new TextEncoder();
   private _pendingData: (Uint8Array | string)[] = [];
   // Last dimensions we told the server. Used to make resize idempotent —
@@ -87,6 +87,10 @@ export class MuxPane extends LitElement {
     super.disconnectedCallback();
     this._resizeObserver?.disconnect();
     this._resizeObserver = null;
+    if (this._resizeTimer !== undefined) {
+      clearTimeout(this._resizeTimer);
+      this._resizeTimer = undefined;
+    }
     this._term?.dispose();
     this._term = null;
     this._fitAddon = null;
@@ -190,7 +194,7 @@ export class MuxPane extends LitElement {
       lineHeight: 1.2,
       cursorBlink: true,
       cursorStyle: 'block',
-      scrollback: 1000,        // xterm.js owns its scrollback buffer
+      scrollback: 10000,        // xterm owns display scrollback; matches tmux history-limit. tmux capture-pane reseeds on connect.
       allowTransparency: false,
       convertEol: false,       // tmux sends \r\n — don't double-convert
     });
@@ -203,7 +207,8 @@ export class MuxPane extends LitElement {
     // giving FitAddon a correct clientWidth from a settled flex layout.
     // Fitting synchronously (or even in one rAF) here races against flexbox.
 
-    // Input: forward keystrokes/paste to tmux
+    // Input: forward keystrokes/paste/SGR mouse sequences to tmux.
+    // xterm.js emits UTF-8 text (including SGR mouse reports) via onData.
     term.onData((data) => {
       this.dispatchEvent(
         new CustomEvent('pane-input', {
@@ -214,13 +219,28 @@ export class MuxPane extends LitElement {
       );
     });
 
+    // Forward legacy (non-UTF8, non-SGR) binary mouse reports via onBinary.
+    // These are rare but needed for apps using X10/UTF-8 mouse encoding.
+    term.onBinary((data) => {
+      const bytes = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i) & 0xff;
+      this.dispatchEvent(new CustomEvent('pane-input', {
+        bubbles: true, composed: true,
+        detail: { paneId: this.paneId, data: bytes },
+      }));
+    });
+
     // Resize: FitAddon measured cols/rows — tell tmux (idempotent).
     term.onResize(({ cols, rows }) => this._emitResize(cols, rows));
 
-    // Re-fit when the container changes size (window resize, pane drag, etc.)
+    // Re-fit when the container changes size (window resize, pane drag, etc.).
+    // 50ms trailing debounce collapses a rapid burst (e.g. window drag at 60fps)
+    // into a single fit(); the inner rAF guards against ResizeObserver loop errors.
     const ro = new ResizeObserver(() => {
-      // rAF prevents ResizeObserver loop errors and batches rapid resizes
-      requestAnimationFrame(() => fitAddon.fit());
+      if (this._resizeTimer !== undefined) clearTimeout(this._resizeTimer);
+      this._resizeTimer = setTimeout(() => {
+        requestAnimationFrame(() => this._fitAddon?.fit());
+      }, 50);
     });
     ro.observe(container);
 
@@ -250,24 +270,10 @@ export class MuxPane extends LitElement {
     this._pendingData = [];
   }
 
-  // Scroll via mouse wheel — dispatch pane-scroll; server sends to tmux copy-mode
-  private _onWheel = (e: WheelEvent): void => {
-    e.preventDefault();
-    const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
-    this.dispatchEvent(
-      new CustomEvent('pane-scroll', {
-        bubbles: true,
-        composed: true,
-        detail: { paneId: this.paneId, up: e.deltaY < 0, lines },
-      }),
-    );
-  };
-
   render() {
     return html`
       <div
         id="container"
-        @wheel=${this._onWheel}
         @mousedown=${() => {
           this._term?.focus();
           this.dispatchEvent(
