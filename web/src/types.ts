@@ -48,7 +48,8 @@ export interface LayoutSplit {
 export type LayoutNode = LayoutLeaf | LayoutSplit;
 
 export type ServerMessage =
-  | { type: 'state'; data: TmuxState }
+  | { type: 'full-sync'; data: TmuxState }   // on-connect: full replace + terminal reset
+  | { type: 'state'; data: TmuxState }        // periodic: structural reconciliation only
   | { type: 'window-add'; data: Window }
   | { type: 'window-renamed'; data: { id: number; name: string } }
   | { type: 'window-close'; data: { id: number } }
@@ -66,8 +67,11 @@ export type ClientMessage =
   | { type: 'resize-pane'; paneId: number; cols: number; rows: number }
   | { type: 'new-window' }
   | { type: 'close-pane'; paneId: number }
+  | { type: 'close-window'; windowId: number }
   | { type: 'rename-window'; windowId: number; name: string }
-  | { type: 'create-session'; name: string };
+  | { type: 'create-session'; name: string }
+  | { type: 'pane-scroll'; paneId: number; up: boolean; lines: number }
+  | { type: 'request-sync' };
 
 export interface MuxStoreEvents {
   change: TmuxState;

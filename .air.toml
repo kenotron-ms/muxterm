@@ -1,0 +1,34 @@
+# air config for muxterm dev mode.
+# Watches Go source AND web/dist so a Vite rebuild also restarts the server.
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  bin     = "./bin/muxterm"
+  cmd     = "go build -o ./bin/muxterm ./cmd/muxterm"
+  delay   = 300          # ms to wait after a change before rebuilding
+  stop_on_error = false
+
+  # Dirs to watch (Go source + the Vite output dir).
+  include_dir = ["cmd", "internal", "web/dist"]
+  # Only care about these extensions.
+  include_ext = ["go", "js", "html", "css"]
+
+  # Never watch inside web/src — Vite owns that; we only care about its output.
+  exclude_dir  = ["tmp", "vendor", "testdata", "web/src", "web/node_modules"]
+  exclude_regex = ["_test\\.go$"]
+
+[color]
+  build   = "yellow"
+  runner  = "green"
+  watcher = "cyan"
+  main    = "magenta"
+  app     = ""
+
+[log]
+  time = false
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll      = true

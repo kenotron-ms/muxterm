@@ -45,6 +45,67 @@ export class MuxApp extends LitElement {
     .overlay.hidden {
       display: none;
     }
+
+    /* Empty session state — shown when the active session has no windows.
+       Fills the space the terminal layout would occupy. */
+    .empty-session {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: #1a1b26;
+      color: #565f89;
+      user-select: none;
+    }
+
+    .empty-session .glyph {
+      font-size: 48px;
+      line-height: 1;
+      opacity: 0.5;
+    }
+
+    .empty-session .headline {
+      font-size: 16px;
+      color: #a9b1d6;
+      font-weight: 600;
+    }
+
+    .empty-session .subtext {
+      font-size: 13px;
+      color: #565f89;
+    }
+
+    .empty-session button {
+      margin-top: 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 18px;
+      font-size: 13px;
+      color: #c0caf5;
+      background: #24283b;
+      border: 1px solid #414868;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease;
+    }
+
+    .empty-session button:hover {
+      background: #2f344d;
+      border-color: #7aa2f7;
+    }
+
+    .empty-session kbd {
+      font-family: inherit;
+      font-size: 12px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: #1f2335;
+      border: 1px solid #414868;
+      color: #a9b1d6;
+    }
   `;
 
   @state()
@@ -124,13 +185,43 @@ export class MuxApp extends LitElement {
         @tab-new=${this._onTabNew}
         @tab-close=${this._onTabClose}
       ></mux-tab-bar>
-      <mux-layout
-        layout-string=${activeWindow?.layout ?? ''}
-        active-pane-id=${activePaneId}
-        @pane-input=${this._onPaneInput}
-        @pane-resize=${this._onPaneResize}
-        @pane-focus=${this._onPaneSelect}
-      ></mux-layout>
+      ${this._tmuxState.sessions.length === 0
+        ? html`
+            <div class="empty-session">
+              <div class="glyph">◳</div>
+              <div class="headline">No active session</div>
+              <div class="subtext">
+                The tmux session ended. muxterm is still running — create a new
+                session to pick up where you left off.
+              </div>
+              <button @click=${this._onCreateSession}>
+                <span>+</span> New session
+              </button>
+            </div>
+          `
+        : windows.length === 0
+        ? html`
+            <div class="empty-session">
+              <div class="glyph">◳</div>
+              <div class="headline">No open windows</div>
+              <div class="subtext">
+                This session has nothing running. Create a window to get started.
+              </div>
+              <button @click=${this._onTabNew}>
+                <span>+</span> New window
+              </button>
+            </div>
+          `
+        : html`
+            <mux-layout
+              layout-string=${activeWindow?.layout ?? ''}
+              active-pane-id=${activePaneId}
+              @pane-input=${this._onPaneInput}
+              @pane-resize=${this._onPaneResize}
+              @pane-scroll=${this._onPaneScroll}
+              @pane-focus=${this._onPaneSelect}
+            ></mux-layout>
+          `}
       <mux-status-bar
         sessionName=${this._tmuxState.activeSession}
         .windowCount=${windows.length}
@@ -166,10 +257,20 @@ export class MuxApp extends LitElement {
     this._socket?.sendControl({ type: 'new-window' });
   };
 
+  // Shown on the "no active session" page. Asks the server to (re)attach a tmux
+  // session. The server's supervisor creates one and pushes fresh state.
+  private _onCreateSession = (): void => {
+    this._socket?.sendControl({ type: 'create-session', name: '' });
+  };
+
   private _onTabClose = (e: CustomEvent<{ windowId: number }>): void => {
+    // Close the whole window (kill-window), not a single pane. A window may
+    // hold several panes; kill-pane on a window id would close only one.
+    // The authoritative state push that follows removes the tab — but if this
+    // was the LAST window, tmux kills the session and we'll get a detach.
     this._socket?.sendControl({
-      type: 'close-pane',
-      paneId: e.detail.windowId,
+      type: 'close-window',
+      windowId: e.detail.windowId,
     });
   };
 
@@ -180,11 +281,30 @@ export class MuxApp extends LitElement {
   private _onPaneResize = (
     e: CustomEvent<{ paneId: number; cols: number; rows: number }>,
   ): void => {
+    // This handler fires ONLY when the size genuinely changed — pane.ts gates
+    // every dispatch through an idempotent check (_emitResize). So it is safe
+    // to both resize AND request fresh content here: it runs once per real
+    // resize and cannot loop. (The old storm came from full-sync re-triggering
+    // a resize, which re-requested a sync, which sent another full-sync...)
     this._socket?.sendControl({
       type: 'resize-pane',
       paneId: e.detail.paneId,
       cols: e.detail.cols,
       rows: e.detail.rows,
+    });
+    // Re-fetch content at the new dimensions (tmux content was wrapped at the
+    // old size). Safe because this only runs on a genuine size change.
+    this._socket?.sendControl({ type: 'request-sync' });
+  };
+
+  private _onPaneScroll = (
+    e: CustomEvent<{ paneId: number; up: boolean; lines: number }>,
+  ): void => {
+    this._socket?.sendControl({
+      type: 'pane-scroll',
+      paneId: e.detail.paneId,
+      up: e.detail.up,
+      lines: e.detail.lines,
     });
   };
 
@@ -196,6 +316,12 @@ export class MuxApp extends LitElement {
   };
 
   private _handleControlMessage = (msg: Record<string, unknown>): void => {
+    // full-sync arrives on connect/reconnect just before binary pane-content frames.
+    // Reset all existing terminals NOW so the incoming capture-pane replay writes
+    // to a clean screen rather than stacking on top of stale content.
+    if ('full-sync' in msg) {
+      this._resetAllPaneTerminals();
+    }
     if ('sessions' in msg && Array.isArray(msg.sessions)) {
       this._sessions = msg.sessions as SessionInfo[];
       this._showSessionPicker = true;
@@ -206,6 +332,14 @@ export class MuxApp extends LitElement {
       this._reconnectMessage = detached.reason ?? 'Disconnected';
     }
   };
+
+  private _resetAllPaneTerminals(): void {
+    const layout = this.shadowRoot?.querySelector('mux-layout') as any;
+    if (!layout?.shadowRoot) return;
+    layout.shadowRoot.querySelectorAll('mux-pane').forEach((p: any) => {
+      if (typeof p.resetTerminal === 'function') p.resetTerminal();
+    });
+  }
 
   private _onSessionSelected = (e: CustomEvent<{ name: string }>): void => {
     this._showSessionPicker = false;

@@ -18,16 +18,27 @@ import (
 
 // TmuxEngine defines the interface for interacting with tmux.
 type TmuxEngine interface {
+	// State returns the in-memory cached state — used only for pane lookups
+	// during event routing. Never use this for state syncs to clients.
 	State() *tmux.TmuxState
+	// LiveState queries tmux directly for current session/window/pane structure.
+	// Always reflects ground truth regardless of missed events.
+	LiveState() (*tmux.TmuxState, error)
 	SendKeys(paneID, keys string) error
 	SelectWindow(windowID string) error
 	SelectPane(paneID string) error
 	SplitWindow(targetPaneID string, horizontal bool) error
-	ResizePane(paneID, direction string, amount int) error
+	ResizePane(paneID string, cols, rows int) error
+	ScrollPane(paneID string, up bool, lines int) error
 	NewWindow(sessionID string) error
 	KillPane(paneID string) error
+	CloseWindow(windowID string) error
 	RenameWindow(windowID, name string) error
 	NewSession(name string) error
+	// CapturePaneContent returns the current screen content of a pane
+	// (-e preserves ANSI escape sequences). Used to populate new clients
+	// with existing terminal output on connect.
+	CapturePaneContent(paneID string) ([]byte, error)
 }
 
 // Client represents a connected WebSocket client.
@@ -221,20 +232,54 @@ func (h *Hub) broadcastText(data []byte) {
 	}
 }
 
-// sendStateSync sends the current tmux state to a client as a JSON text frame.
+// sendStateSync sends the live tmux state to a client using the "full-sync"
+// key (distinct from the periodic "state" key). The browser uses "full-sync" to
+// do a full state replace + terminal reset, whereas periodic "state" pushes only
+// trigger structural reconciliation without clearing terminal content.
+// Uses LiveState() (direct tmux query) so the snapshot is always accurate
+// regardless of any missed %window-close events.
+// After the JSON frame, binary pane-content frames are sent for every pane.
 func (h *Hub) sendStateSync(c *Client) {
 	if h.engine == nil {
 		return
 	}
-	state := h.engine.State()
-	data, err := json.Marshal(map[string]interface{}{"state": state})
+	// LiveState() queries tmux directly — always accurate, never stale.
+	state, liveErr := h.engine.LiveState()
+	if liveErr != nil {
+		// Fall back to cached state if the live query fails (e.g. tmux not responding).
+		log.Printf("sendStateSync: live query failed: %v (using cached state)", liveErr)
+		state = h.engine.State()
+	}
+	// "full-sync" (not "state") tells the browser to do a full replace + terminal
+	// reset. Periodic pushes use "state" for structural reconciliation only.
+	data, err := json.Marshal(map[string]interface{}{"full-sync": state})
 	if err != nil {
 		log.Printf("sendStateSync: marshal error: %v", err)
 		return
 	}
 	if err := c.writeText(data); err != nil {
 		log.Printf("sendStateSync: write error: %v", err)
+		return
 	}
+
+	// Send captured screen content for every pane so the browser shows
+	// what was already on screen before this client connected.
+	// tmux control mode only emits %output for new data, so without this
+	// the browser would show a blank terminal until the next keystroke.
+	state.ForEachPane(func(paneID string) {
+		content, captureErr := h.engine.CapturePaneContent(paneID)
+		if captureErr != nil || len(content) == 0 {
+			return
+		}
+		id, parseErr := PaneIDToUint32(paneID)
+		if parseErr != nil {
+			return
+		}
+		frame := EncodeBinaryFrame(id, content)
+		if err := c.writeBinary(frame); err != nil {
+			log.Printf("sendStateSync: pane %s write error: %v", paneID, err)
+		}
+	})
 }
 
 // EncodeBinaryFrame creates a binary frame: [4-byte LE uint32 pane_id][data].
@@ -328,10 +373,18 @@ func (h *Hub) dispatchAction(action string, payload json.RawMessage) error {
 		if err := json.Unmarshal(payload, &p); err != nil {
 			return fmt.Errorf("resize-pane: %w", err)
 		}
-		if err := h.engine.ResizePane(p.ID, "x", p.Cols); err != nil {
-			return err
+		return h.engine.ResizePane(p.ID, p.Cols, p.Rows)
+
+	case "pane-scroll":
+		var p struct {
+			ID    string `json:"id"`
+			Up    bool   `json:"up"`
+			Lines int    `json:"lines"`
 		}
-		return h.engine.ResizePane(p.ID, "y", p.Rows)
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return fmt.Errorf("pane-scroll: %w", err)
+		}
+		return h.engine.ScrollPane(p.ID, p.Up, p.Lines)
 
 	case "new-window":
 		return h.engine.NewWindow("")
@@ -342,6 +395,13 @@ func (h *Hub) dispatchAction(action string, payload json.RawMessage) error {
 			return fmt.Errorf("close-pane: %w", err)
 		}
 		return h.engine.KillPane(paneID)
+
+	case "close-window":
+		var windowID string
+		if err := json.Unmarshal(payload, &windowID); err != nil {
+			return fmt.Errorf("close-window: %w", err)
+		}
+		return h.engine.CloseWindow(windowID)
 
 	case "rename-window":
 		var p struct {
@@ -375,6 +435,26 @@ func (c *Client) handleTextInput(data []byte) {
 		return
 	}
 
+	// request-sync: client asks for a fresh full-sync (state + capture-pane for all
+	// panes). Sent by the browser after its first pane-resize so that capture-pane
+	// content is re-delivered at the correct terminal dimensions instead of the stale
+	// dimensions tmux had before the browser reported its size.
+	if action == "request-sync" {
+		go func() {
+			// Brief pause so tmux has time to finish processing the preceding
+			// resize-pane command before we call capture-pane.
+			timer := time.NewTimer(50 * time.Millisecond)
+			select {
+			case <-timer.C:
+				c.hub.sendStateSync(c)
+			case <-c.ctx.Done():
+				timer.Stop()
+			}
+		}()
+		_ = payload
+		return
+	}
+
 	if err := c.hub.dispatchAction(action, payload); err != nil {
 		c.writeText(NewErrorMsg(err.Error()))
 	}
@@ -402,6 +482,21 @@ func (h *Hub) HandleTmuxDisconnect(ctrl *tmux.ControlMode, readErr error) {
 	if err != nil {
 		h.BroadcastEvent("detached", map[string]string{"reason": err.Error()})
 	}
+}
+
+// BroadcastPaneCapture runs CapturePaneContent for paneID and broadcasts the
+// result to all connected clients as a binary pane-output frame. Used when
+// the active window changes so clients immediately see existing terminal content
+// rather than waiting for the next live %output event.
+func (h *Hub) BroadcastPaneCapture(paneID string) {
+	if h.engine == nil {
+		return
+	}
+	content, err := h.engine.CapturePaneContent(paneID)
+	if err != nil || len(content) == 0 {
+		return
+	}
+	h.BroadcastPaneOutput(paneID, content)
 }
 
 // BroadcastPaneOutput encodes pane output as a binary frame and broadcasts

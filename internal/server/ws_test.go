@@ -123,6 +123,9 @@ func (m *mockEngine) NewSession(name string) error {
 	m.commandCalls = append(m.commandCalls, commandCall{Method: "NewSession", Args: []interface{}{name}})
 	return nil
 }
+
+func (m *mockEngine) CapturePaneContent(_ string) ([]byte, error) { return nil, nil }
+func (m *mockEngine) LiveState() (*tmux.TmuxState, error)         { return m.state, nil }
 func (m *mockEngine) getCommandCalls() []commandCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()

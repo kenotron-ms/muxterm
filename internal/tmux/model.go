@@ -64,6 +64,22 @@ func (s *TmuxState) FindWindow(id string) *Window {
 	return nil
 }
 
+// PanesForWindow returns the IDs of all panes in a given window.
+func (s *TmuxState) WindowForPane(paneID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range s.Sessions {
+		for j := range s.Sessions[i].Windows {
+			for k := range s.Sessions[i].Windows[j].Panes {
+				if s.Sessions[i].Windows[j].Panes[k].ID == paneID {
+					return s.Sessions[i].Windows[j].ID
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // FindPane returns a pointer to the pane with the given ID, or nil if not found.
 func (s *TmuxState) FindPane(id string) *Pane {
 	s.mu.RLock()
@@ -222,6 +238,52 @@ func (s *TmuxState) ApplySessionRenamed(name string) {
 		return
 	}
 	sess.Name = name
+}
+
+// PanesForWindow returns the pane IDs belonging to the given window ID,
+// or nil if the window is not found.
+func (s *TmuxState) PanesForWindow(windowID string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, session := range s.Sessions {
+		for _, window := range session.Windows {
+			if window.ID == windowID {
+				ids := make([]string, len(window.Panes))
+				for i, p := range window.Panes {
+					ids[i] = p.ID
+				}
+				return ids
+			}
+		}
+	}
+	return nil
+}
+
+// ActiveSessionName returns the name of the active session, or "" if unknown.
+func (s *TmuxState) ActiveSessionName() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, session := range s.Sessions {
+		if session.ID == s.ActiveSessionID {
+			return session.Name
+		}
+	}
+	return ""
+}
+
+// ForEachPane calls fn once for every pane ID across all sessions and windows,
+// holding the read lock for the duration. Used by the server to iterate panes
+// without exposing the internal slice.
+func (s *TmuxState) ForEachPane(fn func(paneID string)) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, session := range s.Sessions {
+		for _, window := range session.Windows {
+			for _, pane := range window.Panes {
+				fn(pane.ID)
+			}
+		}
+	}
 }
 
 // findLayoutNode finds a leaf node in the layout tree by pane ID.

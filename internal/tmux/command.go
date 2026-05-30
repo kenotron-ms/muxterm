@@ -61,6 +61,42 @@ func (c *CommandWriter) ResizePane(paneID string, width, height int) error {
 	return c.send("resize-pane -t %s -x %d -y %d", paneID, width, height)
 }
 
+// ResizeWindow resizes a window to the given width and height.
+// In control mode, resize-window is the reliable way to change dimensions —
+// resize-pane works within a window but the window itself is constrained by
+// the client's PTY size. resize-window overrides that constraint.
+func (c *CommandWriter) ResizeWindow(windowID string, width, height int) error {
+	return c.send("resize-window -t %s -x %d -y %d", windowID, width, height)
+}
+
+// SetOption applies a tmux option (set [-g] key value).
+// Pass global=true to set the option globally across all sessions/windows/panes.
+func (c *CommandWriter) SetOption(global bool, key, value string) error {
+	if global {
+		return c.send("set -g %s %s", key, value)
+	}
+	return c.send("set %s %s", key, value)
+}
+
+// ScrollPane scrolls the pane using tmux copy-mode commands.
+// lines controls how many lines to scroll per call.
+// Scroll-up enters copy-mode (idempotent) then scrolls up.
+// Scroll-down uses scroll-down-and-cancel so tmux exits copy-mode
+// automatically when the bottom of the history is reached.
+func (c *CommandWriter) ScrollPane(paneID string, up bool, lines int) error {
+	if lines < 1 {
+		lines = 3
+	}
+	// Enter copy-mode first (safe to call even if already in copy-mode).
+	if err := c.send("copy-mode -t %s", paneID); err != nil {
+		return err
+	}
+	if up {
+		return c.send("send-keys -t %s -X -N %d scroll-up", paneID, lines)
+	}
+	return c.send("send-keys -t %s -X -N %d scroll-down-and-cancel", paneID, lines)
+}
+
 // NewWindow creates a new window, optionally with a name.
 func (c *CommandWriter) NewWindow(name string) error {
 	if name == "" {
@@ -72,6 +108,13 @@ func (c *CommandWriter) NewWindow(name string) error {
 // ClosePane kills a pane.
 func (c *CommandWriter) ClosePane(paneID string) error {
 	return c.send("kill-pane -t %s", paneID)
+}
+
+// CloseWindow kills an entire window (and all its panes). Closing a tab maps to
+// this, not kill-pane — a window may hold multiple panes, and kill-pane on a
+// window id would only remove one of them.
+func (c *CommandWriter) CloseWindow(windowID string) error {
+	return c.send("kill-window -t %s", windowID)
 }
 
 // RenameWindow renames a window.

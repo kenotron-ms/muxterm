@@ -1,5 +1,6 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { keyed } from 'lit/directives/keyed.js';
 import { parseLayout } from '../lib/layout-parser.js';
 import type { LayoutNode, LayoutSplit, LayoutLeaf } from '../types.js';
 import './pane.js';
@@ -38,11 +39,11 @@ export class MuxLayout extends LitElement {
 
     .empty {
       display: flex;
-      align-items: center;
-      justify-content: center;
       width: 100%;
       height: 100%;
-      color: #565f89;
+      background: #1a1b26;
+      /* No text — blank dark area while layout loads */
+      color: transparent;
       font-size: 14px;
     }
   `;
@@ -107,10 +108,18 @@ export class MuxLayout extends LitElement {
   }
 
   private _renderLeaf(node: LayoutLeaf) {
-    return html`<mux-pane
-      pane-id=${node.paneId}
-      ?active=${node.paneId === this.activePaneId}
-    ></mux-pane>`;
+    // Key by paneId so Lit creates a FRESH mux-pane (and a fresh xterm
+    // instance) for each distinct pane. Without this, Lit reuses the same
+    // <mux-pane> element across window switches — it just rewrites the
+    // pane-id attribute — so every window ends up sharing ONE terminal.
+    // Keying forces disconnect (dispose old xterm) + reconnect (new xterm).
+    return keyed(
+      node.paneId,
+      html`<mux-pane
+        pane-id=${node.paneId}
+        ?active=${node.paneId === this.activePaneId}
+      ></mux-pane>`,
+    );
   }
 
   getPaneElement(paneId: number): Element | null {

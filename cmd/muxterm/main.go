@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/fs"
@@ -9,8 +10,11 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/user/muxterm/internal/deploy"
@@ -63,34 +67,27 @@ func main() {
 // runLocal starts muxterm in local mode: launches tmux, starts the HTTP server
 // on localhost, opens a browser, and blocks until shutdown.
 func runLocal(cfg Config) error {
-	// Gap 2 fix: use EnsureRunning() to detect/start tmux and get session name.
-	sessionName, err := tmux.EnsureRunning()
-	if err != nil {
-		return fmt.Errorf("tmux: %w", err)
-	}
-
-	ctrl, events, cleanup, err := startTmuxControl(sessionName)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	adapter := &controllerAdapter{ctrl: ctrl}
-	// Gap 1 fix: serve embedded frontend via StaticFS.
+	mgr := newSessionManager()
+	adapter := &controllerAdapter{mgr: mgr}
 	srv := server.New(server.Config{
 		Addr:     cfg.Addr,
 		StaticFS: mustSubFS(webstatic.Dist, "dist"),
 	}, adapter)
-	// Gap 3 fix: broadcast "detached" to all clients when tmux exits.
-	go func() {
-		wireEvents(events, srv.Hub())
-		srv.Hub().BroadcastEvent("detached", map[string]string{"reason": "tmux disconnected"})
-	}()
+	syncer := newStateSyncCoalescer(adapter, srv.Hub())
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// The supervisor owns the tmux lifecycle: it attaches a session, runs until
+	// the session dies (e.g. last window closed), then waits for the user to ask
+	// for a new one. The HTTP server stays up the whole time — closing the last
+	// window shows the "no active session" page, it never shuts muxterm down.
+	go superviseSession(ctx, mgr, srv.Hub(), syncer)
+	go periodicStateSync(ctx, adapter, srv.Hub())
 	go openBrowser("http://" + cfg.Addr)
 
 	log.Printf("muxterm listening on %s", cfg.Addr)
-	return runWithGracefulShutdown(srv)
+	return srv.ListenAndServe(ctx)
 }
 
 // runServe starts muxterm in serve mode: launches tmux, starts the HTTP server
@@ -106,30 +103,23 @@ func runServe(cfg Config) error {
 		secret = s
 	}
 
-	// Gap 2 fix: use EnsureRunning() to detect/start tmux and get session name.
-	sessionName, err := tmux.EnsureRunning()
-	if err != nil {
-		return fmt.Errorf("tmux: %w", err)
-	}
-
-	ctrl, events, cleanup, err := startTmuxControl(sessionName)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	adapter := &controllerAdapter{ctrl: ctrl}
-	// Gap 1 fix: serve embedded frontend via StaticFS.
+	mgr := newSessionManager()
+	adapter := &controllerAdapter{mgr: mgr}
 	srv := server.New(server.Config{
 		Addr:     cfg.Addr,
 		Secret:   secret,
 		StaticFS: mustSubFS(webstatic.Dist, "dist"),
 	}, adapter)
-	// Gap 3 fix: broadcast "detached" to all clients when tmux exits.
-	go func() {
-		wireEvents(events, srv.Hub())
-		srv.Hub().BroadcastEvent("detached", map[string]string{"reason": "tmux disconnected"})
-	}()
+	syncer := newStateSyncCoalescer(adapter, srv.Hub())
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Supervisor owns the tmux lifecycle (see runLocal for rationale): the HTTP
+	// server survives session death; closing the last window shows the
+	// "no active session" page rather than tearing muxterm down.
+	go superviseSession(ctx, mgr, srv.Hub(), syncer)
+	go periodicStateSync(ctx, adapter, srv.Hub())
 
 	// Generate and print access token
 	token, err := server.GenerateToken(secret)
@@ -139,7 +129,7 @@ func runServe(cfg Config) error {
 	log.Printf("muxterm listening on %s", cfg.Addr)
 	log.Printf("access token: %s", token)
 
-	return runWithGracefulShutdown(srv)
+	return srv.ListenAndServe(ctx)
 }
 
 // runDeploy deploys muxterm to a remote host via SSH.
@@ -185,12 +175,25 @@ func runUninstall() error {
 	return nil
 }
 
-// runWithGracefulShutdown starts the server and blocks until SIGINT or SIGTERM,
-// then performs a graceful shutdown (5s timeout handled by server.ListenAndServe).
-func runWithGracefulShutdown(srv *server.Server) error {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	return srv.ListenAndServe(ctx)
+// periodicStateSync pushes the live tmux state to all connected clients every 5s.
+// Using LiveState() (direct tmux query) ensures the browser always converges to
+// ground truth even if %window-close or other structural events were dropped.
+func periodicStateSync(ctx context.Context, engine server.TmuxEngine, hub *server.Hub) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			state, err := engine.LiveState()
+			if err != nil {
+				log.Printf("periodicStateSync: live query failed: %v", err)
+				continue
+			}
+			hub.BroadcastEvent("state", state)
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // openBrowser opens the given URL in the default browser. Non-fatal if it fails.
@@ -220,17 +223,37 @@ func openBrowser(url string) {
 // attach-session does not resend window/layout events on connect, so the
 // initial state is bootstrapped by querying tmux directly before the
 // event-reading goroutine starts.
-func startTmuxControl(sessionName string) (*tmux.Controller, chan tmux.Event, func(), error) {
+// applyMuxtermConfig sets the tmux options that muxterm requires.
+// These are applied globally so they take effect immediately in the session.
+func applyMuxtermConfig(ctrl *tmux.Controller) error {
+	cmds := ctrl.Commands()
+	settings := []struct{ key, val string }{
+		{"mouse", "on"},          // mouse wheel, click, drag — required for scroll forwarding
+		{"focus-events", "on"},   // terminal focus in/out events (nice-to-have)
+	}
+	var errs []string
+	for _, s := range settings {
+		if err := cmds.SetOption(true, s.key, s.val); err != nil {
+			errs = append(errs, fmt.Sprintf("set -g %s %s: %v", s.key, s.val, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func startTmuxControl(sessionName string) (*tmux.Controller, *os.File, chan tmux.Event, func(), error) {
 	cmd := exec.Command("tmux", "-CC", "attach-session", "-t", sessionName)
 
 	// Allocate a PTY. tmux -CC exits immediately with "%exit" when not
 	// connected to a terminal, so a PTY is required.
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("start tmux with pty: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("start tmux with pty: %w", err)
 	}
 
-	events := make(chan tmux.Event, 100)
+	events := make(chan tmux.Event, 1000)
 	ctrl := tmux.NewController(tmux.ControllerConfig{
 		Reader: ptmx, // reads tmux event stream from PTY master
 		Writer: ptmx, // writes commands to tmux via PTY master
@@ -255,7 +278,18 @@ func startTmuxControl(sessionName string) (*tmux.Controller, chan tmux.Event, fu
 		cmd.Wait()
 	}
 
-	return ctrl, events, cleanup, nil
+	return ctrl, ptmx, events, cleanup, nil
+}
+
+// queryCurrentState asks tmux directly for the live session/window/pane
+// structure. It is used both at startup (to bootstrap the in-memory state)
+// and periodically (to produce authoritative snapshots for clients).
+// Because tmux is the source of truth, this always reflects reality — unlike
+// the in-memory state which can miss %window-close events.
+func queryCurrentState(sessionName string) (*tmux.TmuxState, error) {
+	state := &tmux.TmuxState{}
+	err := bootstrapTmuxState(state, sessionName)
+	return state, err
 }
 
 // bootstrapTmuxState queries the current tmux state (sessions, windows, panes)
@@ -307,6 +341,8 @@ func bootstrapTmuxState(state *tmux.TmuxState, sessionName string) error {
 		if activeFlag == "1" {
 			activeWindowID = windowID
 		}
+
+
 	}
 
 	// Step 4: mark the active window (sets Window.Active flags).
@@ -365,89 +401,467 @@ func printEvent(ev tmux.Event) {
 // controllerAdapter wraps a tmux.Controller to satisfy server.TmuxEngine.
 // The Controller's CommandWriter has compatible methods but with slightly
 // different names and signatures in a few cases.
+// errNoSession is returned by adapter methods when there is no live tmux
+// control connection (e.g. the last window was closed and tmux destroyed the
+// session). Commands are silently dropped in this state — the UI shows the
+// "no active session" page until the user creates a new one.
+var errNoSession = fmt.Errorf("no active tmux session")
+
+// sessionManager owns the CURRENT tmux control connection. It is swappable:
+// when a session dies the supervisor clears it; when the user asks for a new
+// session the supervisor attaches a fresh one. All access is mutex-guarded so
+// the HTTP handlers (any goroutine) can safely talk to whatever connection is
+// live — or get errNoSession when there is none.
+type sessionManager struct {
+	mu       sync.RWMutex
+	ctrl     *tmux.Controller
+	ptmx     *os.File
+	recreate chan struct{} // signalled to ask the supervisor to (re)attach
+}
+
+func newSessionManager() *sessionManager {
+	return &sessionManager{recreate: make(chan struct{}, 1)}
+}
+
+func (m *sessionManager) set(ctrl *tmux.Controller, ptmx *os.File) {
+	m.mu.Lock()
+	m.ctrl, m.ptmx = ctrl, ptmx
+	m.mu.Unlock()
+}
+
+func (m *sessionManager) clear() {
+	m.mu.Lock()
+	m.ctrl, m.ptmx = nil, nil
+	m.mu.Unlock()
+}
+
+func (m *sessionManager) controller() *tmux.Controller {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.ctrl
+}
+
+func (m *sessionManager) pty() *os.File {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.ptmx
+}
+
+// requestRecreate asks the supervisor to attach a fresh session. Non-blocking:
+// if a request is already pending, this is a no-op.
+func (m *sessionManager) requestRecreate() {
+	select {
+	case m.recreate <- struct{}{}:
+	default:
+	}
+}
+
 type controllerAdapter struct {
-	ctrl *tmux.Controller
+	mgr *sessionManager
 }
 
 func (a *controllerAdapter) State() *tmux.TmuxState {
-	return a.ctrl.State()
+	c := a.mgr.controller()
+	if c == nil {
+		return &tmux.TmuxState{Sessions: []tmux.Session{}}
+	}
+	return c.State()
 }
 
 func (a *controllerAdapter) SendKeys(paneID, keys string) error {
-	return a.ctrl.Commands().SendKeys(paneID, keys)
+	c := a.mgr.controller()
+	if c == nil {
+		return errNoSession
+	}
+	// Use hex-encoded send-keys (-H) so raw terminal bytes (escape sequences,
+	// backspace, Ctrl codes) pass through unmangled instead of going through
+	// tmux's key-binding interpreter.
+	return c.Commands().SendKeysLiteral(paneID, []byte(keys))
 }
 
 func (a *controllerAdapter) SelectWindow(windowID string) error {
-	return a.ctrl.Commands().SelectWindow(windowID)
+	c := a.mgr.controller()
+	if c == nil {
+		return errNoSession
+	}
+	return c.Commands().SelectWindow(windowID)
 }
 
 func (a *controllerAdapter) SelectPane(paneID string) error {
-	return a.ctrl.Commands().SelectPane(paneID)
+	c := a.mgr.controller()
+	if c == nil {
+		return errNoSession
+	}
+	return c.Commands().SelectPane(paneID)
 }
 
 func (a *controllerAdapter) SplitWindow(targetPaneID string, horizontal bool) error {
-	return a.ctrl.Commands().SplitWindow(targetPaneID, horizontal)
+	c := a.mgr.controller()
+	if c == nil {
+		return errNoSession
+	}
+	return c.Commands().SplitWindow(targetPaneID, horizontal)
 }
 
-func (a *controllerAdapter) ResizePane(paneID, direction string, amount int) error {
-	// TmuxEngine calls ResizePane per-direction ("x" or "y") but the
-	// CommandWriter sets both dimensions at once. Look up the current
-	// dimensions from state and only change the requested axis.
-	state := a.ctrl.State()
-	pane := state.FindPane(paneID)
-	width, height := amount, amount
-	if pane != nil {
-		width = pane.Width
-		height = pane.Height
+func (a *controllerAdapter) ResizePane(paneID string, cols, rows int) error {
+	c := a.mgr.controller()
+	if c == nil {
+		return errNoSession
 	}
-	switch direction {
-	case "x":
-		width = amount
-	case "y":
-		height = amount
+	// 1. Resize the PTY so tmux's client-size constraint is updated.
+	if ptmx := a.mgr.pty(); ptmx != nil {
+		_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	}
-	return a.ctrl.Commands().ResizePane(paneID, width, height)
+
+	// 2. Use resize-window to set the window size directly.
+	//    resize-pane only adjusts within a window; the window itself is capped
+	//    by the client PTY size in control mode. resize-window overrides that.
+	windowID := c.State().WindowForPane(paneID)
+	if windowID != "" {
+		return c.Commands().ResizeWindow(windowID, cols, rows)
+	}
+	// Fallback: resize-pane if we can't resolve the window
+	return c.Commands().ResizePane(paneID, cols, rows)
+}
+
+func (a *controllerAdapter) ScrollPane(paneID string, up bool, lines int) error {
+	c := a.mgr.controller()
+	if c == nil {
+		return errNoSession
+	}
+	return c.Commands().ScrollPane(paneID, up, lines)
 }
 
 func (a *controllerAdapter) NewWindow(name string) error {
-	return a.ctrl.Commands().NewWindow(name)
+	c := a.mgr.controller()
+	if c == nil {
+		return errNoSession
+	}
+	return c.Commands().NewWindow(name)
 }
 
 func (a *controllerAdapter) KillPane(paneID string) error {
-	return a.ctrl.Commands().ClosePane(paneID)
+	c := a.mgr.controller()
+	if c == nil {
+		return errNoSession
+	}
+	return c.Commands().ClosePane(paneID)
+}
+
+func (a *controllerAdapter) CloseWindow(windowID string) error {
+	c := a.mgr.controller()
+	if c == nil {
+		return errNoSession
+	}
+	return c.Commands().CloseWindow(windowID)
 }
 
 func (a *controllerAdapter) RenameWindow(windowID, name string) error {
-	return a.ctrl.Commands().RenameWindow(windowID, name)
+	c := a.mgr.controller()
+	if c == nil {
+		return errNoSession
+	}
+	return c.Commands().RenameWindow(windowID, name)
 }
 
+// NewSession is the "create a session" request from the empty-state page. When
+// no control connection is live (the common case — the last window was closed),
+// we signal the supervisor to attach a fresh session rather than sending a
+// command down a dead connection. When a session IS live this is a no-op: the
+// single-session UI already has its session.
 func (a *controllerAdapter) NewSession(name string) error {
-	return a.ctrl.Commands().CreateSession(name)
+	if a.mgr.controller() == nil {
+		a.mgr.requestRecreate()
+		return nil
+	}
+	return nil
 }
 
-// wireEvents reads tmux events from the channel and broadcasts them via the hub.
+// LiveState queries tmux directly for the current session/window/pane structure.
+// Always accurate regardless of missed %window-close or other dropped events.
+// Returns an empty state (not an error) when no session is attached, so the
+// periodic sync keeps clients on the "no active session" page.
+func (a *controllerAdapter) LiveState() (*tmux.TmuxState, error) {
+	c := a.mgr.controller()
+	if c == nil {
+		return &tmux.TmuxState{Sessions: []tmux.Session{}}, nil
+	}
+	name := c.State().ActiveSessionName()
+	if name == "" {
+		return c.State(), nil // not bootstrapped yet, return cached state
+	}
+	return queryCurrentState(name)
+}
+
+// captureScrollbackLines is how many lines of tmux history to replay on
+// connect/refresh. xterm.js keeps a scrollback buffer (configured to match in
+// pane.ts), so writing these lines lets the user scroll up after a refresh
+// instead of losing everything above the current screen.
+const captureScrollbackLines = 1000
+
+func (a *controllerAdapter) CapturePaneContent(paneID string) ([]byte, error) {
+	// Capture scrollback history + the current screen. With xterm.js (a real
+	// terminal emulator with its own scrollback buffer), writing history lines
+	// fills the buffer and the viewport stays pinned to the bottom — so a
+	// refresh restores everything the user could previously scroll through.
+	out, err := exec.Command("tmux", "capture-pane", "-t", paneID, "-p", "-e",
+		"-S", fmt.Sprintf("-%d", captureScrollbackLines)).Output()
+	if err != nil {
+		return nil, err
+	}
+
+	// Strip tmux's DCS pass-through wrappers (\033Ptmux;...\033\) around
+	// terminal control sequences. (xterm.js handles standard DCS, but tmux's
+	// nested control-mode variant would still surface as stray "tmux;" text.)
+	out = stripDCS(out)
+
+	// Split into lines and drop trailing blank rows. tmux pads the screen
+	// region with empty lines below the prompt; if we wrote those, the cursor
+	// would land below the prompt. Dropping them puts the last line = prompt.
+	lines := bytes.Split(out, []byte("\n"))
+	end := len(lines)
+	for end > 0 && len(bytes.TrimRight(lines[end-1], " \t\r")) == 0 {
+		end--
+	}
+	lines = lines[:end]
+
+	// Join with \r\n (each line starts at column 0). Deliberately NO trailing
+	// newline: that leaves the cursor at the end of the last line — exactly
+	// where a shell cursor sits, on the prompt. xterm.js gets the vertical
+	// position right on its own; no cursor-up math needed (that was a
+	// wterm-era workaround).
+	out = bytes.Join(lines, []byte("\r\n"))
+
+	// Nudge the cursor to tmux's real column on that last line (handles
+	// prompts where the cursor isn't flush against the rendered text).
+	if meta, mErr := exec.Command("tmux", "display-message", "-pt", paneID,
+		"#{cursor_x}").Output(); mErr == nil {
+		if cx, cErr := strconv.Atoi(strings.TrimSpace(string(meta))); cErr == nil && cx >= 0 {
+			out = append(out, []byte(fmt.Sprintf("\033[%dG", cx+1))...)
+		}
+	}
+
+	return out, nil
+}
+
+// stripDCS removes DCS (Device Control String) pass-through sequences from
+// terminal output. tmux wraps escape sequences from pane applications in
+// DCS format (\033Ptmux;...\033\) when forwarding to control-mode clients.
+// wterm doesn't handle this DCS variant and renders "tmux;" as literal text.
+func stripDCS(data []byte) []byte {
+	// Fast path: skip if no DCS introducer present.
+	if !bytes.Contains(data, []byte{0x1b, 'P'}) {
+		return data
+	}
+	result := make([]byte, 0, len(data))
+	i := 0
+	for i < len(data) {
+		// 7-bit DCS start: ESC P (0x1b 0x50)
+		if i+1 < len(data) && data[i] == 0x1b && data[i+1] == 'P' {
+			i += 2 // skip ESC P
+			// Scan forward to ST: either ESC \ (0x1b 0x5c) or 8-bit ST (0x9c)
+			for i < len(data) {
+				if data[i] == 0x9c { // 8-bit ST
+					i++
+					break
+				}
+				if i+1 < len(data) && data[i] == 0x1b && data[i+1] == '\\' { // 7-bit ST
+					i += 2
+					break
+				}
+				i++
+			}
+			continue
+		}
+		// 8-bit DCS start: 0x90
+		if data[i] == 0x90 {
+			i++
+			for i < len(data) {
+				if data[i] == 0x9c {
+					i++
+					break
+				}
+				if i+1 < len(data) && data[i] == 0x1b && data[i+1] == '\\' {
+					i += 2
+					break
+				}
+				i++
+			}
+			continue
+		}
+		result = append(result, data[i])
+		i++
+	}
+	return result
+}
+
+// stripTrailingBlankLines removes lines that are entirely whitespace from
+// the end of capture-pane output. These are the blank viewport rows that
+// appear after the cursor row; writing them to the terminal causes extra
+// scroll events which displace the cursor below the actual prompt.
+func stripTrailingBlankLines(data []byte) []byte {
+	lines := bytes.Split(data, []byte("\n"))
+	end := len(lines)
+	for end > 0 && len(bytes.TrimRight(lines[end-1], " \t\r")) == 0 {
+		end--
+	}
+	if end == len(lines) {
+		return data
+	}
+	// Re-join with \n, preserving the final \n
+	result := bytes.Join(lines[:end], []byte("\n"))
+	return append(result, '\n')
+}
+
+// emptyTmuxState is the state broadcast when no tmux session is attached. The
+// empty (non-nil) Sessions slice marshals to `[]`, which the browser reads as
+// "no active session" and renders the create-session page.
+func emptyTmuxState() *tmux.TmuxState {
+	return &tmux.TmuxState{Sessions: []tmux.Session{}}
+}
+
+// superviseSession owns the tmux control lifecycle. It attaches a session and
+// runs until that session dies, then shows the "no active session" page and
+// waits for the user to request a new one — the HTTP server never goes down.
+func superviseSession(ctx context.Context, mgr *sessionManager, hub *server.Hub, syncer *stateSyncCoalescer) {
+	for {
+		// Drain any stale recreate request so we don't immediately re-loop.
+		select {
+		case <-mgr.recreate:
+		default:
+		}
+
+		if !attachAndRun(ctx, mgr, hub, syncer) {
+			return // context cancelled — server shutting down
+		}
+
+		// The session ended (last window closed, tmux killed, etc.). Tell every
+		// client there's no session so they show the create page, then wait for
+		// a create request or shutdown.
+		mgr.clear()
+		hub.BroadcastEvent("state", emptyTmuxState())
+		log.Printf("supervisor: no active session — waiting for create request")
+
+		select {
+		case <-mgr.recreate:
+			log.Printf("supervisor: create requested — attaching new session")
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// attachAndRun ensures a tmux session exists, attaches control mode, and runs
+// wireEvents until the session dies. Returns false only if ctx was cancelled
+// (so the supervisor should stop); true means "session ended, loop again".
+func attachAndRun(ctx context.Context, mgr *sessionManager, hub *server.Hub, syncer *stateSyncCoalescer) bool {
+	sessionName, err := tmux.EnsureRunning()
+	if err != nil {
+		log.Printf("supervisor: ensure session: %v", err)
+		return ctx.Err() == nil
+	}
+
+	ctrl, ptmx, events, cleanup, err := startTmuxControl(sessionName)
+	if err != nil {
+		log.Printf("supervisor: attach %q: %v", sessionName, err)
+		return ctx.Err() == nil
+	}
+	defer cleanup()
+
+	if err := applyMuxtermConfig(ctrl); err != nil {
+		log.Printf("warn: tmux config: %v", err)
+	}
+
+	mgr.set(ctrl, ptmx)
+	syncer.trigger() // push the fresh session's state to all clients
+	log.Printf("supervisor: attached to session %q", sessionName)
+
+	wireEvents(events, hub, ctrl, syncer) // blocks until the session/control dies
+
+	log.Printf("supervisor: session %q ended", sessionName)
+	return ctx.Err() == nil
+}
+
+// stateSyncCoalescer collapses a burst of structural tmux events into a single
+// authoritative state push. tmux emits several events for one logical action
+// (e.g. new-window → window-add + layout-change + session-window-changed); rather
+// than send each as a fragile incremental delta, we wait a short quiet period and
+// then push ONE full snapshot queried live from tmux. The browser reconciles
+// idempotently, so it always converges to ground truth — no partial data, no
+// duplicates, no event-ordering hazards.
+type stateSyncCoalescer struct {
+	engine server.TmuxEngine
+	hub    *server.Hub
+	mu     sync.Mutex
+	timer  *time.Timer
+}
+
+func newStateSyncCoalescer(engine server.TmuxEngine, hub *server.Hub) *stateSyncCoalescer {
+	return &stateSyncCoalescer{engine: engine, hub: hub}
+}
+
+// trigger schedules an authoritative state push, coalescing rapid calls into one.
+func (c *stateSyncCoalescer) trigger() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	c.timer = time.AfterFunc(40*time.Millisecond, func() {
+		state, err := c.engine.LiveState()
+		if err != nil {
+			log.Printf("stateSync: live query failed: %v", err)
+			return
+		}
+		c.hub.BroadcastEvent("state", state)
+	})
+}
+
+// wireEvents reads tmux events from the channel and routes them. Structural
+// events (windows/panes/sessions appearing, closing, renaming, relayout) all
+// funnel into a single coalesced authoritative state push so the browser's
+// structure always reflects tmux truth. Only pane OUTPUT (terminal bytes) and
+// content captures stream as deltas.
 // It exits when the events channel is closed (controller stopped).
-func wireEvents(events <-chan tmux.Event, hub *server.Hub) {
+func wireEvents(events <-chan tmux.Event, hub *server.Hub, ctrl *tmux.Controller, sync *stateSyncCoalescer) {
 	for ev := range events {
 		switch e := ev.(type) {
 		case tmux.OutputEvent:
-			hub.BroadcastPaneOutput(e.PaneID, e.Data)
+			// Strip tmux DCS pass-through wrappers (\033Ptmux;...\033\) around
+			// terminal escape sequences (OSC, shell integration, etc.).
+			data := stripDCS(e.Data)
+			hub.BroadcastPaneOutput(e.PaneID, data)
+
+		// ── Structural events → one coalesced authoritative state snapshot ──
 		case tmux.WindowAddEvent:
-			hub.BroadcastEvent("window-add", e)
+			sync.trigger()
 		case tmux.WindowCloseEvent:
-			hub.BroadcastEvent("window-close", e)
+			sync.trigger()
 		case tmux.WindowRenamedEvent:
-			hub.BroadcastEvent("window-renamed", e)
+			sync.trigger()
 		case tmux.LayoutChangeEvent:
-			hub.BroadcastEvent("layout-change", e)
+			sync.trigger()
 		case tmux.SessionChangedEvent:
-			hub.BroadcastEvent("session-changed", e)
+			sync.trigger()
 		case tmux.SessionWindowChangedEvent:
-			hub.BroadcastEvent("session-window-changed", e)
+			sync.trigger()
+			// Capture pane content for the newly active window off the hot path
+			// so wireEvents never blocks draining the events channel.
+			go func(windowID string) {
+				for _, paneID := range ctrl.State().PanesForWindow(windowID) {
+					hub.BroadcastPaneCapture(paneID)
+				}
+			}(e.WindowID)
+
 		case tmux.PaneModeChangedEvent:
-			hub.BroadcastEvent("pane-mode", e)
+			// Pane mode (copy-mode etc.) — structural enough to resync.
+			sync.trigger()
 		case tmux.ExitEvent:
-			hub.BroadcastEvent("detached", e)
+			// Control connection is exiting (session destroyed). Don't broadcast
+			// "detached" — that would flash the reconnect overlay. wireEvents is
+			// about to return; the supervisor takes over and shows the
+			// "no active session" page instead.
+			return
 		}
 	}
 }

@@ -81,6 +81,9 @@ function normalizeMessage(raw: Record<string, unknown>): ServerMessage | null {
   const payload = raw[type];
 
   switch (type) {
+    // "full-sync" arrives on initial connect / reconnect — full replace + terminal reset.
+    // "state"     arrives on periodic 5-second push   — structural reconciliation only.
+    case 'full-sync':
     case 'state': {
       const s = payload as ServerTmuxState;
       if (!s || !Array.isArray(s.sessions)) return null;
@@ -89,7 +92,6 @@ function normalizeMessage(raw: Record<string, unknown>): ServerMessage | null {
       const activeSessionName = activeSessionObj?.name ?? '';
       const activeWindowObj = activeSessionObj?.windows?.find((w) => w.active);
       const activeWindow = activeWindowObj ? parseTmuxId(activeWindowObj.id) : 0;
-      // Prefer an explicitly active pane; fall back to the first pane.
       const activePaneObj =
         activeWindowObj?.panes?.find((p) => p.active) ?? activeWindowObj?.panes?.[0];
       const activePane = activePaneObj ? parseTmuxId(activePaneObj.id) : 0;
@@ -100,7 +102,8 @@ function normalizeMessage(raw: Record<string, unknown>): ServerMessage | null {
         activeWindow,
         activePane,
       };
-      return { type: 'state', data };
+      // Preserve the original type so state.ts can distinguish full-sync from periodic state.
+      return { type: type as 'full-sync' | 'state', data };
     }
 
     case 'session-changed': {
@@ -191,14 +194,20 @@ function encodeClientMessage(msg: ClientMessage): Record<string, unknown> {
       return { split: { direction: msg.direction, pane: `%${msg.paneId}` } };
     case 'resize-pane':
       return { 'resize-pane': { id: `%${msg.paneId}`, cols: msg.cols, rows: msg.rows } };
+    case 'pane-scroll':
+      return { 'pane-scroll': { id: `%${msg.paneId}`, up: msg.up, lines: msg.lines } };
     case 'new-window':
       return { 'new-window': '' };
     case 'close-pane':
       return { 'close-pane': `%${msg.paneId}` };
+    case 'close-window':
+      return { 'close-window': `@${msg.windowId}` };
     case 'rename-window':
       return { 'rename-window': { id: `@${msg.windowId}`, name: msg.name } };
     case 'create-session':
       return { 'create-session': { name: msg.name } };
+    case 'request-sync':
+      return { 'request-sync': {} };
     default:
       // Fallthrough: pass as-is (forward compatibility)
       return msg as unknown as Record<string, unknown>;
