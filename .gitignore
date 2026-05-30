@@ -28,3 +28,6 @@ Thumbs.db
 
 # Playwright CLI session artifacts
 .playwright-cli/
+
+# Scratch / reference material (not source)
+tmp/
