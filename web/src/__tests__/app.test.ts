@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { terminalRegistry } from '../lib/terminal-registry.js';
 
 // Mock WebSocket before importing app
 class MockWebSocket {
@@ -77,6 +78,8 @@ describe('MuxApp', () => {
       type: 'state',
       data: { sessions: [], activeSession: '', activeWindow: 0, activePane: 0 },
     });
+    // Clean up registry terminals created by _syncTerminals()
+    terminalRegistry.prune(new Set());
   });
 
   it('registers as mux-app custom element', () => {
@@ -187,43 +190,6 @@ describe('MuxApp', () => {
     );
   });
 
-  it('translates pane-input event to sendPaneInput', async () => {
-    el = await fixture(makeState());
-    const socket = (el as any)._socket;
-    const sendPaneInputSpy = vi.spyOn(socket, 'sendPaneInput');
-
-    const layout = el.shadowRoot!.querySelector('mux-layout')!;
-    const testData = new Uint8Array([104, 105]);
-    layout.dispatchEvent(
-      new CustomEvent('pane-input', {
-        bubbles: true,
-        composed: true,
-        detail: { paneId: 5, data: testData },
-      }),
-    );
-
-    expect(sendPaneInputSpy).toHaveBeenCalledWith(5, testData);
-  });
-
-  it('translates pane-resize event to sendControl resize-pane', async () => {
-    el = await fixture(makeState());
-    const socket = (el as any)._socket;
-    const sendControlSpy = vi.spyOn(socket, 'sendControl');
-
-    const layout = el.shadowRoot!.querySelector('mux-layout')!;
-    layout.dispatchEvent(
-      new CustomEvent('pane-resize', {
-        bubbles: true,
-        composed: true,
-        detail: { paneId: 5, cols: 120, rows: 40 },
-      }),
-    );
-
-    expect(sendControlSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'resize-pane', paneId: 5, cols: 120, rows: 40 }),
-    );
-  });
-
   it('translates pane-focus event to sendControl select-pane', async () => {
     el = await fixture(makeState());
     const socket = (el as any)._socket;
@@ -243,17 +209,14 @@ describe('MuxApp', () => {
     );
   });
 
-  it('_routePaneOutput calls writeData on the target pane element', async () => {
+  it('_routePaneOutput calls terminalRegistry.write with paneId and data', async () => {
     el = await fixture(makeState());
-    // Mock the layout's getPaneElement method
-    const layout = el.shadowRoot!.querySelector('mux-layout')!;
-    const mockPaneEl = { writeData: vi.fn() };
-    vi.spyOn(layout as any, 'getPaneElement').mockReturnValue(mockPaneEl);
 
+    const writeSpy = vi.spyOn(terminalRegistry, 'write');
     const testData = new Uint8Array([65, 66, 67]);
     (el as any)._routePaneOutput(5, testData);
 
-    expect(mockPaneEl.writeData).toHaveBeenCalledWith(testData);
+    expect(writeSpy).toHaveBeenCalledWith(5, testData);
   });
 
   it('renders empty state gracefully when no sessions', async () => {

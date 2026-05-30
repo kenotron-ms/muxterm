@@ -1,5 +1,11 @@
-// Mock ghostty-web for testing
-// This file is aliased as 'ghostty-web' in vite.config.ts
+// Mock xterm-like terminal for testing.
+// This file is aliased as:
+//   'ghostty-web'       → setup.ts  (original)
+//   '@xterm/xterm'      → setup.ts  (exact-match RegExp in vite.config.ts)
+//   '@xterm/addon-fit'  → setup.ts  (exact-match RegExp in vite.config.ts)
+//
+// Added vs original: onBinary / _onBinaryCbs / simulateBinaryInput
+// (needed by terminal-registry which calls term.onBinary(...)).
 
 export async function init(): Promise<void> {
   // async noop
@@ -11,6 +17,7 @@ export class Terminal {
   element: HTMLElement | null = null;
 
   _onDataCbs: Array<(data: string) => void> = [];
+  _onBinaryCbs: Array<(data: string) => void> = [];
   _onResizeCbs: Array<(size: { cols: number; rows: number }) => void> = [];
   _writtenData: Uint8Array[] = [];
 
@@ -32,6 +39,11 @@ export class Terminal {
     this._onDataCbs.push(cb);
   }
 
+  /** Added: forward binary mouse reports (X10/UTF-8 encoding). */
+  onBinary(cb: (data: string) => void): void {
+    this._onBinaryCbs.push(cb);
+  }
+
   onResize(cb: (size: { cols: number; rows: number }) => void): void {
     this._onResizeCbs.push(cb);
   }
@@ -42,6 +54,7 @@ export class Terminal {
 
   dispose(): void {
     this._onDataCbs = [];
+    this._onBinaryCbs = [];
     this._onResizeCbs = [];
     this._writtenData = [];
     this.element = null;
@@ -71,6 +84,13 @@ export class Terminal {
 
   simulateInput(data: string): void {
     for (const cb of this._onDataCbs) {
+      cb(data);
+    }
+  }
+
+  /** Added: trigger binary input callbacks (for onBinary testing). */
+  simulateBinaryInput(data: string): void {
+    for (const cb of this._onBinaryCbs) {
       cb(data);
     }
   }

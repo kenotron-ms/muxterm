@@ -1,32 +1,25 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 
 // Import the component — this triggers custom element registration
 import '../components/pane.js';
 
-// Type alias for our component to access internal mock Terminal
+// Import the registry so we can prime it and clean it up between tests
+import { terminalRegistry } from '../lib/terminal-registry.js';
+
 import type { MuxPane } from '../components/pane.js';
 
-// Mock Terminal interface — test helpers exposed by setup.ts mock
-interface MockTerminal {
-  getWrittenData(): Uint8Array[];
-  simulateInput(data: string): void;
-  _onResizeCbs: Array<(size: { cols: number; rows: number }) => void>;
-  focus(): void;
-  dispose(): void;
-}
-
-function createElement(): MuxPane {
+function createElement(paneId = 0): MuxPane {
   const el = document.createElement('mux-pane') as MuxPane;
+  if (paneId !== 0) el.setAttribute('pane-id', String(paneId));
   return el;
 }
 
-async function fixture(): Promise<MuxPane> {
-  const el = createElement();
+async function fixture(paneId = 0): Promise<MuxPane> {
+  const el = createElement(paneId);
   document.body.appendChild(el);
   await el.updateComplete;
-  // Wait for connectedCallback async init
+  // Wait for the connectedCallback updateComplete.then(...) to fire
   await new Promise((r) => setTimeout(r, 50));
-  await el.updateComplete;
   return el;
 }
 
@@ -37,8 +30,13 @@ describe('MuxPane', () => {
     if (el && el.parentNode) {
       el.parentNode.removeChild(el);
     }
+    // Clean up registry state between tests
+    terminalRegistry.prune(new Set());
   });
 
+  // ──────────────────────────────────────────────────────────
+  // Registration
+  // ──────────────────────────────────────────────────────────
   describe('registration', () => {
     it('registers as mux-pane custom element', () => {
       const Ctor = customElements.get('mux-pane');
@@ -52,6 +50,9 @@ describe('MuxPane', () => {
     });
   });
 
+  // ──────────────────────────────────────────────────────────
+  // Default properties
+  // ──────────────────────────────────────────────────────────
   describe('default properties', () => {
     it('has paneId defaulting to 0', () => {
       el = createElement();
@@ -80,6 +81,9 @@ describe('MuxPane', () => {
     });
   });
 
+  // ──────────────────────────────────────────────────────────
+  // Rendering
+  // ──────────────────────────────────────────────────────────
   describe('rendering', () => {
     it('renders a #container div', async () => {
       el = await fixture();
@@ -89,92 +93,53 @@ describe('MuxPane', () => {
     });
   });
 
-  describe('terminal initialization', () => {
-    it('creates a terminal inside the container after connect', async () => {
-      el = await fixture();
-      const container = el.shadowRoot!.querySelector('#container');
-      // The mock Terminal.open() appends a canvas element
-      const canvas = container!.querySelector('canvas');
-      expect(canvas).toBeTruthy();
-    });
-  });
+  // ──────────────────────────────────────────────────────────
+  // Terminal attachment (registry-based)
+  // ──────────────────────────────────────────────────────────
+  describe('terminal attachment', () => {
+    it('attaches registry hostEl into #container after ensure + connect', async () => {
+      // Prime the registry BEFORE connecting the element
+      terminalRegistry.ensure(99, { onInput: vi.fn(), onResize: vi.fn() });
 
-  describe('public API', () => {
-    it('writeData writes string data to the terminal', async () => {
-      el = await fixture();
-      el.writeData('hello');
-      // Access the mock terminal to verify
-      const term = (el as any)._term as MockTerminal;
+      el = createElement(99);
+      document.body.appendChild(el);
+      await el.updateComplete;
+      await new Promise((r) => setTimeout(r, 50)); // let updateComplete.then fire
+
+      const container = el.shadowRoot!.querySelector('#container')!;
+      // The mock Terminal.open() appends a canvas to hostEl; hostEl is in container
+      expect(container.firstChild).toBeTruthy();
+    });
+
+    it('does NOT dispose terminal on disconnect — registry still holds it', async () => {
+      terminalRegistry.ensure(88, { onInput: vi.fn(), onResize: vi.fn() });
+
+      el = createElement(88);
+      document.body.appendChild(el);
+      await el.updateComplete;
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Spy on the mock terminal's dispose method
+      const term = terminalRegistry.getTerminal(88);
       expect(term).toBeTruthy();
-      const written = term.getWrittenData();
-      expect(written.length).toBeGreaterThan(0);
-    });
+      const disposeSpy = vi.spyOn(term!, 'dispose');
 
-    it('writeData writes Uint8Array data to the terminal', async () => {
-      el = await fixture();
-      const data = new Uint8Array([104, 101, 108, 108, 111]);
-      el.writeData(data);
-      const term = (el as any)._term as MockTerminal;
-      const written = term.getWrittenData();
-      expect(written.length).toBeGreaterThan(0);
-    });
+      // Disconnect
+      el.parentNode!.removeChild(el);
 
-    it('focusTerminal calls focus on the terminal', async () => {
-      el = await fixture();
-      const term = (el as any)._term as MockTerminal;
-      const spy = vi.spyOn(term, 'focus');
-      el.focusTerminal();
-      expect(spy).toHaveBeenCalled();
+      // dispose must NOT have been called
+      expect(disposeSpy).not.toHaveBeenCalled();
+      // The registry still has the entry
+      expect(terminalRegistry.getTerminal(88)).toBeTruthy();
     });
   });
 
+  // ──────────────────────────────────────────────────────────
+  // Events
+  // ──────────────────────────────────────────────────────────
   describe('events', () => {
-    it('dispatches pane-input with paneId and data when terminal receives input', async () => {
-      el = await fixture();
-      el.paneId = 7;
-
-      const handler = vi.fn();
-      el.addEventListener('pane-input', handler);
-
-      const term = (el as any)._term as MockTerminal;
-      term.simulateInput('test-data');
-
-      expect(handler).toHaveBeenCalledTimes(1);
-      const event = handler.mock.calls[0][0] as CustomEvent;
-      expect(event.bubbles).toBe(true);
-      expect(event.composed).toBe(true);
-      expect(event.detail.paneId).toBe(7);
-      expect(event.detail.data).toBeInstanceOf(Uint8Array);
-      // Verify the data content is the encoded string
-      const decoded = new TextDecoder().decode(event.detail.data);
-      expect(decoded).toBe('test-data');
-    });
-
-    it('dispatches pane-resize with paneId, cols, rows when terminal resizes', async () => {
-      el = await fixture();
-      el.paneId = 3;
-
-      const handler = vi.fn();
-      el.addEventListener('pane-resize', handler);
-
-      const term = (el as any)._term as MockTerminal;
-      // Trigger resize callbacks
-      for (const cb of term._onResizeCbs) {
-        cb({ cols: 120, rows: 40 });
-      }
-
-      expect(handler).toHaveBeenCalledTimes(1);
-      const event = handler.mock.calls[0][0] as CustomEvent;
-      expect(event.bubbles).toBe(true);
-      expect(event.composed).toBe(true);
-      expect(event.detail.paneId).toBe(3);
-      expect(event.detail.cols).toBe(120);
-      expect(event.detail.rows).toBe(40);
-    });
-
     it('dispatches pane-focus with paneId on container mousedown', async () => {
-      el = await fixture();
-      el.paneId = 5;
+      el = await fixture(5);
 
       const handler = vi.fn();
       el.addEventListener('pane-focus', handler);
@@ -187,18 +152,6 @@ describe('MuxPane', () => {
       expect(event.bubbles).toBe(true);
       expect(event.composed).toBe(true);
       expect(event.detail.paneId).toBe(5);
-    });
-  });
-
-  describe('cleanup', () => {
-    it('disposes terminal on disconnect', async () => {
-      el = await fixture();
-      const term = (el as any)._term as MockTerminal;
-      const spy = vi.spyOn(term, 'dispose');
-
-      el.parentNode!.removeChild(el);
-
-      expect(spy).toHaveBeenCalled();
     });
   });
 });

@@ -5,6 +5,7 @@ import { MuxSocket, buildWsUrl } from './ws.js';
 import type { TmuxState, Window } from './types.js';
 import type { MuxLayout } from './components/layout.js';
 import type { SessionInfo } from './components/session-picker.js';
+import { terminalRegistry } from './lib/terminal-registry.js';
 
 // Side-effect imports — register child custom elements
 import './components/tab-bar.js';
@@ -169,6 +170,41 @@ export class MuxApp extends LitElement {
     }
   }
 
+  /**
+   * Before each render, synchronise the terminal registry with the current
+   * tmux state. This ensure()s a persistent Terminal for EVERY pane across
+   * ALL windows in ALL sessions (not just the active window), so background
+   * windows stay fed and their scrollback is preserved on tab switch.
+   * Panes that no longer exist in tmux are prune()'d (disposed).
+   */
+  override willUpdate(_changedProperties: Map<PropertyKey, unknown>): void {
+    super.willUpdate(_changedProperties);
+    this._syncTerminals();
+  }
+
+  private _syncTerminals(): void {
+    const liveIds = new Set<number>();
+    for (const session of this._tmuxState.sessions) {
+      for (const window of session.windows) {
+        for (const pane of window.panes) {
+          const paneId = pane.id;
+          terminalRegistry.ensure(paneId, {
+            onInput: (data) => this._socket?.sendPaneInput(paneId, data),
+            onResize: (cols, rows) =>
+              this._socket?.sendControl({
+                type: 'resize-pane',
+                paneId,
+                cols,
+                rows,
+              }),
+          });
+          liveIds.add(paneId);
+        }
+      }
+    }
+    terminalRegistry.prune(liveIds);
+  }
+
   render() {
     const activeSession = this._tmuxState.sessions.find(
       (s) => s.name === this._tmuxState.activeSession,
@@ -216,8 +252,6 @@ export class MuxApp extends LitElement {
             <mux-layout
               layout-string=${activeWindow?.layout ?? ''}
               active-pane-id=${activePaneId}
-              @pane-input=${this._onPaneInput}
-              @pane-resize=${this._onPaneResize}
               @pane-focus=${this._onPaneSelect}
             ></mux-layout>
           `}
@@ -273,27 +307,6 @@ export class MuxApp extends LitElement {
     });
   };
 
-  private _onPaneInput = (e: CustomEvent<{ paneId: number; data: Uint8Array }>): void => {
-    this._socket?.sendPaneInput(e.detail.paneId, e.detail.data);
-  };
-
-  private _onPaneResize = (
-    e: CustomEvent<{ paneId: number; cols: number; rows: number }>,
-  ): void => {
-    // Resize only — tell tmux the new size and let it reflow naturally. We do
-    // NOT clear+recapture (request-sync) here: under a fast resize that fires
-    // many times, the overlapping clear+recapture cycles race with each other
-    // and with tmux's live reflow output, stacking duplicate content on screen.
-    // The initial connect already gets a full-sync; ongoing resizes ride on
-    // tmux's own reflow %output. xterm.js reflows its own buffer to match.
-    this._socket?.sendControl({
-      type: 'resize-pane',
-      paneId: e.detail.paneId,
-      cols: e.detail.cols,
-      rows: e.detail.rows,
-    });
-  };
-
   private _onPaneSelect = (e: CustomEvent<{ paneId: number }>): void => {
     this._socket?.sendControl({
       type: 'select-pane',
@@ -320,11 +333,7 @@ export class MuxApp extends LitElement {
   };
 
   private _resetAllPaneTerminals(): void {
-    const layout = this.shadowRoot?.querySelector('mux-layout') as any;
-    if (!layout?.shadowRoot) return;
-    layout.shadowRoot.querySelectorAll('mux-pane').forEach((p: any) => {
-      if (typeof p.resetTerminal === 'function') p.resetTerminal();
-    });
+    terminalRegistry.resetAll();
   }
 
   private _onSessionSelected = (e: CustomEvent<{ name: string }>): void => {
@@ -333,13 +342,9 @@ export class MuxApp extends LitElement {
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {
-    const layout = this.shadowRoot?.querySelector('mux-layout') as MuxLayout | null;
-    if (layout) {
-      const paneEl = layout.getPaneElement(paneId);
-      if (paneEl) {
-        (paneEl as any).writeData(data);
-      }
-    }
+    // Write directly to the registry — works for ALL panes (including
+    // background windows whose mux-pane element is not in the DOM).
+    terminalRegistry.write(paneId, data);
   }
 
   private _pollConnectionStatus(): void {

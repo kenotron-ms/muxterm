@@ -108,11 +108,12 @@ export class MuxLayout extends LitElement {
   }
 
   private _renderLeaf(node: LayoutLeaf) {
-    // Key by paneId so Lit creates a FRESH mux-pane (and a fresh xterm
-    // instance) for each distinct pane. Without this, Lit reuses the same
-    // <mux-pane> element across window switches — it just rewrites the
-    // pane-id attribute — so every window ends up sharing ONE terminal.
-    // Keying forces disconnect (dispose old xterm) + reconnect (new xterm).
+    // Key by paneId so Lit creates one mux-pane shell per distinct pane.
+    // Without this, Lit reuses the same <mux-pane> element across window
+    // switches — it just rewrites the pane-id attribute — so every window
+    // ends up sharing ONE shell. Keying ensures each pane gets its own
+    // dedicated shell element. The terminal itself lives in terminalRegistry
+    // and survives unmounting/remounting intact (scrollback preserved).
     return keyed(
       node.paneId,
       html`<mux-pane
