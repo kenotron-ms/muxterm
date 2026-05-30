@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Event is the interface implemented by all tmux control mode notification types.
@@ -330,10 +331,12 @@ type ControllerConfig struct {
 
 // Controller manages tmux state and command dispatch.
 type Controller struct {
-	state  TmuxState
-	cmds   *CommandWriter
-	events chan Event
-	reader io.Reader
+	state    TmuxState
+	cmds     *CommandWriter
+	events   chan Event
+	reader   io.Reader
+	done     chan struct{} // closed by Stop() to unblock any in-progress send
+	stopOnce sync.Once
 }
 
 // NewController creates a Controller from the given configuration.
@@ -342,7 +345,15 @@ func NewController(cfg ControllerConfig) *Controller {
 		cmds:   &CommandWriter{W: cfg.Writer},
 		events: cfg.Events,
 		reader: cfg.Reader,
+		done:   make(chan struct{}),
 	}
+}
+
+// Stop signals the controller to stop forwarding events. Safe to call multiple
+// times. Must be called before the events consumer exits to prevent Run() from
+// blocking on a send into an unread channel.
+func (c *Controller) Stop() {
+	c.stopOnce.Do(func() { close(c.done) })
 }
 
 // State returns a pointer to the controller's TmuxState.
@@ -355,29 +366,95 @@ func (c *Controller) Commands() *CommandWriter {
 	return c.cmds
 }
 
+// internalBufSize is the capacity of the staging channel between the PTY reader
+// and the dispatcher goroutine. 8192 events is enough to absorb a sendStateSync
+// write (which can hold writeMu for several hundred milliseconds while sending
+// thousands of lines of captured history) without the PTY reader stalling.
+const internalBufSize = 8192
+
 // Run reads events from the reader, applies them to state, and forwards
 // them to the events channel. Returns nil on io.EOF.
+//
+// # Two-goroutine architecture
+//
+// The PTY reader (this goroutine) MUST NEVER block on sending to the external
+// events channel. If it does, it stops draining the kernel PTY read buffer.
+// When that buffer fills, tmux's event loop stalls on its own stdout write,
+// which prevents tmux from reading new stdin input — including our send-keys
+// commands — so keyboard input silently freezes.
+//
+// To decouple PTY drainage from the (potentially slow) event consumer:
+//
+//   - This goroutine reads from the PTY and sends to an internal staging
+//     channel with a NON-BLOCKING send. The staging channel has enough
+//     headroom (internalBufSize) that drops never occur in normal interactive
+//     use; overflow is a safety valve for pathological conditions.
+//
+//   - A dispatcher goroutine reads from the staging channel and forwards to
+//     c.events with a BLOCKING send (correct backpressure to the consumer).
+//     The dispatcher is allowed to block because it is not the PTY reader.
 func (c *Controller) Run() error {
 	defer close(c.events)
 
 	er := NewEventReader(bufio.NewReader(c.reader))
+
+	// internal is the staging channel between this goroutine (PTY reader) and
+	// the dispatcher below. The PTY reader sends here non-blocking so it can
+	// never be stalled by a slow external consumer.
+	internal := make(chan Event, internalBufSize)
+
+	// Dispatcher goroutine: forwards events from internal to the external
+	// c.events channel with blocking semantics (backpressure to wireEvents).
+	// This goroutine IS allowed to block on c.events — it is not the PTY reader.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case ev, ok := <-internal:
+				if !ok {
+					return // staging channel closed — PTY reader is done
+				}
+				select {
+				case c.events <- ev:
+				case <-c.done:
+					return
+				}
+			case <-c.done:
+				return
+			}
+		}
+	}()
+
+	// PTY reader loop — MUST NOT block. A non-blocking send to internal keeps
+	// the PTY always drained regardless of consumer speed.
+	var runErr error
 	for {
 		ev, err := er.ReadEvent()
 		if err != nil {
-			if err == io.EOF {
-				return nil
+			if err != io.EOF {
+				runErr = fmt.Errorf("controller run: %w", err)
 			}
-			return fmt.Errorf("controller run: %w", err)
+			break
 		}
-
 		c.applyEvent(ev)
 
-		// Non-blocking send to events channel
+		// Non-blocking send to the staging channel. Drop only if internal is
+		// full, which requires internalBufSize undelivered events — far beyond
+		// normal interactive load. Structural events missed here are recovered
+		// by the 5-second periodic state sync; output events are visual-only
+		// and will reappear on the next capture-pane replay.
 		select {
-		case c.events <- ev:
+		case internal <- ev:
 		default:
+			// safety valve: drop rather than stall PTY drainage
 		}
 	}
+
+	close(internal)
+	wg.Wait()
+	return runErr
 }
 
 // applyEvent dispatches the event to the appropriate state mutation method.

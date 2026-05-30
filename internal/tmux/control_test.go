@@ -3,6 +3,7 @@ package tmux
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -485,6 +486,191 @@ func TestEventReader_CommandError(t *testing.T) {
 	}
 	if cr.Lines[0] != "error line" {
 		t.Errorf("Lines[0]: got %q, want %q", cr.Lines[0], "error line")
+	}
+}
+
+// TestController_BlockingOutput_NoneDropped verifies that all events are
+// delivered even when the consumer reads slowly. The dispatcher goroutine
+// (inside Run) blocks on the external events channel when it is full, so the
+// consumer can absorb events at its own pace without any being silently
+// dropped. Events are queued in the internal staging buffer (internalBufSize)
+// so the PTY reader is never stalled regardless of consumer speed.
+func TestController_BlockingOutput_NoneDropped(t *testing.T) {
+	const N = 50
+
+	pr, pw := io.Pipe()
+
+	// Tiny channel forces backpressure — producer must wait for consumer.
+	events := make(chan Event, 4)
+	ctrl := NewController(ControllerConfig{
+		Reader: pr,
+		Writer: io.Discard,
+		Events: events,
+	})
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- ctrl.Run() }()
+
+	// Write N %output events then close the pipe (signals EOF to Run).
+	var sb strings.Builder
+	for i := 0; i < N; i++ {
+		fmt.Fprintf(&sb, "%%output %%0 line%d\n", i)
+	}
+	if _, err := pw.Write([]byte(sb.String())); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	pw.Close()
+
+	// Slow consumer: 1ms delay per event simulates a sluggish downstream.
+	var collected []Event
+	timeout := time.After(10 * time.Second)
+loop:
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				break loop
+			}
+			time.Sleep(time.Millisecond)
+			collected = append(collected, ev)
+		case <-timeout:
+			t.Fatal("timed out — potential deadlock or event loss")
+		}
+	}
+
+	if err := <-runDone; err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	if len(collected) != N {
+		t.Fatalf("expected %d events, got %d (%d dropped)", N, len(collected), N-len(collected))
+	}
+
+	// Verify delivery order — no reordering, no duplicates.
+	for i, ev := range collected {
+		out, ok := ev.(OutputEvent)
+		if !ok {
+			t.Fatalf("event %d: expected OutputEvent, got %T", i, ev)
+		}
+		want := fmt.Sprintf("line%d", i)
+		if string(out.Data) != want {
+			t.Errorf("event %d: data = %q, want %q", i, out.Data, want)
+		}
+	}
+}
+
+// TestController_Stop_UnblocksRun verifies that calling Stop() on a controller
+// whose events channel consumer has already exited causes Run() to return
+// promptly rather than blocking forever.
+func TestController_Stop_UnblocksRun(t *testing.T) {
+	pr, pw := io.Pipe()
+
+	// Channel with no buffer: first send will block if no consumer.
+	events := make(chan Event, 0)
+	ctrl := NewController(ControllerConfig{
+		Reader: pr,
+		Writer: io.Discard,
+		Events: events,
+	})
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- ctrl.Run() }()
+
+	// Write one event to get Run() into the blocking send.
+	pw.Write([]byte("%output %0 hello\n"))
+
+	// Call Stop() to unblock the blocked send; Run() should return nil.
+	ctrl.Stop()
+	// Close the pipe so Run() can exit its read loop cleanly.
+	pw.Close()
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run() returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not return after Stop() — deadlock detected")
+	}
+}
+
+// TestController_PTYReaderNeverStalls verifies that the PTY reader goroutine
+// inside Run() keeps draining the PTY even when the external events consumer
+// is completely stopped. This is the regression test for the keyboard-freeze bug.
+//
+// Root cause of the bug: in the old blocking-send design, a full events channel
+// would stall Run() inside the select statement. Run() IS the PTY reader, so
+// stopping it stopped PTY drainage. The kernel PTY buffer then filled up,
+// stalling tmux's own event-loop write, which prevented tmux from reading stdin.
+// Keyboard input (send-keys -H) was enqueued in the kernel stdin buffer but
+// never processed because tmux's event loop was stuck on the blocked write.
+//
+// This test proves the fix: Run() splits into a PTY-reader goroutine (this) and
+// a dispatcher goroutine. The PTY reader uses a non-blocking send to an internal
+// buffer so it can never stall, even when the dispatcher or the external consumer
+// is blocked.
+//
+// Mechanism: write more than bufio.Reader's internal buffer (4096 bytes) so
+// that pw.Write() MUST block in io.Pipe until Run() performs additional
+// ReadString calls. With the old blocking-send design, Run() stalls after the
+// second event (events channel capacity = 2), bufio stops reading from the pipe,
+// and pw.Write() never completes — test times out. With the new design, Run()
+// keeps reading and pw.Write() completes quickly.
+func TestController_PTYReaderNeverStalls(t *testing.T) {
+	pr, pw := io.Pipe()
+
+	// Tiny events channel — simulates a completely stalled consumer (e.g.
+	// wireEvents blocked on BroadcastPaneOutput while sendStateSync holds writeMu).
+	events := make(chan Event, 2)
+	ctrl := NewController(ControllerConfig{
+		Reader: pr,
+		Writer: io.Discard,
+		Events: events,
+	})
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- ctrl.Run() }()
+
+	// Build a payload large enough to overflow bufio.Reader's default 4096-byte
+	// buffer. Each %output line is ~20 bytes; 300 events ≈ 5.8 KB >> 4096 bytes.
+	// io.Pipe is fully synchronous: pw.Write blocks until the reader consumes all
+	// bytes. If Run() stalls (old behaviour), pw.Write never completes.
+	const N = 300
+	var sb strings.Builder
+	for i := 0; i < N; i++ {
+		fmt.Fprintf(&sb, "%%output %%0 event%d\n", i)
+	}
+	payload := []byte(sb.String())
+
+	// Write from a goroutine so we can time it out.
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := pw.Write(payload)
+		writeDone <- err
+	}()
+
+	// pw.Write must complete quickly — Run() must keep draining the PTY.
+	// If this times out, the PTY reader is stalled (keyboard-freeze bug is back).
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("pipe write failed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pipe write blocked for 5s — PTY reader is not draining (keyboard-freeze bug reproduced)")
+	}
+
+	// Clean shutdown: Stop() unblocks the dispatcher, Close() unblocks ReadEvent.
+	ctrl.Stop()
+	pw.Close()
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run() returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return after Stop() — deadlock")
 	}
 }
 
