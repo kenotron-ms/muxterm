@@ -59,6 +59,53 @@ export class MuxStore {
         this._sessionList = msg.data.sessions;
         break;
 
+      case 'window-add': {
+        const session = this._state.sessions.find(
+          (s) => s.name === this._state.activeSession,
+        );
+        if (session) {
+          session.windows.push(msg.data);
+        }
+        break;
+      }
+
+      case 'window-renamed': {
+        for (const s of this._state.sessions) {
+          const win = s.windows.find((w) => w.id === msg.data.id);
+          if (win) {
+            win.name = msg.data.name;
+            break;
+          }
+        }
+        break;
+      }
+
+      case 'window-close': {
+        for (const s of this._state.sessions) {
+          const idx = s.windows.findIndex((w) => w.id === msg.data.id);
+          if (idx !== -1) {
+            s.windows.splice(idx, 1);
+            break;
+          }
+        }
+        break;
+      }
+
+      case 'layout-change': {
+        for (const s of this._state.sessions) {
+          const win = s.windows.find((w) => w.id === msg.data.windowId);
+          if (win) {
+            win.layout = msg.data.layout;
+            break;
+          }
+        }
+        break;
+      }
+
+      case 'session-window-changed':
+        this._state.activeWindow = msg.data.windowId;
+        break;
+
       case 'detached':
         break;
 
