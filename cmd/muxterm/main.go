@@ -82,7 +82,7 @@ func runLocal(cfg Config) error {
 	// the session dies (e.g. last window closed), then waits for the user to ask
 	// for a new one. The HTTP server stays up the whole time — closing the last
 	// window shows the "no active session" page, it never shuts muxterm down.
-	go superviseSession(ctx, pool, srv.Hub(), syncer)
+	go supervisePool(ctx, pool, srv.Hub(), syncer)
 	go periodicStateSync(ctx, adapter, srv.Hub())
 	go openBrowser("http://" + cfg.Addr)
 
@@ -118,7 +118,7 @@ func runServe(cfg Config) error {
 	// Supervisor owns the tmux lifecycle (see runLocal for rationale): the HTTP
 	// server survives session death; closing the last window shows the
 	// "no active session" page rather than tearing muxterm down.
-	go superviseSession(ctx, pool, srv.Hub(), syncer)
+	go supervisePool(ctx, pool, srv.Hub(), syncer)
 	go periodicStateSync(ctx, adapter, srv.Hub())
 
 	// Generate and print access token
@@ -675,77 +675,68 @@ func emptyTmuxState() *tmux.TmuxState {
 	return &tmux.TmuxState{Sessions: []tmux.Session{}}
 }
 
-// superviseSession owns the tmux control lifecycle. It attaches a session and
-// runs until that session dies, then shows the "no active session" page and
-// waits for the user to request a new one — the HTTP server never goes down.
-func superviseSession(ctx context.Context, pool *controllerPool, hub *server.Hub, syncer *stateSyncCoalescer) {
+// supervisePool owns the tmux control lifecycle for a pool of sessions. On boot
+// it attaches the first session; then it blocks waiting for switch requests,
+// recreate requests, or context cancellation.
+func supervisePool(ctx context.Context, pool *controllerPool, hub *server.Hub, syncer *stateSyncCoalescer) {
+	name, err := tmux.EnsureRunning()
+	if err != nil {
+		log.Printf("supervisor: ensure session: %v", err)
+	} else {
+		startSession(ctx, pool, hub, syncer, name, true)
+	}
+
 	for {
-		// Drain any stale recreate request so we don't immediately re-loop.
 		select {
-		case <-pool.recreate:
-		default:
-		}
-
-		if !attachAndRun(ctx, pool, hub, syncer) {
-			return // context cancelled — server shutting down
-		}
-
-		// The session ended (last window closed, tmux killed, etc.). Tell every
-		// client there's no session so they show the create page, then wait for
-		// a create request or shutdown.
-		pool.clear()
-		hub.BroadcastEvent("state", emptyTmuxState())
-		log.Printf("supervisor: no active session — waiting for create request")
-
-		select {
-		case <-pool.recreate:
-			log.Printf("supervisor: create requested — attaching new session")
 		case <-ctx.Done():
 			return
+		case name := <-pool.switchReq:
+			startSession(ctx, pool, hub, syncer, name, true)
+		case <-pool.recreate:
+			name, err := tmux.EnsureRunning()
+			if err != nil {
+				log.Printf("supervisor: ensure session: %v", err)
+				continue
+			}
+			startSession(ctx, pool, hub, syncer, name, true)
 		}
 	}
 }
 
-// attachAndRun ensures a tmux session exists, attaches control mode, and runs
-// wireEvents until the session dies. Returns false only if ctx was cancelled
-// (so the supervisor should stop); true means "session ended, loop again".
-func attachAndRun(ctx context.Context, pool *controllerPool, hub *server.Hub, syncer *stateSyncCoalescer) bool {
-	sessionName, err := tmux.EnsureRunning()
+// startSession attaches (or reuses) a named tmux session and, if newly attached,
+// configures it and launches an event-reader goroutine. It always triggers a
+// state push and logs progress.
+func startSession(ctx context.Context, pool *controllerPool, hub *server.Hub, syncer *stateSyncCoalescer, name string, activate bool) {
+	wasExisting := pool.get(name) != nil
+	cs, err := pool.ensure(name)
 	if err != nil {
-		log.Printf("supervisor: ensure session: %v", err)
-		return ctx.Err() == nil
+		log.Printf("supervisor: startSession %q: %v", name, err)
+		return
 	}
-
-	ctrl, ptmx, events, cleanup, err := startTmuxControl(sessionName)
-	if err != nil {
-		log.Printf("supervisor: attach %q: %v", sessionName, err)
-		return ctx.Err() == nil
+	if activate {
+		pool.setActive(name)
 	}
-	defer cleanup()
-
-	if err := applyMuxtermConfig(ctrl); err != nil {
-		log.Printf("warn: tmux config: %v", err)
+	if !wasExisting {
+		if err := applyMuxtermConfig(cs.ctrl); err != nil {
+			log.Printf("warn: tmux config for %q: %v", name, err)
+		}
+		// Size the fresh session to the browser's last-known dimensions.
+		if cols, rows := pool.size(); cols > 0 && rows > 0 {
+			_ = cs.ctrl.Commands().RefreshClientSize(cols, rows)
+		}
+		go func() {
+			wireEvents(name, pool, cs.events, hub, cs.ctrl, syncer)
+			pool.remove(name)
+			if len(pool.names()) == 0 {
+				hub.BroadcastEvent("state", emptyTmuxState())
+			} else {
+				syncer.trigger()
+			}
+			log.Printf("supervisor: session %q ended", name)
+		}()
 	}
-
-	pool.set(ctrl, ptmx)
-
-	// Size the fresh session to the browser's last-known dimensions. The browser
-	// only emits a resize when ITS size changes, which doesn't happen on a
-	// server-side re-attach — so without this the new session is stuck at tmux's
-	// 80x24 default (and zsh's PROMPT_SP partial-line marker, a stray "%", leaks
-	// because the shell's COLUMNS no longer matches what the browser renders).
-	// refresh-client -C is the only mechanism that resizes a control-mode client.
-	if cols, rows := pool.size(); cols > 0 && rows > 0 {
-		_ = ctrl.Commands().RefreshClientSize(cols, rows)
-	}
-
-	syncer.trigger() // push the fresh session's state to all clients
-	log.Printf("supervisor: attached to session %q", sessionName)
-
-	wireEvents(events, hub, ctrl, syncer) // blocks until the session/control dies
-
-	log.Printf("supervisor: session %q ended", sessionName)
-	return ctx.Err() == nil
+	syncer.trigger()
+	log.Printf("supervisor: attached to session %q (activate=%v)", name, activate)
 }
 
 // stateSyncCoalescer collapses a burst of structural tmux events into a single
@@ -789,10 +780,15 @@ func (c *stateSyncCoalescer) trigger() {
 // structure always reflects tmux truth. Only pane OUTPUT (terminal bytes) and
 // content captures stream as deltas.
 // It exits when the events channel is closed (controller stopped).
-func wireEvents(events <-chan tmux.Event, hub *server.Hub, ctrl *tmux.Controller, sync *stateSyncCoalescer) {
+func wireEvents(sessionName string, pool *controllerPool, events <-chan tmux.Event, hub *server.Hub, ctrl *tmux.Controller, sync *stateSyncCoalescer) {
 	for ev := range events {
 		switch e := ev.(type) {
 		case tmux.OutputEvent:
+			// First-attached-wins ownership: skip output for panes owned by
+			// another session (avoids duplicate broadcasts when sessions share panes).
+			if !pool.claimPane(sessionName, e.PaneID) {
+				continue
+			}
 			// Strip tmux DCS pass-through wrappers (\033Ptmux;...\033\) around
 			// terminal escape sequences (OSC, shell integration, etc.).
 			data := stripDCS(e.Data)
@@ -818,7 +814,8 @@ func wireEvents(events <-chan tmux.Event, hub *server.Hub, ctrl *tmux.Controller
 			// for ALL panes regardless of active window). Re-capturing here
 			// would write a screenful on top of an already-populated terminal,
 			// duplicating content on every tab switch.
-
+		case tmux.SessionsChangedEvent:
+			sync.trigger()
 		case tmux.PaneModeChangedEvent:
 			// Pane mode (copy-mode etc.) — structural enough to resync.
 			sync.trigger()
@@ -832,15 +829,4 @@ func wireEvents(events <-chan tmux.Event, hub *server.Hub, ctrl *tmux.Controller
 	}
 }
 
-// firstSession returns the name of the first available tmux session.
-func firstSession() (string, error) {
-	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
-	if err != nil {
-		return "", err
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) == 0 || lines[0] == "" {
-		return "", fmt.Errorf("no tmux sessions available")
-	}
-	return lines[0], nil
-}
+

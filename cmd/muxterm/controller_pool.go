@@ -234,29 +234,4 @@ func (p *controllerPool) ownsPane(name, paneID string) bool {
 	return p.owner[paneID] == name
 }
 
-// set registers ctrl as the sole active session (pool-of-1 shim).
-// It reads ctrl.State().ActiveSessionName() to determine the session name,
-// inserts a controllerSession into the map, and sets active.
-// This is a temporary compatibility shim deleted in Task 4.
-func (p *controllerPool) set(ctrl *tmux.Controller, ptmx *os.File) {
-	name := ctrl.State().ActiveSessionName()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.sessions[name] = &controllerSession{
-		name:    name,
-		ctrl:    ctrl,
-		ptmx:    ptmx,
-		cleanup: func() {},
-	}
-	p.active = name
-}
 
-// clear removes all sessions from the map, clears the owner map, and sets active to "".
-// This is a temporary compatibility shim deleted in Task 4.
-func (p *controllerPool) clear() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.sessions = make(map[string]*controllerSession)
-	p.owner = make(map[string]string)
-	p.active = ""
-}

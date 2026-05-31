@@ -155,6 +155,40 @@ func TestControllerPool_PaneOwnershipDedup(t *testing.T) {
 	}
 }
 
+// TestControllerPool_SwitchActivatesTarget verifies the switch contract:
+// after requestSwitch("ops"), the channel has a pending value; consuming it
+// then calling ensure()+setActive() results in activeName()=="ops" and get("ops")!=nil.
+func TestControllerPool_SwitchActivatesTarget(t *testing.T) {
+	var attached []string
+	pool := newControllerPool(fakeAttach(&attached))
+
+	// Request a switch to "ops"
+	pool.requestSwitch("ops")
+
+	// Verify a value is pending in the channel (non-blocking receive)
+	select {
+	case name := <-pool.switchReq:
+		if name != "ops" {
+			t.Fatalf("expected switch request for 'ops', got %q", name)
+		}
+	default:
+		t.Fatal("expected pending switch request, got none")
+	}
+
+	// Simulate what supervisePool does on receiving a switch request
+	if _, err := pool.ensure("ops"); err != nil {
+		t.Fatalf("ensure ops: %v", err)
+	}
+	pool.setActive("ops")
+
+	if pool.activeName() != "ops" {
+		t.Errorf("expected activeName='ops', got %q", pool.activeName())
+	}
+	if pool.get("ops") == nil {
+		t.Error("expected get('ops') to return non-nil after ensure()")
+	}
+}
+
 // TestControllerPool_RememberSize verifies that rememberSize stores dimensions
 // and ignores non-positive values.
 func TestControllerPool_RememberSize(t *testing.T) {
