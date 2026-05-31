@@ -4,7 +4,7 @@ import './layout.js';
 import './region-tabstrip.js';
 import './browser-surface.js';
 import './settings-surface.js';
-import { isTerminalSurface, type SurfaceKind } from '../types.js';
+import { isTerminalSurface, type SurfaceKind, type SessionInfo } from '../types.js';
 import type { Window } from '../types.js';
 
 @customElement('mux-region')
@@ -52,6 +52,12 @@ export class MuxRegion extends LitElement {
   @property({ type: Number, attribute: 'active-window-id' })
   activeWindowId = 0;
 
+  @property({ attribute: false })
+  sessions: SessionInfo[] = [];
+
+  @property({ type: String, attribute: 'active-session' })
+  activeSession = '';
+
   @property({ type: String })
   surfaceKind: SurfaceKind = 'terminal';
 
@@ -85,6 +91,8 @@ export class MuxRegion extends LitElement {
         .sessionName="${this.sessionName}"
         .windows="${this.windows}"
         .activeWindowId="${this.activeWindowId}"
+        .sessions="${this.sessions}"
+        .activeSession="${this.activeSession}"
         .isDriver="${this.surfaceKind === 'driver'}"
         @tab-select="${this._forwardEvent}"
         @tab-close="${this._forwardEvent}"
@@ -92,6 +100,8 @@ export class MuxRegion extends LitElement {
         @open-session-picker="${this._forwardEvent}"
         @region-maximize="${this._forwardEvent}"
         @region-action="${this._forwardEvent}"
+        @session-selected="${this._forwardEvent}"
+        @new-session="${this._forwardEvent}"
       ></mux-region-tabstrip>
       <div class="body">
         ${isTerminalSurface(this.surfaceKind)

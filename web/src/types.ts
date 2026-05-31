@@ -78,7 +78,8 @@ export type ClientMessage =
   | { type: 'rename-window'; windowId: number; name: string }
   | { type: 'create-session'; name: string }
   | { type: 'attach-session'; name: string }
-  | { type: 'request-sync' };
+  | { type: 'request-sync' }
+  | { type: 'open-settings' };
 
 export interface MuxStoreEvents {
   change: TmuxState;

@@ -2,10 +2,11 @@ import { LitElement, html, css, unsafeCSS } from 'lit';
 import type { PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { styleMap } from 'lit/directives/style-map.js';
-import type { Window } from '../types.js';
+import type { Window, SessionInfo } from '../types.js';
 import { CHROME } from '../lib/theme.js';
 import type { RegionAction } from './region-menu.js';
 import './region-menu.js';
+import './session-picker.js';
 import { icon } from '../lib/icons.js';
 import { ChevronDown, Ellipsis, Maximize2, X } from 'lucide';
 
@@ -215,19 +216,33 @@ export class MuxRegionTabstrip extends LitElement {
   @property({ attribute: false })
   runningWindowIds: number[] = [];
 
+  /** Sessions list for the inline session dropdown. */
+  @property({ attribute: false })
+  sessions: SessionInfo[] = [];
+
+  /** The currently-active session name (used to show a checkmark). */
+  @property({ type: String })
+  activeSession = '';
+
   // Fix 4: optimistic tab selection — shows the clicked tab as active
   // immediately without waiting for the server round-trip.
   @state() private _optimisticWindowId: number | null = null;
 
-  // Fix 6: region ⋯ menu state, managed here so we can position it correctly.
+  // Region ⋯ menu state, managed here so we can position it correctly.
   @state() private _menuOpen = false;
   @state() private _menuRect: { top: number; right: number } | null = null;
 
-  /** Bound so it can be removed in disconnectedCallback. */
+  // Session dropdown state — toggles when the session chip is clicked.
+  @state() private _showSessionDropdown = false;
+  @state() private _sessionDropdownRect: { top: number; left: number } | null = null;
+
+  /** Bound so it can be removed in disconnectedCallback. Closes both menus. */
   private _onOutsideMenuClick = (e: MouseEvent): void => {
-    if (this._menuOpen && !this.contains(e.target as Node)) {
+    if ((this._menuOpen || this._showSessionDropdown) && !this.contains(e.target as Node)) {
       this._menuOpen = false;
       this._menuRect = null;
+      this._showSessionDropdown = false;
+      this._sessionDropdownRect = null;
     }
   };
 
@@ -260,8 +275,35 @@ export class MuxRegionTabstrip extends LitElement {
   }
 
   private _onChipClick(): void {
-    this._emit('open-session-picker');
+    if (this._showSessionDropdown) {
+      this._showSessionDropdown = false;
+      this._sessionDropdownRect = null;
+      return;
+    }
+    const btn = this.shadowRoot?.querySelector<HTMLElement>('.session-chip');
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      this._sessionDropdownRect = { top: rect.bottom + 2, left: rect.left };
+    }
+    this._showSessionDropdown = true;
   }
+
+  /** Handle session-selected from the inline session picker. */
+  private _onSessionPickerSelected = (e: Event): void => {
+    e.stopPropagation();
+    this._showSessionDropdown = false;
+    this._sessionDropdownRect = null;
+    const ev = e as CustomEvent<{ name: string }>;
+    this._emit('session-selected', { name: ev.detail.name });
+  };
+
+  /** Handle new-session from the inline session picker. */
+  private _onSessionPickerNewSession = (e: Event): void => {
+    e.stopPropagation();
+    this._showSessionDropdown = false;
+    this._sessionDropdownRect = null;
+    this._emit('new-session', {});
+  };
 
   private _onTabClick(windowId: number): void {
     // Fix 4: set optimistic state immediately so the active indicator moves
@@ -372,6 +414,29 @@ export class MuxRegionTabstrip extends LitElement {
             <mux-region-menu
               @region-action="${this._onRegionAction}"
             ></mux-region-menu>
+          </div>`
+        : ''}
+
+      ${this._showSessionDropdown && this._sessionDropdownRect
+        ? html`<div
+            style="${styleMap({
+              position: 'fixed',
+              top: `${this._sessionDropdownRect.top}px`,
+              left: `${this._sessionDropdownRect.left}px`,
+              zIndex: '2000',
+            })}"
+          >
+            <mux-session-picker
+              .inline="${true}"
+              .sessions="${this.sessions}"
+              .currentSession="${this.activeSession}"
+              @session-selected="${this._onSessionPickerSelected}"
+              @new-session="${this._onSessionPickerNewSession}"
+              @close-picker="${() => {
+                this._showSessionDropdown = false;
+                this._sessionDropdownRect = null;
+              }}"
+            ></mux-session-picker>
           </div>`
         : ''}
     `;

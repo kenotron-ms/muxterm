@@ -71,20 +71,31 @@ describe('MuxRegionTabstrip', () => {
     expect(tabs[1].classList.contains('active')).toBe(true);
   });
 
-  it('emits open-session-picker (bubbles, composed) on session chip click', async () => {
+  it('toggles inline session picker on session chip click (does NOT emit open-session-picker)', async () => {
     el = await fixture({ sessionName: 'main' });
 
-    const handler = vi.fn();
-    el.addEventListener('open-session-picker', handler as EventListener);
+    // No open-session-picker event anymore — chip click shows the inline dropdown.
+    const noEvent = vi.fn();
+    el.addEventListener('open-session-picker', noEvent as EventListener);
 
     const chip = el.shadowRoot!.querySelector('.session-chip') as HTMLButtonElement;
     expect(chip).toBeTruthy();
-    chip.click();
 
-    expect(handler).toHaveBeenCalledTimes(1);
-    const event = handler.mock.calls[0][0] as CustomEvent;
-    expect(event.bubbles).toBe(true);
-    expect(event.composed).toBe(true);
+    // Before click: no inline picker present.
+    expect(el.shadowRoot!.querySelector('mux-session-picker')).toBeNull();
+
+    chip.click();
+    await el.updateComplete;
+
+    // After click: inline picker is rendered inside the fixed portal.
+    expect(el.shadowRoot!.querySelector('mux-session-picker')).toBeTruthy();
+    // And the old event is NOT emitted.
+    expect(noEvent).not.toHaveBeenCalled();
+
+    // Clicking again closes it.
+    chip.click();
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('mux-session-picker')).toBeNull();
   });
 
   it('emits tab-select (bubbles, composed) with windowId on tab click, and emits region-maximize on maximize button', async () => {

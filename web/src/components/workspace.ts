@@ -2,7 +2,7 @@ import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { Workspace, Region } from '../lib/workspace.js';
-import type { TmuxState, Window } from '../types.js';
+import type { TmuxState, Window, SessionInfo } from '../types.js';
 import { CellBudgetManager } from '../lib/cell-budget.js';
 import { ResizeCoalescer } from '../lib/resize-coalescer.js';
 import type { CellMetrics, PixelBox } from '../lib/cell-budget.js';
@@ -299,15 +299,23 @@ export class MuxWorkspace extends LitElement {
   }
 
   private _renderRegion(region: Region) {
-    const win = this._findWindow(region.surface.sessionName, region.surface.windowId);
+    // All windows for this session — shown in the per-region tab strip.
+    const sessionWindows = this._sessionWindows(region.surface.sessionName);
+    // The active (focused) window for this session — used for BOTH the tab highlight
+    // AND the layout/pane content rendered in the body. Computing this FIRST ensures
+    // that clicking a tab updates the displayed terminal, not just the active indicator.
+    const sessionActiveWindowId = this._sessionActiveWindowId(region.surface.sessionName);
+    const win = this._findWindow(region.surface.sessionName, sessionActiveWindowId);
     const windowName = win?.name ?? '';
     const layoutString = win?.layout ?? '';
     const activePaneId = win?.panes.find((p) => p.active)?.id ?? -1;
 
-    // All windows for this session — shown in the per-region tab strip.
-    const sessionWindows = this._sessionWindows(region.surface.sessionName);
-    // The active (focused) window for this session.
-    const sessionActiveWindowId = this._sessionActiveWindowId(region.surface.sessionName);
+    // Session list for the inline session-dropdown inside the tab strip.
+    const sessions: SessionInfo[] = (this.tmuxState?.sessions ?? []).map((s) => ({
+      name: s.name,
+      windows: s.windows.length,
+    }));
+    const activeSession = this.tmuxState?.activeSession ?? '';
 
     return html`
       <div class="region-slot" style="flex: ${region.weight}">
@@ -320,6 +328,8 @@ export class MuxWorkspace extends LitElement {
           .activePaneId="${activePaneId}"
           .windows="${sessionWindows}"
           .activeWindowId="${sessionActiveWindowId}"
+          .sessions="${sessions}"
+          .activeSession="${activeSession}"
           @region-action="${(e: Event) => {
             e.stopPropagation();
             const ev = e as CustomEvent<{ action: RegionAction }>;

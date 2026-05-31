@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -540,6 +541,36 @@ func (a *controllerAdapter) NewSession(name string) error {
 func (a *controllerAdapter) AttachSession(name string) error {
 	a.pool.requestSwitch(name)
 	return nil
+}
+
+// OpenSettings opens the muxterm config file in an editor in a new tmux window.
+// It tries $EDITOR first, then vim, nano, vi. If no session is live, returns errNoSession.
+func (a *controllerAdapter) OpenSettings() error {
+	ctrl := a.pool.controller()
+	if ctrl == nil {
+		return errNoSession
+	}
+	editor := findEditor()
+	configPath := config.DefaultPath()
+	// Ensure the config directory exists so the editor can save.
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		log.Printf("open-settings: mkdir: %v", err)
+	}
+	cmd := fmt.Sprintf("%s '%s'", editor, configPath)
+	return ctrl.Commands().NewWindowWithCommand("settings", cmd)
+}
+
+// findEditor returns the first available editor from $EDITOR, vim, nano, vi.
+func findEditor() string {
+	for _, ed := range []string{os.Getenv("EDITOR"), "vim", "nano", "vi"} {
+		if ed == "" {
+			continue
+		}
+		if _, err := exec.LookPath(ed); err == nil {
+			return ed
+		}
+	}
+	return "nano"
 }
 
 // SessionList returns a snapshot of all running tmux sessions.

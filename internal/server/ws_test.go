@@ -141,6 +141,7 @@ func (m *mockEngine) AttachSession(name string) error {
 func (m *mockEngine) SessionList() []SessionInfo {
 	return []SessionInfo{{Name: "dev", Windows: 1}}
 }
+func (m *mockEngine) OpenSettings() error { return nil }
 func (m *mockEngine) getCommandCalls() []commandCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -339,6 +339,8 @@ export class MuxApp extends LitElement {
               @tab-select="${this._onTabSelect}"
               @tab-new="${this._onTabNew}"
               @tab-close="${this._onTabClose}"
+              @session-selected="${this._onSessionSelected}"
+              @new-session="${this._onNewSessionCreate}"
             ></mux-workspace>
           `}
       <mux-status-bar
@@ -446,6 +448,12 @@ export class MuxApp extends LitElement {
     this._socket?.sendControl({ type: 'attach-session', name: e.detail.name });
   };
 
+  /** Create a brand-new tmux session from the inline dropdown "New session" button. */
+  private _onNewSessionCreate = (): void => {
+    const name = `session-${Date.now().toString(36)}`;
+    this._socket?.sendControl({ type: 'create-session', name });
+  };
+
   private _onLauncherAction = (e: CustomEvent<{ action: LauncherAction }>): void => {
     const { action } = e.detail;
     switch (action) {
@@ -453,35 +461,16 @@ export class MuxApp extends LitElement {
         this._sessions = store.sessionList;
         this._showSessionPicker = true;
         break;
-      case 'open-driver':
-        this._socket?.sendControl({ type: 'create-session', name: 'driver' });
-        break;
-      case 'new-browser':
-        this._openSurfaceBeside('browser');
-        break;
       case 'settings':
-        this._openSurfaceBeside('settings');
+        // Ask the backend to open the config file in an editor ($EDITOR / vim / nano)
+        // in a new tmux window named "settings".
+        this._socket?.sendControl({ type: 'open-settings' });
         break;
       case 'reconnect':
         this._socket?.sendControl({ type: 'request-sync' });
         break;
-      case 'shortcuts':
-      case 'about':
-        // no-op placeholder
-        break;
     }
   };
-
-  private _openSurfaceBeside(kind: 'browser' | 'settings'): void {
-    // PHASE-3 INTEGRATION POINT: dispatch CustomEvent until real workspace API exists.
-    this.dispatchEvent(
-      new CustomEvent('open-surface-beside', {
-        bubbles: true,
-        composed: true,
-        detail: { kind },
-      }),
-    );
-  }
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {
     // Write directly to the registry — works for ALL panes (including

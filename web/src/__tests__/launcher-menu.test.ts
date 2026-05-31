@@ -23,19 +23,11 @@ describe('MuxLauncherMenu', () => {
     expect(ctor).toBeDefined();
   });
 
-  it('renders all 7 items in order with correct data-action values', async () => {
+  it('renders exactly 3 items (new-session, settings, reconnect) — no stubs', async () => {
     el = await fixture();
     const buttons = el.shadowRoot!.querySelectorAll('button[data-action]');
     const actions = Array.from(buttons).map((b) => b.getAttribute('data-action'));
-    expect(actions).toEqual([
-      'new-session',
-      'new-browser',
-      'open-driver',
-      'settings',
-      'shortcuts',
-      'reconnect',
-      'about',
-    ]);
+    expect(actions).toEqual(['new-session', 'settings', 'reconnect']);
   });
 
   it('dispatches launcher-action event with the clicked action in detail', async () => {
@@ -54,10 +46,11 @@ describe('MuxLauncherMenu', () => {
     expect(event.detail.action).toBe('new-session');
   });
 
-  it('marks the open-driver button with the driver class', async () => {
+  it('does not render removed stub items (new-browser, open-driver, shortcuts, about)', async () => {
     el = await fixture();
-    const driverBtn = el.shadowRoot!.querySelector('button[data-action="open-driver"]');
-    expect(driverBtn).toBeTruthy();
-    expect(driverBtn!.classList.contains('driver')).toBe(true);
+    expect(el.shadowRoot!.querySelector('button[data-action="new-browser"]')).toBeNull();
+    expect(el.shadowRoot!.querySelector('button[data-action="open-driver"]')).toBeNull();
+    expect(el.shadowRoot!.querySelector('button[data-action="shortcuts"]')).toBeNull();
+    expect(el.shadowRoot!.querySelector('button[data-action="about"]')).toBeNull();
   });
 });

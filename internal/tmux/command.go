@@ -91,6 +91,16 @@ func (c *CommandWriter) NewWindow(name string) error {
 	return c.send("new-window -n %s", name)
 }
 
+// NewWindowWithCommand creates a new window that runs a shell command.
+// name may be empty (tmux picks a name from the command).
+// command is passed verbatim as the window's startup command.
+func (c *CommandWriter) NewWindowWithCommand(name, command string) error {
+	if name == "" {
+		return c.send("new-window -- %s", command)
+	}
+	return c.send("new-window -n %s -- %s", name, command)
+}
+
 // ClosePane kills a pane.
 func (c *CommandWriter) ClosePane(paneID string) error {
 	return c.send("kill-pane -t %s", paneID)

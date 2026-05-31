@@ -42,6 +42,9 @@ type TmuxEngine interface {
 	AttachSession(name string) error
 	// SessionList returns a snapshot of all running tmux sessions.
 	SessionList() []SessionInfo
+	// OpenSettings opens the muxterm config file in an editor ($EDITOR / vim / nano)
+	// in a new tmux window named "settings".
+	OpenSettings() error
 }
 
 // Client represents a connected WebSocket client.
@@ -483,6 +486,12 @@ func (h *Hub) dispatchAction(action string, payload json.RawMessage) error {
 			return fmt.Errorf("resize-surface: %w", err)
 		}
 		return h.surfaceRouter.Resize(SurfaceID(p.SurfaceID), p.Cols, p.Rows)
+
+	case "open-settings":
+		if err := h.engine.OpenSettings(); err != nil {
+			log.Printf("open-settings: %v", err)
+		}
+		return nil
 
 	default:
 		return fmt.Errorf("unknown action: %s", action)
