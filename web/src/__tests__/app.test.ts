@@ -378,6 +378,40 @@ describe('MuxApp', () => {
       await el.updateComplete;
       expect((el as any)._showSessionPicker).toBe(true);
     });
+
+    it('open-session-picker from mux-workspace opens session picker', async () => {
+      el = await fixture(makeState());
+      expect((el as any)._showSessionPicker).toBe(false);
+      const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
+      expect(workspace).toBeTruthy();
+      workspace.dispatchEvent(
+        new CustomEvent('open-session-picker', { bubbles: true, composed: true }),
+      );
+      await el.updateComplete;
+      expect((el as any)._showSessionPicker).toBe(true);
+    });
+
+    it('_ensureActiveRegion does not open a region when one is detached (pop-out race)', async () => {
+      el = await fixture(makeState());
+      const ws = (el as any)._workspace;
+      // The workspace starts with 1 region auto-opened by _ensureActiveRegion
+      expect(ws.regions.length).toBe(1);
+      const region = ws.regions[0];
+
+      // Simulate _detachRegion: remove from regions and track as detached
+      ws.regions = [];
+      // After fix: detachedRegionIds exists and blocks _ensureActiveRegion from re-creating
+      if (ws.detachedRegionIds) {
+        ws.detachedRegionIds.add(region.id);
+      }
+
+      // Trigger willUpdate → _ensureActiveRegion
+      el.requestUpdate();
+      await el.updateComplete;
+
+      // regions must still be empty — no ghost region was created
+      expect(ws.regions.length).toBe(0);
+    });
   });
 
   describe('Reconnect Overlay', () => {

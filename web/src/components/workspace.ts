@@ -258,6 +258,7 @@ export class MuxWorkspace extends LitElement {
     if (!region) return;
     this._detachedRegions.set(regionId, region);
     this.workspace.regions = this.workspace.regions.filter((r) => r.id !== regionId);
+    this.workspace.detachedRegionIds.add(regionId);
     this.requestUpdate();
   }
 
@@ -270,6 +271,7 @@ export class MuxWorkspace extends LitElement {
     if (!region || !this.workspace) return;
     this._detachedRegions.delete(regionId);
     this.workspace.regions.push(region);
+    this.workspace.detachedRegionIds.delete(regionId);
     this.requestUpdate();
   }
 

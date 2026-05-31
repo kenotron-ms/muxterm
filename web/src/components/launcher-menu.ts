@@ -54,10 +54,6 @@ export class MuxLauncherMenu extends LitElement {
     button.driver {
       color: ${unsafeCSS(CHROME.driverAccent)};
     }
-
-    .close-region:hover {
-      color: ${unsafeCSS(CHROME.danger)};
-    }
   `;
 
   private _dispatch(action: LauncherAction): void {

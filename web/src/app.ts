@@ -196,7 +196,11 @@ export class MuxApp extends LitElement {
       (r) => r.surface.sessionName === session && r.surface.windowId === windowId,
     );
 
-    if (this._workspace.regions.length === 0 && !alreadyMounted) {
+    if (
+      this._workspace.regions.length === 0 &&
+      this._workspace.detachedRegionIds.size === 0 &&
+      !alreadyMounted
+    ) {
       this._workspace.openRegion({ sessionName: session, windowId });
     }
   }
@@ -274,6 +278,7 @@ export class MuxApp extends LitElement {
               .tmuxState=${this._tmuxState}
               @pane-focus=${this._onPaneSelect}
               @resize-surface=${this._onSurfaceResize}
+              @open-session-picker=${this._onOpenSessionPicker}
             ></mux-workspace>
           `}
       <mux-status-bar
@@ -376,7 +381,7 @@ export class MuxApp extends LitElement {
     const { action } = e.detail;
     switch (action) {
       case 'new-session':
-        this._socket?.sendControl({ type: 'list-sessions' });
+        this._sessions = store.sessionList;
         this._showSessionPicker = true;
         break;
       case 'open-driver':

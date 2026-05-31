@@ -18,6 +18,10 @@ export interface Region {
 export class Workspace {
   regions: Region[] = [];
   maximizedRegionId: string | null = null;
+  /** Tracks regions currently popped out to an external window. Used by
+   * app.ts to suppress _ensureActiveRegion when all docked regions are
+   * temporarily gone due to a pop-out (not a true empty state). */
+  readonly detachedRegionIds = new Set<string>();
   private _surfaceCounter = 0;
   private _regionCounter = 0;
 
