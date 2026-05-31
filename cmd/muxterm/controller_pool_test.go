@@ -109,6 +109,52 @@ func TestControllerPool_ActiveRouting(t *testing.T) {
 	}
 }
 
+// TestControllerPool_PaneOwnershipDedup verifies first-attached-wins pane ownership:
+// the first session to claimPane wins, subsequent claims by other sessions fail,
+// and ownership is released when the owning session is removed.
+func TestControllerPool_PaneOwnershipDedup(t *testing.T) {
+	var attached []string
+	pool := newControllerPool(fakeAttach(&attached))
+
+	// Attach both sessions so remove() can find them in p.sessions.
+	if _, err := pool.ensure("dev"); err != nil {
+		t.Fatalf("ensure dev: %v", err)
+	}
+	if _, err := pool.ensure("ops"); err != nil {
+		t.Fatalf("ensure ops: %v", err)
+	}
+
+	// dev claims %1 first → should succeed
+	if !pool.claimPane("dev", "%1") {
+		t.Fatal("dev: claimPane(%1) should return true on first claim")
+	}
+	if !pool.ownsPane("dev", "%1") {
+		t.Error("dev: ownsPane(%1) should be true after claiming")
+	}
+
+	// ops claims the same %1 → should fail (dev already owns it)
+	if pool.claimPane("ops", "%1") {
+		t.Fatal("ops: claimPane(%1) should return false — dev already owns it")
+	}
+	if pool.ownsPane("ops", "%1") {
+		t.Error("ops: ownsPane(%1) should be false — ops does not own it")
+	}
+
+	// ops claims a different pane %2 → should succeed
+	if !pool.claimPane("ops", "%2") {
+		t.Fatal("ops: claimPane(%2) should return true on first claim for that pane")
+	}
+
+	// After remove("dev"), ops can re-claim %1
+	pool.remove("dev")
+	if !pool.claimPane("ops", "%1") {
+		t.Fatal("ops: claimPane(%1) should return true after dev was removed")
+	}
+	if !pool.ownsPane("ops", "%1") {
+		t.Error("ops: ownsPane(%1) should be true after re-claiming")
+	}
+}
+
 // TestControllerPool_RememberSize verifies that rememberSize stores dimensions
 // and ignores non-positive values.
 func TestControllerPool_RememberSize(t *testing.T) {

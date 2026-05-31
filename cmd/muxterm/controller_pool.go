@@ -212,3 +212,24 @@ func (p *controllerPool) requestSwitch(name string) {
 	default:
 	}
 }
+
+// claimPane attempts to assign ownership of paneID to name (first-attached-wins).
+// Write-locked. Returns true if name already owned paneID or successfully claimed it.
+// Returns false if paneID is owned by a different session.
+func (p *controllerPool) claimPane(name, paneID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if existing, ok := p.owner[paneID]; ok {
+		return existing == name
+	}
+	p.owner[paneID] = name
+	return true
+}
+
+// ownsPane reports whether name is the registered owner of paneID.
+// Read-locked.
+func (p *controllerPool) ownsPane(name, paneID string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.owner[paneID] == name
+}
