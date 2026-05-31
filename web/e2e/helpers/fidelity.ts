@@ -124,6 +124,11 @@ export function compareLayout(
   // ±1 cell tolerance absorbs sub-pixel rounding
   const near = (a: number, b: number): boolean => Math.abs(a - b) <= 1;
 
+  // Guard against unrendered terminal (zero dimensions produce NaN, not a useful diff)
+  if (measured.rowHeight === 0 || measured.cellWidth === 0) {
+    throw new Error('compareLayout: measured rowHeight/cellWidth must be > 0 (terminal not yet rendered?)');
+  }
+
   // Convert pixels to cell units
   const measuredRowsScrolled = Math.round(measured.scrollTop / measured.rowHeight);
   const measuredCols = Math.round(measured.clientWidth / measured.cellWidth);

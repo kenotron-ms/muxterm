@@ -1,7 +1,7 @@
 # 3-Source Harness Verification Notes
 
 How to self-verify every pane re-parent against `make dev` using the
-three-source harness introduced in Phase 3.
+three-source harness introduced in Phase 2.
 
 ---
 

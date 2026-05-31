@@ -22,7 +22,7 @@
  *   node --experimental-strip-types web/e2e/content-fidelity.mjs --pane 1
  */
 
-import { execFileSync } from 'child_process';
+import { execFileSync } from 'node:child_process';
 import { compareContent } from './helpers/fidelity.ts';
 
 // ---------------------------------------------------------------------------
