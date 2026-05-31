@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/user/muxterm/internal/config"
 	"github.com/user/muxterm/internal/deploy"
 	"github.com/user/muxterm/internal/server"
 	"github.com/user/muxterm/internal/service"
@@ -73,6 +74,8 @@ func runLocal(cfg Config) error {
 		Addr:     cfg.Addr,
 		StaticFS: mustSubFS(webstatic.Dist, "dist"),
 	}, adapter)
+	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
+	srv.Hub().SetResolvedConfig(resolved)
 	syncer := newStateSyncCoalescer(adapter, srv.Hub())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -110,6 +113,8 @@ func runServe(cfg Config) error {
 		Secret:   secret,
 		StaticFS: mustSubFS(webstatic.Dist, "dist"),
 	}, adapter)
+	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
+	srv.Hub().SetResolvedConfig(resolved)
 	syncer := newStateSyncCoalescer(adapter, srv.Hub())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

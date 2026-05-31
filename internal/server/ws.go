@@ -157,10 +157,20 @@ func (c *Client) close() {
 
 // Hub manages WebSocket clients and their interaction with the tmux engine.
 type Hub struct {
-	clients       map[*Client]bool
-	mu            sync.RWMutex
-	engine        TmuxEngine
-	surfaceRouter *SurfaceRouter
+	clients        map[*Client]bool
+	mu             sync.RWMutex
+	engine         TmuxEngine
+	surfaceRouter  *SurfaceRouter
+	resolvedConfig any // muxterm-owned resolved config, shipped to clients on connect
+}
+
+// SetResolvedConfig stores the resolved configuration on the hub. The config is
+// stored as any so the server package takes no dependency on config package's
+// concrete type (only marshals to JSON when sending to clients).
+func (h *Hub) SetResolvedConfig(cfg any) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.resolvedConfig = cfg
 }
 
 // NewHub creates a new Hub with the given tmux engine.
