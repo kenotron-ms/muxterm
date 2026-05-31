@@ -283,6 +283,13 @@ func (h *Hub) sendStateSync(c *Client) {
 	if h.engine == nil {
 		return
 	}
+	if h.resolvedConfig != nil {
+		if cfgData, cfgErr := NewServerMsg("config", h.resolvedConfig); cfgErr != nil {
+			log.Printf("sendStateSync: config marshal error: %v", cfgErr)
+		} else if writeErr := c.writeText(cfgData); writeErr != nil {
+			log.Printf("sendStateSync: config write error: %v", writeErr)
+		}
+	}
 	// LiveState() queries tmux directly — always accurate, never stale.
 	state, liveErr := h.engine.LiveState()
 	if liveErr != nil {
