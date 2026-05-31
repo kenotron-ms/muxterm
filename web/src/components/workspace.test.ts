@@ -211,6 +211,44 @@ describe('MuxWorkspace', () => {
     }
   });
 
+  it('region-resize-drag from divider updates left/right region flex weights proportionally', async () => {
+    const ws = new Workspace();
+    ws.openRegion({ sessionName: 'main', windowId: 1 });
+    ws.openRegion({ sessionName: 'main', windowId: 2 });
+
+    const state = makeTmuxState([
+      {
+        name: 'main',
+        windows: [
+          { id: 1, name: 'vim', layout: '', panes: [] },
+          { id: 2, name: 'htop', layout: '', panes: [] },
+        ],
+      },
+    ]);
+
+    el = await fixture(ws, state);
+
+    const initialLeft = ws.regions[0].weight;
+    const initialRight = ws.regions[1].weight;
+    expect(initialLeft).toBe(1);
+    expect(initialRight).toBe(1);
+
+    // Dispatch region-resize-drag from the divider (negative deltaX = drag left = shrink left region)
+    const divider = el.shadowRoot!.querySelector('mux-region-divider')!;
+    divider.dispatchEvent(
+      new CustomEvent('region-resize-drag', {
+        bubbles: true,
+        composed: true,
+        detail: { deltaX: -100, deltaY: 0 },
+      }),
+    );
+
+    await el.updateComplete;
+
+    // Left region should have smaller weight (dragged left = shrinks left region)
+    expect(ws.regions[0].weight).toBeLessThan(ws.regions[1].weight);
+  });
+
   it('does not re-emit when the pixel change stays within the same cell boundary', async () => {
     vi.useFakeTimers();
     try {

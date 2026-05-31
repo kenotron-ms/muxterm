@@ -43,6 +43,40 @@ describe('MuxApp workspace integration', () => {
     }
   });
 
+  it('auto-seeds workspace region when activeWindow is 0 (falsy window id)', async () => {
+    // Regression: window id 0 is falsy in JS; _ensureActiveRegion must NOT bail out
+    const state: TmuxState = {
+      sessions: [
+        {
+          name: 'muxterm',
+          windows: [
+            {
+              id: 0,
+              name: 'zsh',
+              panes: [{ id: 0, width: 80, height: 24, active: true }],
+              layout: '80x24,0,0,0',
+            },
+          ],
+        },
+      ],
+      activeSession: 'muxterm',
+      activeWindow: 0,
+      activePane: 0,
+    };
+
+    el = document.createElement('mux-app') as MuxApp;
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    (el as any).injectStateForTest(state);
+    await el.updateComplete;
+
+    const ws = el.shadowRoot!.querySelector('mux-workspace') as any;
+    expect(ws).not.toBeNull();
+    // The workspace model should have one region auto-seeded for window 0
+    expect((el as any)._workspace.regions.length).toBe(1);
+  });
+
   it('renders mux-workspace after seedWorkspaceForTest', async () => {
     const state: TmuxState = {
       sessions: [

@@ -188,7 +188,7 @@ export class MuxApp extends LitElement {
   private _ensureActiveRegion(): void {
     const session = this._tmuxState.activeSession;
     const windowId = this._tmuxState.activeWindow;
-    if (!session || !windowId) return;
+    if (!session || windowId === null || windowId === undefined) return;
 
     const alreadyMounted = this._workspace.regions.some(
       (r) => r.surface.sessionName === session && r.surface.windowId === windowId,
