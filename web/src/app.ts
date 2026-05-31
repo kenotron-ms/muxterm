@@ -261,6 +261,7 @@ export class MuxApp extends LitElement {
         .paneCount=${activeWindow?.panes.length ?? 0}
         activeWindowName=${activeWindow?.name ?? ''}
         connectionStatus=${this._connectionStatus}
+        @open-session-picker=${this._onOpenSessionPicker}
       ></mux-status-bar>
       <div class="overlay ${this._connectionStatus === 'connected' ? 'hidden' : ''}">
         Connecting to muxterm...
@@ -321,9 +322,8 @@ export class MuxApp extends LitElement {
     if ('full-sync' in msg) {
       this._resetAllPaneTerminals();
     }
-    if ('sessions' in msg && Array.isArray(msg.sessions)) {
-      this._sessions = msg.sessions as SessionInfo[];
-      this._showSessionPicker = true;
+    if ('session-list' in msg) {
+      this._sessions = store.sessionList;
     }
     if ('detached' in msg && msg.detached && typeof msg.detached === 'object') {
       const detached = msg.detached as { reason?: string };
@@ -336,9 +336,14 @@ export class MuxApp extends LitElement {
     terminalRegistry.resetAll();
   }
 
+  private _onOpenSessionPicker = (): void => {
+    this._sessions = store.sessionList;
+    this._showSessionPicker = true;
+  };
+
   private _onSessionSelected = (e: CustomEvent<{ name: string }>): void => {
     this._showSessionPicker = false;
-    this._socket?.sendRaw(JSON.stringify({ 'attach-session': e.detail.name }));
+    this._socket?.sendControl({ type: 'attach-session', name: e.detail.name });
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {

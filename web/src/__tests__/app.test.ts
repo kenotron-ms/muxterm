@@ -171,7 +171,7 @@ describe('MuxApp', () => {
     );
   });
 
-  it('translates tab-close event to sendControl close-pane with windowId', async () => {
+  it('translates tab-close event to sendControl close-window with windowId', async () => {
     el = await fixture(makeState());
     const socket = (el as any)._socket;
     const sendControlSpy = vi.spyOn(socket, 'sendControl');
@@ -186,7 +186,7 @@ describe('MuxApp', () => {
     );
 
     expect(sendControlSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'close-pane', paneId: 1 }),
+      expect.objectContaining({ type: 'close-window', windowId: 1 }),
     );
   });
 
@@ -281,29 +281,53 @@ describe('MuxApp', () => {
       expect(picker.sessions).toEqual(sessions);
     });
 
-    it('shows session picker when control message has sessions key', async () => {
+    it('updates sessions from store on session-list control message (no auto-open)', async () => {
       el = await fixture(makeState());
       const socket = (el as any)._socket;
 
-      // Trigger the control message callback
-      const sessionsMsg = {
-        sessions: [
-          { name: 'dev', windows: 3 },
-          { name: 'staging', windows: 1 },
-        ],
-      };
-      socket._controlMessageCb?.(sessionsMsg);
+      // Pre-populate store with a session list
+      store.applyMessage({
+        type: 'session-list',
+        data: { sessions: [{ name: 'dev', windows: 3 }, { name: 'staging', windows: 1 }] },
+      });
+
+      // Trigger the control message callback with the session-list key
+      socket._controlMessageCb?.({ 'session-list': { sessions: [] } });
       await el.updateComplete;
 
+      // Picker should NOT be auto-shown
       const picker = el.shadowRoot!.querySelector('mux-session-picker');
-      expect(picker).toBeTruthy();
-      expect((picker as any).sessions).toEqual(sessionsMsg.sessions);
+      expect(picker).toBeNull();
+
+      // _sessions should be updated from store.sessionList
+      expect((el as any)._sessions).toEqual([
+        { name: 'dev', windows: 3 },
+        { name: 'staging', windows: 1 },
+      ]);
+    });
+
+    it('_onSessionSelected sends attach-session via typed sendControl and hides picker', async () => {
+      el = await fixture(makeState());
+      const sent: unknown[] = [];
+      (el as any)._socket = {
+        sendControl: (m: unknown) => sent.push(m),
+        connected: true,
+        disconnect: () => {},
+      };
+      (el as any)._showSessionPicker = true;
+
+      (el as any)._onSessionSelected(
+        new CustomEvent('session-selected', { detail: { name: 'ops' } }),
+      );
+
+      expect(sent).toContainEqual({ type: 'attach-session', name: 'ops' });
+      expect((el as any)._showSessionPicker).toBe(false);
     });
 
     it('hides session picker and sends attach-session on session-selected', async () => {
       el = await fixture(makeState());
       const socket = (el as any)._socket;
-      const sendRawSpy = vi.spyOn(socket, 'sendRaw');
+      const sendControlSpy = vi.spyOn(socket, 'sendControl');
 
       // Show the picker first
       (el as any)._showSessionPicker = true;
@@ -325,8 +349,8 @@ describe('MuxApp', () => {
       const pickerAfter = el.shadowRoot!.querySelector('mux-session-picker');
       expect(pickerAfter).toBeNull();
 
-      // Should have sent attach-session JSON via ws
-      expect(sendRawSpy).toHaveBeenCalledWith(JSON.stringify({ 'attach-session': 'dev' }));
+      // Should have sent attach-session via sendControl
+      expect(sendControlSpy).toHaveBeenCalledWith({ type: 'attach-session', name: 'dev' });
     });
   });
 
