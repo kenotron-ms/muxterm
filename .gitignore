@@ -18,6 +18,7 @@ web/package-lock.json
 *~
 
 # Build/Test
+.superpowers/
 .superpowers-checkpoint.json
 .pytest_cache/
 __pycache__/

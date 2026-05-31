@@ -1,0 +1,361 @@
+// storyboard.dot
+// muxterm — workspace UX state flow
+// Tokyo Night dark theme  ·  engine: dot  ·  rankdir: LR
+// Canonical reference for implementation plan + Playwright E2E tests.
+
+digraph muxterm_storyboard {
+
+    // ── Graph defaults ────────────────────────────────────────────────────
+    graph [
+        label       = "muxterm — workspace UX state flow\n(v1 scope; driver application = separate plan)"
+        labelloc    = t
+        fontname    = "Helvetica,Arial,sans-serif"
+        fontsize    = 17
+        fontcolor   = "#c0caf5"
+        bgcolor     = "#1a1b26"
+        rankdir     = LR
+        pad         = "0.8,0.6"
+        splines     = spline
+        nodesep     = 0.9
+        ranksep     = 1.4
+        compound    = true
+    ]
+
+    node [
+        fontname    = "Helvetica,Arial,sans-serif"
+        fontsize    = 12
+        fontcolor   = "#c0caf5"
+        style       = "filled,rounded"
+        fillcolor   = "#1f2335"
+        color       = "#3b4261"
+        penwidth    = 1.5
+        margin      = "0.22,0.14"
+    ]
+
+    edge [
+        fontname    = "Helvetica,Arial,sans-serif"
+        fontsize    = 10
+        fontcolor   = "#7dcfff"
+        color       = "#7aa2f7"
+        penwidth    = 1.5
+        arrowsize   = 0.85
+    ]
+
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // A  ·  WORKSPACE STATE MACHINE
+    // ═══════════════════════════════════════════════════════════════════════
+    subgraph cluster_workspace {
+        label       = "A  ·  workspace state machine"
+        fontname    = "Helvetica,Arial,sans-serif"
+        fontsize    = 13
+        fontcolor   = "#a9b1d6"
+        style       = "rounded"
+        color       = "#3b4261"
+        bgcolor     = "#16161e"
+        penwidth    = 1.5
+        margin      = 20
+
+        // ── Entry point ──────────────────────────────────────────────────
+        start [
+            label     = ""
+            shape     = circle
+            width     = 0.22
+            height    = 0.22
+            style     = filled
+            fillcolor = "#9ece6a"
+            color     = "#9ece6a"
+            penwidth  = 0
+        ]
+
+        // ── States ───────────────────────────────────────────────────────
+        solo [
+            label = <<B>SOLO</B><BR/>
+                      <FONT POINT-SIZE="10" COLOR="#a9b1d6">1 region visible  &#183;  window tabs + tmux panes</FONT>>
+            shape = box
+        ]
+
+        dock [
+            label = <<B>DOCK</B><BR/>
+                      <FONT POINT-SIZE="10" COLOR="#a9b1d6">2+ regions side by side  &#183;  per-region tab strips</FONT>>
+            shape = box
+        ]
+
+        maximized [
+            label = <<B>MAXIMIZED</B><BR/>
+                      <FONT POINT-SIZE="10" COLOR="#a9b1d6">1 region focused  &#183;  others to switcher</FONT>>
+            shape = box
+        ]
+
+        popped_out [
+            label     = <<B><FONT COLOR="#e0c8ff">POPPED-OUT</FONT></B><BR/>
+                          <FONT POINT-SIZE="10" COLOR="#c9a8ff">region in a separate OS window</FONT>>
+            shape     = box
+            fillcolor = "#221a31"
+            color     = "#bb9af7"
+            penwidth  = 2.0
+        ]
+
+        // ── Transitions ───────────────────────────────────────────────────
+        start      -> solo       [ label="" color="#9ece6a" penwidth=2.5 arrowsize=1.1 ]
+
+        solo       -> dock       [ label="open beside /\ndrag tab out" ]
+        dock       -> solo       [ label="close region\n(down to 1)" ]
+
+        dock       -> maximized  [ label="maximize" ]
+        maximized  -> dock       [ label="restore" ]
+
+        solo       -> popped_out [ label="pop out"
+                                   color="#bb9af7" fontcolor="#bb9af7" ]
+        dock       -> popped_out [ label="pop out"
+                                   color="#bb9af7" fontcolor="#bb9af7" ]
+        popped_out -> dock       [ label="close popped window\n(remount)"
+                                   color="#bb9af7" fontcolor="#bb9af7" ]
+
+        // ── Self-loops (internal activity — dashed gray) ──────────────────
+        solo -> solo [
+            label      = "split pane  &#183;  +window  &#183;  switch session"
+            style      = dashed
+            constraint = false
+            color      = "#565f89"
+            fontcolor  = "#565f89"
+            arrowsize  = 0.7
+        ]
+
+        dock -> dock [
+            label      = "split  &#183;  +window  &#183;  switch session  &#183;  open browser/settings"
+            style      = dashed
+            constraint = false
+            color      = "#565f89"
+            fontcolor  = "#565f89"
+            arrowsize  = 0.7
+        ]
+    }
+
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // B  ·  REGION CONTENT TYPES
+    // ═══════════════════════════════════════════════════════════════════════
+    subgraph cluster_content {
+        label       = "B  &#183;  region content  (what a region can hold)"
+        fontname    = "Helvetica,Arial,sans-serif"
+        fontsize    = 13
+        fontcolor   = "#a9b1d6"
+        style       = "rounded"
+        color       = "#3b4261"
+        bgcolor     = "#16161e"
+        penwidth    = 1.5
+        margin      = 20
+
+        launcher [
+            label     = <<B><FONT COLOR="#7aa2f7">global launcher</FONT></B>>
+            shape     = diamond
+            fillcolor = "#1a2038"
+            color     = "#7aa2f7"
+            penwidth  = 2.0
+            margin    = "0.38,0.24"
+        ]
+
+        term [
+            label = <<B>Terminal</B><BR/>
+                      <FONT POINT-SIZE="10" COLOR="#a9b1d6">tmux window  &#183;  cell-budget grid</FONT>>
+            shape = box
+        ]
+
+        browser [
+            label     = <<B><FONT COLOR="#7dcfff">Browser</FONT></B><BR/>
+                          <FONT POINT-SIZE="10" COLOR="#89d9f0">iframe  &#183;  pixel box</FONT>>
+            shape     = box
+            fillcolor = "#192535"
+            color     = "#7dcfff"
+            penwidth  = 2.0
+        ]
+
+        settings [
+            label     = <<B><FONT COLOR="#7dcfff">Settings</FONT></B><BR/>
+                          <FONT POINT-SIZE="10" COLOR="#89d9f0">panel  &#183;  pixel box</FONT>>
+            shape     = box
+            fillcolor = "#192535"
+            color     = "#7dcfff"
+            penwidth  = 2.0
+        ]
+
+        driver [
+            label     = <<B><FONT COLOR="#e0c8ff">Driver</FONT></B><BR/>
+                          <FONT POINT-SIZE="10" COLOR="#c9a8ff">agent TUI (terminal)  &#183;  SEPARATE PLAN</FONT>>
+            shape     = box
+            fillcolor = "#221a31"
+            color     = "#bb9af7"
+            penwidth  = 2.0
+        ]
+
+        // ── Notes ─────────────────────────────────────────────────────────
+        note_beside [
+            label     = <<FONT POINT-SIZE="10" COLOR="#a9b1d6"><B>*</B>  Opening content opens it <B>BESIDE</B> the focused region<BR/>
+                            &#160;&#160; &#8594; workspace transitions toward <B>DOCK</B></FONT>>
+            shape     = note
+            style     = filled
+            fillcolor = "#1c1d2e"
+            color     = "#414868"
+            penwidth  = 1.0
+            margin    = "0.18,0.12"
+        ]
+
+        note_driver_scope [
+            label     = <<FONT POINT-SIZE="10" COLOR="#c9a8ff"><B>!</B>  Driver application = separate plan<BR/>
+                            &#160;&#160; Only terminal-surface rendering is in v1 scope</FONT>>
+            shape     = note
+            style     = filled
+            fillcolor = "#221a31"
+            color     = "#bb9af7"
+            penwidth  = 1.0
+            margin    = "0.18,0.12"
+        ]
+
+        // ── Launcher → content edges ─────────────────────────────────────
+        launcher -> term     [ label="New session" ]
+        launcher -> browser  [ label="New browser" ]
+        launcher -> settings [ label="Settings" ]
+        launcher -> driver   [ label="Open driver"
+                               style=dashed color="#bb9af7" fontcolor="#bb9af7" ]
+
+        // ── Annotation ties (dotted, no arrowhead) ────────────────────────
+        launcher -> note_beside      [ style=dotted color="#414868"
+                                       arrowhead=none penwidth=1.0 constraint=false ]
+        driver   -> note_driver_scope [ style=dotted color="#bb9af7"
+                                        arrowhead=none penwidth=1.0 constraint=false ]
+    }
+
+
+    // ── Cross-cluster: workspace invokes the launcher → content pane opens ──
+    // (uses compound=true; ltail/lhead draw edge between cluster boundaries)
+    dock -> launcher [
+        ltail     = cluster_workspace
+        lhead     = cluster_content
+        label     = "open content pane\n(appears BESIDE focused region)"
+        style     = dashed
+        color     = "#7aa2f7"
+        fontcolor = "#7dcfff"
+        penwidth  = 1.2
+        arrowsize = 0.8
+        constraint = false
+        weight    = 0
+    ]
+
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // LEGEND  (HTML-table node; <HR/> is a sibling of <TR>, not inside <TD>)
+    // ═══════════════════════════════════════════════════════════════════════
+    subgraph cluster_legend {
+        label    = ""
+        style    = "rounded"
+        color    = "#3b4261"
+        bgcolor  = "#16161e"
+        penwidth = 1.5
+        margin   = 10
+
+        legend [
+            shape  = none
+            margin = 0
+            label  = <<TABLE BORDER="1" BGCOLOR="#16161e" COLOR="#3b4261"
+                              CELLBORDER="0" CELLSPACING="4" CELLPADDING="6"
+                              STYLE="ROUNDED">
+              <TR>
+                <TD COLSPAN="2" ALIGN="LEFT">
+                  <FONT COLOR="#7aa2f7" POINT-SIZE="12"><B> legend</B></FONT>
+                </TD>
+              </TR>
+              <HR/>
+              <TR>
+                <TD BGCOLOR="#9ece6a" WIDTH="14" HEIGHT="14"> </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#9ece6a" POINT-SIZE="10"> entry point</FONT>
+                </TD>
+              </TR>
+              <TR>
+                <TD BGCOLOR="#1f2335" BORDER="1" COLOR="#3b4261" WIDTH="14" HEIGHT="14"> </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#c0caf5" POINT-SIZE="10"> workspace state</FONT>
+                </TD>
+              </TR>
+              <TR>
+                <TD BGCOLOR="#221a31" BORDER="1" COLOR="#bb9af7" WIDTH="14" HEIGHT="14"> </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#bb9af7" POINT-SIZE="10"> OS window / separate plan</FONT>
+                </TD>
+              </TR>
+              <TR>
+                <TD BGCOLOR="#192535" BORDER="1" COLOR="#7dcfff" WIDTH="14" HEIGHT="14"> </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#7dcfff" POINT-SIZE="10"> pixel-box content</FONT>
+                </TD>
+              </TR>
+              <TR>
+                <TD BGCOLOR="#1a2038" BORDER="1" COLOR="#7aa2f7" WIDTH="14" HEIGHT="14"> </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#7aa2f7" POINT-SIZE="10"> global launcher (diamond)</FONT>
+                </TD>
+              </TR>
+              <TR>
+                <TD BGCOLOR="#1c1d2e" BORDER="1" COLOR="#414868" WIDTH="14" HEIGHT="14"> </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#a9b1d6" POINT-SIZE="10"> note / annotation</FONT>
+                </TD>
+              </TR>
+              <HR/>
+              <TR>
+                <TD ALIGN="CENTER">
+                  <FONT COLOR="#7aa2f7" POINT-SIZE="14">&#8212;</FONT>
+                </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#a9b1d6" POINT-SIZE="10"> state transition</FONT>
+                </TD>
+              </TR>
+              <TR>
+                <TD ALIGN="CENTER">
+                  <FONT COLOR="#9ece6a" POINT-SIZE="14">&#8212;</FONT>
+                </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#a9b1d6" POINT-SIZE="10"> initial entry</FONT>
+                </TD>
+              </TR>
+              <TR>
+                <TD ALIGN="CENTER">
+                  <FONT COLOR="#bb9af7" POINT-SIZE="14">&#8212;</FONT>
+                </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#a9b1d6" POINT-SIZE="10"> pop-out / driver transition</FONT>
+                </TD>
+              </TR>
+              <TR>
+                <TD ALIGN="CENTER">
+                  <FONT COLOR="#565f89" POINT-SIZE="13">- -</FONT>
+                </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#a9b1d6" POINT-SIZE="10"> internal activity (self-loop)</FONT>
+                </TD>
+              </TR>
+              <TR>
+                <TD ALIGN="CENTER">
+                  <FONT COLOR="#bb9af7" POINT-SIZE="13">- -</FONT>
+                </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#a9b1d6" POINT-SIZE="10"> out-of-scope link</FONT>
+                </TD>
+              </TR>
+              <TR>
+                <TD ALIGN="CENTER">
+                  <FONT COLOR="#414868" POINT-SIZE="13">. .</FONT>
+                </TD>
+                <TD ALIGN="LEFT">
+                  <FONT COLOR="#a9b1d6" POINT-SIZE="10"> annotation tie (no arrow)</FONT>
+                </TD>
+              </TR>
+            </TABLE>>
+        ]
+    }
+
+    // ── Invisible anchor: keeps legend connected to main graph ────────────
+    legend -> start [ style=invis constraint=false weight=0 ]
+
+}
