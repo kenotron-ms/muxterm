@@ -89,21 +89,13 @@ describe('MuxWorkspace pop-out orchestration', () => {
   // -------------------------------------------------------------------------
 
   async function triggerPopOut(workspaceEl: MuxWorkspace, regionId: string): Promise<void> {
-    // Step 1: Fire region-menu-open on the mux-region element so workspace
-    // records which region's menu is open.
+    // The region menu is now managed inside mux-region-tabstrip (not in the
+    // workspace shadow DOM). To trigger a region action, dispatch region-action
+    // directly from the mux-region element — this is the same event that the
+    // region-tabstrip's internal menu emits after the user clicks an action.
     const regionEl = findRegionEl(workspaceEl, regionId);
     expect(regionEl).toBeTruthy();
     regionEl!.dispatchEvent(
-      new CustomEvent('region-menu-open', { bubbles: true, composed: true }),
-    );
-    await workspaceEl.updateComplete;
-
-    // Step 2: The workspace should now render a mux-region-menu.
-    const menu = workspaceEl.shadowRoot!.querySelector('mux-region-menu');
-    expect(menu).toBeTruthy();
-
-    // Step 3: Dispatch the pop-out action from the menu.
-    menu!.dispatchEvent(
       new CustomEvent('region-action', {
         bubbles: true,
         composed: true,
@@ -218,21 +210,15 @@ describe('MuxWorkspace pop-out orchestration', () => {
     // Initially 2 regions
     expect(blockedEl.shadowRoot!.querySelectorAll('mux-region')).toHaveLength(2);
 
-    // Trigger pop-out (will be blocked)
+    // Trigger pop-out (will be blocked) — dispatch region-action directly from
+    // the mux-region element (the menu is now managed inside mux-region-tabstrip).
     const regionEl = findRegionEl(blockedEl, r1.id);
     expect(regionEl).toBeTruthy();
-    regionEl!.dispatchEvent(
-      new CustomEvent('region-menu-open', { bubbles: true, composed: true }),
-    );
-    await blockedEl.updateComplete;
-
-    const menu = blockedEl.shadowRoot!.querySelector('mux-region-menu');
-    expect(menu).toBeTruthy();
 
     // Spy on console.warn to verify it was called
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    menu!.dispatchEvent(
+    regionEl!.dispatchEvent(
       new CustomEvent('region-action', {
         bubbles: true,
         composed: true,

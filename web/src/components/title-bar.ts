@@ -80,14 +80,24 @@ export class MuxTitleBar extends LitElement {
     this._menuOpen = true;
   };
 
+  /** Fix 5: close the launcher menu when the user clicks anywhere outside
+   *  the title-bar element. */
+  private _onOutsideClick = (e: MouseEvent): void => {
+    if (this._menuOpen && !this.contains(e.target as Node)) {
+      this._menuOpen = false;
+    }
+  };
+
   override connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener('open-launcher', this._onOpenLauncher);
+    document.addEventListener('mousedown', this._onOutsideClick);
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener('open-launcher', this._onOpenLauncher);
+    document.removeEventListener('mousedown', this._onOutsideClick);
   }
 
   protected override updated(changed: PropertyValues): void {

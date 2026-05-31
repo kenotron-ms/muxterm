@@ -117,20 +117,27 @@ describe('MuxRegionTabstrip', () => {
     expect(maximizeEvent.composed).toBe(true);
   });
 
-  it('emits region-menu-open (bubbles, composed) on more button click', async () => {
+  it('shows mux-region-menu inline when more button is clicked (menu managed internally)', async () => {
+    // The ⋯ button no longer emits region-menu-open — it manages the dropdown
+    // popup internally via a position:fixed portal in the shadow DOM.
     el = await fixture();
 
-    const handler = vi.fn();
-    el.addEventListener('region-menu-open', handler as EventListener);
+    // Menu should not be visible before click.
+    expect(el.shadowRoot!.querySelector('mux-region-menu')).toBeNull();
 
     const moreBtn = el.shadowRoot!.querySelector('.more-btn') as HTMLButtonElement;
     expect(moreBtn).toBeTruthy();
     moreBtn.click();
+    await el.updateComplete;
 
-    expect(handler).toHaveBeenCalledTimes(1);
-    const event = handler.mock.calls[0][0] as CustomEvent;
-    expect(event.bubbles).toBe(true);
-    expect(event.composed).toBe(true);
+    // After click the menu element is present in the shadow DOM.
+    const menu = el.shadowRoot!.querySelector('mux-region-menu');
+    expect(menu).toBeTruthy();
+
+    // Clicking the button again should dismiss the menu.
+    moreBtn.click();
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('mux-region-menu')).toBeNull();
   });
 
   it('shows dirty-dot (no tab-close) for running windows', async () => {

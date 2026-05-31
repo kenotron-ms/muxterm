@@ -1,7 +1,11 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
-import { customElement, property } from 'lit/decorators.js';
+import type { PropertyValues } from 'lit';
+import { customElement, property, state } from 'lit/decorators.js';
+import { styleMap } from 'lit/directives/style-map.js';
 import type { Window } from '../types.js';
 import { CHROME } from '../lib/theme.js';
+import type { RegionAction } from './region-menu.js';
+import './region-menu.js';
 
 @customElement('mux-region-tabstrip')
 export class MuxRegionTabstrip extends LitElement {
@@ -176,6 +180,11 @@ export class MuxRegionTabstrip extends LitElement {
       background: ${unsafeCSS(CHROME.hover)};
       color: ${unsafeCSS(CHROME.textBright)};
     }
+
+    .more-btn.open {
+      background: ${unsafeCSS(CHROME.hover)};
+      color: ${unsafeCSS(CHROME.textBright)};
+    }
   `;
 
   @property({ type: String })
@@ -193,6 +202,40 @@ export class MuxRegionTabstrip extends LitElement {
   @property({ attribute: false })
   runningWindowIds: number[] = [];
 
+  // Fix 4: optimistic tab selection — shows the clicked tab as active
+  // immediately without waiting for the server round-trip.
+  @state() private _optimisticWindowId: number | null = null;
+
+  // Fix 6: region ⋯ menu state, managed here so we can position it correctly.
+  @state() private _menuOpen = false;
+  @state() private _menuRect: { top: number; right: number } | null = null;
+
+  /** Bound so it can be removed in disconnectedCallback. */
+  private _onOutsideMenuClick = (e: MouseEvent): void => {
+    if (this._menuOpen && !this.contains(e.target as Node)) {
+      this._menuOpen = false;
+      this._menuRect = null;
+    }
+  };
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    document.addEventListener('mousedown', this._onOutsideMenuClick);
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    document.removeEventListener('mousedown', this._onOutsideMenuClick);
+  }
+
+  /** Fix 4: reset optimistic state once the server confirms the new activeWindowId. */
+  protected override updated(changedProperties: PropertyValues): void {
+    super.updated(changedProperties);
+    if (changedProperties.has('activeWindowId') && this._optimisticWindowId !== null) {
+      this._optimisticWindowId = null;
+    }
+  }
+
   private _emit(name: string, detail?: Record<string, unknown>): void {
     this.dispatchEvent(
       new CustomEvent(name, {
@@ -208,6 +251,9 @@ export class MuxRegionTabstrip extends LitElement {
   }
 
   private _onTabClick(windowId: number): void {
+    // Fix 4: set optimistic state immediately so the active indicator moves
+    // without waiting for the server round-trip (~100 ms).
+    this._optimisticWindowId = windowId;
     this._emit('tab-select', { windowId });
   }
 
@@ -219,12 +265,38 @@ export class MuxRegionTabstrip extends LitElement {
     this._emit('region-maximize');
   }
 
+  /** Fix 6: capture the ⋯ button position so we can position the menu with
+   *  position:fixed (escaping any overflow:hidden ancestors). */
   private _onMenuOpen(): void {
-    this._emit('region-menu-open');
+    if (this._menuOpen) {
+      this._menuOpen = false;
+      this._menuRect = null;
+      return;
+    }
+    const btn = this.shadowRoot?.querySelector<HTMLElement>('.more-btn');
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      this._menuRect = { top: rect.bottom + 4, right: window.innerWidth - rect.right };
+    }
+    this._menuOpen = true;
+  }
+
+  /** Fix 6: handle region-action from the inline menu, close it, and bubble
+   *  the action up so workspace.ts can respond. */
+  private _onRegionAction(e: Event): void {
+    e.stopPropagation();
+    this._menuOpen = false;
+    this._menuRect = null;
+    const ev = e as CustomEvent<{ action: RegionAction }>;
+    this._emit('region-action', { action: ev.detail.action });
   }
 
   render() {
     const stripClass = `strip${this.isDriver ? ' driver' : ''}`;
+
+    // Fix 4: use the optimistic window id (if set) to show immediate feedback,
+    // fall back to the server-authoritative activeWindowId.
+    const effectiveActiveId = this._optimisticWindowId ?? this.activeWindowId;
 
     return html`
       <div class=${stripClass}>
@@ -234,7 +306,7 @@ export class MuxRegionTabstrip extends LitElement {
 
         <div class="tabs">
           ${this.windows.map((w) => {
-            const isActive = w.id === this.activeWindowId;
+            const isActive = w.id === effectiveActiveId;
             const isRunning = this.runningWindowIds.includes(w.id);
             return html`
               <button
@@ -242,11 +314,19 @@ export class MuxRegionTabstrip extends LitElement {
                 data-window-id=${w.id}
                 @click=${() => this._onTabClick(w.id)}
               >
-                <span class="file-icon">■</span>
+                <span class="file-icon">▪</span>
                 ${w.name}
                 ${isRunning
                   ? html`<span class="dirty-dot">●</span>`
-                  : html`<span class="tab-close">×</span>`}
+                  : html`<span
+                      class="tab-close"
+                      @click=${(e: Event) => {
+                        // Fix 3: stop propagation so the parent tab button's
+                        // click handler (which would select the tab) doesn't also fire.
+                        e.stopPropagation();
+                        this._emit('tab-close', { windowId: w.id });
+                      }}
+                    >×</span>`}
               </button>
             `;
           })}
@@ -258,9 +338,29 @@ export class MuxRegionTabstrip extends LitElement {
 
         <div class="controls">
           <button class="maximize-btn" @click=${this._onMaximize}>⊡</button>
-          <button class="more-btn" @click=${this._onMenuOpen}>⋯</button>
+          <button
+            class="more-btn${this._menuOpen ? ' open' : ''}"
+            @click=${this._onMenuOpen}
+          >⋯</button>
         </div>
       </div>
+
+      ${this._menuOpen && this._menuRect
+        ? html`<div
+            style=${styleMap({
+              position: 'fixed',
+              top: `${this._menuRect.top}px`,
+              right: `${this._menuRect.right}px`,
+              zIndex: '1500',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+            })}
+          >
+            <mux-region-menu
+              @region-action=${this._onRegionAction}
+            ></mux-region-menu>
+          </div>`
+        : ''}
     `;
   }
 }

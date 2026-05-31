@@ -9,7 +9,6 @@ import type { CellMetrics, PixelBox } from '../lib/cell-budget.js';
 import { popoutManager, PopoutManager } from '../lib/popout.js';
 import './region.js';
 import './region-divider.js';
-import './region-menu.js';
 import type { MuxRegion } from './region.js';
 import type { RegionAction } from './region-menu.js';
 
@@ -41,9 +40,6 @@ export class MuxWorkspace extends LitElement {
   @property({ attribute: false })
   tmuxState!: TmuxState;
 
-  /** Which region's ⋯ menu is currently open (null = no menu). */
-  @state() private _openMenuRegionId: string | null = null;
-
   /**
    * Injectable pop-out manager — defaults to the app-wide singleton but can
    * be replaced in tests with a PopoutManager using a fake window opener.
@@ -70,6 +66,20 @@ export class MuxWorkspace extends LitElement {
   private _findWindow(sessionName: string, windowId: number): Window | undefined {
     const session = this.tmuxState?.sessions.find((s) => s.name === sessionName);
     return session?.windows.find((w) => w.id === windowId);
+  }
+
+  private _sessionWindows(sessionName: string): Window[] {
+    return this.tmuxState?.sessions.find((s) => s.name === sessionName)?.windows ?? [];
+  }
+
+  private _sessionActiveWindowId(sessionName: string): number {
+    // For the currently-active session, tmuxState.activeWindow is authoritative.
+    if (this.tmuxState?.activeSession === sessionName) {
+      return this.tmuxState.activeWindow ?? 0;
+    }
+    // For other sessions in the dock, default to the first window.
+    const session = this.tmuxState?.sessions.find((s) => s.name === sessionName);
+    return session?.windows[0]?.id ?? 0;
   }
 
   /** Per-drag state: initial pixel widths and which regions are being resized. */
@@ -169,25 +179,12 @@ export class MuxWorkspace extends LitElement {
   // Region menu orchestration
   // ---------------------------------------------------------------------------
 
-  /** Called when the ⋯ button in a region opens the context menu. */
-  private _onRegionMenuOpen(regionId: string): void {
-    this._openMenuRegionId = regionId;
-  }
-
   /**
-   * Handles `region-action` events bubbled from the `<mux-region-menu>`.
-   * The `regionId` is the region whose menu was opened (captured at open time).
+   * Handles `region-action` events bubbled from `<mux-region-menu>` via the
+   * region-tabstrip and region components. The regionId comes from the closure
+   * set up in _renderRegion so we always know which region acted.
    */
-  private _onRegionAction = (e: Event): void => {
-    const regionId = this._openMenuRegionId;
-    if (!regionId) return;
-
-    const event = e as CustomEvent<{ action: RegionAction }>;
-    const { action } = event.detail;
-
-    // Close the menu first
-    this._openMenuRegionId = null;
-
+  private _handleRegionAction(regionId: string, action: RegionAction): void {
     switch (action) {
       case 'split-right':
         this._splitRegion(regionId, 'horizontal');
@@ -225,7 +222,7 @@ export class MuxWorkspace extends LitElement {
         }
         break;
     }
-  };
+  }
 
   // ---------------------------------------------------------------------------
   // Region lifecycle helpers
@@ -307,6 +304,11 @@ export class MuxWorkspace extends LitElement {
     const layoutString = win?.layout ?? '';
     const activePaneId = win?.panes.find((p) => p.active)?.id ?? -1;
 
+    // All windows for this session — shown in the per-region tab strip.
+    const sessionWindows = this._sessionWindows(region.surface.sessionName);
+    // The active (focused) window for this session.
+    const sessionActiveWindowId = this._sessionActiveWindowId(region.surface.sessionName);
+
     return html`
       <div class="region-slot" style="flex: ${region.weight}">
         <mux-region
@@ -316,7 +318,13 @@ export class MuxWorkspace extends LitElement {
           .windowName=${windowName}
           .layoutString=${layoutString}
           .activePaneId=${activePaneId}
-          @region-menu-open=${() => this._onRegionMenuOpen(region.id)}
+          .windows=${sessionWindows}
+          .activeWindowId=${sessionActiveWindowId}
+          @region-action=${(e: Event) => {
+            e.stopPropagation();
+            const ev = e as CustomEvent<{ action: RegionAction }>;
+            this._handleRegionAction(region.id, ev.detail.action);
+          }}
         ></mux-region>
       </div>
     `;
@@ -359,11 +367,7 @@ export class MuxWorkspace extends LitElement {
         item.type === 'region'
           ? this._renderRegion(item.region)
           : html`<mux-region-divider></mux-region-divider>`,
-    )}${this._openMenuRegionId !== null
-      ? html`<mux-region-menu
-          @region-action=${this._onRegionAction}
-        ></mux-region-menu>`
-      : ''}`;
+    )}`;
   }
 
   /** @internal test hook — drive the cell-budget entry point directly. */

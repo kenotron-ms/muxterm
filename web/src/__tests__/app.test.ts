@@ -88,11 +88,14 @@ describe('MuxApp', () => {
     expect(ctor).toBeDefined();
   });
 
-  it('renders mux-tab-bar with windows and active window', async () => {
+  it('renders mux-workspace (tab-bar removed; tabs now inside each region)', async () => {
     el = await fixture(makeState());
+    // The old mux-tab-bar is gone — the workspace renders per-region tabstrips.
+    const workspace = el.shadowRoot!.querySelector('mux-workspace');
+    expect(workspace).toBeTruthy();
+    // mux-tab-bar must NOT exist in the app shadow DOM (it was removed).
     const tabBar = el.shadowRoot!.querySelector('mux-tab-bar');
-    expect(tabBar).toBeTruthy();
-    expect(tabBar!.getAttribute('active-window-id')).toBe('1');
+    expect(tabBar).toBeNull();
   });
 
   it('renders mux-workspace for the active window', async () => {
@@ -138,8 +141,10 @@ describe('MuxApp', () => {
     const socket = (el as any)._socket;
     const sendControlSpy = vi.spyOn(socket, 'sendControl');
 
-    const tabBar = el.shadowRoot!.querySelector('mux-tab-bar')!;
-    tabBar.dispatchEvent(
+    // Events now bubble from mux-workspace (where the handlers are bound).
+    const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
+    expect(workspace).toBeTruthy();
+    workspace.dispatchEvent(
       new CustomEvent('tab-select', {
         bubbles: true,
         composed: true,
@@ -157,8 +162,9 @@ describe('MuxApp', () => {
     const socket = (el as any)._socket;
     const sendControlSpy = vi.spyOn(socket, 'sendControl');
 
-    const tabBar = el.shadowRoot!.querySelector('mux-tab-bar')!;
-    tabBar.dispatchEvent(
+    const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
+    expect(workspace).toBeTruthy();
+    workspace.dispatchEvent(
       new CustomEvent('tab-new', {
         bubbles: true,
         composed: true,
@@ -175,8 +181,9 @@ describe('MuxApp', () => {
     const socket = (el as any)._socket;
     const sendControlSpy = vi.spyOn(socket, 'sendControl');
 
-    const tabBar = el.shadowRoot!.querySelector('mux-tab-bar')!;
-    tabBar.dispatchEvent(
+    const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
+    expect(workspace).toBeTruthy();
+    workspace.dispatchEvent(
       new CustomEvent('tab-close', {
         bubbles: true,
         composed: true,
@@ -220,9 +227,11 @@ describe('MuxApp', () => {
 
   it('renders empty state gracefully when no sessions', async () => {
     el = await fixture();
-    // Should render without errors
-    const tabBar = el.shadowRoot!.querySelector('mux-tab-bar');
-    expect(tabBar).toBeTruthy();
+    // Should render without errors; title bar and status bar always present.
+    const titleBar = el.shadowRoot!.querySelector('mux-title-bar');
+    expect(titleBar).toBeTruthy();
+    const statusBar = el.shadowRoot!.querySelector('mux-status-bar');
+    expect(statusBar).toBeTruthy();
   });
 
   it('passes windowCount and paneCount to status bar', async () => {
@@ -354,14 +363,15 @@ describe('MuxApp', () => {
   });
 
   describe('Title Bar + Launcher', () => {
-    it('renders title bar above everything (before mux-tab-bar)', async () => {
+    it('renders title bar above everything (before mux-workspace)', async () => {
       el = await fixture(makeState());
       const titleBar = el.shadowRoot!.querySelector('mux-title-bar');
       expect(titleBar).toBeTruthy();
-      const tabBar = el.shadowRoot!.querySelector('mux-tab-bar');
-      expect(tabBar).toBeTruthy();
-      // title bar must come before tab-bar in DOM order
-      const position = titleBar!.compareDocumentPosition(tabBar!);
+      // The old mux-tab-bar is removed; check against mux-workspace instead.
+      const workspace = el.shadowRoot!.querySelector('mux-workspace');
+      expect(workspace).toBeTruthy();
+      // title bar must come before workspace in DOM order
+      const position = titleBar!.compareDocumentPosition(workspace!);
       expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 

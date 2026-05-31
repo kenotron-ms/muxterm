@@ -11,7 +11,6 @@ import { applyThemeTokens, resolvePalette } from './lib/theme.js';
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
-import './components/tab-bar.js';
 import './components/layout.js';
 import './components/status-bar.js';
 import './components/pane.js';
@@ -166,6 +165,13 @@ export class MuxApp extends LitElement {
   private _unsubscribe: (() => void) | null = null;
   private _workspace = new Workspace();
 
+  /** Close the session picker on Escape. */
+  private _onDocKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape' && this._showSessionPicker) {
+      this._showSessionPicker = false;
+    }
+  };
+
   /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
    *  selectors like document.querySelector('[data-launcher-open]') work. */
   private _onOpenLauncherAttr = (): void => {
@@ -177,6 +183,8 @@ export class MuxApp extends LitElement {
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
+    // Escape closes the session picker.
+    document.addEventListener('keydown', this._onDocKeyDown);
 
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
@@ -212,6 +220,7 @@ export class MuxApp extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
+    document.removeEventListener('keydown', this._onDocKeyDown);
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -286,13 +295,6 @@ export class MuxApp extends LitElement {
 
     return html`
       <mux-title-bar @launcher-action=${this._onLauncherAction}></mux-title-bar>
-      <mux-tab-bar
-        .windows=${windows}
-        active-window-id=${this._tmuxState.activeWindow}
-        @tab-select=${this._onTabSelect}
-        @tab-new=${this._onTabNew}
-        @tab-close=${this._onTabClose}
-      ></mux-tab-bar>
       ${this._tmuxState.sessions.length === 0
         ? html`
             <div class="empty-session">
@@ -327,6 +329,9 @@ export class MuxApp extends LitElement {
               @pane-focus=${this._onPaneSelect}
               @resize-surface=${this._onSurfaceResize}
               @open-session-picker=${this._onOpenSessionPicker}
+              @tab-select=${this._onTabSelect}
+              @tab-new=${this._onTabNew}
+              @tab-close=${this._onTabClose}
             ></mux-workspace>
           `}
       <mux-status-bar
@@ -349,6 +354,7 @@ export class MuxApp extends LitElement {
         ? html`<mux-session-picker
             .sessions=${this._sessions}
             @session-selected=${this._onSessionSelected}
+            @close-picker=${() => { this._showSessionPicker = false; }}
           ></mux-session-picker>`
         : ''}
     `;

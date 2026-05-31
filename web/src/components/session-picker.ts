@@ -127,6 +127,11 @@ export class MuxSessionPicker extends LitElement {
     );
   }
 
+  /** Fix 5: clicking the dim overlay (outside the picker card) closes the picker. */
+  private _onOverlayClick(): void {
+    this.dispatchEvent(new CustomEvent('close-picker', { bubbles: true, composed: true }));
+  }
+
   render() {
     if (this.inline) {
       return html`
@@ -152,8 +157,8 @@ export class MuxSessionPicker extends LitElement {
     }
 
     return html`
-      <div class="overlay">
-        <div class="picker">
+      <div class="overlay" @click=${this._onOverlayClick}>
+        <div class="picker" @click=${(e: Event) => e.stopPropagation()}>
           <h2>Select a tmux session</h2>
           <div class="session-list">
             ${this.sessions.map(

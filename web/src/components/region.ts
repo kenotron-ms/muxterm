@@ -91,7 +91,7 @@ export class MuxRegion extends LitElement {
         @tab-new=${this._forwardEvent}
         @open-session-picker=${this._forwardEvent}
         @region-maximize=${this._forwardEvent}
-        @region-menu-open=${this._forwardEvent}
+        @region-action=${this._forwardEvent}
       ></mux-region-tabstrip>
       <div class="body">
         ${isTerminalSurface(this.surfaceKind)
