@@ -14,6 +14,8 @@ import './components/pane.js';
 import './components/resize-handle.js';
 import './components/session-picker.js';
 import './components/reconnect-overlay.js';
+import './components/workspace.js';
+import { Workspace } from './lib/workspace.js';
 
 @customElement('mux-app')
 export class MuxApp extends LitElement {
@@ -128,6 +130,7 @@ export class MuxApp extends LitElement {
 
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
+  private _workspace = new Workspace();
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -179,6 +182,21 @@ export class MuxApp extends LitElement {
   override willUpdate(_changedProperties: Map<PropertyKey, unknown>): void {
     super.willUpdate(_changedProperties);
     this._syncTerminals();
+    this._ensureActiveRegion();
+  }
+
+  private _ensureActiveRegion(): void {
+    const session = this._tmuxState.activeSession;
+    const windowId = this._tmuxState.activeWindow;
+    if (!session || !windowId) return;
+
+    const alreadyMounted = this._workspace.regions.some(
+      (r) => r.surface.sessionName === session && r.surface.windowId === windowId,
+    );
+
+    if (this._workspace.regions.length === 0 && !alreadyMounted) {
+      this._workspace.openRegion({ sessionName: session, windowId });
+    }
   }
 
   private _syncTerminals(): void {
@@ -248,11 +266,11 @@ export class MuxApp extends LitElement {
             </div>
           `
         : html`
-            <mux-layout
-              layout-string=${activeWindow?.layout ?? ''}
-              active-pane-id=${activePaneId}
+            <mux-workspace
+              .workspace=${this._workspace}
+              .tmuxState=${this._tmuxState}
               @pane-focus=${this._onPaneSelect}
-            ></mux-layout>
+            ></mux-workspace>
           `}
       <mux-status-bar
         sessionName=${this._tmuxState.activeSession}
@@ -361,6 +379,24 @@ export class MuxApp extends LitElement {
       requestAnimationFrame(poll);
     };
     requestAnimationFrame(poll);
+  }
+
+  /** @internal test hook — seed a region without a live socket. */
+  seedWorkspaceForTest(sessionName: string, windowId: number): void {
+    this._workspace = new Workspace();
+    this._workspace.openRegion({ sessionName, windowId });
+  }
+
+  /** @internal test hook — inject tmux state without a live socket. */
+  injectStateForTest(state: TmuxState): void {
+    this._tmuxState = state;
+    this.requestUpdate();
+  }
+
+  /** Open the active window of another session as a second region (dock). */
+  openRegionForTest(sessionName: string, windowId: number): void {
+    this._workspace.openRegion({ sessionName, windowId });
+    this.requestUpdate();
   }
 }
 

@@ -94,12 +94,10 @@ describe('MuxApp', () => {
     expect(tabBar!.getAttribute('active-window-id')).toBe('1');
   });
 
-  it('renders mux-layout with layout string and active pane', async () => {
+  it('renders mux-workspace for the active window', async () => {
     el = await fixture(makeState());
-    const layout = el.shadowRoot!.querySelector('mux-layout');
-    expect(layout).toBeTruthy();
-    expect(layout!.getAttribute('layout-string')).toBe('80x24,0,0,5');
-    expect(layout!.getAttribute('active-pane-id')).toBe('5');
+    const workspace = el.shadowRoot!.querySelector('mux-workspace');
+    expect(workspace).toBeTruthy();
   });
 
   it('renders mux-status-bar with session info', async () => {
@@ -195,8 +193,8 @@ describe('MuxApp', () => {
     const socket = (el as any)._socket;
     const sendControlSpy = vi.spyOn(socket, 'sendControl');
 
-    const layout = el.shadowRoot!.querySelector('mux-layout')!;
-    layout.dispatchEvent(
+    const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
+    workspace.dispatchEvent(
       new CustomEvent('pane-focus', {
         bubbles: true,
         composed: true,
