@@ -1,5 +1,6 @@
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, unsafeCSS } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { CHROME } from '../lib/theme.js';
 
 @customElement('mux-status-bar')
 export class MuxStatusBar extends LitElement {
@@ -7,12 +8,12 @@ export class MuxStatusBar extends LitElement {
     :host {
       display: flex;
       justify-content: space-between;
-      background: #16161e;
-      border-top: 1px solid #292e42;
+      background: ${unsafeCSS(CHROME.bar)};
+      border-top: 1px solid ${unsafeCSS(CHROME.border)};
       height: 24px;
       padding: 0 12px;
       font-size: 12px;
-      color: #565f89;
+      color: ${unsafeCSS(CHROME.textDim)};
       flex-shrink: 0;
       user-select: none;
     }
@@ -25,29 +26,29 @@ export class MuxStatusBar extends LitElement {
     }
 
     .session {
-      color: #7aa2f7;
+      color: var(--mux-accent);
       font-weight: 600;
       cursor: pointer;
     }
 
     .separator {
-      color: #292e42;
+      color: ${unsafeCSS(CHROME.border)};
     }
 
     .connected {
-      color: #9ece6a;
+      color: var(--mux-ok);
     }
 
     .disconnected {
-      color: #f7768e;
+      color: var(--mux-error);
     }
 
     .reconnecting {
-      color: #e0af68;
+      color: var(--mux-warn);
     }
 
     .goal {
-      color: #bb9af7;
+      color: ${unsafeCSS(CHROME.driverAccent)};
       font-weight: 600;
     }
   `;

@@ -73,3 +73,28 @@ export const PALETTES: Record<string, Palette> = {
 export function resolvePalette(name: string): Palette {
   return PALETTES[name] ?? THEME;
 }
+
+/** Maps a Palette to canonical --mux-* CSS custom property names. */
+export function paletteToCSSVars(p: Palette): Record<string, string> {
+  return {
+    '--mux-bg': p.background,
+    '--mux-fg': p.foreground,
+    '--mux-accent': p.blue,
+    '--mux-border': p.brightBlack,
+    '--mux-selection': p.selectionBackground,
+    '--mux-warn': p.yellow,
+    '--mux-error': p.red,
+    '--mux-ok': p.green,
+  };
+}
+
+/** Applies --mux-* CSS variables from a Palette to the given root element. */
+export function applyThemeTokens(
+  p: Palette,
+  root: HTMLElement = document.documentElement,
+): void {
+  const vars = paletteToCSSVars(p);
+  for (const [k, v] of Object.entries(vars)) {
+    root.style.setProperty(k, v);
+  }
+}

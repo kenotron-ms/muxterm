@@ -7,6 +7,7 @@ import type { MuxLayout } from './components/layout.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { parseResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, type UIActions } from './lib/keybindings.js';
+import { applyThemeTokens, resolvePalette } from './lib/theme.js';
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
@@ -167,6 +168,9 @@ export class MuxApp extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
+
+    // Apply default theme tokens immediately so --mux-* vars exist before any frame.
+    applyThemeTokens(resolvePalette(store.config.theme.palette));
 
     // Subscribe to store changes
     this._unsubscribe = store.subscribe(() => {
@@ -395,6 +399,7 @@ export class MuxApp extends LitElement {
     if ('config' in msg) {
       const cfg = parseResolvedConfig(msg['config']);
       store.setConfig(cfg);
+      applyThemeTokens(resolvePalette(cfg.theme.palette));
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);

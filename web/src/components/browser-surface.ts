@@ -27,16 +27,16 @@ export class MuxBrowserSurface extends LitElement {
       align-items: center;
       padding: 4px 8px;
       gap: 6px;
-      background: #1a1b26;
-      border-bottom: 1px solid #32344a;
+      background: var(--mux-bg);
+      border-bottom: 1px solid var(--mux-border);
       flex-shrink: 0;
     }
 
     .address {
       flex: 1;
-      background: #24283b;
-      color: #c0caf5;
-      border: 1px solid #32344a;
+      background: var(--mux-bg);
+      color: var(--mux-fg);
+      border: 1px solid var(--mux-border);
       border-radius: 4px;
       padding: 4px 8px;
       font-size: 13px;
@@ -45,7 +45,7 @@ export class MuxBrowserSurface extends LitElement {
     }
 
     .address:focus {
-      border-color: #7aa2f7;
+      border-color: var(--mux-accent);
     }
 
     iframe {
