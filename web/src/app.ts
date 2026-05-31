@@ -6,6 +6,7 @@ import type { TmuxState, Window, SessionInfo } from './types.js';
 import type { MuxLayout } from './components/layout.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { parseResolvedConfig } from './lib/config.js';
+import { makeKeyHandler, type UIActions } from './lib/keybindings.js';
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
@@ -19,6 +20,35 @@ import './components/reconnect-overlay.js';
 import './components/workspace.js';
 import type { LauncherAction } from './components/launcher-menu.js';
 import { Workspace } from './lib/workspace.js';
+
+// ---------------------------------------------------------------------------
+// Module-level keybinding wiring
+// ---------------------------------------------------------------------------
+
+/** Actions map passed to installKeybindings — populated with real handlers as
+ *  each phase lands. Stubs use () => {} to keep wiring unconditional. */
+const uiActions: UIActions = {
+  openLauncher: () => {}, // TODO(phaseX): wire when available
+  split: () => {}, // TODO(phaseX): wire when available
+  maximizeRegion: () => {}, // TODO(phaseX): wire when available
+  popOut: () => {}, // TODO(phaseX): wire when available
+  nextSession: () => {}, // TODO(phaseX): wire when available
+  focusDriver: () => {}, // TODO(phaseX): wire when available
+};
+
+/** Disposer for the currently-installed keydown handler. Re-set after each
+ *  config frame so new key bindings take effect immediately. */
+let disposeKeys: (() => void) | undefined;
+
+/**
+ * Installs a global keydown handler wired to the given UIActions.
+ * Returns a cleanup function that removes the handler.
+ */
+export function installKeybindings(actions: UIActions): () => void {
+  const handler = makeKeyHandler(store.config.keys, actions);
+  window.addEventListener('keydown', handler);
+  return () => window.removeEventListener('keydown', handler);
+}
 
 @customElement('mux-app')
 export class MuxApp extends LitElement {
@@ -366,6 +396,8 @@ export class MuxApp extends LitElement {
       const cfg = parseResolvedConfig(msg['config']);
       store.setConfig(cfg);
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
+      disposeKeys?.();
+      disposeKeys = installKeybindings(uiActions);
     }
   };
 

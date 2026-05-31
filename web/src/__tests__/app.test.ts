@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { terminalRegistry } from '../lib/terminal-registry.js';
+import { parseResolvedConfig } from '../lib/config.js';
 
 // Mock WebSocket before importing app
 class MockWebSocket {
@@ -32,7 +33,7 @@ class MockWebSocket {
 globalThis.WebSocket = MockWebSocket;
 
 // Need to import app AFTER WebSocket mock is set up
-import '../app.js';
+import { installKeybindings } from '../app.js';
 import type { MuxApp } from '../app.js';
 import { store } from '../state.js';
 import type { TmuxState } from '../types.js';
@@ -476,5 +477,17 @@ describe('MuxApp', () => {
       expect(overlay).toBeTruthy();
       expect(overlay!.getAttribute('message')).toBe('Session ended by admin');
     });
+  });
+});
+
+describe('installKeybindings', () => {
+  it('dispatches the open-launcher action for the configured chord', () => {
+    store.setConfig(parseResolvedConfig({ keys: { open_launcher: 'ctrl+shift+p' } }));
+    const openLauncher = vi.fn();
+    const remove = installKeybindings({ openLauncher });
+    const e = new KeyboardEvent('keydown', { key: 'P', ctrlKey: true, shiftKey: true });
+    window.dispatchEvent(e);
+    expect(openLauncher).toHaveBeenCalledOnce();
+    remove();
   });
 });
