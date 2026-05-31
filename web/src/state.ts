@@ -1,4 +1,4 @@
-import type { ServerMessage, TmuxState } from './types';
+import type { ServerMessage, TmuxState, SessionInfo } from './types';
 
 export function createInitialState(): TmuxState {
   return {
@@ -11,10 +11,15 @@ export function createInitialState(): TmuxState {
 
 export class MuxStore {
   private _state: TmuxState = createInitialState();
+  private _sessionList: SessionInfo[] = [];
   private _listeners: Set<() => void> = new Set();
 
   get state(): TmuxState {
     return this._state;
+  }
+
+  get sessionList(): SessionInfo[] {
+    return this._sessionList;
   }
 
   subscribe(cb: () => void): () => void {
@@ -48,6 +53,10 @@ export class MuxStore {
         } else {
           this._reconcileFromTmux(msg.data);
         }
+        break;
+
+      case 'session-list':
+        this._sessionList = msg.data.sessions;
         break;
 
       case 'detached':
