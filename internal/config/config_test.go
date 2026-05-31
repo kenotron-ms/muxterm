@@ -1,10 +1,23 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/user/muxterm/internal/config"
 )
+
+// writeTempConfig writes contents to a config.toml file inside t.TempDir()
+// and returns the full path to that file.
+func writeTempConfig(t *testing.T, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("writeTempConfig: %v", err)
+	}
+	return path
+}
 
 func TestDefaults(t *testing.T) {
 	cfg := config.Defaults()
@@ -87,5 +100,60 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	}
 	if cfg.Terminal.Scrollback != 10000 {
 		t.Errorf("Terminal.Scrollback: got %d, want 10000", cfg.Terminal.Scrollback)
+	}
+}
+
+func TestLoadOverridesDefaults(t *testing.T) {
+	const tomlContent = `
+[theme]
+palette = "gruvbox"
+
+[font]
+size = 16
+
+[terminal]
+scrollback = 50000
+bell = "off"
+
+[keys]
+open_launcher = "ctrl+k"
+
+[workspace]
+default_presentation = "single"
+`
+	path := writeTempConfig(t, tomlContent)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+
+	// Overridden values must be applied.
+	if cfg.Theme.Palette != "gruvbox" {
+		t.Errorf("Theme.Palette: got %q, want %q", cfg.Theme.Palette, "gruvbox")
+	}
+	if cfg.Font.Size != 16 {
+		t.Errorf("Font.Size: got %d, want 16", cfg.Font.Size)
+	}
+	if cfg.Terminal.Scrollback != 50000 {
+		t.Errorf("Terminal.Scrollback: got %d, want 50000", cfg.Terminal.Scrollback)
+	}
+	if cfg.Terminal.Bell != "off" {
+		t.Errorf("Terminal.Bell: got %q, want %q", cfg.Terminal.Bell, "off")
+	}
+	if cfg.Keys.OpenLauncher != "ctrl+k" {
+		t.Errorf("Keys.OpenLauncher: got %q, want %q", cfg.Keys.OpenLauncher, "ctrl+k")
+	}
+	if cfg.Workspace.DefaultPresentation != "single" {
+		t.Errorf("Workspace.DefaultPresentation: got %q, want %q", cfg.Workspace.DefaultPresentation, "single")
+	}
+
+	// Untouched keys must retain their default values.
+	defaults := config.Defaults()
+	if cfg.Font.Family != defaults.Font.Family {
+		t.Errorf("Font.Family: got %q, want default %q", cfg.Font.Family, defaults.Font.Family)
+	}
+	if cfg.Keys.NextSession != "ctrl+shift+]" {
+		t.Errorf("Keys.NextSession: got %q, want %q", cfg.Keys.NextSession, "ctrl+shift+]")
 	}
 }
