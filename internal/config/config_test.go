@@ -157,3 +157,24 @@ default_presentation = "single"
 		t.Errorf("Keys.NextSession: got %q, want %q", cfg.Keys.NextSession, "ctrl+shift+]")
 	}
 }
+
+func TestLoadMalformedFallsBackToDefaults(t *testing.T) {
+	// A deliberately broken TOML string (unterminated string value).
+	const malformed = "[theme]\npalette = \"unterminated"
+	path := writeTempConfig(t, malformed)
+
+	cfg, err := config.Load(path)
+
+	// 1. Load must NOT return an error for a malformed config.
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	// 2. Fell back to default theme palette.
+	if cfg.Theme.Palette != "tokyo-night" {
+		t.Errorf("Theme.Palette: got %q, want %q", cfg.Theme.Palette, "tokyo-night")
+	}
+	// 3. Fully reset to defaults, not partially parsed.
+	if cfg.Terminal.Scrollback != 10000 {
+		t.Errorf("Terminal.Scrollback: got %d, want 10000", cfg.Terminal.Scrollback)
+	}
+}
