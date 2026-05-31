@@ -92,3 +92,15 @@ body{background:#0d0e14;font-family:"Segoe UI",-apple-system,system-ui,sans-seri
 /* ---- title-bar launcher menu anchor ---- */
 .title .ctls{position:relative;display:flex;align-items:center}
 .title .menu{top:30px}
+
+/* ---- Lucide SVG icon sizing ---- */
+.ibtn svg{width:14px;height:14px;display:block}
+.rtabs .ibtn svg{width:13px;height:13px}
+.vtab .x svg{width:12px;height:12px;display:block}
+.schip .car svg,.wbar .ses .car svg{width:9px;height:9px;display:block}
+.schip svg{width:12px;height:12px;display:inline-block;vertical-align:middle}
+.mi .ck svg{width:11px;height:11px;display:block;margin:0 auto}
+.mi .mic svg{width:13px;height:13px;display:block;margin:0 auto}
+.sbar svg{width:11px;height:11px;display:inline-block;vertical-align:middle}
+/* Live status dot via CSS (replaces ● character) */
+.sbar .live{color:var(--green);width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
