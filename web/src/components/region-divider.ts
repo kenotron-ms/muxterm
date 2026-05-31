@@ -1,5 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import { icon } from '../lib/icons.js';
+import { GripHorizontal, GripVertical } from 'lucide';
 
 @customElement('mux-region-divider')
 export class MuxRegionDivider extends LitElement {
@@ -35,6 +37,12 @@ export class MuxRegionDivider extends LitElement {
     .handle.dragging {
       background: #292e42;
       color: #7aa2f7;
+    }
+
+    .lucide-icon {
+      display: inline-block;
+      vertical-align: middle;
+      flex-shrink: 0;
     }
   `;
 
@@ -87,11 +95,15 @@ export class MuxRegionDivider extends LitElement {
   };
 
   render() {
-    const glyph = this.direction === 'horizontal' ? '⋮' : '⋯';
+    // horizontal direction = vertical divider bar (splits left/right) → GripVertical dots
+    // vertical direction = horizontal divider bar (splits top/bottom) → GripHorizontal dots
+    const gripIcon = this.direction === 'horizontal'
+      ? icon(GripVertical, { size: 10 })
+      : icon(GripHorizontal, { size: 10 });
     return html`<div
       class="handle ${this._dragging ? 'dragging' : ''}"
-      @pointerdown=${this._onPointerDown}
-    >${glyph}</div>`;
+      @pointerdown="${this._onPointerDown}"
+    >${gripIcon}</div>`;
   }
 }
 

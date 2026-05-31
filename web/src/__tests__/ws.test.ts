@@ -71,12 +71,12 @@ let origWebSocket: typeof globalThis.WebSocket;
 beforeEach(() => {
   MockWebSocket.instances = [];
   origWebSocket = globalThis.WebSocket;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   (globalThis as any).WebSocket = MockWebSocket;
 });
 
 afterEach(() => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   (globalThis as any).WebSocket = origWebSocket;
 });
 

@@ -225,10 +225,10 @@ export class MuxTabBar extends LitElement {
         (w) => html`
           <button
             class="tab ${String(w.id) === this.activeWindowId ? 'active' : ''}"
-            @click=${() => this._selectWindow(w.id)}
+            @click="${() => this._selectWindow(w.id)}"
           >
             ${w.name}
-            <span class="tab-close" @click=${(e: Event) => this._closeWindow(e, w.id)}>&times;</span>
+            <span class="tab-close" @click="${(e: Event) => this._closeWindow(e, w.id)}">&times;</span>
           </button>
         `,
       )}
@@ -240,7 +240,7 @@ export class MuxTabBar extends LitElement {
           </button>
         `,
       )}
-      <button class="tab-add" @click=${this._newWindow}>+</button>
+      <button class="tab-add" @click="${this._newWindow}">+</button>
       <div class="spacer"></div>
     `;
   }

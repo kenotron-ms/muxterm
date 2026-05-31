@@ -76,7 +76,7 @@ export class MuxResizeHandle extends LitElement {
   render() {
     return html`<div
       class="handle ${this._dragging ? 'dragging' : ''}"
-      @pointerdown=${this._onPointerDown}
+      @pointerdown="${this._onPointerDown}"
     ></div>`;
   }
 }

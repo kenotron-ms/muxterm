@@ -49,7 +49,8 @@ describe('MuxRegionTabstrip', () => {
     const chip = el.shadowRoot!.querySelector('.session-chip') as HTMLButtonElement;
     expect(chip).toBeTruthy();
     expect(chip.textContent).toContain('mysession');
-    expect(chip.textContent).toContain('▾');
+    // ChevronDown SVG icon replaced the ▾ unicode character
+    expect(chip.querySelector('svg.lucide-icon')).toBeTruthy();
 
     const tabs = el.shadowRoot!.querySelectorAll('.tab');
     expect(tabs.length).toBe(2);

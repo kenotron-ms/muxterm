@@ -6,6 +6,8 @@ import type { Window } from '../types.js';
 import { CHROME } from '../lib/theme.js';
 import type { RegionAction } from './region-menu.js';
 import './region-menu.js';
+import { icon } from '../lib/icons.js';
+import { ChevronDown, Ellipsis, Maximize2, X } from 'lucide';
 
 @customElement('mux-region-tabstrip')
 export class MuxRegionTabstrip extends LitElement {
@@ -105,7 +107,9 @@ export class MuxRegionTabstrip extends LitElement {
 
     /* Close button — visibility:hidden until tab hover */
     .tab-close {
-      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       line-height: 1;
       cursor: pointer;
       visibility: hidden;
@@ -170,7 +174,6 @@ export class MuxRegionTabstrip extends LitElement {
       background: transparent;
       border: none;
       color: ${unsafeCSS(CHROME.textDim)};
-      font-size: 14px;
       cursor: pointer;
       border-radius: 4px;
     }
@@ -184,6 +187,16 @@ export class MuxRegionTabstrip extends LitElement {
     .more-btn.open {
       background: ${unsafeCSS(CHROME.hover)};
       color: ${unsafeCSS(CHROME.textBright)};
+    }
+
+    .lucide-icon {
+      display: inline-block;
+      vertical-align: middle;
+      flex-shrink: 0;
+    }
+
+    button .lucide-icon {
+      pointer-events: none;
     }
   `;
 
@@ -299,9 +312,9 @@ export class MuxRegionTabstrip extends LitElement {
     const effectiveActiveId = this._optimisticWindowId ?? this.activeWindowId;
 
     return html`
-      <div class=${stripClass}>
-        <button class="session-chip" @click=${this._onChipClick}>
-          ${this.sessionName} ▾
+      <div class="${stripClass}">
+        <button class="session-chip" @click="${this._onChipClick}">
+          ${this.sessionName} ${icon(ChevronDown, { size: 12 })}
         </button>
 
         <div class="tabs">
@@ -311,8 +324,8 @@ export class MuxRegionTabstrip extends LitElement {
             return html`
               <button
                 class="tab${isActive ? ' active' : ''}"
-                data-window-id=${w.id}
-                @click=${() => this._onTabClick(w.id)}
+                data-window-id="${w.id}"
+                @click="${() => this._onTabClick(w.id)}"
               >
                 <span class="file-icon">▪</span>
                 ${w.name}
@@ -320,44 +333,44 @@ export class MuxRegionTabstrip extends LitElement {
                   ? html`<span class="dirty-dot">●</span>`
                   : html`<span
                       class="tab-close"
-                      @click=${(e: Event) => {
+                      @click="${(e: Event) => {
                         // Fix 3: stop propagation so the parent tab button's
                         // click handler (which would select the tab) doesn't also fire.
                         e.stopPropagation();
                         this._emit('tab-close', { windowId: w.id });
-                      }}
-                    >×</span>`}
+                      }}"
+                    >${icon(X, { size: 12 })}</span>`}
               </button>
             `;
           })}
         </div>
 
-        <button class="tab-add" @click=${this._onTabNew}>+</button>
+        <button class="tab-add" @click="${this._onTabNew}">+</button>
 
         <div class="spacer"></div>
 
         <div class="controls">
-          <button class="maximize-btn" @click=${this._onMaximize}>⊡</button>
+          <button class="maximize-btn" @click="${this._onMaximize}">${icon(Maximize2, { size: 14 })}</button>
           <button
             class="more-btn${this._menuOpen ? ' open' : ''}"
-            @click=${this._onMenuOpen}
-          >⋯</button>
+            @click="${this._onMenuOpen}"
+          >${icon(Ellipsis, { size: 14 })}</button>
         </div>
       </div>
 
       ${this._menuOpen && this._menuRect
         ? html`<div
-            style=${styleMap({
+            style="${styleMap({
               position: 'fixed',
               top: `${this._menuRect.top}px`,
               right: `${this._menuRect.right}px`,
               zIndex: '1500',
               maxHeight: '80vh',
               overflowY: 'auto',
-            })}
+            })}"
           >
             <mux-region-menu
-              @region-action=${this._onRegionAction}
+              @region-action="${this._onRegionAction}"
             ></mux-region-menu>
           </div>`
         : ''}

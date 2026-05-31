@@ -1,6 +1,8 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
 import { customElement } from 'lit/decorators.js';
 import { CHROME } from '../lib/theme.js';
+import { icon } from '../lib/icons.js';
+import { ExternalLink, PanelLeft, PanelTop, Pencil, X } from 'lucide';
 
 export type RegionAction =
   | 'split-right'
@@ -52,6 +54,16 @@ export class MuxRegionMenu extends LitElement {
     button.danger:hover {
       color: ${unsafeCSS(CHROME.danger)};
     }
+
+    .lucide-icon {
+      display: inline-block;
+      vertical-align: middle;
+      flex-shrink: 0;
+    }
+
+    button .lucide-icon {
+      pointer-events: none;
+    }
   `;
 
   private _dispatch(action: RegionAction): void {
@@ -66,22 +78,22 @@ export class MuxRegionMenu extends LitElement {
 
   render() {
     return html`
-      <button data-action="split-right" @click=${() => this._dispatch('split-right')}>
-        ⊟ Split right
+      <button data-action="split-right" @click="${() => this._dispatch('split-right')}">
+        ${icon(PanelLeft, { size: 14 })} Split right
       </button>
-      <button data-action="split-down" @click=${() => this._dispatch('split-down')}>
-        ⊟ Split down
-      </button>
-      <div class="divider"></div>
-      <button data-action="pop-out" @click=${() => this._dispatch('pop-out')}>
-        ⧉ Pop out to window
-      </button>
-      <button data-action="rename" @click=${() => this._dispatch('rename')}>
-        ✎ Rename window
+      <button data-action="split-down" @click="${() => this._dispatch('split-down')}">
+        ${icon(PanelTop, { size: 14 })} Split down
       </button>
       <div class="divider"></div>
-      <button data-action="close-region" class="danger" @click=${() => this._dispatch('close-region')}>
-        ✕ Close region
+      <button data-action="pop-out" @click="${() => this._dispatch('pop-out')}">
+        ${icon(ExternalLink, { size: 14 })} Pop out to window
+      </button>
+      <button data-action="rename" @click="${() => this._dispatch('rename')}">
+        ${icon(Pencil, { size: 14 })} Rename window
+      </button>
+      <div class="divider"></div>
+      <button data-action="close-region" class="danger" @click="${() => this._dispatch('close-region')}">
+        ${icon(X, { size: 14 })} Close region
       </button>
     `;
   }

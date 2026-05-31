@@ -98,7 +98,7 @@ export class PopoutManager {
     this.openFn =
       options.open ??
       ((url, target, features) =>
-        // eslint-disable-next-line no-restricted-globals
+         
         window.open(url, target, features ?? '') as PopoutWindowLike | null);
     this.pollIntervalMs = options.pollIntervalMs ?? 400;
     this.origin =
@@ -192,7 +192,7 @@ export class PopoutManager {
         manager.close(regionId);
       },
       get open(): PopoutWindowLike {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+         
         return manager.entries.get(regionId)!.win;
       },
     };

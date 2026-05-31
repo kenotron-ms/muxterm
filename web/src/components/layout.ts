@@ -98,7 +98,7 @@ export class MuxLayout extends LitElement {
       if (i < node.children.length - 1) {
         items.push(
           html`<mux-resize-handle
-            direction=${node.direction}
+            direction="${node.direction}"
           ></mux-resize-handle>`,
         );
       }
@@ -117,8 +117,8 @@ export class MuxLayout extends LitElement {
     return keyed(
       node.paneId,
       html`<mux-pane
-        pane-id=${node.paneId}
-        ?active=${node.paneId === this.activePaneId}
+        pane-id="${node.paneId}"
+        ?active="${node.paneId === this.activePaneId}"
       ></mux-pane>`,
     );
   }

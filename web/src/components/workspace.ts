@@ -312,19 +312,19 @@ export class MuxWorkspace extends LitElement {
     return html`
       <div class="region-slot" style="flex: ${region.weight}">
         <mux-region
-          .regionId=${region.id}
-          .surfaceId=${region.surface.id}
-          .sessionName=${region.surface.sessionName}
-          .windowName=${windowName}
-          .layoutString=${layoutString}
-          .activePaneId=${activePaneId}
-          .windows=${sessionWindows}
-          .activeWindowId=${sessionActiveWindowId}
-          @region-action=${(e: Event) => {
+          .regionId="${region.id}"
+          .surfaceId="${region.surface.id}"
+          .sessionName="${region.surface.sessionName}"
+          .windowName="${windowName}"
+          .layoutString="${layoutString}"
+          .activePaneId="${activePaneId}"
+          .windows="${sessionWindows}"
+          .activeWindowId="${sessionActiveWindowId}"
+          @region-action="${(e: Event) => {
             e.stopPropagation();
             const ev = e as CustomEvent<{ action: RegionAction }>;
             this._handleRegionAction(region.id, ev.detail.action);
-          }}
+          }}"
         ></mux-region>
       </div>
     `;

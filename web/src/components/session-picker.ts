@@ -141,7 +141,7 @@ export class MuxSessionPicker extends LitElement {
               (s) => html`
                 <button
                   class="session-item${s.name === this.currentSession ? ' current' : ''}"
-                  @click=${() => this._onSessionClick(s.name)}
+                  @click="${() => this._onSessionClick(s.name)}"
                 >
                   <span class="session-name">${s.name}</span>
                   <span class="session-meta"
@@ -151,21 +151,21 @@ export class MuxSessionPicker extends LitElement {
               `,
             )}
           </div>
-          <button class="new-session" @click=${this._onNewSession}>+ New Session</button>
+          <button class="new-session" @click="${this._onNewSession}">+ New Session</button>
         </div>
       `;
     }
 
     return html`
-      <div class="overlay" @click=${this._onOverlayClick}>
-        <div class="picker" @click=${(e: Event) => e.stopPropagation()}>
+      <div class="overlay" @click="${this._onOverlayClick}">
+        <div class="picker" @click="${(e: Event) => e.stopPropagation()}">
           <h2>Select a tmux session</h2>
           <div class="session-list">
             ${this.sessions.map(
               (s) => html`
                 <button
                   class="session-item"
-                  @click=${() => this._onSessionClick(s.name)}
+                  @click="${() => this._onSessionClick(s.name)}"
                 >
                   <span class="session-name">${s.name}</span>
                   <span class="session-meta"

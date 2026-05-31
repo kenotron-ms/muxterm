@@ -121,7 +121,7 @@ export class MuxPane extends LitElement {
     return html`
       <div
         id="container"
-        @mousedown=${() => {
+        @mousedown="${() => {
           terminalRegistry.focus(this.paneId);
           this.dispatchEvent(
             new CustomEvent('pane-focus', {
@@ -130,7 +130,7 @@ export class MuxPane extends LitElement {
               detail: { paneId: this.paneId },
             }),
           );
-        }}
+        }}"
       ></div>
     `;
   }

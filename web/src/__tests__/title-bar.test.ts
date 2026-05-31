@@ -33,7 +33,8 @@ describe('MuxTitleBar', () => {
     // Launcher button present
     const launcherBtn = el.shadowRoot!.querySelector('.launcher-btn');
     expect(launcherBtn).toBeTruthy();
-    expect(launcherBtn!.textContent).toContain('⋯');
+    // Ellipsis SVG icon replaced the ⋯ unicode character
+    expect(launcherBtn!.querySelector('svg.lucide-icon')).toBeTruthy();
 
     // Menu not rendered by default
     const menu = el.shadowRoot!.querySelector('mux-launcher-menu');

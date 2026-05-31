@@ -82,29 +82,29 @@ export class MuxRegion extends LitElement {
   render() {
     return html`
       <mux-region-tabstrip
-        .sessionName=${this.sessionName}
-        .windows=${this.windows}
-        .activeWindowId=${this.activeWindowId}
-        .isDriver=${this.surfaceKind === 'driver'}
-        @tab-select=${this._forwardEvent}
-        @tab-close=${this._forwardEvent}
-        @tab-new=${this._forwardEvent}
-        @open-session-picker=${this._forwardEvent}
-        @region-maximize=${this._forwardEvent}
-        @region-action=${this._forwardEvent}
+        .sessionName="${this.sessionName}"
+        .windows="${this.windows}"
+        .activeWindowId="${this.activeWindowId}"
+        .isDriver="${this.surfaceKind === 'driver'}"
+        @tab-select="${this._forwardEvent}"
+        @tab-close="${this._forwardEvent}"
+        @tab-new="${this._forwardEvent}"
+        @open-session-picker="${this._forwardEvent}"
+        @region-maximize="${this._forwardEvent}"
+        @region-action="${this._forwardEvent}"
       ></mux-region-tabstrip>
       <div class="body">
         ${isTerminalSurface(this.surfaceKind)
           ? html`<mux-layout
-              layout-string=${this.layoutString}
-              active-pane-id=${this.activePaneId}
+              layout-string="${this.layoutString}"
+              active-pane-id="${this.activePaneId}"
             ></mux-layout>`
           : this.surfaceKind === 'browser'
             ? html`<mux-browser-surface
-                .url=${this.browserUrl ?? 'about:blank'}
+                .url="${this.browserUrl ?? 'about:blank'}"
               ></mux-browser-surface>`
             : html`<mux-settings-surface
-                .serverAddr=${this.serverAddr ?? location.host}
+                .serverAddr="${this.serverAddr ?? location.host}"
               ></mux-settings-surface>`}
       </div>
     `;

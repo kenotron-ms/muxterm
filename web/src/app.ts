@@ -1,6 +1,8 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { store, MuxStore } from './state.js';
+import { icon } from './lib/icons.js';
+import { MonitorX } from 'lucide';
 import { MuxSocket, buildWsUrl } from './ws.js';
 import type { TmuxState, Window, SessionInfo } from './types.js';
 import type { MuxLayout } from './components/layout.js';
@@ -96,9 +98,14 @@ export class MuxApp extends LitElement {
     }
 
     .empty-session .glyph {
-      font-size: 48px;
       line-height: 1;
       opacity: 0.5;
+    }
+
+    .lucide-icon {
+      display: inline-block;
+      vertical-align: middle;
+      flex-shrink: 0;
     }
 
     .empty-session .headline {
@@ -294,17 +301,17 @@ export class MuxApp extends LitElement {
     const activePaneId = this._tmuxState.activePane;
 
     return html`
-      <mux-title-bar @launcher-action=${this._onLauncherAction}></mux-title-bar>
+      <mux-title-bar @launcher-action="${this._onLauncherAction}"></mux-title-bar>
       ${this._tmuxState.sessions.length === 0
         ? html`
             <div class="empty-session">
-              <div class="glyph">◳</div>
+              <div class="glyph">${icon(MonitorX, { size: 48 })}</div>
               <div class="headline">No active session</div>
               <div class="subtext">
                 The tmux session ended. muxterm is still running — create a new
                 session to pick up where you left off.
               </div>
-              <button @click=${this._onCreateSession}>
+              <button @click="${this._onCreateSession}">
                 <span>+</span> New session
               </button>
             </div>
@@ -312,49 +319,49 @@ export class MuxApp extends LitElement {
         : windows.length === 0
         ? html`
             <div class="empty-session">
-              <div class="glyph">◳</div>
+              <div class="glyph">${icon(MonitorX, { size: 48 })}</div>
               <div class="headline">No open windows</div>
               <div class="subtext">
                 This session has nothing running. Create a window to get started.
               </div>
-              <button @click=${this._onTabNew}>
+              <button @click="${this._onTabNew}">
                 <span>+</span> New window
               </button>
             </div>
           `
         : html`
             <mux-workspace
-              .workspace=${this._workspace}
-              .tmuxState=${this._tmuxState}
-              @pane-focus=${this._onPaneSelect}
-              @resize-surface=${this._onSurfaceResize}
-              @open-session-picker=${this._onOpenSessionPicker}
-              @tab-select=${this._onTabSelect}
-              @tab-new=${this._onTabNew}
-              @tab-close=${this._onTabClose}
+              .workspace="${this._workspace}"
+              .tmuxState="${this._tmuxState}"
+              @pane-focus="${this._onPaneSelect}"
+              @resize-surface="${this._onSurfaceResize}"
+              @open-session-picker="${this._onOpenSessionPicker}"
+              @tab-select="${this._onTabSelect}"
+              @tab-new="${this._onTabNew}"
+              @tab-close="${this._onTabClose}"
             ></mux-workspace>
           `}
       <mux-status-bar
-        sessionName=${this._tmuxState.activeSession}
-        .windowCount=${windows.length}
-        .paneCount=${activeWindow?.panes.length ?? 0}
-        activeWindowName=${activeWindow?.name ?? ''}
-        connectionStatus=${this._connectionStatus}
-        @open-session-picker=${this._onOpenSessionPicker}
+        sessionName="${this._tmuxState.activeSession}"
+        .windowCount="${windows.length}"
+        .paneCount="${activeWindow?.panes.length ?? 0}"
+        activeWindowName="${activeWindow?.name ?? ''}"
+        connectionStatus="${this._connectionStatus}"
+        @open-session-picker="${this._onOpenSessionPicker}"
       ></mux-status-bar>
       <div class="overlay ${this._connectionStatus === 'connected' ? 'hidden' : ''}">
         Connecting to muxterm...
       </div>
       ${this._showReconnectOverlay
         ? html`<mux-reconnect-overlay
-            message=${this._reconnectMessage}
+            message="${this._reconnectMessage}"
           ></mux-reconnect-overlay>`
         : ''}
       ${this._showSessionPicker
         ? html`<mux-session-picker
-            .sessions=${this._sessions}
-            @session-selected=${this._onSessionSelected}
-            @close-picker=${() => { this._showSessionPicker = false; }}
+            .sessions="${this._sessions}"
+            @session-selected="${this._onSessionSelected}"
+            @close-picker="${() => { this._showSessionPicker = false; }}"
           ></mux-session-picker>`
         : ''}
     `;

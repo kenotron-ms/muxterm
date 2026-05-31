@@ -3,6 +3,8 @@ import { customElement, state } from 'lit/decorators.js';
 import type { PropertyValues } from 'lit';
 import { CHROME } from '../lib/theme.js';
 import './launcher-menu.js';
+import { icon } from '../lib/icons.js';
+import { Ellipsis } from 'lucide';
 
 @customElement('mux-title-bar')
 export class MuxTitleBar extends LitElement {
@@ -51,7 +53,6 @@ export class MuxTitleBar extends LitElement {
       border: none;
       border-radius: 4px;
       color: ${unsafeCSS(CHROME.textBright)};
-      font-size: 16px;
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -69,6 +70,16 @@ export class MuxTitleBar extends LitElement {
       top: 28px;
       right: 0;
       z-index: 1500;
+    }
+
+    .lucide-icon {
+      display: inline-block;
+      vertical-align: middle;
+      flex-shrink: 0;
+    }
+
+    button .lucide-icon {
+      pointer-events: none;
     }
   `;
 
@@ -137,12 +148,12 @@ export class MuxTitleBar extends LitElement {
         <button
           class="launcher-btn"
           title="Open menu"
-          @click=${this._toggleMenu}
-        >⋯</button>
+          @click="${this._toggleMenu}"
+        >${icon(Ellipsis, { size: 16 })}</button>
         ${this._menuOpen
           ? html`<div class="menu-anchor">
               <mux-launcher-menu
-                @launcher-action=${this._onLauncherAction}
+                @launcher-action="${this._onLauncherAction}"
               ></mux-launcher-menu>
             </div>`
           : ''}

@@ -78,12 +78,12 @@ export class MuxBrowserSurface extends LitElement {
         <input
           class="address"
           type="text"
-          .value=${this.url}
-          @change=${this._onAddressChange}
+          .value="${this.url}"
+          @change="${this._onAddressChange}"
         />
       </div>
       <iframe
-        src=${this.url}
+        src="${this.url}"
         sandbox="allow-scripts allow-same-origin allow-forms"
       ></iframe>
     `;

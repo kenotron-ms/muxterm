@@ -1,6 +1,8 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { CHROME } from '../lib/theme.js';
+import { icon } from '../lib/icons.js';
+import { ChevronDown, Target } from 'lucide';
 
 @customElement('mux-status-bar')
 export class MuxStatusBar extends LitElement {
@@ -26,6 +28,9 @@ export class MuxStatusBar extends LitElement {
     }
 
     .session {
+      display: flex;
+      align-items: center;
+      gap: 4px;
       color: var(--mux-accent);
       font-weight: 600;
       cursor: pointer;
@@ -48,8 +53,17 @@ export class MuxStatusBar extends LitElement {
     }
 
     .goal {
+      display: flex;
+      align-items: center;
+      gap: 4px;
       color: ${unsafeCSS(CHROME.driverAccent)};
       font-weight: 600;
+    }
+
+    .lucide-icon {
+      display: inline-block;
+      vertical-align: middle;
+      flex-shrink: 0;
     }
   `;
 
@@ -103,15 +117,17 @@ export class MuxStatusBar extends LitElement {
             role="button"
             tabindex="0"
             title="Switch session"
-            @click=${this._onSessionClick}
-          >${sessionDisplay} ▾</span>
+            @click="${this._onSessionClick}"
+          >${sessionDisplay} ${icon(ChevronDown, { size: 11 })}</span>
         <span class="separator">|</span>
         <span>${this.windowCount} ${windowLabel}</span>
         <span class="separator">|</span>
         <span>${this.activeWindowName} ${this.paneCount} ${paneLabel}</span>
       </div>
       <div class="right">
-        ${this.driverActive ? html`<span class="goal">◉ goal</span>` : ''}
+        ${this.driverActive
+          ? html`<span class="goal">${icon(Target, { size: 12 })} goal</span>`
+          : ''}
         <span class="${this.connectionStatus}">${this._statusText()}</span>
       </div>
     `;
