@@ -74,7 +74,7 @@ function normalizeSession(s: ServerSession): Session {
  * store.applyMessage() expects { type: string; data: ... } with camelCase
  * numeric IDs.  This function bridges the gap.
  */
-function normalizeMessage(raw: Record<string, unknown>): ServerMessage | null {
+export function normalizeMessage(raw: Record<string, unknown>): ServerMessage | null {
   const keys = Object.keys(raw);
   if (keys.length === 0) return null;
   const type = keys[0];
@@ -163,6 +163,11 @@ function normalizeMessage(raw: Record<string, unknown>): ServerMessage | null {
       };
     }
 
+    case 'session-list': {
+      const e = payload as { sessions?: { name: string; windows: number }[] };
+      return { type: 'session-list', data: { sessions: e?.sessions ?? [] } };
+    }
+
     case 'detached': {
       const e = payload as { reason?: string } | null | undefined;
       return { type: 'detached', data: { reason: (e as { reason?: string })?.reason ?? 'disconnected' } };
@@ -184,7 +189,7 @@ function normalizeMessage(raw: Record<string, unknown>): ServerMessage | null {
  * Window IDs are prefixed "@", pane IDs are prefixed "%" to match the tmux
  * ID format that the Go server passes directly to tmux commands.
  */
-function encodeClientMessage(msg: ClientMessage): Record<string, unknown> {
+export function encodeClientMessage(msg: ClientMessage): Record<string, unknown> {
   switch (msg.type) {
     case 'select-window':
       return { 'select-window': `@${msg.windowId}` };
@@ -204,6 +209,8 @@ function encodeClientMessage(msg: ClientMessage): Record<string, unknown> {
       return { 'rename-window': { id: `@${msg.windowId}`, name: msg.name } };
     case 'create-session':
       return { 'create-session': { name: msg.name } };
+    case 'attach-session':
+      return { 'attach-session': msg.name };
     case 'request-sync':
       return { 'request-sync': {} };
     default:

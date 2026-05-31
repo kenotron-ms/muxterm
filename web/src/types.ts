@@ -57,8 +57,14 @@ export type ServerMessage =
   | { type: 'session-changed'; data: { name: string } }
   | { type: 'session-window-changed'; data: { windowId: number } }
   | { type: 'pane-mode'; data: { paneId: number; mode: string } }
+  | { type: 'session-list'; data: { sessions: SessionInfo[] } }
   | { type: 'detached'; data: { reason: string } }
   | { type: 'error'; data: { message: string } };
+
+export interface SessionInfo {
+  name: string;
+  windows: number;
+}
 
 export type ClientMessage =
   | { type: 'select-window'; windowId: number }
@@ -70,6 +76,7 @@ export type ClientMessage =
   | { type: 'close-window'; windowId: number }
   | { type: 'rename-window'; windowId: number; name: string }
   | { type: 'create-session'; name: string }
+  | { type: 'attach-session'; name: string }
   | { type: 'request-sync' };
 
 export interface MuxStoreEvents {
