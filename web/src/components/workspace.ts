@@ -50,6 +50,13 @@ export class MuxWorkspace extends LitElement {
   /** Regions that have been detached (popped out) — preserved for remount. */
   private _detachedRegions = new Map<string, Region>();
 
+  /**
+   * Optimistic window selection: records the windowId the user just clicked
+   * before the server round-trip completes. Keyed by sessionName.
+   * Cleared when the server confirms a tmuxState update for that session.
+   */
+  @state() private _optimisticWindows = new Map<string, number>();
+
   // Two-clock plumbing: ResizeObserver → budget → coalescer → resize-surface event
 
   private _coalescer = new ResizeCoalescer((surfaceId, budget) => {
@@ -73,6 +80,10 @@ export class MuxWorkspace extends LitElement {
   }
 
   private _sessionActiveWindowId(sessionName: string): number {
+    // Check optimistic override first — gives instant response before server confirms.
+    if (this._optimisticWindows.has(sessionName)) {
+      return this._optimisticWindows.get(sessionName)!;
+    }
     // For the currently-active session, tmuxState.activeWindow is authoritative.
     if (this.tmuxState?.activeSession === sessionName) {
       return this.tmuxState.activeWindow ?? 0;
@@ -276,7 +287,7 @@ export class MuxWorkspace extends LitElement {
   // Lifecycle
   // ---------------------------------------------------------------------------
 
-  protected override updated(): void {
+  protected override updated(changedProperties: Map<string, unknown>): void {
     if (!this.workspace) return;
     const regionEls = this.shadowRoot?.querySelectorAll('mux-region') as NodeListOf<MuxRegion> | undefined;
     if (!regionEls) return;
@@ -289,6 +300,21 @@ export class MuxWorkspace extends LitElement {
       const metrics = this._cellMetricsFor(region.surface.id);
       if (!metrics) continue;
       this._budget.observe(region.surface.id, body, metrics);
+    }
+
+    // Clear optimistic window selections once the server has confirmed a
+    // tmuxState update for the affected session — the server is now authoritative.
+    if (changedProperties.has('tmuxState') && this.tmuxState && this._optimisticWindows.size > 0) {
+      const next = new Map(this._optimisticWindows);
+      let changed = false;
+      for (const [sessionName] of next) {
+        const session = this.tmuxState.sessions.find((s) => s.name === sessionName);
+        if (session) {
+          next.delete(sessionName);
+          changed = true;
+        }
+      }
+      if (changed) this._optimisticWindows = next;
     }
   }
 
@@ -330,6 +356,13 @@ export class MuxWorkspace extends LitElement {
           .activeWindowId="${sessionActiveWindowId}"
           .sessions="${sessions}"
           .activeSession="${activeSession}"
+          @tab-select="${(e: CustomEvent<{ windowId: number }>) => {
+            // Optimistically record the desired window so content switches instantly.
+            // Do NOT stopPropagation — let it continue up to app.ts for the server call.
+            this._optimisticWindows = new Map(
+              this._optimisticWindows.set(region.surface.sessionName, e.detail.windowId)
+            );
+          }}"
           @region-action="${(e: Event) => {
             e.stopPropagation();
             const ev = e as CustomEvent<{ action: RegionAction }>;
