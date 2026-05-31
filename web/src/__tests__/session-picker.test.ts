@@ -135,4 +135,36 @@ describe('MuxSessionPicker', () => {
     expect(items.length).toBe(1);
     expect(items[0].querySelector('.session-name')?.textContent).toBe('only-one');
   });
+
+  it('SessionInfo contract: consumes {name, windows} shape, shows window counts, fires session-selected with name', async () => {
+    // Arrange: create element with two sessions using the SessionInfo shape
+    el = document.createElement('mux-session-picker') as MuxSessionPicker;
+    el.sessions = [
+      { name: 'dev', windows: 2 },
+      { name: 'ops', windows: 1 },
+    ];
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    // Assert: renders two .session-item elements
+    const items = el.shadowRoot!.querySelectorAll('.session-item');
+    expect(items.length).toBe(2);
+
+    // Assert: shadowRoot text contains session name and window count
+    const text = el.shadowRoot!.textContent ?? '';
+    expect(text).toContain('dev');
+    expect(text).toContain('2 windows');
+
+    // Assert: clicking items[1] dispatches session-selected with {name: 'ops'}
+    let picked: string | undefined;
+    el.addEventListener('session-selected', (e) => {
+      picked = (e as CustomEvent<{ name: string }>).detail.name;
+    });
+    (items[1] as HTMLElement).click();
+    expect(picked).toBe('ops');
+
+    // Cleanup
+    el.parentNode?.removeChild(el);
+    (el as unknown as null) = null!;
+  });
 });
