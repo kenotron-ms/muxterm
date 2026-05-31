@@ -532,6 +532,35 @@ func (a *controllerAdapter) NewSession(name string) error {
 	return nil
 }
 
+// AttachSession requests switching the active tmux session to name.
+func (a *controllerAdapter) AttachSession(name string) error {
+	a.pool.requestSwitch(name)
+	return nil
+}
+
+// SessionList returns a snapshot of all running tmux sessions.
+// Returns nil if tmux is not available or no sessions exist.
+func (a *controllerAdapter) SessionList() []server.SessionInfo {
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}\t#{session_windows}").Output()
+	if err != nil {
+		return nil
+	}
+	var result []server.SessionInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		n, _ := strconv.Atoi(parts[1])
+		result = append(result, server.SessionInfo{Name: parts[0], Windows: n})
+	}
+	return result
+}
+
 // LiveState queries tmux directly for the current session/window/pane structure.
 // Always accurate regardless of missed %window-close or other dropped events.
 // Returns an empty state (not an error) when no session is attached, so the

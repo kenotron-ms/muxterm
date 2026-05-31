@@ -38,6 +38,10 @@ type TmuxEngine interface {
 	// (-e preserves ANSI escape sequences). Used to populate new clients
 	// with existing terminal output on connect.
 	CapturePaneContent(paneID string) ([]byte, error)
+	// AttachSession requests switching the active tmux session to name.
+	AttachSession(name string) error
+	// SessionList returns a snapshot of all running tmux sessions.
+	SessionList() []SessionInfo
 }
 
 // Client represents a connected WebSocket client.

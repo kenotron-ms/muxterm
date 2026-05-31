@@ -132,6 +132,15 @@ func (m *mockEngine) NewSession(name string) error {
 
 func (m *mockEngine) CapturePaneContent(_ string) ([]byte, error) { return nil, nil }
 func (m *mockEngine) LiveState() (*tmux.TmuxState, error)         { return m.state, nil }
+func (m *mockEngine) AttachSession(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.commandCalls = append(m.commandCalls, commandCall{Method: "AttachSession", Args: []interface{}{name}})
+	return nil
+}
+func (m *mockEngine) SessionList() []SessionInfo {
+	return []SessionInfo{{Name: "dev", Windows: 1}}
+}
 func (m *mockEngine) getCommandCalls() []commandCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -590,6 +599,19 @@ func TestResizePaneAction(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("ResizePane not called with '%%5', got calls: %v", calls)
+	}
+}
+
+func TestEngineInterface_AttachAndList(t *testing.T) {
+	m := newMockEngine()
+	var eng TmuxEngine = m // compile-time interface satisfaction check
+	err := eng.AttachSession("ops")
+	if err != nil {
+		t.Fatalf("AttachSession: unexpected error: %v", err)
+	}
+	sessions := eng.SessionList()
+	if len(sessions) == 0 {
+		t.Fatal("SessionList returned empty slice")
 	}
 }
 
