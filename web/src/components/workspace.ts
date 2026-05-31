@@ -1,14 +1,17 @@
 import { LitElement, html, css } from 'lit';
-import { customElement, property } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { Workspace, Region } from '../lib/workspace.js';
 import type { TmuxState, Window } from '../types.js';
 import { CellBudgetManager } from '../lib/cell-budget.js';
 import { ResizeCoalescer } from '../lib/resize-coalescer.js';
 import type { CellMetrics, PixelBox } from '../lib/cell-budget.js';
+import { popoutManager, PopoutManager } from '../lib/popout.js';
 import './region.js';
 import './region-divider.js';
+import './region-menu.js';
 import type { MuxRegion } from './region.js';
+import type { RegionAction } from './region-menu.js';
 
 type Item =
   | { type: 'region'; region: Region }
@@ -37,6 +40,19 @@ export class MuxWorkspace extends LitElement {
 
   @property({ attribute: false })
   tmuxState!: TmuxState;
+
+  /** Which region's ⋯ menu is currently open (null = no menu). */
+  @state() private _openMenuRegionId: string | null = null;
+
+  /**
+   * Injectable pop-out manager — defaults to the app-wide singleton but can
+   * be replaced in tests with a PopoutManager using a fake window opener.
+   * @internal
+   */
+  _popoutManager: PopoutManager = popoutManager;
+
+  /** Regions that have been detached (popped out) — preserved for remount. */
+  private _detachedRegions = new Map<string, Region>();
 
   // Two-clock plumbing: ResizeObserver → budget → coalescer → resize-surface event
 
@@ -149,6 +165,118 @@ export class MuxWorkspace extends LitElement {
     this.requestUpdate();
   };
 
+  // ---------------------------------------------------------------------------
+  // Region menu orchestration
+  // ---------------------------------------------------------------------------
+
+  /** Called when the ⋯ button in a region opens the context menu. */
+  private _onRegionMenuOpen(regionId: string): void {
+    this._openMenuRegionId = regionId;
+  }
+
+  /**
+   * Handles `region-action` events bubbled from the `<mux-region-menu>`.
+   * The `regionId` is the region whose menu was opened (captured at open time).
+   */
+  private _onRegionAction = (e: Event): void => {
+    const regionId = this._openMenuRegionId;
+    if (!regionId) return;
+
+    const event = e as CustomEvent<{ action: RegionAction }>;
+    const { action } = event.detail;
+
+    // Close the menu first
+    this._openMenuRegionId = null;
+
+    switch (action) {
+      case 'split-right':
+        this._splitRegion(regionId, 'horizontal');
+        break;
+
+      case 'split-down':
+        this._splitRegion(regionId, 'vertical');
+        break;
+
+      case 'rename':
+        this._renameRegionWindow(regionId);
+        break;
+
+      case 'close-region':
+        this._closeRegion(regionId);
+        break;
+
+      case 'pop-out':
+        try {
+          this._popoutManager.popOut({
+            regionId,
+            onClose: () => this._remountRegion(regionId),
+          });
+          // MOVES the surface — detach only after successful popOut call
+          this._detachRegion(regionId);
+        } catch (err) {
+          if ((err as Error).message === 'popout-blocked') {
+            // Keep the region docked — NEVER lose it
+            console.warn(
+              `[mux-workspace] pop-out blocked for region "${regionId}" — keeping docked`,
+            );
+          } else {
+            throw err;
+          }
+        }
+        break;
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Region lifecycle helpers
+  // ---------------------------------------------------------------------------
+
+  /** Split a region horizontally or vertically (stub — full impl in later task). */
+  private _splitRegion(_regionId: string, _direction: 'horizontal' | 'vertical'): void {
+    // TODO: implement split
+  }
+
+  /** Rename the tmux window associated with a region (stub). */
+  private _renameRegionWindow(_regionId: string): void {
+    // TODO: implement rename
+  }
+
+  /** Close a region and remove it from the workspace. */
+  private _closeRegion(regionId: string): void {
+    if (!this.workspace) return;
+    this.workspace.closeRegion(regionId);
+    this.requestUpdate();
+  }
+
+  /**
+   * Remove a region from the in-page layout without destroying it.
+   * The region data is stored in `_detachedRegions` so it can be remounted.
+   */
+  private _detachRegion(regionId: string): void {
+    if (!this.workspace) return;
+    const region = this.workspace.regions.find((r) => r.id === regionId);
+    if (!region) return;
+    this._detachedRegions.set(regionId, region);
+    this.workspace.regions = this.workspace.regions.filter((r) => r.id !== regionId);
+    this.requestUpdate();
+  }
+
+  /**
+   * Re-add a previously detached region back into the in-page layout.
+   * Called by the pop-out manager's `onClose` callback.
+   */
+  private _remountRegion(regionId: string): void {
+    const region = this._detachedRegions.get(regionId);
+    if (!region || !this.workspace) return;
+    this._detachedRegions.delete(regionId);
+    this.workspace.regions.push(region);
+    this.requestUpdate();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
+
   protected override updated(): void {
     if (!this.workspace) return;
     const regionEls = this.shadowRoot?.querySelectorAll('mux-region') as NodeListOf<MuxRegion> | undefined;
@@ -186,6 +314,7 @@ export class MuxWorkspace extends LitElement {
           .windowName=${windowName}
           .layoutString=${layoutString}
           .activePaneId=${activePaneId}
+          @region-menu-open=${() => this._onRegionMenuOpen(region.id)}
         ></mux-region>
       </div>
     `;
@@ -205,6 +334,7 @@ export class MuxWorkspace extends LitElement {
     this.removeEventListener('region-resize-end', this._onResizeEnd);
     this._budget.dispose();
     this._coalescer.dispose();
+    this._popoutManager.dispose();
   }
 
   render() {
@@ -227,7 +357,11 @@ export class MuxWorkspace extends LitElement {
         item.type === 'region'
           ? this._renderRegion(item.region)
           : html`<mux-region-divider></mux-region-divider>`,
-    )}`;
+    )}${this._openMenuRegionId !== null
+      ? html`<mux-region-menu
+          @region-action=${this._onRegionAction}
+        ></mux-region-menu>`
+      : ''}`;
   }
 
   /** @internal test hook — drive the cell-budget entry point directly. */
