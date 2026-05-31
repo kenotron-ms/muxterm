@@ -157,16 +157,18 @@ func (c *Client) close() {
 
 // Hub manages WebSocket clients and their interaction with the tmux engine.
 type Hub struct {
-	clients map[*Client]bool
-	mu      sync.RWMutex
-	engine  TmuxEngine
+	clients       map[*Client]bool
+	mu            sync.RWMutex
+	engine        TmuxEngine
+	surfaceRouter *SurfaceRouter
 }
 
 // NewHub creates a new Hub with the given tmux engine.
 func NewHub(engine TmuxEngine) *Hub {
 	return &Hub{
-		clients: make(map[*Client]bool),
-		engine:  engine,
+		clients:       make(map[*Client]bool),
+		engine:        engine,
+		surfaceRouter: NewSurfaceRouter(),
 	}
 }
 
@@ -450,6 +452,17 @@ func (h *Hub) dispatchAction(action string, payload json.RawMessage) error {
 			return fmt.Errorf("attach-session: %w", err)
 		}
 		return h.engine.AttachSession(name)
+
+	case "resize-surface":
+		var p struct {
+			SurfaceID string `json:"surfaceId"`
+			Cols      int    `json:"cols"`
+			Rows      int    `json:"rows"`
+		}
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return fmt.Errorf("resize-surface: %w", err)
+		}
+		return h.surfaceRouter.Resize(SurfaceID(p.SurfaceID), p.Cols, p.Rows)
 
 	default:
 		return fmt.Errorf("unknown action: %s", action)

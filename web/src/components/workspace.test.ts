@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 
 // Import the component — triggers custom element registration
 import './workspace.js';
@@ -172,5 +172,84 @@ describe('MuxWorkspace', () => {
     };
     expect(regionEl).toBeTruthy();
     expect(regionEl.layoutString).toBe(layoutString);
+  });
+
+  it('emits a resize-surface event (id, cols, rows) when a surface is measured via measureSurfaceForTest', async () => {
+    vi.useFakeTimers();
+    try {
+      const ws = new Workspace();
+      const region = ws.openRegion({ sessionName: 'main', windowId: 1 });
+      const surfaceId = region.surface.id;
+
+      const state = makeTmuxState([
+        { name: 'main', windows: [{ id: 1, name: 'vim', layout: '', panes: [] }] },
+      ]);
+
+      el = await fixture(ws, state);
+
+      const events: CustomEvent<{ surfaceId: string; cols: number; rows: number }>[] = [];
+      el.addEventListener('resize-surface', (e) => {
+        events.push(e as CustomEvent<{ surfaceId: string; cols: number; rows: number }>);
+      });
+
+      // Drive the cell-budget entry point directly (bypasses DOM/ResizeObserver)
+      (el as unknown as { measureSurfaceForTest: (id: string, box: { width: number; height: number }, metrics: { cellWidth: number; cellHeight: number }) => void }).measureSurfaceForTest(
+        surfaceId,
+        { width: 800, height: 400 },
+        { cellWidth: 8, cellHeight: 16 },
+      );
+
+      // Advance timers past the 40 ms coalescer debounce
+      vi.advanceTimersByTime(50);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].detail.surfaceId).toBe(surfaceId);
+      expect(events[0].detail.cols).toBe(100); // floor(800 / 8)
+      expect(events[0].detail.rows).toBe(25);  // floor(400 / 16)
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not re-emit when the pixel change stays within the same cell boundary', async () => {
+    vi.useFakeTimers();
+    try {
+      const ws = new Workspace();
+      const region = ws.openRegion({ sessionName: 'main', windowId: 1 });
+      const surfaceId = region.surface.id;
+
+      const state = makeTmuxState([
+        { name: 'main', windows: [{ id: 1, name: 'vim', layout: '', panes: [] }] },
+      ]);
+
+      el = await fixture(ws, state);
+
+      const events: CustomEvent[] = [];
+      el.addEventListener('resize-surface', (e) => events.push(e as CustomEvent));
+
+      type MeasureFn = { measureSurfaceForTest: (id: string, box: { width: number; height: number }, metrics: { cellWidth: number; cellHeight: number }) => void };
+
+      // First measurement: 800×400 → 100 cols × 25 rows
+      (el as unknown as MeasureFn).measureSurfaceForTest(
+        surfaceId,
+        { width: 800, height: 400 },
+        { cellWidth: 8, cellHeight: 16 },
+      );
+      vi.advanceTimersByTime(50);
+      expect(events).toHaveLength(1);
+
+      // Sub-cell pixel change: 804×402 → still 100 cols × 25 rows (no boundary crossed)
+      (el as unknown as MeasureFn).measureSurfaceForTest(
+        surfaceId,
+        { width: 804, height: 402 },
+        { cellWidth: 8, cellHeight: 16 },
+      );
+      vi.advanceTimersByTime(50);
+
+      // Must NOT emit a second event — same cell budget
+      expect(events).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

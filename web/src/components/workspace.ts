@@ -3,8 +3,12 @@ import { customElement, property } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { Workspace, Region } from '../lib/workspace.js';
 import type { TmuxState, Window } from '../types.js';
+import { CellBudgetManager } from '../lib/cell-budget.js';
+import { ResizeCoalescer } from '../lib/resize-coalescer.js';
+import type { CellMetrics, PixelBox } from '../lib/cell-budget.js';
 import './region.js';
 import './region-divider.js';
+import type { MuxRegion } from './region.js';
 
 type Item =
   | { type: 'region'; region: Region }
@@ -34,6 +38,19 @@ export class MuxWorkspace extends LitElement {
   @property({ attribute: false })
   tmuxState!: TmuxState;
 
+  // Two-clock plumbing: ResizeObserver → budget → coalescer → resize-surface event
+
+  private _coalescer = new ResizeCoalescer((surfaceId, budget) => {
+    this.dispatchEvent(new CustomEvent('resize-surface', {
+      bubbles: true, composed: true,
+      detail: { surfaceId, cols: budget.cols, rows: budget.rows },
+    }));
+  });
+
+  private _budget = new CellBudgetManager((surfaceId, budget) => {
+    this._coalescer.push(surfaceId, budget);
+  });
+
   private _findWindow(sessionName: string, windowId: number): Window | undefined {
     const session = this.tmuxState?.sessions.find((s) => s.name === sessionName);
     return session?.windows.find((w) => w.id === windowId);
@@ -50,6 +67,28 @@ export class MuxWorkspace extends LitElement {
     }
     this.requestUpdate();
   };
+
+  protected override updated(): void {
+    if (!this.workspace) return;
+    const regionEls = this.shadowRoot?.querySelectorAll('mux-region') as NodeListOf<MuxRegion> | undefined;
+    if (!regionEls) return;
+
+    for (const region of this.workspace.visibleRegions) {
+      const regionEl = Array.from(regionEls).find((el) => el.surfaceId === region.surface.id);
+      if (!regionEl) continue;
+      const body = regionEl.bodyElement;
+      if (!body) continue;
+      const metrics = this._cellMetricsFor(region.surface.id);
+      if (!metrics) continue;
+      this._budget.observe(region.surface.id, body, metrics);
+    }
+  }
+
+  /** Returns the character-cell dimensions for a surface.
+   *  Returns a fixed default until xterm reports real CSS cell dimensions. */
+  private _cellMetricsFor(_surfaceId: string): CellMetrics | null {
+    return { cellWidth: 8, cellHeight: 16 };
+  }
 
   private _renderRegion(region: Region) {
     const win = this._findWindow(region.surface.sessionName, region.surface.windowId);
@@ -79,6 +118,8 @@ export class MuxWorkspace extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     this.removeEventListener('region-maximize', this._onMaximize);
+    this._budget.dispose();
+    this._coalescer.dispose();
   }
 
   render() {
@@ -102,6 +143,12 @@ export class MuxWorkspace extends LitElement {
           ? this._renderRegion(item.region)
           : html`<mux-region-divider></mux-region-divider>`,
     )}`;
+  }
+
+  /** @internal test hook — drive the cell-budget entry point directly. */
+  measureSurfaceForTest(surfaceId: string, box: PixelBox, metrics: CellMetrics): void {
+    this._budget.setSurfaceMetrics(surfaceId, metrics);
+    this._budget.setSurfacePixelBox(surfaceId, box);
   }
 }
 

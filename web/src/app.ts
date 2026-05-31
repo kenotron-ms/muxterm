@@ -270,6 +270,7 @@ export class MuxApp extends LitElement {
               .workspace=${this._workspace}
               .tmuxState=${this._tmuxState}
               @pane-focus=${this._onPaneSelect}
+              @resize-surface=${this._onSurfaceResize}
             ></mux-workspace>
           `}
       <mux-status-bar
@@ -296,6 +297,11 @@ export class MuxApp extends LitElement {
         : ''}
     `;
   }
+
+  private _onSurfaceResize = (e: CustomEvent<{ surfaceId: string; cols: number; rows: number }>): void => {
+    // Async fire-and-forget (seam S5) — never a synchronous handshake.
+    this._socket?.sendControl({ type: 'resize-surface', surfaceId: e.detail.surfaceId, cols: e.detail.cols, rows: e.detail.rows });
+  };
 
   private _onTabSelect = (e: CustomEvent<{ windowId: number }>): void => {
     this._socket?.sendControl({

@@ -211,6 +211,8 @@ export function encodeClientMessage(msg: ClientMessage): Record<string, unknown>
       return { 'create-session': { name: msg.name } };
     case 'attach-session':
       return { 'attach-session': msg.name };
+    case 'resize-surface':
+      return { 'resize-surface': { surfaceId: msg.surfaceId, cols: msg.cols, rows: msg.rows } };
     case 'request-sync':
       return { 'request-sync': {} };
     default:

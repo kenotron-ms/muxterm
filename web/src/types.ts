@@ -71,6 +71,7 @@ export type ClientMessage =
   | { type: 'select-pane'; paneId: number }
   | { type: 'split'; direction: SplitDirection; paneId: number }
   | { type: 'resize-pane'; paneId: number; cols: number; rows: number }
+  | { type: 'resize-surface'; surfaceId: string; cols: number; rows: number }
   | { type: 'new-window' }
   | { type: 'close-pane'; paneId: number }
   | { type: 'close-window'; windowId: number }
