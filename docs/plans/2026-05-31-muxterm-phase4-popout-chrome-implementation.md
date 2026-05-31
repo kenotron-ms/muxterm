@@ -10,6 +10,114 @@
 
 ---
 
+## Phase 1–3 Actuals (grounding for implementers)
+
+Use these exact names — do not use hypothetical names from the plan when they differ from actuals.
+
+### `<mux-region>` — `web/src/components/region.ts`
+
+**Properties (all Lit `@property` with HTML attributes):**
+```
+regionId: string     // 'region-id'
+surfaceId: string    // 'surface-id'
+sessionName: string  // 'session-name'
+windowName: string   // 'window-name'
+layoutString: string // 'layout-string'
+activePaneId: number // 'active-pane-id'
+```
+
+**Events emitted:** `region-maximize` (bubbles, composed) — `detail: { regionId: string }`.
+
+**Existing stub header:** A `.header` strip showing `sessionName + windowName + ⊡ maximize button` (NOT a tab strip). **Phase 4 replaces/extends this with the VS Code-style tab strip.** The `maximize ⊡` functionality must be preserved.
+
+**Critical seam — preserve:** `get bodyElement(): HTMLElement` — used by `<mux-workspace>` to register ResizeObserver for cell-budget. Do not remove or rename this getter.
+
+### `<mux-workspace>` — `web/src/components/workspace.ts`
+
+**Properties (JS-only, no HTML attributes):**
+- `.workspace: Workspace` — the Layer-2 model
+- `.tmuxState: TmuxState` — current tmux snapshot
+
+**Events emitted:** `resize-surface` (bubbles, composed) — `detail: { surfaceId: string; cols: number; rows: number }`.
+
+**Events consumed:** `region-maximize` → `workspace.maximize()`/`workspace.restore()`. `region-resize-drag` / `region-resize-end` (drag divider).
+
+**No presentation-mode attribute** — mode is `workspace.mode` (derived, read-only). Phase 4 chrome wraps around `<mux-workspace>` in `app.ts`, not inside it.
+
+### `Workspace` model — `web/src/lib/workspace.ts`
+
+```ts
+// Core types
+type PresentationMode = 'docked' | 'single'
+interface SurfaceRef  { sessionName: string; windowId: number }
+interface Surface extends SurfaceRef { id: string }  // "surf-N"
+interface Region { id: string; surface: Surface; weight: number }  // "region-N"
+
+// Key methods
+workspace.openRegion(ref: SurfaceRef): Region  // throws if same windowId already open (one-window-one-surface)
+workspace.closeRegion(id: string): void
+workspace.maximize(id: string): void
+workspace.restore(): void
+workspace.mode: PresentationMode  // getter: 'single' if ≤1 or maximized; 'docked' if 2+
+workspace.visibleRegions: Region[]  // getter
+workspace.regions: Region[]  // mutable array (ALL regions, incl. maximized)
+```
+
+**Pop-out design decision (v1):** Pop-out = MOVE the surface. Call `closeRegion(id)`, then `window.open()` the popup with the `surfaceId`, then `openRegion(ref)` inside the popup. Prevents one-window-one-surface conflict. Pop-out window carries its own `Workspace` instance with one region.
+
+**Opening non-terminal surfaces (Browser, Settings):** These do NOT have a tmux `windowId`. Extend `SurfaceRef` to allow `kind: 'terminal' | 'browser' | 'settings'`. For non-terminal: skip the one-window-one-surface check (no `windowId`) and skip the `SurfaceRouter.Mount` call.
+
+### `SurfaceRouter` — `internal/server/surface.go`
+
+```go
+type SurfaceID string  // frontend-minted, e.g. "surf-3"
+type SurfaceRouter struct { ... }  // package: server
+
+// API
+router.Mount(id SurfaceID, windowID string, client surfaceClient) error
+router.Resize(id SurfaceID, cols, rows int) error
+router.Accept(pane uint32, id SurfaceID) bool      // pane ownership (dedup)
+router.Unmount(id SurfaceID) error
+
+// surfaceClient interface (internal)
+type surfaceClient interface {
+    SelectWindow(windowID string) error
+    SetAggressiveResize() error
+    RefreshClientSize(cols, rows int) error
+    Close() error
+}
+```
+
+**Backend WS `resize-surface` message** (`ws.go:456–465`):
+```json
+{ "type": "resize-surface", "surfaceId": "surf-N", "cols": 120, "rows": 34 }
+```
+→ `hub.surfaceRouter.Resize(SurfaceID("surf-N"), 120, 34)`
+
+### `TmuxEngine` — `internal/server/ws.go:20–45`
+
+**No `EngineForSession()` factory method exists.** If Phase 4 needs to open a new terminal surface for a different session, use `AttachSession(name)` on the shared engine first. Non-terminal surfaces (Browser, Settings) need no engine interaction at all.
+
+### App-level chrome already in `app.ts`
+
+**Already present (Phase 4 must integrate with these, not duplicate them):**
+- `<mux-tab-bar>` — window tabs for the active session only; events: `tab-select`, `tab-new`, `tab-close`
+- `<mux-status-bar>` — bottom bar; emits `open-session-picker`
+- `<mux-session-picker>` — overlay; `@session-selected`
+- `<mux-reconnect-overlay>` — overlay
+
+**Phase 4 adds:** `<mux-title-bar>` (wraps/replaces the existing window-chrome `<div class="title-bar">` equivalent at the top of the render), per-region VS Code tab strips (replacing `<mux-region>`'s stub header), region menus, the global `⋯` launcher.
+
+**App state already managed:** `_tmuxState`, `_sessions`, `_showSessionPicker`, `_connectionStatus`. Phase 4 adds `_showLauncher: boolean` and `_launcherAnchor`.
+
+### Phase 2 Verification Harness (use in all E2E tasks)
+
+- `window.__muxterm.snapshot(paneId: number)` → `StructuredSnapshot` (via `playwright-cli eval`)
+- `web/e2e/helpers/fidelity.ts`: `compareContent(paneId, sessionName)` + `compareLayout(paneId, element)`
+- `playwright-cli open http://localhost:8080` — dev server port confirmed :8080
+
+---
+
 ## Before you start — orientation (read this once)
 
 **Visual source of truth — match these exactly:**
