@@ -10,6 +10,72 @@
 
 ---
 
+## Phase 1 & 2 Actuals (grounding for implementers)
+
+These are the actual seams delivered by Phases 1 and 2. Use these exact names — do not use the plan's hypothetical names when they conflict.
+
+### Go Backend — `TmuxEngine` interface (internal/server/ws.go:20–45)
+
+15 methods, ALL session-agnostic (no session-ID parameter on any method):
+
+```go
+State() *tmux.TmuxState
+LiveState() (*tmux.TmuxState, error)
+SendKeys(paneID, keys string) error
+SelectWindow(windowID string) error
+SelectPane(paneID string) error
+SplitWindow(targetPaneID string, horizontal bool) error
+ResizePane(paneID string, cols, rows int) error
+NewWindow(sessionID string) error
+KillPane(paneID string) error
+CloseWindow(windowID string) error
+RenameWindow(windowID, name string) error
+NewSession(name string) error
+CapturePaneContent(paneID string) ([]byte, error)
+AttachSession(name string) error  // Phase 1 addition
+SessionList() []SessionInfo       // Phase 1 addition
+```
+
+**Phase 3 must add per-surface routing.** Recommended approach: add a factory method to `TmuxEngine`:
+```go
+// Add to TmuxEngine interface:
+EngineForSession(name string) TmuxEngine
+```
+This returns a session-scoped sub-engine without breaking any existing callers. The concrete `controllerAdapter` at `cmd/muxterm/main.go:423` wraps `*controllerPool` and is the only implementation — extend it here.
+
+### Go Backend — controllerPool (cmd/muxterm/controller_pool.go)
+
+Package-private concrete type. Public seam for Phase 3:
+- `pool.get(name string) *controllerSession` — returns the session's controller wrapper or nil
+- `controllerSession.ctrl *tmux.Controller` — the actual control client for `select-window` + `refresh-client`
+- `pool.claimPane(name, paneID string) bool` — first-attached-wins pane ownership
+
+Phase 3's `SurfaceRouter` should use `pool.get(sessionName).ctrl` to get a per-session controller to run `select-window` and `refresh-client -C WxH` for that surface.
+
+### Frontend — terminal-registry.ts (web/src/lib/terminal-registry.ts)
+
+- Map keyed by `number` (not string): `Map<number, PaneEntry>`
+- `PaneEntry` has: `{ term: Terminal, fitAddon: FitAddon, hostEl: HTMLElement, handlers, lastCols, lastRows, opened, pendingData, resizeObserver, resizeTimer }`
+- Phase 2 added `snapshot(paneId: number): StructuredSnapshot` method
+- Phase 2 added `window.__muxterm.snapshot(paneId)` for playwright-cli eval
+
+### Phase 2 Verification Harness (use in E2E tasks)
+
+- `window.__muxterm.snapshot(paneId: number)` → `StructuredSnapshot` (via `playwright-cli eval`)
+- `web/e2e/helpers/fidelity.ts` exports: `compareContent(paneId, sessionName)` + `compareLayout(paneId, element)`
+- Content fidelity: tmux `capture-pane -p -t %N` text == xterm.js snapshot text, per-row trailing-blank-exact
+- Layout fidelity: xterm `viewportY` + cols×rows == playwright-cli `scrollTop` + `clientWidth`
+
+### Types (web/src/types.ts)
+
+- `ClientMessage` does NOT have a `session` tag yet (Phase 4 adds it for chrome routing)
+- Phase 1 added: `{ type: 'attach-session'; name: string }` to `ClientMessage`
+- Phase 1 added: `{ type: 'session-list'; data: { sessions: SessionInfo[] } }` to `ServerMessage`
+- `SessionInfo = { name: string; windows: number }`
+- Binary frames carry only 4-byte LE pane ID (no session identifier) — `%N` pane IDs are tmux-server-global, so pane-level routing works without a session tag
+
+---
+
 ## Dependencies & Assumptions (READ FIRST)
 
 This phase **builds on Phase 1 and Phase 2**. Before starting, confirm these exist (they are produced by the other phase plans):
