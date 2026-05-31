@@ -233,5 +233,3 @@ func (p *controllerPool) ownsPane(name, paneID string) bool {
 	defer p.mu.RUnlock()
 	return p.owner[paneID] == name
 }
-
-

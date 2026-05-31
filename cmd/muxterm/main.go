@@ -356,7 +356,6 @@ func bootstrapTmuxState(state *tmux.TmuxState, sessionName string) error {
 			activeWindowID = windowID
 		}
 
-
 	}
 
 	// Step 4: mark the active window (sets Window.Active flags).
@@ -840,5 +839,3 @@ func wireEvents(sessionName string, pool *controllerPool, events <-chan tmux.Eve
 		}
 	}
 }
-
-
