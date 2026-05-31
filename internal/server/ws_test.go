@@ -615,6 +615,24 @@ func TestEngineInterface_AttachAndList(t *testing.T) {
 	}
 }
 
+func TestDispatchAction_AttachSession(t *testing.T) {
+	m := newMockEngine()
+	hub := NewHub(m)
+
+	err := hub.dispatchAction("attach-session", json.RawMessage(`"ops"`))
+	if err != nil {
+		t.Fatalf("dispatchAction returned error: %v", err)
+	}
+
+	calls := m.getCommandCalls()
+	for _, c := range calls {
+		if c.Method == "AttachSession" && len(c.Args) > 0 && c.Args[0] == "ops" {
+			return // found expected call
+		}
+	}
+	t.Fatalf("AttachSession(\"ops\") not found in command calls: %v", calls)
+}
+
 func TestInvalidAction(t *testing.T) {
 	env := newTestEnv(t)
 

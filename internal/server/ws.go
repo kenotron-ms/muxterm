@@ -439,6 +439,13 @@ func (h *Hub) dispatchAction(action string, payload json.RawMessage) error {
 		}
 		return h.engine.NewSession(p.Name)
 
+	case "attach-session":
+		var name string
+		if err := json.Unmarshal(payload, &name); err != nil {
+			return fmt.Errorf("attach-session: %w", err)
+		}
+		return h.engine.AttachSession(name)
+
 	default:
 		return fmt.Errorf("unknown action: %s", action)
 	}
