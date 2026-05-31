@@ -180,6 +180,9 @@ export class MuxApp extends LitElement {
 
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
+    // Install keybindings with defaults immediately — mirrors applyThemeTokens.
+    // Without this, shortcuts are dead until the first config frame arrives.
+    disposeKeys = installKeybindings(uiActions);
 
     // Subscribe to store changes
     this._unsubscribe = store.subscribe(() => {
@@ -512,19 +515,22 @@ declare global {
 
 // ---------------------------------------------------------------------------
 // Dev window accessors — exposed for E2E testing (Phase 5 config assertions)
+// Guarded behind import.meta.env.DEV: never leaks store state in production.
 // ---------------------------------------------------------------------------
-(window as unknown as Record<string, unknown>)['__muxStore'] = store;
+if (import.meta.env.DEV) {
+  (window as unknown as Record<string, unknown>)['__muxStore'] = store;
 
-(window as unknown as Record<string, unknown>)['__muxFirstPaneId'] =
-  (): number | null => {
-    for (const session of store.state.sessions) {
-      for (const win of session.windows) {
-        if (win.panes.length > 0) return win.panes[0].id;
+  (window as unknown as Record<string, unknown>)['__muxFirstPaneId'] =
+    (): number | null => {
+      for (const session of store.state.sessions) {
+        for (const win of session.windows) {
+          if (win.panes.length > 0) return win.panes[0].id;
+        }
       }
-    }
-    return null;
-  };
+      return null;
+    };
 
-(window as unknown as Record<string, unknown>)['__muxRegistry'] = {
-  peek: (paneId: number) => terminalRegistry.getTerminal(paneId),
-};
+  (window as unknown as Record<string, unknown>)['__muxRegistry'] = {
+    peek: (paneId: number) => terminalRegistry.getTerminal(paneId),
+  };
+}
