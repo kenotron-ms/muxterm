@@ -3,8 +3,10 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 // terminal-registry is a module-level singleton — import it directly.
 // @xterm/xterm is aliased to setup.ts mock (see vite.config.ts),
 // so Terminal here is the mock class with getWrittenData() / simulateInput() etc.
-import { terminalRegistry } from '../lib/terminal-registry.js';
+import { terminalRegistry, buildTerminalConfig, configureTerminals } from '../lib/terminal-registry.js';
 import type { PaneHandlers } from '../lib/terminal-registry.js';
+import { DEFAULT_RESOLVED_CONFIG } from '../lib/config.js';
+import { resolvePalette } from '../lib/theme.js';
 
 // Helper: a no-op handler set
 function handlers(): PaneHandlers {
@@ -340,5 +342,47 @@ describe('terminalRegistry', () => {
       const snapFn = muxterm!.snapshot as (paneId: number) => unknown;
       expect(snapFn(9999)).toBeNull();
     });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// buildTerminalConfig / configureTerminals
+// ────────────────────────────────────────────────────────────────────
+describe('buildTerminalConfig', () => {
+  it('returns defaults matching DEFAULT_RESOLVED_CONFIG', () => {
+    const cfg = buildTerminalConfig(DEFAULT_RESOLVED_CONFIG);
+    expect(cfg.fontSize).toBe(13);
+    expect(cfg.cursorStyle).toBe('block');
+    expect(cfg.cursorBlink).toBe(true);
+    expect(cfg.scrollback).toBe(10000);
+    expect(cfg.theme).toStrictEqual(resolvePalette('tokyo-night'));
+  });
+
+  it('returns overrides when given a custom config', () => {
+    const custom = {
+      ...DEFAULT_RESOLVED_CONFIG,
+      theme: { palette: 'gruvbox' },
+      font: { family: 'Iosevka', size: 18 },
+      terminal: {
+        ...DEFAULT_RESOLVED_CONFIG.terminal,
+        cursorStyle: 'bar' as const,
+        cursorBlink: false,
+        scrollback: 99999,
+      },
+    };
+    const cfg = buildTerminalConfig(custom);
+    expect(cfg.fontFamily).toBe('Iosevka');
+    expect(cfg.fontSize).toBe(18);
+    expect(cfg.cursorStyle).toBe('bar');
+    expect(cfg.cursorBlink).toBe(false);
+    expect(cfg.scrollback).toBe(99999);
+    expect(cfg.theme).toStrictEqual(resolvePalette('gruvbox'));
+  });
+
+  it('always sets non-overridable fields (lineHeight, allowTransparency, convertEol)', () => {
+    const cfg = buildTerminalConfig(DEFAULT_RESOLVED_CONFIG);
+    expect(cfg.lineHeight).toBe(1.2);
+    expect(cfg.allowTransparency).toBe(false);
+    expect(cfg.convertEol).toBe(false);
   });
 });

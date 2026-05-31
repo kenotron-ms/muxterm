@@ -13,22 +13,40 @@
 
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { THEME } from './theme.js';
+import { resolvePalette } from './theme.js';
 import { serializeSnapshot } from './snapshot.js';
 import type { StructuredSnapshot, SnapshotSource } from './snapshot.js';
+import type { ResolvedConfig } from './config.js';
+import { DEFAULT_RESOLVED_CONFIG } from './config.js';
 
-const TERMINAL_CONFIG = {
-  theme: THEME,
-  fontFamily:
-    "'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'Fira Code', 'Menlo', 'Consolas', monospace",
-  fontSize: 13,
-  lineHeight: 1.2,
-  cursorBlink: true,
-  cursorStyle: 'block' as const,
-  scrollback: 10000, // xterm owns display scrollback; matches tmux history-limit
-  allowTransparency: false,
-  convertEol: false, // tmux sends \r\n — don't double-convert
-};
+/**
+ * Build an xterm.js Terminal options object from a ResolvedConfig.
+ * lineHeight, allowTransparency, and convertEol are hardcoded and non-overridable.
+ */
+export function buildTerminalConfig(cfg: ResolvedConfig) {
+  return {
+    theme: resolvePalette(cfg.theme.palette),
+    fontFamily: cfg.font.family,
+    fontSize: cfg.font.size,
+    lineHeight: 1.2, // non-overridable
+    cursorBlink: cfg.terminal.cursorBlink,
+    cursorStyle: cfg.terminal.cursorStyle,
+    scrollback: cfg.terminal.scrollback,
+    allowTransparency: false, // non-overridable
+    convertEol: false, // tmux sends \r\n — don't double-convert; non-overridable
+  };
+}
+
+let TERMINAL_CONFIG = buildTerminalConfig(DEFAULT_RESOLVED_CONFIG);
+
+/**
+ * Reconfigure the terminal defaults from a ResolvedConfig.
+ * NOTE: No hot-reload in v1 — existing Terminals keep current options;
+ * only Terminals created after this call pick up the new config.
+ */
+export function configureTerminals(cfg: ResolvedConfig): void {
+  TERMINAL_CONFIG = buildTerminalConfig(cfg);
+}
 
 export interface PaneHandlers {
   /** Called when the user types / pastes / SGR mouse events arrive. */
