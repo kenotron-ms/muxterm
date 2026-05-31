@@ -67,8 +67,8 @@ func main() {
 // runLocal starts muxterm in local mode: launches tmux, starts the HTTP server
 // on localhost, opens a browser, and blocks until shutdown.
 func runLocal(cfg Config) error {
-	mgr := newSessionManager()
-	adapter := &controllerAdapter{mgr: mgr}
+	pool := newControllerPool(startTmuxControl)
+	adapter := &controllerAdapter{pool: pool}
 	srv := server.New(server.Config{
 		Addr:     cfg.Addr,
 		StaticFS: mustSubFS(webstatic.Dist, "dist"),
@@ -82,7 +82,7 @@ func runLocal(cfg Config) error {
 	// the session dies (e.g. last window closed), then waits for the user to ask
 	// for a new one. The HTTP server stays up the whole time — closing the last
 	// window shows the "no active session" page, it never shuts muxterm down.
-	go superviseSession(ctx, mgr, srv.Hub(), syncer)
+	go superviseSession(ctx, pool, srv.Hub(), syncer)
 	go periodicStateSync(ctx, adapter, srv.Hub())
 	go openBrowser("http://" + cfg.Addr)
 
@@ -103,8 +103,8 @@ func runServe(cfg Config) error {
 		secret = s
 	}
 
-	mgr := newSessionManager()
-	adapter := &controllerAdapter{mgr: mgr}
+	pool := newControllerPool(startTmuxControl)
+	adapter := &controllerAdapter{pool: pool}
 	srv := server.New(server.Config{
 		Addr:     cfg.Addr,
 		Secret:   secret,
@@ -118,7 +118,7 @@ func runServe(cfg Config) error {
 	// Supervisor owns the tmux lifecycle (see runLocal for rationale): the HTTP
 	// server survives session death; closing the last window shows the
 	// "no active session" page rather than tearing muxterm down.
-	go superviseSession(ctx, mgr, srv.Hub(), syncer)
+	go superviseSession(ctx, pool, srv.Hub(), syncer)
 	go periodicStateSync(ctx, adapter, srv.Hub())
 
 	// Generate and print access token
@@ -421,86 +421,12 @@ func printEvent(ev tmux.Event) {
 // "no active session" page until the user creates a new one.
 var errNoSession = fmt.Errorf("no active tmux session")
 
-// sessionManager owns the CURRENT tmux control connection. It is swappable:
-// when a session dies the supervisor clears it; when the user asks for a new
-// session the supervisor attaches a fresh one. All access is mutex-guarded so
-// the HTTP handlers (any goroutine) can safely talk to whatever connection is
-// live — or get errNoSession when there is none.
-type sessionManager struct {
-	mu       sync.RWMutex
-	ctrl     *tmux.Controller
-	ptmx     *os.File
-	recreate chan struct{} // signalled to ask the supervisor to (re)attach
-
-	// Last terminal size the browser reported. Remembered so a freshly attached
-	// session can be sized to match immediately — the browser only sends a
-	// resize when ITS size changes, which doesn't happen on a server-side
-	// re-attach, leaving a new session stuck at tmux's 80x24 default.
-	lastCols int
-	lastRows int
-}
-
-func newSessionManager() *sessionManager {
-	return &sessionManager{recreate: make(chan struct{}, 1)}
-}
-
-func (m *sessionManager) set(ctrl *tmux.Controller, ptmx *os.File) {
-	m.mu.Lock()
-	m.ctrl, m.ptmx = ctrl, ptmx
-	m.mu.Unlock()
-}
-
-func (m *sessionManager) clear() {
-	m.mu.Lock()
-	m.ctrl, m.ptmx = nil, nil
-	m.mu.Unlock()
-}
-
-func (m *sessionManager) controller() *tmux.Controller {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.ctrl
-}
-
-func (m *sessionManager) pty() *os.File {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.ptmx
-}
-
-// requestRecreate asks the supervisor to attach a fresh session. Non-blocking:
-// if a request is already pending, this is a no-op.
-func (m *sessionManager) requestRecreate() {
-	select {
-	case m.recreate <- struct{}{}:
-	default:
-	}
-}
-
-// rememberSize records the browser's terminal size so a future re-attach can
-// size the new session to match without waiting for a client resize.
-func (m *sessionManager) rememberSize(cols, rows int) {
-	if cols <= 0 || rows <= 0 {
-		return
-	}
-	m.mu.Lock()
-	m.lastCols, m.lastRows = cols, rows
-	m.mu.Unlock()
-}
-
-// size returns the last-known browser terminal size (0,0 if never set).
-func (m *sessionManager) size() (cols, rows int) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.lastCols, m.lastRows
-}
-
 type controllerAdapter struct {
-	mgr *sessionManager
+	pool *controllerPool
 }
 
 func (a *controllerAdapter) State() *tmux.TmuxState {
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return &tmux.TmuxState{Sessions: []tmux.Session{}}
 	}
@@ -508,7 +434,7 @@ func (a *controllerAdapter) State() *tmux.TmuxState {
 }
 
 func (a *controllerAdapter) SendKeys(paneID, keys string) error {
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return errNoSession
 	}
@@ -519,7 +445,7 @@ func (a *controllerAdapter) SendKeys(paneID, keys string) error {
 }
 
 func (a *controllerAdapter) SelectWindow(windowID string) error {
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return errNoSession
 	}
@@ -527,7 +453,7 @@ func (a *controllerAdapter) SelectWindow(windowID string) error {
 }
 
 func (a *controllerAdapter) SelectPane(paneID string) error {
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return errNoSession
 	}
@@ -535,7 +461,7 @@ func (a *controllerAdapter) SelectPane(paneID string) error {
 }
 
 func (a *controllerAdapter) SplitWindow(targetPaneID string, horizontal bool) error {
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return errNoSession
 	}
@@ -545,9 +471,9 @@ func (a *controllerAdapter) SplitWindow(targetPaneID string, horizontal bool) er
 func (a *controllerAdapter) ResizePane(paneID string, cols, rows int) error {
 	// Remember the size even if there's no live session — so the next attached
 	// session can be sized to match the browser immediately.
-	a.mgr.rememberSize(cols, rows)
+	a.pool.rememberSize(cols, rows)
 
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return errNoSession
 	}
@@ -562,7 +488,7 @@ func (a *controllerAdapter) ResizePane(paneID string, cols, rows int) error {
 }
 
 func (a *controllerAdapter) NewWindow(name string) error {
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return errNoSession
 	}
@@ -570,7 +496,7 @@ func (a *controllerAdapter) NewWindow(name string) error {
 }
 
 func (a *controllerAdapter) KillPane(paneID string) error {
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return errNoSession
 	}
@@ -578,7 +504,7 @@ func (a *controllerAdapter) KillPane(paneID string) error {
 }
 
 func (a *controllerAdapter) CloseWindow(windowID string) error {
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return errNoSession
 	}
@@ -586,7 +512,7 @@ func (a *controllerAdapter) CloseWindow(windowID string) error {
 }
 
 func (a *controllerAdapter) RenameWindow(windowID, name string) error {
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return errNoSession
 	}
@@ -599,8 +525,8 @@ func (a *controllerAdapter) RenameWindow(windowID, name string) error {
 // command down a dead connection. When a session IS live this is a no-op: the
 // single-session UI already has its session.
 func (a *controllerAdapter) NewSession(name string) error {
-	if a.mgr.controller() == nil {
-		a.mgr.requestRecreate()
+	if a.pool.controller() == nil {
+		a.pool.requestRecreate()
 		return nil
 	}
 	return nil
@@ -611,7 +537,7 @@ func (a *controllerAdapter) NewSession(name string) error {
 // Returns an empty state (not an error) when no session is attached, so the
 // periodic sync keeps clients on the "no active session" page.
 func (a *controllerAdapter) LiveState() (*tmux.TmuxState, error) {
-	c := a.mgr.controller()
+	c := a.pool.controller()
 	if c == nil {
 		return &tmux.TmuxState{Sessions: []tmux.Session{}}, nil
 	}
@@ -752,27 +678,27 @@ func emptyTmuxState() *tmux.TmuxState {
 // superviseSession owns the tmux control lifecycle. It attaches a session and
 // runs until that session dies, then shows the "no active session" page and
 // waits for the user to request a new one — the HTTP server never goes down.
-func superviseSession(ctx context.Context, mgr *sessionManager, hub *server.Hub, syncer *stateSyncCoalescer) {
+func superviseSession(ctx context.Context, pool *controllerPool, hub *server.Hub, syncer *stateSyncCoalescer) {
 	for {
 		// Drain any stale recreate request so we don't immediately re-loop.
 		select {
-		case <-mgr.recreate:
+		case <-pool.recreate:
 		default:
 		}
 
-		if !attachAndRun(ctx, mgr, hub, syncer) {
+		if !attachAndRun(ctx, pool, hub, syncer) {
 			return // context cancelled — server shutting down
 		}
 
 		// The session ended (last window closed, tmux killed, etc.). Tell every
 		// client there's no session so they show the create page, then wait for
 		// a create request or shutdown.
-		mgr.clear()
+		pool.clear()
 		hub.BroadcastEvent("state", emptyTmuxState())
 		log.Printf("supervisor: no active session — waiting for create request")
 
 		select {
-		case <-mgr.recreate:
+		case <-pool.recreate:
 			log.Printf("supervisor: create requested — attaching new session")
 		case <-ctx.Done():
 			return
@@ -783,7 +709,7 @@ func superviseSession(ctx context.Context, mgr *sessionManager, hub *server.Hub,
 // attachAndRun ensures a tmux session exists, attaches control mode, and runs
 // wireEvents until the session dies. Returns false only if ctx was cancelled
 // (so the supervisor should stop); true means "session ended, loop again".
-func attachAndRun(ctx context.Context, mgr *sessionManager, hub *server.Hub, syncer *stateSyncCoalescer) bool {
+func attachAndRun(ctx context.Context, pool *controllerPool, hub *server.Hub, syncer *stateSyncCoalescer) bool {
 	sessionName, err := tmux.EnsureRunning()
 	if err != nil {
 		log.Printf("supervisor: ensure session: %v", err)
@@ -801,7 +727,7 @@ func attachAndRun(ctx context.Context, mgr *sessionManager, hub *server.Hub, syn
 		log.Printf("warn: tmux config: %v", err)
 	}
 
-	mgr.set(ctrl, ptmx)
+	pool.set(ctrl, ptmx)
 
 	// Size the fresh session to the browser's last-known dimensions. The browser
 	// only emits a resize when ITS size changes, which doesn't happen on a
@@ -809,7 +735,7 @@ func attachAndRun(ctx context.Context, mgr *sessionManager, hub *server.Hub, syn
 	// 80x24 default (and zsh's PROMPT_SP partial-line marker, a stray "%", leaks
 	// because the shell's COLUMNS no longer matches what the browser renders).
 	// refresh-client -C is the only mechanism that resizes a control-mode client.
-	if cols, rows := mgr.size(); cols > 0 && rows > 0 {
+	if cols, rows := pool.size(); cols > 0 && rows > 0 {
 		_ = ctrl.Commands().RefreshClientSize(cols, rows)
 	}
 
