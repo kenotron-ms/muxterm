@@ -77,3 +77,68 @@ export function compareContent(
 
   return { ok: diffs.length === 0, diffs };
 }
+
+// ---------------------------------------------------------------------------
+// Layout types
+// ---------------------------------------------------------------------------
+
+export interface MeasuredLayout {
+  /** CSS px — element.scrollTop */
+  scrollTop: number;
+  /** px per row */
+  rowHeight: number;
+  /** CSS px — element.clientWidth */
+  clientWidth: number;
+  /** px per cell */
+  cellWidth: number;
+  /** expected visible row count */
+  rows: number;
+}
+
+export interface LayoutDiff {
+  field: 'scroll' | 'cols' | 'rows';
+  expected: number;
+  actual: number;
+}
+
+export interface LayoutResult {
+  ok: boolean;
+  diffs: LayoutDiff[];
+}
+
+// ---------------------------------------------------------------------------
+// compareLayout
+// ---------------------------------------------------------------------------
+
+/**
+ * Compare Playwright-CLI-measured DOM layout against a StructuredSnapshot's logical dimensions.
+ *
+ * Tolerates ±1 cell sub-pixel rounding with near().
+ */
+export function compareLayout(
+  snapshot: StructuredSnapshot,
+  measured: MeasuredLayout,
+): LayoutResult {
+  const diffs: LayoutDiff[] = [];
+
+  // ±1 cell tolerance absorbs sub-pixel rounding
+  const near = (a: number, b: number): boolean => Math.abs(a - b) <= 1;
+
+  // Convert pixels to cell units
+  const measuredRowsScrolled = Math.round(measured.scrollTop / measured.rowHeight);
+  const measuredCols = Math.round(measured.clientWidth / measured.cellWidth);
+
+  if (!near(measuredRowsScrolled, snapshot.viewportY)) {
+    diffs.push({ field: 'scroll', expected: measuredRowsScrolled, actual: snapshot.viewportY });
+  }
+
+  if (!near(measuredCols, snapshot.cols)) {
+    diffs.push({ field: 'cols', expected: measuredCols, actual: snapshot.cols });
+  }
+
+  if (!near(measured.rows, snapshot.rows)) {
+    diffs.push({ field: 'rows', expected: measured.rows, actual: snapshot.rows });
+  }
+
+  return { ok: diffs.length === 0, diffs };
+}

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { compareContent } from '../../e2e/helpers/fidelity';
+import { compareContent, compareLayout } from '../../e2e/helpers/fidelity';
+import type { MeasuredLayout } from '../../e2e/helpers/fidelity';
 import type { StructuredSnapshot } from '../lib/snapshot';
 
 // Minimal fixture builder — only rowText and shape metadata matter for compareContent
@@ -38,5 +39,51 @@ describe('compareContent', () => {
     const result = compareContent('a\nb\nc', snap);
     expect(result.ok).toBe(false);
     expect(result.diffs.some(d => d.reason === 'row-count')).toBe(true);
+  });
+});
+
+// Fixture builder for layout tests — only viewportY, cols, rows matter for compareLayout
+function makeLayoutSnap(viewportY: number, cols: number, rows: number): StructuredSnapshot {
+  return {
+    rows,
+    cols,
+    cells: Array.from({ length: rows }, () => []),
+    rowText: Array.from({ length: rows }, () => ''),
+    cursor: { x: 0, y: 0 },
+    viewportY,
+    baseY: 0,
+  };
+}
+
+describe('compareLayout', () => {
+  // measured: scrollTop=200, rowHeight=20 → 10 rows scrolled
+  //           clientWidth=800, cellWidth=10 → 80 cols
+  const measured: MeasuredLayout = {
+    scrollTop: 200,
+    rowHeight: 20,
+    clientWidth: 800,
+    cellWidth: 10,
+    rows: 24,
+  };
+
+  it('passes when logical viewportY and dims match measured', () => {
+    const snap = makeLayoutSnap(10, 80, 24);
+    const result = compareLayout(snap, measured);
+    expect(result.ok).toBe(true);
+    expect(result.diffs).toEqual([]);
+  });
+
+  it('fails on scroll drift', () => {
+    const snap = makeLayoutSnap(7, 80, 24);
+    const result = compareLayout(snap, measured);
+    expect(result.ok).toBe(false);
+    expect(result.diffs.some(d => d.field === 'scroll')).toBe(true);
+  });
+
+  it('fails on width miscalc', () => {
+    const snap = makeLayoutSnap(10, 70, 24);
+    const result = compareLayout(snap, measured);
+    expect(result.ok).toBe(false);
+    expect(result.diffs.some(d => d.field === 'cols')).toBe(true);
   });
 });
