@@ -72,6 +72,22 @@ func (r *SurfaceRouter) Resize(id SurfaceID, cols, rows int) error {
 	return c.RefreshClientSize(cols, rows)
 }
 
+// Accept reports whether output for the given pane should be forwarded from
+// surface id. The first surface to see a pane claims ownership and returns
+// true; any other surface seeing the same pane returns false (duplicate). The
+// owning surface always returns true for subsequent calls. After the owning
+// surface is Unmounted its pane entry is freed and can be re-claimed.
+func (r *SurfaceRouter) Accept(pane uint32, id SurfaceID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	owner, ok := r.owner[pane]
+	if !ok {
+		r.owner[pane] = id
+		return true
+	}
+	return owner == id
+}
+
 // Unmount closes the control client registered for surface id, removes it from
 // the registry, and drops any pane ownership entries for that surface. If no
 // client is registered for id, Unmount is a no-op and returns nil.

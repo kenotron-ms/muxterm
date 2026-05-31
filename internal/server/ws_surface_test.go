@@ -136,5 +136,54 @@ func TestSurfaceRouter_UnmountClosesClient(t *testing.T) {
 	}
 }
 
+// TestSurfaceRouter_AcceptDedupsByGlobalPaneID verifies that the first surface to
+// see a pane claims ownership, subsequent surfaces are rejected, and the owner
+// surface continues to be accepted.
+func TestSurfaceRouter_AcceptDedupsByGlobalPaneID(t *testing.T) {
+	r := NewSurfaceRouter()
+
+	// First sighting of pane 5 on surf-a: should be accepted and claim ownership.
+	if !r.Accept(5, "surf-a") {
+		t.Fatal("expected Accept(5, surf-a) to return true (first claim)")
+	}
+
+	// Same pane 5 on surf-b: duplicate — should be dropped.
+	if r.Accept(5, "surf-b") {
+		t.Fatal("expected Accept(5, surf-b) to return false (duplicate on non-owner)")
+	}
+
+	// Ongoing output for pane 5 on the owner surf-a: should still be accepted.
+	if !r.Accept(5, "surf-a") {
+		t.Fatal("expected Accept(5, surf-a) to return true (ongoing output on owner)")
+	}
+}
+
+// TestSurfaceRouter_AcceptReassignsAfterUnmount verifies that after the owning
+// surface is unmounted, its pane can be re-claimed by a new surface.
+func TestSurfaceRouter_AcceptReassignsAfterUnmount(t *testing.T) {
+	r := NewSurfaceRouter()
+	cA := &mockSurfaceClient{}
+
+	// Mount surf-a so we can unmount it later.
+	if err := r.Mount("surf-a", "@1", cA); err != nil {
+		t.Fatalf("Mount returned unexpected error: %v", err)
+	}
+
+	// Pane 7 claimed by surf-a.
+	if !r.Accept(7, "surf-a") {
+		t.Fatal("expected Accept(7, surf-a) to return true (first claim)")
+	}
+
+	// Unmount surf-a — this should free pane 7 from r.owner.
+	if err := r.Unmount("surf-a"); err != nil {
+		t.Fatalf("Unmount returned unexpected error: %v", err)
+	}
+
+	// Pane 7 should now be re-claimable by surf-c.
+	if !r.Accept(7, "surf-c") {
+		t.Fatal("expected Accept(7, surf-c) to return true after surf-a was unmounted")
+	}
+}
+
 // Compile-time guard: ensure errors package is used (for future error-wrapping tests).
 var _ = errors.New
