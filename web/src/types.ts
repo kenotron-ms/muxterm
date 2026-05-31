@@ -87,3 +87,16 @@ export interface MuxStoreEvents {
   reconnecting: { attempt: number };
   connected: void;
 }
+
+/**
+ * Discriminates the four surface kinds.
+ *
+ * terminal / driver — cell-grid surfaces (cols×rows budget, xterm.js).
+ * browser / settings — NON-terminal (pixel box, normal responsive DOM, NO tmux grid).
+ */
+export type SurfaceKind = 'terminal' | 'driver' | 'browser' | 'settings';
+
+/** Returns true for cell-grid surfaces that use the xterm.js / tmux grid. */
+export function isTerminalSurface(kind: SurfaceKind): boolean {
+  return kind === 'terminal' || kind === 'driver';
+}
