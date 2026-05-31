@@ -10,10 +10,10 @@ import (
 type mockSurfaceClient struct {
 	mu sync.Mutex
 
-	selectWindowCalls []string
+	selectWindowCalls     []string
 	aggressiveResizeCalls int
-	refreshCalls []struct{ cols, rows int }
-	closeCalled  bool
+	refreshCalls          []struct{ cols, rows int }
+	closeCalled           bool
 
 	selectWindowErr     error
 	aggressiveResizeErr error
