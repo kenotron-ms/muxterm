@@ -132,6 +132,22 @@ describe('MuxStatusBar', () => {
     expect(right).toBeTruthy();
   });
 
+  it('clicking .session dispatches open-session-picker event', async () => {
+    el = document.createElement('mux-status-bar') as MuxStatusBar;
+    el.sessionName = 'dev';
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    let counter = 0;
+    el.addEventListener('open-session-picker', () => { counter++; });
+
+    const session = el.shadowRoot!.querySelector('.session') as HTMLElement;
+    expect(session).toBeTruthy();
+    session.click();
+
+    expect(counter).toBe(1);
+  });
+
   it('renders all parts together correctly', async () => {
     el = await fixture({
       sessionName: 'main',

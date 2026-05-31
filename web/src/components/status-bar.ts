@@ -27,6 +27,7 @@ export class MuxStatusBar extends LitElement {
     .session {
       color: #7aa2f7;
       font-weight: 600;
+      cursor: pointer;
     }
 
     .separator {
@@ -61,6 +62,12 @@ export class MuxStatusBar extends LitElement {
   @property({ type: String })
   connectionStatus: 'connected' | 'disconnected' | 'reconnecting' = 'disconnected';
 
+  private _onSessionClick = (): void => {
+    this.dispatchEvent(
+      new CustomEvent('open-session-picker', { bubbles: true, composed: true }),
+    );
+  };
+
   private _statusText(): string {
     switch (this.connectionStatus) {
       case 'connected':
@@ -82,7 +89,13 @@ export class MuxStatusBar extends LitElement {
 
     return html`
       <div class="left">
-        <span class="session">${sessionDisplay}</span>
+        <span
+            class="session"
+            role="button"
+            tabindex="0"
+            title="Switch session"
+            @click=${this._onSessionClick}
+          >${sessionDisplay} ▾</span>
         <span class="separator">|</span>
         <span>${this.windowCount} ${windowLabel}</span>
         <span class="separator">|</span>
