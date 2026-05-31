@@ -29,7 +29,7 @@ muxterm = browser frontend + Go binary + tmux control mode
 Key facts that shape this design:
 
 - **Layout is 100% tmux-driven today.** `<mux-layout>` parses the tmux layout string into CSS flex splits. There is no UI-owned dock/float system. Panes == tmux panes.
-- **The terminal registry is the enabling asset.** `terminal-registry.ts` owns one xterm.js instance per pane as a DOM-position-agnostic singleton; `attach(paneId, container)` works with *any* container. Floating/docking is therefore a "where do I mount it" problem, not a "how do I keep the terminal alive" problem.
+- **The terminal registry is the enabling asset.** `terminal-registry.ts` owns one xterm.js instance per pane as a DOM-position-agnostic singleton; `attach(paneId, container)` works with *any* container. **Re-parenting** (docking / pop-out) is therefore a "where do I mount it" problem, not a "how do I keep the terminal alive" problem.
 - **Multi-session is partially modeled, not wired.** `TmuxState.Sessions[]`, the reconciler, and `<mux-session-picker>` exist — but `sessionManager` holds exactly ONE tmux controller, and there is no session routing in the WS protocol. `%sessions-changed` is parsed but not plumbed to advertise the session list.
 - **No config/settings system exists.** Theme, fonts, and tmux options are hardcoded (`theme.ts`, `terminal-registry.ts:18`, `applyMuxtermConfig()` at `main.go:238`).
 - **A "driver" is architecturally cheap-ish:** tmux pane IDs (`%N`) are server-global, so `send-keys -t %N` already crosses sessions on a single control connection.
@@ -92,15 +92,19 @@ Two layout authorities, nested, with a hard boundary. They communicate through *
 - **Layer 1 (tmux owns):** the intra-window split tree (the `%layout` string). This is exactly `<mux-layout>` today — **untouched**.
 - **Layer 2 (muxterm owns):** a dock/workspace manager whose leaves are **surfaces**. A surface is either:
   - one tmux window's pane-tree treated as an **opaque block** (rendered by Layer 1), or
-  - a **non-terminal panel** (driver console · browser · settings).
+  - a **non-terminal panel** (browser · settings).
 
   The dock arranges surfaces into regions, tabs, and popped-out OS windows.
 
-> **Non-terminal surface sizing:** a non-terminal surface (driver console · browser ·
-> settings) mounts in a dock slot like any surface, but it is **NOT** driven by the
-> `cols×rows` cell-budget handoff. It simply gets a **pixel box** and renders as
-> normal responsive DOM — there is no tmux grid behind it. The cell-budget contract
-> applies only to terminal (tmux-window) surfaces.
+> **Surface sizing classification.** Two kinds of surface, by sizing:
+> - **Terminal surfaces** — a tmux window's pane-tree, **cell-budget driven** (`cols×rows`).
+>   This includes the **driver console**: it runs in a real `$driver` tmux session and
+>   renders to a grid exactly like vim. Its *content* happens to be an agent TUI, but its
+>   *sizing* is a normal terminal grid. (Its magenta accent + tinted background are a
+>   **visual cue only** — they do NOT change its sizing classification.)
+> - **Non-terminal surfaces** — **browser (iframe)** and **settings**. These get a
+>   **pixel box** and render as normal responsive DOM — there is **no tmux grid** behind
+>   them. The cell-budget contract does NOT apply.
 
 **The contract:** tmux splits *panes within a window*; muxterm arranges *windows-as-surfaces + non-terminal panels within a workspace*. Neither crosses the line. muxterm never re-splits a tmux window; tmux never knows where its window is shown.
 
@@ -433,9 +437,12 @@ Users never choose "pane vs surface." They pick an **intent**:
   driver / browser / settings.
 
 A region can hold: a **terminal** (tmux window), the **driver console**, a **browser**
-(iframe), or **settings**. Terminals are driven by the `cols×rows` cell-budget;
-**non-terminal surfaces (driver · browser · settings) get a pixel box and render as
-normal responsive DOM — no tmux grid.**
+(iframe), or **settings**. Terminals are driven by the `cols×rows` cell-budget — and
+**the driver console is a terminal surface** (a tmux pane in the dedicated `$driver`
+session, cell-budget driven, exactly like vim); its *content* is an agent TUI, and its
+magenta accent + tinted background are a **visual cue only** that does NOT change its
+sizing classification. Only **browser · settings** are truly non-terminal: they **get a
+pixel box and render as normal responsive DOM — no tmux grid.**
 
 ### Three "add" verbs — location + icon + result each encode the layer
 
@@ -482,6 +489,9 @@ Two **divider weights** make layout readable at a glance:
 - **Global `⋯` launcher** (title bar): New session · New browser · Open driver ·
   Settings · Keyboard Shortcuts · Reconnect · About. New content opens **beside** the
   focused region.
+  - **Surface kind at creation:** **"Open driver" creates a TERMINAL surface**
+    (cell-budget grid); **"New browser" and "Settings" create NON-TERMINAL surfaces**
+    (pixel box). "New session" / window tabs are terminals as usual.
 
 ### Spatial verbs — final, non-overlapping set
 
