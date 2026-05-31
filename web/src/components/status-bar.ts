@@ -45,6 +45,11 @@ export class MuxStatusBar extends LitElement {
     .reconnecting {
       color: #e0af68;
     }
+
+    .goal {
+      color: #bb9af7;
+      font-weight: 600;
+    }
   `;
 
   @property({ type: String })
@@ -61,6 +66,9 @@ export class MuxStatusBar extends LitElement {
 
   @property({ type: String })
   connectionStatus: 'connected' | 'disconnected' | 'reconnecting' = 'disconnected';
+
+  @property({ type: Boolean })
+  driverActive = false;
 
   private _onSessionClick = (): void => {
     this.dispatchEvent(
@@ -102,6 +110,7 @@ export class MuxStatusBar extends LitElement {
         <span>${this.activeWindowName} ${this.paneCount} ${paneLabel}</span>
       </div>
       <div class="right">
+        ${this.driverActive ? html`<span class="goal">◉ goal</span>` : ''}
         <span class="${this.connectionStatus}">${this._statusText()}</span>
       </div>
     `;

@@ -170,3 +170,34 @@ describe('MuxStatusBar', () => {
     expect(connStatus).toBeTruthy();
   });
 });
+
+describe('MuxStatusBar goal segment', () => {
+  let el: MuxStatusBar;
+
+  afterEach(() => {
+    if (el && el.parentNode) {
+      el.parentNode.removeChild(el);
+    }
+  });
+
+  it('hides .goal when driverActive is false', async () => {
+    el = document.createElement('mux-status-bar') as MuxStatusBar;
+    el.driverActive = false;
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const goal = el.shadowRoot!.querySelector('.goal');
+    expect(goal).toBeNull();
+  });
+
+  it('shows ◉ goal span when driverActive is true and text contains goal', async () => {
+    el = document.createElement('mux-status-bar') as MuxStatusBar;
+    el.driverActive = true;
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const goal = el.shadowRoot!.querySelector('.goal');
+    expect(goal).toBeTruthy();
+    expect(goal!.textContent).toContain('goal');
+  });
+});
