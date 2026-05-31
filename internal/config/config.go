@@ -1,6 +1,15 @@
 // Package config defines the muxterm configuration structure and hardcoded defaults.
 package config
 
+import (
+	"errors"
+	"io/fs"
+	"log"
+	"os"
+
+	"github.com/BurntSushi/toml"
+)
+
 // Config is the top-level configuration for muxterm.
 type Config struct {
 	Theme     ThemeConfig     `toml:"theme"`
@@ -55,6 +64,23 @@ type DriverConfig struct {
 	Autostart          bool   `toml:"autostart"`
 	SharedWindowPolicy string `toml:"shared_window_policy"`
 	Launch             string `toml:"launch"`
+}
+
+// Load reads a TOML config file from path and returns a Config.
+// Resolution rules:
+//   - Missing file → Defaults(), no error (config is optional)
+//   - Malformed file → Defaults() + logged warning, no error (a typo can never take the app down)
+//   - Present and valid → Defaults() with the file's set fields applied on top (partial configs supported)
+func Load(path string) (Config, error) {
+	cfg := Defaults()
+	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
+		return cfg, nil
+	}
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		log.Printf("config: %s is malformed (%v); using built-in defaults", path, err)
+		return Defaults(), nil
+	}
+	return cfg, nil
 }
 
 // Defaults returns a Config populated with hardcoded default values.

@@ -76,3 +76,16 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("Driver.Launch: got %q, want %q", cfg.Driver.Launch, "muxterm-agent")
 	}
 }
+
+func TestLoadMissingFileReturnsDefaults(t *testing.T) {
+	cfg, err := config.Load("/nonexistent/path/to/config.toml")
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.Theme.Palette != "tokyo-night" {
+		t.Errorf("Theme.Palette: got %q, want %q", cfg.Theme.Palette, "tokyo-night")
+	}
+	if cfg.Terminal.Scrollback != 10000 {
+		t.Errorf("Terminal.Scrollback: got %d, want 10000", cfg.Terminal.Scrollback)
+	}
+}
