@@ -1,6 +1,20 @@
 // Tokyo Night theme — matches the rest of the UI.
 // Exported here so both terminal-registry (Terminal config) and
 // pane.ts (CSS background) share a single source of truth.
+
+// VS Code tab + chrome design tokens (Tokyo Night palette).
+export const CHROME = {
+  bar: '#16161e',         // title bar / tab strip / status bar background
+  body: '#1a1b26',        // surface body — active tab merges into this
+  border: '#292e42',      // hairline separators
+  textDim: '#565f89',     // inactive tab / muted labels
+  textBright: '#c0caf5',  // active tab / focused text
+  accent: '#7aa2f7',      // normal active-tab top line + focus accent
+  driverAccent: '#bb9af7', // driver region accent (magenta)
+  hover: '#1f2335',       // flat icon-button hover background
+  danger: '#f7768e',      // close-× hover
+};
+
 export const THEME = {
   background: '#1a1b26',
   foreground: '#a9b1d6',
