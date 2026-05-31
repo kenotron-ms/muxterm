@@ -15,12 +15,11 @@ export interface Region {
   weight: number;
 }
 
-let _surfaceCounter = 0;
-let _regionCounter = 0;
-
 export class Workspace {
   regions: Region[] = [];
   maximizedRegionId: string | null = null;
+  private _surfaceCounter = 0;
+  private _regionCounter = 0;
 
   get mode(): PresentationMode {
     if (this.maximizedRegionId !== null || this.regions.length <= 1) {
@@ -49,13 +48,13 @@ export class Workspace {
     }
 
     const surface: Surface = {
-      id: `surf-${++_surfaceCounter}`,
+      id: `surf-${++this._surfaceCounter}`,
       sessionName: ref.sessionName,
       windowId: ref.windowId,
     };
 
     const region: Region = {
-      id: `region-${++_regionCounter}`,
+      id: `region-${++this._regionCounter}`,
       surface,
       weight: 1,
     };

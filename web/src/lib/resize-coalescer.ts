@@ -1,4 +1,4 @@
-import { cellsEqual, type CellBudget } from './cell-budget';
+import { cellsEqual, type CellBudget } from './cell-budget.js';
 
 /** Callback type for emitting a coalesced resize to the PTY channel. */
 export type ResizeSink = (surfaceId: string, budget: CellBudget) => void;
