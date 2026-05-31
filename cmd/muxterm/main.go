@@ -844,6 +844,7 @@ func wireEvents(sessionName string, pool *controllerPool, events <-chan tmux.Eve
 			// would write a screenful on top of an already-populated terminal,
 			// duplicating content on every tab switch.
 		case tmux.SessionsChangedEvent:
+			hub.BroadcastSessionList()
 			sync.trigger()
 		case tmux.PaneModeChangedEvent:
 			// Pane mode (copy-mode etc.) — structural enough to resync.

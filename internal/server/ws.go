@@ -290,6 +290,11 @@ func (h *Hub) sendStateSync(c *Client) {
 		return
 	}
 
+	// Send the session list so the browser can populate the session picker.
+	if slData, slErr := h.sessionListJSON(); slErr == nil {
+		_ = c.writeText(slData)
+	}
+
 	// Send captured screen content for every pane so the browser shows
 	// what was already on screen before this client connected.
 	// tmux control mode only emits %output for new data, so without this
@@ -499,6 +504,30 @@ func (h *Hub) HandleTmuxDisconnect(ctrl *tmux.ControlMode, readErr error) {
 	if err != nil {
 		h.BroadcastEvent("detached", map[string]string{"reason": err.Error()})
 	}
+}
+
+// sessionListJSON marshals the session list into a JSON frame ready to send to
+// clients. Returns nil, nil when no engine is attached (nothing to send).
+func (h *Hub) sessionListJSON() ([]byte, error) {
+	if h.engine == nil {
+		return nil, nil
+	}
+	return json.Marshal(map[string]interface{}{
+		"session-list": SessionListMessage{Sessions: h.engine.SessionList()},
+	})
+}
+
+// BroadcastSessionList sends the current session list to all connected clients.
+func (h *Hub) BroadcastSessionList() {
+	data, err := h.sessionListJSON()
+	if err != nil {
+		log.Printf("BroadcastSessionList: marshal error: %v", err)
+		return
+	}
+	if data == nil {
+		return
+	}
+	h.broadcastText(data)
 }
 
 // BroadcastPaneOutput encodes pane output as a binary frame and broadcasts

@@ -299,10 +299,14 @@ func TestBroadcastPaneOutput(t *testing.T) {
 	}
 	defer conn.CloseNow()
 
-	// Consume state sync message first
+	// Consume connect messages: full-sync + session-list
 	_, _, err = conn.Read(ctx)
 	if err != nil {
-		t.Fatalf("conn.Read (state sync): %v", err)
+		t.Fatalf("conn.Read (full-sync): %v", err)
+	}
+	_, _, err = conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("conn.Read (session-list): %v", err)
 	}
 
 	// Broadcast pane output for pane %5
@@ -389,10 +393,14 @@ func TestBroadcastEvent(t *testing.T) {
 	}
 	defer conn.CloseNow()
 
-	// Consume state sync message first
+	// Consume connect messages: full-sync + session-list
 	_, _, err = conn.Read(ctx)
 	if err != nil {
-		t.Fatalf("conn.Read (state sync): %v", err)
+		t.Fatalf("conn.Read (full-sync): %v", err)
+	}
+	_, _, err = conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("conn.Read (session-list): %v", err)
 	}
 
 	// Broadcast an event
@@ -615,6 +623,35 @@ func TestEngineInterface_AttachAndList(t *testing.T) {
 	}
 }
 
+func TestBuildSessionListMessage(t *testing.T) {
+	m := newMockEngine()
+	hub := NewHub(m)
+
+	data, err := hub.sessionListJSON()
+	if err != nil {
+		t.Fatalf("sessionListJSON() error: %v", err)
+	}
+	if data == nil {
+		t.Fatal("sessionListJSON() returned nil data")
+	}
+
+	var msg map[string]SessionListMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	list, ok := msg["session-list"]
+	if !ok {
+		t.Fatal("response has no 'session-list' key")
+	}
+	if len(list.Sessions) == 0 {
+		t.Fatal("Sessions is empty")
+	}
+	if list.Sessions[0].Name != "dev" {
+		t.Errorf("Sessions[0].Name = %q, want %q", list.Sessions[0].Name, "dev")
+	}
+}
+
 func TestDispatchAction_AttachSession(t *testing.T) {
 	m := newMockEngine()
 	hub := NewHub(m)
@@ -646,10 +683,14 @@ func TestInvalidAction(t *testing.T) {
 	}
 	defer conn.CloseNow()
 
-	// Consume state sync
+	// Consume connect messages: full-sync + session-list
 	_, _, err = conn.Read(ctx)
 	if err != nil {
-		t.Fatalf("conn.Read (state sync): %v", err)
+		t.Fatalf("conn.Read (full-sync): %v", err)
+	}
+	_, _, err = conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("conn.Read (session-list): %v", err)
 	}
 
 	// Send invalid text
