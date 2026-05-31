@@ -168,3 +168,59 @@ describe('MuxSessionPicker', () => {
     (el as unknown as null) = null!;
   });
 });
+
+describe('MuxSessionPicker inline mode', () => {
+  let el: MuxSessionPicker;
+
+  afterEach(() => {
+    if (el && el.parentNode) {
+      el.parentNode.removeChild(el);
+    }
+  });
+
+  async function inlineFixture(sessions: SessionInfo[] = [], currentSession = ''): Promise<MuxSessionPicker> {
+    const elem = document.createElement('mux-session-picker') as MuxSessionPicker;
+    elem.sessions = sessions;
+    elem.inline = true;
+    if (currentSession) elem.currentSession = currentSession;
+    document.body.appendChild(elem);
+    await elem.updateComplete;
+    return elem;
+  }
+
+  it('renders dropdown container, not overlay', async () => {
+    el = await inlineFixture(makeSessions());
+    const dropdown = el.shadowRoot!.querySelector('.dropdown');
+    const overlay = el.shadowRoot!.querySelector('.overlay');
+    expect(dropdown).toBeTruthy();
+    expect(overlay).toBeNull();
+  });
+
+  it('marks current session with .current class', async () => {
+    el = await inlineFixture(makeSessions(), 'staging');
+    const currentItem = el.shadowRoot!.querySelector('.session-item.current');
+    expect(currentItem).toBeTruthy();
+    expect(currentItem!.querySelector('.session-name')?.textContent).toBe('staging');
+  });
+
+  it('dispatches session-selected on click', async () => {
+    el = await inlineFixture(makeSessions());
+    const handler = vi.fn();
+    el.addEventListener('session-selected', handler as EventListener);
+    const items = el.shadowRoot!.querySelectorAll('button.session-item');
+    (items[0] as HTMLButtonElement).click();
+    expect(handler).toHaveBeenCalledTimes(1);
+    const event = handler.mock.calls[0][0] as CustomEvent<{ name: string }>;
+    expect(event.detail.name).toBe('dev');
+  });
+
+  it('dispatches new-session event when + button is clicked', async () => {
+    el = await inlineFixture(makeSessions());
+    const handler = vi.fn();
+    el.addEventListener('new-session', handler as EventListener);
+    const newBtn = el.shadowRoot!.querySelector('.new-session') as HTMLButtonElement;
+    expect(newBtn).toBeTruthy();
+    newBtn.click();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});

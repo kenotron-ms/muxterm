@@ -64,10 +64,49 @@ export class MuxSessionPicker extends LitElement {
       color: #6c7086;
       font-size: 12px;
     }
+
+    .dropdown {
+      min-width: 220px;
+      background: #1e1e2e;
+      border: 1px solid #45475a;
+      border-radius: 8px;
+      padding: 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    .session-item.current {
+      border-color: #89b4fa;
+    }
+
+    .new-session {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      padding: 8px 12px;
+      background: transparent;
+      border: 1px dashed #45475a;
+      border-radius: 6px;
+      cursor: pointer;
+      color: #89b4fa;
+      font-size: 14px;
+      font-family: inherit;
+      margin-top: 6px;
+    }
+
+    .new-session:hover {
+      border-color: #89b4fa;
+      background: rgba(137, 180, 250, 0.08);
+    }
   `;
 
   @property({ attribute: false })
   sessions: SessionInfo[] = [];
+
+  @property({ type: Boolean })
+  inline = false;
+
+  @property({ type: String })
+  currentSession = '';
 
   private _onSessionClick(name: string): void {
     this.dispatchEvent(
@@ -79,7 +118,39 @@ export class MuxSessionPicker extends LitElement {
     );
   }
 
+  private _onNewSession(): void {
+    this.dispatchEvent(
+      new CustomEvent('new-session', {
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   render() {
+    if (this.inline) {
+      return html`
+        <div class="dropdown">
+          <div class="session-list">
+            ${this.sessions.map(
+              (s) => html`
+                <button
+                  class="session-item${s.name === this.currentSession ? ' current' : ''}"
+                  @click=${() => this._onSessionClick(s.name)}
+                >
+                  <span class="session-name">${s.name}</span>
+                  <span class="session-meta"
+                    >${s.windows} ${s.windows === 1 ? 'window' : 'windows'}</span
+                  >
+                </button>
+              `,
+            )}
+          </div>
+          <button class="new-session" @click=${this._onNewSession}>+ New Session</button>
+        </div>
+      `;
+    }
+
     return html`
       <div class="overlay">
         <div class="picker">
