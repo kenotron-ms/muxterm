@@ -7,6 +7,7 @@ import type { MuxLayout } from './components/layout.js';
 import { terminalRegistry } from './lib/terminal-registry.js';
 
 // Side-effect imports — register child custom elements
+import './components/title-bar.js';
 import './components/tab-bar.js';
 import './components/layout.js';
 import './components/status-bar.js';
@@ -15,6 +16,7 @@ import './components/resize-handle.js';
 import './components/session-picker.js';
 import './components/reconnect-overlay.js';
 import './components/workspace.js';
+import type { LauncherAction } from './components/launcher-menu.js';
 import { Workspace } from './lib/workspace.js';
 
 @customElement('mux-app')
@@ -231,6 +233,7 @@ export class MuxApp extends LitElement {
     const activePaneId = this._tmuxState.activePane;
 
     return html`
+      <mux-title-bar @launcher-action=${this._onLauncherAction}></mux-title-bar>
       <mux-tab-bar
         .windows=${windows}
         active-window-id=${this._tmuxState.activeWindow}
@@ -368,6 +371,43 @@ export class MuxApp extends LitElement {
     this._showSessionPicker = false;
     this._socket?.sendControl({ type: 'attach-session', name: e.detail.name });
   };
+
+  private _onLauncherAction = (e: CustomEvent<{ action: LauncherAction }>): void => {
+    const { action } = e.detail;
+    switch (action) {
+      case 'new-session':
+        this._socket?.sendControl({ type: 'list-sessions' });
+        this._showSessionPicker = true;
+        break;
+      case 'open-driver':
+        this._socket?.sendControl({ type: 'create-session', name: 'driver' });
+        break;
+      case 'new-browser':
+        this._openSurfaceBeside('browser');
+        break;
+      case 'settings':
+        this._openSurfaceBeside('settings');
+        break;
+      case 'reconnect':
+        this._socket?.sendControl({ type: 'request-sync' });
+        break;
+      case 'shortcuts':
+      case 'about':
+        // no-op placeholder
+        break;
+    }
+  };
+
+  private _openSurfaceBeside(kind: 'browser' | 'settings'): void {
+    // PHASE-3 INTEGRATION POINT: dispatch CustomEvent until real workspace API exists.
+    this.dispatchEvent(
+      new CustomEvent('open-surface-beside', {
+        bubbles: true,
+        composed: true,
+        detail: { kind },
+      }),
+    );
+  }
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {
     // Write directly to the registry — works for ALL panes (including

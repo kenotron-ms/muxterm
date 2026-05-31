@@ -352,6 +352,34 @@ describe('MuxApp', () => {
     });
   });
 
+  describe('Title Bar + Launcher', () => {
+    it('renders title bar above everything (before mux-tab-bar)', async () => {
+      el = await fixture(makeState());
+      const titleBar = el.shadowRoot!.querySelector('mux-title-bar');
+      expect(titleBar).toBeTruthy();
+      const tabBar = el.shadowRoot!.querySelector('mux-tab-bar');
+      expect(tabBar).toBeTruthy();
+      // title bar must come before tab-bar in DOM order
+      const position = titleBar!.compareDocumentPosition(tabBar!);
+      expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('sets _showSessionPicker true when launcher fires new-session', async () => {
+      el = await fixture(makeState());
+      expect((el as any)._showSessionPicker).toBe(false);
+      const titleBar = el.shadowRoot!.querySelector('mux-title-bar')!;
+      titleBar.dispatchEvent(
+        new CustomEvent('launcher-action', {
+          bubbles: true,
+          composed: true,
+          detail: { action: 'new-session' },
+        }),
+      );
+      await el.updateComplete;
+      expect((el as any)._showSessionPicker).toBe(true);
+    });
+  });
+
   describe('Reconnect Overlay', () => {
     it('does not render reconnect overlay by default', async () => {
       el = await fixture(makeState());
