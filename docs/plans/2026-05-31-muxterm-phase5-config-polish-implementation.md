@@ -10,6 +10,83 @@
 
 ---
 
+## Phase 1–4 Actuals (grounding for implementers)
+
+Use these exact names and values. Do not use hypothetical names from the plan when they differ from actuals.
+
+### `CHROME` tokens — `web/src/lib/theme.ts`
+
+9 tokens, exported as `CHROME`:
+```ts
+CHROME.bar         = '#16161e'   // title bar / tab strip BG
+CHROME.body        = '#1a1b26'   // surface body / active tab merged BG
+CHROME.border      = '#292e42'   // hairline separators
+CHROME.textDim     = '#565f89'   // inactive/muted text
+CHROME.textBright  = '#c0caf5'   // active/focused text
+CHROME.accent      = '#7aa2f7'   // active-tab top accent line
+CHROME.driverAccent= '#bb9af7'   // driver region magenta
+CHROME.hover       = '#1f2335'   // icon-button hover BG
+CHROME.danger      = '#f7768e'   // close-× hover
+```
+
+**Phase 5 polish pass goal:** every chrome component must use CHROME tokens — NO hardcoded hex.
+
+### `TERMINAL_CONFIG` defaults — `web/src/lib/terminal-registry.ts` (lines 20–31)
+
+These are the hardcoded defaults Phase 5 config system overrides:
+```
+fontFamily: 'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'Fira Code', 'Menlo', 'Consolas', monospace
+fontSize:   13
+lineHeight: 1.2  (non-overridable by user, leave alone)
+cursorBlink: true
+cursorStyle: 'block'
+scrollback:  10000
+```
+Non-overridable internals (leave alone): `allowTransparency: false`, `convertEol: false`.
+
+### Chrome component CHROME status (which need Phase 5 polish)
+
+| File | Status |
+|------|--------|
+| `web/src/components/title-bar.ts` | ✅ Fully CHROME-tokenized — no changes needed |
+| `web/src/components/region-tabstrip.ts` | ✅ Fully CHROME-tokenized — no changes needed |
+| `web/src/components/region-menu.ts` | ✅ Fully CHROME-tokenized — no changes needed |
+| `web/src/components/launcher-menu.ts` | ✅ Fully CHROME-tokenized — no changes needed (dead `.close-region:hover` CSS already removed) |
+| `web/src/components/browser-surface.ts` | ❌ **5 hardcoded hex literals** need migration: `#1a1b26`, `#32344a`, `#24283b`, `#c0caf5`, `#7aa2f7`. NOTE: `#32344a` has no direct CHROME equivalent — map it to `CHROME.border` (#292e42) or add `CHROME.panelBorder = '#32344a'` as a new token. Decide in Phase 5. |
+| `web/src/components/settings-surface.ts` | ✅ Mostly tokenized — one `#7aa2f7` as display text (accent label), not a CSS property. Acceptable, no change needed. |
+| `web/src/components/status-bar.ts` | ❌ **Still uses raw hex** (deferred from Phase 4 review). Must be migrated to CHROME tokens in Phase 5 polish sweep. |
+
+### `applyMuxtermConfig` — `cmd/muxterm/main.go:238`
+
+Sets exactly 3 tmux options (all load-bearing — **do NOT expose via config**):
+```
+mouse          on
+focus-events   on
+history-limit  10000   // maps to scrollback; keep hardcoded (coupling risk not worth it for v1)
+```
+These are muxterm's implementation details — exposing them via config would let users break the app.
+
+### Go TOML dependency
+
+**Not present in `go.mod`.** Only two current deps: `github.com/coder/websocket v1.8.14` and `github.com/creack/pty v1.1.24`. Phase 5 must `go get github.com/BurntSushi/toml` (preferred, widely used) OR `github.com/pelletier/go-toml/v2` (struct-tag compatible with encoding/json). Either works; BurntSushi/toml is the simpler API for this use case.
+
+### Phase 4 deferred stubs (DO NOT implement in Phase 5)
+
+These stubs exist in `app.ts` or related files from Phase 4 as v1 deferred TODOs. Phase 5 must NOT attempt to complete them:
+- `_splitRegion()` — region split is v1 deferred (only ⊟ Split right/down menu items are stubs)
+- `_renameRegionWindow()` — window rename is v1 deferred
+
+These are intentional TODOs, not oversights. Do not touch them.
+
+### Phase 2 Verification Harness (use in E2E tasks)
+
+- `window.__muxterm.snapshot(paneId: number)` → `StructuredSnapshot` (via `playwright-cli eval`)
+- `web/e2e/helpers/fidelity.ts`: `compareContent(paneId, sessionName)` + `compareLayout(paneId, element)`
+- Dev server on `http://localhost:8080` (confirmed)
+- `cd web && npm test` for Vitest; `go test ./...` for Go
+
+---
+
 ## Context the implementer needs (read first)
 
 - **Design source of truth:** `docs/plans/2026-05-30-muxterm-panes-multisession-driver-design.md`, sections *"Config (muxterm-owned knobs only)"* (≈L365) and *"UI polish"* (≈L398).
