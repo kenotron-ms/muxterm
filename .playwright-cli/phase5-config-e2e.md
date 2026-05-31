@@ -171,3 +171,143 @@ matching the TOML tag names). Added matching `json:"..."` tags to all config str
 - Added `updated()` to reflect `_menuOpen` state to the `data-launcher-open` attribute
   on the `mux-title-bar` host (shadow DOM — not directly reachable by `document.querySelector`,
   but useful for component-level testing via `shadowRoot`).
+
+---
+
+# Phase 5 — Task 15: Malformed Config Graceful Fallback
+
+**Task:** task-15  
+**Date:** 2026-05-31  
+**Result:** PASS — all acceptance criteria met  
+
+---
+
+## Step 1 — Write Malformed Config
+
+```bash
+cat > ~/.config/muxterm/config.toml <<'TOML'
+[theme]
+palette = "unterminated
+[terminal]
+scrollback = not-a-number
+TOML
+```
+
+**Injected faults:**
+- Unterminated string literal in `palette` value
+- Type mismatch: `scrollback` given a non-integer value
+
+---
+
+## Step 2 — Force Server Restart
+
+Config is read once at startup. Append a rebuild-trigger comment to `cmd/muxterm/main.go`
+to cause air to rebuild and restart:
+
+```bash
+echo "// rebuild trigger $(date)" >> cmd/muxterm/main.go
+sleep 5
+```
+
+**Observed:**
+- air detected file modification and rebuilt the binary
+- New server PID was assigned (previous PID replaced)
+- `go test ./internal/config/... -run TestLoadMalformedFallsBackToDefaults -v` confirms the log format:
+  ```
+  2026/05/31 14:24:34 config: .../config.toml is malformed (toml: line 2 (last key "theme.palette"): unexpected EOF; expected '"'); using built-in defaults
+  ```
+- `curl http://localhost:8080` → HTTP 200 ✅ (server did NOT crash)
+
+---
+
+## Step 3 — Assert Default Theme Token
+
+With the malformed config, server must fall back to Tokyo Night defaults.
+`--mux-bg` for Tokyo Night is `#1a1b26`.
+
+```bash
+playwright-cli -s=p5mftest open http://localhost:8080
+sleep 3
+playwright-cli -s=p5mftest eval "getComputedStyle(document.documentElement).getPropertyValue('--mux-bg').trim()"
+```
+
+**Observed output:** `"#1a1b26"`  
+**Expected:** `"#1a1b26"` (Tokyo Night background — proves malformed config fell back)  
+**Result:** ✅ PASS
+
+---
+
+## Step 4 — Restore Original Config
+
+No `.phase5bak` backup existed (task-14 started from scratch); the spec restore path is `rm -f`:
+
+```bash
+if [ -f ~/.config/muxterm/config.toml.phase5bak ]; then
+  mv ~/.config/muxterm/config.toml.phase5bak ~/.config/muxterm/config.toml
+else
+  rm -f ~/.config/muxterm/config.toml
+fi
+git checkout cmd/muxterm/main.go  # remove rebuild-trigger comment
+sleep 5
+```
+
+**Observed:** malformed config removed; `cmd/muxterm/main.go` restored to clean state;
+server rebuilt with defaults (no config → Tokyo Night defaults); HTTP 200 confirmed.
+
+---
+
+## Step 5 — Final Full Verification Sweep
+
+```bash
+go test ./...          # Go unit + integration suite
+cd web && npm test     # Vitest frontend suite
+npx tsc --noEmit       # TypeScript type check
+npm run build          # Production frontend build
+```
+
+| Suite | Result | Details |
+|-------|--------|---------|
+| `go test ./...` | ✅ PASS | 6 packages, all cached green |
+| `npm test` (Vitest) | ✅ PASS | 36 test files, 271 tests |
+| `npx tsc --noEmit` | ✅ PASS | no type errors |
+| `npm run build` | ✅ PASS | 431.68 kB bundle, built in 345ms |
+
+---
+
+## Malformed-Fallback Observations
+
+### Behavior under malformed TOML
+
+- `config.Load()` never returns a non-nil error for malformed files — by design.
+- It logs exactly: `config: <path> is malformed (<toml error>); using built-in defaults`
+- It returns `Defaults()` wholesale (not a partial parse); this prevents partially-applied
+  state where only some sections are corrupted.
+
+### Resilience proof
+
+The TOML decoder (`github.com/BurntSushi/toml`) returns an error on the first parse failure.
+`config.Load()` catches that error, logs the warning, and returns `Defaults()` — so the server
+always has a fully valid config, regardless of what's in the file.
+
+### No code changes required
+
+The graceful fallback was implemented in prior phases. Task 15 is purely an E2E verification
+run confirming the behavior end-to-end in the live server (not just in unit tests).
+
+---
+
+## Phase 5 Summary (tasks 14 + 15)
+
+| Assertion | Observed | Expected | Result |
+|-----------|----------|----------|--------|
+| Config override — CSS token `--mux-bg` | `"#282828"` (gruvbox) | `"#282828"` | ✅ PASS |
+| Config override — font size | `20` | `20` | ✅ PASS |
+| Config override — scrollback | `54321` | `54321` | ✅ PASS |
+| Config override — launcher chord | `true` | `true` | ✅ PASS |
+| Malformed config — server stays up | HTTP 200 after rebuild | server not exit | ✅ PASS |
+| Malformed config — default theme | `"#1a1b26"` (Tokyo Night) | `"#1a1b26"` | ✅ PASS |
+| Malformed config — warning log | `...is malformed...; using built-in defaults` | exact log format | ✅ PASS |
+| Final suite — `go test ./...` | 6 packages PASS | all green | ✅ PASS |
+| Final suite — `npm test` | 271 tests PASS | all green | ✅ PASS |
+| Final suite — `tsc --noEmit` | no errors | no errors | ✅ PASS |
+| Final suite — `npm run build` | build success | build success | ✅ PASS |
