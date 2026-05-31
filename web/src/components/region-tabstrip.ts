@@ -224,6 +224,10 @@ export class MuxRegionTabstrip extends LitElement {
   @property({ type: String })
   activeSession = '';
 
+  /** True when this is the only region — disables "Close region" in the menu. */
+  @property({ type: Boolean })
+  isOnlyRegion = false;
+
   // Fix 4: optimistic tab selection — shows the clicked tab as active
   // immediately without waiting for the server round-trip.
   @state() private _optimisticWindowId: number | null = null;
@@ -412,6 +416,7 @@ export class MuxRegionTabstrip extends LitElement {
             })}"
           >
             <mux-region-menu
+              .isOnlyRegion="${this.isOnlyRegion}"
               @region-action="${this._onRegionAction}"
             ></mux-region-menu>
           </div>`

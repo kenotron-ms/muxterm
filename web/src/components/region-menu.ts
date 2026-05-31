@@ -1,5 +1,5 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
-import { customElement } from 'lit/decorators.js';
+import { customElement, property } from 'lit/decorators.js';
 import { CHROME } from '../lib/theme.js';
 import { icon } from '../lib/icons.js';
 import { ExternalLink, PanelLeft, PanelTop, Pencil, X } from 'lucide';
@@ -55,6 +55,19 @@ export class MuxRegionMenu extends LitElement {
       color: ${unsafeCSS(CHROME.danger)};
     }
 
+    button:disabled,
+    button.disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      color: var(--textDim, #565f89);
+    }
+
+    button:disabled:hover,
+    button.disabled:hover {
+      background: transparent;
+      color: var(--textDim, #565f89);
+    }
+
     .lucide-icon {
       display: inline-block;
       vertical-align: middle;
@@ -65,6 +78,9 @@ export class MuxRegionMenu extends LitElement {
       pointer-events: none;
     }
   `;
+
+  @property({ type: Boolean })
+  isOnlyRegion = false;
 
   private _dispatch(action: RegionAction): void {
     this.dispatchEvent(
@@ -92,7 +108,12 @@ export class MuxRegionMenu extends LitElement {
         ${icon(Pencil, { size: 14 })} Rename window
       </button>
       <div class="divider"></div>
-      <button data-action="close-region" class="danger" @click="${() => this._dispatch('close-region')}">
+      <button
+        data-action="close-region"
+        class="danger${this.isOnlyRegion ? ' disabled' : ''}"
+        ?disabled="${this.isOnlyRegion}"
+        @click="${() => this._dispatch('close-region')}"
+      >
         ${icon(X, { size: 14 })} Close region
       </button>
     `;

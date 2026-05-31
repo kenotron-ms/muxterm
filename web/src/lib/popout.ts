@@ -98,12 +98,13 @@ export class PopoutManager {
     this.openFn =
       options.open ??
       ((url, target, features) =>
-         
-        window.open(url, target, features ?? '') as PopoutWindowLike | null);
+        window.open(url, target, features ?? 'width=800,height=600') as PopoutWindowLike | null);
     this.pollIntervalMs = options.pollIntervalMs ?? 400;
+    // Use the full href (minus query string) so the popup gets the correct path
+    // even when the app is served at a non-root sub-path.
     this.origin =
       options.origin ??
-      (typeof window !== 'undefined' ? window.location.origin : '');
+      (typeof window !== 'undefined' ? window.location.href.split('?')[0] : '');
   }
 
   /** Returns `true` if the given region is currently popped out. */

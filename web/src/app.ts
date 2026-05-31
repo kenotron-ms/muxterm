@@ -4,7 +4,7 @@ import { store, MuxStore } from './state.js';
 import { icon } from './lib/icons.js';
 import { MonitorX } from 'lucide';
 import { MuxSocket, buildWsUrl } from './ws.js';
-import type { TmuxState, Window, SessionInfo } from './types.js';
+import type { TmuxState, Window, SessionInfo, SplitDirection } from './types.js';
 import type { MuxLayout } from './components/layout.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { parseResolvedConfig } from './lib/config.js';
@@ -341,6 +341,8 @@ export class MuxApp extends LitElement {
               @tab-close="${this._onTabClose}"
               @session-selected="${this._onSessionSelected}"
               @new-session="${this._onNewSessionCreate}"
+              @split-pane="${this._onSplitPane}"
+              @rename-window="${this._onRenameWindow}"
             ></mux-workspace>
           `}
       <mux-status-bar
@@ -368,6 +370,22 @@ export class MuxApp extends LitElement {
         : ''}
     `;
   }
+
+  private _onSplitPane = (e: CustomEvent<{ direction: string; paneId: number }>): void => {
+    this._socket?.sendControl({
+      type: 'split',
+      direction: e.detail.direction as SplitDirection,
+      paneId: e.detail.paneId,
+    });
+  };
+
+  private _onRenameWindow = (e: CustomEvent<{ windowId: number; name: string }>): void => {
+    this._socket?.sendControl({
+      type: 'rename-window',
+      windowId: e.detail.windowId,
+      name: e.detail.name,
+    });
+  };
 
   private _onSurfaceResize = (e: CustomEvent<{ surfaceId: string; cols: number; rows: number }>): void => {
     // Async fire-and-forget (seam S5) — never a synchronous handshake.

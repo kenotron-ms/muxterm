@@ -195,14 +195,14 @@ export class MuxWorkspace extends LitElement {
    * region-tabstrip and region components. The regionId comes from the closure
    * set up in _renderRegion so we always know which region acted.
    */
-  private _handleRegionAction(regionId: string, action: RegionAction): void {
+  private _handleRegionAction(regionId: string, action: RegionAction, activePaneId: number = -1): void {
     switch (action) {
       case 'split-right':
-        this._splitRegion(regionId, 'horizontal');
+        this._splitRegion(regionId, 'horizontal', activePaneId);
         break;
 
       case 'split-down':
-        this._splitRegion(regionId, 'vertical');
+        this._splitRegion(regionId, 'vertical', activePaneId);
         break;
 
       case 'rename':
@@ -239,14 +239,30 @@ export class MuxWorkspace extends LitElement {
   // Region lifecycle helpers
   // ---------------------------------------------------------------------------
 
-  /** Split a region horizontally or vertically (stub — full impl in later task). */
-  private _splitRegion(_regionId: string, _direction: 'horizontal' | 'vertical'): void {
-    // TODO: implement split
+  /** Split the active pane of a region horizontally or vertically. */
+  private _splitRegion(_regionId: string, direction: 'horizontal' | 'vertical', paneId: number): void {
+    if (paneId < 0) return;
+    this.dispatchEvent(new CustomEvent('split-pane', {
+      bubbles: true,
+      composed: true,
+      detail: { direction, paneId },
+    }));
   }
 
-  /** Rename the tmux window associated with a region (stub). */
-  private _renameRegionWindow(_regionId: string): void {
-    // TODO: implement rename
+  /** Prompt for a new name and rename the tmux window associated with a region. */
+  private _renameRegionWindow(regionId: string): void {
+    const region = this.workspace.regions.find((r) => r.id === regionId);
+    if (!region) return;
+    const windowId = this._sessionActiveWindowId(region.surface.sessionName);
+    const win = this._findWindow(region.surface.sessionName, windowId);
+    const newName = window.prompt('Rename window:', win?.name ?? '');
+    if (newName !== null && newName.trim() !== '') {
+      this.dispatchEvent(new CustomEvent('rename-window', {
+        bubbles: true,
+        composed: true,
+        detail: { windowId, name: newName.trim() },
+      }));
+    }
   }
 
   /** Close a region and remove it from the workspace. */
@@ -356,6 +372,7 @@ export class MuxWorkspace extends LitElement {
           .activeWindowId="${sessionActiveWindowId}"
           .sessions="${sessions}"
           .activeSession="${activeSession}"
+          .isOnlyRegion="${this.workspace.regions.length === 1}"
           @tab-select="${(e: CustomEvent<{ windowId: number }>) => {
             // Optimistically record the desired window so content switches instantly.
             // Do NOT stopPropagation — let it continue up to app.ts for the server call.
@@ -366,7 +383,7 @@ export class MuxWorkspace extends LitElement {
           @region-action="${(e: Event) => {
             e.stopPropagation();
             const ev = e as CustomEvent<{ action: RegionAction }>;
-            this._handleRegionAction(region.id, ev.detail.action);
+            this._handleRegionAction(region.id, ev.detail.action, activePaneId);
           }}"
         ></mux-region>
       </div>

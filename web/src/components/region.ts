@@ -67,6 +67,9 @@ export class MuxRegion extends LitElement {
   @property({ type: String, attribute: 'server-addr' })
   serverAddr?: string;
 
+  @property({ type: Boolean })
+  isOnlyRegion = false;
+
   @query('.body')
   private _body!: HTMLElement;
 
@@ -94,6 +97,7 @@ export class MuxRegion extends LitElement {
         .sessions="${this.sessions}"
         .activeSession="${this.activeSession}"
         .isDriver="${this.surfaceKind === 'driver'}"
+        .isOnlyRegion="${this.isOnlyRegion}"
         @tab-select="${this._forwardEvent}"
         @tab-close="${this._forwardEvent}"
         @tab-new="${this._forwardEvent}"
