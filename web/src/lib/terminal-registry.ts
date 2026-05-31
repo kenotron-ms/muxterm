@@ -14,6 +14,8 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { THEME } from './theme.js';
+import { serializeSnapshot } from './snapshot.js';
+import type { StructuredSnapshot, SnapshotSource } from './snapshot.js';
 
 const TERMINAL_CONFIG = {
   theme: THEME,
@@ -285,4 +287,21 @@ export const terminalRegistry = {
   getTerminal(paneId: number): Terminal | null {
     return _map.get(paneId)?.term ?? null;
   },
+
+  /**
+   * Serialize the visible viewport of a pane's terminal into a StructuredSnapshot.
+   * Returns null if the paneId is not known to the registry.
+   */
+  snapshot(paneId: number): StructuredSnapshot | null {
+    const entry = _map.get(paneId);
+    if (!entry) return null;
+    return serializeSnapshot(entry.term as unknown as SnapshotSource);
+  },
 };
+
+if (typeof window !== 'undefined') {
+  (window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm = {
+    ...(window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm,
+    snapshot: (paneId: number) => terminalRegistry.snapshot(paneId),
+  };
+}

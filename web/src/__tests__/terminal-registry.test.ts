@@ -325,4 +325,20 @@ describe('terminalRegistry', () => {
       expect(term).toBeTruthy();
     });
   });
+
+  // ────────────────────────────────────────────────────────────
+  // snapshot
+  // ────────────────────────────────────────────────────────────
+  describe('snapshot', () => {
+    it('returns null for unknown paneId', () => {
+      expect(terminalRegistry.snapshot(9999)).toBeNull();
+    });
+
+    it('window.__muxterm.snapshot is a function and returns null for unknown paneId', () => {
+      const muxterm = (window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm;
+      expect(typeof muxterm?.snapshot).toBe('function');
+      const snapFn = muxterm!.snapshot as (paneId: number) => unknown;
+      expect(snapFn(9999)).toBeNull();
+    });
+  });
 });
