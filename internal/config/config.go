@@ -12,58 +12,58 @@ import (
 
 // Config is the top-level configuration for muxterm.
 type Config struct {
-	Theme     ThemeConfig     `toml:"theme"`
-	Font      FontConfig      `toml:"font"`
-	Terminal  TerminalConfig  `toml:"terminal"`
-	Keys      KeysConfig      `toml:"keys"`
-	Workspace WorkspaceConfig `toml:"workspace"`
-	Driver    DriverConfig    `toml:"driver"`
+	Theme     ThemeConfig     `toml:"theme"      json:"theme"`
+	Font      FontConfig      `toml:"font"       json:"font"`
+	Terminal  TerminalConfig  `toml:"terminal"   json:"terminal"`
+	Keys      KeysConfig      `toml:"keys"       json:"keys"`
+	Workspace WorkspaceConfig `toml:"workspace"  json:"workspace"`
+	Driver    DriverConfig    `toml:"driver"     json:"driver"`
 }
 
 // ThemeConfig controls visual palette selection.
 type ThemeConfig struct {
-	Palette string `toml:"palette"`
+	Palette string `toml:"palette" json:"palette"`
 }
 
 // FontConfig controls the terminal font family and size.
 type FontConfig struct {
-	Family string `toml:"family"`
-	Size   int    `toml:"size"`
+	Family string `toml:"family" json:"family"`
+	Size   int    `toml:"size"   json:"size"`
 }
 
 // TerminalConfig controls terminal emulator behaviour.
 // Bell accepts: "visual" | "audible" | "off".
 type TerminalConfig struct {
-	CursorStyle string `toml:"cursor_style"`
-	CursorBlink bool   `toml:"cursor_blink"`
-	Scrollback  int    `toml:"scrollback"`
-	Bell        string `toml:"bell"`
+	CursorStyle string `toml:"cursor_style"  json:"cursor_style"`
+	CursorBlink bool   `toml:"cursor_blink"  json:"cursor_blink"`
+	Scrollback  int    `toml:"scrollback"    json:"scrollback"`
+	Bell        string `toml:"bell"          json:"bell"`
 }
 
 // KeysConfig defines muxterm's own UI keybindings.
 // These are muxterm UI actions only — never tmux keys.
 type KeysConfig struct {
-	NextSession     string `toml:"next_session"`
-	Split           string `toml:"split"`
-	MaximizeRegion  string `toml:"maximize_region"`
-	PopOut          string `toml:"pop_out"`
-	OpenLauncher    string `toml:"open_launcher"`
-	FocusDriver     string `toml:"focus_driver"`
+	NextSession    string `toml:"next_session"     json:"next_session"`
+	Split          string `toml:"split"            json:"split"`
+	MaximizeRegion string `toml:"maximize_region"  json:"maximize_region"`
+	PopOut         string `toml:"pop_out"          json:"pop_out"`
+	OpenLauncher   string `toml:"open_launcher"    json:"open_launcher"`
+	FocusDriver    string `toml:"focus_driver"     json:"focus_driver"`
 }
 
 // WorkspaceConfig controls workspace layout and presentation.
 type WorkspaceConfig struct {
-	DefaultPresentation string   `toml:"default_presentation"`
-	Rails               []string `toml:"rails"`
+	DefaultPresentation string   `toml:"default_presentation" json:"default_presentation"`
+	Rails               []string `toml:"rails"                json:"rails"`
 }
 
 // DriverConfig controls the muxterm-agent driver lifecycle.
 // SharedWindowPolicy is RESERVED — parsed and carried through to the client
 // but NOT acted on in Phase 5.
 type DriverConfig struct {
-	Autostart          bool   `toml:"autostart"`
-	SharedWindowPolicy string `toml:"shared_window_policy"`
-	Launch             string `toml:"launch"`
+	Autostart          bool   `toml:"autostart"           json:"autostart"`
+	SharedWindowPolicy string `toml:"shared_window_policy" json:"shared_window_policy"`
+	Launch             string `toml:"launch"              json:"launch"`
 }
 
 // Load reads a TOML config file from path and returns a Config.

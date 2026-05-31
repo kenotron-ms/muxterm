@@ -1,5 +1,6 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
+import type { PropertyValues } from 'lit';
 import { CHROME } from '../lib/theme.js';
 import './launcher-menu.js';
 
@@ -73,6 +74,28 @@ export class MuxTitleBar extends LitElement {
 
   @state()
   private _menuOpen = false;
+
+  /** Bound handler so we can remove it in disconnectedCallback. */
+  private _onOpenLauncher = (): void => {
+    this._menuOpen = true;
+  };
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener('open-launcher', this._onOpenLauncher);
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.removeEventListener('open-launcher', this._onOpenLauncher);
+  }
+
+  protected override updated(changed: PropertyValues): void {
+    super.updated(changed);
+    if (changed.has('_menuOpen')) {
+      this.toggleAttribute('data-launcher-open', this._menuOpen);
+    }
+  }
 
   private _toggleMenu(): void {
     this._menuOpen = !this._menuOpen;

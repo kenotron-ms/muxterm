@@ -29,7 +29,7 @@ import { Workspace } from './lib/workspace.js';
 /** Actions map passed to installKeybindings — populated with real handlers as
  *  each phase lands. Stubs use () => {} to keep wiring unconditional. */
 const uiActions: UIActions = {
-  openLauncher: () => {}, // TODO(phaseX): wire when available
+  openLauncher: () => window.dispatchEvent(new CustomEvent('open-launcher')),
   split: () => {}, // TODO(phaseX): wire when available
   maximizeRegion: () => {}, // TODO(phaseX): wire when available
   popOut: () => {}, // TODO(phaseX): wire when available
@@ -166,8 +166,17 @@ export class MuxApp extends LitElement {
   private _unsubscribe: (() => void) | null = null;
   private _workspace = new Workspace();
 
+  /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
+   *  selectors like document.querySelector('[data-launcher-open]') work. */
+  private _onOpenLauncherAttr = (): void => {
+    this.setAttribute('data-launcher-open', '');
+  };
+
   connectedCallback(): void {
     super.connectedCallback();
+
+    // Track launcher-open state on the host element for E2E assertions.
+    window.addEventListener('open-launcher', this._onOpenLauncherAttr);
 
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
@@ -199,6 +208,7 @@ export class MuxApp extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -499,3 +509,22 @@ declare global {
     'mux-app': MuxApp;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Dev window accessors — exposed for E2E testing (Phase 5 config assertions)
+// ---------------------------------------------------------------------------
+(window as unknown as Record<string, unknown>)['__muxStore'] = store;
+
+(window as unknown as Record<string, unknown>)['__muxFirstPaneId'] =
+  (): number | null => {
+    for (const session of store.state.sessions) {
+      for (const win of session.windows) {
+        if (win.panes.length > 0) return win.panes[0].id;
+      }
+    }
+    return null;
+  };
+
+(window as unknown as Record<string, unknown>)['__muxRegistry'] = {
+  peek: (paneId: number) => terminalRegistry.getTerminal(paneId),
+};
