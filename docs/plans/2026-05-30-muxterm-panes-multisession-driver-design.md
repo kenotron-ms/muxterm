@@ -4,7 +4,7 @@
 
 Add three feature dimensions to muxterm on one shared architectural foundation:
 
-1. **Panes** — a muxterm-owned dock layer plus floating and popped-out windows.
+1. **Panes** — a muxterm-owned dock layer plus popped-out windows.
 2. **Multi-session** — switching between attached tmux sessions.
 3. **Agentic driver** — a standalone "driver" TUI that can drive all sessions/windows/panes.
 
@@ -47,7 +47,7 @@ Build the controller-pool refactor first (invisible; a pool of 1 renders exactly
  0. Controller pool refactor      (invisible; pool of 1 == today)
  1. Multi-session switch          (cheapest pool consumer — proves the spine)
  2. Layer-2 workspace + surfaces  (the dock; tmux window = a surface)
- 3. Float + pop-out presentation  (CSS-scale primitive; window.open second OS window)
+ 3. Pop-out presentation          (no in-page float; CSS-scale primitive; window.open second OS window)
  4. Driver console surface        (the agentic TUI in a dedicated tmux session)
  5. UI polish + config            (woven through; polish sequenced last)
 ```
@@ -82,30 +82,30 @@ Two layout authorities, nested, with a hard boundary. They communicate through *
 ║  └──────────────────────────┘  │   %7                     │  ║
 ║                                 └──────────────────────────┘  ║
 ╚══════════════════════════════════════════════════════════════╝
-      + floating surface (in-page)      + pop-out OS window (window.open)
-            ┌──────────┐                   ┌──────────────────┐
-            │ win @9   │                   │ ▢ muxterm win @2 │
-            │  %12     │                   │   %3 | %4        │
-            └──────────┘                   └──────────────────┘
+                                          + pop-out OS window (window.open)
+                                             ┌──────────────────┐
+                                             │ ▢ muxterm win @2 │
+                                             │   %3 | %4        │
+                                             └──────────────────┘
 ```
 
 - **Layer 1 (tmux owns):** the intra-window split tree (the `%layout` string). This is exactly `<mux-layout>` today — **untouched**.
 - **Layer 2 (muxterm owns):** a dock/workspace manager whose leaves are **surfaces**. A surface is either:
   - one tmux window's pane-tree treated as an **opaque block** (rendered by Layer 1), or
-  - a **non-terminal panel** (driver console, session tree, future iframe).
+  - a **non-terminal panel** (driver console · browser · settings).
 
-  The dock arranges surfaces into regions, tabs, floats, and popped-out OS windows.
+  The dock arranges surfaces into regions, tabs, and popped-out OS windows.
 
-> **Non-terminal surface sizing:** a non-terminal surface (driver console, session
-> tree, future iframe) mounts in a dock slot like any surface, but it is **NOT**
-> driven by the `cols×rows` cell-budget handoff. It simply gets a **pixel box** and
-> renders as normal responsive DOM — there is no tmux grid behind it. The
-> cell-budget contract applies only to terminal (tmux-window) surfaces.
+> **Non-terminal surface sizing:** a non-terminal surface (driver console · browser ·
+> settings) mounts in a dock slot like any surface, but it is **NOT** driven by the
+> `cols×rows` cell-budget handoff. It simply gets a **pixel box** and renders as
+> normal responsive DOM — there is no tmux grid behind it. The cell-budget contract
+> applies only to terminal (tmux-window) surfaces.
 
 **The contract:** tmux splits *panes within a window*; muxterm arranges *windows-as-surfaces + non-terminal panels within a workspace*. Neither crosses the line. muxterm never re-splits a tmux window; tmux never knows where its window is shown.
 
 **Why this is low-risk — it generalizes shipped code:**
-- `terminal-registry` is already position-agnostic. Re-parenting a pane into a dock slot, a float div, or a popped-out document is a DOM move; the terminal stays alive and fed.
+- `terminal-registry` is already position-agnostic. Re-parenting a pane into a dock slot or a popped-out document is a DOM move; the terminal stays alive and fed.
 - `<mux-layout>` already renders a window's split tree. Today only the active window is mounted; the dock mounts several at once.
 
 ### Foundation: N control clients + the cell-budget handoff
@@ -129,7 +129,7 @@ The sharp edge is **per-surface sizing**. tmux sizes a *window* to the *client* 
 A naive two-layer resize janks because both layers run on one clock: every mouse-move pixel triggers a tmux round-trip, flooding the PTY channel. Fix = **two clocks**:
 
 ```
- user drags divider / resizes OS window / float
+ user drags divider / resizes OS window
         │  (fires at ~60 fps)
         ▼
  ┌─────────────────────────────────────────────┐
@@ -216,7 +216,7 @@ tmux's `window-size` option (`smallest` / `largest` / `latest`) plus `aggressive
      NOT global window.innerHeight.
 
  S4  "Presentation mode" is an OPEN strategy set over a presentation-agnostic
-     surface model: docked · floating · popped-out · fullscreen-single.
+     surface model: docked · popped-out · fullscreen-single.
      Phones only ever use fullscreen-single.
 
  S5  Resize is ALWAYS async fire-and-forget + reconcile, never a synchronous
@@ -266,18 +266,19 @@ The pool of 1 renders the current single surface **identically** — this step s
 
 Step 2 (the dock) is then a pure *generalization*: "mount one session's active window" becomes "mount N surfaces, each its own pool client," and the cell-budget/sizing machinery kicks in.
 
-### Dock + float + pop-out (steps 2–3)
+### Dock + pop-out (steps 2–3)
 
-The dock (step 2) is the Layer-2 workspace manager: it arranges surfaces into regions, tabs, and the single-surface/stacked mode (S1/S4). Float and pop-out (step 3) are presentation strategies over the same surface model:
+The dock (step 2) is the Layer-2 workspace manager: it arranges surfaces into regions, tabs, and the single-surface/stacked mode (S1/S4). Pop-out (step 3) is a presentation strategy over the same surface model:
 
 ```
-  float    → in-page draggable surface (a re-parented terminal in a float div)
   pop-out  → window.open second OS browser window, same Go backend (multi-monitor)
 ```
 
-Both use the **grid-vs-fit scale primitive**: moving a surface to a float or popped-out window is a DOM re-parent + a re-budget of `cols×rows`; the terminal stays alive via the registry.
+> **No in-page float.** The in-page floating-overlay concept was cut (see *UX & Chrome*); the only "detach" verb is **pop out** to a real OS window. The grid-vs-fit CSS-scale primitive stays — it's still used by resize, phone down-scaling, and the deferred multi-viewer case.
 
-> **One-window-one-surface invariant (v1):** a tmux window lives in exactly one surface. Pop-out/float **moves** the surface, never duplicates it (see *Failure Modes*).
+It uses the **grid-vs-fit scale primitive**: moving a surface to a popped-out window is a DOM re-parent + a re-budget of `cols×rows`; the terminal stays alive via the registry.
+
+> **One-window-one-surface invariant (v1):** a tmux window lives in exactly one surface. Pop-out **moves** the surface, never duplicates it (see *Failure Modes*).
 
 ### Driver (step 4) — standalone agentic TUI on Amplifier
 
@@ -348,7 +349,7 @@ Goal mode = `/goal <completion-condition>` → the agent loops autonomously; a s
    → the agent's entire core driving ability. No muxterm needed.
 
  TIER 2 — enhanced  (soft dep: muxterm)         WORKS ONLY INSIDE MUXTERM
-   float window @4 · pop out session B · arrange surfaces (Layer-2)
+   pop out window @4 · open beside · arrange surfaces (Layer-2)
    → detected via an env var muxterm injects into panes it spawns
      (e.g. MUXTERM_CTL=/path/to/sock). Absent → silently skipped.
 ```
@@ -373,11 +374,13 @@ Launch `$driver` from iTerm2 and you get the full agentic driver over your tmux 
                scrollback = 10000             # xterm.js display buffer
                bell = "visual"                # visual | audible | off
   [keys]       # muxterm's OWN UI actions ONLY — never tmux keys
-               next_session = "ctrl+shift+]"
-               toggle_dock  = "ctrl+shift+d"
-               float_pane   = "ctrl+shift+f"
-               focus_driver = "ctrl+shift+a"
-  [workspace]  default_presentation = "docked"   # docked | float | single
+               next_session    = "ctrl+shift+]"
+               split           = "ctrl+shift+\\"   # ⊟ split (more terminals here)
+               maximize_region = "ctrl+shift+m"    # ⊡ focus one region
+               pop_out         = "ctrl+shift+o"    # ⧉ separate OS window
+               open_launcher   = "ctrl+shift+p"    # global ⋯ launcher
+               focus_driver    = "ctrl+shift+a"
+  [workspace]  default_presentation = "docked"   # docked | single
                rails = ["sessions"]              # which Layer-2 rails show
   [driver]     autostart = false                 # spawn $driver session on boot
                shared_window_policy = "follow"   # reserved — multi-viewer is post-v1 (mirror | follow | solo)
@@ -386,17 +389,146 @@ Launch `$driver` from iTerm2 and you get the full agentic driver over your tmux 
 
 **Non-goals (explicit):** no tmux-passthrough, no hot-reload in v1, no per-pane overrides. Malformed config → fall back to hardcoded defaults, log a warning, run.
 
-**Keybinding timing:** the `[keys]` actions (`toggle_dock`, `float_pane`, `focus_driver`) are **bound as their features land** (steps 2–4) with sensible hardcoded defaults — they don't wait for step 5. Step 5 only *formalizes* them into the config file (makes the defaults overridable).
+**Keybinding timing:** the `[keys]` actions (`split`, `maximize_region`, `pop_out`, `open_launcher`, `focus_driver`) are **bound as their features land** (steps 2–4) with sensible hardcoded defaults — they don't wait for step 5. Step 5 only *formalizes* them into the config file (makes the defaults overridable).
 
 ### UI polish (step 5 — last)
 
 A **consistency pass, not a redesign**, deliberately sequenced last so we don't polish components about to be restructured into the dock:
 
-- unify styling across the new dock chrome (tab-bar, status-bar, session-picker, reconnect-overlay, dividers, float/pop-out controls);
+- unify styling across the new dock chrome (tab-bar, status-bar, session-picker, reconnect-overlay, dividers, pop-out controls);
 - make all of it theme-driven (consumes `[theme]` config);
 - tighten today's functional stubs (session-picker is inert, status-bar is minimal).
 
 Kept generic intentionally (YAGNI) — no specific changes the user didn't ask for. (Specific polish itches are an open question.)
+
+---
+
+## UX & Chrome
+
+Validated with the user via interactive mockups. Visual language is **VS Code-style
+chrome** on the **Tokyo Night** palette (accent `#7aa2f7`).
+
+**Guiding principle — chrome follows what's VISIBLE, not what EXISTS.** Solo (one
+region) = minimal chrome; dock (N regions) = the global tab row dissolves and each
+region carries its own slim header. Clutter scales with what you're *looking at*,
+not with what the workspace contains. This reuses the **S1** single-surface seam.
+
+```
+  SOLO (one region)                     DOCK (N regions)
+  ┌──────────────────────────┐          ┌─────────────┬─────────────┐
+  │ [session▾] editor shell  │          │[sess▾] edit │[sess▾] logs │  ← per-region
+  │  ── one tab strip ──      │          │ shell       │             │     headers
+  │                          │          ├─────────────┴─────────────┤
+  │     terminal body        │          │  (no global tab row)      │
+  └──────────────────────────┘          └───────────────────────────┘
+   minimal chrome                         chrome distributed per region
+```
+
+### User-facing model — "surface" is INTERNAL, never shown
+
+Users never choose "pane vs surface." They pick an **intent**:
+
+- **Split** = "more terminals here" (same session, a tmux pane). Everyday, tmux-native.
+- **Cross-boundary actions exposed by intent:** open another session, pop out, open
+  driver / browser / settings.
+
+A region can hold: a **terminal** (tmux window), the **driver console**, a **browser**
+(iframe), or **settings**. Terminals are driven by the `cols×rows` cell-budget;
+**non-terminal surfaces (driver · browser · settings) get a pixel box and render as
+normal responsive DOM — no tmux grid.**
+
+### Three "add" verbs — location + icon + result each encode the layer
+
+Never confusable, because each verb has a distinct gesture, glyph, and outcome:
+
+```
+ ① New PANE   (tmux)     →  ⊟ split in the region "⋯" menu (or tmux prefix-%)
+                            → thin tmux divider inside the window
+ ② New WINDOW (tmux)     →  [+] at the end of the region's tab strip
+                            → another tab
+ ③ New REGION (muxterm)  →  global "⋯" launcher (opens beside) OR drag a tab out
+                            → heavy ⋮-handled muxterm divider
+```
+
+Two **divider weights** make layout readable at a glance:
+
+```
+  thin  │     = tmux pane boundary   (Layer 1)
+  heavy ┃⋮    = muxterm region boundary, with grab handle  (Layer 2)
+```
+
+### Final chrome vocabulary
+
+```
+ TITLE BAR:  branding (left)  ···············  ⋯ global launcher (right)
+
+ REGION TAB STRIP  (VS Code-style, one per region):
+     [session ▾]  [ ⬡ editor ×  shell  logs ]  ·········  ⊡ maximize   ⋯ more
+       ^session picker      ^window tabs                    ^region controls
+
+ INSIDE REGION:  tmux panes (⊟ split) · drag dividers to resize
+
+ STATUS BAR:  ● session · window · pane ····· ◉ goal (driver active) · theme · N regions · ⟳
+```
+
+- **Session chip `▾`** = per-region **session picker**, the PRIMARY navigator: switch
+  this region's session · `+ new session`. (Switching a region's session updates its
+  window tabs.)
+- **Window tabs** = VS Code-style: active tab has a thin top accent line + a background
+  merging into the body ("connected"), a file-type icon + label + close `×`; a **dirty
+  dot** replaces `×` for a running/modified window.
+- **Region `⋯` more menu:** Split right · Split down · Pop out to window · Rename window
+  · Close region.
+- **Global `⋯` launcher** (title bar): New session · New browser · Open driver ·
+  Settings · Keyboard Shortcuts · Reconnect · About. New content opens **beside** the
+  focused region.
+
+### Spatial verbs — final, non-overlapping set
+
+```
+ ⊟ split       → more terminals here (same window)
+ open beside    → new region (via launcher, or drag a tab out)
+ ⧉ pop out     → separate OS window (multi-monitor)
+ ⊡ maximize    → focus one region
+```
+
+**"Open beside" clarified:** it means "show content in a NEW region beside the current
+one." It is **not** a standalone menu item (that was confusing and was removed from the
+session dropdown). New content opens beside via the **global launcher**; pulling an
+*existing* window into its own region is the **drag-tab-out** gesture.
+
+### Visual style
+
+VS Code tab/button language — flat seamless tabs (no cards), active tab top-accent
+connected to the body, flat borderless icon-buttons with hover background. Palette stays
+**Tokyo Night** (accent `#7aa2f7`). The **driver region** uses a **magenta accent
+(`#bb9af7`) + a slightly tinted background** to read as special / non-terminal.
+
+### Storyboard (each flow entered by a distinct intent)
+
+```
+  split            → "more terminals here"          (⊟ in region ⋯)
+  switch session   → session dropdown               ([session ▾])
+  open beside      → → dock, two regions            (global ⋯ launcher / drag tab out)
+  pop out          → → separate OS window           (⧉)
+  open driver      → → driver region + /goal        (global ⋯ → Open driver)
+```
+
+### Deployment modes — adaptive title bar
+
+```
+ BROWSER TAB  (baseline, ships first):
+     render an IN-PAGE title row (branding + ⋯). Costs one extra row, but it's
+     necessary — otherwise branding only lives in the browser tab title
+     (undiscoverable). This is the v1 baseline; works in every browser.
+
+ PWA + Window Controls Overlay  (DEFERRED — progressive enhancement, NOT v1):
+     same title content (branding + ⋯) painted into the OS window strip via
+     env(titlebar-area-*) + @media (display-mode: window-controls-overlay);
+     feature-detect with navigator.windowControlsOverlay.visible. Requires a web
+     manifest + display_override:["window-controls-overlay"] + installability.
+     The extra in-page row disappears in this mode. Layer it on later.
+```
 
 ---
 
@@ -464,7 +596,7 @@ The architecture **contains blast radius to a single surface** — the controlle
 
 ## Tradeoffs
 
-- **One-window-one-surface invariant (v1).** A tmux window has exactly one grid at one size; allowing the same window in two differently-sized surfaces is irreducible conflict. We forbid it in v1 (pop-out/float *moves* the surface). This is a deliberate simplification — the genuine two-separate-viewers case is handled by the shared-window policy knob, not by duplicating a window inside one workspace.
+- **One-window-one-surface invariant (v1).** A tmux window has exactly one grid at one size; allowing the same window in two differently-sized surfaces is irreducible conflict. We forbid it in v1 (pop-out *moves* the surface). This is a deliberate simplification — the genuine two-separate-viewers case is handled by the shared-window policy knob, not by duplicating a window inside one workspace.
 - **No backend versioning for resize.** We rely on eventual consistency (newest-wins + 5s self-heal) instead of a size-version protocol. Simpler; accepts ~1 frame of staleness during fast drags.
 - **Driver decoupled via tmux, not embedded.** Costs a process boundary and a capability-detection seam (Tier 1/2), buys portability (works from any terminal client) and swappability (someone can ship a different driver). Explicitly the right trade per the portability requirement.
 - **Config exposes muxterm knobs only.** No tmux passthrough means users can't tune tmux through muxterm — but it protects the load-bearing settings the whole sizing model depends on.
@@ -476,7 +608,7 @@ The architecture **contains blast radius to a single surface** — the controlle
 
 > **Decision: rip out the existing OCR verification currently hooked up** (the plan phase pins the exact files to delete). Replace it **entirely** with a 3-source model. No OCR anywhere.
 
-The verification harness is **build-early infrastructure** — it lands with or just before step 2 (the dock). It is the lifeline for hooking up panes: you do not re-parent panes (dock mount of N surfaces, divider-drag resize, float/pop-out) without it in hand. This makes the dangerous steps **self-verifying as you build them** — every re-parent is checked against tmux truth *and* browser reality, exactly where blank/dup/lost-content bugs hide.
+The verification harness is **build-early infrastructure** — it lands with or just before step 2 (the dock). It is the lifeline for hooking up panes: you do not re-parent panes (dock mount of N surfaces, divider-drag resize, pop-out) without it in hand. This makes the dangerous steps **self-verifying as you build them** — every re-parent is checked against tmux truth *and* browser reality, exactly where blank/dup/lost-content bugs hide.
 
 ### Three sources, each in its lane
 
@@ -545,7 +677,7 @@ The verification harness is **build-early infrastructure** — it lands with or 
                  (debounce · latest-wins · no-op when no cell boundary crossed) ·
                  surface lifecycle · config parse + override + malformed-fallback
   Playwright   — multi-session switch (step 1) · dock mount of N surfaces ·
-                 divider-drag resize propagation · float + pop-out ·
+                 divider-drag resize propagation · pop-out ·
                  responsive collapse
   Driver pkg   — own repo/tests; exercise the terminal-driving tool against a
                  REAL tmux server (terminal-tester bundle pattern)
@@ -565,7 +697,7 @@ Multi-session (step 1) is where the pool's dangerous paths get coverage **before
  1. Multi-session switch          cheapest pool consumer — proves the spine
     ── verification harness ──     build-early; lands with/just before step 2
  2. Layer-2 workspace + surfaces  the dock; tmux window = a surface
- 3. Float + pop-out presentation  CSS-scale primitive; window.open second OS window
+ 3. Pop-out presentation          no in-page float; CSS-scale primitive; window.open second OS window
  4. Driver console surface        muxterm-side integration only; Tier-1 only —
                                   render $driver tmux session as a surface +
                                   [driver] autostart/launch config. (Driver app
@@ -580,6 +712,8 @@ Each step is independently shippable. The verification harness is sequenced as e
 ```
   - concurrent multi-viewer on one session (multiple browser clients, one session)
   - MIRROR / FOLLOW / SOLO shared-window policy
+  - PWA installability + Window Controls Overlay title bar
+    (progressive enhancement; baseline is the in-page title row — see UX & Chrome)
 ```
 
 The device-agnostic seams (S2 client-pool-per-visible-surface, the grid-vs-fit
