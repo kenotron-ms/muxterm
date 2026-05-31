@@ -283,12 +283,6 @@ export class MuxSocket {
     }
   }
 
-  sendRaw(data: string): void {
-    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      this._ws.send(data);
-    }
-  }
-
   destroy(): void {
     this._intentionalClose = true;
     if (this._reconnectTimer !== undefined) {

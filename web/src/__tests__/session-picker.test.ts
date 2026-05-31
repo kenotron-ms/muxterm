@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import '../components/session-picker.js';
 import type { MuxSessionPicker } from '../components/session-picker.js';
-import type { SessionInfo } from '../components/session-picker.js';
+import type { SessionInfo } from '../types.js';
 
 function makeSessions(): SessionInfo[] {
   return [

@@ -2,9 +2,8 @@ import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { store, MuxStore } from './state.js';
 import { MuxSocket, buildWsUrl } from './ws.js';
-import type { TmuxState, Window } from './types.js';
+import type { TmuxState, Window, SessionInfo } from './types.js';
 import type { MuxLayout } from './components/layout.js';
-import type { SessionInfo } from './components/session-picker.js';
 import { terminalRegistry } from './lib/terminal-registry.js';
 
 // Side-effect imports — register child custom elements

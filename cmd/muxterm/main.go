@@ -679,24 +679,6 @@ func stripDCS(data []byte) []byte {
 	return result
 }
 
-// stripTrailingBlankLines removes lines that are entirely whitespace from
-// the end of capture-pane output. These are the blank viewport rows that
-// appear after the cursor row; writing them to the terminal causes extra
-// scroll events which displace the cursor below the actual prompt.
-func stripTrailingBlankLines(data []byte) []byte {
-	lines := bytes.Split(data, []byte("\n"))
-	end := len(lines)
-	for end > 0 && len(bytes.TrimRight(lines[end-1], " \t\r")) == 0 {
-		end--
-	}
-	if end == len(lines) {
-		return data
-	}
-	// Re-join with \n, preserving the final \n
-	result := bytes.Join(lines[:end], []byte("\n"))
-	return append(result, '\n')
-}
-
 // emptyTmuxState is the state broadcast when no tmux session is attached. The
 // empty (non-nil) Sessions slice marshals to `[]`, which the browser reads as
 // "no active session" and renders the create-session page.

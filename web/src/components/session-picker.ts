@@ -1,10 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-
-export interface SessionInfo {
-  name: string;
-  windows: number;
-}
+import type { SessionInfo } from '../types.js';
 
 @customElement('mux-session-picker')
 export class MuxSessionPicker extends LitElement {
