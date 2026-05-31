@@ -96,6 +96,12 @@ Two layout authorities, nested, with a hard boundary. They communicate through *
 
   The dock arranges surfaces into regions, tabs, floats, and popped-out OS windows.
 
+> **Non-terminal surface sizing:** a non-terminal surface (driver console, session
+> tree, future iframe) mounts in a dock slot like any surface, but it is **NOT**
+> driven by the `cols×rows` cell-budget handoff. It simply gets a **pixel box** and
+> renders as normal responsive DOM — there is no tmux grid behind it. The
+> cell-budget contract applies only to terminal (tmux-window) surfaces.
+
 **The contract:** tmux splits *panes within a window*; muxterm arranges *windows-as-surfaces + non-terminal panels within a workspace*. Neither crosses the line. muxterm never re-splits a tmux window; tmux never knows where its window is shown.
 
 **Why this is low-risk — it generalizes shipped code:**
@@ -165,6 +171,14 @@ The shared grid lives in tmux. **How each viewer presents that grid in its own p
 
 ### Foundation: multi-viewer / shared-window policy
 
+> **DESIGNED-FOR, NOT BUILT IN v1.** Concurrent multi-client support and the
+> MIRROR/FOLLOW/SOLO policy are **not implemented in steps 0–5**. This section
+> exists to keep the door open: the device-agnostic seams — **S2** (client pool
+> per visible surface) and the **grid-vs-fit CSS-scale primitive** — preserve the
+> ability to add it as a future increment without rework. v1 assumes a single
+> viewer per session view (see *Clarification: backend control clients vs browser
+> clients*). Treat everything below as forward-looking design, not v1 build work.
+
 Two **separate** viewers on the same session at different sizes (desktop + phone, or two people pairing) is the genuine tmux multi-client problem.
 
 **The physics you can't beat:**
@@ -223,6 +237,17 @@ tmux's `window-size` option (`smallest` / `largest` / `latest`) plus `aggressive
 
 The pool of 1 renders the current single surface **identically** — this step ships invisibly.
 
+> **Clarification: backend control clients vs browser clients.** The spine
+> refactor is about **N tmux control clients on the BACKEND↔tmux side** — one
+> `tmux -CC` per visible surface — **not** about N concurrent BROWSER↔server
+> WebSocket clients. v1 assumes a **single browser client (one viewer) per
+> session view**: step 1 multi-session is *one user switching which surface is
+> shown* over the existing single WebSocket, and step 2's dock is *one browser*
+> driving several backend control clients at once. Concurrent **multiple browser
+> viewers on one session** is the deferred multi-viewer feature (see *Foundation:
+> multi-viewer* and *Rollout: Deferred*). Backend-client fan-out ≠ browser-client
+> fan-out.
+
 ### Multi-session (step 1 — proves the pool)
 
 ```
@@ -257,6 +282,20 @@ Both use the **grid-vs-fit scale primitive**: moving a surface to a float or pop
 ### Driver (step 4) — standalone agentic TUI on Amplifier
 
 The driver is **not embedded in muxterm's Go backend.** It is a separate Amplifier-foundation TUI app (Python) running inside a **dedicated tmux session** (`$driver`), surfaced by muxterm as a normal Layer-2 surface. The "driver console surface" is just muxterm rendering this agent-TUI's tmux pane — exactly like it renders vim. It is built *on* Amplifier but is explicitly **not** amplifier-app-cli.
+
+> **SCOPE BOUNDARY — what this plan builds vs. documents.** This plan implements
+> **ONLY the muxterm-side integration**: render the `$driver` tmux session as a
+> normal Layer-2 surface, plus the optional `[driver] autostart` / `launch`
+> config. The standalone driver **application package** (`muxterm-agent` /
+> `amplifier-app-muxterm`) is a **SEPARATE plan/repo**. Everything below about the
+> embedding contract, the 7-step lifecycle, the orchestrator, the protocol seams,
+> the goal/evaluator loop, and the custom tool module is recorded here as
+> **context / interface contract — NOT as in-scope build work for this plan.**
+>
+> **Step 4 ships Tier-1 only.** The driver renders as a surface and drives via
+> global tmux pane IDs (pure tmux). **Tier-2** (`MUXTERM_CTL` Layer-2 surface
+> manipulation) is **out of this plan's critical path** — it is already an Open
+> Question, and step 4 is shippable Tier-1-only without it.
 
 ```
         ┌─────────────────────────────────────────────────────┐
@@ -341,11 +380,13 @@ Launch `$driver` from iTerm2 and you get the full agentic driver over your tmux 
   [workspace]  default_presentation = "docked"   # docked | float | single
                rails = ["sessions"]              # which Layer-2 rails show
   [driver]     autostart = false                 # spawn $driver session on boot
-               shared_window_policy = "follow"   # mirror | follow | solo
+               shared_window_policy = "follow"   # reserved — multi-viewer is post-v1 (mirror | follow | solo)
                launch = "muxterm-agent"          # the binary to run in $driver
 ```
 
 **Non-goals (explicit):** no tmux-passthrough, no hot-reload in v1, no per-pane overrides. Malformed config → fall back to hardcoded defaults, log a warning, run.
+
+**Keybinding timing:** the `[keys]` actions (`toggle_dock`, `float_pane`, `focus_driver`) are **bound as their features land** (steps 2–4) with sensible hardcoded defaults — they don't wait for step 5. Step 5 only *formalizes* them into the config file (makes the defaults overridable).
 
 ### UI polish (step 5 — last)
 
@@ -505,9 +546,12 @@ The verification harness is **build-early infrastructure** — it lands with or 
                  surface lifecycle · config parse + override + malformed-fallback
   Playwright   — multi-session switch (step 1) · dock mount of N surfaces ·
                  divider-drag resize propagation · float + pop-out ·
-                 shared-window policy (mirror / follow / solo) · responsive collapse
+                 responsive collapse
   Driver pkg   — own repo/tests; exercise the terminal-driving tool against a
                  REAL tmux server (terminal-tester bundle pattern)
+
+  Deferred (lands with multi-viewer, NOT v1):
+               — shared-window policy (mirror / follow / solo) Playwright coverage
 ```
 
 Multi-session (step 1) is where the pool's dangerous paths get coverage **before** the dock builds on them.
@@ -522,11 +566,25 @@ Multi-session (step 1) is where the pool's dangerous paths get coverage **before
     ── verification harness ──     build-early; lands with/just before step 2
  2. Layer-2 workspace + surfaces  the dock; tmux window = a surface
  3. Float + pop-out presentation  CSS-scale primitive; window.open second OS window
- 4. Driver console surface        agentic TUI in a dedicated tmux session ($driver)
+ 4. Driver console surface        muxterm-side integration only; Tier-1 only —
+                                  render $driver tmux session as a surface +
+                                  [driver] autostart/launch config. (Driver app
+                                  package itself = separate plan/repo.)
  5. UI polish + config            woven through; polish sequenced last
 ```
 
 Each step is independently shippable. The verification harness is sequenced as enabling infrastructure for the pane work in steps 2–3.
+
+### Deferred (seams preserved, NOT in steps 0–5)
+
+```
+  - concurrent multi-viewer on one session (multiple browser clients, one session)
+  - MIRROR / FOLLOW / SOLO shared-window policy
+```
+
+The device-agnostic seams (S2 client-pool-per-visible-surface, the grid-vs-fit
+CSS-scale primitive) keep the door open for these without rework; they are a
+future increment, not v1.
 
 ---
 
