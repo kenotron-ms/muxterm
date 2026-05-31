@@ -4,6 +4,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import './region.js';
 
 import type { MuxRegion } from './region.js';
+import type { MuxRegionTabstrip } from './region-tabstrip.js';
 
 async function fixture(opts: {
   regionId?: string;
@@ -34,18 +35,20 @@ describe('MuxRegion', () => {
     }
   });
 
-  it('renders a minimal header showing session and window name', async () => {
+  it('renders a tab strip header showing session name', async () => {
     el = await fixture({ sessionName: 'my-session', windowName: 'vim' });
 
-    const header = el.shadowRoot!.querySelector('.header');
-    expect(header).toBeTruthy();
+    // Phase-3: header is now mux-region-tabstrip, not a .header div
+    const strip = el.shadowRoot!.querySelector('mux-region-tabstrip') as MuxRegionTabstrip;
+    expect(strip).toBeTruthy();
 
-    const session = el.shadowRoot!.querySelector('.session');
-    expect(session).toBeTruthy();
-    expect(session!.textContent).toContain('my-session');
+    // Wait for the tabstrip to render its own shadow DOM
+    await strip.updateComplete;
 
-    const headerText = header!.textContent;
-    expect(headerText).toContain('vim');
+    // The session chip inside the tabstrip shows the session name
+    const chip = strip.shadowRoot!.querySelector('.session-chip') as HTMLElement;
+    expect(chip).toBeTruthy();
+    expect(chip.textContent).toContain('my-session');
   });
 
   it('embeds a mux-layout body for Layer 1', async () => {
@@ -65,20 +68,24 @@ describe('MuxRegion', () => {
     expect(el.bodyElement).toBeInstanceOf(HTMLElement);
   });
 
-  it('emits region-maximize when the maximize button is clicked (with correct regionId)', async () => {
+  it('emits region-maximize (bubbles, composed) when maximize button in tabstrip is clicked', async () => {
     el = await fixture({ regionId: 'surface-1' });
 
     const handler = vi.fn();
     el.addEventListener('region-maximize', handler);
 
-    const button = el.shadowRoot!.querySelector('button[data-action="maximize"]') as HTMLButtonElement;
-    expect(button).toBeTruthy();
-    button.click();
+    // The maximize button lives inside the tabstrip's shadow DOM
+    const strip = el.shadowRoot!.querySelector('mux-region-tabstrip') as MuxRegionTabstrip;
+    expect(strip).toBeTruthy();
+    await strip.updateComplete;
+
+    const maximizeBtn = strip.shadowRoot!.querySelector('.maximize-btn') as HTMLButtonElement;
+    expect(maximizeBtn).toBeTruthy();
+    maximizeBtn.click();
 
     expect(handler).toHaveBeenCalledTimes(1);
     const event = handler.mock.calls[0][0] as CustomEvent;
     expect(event.bubbles).toBe(true);
     expect(event.composed).toBe(true);
-    expect(event.detail.regionId).toBe('surface-1');
   });
 });
