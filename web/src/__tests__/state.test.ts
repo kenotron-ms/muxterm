@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createInitialState, MuxStore } from '../state';
 import type { ServerMessage, TmuxState } from '../types';
+import { DEFAULT_RESOLVED_CONFIG, parseResolvedConfig } from '../lib/config';
 
 describe('MuxStore', () => {
   it('starts with empty initial state', () => {
@@ -187,5 +188,24 @@ describe('MuxStore', () => {
 
     expect(store.state.sessions[0].windows).toHaveLength(1);
     expect(store.state.sessions[0].windows[0].name).toBe('keep');
+  });
+
+  describe('config', () => {
+    it('store.config equals DEFAULT_RESOLVED_CONFIG before any config frame', () => {
+      const store = new MuxStore();
+      expect(store.config).toEqual(DEFAULT_RESOLVED_CONFIG);
+    });
+
+    it('setConfig updates config and notifies listeners', () => {
+      const store = new MuxStore();
+      const listener = vi.fn();
+      store.subscribe(listener);
+
+      const cfg = parseResolvedConfig({ theme: { palette: 'gruvbox' } });
+      store.setConfig(cfg);
+
+      expect(store.config.theme.palette).toBe('gruvbox');
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
   });
 });

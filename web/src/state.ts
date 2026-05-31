@@ -1,4 +1,5 @@
 import type { ServerMessage, TmuxState, SessionInfo } from './types';
+import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from './lib/config.js';
 
 export function createInitialState(): TmuxState {
   return {
@@ -13,6 +14,7 @@ export class MuxStore {
   private _state: TmuxState = createInitialState();
   private _sessionList: SessionInfo[] = [];
   private _listeners: Set<() => void> = new Set();
+  private _config: ResolvedConfig = DEFAULT_RESOLVED_CONFIG;
 
   get state(): TmuxState {
     return this._state;
@@ -20,6 +22,15 @@ export class MuxStore {
 
   get sessionList(): SessionInfo[] {
     return this._sessionList;
+  }
+
+  get config(): ResolvedConfig {
+    return this._config;
+  }
+
+  setConfig(cfg: ResolvedConfig): void {
+    this._config = cfg;
+    this._notify();
   }
 
   subscribe(cb: () => void): () => void {

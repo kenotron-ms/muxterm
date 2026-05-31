@@ -4,7 +4,8 @@ import { store, MuxStore } from './state.js';
 import { MuxSocket, buildWsUrl } from './ws.js';
 import type { TmuxState, Window, SessionInfo } from './types.js';
 import type { MuxLayout } from './components/layout.js';
-import { terminalRegistry } from './lib/terminal-registry.js';
+import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
+import { parseResolvedConfig } from './lib/config.js';
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
@@ -360,6 +361,11 @@ export class MuxApp extends LitElement {
       const detached = msg.detached as { reason?: string };
       this._showReconnectOverlay = true;
       this._reconnectMessage = detached.reason ?? 'Disconnected';
+    }
+    if ('config' in msg) {
+      const cfg = parseResolvedConfig(msg['config']);
+      store.setConfig(cfg);
+      configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
     }
   };
 
