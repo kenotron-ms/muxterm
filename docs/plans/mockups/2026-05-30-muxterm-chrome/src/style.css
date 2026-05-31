@@ -1,0 +1,94 @@
+:root{
+  --bg:#1a1b26; --bgdark:#16161e; --panel:#1f2335; --border:#2a2e3f;
+  --fg:#c0caf5; --dim:#565f89; --blue:#7aa2f7; --cyan:#7dcfff; --green:#9ece6a;
+  --mag:#bb9af7; --red:#f7768e; --orange:#ff9e64; --yellow:#e0af68; --sel:#283457;
+  /* VS Code-style tab + button tokens (Tokyo Night-tinted) */
+  --tabbar:#1b1c28; --tabinact:#22232f; --tabsep:#14151d; --tabdim:#6b73a0;
+  --icon:#a9b1d6; --btnhover:#2a2d40; --accent:#7aa2f7;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0e14;font-family:"Segoe UI",-apple-system,system-ui,sans-serif;
+  display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+.app{width:1240px;height:752px;background:var(--bg);border:1px solid var(--border);
+  border-radius:12px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.6);display:flex;flex-direction:column}
+.title{height:34px;background:var(--bgdark);display:flex;align-items:center;padding:0 14px;gap:8px;border-bottom:1px solid var(--tabsep)}
+.dot{width:12px;height:12px;border-radius:50%}
+.dot.r{background:#f7768e}.dot.y{background:#e0af68}.dot.g{background:#9ece6a}
+.title .name{color:var(--dim);font-size:12px;margin-left:10px}
+.mono{font-family:"SF Mono",Menlo,Consolas,monospace}
+/* workspace bar (app level) — flat icon buttons */
+.wbar{height:38px;display:flex;align-items:center;gap:2px;padding:0 8px;background:var(--bgdark);border-bottom:1px solid var(--tabsep)}
+.wbar .ses{color:var(--fg);font-size:13px;padding:0 8px;display:flex;align-items:center;gap:6px}
+.wbar .ses .car{color:var(--dim);font-size:10px}
+.wbar .spacer{flex:1}
+.ibtn{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;color:var(--icon);
+  border-radius:5px;font-size:15px;background:transparent}
+.ibtn.hover{background:var(--btnhover)}
+.ibtn.wide{width:auto;padding:0 9px;font-size:12.5px;gap:6px}
+.ibtn.wide .car{color:var(--dim);font-size:9px}
+/* body / regions */
+.body{flex:1;display:flex;overflow:hidden}
+.region{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+/* VS Code tab strip */
+.rtabs{height:36px;display:flex;align-items:stretch;background:var(--tabbar);border-bottom:1px solid var(--tabsep)}
+.schip{display:flex;align-items:center;gap:6px;padding:0 12px;font-size:12.5px;color:var(--fg);background:var(--bgdark);border-right:1px solid var(--tabsep)}
+.schip .car{color:var(--dim);font-size:9px}
+.schip.driver{color:var(--mag)}
+.vtab{display:flex;align-items:center;gap:7px;padding:0 8px 0 12px;font-size:13px;color:var(--tabdim);
+  background:var(--tabinact);border-right:1px solid var(--tabsep);position:relative;cursor:default}
+.vtab.active{background:var(--bg);color:var(--fg)}
+.vtab.active::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent)}
+.vtab .ic{width:13px;height:13px;border-radius:3px;flex:none}
+.ic.go{background:#7dcfff}.ic.sh{background:#9ece6a}.ic.log{background:#565f89}.ic.run{background:#e0af68}
+.vtab .x{margin-left:6px;width:17px;height:17px;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:4px;color:transparent;font-size:13px}
+.vtab.active .x{color:var(--dim)}
+.vtab .x.hover{background:var(--btnhover);color:var(--fg)}
+.vtab .dirty{margin-left:6px;width:8px;height:8px;border-radius:50%;background:var(--fg)}
+.rtabs .spacer{flex:1;background:var(--tabbar);border-bottom:1px solid var(--tabsep)}
+.rtabs .ctls{display:flex;align-items:center;gap:1px;padding:0 4px;background:var(--tabbar);border-bottom:1px solid var(--tabsep)}
+.rtabs .ibtn{width:26px;height:26px;align-self:center;font-size:13px}
+/* terminal */
+.term{flex:1;padding:10px 12px;font-family:"SF Mono",Menlo,monospace;font-size:12.5px;line-height:1.55;color:var(--fg);white-space:pre-wrap;overflow:hidden}
+.pane-split{display:flex;flex:1;min-height:0}
+.pane{flex:1;display:flex;flex-direction:column;min-width:0}
+.vdiv{width:1px;background:var(--border)}
+.rdiv{width:6px;background:var(--bgdark);display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:12px}
+.rdiv::after{content:"\22ee"}
+/* status */
+.sbar{height:24px;background:var(--bgdark);border-top:1px solid var(--tabsep);display:flex;align-items:center;padding:0 12px;gap:8px;font-size:11.5px;color:var(--dim)}
+.sbar .live{color:var(--green)}.sbar .seg{color:var(--fg)}.sbar .spacer{flex:1}.sbar .goal{color:var(--mag)}
+/* syntax tokens */
+.k{color:var(--mag)}.s{color:var(--green)}.c{color:var(--dim)}.fn{color:var(--blue)}
+.ty{color:var(--cyan)}.nu{color:var(--orange)}.er{color:var(--red)}.ok{color:var(--green)}
+.cur{background:var(--fg);color:var(--bg)}
+
+/* ---- baseline (today) simple tab bar ---- */
+.tabbar0{height:40px;display:flex;align-items:flex-end;gap:3px;padding:7px 10px 0;background:var(--bg);border-bottom:1px solid var(--border)}
+.tab{padding:7px 13px;border-radius:6px 6px 0 0;font-size:13px;color:var(--dim);background:transparent}
+.tab.active{color:var(--fg);background:var(--panel);border:1px solid var(--border);border-bottom:none}
+.plus{color:var(--dim);padding:7px 9px;font-size:14px}
+/* ---- session dropdown menu ---- */
+.schip{position:relative}
+.schip.open{background:var(--panel)}
+.menu{position:absolute;top:36px;left:0;background:var(--bgdark);border:1px solid var(--border);border-radius:9px;
+  padding:5px;min-width:208px;box-shadow:0 18px 46px rgba(0,0,0,.6);z-index:20;font-size:13px;font-family:"Segoe UI",system-ui,sans-serif}
+.mi{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:var(--fg)}
+.mi.sel{background:var(--sel)}
+.mi.dim{color:var(--dim)}
+.mi .ck{width:14px;color:var(--green);font-size:12px}
+.mi .dotm{width:9px;height:9px;border-radius:50%}
+.menu .sep{height:1px;background:var(--border);margin:5px 6px}
+.mi .kbd{margin-left:auto;color:var(--dim);font-size:11px}
+
+/* ---- title-bar global control + right-aligned menus ---- */
+.title .spacer{flex:1}
+.title .ibtn{width:26px;height:26px;font-size:15px}
+.ctls{position:relative}
+.menu.right{left:auto;right:4px}
+.mi .mic{width:16px;color:var(--icon);font-size:13px;text-align:center}
+.mi.danger{color:var(--red)}
+
+/* ---- title-bar launcher menu anchor ---- */
+.title .ctls{position:relative;display:flex;align-items:center}
+.title .menu{top:30px}

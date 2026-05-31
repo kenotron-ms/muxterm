@@ -1,0 +1,50 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body>
+<div class="app">
+  <div class="title"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><span class="name mono">muxterm</span><span class="spacer"></span><div class="ibtn">⋯</div></div>
+  <div class="body">
+    <div class="region">
+      <div class="rtabs">
+        <div class="schip">work <span class="car">▾</span></div>
+        <div class="vtab active"><span class="ic go"></span>editor<span class="x">×</span></div>
+        <div class="vtab"><span class="ic sh"></span>shell<span class="x">×</span></div>
+        <div class="vtab"><span class="ic log"></span>logs<span class="x">×</span></div>
+        <div class="spacer"></div>
+        <div class="ctls"><div class="ibtn">⊡</div><div class="ibtn hover">⋯</div>
+          <div class="menu right" style="top:32px">
+            <div class="mi"><span class="mic">⊟</span><span>Split right</span><span class="kbd">⌃⇧\</span></div>
+            <div class="mi"><span class="mic">⊟</span><span>Split down</span></div>
+            <div class="sep"></div>
+            <div class="mi"><span class="mic">⧉</span><span>Pop out to window</span></div>
+            <div class="mi"><span class="mic">✎</span><span>Rename window…</span></div>
+            <div class="sep"></div>
+            <div class="mi danger"><span class="mic">×</span><span>Close region</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="pane-split">
+        <div class="pane"><div class="term"><span class="c">  5 </span><span class="k">func</span> <span class="fn">main</span>() {
+<span class="c">  6 </span>    fmt.<span class="fn">Println</span>(<span class="s">"hello"</span>)
+<span class="c">  7 </span>}<span class="cur"> </span>
+</div></div>
+        <div class="vdiv"></div>
+        <div class="pane"><div class="term">$ go build ./...
+$ <span class="cur"> </span>
+</div></div>
+      </div>
+    </div>
+    <div class="rdiv"></div>
+    <div class="region">
+      <div class="rtabs">
+        <div class="schip">agents <span class="car">▾</span></div>
+        <div class="vtab active"><span class="ic log"></span>logs<span class="x">×</span></div>
+        <div class="spacer"></div>
+        <div class="ctls"><div class="ibtn">⊡</div><div class="ibtn">⋯</div></div>
+      </div>
+      <div class="term"><span class="c">12:04:27</span> <span class="ok">INFO</span>  job#88 ok
+$ tail -f run.log<span class="cur"> </span>
+</div>
+    </div>
+  </div>
+  <div class="sbar"><span class="live">●</span><span class="seg">work</span><span>·</span><span>editor</span><span class="spacer"></span><span>tokyo-night · 2 regions · ⟳</span></div>
+</div>
+</body></html>

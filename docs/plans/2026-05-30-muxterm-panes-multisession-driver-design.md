@@ -540,6 +540,34 @@ connected to the body, flat borderless icon-buttons with hover background. Palet
      The extra in-page row disappears in this mode. Layer it on later.
 ```
 
+### Visual reference
+
+These are the validated look-and-feel references from the interactive mockup session. Editable HTML/CSS sources live in `mockups/2026-05-30-muxterm-chrome/src/`.
+
+![Baseline (today): simple window tabs + a tmux split, minimal chrome.](mockups/2026-05-30-muxterm-chrome/1-current.png)
+
+**Baseline (today):** simple window tabs + a tmux split, minimal chrome.
+
+![Dock: two sessions side-by-side; VS Code-style per-region tab strips; heavy ⋮-handled region divider.](mockups/2026-05-30-muxterm-chrome/2-dock.png)
+
+**Dock:** two sessions side-by-side; VS Code-style per-region tab strips; heavy ⋮-handled region divider.
+
+![Driver region: agent TUI (goal · tool steps · approval gate); magenta accent; it is a terminal surface.](mockups/2026-05-30-muxterm-chrome/3-driver.png)
+
+**Driver region:** agent TUI (goal · tool steps · approval gate); magenta accent; it is a terminal surface.
+
+![Session picker: the per-region work ▾ dropdown (primary navigator) — switch session / new session.](mockups/2026-05-30-muxterm-chrome/4-sessions.png)
+
+**Session picker:** the per-region `work ▾` dropdown (primary navigator) — switch session / new session.
+
+![Region ⋯ menu: Split right/down · Pop out · Rename · Close (Float removed).](mockups/2026-05-30-muxterm-chrome/5-more.png)
+
+**Region "⋯" menu:** Split right/down · Pop out · Rename · Close (Float removed).
+
+![Global ⋯ launcher: New session/browser · Open driver · Settings · Shortcuts · Reconnect · About.](mockups/2026-05-30-muxterm-chrome/6-launcher.png)
+
+**Global "⋯" launcher:** New session/browser · Open driver · Settings · Shortcuts · Reconnect · About.
+
 ---
 
 ## Data & Control Flows
