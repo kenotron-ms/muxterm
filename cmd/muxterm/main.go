@@ -191,11 +191,13 @@ func runWithGracefulShutdown(srv *server.Server) error {
 	return srv.ListenAndServe(ctx)
 }
 
-// periodicStateSync pushes the live tmux state to all connected clients every 5s.
+// periodicStateSync pushes the live tmux state to all connected clients every 2s.
 // Using LiveState() (direct tmux query) ensures the browser always converges to
 // ground truth even if %window-close or other structural events were dropped.
+// This is the accuracy safety net; the coalescer uses the faster in-memory State()
+// for event-driven updates, so 2s here is a sufficient catchup interval.
 func periodicStateSync(ctx context.Context, engine server.TmuxEngine, hub *server.Hub) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
@@ -789,9 +791,12 @@ func startSession(ctx context.Context, pool *controllerPool, hub *server.Hub, sy
 // authoritative state push. tmux emits several events for one logical action
 // (e.g. new-window → window-add + layout-change + session-window-changed); rather
 // than send each as a fragile incremental delta, we wait a short quiet period and
-// then push ONE full snapshot queried live from tmux. The browser reconciles
-// idempotently, so it always converges to ground truth — no partial data, no
-// duplicates, no event-ordering hazards.
+// then push ONE full snapshot from the in-memory TmuxState. The event handlers
+// (ApplyLayoutChange, ApplyWindowAdd, etc.) have already updated the in-memory
+// state before trigger() fires, so no subprocess round-trip is needed here.
+// The periodic sync (periodicStateSync) uses LiveState() as the accuracy safety net.
+// The browser reconciles idempotently — no partial data, no duplicates, no
+// event-ordering hazards.
 type stateSyncCoalescer struct {
 	engine server.TmuxEngine
 	hub    *server.Hub
@@ -804,19 +809,19 @@ func newStateSyncCoalescer(engine server.TmuxEngine, hub *server.Hub) *stateSync
 }
 
 // trigger schedules an authoritative state push, coalescing rapid calls into one.
+// Uses the in-memory state (engine.State()) — no subprocess cost. Event handlers
+// have already applied the structural change before trigger() is called, so the
+// snapshot is accurate. LiveState() (subprocess-backed) is reserved for the
+// periodic safety-net sync in periodicStateSync.
 func (c *stateSyncCoalescer) trigger() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.timer != nil {
 		c.timer.Stop()
 	}
-	c.timer = time.AfterFunc(40*time.Millisecond, func() {
-		state, err := c.engine.LiveState()
-		if err != nil {
-			log.Printf("stateSync: live query failed: %v", err)
-			return
-		}
-		c.hub.BroadcastEvent("state", state)
+	c.timer = time.AfterFunc(10*time.Millisecond, func() {
+		// Use in-memory state — no subprocess cost, already updated by event handlers.
+		c.hub.BroadcastEvent("state", c.engine.State())
 	})
 }
 
