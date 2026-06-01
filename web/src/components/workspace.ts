@@ -57,6 +57,13 @@ export class MuxWorkspace extends LitElement {
    */
   @state() private _optimisticWindows = new Map<string, number>();
 
+  /**
+   * Optimistic window rename: records the name the user just typed before the
+   * server round-trip completes. Keyed by windowId.
+   * Cleared when the server confirms a tmuxState update containing that window.
+   */
+  @state() private _optimisticWindowNames = new Map<number, string>();
+
   // Two-clock plumbing: ResizeObserver → budget → coalescer → resize-surface event
 
   private _coalescer = new ResizeCoalescer((surfaceId, budget) => {
@@ -257,10 +264,15 @@ export class MuxWorkspace extends LitElement {
     const win = this._findWindow(region.surface.sessionName, windowId);
     const newName = window.prompt('Rename window:', win?.name ?? '');
     if (newName !== null && newName.trim() !== '') {
+      const trimmed = newName.trim();
+      // Optimistically show the new name immediately before server confirms.
+      this._optimisticWindowNames = new Map(
+        this._optimisticWindowNames.set(windowId, trimmed)
+      );
       this.dispatchEvent(new CustomEvent('rename-window', {
         bubbles: true,
         composed: true,
-        detail: { windowId, name: newName.trim() },
+        detail: { windowId, name: trimmed },
       }));
     }
   }
@@ -332,6 +344,23 @@ export class MuxWorkspace extends LitElement {
       }
       if (changed) this._optimisticWindows = next;
     }
+
+    // Clear optimistic window renames once the server has confirmed a
+    // tmuxState update containing the affected window — server is now authoritative.
+    if (changedProperties.has('tmuxState') && this.tmuxState && this._optimisticWindowNames.size > 0) {
+      const next = new Map(this._optimisticWindowNames);
+      let changed = false;
+      for (const [windowId] of next) {
+        for (const session of this.tmuxState.sessions) {
+          const win = session.windows.find((w) => w.id === windowId);
+          if (win) {
+            next.delete(windowId);
+            changed = true;
+          }
+        }
+      }
+      if (changed) this._optimisticWindowNames = next;
+    }
   }
 
   /** Returns the character-cell dimensions for a surface.
@@ -343,6 +372,12 @@ export class MuxWorkspace extends LitElement {
   private _renderRegion(region: Region) {
     // All windows for this session — shown in the per-region tab strip.
     const sessionWindows = this._sessionWindows(region.surface.sessionName);
+    // Apply any pending optimistic renames so the tab label updates instantly.
+    const windowsForDisplay = sessionWindows.map((w) =>
+      this._optimisticWindowNames.has(w.id)
+        ? { ...w, name: this._optimisticWindowNames.get(w.id)! }
+        : w
+    );
     // The active (focused) window for this session — used for BOTH the tab highlight
     // AND the layout/pane content rendered in the body. Computing this FIRST ensures
     // that clicking a tab updates the displayed terminal, not just the active indicator.
@@ -368,7 +403,7 @@ export class MuxWorkspace extends LitElement {
           .windowName="${windowName}"
           .layoutString="${layoutString}"
           .activePaneId="${activePaneId}"
-          .windows="${sessionWindows}"
+          .windows="${windowsForDisplay}"
           .activeWindowId="${sessionActiveWindowId}"
           .sessions="${sessions}"
           .activeSession="${activeSession}"
