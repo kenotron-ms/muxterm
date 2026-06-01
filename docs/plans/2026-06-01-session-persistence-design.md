@@ -1,0 +1,355 @@
+# muxterm Session Persistence & Multiplexing Re-Architecture Design
+
+## Goal
+
+Re-architect how muxterm keeps terminal sessions alive: move from *"tmux is the
+multiplexer, driven via control mode (`-CC`), and the web renders tmux's layout"*
+to *"the browser **is** the multiplexer, and a small, dumb Go daemon keeps PTYs +
+scrollback alive."*
+
+**North-star success criterion:** the end-to-end, user-perceived
+session-create feel must be as fast as possible. The current control-mode
+`new-window` handshake latency is the specific pain this design eliminates.
+
+## Background
+
+Source research notes: [`docs/research/session-persistence.md`](../research/session-persistence.md)
+
+### Current state (confirmed by codebase survey)
+
+- muxterm is **pure Go + TypeScript/Lit**. There is no Python, no FastAPI, and no
+  AGENTS.md — so the research doc's "Go vs Python discrepancy" open question is
+  moot and dropped.
+- Today muxterm runs `tmux -CC attach-session` over a PTY (`creack/pty`).
+  Server-side tmux drives panes/windows/splits (`split-window`, `new-window`,
+  `kill-pane`, `refresh-client -C`), with `history-limit 10000` and per-pane
+  scrollback replay via `capture-pane -e -S -10000`.
+- The client already runs **one xterm.js per pane** (`web/src/lib/terminal-registry.ts`),
+  and there is existing binary WebSocket framing: `[4-byte LE paneID][data]`.
+
+### Why this pivot is the only honest path
+
+The key realization that justifies the whole effort: **you cannot drop control
+mode while keeping tmux as the multiplexer.** The `-CC` protocol exists precisely
+to drive tmux's multiplexing. Therefore "kill the latency" and "make the browser
+the multiplexer" are not two decisions — they are the same decision.
+
+Prior art validates the two-process backbone: `zellij web` also runs a long-lived
+session server that owns PTYs/state plus a separate web server that bridges
+browser WebSockets to it. The difference is that Zellij multiplexes **server-side**
+and ships rendered frames, which would require us to *build* a server-side
+compositor + VT render engine. muxterm already renders client-side (one xterm.js
+per pane), so the browser-as-multiplexer model is strictly **less** work for us.
+
+## Approach
+
+**Approach A — a custom Go persistence daemon with a hand-rolled "Level 1"
+scrollback buffer.**
+
+Rejected alternatives:
+
+- **tmux-plain stripped to a keepalive** — keeps a tmux dependency the user is
+  scarred by.
+- **abduco/dtach as a keepalive kernel** — adds a C dependency and introduces a
+  restart-window history gap.
+- **Zellij-style server-side multiplexing** — requires building a server-side
+  compositor + full VT render engine; more work, not less.
+
+`charmbracelet/x/vt` is explicitly held **in reserve** as a swappable "Level 2"
+buffer implementation, to be adopted only if Level-1 fidelity ever proves
+insufficient. It is **not** adopted now (it is experimental / pre-1.0).
+
+## Architecture
+
+### Lifetime model
+
+Two-process runtime connected by a Unix socket:
+
+- **`muxterm serve`** — HTTP + WebSocket, stateless, restarts often.
+- **`muxterm sessiond`** — long-lived daemon owning all PTYs + buffers.
+
+```
+        ┌──────────────────────────────────────────────────────────┐
+        │ browser (THE multiplexer)                                  │
+        │  ├─ owns layout / arrangement                              │
+        │  └─ one xterm.js per pane                                  │
+        └───────────────▲───────────────────────────────────────────┘
+                        │  WebSocket: existing binary framing
+                        │  [4-byte LE paneID][data]
+        ┌───────────────▼───────────────────────────────────────────┐
+        │ muxterm serve   (stateless, restarts often)                │
+        │  └─ thin relay/translator, holds NO terminal state         │
+        └───────────────▲───────────────────────────────────────────┘
+                        │  Unix socket: length-prefixed frames
+                        │  $XDG_RUNTIME_DIR/muxterm/sessiond.sock
+        ┌───────────────▼───────────────────────────────────────────┐
+        │ muxterm sessiond  (long-lived, owns PTYs + buffers)        │
+        │  ├─ Registry: panes + workspaces                           │
+        │  ├─ Pane = 1 PTY + RingBuffer + ModeTracker + subscribers  │
+        │  └─ SocketServer                                           │
+        └────────────────────────────────────────────────────────────┘
+```
+
+Key properties:
+
+- The **browser is THE multiplexer** and owns layout. tmux, control mode, and all
+  server-side `split-window` / `new-window` / `refresh-client` logic are **deleted**.
+- One PTY = one rectangle. Create = fork a PTY (sub-millisecond, zero handshake).
+  This meets the create-latency north star **by construction**.
+- The daemon replaces tmux's persistence role. The separate-service model
+  sidesteps the fiddly per-session daemonization/reparenting. Net process count is
+  unchanged versus today (the tmux server is swapped for `sessiond`).
+- `serve ↔ browser` keeps the **existing** binary WebSocket framing.
+
+### One binary, two roles: lifecycle & restart survival
+
+A single binary exposes two roles/subcommands: `muxterm sessiond` and
+`muxterm serve`. The daemon listens on `$XDG_RUNTIME_DIR/muxterm/sessiond.sock`.
+
+```
+muxterm serve            # web role (ephemeral)
+  └─ on start: is the daemon socket live?
+       ├─ yes → connect
+       └─ no  → spawn `muxterm sessiond`, detach, then connect
+
+muxterm sessiond         # daemon role (long-lived, owns PTYs + buffers)
+  └─ listens on $XDG_RUNTIME_DIR/muxterm/sessiond.sock
+```
+
+**Auto-spawn (the abduco trick):** when `serve` finds a dead socket, it launches
+`sessiond` via `setsid` + a double-fork so the daemon reparents to init/PID 1,
+with stdio redirected to a logfile. The web process can then exit/restart freely;
+the daemon is no longer in its process tree. This covers dev, manual, and SSH runs.
+
+**Honest caveat — systemd:** under systemd, `setsid` is **not** enough. systemd
+kills a unit's entire cgroup on `systemctl --user restart` (default
+`KillMode=control-group`), so a daemon spawned inside the web unit's cgroup gets
+killed with it — exactly the failure persistence is meant to prevent. Therefore:
+
+- **Under systemd (the install path):** the daemon must be its **own unit**
+  (`muxterm-sessiond.service`). The web unit declares `Wants=` / `After=` it.
+  Separate unit = separate cgroup = survives web restart. `muxterm install` wires
+  **both** units.
+- **Everywhere else (dev, manual, SSH):** the auto-spawn/detach path is the
+  fallback.
+
+So "one binary" holds, "auto-spawn" holds for the manual case, but **restart
+survival under systemd specifically requires the daemon to be its own unit** —
+auto-spawn alone would silently fail there.
+
+## Components
+
+The daemon (`sessiond`) stays deliberately dumb.
+
+```
+sessiond
+├── Registry          # the single source of truth
+│   ├── panes:      map[PaneID]      → Pane
+│   └── workspaces: map[WorkspaceID] → Workspace
+├── Pane              # one rectangle = one PTY
+│   ├── pty (creack/pty) + child process
+│   ├── RingBuffer + ModeTracker   (see "Level 1 buffer")
+│   └── subscribers: set of attached serve conns
+└── SocketServer      # Unix socket, framed protocol (see "Data Flow")
+```
+
+- **Registry** is the single source of truth: `panes: map[PaneID]→Pane` and
+  `workspaces: map[WorkspaceID]→Workspace`.
+- **Pane** owns exactly one PTY + child process, a `RingBuffer` + `ModeTracker`,
+  and a set of attached subscribers. Create = fork a PTY (sub-ms). Close = kill the
+  process + drop the buffer. There is **no** split/layout logic in the daemon.
+- **SocketServer** serves the Unix socket with a framed protocol.
+
+### Two-layer layout model
+
+Layout is two layers with different owners.
+
+**Layer 1 — Composition (device-independent, daemon-side).**
+*Which panes belong to a workspace.*
+
+```
+Workspace = { id, name, []PaneID }
+```
+
+This is the entire persistence unit — the honest replacement for a "tmux session."
+It is the set of live terminals that appears identically on every device, and it
+has nothing to do with pixels.
+
+**Layer 2 — Arrangement (device-specific, client-side).**
+*How those panes are spatially laid out* — splits, ratios, tabs, orientation.
+The daemon does **not** store layout blobs (this was explicitly dropped).
+Arrangement lives in the browser, keyed by viewport profile, in `localStorage`
+for now.
+
+On attach, the client pulls the composition from the daemon, then either restores
+a saved arrangement for the current device profile **or** auto-generates a
+responsive default.
+
+*Future upgrade (not now): daemon-side profile-keyed arrangements for
+cross-browser portability on the same device.*
+
+### Responsive arrangement
+
+Arrangement is a **responsive function of (composition, viewport class)** — not a
+stored picture. Borrowing breakpoints from responsive web design, the same logical
+composition renders through layout modes selected by the viewport:
+
+```
+wide   (desktop/ultrawide):  tiling  — multiple panes visible, splittable
+medium (tablet/laptop):      fewer simultaneous splits
+narrow (phone/portrait):     tabbed  — one pane visible, swipe/switch
+```
+
+A side-by-side split on desktop **degrades to tabs** on a phone — not stored as
+"two columns," but as "these panes are peers; render them however the current
+viewport class dictates."
+
+**Consequence reaching the daemon — PTY size follows the rendered frame.** A pane
+that is 100 cols in a desktop split becomes ~40 cols full-width on a phone. The
+client measures each pane's actual rendered cell grid and sends
+`Resize(paneID, cols, rows)`; the daemon resizes the PTY and the program reflows.
+All breakpoint logic stays client-side — the daemon only ever hears "this pane is
+now W×H." The daemon stays dumb.
+
+**Multi-client sizing policy.** A PTY has exactly one size, but multiple clients
+(e.g. a phone tab-visible at 40 cols and a desktop split at 100 cols) can attach
+to the same pane simultaneously. Policy: **the most-recently-active view drives
+the PTY size; other views reflow to fit** (matching the research doc's
+`window-size latest`). A pane tabbed-away keeps its last size until re-focused.
+
+*YAGNI guardrail:* breakpoint **preferences** (e.g. "phone defaults to pane C
+visible") live in `localStorage` per device now; cross-device class-layout memory
+is a future upgrade.
+
+### The Level 1 buffer (per-pane)
+
+Each `Pane` owns a `RingBuffer` + `ModeTracker`, behind a `PaneBuffer` interface
+so a Level-2 `charmbracelet/x/vt`-backed implementation can be swapped in later
+without touching the daemon or protocol.
+
+```
+Pane buffer
+├── scrollback ring   # normal-screen output, budgeted ~10k lines (configurable)
+├── altscreen frame   # single REPLACEABLE buffer, used while in alt-screen
+└── ModeTracker       # sticky terminal state, updated as bytes stream through
+```
+
+- **scrollback ring** — normal-screen output, budgeted ~10k lines (configurable).
+- **altscreen frame** — a single **replaceable** buffer used while the program is
+  on the alternate screen.
+- **Two-tier rule:** while on the alt-screen (`ESC[?1049h`), output goes to the
+  replaceable altscreen frame, **not** the ring — so full-screen apps (htop/vim)
+  never flood scrollback, and exiting (`ESC[?1049l`) cleanly discards the frame and
+  returns to the ring. Normal output appends to the ring.
+- **ModeTracker** scans every byte and keeps a tiny sticky-state snapshot:
+  alt-screen on/off, current SGR (colors/attrs), cursor position, and a handful of
+  DEC private modes (autowrap, cursor visibility).
+- **Safe-boundary trimming:** when the ring exceeds budget it only trims **between
+  complete escape sequences** — never severing e.g. `ESC[31m` mid-sequence.
+- **Replay on attach** = `[synthetic preamble]` + `[retained ring bytes]` +
+  live stream. The preamble is a small burst of escape sequences the ModeTracker
+  emits to re-establish correct sticky state at the trim boundary, so xterm.js
+  reconstructs colors/cursor/mode correctly despite trimmed history.
+- **Accepted Level-1 limitation:** it does **not** reflow *old scrollback* on width
+  change — acceptable for a replay-then-go-live model. This is the explicit reason
+  x/vt is kept in reserve.
+
+The three problems this buffer design solves:
+
+1. **Alt-screen flooding/replay** — the two-tier rule keeps full-screen repaints
+   out of scrollback.
+2. **Mid-escape trimming corruption** — safe-boundary trimming guarantees no
+   severed escape sequence.
+3. **Lost cumulative sticky state at the trim boundary** — the ModeTracker
+   preamble re-establishes colors/cursor/mode after history is trimmed.
+
+## Data Flow
+
+Five paths exercise the system.
+
+```
+CREATE pane:
+  browser → serve: "new pane in workspace W, size CxR, cmd=$SHELL"
+  serve → sessiond: CreatePane(W, CxR, cmd)
+  sessiond: fork PTY (sub-ms) → register Pane → return PaneID
+  → browser spawns an xterm.js for PaneID, places it per responsive layout
+
+ATTACH (fresh client / reconnect / new device):
+  browser → serve → sessiond: Attach(workspaceW)
+  sessiond → serve → browser: composition {paneIDs} + per-pane replay
+       (replay = synthetic preamble + retained ring bytes)
+  browser: builds arrangement for this viewport profile, feeds replay to xterm.js,
+           then subscribes to live
+
+LIVE output:
+  PTY → sessiond: appends to ring/altscreen, updates ModeTracker
+  sessiond → all subscribed serve conns → browsers: raw bytes [paneID][data]
+
+INPUT:
+  xterm.js onData → serve → sessiond: [paneID][utf8 bytes] → PTY write
+
+RESIZE (responsive reflow / active-view-wins):
+  browser measures pane's rendered grid → serve → sessiond: Resize(paneID, CxR)
+  sessiond: pty.Setsize → program reflows
+```
+
+**Detach is a non-event:** the browser closing or `serve` restarting just drops
+subscribers. The PTY and ring keep running in `sessiond`. Re-attach replays from
+the ring.
+
+**Two transport hops, two formats:**
+
+- `serve ↔ sessiond` over the Unix socket — length-prefixed frames: a small
+  control channel for create/attach/resize/composition, plus binary pane data.
+- `browser ↔ serve` keeps muxterm's **existing** binary WebSocket framing
+  `[4-byte LE paneID][data]`.
+
+`serve` is a thin, stateless relay/translator between the two — which is exactly
+what makes its restart a non-event. This is the **same** per-pane binary streaming
+muxterm already does; only the upstream source changes, from "tmux `-CC` control
+connection" to "sessiond Unix socket."
+
+## Error Handling
+
+| Event | Response |
+| --- | --- |
+| **PTY process exits (shell quits)** | Daemon emits pane-closed; the ring is kept briefly so a reconnecting client sees final output, then the pane is reaped and the workspace drops the PaneID. |
+| **sessiond crashes** | Worst case: its child PTYs die with it. `Restart=on-failure` relaunches; web reconnects. **This is the one event that loses sessions** — acceptable, rare, and logged loudly. |
+| **serve crashes / restarts** | Non-event. PTYs + rings live on in sessiond. New serve reconnects, re-subscribes, replays. |
+| **socket dead on serve start** | Auto-spawn sessiond (see lifecycle section). |
+| **web client disconnect** | Drop the subscriber only. The pane runs on. |
+| **attach to unknown workspace** | Daemon returns an empty composition; the client starts a fresh workspace. |
+| **ring trim mid-stream** | Safe-boundary trimming guarantees no severed escape; the ModeTracker preamble restores state. |
+
+**The honest weak point:** if `sessiond` itself dies, its child PTYs die — sessions
+are lost. v1 explicitly does **not** mirror scrollback to disk or re-parent PTYs
+across daemon restarts (the research doc's "disk-mirrored buffer" — deferred
+YAGNI). The mitigation is operational: `Restart=on-failure` plus a stable daemon
+that does very little, so it rarely crashes.
+
+## Testing Strategy
+
+- **ModeTracker / buffer — unit tests, the priority.** This is where correctness
+  risk lives. Feed recorded byte streams (vim enter/exit, htop, `tput` color runs,
+  cursor moves), trim at every offset, and assert that replay + preamble
+  reconstructs correct screen state. Table-driven golden tests.
+- **Daemon protocol — integration tests.** Real PTYs running `cat` / `echo` /
+  `vttest`; assert create/attach/resize/replay over a real Unix socket.
+- **Restart survival — integration test.** Spawn the daemon, create panes, kill +
+  restart `serve`, and assert that reattach replays intact.
+- **Web/client — keep existing tests** (`ws.session`, `state.session`); repoint
+  them from the tmux mock to a sessiond mock.
+
+## Open Questions
+
+- **Daemon-restart durability:** is operational `Restart=on-failure` enough for v1,
+  or will users demand disk-mirrored scrollback sooner than expected? (Deferred for
+  now.)
+- **Exact `PaneBuffer` interface shape** — the seam that lets x/vt swap in for
+  Level 2.
+- **Unix-socket control-frame schema specifics** (message types, encoding) — to be
+  nailed down in the implementation plan.
+- **Cross-device arrangement memory** (daemon-side profile-keyed layouts) —
+  explicitly deferred; confirm it stays deferred.
+- **Workspace lifecycle details** — how and when workspaces are created, named, and
+  reaped when empty.
