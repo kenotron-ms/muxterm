@@ -41,6 +41,14 @@ export class MuxWorkspace extends LitElement {
   tmuxState!: TmuxState;
 
   /**
+   * The full list of all tmux sessions from the server (via tmux list-sessions).
+   * Passed from app.ts so the inline session picker shows every session, not just
+   * those already in the live tmuxState snapshot.
+   */
+  @property({ attribute: false })
+  allSessions: SessionInfo[] = [];
+
+  /**
    * Injectable pop-out manager — defaults to the app-wide singleton but can
    * be replaced in tests with a PopoutManager using a fake window opener.
    * @internal
@@ -399,11 +407,12 @@ export class MuxWorkspace extends LitElement {
     const layoutString = win?.layout ?? '';
     const activePaneId = win?.panes.find((p) => p.active)?.id ?? win?.panes[0]?.id ?? -1;
 
-    // Session list for the inline session-dropdown inside the tab strip.
-    const sessions: SessionInfo[] = (this.tmuxState?.sessions ?? []).map((s) => ({
-      name: s.name,
-      windows: s.windows.length,
-    }));
+    // Use the full session list from the server (allSessions) so the dropdown
+    // shows every tmux session — not just those in the current state snapshot.
+    // Fall back to deriving from tmuxState if allSessions hasn't arrived yet.
+    const sessions: SessionInfo[] = this.allSessions.length > 0
+      ? this.allSessions
+      : (this.tmuxState?.sessions ?? []).map((s) => ({ name: s.name, windows: s.windows.length }));
     const activeSession = this.tmuxState?.activeSession ?? '';
 
     return html`

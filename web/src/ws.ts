@@ -198,7 +198,7 @@ export function encodeClientMessage(msg: ClientMessage): Record<string, unknown>
     case 'split':
       return { split: { direction: msg.direction, pane: `%${msg.paneId}` } };
     case 'resize-pane':
-      return { 'resize-pane': { id: `%${msg.paneId}`, cols: msg.cols, rows: msg.rows } };
+      return { 'resize-pane': { id: `%${msg.paneId}`, dir: msg.dir, amount: msg.amount } };
     case 'new-window':
       return { 'new-window': '' };
     case 'close-pane':

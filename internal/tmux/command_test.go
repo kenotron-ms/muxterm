@@ -97,16 +97,16 @@ func TestCommandSplitWindowVertical(t *testing.T) {
 	}
 }
 
-func TestCommandResizePane(t *testing.T) {
+func TestCommandResizePaneRelative(t *testing.T) {
 	var buf bytes.Buffer
 	cw := &CommandWriter{W: &buf}
 
-	if err := cw.ResizePane("%0", 120, 40); err != nil {
-		t.Fatalf("ResizePane returned error: %v", err)
+	if err := cw.ResizePaneRelative("%0", "R", 5); err != nil {
+		t.Fatalf("ResizePaneRelative returned error: %v", err)
 	}
 
 	got := buf.String()
-	want := "resize-pane -t %0 -x 120 -y 40\n"
+	want := "resize-pane -R -t \"%0\" 5\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

@@ -2,7 +2,7 @@ import { LitElement, html, css, unsafeCSS } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { CHROME } from '../lib/theme.js';
 import { icon } from '../lib/icons.js';
-import { ChevronDown, Target } from 'lucide';
+import { Target } from 'lucide';
 
 @customElement('mux-status-bar')
 export class MuxStatusBar extends LitElement {
@@ -33,7 +33,8 @@ export class MuxStatusBar extends LitElement {
       gap: 4px;
       color: var(--mux-accent);
       font-weight: 600;
-      cursor: pointer;
+      /* Session name is informational only — switching is done from the top-left
+         session chip in the tab strip, not here. */
     }
 
     .separator {
@@ -85,11 +86,8 @@ export class MuxStatusBar extends LitElement {
   @property({ type: Boolean })
   driverActive = false;
 
-  private _onSessionClick = (): void => {
-    this.dispatchEvent(
-      new CustomEvent('open-session-picker', { bubbles: true, composed: true }),
-    );
-  };
+  // Session name is display-only — switching sessions is handled from the
+  // top-left session chip in the tab strip. No click handler here.
 
   private _statusText(): string {
     switch (this.connectionStatus) {
@@ -112,13 +110,7 @@ export class MuxStatusBar extends LitElement {
 
     return html`
       <div class="left">
-        <span
-            class="session"
-            role="button"
-            tabindex="0"
-            title="Switch session"
-            @click="${this._onSessionClick}"
-          >${sessionDisplay} ${icon(ChevronDown, { size: 11 })}</span>
+        <span class="session">${sessionDisplay}</span>
         <span class="separator">|</span>
         <span>${this.windowCount} ${windowLabel}</span>
         <span class="separator">|</span>

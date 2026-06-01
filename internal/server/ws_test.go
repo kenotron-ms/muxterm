@@ -93,10 +93,16 @@ func (m *mockEngine) SplitWindow(targetPaneID string, horizontal bool) error {
 	m.commandCalls = append(m.commandCalls, commandCall{Method: "SplitWindow", Args: []interface{}{targetPaneID, horizontal}})
 	return nil
 }
-func (m *mockEngine) ResizePane(paneID string, cols, rows int) error {
+func (m *mockEngine) ResizePane(paneID, dir string, amount int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.commandCalls = append(m.commandCalls, commandCall{Method: "ResizePane", Args: []interface{}{paneID, cols, rows}})
+	m.commandCalls = append(m.commandCalls, commandCall{Method: "ResizePane", Args: []interface{}{paneID, dir, amount}})
+	return nil
+}
+func (m *mockEngine) ResizeSurface(cols, rows int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.commandCalls = append(m.commandCalls, commandCall{Method: "ResizeSurface", Args: []interface{}{cols, rows}})
 	return nil
 }
 func (m *mockEngine) NewWindow(sessionID string) error {
@@ -591,7 +597,7 @@ func TestResizePaneAction(t *testing.T) {
 	}
 
 	// Send resize-pane action
-	err = conn.Write(ctx, websocket.MessageText, []byte(`{"resize-pane":{"id":"%5","cols":100,"rows":40}}`))
+	err = conn.Write(ctx, websocket.MessageText, []byte(`{"resize-pane":{"id":"%5","dir":"R","amount":5}}`))
 	if err != nil {
 		t.Fatalf("conn.Write: %v", err)
 	}

@@ -70,7 +70,7 @@ export type ClientMessage =
   | { type: 'select-window'; windowId: number }
   | { type: 'select-pane'; paneId: number }
   | { type: 'split'; direction: SplitDirection; paneId: number }
-  | { type: 'resize-pane'; paneId: number; cols: number; rows: number }
+  | { type: 'resize-pane'; paneId: number; dir: string; amount: number }
   | { type: 'resize-surface'; surfaceId: string; cols: number; rows: number }
   | { type: 'new-window' }
   | { type: 'close-pane'; paneId: number }

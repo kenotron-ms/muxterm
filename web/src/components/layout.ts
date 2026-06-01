@@ -35,6 +35,8 @@ export class MuxLayout extends LitElement {
       overflow: hidden;
       min-width: 40px;
       min-height: 20px;
+      /* Do NOT set z-index here — keep z-index:auto so mux-resize-handle's
+         z-index:10 can win during drag without needing a stacking-context battle. */
     }
 
     .empty {
@@ -161,11 +163,12 @@ export class MuxLayout extends LitElement {
                 handleEl,
               } = this._drag;
 
-              // Reset handle to original position immediately
+              // Reset handle transform — it will land at the new position once
+              // Lit re-renders from the server-confirmed %layout-change.
               handleEl.style.transform = '';
               this._drag = null;
 
-              // Compute final sizes (clamp to minimum 1)
+              // Compute new sizes (clamp to minimum 1 char each side)
               const totalChars = lChars + rChars;
               const charsPerPx = containerPx > 0 ? totalChars / containerPx : 1;
               const newL = Math.max(
@@ -174,20 +177,29 @@ export class MuxLayout extends LitElement {
               );
               const newR = totalChars - newL;
 
-              // Fire ONE resize command — server updates layout, no local state to reconcile
+              const cellDelta = newL - lChars;
+              if (cellDelta === 0) return; // no movement
+
+              const dir = h
+                ? (cellDelta > 0 ? 'R' : 'L')
+                : (cellDelta > 0 ? 'D' : 'U');
+              const amount = Math.abs(cellDelta);
+
+              // OPTIMISTIC UPDATE — apply new flex ratios directly to the DOM so
+              // the split snaps to the dropped position instantly, before the
+              // server round-trip completes. When %layout-change arrives, Lit
+              // re-renders with the server-confirmed proportions (idempotent).
+              const leftWrapper = handleEl.previousElementSibling as HTMLElement | null;
+              const rightWrapper = handleEl.nextElementSibling as HTMLElement | null;
+              if (leftWrapper) leftWrapper.style.flex = String(newL);
+              if (rightWrapper) rightWrapper.style.flex = String(newR);
+
+              // Fire ONE relative resize command to tmux.
               this.dispatchEvent(
                 new CustomEvent('pane-resize-request', {
                   bubbles: true,
                   composed: true,
-                  detail: {
-                    leftPaneId: leftId,
-                    rightPaneId: rightId,
-                    direction: node.direction,
-                    leftWidth: h ? newL : lc.width,
-                    leftHeight: h ? lc.height : newL,
-                    rightWidth: h ? newR : rc.width,
-                    rightHeight: h ? rc.height : newR,
-                  },
+                  detail: { paneId: leftId, dir, amount },
                 }),
               );
             }}"

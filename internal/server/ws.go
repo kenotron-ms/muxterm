@@ -28,7 +28,11 @@ type TmuxEngine interface {
 	SelectWindow(windowID string) error
 	SelectPane(paneID string) error
 	SplitWindow(targetPaneID string, horizontal bool) error
-	ResizePane(paneID string, cols, rows int) error
+	// ResizePane moves a pane border by amount cells in direction dir (R/L/D/U).
+	ResizePane(paneID, dir string, amount int) error
+	// ResizeSurface tells tmux the full viewport size. This is the ONLY call
+	// that should use refresh-client -C; it must never be called from drag paths.
+	ResizeSurface(cols, rows int) error
 	NewWindow(sessionID string) error
 	KillPane(paneID string) error
 	CloseWindow(windowID string) error
@@ -424,14 +428,14 @@ func (h *Hub) dispatchAction(action string, payload json.RawMessage) error {
 
 	case "resize-pane":
 		var p struct {
-			ID   string `json:"id"`
-			Cols int    `json:"cols"`
-			Rows int    `json:"rows"`
+			ID     string `json:"id"`
+			Dir    string `json:"dir"`
+			Amount int    `json:"amount"`
 		}
 		if err := json.Unmarshal(payload, &p); err != nil {
 			return fmt.Errorf("resize-pane: %w", err)
 		}
-		return h.engine.ResizePane(p.ID, p.Cols, p.Rows)
+		return h.engine.ResizePane(p.ID, p.Dir, p.Amount)
 
 	case "new-window":
 		return h.engine.NewWindow("")
@@ -485,7 +489,7 @@ func (h *Hub) dispatchAction(action string, payload json.RawMessage) error {
 		if err := json.Unmarshal(payload, &p); err != nil {
 			return fmt.Errorf("resize-surface: %w", err)
 		}
-		return h.surfaceRouter.Resize(SurfaceID(p.SurfaceID), p.Cols, p.Rows)
+		return h.engine.ResizeSurface(p.Cols, p.Rows)
 
 	case "open-settings":
 		if err := h.engine.OpenSettings(); err != nil {
@@ -557,6 +561,21 @@ func (h *Hub) sessionListJSON() ([]byte, error) {
 	return json.Marshal(map[string]interface{}{
 		"session-list": SessionListMessage{Sessions: h.engine.SessionList()},
 	})
+}
+
+// BroadcastFullSync sends a full state sync (including pane capture) to every
+// connected client. Called after a session switch so the browser receives the
+// scrollback of the newly-active session's panes, not just structural state.
+func (h *Hub) BroadcastFullSync() {
+	h.mu.RLock()
+	clients := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+	for _, c := range clients {
+		h.sendStateSync(c)
+	}
 }
 
 // BroadcastSessionList sends the current session list to all connected clients.

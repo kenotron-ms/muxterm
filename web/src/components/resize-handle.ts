@@ -7,6 +7,17 @@ export class MuxResizeHandle extends LitElement {
     :host {
       display: block;
       flex-shrink: 0;
+      /* Must be positioned so z-index takes effect. Without this the handle is
+         a non-positioned flex child and paints BEFORE positioned .pane-wrapper
+         siblings, so the right/bottom pane's canvas covers it during drag. */
+      position: relative;
+      z-index: 10;
+    }
+
+    /* Boost further while actively dragging so the handle always stays on top
+       even if the adjacent pane somehow has a higher natural z-index. */
+    :host([dragging]) {
+      z-index: 100;
     }
 
     :host([direction="horizontal"]) {
@@ -42,6 +53,7 @@ export class MuxResizeHandle extends LitElement {
   private _onPointerDown = (e: PointerEvent): void => {
     e.preventDefault();
     this._dragging = true;
+    this.toggleAttribute('dragging', true);
     this._startX = e.clientX;
     this._startY = e.clientY;
     this.requestUpdate();
@@ -64,6 +76,7 @@ export class MuxResizeHandle extends LitElement {
 
     const onPointerUp = (): void => {
       this._dragging = false;
+      this.toggleAttribute('dragging', false);
       this.requestUpdate();
       this.dispatchEvent(new CustomEvent('resize-drag-end', { bubbles: true, composed: true }));
       target.removeEventListener('pointermove', onPointerMove);

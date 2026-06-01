@@ -244,11 +244,33 @@ export class MuxApp extends LitElement {
    * ALL windows in ALL sessions (not just the active window), so background
    * windows stay fed and their scrollback is preserved on tab switch.
    * Panes that no longer exist in tmux are prune()'d (disposed).
+   *
+   * Also keeps _sessions (the full session list) in sync with store.sessionList
+   * and updates the workspace region to follow the active session.
    */
   override willUpdate(_changedProperties: Map<PropertyKey, unknown>): void {
     super.willUpdate(_changedProperties);
     this._syncTerminals();
     this._ensureActiveRegion();
+
+    if (_changedProperties.has('_tmuxState')) {
+      // Keep the full session list fresh whenever the state updates so the
+      // inline session dropdown in the tab strip always shows every session.
+      const sl = store.sessionList;
+      if (sl.length > 0) this._sessions = sl;
+
+      // When the active session changes, update the first workspace region to
+      // follow it immediately so the displayed content switches.
+      const newSession = this._tmuxState.activeSession;
+      if (newSession && this._workspace.regions.length > 0) {
+        const region = this._workspace.regions[0];
+        if (region.surface.sessionName !== newSession) {
+          region.surface.sessionName = newSession;
+          // Reset windowId; _renderRegion will pick up the correct active window.
+          region.surface.windowId = this._tmuxState.activeWindow ?? 0;
+        }
+      }
+    }
   }
 
   private _ensureActiveRegion(): void {
@@ -277,13 +299,9 @@ export class MuxApp extends LitElement {
           const paneId = pane.id;
           terminalRegistry.ensure(paneId, {
             onInput: (data) => this._socket?.sendPaneInput(paneId, data),
-            onResize: (cols, rows) =>
-              this._socket?.sendControl({
-                type: 'resize-pane',
-                paneId,
-                cols,
-                rows,
-              }),
+            // FitAddon resize is for xterm.js display only — tmux viewport sizing
+            // comes from resize-surface (CellBudgetManager), not per-pane callbacks.
+            onResize: () => {},
           });
           liveIds.add(paneId);
         }
@@ -333,6 +351,7 @@ export class MuxApp extends LitElement {
             <mux-workspace
               .workspace="${this._workspace}"
               .tmuxState="${this._tmuxState}"
+              .allSessions="${this._sessions}"
               @pane-focus="${this._onPaneSelect}"
               @resize-surface="${this._onSurfaceResize}"
               @open-session-picker="${this._onOpenSessionPicker}"
@@ -381,17 +400,17 @@ export class MuxApp extends LitElement {
   };
 
   private _onPaneResizeRequest = (e: CustomEvent<{
-    leftPaneId: number; rightPaneId: number;
-    direction: 'horizontal' | 'vertical';
-    leftWidth: number; leftHeight: number;
-    rightWidth: number; rightHeight: number;
+    paneId: number;
+    dir: string;
+    amount: number;
   }>): void => {
-    // Resize the left pane — tmux will automatically adjust the right pane
+    // Send a relative resize-pane command to move the divider.
+    // Never send RefreshClientSize from here — that's resize-surface's job.
     this._socket?.sendControl({
       type: 'resize-pane',
-      paneId: e.detail.leftPaneId,
-      cols: e.detail.leftWidth,
-      rows: e.detail.leftHeight,
+      paneId: e.detail.paneId,
+      dir: e.detail.dir,
+      amount: e.detail.amount,
     });
   };
 
@@ -419,10 +438,14 @@ export class MuxApp extends LitElement {
     this._socket?.sendControl({ type: 'new-window' });
   };
 
-  // Shown on the "no active session" page. Asks the server to (re)attach a tmux
-  // session. The server's supervisor creates one and pushes fresh state.
+  // Shown on the "no active session" page. Prompts for a session name then
+  // creates and attaches it, consistent with every other new-session entry point.
   private _onCreateSession = (): void => {
-    this._socket?.sendControl({ type: 'create-session', name: '' });
+    const name = window.prompt('Session name (leave blank for auto-name):')?.trim() ?? '';
+    this._socket?.sendControl({ type: 'create-session', name });
+    if (name) {
+      this._socket?.sendControl({ type: 'attach-session', name });
+    }
   };
 
   private _onTabClose = (e: CustomEvent<{ windowId: number }>): void => {
@@ -479,24 +502,46 @@ export class MuxApp extends LitElement {
 
   private _onSessionSelected = (e: CustomEvent<{ name: string }>): void => {
     this._showSessionPicker = false;
-    this._socket?.sendControl({ type: 'attach-session', name: e.detail.name });
+    const name = e.detail.name;
+    this._socket?.sendControl({ type: 'attach-session', name });
+
+    // Optimistic: switch the workspace region immediately so the user sees
+    // the new session's content without waiting for the server round-trip.
+    if (this._workspace.regions.length > 0) {
+      this._workspace.regions[0].surface.sessionName = name;
+      this._workspace.regions[0].surface.windowId = 0; // server will confirm real window
+      this.requestUpdate();
+    }
   };
 
   /** Create a brand-new tmux session from the inline dropdown "New session" button. */
   private _onNewSessionCreate = (): void => {
-    const name = window.prompt('Session name:')?.trim();
-    if (!name) return;
+    const name = window.prompt('Session name (leave blank for auto-name):')?.trim() ?? '';
+    // Always create; if a name was given, attach immediately.
     this._socket?.sendControl({ type: 'create-session', name });
-    this._socket?.sendControl({ type: 'attach-session', name });
+    if (name) {
+      this._socket?.sendControl({ type: 'attach-session', name });
+    }
   };
 
   private _onLauncherAction = (e: CustomEvent<{ action: LauncherAction }>): void => {
     const { action } = e.detail;
     switch (action) {
-      case 'new-session':
-        this._sessions = store.sessionList;
-        this._showSessionPicker = true;
+      case 'new-session': {
+        // Create a new session with an optional name, then switch to it.
+        const name = window.prompt('Session name (leave blank for auto-name):')?.trim() ?? '';
+        this._socket?.sendControl({ type: 'create-session', name });
+        if (name) {
+          this._socket?.sendControl({ type: 'attach-session', name });
+          // Optimistic display switch.
+          if (this._workspace.regions.length > 0) {
+            this._workspace.regions[0].surface.sessionName = name;
+            this._workspace.regions[0].surface.windowId = 0;
+          }
+          this.requestUpdate();
+        }
         break;
+      }
       case 'settings':
         // Ask the backend to open the config file in an editor ($EDITOR / vim / nano)
         // in a new tmux window named "settings".

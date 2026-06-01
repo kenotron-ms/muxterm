@@ -56,9 +56,11 @@ func (c *CommandWriter) SplitWindow(paneID string, horizontal bool) error {
 	return c.send("split-window %s -t %s", flag, paneID)
 }
 
-// ResizePane resizes a pane to the given width and height.
-func (c *CommandWriter) ResizePane(paneID string, width, height int) error {
-	return c.send("resize-pane -t %s -x %d -y %d", paneID, width, height)
+// ResizePaneRelative resizes a pane by moving one of its borders.
+// dir is one of R (expand right), L (shrink left), D (expand down), U (shrink up).
+// amount is the number of cells to move the border.
+func (c *CommandWriter) ResizePaneRelative(paneID, dir string, amount int) error {
+	return c.send("resize-pane -%s -t \"%s\" %d", dir, paneID, amount)
 }
 
 // ResizeWindow resizes a window to the given width and height.

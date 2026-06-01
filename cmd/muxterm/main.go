@@ -475,9 +475,24 @@ func (a *controllerAdapter) SplitWindow(targetPaneID string, horizontal bool) er
 	return c.Commands().SplitWindow(targetPaneID, horizontal)
 }
 
-func (a *controllerAdapter) ResizePane(paneID string, cols, rows int) error {
-	// Remember the size even if there's no live session — so the next attached
-	// session can be sized to match the browser immediately.
+// ResizePane moves a pane border by amount cells in direction dir (R/L/D/U).
+// This sends `resize-pane -<dir> -t "%id" <amount>` — a relative adjustment
+// that only moves the divider between adjacent panes. It never calls
+// RefreshClientSize; that is ResizeSurface's job.
+func (a *controllerAdapter) ResizePane(paneID, dir string, amount int) error {
+	c := a.pool.controller()
+	if c == nil {
+		return errNoSession
+	}
+	return c.Commands().ResizePaneRelative(paneID, dir, amount)
+}
+
+// ResizeSurface tells tmux the full browser viewport size via refresh-client -C.
+// This is the ONLY place RefreshClientSize is called at runtime. It also
+// remembers the size so the next attached session starts at the right dimensions.
+func (a *controllerAdapter) ResizeSurface(cols, rows int) error {
+	// Remember even when no session is live — the supervisor will apply it
+	// when the next session starts.
 	a.pool.rememberSize(cols, rows)
 
 	c := a.pool.controller()
@@ -490,7 +505,7 @@ func (a *controllerAdapter) ResizePane(paneID string, cols, rows int) error {
 	// `window-size latest` (set in applyMuxtermConfig), the window then follows
 	// this client size. So refresh-client is the ONE lever that resizes the
 	// window. (resize-window gets clamped to the client size; pty.Setsize is
-	// ignored by control-mode clients — both appeared to "do nothing".)
+	// ignored by control-mode clients.)
 	return c.Commands().RefreshClientSize(cols, rows)
 }
 
@@ -783,7 +798,14 @@ func startSession(ctx context.Context, pool *controllerPool, hub *server.Hub, sy
 			log.Printf("supervisor: session %q ended", name)
 		}()
 	}
-	syncer.trigger()
+	if activate {
+		// Full sync delivers "full-sync" + capture-pane content so the browser
+		// sees the new session's scrollback on switch, not just structural state.
+		// Run in a goroutine so the supervisor stays responsive.
+		go hub.BroadcastFullSync()
+	} else {
+		syncer.trigger()
+	}
 	log.Printf("supervisor: attached to session %q (activate=%v)", name, activate)
 }
 
@@ -853,6 +875,20 @@ func wireEvents(sessionName string, pool *controllerPool, events <-chan tmux.Eve
 		case tmux.WindowRenamedEvent:
 			sync.trigger()
 		case tmux.LayoutChangeEvent:
+			// Fast-path: broadcast the layout string immediately without the
+			// coalescer's 10ms debounce floor. A bare resize-pane emits exactly
+			// one %layout-change with no preceding structural events, so there is
+			// nothing to batch. Sending directly cuts return-path latency from
+			// ~10ms to ~0ms, closing the gap with CLI-driven resizes.
+			//
+			// We still fire the coalescer so a full state sync follows ~10ms
+			// later. This handles splits (window-add precedes layout-change) and
+			// serves as a structural safety net for anything the targeted message
+			// lacks.
+			hub.BroadcastEvent("layout-change", map[string]string{
+				"WindowID": e.WindowID,
+				"Layout":   e.Layout,
+			})
 			sync.trigger()
 		case tmux.SessionChangedEvent:
 			sync.trigger()
