@@ -26,6 +26,29 @@ export class MuxRegion extends LitElement {
       display: flex;
       overflow: hidden;
     }
+
+    .blank-terminal {
+      width: 100%;
+      height: 100%;
+      background: #1a1b26;
+      padding: 6px 8px;
+      box-sizing: border-box;
+      display: flex;
+      align-items: flex-start;
+    }
+
+    .blank-cursor {
+      display: inline-block;
+      width: 7px;
+      height: 1.2em;
+      background: #c0caf5;
+      animation: cursor-blink 1s step-end infinite;
+    }
+
+    @keyframes cursor-blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0; }
+    }
   `;
 
   @property({ type: String, attribute: 'region-id' })
@@ -70,6 +93,9 @@ export class MuxRegion extends LitElement {
   @property({ type: Boolean })
   isOnlyRegion = false;
 
+  @property({ type: Boolean })
+  showPendingTerminal = false;
+
   @query('.body')
   private _body!: HTMLElement;
 
@@ -109,10 +135,12 @@ export class MuxRegion extends LitElement {
       ></mux-region-tabstrip>
       <div class="body">
         ${isTerminalSurface(this.surfaceKind)
-          ? html`<mux-layout
-              layout-string="${this.layoutString}"
-              active-pane-id="${this.activePaneId}"
-            ></mux-layout>`
+          ? this.showPendingTerminal
+            ? html`<div class="blank-terminal"><span class="blank-cursor"></span></div>`
+            : html`<mux-layout
+                layout-string="${this.layoutString}"
+                active-pane-id="${this.activePaneId}"
+              ></mux-layout>`
           : this.surfaceKind === 'browser'
             ? html`<mux-browser-surface
                 .url="${this.browserUrl ?? 'about:blank'}"

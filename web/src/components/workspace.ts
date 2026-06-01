@@ -64,6 +64,14 @@ export class MuxWorkspace extends LitElement {
    */
   @state() private _optimisticWindowNames = new Map<number, string>();
 
+  /**
+   * Optimistic new-tab: records the session for which a new window is being
+   * created. Drives an instant blank-terminal canvas in the terminal area while
+   * waiting for the server round-trip to complete.
+   * Cleared when the server confirms a tmuxState update for that session.
+   */
+  @state() private _pendingNewWindowSession: string | null = null;
+
   // Two-clock plumbing: ResizeObserver → budget → coalescer → resize-surface event
 
   private _coalescer = new ResizeCoalescer((surfaceId, budget) => {
@@ -361,6 +369,15 @@ export class MuxWorkspace extends LitElement {
       }
       if (changed) this._optimisticWindowNames = next;
     }
+
+    // Clear the pending-new-window state once the server has confirmed a
+    // tmuxState update for that session — the new window has arrived.
+    if (changedProperties.has('tmuxState') && this._pendingNewWindowSession !== null && this.tmuxState) {
+      const session = this.tmuxState.sessions.find((s) => s.name === this._pendingNewWindowSession);
+      if (session && session.windows.length > 0) {
+        this._pendingNewWindowSession = null;
+      }
+    }
   }
 
   /** Returns the character-cell dimensions for a surface.
@@ -408,6 +425,7 @@ export class MuxWorkspace extends LitElement {
           .sessions="${sessions}"
           .activeSession="${activeSession}"
           .isOnlyRegion="${this.workspace.regions.length === 1}"
+          .showPendingTerminal="${this._pendingNewWindowSession === region.surface.sessionName}"
           @tab-select="${(e: CustomEvent<{ windowId: number }>) => {
             // Optimistically record the desired window so content switches instantly.
             // Do NOT stopPropagation — let it continue up to app.ts for the server call.
@@ -419,6 +437,11 @@ export class MuxWorkspace extends LitElement {
             e.stopPropagation();
             const ev = e as CustomEvent<{ action: RegionAction }>;
             this._handleRegionAction(region.id, ev.detail.action, activePaneId);
+          }}"
+          @tab-new="${() => {
+            // Optimistically switch the terminal area to a blank canvas immediately.
+            // Do NOT stopPropagation — let tab-new bubble to app.ts for the server call.
+            this._pendingNewWindowSession = region.surface.sessionName;
           }}"
         ></mux-region>
       </div>
