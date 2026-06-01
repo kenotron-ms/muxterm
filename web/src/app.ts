@@ -343,6 +343,7 @@ export class MuxApp extends LitElement {
               @new-session="${this._onNewSessionCreate}"
               @split-pane="${this._onSplitPane}"
               @rename-window="${this._onRenameWindow}"
+              @pane-resize-request="${this._onPaneResizeRequest}"
             ></mux-workspace>
           `}
       <mux-status-bar
@@ -376,6 +377,21 @@ export class MuxApp extends LitElement {
       type: 'split',
       direction: e.detail.direction as SplitDirection,
       paneId: e.detail.paneId,
+    });
+  };
+
+  private _onPaneResizeRequest = (e: CustomEvent<{
+    leftPaneId: number; rightPaneId: number;
+    direction: 'horizontal' | 'vertical';
+    leftWidth: number; leftHeight: number;
+    rightWidth: number; rightHeight: number;
+  }>): void => {
+    // Resize the left pane — tmux will automatically adjust the right pane
+    this._socket?.sendControl({
+      type: 'resize-pane',
+      paneId: e.detail.leftPaneId,
+      cols: e.detail.leftWidth,
+      rows: e.detail.leftHeight,
     });
   };
 

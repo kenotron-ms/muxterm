@@ -65,10 +65,12 @@ export class MuxResizeHandle extends LitElement {
     const onPointerUp = (): void => {
       this._dragging = false;
       this.requestUpdate();
+      this.dispatchEvent(new CustomEvent('resize-drag-end', { bubbles: true, composed: true }));
       target.removeEventListener('pointermove', onPointerMove);
       target.removeEventListener('pointerup', onPointerUp);
     };
 
+    this.dispatchEvent(new CustomEvent('resize-drag-start', { bubbles: true, composed: true }));
     target.addEventListener('pointermove', onPointerMove);
     target.addEventListener('pointerup', onPointerUp);
   };
