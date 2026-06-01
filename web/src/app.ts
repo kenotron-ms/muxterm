@@ -470,6 +470,8 @@ export class MuxApp extends LitElement {
   private _onNewSessionCreate = (): void => {
     const name = `session-${Date.now().toString(36)}`;
     this._socket?.sendControl({ type: 'create-session', name });
+    // Immediately attach so the workspace shows the new session
+    this._socket?.sendControl({ type: 'attach-session', name });
   };
 
   private _onLauncherAction = (e: CustomEvent<{ action: LauncherAction }>): void => {

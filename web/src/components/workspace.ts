@@ -402,7 +402,7 @@ export class MuxWorkspace extends LitElement {
     const win = this._findWindow(region.surface.sessionName, sessionActiveWindowId);
     const windowName = win?.name ?? '';
     const layoutString = win?.layout ?? '';
-    const activePaneId = win?.panes.find((p) => p.active)?.id ?? -1;
+    const activePaneId = win?.panes.find((p) => p.active)?.id ?? win?.panes[0]?.id ?? -1;
 
     // Session list for the inline session-dropdown inside the tab strip.
     const sessions: SessionInfo[] = (this.tmuxState?.sessions ?? []).map((s) => ({
