@@ -232,6 +232,10 @@ export class MuxRegionTabstrip extends LitElement {
   // immediately without waiting for the server round-trip.
   @state() private _optimisticWindowId: number | null = null;
 
+  // Optimistic close — hide a tab immediately on click, before the server
+  // confirms the window is gone.  Cleaned up in updated() once confirmed.
+  @state() private _closingWindowIds = new Set<number>();
+
   // Region ⋯ menu state, managed here so we can position it correctly.
   @state() private _menuOpen = false;
   @state() private _menuRect: { top: number; right: number } | null = null;
@@ -260,11 +264,21 @@ export class MuxRegionTabstrip extends LitElement {
     document.removeEventListener('mousedown', this._onOutsideMenuClick);
   }
 
-  /** Fix 4: reset optimistic state once the server confirms the new activeWindowId. */
+  /** Fix 4: reset optimistic state once the server confirms the new activeWindowId.
+   *  Also cleans up _closingWindowIds once the server confirms those windows are gone. */
   protected override updated(changedProperties: PropertyValues): void {
     super.updated(changedProperties);
     if (changedProperties.has('activeWindowId') && this._optimisticWindowId !== null) {
       this._optimisticWindowId = null;
+    }
+    if (changedProperties.has('windows') && this._closingWindowIds.size > 0) {
+      const liveIds = new Set(this.windows.map((w) => w.id));
+      const confirmed = [...this._closingWindowIds].filter((id) => !liveIds.has(id));
+      if (confirmed.length > 0) {
+        this._closingWindowIds = new Set(
+          [...this._closingWindowIds].filter((id) => liveIds.has(id)),
+        );
+      }
     }
   }
 
@@ -364,7 +378,7 @@ export class MuxRegionTabstrip extends LitElement {
         </button>
 
         <div class="tabs">
-          ${this.windows.map((w) => {
+          ${this.windows.filter((w) => !this._closingWindowIds.has(w.id)).map((w) => {
             const isActive = w.id === effectiveActiveId;
             const isRunning = this.runningWindowIds.includes(w.id);
             return html`
@@ -383,6 +397,9 @@ export class MuxRegionTabstrip extends LitElement {
                         // Fix 3: stop propagation so the parent tab button's
                         // click handler (which would select the tab) doesn't also fire.
                         e.stopPropagation();
+                        // Optimistically hide the tab right now so the UI is
+                        // instant; updated() will clean up once the server confirms.
+                        this._closingWindowIds = new Set([...this._closingWindowIds, w.id]);
                         this._emit('tab-close', { windowId: w.id });
                       }}"
                     >${icon(X, { size: 12 })}</span>`}
