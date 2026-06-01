@@ -64,9 +64,9 @@ export class MuxLayout extends LitElement {
   // from snapping the layout back mid-drag. Not @state: no re-render needed.
   private _isDragging = false;
 
-  // Populated on drag-end with what we sent to the server.
-  // _localFlex is only cleared when an incoming layoutString matches this.
-  private _expectedAfterResize = new Map<number, { width: number; height: number }>();
+  // Snapshot of layoutString taken at drag-start.
+  // _localFlex is only cleared when the server sends a layout DIFFERENT from this.
+  private _layoutStringBeforeDrag = '';
 
   render() {
     if (!this.layoutString) {
@@ -86,38 +86,15 @@ export class MuxLayout extends LitElement {
     if (this._isDragging) return; // never reconcile during active drag
     if (this._localFlex.size === 0) return; // nothing to reconcile
 
-    if (this._expectedAfterResize.size > 0) {
-      // We sent a resize to the server. Only clear when the incoming layout
-      // reflects the expected dimensions (within 2-char tolerance).
-      // Stale pre-resize layouts are ignored to prevent the snap-back jump.
-      try {
-        const tree = parseLayout(this.layoutString);
-        let confirmed = true;
-        for (const [paneId, expected] of this._expectedAfterResize) {
-          const actual = this._findPaneDimensions(tree, paneId);
-          if (actual === null) continue; // pane not in layout — treat as confirmed
-          if (
-            Math.abs(actual.width - expected.width) > 2 ||
-            Math.abs(actual.height - expected.height) > 2
-          ) {
-            confirmed = false;
-            break;
-          }
-        }
-        if (confirmed) {
-          this._localFlex = new Map();
-          this._expectedAfterResize = new Map();
-        }
-        // Not confirmed → stale layout update. Keep _localFlex active.
-      } catch {
-        // Parse error — clear and reset to be safe
-        this._localFlex = new Map();
-        this._expectedAfterResize = new Map();
-      }
-    } else {
-      // No pending resize confirmation — reconcile normally
+    // Only clear _localFlex when the server sends a layout DIFFERENT from
+    // what we had before the drag started. Same-as-before = stale periodic sync, ignore it.
+    // Different = server processed our resize (or some other real change) — accept it.
+    if (this.layoutString !== this._layoutStringBeforeDrag) {
       this._localFlex = new Map();
+      this._layoutStringBeforeDrag = '';
+      this._dragInit = new Map();
     }
+    // If same as before drag: stale update, keep _localFlex active.
   }
 
   private _renderNode(node: LayoutNode) {
@@ -179,6 +156,7 @@ export class MuxLayout extends LitElement {
           html`<mux-resize-handle
             direction="${node.direction}"
             @resize-drag-start="${(e: Event) => {
+              this._layoutStringBeforeDrag = this.layoutString;
               this._isDragging = true;
               const handleEl = e.currentTarget as HTMLElement;
               const splitEl = handleEl.parentElement!;
@@ -231,16 +209,14 @@ export class MuxLayout extends LitElement {
                   }),
                 );
 
-                // Record what we expect the server to confirm so updated()
-                // can ignore stale pre-resize layouts and avoid the snap-back jump.
-                this._expectedAfterResize.set(leftId, {
-                  width: isHorizontal ? newL : leftChild.width,
-                  height: isHorizontal ? leftChild.height : newL,
-                });
               }
 
               this._dragInit.delete(hkey);
-              // Keep _localFlex until layoutString prop updates (server will confirm)
+              // Safety: if nothing is in _localFlex, clear the snapshot so we don't hold state forever.
+              if (this._localFlex.size === 0) {
+                this._layoutStringBeforeDrag = '';
+              }
+              // Otherwise keep _localFlex until server confirms with a different layoutString.
             }}"
           ></mux-resize-handle>`,
         );
@@ -253,20 +229,6 @@ export class MuxLayout extends LitElement {
   private _firstLeafId(node: LayoutNode): number {
     if (node.type === 'leaf') return node.paneId;
     return this._firstLeafId(node.children[0]);
-  }
-
-  private _findPaneDimensions(
-    node: LayoutNode,
-    paneId: number,
-  ): { width: number; height: number } | null {
-    if (node.type === 'leaf') {
-      return node.paneId === paneId ? { width: node.width, height: node.height } : null;
-    }
-    for (const child of node.children) {
-      const result = this._findPaneDimensions(child, paneId);
-      if (result !== null) return result;
-    }
-    return null;
   }
 
   private _renderLeaf(node: LayoutLeaf) {
