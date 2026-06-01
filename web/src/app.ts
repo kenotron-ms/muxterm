@@ -468,9 +468,9 @@ export class MuxApp extends LitElement {
 
   /** Create a brand-new tmux session from the inline dropdown "New session" button. */
   private _onNewSessionCreate = (): void => {
-    const name = `session-${Date.now().toString(36)}`;
+    const name = window.prompt('Session name:')?.trim();
+    if (!name) return;
     this._socket?.sendControl({ type: 'create-session', name });
-    // Immediately attach so the workspace shows the new session
     this._socket?.sendControl({ type: 'attach-session', name });
   };
 
