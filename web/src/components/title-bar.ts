@@ -94,7 +94,7 @@ export class MuxTitleBar extends LitElement {
   /** Fix 5: close the launcher menu when the user clicks anywhere outside
    *  the title-bar element. */
   private _onOutsideClick = (e: MouseEvent): void => {
-    if (this._menuOpen && !this.contains(e.target as Node)) {
+    if (this._menuOpen && !e.composedPath().includes(this)) {
       this._menuOpen = false;
     }
   };

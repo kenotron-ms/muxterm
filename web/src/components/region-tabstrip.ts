@@ -152,6 +152,23 @@ export class MuxRegionTabstrip extends LitElement {
       border-radius: 4px;
     }
 
+    /* Pending tab placeholder — shown while waiting for server confirmation */
+    .tab-pending {
+      font-style: italic;
+      opacity: 0.6;
+      color: ${unsafeCSS(CHROME.textDim)};
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      font-size: 12px;
+      animation: tab-pulse 1s ease-in-out infinite alternate;
+    }
+
+    @keyframes tab-pulse {
+      from { opacity: 0.4; }
+      to   { opacity: 0.8; }
+    }
+
     /* Spacer */
     .spacer {
       flex: 1;
@@ -236,6 +253,9 @@ export class MuxRegionTabstrip extends LitElement {
   // confirms the window is gone.  Cleaned up in updated() once confirmed.
   @state() private _closingWindowIds = new Set<number>();
 
+  // Optimistic new-tab — shows a placeholder while waiting for server confirmation.
+  @state() private _pendingCount = 0;
+
   // Region ⋯ menu state, managed here so we can position it correctly.
   @state() private _menuOpen = false;
   @state() private _menuRect: { top: number; right: number } | null = null;
@@ -246,7 +266,7 @@ export class MuxRegionTabstrip extends LitElement {
 
   /** Bound so it can be removed in disconnectedCallback. Closes both menus. */
   private _onOutsideMenuClick = (e: MouseEvent): void => {
-    if ((this._menuOpen || this._showSessionDropdown) && !this.contains(e.target as Node)) {
+    if ((this._menuOpen || this._showSessionDropdown) && !e.composedPath().includes(this)) {
       this._menuOpen = false;
       this._menuRect = null;
       this._showSessionDropdown = false;
@@ -271,13 +291,20 @@ export class MuxRegionTabstrip extends LitElement {
     if (changedProperties.has('activeWindowId') && this._optimisticWindowId !== null) {
       this._optimisticWindowId = null;
     }
-    if (changedProperties.has('windows') && this._closingWindowIds.size > 0) {
-      const liveIds = new Set(this.windows.map((w) => w.id));
-      const confirmed = [...this._closingWindowIds].filter((id) => !liveIds.has(id));
-      if (confirmed.length > 0) {
-        this._closingWindowIds = new Set(
-          [...this._closingWindowIds].filter((id) => liveIds.has(id)),
-        );
+    if (changedProperties.has('windows')) {
+      const prev = changedProperties.get('windows') as Window[] | undefined;
+      const gained = (this.windows?.length ?? 0) - (prev?.length ?? 0);
+      if (gained > 0) {
+        this._pendingCount = Math.max(0, this._pendingCount - gained);
+      }
+      if (this._closingWindowIds.size > 0) {
+        const liveIds = new Set(this.windows.map((w) => w.id));
+        const confirmed = [...this._closingWindowIds].filter((id) => !liveIds.has(id));
+        if (confirmed.length > 0) {
+          this._closingWindowIds = new Set(
+            [...this._closingWindowIds].filter((id) => liveIds.has(id)),
+          );
+        }
       }
     }
   }
@@ -331,6 +358,7 @@ export class MuxRegionTabstrip extends LitElement {
   }
 
   private _onTabNew(): void {
+    this._pendingCount++;
     this._emit('tab-new');
   }
 
@@ -406,6 +434,9 @@ export class MuxRegionTabstrip extends LitElement {
               </button>
             `;
           })}
+          ${Array.from({ length: this._pendingCount }, () => html`
+            <span class="tab tab-pending">opening…</span>
+          `)}
         </div>
 
         <button class="tab-add" @click="${this._onTabNew}">+</button>
