@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { customElement, property } from 'lit/decorators.js';
 import { keyed } from 'lit/directives/keyed.js';
 import { parseLayout } from '../lib/layout-parser.js';
 import type { LayoutNode, LayoutSplit, LayoutLeaf } from '../types.js';
@@ -54,19 +54,19 @@ export class MuxLayout extends LitElement {
   @property({ type: Number, attribute: 'active-pane-id' })
   activePaneId = -1;
 
-  // Local size overrides: key = `${leftPaneId}:${rightPaneId}:${direction}`, value = [leftFlex, rightFlex]
-  @state() private _localFlex = new Map<string, [number, number]>();
-
-  // Drag-start sizes: same key, value = [initialLeftChars, initialRightChars, totalContainerPx]
-  private _dragInit = new Map<string, [number, number, number]>();
-
-  // True while the user holds a resize handle — prevents server layout-change events
-  // from snapping the layout back mid-drag. Not @state: no re-render needed.
-  private _isDragging = false;
-
-  // Snapshot of layoutString taken at drag-start.
-  // _localFlex is only cleared when the server sends a layout DIFFERENT from this.
-  private _layoutStringBeforeDrag = '';
+  /** Live drag state. Plain object — not @state, so no re-renders during drag. */
+  private _drag: {
+    delta: number; // cumulative pixel delta from drag start (updated on every pointermove)
+    containerPx: number; // split container size in pixels at drag start
+    leftChars: number; // left child size in chars at drag start
+    rightChars: number; // right child size in chars at drag start
+    leftId: number; // first-leaf pane ID of left child
+    rightId: number; // first-leaf pane ID of right child
+    leftChild: LayoutNode; // full left child node (for width/height of other axis)
+    rightChild: LayoutNode; // full right child node
+    isH: boolean; // horizontal split?
+    handleEl: HTMLElement; // the handle DOM element (for direct transform)
+  } | null = null;
 
   render() {
     if (!this.layoutString) {
@@ -79,22 +79,6 @@ export class MuxLayout extends LitElement {
     } catch {
       return html`<div class="empty">Layout error</div>`;
     }
-  }
-
-  override updated(changedProperties: Map<PropertyKey, unknown>): void {
-    if (!changedProperties.has('layoutString')) return;
-    if (this._isDragging) return; // never reconcile during active drag
-    if (this._localFlex.size === 0) return; // nothing to reconcile
-
-    // Only clear _localFlex when the server sends a layout DIFFERENT from
-    // what we had before the drag started. Same-as-before = stale periodic sync, ignore it.
-    // Different = server processed our resize (or some other real change) — accept it.
-    if (this.layoutString !== this._layoutStringBeforeDrag) {
-      this._localFlex = new Map();
-      this._layoutStringBeforeDrag = '';
-      this._dragInit = new Map();
-    }
-    // If same as before drag: stale update, keep _localFlex active.
   }
 
   private _renderNode(node: LayoutNode) {
@@ -117,24 +101,7 @@ export class MuxLayout extends LitElement {
     for (let i = 0; i < node.children.length; i++) {
       const child = node.children[i];
       const childSize = isHorizontal ? child.width : child.height;
-
-      // Compute effective flex, with local drag override if present
-      let flex = childSize / totalSize;
-
-      // Check if this child is the LEFT of an overridden pair
-      if (i < node.children.length - 1) {
-        const nextChild = node.children[i + 1];
-        const key = `${this._firstLeafId(child)}:${this._firstLeafId(nextChild)}:${node.direction}`;
-        const ov = this._localFlex.get(key);
-        if (ov) flex = ov[0];
-      }
-      // Check if this child is the RIGHT of an overridden pair
-      if (i > 0) {
-        const prevChild = node.children[i - 1];
-        const key = `${this._firstLeafId(prevChild)}:${this._firstLeafId(child)}:${node.direction}`;
-        const ov = this._localFlex.get(key);
-        if (ov) flex = ov[1];
-      }
+      const flex = childSize / totalSize;
 
       items.push(
         html`<div class="pane-wrapper" style="flex: ${flex}">
@@ -144,79 +111,85 @@ export class MuxLayout extends LitElement {
 
       // Insert resize handle between children (not after last)
       if (i < node.children.length - 1) {
-        const leftChild = child;
+        const leftChild = node.children[i];
         const rightChild = node.children[i + 1];
-        const leftSize = isHorizontal ? leftChild.width : leftChild.height;
-        const rightSize = isHorizontal ? rightChild.width : rightChild.height;
+        const isH = node.direction === 'horizontal';
+        const leftChars = isH ? leftChild.width : leftChild.height;
+        const rightChars = isH ? rightChild.width : rightChild.height;
         const leftId = this._firstLeafId(leftChild);
         const rightId = this._firstLeafId(rightChild);
-        const hkey = `${leftId}:${rightId}:${node.direction}`;
 
         items.push(
           html`<mux-resize-handle
             direction="${node.direction}"
             @resize-drag-start="${(e: Event) => {
-              this._layoutStringBeforeDrag = this.layoutString;
-              this._isDragging = true;
               const handleEl = e.currentTarget as HTMLElement;
               const splitEl = handleEl.parentElement!;
-              const containerPx = isHorizontal ? splitEl.clientWidth : splitEl.clientHeight;
-              this._dragInit.set(hkey, [leftSize, rightSize, containerPx]);
+              this._drag = {
+                delta: 0,
+                containerPx: isH ? splitEl.clientWidth : splitEl.clientHeight,
+                leftChars,
+                rightChars,
+                leftId,
+                rightId,
+                leftChild,
+                rightChild,
+                isH,
+                handleEl,
+              };
             }}"
             @resize-drag="${(e: CustomEvent<{ deltaX: number; deltaY: number }>) => {
-              const init = this._dragInit.get(hkey);
-              if (!init) return;
-              const [initL, initR, containerPx] = init;
-              const delta = isHorizontal ? e.detail.deltaX : e.detail.deltaY;
-              const totalChars = initL + initR;
-              const charsPerPx = containerPx > 0 ? totalChars / containerPx : 1;
-
-              // New sizes in chars (clamped to minimum 1)
-              const newL = Math.max(1, initL + Math.round(delta * charsPerPx));
-              const newR = Math.max(1, totalChars - newL);
-              const total = newL + newR;
-
-              // Instant local flex override — triggers immediate re-render (no server call during drag)
-              this._localFlex = new Map(this._localFlex.set(hkey, [newL / total, newR / total]));
+              if (!this._drag || this._drag.leftId !== leftId) return;
+              const delta = isH ? e.detail.deltaX : e.detail.deltaY;
+              this._drag.delta = delta;
+              // Move handle element directly via CSS transform — NO Lit re-render.
+              // User sees the handle sliding; pane content stays frozen.
+              this._drag.handleEl.style.transform = isH
+                ? `translateX(${delta}px)`
+                : `translateY(${delta}px)`;
             }}"
             @resize-drag-end="${() => {
-              this._isDragging = false;
+              if (!this._drag || this._drag.leftId !== leftId) return;
+              const {
+                delta,
+                containerPx,
+                leftChars: lChars,
+                rightChars: rChars,
+                leftChild: lc,
+                rightChild: rc,
+                isH: h,
+                handleEl,
+              } = this._drag;
 
-              // Compute final sizes from current _localFlex override
-              const flex = this._localFlex.get(hkey);
-              const init = this._dragInit.get(hkey);
-              if (flex && init) {
-                const totalChars =
-                  (isHorizontal ? leftChild.width : leftChild.height) +
-                  (isHorizontal ? rightChild.width : rightChild.height);
-                const newL = Math.max(1, Math.round(flex[0] * totalChars));
-                const newR = Math.max(1, totalChars - newL);
+              // Reset handle to original position immediately
+              handleEl.style.transform = '';
+              this._drag = null;
 
-                // Fire ONE server resize on drop
-                this.dispatchEvent(
-                  new CustomEvent('pane-resize-request', {
-                    bubbles: true,
-                    composed: true,
-                    detail: {
-                      leftPaneId: leftId,
-                      rightPaneId: rightId,
-                      direction: node.direction,
-                      leftWidth: isHorizontal ? newL : leftChild.width,
-                      leftHeight: isHorizontal ? leftChild.height : newL,
-                      rightWidth: isHorizontal ? newR : rightChild.width,
-                      rightHeight: isHorizontal ? rightChild.height : newR,
-                    },
-                  }),
-                );
+              // Compute final sizes (clamp to minimum 1)
+              const totalChars = lChars + rChars;
+              const charsPerPx = containerPx > 0 ? totalChars / containerPx : 1;
+              const newL = Math.max(
+                1,
+                Math.min(totalChars - 1, lChars + Math.round(delta * charsPerPx)),
+              );
+              const newR = totalChars - newL;
 
-              }
-
-              this._dragInit.delete(hkey);
-              // Safety: if nothing is in _localFlex, clear the snapshot so we don't hold state forever.
-              if (this._localFlex.size === 0) {
-                this._layoutStringBeforeDrag = '';
-              }
-              // Otherwise keep _localFlex until server confirms with a different layoutString.
+              // Fire ONE resize command — server updates layout, no local state to reconcile
+              this.dispatchEvent(
+                new CustomEvent('pane-resize-request', {
+                  bubbles: true,
+                  composed: true,
+                  detail: {
+                    leftPaneId: leftId,
+                    rightPaneId: rightId,
+                    direction: node.direction,
+                    leftWidth: h ? newL : lc.width,
+                    leftHeight: h ? lc.height : newL,
+                    rightWidth: h ? newR : rc.width,
+                    rightHeight: h ? rc.height : newR,
+                  },
+                }),
+              );
             }}"
           ></mux-resize-handle>`,
         );
