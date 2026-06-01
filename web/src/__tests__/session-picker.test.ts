@@ -196,18 +196,18 @@ describe('MuxSessionPicker inline mode', () => {
     expect(overlay).toBeNull();
   });
 
-  it('marks current session with .current class', async () => {
+  it('marks current session with .sel class and checkmark', async () => {
     el = await inlineFixture(makeSessions(), 'staging');
-    const currentItem = el.shadowRoot!.querySelector('.session-item.current');
+    const currentItem = el.shadowRoot!.querySelector('.mi.sel');
     expect(currentItem).toBeTruthy();
-    expect(currentItem!.querySelector('.session-name')?.textContent).toBe('staging');
+    expect(currentItem!.querySelector('.sname')?.textContent).toBe('staging');
   });
 
   it('dispatches session-selected on click', async () => {
     el = await inlineFixture(makeSessions());
     const handler = vi.fn();
     el.addEventListener('session-selected', handler as EventListener);
-    const items = el.shadowRoot!.querySelectorAll('button.session-item');
+    const items = el.shadowRoot!.querySelectorAll('button.mi:not(.dim)');
     (items[0] as HTMLButtonElement).click();
     expect(handler).toHaveBeenCalledTimes(1);
     const event = handler.mock.calls[0][0] as CustomEvent<{ name: string }>;
@@ -218,7 +218,7 @@ describe('MuxSessionPicker inline mode', () => {
     el = await inlineFixture(makeSessions());
     const handler = vi.fn();
     el.addEventListener('new-session', handler as EventListener);
-    const newBtn = el.shadowRoot!.querySelector('.new-session') as HTMLButtonElement;
+    const newBtn = el.shadowRoot!.querySelector('button.mi.dim') as HTMLButtonElement;
     expect(newBtn).toBeTruthy();
     newBtn.click();
     expect(handler).toHaveBeenCalledTimes(1);

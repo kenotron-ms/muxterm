@@ -1,5 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { Check, Plus } from 'lucide';
+import { icon } from '../lib/icons.js';
 import type { SessionInfo } from '../types.js';
 
 @customElement('mux-session-picker')
@@ -66,36 +68,70 @@ export class MuxSessionPicker extends LitElement {
     }
 
     .dropdown {
-      min-width: 220px;
-      background: #1e1e2e;
-      border: 1px solid #45475a;
-      border-radius: 8px;
-      padding: 6px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      min-width: 208px;
+      background: #16161e;
+      border: 1px solid #2a2e3f;
+      border-radius: 9px;
+      padding: 5px;
+      box-shadow: 0 18px 46px rgba(0, 0, 0, 0.6);
+      font-size: 13px;
     }
 
-    .session-item.current {
-      border-color: #89b4fa;
-    }
-
-    .new-session {
+    .mi {
       display: flex;
       align-items: center;
+      gap: 9px;
       width: 100%;
-      padding: 8px 12px;
-      background: transparent;
-      border: 1px dashed #45475a;
+      padding: 8px 10px;
+      border: none;
       border-radius: 6px;
+      background: transparent;
+      color: #c0caf5;
       cursor: pointer;
-      color: #89b4fa;
-      font-size: 14px;
-      font-family: inherit;
-      margin-top: 6px;
+      text-align: left;
+      font-size: 13px;
     }
 
-    .new-session:hover {
-      border-color: #89b4fa;
-      background: rgba(137, 180, 250, 0.08);
+    .mi:hover {
+      background: #1f2335;
+    }
+
+    .mi.sel {
+      background: #283457;
+    }
+
+    .mi.dim {
+      color: #565f89;
+    }
+
+    .mi.dim:hover {
+      background: #1f2335;
+      color: #c0caf5;
+    }
+
+    .ck {
+      width: 14px;
+      flex-shrink: 0;
+      color: #9ece6a;
+      display: flex;
+      align-items: center;
+    }
+
+    .sname {
+      flex: 1;
+    }
+
+    .kbd {
+      margin-left: auto;
+      color: #565f89;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    .sep {
+      height: 1px;
+      background: #2a2e3f;
+      margin: 5px 6px;
     }
   `;
 
@@ -136,22 +172,26 @@ export class MuxSessionPicker extends LitElement {
     if (this.inline) {
       return html`
         <div class="dropdown">
-          <div class="session-list">
-            ${this.sessions.map(
-              (s) => html`
-                <button
-                  class="session-item${s.name === this.currentSession ? ' current' : ''}"
-                  @click="${() => this._onSessionClick(s.name)}"
-                >
-                  <span class="session-name">${s.name}</span>
-                  <span class="session-meta"
-                    >${s.windows} ${s.windows === 1 ? 'window' : 'windows'}</span
-                  >
-                </button>
-              `,
-            )}
-          </div>
-          <button class="new-session" @click="${this._onNewSession}">+ New Session</button>
+          ${this.sessions.map(
+            (s, i) => html`
+              <button
+                class="mi ${s.name === this.currentSession ? 'sel' : ''}"
+                @click="${() => this._onSessionClick(s.name)}"
+              >
+                <span class="ck">
+                  ${s.name === this.currentSession ? icon(Check, { size: 12 }) : ''}
+                </span>
+                <span class="sname">${s.name}</span>
+                ${i < 2 ? html`<span class="kbd">⌃⇧${i + 1}</span>` : ''}
+              </button>
+            `,
+          )}
+          <div class="sep"></div>
+          <button class="mi dim" @click="${this._onNewSession}">
+            <span class="ck"></span>
+            ${icon(Plus, { size: 12 })}
+            <span>New session…</span>
+          </button>
         </div>
       `;
     }
