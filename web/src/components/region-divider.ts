@@ -12,7 +12,7 @@ export class MuxRegionDivider extends LitElement {
     }
 
     :host([direction='horizontal']) {
-      width: 8px;
+      width: 12px;
       cursor: col-resize;
     }
 
@@ -37,6 +37,15 @@ export class MuxRegionDivider extends LitElement {
     .handle.dragging {
       background: #292e42;
       color: #7aa2f7;
+    }
+
+    :host([direction='horizontal']) .handle::after {
+      content: '';
+      display: block;
+      width: 2px;
+      height: 24px;
+      background: #414868;
+      border-radius: 1px;
     }
 
     .lucide-icon {

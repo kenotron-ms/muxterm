@@ -146,16 +146,11 @@ export class MuxWorkspace extends LitElement {
 
       const totalWeight = this.workspace.regions.reduce((s, r) => s + r.weight, 0);
       // Use actual DOM width when available; fall back to 400 px for jsdom/test env
-      const totalPx = Math.max(
-        leftSlot?.getBoundingClientRect().width ?? 0,
-        this.getBoundingClientRect().width,
-        this.clientWidth,
-        400,
-      ) + Math.max(
-        rightSlot?.getBoundingClientRect().width ?? 0,
-        0,
-      );
-      const domTotal = Math.max(totalPx, 400);
+      const leftPx  = leftSlot?.getBoundingClientRect().width  ?? 0;
+      const rightPx = rightSlot?.getBoundingClientRect().width ?? 0;
+      const domTotal = (leftPx + rightPx) > 0
+        ? leftPx + rightPx
+        : Math.max(this.getBoundingClientRect().width, this.clientWidth, 400);
 
       const leftRatio = regions[leftIdx].weight / totalWeight;
       const rightRatio = regions[rightIdx].weight / totalWeight;
@@ -484,7 +479,7 @@ export class MuxWorkspace extends LitElement {
       (item) =>
         item.type === 'region'
           ? this._renderRegion(item.region)
-          : html`<mux-region-divider></mux-region-divider>`,
+          : html`<mux-region-divider direction="horizontal"></mux-region-divider>`,
     )}`;
   }
 

@@ -46,6 +46,19 @@ export class MuxPane extends LitElement {
            the viewport background always matches the terminal theme. */
         background-color: ${unsafeCSS(THEME.background)} !important;
       }
+      #container .xterm-viewport::-webkit-scrollbar {
+        width: 8px;
+      }
+      #container .xterm-viewport::-webkit-scrollbar-track {
+        background: ${unsafeCSS(THEME.background)};
+      }
+      #container .xterm-viewport::-webkit-scrollbar-thumb {
+        background: #414868;
+        border-radius: 4px;
+      }
+      #container .xterm-viewport::-webkit-scrollbar-thumb:hover {
+        background: #565f89;
+      }
     `,
   ];
 
