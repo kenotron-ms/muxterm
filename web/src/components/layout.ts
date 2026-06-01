@@ -60,6 +60,10 @@ export class MuxLayout extends LitElement {
   // Drag-start sizes: same key, value = [initialLeftChars, initialRightChars, totalContainerPx]
   private _dragInit = new Map<string, [number, number, number]>();
 
+  // True while the user holds a resize handle — prevents server layout-change events
+  // from snapping the layout back mid-drag. Not @state: no re-render needed.
+  private _isDragging = false;
+
   render() {
     if (!this.layoutString) {
       return html`<div class="empty">No panes</div>`;
@@ -74,8 +78,9 @@ export class MuxLayout extends LitElement {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown>): void {
-    if (changedProperties.has('layoutString') && this._localFlex.size > 0) {
+    if (changedProperties.has('layoutString') && this._localFlex.size > 0 && !this._isDragging) {
       // Server has sent a new layout — clear our local overrides
+      // (Guard: skip while dragging so server events can't snap layout mid-drag)
       this._localFlex = new Map();
       this._dragInit.clear();
     }
@@ -140,6 +145,7 @@ export class MuxLayout extends LitElement {
           html`<mux-resize-handle
             direction="${node.direction}"
             @resize-drag-start="${(e: Event) => {
+              this._isDragging = true;
               const handleEl = e.currentTarget as HTMLElement;
               const splitEl = handleEl.parentElement!;
               const containerPx = isHorizontal ? splitEl.clientWidth : splitEl.clientHeight;
@@ -158,29 +164,40 @@ export class MuxLayout extends LitElement {
               const newR = Math.max(1, totalChars - newL);
               const total = newL + newR;
 
-              // Instant local flex override — triggers immediate re-render
+              // Instant local flex override — triggers immediate re-render (no server call during drag)
               this._localFlex = new Map(this._localFlex.set(hkey, [newL / total, newR / total]));
-
-              // Dispatch up to app.ts for server call (fire-and-forget, no waiting)
-              this.dispatchEvent(
-                new CustomEvent('pane-resize-request', {
-                  bubbles: true,
-                  composed: true,
-                  detail: {
-                    leftPaneId: leftId,
-                    rightPaneId: rightId,
-                    direction: node.direction,
-                    leftChars: newL,
-                    rightChars: newR,
-                    leftWidth: isHorizontal ? newL : leftChild.width,
-                    leftHeight: isHorizontal ? leftChild.height : newL,
-                    rightWidth: isHorizontal ? newR : rightChild.width,
-                    rightHeight: isHorizontal ? rightChild.height : newR,
-                  },
-                }),
-              );
             }}"
             @resize-drag-end="${() => {
+              this._isDragging = false;
+
+              // Compute final sizes from current _localFlex override
+              const flex = this._localFlex.get(hkey);
+              const init = this._dragInit.get(hkey);
+              if (flex && init) {
+                const totalChars =
+                  (isHorizontal ? leftChild.width : leftChild.height) +
+                  (isHorizontal ? rightChild.width : rightChild.height);
+                const newL = Math.max(1, Math.round(flex[0] * totalChars));
+                const newR = Math.max(1, totalChars - newL);
+
+                // Fire ONE server resize on drop
+                this.dispatchEvent(
+                  new CustomEvent('pane-resize-request', {
+                    bubbles: true,
+                    composed: true,
+                    detail: {
+                      leftPaneId: leftId,
+                      rightPaneId: rightId,
+                      direction: node.direction,
+                      leftWidth: isHorizontal ? newL : leftChild.width,
+                      leftHeight: isHorizontal ? leftChild.height : newL,
+                      rightWidth: isHorizontal ? newR : rightChild.width,
+                      rightHeight: isHorizontal ? rightChild.height : newR,
+                    },
+                  }),
+                );
+              }
+
               this._dragInit.delete(hkey);
               // Keep _localFlex until layoutString prop updates (server will confirm)
             }}"
