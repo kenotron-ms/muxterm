@@ -55,6 +55,9 @@ func NewPane(
 	onExit func(localID int),
 ) (*Pane, error) {
 	if buf == nil {
+		// v1 default: RawBuffer. See the "Buffer bake-off result (Phase 5)"
+		// decision record in docs/plans/2026-06-01-session-persistence-design.md
+		// (Tracked/VT remain drop-in upgrades behind the PaneBuffer seam).
 		buf = NewRawBuffer(0)
 	}
 	argv = resolveArgv(argv)
