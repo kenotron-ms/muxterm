@@ -23,9 +23,6 @@ const (
 	oracleRows = 24
 )
 
-// esc is the ASCII escape byte as a string, for building escape sequences.
-const esc = "\x1b"
-
 // renderScreen feeds b to a fresh x/vt emulator and returns the canonical
 // plain-text grid (emu.String()). This is the oracle: two byte streams that
 // render to the same screen are considered equivalent.
