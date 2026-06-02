@@ -1,0 +1,196 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { MuxStore } from '../state';
+import { MuxSocket } from '../ws';
+import { SessiondType, decodePaneFrame } from '../types';
+
+/* ---- MockWebSocket ---- */
+
+const CONNECTING = 0;
+const OPEN = 1;
+const CLOSING = 2;
+const CLOSED = 3;
+
+class MockWebSocket {
+  static CONNECTING = CONNECTING;
+  static OPEN = OPEN;
+  static CLOSING = CLOSING;
+  static CLOSED = CLOSED;
+
+  CONNECTING = CONNECTING;
+  OPEN = OPEN;
+  CLOSING = CLOSING;
+  CLOSED = CLOSED;
+
+  url: string;
+  readyState: number = CONNECTING;
+  binaryType: string = '';
+  sent: unknown[] = [];
+
+  onopen: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+  onclose: ((ev: CloseEvent) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+  }
+
+  send(data: unknown): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.readyState = CLOSED;
+  }
+
+  simulateOpen(): void {
+    this.readyState = OPEN;
+    this.onopen?.(new Event('open'));
+  }
+
+  static instances: MockWebSocket[] = [];
+}
+
+/* ---- Install / remove global mock ---- */
+
+let origWebSocket: typeof globalThis.WebSocket;
+
+beforeEach(() => {
+  MockWebSocket.instances = [];
+  origWebSocket = globalThis.WebSocket;
+   
+  (globalThis as any).WebSocket = MockWebSocket;
+});
+
+afterEach(() => {
+   
+  (globalThis as any).WebSocket = origWebSocket;
+});
+
+/** Helper: build an open MuxSocket + its MockWebSocket. */
+function openSocket(): { mux: MuxSocket; ws: MockWebSocket } {
+  const store = new MuxStore();
+  const mux = new MuxSocket(store, 'ws://localhost:8080/ws');
+  mux.connect();
+  const ws = MockWebSocket.instances[0];
+  ws.simulateOpen();
+  return { mux, ws };
+}
+
+/** Helper: parse the last JSON text frame sent. */
+function lastJson(ws: MockWebSocket): Record<string, unknown> {
+  return JSON.parse(ws.sent[ws.sent.length - 1] as string) as Record<string, unknown>;
+}
+
+/* ---- Tests ---- */
+
+describe('MuxSocket sessiond senders', () => {
+  it('attach() emits flat {type:"attach", workspaceId}', () => {
+    const { mux, ws } = openSocket();
+    mux.attach('ws-1');
+
+    expect(ws.sent).toHaveLength(1);
+    expect(lastJson(ws)).toEqual({ type: SessiondType.Attach, workspaceId: 'ws-1' });
+  });
+
+  it('listWorkspaces() emits flat {type:"list-workspaces"}', () => {
+    const { mux, ws } = openSocket();
+    mux.listWorkspaces();
+
+    expect(ws.sent).toHaveLength(1);
+    expect(lastJson(ws)).toEqual({ type: SessiondType.ListWorkspaces });
+  });
+
+  it('createWorkspace() omits name; createWorkspace(name) includes it', () => {
+    const { mux, ws } = openSocket();
+
+    mux.createWorkspace();
+    expect(lastJson(ws)).toEqual({ type: SessiondType.CreateWorkspace });
+
+    mux.createWorkspace('alpha');
+    expect(lastJson(ws)).toEqual({ type: SessiondType.CreateWorkspace, name: 'alpha' });
+
+    // Empty string is falsy -> name omitted.
+    mux.createWorkspace('');
+    expect(lastJson(ws)).toEqual({ type: SessiondType.CreateWorkspace });
+  });
+
+  it('renameWorkspace() emits {type,workspaceId,name}', () => {
+    const { mux, ws } = openSocket();
+    mux.renameWorkspace('ws-9', 'renamed');
+
+    expect(lastJson(ws)).toEqual({
+      type: SessiondType.RenameWorkspace,
+      workspaceId: 'ws-9',
+      name: 'renamed',
+    });
+  });
+
+  it('closeWorkspace() emits {type,workspaceId}', () => {
+    const { mux, ws } = openSocket();
+    mux.closeWorkspace('ws-3');
+
+    expect(lastJson(ws)).toEqual({ type: SessiondType.CloseWorkspace, workspaceId: 'ws-3' });
+  });
+
+  it('createPane() carries no workspaceId; includes cmd only when non-empty', () => {
+    const { mux, ws } = openSocket();
+
+    mux.createPane();
+    const noCmd = lastJson(ws);
+    expect(noCmd).toEqual({ type: SessiondType.CreatePane });
+    expect('workspaceId' in noCmd).toBe(false);
+
+    mux.createPane([]);
+    expect(lastJson(ws)).toEqual({ type: SessiondType.CreatePane });
+
+    mux.createPane(['bash', '-l']);
+    const withCmd = lastJson(ws);
+    expect(withCmd).toEqual({ type: SessiondType.CreatePane, cmd: ['bash', '-l'] });
+    expect('workspaceId' in withCmd).toBe(false);
+  });
+
+  it('resize() carries paneId/cols/rows', () => {
+    const { mux, ws } = openSocket();
+    mux.resize(5, 120, 40);
+
+    expect(lastJson(ws)).toEqual({
+      type: SessiondType.Resize,
+      paneId: 5,
+      cols: 120,
+      rows: 40,
+    });
+  });
+
+  it('sendPaneInput() emits a binary frame that round-trips via decodePaneFrame', () => {
+    const { mux, ws } = openSocket();
+    const input = new Uint8Array([104, 105]); // "hi"
+    mux.sendPaneInput(7, input);
+
+    expect(ws.sent).toHaveLength(1);
+    const buf = ws.sent[0] as ArrayBuffer;
+    expect(buf).toBeInstanceOf(ArrayBuffer);
+
+    const { paneId, data } = decodePaneFrame(buf);
+    expect(paneId).toBe(7);
+    expect(Array.from(data)).toEqual([104, 105]);
+  });
+
+  it('senders do not throw when the socket is not open', () => {
+    const store = new MuxStore();
+    const mux = new MuxSocket(store, 'ws://localhost:8080/ws');
+    // never connected -> no underlying WebSocket
+
+    expect(() => {
+      mux.attach('ws-1');
+      mux.listWorkspaces();
+      mux.createWorkspace('x');
+      mux.renameWorkspace('ws-1', 'y');
+      mux.closeWorkspace('ws-1');
+      mux.createPane(['bash']);
+      mux.resize(1, 80, 24);
+      mux.sendPaneInput(1, new Uint8Array([1, 2, 3]));
+    }).not.toThrow();
+  });
+});

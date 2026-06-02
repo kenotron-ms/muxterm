@@ -1,4 +1,5 @@
 import type { ClientMessage, ServerMessage, TmuxState, Window, Pane, Session } from './types';
+import { SessiondType, encodePaneFrame, type SessiondMessage } from './types';
 import type { MuxStore } from './state';
 
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
@@ -271,12 +272,66 @@ export class MuxSocket {
 
   sendPaneInput(paneId: number, data: Uint8Array): void {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      const buf = new ArrayBuffer(4 + data.length);
-      const view = new DataView(buf);
-      view.setUint32(0, paneId, true); // little-endian
-      new Uint8Array(buf, 4).set(data);
-      this._ws.send(buf);
+      this._ws.send(encodePaneFrame(paneId, data));
     }
+  }
+
+  // --- sessiond v1 control senders -----------------------------------------
+  // All senders emit the FLAT SessiondMessage envelope (no single-key
+  // wrapping) and consume the frozen SessiondType vocabulary, never raw
+  // strings.
+
+  /** Send one flat sessiond control message if the socket is open. */
+  private sendSessiond(msg: SessiondMessage): void {
+    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+      this._ws.send(JSON.stringify(msg));
+    }
+  }
+
+  /** Attach this connection to a workspace. */
+  attach(workspaceId: string): void {
+    this.sendSessiond({ type: SessiondType.Attach, workspaceId });
+  }
+
+  /** Request the list of workspaces. */
+  listWorkspaces(): void {
+    this.sendSessiond({ type: SessiondType.ListWorkspaces });
+  }
+
+  /** Create a new workspace; name is included only when truthy. */
+  createWorkspace(name?: string): void {
+    const msg: SessiondMessage = { type: SessiondType.CreateWorkspace };
+    if (name) msg.name = name;
+    this.sendSessiond(msg);
+  }
+
+  /** Rename an existing workspace. */
+  renameWorkspace(workspaceId: string, name: string): void {
+    this.sendSessiond({ type: SessiondType.RenameWorkspace, workspaceId, name });
+  }
+
+  /** Close a workspace. */
+  closeWorkspace(workspaceId: string): void {
+    this.sendSessiond({ type: SessiondType.CloseWorkspace, workspaceId });
+  }
+
+  /**
+   * Create a connection-scoped pane (NO workspaceId). cmd is included only
+   * when it carries at least one argument.
+   */
+  createPane(cmd?: string[]): void {
+    const msg: SessiondMessage = { type: SessiondType.CreatePane };
+    if (cmd && cmd.length > 0) msg.cmd = cmd;
+    this.sendSessiond(msg);
+  }
+
+  /**
+   * Report a pane's measured rendered grid (active-view-wins by construction:
+   * only visible panes own a live ResizeObserver, so tabbed-away panes never
+   * call resize).
+   */
+  resize(paneId: number, cols: number, rows: number): void {
+    this.sendSessiond({ type: SessiondType.Resize, paneId, cols, rows });
   }
 
   sendControl(msg: ClientMessage): void {
