@@ -29,7 +29,9 @@ export class MuxStore {
   }
 
   get workspaces(): SessiondWorkspaceInfo[] {
-    return this._workspaces;
+    // Return fresh shallow copies so callers cannot mutate the authoritative
+    // base array or its entries in place.
+    return this._workspaces.map((w) => ({ ...w }));
   }
 
   get attached(): string | null {
@@ -37,7 +39,9 @@ export class MuxStore {
   }
 
   get panes(): SessiondPaneInfo[] {
-    return this._panes;
+    // Return fresh shallow copies so callers cannot mutate the authoritative
+    // base array or its entries in place.
+    return this._panes.map((p) => ({ ...p }));
   }
 
   // Pure device-independent projection of the frozen PaneInfo[] for the layout
