@@ -30,3 +30,28 @@ func TestCreateWorkspaceEchoesClientRefInList(t *testing.T) {
 		t.Fatalf("new workspace %q not present in List()", created.WorkspaceID)
 	}
 }
+
+// TestCreatePaneEchoesClientRefOnPaneAdded verifies that the create-pane handler
+// stamps the request's client-minted ref onto the authoritative pane-added
+// broadcast while still carrying a real server-assigned PaneID.
+func TestCreatePaneEchoesClientRefOnPaneAdded(t *testing.T) {
+	_, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	c := newTClient(t, socketPath)
+	c.send(&Message{Type: TypeCreateWorkspace, CID: 1, Name: "dev"})
+	created := c.waitCtrl(TypeWorkspaceCreated)
+
+	c.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: created.WorkspaceID})
+	c.waitCtrl(TypeComposition)
+
+	c.send(&Message{Type: TypeCreatePane, CID: 3, ClientRef: "tmp-pane-1"})
+	added := c.waitCtrl(TypePaneAdded)
+
+	if added.ClientRef != "tmp-pane-1" {
+		t.Fatalf("added.ClientRef = %q, want %q", added.ClientRef, "tmp-pane-1")
+	}
+	if added.PaneID == 0 {
+		t.Fatalf("added.PaneID = %d, want a real positive server-assigned id", added.PaneID)
+	}
+}

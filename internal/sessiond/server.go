@@ -322,7 +322,7 @@ func (c *conn) createPane(msg Message) {
 	}
 	c.srv.reg.PutPane(wsID, p)
 	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
-	c.srv.broadcast(wsID, &Message{Type: TypePaneAdded, WorkspaceID: wsID, PaneID: localID, Cols: cols, Rows: rows})
+	c.srv.broadcast(wsID, &Message{Type: TypePaneAdded, WorkspaceID: wsID, PaneID: localID, Cols: cols, Rows: rows, ClientRef: msg.ClientRef})
 }
 
 // closeWorkspace removes a workspace and kills its panes, broadcasting a
