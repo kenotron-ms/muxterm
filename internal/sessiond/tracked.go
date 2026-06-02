@@ -2,11 +2,17 @@ package sessiond
 
 import (
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/ansi/parser"
 )
 
 // defaultTrackedBudget is the default per-pane scrollback budget (~1 MiB) for a
 // TrackedBuffer.
 const defaultTrackedBudget = 1 << 20
+
+// groundState is the parser's neutral state: no escape sequence is in progress,
+// so a byte offset where the parser sits in groundState is a safe cut boundary
+// that never severs a sequence.
+const groundState = parser.GroundState
 
 // modeTracker accumulates "sticky" terminal state (SGR runs, modes, cursor,
 // title) observed by the parser so it can later be synthesized into a replay
@@ -216,17 +222,44 @@ func (b *TrackedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// trim performs a naive tail-retaining cut: when the ring exceeds budget it
-// keeps only the last budget bytes. This is replaced by a smarter strategy in
-// Task 8.
+// trim caps the ring at budget by dropping its head, but only at a safe escape
+// boundary: the initial byte-cut is advanced forward to the next offset where
+// the ANSI parser sits in its ground state, so the retained ring never begins
+// partway through an escape sequence (which would render as garbage on replay).
 func (b *TrackedBuffer) trim() {
 	if b.budget <= 0 || len(b.ring) <= b.budget {
 		return
 	}
 	cut := len(b.ring) - b.budget
-	retained := make([]byte, b.budget)
+	cut = nextSafeBoundary(b.ring, cut)
+	retained := make([]byte, len(b.ring)-cut)
 	copy(retained, b.ring[cut:])
 	b.ring = retained
+}
+
+// nextSafeBoundary returns the smallest offset >= from at which a cut leaves the
+// remainder starting on a clean escape-sequence boundary. It replays ring[:from]
+// through a throwaway parser to recover the mid-stream state, then advances one
+// byte at a time until the parser returns to ground state. If no such boundary
+// exists before the end, it returns len(ring) (drop everything).
+func nextSafeBoundary(ring []byte, from int) int {
+	if from <= 0 {
+		return 0
+	}
+	if from >= len(ring) {
+		return len(ring)
+	}
+	p := ansi.NewParser()
+	p.Parse(ring[:from])
+	idx := from
+	for idx < len(ring) {
+		if p.State() == groundState {
+			return idx
+		}
+		p.Parse(ring[idx : idx+1])
+		idx++
+	}
+	return len(ring)
 }
 
 // Replay returns a copy of the retained bytes. No synthetic preamble is emitted

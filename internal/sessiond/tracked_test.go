@@ -112,3 +112,47 @@ func TestTrackedBufferTwoTierAltScreen(t *testing.T) {
 		t.Errorf("ring did not resume growing after exit: len(ring)=%d, want > %d", len(b.ring), ringBefore)
 	}
 }
+
+// head returns the first n bytes of b (or all of b if shorter), for compact
+// failure messages.
+func head(b []byte, n int) []byte {
+	if n > len(b) {
+		n = len(b)
+	}
+	return b[:n]
+}
+
+// startsMidEscape reports whether b appears to begin in the middle of a severed
+// CSI escape sequence. It is a heuristic: a buffer that starts with ESC is a
+// clean sequence boundary (false), and a buffer that starts with ordinary text
+// is also fine (false). But a leading run of CSI param/final bytes
+// (digits, ';', or 'm') appearing before any ESC indicates the buffer was sliced
+// mid-sequence, leaving a dangling tail like "1m..." (true).
+func startsMidEscape(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	if b[0] == 0x1b {
+		return false // ESC-first: clean boundary.
+	}
+	c := b[0]
+	if (c >= '0' && c <= '9') || c == ';' || c == 'm' {
+		return true // looks like a severed CSI tail.
+	}
+	return false // ordinary-text-first: clean boundary.
+}
+
+// TestTrackedBufferSafeTrimNeverSeversEscape drives far more bytes than the
+// budget through the buffer so trimming fires repeatedly, then asserts the
+// retained ring never begins partway through an escape sequence. A naive
+// byte-cut can leave the ring starting at e.g. "1m..."; safe-boundary trimming
+// must cut only at parser ground-state boundaries.
+func TestTrackedBufferSafeTrimNeverSeversEscape(t *testing.T) {
+	b := NewTrackedBufferWithBudget(64)
+	for i := 0; i < 50; i++ {
+		b.Write([]byte("\x1b[31mabc\x1b[0mdef"))
+	}
+	if startsMidEscape(b.ring) {
+		t.Errorf("ring starts mid-escape: head=%q", head(b.ring, 8))
+	}
+}
