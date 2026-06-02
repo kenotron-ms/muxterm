@@ -36,9 +36,36 @@ type pending struct {
 }
 
 // Handlers holds callbacks for unsolicited events (Messages with CID == 0)
-// pushed by the daemon. It is guarded by Client.hmu. Fields are added by later
-// tasks as event types are wired up.
-type Handlers struct{}
+// pushed by the daemon. It is guarded by Client.hmu. Every callback runs on the
+// client's single read-loop goroutine and must not block for long; offload slow
+// work to another goroutine. Any callback may be nil, in which case its event is
+// dropped.
+type Handlers struct {
+	// OnPaneOutput receives live pane output (and attach replay) bytes for the
+	// workspace-local paneID. data is owned by the caller for the duration of
+	// the call only.
+	OnPaneOutput func(paneID uint32, data []byte)
+	// OnPaneAdded fires when a pane is created in the attached workspace,
+	// carrying the frozen PaneInfo for the new pane.
+	OnPaneAdded func(pane PaneInfo)
+	// OnPaneClosed fires when the pane identified by the workspace-local paneID
+	// is removed.
+	OnPaneClosed func(paneID int)
+	// OnWorkspaceClosed fires when the workspace identified by workspaceID is
+	// closed.
+	OnWorkspaceClosed func(workspaceID string)
+	// OnWorkspaceRenamed fires when the workspace identified by workspaceID is
+	// relabeled to name.
+	OnWorkspaceRenamed func(workspaceID, name string)
+}
+
+// SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
+// must be called before Run so the read loop sees a fully-populated Handlers.
+func (c *Client) SetHandlers(h Handlers) {
+	c.hmu.Lock()
+	c.handlers = h
+	c.hmu.Unlock()
+}
 
 // Dial opens a Unix-socket connection to the sessiond daemon at socketPath and
 // returns a connection-scoped Client.
@@ -254,10 +281,40 @@ func (c *Client) Resize(paneID, cols, rows int) error {
 	return WriteControl(c.conn, &Message{Type: TypeResize, PaneID: paneID, Cols: cols, Rows: rows})
 }
 
-// dispatchPaneData routes a decoded pane-data frame to the registered handler.
-// Wired up by a later task; a no-op stub for now.
-func (c *Client) dispatchPaneData(paneID uint32, data []byte) {}
+// dispatchPaneData routes a decoded pane-data frame to OnPaneOutput if set. It
+// runs on the read-loop goroutine, so the handler must not block for long.
+func (c *Client) dispatchPaneData(paneID uint32, data []byte) {
+	c.hmu.Lock()
+	fn := c.handlers.OnPaneOutput
+	c.hmu.Unlock()
+	if fn != nil {
+		fn(paneID, data)
+	}
+}
 
-// dispatchEvent routes an unsolicited event Message (CID == 0) to the registered
-// handlers. Wired up by a later task; a no-op stub for now.
-func (c *Client) dispatchEvent(msg *Message) {}
+// dispatchEvent routes an unsolicited event Message (CID == 0) to the matching
+// lifecycle handler. It runs on the read-loop goroutine, so handlers must not
+// block for long. Unknown event types are ignored.
+func (c *Client) dispatchEvent(msg *Message) {
+	c.hmu.Lock()
+	h := c.handlers
+	c.hmu.Unlock()
+	switch msg.Type {
+	case TypePaneAdded:
+		if h.OnPaneAdded != nil {
+			h.OnPaneAdded(PaneInfo{PaneID: msg.PaneID, Cols: msg.Cols, Rows: msg.Rows, Title: msg.Title})
+		}
+	case TypePaneClosed:
+		if h.OnPaneClosed != nil {
+			h.OnPaneClosed(msg.PaneID)
+		}
+	case TypeWorkspaceClosed:
+		if h.OnWorkspaceClosed != nil {
+			h.OnWorkspaceClosed(msg.WorkspaceID)
+		}
+	case TypeWorkspaceRenamed:
+		if h.OnWorkspaceRenamed != nil {
+			h.OnWorkspaceRenamed(msg.WorkspaceID, msg.Name)
+		}
+	}
+}

@@ -5,9 +5,16 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
+
+// itoa is a tiny helper for building expected log strings in tests.
+func itoa(n int) string {
+	return strconv.Itoa(n)
+}
 
 // fakeDaemon is an in-process Unix-socket server used to test the serve-side
 // Client in isolation. It accepts exactly one connection and hands it to a
@@ -413,5 +420,83 @@ func TestInputAndResize(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for resize control frame")
+	}
+}
+
+func TestHandlersReceiveOutputAndEvents(t *testing.T) {
+	fd := newFakeDaemon(t, func(conn net.Conn) {
+		_ = WritePaneData(conn, 5, []byte("hello"))
+		_ = WriteControl(conn, &Message{Type: TypePaneAdded, PaneID: 6, Cols: 80, Rows: 24, Title: "vim"})
+		_ = WriteControl(conn, &Message{Type: TypePaneClosed, PaneID: 5})
+		_ = WriteControl(conn, &Message{Type: TypeWorkspaceRenamed, WorkspaceID: "w1", Name: "ops"})
+		_ = WriteControl(conn, &Message{Type: TypeWorkspaceClosed, WorkspaceID: "w1"})
+		time.Sleep(100 * time.Millisecond)
+	})
+
+	c, err := Dial(fd.sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+
+	var mu sync.Mutex
+	var log []string
+	add := func(s string) {
+		mu.Lock()
+		log = append(log, s)
+		mu.Unlock()
+	}
+
+	c.SetHandlers(Handlers{
+		OnPaneOutput: func(paneID uint32, data []byte) {
+			add("out:" + itoa(int(paneID)) + ":" + string(data))
+		},
+		OnPaneAdded: func(pane PaneInfo) {
+			add("added:" + itoa(pane.PaneID) + ":" + pane.Title)
+		},
+		OnPaneClosed: func(paneID int) {
+			add("closed:" + itoa(paneID))
+		},
+		OnWorkspaceRenamed: func(workspaceID, name string) {
+			add("renamed:" + workspaceID + ":" + name)
+		},
+		OnWorkspaceClosed: func(workspaceID string) {
+			add("wsclosed:" + workspaceID)
+		},
+	})
+
+	go c.Run()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(log)
+		mu.Unlock()
+		if n >= 5 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for events; got %d, want >= 5", n)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	want := []string{
+		"out:5:hello",
+		"added:6:vim",
+		"closed:5",
+		"renamed:w1:ops",
+		"wsclosed:w1",
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(log) != len(want) {
+		t.Fatalf("log = %v, want %v", log, want)
+	}
+	for i := range want {
+		if log[i] != want[i] {
+			t.Errorf("log[%d] = %q, want %q", i, log[i], want[i])
+		}
 	}
 }
