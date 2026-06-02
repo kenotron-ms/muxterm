@@ -172,3 +172,47 @@ describe('MuxApp optimistic pane create', () => {
     expect(store.panes.length).toBe(2);
   });
 });
+
+describe('MuxApp one-terminal-per-workspace', () => {
+  let el: MuxApp;
+
+  afterEach(() => {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    store.applySessiond({ type: SessiondType.WorkspaceList, workspaces: [] });
+    (store as unknown as { _pending: Map<string, unknown> })._pending.clear();
+    store.applySessiond({ type: SessiondType.Composition, workspaceId: '', panes: [] });
+    terminalRegistry.prune(new Set());
+    el = null as unknown as MuxApp;
+  });
+
+  it('auto-spawns one pane when attaching a zero-pane workspace', async () => {
+    el = await fixture();
+    const socket = (el as unknown as {
+      _socket: { createPane: unknown; onSessiondMessage: (m: unknown) => void };
+    })._socket;
+    const sendSpy = vi.spyOn(socket as { createPane: (...a: unknown[]) => void }, 'createPane');
+
+    // Attaching a zero-pane composition triggers the one-terminal-per-workspace rule.
+    socket.onSessiondMessage({ type: SessiondType.Composition, workspaceId: 'w1', panes: [] });
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(store.panes.length).toBe(1);
+  });
+
+  it('does NOT auto-spawn when attaching a populated workspace', async () => {
+    el = await fixture();
+    const socket = (el as unknown as {
+      _socket: { createPane: unknown; onSessiondMessage: (m: unknown) => void };
+    })._socket;
+    const sendSpy = vi.spyOn(socket as { createPane: (...a: unknown[]) => void }, 'createPane');
+
+    socket.onSessiondMessage({
+      type: SessiondType.Composition,
+      workspaceId: 'w1',
+      panes: [{ paneId: 3, cols: 0, rows: 0 }],
+    });
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(store.panes.map((p) => p.paneId)).toEqual([3]);
+  });
+});

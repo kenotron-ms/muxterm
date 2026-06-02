@@ -20,6 +20,7 @@ import './components/reconnect-overlay.js';
 import type { LauncherAction } from './components/launcher-menu.js';
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
+import { SessiondType } from './types.js';
 
 // Optimistic panes use a strictly-negative temp paneId so they never collide
 // with the daemon's positive workspace-local ids (which start at 1); the real
@@ -213,6 +214,12 @@ export class MuxApp extends LitElement {
     this._socket.onSessiondMessage = (msg) => {
       store.applySessiond(msg);
       this._controller?.onMessage(msg);
+      // One-terminal-per-workspace: when a composition is applied and the folded
+      // store has zero panes, auto-spawn exactly one. Guarding on the FOLDED
+      // getter means an already-overlaid optimistic pane suppresses a double-spawn.
+      if (msg.type === SessiondType.Composition && store.panes.length === 0) {
+        this._createPaneOptimistic();
+      }
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
     // now optimistic so the provisional pane overlays instantly.
