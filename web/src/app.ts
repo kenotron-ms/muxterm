@@ -284,7 +284,6 @@ export class MuxApp extends LitElement {
   render() {
     const panes = store.panes;
     const arrangement = this._arrangement();
-    const activeTitle = panes.find((p) => p.paneId === arrangement.active)?.title ?? '';
 
     return html`
       <mux-title-bar @launcher-action="${this._onLauncherAction}"></mux-title-bar>
@@ -307,12 +306,10 @@ export class MuxApp extends LitElement {
             ></mux-composition>
           `}
       <mux-status-bar
-        sessionName="${store.attached ?? ''}"
-        .windowCount="${store.workspaces.length}"
-        .paneCount="${panes.length}"
-        activeWindowName="${activeTitle}"
+        .workspaces="${store.workspaces}"
+        .currentWorkspaceId="${store.attached ?? ''}"
         connectionStatus="${this._connectionStatus}"
-        @open-session-picker="${this._onOpenSessionPicker}"
+        @open-workspace-picker="${this._onOpenWorkspacePicker}"
       ></mux-status-bar>
       <div class="overlay ${this._connectionStatus === 'connected' ? 'hidden' : ''}">
         Connecting to muxterm...
@@ -368,8 +365,8 @@ export class MuxApp extends LitElement {
     }
   };
 
-  private _onOpenSessionPicker = (): void => {
-    this._showWorkspacePicker = true;
+  private _onOpenWorkspacePicker = (): void => {
+    this._showWorkspacePicker = !this._showWorkspacePicker;
   };
 
   /**

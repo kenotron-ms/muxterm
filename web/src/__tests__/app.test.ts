@@ -91,11 +91,11 @@ describe('MuxApp', () => {
     expect(panes.length).toBe(2);
   });
 
-  it('renders mux-status-bar with the attached workspace id', async () => {
+  it('passes the attached workspace id to the status bar', async () => {
     el = await fixture();
-    const statusBar = el.shadowRoot!.querySelector('mux-status-bar');
+    const statusBar = el.shadowRoot!.querySelector('mux-status-bar') as any;
     expect(statusBar).toBeTruthy();
-    expect(statusBar!.getAttribute('sessionname')).toBe('ws-1');
+    expect(statusBar.currentWorkspaceId).toBe('ws-1');
   });
 
   it('renders overlay div', async () => {
@@ -142,12 +142,11 @@ describe('MuxApp', () => {
     expect(el.shadowRoot!.querySelector('.empty-session')).toBeTruthy();
   });
 
-  it('passes paneCount and workspace count to status bar', async () => {
+  it('passes the workspace list to the status bar', async () => {
     el = await fixture();
     const statusBar = el.shadowRoot!.querySelector('mux-status-bar') as any;
     expect(statusBar).toBeTruthy();
-    // paneCount should be 2 (two panes in the composition)
-    expect(statusBar.paneCount).toBe(2);
+    expect(Array.isArray(statusBar.workspaces)).toBe(true);
   });
 
   it('disconnects socket on disconnectedCallback', async () => {
@@ -197,12 +196,12 @@ describe('MuxApp', () => {
       expect((el as any)._showWorkspacePicker).toBe(false);
     });
 
-    it('open-session-picker from mux-status-bar opens the workspace picker', async () => {
+    it('open-workspace-picker from mux-status-bar opens the workspace picker', async () => {
       el = await fixture();
       expect((el as any)._showWorkspacePicker).toBe(false);
       const statusBar = el.shadowRoot!.querySelector('mux-status-bar')!;
       statusBar.dispatchEvent(
-        new CustomEvent('open-session-picker', { bubbles: true, composed: true }),
+        new CustomEvent('open-workspace-picker', { bubbles: true, composed: true }),
       );
       await el.updateComplete;
       expect((el as any)._showWorkspacePicker).toBe(true);
