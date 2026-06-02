@@ -321,12 +321,20 @@ at least one workspace exists, so the client never has to invent an id.
 
 **Reaping (tmux parity).** When a workspace's **last pane exits**, the workspace is
 auto-reaped. Both auto-reap and explicit `CloseWorkspace(id)` fire a
-**`workspace-closed(id)`** event to **all** subscribers of that workspace. On
-receiving it, a co-attached client **detaches, calls `ListWorkspaces()`, and
-attaches to another workspace**; if reaping emptied the daemon, the daemon
-re-creates a fresh unnamed default, so the next attach always lands somewhere.
-Explicit `CloseWorkspace(id)` kills all its panes and removes it. (A
-"keep empty workspaces" config knob is deferred — YAGNI.)
+**`workspace-closed(id)`** event to **all** subscribers of that workspace.
+
+**Event ordering on last-pane-exit:** when the final pane in a workspace exits, the
+daemon fires `pane-closed` for that pane and **then** `workspace-closed` for the
+workspace. A client that receives `workspace-closed` should treat the workspace as
+gone and **ignore any trailing `pane-closed` for it**.
+
+On receiving `workspace-closed`, a co-attached client **detaches and attaches to
+the most-recently-active surviving workspace**; if none survive, the daemon
+re-creates a fresh unnamed default and the client attaches to that, so the next
+attach always lands somewhere. (This generalizes the first-connect "attach to the
+default" rule.) Clients discover the survivor set via `ListWorkspaces()`. Explicit
+`CloseWorkspace(id)` kills all its panes and removes it. (A "keep empty workspaces"
+config knob is deferred — YAGNI.)
 
 **Persistence boundary.** The workspace set lives in the daemon's in-memory registry
 — it survives `serve` restarts, but is **lost on daemon crash** (consistent with the
@@ -340,7 +348,7 @@ presentation is per-client, and exactly one resource is contested.**
 | Aspect | Shared or per-client? | Behavior |
 | --- | --- | --- |
 | **Composition** (which panes exist) | **Shared** | Browser A creates/closes a pane → daemon **broadcasts composition-change events (`pane-added`/`pane-closed`) to ALL subscribers of the workspace** → B spawns/destroys its xterm.js and re-runs its responsive arrangement. `pane-added` is **idempotent, dedup-keyed by `localPaneId`**, so the actor (which also gets the broadcast after its `CreatePane` ack) does not double-spawn. |
-| **Workspace existence** (open/closed) | **Shared** | If the workspace is reaped (last pane exits) or `CloseWorkspace`d, the daemon **broadcasts `workspace-closed(id)` to ALL subscribers**. Each co-attached client then **detaches, calls `ListWorkspaces()`, and attaches to another workspace** (the daemon re-creates a fresh unnamed default if it is now empty) — no client is left stranded on a dead workspace. A `RenameWorkspace` broadcasts **`workspace-renamed(id, name?)`** so every client updates its tab label. |
+| **Workspace existence** (open/closed) | **Shared** | If the workspace is reaped (last pane exits) or `CloseWorkspace`d, the daemon **broadcasts `workspace-closed(id)` to ALL subscribers**. Each co-attached client then **detaches and attaches to the most-recently-active surviving workspace** (or, if none survive, the daemon-recreated fresh unnamed default) — no client is left stranded on a dead workspace. On a last-pane-exit reap the daemon fires `pane-closed` then `workspace-closed`; a client that sees `workspace-closed` ignores any trailing `pane-closed` for that workspace. A `RenameWorkspace` broadcasts **`workspace-renamed(id, name?)`** so every client updates its tab label. |
 | **Pane output** (live bytes + scrollback) | **Shared/mirrored** | Both subscribe to the same PTY streams; both get the same replay + live feed (like two tmux clients on one session). |
 | **Input** (keystrokes) | **Shared** | Both can type into the same pane; keystrokes interleave at the PTY. No locking, no "driver" lock (YAGNI). |
 | **PTY size** | **Contested** (one PTY, one size) | **Active-view-wins:** whichever client most recently sent `Resize(paneID, CxR)` sets it; others reflow. Tabbed-away/unrendered panes send no resizes, so they don't fight. |
@@ -470,7 +478,9 @@ that does very little, so it rarely crashes.
   events (`workspace-closed`, `workspace-renamed`) and the **idempotent**
   `pane-added` / `pane-closed` events, alongside the request/reply messages
   (`Attach`, `CreatePane`, `ListWorkspaces`, `CreateWorkspace`, `RenameWorkspace`,
-  `CloseWorkspace`, `Resize`) and the `unknown-workspace` error. A
+  `CloseWorkspace`, `Resize`) and the `unknown-workspace` error. The schema must
+  give `unknown-workspace` a **stable error code/shape**, since two call sites
+  (`Attach`, `CreatePane`) depend on detecting and recovering from it. A
   `workspace-created` broadcast (live cross-client picker updates) is **deferred**.
 - **Cross-device arrangement memory** (daemon-side profile-keyed layouts) —
   explicitly deferred; confirm it stays deferred.
