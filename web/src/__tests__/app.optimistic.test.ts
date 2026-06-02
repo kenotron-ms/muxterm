@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { SessiondType } from '../types.js';
+import type { MuxWorkspacePicker } from '../components/workspace-picker.js';
 
 // Mock WebSocket before importing app (mirrors app.sessiond.test.ts).
 class MockWebSocket {
@@ -100,6 +101,70 @@ describe('MuxApp optimistic workspace-rename', () => {
     ).toBe(false);
 
     mutateSpy.mockRestore();
+  });
+});
+
+describe('MuxApp errored-row wiring', () => {
+  let el: MuxApp;
+
+  afterEach(() => {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    // Dismiss any lingering (errored/pending) mutations so they don't leak.
+    for (const m of store.erroredMutations) store.dismiss(m.id);
+    // Reset sessiond store state between tests.
+    store.applySessiond({ type: SessiondType.WorkspaceList, workspaces: [] });
+    store.applySessiond({ type: SessiondType.Composition, workspaceId: '', panes: [] });
+    el = null as unknown as MuxApp;
+    vi.useRealTimers();
+  });
+
+  it('passes store.erroredMutations into the picker and forwards retry/dismiss', async () => {
+    vi.useFakeTimers();
+    seedWorkspaces();
+    el = await openPicker();
+
+    const picker = el.shadowRoot!.querySelector('mux-workspace-picker') as MuxWorkspacePicker;
+
+    // Rename that never settles → times out into an errored mutation.
+    picker.dispatchEvent(
+      new CustomEvent('workspace-rename', {
+        bubbles: true,
+        composed: true,
+        detail: { workspaceId: 'ws-1', name: 'renamed' },
+      }),
+    );
+
+    vi.advanceTimersByTime(5000);
+    await el.updateComplete;
+
+    // The errored mutation prop is received by the picker.
+    expect(picker.erroredMutations.length).toBe(1);
+    expect(picker.erroredMutations[0].workspaceId).toBe('ws-1');
+
+    const retrySpy = vi.spyOn(store, 'retry');
+    const dismissSpy = vi.spyOn(store, 'dismiss');
+    const mutationId = store.erroredMutations[0].id;
+
+    picker.dispatchEvent(
+      new CustomEvent('workspace-retry', {
+        bubbles: true,
+        composed: true,
+        detail: { mutationId },
+      }),
+    );
+    expect(retrySpy).toHaveBeenCalledWith(mutationId);
+
+    picker.dispatchEvent(
+      new CustomEvent('workspace-dismiss', {
+        bubbles: true,
+        composed: true,
+        detail: { mutationId },
+      }),
+    );
+    expect(dismissSpy).toHaveBeenCalledWith(mutationId);
+
+    retrySpy.mockRestore();
+    dismissSpy.mockRestore();
   });
 });
 

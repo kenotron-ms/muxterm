@@ -323,10 +323,15 @@ export class MuxApp extends LitElement {
         ? html`<mux-workspace-picker
             .workspaces="${store.workspaces}"
             .currentWorkspaceId="${store.attached ?? ''}"
+            .erroredMutations="${store.erroredMutations}"
             @workspace-selected="${this._onWorkspaceSelected}"
             @workspace-create="${() => this._socket?.createWorkspace()}"
             @workspace-rename="${this._onWorkspaceRename}"
             @workspace-close="${this._onWorkspaceClose}"
+            @workspace-retry="${(e: CustomEvent<{ mutationId: string }>) =>
+              store.retry(e.detail.mutationId)}"
+            @workspace-dismiss="${(e: CustomEvent<{ mutationId: string }>) =>
+              store.dismiss(e.detail.mutationId)}"
             @close-picker="${() => {
               this._showWorkspacePicker = false;
             }}"
