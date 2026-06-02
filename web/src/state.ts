@@ -97,6 +97,10 @@ export class MuxStore {
     };
   }
 
+  get erroredMutations(): ErroredMutation[] {
+    return [];
+  }
+
   setActivePane(paneId: number): void {
     if (this._activePaneId === paneId) return;
     this._activePaneId = paneId;
@@ -170,6 +174,7 @@ export class MuxStore {
       default:
         return; // unhandled type: no state change, no notify
     }
+    this._settlePending();
     this._notify();
   }
 
@@ -185,6 +190,23 @@ export class MuxStore {
       record.optimistic(draft);
     }
     return draft;
+  }
+
+  // After the authoritative base updates, drop any pending mutation whose
+  // settled(base) predicate is now true so its overlay vanishes and the correct
+  // base shows through. Errored records are left for the user to retry/dismiss.
+  private _settlePending(): void {
+    const base: MutationBase = {
+      workspaces: this._workspaces,
+      panes: this._panes,
+    };
+    for (const record of this._pending.values()) {
+      if (record.errored) continue;
+      if (record.settled(base)) {
+        if (record.timer !== undefined) clearTimeout(record.timer);
+        this._pending.delete(record.id);
+      }
+    }
   }
 
   mutate(spec: MutationSpec): string {
