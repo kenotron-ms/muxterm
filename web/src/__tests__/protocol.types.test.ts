@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   SessiondType,
   SessiondErrorCode,
+  encodePaneFrame,
+  decodePaneFrame,
   type SessiondMessage,
   type SessiondWorkspaceInfo,
   type SessiondPaneInfo,
@@ -56,5 +58,25 @@ describe('sessiond protocol types', () => {
 
     const pane: SessiondPaneInfo = { paneId: 1, cols: 80, rows: 24, title: 'bash' };
     expect(Object.keys(pane).sort()).toEqual(['cols', 'paneId', 'rows', 'title']);
+  });
+});
+
+describe('sessiond binary pane frame', () => {
+  it('round-trips a binary-safe payload', () => {
+    const data = new Uint8Array([0x68, 0x69, 0x0a, 0x00, 0xff, 0x21]);
+    const got = decodePaneFrame(encodePaneFrame(1234, data));
+    expect(got.paneId).toBe(1234);
+    expect(Array.from(got.data)).toEqual(Array.from(data));
+  });
+
+  it('encodes paneId little-endian with no body', () => {
+    const buf = encodePaneFrame(1, new Uint8Array());
+    expect(Array.from(new Uint8Array(buf))).toEqual([0x01, 0x00, 0x00, 0x00]);
+  });
+
+  it('round-trips an empty payload', () => {
+    const got = decodePaneFrame(encodePaneFrame(9, new Uint8Array()));
+    expect(got.paneId).toBe(9);
+    expect(got.data.length).toBe(0);
   });
 });

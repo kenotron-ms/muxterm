@@ -175,3 +175,28 @@ export interface SessiondMessage {
   code?: SessiondErrorCodeValue;
   error?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Binary pane-data frame helpers
+//
+// WebSocket frame layout: [4-byte LITTLE-ENDIAN paneId][raw bytes]. Mirrors the
+// Go WritePaneData/DecodePaneData payload so ws.ts and later phases bridge
+// frames without rewriting them.
+// ---------------------------------------------------------------------------
+
+/** Encodes a pane-data frame: [4-byte little-endian paneId][raw bytes]. */
+export function encodePaneFrame(paneId: number, data: Uint8Array): ArrayBuffer {
+  const buf = new ArrayBuffer(4 + data.length);
+  const view = new DataView(buf);
+  view.setUint32(0, paneId, true);
+  new Uint8Array(buf, 4).set(data);
+  return buf;
+}
+
+/** Decodes a pane-data frame; returned data aliases the input buffer (no copy). */
+export function decodePaneFrame(buf: ArrayBuffer): { paneId: number; data: Uint8Array } {
+  const view = new DataView(buf);
+  const paneId = view.getUint32(0, true);
+  const data = new Uint8Array(buf, 4);
+  return { paneId, data };
+}
