@@ -124,6 +124,16 @@ func TestParseArgs_Install_WithFlags(t *testing.T) {
 	}
 }
 
+func TestParseArgs_Sessiond(t *testing.T) {
+	cfg, err := ParseArgs([]string{"sessiond"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Mode != "sessiond" {
+		t.Errorf("Mode = %q, want %q", cfg.Mode, "sessiond")
+	}
+}
+
 func TestParseArgs_Uninstall(t *testing.T) {
 	cfg, err := ParseArgs([]string{"uninstall"})
 	if err != nil {
