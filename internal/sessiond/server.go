@@ -256,7 +256,7 @@ func (c *conn) handle(msg Message) {
 	switch msg.Type {
 	case TypeCreateWorkspace:
 		id := c.srv.reg.AddWorkspace(msg.Name, msg.ClientRef)
-		c.reply(&Message{Type: TypeWorkspaceCreated, CID: msg.CID, WorkspaceID: id, Name: msg.Name})
+		c.reply(&Message{Type: TypeWorkspaceCreated, CID: msg.CID, WorkspaceID: id, Name: msg.Name, ClientRef: msg.ClientRef})
 		c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
 	case TypeListWorkspaces:
 		c.reply(&Message{Type: TypeWorkspaceList, CID: msg.CID, Workspaces: c.srv.reg.List()})
