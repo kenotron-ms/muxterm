@@ -60,11 +60,8 @@ export class MuxWorkspacePicker extends LitElement {
       background: #181825;
       border: 1px solid #45475a;
       border-radius: 6px;
-      cursor: pointer;
       color: #cdd6f4;
       font-size: 14px;
-      font-family: inherit;
-      text-align: left;
       transition: border-color 0.15s;
     }
 
@@ -75,6 +72,20 @@ export class MuxWorkspacePicker extends LitElement {
     .ws-item.sel {
       border-color: #89b4fa;
       background: #283457;
+    }
+
+    .ws-sel {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
     }
 
     .ck {
@@ -184,13 +195,15 @@ export class MuxWorkspacePicker extends LitElement {
             ${this.workspaces.map((w) => {
               const current = w.workspaceId === this.currentWorkspaceId;
               return html`
-                <button
-                  class="ws-item ${current ? 'sel' : ''}"
-                  @click="${() => this._onSelect(w.workspaceId)}"
-                >
-                  <span class="ck">${current ? icon(Check, { size: 12 }) : ''}</span>
-                  <span class="ws-name">${workspaceLabel(w)}</span>
-                  <span class="ws-meta">${w.paneCount} ${w.paneCount === 1 ? 'pane' : 'panes'}</span>
+                <div class="ws-item ${current ? 'sel' : ''}">
+                  <button
+                    class="ws-sel"
+                    @click="${() => this._onSelect(w.workspaceId)}"
+                  >
+                    <span class="ck">${current ? icon(Check, { size: 12 }) : ''}</span>
+                    <span class="ws-name">${workspaceLabel(w)}</span>
+                    <span class="ws-meta">${w.paneCount} ${w.paneCount === 1 ? 'pane' : 'panes'}</span>
+                  </button>
                   <button
                     class="row-action ws-rename"
                     title="Rename"
@@ -205,7 +218,7 @@ export class MuxWorkspacePicker extends LitElement {
                   >
                     ${icon(X, { size: 14 })}
                   </button>
-                </button>
+                </div>
               `;
             })}
           </div>

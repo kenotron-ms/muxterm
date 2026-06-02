@@ -38,15 +38,23 @@ describe('MuxWorkspacePicker', () => {
     expect(ctor).toBeDefined();
   });
 
-  it('renders one button.ws-item row per workspace', async () => {
+  it('renders one .ws-item row per workspace', async () => {
     el = await fixture(makeWorkspaces());
-    const items = el.shadowRoot!.querySelectorAll('button.ws-item');
+    const items = el.shadowRoot!.querySelectorAll('.ws-item');
     expect(items.length).toBe(3);
+  });
+
+  it('keeps rename + close actions inside a non-button .ws-item row', async () => {
+    el = await fixture(makeWorkspaces());
+    const item = el.shadowRoot!.querySelector('.ws-item')!;
+    expect(item).toBeTruthy();
+    expect(item.tagName).not.toBe('BUTTON');
+    expect(item.querySelectorAll('.row-action').length).toBe(2);
   });
 
   it('labels named workspaces by their name', async () => {
     el = await fixture(makeWorkspaces());
-    const names = Array.from(el.shadowRoot!.querySelectorAll('button.ws-item')).map(
+    const names = Array.from(el.shadowRoot!.querySelectorAll('.ws-item')).map(
       (btn) => btn.querySelector('.ws-name')?.textContent,
     );
     expect(names[0]).toBe('main');
@@ -55,7 +63,7 @@ describe('MuxWorkspacePicker', () => {
 
   it('labels unnamed workspaces by stable id fallback', async () => {
     el = await fixture(makeWorkspaces());
-    const names = Array.from(el.shadowRoot!.querySelectorAll('button.ws-item')).map(
+    const names = Array.from(el.shadowRoot!.querySelectorAll('.ws-item')).map(
       (btn) => btn.querySelector('.ws-name')?.textContent,
     );
     expect(names[1]).toBe('Workspace ws-2');
@@ -63,7 +71,7 @@ describe('MuxWorkspacePicker', () => {
 
   it('displays pane-count meta with correct pluralization', async () => {
     el = await fixture(makeWorkspaces());
-    const metas = Array.from(el.shadowRoot!.querySelectorAll('button.ws-item')).map(
+    const metas = Array.from(el.shadowRoot!.querySelectorAll('.ws-item')).map(
       (btn) => btn.querySelector('.ws-meta')?.textContent?.trim(),
     );
     expect(metas).toEqual(['3 panes', '1 pane', '2 panes']);
@@ -71,7 +79,7 @@ describe('MuxWorkspacePicker', () => {
 
   it('marks the current workspace with .sel', async () => {
     el = await fixture(makeWorkspaces(), 'ws-2');
-    const sel = el.shadowRoot!.querySelectorAll('button.ws-item.sel');
+    const sel = el.shadowRoot!.querySelectorAll('.ws-item.sel');
     expect(sel.length).toBe(1);
     expect(sel[0].querySelector('.ws-name')?.textContent).toBe('Workspace ws-2');
   });
@@ -81,8 +89,8 @@ describe('MuxWorkspacePicker', () => {
     const handler = vi.fn();
     el.addEventListener('workspace-selected', handler as EventListener);
 
-    const items = el.shadowRoot!.querySelectorAll('button.ws-item');
-    (items[1] as HTMLButtonElement).click();
+    const selectors = el.shadowRoot!.querySelectorAll('button.ws-sel');
+    (selectors[1] as HTMLButtonElement).click();
 
     expect(handler).toHaveBeenCalledTimes(1);
     const event = handler.mock.calls[0][0] as CustomEvent<{ workspaceId: string }>;
@@ -148,7 +156,7 @@ describe('MuxWorkspacePicker', () => {
     await picker.updateComplete;
     el = picker;
     expect(picker.workspaces).toEqual([]);
-    const items = picker.shadowRoot!.querySelectorAll('button.ws-item');
+    const items = picker.shadowRoot!.querySelectorAll('.ws-item');
     expect(items.length).toBe(0);
   });
 });
