@@ -115,10 +115,11 @@ export class MuxStore {
       }
 
       case SessiondType.WorkspaceRenamed: {
-        const ws = this._workspaces.find((w) => w.workspaceId === msg.workspaceId);
-        if (ws) {
-          ws.name = msg.name ? msg.name : undefined;
-        }
+        this._workspaces = this._workspaces.map((w) =>
+          w.workspaceId === msg.workspaceId
+            ? { ...w, name: msg.name ? msg.name : undefined }
+            : w,
+        );
         break;
       }
 

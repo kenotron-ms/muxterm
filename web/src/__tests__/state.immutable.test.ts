@@ -45,4 +45,18 @@ describe('MuxStore base immutability', () => {
     store.panes[0].title = 'HACKED';
     expect(store.panes[0].title).toBe('shell');
   });
+
+  it('applies WorkspaceRenamed immutably without mutating prior snapshots', () => {
+    const store = seeded();
+    const before = store.workspaces;
+    store.applySessiond({
+      type: SessiondType.WorkspaceRenamed,
+      workspaceId: 'w1',
+      name: 'renamed',
+    });
+    const after = store.workspaces;
+    expect(after).not.toBe(before);
+    expect(after.find((w) => w.workspaceId === 'w1')?.name).toBe('renamed');
+    expect(before.find((w) => w.workspaceId === 'w1')?.name).toBe('one');
+  });
 });
