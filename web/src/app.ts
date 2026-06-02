@@ -17,11 +17,12 @@ import './components/layout.js';
 import './components/status-bar.js';
 import './components/pane.js';
 import './components/resize-handle.js';
-import './components/session-picker.js';
+import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 import './components/workspace.js';
 import type { LauncherAction } from './components/launcher-menu.js';
 import { Workspace } from './lib/workspace.js';
+import { WorkspaceController } from './lib/workspace-controller.js';
 
 // ---------------------------------------------------------------------------
 // Module-level keybinding wiring
@@ -157,7 +158,7 @@ export class MuxApp extends LitElement {
   _connectionStatus: 'connected' | 'disconnected' | 'reconnecting' = 'disconnected';
 
   @state()
-  _showSessionPicker = false;
+  _showWorkspacePicker = false;
 
   @state()
   _sessions: SessionInfo[] = [];
@@ -171,11 +172,12 @@ export class MuxApp extends LitElement {
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
   private _workspace = new Workspace();
+  private _controller: WorkspaceController | null = null;
 
-  /** Close the session picker on Escape. */
+  /** Close the workspace picker on Escape. */
   private _onDocKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && this._showSessionPicker) {
-      this._showSessionPicker = false;
+    if (e.key === 'Escape' && this._showWorkspacePicker) {
+      this._showWorkspacePicker = false;
     }
   };
 
@@ -206,6 +208,17 @@ export class MuxApp extends LitElement {
 
     // Create WebSocket connection
     this._socket = new MuxSocket(store, buildWsUrl('/ws'));
+    // Browser-as-multiplexer coordination seam: feed every inbound frozen
+    // sessiond message to BOTH the store (wire-state truth) and the controller
+    // (next-action decisions: bootstrap, MRU, recovery).
+    this._controller = new WorkspaceController(store, this._socket);
+    this._socket.onSessiondMessage = (msg) => {
+      store.applySessiond(msg);
+      this._controller?.onMessage(msg);
+    };
+    // The split shortcut now creates a connection-scoped pane (create-pane);
+    // argv omitted ⇒ daemon default $SHELL.
+    uiActions.split = () => this._socket?.createPane();
     this._socket.onPaneOutput((paneId: number, data: Uint8Array) => {
       this._routePaneOutput(paneId, data);
     });
@@ -218,6 +231,9 @@ export class MuxApp extends LitElement {
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
+      // On (re)connect: attach the last/known workspace, or list + attach the
+      // first. This is where the old code requested the initial sync.
+      this._controller?.bootstrap();
     };
     this._socket.connect();
     this._connectionStatus = 'reconnecting';
@@ -299,9 +315,9 @@ export class MuxApp extends LitElement {
           const paneId = pane.id;
           terminalRegistry.ensure(paneId, {
             onInput: (data) => this._socket?.sendPaneInput(paneId, data),
-            // FitAddon resize is for xterm.js display only — tmux viewport sizing
-            // comes from resize-surface (CellBudgetManager), not per-pane callbacks.
-            onResize: () => {},
+            // Active-view-wins: only rendered/visible panes own a live
+            // ResizeObserver, so tabbed-away panes never report a resize.
+            onResize: (cols, rows) => this._controller?.reportResize(paneId, cols, rows),
           });
           liveIds.add(paneId);
         }
@@ -381,12 +397,18 @@ export class MuxApp extends LitElement {
             message="${this._reconnectMessage}"
           ></mux-reconnect-overlay>`
         : ''}
-      ${this._showSessionPicker
-        ? html`<mux-session-picker
-            .sessions="${this._sessions}"
-            @session-selected="${this._onSessionSelected}"
-            @close-picker="${() => { this._showSessionPicker = false; }}"
-          ></mux-session-picker>`
+      ${this._showWorkspacePicker
+        ? html`<mux-workspace-picker
+            .workspaces="${store.workspaces}"
+            .currentWorkspaceId="${store.attached ?? ''}"
+            @workspace-selected="${this._onWorkspaceSelected}"
+            @workspace-create="${() => this._socket?.createWorkspace()}"
+            @workspace-rename="${(e: CustomEvent<{ workspaceId: string; name: string }>) =>
+              this._socket?.renameWorkspace(e.detail.workspaceId, e.detail.name)}"
+            @workspace-close="${(e: CustomEvent<{ workspaceId: string }>) =>
+              this._socket?.closeWorkspace(e.detail.workspaceId)}"
+            @close-picker="${() => { this._showWorkspacePicker = false; }}"
+          ></mux-workspace-picker>`
         : ''}
     `;
   }
@@ -496,12 +518,23 @@ export class MuxApp extends LitElement {
   }
 
   private _onOpenSessionPicker = (): void => {
-    this._sessions = store.sessionList;
-    this._showSessionPicker = true;
+    this._showWorkspacePicker = true;
+  };
+
+  /**
+   * Switch the attached workspace. The daemon's composition reply re-populates
+   * the store, so we only dispose the previous workspace's terminals (paneIds
+   * are reused across workspaces) and request the attach.
+   */
+  private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
+    this._showWorkspacePicker = false;
+    if (e.detail.workspaceId === store.attached) return;
+    terminalRegistry.disposeAll();
+    this._socket?.attach(e.detail.workspaceId);
   };
 
   private _onSessionSelected = (e: CustomEvent<{ name: string }>): void => {
-    this._showSessionPicker = false;
+    this._showWorkspacePicker = false;
     const name = e.detail.name;
     this._socket?.sendControl({ type: 'attach-session', name });
 
@@ -527,21 +560,11 @@ export class MuxApp extends LitElement {
   private _onLauncherAction = (e: CustomEvent<{ action: LauncherAction }>): void => {
     const { action } = e.detail;
     switch (action) {
-      case 'new-session': {
-        // Create a new session with an optional name, then switch to it.
-        const name = window.prompt('Session name (leave blank for auto-name):')?.trim() ?? '';
-        this._socket?.sendControl({ type: 'create-session', name });
-        if (name) {
-          this._socket?.sendControl({ type: 'attach-session', name });
-          // Optimistic display switch.
-          if (this._workspace.regions.length > 0) {
-            this._workspace.regions[0].surface.sessionName = name;
-            this._workspace.regions[0].surface.windowId = 0;
-          }
-          this.requestUpdate();
-        }
+      case 'new-session':
+        // In the workspace model, "new session" opens the workspace picker
+        // where the user can create or switch workspaces.
+        this._showWorkspacePicker = true;
         break;
-      }
       case 'settings':
         // Ask the backend to open the config file in an editor ($EDITOR / vim / nano)
         // in a new tmux window named "settings".

@@ -256,37 +256,19 @@ describe('MuxApp', () => {
     el = null as any;
   });
 
-  describe('Session Picker', () => {
-    it('does not render session picker by default', async () => {
+  describe('Workspace Picker', () => {
+    it('does not render workspace picker by default', async () => {
       el = await fixture(makeState());
-      const picker = el.shadowRoot!.querySelector('mux-session-picker');
+      const picker = el.shadowRoot!.querySelector('mux-workspace-picker');
       expect(picker).toBeNull();
     });
 
-    it('renders session picker when showSessionPicker is true', async () => {
+    it('renders workspace picker when _showWorkspacePicker is true', async () => {
       el = await fixture(makeState());
-      (el as any)._showSessionPicker = true;
-      (el as any)._sessions = [
-        { name: 'dev', windows: 2 },
-        { name: 'test', windows: 1 },
-      ];
+      (el as any)._showWorkspacePicker = true;
       await el.updateComplete;
-      const picker = el.shadowRoot!.querySelector('mux-session-picker');
+      const picker = el.shadowRoot!.querySelector('mux-workspace-picker');
       expect(picker).toBeTruthy();
-    });
-
-    it('passes sessions to session picker', async () => {
-      el = await fixture(makeState());
-      const sessions = [
-        { name: 'dev', windows: 2 },
-        { name: 'staging', windows: 3 },
-      ];
-      (el as any)._showSessionPicker = true;
-      (el as any)._sessions = sessions;
-      await el.updateComplete;
-      const picker = el.shadowRoot!.querySelector('mux-session-picker') as any;
-      expect(picker).toBeTruthy();
-      expect(picker.sessions).toEqual(sessions);
     });
 
     it('updates sessions from store on session-list control message (no auto-open)', async () => {
@@ -304,7 +286,7 @@ describe('MuxApp', () => {
       await el.updateComplete;
 
       // Picker should NOT be auto-shown
-      const picker = el.shadowRoot!.querySelector('mux-session-picker');
+      const picker = el.shadowRoot!.querySelector('mux-workspace-picker');
       expect(picker).toBeNull();
 
       // _sessions should be updated from store.sessionList
@@ -314,7 +296,27 @@ describe('MuxApp', () => {
       ]);
     });
 
-    it('_onSessionSelected sends attach-session via typed sendControl and hides picker', async () => {
+    it('_onWorkspaceSelected disposes terminals and attaches the chosen workspace', async () => {
+      el = await fixture(makeState());
+      const disposeSpy = vi.spyOn(terminalRegistry, 'disposeAll');
+      const attached: string[] = [];
+      (el as any)._socket = {
+        attach: (id: string) => attached.push(id),
+        connected: true,
+        disconnect: () => {},
+      };
+      (el as any)._showWorkspacePicker = true;
+
+      (el as any)._onWorkspaceSelected(
+        new CustomEvent('workspace-selected', { detail: { workspaceId: 'ws-2' } }),
+      );
+
+      expect(disposeSpy).toHaveBeenCalled();
+      expect(attached).toContain('ws-2');
+      expect((el as any)._showWorkspacePicker).toBe(false);
+    });
+
+    it('_onSessionSelected (legacy) sends attach-session via typed sendControl and hides picker', async () => {
       el = await fixture(makeState());
       const sent: unknown[] = [];
       (el as any)._socket = {
@@ -322,28 +324,26 @@ describe('MuxApp', () => {
         connected: true,
         disconnect: () => {},
       };
-      (el as any)._showSessionPicker = true;
+      (el as any)._showWorkspacePicker = true;
 
       (el as any)._onSessionSelected(
         new CustomEvent('session-selected', { detail: { name: 'ops' } }),
       );
 
       expect(sent).toContainEqual({ type: 'attach-session', name: 'ops' });
-      expect((el as any)._showSessionPicker).toBe(false);
+      expect((el as any)._showWorkspacePicker).toBe(false);
     });
 
-    it('hides session picker and sends attach-session on session-selected', async () => {
+    it('hides picker and sends attach-session on session-selected from mux-workspace', async () => {
       el = await fixture(makeState());
       const socket = (el as any)._socket;
       const sendControlSpy = vi.spyOn(socket, 'sendControl');
 
-      // Show the picker first
-      (el as any)._showSessionPicker = true;
-      (el as any)._sessions = [{ name: 'dev', windows: 2 }];
+      (el as any)._showWorkspacePicker = true;
       await el.updateComplete;
 
-      const picker = el.shadowRoot!.querySelector('mux-session-picker')!;
-      picker.dispatchEvent(
+      const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
+      workspace.dispatchEvent(
         new CustomEvent('session-selected', {
           bubbles: true,
           composed: true,
@@ -353,9 +353,7 @@ describe('MuxApp', () => {
       await el.updateComplete;
 
       // Picker should be hidden
-      expect((el as any)._showSessionPicker).toBe(false);
-      const pickerAfter = el.shadowRoot!.querySelector('mux-session-picker');
-      expect(pickerAfter).toBeNull();
+      expect((el as any)._showWorkspacePicker).toBe(false);
 
       // Should have sent attach-session via sendControl
       expect(sendControlSpy).toHaveBeenCalledWith({ type: 'attach-session', name: 'dev' });
@@ -375,9 +373,9 @@ describe('MuxApp', () => {
       expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
-    it('sets _showSessionPicker true when launcher fires new-session', async () => {
+    it('sets _showWorkspacePicker true when launcher fires new-session', async () => {
       el = await fixture(makeState());
-      expect((el as any)._showSessionPicker).toBe(false);
+      expect((el as any)._showWorkspacePicker).toBe(false);
       const titleBar = el.shadowRoot!.querySelector('mux-title-bar')!;
       titleBar.dispatchEvent(
         new CustomEvent('launcher-action', {
@@ -387,19 +385,19 @@ describe('MuxApp', () => {
         }),
       );
       await el.updateComplete;
-      expect((el as any)._showSessionPicker).toBe(true);
+      expect((el as any)._showWorkspacePicker).toBe(true);
     });
 
-    it('open-session-picker from mux-workspace opens session picker', async () => {
+    it('open-session-picker from mux-workspace opens the workspace picker', async () => {
       el = await fixture(makeState());
-      expect((el as any)._showSessionPicker).toBe(false);
+      expect((el as any)._showWorkspacePicker).toBe(false);
       const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
       expect(workspace).toBeTruthy();
       workspace.dispatchEvent(
         new CustomEvent('open-session-picker', { bubbles: true, composed: true }),
       );
       await el.updateComplete;
-      expect((el as any)._showSessionPicker).toBe(true);
+      expect((el as any)._showWorkspacePicker).toBe(true);
     });
 
     it('_ensureActiveRegion does not open a region when one is detached (pop-out race)', async () => {

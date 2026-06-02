@@ -81,21 +81,21 @@ describe('MuxRegionTabstrip', () => {
     const chip = el.shadowRoot!.querySelector('.session-chip') as HTMLButtonElement;
     expect(chip).toBeTruthy();
 
-    // Before click: no inline picker present.
-    expect(el.shadowRoot!.querySelector('mux-session-picker')).toBeNull();
+    // Before click: no inline dropdown present.
+    expect(el.shadowRoot!.querySelector('.session-dropdown')).toBeNull();
 
     chip.click();
     await el.updateComplete;
 
-    // After click: inline picker is rendered inside the fixed portal.
-    expect(el.shadowRoot!.querySelector('mux-session-picker')).toBeTruthy();
+    // After click: inline dropdown is rendered inside the fixed portal.
+    expect(el.shadowRoot!.querySelector('.session-dropdown')).toBeTruthy();
     // And the old event is NOT emitted.
     expect(noEvent).not.toHaveBeenCalled();
 
     // Clicking again closes it.
     chip.click();
     await el.updateComplete;
-    expect(el.shadowRoot!.querySelector('mux-session-picker')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.session-dropdown')).toBeNull();
   });
 
   it('emits tab-select (bubbles, composed) with windowId on tab click, and emits region-maximize on maximize button', async () => {

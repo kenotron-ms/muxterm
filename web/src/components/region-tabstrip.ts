@@ -6,9 +6,8 @@ import type { Window, SessionInfo } from '../types.js';
 import { CHROME } from '../lib/theme.js';
 import type { RegionAction } from './region-menu.js';
 import './region-menu.js';
-import './session-picker.js';
 import { icon } from '../lib/icons.js';
-import { ChevronDown, Ellipsis, Maximize2, X } from 'lucide';
+import { Check, ChevronDown, Ellipsis, Maximize2, Plus, X } from 'lucide';
 
 @customElement('mux-region-tabstrip')
 export class MuxRegionTabstrip extends LitElement {
@@ -216,6 +215,74 @@ export class MuxRegionTabstrip extends LitElement {
     button .lucide-icon {
       pointer-events: none;
     }
+
+    /* Inline session dropdown (formerly mux-session-picker inline mode). */
+    .dropdown {
+      min-width: 208px;
+      background: #16161e;
+      border: 1px solid #2a2e3f;
+      border-radius: 9px;
+      padding: 5px;
+      box-shadow: 0 18px 46px rgba(0, 0, 0, 0.6);
+      font-size: 13px;
+    }
+
+    .mi {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: #c0caf5;
+      cursor: pointer;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    .mi:hover {
+      background: #1f2335;
+    }
+
+    .mi.sel {
+      background: #283457;
+    }
+
+    .mi.dim {
+      color: #565f89;
+    }
+
+    .mi.dim:hover {
+      background: #1f2335;
+      color: #c0caf5;
+    }
+
+    .ck {
+      width: 14px;
+      flex-shrink: 0;
+      color: #9ece6a;
+      display: flex;
+      align-items: center;
+    }
+
+    .sname {
+      flex: 1;
+    }
+
+    .kbd {
+      margin-left: auto;
+      color: #565f89;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    .sep {
+      height: 1px;
+      background: #2a2e3f;
+      margin: 5px 6px;
+    }
   `;
 
   @property({ type: String })
@@ -333,18 +400,15 @@ export class MuxRegionTabstrip extends LitElement {
     this._showSessionDropdown = true;
   }
 
-  /** Handle session-selected from the inline session picker. */
-  private _onSessionPickerSelected = (e: Event): void => {
-    e.stopPropagation();
+  /** Handle a session pick from the inline session dropdown. */
+  private _onSessionPickerSelected = (name: string): void => {
     this._showSessionDropdown = false;
     this._sessionDropdownRect = null;
-    const ev = e as CustomEvent<{ name: string }>;
-    this._emit('session-selected', { name: ev.detail.name });
+    this._emit('session-selected', { name });
   };
 
-  /** Handle new-session from the inline session picker. */
-  private _onSessionPickerNewSession = (e: Event): void => {
-    e.stopPropagation();
+  /** Handle "New session…" from the inline session dropdown. */
+  private _onSessionPickerNewSession = (): void => {
     this._showSessionDropdown = false;
     this._sessionDropdownRect = null;
     this._emit('new-session', {});
@@ -472,6 +536,7 @@ export class MuxRegionTabstrip extends LitElement {
 
       ${this._showSessionDropdown && this._sessionDropdownRect
         ? html`<div
+            class="session-dropdown"
             style="${styleMap({
               position: 'fixed',
               top: `${this._sessionDropdownRect.top}px`,
@@ -479,17 +544,28 @@ export class MuxRegionTabstrip extends LitElement {
               zIndex: '2000',
             })}"
           >
-            <mux-session-picker
-              .inline="${true}"
-              .sessions="${this.sessions}"
-              .currentSession="${this.activeSession}"
-              @session-selected="${this._onSessionPickerSelected}"
-              @new-session="${this._onSessionPickerNewSession}"
-              @close-picker="${() => {
-                this._showSessionDropdown = false;
-                this._sessionDropdownRect = null;
-              }}"
-            ></mux-session-picker>
+            <div class="dropdown">
+              ${this.sessions.map(
+                (s, i) => html`
+                  <button
+                    class="mi ${s.name === this.activeSession ? 'sel' : ''}"
+                    @click="${() => this._onSessionPickerSelected(s.name)}"
+                  >
+                    <span class="ck">
+                      ${s.name === this.activeSession ? icon(Check, { size: 12 }) : ''}
+                    </span>
+                    <span class="sname">${s.name}</span>
+                    ${i < 2 ? html`<span class="kbd">⌃⇧${i + 1}</span>` : ''}
+                  </button>
+                `,
+              )}
+              <div class="sep"></div>
+              <button class="mi dim" @click="${this._onSessionPickerNewSession}">
+                <span class="ck"></span>
+                ${icon(Plus, { size: 12 })}
+                <span>New session…</span>
+              </button>
+            </div>
           </div>`
         : ''}
     `;
