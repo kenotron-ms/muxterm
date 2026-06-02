@@ -90,12 +90,13 @@ export class MuxWorkspacePicker extends LitElement {
       cursor: pointer;
     }
 
-    .ck {
-      width: 14px;
+    .ws-check {
+      width: 16px;
       flex-shrink: 0;
       color: #9ece6a;
-      display: flex;
+      display: inline-flex;
       align-items: center;
+      justify-content: center;
     }
 
     .ws-name {
@@ -202,7 +203,7 @@ export class MuxWorkspacePicker extends LitElement {
                     class="ws-sel"
                     @click="${() => this._onSelect(w.workspaceId)}"
                   >
-                    <span class="ck">${current ? icon(Check, { size: 12 }) : ''}</span>
+                    <span class="ws-check">${current ? icon(Check, { size: 12 }) : ''}</span>
                     <span class="ws-name">${workspaceLabel(w)}</span>
                     <span class="ws-meta">${w.paneCount} ${w.paneCount === 1 ? 'pane' : 'panes'}</span>
                   </button>

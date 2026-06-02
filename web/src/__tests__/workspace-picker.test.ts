@@ -44,6 +44,14 @@ describe('MuxWorkspacePicker', () => {
     expect(items.length).toBe(3);
   });
 
+  it('renders a .ws-check column for every row, reserving space when not current', async () => {
+    el = await fixture(makeWorkspaces(), 'ws-2');
+    const checks = el.shadowRoot!.querySelectorAll('.ws-check');
+    expect(checks.length).toBe(3);
+    expect(checks[0].querySelector('svg')).toBeNull();
+    expect(checks[1].querySelector('svg')).not.toBeNull();
+  });
+
   it('keeps rename + close actions inside a non-button .ws-item row', async () => {
     el = await fixture(makeWorkspaces());
     const item = el.shadowRoot!.querySelector('.ws-item')!;
