@@ -125,3 +125,49 @@ func runNoTrim(t *testing.T, newBuf func() PaneBuffer, fixtures []fixture) {
 func TestRawBufferNoTrim(t *testing.T) {
 	runNoTrim(t, func() PaneBuffer { return NewRawBuffer(0) }, stickyFixtures())
 }
+
+// scoreTrimResilience measures how well a budgeted PaneBuffer survives forced
+// trimming. For each split offset k in [1,n) it constructs a buffer whose
+// budget equals the suffix length (n-k), writes the prefix f.bytes[:k] and then
+// the suffix f.bytes[k:]. Because the budget exactly fits the suffix, the
+// prefix is evicted, so only a buffer that reconstructs the dropped sticky
+// state (a Tracked synthetic preamble, or VT live-grid serialization) can still
+// render the golden screen. The score is the fraction of offsets whose Replay()
+// renders identically to the un-trimmed oracle screen; 1.0 means fully
+// trim-resilient. Streams shorter than 2 bytes have no interior split and score
+// 1.0 by definition.
+func scoreTrimResilience(newBudgeted func(budget int) PaneBuffer, f fixture) float64 {
+	n := len(f.bytes)
+	if n < 2 {
+		return 1.0
+	}
+	golden := renderScreen(f.bytes)
+	ok := 0
+	total := 0
+	for k := 1; k < n; k++ {
+		budget := n - k
+		buf := newBudgeted(budget)
+		_, _ = buf.Write(f.bytes[:k])
+		_, _ = buf.Write(f.bytes[k:])
+		if renderScreen(buf.Replay()) == golden {
+			ok++
+		}
+		total++
+	}
+	return float64(ok) / float64(total)
+}
+
+// TestRawBufferTrimBaseline records RawBuffer's trim-resilience scores for the
+// sticky fixtures as documented baseline data for the buffer bake-off. The
+// no-trim floor for Raw is asserted separately by TestRawBufferNoTrim; here the
+// sticky-state trim scores are only logged, NOT asserted. RawBuffer is allowed
+// to lose mid-screen sticky state under forced eviction (typically scoring
+// below 1.0 for SGR/color and alt-screen fixtures) -- that is precisely the
+// gap a TrackedBuffer/VTBuffer is expected to close.
+func TestRawBufferTrimBaseline(t *testing.T) {
+	newBudgeted := func(budget int) PaneBuffer { return NewRawBuffer(budget) }
+	for _, f := range stickyFixtures() {
+		score := scoreTrimResilience(newBudgeted, f)
+		t.Logf("RawBuffer trim-resilience %-22s = %.2f", f.name, score)
+	}
+}
