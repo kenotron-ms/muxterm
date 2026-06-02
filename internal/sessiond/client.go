@@ -235,6 +235,25 @@ func (c *Client) CreatePane(cmd []string) (int, error) {
 	return reply.PaneID, nil
 }
 
+// Input forwards keystroke bytes to the pane identified by the workspace-local
+// paneID as a binary FramePaneData frame, matching the live-output framing so
+// serve can bridge the body without rewriting it. It is connection-scoped: the
+// frame carries no workspaceId and targets the attached workspace.
+func (c *Client) Input(paneID uint32, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return WritePaneData(c.conn, paneID, data)
+}
+
+// Resize tells the daemon to resize the pane identified by the workspace-local
+// paneID to cols x rows. It is a connection-scoped control message carrying no
+// workspaceId and is fire-and-forget: the daemon sends no reply.
+func (c *Client) Resize(paneID, cols, rows int) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return WriteControl(c.conn, &Message{Type: TypeResize, PaneID: paneID, Cols: cols, Rows: rows})
+}
+
 // dispatchPaneData routes a decoded pane-data frame to the registered handler.
 // Wired up by a later task; a no-op stub for now.
 func (c *Client) dispatchPaneData(paneID uint32, data []byte) {}

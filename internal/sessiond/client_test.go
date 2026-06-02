@@ -342,3 +342,76 @@ func TestAttachUnknownWorkspace(t *testing.T) {
 		t.Errorf("de.Code = %q, want %q", de.Code, CodeUnknownWorkspace)
 	}
 }
+
+func TestInputAndResize(t *testing.T) {
+	type input struct {
+		paneID uint32
+		data   []byte
+	}
+	gotInput := make(chan input, 1)
+	gotResize := make(chan Message, 1)
+
+	fd := newFakeDaemon(t, func(conn net.Conn) {
+		for {
+			kind, payload, err := ReadFrame(conn)
+			if err != nil {
+				return
+			}
+			switch kind {
+			case FramePaneData:
+				paneID, data := DecodePaneData(payload)
+				gotInput <- input{paneID: paneID, data: data}
+			case FrameControl:
+				var req Message
+				mustUnmarshal(t, payload, &req)
+				if req.Type == TypeResize {
+					gotResize <- req
+				}
+			}
+		}
+	})
+
+	c, err := Dial(fd.sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	go c.Run()
+
+	if err := c.Input(3, []byte("ls\r")); err != nil {
+		t.Fatalf("Input: %v", err)
+	}
+	if err := c.Resize(3, 120, 30); err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+
+	select {
+	case in := <-gotInput:
+		if in.paneID != 3 {
+			t.Errorf("input paneID = %d, want 3", in.paneID)
+		}
+		if string(in.data) != "ls\r" {
+			t.Errorf("input data = %q, want %q", string(in.data), "ls\r")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for input frame")
+	}
+
+	select {
+	case rz := <-gotResize:
+		if rz.PaneID != 3 {
+			t.Errorf("resize PaneID = %d, want 3", rz.PaneID)
+		}
+		if rz.Cols != 120 {
+			t.Errorf("resize Cols = %d, want 120", rz.Cols)
+		}
+		if rz.Rows != 30 {
+			t.Errorf("resize Rows = %d, want 30", rz.Rows)
+		}
+		if rz.WorkspaceID != "" {
+			t.Errorf("resize WorkspaceID = %q, want \"\" (connection-scoped)", rz.WorkspaceID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for resize control frame")
+	}
+}
