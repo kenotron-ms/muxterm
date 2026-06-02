@@ -32,47 +32,49 @@ export class MuxWorkspacePicker extends LitElement {
       background: #1e1e2e;
       border: 1px solid #45475a;
       border-radius: 8px;
-      padding: 16px;
-      min-width: 280px;
-      max-width: 420px;
+      padding: 8px;
+      width: max-content;
+      min-width: 220px;
+      max-width: 360px;
       max-height: 70vh;
       overflow-y: auto;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     }
 
     h2 {
-      margin: 0 0 16px 0;
-      color: #cdd6f4;
-      font-size: 18px;
+      margin: 4px 8px 8px;
+      color: #6c7086;
+      font-size: 11px;
       font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
     }
 
     .ws-list {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 2px;
     }
 
     .ws-item {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       width: 100%;
-      padding: 12px 16px;
-      background: #181825;
-      border: 1px solid #45475a;
-      border-radius: 6px;
+      padding: 6px 8px;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
       color: #cdd6f4;
       font-size: 14px;
-      transition: border-color 0.15s;
+      transition: background-color 0.12s;
     }
 
     .ws-item:hover {
-      border-color: #89b4fa;
+      background: #2a2b3c;
     }
 
     .ws-item.sel {
-      border-color: #89b4fa;
       background: #283457;
     }
 
@@ -100,8 +102,11 @@ export class MuxWorkspacePicker extends LitElement {
     }
 
     .ws-name {
-      font-weight: 600;
+      font-weight: 500;
       flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .ws-meta {
@@ -120,10 +125,17 @@ export class MuxWorkspacePicker extends LitElement {
       cursor: pointer;
       padding: 4px;
       border-radius: 4px;
+      opacity: 0;
+      transition: opacity 0.12s, color 0.12s, background-color 0.12s;
+    }
+
+    .ws-item:hover .row-action,
+    .ws-item.sel .row-action {
+      opacity: 1;
     }
 
     .row-action:hover {
-      background: #313244;
+      background: #45475a;
       color: #cdd6f4;
     }
 
