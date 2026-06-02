@@ -81,3 +81,34 @@ func TestTrackedBufferCapturesTitle(t *testing.T) {
 		})
 	}
 }
+
+// TestTrackedBufferTwoTierAltScreen verifies the two-tier routing: while on the
+// alternate screen (CSI ?1049h) full-screen repaint output is routed to a single
+// replaceable alt-screen frame instead of growing the scrollback ring, and on
+// exit (CSI ?1049l) the frame is discarded and the ring resumes growing.
+func TestTrackedBufferTwoTierAltScreen(t *testing.T) {
+	b := NewTrackedBuffer()
+	b.Write([]byte("scrollback line\n"))
+	ringBefore := len(b.ring)
+
+	b.Write([]byte("\x1b[?1049h"))
+	for i := 0; i < 100; i++ {
+		b.Write([]byte("\x1b[2J\x1b[HFULLSCREEN REPAINT FRAME\n"))
+	}
+	if len(b.ring) != ringBefore {
+		t.Errorf("ring grew during alt-screen: len(ring)=%d, want %d", len(b.ring), ringBefore)
+	}
+	if !b.tracker.altScreen {
+		t.Errorf("altScreen = false during alt-screen, want true")
+	}
+
+	b.Write([]byte("\x1b[?1049l"))
+	if b.tracker.altScreen {
+		t.Errorf("altScreen = true after exit, want false")
+	}
+
+	b.Write([]byte("more scrollback\n"))
+	if len(b.ring) <= ringBefore {
+		t.Errorf("ring did not resume growing after exit: len(ring)=%d, want > %d", len(b.ring), ringBefore)
+	}
+}

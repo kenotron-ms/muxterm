@@ -54,10 +54,13 @@ func (t modeTracker) sgrPreamble() []byte {
 // parser handler is empty and Replay returns a raw copy of the ring; trimming is
 // naive (replaced in Task 8) and no synthetic preamble is emitted yet (Task 9).
 type TrackedBuffer struct {
-	budget  int
-	ring    []byte
-	parser  *ansi.Parser
-	tracker modeTracker
+	budget int
+	ring   []byte
+	// altFrame holds the single replaceable alternate-screen frame. It is NOT
+	// counted against budget and is discarded when the alt screen is exited.
+	altFrame []byte
+	parser   *ansi.Parser
+	tracker  modeTracker
 }
 
 // NewTrackedBuffer returns a TrackedBuffer with the default budget.
@@ -111,7 +114,18 @@ func (b *TrackedBuffer) onCSI(cmd ansi.Cmd, params ansi.Params) {
 		b.tracker.cursorRow = row
 		b.tracker.cursorCol = col
 	case 'h', 'l':
-		// Placeholder for private ('?') mode set/reset (alt screen, Task 7).
+		// Private ('?') alt-screen modes: 1049 (save+alt), 1047 (alt), 47 (alt).
+		if cmd.Prefix() != '?' {
+			return
+		}
+		mode, _, _ := params.Param(0, 0)
+		switch mode {
+		case 1049, 1047, 47:
+			// On set ('h') enter alt screen; on reset ('l') exit. Either way the
+			// alt-screen frame is reset (fresh on entry, discarded on exit).
+			b.tracker.altScreen = cmd.Final() == 'h'
+			b.altFrame = nil
+		}
 	}
 }
 
@@ -173,9 +187,32 @@ func itoa(n int) string {
 // budget, and reports len(p) bytes consumed. The (int, error) signature matches
 // the Phase-1 PaneBuffer seam and io.Writer.
 func (b *TrackedBuffer) Write(p []byte) (int, error) {
+	wasAlt := b.tracker.altScreen
 	b.parser.Parse(p)
-	b.ring = append(b.ring, p...)
-	b.trim()
+	nowAlt := b.tracker.altScreen
+
+	switch {
+	case !wasAlt && !nowAlt:
+		// Normal scrollback: append to the budgeted ring.
+		b.ring = append(b.ring, p...)
+		b.trim()
+	case wasAlt && nowAlt:
+		// Steady-state alt screen: route full-screen repaints to the single
+		// replaceable frame, never the ring.
+		b.altFrame = append(b.altFrame, p...)
+	default:
+		// The alt-screen mode toggled inside this chunk. PTY reads deliver the
+		// ?1049h/l toggle as its own small write in practice and golden tests
+		// write toggles in isolated Write calls, so we route the whole
+		// straddling chunk by its END state rather than splitting byte-exactly
+		// at the toggle (YAGNI).
+		if nowAlt {
+			b.altFrame = append(b.altFrame, p...)
+		} else {
+			b.ring = append(b.ring, p...)
+			b.trim()
+		}
+	}
 	return len(p), nil
 }
 
