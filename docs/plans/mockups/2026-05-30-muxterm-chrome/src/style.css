@@ -26,9 +26,9 @@ body{background:#0d0e14;font-family:"Segoe UI",-apple-system,system-ui,sans-seri
 .ibtn.hover{background:var(--btnhover)}
 .ibtn.wide{width:auto;padding:0 9px;font-size:12.5px;gap:6px}
 .ibtn.wide .car{color:var(--dim);font-size:9px}
-/* body / regions */
+/* body / surfaces */
 .body{flex:1;display:flex;overflow:hidden}
-.region{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.surface{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 /* VS Code tab strip */
 .rtabs{height:36px;display:flex;align-items:stretch;background:var(--tabbar);border-bottom:1px solid var(--tabsep)}
 .schip{display:flex;align-items:center;gap:6px;padding:0 12px;font-size:12.5px;color:var(--fg);background:var(--bgdark);border-right:1px solid var(--tabsep)}
@@ -68,7 +68,7 @@ body{background:#0d0e14;font-family:"Segoe UI",-apple-system,system-ui,sans-seri
 .tab{padding:7px 13px;border-radius:6px 6px 0 0;font-size:13px;color:var(--dim);background:transparent}
 .tab.active{color:var(--fg);background:var(--panel);border:1px solid var(--border);border-bottom:none}
 .plus{color:var(--dim);padding:7px 9px;font-size:14px}
-/* ---- session dropdown menu ---- */
+/* ---- workspace dropdown menu ---- */
 .schip{position:relative}
 .schip.open{background:var(--panel)}
 .menu{position:absolute;top:36px;left:0;background:var(--bgdark);border:1px solid var(--border);border-radius:9px;
@@ -104,3 +104,35 @@ body{background:#0d0e14;font-family:"Segoe UI",-apple-system,system-ui,sans-seri
 .sbar svg{width:11px;height:11px;display:inline-block;vertical-align:middle}
 /* Live status dot via CSS (replaces ● character) */
 .sbar .live{color:var(--green);width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+
+/* ===== workspace switcher in status bar (bottom-left) ===== */
+.sbar .wsw{position:relative;display:flex;align-items:center;gap:6px;color:var(--fg);
+  height:18px;padding:0 7px;border-radius:5px;cursor:default}
+.sbar .wsw:hover,.sbar .wsw.open{background:var(--btnhover)}
+.sbar .wsw .live{margin:0}
+.sbar .wsw .nm{font-size:11.5px;color:var(--fg)}
+.sbar .wsw .car{color:var(--dim);display:inline-flex;align-items:center}
+.sbar .wsw .car svg{width:11px;height:11px;display:block}
+/* upward-opening dropdown anchored above the status bar */
+.menu.up{top:auto;bottom:26px;left:0}
+/* workspace rows: name + rename / close affordances */
+.mi .acts{display:flex;align-items:center;gap:2px;margin-left:auto;padding-left:14px}
+.mi .act{width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:4px;color:var(--dim)}
+.mi .act:hover,.mi .act.hover{background:var(--btnhover);color:var(--fg)}
+.mi .act svg{width:12px;height:12px;display:block}
+.mi.new{color:var(--dim)}
+
+/* ===== narrow / responsive chrome ===== */
+.app.narrow{width:390px}
+.app.narrow .rtabs{overflow-x:auto}
+.rtabs.scroll{overflow-x:auto;scrollbar-width:none}
+.rtabs.scroll::-webkit-scrollbar{display:none}
+.rtabs .ovf{display:flex;align-items:center;padding:0 10px;color:var(--tabdim);font-size:12px;
+  white-space:nowrap;background:var(--tabbar);border-bottom:1px solid var(--tabsep)}
+.app.narrow .vtab{flex:none}
+.app.narrow .sbar .wsw .nm{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* mobile: new-tab "+" floats to the right of the tab strip (vs hugging the last tab on desktop).
+   neutralize the trailing spacer's flex-grow so the auto-margin (not the spacer) claims the free space. */
+.app.narrow .rtabs .spacer{flex:0 0 0}
+.app.narrow .rtabs .ctls{margin-left:auto}
