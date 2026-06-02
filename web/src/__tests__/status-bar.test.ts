@@ -55,7 +55,7 @@ describe('MuxStatusBar', () => {
     });
     const chip = el.shadowRoot!.querySelector('.workspace-switcher');
     expect(chip).toBeTruthy();
-    expect(chip!.textContent).toContain('w2');
+    expect(chip!.textContent).toContain('workspace 2');
   });
 
   it('emits open-workspace-picker (bubbles, composed) when the switcher is clicked', async () => {
