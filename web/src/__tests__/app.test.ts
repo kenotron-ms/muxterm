@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { terminalRegistry } from '../lib/terminal-registry.js';
 import { parseResolvedConfig } from '../lib/config.js';
+import { SessiondType } from '../types.js';
 
 // Mock WebSocket before importing app
 class MockWebSocket {
@@ -36,31 +37,20 @@ globalThis.WebSocket = MockWebSocket;
 import { installKeybindings } from '../app.js';
 import type { MuxApp } from '../app.js';
 import { store } from '../state.js';
-import type { TmuxState } from '../types.js';
 
-function makeState(overrides: Partial<TmuxState> = {}): TmuxState {
-  return {
-    sessions: [
-      {
-        name: 'main',
-        windows: [
-          { id: 1, name: 'bash', panes: [{ id: 5, width: 80, height: 24, active: true }], layout: '80x24,0,0,5' },
-          { id: 2, name: 'vim', panes: [{ id: 6, width: 80, height: 24, active: true }], layout: '80x24,0,0,6' },
-        ],
-      },
-    ],
-    activeSession: 'main',
-    activeWindow: 1,
-    activePane: 5,
-    ...overrides,
-  };
+/** Apply a sessiond composition (the live render source) to the store. */
+function applyComposition(
+  panes: { paneId: number; cols: number; rows: number; title?: string }[] = [
+    { paneId: 5, cols: 80, rows: 24 },
+    { paneId: 6, cols: 80, rows: 24 },
+  ],
+  workspaceId = 'ws-1',
+): void {
+  store.applySessiond({ type: SessiondType.Composition, workspaceId, panes });
 }
 
-async function fixture(state?: TmuxState): Promise<MuxApp> {
-  if (state) {
-    // Apply state via applyMessage
-    store.applyMessage({ type: 'state', data: state });
-  }
+async function fixture(withPanes = true): Promise<MuxApp> {
+  if (withPanes) applyComposition();
   const el = document.createElement('mux-app') as MuxApp;
   document.body.appendChild(el);
   await el.updateComplete;
@@ -74,11 +64,8 @@ describe('MuxApp', () => {
     if (el && el.parentNode) {
       el.parentNode.removeChild(el);
     }
-    // Reset store state
-    store.applyMessage({
-      type: 'state',
-      data: { sessions: [], activeSession: '', activeWindow: 0, activePane: 0 },
-    });
+    // Reset sessiond store state.
+    store.applySessiond({ type: SessiondType.Composition, workspaceId: '', panes: [] });
     // Clean up registry terminals created by _syncTerminals()
     terminalRegistry.prune(new Set());
   });
@@ -88,40 +75,38 @@ describe('MuxApp', () => {
     expect(ctor).toBeDefined();
   });
 
-  it('renders mux-workspace (tab-bar removed; tabs now inside each region)', async () => {
-    el = await fixture(makeState());
-    // The old mux-tab-bar is gone — the workspace renders per-region tabstrips.
-    const workspace = el.shadowRoot!.querySelector('mux-workspace');
-    expect(workspace).toBeTruthy();
-    // mux-tab-bar must NOT exist in the app shadow DOM (it was removed).
-    const tabBar = el.shadowRoot!.querySelector('mux-tab-bar');
-    expect(tabBar).toBeNull();
+  it('renders mux-composition (the live sessiond render surface); no mux-workspace', async () => {
+    el = await fixture();
+    const composition = el.shadowRoot!.querySelector('mux-composition');
+    expect(composition).toBeTruthy();
+    // The legacy tmux mux-workspace path is dead — it must NOT render.
+    expect(el.shadowRoot!.querySelector('mux-workspace')).toBeNull();
   });
 
-  it('renders mux-workspace for the active window', async () => {
-    el = await fixture(makeState());
-    const workspace = el.shadowRoot!.querySelector('mux-workspace');
-    expect(workspace).toBeTruthy();
+  it('renders a mux-pane host per composition pane', async () => {
+    el = await fixture();
+    const composition = el.shadowRoot!.querySelector('mux-composition')!;
+    await (composition as any).updateComplete;
+    const panes = composition.shadowRoot!.querySelectorAll('mux-pane');
+    expect(panes.length).toBe(2);
   });
 
-  it('renders mux-status-bar with session info', async () => {
-    el = await fixture(makeState());
+  it('renders mux-status-bar with the attached workspace id', async () => {
+    el = await fixture();
     const statusBar = el.shadowRoot!.querySelector('mux-status-bar');
     expect(statusBar).toBeTruthy();
-    expect(statusBar!.getAttribute('sessionname')).toBe('main');
-    expect(statusBar!.getAttribute('activewindowname')).toBe('bash');
+    expect(statusBar!.getAttribute('sessionname')).toBe('ws-1');
   });
 
   it('renders overlay div', async () => {
-    el = await fixture(makeState());
+    el = await fixture();
     const overlay = el.shadowRoot!.querySelector('.overlay');
     expect(overlay).toBeTruthy();
     expect(overlay!.textContent).toContain('Connecting to muxterm');
   });
 
   it('overlay is hidden when connected', async () => {
-    el = await fixture(makeState());
-    // Manually set connected status
+    el = await fixture();
     (el as any)._connectionStatus = 'connected';
     await el.updateComplete;
     const overlay = el.shadowRoot!.querySelector('.overlay');
@@ -129,94 +114,15 @@ describe('MuxApp', () => {
   });
 
   it('overlay is visible when disconnected', async () => {
-    el = await fixture(makeState());
+    el = await fixture();
     (el as any)._connectionStatus = 'disconnected';
     await el.updateComplete;
     const overlay = el.shadowRoot!.querySelector('.overlay');
     expect(overlay!.classList.contains('hidden')).toBe(false);
   });
 
-  it('translates tab-select event to sendControl select-window', async () => {
-    el = await fixture(makeState());
-    const socket = (el as any)._socket;
-    const sendControlSpy = vi.spyOn(socket, 'sendControl');
-
-    // Events now bubble from mux-workspace (where the handlers are bound).
-    const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
-    expect(workspace).toBeTruthy();
-    workspace.dispatchEvent(
-      new CustomEvent('tab-select', {
-        bubbles: true,
-        composed: true,
-        detail: { windowId: 2 },
-      }),
-    );
-
-    expect(sendControlSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'select-window', windowId: 2 }),
-    );
-  });
-
-  it('translates tab-new event to sendControl new-window', async () => {
-    el = await fixture(makeState());
-    const socket = (el as any)._socket;
-    const sendControlSpy = vi.spyOn(socket, 'sendControl');
-
-    const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
-    expect(workspace).toBeTruthy();
-    workspace.dispatchEvent(
-      new CustomEvent('tab-new', {
-        bubbles: true,
-        composed: true,
-      }),
-    );
-
-    expect(sendControlSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'new-window' }),
-    );
-  });
-
-  it('translates tab-close event to sendControl close-window with windowId', async () => {
-    el = await fixture(makeState());
-    const socket = (el as any)._socket;
-    const sendControlSpy = vi.spyOn(socket, 'sendControl');
-
-    const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
-    expect(workspace).toBeTruthy();
-    workspace.dispatchEvent(
-      new CustomEvent('tab-close', {
-        bubbles: true,
-        composed: true,
-        detail: { windowId: 1 },
-      }),
-    );
-
-    expect(sendControlSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'close-window', windowId: 1 }),
-    );
-  });
-
-  it('translates pane-focus event to sendControl select-pane', async () => {
-    el = await fixture(makeState());
-    const socket = (el as any)._socket;
-    const sendControlSpy = vi.spyOn(socket, 'sendControl');
-
-    const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
-    workspace.dispatchEvent(
-      new CustomEvent('pane-focus', {
-        bubbles: true,
-        composed: true,
-        detail: { paneId: 5 },
-      }),
-    );
-
-    expect(sendControlSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'select-pane', paneId: 5 }),
-    );
-  });
-
   it('_routePaneOutput calls terminalRegistry.write with paneId and data', async () => {
-    el = await fixture(makeState());
+    el = await fixture();
 
     const writeSpy = vi.spyOn(terminalRegistry, 'write');
     const testData = new Uint8Array([65, 66, 67]);
@@ -225,27 +131,27 @@ describe('MuxApp', () => {
     expect(writeSpy).toHaveBeenCalledWith(5, testData);
   });
 
-  it('renders empty state gracefully when no sessions', async () => {
-    el = await fixture();
-    // Should render without errors; title bar and status bar always present.
+  it('renders empty state gracefully when no panes', async () => {
+    el = await fixture(false);
+    // Title bar and status bar always present; no composition.
     const titleBar = el.shadowRoot!.querySelector('mux-title-bar');
     expect(titleBar).toBeTruthy();
     const statusBar = el.shadowRoot!.querySelector('mux-status-bar');
     expect(statusBar).toBeTruthy();
+    expect(el.shadowRoot!.querySelector('mux-composition')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.empty-session')).toBeTruthy();
   });
 
-  it('passes windowCount and paneCount to status bar', async () => {
-    el = await fixture(makeState());
+  it('passes paneCount and workspace count to status bar', async () => {
+    el = await fixture();
     const statusBar = el.shadowRoot!.querySelector('mux-status-bar') as any;
     expect(statusBar).toBeTruthy();
-    // windowCount should be 2 (two windows in the session)
-    expect(statusBar.windowCount).toBe(2);
-    // paneCount should be 1 (one pane in the active window)
-    expect(statusBar.paneCount).toBe(1);
+    // paneCount should be 2 (two panes in the composition)
+    expect(statusBar.paneCount).toBe(2);
   });
 
   it('disconnects socket on disconnectedCallback', async () => {
-    el = await fixture(makeState());
+    el = await fixture();
     const socket = (el as any)._socket;
     const disconnectSpy = vi.spyOn(socket, 'disconnect');
 
@@ -258,46 +164,21 @@ describe('MuxApp', () => {
 
   describe('Workspace Picker', () => {
     it('does not render workspace picker by default', async () => {
-      el = await fixture(makeState());
+      el = await fixture();
       const picker = el.shadowRoot!.querySelector('mux-workspace-picker');
       expect(picker).toBeNull();
     });
 
     it('renders workspace picker when _showWorkspacePicker is true', async () => {
-      el = await fixture(makeState());
+      el = await fixture();
       (el as any)._showWorkspacePicker = true;
       await el.updateComplete;
       const picker = el.shadowRoot!.querySelector('mux-workspace-picker');
       expect(picker).toBeTruthy();
     });
 
-    it('updates sessions from store on session-list control message (no auto-open)', async () => {
-      el = await fixture(makeState());
-      const socket = (el as any)._socket;
-
-      // Pre-populate store with a session list
-      store.applyMessage({
-        type: 'session-list',
-        data: { sessions: [{ name: 'dev', windows: 3 }, { name: 'staging', windows: 1 }] },
-      });
-
-      // Trigger the control message callback with the session-list key
-      socket._controlMessageCb?.({ 'session-list': { sessions: [] } });
-      await el.updateComplete;
-
-      // Picker should NOT be auto-shown
-      const picker = el.shadowRoot!.querySelector('mux-workspace-picker');
-      expect(picker).toBeNull();
-
-      // _sessions should be updated from store.sessionList
-      expect((el as any)._sessions).toEqual([
-        { name: 'dev', windows: 3 },
-        { name: 'staging', windows: 1 },
-      ]);
-    });
-
     it('_onWorkspaceSelected disposes terminals and attaches the chosen workspace', async () => {
-      el = await fixture(makeState());
+      el = await fixture();
       const disposeSpy = vi.spyOn(terminalRegistry, 'disposeAll');
       const attached: string[] = [];
       (el as any)._socket = {
@@ -316,65 +197,32 @@ describe('MuxApp', () => {
       expect((el as any)._showWorkspacePicker).toBe(false);
     });
 
-    it('_onSessionSelected (legacy) sends attach-session via typed sendControl and hides picker', async () => {
-      el = await fixture(makeState());
-      const sent: unknown[] = [];
-      (el as any)._socket = {
-        sendControl: (m: unknown) => sent.push(m),
-        connected: true,
-        disconnect: () => {},
-      };
-      (el as any)._showWorkspacePicker = true;
-
-      (el as any)._onSessionSelected(
-        new CustomEvent('session-selected', { detail: { name: 'ops' } }),
-      );
-
-      expect(sent).toContainEqual({ type: 'attach-session', name: 'ops' });
+    it('open-session-picker from mux-status-bar opens the workspace picker', async () => {
+      el = await fixture();
       expect((el as any)._showWorkspacePicker).toBe(false);
-    });
-
-    it('hides picker and sends attach-session on session-selected from mux-workspace', async () => {
-      el = await fixture(makeState());
-      const socket = (el as any)._socket;
-      const sendControlSpy = vi.spyOn(socket, 'sendControl');
-
-      (el as any)._showWorkspacePicker = true;
-      await el.updateComplete;
-
-      const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
-      workspace.dispatchEvent(
-        new CustomEvent('session-selected', {
-          bubbles: true,
-          composed: true,
-          detail: { name: 'dev' },
-        }),
+      const statusBar = el.shadowRoot!.querySelector('mux-status-bar')!;
+      statusBar.dispatchEvent(
+        new CustomEvent('open-session-picker', { bubbles: true, composed: true }),
       );
       await el.updateComplete;
-
-      // Picker should be hidden
-      expect((el as any)._showWorkspacePicker).toBe(false);
-
-      // Should have sent attach-session via sendControl
-      expect(sendControlSpy).toHaveBeenCalledWith({ type: 'attach-session', name: 'dev' });
+      expect((el as any)._showWorkspacePicker).toBe(true);
     });
   });
 
   describe('Title Bar + Launcher', () => {
-    it('renders title bar above everything (before mux-workspace)', async () => {
-      el = await fixture(makeState());
+    it('renders title bar above the composition', async () => {
+      el = await fixture();
       const titleBar = el.shadowRoot!.querySelector('mux-title-bar');
       expect(titleBar).toBeTruthy();
-      // The old mux-tab-bar is removed; check against mux-workspace instead.
-      const workspace = el.shadowRoot!.querySelector('mux-workspace');
-      expect(workspace).toBeTruthy();
-      // title bar must come before workspace in DOM order
-      const position = titleBar!.compareDocumentPosition(workspace!);
+      const composition = el.shadowRoot!.querySelector('mux-composition');
+      expect(composition).toBeTruthy();
+      // title bar must come before composition in DOM order
+      const position = titleBar!.compareDocumentPosition(composition!);
       expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it('sets _showWorkspacePicker true when launcher fires new-session', async () => {
-      el = await fixture(makeState());
+      el = await fixture();
       expect((el as any)._showWorkspacePicker).toBe(false);
       const titleBar = el.shadowRoot!.querySelector('mux-title-bar')!;
       titleBar.dispatchEvent(
@@ -387,51 +235,30 @@ describe('MuxApp', () => {
       await el.updateComplete;
       expect((el as any)._showWorkspacePicker).toBe(true);
     });
+  });
 
-    it('open-session-picker from mux-workspace opens the workspace picker', async () => {
-      el = await fixture(makeState());
-      expect((el as any)._showWorkspacePicker).toBe(false);
-      const workspace = el.shadowRoot!.querySelector('mux-workspace')!;
-      expect(workspace).toBeTruthy();
-      workspace.dispatchEvent(
-        new CustomEvent('open-session-picker', { bubbles: true, composed: true }),
-      );
+  describe('Config envelope', () => {
+    it('consumes the {type:config,...} envelope: sets store config', async () => {
+      el = await fixture();
+      const socket = (el as any)._socket;
+      socket._controlMessageCb?.({
+        type: 'config',
+        config: { font: { size: 17 } },
+      });
       await el.updateComplete;
-      expect((el as any)._showWorkspacePicker).toBe(true);
-    });
-
-    it('_ensureActiveRegion does not open a region when one is detached (pop-out race)', async () => {
-      el = await fixture(makeState());
-      const ws = (el as any)._workspace;
-      // The workspace starts with 1 region auto-opened by _ensureActiveRegion
-      expect(ws.regions.length).toBe(1);
-      const region = ws.regions[0];
-
-      // Simulate _detachRegion: remove from regions and track as detached
-      ws.regions = [];
-      // After fix: detachedRegionIds exists and blocks _ensureActiveRegion from re-creating
-      if (ws.detachedRegionIds) {
-        ws.detachedRegionIds.add(region.id);
-      }
-
-      // Trigger willUpdate → _ensureActiveRegion
-      el.requestUpdate();
-      await el.updateComplete;
-
-      // regions must still be empty — no ghost region was created
-      expect(ws.regions.length).toBe(0);
+      expect(store.config.font.size).toBe(17);
     });
   });
 
   describe('Reconnect Overlay', () => {
     it('does not render reconnect overlay by default', async () => {
-      el = await fixture(makeState());
+      el = await fixture();
       const overlay = el.shadowRoot!.querySelector('mux-reconnect-overlay');
       expect(overlay).toBeNull();
     });
 
     it('renders reconnect overlay when showReconnectOverlay is true', async () => {
-      el = await fixture(makeState());
+      el = await fixture();
       (el as any)._showReconnectOverlay = true;
       (el as any)._reconnectMessage = 'Connection lost. Reconnecting...';
       await el.updateComplete;
@@ -441,10 +268,9 @@ describe('MuxApp', () => {
     });
 
     it('shows overlay when onDisconnect fires', async () => {
-      el = await fixture(makeState());
+      el = await fixture();
       const socket = (el as any)._socket;
 
-      // Trigger onDisconnect
       socket.onDisconnect?.();
       await el.updateComplete;
 
@@ -454,15 +280,13 @@ describe('MuxApp', () => {
     });
 
     it('hides overlay when onReconnect fires', async () => {
-      el = await fixture(makeState());
+      el = await fixture();
       const socket = (el as any)._socket;
 
-      // Show overlay first
       socket.onDisconnect?.();
       await el.updateComplete;
       expect((el as any)._showReconnectOverlay).toBe(true);
 
-      // Reconnect
       socket.onReconnect?.();
       await el.updateComplete;
 
@@ -472,10 +296,9 @@ describe('MuxApp', () => {
     });
 
     it('shows overlay with reason on detached control message', async () => {
-      el = await fixture(makeState());
+      el = await fixture();
       const socket = (el as any)._socket;
 
-      // Trigger control message with detached key
       const detachedMsg = { detached: { reason: 'Session ended by admin' } };
       socket._controlMessageCb?.(detachedMsg);
       await el.updateComplete;
