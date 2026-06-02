@@ -92,7 +92,7 @@ export class MuxStore {
   // engine. Keeps lib/layout.ts free of wire types.
   get composition(): Composition {
     return {
-      paneIds: this._panes.map((p) => p.paneId),
+      paneIds: this._foldedView().panes.map((p) => p.paneId),
       activePaneId: this._activePaneId,
     };
   }

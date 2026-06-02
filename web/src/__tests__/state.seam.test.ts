@@ -97,3 +97,22 @@ describe('folded panes getter', () => {
     expect(store.panes.map((p) => p.paneId)).toEqual([5, 999]);
   });
 });
+
+describe('composition reads the folded view', () => {
+  it('shows an optimistic pane through store.composition.paneIds (no split-brain)', () => {
+    const store = new MuxStore();
+    store.applySessiond(
+      composition('ws-1', [{ paneId: 5, cols: 80, rows: 24 }]),
+    );
+
+    store.mutate({
+      kind: 'create-pane',
+      optimistic: (draft) => {
+        draft.panes.push({ paneId: 999, cols: 80, rows: 24 });
+      },
+      settled: (base) => base.panes.some((p) => p.paneId === 999),
+    });
+
+    expect(store.composition.paneIds).toEqual([5, 999]);
+  });
+});
