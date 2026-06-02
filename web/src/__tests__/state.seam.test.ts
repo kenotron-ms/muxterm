@@ -7,6 +7,15 @@ const workspaceList = (
   workspaces: { workspaceId: string; name?: string; paneCount: number }[],
 ): SessiondMessage => ({ type: SessiondType.WorkspaceList, workspaces });
 
+const composition = (
+  workspaceId: string,
+  panes: { paneId: number; cols: number; rows: number; title?: string }[],
+): SessiondMessage => ({
+  type: SessiondType.Composition,
+  workspaceId,
+  panes,
+});
+
 describe('MuxStore optimistic-mutation seam', () => {
   it('applies an optimistic rename over the base in store.workspaces', () => {
     const store = new MuxStore();
@@ -67,5 +76,24 @@ describe('MuxStore optimistic-mutation seam', () => {
 
     expect(typeof id).toBe('string');
     expect(commits).toBe(1);
+  });
+});
+
+describe('folded panes getter', () => {
+  it('applies an optimistic pane add over the base in store.panes', () => {
+    const store = new MuxStore();
+    store.applySessiond(
+      composition('ws-1', [{ paneId: 5, cols: 80, rows: 24 }]),
+    );
+
+    store.mutate({
+      kind: 'create-pane',
+      optimistic: (draft) => {
+        draft.panes.push({ paneId: 999, cols: 80, rows: 24 });
+      },
+      settled: (base) => base.panes.some((p) => p.paneId === 999),
+    });
+
+    expect(store.panes.map((p) => p.paneId)).toEqual([5, 999]);
   });
 });

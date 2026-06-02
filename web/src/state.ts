@@ -84,9 +84,8 @@ export class MuxStore {
   }
 
   get panes(): SessiondPaneInfo[] {
-    // Return fresh shallow copies so callers cannot mutate the authoritative
-    // base array or its entries in place.
-    return this._panes.map((p) => ({ ...p }));
+    // Fold the pending optimistic overlay over a fresh copy of the base.
+    return this._foldedView().panes;
   }
 
   // Pure device-independent projection of the frozen PaneInfo[] for the layout
