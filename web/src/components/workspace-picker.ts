@@ -18,10 +18,11 @@ export class MuxWorkspacePicker extends LitElement {
     .overlay {
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.85);
+      background: transparent;
       display: flex;
-      align-items: center;
-      justify-content: center;
+      align-items: flex-end;
+      justify-content: flex-start;
+      padding: 0 0 32px 12px;
       z-index: 2000;
     }
 
@@ -29,9 +30,12 @@ export class MuxWorkspacePicker extends LitElement {
       background: #1e1e2e;
       border: 1px solid #45475a;
       border-radius: 8px;
-      padding: 24px;
-      min-width: 320px;
-      max-width: 480px;
+      padding: 16px;
+      min-width: 280px;
+      max-width: 420px;
+      max-height: 70vh;
+      overflow-y: auto;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     }
 
     h2 {
