@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -38,6 +40,43 @@ func SocketPath() (string, error) {
 // SocketPath for details.
 func DefaultLogPath() (string, error) {
 	return filepath.Join(socketDir(), "sessiond.log"), nil
+}
+
+// SpawnCommand launches name with args as a detached child process and returns
+// its handle. Stdin is detached and both stdout and stderr are redirected to the
+// append-mode log file at logPath (its parent directory is created if needed).
+//
+// The child is placed in a brand-new session via Setsid, so it has no
+// controlling terminal and is the leader of its own process group. When the
+// launching process exits, the child reparents to init and survives — this is
+// the manual/dev/SSH persistence path.
+func SpawnCommand(name string, args []string, logPath string) (*os.Process, error) {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		return nil, fmt.Errorf("creating log directory: %w", err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("opening log file: %w", err)
+	}
+	defer logFile.Close()
+
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = nil
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting %s: %w", name, err)
+	}
+	return cmd.Process, nil
+}
+
+// Spawn launches the current executable as a detached sessiond daemon, logging
+// to logPath. It is a thin convenience wrapper over SpawnCommand.
+func Spawn(logPath string) (*os.Process, error) {
+	exe, _ := os.Executable()
+	return SpawnCommand(exe, []string{"sessiond"}, logPath)
 }
 
 // IsAlive reports whether a daemon is currently accepting connections on the
