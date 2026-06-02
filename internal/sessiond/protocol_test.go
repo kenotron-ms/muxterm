@@ -168,3 +168,88 @@ func TestReadFrameTruncatedPayload(t *testing.T) {
 		t.Errorf("ReadFrame error = %v, want io.ErrUnexpectedEOF or io.EOF", err)
 	}
 }
+
+// TestWritePaneDataRoundTrip writes a binary-safe pane-data frame and reads it
+// back, asserting the frame kind, decoded paneID, and exact byte payload.
+func TestWritePaneDataRoundTrip(t *testing.T) {
+	data := []byte{'h', 'i', '\n', 0x00, 0xff, '!'}
+
+	var buf bytes.Buffer
+	if err := WritePaneData(&buf, 1234, data); err != nil {
+		t.Fatalf("WritePaneData returned error: %v", err)
+	}
+
+	kind, payload, err := ReadFrame(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrame returned error: %v", err)
+	}
+	if kind != FramePaneData {
+		t.Fatalf("kind = %#x, want FramePaneData (%#x)", kind, FramePaneData)
+	}
+
+	paneID, gotData := DecodePaneData(payload)
+	if paneID != 1234 {
+		t.Errorf("paneID = %d, want 1234", paneID)
+	}
+	if !bytes.Equal(gotData, data) {
+		t.Errorf("data = %#v, want %#v", gotData, data)
+	}
+}
+
+// TestWritePaneDataLittleEndian asserts the on-wire paneId is encoded
+// little-endian, matching the existing browser framing that serve bridges
+// unchanged.
+func TestWritePaneDataLittleEndian(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WritePaneData(&buf, 1, nil); err != nil {
+		t.Fatalf("WritePaneData returned error: %v", err)
+	}
+
+	_, payload, err := ReadFrame(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrame returned error: %v", err)
+	}
+
+	want := []byte{0x01, 0x00, 0x00, 0x00}
+	if !bytes.Equal(payload, want) {
+		t.Errorf("payload = %#v, want %#v (paneId=1 little-endian, no body)", payload, want)
+	}
+}
+
+// TestWritePaneDataEmptyBody asserts a pane-data frame with an empty body
+// decodes to the correct paneID and a zero-length payload.
+func TestWritePaneDataEmptyBody(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WritePaneData(&buf, 9, []byte{}); err != nil {
+		t.Fatalf("WritePaneData returned error: %v", err)
+	}
+
+	kind, payload, err := ReadFrame(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrame returned error: %v", err)
+	}
+	if kind != FramePaneData {
+		t.Fatalf("kind = %#x, want FramePaneData (%#x)", kind, FramePaneData)
+	}
+
+	paneID, data := DecodePaneData(payload)
+	if paneID != 9 {
+		t.Errorf("paneID = %d, want 9", paneID)
+	}
+	if len(data) != 0 {
+		t.Errorf("len(data) = %d, want 0", len(data))
+	}
+}
+
+// TestDecodePaneDataShort asserts DecodePaneData defends against a malformed
+// payload shorter than the 4-byte paneId header, returning (0, nil) rather than
+// panicking.
+func TestDecodePaneDataShort(t *testing.T) {
+	paneID, data := DecodePaneData([]byte{0x01, 0x02})
+	if paneID != 0 {
+		t.Errorf("paneID = %d, want 0", paneID)
+	}
+	if data != nil {
+		t.Errorf("data = %#v, want nil", data)
+	}
+}

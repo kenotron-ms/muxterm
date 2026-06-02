@@ -43,6 +43,27 @@ func WriteControl(w io.Writer, msg *Message) error {
 	return writeFrame(w, FrameControl, payload)
 }
 
+// WritePaneData writes a FramePaneData frame whose payload is
+// [4-byte LITTLE-ENDIAN paneId][raw bytes]. Little-endian matches the existing
+// browser framing so serve can bridge the body without rewriting it. The body
+// is binary-safe (may contain newlines and NUL bytes).
+func WritePaneData(w io.Writer, paneID uint32, data []byte) error {
+	payload := make([]byte, 4+len(data))
+	binary.LittleEndian.PutUint32(payload[0:4], paneID)
+	copy(payload[4:], data)
+	return writeFrame(w, FramePaneData, payload)
+}
+
+// DecodePaneData splits a FramePaneData payload into its little-endian paneID
+// and raw body. A payload shorter than the 4-byte paneId header is malformed
+// and yields (0, nil) defensively rather than panicking.
+func DecodePaneData(payload []byte) (paneID uint32, data []byte) {
+	if len(payload) < 4 {
+		return 0, nil
+	}
+	return binary.LittleEndian.Uint32(payload[0:4]), payload[4:]
+}
+
 // ReadFrame reads one frame and returns its kind and payload. This is the
 // frozen 3-value signature (kind, payload, err) and must not change shape.
 func ReadFrame(r io.Reader) (kind byte, payload []byte, err error) {
