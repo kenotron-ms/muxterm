@@ -325,8 +325,7 @@ export class MuxApp extends LitElement {
             .currentWorkspaceId="${store.attached ?? ''}"
             @workspace-selected="${this._onWorkspaceSelected}"
             @workspace-create="${() => this._socket?.createWorkspace()}"
-            @workspace-rename="${(e: CustomEvent<{ workspaceId: string; name: string }>) =>
-              this._socket?.renameWorkspace(e.detail.workspaceId, e.detail.name)}"
+            @workspace-rename="${this._onWorkspaceRename}"
             @workspace-close="${(e: CustomEvent<{ workspaceId: string }>) =>
               this._socket?.closeWorkspace(e.detail.workspaceId)}"
             @close-picker="${() => {
@@ -367,6 +366,28 @@ export class MuxApp extends LitElement {
 
   private _onOpenWorkspacePicker = (): void => {
     this._showWorkspacePicker = !this._showWorkspacePicker;
+  };
+
+  /**
+   * Rename a workspace optimistically: the overlay shows the new name instantly,
+   * the socket send is the mutation's commit, and the daemon's workspace-renamed
+   * echo settles (or times out) the pending record.
+   */
+  private _onWorkspaceRename = (e: CustomEvent<{ workspaceId: string; name: string }>): void => {
+    const { workspaceId, name } = e.detail;
+    store.mutate({
+      workspaceId,
+      kind: 'rename',
+      optimistic: (draft) => {
+        const ws = draft.workspaces.find((w) => w.workspaceId === workspaceId);
+        if (ws) ws.name = name ? name : undefined;
+      },
+      settled: (base) => {
+        const ws = base.workspaces.find((w) => w.workspaceId === workspaceId);
+        return (ws?.name ?? '') === name;
+      },
+      commit: () => this._socket?.renameWorkspace(workspaceId, name),
+    });
   };
 
   /**
