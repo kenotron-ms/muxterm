@@ -79,6 +79,44 @@ func Spawn(logPath string) (*os.Process, error) {
 	return SpawnCommand(exe, []string{"sessiond"}, logPath)
 }
 
+// EnsureDaemon makes sure a sessiond daemon is reachable at socketPath,
+// spawning one (logging to logPath) if necessary. It is the single entry point
+// the web server calls on startup.
+//
+// The (socketPath, logPath string) error signature is frozen: Phase 3 imports
+// this exact shape.
+//
+// Order of operations:
+//  1. systemd gate. When running under systemd, INVOCATION_ID is set for every
+//     unit it starts. There the daemon runs as its own unit
+//     (muxterm-sessiond.service) in its own cgroup, so auto-spawning a second
+//     copy inside the web unit's cgroup would double-spawn and race. Bail out.
+//  2. If a daemon is already live, there is nothing to do.
+//  3. Otherwise clear any stale socket file left by a crashed daemon so the new
+//     one can bind, spawn a fresh detached daemon, and poll until it comes up.
+func EnsureDaemon(socketPath, logPath string) error {
+	if os.Getenv("INVOCATION_ID") != "" {
+		return nil
+	}
+	if IsAlive(socketPath) {
+		return nil
+	}
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale socket: %w", err)
+	}
+	if _, err := Spawn(logPath); err != nil {
+		return fmt.Errorf("spawn sessiond: %w", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if IsAlive(socketPath) {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("sessiond did not become reachable at %s within timeout", socketPath)
+}
+
 // IsAlive reports whether a daemon is currently accepting connections on the
 // Unix socket at socketPath. It attempts a short-timeout dial: a successful
 // connection means the daemon is live, while any error (missing file, a stale

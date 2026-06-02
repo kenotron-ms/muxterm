@@ -137,6 +137,40 @@ func TestSpawn_SurvivesParentExit(t *testing.T) {
 	t.Fatalf("marker %q never appeared; grandchild did not survive parent exit", marker)
 }
 
+func TestEnsureDaemon_SystemdGate_NoSpawn(t *testing.T) {
+	t.Setenv("INVOCATION_ID", "deadbeef")
+	dir := t.TempDir()
+	socketPath := filepath.Join(dir, "missing.sock")
+	logPath := filepath.Join(dir, "sessiond.log")
+
+	if err := EnsureDaemon(socketPath, logPath); err != nil {
+		t.Fatalf("EnsureDaemon returned error under systemd gate: %v", err)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("log file %q should not exist (no spawn under systemd), stat err = %v", logPath, err)
+	}
+}
+
+func TestEnsureDaemon_AlreadyAlive_NoSpawn(t *testing.T) {
+	t.Setenv("INVOCATION_ID", "")
+	dir := t.TempDir()
+	socketPath := filepath.Join(dir, "live.sock")
+	logPath := filepath.Join(dir, "sessiond.log")
+
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer ln.Close()
+
+	if err := EnsureDaemon(socketPath, logPath); err != nil {
+		t.Fatalf("EnsureDaemon returned error when daemon already alive: %v", err)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("log file %q should not exist (no spawn when already alive), stat err = %v", logPath, err)
+	}
+}
+
 func TestDefaultLogPath_SitsBesideSocket(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1234")
 	got, err := DefaultLogPath()
