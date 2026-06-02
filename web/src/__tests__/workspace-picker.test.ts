@@ -169,6 +169,80 @@ describe('MuxWorkspacePicker', () => {
   });
 });
 
+describe('MuxWorkspacePicker errored-row failure UX', () => {
+  let el: MuxWorkspacePicker;
+
+  afterEach(() => {
+    if (el && el.parentNode) {
+      el.parentNode.removeChild(el);
+    }
+    vi.restoreAllMocks();
+  });
+
+  async function erroredFixture(): Promise<MuxWorkspacePicker> {
+    const picker = document.createElement('mux-workspace-picker') as MuxWorkspacePicker;
+    picker.workspaces = [
+      { workspaceId: 'ws-1', name: 'main', paneCount: 1 },
+      { workspaceId: 'ws-2', name: 'logs', paneCount: 1 },
+    ];
+    picker.erroredMutations = [{ id: 'm7', workspaceId: 'ws-1', kind: 'rename' }];
+    document.body.appendChild(picker);
+    await picker.updateComplete;
+    return picker;
+  }
+
+  it('marks the targeted row errored and keeps it visible', async () => {
+    el = await erroredFixture();
+    const items = el.shadowRoot!.querySelectorAll('.ws-item');
+    expect(items.length).toBe(2);
+    const errored = el.shadowRoot!.querySelectorAll('.ws-item.errored');
+    expect(errored.length).toBe(1);
+    expect(errored[0].querySelector('.ws-name')?.textContent).toBe('main');
+  });
+
+  it('renders retry and dismiss affordances on errored row', async () => {
+    el = await erroredFixture();
+    const retry = el.shadowRoot!.querySelector('button.ws-retry');
+    const dismiss = el.shadowRoot!.querySelector('button.ws-dismiss');
+    expect(retry).toBeTruthy();
+    expect(dismiss).toBeTruthy();
+  });
+
+  it('dispatches workspace-retry with mutation id', async () => {
+    el = await erroredFixture();
+    const handler = vi.fn();
+    el.addEventListener('workspace-retry', handler as EventListener);
+
+    const retryBtn = el.shadowRoot!.querySelector('button.ws-retry') as HTMLButtonElement;
+    retryBtn.click();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const event = handler.mock.calls[0][0] as CustomEvent<{ mutationId: string }>;
+    expect(event.detail.mutationId).toBe('m7');
+  });
+
+  it('dispatches workspace-dismiss with mutation id', async () => {
+    el = await erroredFixture();
+    const handler = vi.fn();
+    el.addEventListener('workspace-dismiss', handler as EventListener);
+
+    const dismissBtn = el.shadowRoot!.querySelector('button.ws-dismiss') as HTMLButtonElement;
+    dismissBtn.click();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const event = handler.mock.calls[0][0] as CustomEvent<{ mutationId: string }>;
+    expect(event.detail.mutationId).toBe('m7');
+  });
+
+  it('defaults erroredMutations to an empty array', async () => {
+    const picker = document.createElement('mux-workspace-picker') as MuxWorkspacePicker;
+    document.body.appendChild(picker);
+    await picker.updateComplete;
+    el = picker;
+    expect(picker.erroredMutations).toEqual([]);
+  });
+});
+
 describe('workspaceLabel helper', () => {
   it('returns the explicit name when present', () => {
     expect(workspaceLabel({ workspaceId: 'ws-9', name: 'alpha', paneCount: 0 })).toBe('alpha');

@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { Check, Plus, Pencil, X } from 'lucide';
+import { Check, Plus, Pencil, X, RotateCcw } from 'lucide';
 import { icon } from '../lib/icons.js';
 import type { SessiondWorkspaceInfo } from '../types.js';
 
@@ -12,6 +12,12 @@ export function workspaceLabel(ws: SessiondWorkspaceInfo): string {
   if (ws.name && ws.name.length > 0) return ws.name;
   const n = ws.workspaceId.replace(/\D/g, '');
   return `workspace ${n || ws.workspaceId}`;
+}
+
+export interface PickerErroredMutation {
+  id: string;
+  workspaceId?: string;
+  kind?: string;
 }
 
 @customElement('mux-workspace-picker')
@@ -76,6 +82,21 @@ export class MuxWorkspacePicker extends LitElement {
 
     .ws-item.sel {
       background: #283457;
+    }
+
+    .ws-item.errored {
+      border-color: #f38ba8;
+      background: #3a2230;
+    }
+
+    .ws-err-msg {
+      color: #f38ba8;
+      font-size: 12px;
+      margin-right: 4px;
+    }
+
+    .ws-item.errored .row-action {
+      color: #f38ba8;
     }
 
     .ws-sel {
@@ -168,6 +189,9 @@ export class MuxWorkspacePicker extends LitElement {
   @property({ type: String })
   currentWorkspaceId = '';
 
+  @property({ attribute: false })
+  erroredMutations: PickerErroredMutation[] = [];
+
   private _emit(name: string, detail?: unknown): void {
     this.dispatchEvent(
       new CustomEvent(name, {
@@ -197,6 +221,16 @@ export class MuxWorkspacePicker extends LitElement {
     this._emit('workspace-close', { workspaceId });
   }
 
+  private _onRetry(e: Event, mutationId: string): void {
+    e.stopPropagation();
+    this._emit('workspace-retry', { mutationId });
+  }
+
+  private _onDismiss(e: Event, mutationId: string): void {
+    e.stopPropagation();
+    this._emit('workspace-dismiss', { mutationId });
+  }
+
   private _onOverlayClick(): void {
     this._emit('close-picker');
   }
@@ -209,8 +243,9 @@ export class MuxWorkspacePicker extends LitElement {
           <div class="ws-list">
             ${this.workspaces.map((w) => {
               const current = w.workspaceId === this.currentWorkspaceId;
+              const errored = this.erroredMutations.find((m) => m.workspaceId === w.workspaceId);
               return html`
-                <div class="ws-item ${current ? 'sel' : ''}">
+                <div class="ws-item ${current ? 'sel' : ''} ${errored ? 'errored' : ''}">
                   <button
                     class="ws-sel"
                     @click="${() => this._onSelect(w.workspaceId)}"
@@ -219,20 +254,40 @@ export class MuxWorkspacePicker extends LitElement {
                     <span class="ws-name">${workspaceLabel(w)}</span>
                     <span class="ws-meta">${w.paneCount} ${w.paneCount === 1 ? 'pane' : 'panes'}</span>
                   </button>
-                  <button
-                    class="row-action ws-rename"
-                    title="Rename"
-                    @click="${(e: Event) => this._onRename(e, w.workspaceId)}"
-                  >
-                    ${icon(Pencil, { size: 14 })}
-                  </button>
-                  <button
-                    class="row-action ws-close"
-                    title="Close"
-                    @click="${(e: Event) => this._onClose(e, w.workspaceId)}"
-                  >
-                    ${icon(X, { size: 14 })}
-                  </button>
+                  ${errored
+                    ? html`
+                        <span class="ws-err-msg">failed</span>
+                        <button
+                          class="row-action ws-retry"
+                          title="Retry"
+                          @click="${(e: Event) => this._onRetry(e, errored.id)}"
+                        >
+                          ${icon(RotateCcw, { size: 14 })}
+                        </button>
+                        <button
+                          class="row-action ws-dismiss"
+                          title="Dismiss"
+                          @click="${(e: Event) => this._onDismiss(e, errored.id)}"
+                        >
+                          ${icon(X, { size: 14 })}
+                        </button>
+                      `
+                    : html`
+                        <button
+                          class="row-action ws-rename"
+                          title="Rename"
+                          @click="${(e: Event) => this._onRename(e, w.workspaceId)}"
+                        >
+                          ${icon(Pencil, { size: 14 })}
+                        </button>
+                        <button
+                          class="row-action ws-close"
+                          title="Close"
+                          @click="${(e: Event) => this._onClose(e, w.workspaceId)}"
+                        >
+                          ${icon(X, { size: 14 })}
+                        </button>
+                      `}
                 </div>
               `;
             })}
