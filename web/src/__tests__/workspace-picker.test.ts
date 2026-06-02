@@ -175,12 +175,12 @@ describe('workspaceLabel helper', () => {
   });
 
   it('falls back to a lowercase, id-derived "workspace N" label', () => {
-    expect(workspaceLabel({ workspaceId: 'w3', name: undefined })).toBe('workspace 3');
-    expect(workspaceLabel({ workspaceId: 'ws-9', name: '' })).toBe('workspace 9');
-    expect(workspaceLabel({ workspaceId: 'w12' })).toBe('workspace 12');
+    expect(workspaceLabel({ workspaceId: 'w3', name: undefined, paneCount: 0 })).toBe('workspace 3');
+    expect(workspaceLabel({ workspaceId: 'ws-9', name: '', paneCount: 0 })).toBe('workspace 9');
+    expect(workspaceLabel({ workspaceId: 'w12', paneCount: 0 })).toBe('workspace 12');
   });
 
   it('uses the raw id when it contains no digits', () => {
-    expect(workspaceLabel({ workspaceId: 'main' })).toBe('workspace main');
+    expect(workspaceLabel({ workspaceId: 'main', paneCount: 0 })).toBe('workspace main');
   });
 });
