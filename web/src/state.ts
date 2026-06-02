@@ -245,6 +245,19 @@ export class MuxStore {
     this._notify();
   }
 
+  retry(id: string): void {
+    const record = this._pending.get(id);
+    if (!record) return;
+    record.errored = false;
+    if (record.timer !== undefined) clearTimeout(record.timer);
+    record.timer = setTimeout(
+      () => this._onMutationTimeout(id),
+      record.timeoutMs ?? DEFAULT_MUTATION_TIMEOUT_MS,
+    );
+    record.commit?.();
+    this._notify();
+  }
+
   private _onMutationTimeout(id: string): void {
     const record = this._pending.get(id);
     if (!record || record.errored) return;

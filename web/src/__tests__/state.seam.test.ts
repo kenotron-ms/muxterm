@@ -192,3 +192,73 @@ describe('timeout marks errored, snaps to truth', () => {
     }
   });
 });
+
+describe('retry and dismiss', () => {
+  it('retry clears errored, re-applies the overlay, and re-fires commit', () => {
+    vi.useFakeTimers();
+    try {
+      const store = new MuxStore();
+      store.applySessiond(
+        workspaceList([{ workspaceId: 'ws-1', name: 'old', paneCount: 0 }]),
+      );
+
+      let commits = 0;
+      const id = store.mutate({
+        workspaceId: 'ws-1',
+        kind: 'rename',
+        timeoutMs: 5000,
+        optimistic: (draft) => {
+          const ws = draft.workspaces.find((w) => w.workspaceId === 'ws-1');
+          if (ws) ws.name = 'new';
+        },
+        settled: () => false,
+        commit: () => {
+          commits += 1;
+        },
+      });
+
+      // Timeout fires without a settle: overlay reverts, mutation errored.
+      vi.advanceTimersByTime(5000);
+      expect(store.erroredMutations.length).toBe(1);
+      expect(store.workspaces[0].name).toBe('old');
+
+      // Retry: clears errored, re-fires commit, re-applies overlay.
+      store.retry(id);
+      expect(commits).toBe(2);
+      expect(store.erroredMutations).toEqual([]);
+      expect(store.workspaces[0].name).toBe('new');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('dismiss removes an errored mutation entirely', () => {
+    vi.useFakeTimers();
+    try {
+      const store = new MuxStore();
+      store.applySessiond(
+        workspaceList([{ workspaceId: 'ws-1', name: 'old', paneCount: 0 }]),
+      );
+
+      const id = store.mutate({
+        workspaceId: 'ws-1',
+        kind: 'rename',
+        timeoutMs: 5000,
+        optimistic: (draft) => {
+          const ws = draft.workspaces.find((w) => w.workspaceId === 'ws-1');
+          if (ws) ws.name = 'new';
+        },
+        settled: () => false,
+      });
+
+      vi.advanceTimersByTime(5000);
+      expect(store.erroredMutations.length).toBe(1);
+
+      store.dismiss(id);
+      expect(store.erroredMutations).toEqual([]);
+      expect(store.workspaces[0].name).toBe('old');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
