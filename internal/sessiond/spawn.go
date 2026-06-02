@@ -4,8 +4,10 @@ package sessiond
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // socketDir resolves the directory that holds the daemon's Unix socket and
@@ -36,4 +38,17 @@ func SocketPath() (string, error) {
 // SocketPath for details.
 func DefaultLogPath() (string, error) {
 	return filepath.Join(socketDir(), "sessiond.log"), nil
+}
+
+// IsAlive reports whether a daemon is currently accepting connections on the
+// Unix socket at socketPath. It attempts a short-timeout dial: a successful
+// connection means the daemon is live, while any error (missing file, a stale
+// socket file left by a crashed daemon, or a non-socket file) reads as dead.
+func IsAlive(socketPath string) bool {
+	conn, err := net.DialTimeout("unix", socketPath, 250*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
