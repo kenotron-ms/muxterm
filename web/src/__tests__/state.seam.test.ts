@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MuxStore } from '../state';
 import { SessiondType } from '../types';
 import type { SessiondMessage } from '../types';
@@ -153,5 +153,42 @@ describe('settle after applySessiond', () => {
     // Overlay is truly gone: a later base change shows through unobstructed.
     store.applySessiond(workspaceRenamed('ws-1', 'newer'));
     expect(store.workspaces[0].name).toBe('newer');
+  });
+});
+
+describe('timeout marks errored, snaps to truth', () => {
+  it('on timeout without settle, reverts overlay and marks the mutation errored', () => {
+    vi.useFakeTimers();
+    try {
+      const store = new MuxStore();
+      store.applySessiond(
+        workspaceList([{ workspaceId: 'ws-1', name: 'old', paneCount: 0 }]),
+      );
+
+      const id = store.mutate({
+        workspaceId: 'ws-1',
+        kind: 'rename',
+        timeoutMs: 5000,
+        optimistic: (draft) => {
+          const ws = draft.workspaces.find((w) => w.workspaceId === 'ws-1');
+          if (ws) ws.name = 'new';
+        },
+        settled: () => false,
+      });
+
+      // Optimistic overlay shows while pending.
+      expect(store.workspaces[0].name).toBe('new');
+
+      // Timeout fires without a settle: overlay reverts to truth.
+      vi.advanceTimersByTime(5000);
+      expect(store.workspaces[0].name).toBe('old');
+
+      // The mutation is kept but marked errored for retry/dismiss.
+      expect(store.erroredMutations).toEqual([
+        { id, workspaceId: 'ws-1', kind: 'rename' },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -98,7 +98,17 @@ export class MuxStore {
   }
 
   get erroredMutations(): ErroredMutation[] {
-    return [];
+    const out: ErroredMutation[] = [];
+    for (const record of this._pending.values()) {
+      if (record.errored) {
+        out.push({
+          id: record.id,
+          workspaceId: record.workspaceId,
+          kind: record.kind,
+        });
+      }
+    }
+    return out;
   }
 
   setActivePane(paneId: number): void {
