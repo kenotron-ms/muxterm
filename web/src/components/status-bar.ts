@@ -114,7 +114,7 @@ export class MuxStatusBar extends LitElement {
         <button
           class="workspace-switcher"
           title="Switch workspace"
-          @click=${this._onSwitcherClick}
+          @click="${this._onSwitcherClick}"
         >
           <span class="ws-label">${this._currentLabel()}</span>
           ${icon(ChevronUp, { size: 12 })}
