@@ -142,6 +142,22 @@ func startsMidEscape(b []byte) bool {
 	return false // ordinary-text-first: clean boundary.
 }
 
+// TestTrackedBufferTrimBaseline records TrackedBuffer's sticky trim-resilience
+// scores as documented baseline data for the bake-off. The synthetic preamble
+// re-establishes pen/cursor/title/alt-screen *state*, but a byte-ring buffer
+// cannot re-emit glyphs that were evicted from the ring, so full mid-screen
+// reconstruction (score == 1.00) is mathematically unachievable for this design
+// -- that ceiling belongs to VTBuffer's live grid. These scores are therefore
+// LOGGED, not asserted; the strict == 1.00 contract is asserted only for
+// VTBuffer in TestBufferBakeoff.
+func TestTrackedBufferTrimBaseline(t *testing.T) {
+	newBudgeted := func(budget int) PaneBuffer { return NewTrackedBufferWithBudget(budget) }
+	for _, f := range stickyFixtures() {
+		score := scoreTrimResilience(newBudgeted, f)
+		t.Logf("TrackedBuffer trim-resilience %-22s = %.2f", f.name, score)
+	}
+}
+
 // TestTrackedBufferSafeTrimNeverSeversEscape drives far more bytes than the
 // budget through the buffer so trimming fires repeatedly, then asserts the
 // retained ring never begins partway through an escape sequence. A naive

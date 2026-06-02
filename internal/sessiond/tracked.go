@@ -55,6 +55,31 @@ func (t modeTracker) sgrPreamble() []byte {
 	return out
 }
 
+// preamble renders a synthetic byte stream that re-establishes the sticky state
+// captured in the tracker, so a replay whose history was trimmed still paints
+// the correct screen. Order matters: title first, then alt-screen entry, then
+// the SGR pen, then the cursor position.
+func (t modeTracker) preamble() []byte {
+	var out []byte
+	if t.title != "" {
+		out = append(out, "\x1b]2;"...)
+		out = append(out, t.title...)
+		out = append(out, '\x07')
+	}
+	if t.altScreen {
+		out = append(out, "\x1b[?1049h"...)
+	}
+	out = append(out, t.sgrPreamble()...)
+	if t.cursorRow > 0 && t.cursorCol > 0 {
+		out = append(out, "\x1b["...)
+		out = append(out, itoa(t.cursorRow)...)
+		out = append(out, ';')
+		out = append(out, itoa(t.cursorCol)...)
+		out = append(out, 'H')
+	}
+	return out
+}
+
 // TrackedBuffer is a PaneBuffer that feeds writes through an ANSI parser while
 // retaining the raw byte stream in an append-only scrollback ring. At Task 4 the
 // parser handler is empty and Replay returns a raw copy of the ring; trimming is
@@ -262,10 +287,19 @@ func nextSafeBoundary(ring []byte, from int) int {
 	return len(ring)
 }
 
-// Replay returns a copy of the retained bytes. No synthetic preamble is emitted
-// yet (added in Task 9). The returned slice never aliases internal state.
+// Replay returns a synthetic preamble that re-establishes the sticky state at
+// the trim boundary (title, alt-screen mode, SGR pen, cursor) followed by the
+// retained content: the single alt-screen frame when on the alternate screen,
+// otherwise the budgeted scrollback ring. The preamble closes the loop so a
+// replay whose history was trimmed still paints the correct screen. The
+// returned slice never aliases internal state.
 func (b *TrackedBuffer) Replay() []byte {
-	out := make([]byte, len(b.ring))
-	copy(out, b.ring)
+	snap := b.tracker.snapshot()
+	out := snap.preamble()
+	if snap.altScreen {
+		out = append(out, b.altFrame...)
+	} else {
+		out = append(out, b.ring...)
+	}
 	return out
 }
