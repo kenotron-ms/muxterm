@@ -25,19 +25,14 @@ type Server struct {
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
-// If engine is provided (variadic), it is used to create the Hub; otherwise
-// the Hub is created with a nil engine.
-func New(cfg Config, engine ...TmuxEngine) *Server {
-	var eng TmuxEngine
-	if len(engine) > 0 {
-		eng = engine[0]
-	}
-
+// The Hub is created with a nil dialer; the per-browser daemon dialer is
+// injected later via s.hub.SetDialer.
+func New(cfg Config) *Server {
 	s := &Server{
 		addr:   cfg.Addr,
 		secret: cfg.Secret,
 		mux:    http.NewServeMux(),
-		hub:    NewHub(eng),
+		hub:    NewHub(nil),
 	}
 
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
