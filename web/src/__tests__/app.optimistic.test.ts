@@ -101,3 +101,74 @@ describe('MuxApp optimistic workspace create', () => {
     expect(store.workspaces.length).toBe(2);
   });
 });
+
+describe('MuxApp optimistic pane create', () => {
+  let el: MuxApp;
+
+  afterEach(() => {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    store.applySessiond({ type: SessiondType.WorkspaceList, workspaces: [] });
+    (store as unknown as { _pending: Map<string, unknown> })._pending.clear();
+    store.applySessiond({ type: SessiondType.Composition, workspaceId: '', panes: [] });
+    terminalRegistry.prune(new Set());
+    el = null as unknown as MuxApp;
+  });
+
+  it('shows provisional pane instantly and settles on matching pane-added', async () => {
+    el = await fixture();
+    // Attach an empty workspace so PaneAdded reconciles against it.
+    store.applySessiond({ type: SessiondType.Composition, workspaceId: 'w1', panes: [] });
+
+    const socket = (el as unknown as { _socket: { createPane: unknown } })._socket;
+    const sendSpy = vi.spyOn(socket as { createPane: (...a: unknown[]) => void }, 'createPane');
+
+    (el as unknown as { _createPaneOptimistic: () => void })._createPaneOptimistic();
+
+    // Provisional pane overlaid instantly.
+    expect(store.panes.length).toBe(1);
+
+    // Create sent with a non-empty clientRef as the second argument.
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const ref = sendSpy.mock.calls[0][1] as string;
+    expect(typeof ref).toBe('string');
+    expect(ref.length).toBeGreaterThan(0);
+
+    // Daemon echoes a real positive paneId carrying that exact clientRef.
+    store.applySessiond({
+      type: SessiondType.PaneAdded,
+      paneId: 1,
+      cols: 0,
+      rows: 0,
+      clientRef: ref,
+    });
+
+    expect(store.panes.length).toBe(1);
+    expect(store.panes[0].paneId).toBe(1);
+  });
+
+  it('does NOT settle on a pane-added with a different clientRef', async () => {
+    el = await fixture();
+    store.applySessiond({ type: SessiondType.Composition, workspaceId: 'w1', panes: [] });
+
+    const socket = (el as unknown as { _socket: { createPane: unknown } })._socket;
+    const sendSpy = vi.spyOn(socket as { createPane: (...a: unknown[]) => void }, 'createPane');
+
+    (el as unknown as { _createPaneOptimistic: () => void })._createPaneOptimistic();
+    expect(store.panes.length).toBe(1);
+    const ref = sendSpy.mock.calls[0][1] as string;
+
+    // Another tab's create echoes with a DIFFERENT clientRef.
+    store.applySessiond({
+      type: SessiondType.PaneAdded,
+      paneId: 1,
+      cols: 0,
+      rows: 0,
+      clientRef: 'other-ref',
+    });
+
+    // Our provisional pane is still pending (ref not echoed) and overlays on top
+    // of the other tab's authoritative pane: two panes, unsettled.
+    expect(ref).not.toBe('other-ref');
+    expect(store.panes.length).toBe(2);
+  });
+});

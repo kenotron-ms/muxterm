@@ -21,6 +21,11 @@ import type { LauncherAction } from './components/launcher-menu.js';
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
 
+// Optimistic panes use a strictly-negative temp paneId so they never collide
+// with the daemon's positive workspace-local ids (which start at 1); the real
+// positive-id pane replaces it on settle (matched by clientRef).
+let _nextTempPaneId = -1;
+
 // ---------------------------------------------------------------------------
 // Module-level keybinding wiring
 // ---------------------------------------------------------------------------
@@ -210,8 +215,8 @@ export class MuxApp extends LitElement {
       this._controller?.onMessage(msg);
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
-    // argv omitted ⇒ daemon default $SHELL.
-    uiActions.split = () => this._socket?.createPane();
+    // now optimistic so the provisional pane overlays instantly.
+    uiActions.split = () => this._createPaneOptimistic();
     this._socket.onPaneOutput((paneId: number, data: Uint8Array) => {
       this._routePaneOutput(paneId, data);
     });
@@ -348,7 +353,7 @@ export class MuxApp extends LitElement {
 
   /** Empty-state button: create a connection-scoped pane in the workspace. */
   private _onCreatePane = (): void => {
-    this._socket?.createPane();
+    this._createPaneOptimistic();
   };
 
   /**
@@ -371,6 +376,25 @@ export class MuxApp extends LitElement {
       },
     });
     this._socket?.createWorkspace(undefined, ref);
+  };
+
+  /**
+   * Create a pane optimistically: a provisional pane appears instantly with a
+   * strictly-negative temp paneId (so it never collides with the daemon's
+   * positive workspace-local ids) keyed by a minted clientRef. The daemon echoes
+   * the ref on the authoritative pane-added, which settles the pending mutation
+   * by exact identity (clientRef match) and replaces the temp with the real id.
+   */
+  private _createPaneOptimistic = (): void => {
+    const ref = mintClientRef();
+    const tempId = _nextTempPaneId--;
+    store.mutate({
+      workspaceId: ref,
+      kind: 'create-pane',
+      optimistic: (draft) => draft.panes.push({ paneId: tempId, cols: 0, rows: 0, clientRef: ref }),
+      settled: (base) => base.panes.some((p) => p.clientRef === ref),
+    });
+    this._socket?.createPane(undefined, ref);
   };
 
   private _handleControlMessage = (msg: Record<string, unknown>): void => {
