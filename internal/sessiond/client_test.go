@@ -258,6 +258,48 @@ func TestAttachEmptyCompositionIsValid(t *testing.T) {
 	}
 }
 
+func TestCreatePaneReturnsID(t *testing.T) {
+	fd := newFakeDaemon(t, func(conn net.Conn) {
+		kind, payload, err := ReadFrame(conn)
+		if err != nil {
+			t.Errorf("ReadFrame: %v", err)
+			return
+		}
+		if kind != FrameControl {
+			t.Errorf("kind = %#x, want FrameControl", kind)
+			return
+		}
+		var req Message
+		mustUnmarshal(t, payload, &req)
+		if req.Type != TypeCreatePane {
+			t.Errorf("req.Type = %q, want %q", req.Type, TypeCreatePane)
+		}
+		if req.WorkspaceID != "" {
+			t.Errorf("req.WorkspaceID = %q, want \"\" (connection-scoped)", req.WorkspaceID)
+		}
+		if len(req.Cmd) != 1 || req.Cmd[0] != "bash" {
+			t.Errorf("req.Cmd = %v, want [bash]", req.Cmd)
+		}
+		_ = WriteControl(conn, &Message{Type: TypePaneCreated, CID: req.CID, PaneID: 7})
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	c, err := Dial(fd.sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	go c.Run()
+
+	id, err := c.CreatePane([]string{"bash"})
+	if err != nil {
+		t.Fatalf("CreatePane: %v", err)
+	}
+	if id != 7 {
+		t.Errorf("CreatePane id = %d, want 7", id)
+	}
+}
+
 func TestAttachUnknownWorkspace(t *testing.T) {
 	fd := newFakeDaemon(t, func(conn net.Conn) {
 		kind, payload, err := ReadFrame(conn)

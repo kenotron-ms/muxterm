@@ -221,6 +221,20 @@ func (c *Client) Attach(workspaceID string) (Composition, error) {
 	return Composition{WorkspaceID: reply.WorkspaceID, Panes: reply.Panes}, nil
 }
 
+// CreatePane forks a PTY in the connection's currently-attached workspace and
+// returns the daemon-assigned workspace-local pane id from the pane-created
+// reply. It is connection-scoped: the request carries no workspaceId, targeting
+// whichever workspace this connection is attached to. cmd is the argv to exec;
+// an empty cmd means the daemon's default $SHELL. The browser spawns its
+// xterm.js instance on the resulting pane-added broadcast, NOT on this ack.
+func (c *Client) CreatePane(cmd []string) (int, error) {
+	reply, err := c.request(&Message{Type: TypeCreatePane, Cmd: cmd})
+	if err != nil {
+		return 0, err
+	}
+	return reply.PaneID, nil
+}
+
 // dispatchPaneData routes a decoded pane-data frame to the registered handler.
 // Wired up by a later task; a no-op stub for now.
 func (c *Client) dispatchPaneData(paneID uint32, data []byte) {}
