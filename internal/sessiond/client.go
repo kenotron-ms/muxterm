@@ -1,6 +1,8 @@
 package sessiond
 
 import (
+	"encoding/json"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -60,3 +62,124 @@ func (c *Client) Close() error {
 	})
 	return err
 }
+
+// DaemonError is the typed error returned when the daemon replies with a
+// TypeError envelope. Code is the stable machine-readable error code; Err is the
+// human-readable text; WorkspaceID names the workspace the error refers to (if
+// any).
+type DaemonError struct {
+	Code        string
+	Err         string
+	WorkspaceID string
+}
+
+// Error implements the error interface.
+func (e *DaemonError) Error() string {
+	return e.Code + ": " + e.Err
+}
+
+// Run is the single background read loop. It reads frames off the connection and
+// routes them: pane-data frames go to dispatchPaneData, control frames go to
+// dispatchControl (which correlates replies by cid and dispatches events). It
+// runs until the connection errors, at which point it fails all pending
+// requests and returns the error. Run MUST be started in its own goroutine
+// before any requests are issued.
+func (c *Client) Run() error {
+	for {
+		kind, payload, err := ReadFrame(c.conn)
+		if err != nil {
+			c.failAllPending(err)
+			return err
+		}
+		switch kind {
+		case FramePaneData:
+			paneID, data := DecodePaneData(payload)
+			c.dispatchPaneData(paneID, data)
+		case FrameControl:
+			c.dispatchControl(payload)
+		}
+	}
+}
+
+// dispatchControl decodes a control payload into a Message and routes it. A
+// reply (CID != 0) is delivered to the waiting requester; an unsolicited event
+// (CID == 0) is dispatched to the event handlers.
+func (c *Client) dispatchControl(payload []byte) {
+	var msg Message
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		return
+	}
+	if msg.CID != 0 {
+		c.pendMu.Lock()
+		p := c.pend[msg.CID]
+		delete(c.pend, msg.CID)
+		c.pendMu.Unlock()
+		if p != nil {
+			p.ch <- &msg
+		}
+		return
+	}
+	c.dispatchEvent(&msg)
+}
+
+// failAllPending closes every pending request channel and clears the map. It is
+// called once when the read loop exits so blocked requesters observe a closed
+// connection instead of hanging.
+func (c *Client) failAllPending(err error) {
+	c.pendMu.Lock()
+	defer c.pendMu.Unlock()
+	for cid, p := range c.pend {
+		close(p.ch)
+		delete(c.pend, cid)
+	}
+}
+
+// request sends msg as a control frame and blocks until the daemon's correlated
+// reply arrives. It assigns a fresh cid (>=1; 0 is reserved for events),
+// registers a pending entry, writes the frame under writeMu, and waits on the
+// pending channel. A TypeError reply is converted to a *DaemonError.
+func (c *Client) request(msg *Message) (*Message, error) {
+	cid := c.nextCID.Add(1)
+	msg.CID = cid
+
+	p := &pending{ch: make(chan *Message, 1)}
+	c.pendMu.Lock()
+	c.pend[cid] = p
+	c.pendMu.Unlock()
+
+	c.writeMu.Lock()
+	err := WriteControl(c.conn, msg)
+	c.writeMu.Unlock()
+	if err != nil {
+		c.pendMu.Lock()
+		delete(c.pend, cid)
+		c.pendMu.Unlock()
+		return nil, err
+	}
+
+	reply, ok := <-p.ch
+	if !ok {
+		return nil, fmt.Errorf("sessiond: connection closed before reply")
+	}
+	if reply.Type == TypeError {
+		return nil, &DaemonError{Code: reply.Code, Err: reply.Error, WorkspaceID: reply.WorkspaceID}
+	}
+	return reply, nil
+}
+
+// ListWorkspaces requests the daemon's current workspace list.
+func (c *Client) ListWorkspaces() ([]WorkspaceInfo, error) {
+	reply, err := c.request(&Message{Type: TypeListWorkspaces})
+	if err != nil {
+		return nil, err
+	}
+	return reply.Workspaces, nil
+}
+
+// dispatchPaneData routes a decoded pane-data frame to the registered handler.
+// Wired up by a later task; a no-op stub for now.
+func (c *Client) dispatchPaneData(paneID uint32, data []byte) {}
+
+// dispatchEvent routes an unsolicited event Message (CID == 0) to the registered
+// handlers. Wired up by a later task; a no-op stub for now.
+func (c *Client) dispatchEvent(msg *Message) {}

@@ -1,6 +1,7 @@
 package sessiond
 
 import (
+	"encoding/json"
 	"net"
 	"path/filepath"
 	"testing"
@@ -50,5 +51,63 @@ func TestDialConnects(t *testing.T) {
 	defer c.Close()
 	if c == nil {
 		t.Fatal("Dial returned nil *Client")
+	}
+}
+
+// mustUnmarshal unmarshals data into v, failing the test on error.
+func mustUnmarshal(t *testing.T, data []byte, v any) {
+	t.Helper()
+	if err := json.Unmarshal(data, v); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+}
+
+func TestListWorkspaces(t *testing.T) {
+	fd := newFakeDaemon(t, func(conn net.Conn) {
+		kind, payload, err := ReadFrame(conn)
+		if err != nil {
+			t.Errorf("ReadFrame: %v", err)
+			return
+		}
+		if kind != FrameControl {
+			t.Errorf("kind = %#x, want FrameControl", kind)
+			return
+		}
+		var req Message
+		mustUnmarshal(t, payload, &req)
+		if req.Type != TypeListWorkspaces {
+			t.Errorf("req.Type = %q, want %q", req.Type, TypeListWorkspaces)
+			return
+		}
+		_ = WriteControl(conn, &Message{
+			Type: TypeWorkspaceList,
+			CID:  req.CID,
+			Workspaces: []WorkspaceInfo{
+				{WorkspaceID: "w1", Name: "dev", PaneCount: 2},
+				{WorkspaceID: "w2", Name: "", PaneCount: 0},
+			},
+		})
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	c, err := Dial(fd.sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	go c.Run()
+
+	wss, err := c.ListWorkspaces()
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+	if len(wss) != 2 {
+		t.Fatalf("len(wss) = %d, want 2", len(wss))
+	}
+	if wss[0].WorkspaceID != "w1" || wss[0].Name != "dev" || wss[0].PaneCount != 2 {
+		t.Errorf("wss[0] = %+v, want {w1 dev 2}", wss[0])
+	}
+	if wss[1].WorkspaceID != "w2" || wss[1].Name != "" || wss[1].PaneCount != 0 {
+		t.Errorf("wss[1] = %+v, want {w2 \"\" 0}", wss[1])
 	}
 }
