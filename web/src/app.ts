@@ -82,7 +82,7 @@ export class MuxApp extends LitElement {
 
     /* Empty workspace state — shown when the attached workspace has no panes.
        Fills the space the terminal composition would occupy. */
-    .empty-session {
+    .empty-workspace {
       flex: 1;
       display: flex;
       flex-direction: column;
@@ -94,7 +94,7 @@ export class MuxApp extends LitElement {
       user-select: none;
     }
 
-    .empty-session .glyph {
+    .empty-workspace .glyph {
       line-height: 1;
       opacity: 0.5;
     }
@@ -105,18 +105,18 @@ export class MuxApp extends LitElement {
       flex-shrink: 0;
     }
 
-    .empty-session .headline {
+    .empty-workspace .headline {
       font-size: 16px;
       color: #a9b1d6;
       font-weight: 600;
     }
 
-    .empty-session .subtext {
+    .empty-workspace .subtext {
       font-size: 13px;
       color: #565f89;
     }
 
-    .empty-session button {
+    .empty-workspace button {
       margin-top: 8px;
       display: inline-flex;
       align-items: center;
@@ -131,7 +131,7 @@ export class MuxApp extends LitElement {
       transition: background 0.12s ease, border-color 0.12s ease;
     }
 
-    .empty-session button:hover {
+    .empty-workspace button:hover {
       background: #2f344d;
       border-color: #7aa2f7;
     }
@@ -289,7 +289,7 @@ export class MuxApp extends LitElement {
       <mux-title-bar @launcher-action="${this._onLauncherAction}"></mux-title-bar>
       ${panes.length === 0
         ? html`
-            <div class="empty-session">
+            <div class="empty-workspace">
               <div class="glyph">${icon(MonitorX, { size: 48 })}</div>
               <div class="headline">No panes</div>
               <div class="subtext">

@@ -139,7 +139,7 @@ describe('MuxApp', () => {
     const statusBar = el.shadowRoot!.querySelector('mux-status-bar');
     expect(statusBar).toBeTruthy();
     expect(el.shadowRoot!.querySelector('mux-composition')).toBeNull();
-    expect(el.shadowRoot!.querySelector('.empty-session')).toBeTruthy();
+    expect(el.shadowRoot!.querySelector('.empty-workspace')).toBeTruthy();
   });
 
   it('passes the workspace list to the status bar', async () => {
