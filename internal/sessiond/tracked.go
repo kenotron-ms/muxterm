@@ -115,11 +115,34 @@ func (b *TrackedBuffer) onCSI(cmd ansi.Cmd, params ansi.Params) {
 	}
 }
 
-// onOSC updates the modeTracker from OSC sequences. Title tracking lands in
-// Task 6; this is a stub for now.
+// onOSC updates the modeTracker from OSC sequences. OSC 0 (icon+window) and
+// OSC 2 (window) carry the pane title. The parser's data payload includes the
+// numeric command and ';' separator (e.g. "2;vim main.go"), so we strip that
+// prefix before recording the title.
 func (b *TrackedBuffer) onOSC(cmd int, data []byte) {
-	_ = cmd
-	_ = data
+	if cmd != 0 && cmd != 2 {
+		return
+	}
+	title := string(data)
+	if i := indexByte(title, ';'); i >= 0 {
+		title = title[i+1:]
+	}
+	b.tracker.title = title
+}
+
+// Title returns the last OSC 0/2 window title observed, or "" if none.
+func (b *TrackedBuffer) Title() string {
+	return b.tracker.title
+}
+
+// indexByte returns the index of the first occurrence of c in s, or -1.
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
 }
 
 // itoa converts a non-negative int to its decimal string without pulling in

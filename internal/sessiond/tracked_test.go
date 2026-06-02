@@ -57,3 +57,27 @@ func TestTrackedBufferTracksSGRAndCursor(t *testing.T) {
 		t.Errorf("cursor = (%d,%d), want (3,10)", snap.cursorRow, snap.cursorCol)
 	}
 }
+
+// TestTrackedBufferCapturesTitle verifies that the modeTracker captures the pane
+// title from OSC 0 (icon+window) and OSC 2 (window) sequences, handling both the
+// BEL terminator and the ST (ESC\) terminator, and exposes it via Title().
+func TestTrackedBufferCapturesTitle(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"osc2_bel", "\x1b]2;vim main.go\x07", "vim main.go"},
+		{"osc0_bel", "\x1b]0;~/proj\x07", "~/proj"},
+		{"osc2_st", "\x1b]2;tailing logs\x1b\\", "tailing logs"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewTrackedBuffer()
+			b.Write([]byte(tc.input))
+			if got := b.Title(); got != tc.want {
+				t.Errorf("Title() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
