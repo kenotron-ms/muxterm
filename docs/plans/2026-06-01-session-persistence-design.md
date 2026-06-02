@@ -315,9 +315,17 @@ workspaces are first-class in v1.
 **Rename.** `RenameWorkspace(id, name)` sets or clears the optional display label.
 No uniqueness check (ids are the key).
 
+**First-connect bootstrap.** A fresh client with **no** stored workspaceId calls
+`ListWorkspaces()` and attaches to the default — cold-start auto-create guarantees
+at least one workspace exists, so the client never has to invent an id.
+
 **Reaping (tmux parity).** When a workspace's **last pane exits**, the workspace is
-auto-reaped. If that empties the daemon, the next attach re-creates a fresh unnamed
-default. Explicit `CloseWorkspace(id)` kills all its panes and removes it. (A
+auto-reaped. Both auto-reap and explicit `CloseWorkspace(id)` fire a
+**`workspace-closed(id)`** event to **all** subscribers of that workspace. On
+receiving it, a co-attached client **detaches, calls `ListWorkspaces()`, and
+attaches to another workspace**; if reaping emptied the daemon, the daemon
+re-creates a fresh unnamed default, so the next attach always lands somewhere.
+Explicit `CloseWorkspace(id)` kills all its panes and removes it. (A
 "keep empty workspaces" config knob is deferred — YAGNI.)
 
 **Persistence boundary.** The workspace set lives in the daemon's in-memory registry
@@ -331,7 +339,8 @@ presentation is per-client, and exactly one resource is contested.**
 
 | Aspect | Shared or per-client? | Behavior |
 | --- | --- | --- |
-| **Composition** (which panes exist) | **Shared** | Browser A creates/closes a pane → daemon **broadcasts composition-change events (`pane-added`/`pane-closed`) to ALL subscribers of the workspace** → B spawns/destroys its xterm.js and re-runs its responsive arrangement. |
+| **Composition** (which panes exist) | **Shared** | Browser A creates/closes a pane → daemon **broadcasts composition-change events (`pane-added`/`pane-closed`) to ALL subscribers of the workspace** → B spawns/destroys its xterm.js and re-runs its responsive arrangement. `pane-added` is **idempotent, dedup-keyed by `localPaneId`**, so the actor (which also gets the broadcast after its `CreatePane` ack) does not double-spawn. |
+| **Workspace existence** (open/closed) | **Shared** | If the workspace is reaped (last pane exits) or `CloseWorkspace`d, the daemon **broadcasts `workspace-closed(id)` to ALL subscribers**. Each co-attached client then **detaches, calls `ListWorkspaces()`, and attaches to another workspace** (the daemon re-creates a fresh unnamed default if it is now empty) — no client is left stranded on a dead workspace. A `RenameWorkspace` broadcasts **`workspace-renamed(id, name?)`** so every client updates its tab label. |
 | **Pane output** (live bytes + scrollback) | **Shared/mirrored** | Both subscribe to the same PTY streams; both get the same replay + live feed (like two tmux clients on one session). |
 | **Input** (keystrokes) | **Shared** | Both can type into the same pane; keystrokes interleave at the PTY. No locking, no "driver" lock (YAGNI). |
 | **PTY size** | **Contested** (one PTY, one size) | **Active-view-wins:** whichever client most recently sent `Resize(paneID, CxR)` sets it; others reflow. Tabbed-away/unrendered panes send no resizes, so they don't fight. |
@@ -347,16 +356,26 @@ otherwise a second browser would not see panes appear/disappear.
 Five paths exercise the system.
 
 ```
-CREATE pane:
+CREATE pane (event-driven for ALL clients, including the actor):
   browser → serve: "new pane in workspace W, size CxR, cmd=$SHELL"
   serve → sessiond: CreatePane(W, CxR, cmd)
-  sessiond: fork PTY (sub-ms) → register Pane → return PaneID
-  → browser spawns an xterm.js for PaneID, places it per responsive layout
+       (unknown W → `unknown-workspace` error; pane can only be created in a
+        workspace the client is attached to)
+  sessiond: fork PTY (sub-ms) → assign localPaneId → register Pane
+  sessiond → actor: ACK carrying the assigned localPaneId (NOT a spawn signal)
+  sessiond → ALL subscribers: broadcast pane-added(localPaneId)
+  → every client (INCLUDING the actor) spawns its xterm.js on pane-added,
+    deduped by localPaneId, and places it per responsive layout
 
 ATTACH (fresh client / reconnect / new device):
+  fresh client with no stored workspaceId → ListWorkspaces() → Attach(default)
+       (cold-start auto-create guarantees at least one workspace exists)
   browser → serve → sessiond: Attach(workspaceId)
   sessiond → serve → browser: composition {localPaneIds} + per-pane replay
        (replay = synthetic preamble + retained ring bytes)
+  unknown/stale workspaceId (reaped, stale localStorage) → `unknown-workspace`
+       error → client recovers via ListWorkspaces() and attaches to an existing
+       workspace (or CreateWorkspace() for a fresh daemon-allocated id)
   browser: builds arrangement for this viewport profile, feeds replay to xterm.js,
            then subscribes to live
 
@@ -366,9 +385,17 @@ WORKSPACE control (multi-workspace management):
   browser → serve → sessiond: RenameWorkspace(id, name)
   browser → serve → sessiond: CloseWorkspace(id)      kills all panes, removes it
 
-COMPOSITION-CHANGE broadcast (to ALL subscribers of a workspace):
+COMPOSITION + WORKSPACE-LIFECYCLE broadcast (to ALL subscribers of a workspace):
   sessiond → serve → browsers: pane-added(localPaneId) / pane-closed(localPaneId)
-       each attached browser spawns/destroys its xterm.js and re-arranges
+       idempotent, dedup-keyed by localPaneId; each browser spawns/destroys its
+       xterm.js and re-arranges
+  sessiond → serve → browsers: workspace-closed(id)   on auto-reap or CloseWorkspace
+       → client detaches, calls ListWorkspaces(), attaches to another workspace
+         (daemon re-creates a fresh unnamed default if it is now empty)
+  sessiond → serve → browsers: workspace-renamed(id, name?)
+       → co-attached clients update their tab label (workspace.name ?? activePane.title)
+  (workspace-created broadcast for live cross-client picker updates is DEFERRED;
+   pickers refresh via ListWorkspaces() on open for now.)
 
 LIVE output:
   PTY → sessiond: appends to ring/altscreen, updates ModeTracker
@@ -407,7 +434,8 @@ connection" to "sessiond Unix socket."
 | **serve crashes / restarts** | Non-event. PTYs + rings live on in sessiond. New serve reconnects, re-subscribes, replays. |
 | **socket dead on serve start** | Auto-spawn sessiond (see lifecycle section). |
 | **web client disconnect** | Drop the subscriber only. The pane runs on. |
-| **attach to unknown workspace** | Daemon returns an empty composition; the client starts a fresh workspace. |
+| **attach to unknown/stale workspace id** (reaped workspace, stale `localStorage`) | Daemon returns an **`unknown-workspace` error**. It does **not** lazily create a workspace from a client-supplied id, and does **not** return an empty composition. The client **recovers** via `ListWorkspaces()` (cold-start auto-create guarantees at least the default exists) and attaches to an existing workspace, or calls `CreateWorkspace()` for a fresh daemon-allocated id. |
+| **create pane in unknown workspace id** | Same **`unknown-workspace` error**. A pane can only be created in a workspace the client is attached to. |
 | **ring trim mid-stream** | Safe-boundary trimming guarantees no severed escape; the ModeTracker preamble restores state. |
 
 **The honest weak point:** if `sessiond` itself dies, its child PTYs die — sessions
@@ -437,7 +465,13 @@ that does very little, so it rarely crashes.
 - **Exact `PaneBuffer` interface shape** — the seam that lets x/vt swap in for
   Level 2.
 - **Unix-socket control-frame schema specifics** (message types, encoding) — to be
-  nailed down in the implementation plan.
+  nailed down in the implementation plan. The schema must enumerate the **full**
+  message + event set, not just pane-level messages: the workspace-level lifecycle
+  events (`workspace-closed`, `workspace-renamed`) and the **idempotent**
+  `pane-added` / `pane-closed` events, alongside the request/reply messages
+  (`Attach`, `CreatePane`, `ListWorkspaces`, `CreateWorkspace`, `RenameWorkspace`,
+  `CloseWorkspace`, `Resize`) and the `unknown-workspace` error. A
+  `workspace-created` broadcast (live cross-client picker updates) is **deferred**.
 - **Cross-device arrangement memory** (daemon-side profile-keyed layouts) —
   explicitly deferred; confirm it stays deferred.
 - **"Keep empty workspaces" config knob** — deferred (YAGNI); v1 auto-reaps a
