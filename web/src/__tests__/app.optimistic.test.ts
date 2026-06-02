@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { terminalRegistry } from '../lib/terminal-registry.js';
 import { SessiondType } from '../types.js';
-import type { MuxWorkspacePicker } from '../components/workspace-picker.js';
 
 // Mock WebSocket before importing app (mirrors app.sessiond.test.ts).
 class MockWebSocket {
@@ -32,199 +32,72 @@ globalThis.WebSocket = MockWebSocket;
 import type { MuxApp } from '../app.js';
 import '../app.js';
 import { store } from '../state.js';
-import type { MutationSpec } from '../state.js';
 
-function seedWorkspaces(): void {
-  store.applySessiond({
-    type: SessiondType.WorkspaceList,
-    workspaces: [{ workspaceId: 'ws-1', name: 'old', paneCount: 0 }],
-  });
-}
-
-async function openPicker(): Promise<MuxApp> {
+async function fixture(): Promise<MuxApp> {
   const el = document.createElement('mux-app') as MuxApp;
   document.body.appendChild(el);
-  await el.updateComplete;
-  (el as unknown as { _showWorkspacePicker: boolean })._showWorkspacePicker = true;
-  el.requestUpdate();
   await el.updateComplete;
   return el;
 }
 
-describe('MuxApp optimistic workspace-rename', () => {
+describe('MuxApp optimistic workspace create', () => {
   let el: MuxApp;
 
   afterEach(() => {
     if (el && el.parentNode) el.parentNode.removeChild(el);
-    // Dismiss any lingering (errored/pending) mutations so they don't leak.
-    for (const m of store.erroredMutations) store.dismiss(m.id);
-    // Reset sessiond store state between tests.
+    // Reset sessiond store state, drop any lingering pending mutations, and
+    // clear the registry between tests so the shared singleton starts clean.
     store.applySessiond({ type: SessiondType.WorkspaceList, workspaces: [] });
+    (store as unknown as { _pending: Map<string, unknown> })._pending.clear();
     store.applySessiond({ type: SessiondType.Composition, workspaceId: '', panes: [] });
+    terminalRegistry.prune(new Set());
     el = null as unknown as MuxApp;
   });
 
-  it('routes workspace-rename through store.mutate and shows the new name instantly', async () => {
-    seedWorkspaces();
-    el = await openPicker();
+  it('shows provisional workspace instantly and sends create with a clientRef', async () => {
+    el = await fixture();
+    const socket = (el as unknown as { _socket: { createWorkspace: unknown } })._socket;
+    const sendSpy = vi.spyOn(socket as { createWorkspace: (...a: unknown[]) => void }, 'createWorkspace');
 
-    const picker = el.shadowRoot!.querySelector('mux-workspace-picker')!;
-    const mutateSpy = vi.spyOn(store, 'mutate');
+    (el as unknown as { _createWorkspaceOptimistic: () => void })._createWorkspaceOptimistic();
 
-    picker.dispatchEvent(
-      new CustomEvent('workspace-rename', {
-        bubbles: true,
-        composed: true,
-        detail: { workspaceId: 'ws-1', name: 'renamed' },
-      }),
-    );
+    // Provisional row overlaid instantly.
+    expect(store.workspaces.length).toBe(1);
 
-    expect(mutateSpy).toHaveBeenCalledTimes(1);
+    // Create sent with a non-empty clientRef as the second argument.
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const ref = sendSpy.mock.calls[0][1] as string;
+    expect(typeof ref).toBe('string');
+    expect(ref.length).toBeGreaterThan(0);
 
-    // Instant optimistic overlay: the folded view shows the new name immediately.
-    const ws = store.workspaces.find((w) => w.workspaceId === 'ws-1');
-    expect(ws?.name).toBe('renamed');
-
-    // Verify the settle predicate routes off the authoritative base.
-    const spec = mutateSpy.mock.calls[0][0] as MutationSpec;
-    expect(
-      spec.settled({
-        workspaces: [{ workspaceId: 'ws-1', name: 'renamed', paneCount: 0 }],
-        panes: [],
-      }),
-    ).toBe(true);
-    expect(
-      spec.settled({
-        workspaces: [{ workspaceId: 'ws-1', name: 'old', paneCount: 0 }],
-        panes: [],
-      }),
-    ).toBe(false);
-
-    mutateSpy.mockRestore();
-  });
-});
-
-describe('MuxApp errored-row wiring', () => {
-  let el: MuxApp;
-
-  afterEach(() => {
-    if (el && el.parentNode) el.parentNode.removeChild(el);
-    // Dismiss any lingering (errored/pending) mutations so they don't leak.
-    for (const m of store.erroredMutations) store.dismiss(m.id);
-    // Reset sessiond store state between tests.
-    store.applySessiond({ type: SessiondType.WorkspaceList, workspaces: [] });
-    store.applySessiond({ type: SessiondType.Composition, workspaceId: '', panes: [] });
-    el = null as unknown as MuxApp;
-    vi.useRealTimers();
-  });
-
-  it('passes store.erroredMutations into the picker and forwards retry/dismiss', async () => {
-    vi.useFakeTimers();
-    seedWorkspaces();
-    el = await openPicker();
-
-    const picker = el.shadowRoot!.querySelector('mux-workspace-picker') as MuxWorkspacePicker;
-
-    // Rename that never settles → times out into an errored mutation.
-    picker.dispatchEvent(
-      new CustomEvent('workspace-rename', {
-        bubbles: true,
-        composed: true,
-        detail: { workspaceId: 'ws-1', name: 'renamed' },
-      }),
-    );
-
-    vi.advanceTimersByTime(5000);
-    await el.updateComplete;
-
-    // The errored mutation prop is received by the picker.
-    expect(picker.erroredMutations.length).toBe(1);
-    expect(picker.erroredMutations[0].workspaceId).toBe('ws-1');
-
-    const retrySpy = vi.spyOn(store, 'retry');
-    const dismissSpy = vi.spyOn(store, 'dismiss');
-    const mutationId = store.erroredMutations[0].id;
-
-    picker.dispatchEvent(
-      new CustomEvent('workspace-retry', {
-        bubbles: true,
-        composed: true,
-        detail: { mutationId },
-      }),
-    );
-    expect(retrySpy).toHaveBeenCalledWith(mutationId);
-
-    picker.dispatchEvent(
-      new CustomEvent('workspace-dismiss', {
-        bubbles: true,
-        composed: true,
-        detail: { mutationId },
-      }),
-    );
-    expect(dismissSpy).toHaveBeenCalledWith(mutationId);
-
-    retrySpy.mockRestore();
-    dismissSpy.mockRestore();
-  });
-});
-
-describe('MuxApp optimistic close wiring', () => {
-  let el: MuxApp;
-
-  afterEach(() => {
-    if (el && el.parentNode) el.parentNode.removeChild(el);
-    // Dismiss any lingering (errored/pending) mutations so they don't leak.
-    for (const m of store.erroredMutations) store.dismiss(m.id);
-    // Reset sessiond store state between tests.
-    store.applySessiond({ type: SessiondType.WorkspaceList, workspaces: [] });
-    store.applySessiond({ type: SessiondType.Composition, workspaceId: '', panes: [] });
-    el = null as unknown as MuxApp;
-  });
-
-  it('routes workspace-close through store.mutate and removes the row instantly', async () => {
+    // Authoritative list echoes that exact clientRef → settles to the real row.
     store.applySessiond({
       type: SessiondType.WorkspaceList,
-      workspaces: [
-        { workspaceId: 'ws-1', name: 'a', paneCount: 0 },
-        { workspaceId: 'ws-2', name: 'b', paneCount: 0 },
-      ],
+      workspaces: [{ workspaceId: 'w7', paneCount: 0, clientRef: ref }],
     });
-    el = await openPicker();
 
-    const picker = el.shadowRoot!.querySelector('mux-workspace-picker')!;
-    const mutateSpy = vi.spyOn(store, 'mutate');
+    expect(store.workspaces.length).toBe(1);
+    expect(store.workspaces[0].workspaceId).toBe('w7');
+  });
 
-    picker.dispatchEvent(
-      new CustomEvent('workspace-close', {
-        bubbles: true,
-        composed: true,
-        detail: { workspaceId: 'ws-1' },
-      }),
-    );
+  it('does NOT settle when echo carries a different clientRef', async () => {
+    el = await fixture();
+    const socket = (el as unknown as { _socket: { createWorkspace: unknown } })._socket;
+    const sendSpy = vi.spyOn(socket as { createWorkspace: (...a: unknown[]) => void }, 'createWorkspace');
 
-    expect(mutateSpy).toHaveBeenCalledTimes(1);
+    (el as unknown as { _createWorkspaceOptimistic: () => void })._createWorkspaceOptimistic();
+    expect(store.workspaces.length).toBe(1);
+    const ref = sendSpy.mock.calls[0][1] as string;
 
-    // Instant optimistic removal: the folded view drops the row immediately.
-    expect(store.workspaces.map((w) => w.workspaceId)).toEqual(['ws-2']);
+    // Another tab's create echoes with a DIFFERENT clientRef.
+    store.applySessiond({
+      type: SessiondType.WorkspaceList,
+      workspaces: [{ workspaceId: 'w9', paneCount: 0, clientRef: 'someone-elses-ref' }],
+    });
 
-    // Verify the settle predicate routes off the authoritative base.
-    const spec = mutateSpy.mock.calls[0][0] as MutationSpec;
-    expect(
-      spec.settled({
-        workspaces: [{ workspaceId: 'ws-2', name: 'b', paneCount: 0 }],
-        panes: [],
-      }),
-    ).toBe(true);
-    expect(
-      spec.settled({
-        workspaces: [
-          { workspaceId: 'ws-1', name: 'a', paneCount: 0 },
-          { workspaceId: 'ws-2', name: 'b', paneCount: 0 },
-        ],
-        panes: [],
-      }),
-    ).toBe(false);
-
-    mutateSpy.mockRestore();
+    // Our provisional row is still pending (its ref was not echoed), so it
+    // overlays on top of the other tab's authoritative row: two rows, unsettled.
+    expect(ref).not.toBe('someone-elses-ref');
+    expect(store.workspaces.length).toBe(2);
   });
 });

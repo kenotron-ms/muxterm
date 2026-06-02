@@ -19,6 +19,7 @@ import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 import type { LauncherAction } from './components/launcher-menu.js';
 import { WorkspaceController } from './lib/workspace-controller.js';
+import { mintClientRef } from './lib/client-ref.js';
 
 // ---------------------------------------------------------------------------
 // Module-level keybinding wiring
@@ -325,7 +326,7 @@ export class MuxApp extends LitElement {
             .currentWorkspaceId="${store.attached ?? ''}"
             .erroredMutations="${store.erroredMutations}"
             @workspace-selected="${this._onWorkspaceSelected}"
-            @workspace-create="${() => this._socket?.createWorkspace()}"
+            @workspace-create="${this._createWorkspaceOptimistic}"
             @workspace-rename="${this._onWorkspaceRename}"
             @workspace-close="${this._onWorkspaceClose}"
             @workspace-retry="${(e: CustomEvent<{ mutationId: string }>) =>
@@ -348,6 +349,28 @@ export class MuxApp extends LitElement {
   /** Empty-state button: create a connection-scoped pane in the workspace. */
   private _onCreatePane = (): void => {
     this._socket?.createPane();
+  };
+
+  /**
+   * Create a workspace optimistically: a provisional row appears instantly,
+   * keyed by a minted clientRef used as its temporary workspaceId so the row
+   * has byte-identical layout to a real entry. The daemon echoes the ref on the
+   * authoritative workspace-list, which settles the pending mutation by exact
+   * identity (clientRef match) rather than fragile counting.
+   */
+  private _createWorkspaceOptimistic = (): void => {
+    const ref = mintClientRef();
+    store.mutate({
+      workspaceId: ref,
+      kind: 'create',
+      optimistic: (draft) =>
+        draft.workspaces.push({ workspaceId: ref, paneCount: 0, clientRef: ref }),
+      settled: (base) => base.workspaces.some((w) => w.clientRef === ref),
+      onTimeout: () => {
+        /* no-op; Phase-2 marks errored row, must never silently vanish */
+      },
+    });
+    this._socket?.createWorkspace(undefined, ref);
   };
 
   private _handleControlMessage = (msg: Record<string, unknown>): void => {
