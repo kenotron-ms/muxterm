@@ -59,6 +59,41 @@ Rejected alternatives:
 buffer implementation, to be adopted only if Level-1 fidelity ever proves
 insufficient. It is **not** adopted now (it is experimental / pre-1.0).
 
+## Dependencies / build-vs-leverage
+
+The external dependency footprint is deliberately tiny \u2014 `creack/pty` +
+`charmbracelet/x` \u2014 everything else is stdlib or hand-rolled.
+
+| Building block | Choice | Verdict |
+| --- | --- | --- |
+| PTY allocation/resize/lifecycle | `github.com/creack/pty` | **Leverage** \u2014 the Go standard; `Setsize`, process lifecycle |
+| ANSI/VT escape-sequence parsing | `github.com/charmbracelet/x/ansi` | **Leverage** \u2014 feeds bytes \u2192 emits parsed CSI/SGR/DEC-private-mode/OSC sequences |
+| Headless VT emulator (Level 2 reserve) | `github.com/charmbracelet/x/vt` | **Reserve** \u2014 swaps in behind `PaneBuffer` if Level 1 fidelity is insufficient |
+| Daemonize / detach / reparent | `golang.org/x/sys/unix` (`Setsid` via `SysProcAttr`) | **Hand-roll on stdlib** |
+| systemd integration (optional) | `github.com/coreos/go-systemd` | **Consider** \u2014 socket activation / `sd_notify`, only if systemd-first |
+| Unix-socket framing | stdlib (`encoding/json` or `gob` + 4-byte length prefix) | **Hand-roll** \u2014 trivial |
+| Scrollback ring buffer | hand-rolled slice + head/tail (~40 lines) | **Hand-roll** |
+| Web-terminal prior art | `gotty` (aging, 2015) | **Learn from**, don't reuse |
+
+**The key decision \u2014 ModeTracker is policy on top of a proven parser, not a
+from-scratch parser.** Our highest-risk component was "hand-roll a byte-level
+escape parser to track sticky state." `charmbracelet/x/ansi` is a standalone ANSI
+parser state machine (**not** a grid emulator): feed it the PTY byte stream, it
+emits parsed CSI / SGR / DEC private modes (incl. `?1049h/l`) / **OSC 0-2 window
+title**. So we hand-roll only the *policy* \u2014 the two-tier buffer, the sticky-state
+snapshot, the synthetic preamble \u2014 on top of it. OSC title extraction (for
+`pane.title`) comes for free from the same parser. This shrinks the "Level 1
+hand-roll" to the part that is genuinely ours.
+
+**Honest dependency caveat (given the project's aversion to fragile deps):**
+`charmbracelet/x` is versioned `v0.0.0` (experimental, breaking changes possible).
+It is reputable (Charm) and production-used, and \u2014 critically \u2014 it sits **behind
+the `PaneBuffer` interface**, so its blast radius is contained. Escape hatches if
+it ever becomes a problem: `github.com/Azure/go-ansiterm` (stable, callback-based,
+less ergonomic) or a hand-rolled parser. This is an acceptable, contained risk;
+the alternative (hand-rolling the byte-level parser now) trades a small dependency
+risk for a larger correctness risk in the hardest code.
+
 ## Architecture
 
 ### Lifetime model
@@ -268,9 +303,12 @@ Pane buffer
   replaceable altscreen frame, **not** the ring — so full-screen apps (htop/vim)
   never flood scrollback, and exiting (`ESC[?1049l`) cleanly discards the frame and
   returns to the ring. Normal output appends to the ring.
-- **ModeTracker** scans every byte and keeps a tiny sticky-state snapshot:
-  alt-screen on/off, current SGR (colors/attrs), cursor position, and a handful of
-  DEC private modes (autowrap, cursor visibility).
+- **ModeTracker** keeps a tiny sticky-state snapshot: alt-screen on/off, current
+  SGR (colors/attrs), cursor position, and a handful of DEC private modes
+  (autowrap, cursor visibility). It is **built on the `charmbracelet/x/ansi`
+  parser** \u2014 it consumes *parsed* sequences rather than scanning raw bytes itself,
+  so the hand-rolled scope here is the sticky-state policy + synthetic preamble,
+  **not** the escape-sequence parser.
 - **Safe-boundary trimming:** when the ring exceeds budget it only trims **between
   complete escape sequences** — never severing e.g. `ESC[31m` mid-sequence.
 - **Replay on attach** = `[synthetic preamble]` + `[retained ring bytes]` +
