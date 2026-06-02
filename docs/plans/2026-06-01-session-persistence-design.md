@@ -43,8 +43,8 @@ per pane), so the browser-as-multiplexer model is strictly **less** work for us.
 
 ## Approach
 
-**Approach A — a custom Go persistence daemon with a hand-rolled "Level 1"
-scrollback buffer.**
+**Approach A — a custom Go persistence daemon with a per-pane scrollback buffer
+behind a `PaneBuffer` interface, shipping the simplest implementation first.**
 
 Rejected alternatives:
 
@@ -55,44 +55,55 @@ Rejected alternatives:
 - **Zellij-style server-side multiplexing** — requires building a server-side
   compositor + full VT render engine; more work, not less.
 
-`charmbracelet/x/vt` is explicitly held **in reserve** as a swappable "Level 2"
-buffer implementation, to be adopted only if Level-1 fidelity ever proves
-insufficient. It is **not** adopted now (it is experimental / pre-1.0).
+The buffer is designed as a `PaneBuffer` interface with **three candidate
+implementations** (see "The PaneBuffer interface" below). **v1 ships the simplest
+one — `RawBuffer` — and commits to NO `charmbracelet` dependency yet.** The two
+richer implementations (`TrackedBuffer` on `charmbracelet/x/ansi`, `VTBuffer` on
+`charmbracelet/x/vt`) are deferred upgrades chosen **empirically later** via the
+golden-test suite, not up front. Both `x/ansi` and `x/vt` live in the same
+`charmbracelet/x` repo at the same `v0.0.0` maturity, so the choice between them
+is one of **fidelity and weight, not maturity** — and it is deferred until it can
+be measured.
 
 ## Dependencies / build-vs-leverage
 
-The external dependency footprint is deliberately tiny \u2014 `creack/pty` +
-`charmbracelet/x` \u2014 everything else is stdlib or hand-rolled.
+The v1 external dependency footprint is deliberately tiny — **`creack/pty` only**
+(plus stdlib `golang.org/x/sys/unix`); everything else is stdlib or hand-rolled.
+The `charmbracelet/x` packages are **deferred candidates**, pulled in only if and
+when a richer buffer wins the bake-off (see "The PaneBuffer interface").
 
 | Building block | Choice | Verdict |
 | --- | --- | --- |
-| PTY allocation/resize/lifecycle | `github.com/creack/pty` | **Leverage** \u2014 the Go standard; `Setsize`, process lifecycle |
-| ANSI/VT escape-sequence parsing | `github.com/charmbracelet/x/ansi` | **Leverage** \u2014 feeds bytes \u2192 emits parsed CSI/SGR/DEC-private-mode/OSC sequences |
-| Headless VT emulator (Level 2 reserve) | `github.com/charmbracelet/x/vt` | **Reserve** \u2014 swaps in behind `PaneBuffer` if Level 1 fidelity is insufficient |
-| Daemonize / detach / reparent | `golang.org/x/sys/unix` (`Setsid` via `SysProcAttr`) | **Hand-roll on stdlib** |
-| systemd integration (optional) | `github.com/coreos/go-systemd` | **Consider** \u2014 socket activation / `sd_notify`, only if systemd-first |
-| Unix-socket framing | stdlib (`encoding/json` or `gob` + 4-byte length prefix) | **Hand-roll** \u2014 trivial |
-| Scrollback ring buffer | hand-rolled slice + head/tail (~40 lines) | **Hand-roll** |
+| PTY allocation/resize/lifecycle | `github.com/creack/pty` | **Leverage now** — the Go standard; `Setsize`, process lifecycle |
+| Daemonize / detach / reparent | `golang.org/x/sys/unix` (`Setsid` via `SysProcAttr`) | **Leverage now (stdlib)** |
+| Unix-socket framing | stdlib (`encoding/json` or `gob` + 4-byte length prefix) | **Hand-roll** — trivial |
+| Scrollback ring buffer (RawBuffer v1) | hand-rolled byte ring + newline-boundary trim (~40 lines) | **Hand-roll** — zero external deps |
+| ANSI/VT escape-sequence parsing (TrackedBuffer) | `github.com/charmbracelet/x/ansi` | **Deferred / candidate** — chosen by bake-off; same maturity as x/vt |
+| Headless VT emulator (VTBuffer) | `github.com/charmbracelet/x/vt` | **Deferred / candidate** — chosen by bake-off; same maturity as x/ansi |
+| systemd integration (optional) | `github.com/coreos/go-systemd` | **Deferred** — arrives with the systemd phase; socket activation / `sd_notify` |
 | Web-terminal prior art | `gotty` (aging, 2015) | **Learn from**, don't reuse |
 
-**The key decision \u2014 ModeTracker is policy on top of a proven parser, not a
-from-scratch parser.** Our highest-risk component was "hand-roll a byte-level
-escape parser to track sticky state." `charmbracelet/x/ansi` is a standalone ANSI
-parser state machine (**not** a grid emulator): feed it the PTY byte stream, it
-emits parsed CSI / SGR / DEC private modes (incl. `?1049h/l`) / **OSC 0-2 window
-title**. So we hand-roll only the *policy* \u2014 the two-tier buffer, the sticky-state
-snapshot, the synthetic preamble \u2014 on top of it. OSC title extraction (for
-`pane.title`) comes for free from the same parser. This shrinks the "Level 1
-hand-roll" to the part that is genuinely ours.
+**The key decision — v1 commits to NO `charmbracelet` dependency.** The default
+buffer (`RawBuffer`) is a plain budgeted byte ring with newline-boundary trimming
+and raw replay — zero external deps. The two richer buffers each add exactly one
+`charmbracelet/x` package, but only as a **deferred upgrade** behind the
+`PaneBuffer` interface, so the v1 dependency surface stays at `creack/pty`. When a
+richer buffer is eventually warranted, `charmbracelet/x/ansi` is a standalone ANSI
+parser state machine (**not** a grid emulator) — feed it the PTY byte stream and
+it emits parsed CSI / SGR / DEC private modes (incl. `?1049h/l`) / **OSC 0-2 window
+title** — so `TrackedBuffer` hand-rolls only the *policy* (two-tier buffer, sticky
+snapshot, synthetic preamble) on top of it, and OSC title extraction comes for free.
 
-**Honest dependency caveat (given the project's aversion to fragile deps):**
-`charmbracelet/x` is versioned `v0.0.0` (experimental, breaking changes possible).
-It is reputable (Charm) and production-used, and \u2014 critically \u2014 it sits **behind
-the `PaneBuffer` interface**, so its blast radius is contained. Escape hatches if
-it ever becomes a problem: `github.com/Azure/go-ansiterm` (stable, callback-based,
-less ergonomic) or a hand-rolled parser. This is an acceptable, contained risk;
-the alternative (hand-rolling the byte-level parser now) trades a small dependency
-risk for a larger correctness risk in the hardest code.
+**Equal-maturity correction (important — supersedes earlier framing).** An earlier
+draft preferred `x/ansi` over `x/vt` on *maturity* grounds. That was incoherent:
+`x/ansi` and `x/vt` live in the **same `charmbracelet/x` repo at the same `v0.0.0`
+experimental version**, so they carry the **same** backwards-compat risk. The real
+distinction is **fidelity and weight, not maturity** — `TrackedBuffer`'s
+parsed-sequence policy + byte-identical-ish replay vs. `VTBuffer`'s full grid
+emulation + reflow — and that choice is **deferred** until the golden-test bake-off
+can measure it. Whichever wins, it sits **behind the `PaneBuffer` interface**, so
+its blast radius is contained, and `github.com/Azure/go-ansiterm` (stable,
+callback-based) or a hand-rolled parser remain escape hatches.
 
 ## Architecture
 
@@ -283,50 +294,102 @@ the PTY size; other views reflow to fit** (matching the research doc's
 visible") live in `localStorage` per device now; cross-device class-layout memory
 is a future upgrade.
 
-### The Level 1 buffer (per-pane)
+### The PaneBuffer interface (per-pane scrollback)
 
-Each `Pane` owns a `RingBuffer` + `ModeTracker`, behind a `PaneBuffer` interface
-so a Level-2 `charmbracelet/x/vt`-backed implementation can be swapped in later
-without touching the daemon or protocol.
+Each `Pane` owns its scrollback behind a single **`PaneBuffer` interface**. There
+are **three candidate implementations** of that interface, increasing in fidelity
+and cost. **v1 ships the simplest (`RawBuffer`) and commits to NO `charmbracelet`
+dependency.** The richer two are deferred upgrades, swappable behind the same
+interface without touching the daemon or protocol, and the choice between them is
+made **empirically later** (see "How we choose").
 
 ```
-Pane buffer
+PaneBuffer  (interface)
+├── RawBuffer     v1 DEFAULT  — byte ring + newline-boundary trim, raw replay; zero deps
+├── TrackedBuffer deferred    — + charmbracelet/x/ansi (ModeTracker, two-tier, preamble)
+└── VTBuffer      deferred    — + charmbracelet/x/vt   (full cell-grid + scrollback, reflow)
+```
+
+#### 1. RawBuffer — the v1 default (zero external deps)
+
+A budgeted **byte ring** (configurable, roughly ~10k lines' worth of bytes). When
+the ring exceeds budget it trims at the **nearest newline boundary**, which avoids
+severing escape sequences in the common case. Replay on attach = dump the retained
+bytes straight to xterm.js, which is itself the VT emulator — so replay is
+**byte-identical**, reconstructed through the *same* emulator the user sees live,
+with zero drift and no synthetic preamble.
+
+```
+RawBuffer
+├── byte ring        # budgeted bytes (~10k lines), configurable
+└── trim @ newline   # nearest-newline boundary, avoids severing escapes (common case)
+```
+
+**Accepted v1 limitations (documented; each is addressed by an upgrade below):**
+
+- Aggressive trimming can, rarely, clip mid-screen sticky state (a color/mode set
+  far back in history then trimmed) — there is no preamble to restore it.
+- Alt-screen apps (vim/htop) repaint into the ring and can transiently **bloat**
+  it until they exit (no two-tier separation).
+- **Old scrollback does not reflow** on width change (replay-then-go-live model).
+
+These are acceptable for v1 precisely because the richer implementations below
+remove each one, and they slot in behind the same interface.
+
+#### 2. TrackedBuffer — deferred upgrade (adds `charmbracelet/x/ansi`)
+
+Adds a **ModeTracker** built on the `charmbracelet/x/ansi` parser: it consumes
+*parsed* sequences (rather than scanning raw bytes itself) and keeps a tiny
+sticky-state snapshot — alt-screen on/off, current SGR (colors/attrs), cursor
+position, a handful of DEC private modes (autowrap, cursor visibility), and the
+**OSC 0/2 window title** (feeding `pane.title`). On top of the tracker it adds:
+
+```
+TrackedBuffer
 ├── scrollback ring   # normal-screen output, budgeted ~10k lines (configurable)
 ├── altscreen frame   # single REPLACEABLE buffer, used while in alt-screen
-└── ModeTracker       # sticky terminal state, updated as bytes stream through
+└── ModeTracker       # sticky state (on x/ansi), updated as bytes stream through
 ```
 
-- **scrollback ring** — normal-screen output, budgeted ~10k lines (configurable).
-- **altscreen frame** — a single **replaceable** buffer used while the program is
-  on the alternate screen.
 - **Two-tier rule:** while on the alt-screen (`ESC[?1049h`), output goes to the
   replaceable altscreen frame, **not** the ring — so full-screen apps (htop/vim)
   never flood scrollback, and exiting (`ESC[?1049l`) cleanly discards the frame and
-  returns to the ring. Normal output appends to the ring.
-- **ModeTracker** keeps a tiny sticky-state snapshot: alt-screen on/off, current
-  SGR (colors/attrs), cursor position, and a handful of DEC private modes
-  (autowrap, cursor visibility). It is **built on the `charmbracelet/x/ansi`
-  parser** \u2014 it consumes *parsed* sequences rather than scanning raw bytes itself,
-  so the hand-rolled scope here is the sticky-state policy + synthetic preamble,
-  **not** the escape-sequence parser.
+  returns to the ring. (Fixes RawBuffer's alt-screen bloat.)
 - **Safe-boundary trimming:** when the ring exceeds budget it only trims **between
   complete escape sequences** — never severing e.g. `ESC[31m` mid-sequence.
-- **Replay on attach** = `[synthetic preamble]` + `[retained ring bytes]` +
-  live stream. The preamble is a small burst of escape sequences the ModeTracker
-  emits to re-establish correct sticky state at the trim boundary, so xterm.js
-  reconstructs colors/cursor/mode correctly despite trimmed history.
-- **Accepted Level-1 limitation:** it does **not** reflow *old scrollback* on width
-  change — acceptable for a replay-then-go-live model. This is the explicit reason
-  x/vt is kept in reserve.
+- **Replay on attach** = `[synthetic preamble]` + `[retained ring bytes]` + live
+  stream. The preamble is a small burst of escape sequences the ModeTracker emits
+  to re-establish correct sticky state at the trim boundary, so xterm.js
+  reconstructs colors/cursor/mode correctly despite trimmed history. (Fixes
+  RawBuffer's mid-screen-state clipping.)
 
-The three problems this buffer design solves:
+This is the material previously specced as the hand-rolled "Level 1" buffer; it is
+now framed as a **deferred** implementation, not the v1 default. It still does
+**not** reflow old scrollback on width change — that is what VTBuffer adds.
 
-1. **Alt-screen flooding/replay** — the two-tier rule keeps full-screen repaints
-   out of scrollback.
-2. **Mid-escape trimming corruption** — safe-boundary trimming guarantees no
-   severed escape sequence.
-3. **Lost cumulative sticky state at the trim boundary** — the ModeTracker
-   preamble re-establishes colors/cursor/mode after history is trimmed.
+#### 3. VTBuffer — deferred upgrade (adds `charmbracelet/x/vt`)
+
+A full **headless cell-grid + scrollback** emulator. Because it stores a line grid,
+it trims **whole rendered lines** (never severs an escape), it **serializes the
+live grid** on attach (no synthetic preamble needed), and it **reflows old
+scrollback on resize**. The trade-off versus Tracked/Raw: output is rendered
+through **two** emulators (x/vt to store, then xterm.js to show), so subtle drift
+is possible on odd sequences / wide chars, and it is **heavier** (a full cell-grid
+per pane in memory).
+
+#### How we choose
+
+`TrackedBuffer` vs `VTBuffer` is decided **empirically later** — both implemented
+behind the same `PaneBuffer` interface and judged by the **golden-test suite**
+(real recorded streams: vim/htop enter-exit, color runs, cursor moves, trim at
+every offset). **No `charmbracelet` dependency is committed until measured.** Both
+candidates carry equal maturity risk (same `charmbracelet/x` repo, same `v0.0.0`),
+so the bake-off turns purely on **fidelity vs weight**, not maturity.
+
+**Explicit anti-option — do NOT hand-port a VT grid emulator "by reference" from
+x/vt.** That re-implements the single hardest component and is the worst of both
+worlds. We either **depend on x/vt** or **stay byte-based** (Raw/Tracked); we never
+reimplement a grid emulator ourselves.
 
 ## Workspace lifecycle
 
@@ -508,8 +571,8 @@ that does very little, so it rarely crashes.
 - **Daemon-restart durability:** is operational `Restart=on-failure` enough for v1,
   or will users demand disk-mirrored scrollback sooner than expected? (Deferred for
   now.)
-- **Exact `PaneBuffer` interface shape** — the seam that lets x/vt swap in for
-  Level 2.
+- **Exact `PaneBuffer` interface shape** — the seam that lets `TrackedBuffer`
+  (x/ansi) or `VTBuffer` (x/vt) swap in behind the v1 `RawBuffer` default.
 - **Unix-socket control-frame schema specifics** (message types, encoding) — to be
   nailed down in the implementation plan. The schema must enumerate the **full**
   message + event set, not just pane-level messages: the workspace-level lifecycle
