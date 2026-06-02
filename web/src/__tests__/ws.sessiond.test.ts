@@ -116,6 +116,32 @@ describe('MuxSocket sessiond senders', () => {
     expect(lastJson(ws)).toEqual({ type: SessiondType.CreateWorkspace });
   });
 
+  it('createWorkspace(name, clientRef) includes clientRef when provided', () => {
+    const { mux, ws } = openSocket();
+    mux.createWorkspace('dev', 'tmp-ws-1');
+
+    const sent = lastJson(ws);
+    expect(sent.type).toBe('create-workspace');
+    expect(sent.name).toBe('dev');
+    expect(sent.clientRef).toBe('tmp-ws-1');
+  });
+
+  it('createWorkspace() omits clientRef when not provided', () => {
+    const { mux, ws } = openSocket();
+    mux.createWorkspace();
+
+    const sent = lastJson(ws);
+    expect('clientRef' in sent).toBe(false);
+  });
+
+  it('createPane(undefined, clientRef) includes clientRef when provided', () => {
+    const { mux, ws } = openSocket();
+    mux.createPane(undefined, 'tmp-pane-1');
+
+    const sent = lastJson(ws);
+    expect(sent.clientRef).toBe('tmp-pane-1');
+  });
+
   it('renameWorkspace() emits {type,workspaceId,name}', () => {
     const { mux, ws } = openSocket();
     mux.renameWorkspace('ws-9', 'renamed');

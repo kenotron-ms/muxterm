@@ -81,10 +81,14 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.ListWorkspaces });
   }
 
-  /** Create a new workspace; name is included only when truthy. */
-  createWorkspace(name?: string): void {
+  /**
+   * Create a new workspace; name and clientRef are each included only when
+   * truthy.
+   */
+  createWorkspace(name?: string, clientRef?: string): void {
     const msg: SessiondMessage = { type: SessiondType.CreateWorkspace };
     if (name) msg.name = name;
+    if (clientRef) msg.clientRef = clientRef;
     this.sendSessiond(msg);
   }
 
@@ -100,11 +104,13 @@ export class MuxSocket {
 
   /**
    * Create a connection-scoped pane (NO workspaceId). cmd is included only
-   * when it carries at least one argument.
+   * when it carries at least one argument. clientRef is included only when
+   * truthy.
    */
-  createPane(cmd?: string[]): void {
+  createPane(cmd?: string[], clientRef?: string): void {
     const msg: SessiondMessage = { type: SessiondType.CreatePane };
     if (cmd && cmd.length > 0) msg.cmd = cmd;
+    if (clientRef) msg.clientRef = clientRef;
     this.sendSessiond(msg);
   }
 
