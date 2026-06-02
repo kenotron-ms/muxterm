@@ -1,6 +1,66 @@
 // Package sessiond defines the session daemon control protocol.
 package sessiond
 
+import (
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+)
+
+// Frame kinds tag each daemon socket frame. A frame is
+// [4-byte BIG-ENDIAN length][1-byte kind][payload], where the length covers the
+// kind byte plus the payload.
+const (
+	FrameControl  byte = 0x01 // payload is JSON of the Message envelope
+	FramePaneData byte = 0x02 // payload is [4-byte LITTLE-ENDIAN paneId][raw bytes]
+)
+
+// writeFrame writes a single framed message: a 5-byte header consisting of a
+// big-endian uint32 length (kind byte + payload) followed by the kind byte,
+// then the payload (if any).
+func writeFrame(w io.Writer, kind byte, payload []byte) error {
+	var hdr [5]byte
+	binary.BigEndian.PutUint32(hdr[0:4], uint32(1+len(payload)))
+	hdr[4] = kind
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	if len(payload) > 0 {
+		if _, err := w.Write(payload); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// WriteControl marshals msg to JSON and writes it as a FrameControl frame.
+func WriteControl(w io.Writer, msg *Message) error {
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	return writeFrame(w, FrameControl, payload)
+}
+
+// ReadFrame reads one frame and returns its kind and payload. This is the
+// frozen 3-value signature (kind, payload, err) and must not change shape.
+func ReadFrame(r io.Reader) (kind byte, payload []byte, err error) {
+	var hdr [4]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return 0, nil, err
+	}
+	total := binary.BigEndian.Uint32(hdr[:])
+	if total < 1 {
+		return 0, nil, fmt.Errorf("sessiond: frame length %d too short (need >=1 for kind byte)", total)
+	}
+	buf := make([]byte, total)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, nil, err
+	}
+	return buf[0], buf[1:], nil
+}
+
 // Message is the single control envelope. Every request, reply, event, and
 // error is this struct with a different Type. The JSON tags are FROZEN per the
 // v1 wire protocol contract (see

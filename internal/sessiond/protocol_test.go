@@ -1,7 +1,10 @@
 package sessiond
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"reflect"
 	"testing"
 )
@@ -83,5 +86,85 @@ func TestMessageRoundTrip(t *testing.T) {
 
 	if !reflect.DeepEqual(original, decoded) {
 		t.Errorf("round-trip mismatch\n original: %+v\n decoded:  %+v", original, decoded)
+	}
+}
+
+// TestWriteControlReadFrameRoundTrip writes a control frame and reads it back,
+// asserting the frame kind and the decoded Message envelope.
+func TestWriteControlReadFrameRoundTrip(t *testing.T) {
+	original := Message{Type: "workspace-created", CID: 5, WorkspaceID: "ws-abc"}
+
+	var buf bytes.Buffer
+	if err := WriteControl(&buf, &original); err != nil {
+		t.Fatalf("WriteControl returned error: %v", err)
+	}
+
+	kind, payload, err := ReadFrame(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrame returned error: %v", err)
+	}
+	if kind != FrameControl {
+		t.Fatalf("kind = %#x, want FrameControl (%#x)", kind, FrameControl)
+	}
+
+	var decoded Message
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
+	}
+	if !reflect.DeepEqual(original, decoded) {
+		t.Errorf("round-trip mismatch\n original: %+v\n decoded:  %+v", original, decoded)
+	}
+}
+
+// TestReadFrameSequential writes two control frames back-to-back and reads them
+// in order, asserting each frame kind and decoded Type.
+func TestReadFrameSequential(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteControl(&buf, &Message{Type: "pane-added", PaneID: 1}); err != nil {
+		t.Fatalf("WriteControl (first) returned error: %v", err)
+	}
+	if err := WriteControl(&buf, &Message{Type: "pane-closed", PaneID: 2}); err != nil {
+		t.Fatalf("WriteControl (second) returned error: %v", err)
+	}
+
+	wantTypes := []string{"pane-added", "pane-closed"}
+	for i, want := range wantTypes {
+		kind, payload, err := ReadFrame(&buf)
+		if err != nil {
+			t.Fatalf("ReadFrame #%d returned error: %v", i, err)
+		}
+		if kind != FrameControl {
+			t.Fatalf("frame #%d kind = %#x, want FrameControl (%#x)", i, kind, FrameControl)
+		}
+		var decoded Message
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Fatalf("frame #%d json.Unmarshal returned error: %v", i, err)
+		}
+		if decoded.Type != want {
+			t.Errorf("frame #%d Type = %q, want %q", i, decoded.Type, want)
+		}
+	}
+}
+
+// TestReadFrameTruncatedHeader asserts ReadFrame returns an error (not a panic
+// or a silent zero-frame) when the 4-byte length header is incomplete.
+func TestReadFrameTruncatedHeader(t *testing.T) {
+	r := bytes.NewReader([]byte{0x00, 0x00})
+	_, _, err := ReadFrame(r)
+	if err == nil {
+		t.Fatal("ReadFrame returned nil error for truncated header, want non-nil")
+	}
+}
+
+// TestReadFrameTruncatedPayload asserts ReadFrame returns an EOF-flavored error
+// when the declared payload length exceeds the available bytes.
+func TestReadFrameTruncatedPayload(t *testing.T) {
+	r := bytes.NewReader([]byte{0x00, 0x00, 0x00, 0x0a, 0x01, 0x02, 0x03})
+	_, _, err := ReadFrame(r)
+	if err == nil {
+		t.Fatal("ReadFrame returned nil error for truncated payload, want non-nil")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		t.Errorf("ReadFrame error = %v, want io.ErrUnexpectedEOF or io.EOF", err)
 	}
 }
