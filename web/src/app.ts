@@ -326,8 +326,7 @@ export class MuxApp extends LitElement {
             @workspace-selected="${this._onWorkspaceSelected}"
             @workspace-create="${() => this._socket?.createWorkspace()}"
             @workspace-rename="${this._onWorkspaceRename}"
-            @workspace-close="${(e: CustomEvent<{ workspaceId: string }>) =>
-              this._socket?.closeWorkspace(e.detail.workspaceId)}"
+            @workspace-close="${this._onWorkspaceClose}"
             @close-picker="${() => {
               this._showWorkspacePicker = false;
             }}"
@@ -387,6 +386,24 @@ export class MuxApp extends LitElement {
         return (ws?.name ?? '') === name;
       },
       commit: () => this._socket?.renameWorkspace(workspaceId, name),
+    });
+  };
+
+  /**
+   * Close a workspace optimistically: the overlay drops the row instantly, the
+   * socket send is the mutation's commit, and the daemon's workspace-list echo
+   * settles (by the id no longer existing) or times out the pending record.
+   */
+  private _onWorkspaceClose = (e: CustomEvent<{ workspaceId: string }>): void => {
+    const { workspaceId } = e.detail;
+    store.mutate({
+      workspaceId,
+      kind: 'close',
+      optimistic: (draft) => {
+        draft.workspaces = draft.workspaces.filter((w) => w.workspaceId !== workspaceId);
+      },
+      settled: (base) => !base.workspaces.some((w) => w.workspaceId === workspaceId),
+      commit: () => this._socket?.closeWorkspace(workspaceId),
     });
   };
 
