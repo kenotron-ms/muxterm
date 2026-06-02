@@ -216,3 +216,42 @@ describe('MuxApp one-terminal-per-workspace', () => {
     expect(store.panes.map((p) => p.paneId)).toEqual([3]);
   });
 });
+
+describe('MuxApp switch restores, never double-spawns', () => {
+  let el: MuxApp;
+
+  afterEach(() => {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    store.applySessiond({ type: SessiondType.WorkspaceList, workspaces: [] });
+    (store as unknown as { _pending: Map<string, unknown> })._pending.clear();
+    store.applySessiond({ type: SessiondType.Composition, workspaceId: '', panes: [] });
+    terminalRegistry.prune(new Set());
+    el = null as unknown as MuxApp;
+  });
+
+  it('restores the active pane on switch to a populated workspace without spawning', async () => {
+    el = await fixture();
+    const socket = (el as unknown as {
+      _socket: { createPane: unknown; onSessiondMessage: (m: unknown) => void };
+    })._socket;
+    const sendSpy = vi.spyOn(socket as { createPane: (...a: unknown[]) => void }, 'createPane');
+
+    // Switch to a populated workspace: its existing panes must be restored,
+    // never respawned (D1 guard) and the active pane stays visible.
+    socket.onSessiondMessage({
+      type: SessiondType.Composition,
+      workspaceId: 'w2',
+      panes: [
+        { paneId: 10, cols: 0, rows: 0 },
+        { paneId: 11, cols: 0, rows: 0 },
+      ],
+    });
+
+    // No double-spawn: the one-terminal-per-workspace rule does not fire.
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    // The active pane is restored and visible in the arrangement.
+    const arrangement = (el as unknown as { _arrangement: () => { visible: number[] } })._arrangement();
+    expect(arrangement.visible).toContain(10);
+  });
+});
