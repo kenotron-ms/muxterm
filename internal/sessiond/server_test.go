@@ -1,6 +1,7 @@
 package sessiond
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
@@ -169,6 +170,57 @@ func TestServerAttachRepliesComposition(t *testing.T) {
 	}
 	if len(reply.Panes) != 0 {
 		t.Fatalf("composition Panes = %d, want 0 for empty workspace", len(reply.Panes))
+	}
+}
+
+// TestReattachUnsubscribesFromPriorWorkspace proves that a connection which
+// attaches to ws1 and then re-attaches to ws2 stops receiving ws1's pane
+// output. Without unsubscribing on re-attach the conn stays in BOTH workspaces'
+// subscriber sets and keeps leaking the prior workspace's traffic after a
+// switch.
+func TestReattachUnsubscribesFromPriorWorkspace(t *testing.T) {
+	_, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	// Client A owns ws1 (with a live `cat` pane) and also creates ws2.
+	a := newTClient(t, socketPath)
+	a.send(&Message{Type: TypeCreateWorkspace, CID: 1, Name: "ws1"})
+	ws1 := a.waitCtrl(TypeWorkspaceCreated).WorkspaceID
+	a.send(&Message{Type: TypeCreateWorkspace, CID: 2, Name: "ws2"})
+	ws2 := a.waitCtrl(TypeWorkspaceCreated).WorkspaceID
+
+	a.send(&Message{Type: TypeAttach, CID: 3, WorkspaceID: ws1})
+	a.waitCtrl(TypeComposition)
+	a.send(&Message{Type: TypeCreatePane, CID: 4, Cmd: []string{"cat"}})
+	ws1Pane := a.waitCtrl(TypePaneCreated).PaneID
+	a.waitCtrl(TypePaneAdded)
+
+	// Client B attaches ws1 first, then RE-ATTACHES to ws2 with the SAME conn.
+	b := newTClient(t, socketPath)
+	b.send(&Message{Type: TypeAttach, CID: 10, WorkspaceID: ws1})
+	b.waitCtrl(TypeComposition)
+	b.send(&Message{Type: TypeAttach, CID: 11, WorkspaceID: ws2})
+	b.waitCtrl(TypeComposition)
+
+	// B spins up its own live pane in ws2 so it can drive ws2 traffic itself.
+	b.send(&Message{Type: TypeCreatePane, CID: 12, Cmd: []string{"cat"}})
+	ws2Pane := b.waitCtrl(TypePaneCreated).PaneID
+	b.waitCtrl(TypePaneAdded)
+
+	// Produce output on a ws1 pane. broadcastPaneData enqueues to every ws1
+	// subscriber synchronously under the server lock, so once A (still on ws1)
+	// observes the line, any conn still subscribed to ws1 has ALREADY had the
+	// frame enqueued ahead of whatever it enqueues next.
+	a.sendInput(ws1Pane, []byte("ws1-leak\n"))
+	a.waitData("ws1-leak")
+
+	// Now drive ws2 traffic to B. By FIFO queue order, a leaked ws1 frame (if
+	// B were still subscribed) would arrive strictly BEFORE this marker.
+	b.sendInput(ws2Pane, []byte("ws2-only\n"))
+	acc := b.waitData("ws2-only")
+
+	if bytes.Contains(acc, []byte("ws1-leak")) {
+		t.Fatalf("re-attached conn leaked ws1 output after switching to ws2: %q", acc)
 	}
 }
 

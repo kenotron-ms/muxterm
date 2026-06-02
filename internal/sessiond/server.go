@@ -93,6 +93,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 func (s *Server) unsubscribe(c *conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.unsubscribeLocked(c)
+}
+
+// unsubscribeLocked is unsubscribe's body for callers already holding s.mu.
+func (s *Server) unsubscribeLocked(c *conn) {
 	for wsID, set := range s.subs {
 		if set[c] {
 			delete(set, c)
@@ -128,6 +133,10 @@ func (s *Server) attachConn(c *conn, wsID string, cid uint64) {
 			}
 		}
 	}
+
+	// Re-attach: drop any prior workspace subscription first so this conn never
+	// keeps receiving a previously-attached workspace's output after switching.
+	s.unsubscribeLocked(c)
 
 	// (3) go live.
 	set, ok := s.subs[wsID]
