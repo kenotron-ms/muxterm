@@ -127,6 +127,7 @@ func ReadFrame(r io.Reader) (kind byte, payload []byte, err error) {
 type Message struct {
 	Type        string          `json:"type"`
 	CID         uint64          `json:"cid,omitempty"`         // request/reply correlation, 0 = unsolicited event
+	ClientRef   string          `json:"clientRef,omitempty"`   // client-minted optimistic-create correlation id
 	WorkspaceID string          `json:"workspaceId,omitempty"` //
 	Name        string          `json:"name,omitempty"`        //
 	PaneID      int             `json:"paneId,omitempty"`      // workspace-local
