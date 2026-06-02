@@ -22,6 +22,7 @@ import (
 	"github.com/user/muxterm/internal/deploy"
 	"github.com/user/muxterm/internal/server"
 	"github.com/user/muxterm/internal/service"
+	"github.com/user/muxterm/internal/sessiond"
 	"github.com/user/muxterm/internal/tmux"
 	webstatic "github.com/user/muxterm/web"
 )
@@ -43,6 +44,11 @@ func main() {
 		}
 	case "serve":
 		if err := runServe(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	case "sessiond":
+		if err := runSessiond(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -97,6 +103,19 @@ func runLocal(cfg Config) error {
 // runServe starts muxterm in serve mode: launches tmux, starts the HTTP server
 // with token auth on the configured address, and blocks until shutdown.
 func runServe(cfg Config) error {
+	// Best-effort: ensure the sessiond daemon is up before serving. All failures
+	// here are non-fatal — we log and continue. Phase 3 will make serve actually
+	// connect to the daemon; for now this just guarantees it is running (and is a
+	// no-op under systemd, where the daemon is its own unit). The frozen
+	// (string, error) helpers are chained so each step's error is checked.
+	if sockPath, err := sessiond.SocketPath(); err != nil {
+		log.Printf("serve: sessiond socket path: %v (continuing)", err)
+	} else if logPath, err := sessiond.DefaultLogPath(); err != nil {
+		log.Printf("serve: sessiond log path: %v (continuing)", err)
+	} else if err := sessiond.EnsureDaemon(sockPath, logPath); err != nil {
+		log.Printf("serve: sessiond not ready (continuing): %v", err)
+	}
+
 	// Auto-generate secret if not provided
 	secret := cfg.Secret
 	if secret == "" {
