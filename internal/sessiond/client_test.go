@@ -2,6 +2,7 @@ package sessiond
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"path/filepath"
 	"testing"
@@ -163,5 +164,139 @@ func TestCreateRenameCloseWorkspace(t *testing.T) {
 	}
 	if err := c.CloseWorkspace("w9"); err != nil {
 		t.Fatalf("CloseWorkspace: %v", err)
+	}
+}
+
+func TestAttachReturnsComposition(t *testing.T) {
+	fd := newFakeDaemon(t, func(conn net.Conn) {
+		kind, payload, err := ReadFrame(conn)
+		if err != nil {
+			t.Errorf("ReadFrame: %v", err)
+			return
+		}
+		if kind != FrameControl {
+			t.Errorf("kind = %#x, want FrameControl", kind)
+			return
+		}
+		var req Message
+		mustUnmarshal(t, payload, &req)
+		if req.Type != TypeAttach {
+			t.Errorf("req.Type = %q, want %q", req.Type, TypeAttach)
+			return
+		}
+		_ = WriteControl(conn, &Message{
+			Type:        TypeComposition,
+			CID:         req.CID,
+			WorkspaceID: req.WorkspaceID,
+			Panes: []PaneInfo{
+				{PaneID: 1, Cols: 80, Rows: 24, Title: "shell"},
+				{PaneID: 2, Cols: 80, Rows: 24},
+			},
+		})
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	c, err := Dial(fd.sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	go c.Run()
+
+	comp, err := c.Attach("w1")
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if comp.WorkspaceID != "w1" {
+		t.Errorf("comp.WorkspaceID = %q, want %q", comp.WorkspaceID, "w1")
+	}
+	if len(comp.Panes) != 2 {
+		t.Fatalf("len(comp.Panes) = %d, want 2", len(comp.Panes))
+	}
+	if comp.Panes[0].PaneID != 1 || comp.Panes[0].Cols != 80 || comp.Panes[0].Rows != 24 || comp.Panes[0].Title != "shell" {
+		t.Errorf("comp.Panes[0] = %+v, want {1 80 24 shell}", comp.Panes[0])
+	}
+}
+
+func TestAttachEmptyCompositionIsValid(t *testing.T) {
+	fd := newFakeDaemon(t, func(conn net.Conn) {
+		kind, payload, err := ReadFrame(conn)
+		if err != nil {
+			t.Errorf("ReadFrame: %v", err)
+			return
+		}
+		if kind != FrameControl {
+			t.Errorf("kind = %#x, want FrameControl", kind)
+			return
+		}
+		var req Message
+		mustUnmarshal(t, payload, &req)
+		_ = WriteControl(conn, &Message{
+			Type:        TypeComposition,
+			CID:         req.CID,
+			WorkspaceID: req.WorkspaceID,
+		})
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	c, err := Dial(fd.sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	go c.Run()
+
+	comp, err := c.Attach("empty")
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if comp.WorkspaceID != "empty" {
+		t.Errorf("comp.WorkspaceID = %q, want %q", comp.WorkspaceID, "empty")
+	}
+	if len(comp.Panes) != 0 {
+		t.Errorf("len(comp.Panes) = %d, want 0", len(comp.Panes))
+	}
+}
+
+func TestAttachUnknownWorkspace(t *testing.T) {
+	fd := newFakeDaemon(t, func(conn net.Conn) {
+		kind, payload, err := ReadFrame(conn)
+		if err != nil {
+			t.Errorf("ReadFrame: %v", err)
+			return
+		}
+		if kind != FrameControl {
+			t.Errorf("kind = %#x, want FrameControl", kind)
+			return
+		}
+		var req Message
+		mustUnmarshal(t, payload, &req)
+		_ = WriteControl(conn, &Message{
+			Type:        TypeError,
+			CID:         req.CID,
+			Code:        CodeUnknownWorkspace,
+			Error:       "no such workspace",
+			WorkspaceID: req.WorkspaceID,
+		})
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	c, err := Dial(fd.sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	go c.Run()
+
+	_, err = c.Attach("nope")
+	if err == nil {
+		t.Fatal("Attach: expected error, got nil")
+	}
+	var de *DaemonError
+	if !errors.As(err, &de) {
+		t.Fatalf("Attach error = %T, want *DaemonError", err)
+	}
+	if de.Code != CodeUnknownWorkspace {
+		t.Errorf("de.Code = %q, want %q", de.Code, CodeUnknownWorkspace)
 	}
 }

@@ -200,6 +200,27 @@ func (c *Client) CloseWorkspace(workspaceID string) error {
 	return err
 }
 
+// Composition is the device-independent set of panes that make up a workspace,
+// as returned by Attach. It carries the frozen PaneInfo values for each pane;
+// empty Panes is valid (a workspace with no panes), not an error.
+type Composition struct {
+	WorkspaceID string
+	Panes       []PaneInfo
+}
+
+// Attach binds this connection to the workspace identified by workspaceID and
+// returns its single composition reply. Empty Panes is valid (an empty
+// workspace), not silence. After this reply, per-pane replay bytes arrive as
+// pane-data frames (routed to Handlers), followed by live output. An unknown or
+// stale workspace id surfaces as a *DaemonError with Code == CodeUnknownWorkspace.
+func (c *Client) Attach(workspaceID string) (Composition, error) {
+	reply, err := c.request(&Message{Type: TypeAttach, WorkspaceID: workspaceID})
+	if err != nil {
+		return Composition{}, err
+	}
+	return Composition{WorkspaceID: reply.WorkspaceID, Panes: reply.Panes}, nil
+}
+
 // dispatchPaneData routes a decoded pane-data frame to the registered handler.
 // Wired up by a later task; a no-op stub for now.
 func (c *Client) dispatchPaneData(paneID uint32, data []byte) {}
