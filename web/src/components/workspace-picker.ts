@@ -9,7 +9,9 @@ import type { SessiondWorkspaceInfo } from '../types.js';
  * fall back to a stable id-based label.
  */
 export function workspaceLabel(ws: SessiondWorkspaceInfo): string {
-  return ws.name && ws.name.length > 0 ? ws.name : `Workspace ${ws.workspaceId}`;
+  if (ws.name && ws.name.length > 0) return ws.name;
+  const n = ws.workspaceId.replace(/\D/g, '');
+  return `workspace ${n || ws.workspaceId}`;
 }
 
 @customElement('mux-workspace-picker')

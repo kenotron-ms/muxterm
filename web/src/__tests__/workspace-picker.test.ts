@@ -66,7 +66,7 @@ describe('MuxWorkspacePicker', () => {
     const names = Array.from(el.shadowRoot!.querySelectorAll('.ws-item')).map(
       (btn) => btn.querySelector('.ws-name')?.textContent,
     );
-    expect(names[1]).toBe('Workspace ws-2');
+    expect(names[1]).toBe('workspace 2');
   });
 
   it('displays pane-count meta with correct pluralization', async () => {
@@ -81,7 +81,7 @@ describe('MuxWorkspacePicker', () => {
     el = await fixture(makeWorkspaces(), 'ws-2');
     const sel = el.shadowRoot!.querySelectorAll('.ws-item.sel');
     expect(sel.length).toBe(1);
-    expect(sel[0].querySelector('.ws-name')?.textContent).toBe('Workspace ws-2');
+    expect(sel[0].querySelector('.ws-name')?.textContent).toBe('workspace 2');
   });
 
   it('dispatches workspace-selected with workspaceId on row click', async () => {
@@ -162,9 +162,17 @@ describe('MuxWorkspacePicker', () => {
 });
 
 describe('workspaceLabel helper', () => {
-  it('returns the name when present, else a stable id fallback', () => {
+  it('returns the explicit name when present', () => {
     expect(workspaceLabel({ workspaceId: 'ws-9', name: 'alpha', paneCount: 0 })).toBe('alpha');
-    expect(workspaceLabel({ workspaceId: 'ws-9', name: '', paneCount: 0 })).toBe('Workspace ws-9');
-    expect(workspaceLabel({ workspaceId: 'ws-9', paneCount: 0 })).toBe('Workspace ws-9');
+  });
+
+  it('falls back to a lowercase, id-derived "workspace N" label', () => {
+    expect(workspaceLabel({ workspaceId: 'w3', name: undefined })).toBe('workspace 3');
+    expect(workspaceLabel({ workspaceId: 'ws-9', name: '' })).toBe('workspace 9');
+    expect(workspaceLabel({ workspaceId: 'w12' })).toBe('workspace 12');
+  });
+
+  it('uses the raw id when it contains no digits', () => {
+    expect(workspaceLabel({ workspaceId: 'main' })).toBe('workspace main');
   });
 });
