@@ -176,6 +176,30 @@ func (c *Client) ListWorkspaces() ([]WorkspaceInfo, error) {
 	return reply.Workspaces, nil
 }
 
+// CreateWorkspace asks the daemon to create a new workspace named name and
+// returns the daemon-assigned workspace id from the workspace-created reply.
+func (c *Client) CreateWorkspace(name string) (string, error) {
+	reply, err := c.request(&Message{Type: TypeCreateWorkspace, Name: name})
+	if err != nil {
+		return "", err
+	}
+	return reply.WorkspaceID, nil
+}
+
+// RenameWorkspace sets the label of the workspace identified by workspaceID to
+// name. An empty name clears the label.
+func (c *Client) RenameWorkspace(workspaceID, name string) error {
+	_, err := c.request(&Message{Type: TypeRenameWorkspace, WorkspaceID: workspaceID, Name: name})
+	return err
+}
+
+// CloseWorkspace asks the daemon to close the workspace identified by
+// workspaceID, which kills all of its panes and removes the workspace.
+func (c *Client) CloseWorkspace(workspaceID string) error {
+	_, err := c.request(&Message{Type: TypeCloseWorkspace, WorkspaceID: workspaceID})
+	return err
+}
+
 // dispatchPaneData routes a decoded pane-data frame to the registered handler.
 // Wired up by a later task; a no-op stub for now.
 func (c *Client) dispatchPaneData(paneID uint32, data []byte) {}
