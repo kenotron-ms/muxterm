@@ -16,6 +16,44 @@ const (
 	FramePaneData byte = 0x02 // payload is [4-byte LITTLE-ENDIAN paneId][raw bytes]
 )
 
+// Message Type strings name every frozen control envelope on the wire. No phase
+// should hardcode a raw literal; reference these constants instead. The values
+// are FROZEN per the v1 wire protocol contract (see
+// docs/plans/2026-06-01-session-persistence-design.md) and must never change.
+const (
+	// Requests (client -> daemon).
+	TypeCreateWorkspace = "create-workspace"
+	TypeListWorkspaces  = "list-workspaces"
+	TypeRenameWorkspace = "rename-workspace"
+	TypeCloseWorkspace  = "close-workspace"
+	TypeAttach          = "attach"
+	TypeCreatePane      = "create-pane"
+	TypeResize          = "resize"
+
+	// Replies (daemon -> client, echo request cid).
+	TypeWorkspaceCreated = "workspace-created"
+	TypeWorkspaceList    = "workspace-list"
+	TypeComposition      = "composition"
+	TypePaneCreated      = "pane-created"
+	TypeOK               = "ok"
+
+	// Events (daemon -> all subscribers, cid=0).
+	TypePaneAdded        = "pane-added"
+	TypePaneClosed       = "pane-closed"
+	TypeWorkspaceClosed  = "workspace-closed"
+	TypeWorkspaceRenamed = "workspace-renamed"
+
+	// Error envelope.
+	TypeError = "error"
+)
+
+// Error codes are the frozen Message.Code values carried by a TypeError
+// envelope. FROZEN per the v1 wire protocol contract.
+const (
+	CodeUnknownWorkspace = "unknown-workspace"
+	CodePaneSpawnFailed  = "pane-spawn-failed"
+)
+
 // writeFrame writes a single framed message: a 5-byte header consisting of a
 // big-endian uint32 length (kind byte + payload) followed by the kind byte,
 // then the payload (if any).

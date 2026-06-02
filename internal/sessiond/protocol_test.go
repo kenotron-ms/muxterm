@@ -253,3 +253,44 @@ func TestDecodePaneDataShort(t *testing.T) {
 		t.Errorf("data = %#v, want nil", data)
 	}
 }
+
+// TestTypeConstants locks each named message-type and error-code constant to its
+// exact frozen on-wire string, so no phase can hardcode or mistype a raw wire
+// literal. The values are FROZEN per the v1 wire protocol contract.
+func TestTypeConstants(t *testing.T) {
+	cases := []struct {
+		got  string
+		want string
+	}{
+		// Requests (client -> daemon)
+		{TypeCreateWorkspace, "create-workspace"},
+		{TypeListWorkspaces, "list-workspaces"},
+		{TypeRenameWorkspace, "rename-workspace"},
+		{TypeCloseWorkspace, "close-workspace"},
+		{TypeAttach, "attach"},
+		{TypeCreatePane, "create-pane"},
+		{TypeResize, "resize"},
+		// Replies (daemon -> client, echo request cid)
+		{TypeWorkspaceCreated, "workspace-created"},
+		{TypeWorkspaceList, "workspace-list"},
+		{TypeComposition, "composition"},
+		{TypePaneCreated, "pane-created"},
+		{TypeOK, "ok"},
+		// Events (daemon -> all subscribers, cid=0)
+		{TypePaneAdded, "pane-added"},
+		{TypePaneClosed, "pane-closed"},
+		{TypeWorkspaceClosed, "workspace-closed"},
+		{TypeWorkspaceRenamed, "workspace-renamed"},
+		// Error envelope
+		{TypeError, "error"},
+		// Error codes (Message.Code values)
+		{CodeUnknownWorkspace, "unknown-workspace"},
+		{CodePaneSpawnFailed, "pane-spawn-failed"},
+	}
+
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("constant = %q, want %q", c.got, c.want)
+		}
+	}
+}
