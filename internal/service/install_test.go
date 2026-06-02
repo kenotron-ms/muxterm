@@ -37,6 +37,7 @@ func (m *mockCommander) findCommand(name string) *mockCmd {
 func TestInstall_Linux_WritesUnitFile(t *testing.T) {
 	tmp := t.TempDir()
 	unitPath := filepath.Join(tmp, "muxterm.service")
+	sessiondPath := filepath.Join(tmp, "muxterm-sessiond.service")
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
@@ -45,7 +46,7 @@ func TestInstall_Linux_WritesUnitFile(t *testing.T) {
 	}
 	cmd := &mockCommander{}
 
-	err := installLinux(cfg, unitPath, cmd)
+	err := installLinux(cfg, unitPath, sessiondPath, cmd)
 	if err != nil {
 		t.Fatalf("installLinux() error: %v", err)
 	}
@@ -66,6 +67,7 @@ func TestInstall_Linux_WritesUnitFile(t *testing.T) {
 func TestInstall_Linux_RunsSystemctlEnable(t *testing.T) {
 	tmp := t.TempDir()
 	unitPath := filepath.Join(tmp, "muxterm.service")
+	sessiondPath := filepath.Join(tmp, "muxterm-sessiond.service")
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
@@ -74,40 +76,67 @@ func TestInstall_Linux_RunsSystemctlEnable(t *testing.T) {
 	}
 	cmd := &mockCommander{}
 
-	err := installLinux(cfg, unitPath, cmd)
+	err := installLinux(cfg, unitPath, sessiondPath, cmd)
 	if err != nil {
 		t.Fatalf("installLinux() error: %v", err)
 	}
 
-	if len(cmd.commands) != 3 {
-		t.Fatalf("expected 3 commands, got %d", len(cmd.commands))
+	if len(cmd.commands) != 4 {
+		t.Fatalf("expected 4 commands, got %d", len(cmd.commands))
 	}
 
 	reload := cmd.commands[0]
-	if reload.Name != "systemctl" {
-		t.Errorf("first command = %q, want systemctl", reload.Name)
-	}
-	wantReloadArgs := []string{"--user", "daemon-reload"}
-	if !sliceEqual(reload.Args, wantReloadArgs) {
-		t.Errorf("reload args = %v, want %v", reload.Args, wantReloadArgs)
+	if reload.Name != "systemctl" || !sliceEqual(reload.Args, []string{"--user", "daemon-reload"}) {
+		t.Errorf("command[0] = %q %v, want systemctl [--user daemon-reload]", reload.Name, reload.Args)
 	}
 
-	enable := cmd.commands[1]
-	if enable.Name != "systemctl" {
-		t.Errorf("second command = %q, want systemctl", enable.Name)
-	}
-	wantEnableArgs := []string{"--user", "enable", "--now", "muxterm.service"}
-	if !sliceEqual(enable.Args, wantEnableArgs) {
-		t.Errorf("enable args = %v, want %v", enable.Args, wantEnableArgs)
+	enableSessiond := cmd.commands[1]
+	if enableSessiond.Name != "systemctl" || !sliceEqual(enableSessiond.Args, []string{"--user", "enable", "--now", "muxterm-sessiond.service"}) {
+		t.Errorf("command[1] = %q %v, want systemctl [--user enable --now muxterm-sessiond.service]", enableSessiond.Name, enableSessiond.Args)
 	}
 
-	linger := cmd.commands[2]
-	if linger.Name != "loginctl" {
-		t.Errorf("third command = %q, want loginctl", linger.Name)
+	enableWeb := cmd.commands[2]
+	if enableWeb.Name != "systemctl" || !sliceEqual(enableWeb.Args, []string{"--user", "enable", "--now", "muxterm.service"}) {
+		t.Errorf("command[2] = %q %v, want systemctl [--user enable --now muxterm.service]", enableWeb.Name, enableWeb.Args)
 	}
-	wantLingerArgs := []string{"enable-linger"}
-	if !sliceEqual(linger.Args, wantLingerArgs) {
-		t.Errorf("linger args = %v, want %v", linger.Args, wantLingerArgs)
+
+	linger := cmd.commands[3]
+	if linger.Name != "loginctl" || !sliceEqual(linger.Args, []string{"enable-linger"}) {
+		t.Errorf("command[3] = %q %v, want loginctl [enable-linger]", linger.Name, linger.Args)
+	}
+}
+
+func TestInstall_Linux_WritesBothUnitFiles(t *testing.T) {
+	tmp := t.TempDir()
+	unitPath := filepath.Join(tmp, "muxterm.service")
+	sessiondPath := filepath.Join(tmp, "muxterm-sessiond.service")
+	cfg := ServiceConfig{
+		BinaryPath: "/usr/local/bin/muxterm",
+		Addr:       "localhost:8080",
+		Secret:     "test-secret",
+		SafePATH:   "/usr/bin:/usr/local/bin",
+	}
+	cmd := &mockCommander{}
+
+	err := installLinux(cfg, unitPath, sessiondPath, cmd)
+	if err != nil {
+		t.Fatalf("installLinux() error: %v", err)
+	}
+
+	webData, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("reading web unit file: %v", err)
+	}
+	if !strings.Contains(string(webData), "Wants=muxterm-sessiond.service") {
+		t.Error("web unit file missing Wants=muxterm-sessiond.service")
+	}
+
+	sessiondData, err := os.ReadFile(sessiondPath)
+	if err != nil {
+		t.Fatalf("reading sessiond unit file: %v", err)
+	}
+	if !strings.Contains(string(sessiondData), "/usr/local/bin/muxterm sessiond") {
+		t.Error("sessiond unit file missing '/usr/local/bin/muxterm sessiond'")
 	}
 }
 
@@ -173,6 +202,7 @@ func TestInstall_Darwin_RunsLaunchctl(t *testing.T) {
 func TestInstall_Linux_CreatesMissingDirs(t *testing.T) {
 	tmp := t.TempDir()
 	unitPath := filepath.Join(tmp, "deep", "nested", "dir", "muxterm.service")
+	sessiondPath := filepath.Join(tmp, "deep", "nested", "dir", "muxterm-sessiond.service")
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
@@ -181,7 +211,7 @@ func TestInstall_Linux_CreatesMissingDirs(t *testing.T) {
 	}
 	cmd := &mockCommander{}
 
-	err := installLinux(cfg, unitPath, cmd)
+	err := installLinux(cfg, unitPath, sessiondPath, cmd)
 	if err != nil {
 		t.Fatalf("installLinux() error: %v", err)
 	}
