@@ -2,12 +2,9 @@ import { LitElement, html, css, unsafeCSS } from 'lit';
 import { customElement } from 'lit/decorators.js';
 import { CHROME } from '../lib/theme.js';
 import { icon } from '../lib/icons.js';
-import { Plus, RefreshCw, Settings } from 'lucide';
+import { Info, Keyboard, RefreshCw, Settings } from 'lucide';
 
-export type LauncherAction =
-  | 'new-session'
-  | 'settings'
-  | 'reconnect';
+export type LauncherAction = 'settings' | 'shortcuts' | 'reconnect' | 'about';
 
 @customElement('mux-launcher-menu')
 export class MuxLauncherMenu extends LitElement {
@@ -49,10 +46,6 @@ export class MuxLauncherMenu extends LitElement {
       background: ${unsafeCSS(CHROME.hover)};
     }
 
-    button.driver {
-      color: ${unsafeCSS(CHROME.driverAccent)};
-    }
-
     .lucide-icon {
       display: inline-block;
       vertical-align: middle;
@@ -76,15 +69,18 @@ export class MuxLauncherMenu extends LitElement {
 
   render() {
     return html`
-      <button data-action="new-session" @click="${() => this._dispatch('new-session')}">
-        ${icon(Plus, { size: 14 })} New session
-      </button>
-      <div class="divider"></div>
       <button data-action="settings" @click="${() => this._dispatch('settings')}">
         ${icon(Settings, { size: 14 })} Settings
       </button>
+      <button data-action="shortcuts" @click="${() => this._dispatch('shortcuts')}">
+        ${icon(Keyboard, { size: 14 })} Keyboard Shortcuts
+      </button>
       <button data-action="reconnect" @click="${() => this._dispatch('reconnect')}">
         ${icon(RefreshCw, { size: 14 })} Reconnect
+      </button>
+      <div class="divider"></div>
+      <button data-action="about" @click="${() => this._dispatch('about')}">
+        ${icon(Info, { size: 14 })} About
       </button>
     `;
   }

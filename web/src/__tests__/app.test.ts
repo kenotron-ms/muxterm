@@ -220,7 +220,7 @@ describe('MuxApp', () => {
       expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
-    it('sets _showWorkspacePicker true when launcher fires new-session', async () => {
+    it('app-level launcher actions do NOT open the workspace picker', async () => {
       el = await fixture();
       expect((el as any)._showWorkspacePicker).toBe(false);
       const titleBar = el.shadowRoot!.querySelector('mux-title-bar')!;
@@ -228,11 +228,11 @@ describe('MuxApp', () => {
         new CustomEvent('launcher-action', {
           bubbles: true,
           composed: true,
-          detail: { action: 'new-session' },
+          detail: { action: 'settings' },
         }),
       );
       await el.updateComplete;
-      expect((el as any)._showWorkspacePicker).toBe(true);
+      expect((el as any)._showWorkspacePicker).toBe(false);
     });
   });
 

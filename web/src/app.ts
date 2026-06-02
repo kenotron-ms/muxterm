@@ -381,17 +381,10 @@ export class MuxApp extends LitElement {
     this._socket?.attach(e.detail.workspaceId);
   };
 
-  private _onLauncherAction = (e: CustomEvent<{ action: LauncherAction }>): void => {
-    const { action } = e.detail;
-    switch (action) {
-      case 'new-session':
-        // In the workspace model, "new session" opens the workspace picker
-        // where the user can create or switch workspaces.
-        this._showWorkspacePicker = true;
-        break;
-      default:
-        break;
-    }
+  private _onLauncherAction = (): void => {
+    /* ⋯ menu is app-level only; presentational this round; workspace creation
+       lives in the status-bar switcher, so launcher actions must never open the
+       picker */
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {
