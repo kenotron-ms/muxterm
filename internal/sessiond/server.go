@@ -158,6 +158,24 @@ func (s *Server) broadcast(wsID string, msg *Message) {
 	}
 }
 
+// broadcastAll enqueues msg to every subscriber across all workspaces,
+// deduplicating connections so a conn attached via multiple subscriber sets
+// receives msg only once. Enqueue never blocks, so holding s.mu is safe.
+func (s *Server) broadcastAll(msg *Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := make(map[*conn]bool)
+	for _, set := range s.subs {
+		for c := range set {
+			if seen[c] {
+				continue
+			}
+			seen[c] = true
+			c.sub.enqueueControl(msg)
+		}
+	}
+}
+
 // broadcastPaneData enqueues a pane-data frame to every subscriber attached to
 // wsID.
 func (s *Server) broadcastPaneData(wsID string, paneID int, data []byte) {
