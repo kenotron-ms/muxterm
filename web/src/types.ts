@@ -101,3 +101,77 @@ export type SurfaceKind = 'terminal' | 'driver' | 'browser' | 'settings';
 export function isTerminalSurface(kind: SurfaceKind): boolean {
   return kind === 'terminal' || kind === 'driver';
 }
+
+// ---------------------------------------------------------------------------
+// sessiond v1 control protocol
+//
+// Mirrors the frozen Go Message/WorkspaceInfo/PaneInfo shapes and the
+// type/error-code literals. Field names match the Go JSON tags byte-for-byte
+// so the browser speaks the exact same vocabulary as sessiond.
+// ---------------------------------------------------------------------------
+
+/** Frozen sessiond message-type vocabulary (mirrors Go's MsgType constants). */
+export const SessiondType = {
+  // Requests (client -> server)
+  CreateWorkspace: 'create-workspace',
+  ListWorkspaces: 'list-workspaces',
+  RenameWorkspace: 'rename-workspace',
+  CloseWorkspace: 'close-workspace',
+  Attach: 'attach',
+  CreatePane: 'create-pane',
+  Resize: 'resize',
+  // Replies (server -> requesting client)
+  WorkspaceCreated: 'workspace-created',
+  WorkspaceList: 'workspace-list',
+  Composition: 'composition',
+  PaneCreated: 'pane-created',
+  Ok: 'ok',
+  // Events (server -> all clients)
+  PaneAdded: 'pane-added',
+  PaneClosed: 'pane-closed',
+  WorkspaceClosed: 'workspace-closed',
+  WorkspaceRenamed: 'workspace-renamed',
+  // Error
+  Error: 'error',
+} as const;
+
+export type SessiondMessageType = (typeof SessiondType)[keyof typeof SessiondType];
+
+/** Frozen sessiond error-code vocabulary (mirrors Go's ErrCode constants). */
+export const SessiondErrorCode = {
+  UnknownWorkspace: 'unknown-workspace',
+  PaneSpawnFailed: 'pane-spawn-failed',
+} as const;
+
+export type SessiondErrorCodeValue = (typeof SessiondErrorCode)[keyof typeof SessiondErrorCode];
+
+export interface SessiondWorkspaceInfo {
+  workspaceId: string;
+  name?: string;
+  paneCount: number;
+}
+
+export interface SessiondPaneInfo {
+  paneId: number;
+  cols: number;
+  rows: number;
+  title?: string;
+}
+
+export interface SessiondMessage {
+  type: SessiondMessageType;
+  // cid is Go's uint64; JS numbers safely represent integers up to 2^53 and
+  // cid is a small monotonic counter, so number is correct here (not bigint).
+  cid?: number;
+  workspaceId?: string;
+  name?: string;
+  paneId?: number;
+  cols?: number;
+  rows?: number;
+  cmd?: string[];
+  title?: string;
+  workspaces?: SessiondWorkspaceInfo[];
+  panes?: SessiondPaneInfo[];
+  code?: SessiondErrorCodeValue;
+  error?: string;
+}
