@@ -534,6 +534,199 @@ what makes its restart a non-event. This is the **same** per-pane binary streami
 muxterm already does; only the upstream source changes, from "tmux `-CC` control
 connection" to "sessiond Unix socket."
 
+## Wire Protocol (frozen v1 contract)
+
+This section is **authoritative and FROZEN**. The five phase plans were authored
+in parallel and each invented its own wire vocabulary; an independent review found
+three mutually-incompatible protocols and Go signature mismatches. To close that
+gap, the schema is nailed down here as the **single source of truth all phases
+must conform to**. Phase 0/1 implements these signatures **exactly**; every other
+phase **imports** them and matches these message types/fields byte-for-byte. No
+phase may invent or rename a frame kind, message `type`, or JSON field.
+
+### Transport — two hops, ONE vocabulary
+
+There are two transport hops, but **one** control vocabulary spans both. `serve` is
+a **stateless translator**: it relays control messages between the two transports
+preserving `type` and **all** fields (including the error `code`), and bridges
+binary pane frames. It holds **no** terminal state of any kind.
+
+```
+  daemon ↔ serve     Unix socket
+                     length-prefixed frames (see "Daemon socket framing")
+
+  serve  ↔ browser   WebSocket
+                     control  → JSON in a TEXT frame, SAME message types/fields
+                     pane out → BINARY frame  [4-byte LE paneId][raw bytes]   (down)
+                     key input→ BINARY frame  [4-byte LE paneId][raw bytes]   (up)
+```
+
+- Control messages cross the WebSocket as JSON **text** frames using the **same**
+  `Message` types/fields as the socket hop.
+- Pane output (down) and keyboard input (up) cross as **binary** frames
+  `[4-byte LE paneId][raw bytes]` — the existing muxterm framing, unchanged.
+- `serve` translates control 1:1 (socket `FrameControl` JSON ⇄ WebSocket text
+  JSON) and bridges binary 1:1 (socket `FramePaneData` ⇄ WebSocket binary),
+  preserving every field including error `code`.
+
+### Daemon socket framing
+
+```
+[4-byte BIG-ENDIAN total length][1-byte kind][payload]
+
+  kind = FrameControl  (0x01)  → payload is JSON of the Message envelope
+  kind = FramePaneData (0x02)  → payload is [4-byte LITTLE-ENDIAN paneId][raw bytes]
+```
+
+> Note the deliberate endianness split: the **frame length** is big-endian
+> (network order, daemon socket only); the **paneId** inside a `FramePaneData`
+> payload is little-endian, matching the existing `[4-byte LE paneId]` browser
+> framing so `serve` bridges the binary body **without rewriting it**.
+
+Canonical Go helper signatures — Phase 0 implements these **EXACTLY**; all other
+phases import them:
+
+```go
+const (
+    FrameControl  byte = 0x01
+    FramePaneData byte = 0x02
+)
+
+func WriteControl(w io.Writer, msg *Message) error
+func WritePaneData(w io.Writer, paneID uint32, data []byte) error
+func ReadFrame(r io.Reader) (kind byte, payload []byte, err error)
+func DecodePaneData(payload []byte) (paneID uint32, data []byte)
+```
+
+### The single Message envelope
+
+There is **exactly one** control struct. Every request, reply, event, and error is
+this struct with a different `Type`. JSON tags are frozen exactly as shown.
+
+```go
+type Message struct {
+    Type        string          `json:"type"`
+    CID         uint64          `json:"cid,omitempty"`        // request/reply correlation; 0 = unsolicited event
+    WorkspaceID string          `json:"workspaceId,omitempty"`
+    Name        string          `json:"name,omitempty"`
+    PaneID      int             `json:"paneId,omitempty"`     // workspace-local
+    Cols        int             `json:"cols,omitempty"`
+    Rows        int             `json:"rows,omitempty"`
+    Cmd         []string        `json:"cmd,omitempty"`        // argv; empty => default $SHELL
+    Title       string          `json:"title,omitempty"`
+    Workspaces  []WorkspaceInfo `json:"workspaces,omitempty"`
+    Panes       []PaneInfo      `json:"panes,omitempty"`
+    Code        string          `json:"code,omitempty"`       // error code
+    Error       string          `json:"error,omitempty"`      // human-readable error text
+}
+
+type WorkspaceInfo struct {
+    WorkspaceID string `json:"workspaceId"`
+    Name        string `json:"name,omitempty"`
+    PaneCount   int    `json:"paneCount"`
+}
+
+type PaneInfo struct {
+    PaneID int    `json:"paneId"`
+    Cols   int    `json:"cols"`
+    Rows   int    `json:"rows"`
+    Title  string `json:"title,omitempty"`
+}
+```
+
+### Requests (client → daemon)
+
+Each request carries a client-assigned `cid`; the daemon's reply **ECHOES that
+`cid`** so the client can correlate request↔reply. Events carry `cid=0`.
+
+| Request `type` | Fields | Reply `type` (echoes cid) |
+| --- | --- | --- |
+| `create-workspace` | `name?` | `workspace-created` `{workspaceId}` |
+| `list-workspaces` | — | `workspace-list` `{workspaces:[WorkspaceInfo]}` |
+| `rename-workspace` | `workspaceId, name` | `ok` `{workspaceId}` (+ broadcast `workspace-renamed`) |
+| `close-workspace` | `workspaceId` | `ok` (+ broadcast `workspace-closed`) |
+| `attach` | `workspaceId` | `composition` `{workspaceId, panes:[PaneInfo]}` (empty `panes` if none) — THEN per-pane replay data frames, THEN live |
+| `create-pane` | `cmd?` (connection-scoped to attached workspace) | `pane-created` `{paneId}` (+ broadcast `pane-added`) |
+| `resize` | `paneId, cols, rows` (connection-scoped) | none |
+
+- **`attach`** binds this connection to the named workspace, **replacing any prior
+  attach** on the same connection. The reply order is fixed and load-bearing:
+  `composition` reply first, **then** per-pane replay data frames, **then** live
+  output. (Resolves the review's "first attach hangs waiting for composition"
+  deadlock: the daemon always sends exactly one `composition` reply.)
+- **`create-pane`** and **`resize`** are **connection-scoped** to the connection's
+  currently-attached workspace; they carry no `workspaceId`.
+- **Keyboard `input` is NOT a control message.** It is sent as a binary
+  `FramePaneData` frame `[paneId][bytes]` from client→daemon, connection-scoped to
+  the attached workspace.
+
+### Events (daemon → clients)
+
+Events carry `cid=0` and are **broadcast to ALL subscribers** of the workspace
+(not just the actor).
+
+```
+pane-added       {paneId, cols, rows, title}   idempotent, dedup by paneId
+pane-closed      {paneId}
+workspace-closed {workspaceId}                  emitted AFTER the final pane-closed;
+                                                clients IGNORE any trailing pane-closed
+workspace-renamed{workspaceId, name}
+pane output      binary FramePaneData frames    [paneId][bytes]
+```
+
+### Errors
+
+An error is a `Message` with `type:"error"`, echoing the **failed request's `cid`**:
+
+```
+error  {code, error, workspaceId?}
+
+  code:  unknown-workspace | pane-spawn-failed
+  error: human-readable text
+```
+
+`serve` **preserves `code`** verbatim when relaying to the browser, so the client's
+typed recovery (e.g. the `unknown-workspace` re-list-and-reattach path) fires.
+
+### Connection & delivery model
+
+This resolves the review's ordering and backpressure findings.
+
+- A **daemon connection** (one per browser, opened by `serve`) is attached to
+  **exactly one** workspace at a time. `attach` switches it. `resize`, `input`, and
+  `create-pane` are **scoped to the connection's attached workspace**; `paneId` is
+  always **workspace-local**.
+- **Each subscriber has a bounded, buffered channel drained by a dedicated writer
+  goroutine.** The PTY read goroutine **enqueues** frames and **never blocks** on a
+  slow client.
+- On `attach`, **replay frames are enqueued BEFORE the connection is marked live**,
+  guaranteeing replay-before-live ordering.
+- If a subscriber's queue **overflows** (slow client), **that ONE subscriber is
+  disconnected** — it never blocks the PTY drain or any other client. (Resolves the
+  "one stalled phone tab freezes the PTY for everyone" blocker.)
+
+### Server lifecycle signatures (frozen, Phases 1–3)
+
+```go
+func NewServer(socketPath string) (*Server, error)
+func (*Server) ListenAndServe(ctx context.Context) error   // returns nil on ctx cancel (graceful)
+func SocketPath() (string, error)        // $XDG_RUNTIME_DIR/muxterm/sessiond.sock + documented fallback
+func DefaultLogPath() (string, error)
+func EnsureDaemon(socketPath, logPath string) error         // GATED OFF under systemd (detect via INVOCATION_ID)
+```
+
+`EnsureDaemon` is the auto-spawn path; it is **gated off when running under
+systemd** (detected via the `INVOCATION_ID` environment variable), because under
+systemd the daemon is its own unit (see "One binary, two roles").
+
+### Pane environment & socket security
+
+- **Pane environment.** Forked panes inherit the daemon's environment **plus**
+  `TERM=xterm-256color`; default working directory is `$HOME`.
+- **Socket security.** The socket file is mode `0600`, its parent directory `0700`.
+  On `accept`, the daemon performs an `SO_PEERCRED` uid check and **rejects** any
+  peer whose uid != the daemon's own uid.
+
 ## Error Handling
 
 | Event | Response |
@@ -573,16 +766,20 @@ that does very little, so it rarely crashes.
   now.)
 - **Exact `PaneBuffer` interface shape** — the seam that lets `TrackedBuffer`
   (x/ansi) or `VTBuffer` (x/vt) swap in behind the v1 `RawBuffer` default.
-- **Unix-socket control-frame schema specifics** (message types, encoding) — to be
-  nailed down in the implementation plan. The schema must enumerate the **full**
-  message + event set, not just pane-level messages: the workspace-level lifecycle
-  events (`workspace-closed`, `workspace-renamed`) and the **idempotent**
-  `pane-added` / `pane-closed` events, alongside the request/reply messages
-  (`Attach`, `CreatePane`, `ListWorkspaces`, `CreateWorkspace`, `RenameWorkspace`,
-  `CloseWorkspace`, `Resize`) and the `unknown-workspace` error. The schema must
-  give `unknown-workspace` a **stable error code/shape**, since two call sites
-  (`Attach`, `CreatePane`) depend on detecting and recovering from it. A
-  `workspace-created` broadcast (live cross-client picker updates) is **deferred**.
+- **Unix-socket control-frame schema specifics** (message types, encoding) —
+  **RESOLVED / FROZEN.** This was deferred to "the implementation plan" and then no
+  single phase owned it, so the five parallel plans each invented incompatible wire
+  vocabularies (an independent review found three mutually-incompatible protocols).
+  It is now nailed down authoritatively in **"Wire Protocol (frozen v1 contract)"**
+  above — the single source of truth all phases conform to. That section enumerates
+  the **full** message + event set (request/reply `create-workspace` /
+  `list-workspaces` / `rename-workspace` / `close-workspace` / `attach` /
+  `create-pane` / `resize`, the broadcast events `pane-added` / `pane-closed` /
+  `workspace-closed` / `workspace-renamed`, and the `error` envelope with stable
+  `code`s incl. `unknown-workspace`), the one `Message` JSON envelope, the frame
+  kinds + canonical Go helper signatures, and the connection/delivery (backpressure
+  + replay-before-live) model. A `workspace-created` broadcast (live cross-client
+  picker updates) remains **deferred**.
 - **Cross-device arrangement memory** (daemon-side profile-keyed layouts) —
   explicitly deferred; confirm it stays deferred.
 - **"Keep empty workspaces" config knob** — deferred (YAGNI); v1 auto-reaps a
