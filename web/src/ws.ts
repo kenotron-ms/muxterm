@@ -1,5 +1,5 @@
 import type { ClientMessage, ServerMessage, TmuxState, Window, Pane, Session } from './types';
-import { SessiondType, encodePaneFrame, type SessiondMessage } from './types';
+import { SessiondType, encodePaneFrame, decodePaneFrame, type SessiondMessage } from './types';
 import type { MuxStore } from './state';
 
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
@@ -238,6 +238,7 @@ export class MuxSocket {
 
   onDisconnect: (() => void) | null = null;
   onReconnect: (() => void) | null = null;
+  onSessiondMessage: ((msg: SessiondMessage) => void) | null = null;
 
   constructor(store: MuxStore, url: string) {
     this._store = store;
@@ -374,11 +375,10 @@ export class MuxSocket {
     };
 
     ws.onmessage = (ev: MessageEvent) => {
+      // Binary pane-data frame: [4-byte LE paneId][raw bytes].
       if (ev.data instanceof ArrayBuffer) {
         if (ev.data.byteLength >= 4) {
-          const view = new DataView(ev.data);
-          const paneId = view.getUint32(0, true); // little-endian
-          const data = new Uint8Array(ev.data, 4);
+          const { paneId, data } = decodePaneFrame(ev.data);
           this._paneOutputCb?.(paneId, data);
         }
         return;
@@ -386,9 +386,17 @@ export class MuxSocket {
       // Text frame — JSON control message
       if (typeof ev.data === 'string') {
         const raw = JSON.parse(ev.data) as Record<string, unknown>;
-        // Pass the raw message to control handlers (e.g. for detached/session-picker)
+        // Pass the raw message to control handlers (e.g. for detached/session-picker).
+        // Non-typed envelopes (e.g. serve config) still flow through here.
         this._controlMessageCb?.(raw);
-        // Normalize from server key-value format to frontend typed message format
+        // Flat sessiond messages carry a top-level "type" string; route them to
+        // the sessiond hook. (Legacy single-key envelopes have no "type" field,
+        // so the two paths never collide.)
+        if (typeof raw.type === 'string') {
+          this.onSessiondMessage?.(raw as unknown as SessiondMessage);
+        }
+        // Normalize from legacy server key-value format to frontend typed message
+        // format. A flat {type:...} message normalizes to null.
         const msg = normalizeMessage(raw);
         if (msg) {
           this._store.applyMessage(msg);

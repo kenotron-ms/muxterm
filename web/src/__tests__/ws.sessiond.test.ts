@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MuxStore } from '../state';
 import { MuxSocket } from '../ws';
-import { SessiondType, decodePaneFrame } from '../types';
+import { SessiondType, encodePaneFrame, decodePaneFrame, type SessiondMessage } from '../types';
 
 /* ---- MockWebSocket ---- */
 
@@ -192,5 +192,52 @@ describe('MuxSocket sessiond senders', () => {
       mux.resize(1, 80, 24);
       mux.sendPaneInput(1, new Uint8Array([1, 2, 3]));
     }).not.toThrow();
+  });
+});
+
+describe('MuxSocket sessiond receive routing', () => {
+  it('routes a flat text control frame to onSessiondMessage', () => {
+    const { mux, ws } = openSocket();
+
+    const received: SessiondMessage[] = [];
+    mux.onSessiondMessage = (msg) => received.push(msg);
+
+    const frame: SessiondMessage = {
+      type: SessiondType.Composition,
+      workspaceId: 'ws-1',
+      panes: [{ paneId: 3, cols: 80, rows: 24 }],
+    };
+    ws.onmessage?.({ data: JSON.stringify(frame) } as MessageEvent);
+
+    expect(received).toHaveLength(1);
+    expect(received[0].type).toBe(SessiondType.Composition);
+    expect(received[0].workspaceId).toBe('ws-1');
+    expect(received[0].panes).toEqual([{ paneId: 3, cols: 80, rows: 24 }]);
+  });
+
+  it('decodes a binary pane frame and forwards to onPaneOutput', () => {
+    const { mux, ws } = openSocket();
+
+    const received: { paneId: number; data: Uint8Array }[] = [];
+    mux.onPaneOutput((paneId, data) => received.push({ paneId, data }));
+
+    const buf = encodePaneFrame(9, new Uint8Array([72, 105])); // "Hi"
+    ws.onmessage?.({ data: buf } as MessageEvent);
+
+    expect(received).toHaveLength(1);
+    expect(received[0].paneId).toBe(9);
+    expect(Array.from(received[0].data)).toEqual([72, 105]);
+  });
+
+  it('ignores a text frame with no type (serve config envelope)', () => {
+    const { mux, ws } = openSocket();
+
+    const received: SessiondMessage[] = [];
+    mux.onSessiondMessage = (msg) => received.push(msg);
+
+    // A serve config envelope has no top-level "type" field.
+    ws.onmessage?.({ data: JSON.stringify({ config: { theme: 'dark' } }) } as MessageEvent);
+
+    expect(received).toHaveLength(0);
   });
 });
