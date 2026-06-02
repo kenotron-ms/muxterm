@@ -5,16 +5,10 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
 )
-
-// itoa is a tiny helper for building expected log strings in tests.
-func itoa(n int) string {
-	return strconv.Itoa(n)
-}
 
 // fakeDaemon is an in-process Unix-socket server used to test the serve-side
 // Client in isolation. It accepts exactly one connection and hands it to a
