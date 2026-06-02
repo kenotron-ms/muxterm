@@ -7,6 +7,50 @@ import { SessiondType } from './types';
 import type { Composition } from './lib/layout.js';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from './lib/config.js';
 
+// --- optimistic-mutation seam -----------------------------------------------
+// A pending mutation overlays an optimistic patch over a COPY of the
+// authoritative base; the base is never mutated. Getters fold the pending
+// overlay over a fresh copy of the base, recomputed on every read.
+
+// Mutable working copy the optimistic patch edits.
+export interface MutationDraft {
+  workspaces: SessiondWorkspaceInfo[];
+  panes: SessiondPaneInfo[];
+}
+
+// Read-only authoritative snapshot the settle predicate inspects.
+export interface MutationBase {
+  readonly workspaces: readonly SessiondWorkspaceInfo[];
+  readonly panes: readonly SessiondPaneInfo[];
+}
+
+export interface MutationSpec {
+  // Patch applied over a copy of the base while pending and not errored.
+  optimistic: (draft: MutationDraft) => void;
+  // True once the authoritative base reflects this mutation.
+  settled: (base: MutationBase) => boolean;
+  // Fires the socket send; called on mutate() and again on retry().
+  commit?: () => void;
+  onTimeout?: () => void;
+  workspaceId?: string;
+  kind?: string;
+  timeoutMs?: number;
+}
+
+export interface ErroredMutation {
+  id: string;
+  workspaceId?: string;
+  kind?: string;
+}
+
+export interface PendingRecord extends MutationSpec {
+  id: string;
+  errored: boolean;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+const DEFAULT_MUTATION_TIMEOUT_MS = 5000;
+
 export class MuxStore {
   private _listeners: Set<() => void> = new Set();
   private _config: ResolvedConfig = DEFAULT_RESOLVED_CONFIG;
@@ -18,6 +62,8 @@ export class MuxStore {
   private _attached: string | null = null;
   private _panes: SessiondPaneInfo[] = [];
   private _activePaneId = 0;
+  private _pending: Map<string, PendingRecord> = new Map();
+  private _mutationSeq = 0;
 
   get config(): ResolvedConfig {
     return this._config;
@@ -29,9 +75,8 @@ export class MuxStore {
   }
 
   get workspaces(): SessiondWorkspaceInfo[] {
-    // Return fresh shallow copies so callers cannot mutate the authoritative
-    // base array or its entries in place.
-    return this._workspaces.map((w) => ({ ...w }));
+    // Fold the pending optimistic overlay over a fresh copy of the base.
+    return this._foldedView().workspaces;
   }
 
   get attached(): string | null {
@@ -126,6 +171,55 @@ export class MuxStore {
       default:
         return; // unhandled type: no state change, no notify
     }
+    this._notify();
+  }
+
+  // Fold the pending optimistic overlay over a fresh COPY of the authoritative
+  // base. The base is never mutated; this is recomputed on every read.
+  private _foldedView(): MutationDraft {
+    const draft: MutationDraft = {
+      workspaces: this._workspaces.map((w) => ({ ...w })),
+      panes: this._panes.map((p) => ({ ...p })),
+    };
+    for (const record of this._pending.values()) {
+      if (record.errored) continue;
+      record.optimistic(draft);
+    }
+    return draft;
+  }
+
+  mutate(spec: MutationSpec): string {
+    const id = `m${++this._mutationSeq}`;
+    const record: PendingRecord = {
+      ...spec,
+      id,
+      errored: false,
+      timer: undefined,
+    };
+    record.timer = setTimeout(
+      () => this._onMutationTimeout(id),
+      spec.timeoutMs ?? DEFAULT_MUTATION_TIMEOUT_MS,
+    );
+    this._pending.set(id, record);
+    spec.commit?.();
+    this._notify();
+    return id;
+  }
+
+  dismiss(id: string): void {
+    const record = this._pending.get(id);
+    if (!record) return;
+    if (record.timer !== undefined) clearTimeout(record.timer);
+    this._pending.delete(id);
+    this._notify();
+  }
+
+  private _onMutationTimeout(id: string): void {
+    const record = this._pending.get(id);
+    if (!record || record.errored) return;
+    record.errored = true;
+    record.timer = undefined;
+    record.onTimeout?.();
     this._notify();
   }
 
