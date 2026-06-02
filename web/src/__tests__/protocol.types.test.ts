@@ -80,3 +80,20 @@ describe('sessiond binary pane frame', () => {
     expect(got.data.length).toBe(0);
   });
 });
+
+describe('clientRef correlation field', () => {
+  it('allows clientRef on a create message', () => {
+    const msg: SessiondMessage = { type: 'create-workspace', clientRef: 'tmp-1' };
+    expect(msg.clientRef).toBe('tmp-1');
+  });
+
+  it('allows clientRef on a workspace info', () => {
+    const ws: SessiondWorkspaceInfo = { workspaceId: 'w1', paneCount: 0, clientRef: 'tmp-1' };
+    expect(ws.clientRef).toBe('tmp-1');
+  });
+
+  it('allows clientRef on a pane info', () => {
+    const pane: SessiondPaneInfo = { paneId: 1, cols: 80, rows: 24, clientRef: 'tmp-1' };
+    expect(pane.clientRef).toBe('tmp-1');
+  });
+});

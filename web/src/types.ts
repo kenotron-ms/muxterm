@@ -57,6 +57,7 @@ export type SessiondErrorCodeValue = (typeof SessiondErrorCode)[keyof typeof Ses
 export interface SessiondWorkspaceInfo {
   workspaceId: string;
   name?: string;
+  clientRef?: string;
   paneCount: number;
 }
 
@@ -65,6 +66,7 @@ export interface SessiondPaneInfo {
   cols: number;
   rows: number;
   title?: string;
+  clientRef?: string;
 }
 
 export interface SessiondMessage {
@@ -72,6 +74,7 @@ export interface SessiondMessage {
   // cid is Go's uint64; JS numbers safely represent integers up to 2^53 and
   // cid is a small monotonic counter, so number is correct here (not bigint).
   cid?: number;
+  clientRef?: string;
   workspaceId?: string;
   name?: string;
   paneId?: number;
