@@ -101,9 +101,9 @@ func TestValidateToken_Malformed(t *testing.T) {
 
 func TestIsLocalhost(t *testing.T) {
 	cases := []struct {
-		name     string
+		name       string
 		remoteAddr string
-		want     bool
+		want       bool
 	}{
 		{"ipv4 loopback", "127.0.0.1:12345", true},
 		{"ipv6 loopback", "[::1]:12345", true},
