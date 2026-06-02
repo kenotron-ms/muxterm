@@ -144,21 +144,46 @@ The daemon (`sessiond`) stays deliberately dumb.
 ```
 sessiond
 ├── Registry          # the single source of truth
-│   ├── panes:      map[PaneID]      → Pane
-│   └── workspaces: map[WorkspaceID] → Workspace
-├── Pane              # one rectangle = one PTY
-│   ├── pty (creack/pty) + child process
-│   ├── RingBuffer + ModeTracker   (see "Level 1 buffer")
-│   └── subscribers: set of attached serve conns
+│   └── workspaces: map[workspaceId] → Workspace
+├── Workspace = { id, name?  (nullable), panes: map[localPaneId] → Pane }
+├── Pane = { localId, title (from OSC 0/2), pty+process,
+│            RingBuffer+ModeTracker, subscribers }
 └── SocketServer      # Unix socket, framed protocol (see "Data Flow")
 ```
 
-- **Registry** is the single source of truth: `panes: map[PaneID]→Pane` and
-  `workspaces: map[WorkspaceID]→Workspace`.
-- **Pane** owns exactly one PTY + child process, a `RingBuffer` + `ModeTracker`,
-  and a set of attached subscribers. Create = fork a PTY (sub-ms). Close = kill the
-  process + drop the buffer. There is **no** split/layout logic in the daemon.
+- **Registry** is the single source of truth, and it is keyed only by workspace:
+  `workspaces: map[workspaceId]→Workspace`. There is **no** global pane map; panes
+  live inside their workspace.
+- **Workspace** owns its panes in a workspace-local map `panes:
+  map[localPaneId]→Pane`. See "Identity model" and "Workspace lifecycle" below.
+- **Pane** owns exactly one PTY + child process, a `RingBuffer` + `ModeTracker`, a
+  captured `title` (from OSC 0/2), and a set of attached subscribers. Create = fork
+  a PTY (sub-ms). Close = kill the process + drop the buffer. There is **no**
+  split/layout logic in the daemon.
 - **SocketServer** serves the Unix socket with a framed protocol.
+
+### Identity model
+
+- **Workspace identity = a stable, opaque, daemon-allocated `id`** (short
+  monotonic/random). This `id` is the key **everywhere**: the registry, attach, and
+  the client's arrangement `localStorage`.
+- **Workspace `name` = an OPTIONAL display label** — nullable, and **not** a key.
+  - **Default: unnamed.** A freshly created workspace gets an `id` and **no** name.
+    A name is never auto-assigned at random.
+  - When unnamed, the tab's displayed label is **derived from the terminal title
+    sequence** (OSC 0/2 — `ESC]0;…BEL` / `ESC]2;…`) emitted by the active pane's
+    program (e.g. shell cwd, `vim main.go`).
+  - The user may set an **explicit** name, which overrides the derived title.
+  - **No uniqueness rule** on names — `id`s disambiguate; two unnamed or
+    same-titled workspaces are perfectly fine.
+- **Pane id is unique only WITHIN its workspace** (`localId`, e.g. monotonic per
+  workspace). A pane is addressed as `(workspaceId, localPaneId)`. Because a browser
+  connection is attached to exactly **one** workspace at a time, the existing
+  `[4-byte LE paneID]` wire framing carries the workspace-local id unambiguously —
+  **no protocol change**.
+- **ModeTracker also captures the pane title** from OSC 0/2 as part of its sticky
+  state; the daemon exposes `pane.title`. The client composes each tab's label as
+  `workspace.name ?? activePane.title`.
 
 ### Two-layer layout model
 
@@ -168,7 +193,7 @@ Layout is two layers with different owners.
 *Which panes belong to a workspace.*
 
 ```
-Workspace = { id, name, []PaneID }
+Workspace = { id, name?  (nullable), panes: map[localPaneId] → Pane }
 ```
 
 This is the entire persistence unit — the honest replacement for a "tmux session."
@@ -178,8 +203,10 @@ has nothing to do with pixels.
 **Layer 2 — Arrangement (device-specific, client-side).**
 *How those panes are spatially laid out* — splits, ratios, tabs, orientation.
 The daemon does **not** store layout blobs (this was explicitly dropped).
-Arrangement lives in the browser, keyed by viewport profile, in `localStorage`
-for now.
+Arrangement lives in the browser, keyed by **(workspaceId, viewport profile)**, in
+`localStorage` for now. *Bonus of keying on the stable workspace `id`:* a workspace
+**rename does not lose its saved layout** — the arrangement key is the immutable
+`id`, never the mutable display name.
 
 On attach, the client pulls the composition from the daemon, then either restores
 a saved arrangement for the current device profile **or** auto-generates a
@@ -263,6 +290,58 @@ The three problems this buffer design solves:
 3. **Lost cumulative sticky state at the trim boundary** — the ModeTracker
    preamble re-establishes colors/cursor/mode after history is trimmed.
 
+## Workspace lifecycle
+
+A workspace is the persistence unit — a "tmux session minus layout." Multiple named
+workspaces are first-class in v1.
+
+**Creation.**
+
+- **Cold start:** if the daemon has zero workspaces, it auto-creates a single
+  **unnamed** default workspace (id only, no name) so the user always lands
+  somewhere — never an empty void.
+- **Explicit:** `CreateWorkspace()` → the daemon allocates the `id` and returns it.
+  A name is optional and defaults to unnamed.
+
+**Selection / switching.**
+
+- `ListWorkspaces() → [{id, name?, paneCount}]` drives a picker (repoint the
+  existing session-picker component).
+- A browser connection is attached to **exactly one** workspace at a time;
+  switching = detach + `Attach(otherId)`.
+- The daemon keeps **all** workspaces alive regardless of who is attached; different
+  tabs/devices can sit in different workspaces simultaneously.
+
+**Rename.** `RenameWorkspace(id, name)` sets or clears the optional display label.
+No uniqueness check (ids are the key).
+
+**Reaping (tmux parity).** When a workspace's **last pane exits**, the workspace is
+auto-reaped. If that empties the daemon, the next attach re-creates a fresh unnamed
+default. Explicit `CloseWorkspace(id)` kills all its panes and removes it. (A
+"keep empty workspaces" config knob is deferred — YAGNI.)
+
+**Persistence boundary.** The workspace set lives in the daemon's in-memory registry
+— it survives `serve` restarts, but is **lost on daemon crash** (consistent with the
+rest of v1; no disk persistence).
+
+## Multiple browsers attached to one workspace
+
+Multi-attach semantics fall out of the two-layer model: **content is mirrored,
+presentation is per-client, and exactly one resource is contested.**
+
+| Aspect | Shared or per-client? | Behavior |
+| --- | --- | --- |
+| **Composition** (which panes exist) | **Shared** | Browser A creates/closes a pane → daemon **broadcasts composition-change events (`pane-added`/`pane-closed`) to ALL subscribers of the workspace** → B spawns/destroys its xterm.js and re-runs its responsive arrangement. |
+| **Pane output** (live bytes + scrollback) | **Shared/mirrored** | Both subscribe to the same PTY streams; both get the same replay + live feed (like two tmux clients on one session). |
+| **Input** (keystrokes) | **Shared** | Both can type into the same pane; keystrokes interleave at the PTY. No locking, no "driver" lock (YAGNI). |
+| **PTY size** | **Contested** (one PTY, one size) | **Active-view-wins:** whichever client most recently sent `Resize(paneID, CxR)` sets it; others reflow. Tabbed-away/unrendered panes send no resizes, so they don't fight. |
+| **Arrangement** (splits/tabs/ratios) | **Per-client** | A's desktop tiling and B's phone tabs are independent — same panes, different layout (the whole point of Layer 2). |
+| **Focus + scrollback position** | **Per-client** | Local xterm.js state, never shared. |
+
+**New protocol requirement:** the daemon must **broadcast composition-change events
+(`pane-added` / `pane-closed`) to all workspace subscribers, not just the actor** —
+otherwise a second browser would not see panes appear/disappear.
+
 ## Data Flow
 
 Five paths exercise the system.
@@ -275,11 +354,21 @@ CREATE pane:
   → browser spawns an xterm.js for PaneID, places it per responsive layout
 
 ATTACH (fresh client / reconnect / new device):
-  browser → serve → sessiond: Attach(workspaceW)
-  sessiond → serve → browser: composition {paneIDs} + per-pane replay
+  browser → serve → sessiond: Attach(workspaceId)
+  sessiond → serve → browser: composition {localPaneIds} + per-pane replay
        (replay = synthetic preamble + retained ring bytes)
   browser: builds arrangement for this viewport profile, feeds replay to xterm.js,
            then subscribes to live
+
+WORKSPACE control (multi-workspace management):
+  browser → serve → sessiond: ListWorkspaces()      → [{id, name?, paneCount}]
+  browser → serve → sessiond: CreateWorkspace()      → daemon allocates + returns id
+  browser → serve → sessiond: RenameWorkspace(id, name)
+  browser → serve → sessiond: CloseWorkspace(id)      kills all panes, removes it
+
+COMPOSITION-CHANGE broadcast (to ALL subscribers of a workspace):
+  sessiond → serve → browsers: pane-added(localPaneId) / pane-closed(localPaneId)
+       each attached browser spawns/destroys its xterm.js and re-arranges
 
 LIVE output:
   PTY → sessiond: appends to ring/altscreen, updates ModeTracker
@@ -351,5 +440,5 @@ that does very little, so it rarely crashes.
   nailed down in the implementation plan.
 - **Cross-device arrangement memory** (daemon-side profile-keyed layouts) —
   explicitly deferred; confirm it stays deferred.
-- **Workspace lifecycle details** — how and when workspaces are created, named, and
-  reaped when empty.
+- **"Keep empty workspaces" config knob** — deferred (YAGNI); v1 auto-reaps a
+  workspace when its last pane exits.
