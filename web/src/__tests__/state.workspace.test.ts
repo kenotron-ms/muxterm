@@ -158,3 +158,32 @@ describe('MuxStore sessiond multiplexer path', () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('clientRef threading through base', () => {
+  it('workspace-list entries keep clientRef', () => {
+    const store = new MuxStore();
+    store.applySessiond({
+      type: SessiondType.WorkspaceList,
+      workspaces: [{ workspaceId: 'w1', paneCount: 0, clientRef: 'tmp-ws-1' }],
+    });
+    expect(store.workspaces[0].clientRef).toBe('tmp-ws-1');
+  });
+
+  it('pane-added carries clientRef onto the base pane', () => {
+    const store = new MuxStore();
+    // Handler requires _attached != null; attach with empty panes first.
+    store.applySessiond({
+      type: SessiondType.Composition,
+      workspaceId: 'w1',
+      panes: [],
+    });
+    store.applySessiond({
+      type: SessiondType.PaneAdded,
+      paneId: 5,
+      cols: 80,
+      rows: 24,
+      clientRef: 'tmp-pane-1',
+    });
+    expect(store.panes.find((p) => p.paneId === 5)?.clientRef).toBe('tmp-pane-1');
+  });
+});
