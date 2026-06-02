@@ -11,6 +11,7 @@ import (
 type Workspace struct {
 	ID         string        // daemon-allocated, e.g. "w1"
 	Name       string        // optional label; "" means unnamed
+	ClientRef  string        // client-minted optimistic-create correlation id; "" when none
 	Panes      map[int]*Pane // keyed by workspace-local pane id
 	nextPaneID int
 }
@@ -34,23 +35,24 @@ func NewRegistry() *Registry {
 // addWorkspaceLocked allocates a new workspace id, inserts the workspace, and
 // returns its id. The caller must hold r.mu. It is shared by AddWorkspace and
 // the lifecycle helpers in workspace.go.
-func (r *Registry) addWorkspaceLocked(name string) string {
+func (r *Registry) addWorkspaceLocked(name, clientRef string) string {
 	r.nextWSID++
 	id := fmt.Sprintf("w%d", r.nextWSID)
 	r.workspaces[id] = &Workspace{
-		ID:    id,
-		Name:  name,
-		Panes: make(map[int]*Pane),
+		ID:        id,
+		Name:      name,
+		ClientRef: clientRef,
+		Panes:     make(map[int]*Pane),
 	}
 	return id
 }
 
 // AddWorkspace creates a new workspace with the given name and returns its
 // daemon-allocated id.
-func (r *Registry) AddWorkspace(name string) string {
+func (r *Registry) AddWorkspace(name, clientRef string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.addWorkspaceLocked(name)
+	return r.addWorkspaceLocked(name, clientRef)
 }
 
 // Get returns the workspace for id and whether it exists.
@@ -79,6 +81,7 @@ func (r *Registry) List() []WorkspaceInfo {
 		out = append(out, WorkspaceInfo{
 			WorkspaceID: ws.ID,
 			Name:        ws.Name,
+			ClientRef:   ws.ClientRef,
 			PaneCount:   len(ws.Panes),
 		})
 	}

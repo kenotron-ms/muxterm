@@ -145,6 +145,7 @@ type Message struct {
 type WorkspaceInfo struct {
 	WorkspaceID string `json:"workspaceId"`
 	Name        string `json:"name,omitempty"`
+	ClientRef   string `json:"clientRef,omitempty"`
 	PaneCount   int    `json:"paneCount"`
 }
 

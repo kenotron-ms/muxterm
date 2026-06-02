@@ -24,7 +24,7 @@ func TestEnsureDefaultColdStartCreatesUnnamed(t *testing.T) {
 
 func TestEnsureDefaultNoOpWhenNonEmpty(t *testing.T) {
 	r := NewRegistry()
-	id := r.AddWorkspace("alpha")
+	id := r.AddWorkspace("alpha", "")
 
 	ws := r.EnsureDefault()
 	if ws == nil {
@@ -40,7 +40,7 @@ func TestEnsureDefaultNoOpWhenNonEmpty(t *testing.T) {
 
 func TestRenameWorkspace(t *testing.T) {
 	r := NewRegistry()
-	id := r.AddWorkspace("old")
+	id := r.AddWorkspace("old", "")
 
 	if !r.RenameWorkspace(id, "prod") {
 		t.Fatalf("RenameWorkspace(%q, \"prod\") = false, want true", id)
@@ -65,8 +65,8 @@ func TestRenameWorkspace(t *testing.T) {
 
 func TestReapIfEmpty(t *testing.T) {
 	r := NewRegistry()
-	a := r.AddWorkspace("a")
-	b := r.AddWorkspace("b")
+	a := r.AddWorkspace("a", "")
+	b := r.AddWorkspace("b", "")
 
 	// Give a a pane so it is non-empty.
 	pid, _ := r.AllocPaneID(a)
@@ -96,7 +96,7 @@ func TestReapIfEmpty(t *testing.T) {
 
 func TestReapLastWorkspaceRecreatesDefault(t *testing.T) {
 	r := NewRegistry()
-	only := r.AddWorkspace("only")
+	only := r.AddWorkspace("only", "")
 
 	removed, def := r.ReapIfEmpty(only)
 	if !removed {
@@ -121,8 +121,8 @@ func TestReapLastWorkspaceRecreatesDefault(t *testing.T) {
 
 func TestCloseWorkspaceReturnsPanes(t *testing.T) {
 	r := NewRegistry()
-	a := r.AddWorkspace("a")
-	b := r.AddWorkspace("b")
+	a := r.AddWorkspace("a", "")
+	b := r.AddWorkspace("b", "")
 
 	pid, _ := r.AllocPaneID(a)
 	p := &Pane{LocalID: pid}

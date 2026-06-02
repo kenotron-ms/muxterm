@@ -8,8 +8,8 @@ import (
 func TestRegistryAddAndGetWorkspace(t *testing.T) {
 	r := NewRegistry()
 
-	id1 := r.AddWorkspace("alpha")
-	id2 := r.AddWorkspace("")
+	id1 := r.AddWorkspace("alpha", "")
+	id2 := r.AddWorkspace("", "")
 
 	if id1 == id2 {
 		t.Fatalf("expected unique workspace ids, both were %q", id1)
@@ -48,8 +48,8 @@ func TestRegistryAddAndGetWorkspace(t *testing.T) {
 
 func TestRegistryPaneIDsAreWorkspaceLocal(t *testing.T) {
 	r := NewRegistry()
-	a := r.AddWorkspace("a")
-	b := r.AddWorkspace("b")
+	a := r.AddWorkspace("a", "")
+	b := r.AddWorkspace("b", "")
 
 	id, ok := r.AllocPaneID(a)
 	if !ok || id != 1 {
@@ -73,7 +73,7 @@ func TestRegistryPaneIDsAreWorkspaceLocal(t *testing.T) {
 
 func TestRegistryPutGetRemovePane(t *testing.T) {
 	r := NewRegistry()
-	ws := r.AddWorkspace("w")
+	ws := r.AddWorkspace("w", "")
 
 	id1, _ := r.AllocPaneID(ws)
 	id2, _ := r.AllocPaneID(ws)
@@ -122,8 +122,8 @@ func TestRegistryPutGetRemovePane(t *testing.T) {
 
 func TestRegistryListReportsWorkspaceInfo(t *testing.T) {
 	r := NewRegistry()
-	a := r.AddWorkspace("alpha")
-	b := r.AddWorkspace("beta")
+	a := r.AddWorkspace("alpha", "")
+	b := r.AddWorkspace("beta", "")
 
 	pid, _ := r.AllocPaneID(a)
 	r.PutPane(a, &Pane{LocalID: pid})
@@ -140,7 +140,7 @@ func TestRegistryListReportsWorkspaceInfo(t *testing.T) {
 
 func TestRegistryPaneInfosReportsFrozenPaneInfo(t *testing.T) {
 	r := NewRegistry()
-	ws := r.AddWorkspace("w")
+	ws := r.AddWorkspace("w", "")
 
 	pid, _ := r.AllocPaneID(ws)
 	r.PutPane(ws, &Pane{LocalID: pid, Title: "shell", cols: 80, rows: 24})

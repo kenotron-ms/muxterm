@@ -255,7 +255,7 @@ func (c *conn) cleanup() {
 func (c *conn) handle(msg Message) {
 	switch msg.Type {
 	case TypeCreateWorkspace:
-		id := c.srv.reg.AddWorkspace(msg.Name)
+		id := c.srv.reg.AddWorkspace(msg.Name, msg.ClientRef)
 		c.reply(&Message{Type: TypeWorkspaceCreated, CID: msg.CID, WorkspaceID: id, Name: msg.Name})
 		c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
 	case TypeListWorkspaces:
