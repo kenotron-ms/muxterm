@@ -173,6 +173,22 @@ export class MuxStore {
         break;
       }
 
+      case SessiondType.WorkspaceCreated: {
+        // Idempotent: actor + broadcast echoes of the same event converge to one
+        // entry.  Mirror the PaneAdded guard style.
+        if (this._workspaces.some((w) => w.workspaceId === msg.workspaceId)) break;
+        this._workspaces = [
+          ...this._workspaces,
+          {
+            workspaceId: msg.workspaceId ?? '',
+            name: msg.name ? msg.name : undefined,
+            clientRef: msg.clientRef,
+            paneCount: 0,
+          },
+        ];
+        break;
+      }
+
       case SessiondType.WorkspaceRenamed: {
         this._workspaces = this._workspaces.map((w) =>
           w.workspaceId === msg.workspaceId

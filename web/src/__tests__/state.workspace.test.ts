@@ -159,6 +159,68 @@ describe('MuxStore sessiond multiplexer path', () => {
   });
 });
 
+describe('workspace-created handler', () => {
+  it('adds a new workspace to store.workspaces with name undefined and clientRef', () => {
+    const store = new MuxStore();
+    store.applySessiond({
+      type: SessiondType.WorkspaceCreated,
+      workspaceId: 'w5',
+      name: '',
+      clientRef: 'ref-x',
+    });
+    const ws = store.workspaces.find((w) => w.workspaceId === 'w5');
+    expect(ws).toBeDefined();
+    expect(ws!.name).toBeUndefined();
+    expect(ws!.clientRef).toBe('ref-x');
+    expect(ws!.paneCount).toBe(0);
+  });
+
+  it('is idempotent: duplicate workspace-created does not add a second entry', () => {
+    const store = new MuxStore();
+    store.applySessiond({
+      type: SessiondType.WorkspaceCreated,
+      workspaceId: 'w5',
+      name: '',
+      clientRef: 'ref-x',
+    });
+    store.applySessiond({
+      type: SessiondType.WorkspaceCreated,
+      workspaceId: 'w5',
+      name: '',
+      clientRef: 'ref-x',
+    });
+    expect(store.workspaces.filter((w) => w.workspaceId === 'w5').length).toBe(1);
+  });
+
+  it('settles an optimistic create mutation whose predicate matches clientRef', () => {
+    const store = new MuxStore();
+    const ref = 'ref-x';
+
+    store.mutate({
+      optimistic: (draft) => {
+        draft.workspaces.push({ workspaceId: ref, paneCount: 0, clientRef: ref });
+      },
+      settled: (base) => base.workspaces.some((w) => w.clientRef === ref),
+      kind: 'create-workspace',
+    });
+
+    // Before the echo: one pending mutation visible
+    expect(store.workspaces.some((w) => w.clientRef === ref)).toBe(true);
+
+    // workspace-created echo arrives with the real id + clientRef
+    store.applySessiond({
+      type: SessiondType.WorkspaceCreated,
+      workspaceId: 'w5',
+      name: '',
+      clientRef: ref,
+    });
+
+    // Predicate now satisfied: overlay is gone, base shows the real workspace
+    expect(store.erroredMutations).toEqual([]);
+    expect(store.workspaces.some((w) => w.workspaceId === 'w5' && w.clientRef === ref)).toBe(true);
+  });
+});
+
 describe('clientRef threading through base', () => {
   it('workspace-list entries keep clientRef', () => {
     const store = new MuxStore();

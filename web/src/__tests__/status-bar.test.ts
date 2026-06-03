@@ -73,6 +73,20 @@ describe('MuxStatusBar', () => {
     expect(event.composed).toBe(true);
   });
 
+  it('shows id-derived label when currentWorkspaceId is not in the workspaces list', async () => {
+    // Reproduces the live bug: after optimistic create+switch, the chip receives
+    // the new workspaceId via store.attached before the WorkspaceCreated echo
+    // adds it to store.workspaces.  _currentLabel() must NOT fall back to the
+    // raw id ("w7") but must derive "workspace 7" via workspaceLabel.
+    el = await fixture({
+      workspaces: [{ workspaceId: 'w1', name: 'work', paneCount: 1 }],
+      currentWorkspaceId: 'w7', // w7 is NOT in workspaces
+    });
+    const chip = el.shadowRoot!.querySelector('.ws-label');
+    expect(chip).toBeTruthy();
+    expect(chip!.textContent!.trim()).toBe('workspace 7');
+  });
+
   it('shows no window / session / pane count text', async () => {
     el = await fixture({
       workspaces: [

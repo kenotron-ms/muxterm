@@ -99,7 +99,13 @@ export class MuxStatusBar extends LitElement {
   private _currentLabel(): string {
     const ws = this.workspaces.find((w) => w.workspaceId === this.currentWorkspaceId);
     if (ws) return workspaceLabel(ws);
-    return this.currentWorkspaceId || 'no workspace';
+    // Defense-in-depth: if the workspace isn't in the list yet (e.g. during the
+    // optimistic-create window before the workspace-created echo lands), derive
+    // the id-based label rather than leaking the raw id string "w3".
+    if (this.currentWorkspaceId) {
+      return workspaceLabel({ workspaceId: this.currentWorkspaceId, paneCount: 0 });
+    }
+    return 'no workspace';
   }
 
   private _onSwitcherClick(): void {
