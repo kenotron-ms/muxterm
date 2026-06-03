@@ -63,9 +63,14 @@ export class MuxApp extends LitElement {
       display: flex;
       flex-direction: column;
       width: 100vw;
-      height: 100vh;
+      /* dvh (dynamic viewport height) collapses with the browser chrome on
+         mobile so the status bar is never pushed below the fold. Falls back
+         to svh (smallest stable viewport) then 100vh for older browsers. */
+      height: 100vh;    /* fallback for browsers without dvh support */
+      height: 100dvh;   /* dynamic viewport — shrinks with mobile browser chrome */
       background: #1a1b26;
       color: #a9b1d6;
+      overflow: hidden;
     }
 
     .overlay {

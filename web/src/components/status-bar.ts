@@ -15,7 +15,9 @@ export class MuxStatusBar extends LitElement {
       background: ${unsafeCSS(CHROME.bar)};
       border-top: 1px solid ${unsafeCSS(CHROME.border)};
       height: 24px;
-      padding: 0 12px;
+      /* On iOS with a home indicator, add safe-area inset so the bar
+         sits above the indicator rather than being clipped under it. */
+      padding: 0 12px env(safe-area-inset-bottom, 0px);
       font-size: 12px;
       color: ${unsafeCSS(CHROME.textDim)};
       flex-shrink: 0;
