@@ -43,3 +43,38 @@ func TestServerBroadcastsWorkspaceListOnCreate(t *testing.T) {
 		t.Fatalf("broadcast workspace count = %d, want 2", len(evt.Workspaces))
 	}
 }
+
+// TestBroadcastAllReachesUnattachedConnections verifies that broadcastAll
+// reaches connections that have never attached to any workspace, not just
+// those in the workspace subscriber sets.
+func TestBroadcastAllReachesUnattachedConnections(t *testing.T) {
+	_, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	// Client A: list workspaces then attach to the cold-start default.
+	a := dialMust(t, socketPath)
+	writeControlMust(t, a, &Message{Type: TypeListWorkspaces, CID: 1})
+	list := readControlUntil(t, a, TypeWorkspaceList)
+	defaultID := list.Workspaces[0].WorkspaceID
+	writeControlMust(t, a, &Message{Type: TypeAttach, WorkspaceID: defaultID, CID: 2})
+	readControlUntil(t, a, TypeComposition)
+
+	// Client B: connects but never attaches to any workspace.
+	b := dialMust(t, socketPath)
+
+	// Creator: creates a new workspace, which triggers broadcastAll.
+	creator := dialMust(t, socketPath)
+	writeControlMust(t, creator, &Message{Type: TypeCreateWorkspace, Name: "new-ws", CID: 3})
+	readControlUntil(t, creator, TypeWorkspaceCreated)
+
+	// Both A (attached) and B (unattached) must receive an updated workspace
+	// list with 2 workspaces.
+	evtA := readControlUntil(t, a, TypeWorkspaceList)
+	if len(evtA.Workspaces) != 2 {
+		t.Fatalf("A broadcast workspace count = %d, want 2", len(evtA.Workspaces))
+	}
+	evtB := readControlUntil(t, b, TypeWorkspaceList)
+	if len(evtB.Workspaces) != 2 {
+		t.Fatalf("B broadcast workspace count = %d, want 2", len(evtB.Workspaces))
+	}
+}

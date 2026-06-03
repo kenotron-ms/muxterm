@@ -20,6 +20,7 @@ type Server struct {
 
 	mu   sync.Mutex
 	subs map[string]map[*conn]bool // workspaceId -> set of attached connections
+	conns map[*conn]bool            // all live connections
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -32,6 +33,7 @@ func NewServer(socketPath string) (*Server, error) {
 		reg:    NewRegistry(),
 		socket: socketPath,
 		subs:   make(map[string]map[*conn]bool),
+		conns:  make(map[*conn]bool),
 	}, nil
 }
 
@@ -84,6 +86,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			continue
 		}
 		c := newConn(s, nc)
+		s.mu.Lock()
+		s.conns[c] = true
+		s.mu.Unlock()
 		go c.serve()
 	}
 }
@@ -158,21 +163,13 @@ func (s *Server) broadcast(wsID string, msg *Message) {
 	}
 }
 
-// broadcastAll enqueues msg to every subscriber across all workspaces,
-// deduplicating connections so a conn attached via multiple subscriber sets
-// receives msg only once. Enqueue never blocks, so holding s.mu is safe.
+// broadcastAll enqueues msg to every live connection. Enqueue never blocks,
+// so holding s.mu is safe.
 func (s *Server) broadcastAll(msg *Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	seen := make(map[*conn]bool)
-	for _, set := range s.subs {
-		for c := range set {
-			if seen[c] {
-				continue
-			}
-			seen[c] = true
-			c.sub.enqueueControl(msg)
-		}
+	for c := range s.conns {
+		c.sub.enqueueControl(msg)
 	}
 }
 
@@ -245,9 +242,13 @@ func (c *conn) serve() {
 	}
 }
 
-// cleanup unsubscribes the connection and closes its subscriber (and socket).
+// cleanup unsubscribes the connection, removes it from the live-connections
+// set, and closes its subscriber (and socket).
 func (c *conn) cleanup() {
 	c.srv.unsubscribe(c)
+	c.srv.mu.Lock()
+	delete(c.srv.conns, c)
+	c.srv.mu.Unlock()
 	c.sub.Close()
 }
 
