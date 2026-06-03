@@ -82,6 +82,56 @@ func TestBroadcastAllReachesUnattachedConnections(t *testing.T) {
 	}
 }
 
+// TestCloseWorkspaceBroadcastsListToActor verifies that closing a workspace
+// triggers a broadcastAll(workspace-list) so the closing client receives an
+// updated workspace-list that does NOT contain the closed workspace ID.
+func TestCloseWorkspaceBroadcastsListToActor(t *testing.T) {
+	_, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	// Client A creates "closeable" workspace and attaches to it.
+	a := newTClient(t, socketPath)
+	a.send(&Message{Type: TypeCreateWorkspace, CID: 1, Name: "closeable"})
+	created := a.waitCtrl(TypeWorkspaceCreated)
+	wsID := created.WorkspaceID
+
+	a.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: wsID})
+	a.waitCtrl(TypeComposition)
+
+	// A sends TypeCloseWorkspace.
+	a.send(&Message{Type: TypeCloseWorkspace, CID: 3, WorkspaceID: wsID})
+
+	// A must receive a TypeWorkspaceList that does NOT contain the closed wsID.
+	// Earlier workspace-list messages (from create broadcast) may still contain
+	// wsID — drain with a deadline loop, skipping any that still list wsID.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case msg, ok := <-a.ctrl:
+			if !ok {
+				t.Fatal("connection closed while waiting for workspace-list without closed wsID")
+			}
+			if msg.Type != TypeWorkspaceList {
+				continue
+			}
+			// Check if wsID is still present in the list.
+			found := false
+			for _, ws := range msg.Workspaces {
+				if ws.WorkspaceID == wsID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return // success: workspace-list does not contain the closed wsID
+			}
+			// wsID still present; wait for the post-close broadcast.
+		case <-deadline:
+			t.Fatalf("timeout: did not receive workspace-list without wsID %q", wsID)
+		}
+	}
+}
+
 // TestRenameWorkspaceBroadcastsListToCrossWorkspaceClient verifies that
 // renaming a workspace triggers a broadcastAll(workspace-list) so clients
 // attached to OTHER workspaces also receive the updated list immediately.

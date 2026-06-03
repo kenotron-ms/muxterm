@@ -325,20 +325,20 @@ func (c *conn) createPane(msg Message) {
 	c.srv.broadcast(wsID, &Message{Type: TypePaneAdded, WorkspaceID: wsID, PaneID: localID, Cols: cols, Rows: rows, ClientRef: msg.ClientRef})
 }
 
-// closeWorkspace removes a workspace and kills its panes, broadcasting a
-// workspace-closed event. Exit handlers see the workspace already gone and emit
-// no duplicate pane-closed events.
+// closeWorkspace removes a workspace and kills its panes, then broadcasts the
+// updated workspace list to every connection. Panes are closed before
+// broadcastAll so reg.List() reflects accurate pane counts. Exit handlers see
+// the workspace already gone and emit no duplicate pane-closed events.
 func (c *conn) closeWorkspace(msg Message) {
 	panes, _, ok := c.srv.reg.CloseWorkspace(msg.WorkspaceID)
 	if !ok {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
 		return
 	}
-	c.reply(&Message{Type: TypeOK, CID: msg.CID, WorkspaceID: msg.WorkspaceID})
 	for _, p := range panes {
 		p.Close()
 	}
-	c.srv.broadcast(msg.WorkspaceID, &Message{Type: TypeWorkspaceClosed, WorkspaceID: msg.WorkspaceID})
+	c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
 }
 
 // reply enqueues a control reply to this connection.

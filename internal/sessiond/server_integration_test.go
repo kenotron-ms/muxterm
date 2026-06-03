@@ -180,15 +180,29 @@ func TestIntegrationFullPaneLifecycle(t *testing.T) {
 	c.sendInput(paneID, []byte("after-resize\n"))
 	c.waitData("after-resize")
 
-	// close-workspace => ok reply + workspace-closed broadcast, both matching id.
+	// close-workspace => broadcastAll(workspace-list) where wsID is absent.
 	c.send(&Message{Type: TypeCloseWorkspace, CID: 5, WorkspaceID: wsID})
-	ok := c.waitCtrl(TypeOK)
-	if ok.WorkspaceID != wsID {
-		t.Fatalf("ok WorkspaceID = %q, want %q", ok.WorkspaceID, wsID)
-	}
-	closed := c.waitCtrl(TypeWorkspaceClosed)
-	if closed.WorkspaceID != wsID {
-		t.Fatalf("workspace-closed WorkspaceID = %q, want %q", closed.WorkspaceID, wsID)
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case list, ok := <-c.ctrl:
+			if !ok {
+				t.Fatal("connection closed while waiting for workspace-list after close-workspace")
+			}
+			if list.Type != TypeWorkspaceList {
+				continue
+			}
+			for _, ws := range list.Workspaces {
+				if ws.WorkspaceID == wsID {
+					// Still contains wsID; keep draining for the post-close broadcast.
+					goto next
+				}
+			}
+			return // success: wsID is absent from the workspace-list
+		case <-deadline:
+			t.Fatalf("timeout: did not receive workspace-list without wsID %q after close-workspace", wsID)
+		}
+	next:
 	}
 }
 
