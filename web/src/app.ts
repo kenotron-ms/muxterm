@@ -92,6 +92,95 @@ export class MuxApp extends LitElement {
       display: none;
     }
 
+    /* ── Centered workspace-create modal ── */
+    .ws-create-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 3000;
+    }
+
+    .ws-create-dialog {
+      background: #1e1e2e;
+      border: 1px solid #45475a;
+      border-radius: 12px;
+      padding: 28px 28px 24px;
+      width: min(420px, calc(100vw - 40px));
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+    }
+
+    .ws-create-dialog h3 {
+      margin: 0;
+      color: #cdd6f4;
+      font-size: 17px;
+      font-weight: 600;
+    }
+
+    .ws-create-input {
+      width: 100%;
+      background: #313244;
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      color: #cdd6f4;
+      font: inherit;
+      font-size: 15px;
+      padding: 11px 14px;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+
+    .ws-create-input:focus {
+      border-color: #89b4fa;
+      box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.25);
+    }
+
+    .ws-create-input:disabled { opacity: 0.5; }
+
+    .ws-create-row {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .ws-create-confirm {
+      padding: 10px 22px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      border: none;
+      border-radius: 7px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      min-width: 96px;
+      transition: opacity 0.12s;
+    }
+
+    .ws-create-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
+    .ws-create-confirm:not(:disabled):hover { opacity: 0.85; }
+
+    .ws-create-cancel {
+      padding: 10px 18px;
+      background: transparent;
+      color: #6c7086;
+      border: 1px solid #45475a;
+      border-radius: 7px;
+      font: inherit;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background-color 0.12s, color 0.12s;
+    }
+
+    .ws-create-cancel:disabled { opacity: 0.45; cursor: not-allowed; }
+    .ws-create-cancel:not(:disabled):hover { background: #2a2b3c; color: #cdd6f4; }
+
     /* Empty workspace state — shown when the attached workspace has no panes.
        Fills the space the terminal composition would occupy. */
     .empty-workspace {
@@ -171,7 +260,11 @@ export class MuxApp extends LitElement {
   @state()
   private _creatingWorkspace = false;
 
+  @state()
+  private _showCreateModal = false;
 
+  @state()
+  private _createModalName = '';
 
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
@@ -230,12 +323,11 @@ export class MuxApp extends LitElement {
       if (msg.type === SessiondType.Composition && store.panes.length === 0) {
         this._createPaneOptimistic();
       }
-      // Server confirmed the workspace was created — clear the loading state.
-      // Exactly one create is in-flight at a time (button disabled during pending),
-      // so any WorkspaceCreated while _creatingWorkspace is true is ours.
-      // WorkspaceController.onMessage(WorkspaceCreated) handles socket.attach().
+      // Server confirmed the workspace — clear loading state and close modal.
       if (msg.type === SessiondType.WorkspaceCreated && this._creatingWorkspace) {
         this._creatingWorkspace = false;
+        this._showCreateModal = false;
+        this._createModalName = '';
       }
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
@@ -287,6 +379,16 @@ export class MuxApp extends LitElement {
   override willUpdate(_changedProperties: Map<PropertyKey, unknown>): void {
     super.willUpdate(_changedProperties);
     this._syncTerminals();
+  }
+
+  override updated(changed: Map<PropertyKey, unknown>): void {
+    super.updated(changed);
+    // Auto-focus the name input when the create modal opens.
+    if (changed.has('_showCreateModal') && this._showCreateModal) {
+      requestAnimationFrame(() => {
+        this.shadowRoot?.querySelector<HTMLInputElement>('.ws-create-input')?.focus();
+      });
+    }
   }
 
   private _syncTerminals(): void {
@@ -353,6 +455,35 @@ export class MuxApp extends LitElement {
       <div class="overlay ${this._connectionStatus === 'connected' ? 'hidden' : ''}">
         Connecting to muxterm...
       </div>
+
+      ${this._showCreateModal ? html`
+        <div class="ws-create-backdrop" @click="${this._cancelCreate}">
+          <div class="ws-create-dialog" @click="${(e: Event) => e.stopPropagation()}">
+            <h3>New workspace</h3>
+            <input
+              class="ws-create-input"
+              type="text"
+              placeholder="Workspace name"
+              .value="${this._createModalName}"
+              ?disabled="${this._creatingWorkspace}"
+              @input="${(e: Event) => { this._createModalName = (e.target as HTMLInputElement).value; }}"
+              @keydown="${this._onCreateModalKeyDown}"
+            />
+            <div class="ws-create-row">
+              <button
+                class="ws-create-cancel"
+                ?disabled="${this._creatingWorkspace}"
+                @click="${this._cancelCreate}"
+              >Cancel</button>
+              <button
+                class="ws-create-confirm"
+                ?disabled="${this._creatingWorkspace || !this._createModalName.trim()}"
+                @click="${this._submitCreate}"
+              >${this._creatingWorkspace ? 'Creating…' : 'Create'}</button>
+            </div>
+          </div>
+        </div>
+      ` : ''}
       ${this._showReconnectOverlay
         ? html`<mux-reconnect-overlay
             message="${this._reconnectMessage}"
@@ -365,7 +496,7 @@ export class MuxApp extends LitElement {
             .erroredMutations="${store.erroredMutations}"
             .createPending="${this._creatingWorkspace}"
             @workspace-selected="${this._onWorkspaceSelected}"
-            @workspace-create="${this._createWorkspace}"
+            @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @workspace-close="${this._onWorkspaceClose}"
             @workspace-retry="${(e: CustomEvent<{ mutationId: string }>) =>
@@ -396,12 +527,28 @@ export class MuxApp extends LitElement {
    * WorkspaceCreated reply arrives with the matching clientRef. No provisional
    * row is inserted — the flag is the only local state change.
    */
-  private _createWorkspace = (e: CustomEvent<{ name: string }>): void => {
-    if (this._creatingWorkspace) return;
+  private _onOpenCreateModal = (): void => {
+    this._showWorkspacePicker = false;
+    this._showCreateModal = true;
+    this._createModalName = '';
+  };
+
+  private _onCreateModalKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'Enter')  { e.preventDefault(); this._submitCreate(); }
+    if (e.key === 'Escape') { e.preventDefault(); this._cancelCreate(); }
+  };
+
+  private _submitCreate = (): void => {
+    const name = this._createModalName.trim();
+    if (!name || this._creatingWorkspace) return;
     this._creatingWorkspace = true;
-    this._socket?.createWorkspace(e.detail.name);
-    // WorkspaceController.onMessage(WorkspaceCreated) handles socket.attach().
-    // _creatingWorkspace is cleared when WorkspaceCreated arrives (below).
+    this._socket?.createWorkspace(name);
+  };
+
+  private _cancelCreate = (): void => {
+    if (this._creatingWorkspace) return;
+    this._showCreateModal = false;
+    this._createModalName = '';
   };
 
   /**
