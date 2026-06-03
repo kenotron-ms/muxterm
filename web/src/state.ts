@@ -92,7 +92,9 @@ export class MuxStore {
   // engine. Keeps lib/layout.ts free of wire types.
   get composition(): Composition {
     return {
-      paneIds: this._foldedView().panes.map((p) => p.paneId),
+      // Exclude provisional overlay panes (negative IDs) from the layout so
+      // no blank tile appears while waiting for the real pane-added echo.
+      paneIds: this._foldedView().panes.filter((p) => p.paneId >= 0).map((p) => p.paneId),
       activePaneId: this._activePaneId,
     };
   }

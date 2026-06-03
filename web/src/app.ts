@@ -318,7 +318,9 @@ export class MuxApp extends LitElement {
   }
 
   render() {
-    const panes = store.panes;
+    // Exclude provisional overlay panes (negative IDs) from layout decisions.
+    // They have no terminal and should not render as blank tiles.
+    const panes = store.panes.filter((p) => p.paneId >= 0);
     const arrangement = this._arrangement();
 
     return html`
