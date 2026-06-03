@@ -1,27 +1,31 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
-import { store, MuxStore } from './state.js';
+import { store } from './state.js';
 import { icon } from './lib/icons.js';
 import { MonitorX } from 'lucide';
 import { MuxSocket, buildWsUrl } from './ws.js';
-import type { TmuxState, Window, SessionInfo, SplitDirection } from './types.js';
-import type { MuxLayout } from './components/layout.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { parseResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, resolvePalette } from './lib/theme.js';
+import { arrange, viewportClassFor, type Arrangement } from './lib/layout.js';
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
-import './components/layout.js';
 import './components/status-bar.js';
 import './components/pane.js';
-import './components/resize-handle.js';
-import './components/session-picker.js';
+import './components/composition.js';
+import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
-import './components/workspace.js';
 import type { LauncherAction } from './components/launcher-menu.js';
-import { Workspace } from './lib/workspace.js';
+import { WorkspaceController } from './lib/workspace-controller.js';
+import { mintClientRef } from './lib/client-ref.js';
+import { SessiondType } from './types.js';
+
+// Optimistic panes use a strictly-negative temp paneId so they never collide
+// with the daemon's positive workspace-local ids (which start at 1); the real
+// positive-id pane replaces it on settle (matched by clientRef).
+let _nextTempPaneId = -1;
 
 // ---------------------------------------------------------------------------
 // Module-level keybinding wiring
@@ -31,11 +35,11 @@ import { Workspace } from './lib/workspace.js';
  *  each phase lands. Stubs use () => {} to keep wiring unconditional. */
 const uiActions: UIActions = {
   openLauncher: () => window.dispatchEvent(new CustomEvent('open-launcher')),
-  split: () => {}, // TODO(phaseX): wire when available
-  maximizeRegion: () => {}, // TODO(phaseX): wire when available
-  popOut: () => {}, // TODO(phaseX): wire when available
-  nextSession: () => {}, // TODO(phaseX): wire when available
-  focusDriver: () => {}, // TODO(phaseX): wire when available
+  split: () => {}, // wired to create-pane in connectedCallback
+  maximizeRegion: () => {},
+  popOut: () => {},
+  nextSession: () => {},
+  focusDriver: () => {},
 };
 
 /** Disposer for the currently-installed keydown handler. Re-set after each
@@ -59,9 +63,14 @@ export class MuxApp extends LitElement {
       display: flex;
       flex-direction: column;
       width: 100vw;
-      height: 100vh;
+      /* dvh (dynamic viewport height) collapses with the browser chrome on
+         mobile so the status bar is never pushed below the fold. Falls back
+         to svh (smallest stable viewport) then 100vh for older browsers. */
+      height: 100vh;    /* fallback for browsers without dvh support */
+      height: 100dvh;   /* dynamic viewport — shrinks with mobile browser chrome */
       background: #1a1b26;
       color: #a9b1d6;
+      overflow: hidden;
     }
 
     .overlay {
@@ -83,9 +92,98 @@ export class MuxApp extends LitElement {
       display: none;
     }
 
-    /* Empty session state — shown when the active session has no windows.
-       Fills the space the terminal layout would occupy. */
-    .empty-session {
+    /* ── Centered workspace-create modal ── */
+    .ws-create-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 3000;
+    }
+
+    .ws-create-dialog {
+      background: #1e1e2e;
+      border: 1px solid #45475a;
+      border-radius: 12px;
+      padding: 28px 28px 24px;
+      width: min(420px, calc(100vw - 40px));
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+    }
+
+    .ws-create-dialog h3 {
+      margin: 0;
+      color: #cdd6f4;
+      font-size: 17px;
+      font-weight: 600;
+    }
+
+    .ws-create-input {
+      width: 100%;
+      background: #313244;
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      color: #cdd6f4;
+      font: inherit;
+      font-size: 15px;
+      padding: 11px 14px;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+
+    .ws-create-input:focus {
+      border-color: #89b4fa;
+      box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.25);
+    }
+
+    .ws-create-input:disabled { opacity: 0.5; }
+
+    .ws-create-row {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .ws-create-confirm {
+      padding: 10px 22px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      border: none;
+      border-radius: 7px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      min-width: 96px;
+      transition: opacity 0.12s;
+    }
+
+    .ws-create-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
+    .ws-create-confirm:not(:disabled):hover { opacity: 0.85; }
+
+    .ws-create-cancel {
+      padding: 10px 18px;
+      background: transparent;
+      color: #6c7086;
+      border: 1px solid #45475a;
+      border-radius: 7px;
+      font: inherit;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background-color 0.12s, color 0.12s;
+    }
+
+    .ws-create-cancel:disabled { opacity: 0.45; cursor: not-allowed; }
+    .ws-create-cancel:not(:disabled):hover { background: #2a2b3c; color: #cdd6f4; }
+
+    /* Empty workspace state — shown when the attached workspace has no panes.
+       Fills the space the terminal composition would occupy. */
+    .empty-workspace {
       flex: 1;
       display: flex;
       flex-direction: column;
@@ -97,7 +195,7 @@ export class MuxApp extends LitElement {
       user-select: none;
     }
 
-    .empty-session .glyph {
+    .empty-workspace .glyph {
       line-height: 1;
       opacity: 0.5;
     }
@@ -108,18 +206,18 @@ export class MuxApp extends LitElement {
       flex-shrink: 0;
     }
 
-    .empty-session .headline {
+    .empty-workspace .headline {
       font-size: 16px;
       color: #a9b1d6;
       font-weight: 600;
     }
 
-    .empty-session .subtext {
+    .empty-workspace .subtext {
       font-size: 13px;
       color: #565f89;
     }
 
-    .empty-session button {
+    .empty-workspace button {
       margin-top: 8px;
       display: inline-flex;
       align-items: center;
@@ -134,33 +232,24 @@ export class MuxApp extends LitElement {
       transition: background 0.12s ease, border-color 0.12s ease;
     }
 
-    .empty-session button:hover {
+    .empty-workspace button:hover {
       background: #2f344d;
       border-color: #7aa2f7;
     }
-
-    .empty-session kbd {
-      font-family: inherit;
-      font-size: 12px;
-      padding: 1px 6px;
-      border-radius: 4px;
-      background: #1f2335;
-      border: 1px solid #414868;
-      color: #a9b1d6;
-    }
   `;
 
+  /** Bumped whenever the store notifies; drives Lit re-render off wire state. */
   @state()
-  _tmuxState: TmuxState = store.state;
+  _version = 0;
+
+  @state()
+  _viewportWidth = typeof window !== 'undefined' ? window.innerWidth || 1024 : 1024;
 
   @state()
   _connectionStatus: 'connected' | 'disconnected' | 'reconnecting' = 'disconnected';
 
   @state()
-  _showSessionPicker = false;
-
-  @state()
-  _sessions: SessionInfo[] = [];
+  _showWorkspacePicker = false;
 
   @state()
   _showReconnectOverlay = false;
@@ -168,15 +257,30 @@ export class MuxApp extends LitElement {
   @state()
   _reconnectMessage = 'Reconnecting...';
 
+  @state()
+  private _creatingWorkspace = false;
+
+  @state()
+  private _showCreateModal = false;
+
+  @state()
+  private _createModalName = '';
+
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
-  private _workspace = new Workspace();
+  private _controller: WorkspaceController | null = null;
 
-  /** Close the session picker on Escape. */
+  /** Close the workspace picker on Escape. */
   private _onDocKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && this._showSessionPicker) {
-      this._showSessionPicker = false;
+    if (e.key === 'Escape' && this._showWorkspacePicker) {
+      this._showWorkspacePicker = false;
     }
+  };
+
+  /** Track the live viewport width so the responsive arrangement reflows. */
+  private _onWindowResize = (): void => {
+    const w = window.innerWidth || 1024;
+    if (w !== this._viewportWidth) this._viewportWidth = w;
   };
 
   /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
@@ -190,22 +294,45 @@ export class MuxApp extends LitElement {
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
-    // Escape closes the session picker.
+    // Escape closes the workspace picker.
     document.addEventListener('keydown', this._onDocKeyDown);
+    window.addEventListener('resize', this._onWindowResize);
 
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
-    // Without this, shortcuts are dead until the first config frame arrives.
     disposeKeys = installKeybindings(uiActions);
 
-    // Subscribe to store changes
+    // Re-render whenever wire state (composition / workspaces / config) changes.
     this._unsubscribe = store.subscribe(() => {
-      this._tmuxState = { ...store.state };
+      this._version++;
     });
 
     // Create WebSocket connection
     this._socket = new MuxSocket(store, buildWsUrl('/ws'));
+    // Browser-as-multiplexer coordination seam: feed every inbound frozen
+    // sessiond message to BOTH the store (wire-state truth) and the controller
+    // (next-action decisions: bootstrap, MRU, recovery).
+    this._controller = new WorkspaceController(store, this._socket);
+    this._socket.onSessiondMessage = (msg) => {
+      store.applySessiond(msg);
+      this._controller?.onMessage(msg);
+      // One-terminal-per-workspace: when a composition is applied and the folded
+      // store has zero panes, auto-spawn exactly one. Guarding on the FOLDED
+      // getter means an already-overlaid optimistic pane suppresses a double-spawn.
+      if (msg.type === SessiondType.Composition && store.panes.length === 0) {
+        this._createPaneOptimistic();
+      }
+      // Server confirmed the workspace — clear loading state and close modal.
+      if (msg.type === SessiondType.WorkspaceCreated && this._creatingWorkspace) {
+        this._creatingWorkspace = false;
+        this._showCreateModal = false;
+        this._createModalName = '';
+      }
+    };
+    // The split shortcut creates a connection-scoped pane (create-pane);
+    // now optimistic so the provisional pane overlays instantly.
+    uiActions.split = () => this._createPaneOptimistic();
     this._socket.onPaneOutput((paneId: number, data: Uint8Array) => {
       this._routePaneOutput(paneId, data);
     });
@@ -215,9 +342,13 @@ export class MuxApp extends LitElement {
     this._socket.onDisconnect = () => {
       this._showReconnectOverlay = true;
       this._reconnectMessage = 'Connection lost. Reconnecting...';
+      this._creatingWorkspace = false;
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
+      // On (re)connect: attach the last/known workspace, or list + attach the
+      // first. This is where the initial composition sync is requested.
+      this._controller?.bootstrap();
     };
     this._socket.connect();
     this._connectionStatus = 'reconnecting';
@@ -228,6 +359,7 @@ export class MuxApp extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     document.removeEventListener('keydown', this._onDocKeyDown);
+    window.removeEventListener('resize', this._onWindowResize);
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -240,247 +372,213 @@ export class MuxApp extends LitElement {
 
   /**
    * Before each render, synchronise the terminal registry with the current
-   * tmux state. This ensure()s a persistent Terminal for EVERY pane across
-   * ALL windows in ALL sessions (not just the active window), so background
-   * windows stay fed and their scrollback is preserved on tab switch.
-   * Panes that no longer exist in tmux are prune()'d (disposed).
-   *
-   * Also keeps _sessions (the full session list) in sync with store.sessionList
-   * and updates the workspace region to follow the active session.
+   * composition. This ensure()s a persistent Terminal for EVERY pane in the
+   * attached workspace so background (tabbed-away) panes stay fed and keep
+   * their scrollback. Panes no longer in the composition are prune()'d.
    */
   override willUpdate(_changedProperties: Map<PropertyKey, unknown>): void {
     super.willUpdate(_changedProperties);
     this._syncTerminals();
-    this._ensureActiveRegion();
-
-    if (_changedProperties.has('_tmuxState')) {
-      // Keep the full session list fresh whenever the state updates so the
-      // inline session dropdown in the tab strip always shows every session.
-      const sl = store.sessionList;
-      if (sl.length > 0) this._sessions = sl;
-
-      // When the active session changes, update the first workspace region to
-      // follow it immediately so the displayed content switches.
-      const newSession = this._tmuxState.activeSession;
-      if (newSession && this._workspace.regions.length > 0) {
-        const region = this._workspace.regions[0];
-        if (region.surface.sessionName !== newSession) {
-          region.surface.sessionName = newSession;
-          // Reset windowId; _renderRegion will pick up the correct active window.
-          region.surface.windowId = this._tmuxState.activeWindow ?? 0;
-        }
-      }
-    }
   }
 
-  private _ensureActiveRegion(): void {
-    const session = this._tmuxState.activeSession;
-    const windowId = this._tmuxState.activeWindow;
-    if (!session || windowId === null || windowId === undefined) return;
-
-    const alreadyMounted = this._workspace.regions.some(
-      (r) => r.surface.sessionName === session && r.surface.windowId === windowId,
-    );
-
-    if (
-      this._workspace.regions.length === 0 &&
-      this._workspace.detachedRegionIds.size === 0 &&
-      !alreadyMounted
-    ) {
-      this._workspace.openRegion({ sessionName: session, windowId });
+  override updated(changed: Map<PropertyKey, unknown>): void {
+    super.updated(changed);
+    // Auto-focus the name input when the create modal opens.
+    if (changed.has('_showCreateModal') && this._showCreateModal) {
+      requestAnimationFrame(() => {
+        this.shadowRoot?.querySelector<HTMLInputElement>('.ws-create-input')?.focus();
+      });
     }
   }
 
   private _syncTerminals(): void {
     const liveIds = new Set<number>();
-    for (const session of this._tmuxState.sessions) {
-      for (const window of session.windows) {
-        for (const pane of window.panes) {
-          const paneId = pane.id;
-          terminalRegistry.ensure(paneId, {
-            onInput: (data) => this._socket?.sendPaneInput(paneId, data),
-            // FitAddon resize is for xterm.js display only — tmux viewport sizing
-            // comes from resize-surface (CellBudgetManager), not per-pane callbacks.
-            onResize: () => {},
-          });
-          liveIds.add(paneId);
-        }
-      }
+    for (const pane of store.panes) {
+      const paneId = pane.paneId;
+      // Skip provisional overlay panes: _nextTempPaneId starts at -1 and
+      // decrements, so any negative id is a transient optimistic placeholder.
+      // Mounting a terminal on a provisional pane produces a phantom cursor
+      // that flickers once the real positive-id pane settles.
+      if (paneId < 0) continue;
+      terminalRegistry.ensure(paneId, {
+        onInput: (data) => this._socket?.sendPaneInput(paneId, data),
+        // Active-view-wins: only rendered/visible panes own a live
+        // ResizeObserver, so tabbed-away panes never report a resize.
+        onResize: (cols, rows) => this._controller?.reportResize(paneId, cols, rows),
+      });
+      liveIds.add(paneId);
     }
     terminalRegistry.prune(liveIds);
   }
 
+  /** Compute the current arrangement for the measured viewport class. */
+  private _arrangement(): Arrangement {
+    if (this._controller) {
+      return this._controller.currentArrangement(this._viewportWidth);
+    }
+    return arrange(store.composition, viewportClassFor(this._viewportWidth));
+  }
+
   render() {
-    const activeSession = this._tmuxState.sessions.find(
-      (s) => s.name === this._tmuxState.activeSession,
-    );
-    const windows: Window[] = activeSession?.windows ?? [];
-    const activeWindow = windows.find((w) => w.id === this._tmuxState.activeWindow);
-    const activePaneId = this._tmuxState.activePane;
+    // Exclude provisional overlay panes (negative IDs) from layout decisions.
+    // They have no terminal and should not render as blank tiles.
+    const panes = store.panes.filter((p) => p.paneId >= 0);
+    const arrangement = this._arrangement();
 
     return html`
       <mux-title-bar @launcher-action="${this._onLauncherAction}"></mux-title-bar>
-      ${this._tmuxState.sessions.length === 0
+      ${panes.length === 0
         ? html`
-            <div class="empty-session">
+            <div class="empty-workspace">
               <div class="glyph">${icon(MonitorX, { size: 48 })}</div>
-              <div class="headline">No active session</div>
+              <div class="headline">No panes</div>
               <div class="subtext">
-                The tmux session ended. muxterm is still running — create a new
-                session to pick up where you left off.
+                This workspace has nothing running. Create a pane to get started.
               </div>
-              <button @click="${this._onCreateSession}">
-                <span>+</span> New session
-              </button>
-            </div>
-          `
-        : windows.length === 0
-        ? html`
-            <div class="empty-session">
-              <div class="glyph">${icon(MonitorX, { size: 48 })}</div>
-              <div class="headline">No open windows</div>
-              <div class="subtext">
-                This session has nothing running. Create a window to get started.
-              </div>
-              <button @click="${this._onTabNew}">
-                <span>+</span> New window
-              </button>
+              <button @click="${this._onCreatePane}"><span>+</span> New pane</button>
             </div>
           `
         : html`
-            <mux-workspace
-              .workspace="${this._workspace}"
-              .tmuxState="${this._tmuxState}"
-              .allSessions="${this._sessions}"
-              @pane-focus="${this._onPaneSelect}"
-              @resize-surface="${this._onSurfaceResize}"
-              @open-session-picker="${this._onOpenSessionPicker}"
-              @tab-select="${this._onTabSelect}"
-              @tab-new="${this._onTabNew}"
-              @tab-close="${this._onTabClose}"
-              @session-selected="${this._onSessionSelected}"
-              @new-session="${this._onNewSessionCreate}"
-              @split-pane="${this._onSplitPane}"
-              @rename-window="${this._onRenameWindow}"
-              @pane-resize-request="${this._onPaneResizeRequest}"
-            ></mux-workspace>
+            <mux-composition
+              .arrangement="${arrangement}"
+              workspaceKey="${store.attached ?? ''}"
+              @pane-select="${this._onActivePane}"
+              @pane-focus="${this._onActivePane}"
+            ></mux-composition>
           `}
       <mux-status-bar
-        sessionName="${this._tmuxState.activeSession}"
-        .windowCount="${windows.length}"
-        .paneCount="${activeWindow?.panes.length ?? 0}"
-        activeWindowName="${activeWindow?.name ?? ''}"
+        .workspaces="${store.workspaces}"
+        .currentWorkspaceId="${store.attached ?? ''}"
         connectionStatus="${this._connectionStatus}"
-        @open-session-picker="${this._onOpenSessionPicker}"
+        @open-workspace-picker="${this._onOpenWorkspacePicker}"
       ></mux-status-bar>
       <div class="overlay ${this._connectionStatus === 'connected' ? 'hidden' : ''}">
         Connecting to muxterm...
       </div>
+
+      ${this._showCreateModal ? html`
+        <div class="ws-create-backdrop" @click="${this._cancelCreate}">
+          <div class="ws-create-dialog" @click="${(e: Event) => e.stopPropagation()}">
+            <h3>New workspace</h3>
+            <input
+              class="ws-create-input"
+              type="text"
+              placeholder="Workspace name"
+              ?disabled="${this._creatingWorkspace}"
+              @keydown="${this._onCreateModalKeyDown}"
+            />
+            <div class="ws-create-row">
+              <button
+                class="ws-create-cancel"
+                ?disabled="${this._creatingWorkspace}"
+                @click="${this._cancelCreate}"
+              >Cancel</button>
+              <button
+                class="ws-create-confirm"
+                ?disabled="${this._creatingWorkspace}"
+                @click="${this._submitCreate}"
+              >${this._creatingWorkspace ? 'Creating…' : 'Create'}</button>
+            </div>
+          </div>
+        </div>
+      ` : ''}
       ${this._showReconnectOverlay
         ? html`<mux-reconnect-overlay
             message="${this._reconnectMessage}"
           ></mux-reconnect-overlay>`
         : ''}
-      ${this._showSessionPicker
-        ? html`<mux-session-picker
-            .sessions="${this._sessions}"
-            @session-selected="${this._onSessionSelected}"
-            @close-picker="${() => { this._showSessionPicker = false; }}"
-          ></mux-session-picker>`
+      ${this._showWorkspacePicker
+        ? html`<mux-workspace-picker
+            .workspaces="${store.workspaces}"
+            .currentWorkspaceId="${store.attached ?? ''}"
+            .erroredMutations="${store.erroredMutations}"
+            .createPending="${this._creatingWorkspace}"
+            @workspace-selected="${this._onWorkspaceSelected}"
+            @workspace-create="${this._onOpenCreateModal}"
+            @workspace-rename="${this._onWorkspaceRename}"
+            @workspace-close="${this._onWorkspaceClose}"
+            @workspace-retry="${(e: CustomEvent<{ mutationId: string }>) =>
+              store.retry(e.detail.mutationId)}"
+            @workspace-dismiss="${(e: CustomEvent<{ mutationId: string }>) =>
+              store.dismiss(e.detail.mutationId)}"
+            @close-picker="${() => {
+              this._showWorkspacePicker = false;
+            }}"
+          ></mux-workspace-picker>`
         : ''}
     `;
   }
 
-  private _onSplitPane = (e: CustomEvent<{ direction: string; paneId: number }>): void => {
-    this._socket?.sendControl({
-      type: 'split',
-      direction: e.detail.direction as SplitDirection,
-      paneId: e.detail.paneId,
+  /** Client-local active-pane selection (sessiond has no select-pane message). */
+  private _onActivePane = (e: CustomEvent<{ paneId: number }>): void => {
+    store.setActivePane(e.detail.paneId);
+  };
+
+  /** Empty-state button: create a connection-scoped pane in the workspace. */
+  private _onCreatePane = (): void => {
+    this._createPaneOptimistic();
+  };
+
+  /**
+   * Create a workspace: disables the button immediately via a local flag, sends
+   * the create request to the daemon, and auto-switches when the confirmed
+   * WorkspaceCreated reply arrives with the matching clientRef. No provisional
+   * row is inserted — the flag is the only local state change.
+   */
+  private _onOpenCreateModal = (): void => {
+    this._showWorkspacePicker = false;
+    this._showCreateModal = true;
+    this._createModalName = '';
+  };
+
+  private _onCreateModalKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'Enter')  { e.preventDefault(); this._submitCreate(); }
+    if (e.key === 'Escape') { e.preventDefault(); this._cancelCreate(); }
+  };
+
+  private _submitCreate = (): void => {
+    // Read directly from the DOM — more reliable than state on mobile where
+    // IME/autocorrect can delay @input events, leaving _createModalName stale.
+    const input = this.shadowRoot?.querySelector<HTMLInputElement>('.ws-create-input');
+    const name = (input?.value ?? this._createModalName).trim();
+    if (!name || this._creatingWorkspace) return;
+    this._creatingWorkspace = true;
+    this._socket?.createWorkspace(name);
+  };
+
+  private _cancelCreate = (): void => {
+    if (this._creatingWorkspace) return;
+    this._showCreateModal = false;
+    this._createModalName = '';
+  };
+
+  /**
+   * Create a pane optimistically: a provisional pane appears instantly with a
+   * strictly-negative temp paneId (so it never collides with the daemon's
+   * positive workspace-local ids) keyed by a minted clientRef. The daemon echoes
+   * the ref on the authoritative pane-added, which settles the pending mutation
+   * by exact identity (clientRef match) and replaces the temp with the real id.
+   */
+  private _createPaneOptimistic = (): void => {
+    const ref = mintClientRef();
+    const tempId = _nextTempPaneId--;
+    store.mutate({
+      workspaceId: ref,
+      kind: 'create-pane',
+      optimistic: (draft) => draft.panes.push({ paneId: tempId, cols: 0, rows: 0, clientRef: ref }),
+      settled: (base) => base.panes.some((p) => p.clientRef === ref),
     });
-  };
-
-  private _onPaneResizeRequest = (e: CustomEvent<{
-    paneId: number;
-    dir: string;
-    amount: number;
-  }>): void => {
-    // Send a relative resize-pane command to move the divider.
-    // Never send RefreshClientSize from here — that's resize-surface's job.
-    this._socket?.sendControl({
-      type: 'resize-pane',
-      paneId: e.detail.paneId,
-      dir: e.detail.dir,
-      amount: e.detail.amount,
-    });
-  };
-
-  private _onRenameWindow = (e: CustomEvent<{ windowId: number; name: string }>): void => {
-    this._socket?.sendControl({
-      type: 'rename-window',
-      windowId: e.detail.windowId,
-      name: e.detail.name,
-    });
-  };
-
-  private _onSurfaceResize = (e: CustomEvent<{ surfaceId: string; cols: number; rows: number }>): void => {
-    // Async fire-and-forget (seam S5) — never a synchronous handshake.
-    this._socket?.sendControl({ type: 'resize-surface', surfaceId: e.detail.surfaceId, cols: e.detail.cols, rows: e.detail.rows });
-  };
-
-  private _onTabSelect = (e: CustomEvent<{ windowId: number }>): void => {
-    this._socket?.sendControl({
-      type: 'select-window',
-      windowId: e.detail.windowId,
-    });
-  };
-
-  private _onTabNew = (): void => {
-    this._socket?.sendControl({ type: 'new-window' });
-  };
-
-  // Shown on the "no active session" page. Prompts for a session name then
-  // creates and attaches it, consistent with every other new-session entry point.
-  private _onCreateSession = (): void => {
-    const name = window.prompt('Session name (leave blank for auto-name):')?.trim() ?? '';
-    this._socket?.sendControl({ type: 'create-session', name });
-    if (name) {
-      this._socket?.sendControl({ type: 'attach-session', name });
-    }
-  };
-
-  private _onTabClose = (e: CustomEvent<{ windowId: number }>): void => {
-    // Close the whole window (kill-window), not a single pane. A window may
-    // hold several panes; kill-pane on a window id would close only one.
-    // The authoritative state push that follows removes the tab — but if this
-    // was the LAST window, tmux kills the session and we'll get a detach.
-    this._socket?.sendControl({
-      type: 'close-window',
-      windowId: e.detail.windowId,
-    });
-  };
-
-  private _onPaneSelect = (e: CustomEvent<{ paneId: number }>): void => {
-    this._socket?.sendControl({
-      type: 'select-pane',
-      paneId: e.detail.paneId,
-    });
+    this._socket?.createPane(undefined, ref);
   };
 
   private _handleControlMessage = (msg: Record<string, unknown>): void => {
-    // full-sync arrives on connect/reconnect just before binary pane-content frames.
-    // Reset all existing terminals NOW so the incoming capture-pane replay writes
-    // to a clean screen rather than stacking on top of stale content.
-    if ('full-sync' in msg) {
-      this._resetAllPaneTerminals();
-    }
-    if ('session-list' in msg) {
-      this._sessions = store.sessionList;
-    }
     if ('detached' in msg && msg.detached && typeof msg.detached === 'object') {
       const detached = msg.detached as { reason?: string };
       this._showReconnectOverlay = true;
       this._reconnectMessage = detached.reason ?? 'Disconnected';
     }
+    // {"type":"config",...} envelope (Phase 3 carry-forward): re-resolve theme,
+    // terminal options, and keybindings from the daemon-provided config.
     if ('config' in msg) {
       const cfg = parseResolvedConfig(msg['config']);
       store.setConfig(cfg);
@@ -491,102 +589,88 @@ export class MuxApp extends LitElement {
     }
   };
 
-  private _resetAllPaneTerminals(): void {
-    terminalRegistry.resetAll();
-  }
-
-  private _onOpenSessionPicker = (): void => {
-    this._sessions = store.sessionList;
-    this._showSessionPicker = true;
+  private _onOpenWorkspacePicker = (): void => {
+    this._showWorkspacePicker = !this._showWorkspacePicker;
   };
 
-  private _onSessionSelected = (e: CustomEvent<{ name: string }>): void => {
-    this._showSessionPicker = false;
-    const name = e.detail.name;
-    this._socket?.sendControl({ type: 'attach-session', name });
-
-    // Optimistic: switch the workspace region immediately so the user sees
-    // the new session's content without waiting for the server round-trip.
-    if (this._workspace.regions.length > 0) {
-      this._workspace.regions[0].surface.sessionName = name;
-      this._workspace.regions[0].surface.windowId = 0; // server will confirm real window
-      this.requestUpdate();
-    }
+  /**
+   * Rename a workspace optimistically: the overlay shows the new name instantly,
+   * the socket send is the mutation's commit, and the daemon's workspace-renamed
+   * echo settles (or times out) the pending record.
+   */
+  private _onWorkspaceRename = (e: CustomEvent<{ workspaceId: string; name: string }>): void => {
+    const { workspaceId, name } = e.detail;
+    store.mutate({
+      workspaceId,
+      kind: 'rename',
+      optimistic: (draft) => {
+        const ws = draft.workspaces.find((w) => w.workspaceId === workspaceId);
+        if (ws) ws.name = name ? name : undefined;
+      },
+      settled: (base) => {
+        const ws = base.workspaces.find((w) => w.workspaceId === workspaceId);
+        return (ws?.name ?? '') === name;
+      },
+      commit: () => this._socket?.renameWorkspace(workspaceId, name),
+    });
   };
 
-  /** Create a brand-new tmux session from the inline dropdown "New session" button. */
-  private _onNewSessionCreate = (): void => {
-    const name = window.prompt('Session name (leave blank for auto-name):')?.trim() ?? '';
-    // Always create; if a name was given, attach immediately.
-    this._socket?.sendControl({ type: 'create-session', name });
-    if (name) {
-      this._socket?.sendControl({ type: 'attach-session', name });
-    }
+  /**
+   * Close a workspace optimistically: the overlay drops the row instantly, the
+   * socket send is the mutation's commit, and the daemon's workspace-list echo
+   * settles (by the id no longer existing) or times out the pending record.
+   */
+  private _onWorkspaceClose = (e: CustomEvent<{ workspaceId: string }>): void => {
+    const { workspaceId } = e.detail;
+    store.mutate({
+      workspaceId,
+      kind: 'close',
+      optimistic: (draft) => {
+        draft.workspaces = draft.workspaces.filter((w) => w.workspaceId !== workspaceId);
+      },
+      settled: (base) => !base.workspaces.some((w) => w.workspaceId === workspaceId),
+      commit: () => this._socket?.closeWorkspace(workspaceId),
+    });
   };
 
-  private _onLauncherAction = (e: CustomEvent<{ action: LauncherAction }>): void => {
-    const { action } = e.detail;
-    switch (action) {
-      case 'new-session': {
-        // Create a new session with an optional name, then switch to it.
-        const name = window.prompt('Session name (leave blank for auto-name):')?.trim() ?? '';
-        this._socket?.sendControl({ type: 'create-session', name });
-        if (name) {
-          this._socket?.sendControl({ type: 'attach-session', name });
-          // Optimistic display switch.
-          if (this._workspace.regions.length > 0) {
-            this._workspace.regions[0].surface.sessionName = name;
-            this._workspace.regions[0].surface.windowId = 0;
-          }
-          this.requestUpdate();
-        }
-        break;
-      }
-      case 'settings':
-        // Ask the backend to open the config file in an editor ($EDITOR / vim / nano)
-        // in a new tmux window named "settings".
-        this._socket?.sendControl({ type: 'open-settings' });
-        break;
-      case 'reconnect':
-        this._socket?.sendControl({ type: 'request-sync' });
-        break;
-    }
+  /**
+   * Switch the attached workspace. The daemon's composition reply re-populates
+   * the store, so we only dispose the previous workspace's terminals (paneIds
+   * are reused across workspaces) and request the attach.
+   */
+  private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
+    this._showWorkspacePicker = false;
+    if (e.detail.workspaceId === store.attached) return;
+    terminalRegistry.disposeAll();
+    this._socket?.attach(e.detail.workspaceId);
+  };
+
+  private _onLauncherAction = (): void => {
+    /* ⋯ menu is app-level only; presentational this round; workspace creation
+       lives in the status-bar switcher, so launcher actions must never open the
+       picker */
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {
     // Write directly to the registry — works for ALL panes (including
-    // background windows whose mux-pane element is not in the DOM).
+    // background panes whose mux-pane element is not in the DOM).
     terminalRegistry.write(paneId, data);
   }
 
   private _pollConnectionStatus(): void {
     const poll = (): void => {
       if (!this._socket) return;
-      const newStatus = this._socket.connected ? 'connected' : this._connectionStatus === 'connected' ? 'disconnected' : this._connectionStatus;
+      const newStatus = this._socket.connected
+        ? 'connected'
+        : this._connectionStatus === 'connected'
+        ? 'disconnected'
+        : this._connectionStatus;
       if (newStatus !== this._connectionStatus) {
         this._connectionStatus = this._socket.connected ? 'connected' : 'disconnected';
       }
       requestAnimationFrame(poll);
     };
     requestAnimationFrame(poll);
-  }
-
-  /** @internal test hook — seed a region without a live socket. */
-  seedWorkspaceForTest(sessionName: string, windowId: number): void {
-    this._workspace = new Workspace();
-    this._workspace.openRegion({ sessionName, windowId });
-  }
-
-  /** @internal test hook — inject tmux state without a live socket. */
-  injectStateForTest(state: TmuxState): void {
-    this._tmuxState = state;
-    this.requestUpdate();
-  }
-
-  /** Open the active window of another session as a second region (dock). */
-  openRegionForTest(sessionName: string, windowId: number): void {
-    this._workspace.openRegion({ sessionName, windowId });
-    this.requestUpdate();
   }
 }
 
@@ -597,21 +681,15 @@ declare global {
 }
 
 // ---------------------------------------------------------------------------
-// Dev window accessors — exposed for E2E testing (Phase 5 config assertions)
+// Dev window accessors — exposed for E2E testing (config assertions)
 // Guarded behind import.meta.env.DEV: never leaks store state in production.
 // ---------------------------------------------------------------------------
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>)['__muxStore'] = store;
 
-  (window as unknown as Record<string, unknown>)['__muxFirstPaneId'] =
-    (): number | null => {
-      for (const session of store.state.sessions) {
-        for (const win of session.windows) {
-          if (win.panes.length > 0) return win.panes[0].id;
-        }
-      }
-      return null;
-    };
+  (window as unknown as Record<string, unknown>)['__muxFirstPaneId'] = (): number | null => {
+    return store.panes[0]?.paneId ?? null;
+  };
 
   (window as unknown as Record<string, unknown>)['__muxRegistry'] = {
     peek: (paneId: number) => terminalRegistry.getTerminal(paneId),

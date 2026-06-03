@@ -784,3 +784,48 @@ that does very little, so it rarely crashes.
   explicitly deferred; confirm it stays deferred.
 - **"Keep empty workspaces" config knob** — deferred (YAGNI); v1 auto-reaps a
   workspace when its last pane exits.
+
+## Buffer bake-off result (Phase 5)
+
+The Phase-5 bake-off harness (`internal/sessiond/bakeoff_test.go`,
+`TestBufferBakeoff`) scored the three `PaneBuffer` candidates on sticky
+trim-resilience, reflow trim-resilience, and a rough per-pane memory estimate.
+Measured output (`/tmp/bakeoff.txt`):
+
+```
+buffer             sticky     reflow   mem(bytes)
+RawBuffer            0.01       0.00         4864
+TrackedBuffer        0.17       0.00        71152
+VTBuffer             1.00       1.00      4826640
+```
+
+**Decision: RawBuffer is the v1 default.**
+
+Rationale, grounded in the measured numbers:
+
+- **Sticky fidelity (under forced trimming).** Only `VTBuffer` reconstructs
+  mid-screen sticky state (1.00). `RawBuffer` (0.01) and `TrackedBuffer` (0.17)
+  both lose it; `TrackedBuffer`'s synthetic preamble does *not* clear its own
+  1.00 reconstruction contract (its `TestTrackedBufferTrimResilienceSticky`
+  cases are currently red), so its 14x-larger footprint (71152 vs 4864 bytes)
+  buys no dependable sticky win over Raw. Note that for a generously-budgeted
+  pane that is *not* trimmed, `RawBuffer` replays byte-identically — the common
+  case — so the 0.01 score reflects only the forced-eviction stress, not normal
+  replay.
+- **Reflow fidelity (VT-only).** Reflow correctness is `VTBuffer`-exclusive
+  (1.00 vs 0.00 for both Raw and Tracked), but reflow-on-resize is not a v1
+  replay requirement.
+- **Memory per pane.** Raw ~4.8 KB, Tracked ~71 KB (~14x), VT ~4.8 MB (~1000x).
+  `VTBuffer`'s live grid is three orders of magnitude heavier per pane.
+- **Two-emulator drift (needs browser validation).** `VTBuffer` serializes an
+  `x/vt` grid that the browser must re-render with xterm.js; the Go oracle
+  cannot catch divergence between the two emulators, so VT cannot be trusted as
+  the default until validated against real xterm.js in the browser.
+
+`RawBuffer` therefore remains the v1 default: lowest memory, byte-identical
+replay whenever scrollback is not evicted, and no untestable drift. The
+`PaneBuffer` seam keeps `TrackedBuffer` / `VTBuffer` available as drop-in
+upgrades once their contracts hold (Tracked) or browser validation lands (VT).
+Because the default is unchanged, `Pane.Title` stays on its Phase-1 source; live
+OSC 0/2 title graduation into the field is deferred until a title-capturing
+buffer (`TrackedBuffer`) becomes the default.

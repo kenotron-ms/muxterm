@@ -9,7 +9,7 @@ func Uninstall() error {
 	cmd := &execCommander{}
 	switch DetectPlatform() {
 	case "linux":
-		return uninstallLinux(SystemdUnitPath(), cmd)
+		return uninstallLinux(SystemdUnitPath(), SessiondSystemdUnitPath(), cmd)
 	case "darwin":
 		return uninstallDarwin(LaunchdPlistPath(), cmd)
 	case "windows":
@@ -19,11 +19,15 @@ func Uninstall() error {
 	}
 }
 
-func uninstallLinux(unitPath string, cmd Commander) error {
+func uninstallLinux(webUnitPath, sessiondUnitPath string, cmd Commander) error {
 	cmd.Run("systemctl", "--user", "disable", "--now", "muxterm.service")
+	cmd.Run("systemctl", "--user", "disable", "--now", "muxterm-sessiond.service")
 	cmd.Run("systemctl", "--user", "daemon-reload")
-	if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(webUnitPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove unit file: %w", err)
+	}
+	if err := os.Remove(sessiondUnitPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove sessiond unit file: %w", err)
 	}
 	return nil
 }

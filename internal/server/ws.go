@@ -4,54 +4,25 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/user/muxterm/internal/tmux"
+	"github.com/user/muxterm/internal/sessiond"
 )
 
-// TmuxEngine defines the interface for interacting with tmux.
-type TmuxEngine interface {
-	// State returns the in-memory cached state — used only for pane lookups
-	// during event routing. Never use this for state syncs to clients.
-	State() *tmux.TmuxState
-	// LiveState queries tmux directly for current session/window/pane structure.
-	// Always reflects ground truth regardless of missed events.
-	LiveState() (*tmux.TmuxState, error)
-	SendKeys(paneID, keys string) error
-	SelectWindow(windowID string) error
-	SelectPane(paneID string) error
-	SplitWindow(targetPaneID string, horizontal bool) error
-	// ResizePane moves a pane border by amount cells in direction dir (R/L/D/U).
-	ResizePane(paneID, dir string, amount int) error
-	// ResizeSurface tells tmux the full viewport size. This is the ONLY call
-	// that should use refresh-client -C; it must never be called from drag paths.
-	ResizeSurface(cols, rows int) error
-	NewWindow(sessionID string) error
-	KillPane(paneID string) error
-	CloseWindow(windowID string) error
-	RenameWindow(windowID, name string) error
-	NewSession(name string) error
-	// CapturePaneContent returns the current screen content of a pane
-	// (-e preserves ANSI escape sequences). Used to populate new clients
-	// with existing terminal output on connect.
-	CapturePaneContent(paneID string) ([]byte, error)
-	// AttachSession requests switching the active tmux session to name.
-	AttachSession(name string) error
-	// SessionList returns a snapshot of all running tmux sessions.
-	SessionList() []SessionInfo
-	// OpenSettings opens the muxterm config file in an editor ($EDITOR / vim / nano)
-	// in a new tmux window named "settings".
-	OpenSettings() error
-}
-
-// Client represents a connected WebSocket client.
+// Client represents a connected WebSocket client. Each browser WebSocket is
+// backed by its own DaemonConn; the Client relays the frozen sessiond.Message
+// vocabulary in both directions, holding no terminal state of its own.
+//
+// The cid carried on each message lives in two independent domains: the
+// browser<->serve cid is owned by the browser and echoed back by serve, while
+// the serve<->daemon cid is owned by the DaemonConn internally. serve never
+// rewrites browser cids onto daemon requests.
 type Client struct {
 	hub     *Hub
 	conn    *websocket.Conn
@@ -59,64 +30,49 @@ type Client struct {
 	cancel  context.CancelFunc
 	writeMu sync.Mutex
 
-	// syncTimer coalesces rapid full-sync requests (see scheduleSync). A burst
-	// of resizes would otherwise fire many overlapping sendStateSync calls,
-	// each clearing + replaying captured content, stacking duplicate output.
-	syncMu    sync.Mutex
-	syncTimer *time.Timer
+	// daemon is the per-browser connection this client relays to. nil until the
+	// hub attaches the client.
+	daemon DaemonConn
+
+	// writeTextFn/writeBinaryFn perform the actual frame writes. Production
+	// wires them to the real WebSocket writers in newClient; tests inject
+	// capturing closures.
+	writeTextFn   func([]byte) error
+	writeBinaryFn func([]byte) error
 }
 
-// scheduleSync requests a full-sync, coalescing rapid calls into one. Each call
-// resets a short debounce timer, so only the LAST request in a burst (e.g. a
-// fast resize back-and-forth) actually runs sendStateSync. This prevents
-// overlapping capture-replays from stacking duplicate content on the terminal.
-func (c *Client) scheduleSync() {
-	c.syncMu.Lock()
-	defer c.syncMu.Unlock()
-	if c.syncTimer != nil {
-		c.syncTimer.Stop()
-	}
-	c.syncTimer = time.AfterFunc(120*time.Millisecond, func() {
-		select {
-		case <-c.ctx.Done():
-		default:
-			c.hub.sendStateSync(c)
-		}
-	})
-}
-
-// newClient creates a new Client with a cancellable context.
+// newClient creates a new Client with a cancellable context and real WebSocket
+// writers.
 func newClient(hub *Hub, conn *websocket.Conn) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Client{
+	c := &Client{
 		hub:    hub,
 		conn:   conn,
 		ctx:    ctx,
 		cancel: cancel,
 	}
+	c.writeTextFn = func(data []byte) error {
+		c.writeMu.Lock()
+		defer c.writeMu.Unlock()
+		wctx, wcancel := context.WithTimeout(c.ctx, 5*time.Second)
+		defer wcancel()
+		return c.conn.Write(wctx, websocket.MessageText, data)
+	}
+	c.writeBinaryFn = func(data []byte) error {
+		c.writeMu.Lock()
+		defer c.writeMu.Unlock()
+		wctx, wcancel := context.WithTimeout(c.ctx, 5*time.Second)
+		defer wcancel()
+		return c.conn.Write(wctx, websocket.MessageBinary, data)
+	}
+	return c
 }
 
-// writeBinary writes a binary message with a 5-second timeout.
-func (c *Client) writeBinary(data []byte) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
+// writeBinary writes a binary frame via the client's binary writer.
+func (c *Client) writeBinary(data []byte) error { return c.writeBinaryFn(data) }
 
-	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
-	defer cancel()
-
-	return c.conn.Write(ctx, websocket.MessageBinary, data)
-}
-
-// writeText writes a text message with a 5-second timeout.
-func (c *Client) writeText(data []byte) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
-	defer cancel()
-
-	return c.conn.Write(ctx, websocket.MessageText, data)
-}
+// writeText writes a text frame via the client's text writer.
+func (c *Client) writeText(data []byte) error { return c.writeTextFn(data) }
 
 // readPump loops reading messages from the connection.
 // On exit it removes the client from the hub.
@@ -138,36 +94,178 @@ func (c *Client) readPump() {
 	}
 }
 
-// handleBinaryInput decodes a binary frame and routes the payload to tmux SendKeys.
+// handleBinaryInput decodes a binary frame and forwards the payload to the
+// daemon as pane input. Binary framing is unchanged from the legacy protocol:
+// [4-byte LE uint32 paneId][raw bytes].
 func (c *Client) handleBinaryInput(data []byte) {
 	paneID, payload, err := DecodeBinaryFrame(data)
 	if err != nil {
 		log.Printf("handleBinaryInput: decode error: %v", err)
 		return
 	}
+	if c.daemon == nil {
+		log.Printf("handleBinaryInput: no daemon connection")
+		return
+	}
+	if err := c.daemon.Input(paneID, payload); err != nil {
+		log.Printf("handleBinaryInput: Input error: %v", err)
+	}
+}
 
-	if c.hub.engine == nil {
-		log.Printf("handleBinaryInput: no engine available")
+// handleTextInput unmarshals a frozen sessiond.Message from the browser and
+// relays it to the daemon, re-emitting the reply with the browser's cid echoed.
+func (c *Client) handleTextInput(data []byte) {
+	var msg sessiond.Message
+	if err := json.Unmarshal(data, &msg); err != nil {
+		c.sendError(0, "", fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	if c.daemon == nil {
+		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("no daemon connection"))
 		return
 	}
 
-	if err := c.hub.engine.SendKeys(Uint32ToPaneID(paneID), string(payload)); err != nil {
-		log.Printf("handleBinaryInput: SendKeys error: %v", err)
+	switch msg.Type {
+	case sessiond.TypeAttach:
+		comp, err := c.daemon.Attach(msg.WorkspaceID)
+		if err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{
+			Type:        sessiond.TypeComposition,
+			CID:         msg.CID,
+			WorkspaceID: comp.WorkspaceID,
+			Panes:       comp.Panes,
+		})
+
+	case sessiond.TypeListWorkspaces:
+		workspaces, err := c.daemon.ListWorkspaces()
+		if err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{
+			Type:       sessiond.TypeWorkspaceList,
+			CID:        msg.CID,
+			Workspaces: workspaces,
+		})
+
+	case sessiond.TypeCreateWorkspace:
+		id, err := c.daemon.CreateWorkspace(msg.Name)
+		if err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{
+			Type:        sessiond.TypeWorkspaceCreated,
+			CID:         msg.CID,
+			WorkspaceID: id,
+			Name:        msg.Name,
+			ClientRef:   msg.ClientRef,
+		})
+
+	case sessiond.TypeRenameWorkspace:
+		if err := c.daemon.RenameWorkspace(msg.WorkspaceID, msg.Name); err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		if wsList, err := c.daemon.ListWorkspaces(); err == nil {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: wsList})
+		}
+
+	case sessiond.TypeCloseWorkspace:
+		if err := c.daemon.CloseWorkspace(msg.WorkspaceID); err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		if wsList, err := c.daemon.ListWorkspaces(); err == nil {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: wsList})
+		}
+
+	case sessiond.TypeCreatePane:
+		paneID, err := c.daemon.CreatePane(msg.Cmd)
+		if err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{
+			Type:   sessiond.TypePaneCreated,
+			CID:    msg.CID,
+			PaneID: paneID,
+		})
+
+	case sessiond.TypeResize:
+		// Fire-and-forget: the daemon sends no reply.
+		if err := c.daemon.Resize(msg.PaneID, msg.Cols, msg.Rows); err != nil {
+			log.Printf("handleTextInput: resize error: %v", err)
+		}
+
+	default:
+		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
 	}
+}
+
+// sendMessage marshals a frozen sessiond.Message and writes it as a text frame.
+func (c *Client) sendMessage(msg *sessiond.Message) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("sendMessage: marshal error: %v", err)
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("sendMessage: write error: %v", err)
+	}
+}
+
+// sendConfig writes the serve-owned resolved configuration as a text frame.
+// This is a serve-local envelope ({"type":"config","config":cfg}), NOT a
+// sessiond message.
+func (c *Client) sendConfig(cfg any) {
+	data, err := json.Marshal(map[string]any{"type": "config", "config": cfg})
+	if err != nil {
+		log.Printf("sendConfig: marshal error: %v", err)
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("sendConfig: write error: %v", err)
+	}
+}
+
+// sendError relays a TypeError envelope to the browser, echoing cid. A
+// *sessiond.DaemonError preserves the machine-readable Code (and its
+// human-readable text and workspace id) so the browser sees the original error.
+func (c *Client) sendError(cid uint64, workspaceID string, err error) {
+	m := &sessiond.Message{
+		Type:        sessiond.TypeError,
+		CID:         cid,
+		WorkspaceID: workspaceID,
+		Error:       err.Error(),
+	}
+	var de *sessiond.DaemonError
+	if errors.As(err, &de) {
+		m.Code = de.Code
+		m.Error = de.Err
+		if de.WorkspaceID != "" {
+			m.WorkspaceID = de.WorkspaceID
+		}
+	}
+	c.sendMessage(m)
 }
 
 // close cancels the client context and closes the connection.
 func (c *Client) close() {
 	c.cancel()
-	c.conn.CloseNow()
+	if c.conn != nil {
+		c.conn.CloseNow()
+	}
 }
 
-// Hub manages WebSocket clients and their interaction with the tmux engine.
+// Hub manages WebSocket clients, dialing one DaemonConn per browser.
 type Hub struct {
 	clients        map[*Client]bool
 	mu             sync.RWMutex
-	engine         TmuxEngine
-	surfaceRouter  *SurfaceRouter
+	dial           DialFunc
 	resolvedConfig any // muxterm-owned resolved config, shipped to clients on connect
 }
 
@@ -180,29 +278,110 @@ func (h *Hub) SetResolvedConfig(cfg any) {
 	h.resolvedConfig = cfg
 }
 
-// NewHub creates a new Hub with the given tmux engine.
-func NewHub(engine TmuxEngine) *Hub {
+// NewHub creates a new Hub that dials a fresh daemon connection per browser via
+// dial. dial may be nil and supplied later via SetDialer.
+func NewHub(dial DialFunc) *Hub {
 	return &Hub{
-		clients:       make(map[*Client]bool),
-		engine:        engine,
-		surfaceRouter: NewSurfaceRouter(),
+		clients: make(map[*Client]bool),
+		dial:    dial,
 	}
 }
 
-// Add registers a client in the hub and sends a state sync.
+// SetDialer installs (or replaces) the per-browser daemon dialer.
+func (h *Hub) SetDialer(d DialFunc) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.dial = d
+}
+
+// attachClient dials a daemon for the browser, installs relay handlers that
+// forward daemon events to the browser, starts the connection's read loop, and
+// seeds the browser with config and the workspace list.
+func (h *Hub) attachClient(c *Client) error {
+	h.mu.RLock()
+	dial := h.dial
+	cfg := h.resolvedConfig
+	h.mu.RUnlock()
+
+	if dial == nil {
+		return fmt.Errorf("attachClient: no dialer configured")
+	}
+
+	dc, err := dial()
+	if err != nil {
+		return fmt.Errorf("attachClient: dial: %w", err)
+	}
+	c.daemon = dc
+
+	dc.SetHandlers(sessiond.Handlers{
+		OnPaneOutput: func(paneID uint32, data []byte) {
+			if err := c.writeBinary(EncodeBinaryFrame(paneID, data)); err != nil {
+				log.Printf("attachClient: pane output write error: %v", err)
+			}
+		},
+		OnPaneAdded: func(pane sessiond.PaneInfo) {
+			c.sendMessage(&sessiond.Message{
+				Type:   sessiond.TypePaneAdded,
+				PaneID: pane.PaneID,
+				Cols:   pane.Cols,
+				Rows:   pane.Rows,
+				Title:  pane.Title,
+			})
+		},
+		OnPaneClosed: func(paneID int) {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneClosed, PaneID: paneID})
+		},
+		OnWorkspaceClosed: func(workspaceID string) {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceClosed, WorkspaceID: workspaceID})
+		},
+		OnWorkspaceRenamed: func(workspaceID, name string) {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceRenamed, WorkspaceID: workspaceID, Name: name})
+		},
+		OnWorkspaceList: func(workspaces []sessiond.WorkspaceInfo) {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: workspaces})
+		},
+	})
+
+	go func() {
+		if err := dc.Run(); err != nil {
+			log.Printf("attachClient: daemon run exited: %v", err)
+		}
+	}()
+
+	if cfg != nil {
+		c.sendConfig(cfg)
+	}
+
+	workspaces, err := dc.ListWorkspaces()
+	if err != nil {
+		log.Printf("attachClient: ListWorkspaces error: %v", err)
+	} else {
+		c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: workspaces})
+	}
+
+	return nil
+}
+
+// Add registers a client in the hub and attaches its daemon connection.
 func (h *Hub) Add(c *Client) {
 	h.mu.Lock()
 	h.clients[c] = true
 	h.mu.Unlock()
-	h.sendStateSync(c)
+	if err := h.attachClient(c); err != nil {
+		log.Printf("Add: attachClient error: %v", err)
+	}
 }
 
-// Remove deletes a client from the hub and closes it.
+// Remove deletes a client from the hub, closes its daemon connection, and
+// closes the client.
 func (h *Hub) Remove(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.clients[c]; ok {
 		delete(h.clients, c)
+		if c.daemon != nil {
+			_ = c.daemon.Close()
+		}
 		c.close()
 	}
 }
@@ -245,105 +424,6 @@ func NewServerMsg(msgType string, payload interface{}) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// NewErrorMsg marshals {"error": msg}.
-func NewErrorMsg(msg string) []byte {
-	data, _ := json.Marshal(map[string]string{"error": msg})
-	return data
-}
-
-// BroadcastEvent creates a JSON message via NewServerMsg and broadcasts it
-// as a text frame to all connected clients.
-func (h *Hub) BroadcastEvent(eventType string, payload interface{}) {
-	data, err := NewServerMsg(eventType, payload)
-	if err != nil {
-		log.Printf("BroadcastEvent: marshal error: %v", err)
-		return
-	}
-	h.broadcastText(data)
-}
-
-// broadcastText sends data as a text frame to all connected clients.
-// Clients that fail to receive are removed.
-func (h *Hub) broadcastText(data []byte) {
-	h.mu.RLock()
-	clients := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		clients = append(clients, c)
-	}
-	h.mu.RUnlock()
-
-	for _, c := range clients {
-		if err := c.writeText(data); err != nil {
-			h.Remove(c)
-		}
-	}
-}
-
-// sendStateSync sends the live tmux state to a client using the "full-sync"
-// key (distinct from the periodic "state" key). The browser uses "full-sync" to
-// do a full state replace + terminal reset, whereas periodic "state" pushes only
-// trigger structural reconciliation without clearing terminal content.
-// Uses LiveState() (direct tmux query) so the snapshot is always accurate
-// regardless of any missed %window-close events.
-// After the JSON frame, binary pane-content frames are sent for every pane.
-func (h *Hub) sendStateSync(c *Client) {
-	if h.engine == nil {
-		return
-	}
-	h.mu.RLock()
-	cfg := h.resolvedConfig
-	h.mu.RUnlock()
-	if cfg != nil {
-		if cfgData, cfgErr := NewServerMsg("config", cfg); cfgErr != nil {
-			log.Printf("sendStateSync: config marshal error: %v", cfgErr)
-		} else if writeErr := c.writeText(cfgData); writeErr != nil {
-			log.Printf("sendStateSync: config write error: %v", writeErr)
-		}
-	}
-	// LiveState() queries tmux directly — always accurate, never stale.
-	state, liveErr := h.engine.LiveState()
-	if liveErr != nil {
-		// Fall back to cached state if the live query fails (e.g. tmux not responding).
-		log.Printf("sendStateSync: live query failed: %v (using cached state)", liveErr)
-		state = h.engine.State()
-	}
-	// "full-sync" (not "state") tells the browser to do a full replace + terminal
-	// reset. Periodic pushes use "state" for structural reconciliation only.
-	data, err := json.Marshal(map[string]interface{}{"full-sync": state})
-	if err != nil {
-		log.Printf("sendStateSync: marshal error: %v", err)
-		return
-	}
-	if err := c.writeText(data); err != nil {
-		log.Printf("sendStateSync: write error: %v", err)
-		return
-	}
-
-	// Send the session list so the browser can populate the session picker.
-	if slData, slErr := h.sessionListJSON(); slErr == nil {
-		_ = c.writeText(slData)
-	}
-
-	// Send captured screen content for every pane so the browser shows
-	// what was already on screen before this client connected.
-	// tmux control mode only emits %output for new data, so without this
-	// the browser would show a blank terminal until the next keystroke.
-	state.ForEachPane(func(paneID string) {
-		content, captureErr := h.engine.CapturePaneContent(paneID)
-		if captureErr != nil || len(content) == 0 {
-			return
-		}
-		id, parseErr := PaneIDToUint32(paneID)
-		if parseErr != nil {
-			return
-		}
-		frame := EncodeBinaryFrame(id, content)
-		if err := c.writeBinary(frame); err != nil {
-			log.Printf("sendStateSync: pane %s write error: %v", paneID, err)
-		}
-	})
-}
-
 // EncodeBinaryFrame creates a binary frame: [4-byte LE uint32 pane_id][data].
 func EncodeBinaryFrame(paneID uint32, data []byte) []byte {
 	frame := make([]byte, 4+len(data))
@@ -360,256 +440,4 @@ func DecodeBinaryFrame(frame []byte) (uint32, []byte, error) {
 	}
 	paneID := binary.LittleEndian.Uint32(frame[:4])
 	return paneID, frame[4:], nil
-}
-
-// PaneIDToUint32 converts a tmux pane ID string like "%N" to uint32 N.
-func PaneIDToUint32(id string) (uint32, error) {
-	if !strings.HasPrefix(id, "%") {
-		return 0, fmt.Errorf("pane ID %q missing '%%' prefix", id)
-	}
-	n, err := strconv.ParseUint(id[1:], 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("invalid pane ID %q: %w", id, err)
-	}
-	return uint32(n), nil
-}
-
-// Uint32ToPaneID converts uint32 N to the tmux pane ID string "%N".
-func Uint32ToPaneID(id uint32) string {
-	return "%" + strconv.FormatUint(uint64(id), 10)
-}
-
-// parseClientMessage unmarshals a JSON object and returns the first key+value.
-// Returns an error on invalid JSON or empty object.
-func parseClientMessage(data []byte) (string, json.RawMessage, error) {
-	var msg map[string]json.RawMessage
-	if err := json.Unmarshal(data, &msg); err != nil {
-		return "", nil, fmt.Errorf("invalid JSON: %w", err)
-	}
-	if len(msg) == 0 {
-		return "", nil, fmt.Errorf("empty message")
-	}
-	for k, v := range msg {
-		return k, v, nil
-	}
-	return "", nil, fmt.Errorf("empty message")
-}
-
-// dispatchAction routes a client action to the appropriate tmux engine method.
-func (h *Hub) dispatchAction(action string, payload json.RawMessage) error {
-	if h.engine == nil {
-		return fmt.Errorf("no engine available")
-	}
-
-	switch action {
-	case "select-window":
-		var windowID string
-		if err := json.Unmarshal(payload, &windowID); err != nil {
-			return fmt.Errorf("select-window: %w", err)
-		}
-		return h.engine.SelectWindow(windowID)
-
-	case "select-pane":
-		var paneID string
-		if err := json.Unmarshal(payload, &paneID); err != nil {
-			return fmt.Errorf("select-pane: %w", err)
-		}
-		return h.engine.SelectPane(paneID)
-
-	case "split":
-		var p struct {
-			Direction string `json:"direction"`
-			Pane      string `json:"pane"`
-		}
-		if err := json.Unmarshal(payload, &p); err != nil {
-			return fmt.Errorf("split: %w", err)
-		}
-		return h.engine.SplitWindow(p.Pane, p.Direction == "horizontal")
-
-	case "resize-pane":
-		var p struct {
-			ID     string `json:"id"`
-			Dir    string `json:"dir"`
-			Amount int    `json:"amount"`
-		}
-		if err := json.Unmarshal(payload, &p); err != nil {
-			return fmt.Errorf("resize-pane: %w", err)
-		}
-		return h.engine.ResizePane(p.ID, p.Dir, p.Amount)
-
-	case "new-window":
-		return h.engine.NewWindow("")
-
-	case "close-pane":
-		var paneID string
-		if err := json.Unmarshal(payload, &paneID); err != nil {
-			return fmt.Errorf("close-pane: %w", err)
-		}
-		return h.engine.KillPane(paneID)
-
-	case "close-window":
-		var windowID string
-		if err := json.Unmarshal(payload, &windowID); err != nil {
-			return fmt.Errorf("close-window: %w", err)
-		}
-		return h.engine.CloseWindow(windowID)
-
-	case "rename-window":
-		var p struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(payload, &p); err != nil {
-			return fmt.Errorf("rename-window: %w", err)
-		}
-		return h.engine.RenameWindow(p.ID, p.Name)
-
-	case "create-session":
-		var p struct {
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(payload, &p); err != nil {
-			return fmt.Errorf("create-session: %w", err)
-		}
-		return h.engine.NewSession(p.Name)
-
-	case "attach-session":
-		var name string
-		if err := json.Unmarshal(payload, &name); err != nil {
-			return fmt.Errorf("attach-session: %w", err)
-		}
-		return h.engine.AttachSession(name)
-
-	case "resize-surface":
-		var p struct {
-			SurfaceID string `json:"surfaceId"`
-			Cols      int    `json:"cols"`
-			Rows      int    `json:"rows"`
-		}
-		if err := json.Unmarshal(payload, &p); err != nil {
-			return fmt.Errorf("resize-surface: %w", err)
-		}
-		return h.engine.ResizeSurface(p.Cols, p.Rows)
-
-	case "open-settings":
-		if err := h.engine.OpenSettings(); err != nil {
-			log.Printf("open-settings: %v", err)
-		}
-		return nil
-
-	default:
-		return fmt.Errorf("unknown action: %s", action)
-	}
-}
-
-// handleTextInput parses a text message as a JSON action and dispatches it.
-func (c *Client) handleTextInput(data []byte) {
-	action, payload, err := parseClientMessage(data)
-	if err != nil {
-		c.writeText(NewErrorMsg(err.Error()))
-		return
-	}
-
-	// request-sync: client asks for a fresh full-sync (state + capture-pane for all
-	// panes). Sent by the browser after its first pane-resize so that capture-pane
-	// content is re-delivered at the correct terminal dimensions instead of the stale
-	// dimensions tmux had before the browser reported its size.
-	if action == "request-sync" {
-		// Coalesced + debounced: a burst of resizes collapses into a single
-		// full-sync after the resize settles, so overlapping capture-replays
-		// can't stack duplicate content on the terminal.
-		c.scheduleSync()
-		_ = payload
-		return
-	}
-
-	if err := c.hub.dispatchAction(action, payload); err != nil {
-		c.writeText(NewErrorMsg(err.Error()))
-	}
-}
-
-// HandleTmuxDisconnect handles a tmux control mode disconnection by
-// broadcasting a detached event to all clients, attempting reconnect with
-// exponential backoff, and broadcasting a full state sync on success.
-// If reconnect fails, a final detached message is broadcast.
-func (h *Hub) HandleTmuxDisconnect(ctrl *tmux.ControlMode, readErr error) {
-	h.BroadcastEvent("detached", map[string]string{"reason": readErr.Error()})
-
-	cfg := tmux.DefaultReconnectConfig()
-	err := ctrl.Reconnect(cfg,
-		func(reason string) {
-			log.Printf("tmux disconnected: %s", reason)
-		},
-		func() {
-			if h.engine != nil {
-				h.BroadcastEvent("state", h.engine.State())
-			}
-		},
-	)
-
-	if err != nil {
-		h.BroadcastEvent("detached", map[string]string{"reason": err.Error()})
-	}
-}
-
-// sessionListJSON marshals the session list into a JSON frame ready to send to
-// clients. Returns nil, nil when no engine is attached (nothing to send).
-func (h *Hub) sessionListJSON() ([]byte, error) {
-	if h.engine == nil {
-		return nil, nil
-	}
-	return json.Marshal(map[string]interface{}{
-		"session-list": SessionListMessage{Sessions: h.engine.SessionList()},
-	})
-}
-
-// BroadcastFullSync sends a full state sync (including pane capture) to every
-// connected client. Called after a session switch so the browser receives the
-// scrollback of the newly-active session's panes, not just structural state.
-func (h *Hub) BroadcastFullSync() {
-	h.mu.RLock()
-	clients := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		clients = append(clients, c)
-	}
-	h.mu.RUnlock()
-	for _, c := range clients {
-		h.sendStateSync(c)
-	}
-}
-
-// BroadcastSessionList sends the current session list to all connected clients.
-func (h *Hub) BroadcastSessionList() {
-	data, err := h.sessionListJSON()
-	if err != nil {
-		log.Printf("BroadcastSessionList: marshal error: %v", err)
-		return
-	}
-	if data == nil {
-		return
-	}
-	h.broadcastText(data)
-}
-
-// BroadcastPaneOutput encodes pane output as a binary frame and broadcasts
-// it to all connected clients. Clients that fail to receive are removed.
-func (h *Hub) BroadcastPaneOutput(paneID string, data []byte) {
-	id, err := PaneIDToUint32(paneID)
-	if err != nil {
-		return
-	}
-	frame := EncodeBinaryFrame(id, data)
-
-	h.mu.RLock()
-	clients := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		clients = append(clients, c)
-	}
-	h.mu.RUnlock()
-
-	for _, c := range clients {
-		if err := c.writeBinary(frame); err != nil {
-			h.Remove(c)
-		}
-	}
 }

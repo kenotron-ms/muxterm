@@ -1,28 +1,69 @@
-import type { ServerMessage, TmuxState, SessionInfo } from './types';
+import type {
+  SessiondMessage,
+  SessiondWorkspaceInfo,
+  SessiondPaneInfo,
+} from './types';
+import { SessiondType } from './types';
+import type { Composition } from './lib/layout.js';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from './lib/config.js';
 
-export function createInitialState(): TmuxState {
-  return {
-    sessions: [],
-    activeSession: '',
-    activeWindow: 0,
-    activePane: 0,
-  };
+// --- optimistic-mutation seam -----------------------------------------------
+// A pending mutation overlays an optimistic patch over a COPY of the
+// authoritative base; the base is never mutated. Getters fold the pending
+// overlay over a fresh copy of the base, recomputed on every read.
+
+// Mutable working copy the optimistic patch edits.
+export interface MutationDraft {
+  workspaces: SessiondWorkspaceInfo[];
+  panes: SessiondPaneInfo[];
 }
 
+// Read-only authoritative snapshot the settle predicate inspects.
+export interface MutationBase {
+  readonly workspaces: readonly SessiondWorkspaceInfo[];
+  readonly panes: readonly SessiondPaneInfo[];
+}
+
+export interface MutationSpec {
+  // Patch applied over a copy of the base while pending and not errored.
+  optimistic: (draft: MutationDraft) => void;
+  // True once the authoritative base reflects this mutation.
+  settled: (base: MutationBase) => boolean;
+  // Fires the socket send; called on mutate() and again on retry().
+  commit?: () => void;
+  onTimeout?: () => void;
+  workspaceId?: string;
+  kind?: string;
+  timeoutMs?: number;
+}
+
+export interface ErroredMutation {
+  id: string;
+  workspaceId?: string;
+  kind?: string;
+}
+
+export interface PendingRecord extends MutationSpec {
+  id: string;
+  errored: boolean;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+const DEFAULT_MUTATION_TIMEOUT_MS = 5000;
+
 export class MuxStore {
-  private _state: TmuxState = createInitialState();
-  private _sessionList: SessionInfo[] = [];
   private _listeners: Set<() => void> = new Set();
   private _config: ResolvedConfig = DEFAULT_RESOLVED_CONFIG;
 
-  get state(): TmuxState {
-    return this._state;
-  }
-
-  get sessionList(): SessionInfo[] {
-    return this._sessionList;
-  }
+  // --- sessiond multiplexer path --------------------------------------------
+  // Frozen wire state for the sessiond control protocol. A pure Composition is
+  // projected from _panes for the layout engine.
+  private _workspaces: SessiondWorkspaceInfo[] = [];
+  private _attached: string | null = null;
+  private _panes: SessiondPaneInfo[] = [];
+  private _activePaneId = 0;
+  private _pending: Map<string, PendingRecord> = new Map();
+  private _mutationSeq = 0;
 
   get config(): ResolvedConfig {
     return this._config;
@@ -33,132 +74,214 @@ export class MuxStore {
     this._notify();
   }
 
+  get workspaces(): SessiondWorkspaceInfo[] {
+    // Fold the pending optimistic overlay over a fresh copy of the base.
+    return this._foldedView().workspaces;
+  }
+
+  get attached(): string | null {
+    return this._attached;
+  }
+
+  get panes(): SessiondPaneInfo[] {
+    // Fold the pending optimistic overlay over a fresh copy of the base.
+    return this._foldedView().panes;
+  }
+
+  // Pure device-independent projection of the frozen PaneInfo[] for the layout
+  // engine. Keeps lib/layout.ts free of wire types.
+  get composition(): Composition {
+    return {
+      // Exclude provisional overlay panes (negative IDs) from the layout so
+      // no blank tile appears while waiting for the real pane-added echo.
+      paneIds: this._foldedView().panes.filter((p) => p.paneId >= 0).map((p) => p.paneId),
+      activePaneId: this._activePaneId,
+    };
+  }
+
+  get erroredMutations(): ErroredMutation[] {
+    const out: ErroredMutation[] = [];
+    for (const record of this._pending.values()) {
+      if (record.errored) {
+        out.push({
+          id: record.id,
+          workspaceId: record.workspaceId,
+          kind: record.kind,
+        });
+      }
+    }
+    return out;
+  }
+
+  hasPendingKind(kind: string): boolean {
+    for (const record of this._pending.values()) {
+      if (!record.errored && record.kind === kind) return true;
+    }
+    return false;
+  }
+
+  setActivePane(paneId: number): void {
+    if (this._activePaneId === paneId) return;
+    this._activePaneId = paneId;
+    this._notify();
+  }
+
+  // Apply a sessiond control-protocol message. Workspace and composition state
+  // are reconciled idempotently so actor + broadcast echoes of the same event
+  // converge to one truth.
+  applySessiond(msg: SessiondMessage): void {
+    switch (msg.type) {
+      case SessiondType.WorkspaceList:
+        this._workspaces = msg.workspaces ?? [];
+        // If the currently attached workspace was removed, clear attachment state.
+        if (this._attached !== null && !this._workspaces.some(w => w.workspaceId === this._attached)) {
+          this._attached = null;
+          this._panes = [];
+          this._activePaneId = 0;
+        }
+        break;
+
+      // composition reply: binds us to a workspace and replaces panes wholesale.
+      case SessiondType.Composition: {
+        this._attached = msg.workspaceId ?? null;
+        this._panes = [...(msg.panes ?? [])];
+        this._activePaneId = this._panes[0]?.paneId ?? 0;
+        break;
+      }
+
+      case SessiondType.PaneAdded: {
+        if (this._attached === null) break;
+        const paneId = msg.paneId ?? 0;
+        // Idempotent: actor and broadcast both deliver this event.
+        if (this._panes.some((p) => p.paneId === paneId)) break;
+        this._panes.push({
+          paneId,
+          cols: msg.cols ?? 0,
+          rows: msg.rows ?? 0,
+          title: msg.title,
+          clientRef: msg.clientRef,
+        });
+        break;
+      }
+
+      case SessiondType.PaneClosed: {
+        // Ignore trailing pane-closed after we've detached (workspace-closed).
+        if (this._attached === null) break;
+        const paneId = msg.paneId ?? 0;
+        this._panes = this._panes.filter((p) => p.paneId !== paneId);
+        if (this._activePaneId === paneId) {
+          this._activePaneId = this._panes[0]?.paneId ?? 0;
+        }
+        break;
+      }
+
+      case SessiondType.WorkspaceCreated: {
+        // Idempotent: actor + broadcast echoes of the same event converge to one
+        // entry.  Mirror the PaneAdded guard style.
+        if (this._workspaces.some((w) => w.workspaceId === msg.workspaceId)) break;
+        this._workspaces = [
+          ...this._workspaces,
+          {
+            workspaceId: msg.workspaceId ?? '',
+            name: msg.name ? msg.name : undefined,
+            clientRef: msg.clientRef,
+            paneCount: 0,
+          },
+        ];
+        break;
+      }
+
+      default:
+        return; // unhandled type: no state change, no notify
+    }
+    this._settlePending();
+    this._notify();
+  }
+
+  // Fold the pending optimistic overlay over a fresh COPY of the authoritative
+  // base. The base is never mutated; this is recomputed on every read.
+  private _foldedView(): MutationDraft {
+    const draft: MutationDraft = {
+      workspaces: this._workspaces.map((w) => ({ ...w })),
+      panes: this._panes.map((p) => ({ ...p })),
+    };
+    for (const record of this._pending.values()) {
+      if (record.errored) continue;
+      record.optimistic(draft);
+    }
+    return draft;
+  }
+
+  // After the authoritative base updates, drop any pending mutation whose
+  // settled(base) predicate is now true so its overlay vanishes and the correct
+  // base shows through. Errored records are left for the user to retry/dismiss.
+  private _settlePending(): void {
+    const base: MutationBase = {
+      workspaces: this._workspaces,
+      panes: this._panes,
+    };
+    for (const record of this._pending.values()) {
+      if (record.errored) continue;
+      if (record.settled(base)) {
+        if (record.timer !== undefined) clearTimeout(record.timer);
+        this._pending.delete(record.id);
+      }
+    }
+  }
+
+  mutate(spec: MutationSpec): string {
+    const id = `m${++this._mutationSeq}`;
+    const record: PendingRecord = {
+      ...spec,
+      id,
+      errored: false,
+      timer: undefined,
+    };
+    record.timer = setTimeout(
+      () => this._onMutationTimeout(id),
+      spec.timeoutMs ?? DEFAULT_MUTATION_TIMEOUT_MS,
+    );
+    this._pending.set(id, record);
+    spec.commit?.();
+    this._notify();
+    return id;
+  }
+
+  dismiss(id: string): void {
+    const record = this._pending.get(id);
+    if (!record) return;
+    if (record.timer !== undefined) clearTimeout(record.timer);
+    this._pending.delete(id);
+    this._notify();
+  }
+
+  retry(id: string): void {
+    const record = this._pending.get(id);
+    if (!record) return;
+    record.errored = false;
+    if (record.timer !== undefined) clearTimeout(record.timer);
+    record.timer = setTimeout(
+      () => this._onMutationTimeout(id),
+      record.timeoutMs ?? DEFAULT_MUTATION_TIMEOUT_MS,
+    );
+    record.commit?.();
+    this._notify();
+  }
+
+  private _onMutationTimeout(id: string): void {
+    const record = this._pending.get(id);
+    if (!record || record.errored) return;
+    record.errored = true;
+    record.timer = undefined;
+    record.onTimeout?.();
+    this._notify();
+  }
+
   subscribe(cb: () => void): () => void {
     this._listeners.add(cb);
     return () => {
       this._listeners.delete(cb);
     };
-  }
-
-  applyMessage(msg: ServerMessage): void {
-    switch (msg.type) {
-      // full-sync: on-connect / reconnect — full replace.
-      // Terminal instances will be reset by app.ts before new content arrives.
-      case 'full-sync':
-        this._state = msg.data;
-        break;
-
-      // state: authoritative structure snapshot. The server pushes this on EVERY
-      // structural change (window add/close/rename, layout change, session/active
-      // change) — coalesced — and also every 5s as a safety net. We reconcile
-      // idempotently against it, so the browser always converges to tmux truth.
-      //
-      // This is the ONLY path that mutates structure. There are deliberately no
-      // incremental window-add/window-close/layout-change handlers: applying
-      // partial deltas in order, without duplication, is the exact fragility
-      // that caused blank tabs, duplicate tabs, and lost windows. Full snapshots
-      // make that whole bug class impossible.
-      case 'state':
-        if (this._state.sessions.length === 0) {
-          this._state = msg.data; // nothing to preserve yet
-        } else {
-          this._reconcileFromTmux(msg.data);
-        }
-        break;
-
-      case 'session-list':
-        this._sessionList = msg.data.sessions;
-        break;
-
-      case 'window-add': {
-        const session = this._state.sessions.find(
-          (s) => s.name === this._state.activeSession,
-        );
-        if (session) {
-          session.windows.push(msg.data);
-        }
-        break;
-      }
-
-      case 'window-renamed': {
-        for (const s of this._state.sessions) {
-          const win = s.windows.find((w) => w.id === msg.data.id);
-          if (win) {
-            win.name = msg.data.name;
-            break;
-          }
-        }
-        break;
-      }
-
-      case 'window-close': {
-        for (const s of this._state.sessions) {
-          const idx = s.windows.findIndex((w) => w.id === msg.data.id);
-          if (idx !== -1) {
-            s.windows.splice(idx, 1);
-            break;
-          }
-        }
-        break;
-      }
-
-      case 'layout-change': {
-        for (const s of this._state.sessions) {
-          const win = s.windows.find((w) => w.id === msg.data.windowId);
-          if (win) {
-            win.layout = msg.data.layout;
-            break;
-          }
-        }
-        break;
-      }
-
-      case 'session-window-changed':
-        this._state.activeWindow = msg.data.windowId;
-        break;
-
-      case 'detached':
-        break;
-
-      case 'error':
-        console.warn(msg.data.message);
-        return; // don't notify
-    }
-    this._notify();
-  }
-
-  // Reconcile browser state against a fresh tmux state snapshot without destroying
-  // existing wterm terminal instances. Since tmux is the source of truth:
-  //   — remove windows that no longer exist in tmux (fixes stale tabs)
-  //   — add windows that appeared since last sync
-  //   — update metadata (name, layout, panes) on existing windows
-  private _reconcileFromTmux(incoming: TmuxState): void {
-    this._state.activeSession = incoming.activeSession;
-    this._state.activeWindow = incoming.activeWindow;
-    this._state.activePane = incoming.activePane;
-
-    const incomingNames = new Set(incoming.sessions.map((s) => s.name));
-    this._state.sessions = this._state.sessions.filter((s) => incomingNames.has(s.name));
-
-    for (const inc of incoming.sessions) {
-      const existing = this._state.sessions.find((s) => s.name === inc.name);
-      if (!existing) {
-        this._state.sessions.push(inc);
-        continue;
-      }
-      const incomingIds = new Set(inc.windows.map((w) => w.id));
-      existing.windows = existing.windows.filter((w) => incomingIds.has(w.id));
-      for (const incWin of inc.windows) {
-        const existingWin = existing.windows.find((w) => w.id === incWin.id);
-        if (!existingWin) {
-          existing.windows.push(incWin);
-        } else {
-          existingWin.name = incWin.name;
-          existingWin.layout = incWin.layout;
-          existingWin.panes = incWin.panes;
-        }
-      }
-    }
   }
 
   private _notify(): void {

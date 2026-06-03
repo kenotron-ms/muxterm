@@ -299,6 +299,23 @@ export const terminalRegistry = {
   },
 
   /**
+   * Dispose every terminal in the registry.
+   * Called when switching the attached workspace: panes are keyed by
+   * workspace-local paneId, and paneIds are reused across workspaces, so the
+   * previous workspace's terminals must be torn down to avoid paneId
+   * collisions / cross-workspace scrollback bleed.
+   */
+  disposeAll(): void {
+    for (const [paneId, entry] of _map.entries()) {
+      entry.resizeObserver?.disconnect();
+      if (entry.resizeTimer !== undefined) clearTimeout(entry.resizeTimer);
+      entry.term.dispose();
+      _map.delete(paneId);
+    }
+    _preEnsureBuffer.clear();
+  },
+
+  /**
    * Return the Terminal instance for a pane, or null if not ensured.
    * Used by mux-pane for getVisibleContent() / getBufferLines() delegation.
    */

@@ -212,6 +212,77 @@ func TestSystemdUnitPath_UsesHomeDir(t *testing.T) {
 	}
 }
 
+func TestRenderSessiondSystemdUnit_ContainsSessiondCommand(t *testing.T) {
+	cfg := ServiceConfig{
+		BinaryPath: "/usr/local/bin/muxterm",
+		Addr:       "localhost:8080",
+		Secret:     "abc123",
+		SafePATH:   "/usr/bin:/usr/local/bin",
+	}
+	out, err := RenderSessiondSystemdUnit(cfg)
+	if err != nil {
+		t.Fatalf("RenderSessiondSystemdUnit() error: %v", err)
+	}
+	if !contains(out, "/usr/local/bin/muxterm sessiond") {
+		t.Errorf("output missing sessiond command, got:\n%s", out)
+	}
+	if !contains(out, "Restart=on-failure") {
+		t.Errorf("output missing Restart=on-failure, got:\n%s", out)
+	}
+	for _, section := range []string{"[Unit]", "[Service]", "[Install]"} {
+		if !contains(out, section) {
+			t.Errorf("output missing section %q", section)
+		}
+	}
+}
+
+func TestRenderSessiondSystemdUnit_ContainsPATH(t *testing.T) {
+	cfg := ServiceConfig{
+		BinaryPath: "/usr/local/bin/muxterm",
+		Addr:       "localhost:8080",
+		Secret:     "s",
+		SafePATH:   "/usr/bin:/usr/local/bin",
+	}
+	out, err := RenderSessiondSystemdUnit(cfg)
+	if err != nil {
+		t.Fatalf("RenderSessiondSystemdUnit() error: %v", err)
+	}
+	if !contains(out, "Environment=PATH=/usr/bin:/usr/local/bin") {
+		t.Errorf("output missing PATH environment, got:\n%s", out)
+	}
+}
+
+func TestRenderSystemdUnit_WebUnitDependsOnSessiond(t *testing.T) {
+	cfg := ServiceConfig{
+		BinaryPath: "/usr/local/bin/muxterm",
+		Addr:       "localhost:8080",
+		Secret:     "s",
+		SafePATH:   "/usr/bin",
+	}
+	out, err := RenderSystemdUnit(cfg)
+	if err != nil {
+		t.Fatalf("RenderSystemdUnit() error: %v", err)
+	}
+	if !contains(out, "Wants=muxterm-sessiond.service") {
+		t.Errorf("web unit missing Wants=muxterm-sessiond.service, got:\n%s", out)
+	}
+	if !contains(out, "After=muxterm-sessiond.service") {
+		t.Errorf("web unit missing After=muxterm-sessiond.service, got:\n%s", out)
+	}
+}
+
+func TestSessiondSystemdUnitPath_UsesHomeDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("cannot determine home dir: %v", err)
+	}
+	got := SessiondSystemdUnitPath()
+	want := home + "/.config/systemd/user/muxterm-sessiond.service"
+	if got != want {
+		t.Errorf("SessiondSystemdUnitPath() = %q, want %q", got, want)
+	}
+}
+
 func TestLaunchdPlistPath_UsesHomeDir(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

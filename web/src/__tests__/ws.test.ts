@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MuxStore } from '../state';
-import type { ServerMessage, ClientMessage } from '../types';
 import { MuxSocket, buildWsUrl } from '../ws';
 import type { PaneOutputCallback } from '../ws';
 
@@ -94,26 +93,6 @@ describe('MuxSocket', () => {
     expect(ws.binaryType).toBe('arraybuffer');
   });
 
-  it('routes text frames to store.applyMessage after normalization', () => {
-    const store = new MuxStore();
-    const spy = vi.spyOn(store, 'applyMessage');
-    const mux = new MuxSocket(store, 'ws://localhost:8080/ws');
-    mux.connect();
-
-    const ws = MockWebSocket.instances[0];
-    ws.simulateOpen();
-
-    // Server sends messages in key-value format (action key = first key)
-    // with Go PascalCase field names.
-    const rawMsg = { 'session-changed': { SessionID: '$1', Name: 'dev' } };
-    ws.simulateMessage(JSON.stringify(rawMsg));
-
-    // Store should receive the normalized ServerMessage
-    const expected: ServerMessage = { type: 'session-changed', data: { name: 'dev' } };
-    expect(spy).toHaveBeenCalledOnce();
-    expect(spy).toHaveBeenCalledWith(expected);
-  });
-
   it('routes binary frames to pane output callback', () => {
     const store = new MuxStore();
     const mux = new MuxSocket(store, 'ws://localhost:8080/ws');
@@ -161,23 +140,6 @@ describe('MuxSocket', () => {
     expect(view.getUint32(0, true)).toBe(7); // pane ID, little-endian
     const sentPayload = new Uint8Array(sentBuf, 4);
     expect(Array.from(sentPayload)).toEqual([104, 105]);
-  });
-
-  it('sends JSON text frames for control messages in server key-value format', () => {
-    const store = new MuxStore();
-    const mux = new MuxSocket(store, 'ws://localhost:8080/ws');
-    mux.connect();
-
-    const ws = MockWebSocket.instances[0];
-    ws.simulateOpen();
-
-    // sendControl encodes to server's action-key format with tmux ID prefixes
-    const msg: ClientMessage = { type: 'select-window', windowId: 3 };
-    mux.sendControl(msg);
-
-    expect(ws.sent).toHaveLength(1);
-    // Server expects {"select-window": "@3"} (window ID prefixed with "@")
-    expect(ws.sent[0]).toBe(JSON.stringify({ 'select-window': '@3' }));
   });
 
   describe('onDisconnect / onReconnect callbacks', () => {

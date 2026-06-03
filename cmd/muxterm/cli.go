@@ -9,7 +9,7 @@ import (
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode   string // local, serve, deploy, version
+	Mode   string // local, serve, sessiond, deploy, install, uninstall, version
 	Addr   string // listen address
 	Secret string // auth token for serve mode
 	Target string // SSH target for deploy mode
@@ -28,6 +28,8 @@ func ParseArgs(args []string) (Config, error) {
 	switch args[0] {
 	case "serve":
 		return parseServe(args[1:])
+	case "sessiond":
+		return Config{Mode: "sessiond"}, nil
 	case "deploy":
 		return parseDeploy(args[1:])
 	case "version":

@@ -9,10 +9,27 @@ import (
 var systemdTemplate = template.Must(template.New("systemd").Parse(`[Unit]
 Description=muxterm
 After=network.target
+After=muxterm-sessiond.service
+Wants=muxterm-sessiond.service
 
 [Service]
 Type=simple
 ExecStart={{.BinaryPath}} serve --addr {{.Addr}} --secret {{.Secret}}
+Restart=on-failure
+RestartSec=5s
+Environment=PATH={{.SafePATH}}
+
+[Install]
+WantedBy=default.target
+`))
+
+var sessiondSystemdTemplate = template.Must(template.New("sessiond-systemd").Parse(`[Unit]
+Description=muxterm sessiond (session persistence daemon)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={{.BinaryPath}} sessiond
 Restart=on-failure
 RestartSec=5s
 Environment=PATH={{.SafePATH}}
@@ -64,6 +81,14 @@ func RenderLaunchdPlist(cfg ServiceConfig) (string, error) {
 func RenderSystemdUnit(cfg ServiceConfig) (string, error) {
 	var buf bytes.Buffer
 	if err := systemdTemplate.Execute(&buf, cfg); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+func RenderSessiondSystemdUnit(cfg ServiceConfig) (string, error) {
+	var buf bytes.Buffer
+	if err := sessiondSystemdTemplate.Execute(&buf, cfg); err != nil {
 		return "", err
 	}
 	return buf.String(), nil

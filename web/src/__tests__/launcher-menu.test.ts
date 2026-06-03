@@ -23,11 +23,16 @@ describe('MuxLauncherMenu', () => {
     expect(ctor).toBeDefined();
   });
 
-  it('renders exactly 3 items (new-session, settings, reconnect) — no stubs', async () => {
+  it('renders exactly the 4 app-level items in order (settings, shortcuts, reconnect, about)', async () => {
     el = await fixture();
     const buttons = el.shadowRoot!.querySelectorAll('button[data-action]');
     const actions = Array.from(buttons).map((b) => b.getAttribute('data-action'));
-    expect(actions).toEqual(['new-session', 'settings', 'reconnect']);
+    expect(actions).toEqual(['settings', 'shortcuts', 'reconnect', 'about']);
+  });
+
+  it('no longer renders a new-session button', async () => {
+    el = await fixture();
+    expect(el.shadowRoot!.querySelector('button[data-action="new-session"]')).toBeNull();
   });
 
   it('dispatches launcher-action event with the clicked action in detail', async () => {
@@ -36,21 +41,19 @@ describe('MuxLauncherMenu', () => {
     el.addEventListener('launcher-action', handler as EventListener);
 
     const btn = el.shadowRoot!.querySelector(
-      'button[data-action="new-session"]',
+      'button[data-action="settings"]',
     ) as HTMLButtonElement;
     expect(btn).toBeTruthy();
     btn.click();
 
     expect(handler).toHaveBeenCalledTimes(1);
     const event = handler.mock.calls[0][0] as CustomEvent<{ action: LauncherAction }>;
-    expect(event.detail.action).toBe('new-session');
+    expect(event.detail.action).toBe('settings');
   });
 
-  it('does not render removed stub items (new-browser, open-driver, shortcuts, about)', async () => {
+  it('does not render removed stub items (new-browser, open-driver)', async () => {
     el = await fixture();
     expect(el.shadowRoot!.querySelector('button[data-action="new-browser"]')).toBeNull();
     expect(el.shadowRoot!.querySelector('button[data-action="open-driver"]')).toBeNull();
-    expect(el.shadowRoot!.querySelector('button[data-action="shortcuts"]')).toBeNull();
-    expect(el.shadowRoot!.querySelector('button[data-action="about"]')).toBeNull();
   });
 });

@@ -27,7 +27,7 @@ func Install(cfg ServiceConfig) error {
 	cmd := &execCommander{}
 	switch DetectPlatform() {
 	case "linux":
-		return installLinux(cfg, SystemdUnitPath(), cmd)
+		return installLinux(cfg, SystemdUnitPath(), SessiondSystemdUnitPath(), cmd)
 	case "darwin":
 		return installDarwin(cfg, LaunchdPlistPath(), cmd)
 	case "windows":
@@ -37,19 +37,37 @@ func Install(cfg ServiceConfig) error {
 	}
 }
 
-func installLinux(cfg ServiceConfig, unitPath string, cmd Commander) error {
-	content, err := RenderSystemdUnit(cfg)
+func installLinux(cfg ServiceConfig, webUnitPath, sessiondUnitPath string, cmd Commander) error {
+	// Render and write the sessiond unit FIRST so it is in place before the web unit,
+	// which Wants/After it.
+	sessiondContent, err := RenderSessiondSystemdUnit(cfg)
+	if err != nil {
+		return fmt.Errorf("render sessiond systemd unit: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(sessiondUnitPath), 0755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+	if err := os.WriteFile(sessiondUnitPath, []byte(sessiondContent), 0644); err != nil {
+		return fmt.Errorf("write sessiond unit file: %w", err)
+	}
+
+	webContent, err := RenderSystemdUnit(cfg)
 	if err != nil {
 		return fmt.Errorf("render systemd unit: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(unitPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(webUnitPath), 0755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
-	if err := os.WriteFile(unitPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(webUnitPath, []byte(webContent), 0644); err != nil {
 		return fmt.Errorf("write unit file: %w", err)
 	}
+
 	if _, err := cmd.Run("systemctl", "--user", "daemon-reload"); err != nil {
 		return fmt.Errorf("systemctl daemon-reload: %w", err)
+	}
+	// Enable sessiond before the web unit so it is up first.
+	if _, err := cmd.Run("systemctl", "--user", "enable", "--now", "muxterm-sessiond.service"); err != nil {
+		return fmt.Errorf("systemctl enable sessiond: %w", err)
 	}
 	if _, err := cmd.Run("systemctl", "--user", "enable", "--now", "muxterm.service"); err != nil {
 		return fmt.Errorf("systemctl enable: %w", err)

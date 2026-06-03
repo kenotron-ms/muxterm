@@ -1,225 +1,8 @@
-import type { ClientMessage, ServerMessage, TmuxState, Window, Pane, Session } from './types';
+import { SessiondType, encodePaneFrame, decodePaneFrame, type SessiondMessage } from './types';
 import type { MuxStore } from './state';
 
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
 export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
-
-// ---------------------------------------------------------------------------
-// Server-side JSON shapes (Go struct field names, string tmux IDs)
-// ---------------------------------------------------------------------------
-
-interface ServerPane {
-  id: string;       // "%76"
-  width: number;
-  height: number;
-  active: boolean;
-}
-
-interface ServerWindow {
-  id: string;       // "@69"
-  name: string;
-  layout: string;
-  active: boolean;
-  panes: ServerPane[];
-}
-
-interface ServerSession {
-  id: string;       // "$69"
-  name: string;
-  windows: ServerWindow[];
-}
-
-interface ServerTmuxState {
-  sessions: ServerSession[];
-  activeSessionId: string;   // "$69"
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Parse a tmux prefixed ID string to a plain number.
- * "@69" → 69, "%76" → 76, "$3" → 3.
- */
-function parseTmuxId(id: string): number {
-  if (!id || id.length < 2) return 0;
-  const n = parseInt(id.slice(1), 10);
-  return Number.isNaN(n) ? 0 : n;
-}
-
-function normalizePane(p: ServerPane): Pane {
-  return { id: parseTmuxId(p.id), width: p.width, height: p.height, active: p.active };
-}
-
-function normalizeWindow(w: ServerWindow): Window {
-  return {
-    id: parseTmuxId(w.id),
-    name: w.name,
-    layout: w.layout,
-    panes: (w.panes ?? []).map(normalizePane),
-  };
-}
-
-function normalizeSession(s: ServerSession): Session {
-  return { name: s.name, windows: (s.windows ?? []).map(normalizeWindow) };
-}
-
-/**
- * Convert the server's key-value message envelope  {"msgType": payload}
- * into the frontend's tagged-union format  { type, data }.
- *
- * The server encodes messages as { [eventType]: payload } where payload is
- * the raw Go-struct JSON (PascalCase fields, string tmux IDs).  The frontend
- * store.applyMessage() expects { type: string; data: ... } with camelCase
- * numeric IDs.  This function bridges the gap.
- */
-export function normalizeMessage(raw: Record<string, unknown>): ServerMessage | null {
-  const keys = Object.keys(raw);
-  if (keys.length === 0) return null;
-  const type = keys[0];
-  const payload = raw[type];
-
-  switch (type) {
-    // "full-sync" arrives on initial connect / reconnect — full replace + terminal reset.
-    // "state"     arrives on periodic 5-second push   — structural reconciliation only.
-    case 'full-sync':
-    case 'state': {
-      const s = payload as ServerTmuxState;
-      if (!s || !Array.isArray(s.sessions)) return null;
-
-      const activeSessionObj = s.sessions.find((sess) => sess.id === s.activeSessionId);
-      const activeSessionName = activeSessionObj?.name ?? '';
-      const activeWindowObj = activeSessionObj?.windows?.find((w) => w.active);
-      const activeWindow = activeWindowObj ? parseTmuxId(activeWindowObj.id) : 0;
-      const activePaneObj =
-        activeWindowObj?.panes?.find((p) => p.active) ?? activeWindowObj?.panes?.[0];
-      const activePane = activePaneObj ? parseTmuxId(activePaneObj.id) : 0;
-
-      const data: TmuxState = {
-        sessions: s.sessions.map(normalizeSession),
-        activeSession: activeSessionName,
-        activeWindow,
-        activePane,
-      };
-      // Preserve the original type so state.ts can distinguish full-sync from periodic state.
-      return { type: type as 'full-sync' | 'state', data };
-    }
-
-    case 'session-changed': {
-      // Go: SessionChangedEvent { SessionID, Name }
-      const e = payload as { Name?: string };
-      return { type: 'session-changed', data: { name: e?.Name ?? '' } };
-    }
-
-    case 'window-add': {
-      // Go: WindowAddEvent { WindowID }
-      const e = payload as { WindowID?: string };
-      return {
-        type: 'window-add',
-        data: { id: parseTmuxId(e?.WindowID ?? ''), name: '', panes: [], layout: '' },
-      };
-    }
-
-    case 'window-renamed': {
-      // Go: WindowRenamedEvent { WindowID, Name }
-      const e = payload as { WindowID?: string; Name?: string };
-      return {
-        type: 'window-renamed',
-        data: { id: parseTmuxId(e?.WindowID ?? ''), name: e?.Name ?? '' },
-      };
-    }
-
-    case 'window-close': {
-      // Go: WindowCloseEvent { WindowID }
-      const e = payload as { WindowID?: string };
-      return { type: 'window-close', data: { id: parseTmuxId(e?.WindowID ?? '') } };
-    }
-
-    case 'layout-change': {
-      // Go: LayoutChangeEvent { WindowID, Layout, VisibleLayout, Flags }
-      const e = payload as { WindowID?: string; Layout?: string };
-      return {
-        type: 'layout-change',
-        data: { windowId: parseTmuxId(e?.WindowID ?? ''), layout: e?.Layout ?? '' },
-      };
-    }
-
-    case 'session-window-changed': {
-      // Go: SessionWindowChangedEvent { SessionID, WindowID }
-      const e = payload as { WindowID?: string };
-      return {
-        type: 'session-window-changed',
-        data: { windowId: parseTmuxId(e?.WindowID ?? '') },
-      };
-    }
-
-    case 'pane-mode': {
-      // Go: PaneModeChangedEvent { PaneID }
-      const e = payload as { PaneID?: string };
-      return {
-        type: 'pane-mode',
-        data: { paneId: parseTmuxId(e?.PaneID ?? ''), mode: '' },
-      };
-    }
-
-    case 'session-list': {
-      const e = payload as { sessions?: { name: string; windows: number }[] };
-      return { type: 'session-list', data: { sessions: e?.sessions ?? [] } };
-    }
-
-    case 'detached': {
-      const e = payload as { reason?: string } | null | undefined;
-      return { type: 'detached', data: { reason: (e as { reason?: string })?.reason ?? 'disconnected' } };
-    }
-
-    default:
-      return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Client → Server encoding
-// ---------------------------------------------------------------------------
-
-/**
- * Convert from the frontend's {type, ...fields} ClientMessage format into the
- * server's {actionKey: payload} format that dispatchAction expects.
- *
- * Window IDs are prefixed "@", pane IDs are prefixed "%" to match the tmux
- * ID format that the Go server passes directly to tmux commands.
- */
-export function encodeClientMessage(msg: ClientMessage): Record<string, unknown> {
-  switch (msg.type) {
-    case 'select-window':
-      return { 'select-window': `@${msg.windowId}` };
-    case 'select-pane':
-      return { 'select-pane': `%${msg.paneId}` };
-    case 'split':
-      return { split: { direction: msg.direction, pane: `%${msg.paneId}` } };
-    case 'resize-pane':
-      return { 'resize-pane': { id: `%${msg.paneId}`, dir: msg.dir, amount: msg.amount } };
-    case 'new-window':
-      return { 'new-window': '' };
-    case 'close-pane':
-      return { 'close-pane': `%${msg.paneId}` };
-    case 'close-window':
-      return { 'close-window': `@${msg.windowId}` };
-    case 'rename-window':
-      return { 'rename-window': { id: `@${msg.windowId}`, name: msg.name } };
-    case 'create-session':
-      return { 'create-session': { name: msg.name } };
-    case 'attach-session':
-      return { 'attach-session': msg.name };
-    case 'resize-surface':
-      return { 'resize-surface': { surfaceId: msg.surfaceId, cols: msg.cols, rows: msg.rows } };
-    case 'request-sync':
-      return { 'request-sync': {} };
-    default:
-      // Fallthrough: pass as-is (forward compatibility)
-      return msg as unknown as Record<string, unknown>;
-  }
-}
 
 const BACKOFF_BASE = 1000;
 const BACKOFF_CAP = 30000;
@@ -237,6 +20,7 @@ export class MuxSocket {
 
   onDisconnect: (() => void) | null = null;
   onReconnect: (() => void) | null = null;
+  onSessiondMessage: ((msg: SessiondMessage) => void) | null = null;
 
   constructor(store: MuxStore, url: string) {
     this._store = store;
@@ -271,18 +55,72 @@ export class MuxSocket {
 
   sendPaneInput(paneId: number, data: Uint8Array): void {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      const buf = new ArrayBuffer(4 + data.length);
-      const view = new DataView(buf);
-      view.setUint32(0, paneId, true); // little-endian
-      new Uint8Array(buf, 4).set(data);
-      this._ws.send(buf);
+      this._ws.send(encodePaneFrame(paneId, data));
     }
   }
 
-  sendControl(msg: ClientMessage): void {
+  // --- sessiond v1 control senders -----------------------------------------
+  // All senders emit the FLAT SessiondMessage envelope (no single-key
+  // wrapping) and consume the frozen SessiondType vocabulary, never raw
+  // strings.
+
+  /** Send one flat sessiond control message if the socket is open. */
+  private sendSessiond(msg: SessiondMessage): void {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      this._ws.send(JSON.stringify(encodeClientMessage(msg)));
+      this._ws.send(JSON.stringify(msg));
     }
+  }
+
+  /** Attach this connection to a workspace. */
+  attach(workspaceId: string): void {
+    this.sendSessiond({ type: SessiondType.Attach, workspaceId });
+  }
+
+  /** Request the list of workspaces. */
+  listWorkspaces(): void {
+    this.sendSessiond({ type: SessiondType.ListWorkspaces });
+  }
+
+  /**
+   * Create a new workspace; name and clientRef are each included only when
+   * truthy.
+   */
+  createWorkspace(name?: string, clientRef?: string): void {
+    const msg: SessiondMessage = { type: SessiondType.CreateWorkspace };
+    if (name) msg.name = name;
+    if (clientRef) msg.clientRef = clientRef;
+    this.sendSessiond(msg);
+  }
+
+  /** Rename an existing workspace. */
+  renameWorkspace(workspaceId: string, name: string): void {
+    this.sendSessiond({ type: SessiondType.RenameWorkspace, workspaceId, name });
+  }
+
+  /** Close a workspace. */
+  closeWorkspace(workspaceId: string): void {
+    this.sendSessiond({ type: SessiondType.CloseWorkspace, workspaceId });
+  }
+
+  /**
+   * Create a connection-scoped pane (NO workspaceId). cmd is included only
+   * when it carries at least one argument. clientRef is included only when
+   * truthy.
+   */
+  createPane(cmd?: string[], clientRef?: string): void {
+    const msg: SessiondMessage = { type: SessiondType.CreatePane };
+    if (cmd && cmd.length > 0) msg.cmd = cmd;
+    if (clientRef) msg.clientRef = clientRef;
+    this.sendSessiond(msg);
+  }
+
+  /**
+   * Report a pane's measured rendered grid (active-view-wins by construction:
+   * only visible panes own a live ResizeObserver, so tabbed-away panes never
+   * call resize).
+   */
+  resize(paneId: number, cols: number, rows: number): void {
+    this.sendSessiond({ type: SessiondType.Resize, paneId, cols, rows });
   }
 
   destroy(): void {
@@ -319,11 +157,10 @@ export class MuxSocket {
     };
 
     ws.onmessage = (ev: MessageEvent) => {
+      // Binary pane-data frame: [4-byte LE paneId][raw bytes].
       if (ev.data instanceof ArrayBuffer) {
         if (ev.data.byteLength >= 4) {
-          const view = new DataView(ev.data);
-          const paneId = view.getUint32(0, true); // little-endian
-          const data = new Uint8Array(ev.data, 4);
+          const { paneId, data } = decodePaneFrame(ev.data);
           this._paneOutputCb?.(paneId, data);
         }
         return;
@@ -331,12 +168,14 @@ export class MuxSocket {
       // Text frame — JSON control message
       if (typeof ev.data === 'string') {
         const raw = JSON.parse(ev.data) as Record<string, unknown>;
-        // Pass the raw message to control handlers (e.g. for detached/session-picker)
+        // Pass the raw message to control handlers (e.g. for detached/session-picker).
+        // Non-typed envelopes (e.g. serve config) still flow through here.
         this._controlMessageCb?.(raw);
-        // Normalize from server key-value format to frontend typed message format
-        const msg = normalizeMessage(raw);
-        if (msg) {
-          this._store.applyMessage(msg);
+        // Flat sessiond messages carry a top-level "type" string; route them to
+        // the sessiond hook. (Legacy single-key envelopes have no "type" field,
+        // so the two paths never collide.)
+        if (typeof raw.type === 'string') {
+          this.onSessiondMessage?.(raw as unknown as SessiondMessage);
         }
       }
     };
