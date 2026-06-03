@@ -163,6 +163,11 @@ export class MuxApp extends LitElement {
   @state()
   _reconnectMessage = 'Reconnecting...';
 
+  @state()
+  private _creatingWorkspace = false;
+
+  private _pendingCreateRef: string | null = null;
+
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
   private _controller: WorkspaceController | null = null;
@@ -219,6 +224,15 @@ export class MuxApp extends LitElement {
       // getter means an already-overlaid optimistic pane suppresses a double-spawn.
       if (msg.type === SessiondType.Composition && store.panes.length === 0) {
         this._createPaneOptimistic();
+      }
+      // Auto-switch when the workspace we just created is confirmed by the daemon.
+      if (
+        msg.type === SessiondType.WorkspaceCreated &&
+        msg.clientRef === this._pendingCreateRef
+      ) {
+        this._pendingCreateRef = null;
+        this._creatingWorkspace = false;
+        this._socket?.attach(msg.workspaceId!);
       }
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
@@ -343,9 +357,9 @@ export class MuxApp extends LitElement {
             .workspaces="${store.workspaces}"
             .currentWorkspaceId="${store.attached ?? ''}"
             .erroredMutations="${store.erroredMutations}"
-            .createPending="${store.hasPendingKind('create')}"
+            .createPending="${this._creatingWorkspace}"
             @workspace-selected="${this._onWorkspaceSelected}"
-            @workspace-create="${this._createWorkspaceOptimistic}"
+            @workspace-create="${this._createWorkspace}"
             @workspace-rename="${this._onWorkspaceRename}"
             @workspace-close="${this._onWorkspaceClose}"
             @workspace-retry="${(e: CustomEvent<{ mutationId: string }>) =>
@@ -371,24 +385,16 @@ export class MuxApp extends LitElement {
   };
 
   /**
-   * Create a workspace optimistically: a provisional row appears instantly,
-   * keyed by a minted clientRef used as its temporary workspaceId so the row
-   * has byte-identical layout to a real entry. The daemon echoes the ref on the
-   * authoritative workspace-list, which settles the pending mutation by exact
-   * identity (clientRef match) rather than fragile counting.
+   * Create a workspace: disables the button immediately via a local flag, sends
+   * the create request to the daemon, and auto-switches when the confirmed
+   * WorkspaceCreated reply arrives with the matching clientRef. No provisional
+   * row is inserted — the flag is the only local state change.
    */
-  private _createWorkspaceOptimistic = (): void => {
+  private _createWorkspace = (): void => {
     const ref = mintClientRef();
-    store.mutate({
-      workspaceId: ref,
-      kind: 'create',
-      optimistic: (draft) =>
-        draft.workspaces.push({ workspaceId: ref, paneCount: 0, clientRef: ref }),
-      settled: (base) => base.workspaces.some((w) => w.clientRef === ref),
-      onTimeout: () => {
-        /* no-op; Phase-2 marks errored row, must never silently vanish */
-      },
-    });
+    this._pendingCreateRef = ref;
+    this._creatingWorkspace = true;
+    this.requestUpdate(); // trigger re-render so button disables immediately
     this._socket?.createWorkspace(undefined, ref);
   };
 

@@ -40,7 +40,7 @@ async function fixture(): Promise<MuxApp> {
   return el;
 }
 
-describe('MuxApp optimistic workspace create', () => {
+describe('MuxApp workspace create (loading-state)', () => {
   let el: MuxApp;
 
   afterEach(() => {
@@ -54,51 +54,44 @@ describe('MuxApp optimistic workspace create', () => {
     el = null as unknown as MuxApp;
   });
 
-  it('shows provisional workspace instantly and sends create with a clientRef', async () => {
+  it('fires createWorkspace, sets createPending flag (no provisional row), and auto-attaches on WorkspaceCreated', async () => {
     el = await fixture();
-    const socket = (el as unknown as { _socket: { createWorkspace: unknown } })._socket;
-    const sendSpy = vi.spyOn(socket as { createWorkspace: (...a: unknown[]) => void }, 'createWorkspace');
+    const socket = (el as unknown as {
+      _socket: {
+        createWorkspace: (...a: unknown[]) => void;
+        attach: (workspaceId: string) => void;
+        onSessiondMessage: ((msg: unknown) => void) | null;
+      };
+    })._socket;
 
-    (el as unknown as { _createWorkspaceOptimistic: () => void })._createWorkspaceOptimistic();
+    const createSpy = vi.spyOn(socket, 'createWorkspace');
+    const attachSpy = vi.spyOn(socket, 'attach');
 
-    // Provisional row overlaid instantly.
-    expect(store.workspaces.length).toBe(1);
+    // Trigger workspace create via the new loading-state method.
+    (el as unknown as { _createWorkspace: () => void })._createWorkspace();
 
-    // Create sent with a non-empty clientRef as the second argument.
-    expect(sendSpy).toHaveBeenCalledTimes(1);
-    const ref = sendSpy.mock.calls[0][1] as string;
+    // Socket send should have fired with a non-empty clientRef as the second arg.
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const ref = createSpy.mock.calls[0][1] as string;
     expect(typeof ref).toBe('string');
     expect(ref.length).toBeGreaterThan(0);
 
-    // Authoritative list echoes that exact clientRef → settles to the real row.
-    store.applySessiond({
-      type: SessiondType.WorkspaceList,
-      workspaces: [{ workspaceId: 'w7', paneCount: 0, clientRef: ref }],
+    // No provisional row — only a loading flag.
+    expect(store.workspaces.length).toBe(0);
+    expect((el as unknown as { _creatingWorkspace: boolean })._creatingWorkspace).toBe(true);
+
+    // Daemon echoes WorkspaceCreated with the matching clientRef.
+    socket.onSessiondMessage?.({
+      type: SessiondType.WorkspaceCreated,
+      workspaceId: 'w-new',
+      clientRef: ref,
     });
 
-    expect(store.workspaces.length).toBe(1);
-    expect(store.workspaces[0].workspaceId).toBe('w7');
-  });
+    // auto-switch: attach() called with the real workspaceId.
+    expect(attachSpy).toHaveBeenCalledWith('w-new');
 
-  it('does NOT settle when echo carries a different clientRef', async () => {
-    el = await fixture();
-    const socket = (el as unknown as { _socket: { createWorkspace: unknown } })._socket;
-    const sendSpy = vi.spyOn(socket as { createWorkspace: (...a: unknown[]) => void }, 'createWorkspace');
-
-    (el as unknown as { _createWorkspaceOptimistic: () => void })._createWorkspaceOptimistic();
-    expect(store.workspaces.length).toBe(1);
-    const ref = sendSpy.mock.calls[0][1] as string;
-
-    // Another tab's create echoes with a DIFFERENT clientRef.
-    store.applySessiond({
-      type: SessiondType.WorkspaceList,
-      workspaces: [{ workspaceId: 'w9', paneCount: 0, clientRef: 'someone-elses-ref' }],
-    });
-
-    // Our provisional row is still pending (its ref was not echoed), so it
-    // overlays on top of the other tab's authoritative row: two rows, unsettled.
-    expect(ref).not.toBe('someone-elses-ref');
-    expect(store.workspaces.length).toBe(2);
+    // Loading flag clears.
+    expect((el as unknown as { _creatingWorkspace: boolean })._creatingWorkspace).toBe(false);
   });
 });
 
