@@ -1,6 +1,9 @@
 package sessiond
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestBroadcastAllExistsAndIsSafeWithNoSubs(t *testing.T) {
 	srv, err := NewServer(t.TempDir() + "/sessiond.sock")
@@ -76,5 +79,52 @@ func TestBroadcastAllReachesUnattachedConnections(t *testing.T) {
 	evtB := readControlUntil(t, b, TypeWorkspaceList)
 	if len(evtB.Workspaces) != 2 {
 		t.Fatalf("B broadcast workspace count = %d, want 2", len(evtB.Workspaces))
+	}
+}
+
+// TestRenameWorkspaceBroadcastsListToCrossWorkspaceClient verifies that
+// renaming a workspace triggers a broadcastAll(workspace-list) so clients
+// attached to OTHER workspaces also receive the updated list immediately.
+func TestRenameWorkspaceBroadcastsListToCrossWorkspaceClient(t *testing.T) {
+	_, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	// Client A: create ws1 and attach to it.
+	a := newTClient(t, socketPath)
+	a.send(&Message{Type: TypeCreateWorkspace, CID: 1, Name: "ws1"})
+	ws1ID := a.waitCtrl(TypeWorkspaceCreated).WorkspaceID
+	a.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: ws1ID})
+	a.waitCtrl(TypeComposition)
+
+	// Client B: create ws2 and attach to it (a different workspace than A).
+	b := newTClient(t, socketPath)
+	b.send(&Message{Type: TypeCreateWorkspace, CID: 3, Name: "ws2"})
+	ws2ID := b.waitCtrl(TypeWorkspaceCreated).WorkspaceID
+	b.send(&Message{Type: TypeAttach, CID: 4, WorkspaceID: ws2ID})
+	b.waitCtrl(TypeComposition)
+
+	// A renames ws1; this must trigger broadcastAll(workspace-list).
+	a.send(&Message{Type: TypeRenameWorkspace, CID: 5, WorkspaceID: ws1ID, Name: "ws1-renamed"})
+
+	// B must receive a TypeWorkspaceList where the ws1 entry has Name=="ws1-renamed".
+	// Drain any earlier (non-matching) TypeWorkspaceList messages with a deadline.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case msg, ok := <-b.ctrl:
+			if !ok {
+				t.Fatal("connection closed while waiting for workspace-list with renamed ws1")
+			}
+			if msg.Type != TypeWorkspaceList {
+				continue
+			}
+			for _, ws := range msg.Workspaces {
+				if ws.WorkspaceID == ws1ID && ws.Name == "ws1-renamed" {
+					return // success: B sees the renamed workspace
+				}
+			}
+		case <-deadline:
+			t.Fatal("timeout: B did not receive workspace-list with ws1 renamed to \"ws1-renamed\"")
+		}
 	}
 }
