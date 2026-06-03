@@ -94,8 +94,11 @@ The dockview instance lives for the full element lifetime. Workspace switches re
 this._dv = new DockviewComponent({
     parentElement: this,
     createComponent: (opts) => new TerminalRenderer(opts.id),
+    createGroupControlComponent: () => null,  // no hamburger menu, no maximize button
 });
 ```
+
+The `createGroupControlComponent: () => null` option removes the default right-side group controls (the three-line menu and maximize button), leaving clean tab-only headers matching VS Code's aesthetic.
 
 **Internal state:**
 
