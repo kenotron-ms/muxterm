@@ -5,8 +5,9 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  bin     = "./bin/muxterm"
-  cmd     = "go build -o ./bin/muxterm ./cmd/muxterm"
+  bin      = "./bin/muxterm"
+  args_bin = ["serve", "--addr", "127.0.0.1:9090"]
+  cmd      = "go build -o ./bin/muxterm ./cmd/muxterm"
   delay   = 300          # ms to wait after a change before rebuilding
   stop_on_error = false
 
