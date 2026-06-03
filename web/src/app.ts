@@ -232,7 +232,9 @@ export class MuxApp extends LitElement {
       ) {
         this._pendingCreateRef = null;
         this._creatingWorkspace = false;
-        this._socket?.attach(msg.workspaceId!);
+        // WorkspaceController.onMessage already calls socket.attach() for every
+        // WorkspaceCreated — don't duplicate it or we get two Composition replies
+        // and double _createPaneOptimistic() calls.
       }
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
