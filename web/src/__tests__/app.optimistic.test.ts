@@ -93,6 +93,39 @@ describe('MuxApp workspace create (loading-state)', () => {
     // Loading flag clears.
     expect((el as unknown as { _creatingWorkspace: boolean })._creatingWorkspace).toBe(false);
   });
+
+  it('resets _creatingWorkspace and _pendingCreateRef when the socket disconnects', async () => {
+    el = await fixture();
+    const socket = (el as unknown as {
+      _socket: { onDisconnect: (() => void) | null };
+    })._socket;
+
+    // Simulate a workspace create in-flight.
+    (el as unknown as { _creatingWorkspace: boolean })._creatingWorkspace = true;
+    (el as unknown as { _pendingCreateRef: string | null })._pendingCreateRef = 'x';
+
+    // Fire the disconnect callback (WebSocket drops while create is pending).
+    socket.onDisconnect?.();
+
+    // Both must be cleared so the "New workspace" button re-enables.
+    expect((el as unknown as { _creatingWorkspace: boolean })._creatingWorkspace).toBe(false);
+    expect((el as unknown as { _pendingCreateRef: string | null })._pendingCreateRef).toBeNull();
+  });
+
+  it('does not send a second createWorkspace when called twice in quick succession', async () => {
+    el = await fixture();
+    const socket = (el as unknown as {
+      _socket: { createWorkspace: (...a: unknown[]) => void };
+    })._socket;
+    const createSpy = vi.spyOn(socket, 'createWorkspace');
+
+    // Double-click: two calls in the same synchronous tick.
+    (el as unknown as { _createWorkspace: () => void })._createWorkspace();
+    (el as unknown as { _createWorkspace: () => void })._createWorkspace();
+
+    // Only one socket send should have been dispatched.
+    expect(createSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('MuxApp optimistic pane create', () => {

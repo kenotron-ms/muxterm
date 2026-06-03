@@ -247,6 +247,8 @@ export class MuxApp extends LitElement {
     this._socket.onDisconnect = () => {
       this._showReconnectOverlay = true;
       this._reconnectMessage = 'Connection lost. Reconnecting...';
+      this._creatingWorkspace = false;
+      this._pendingCreateRef = null;
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
@@ -391,10 +393,10 @@ export class MuxApp extends LitElement {
    * row is inserted — the flag is the only local state change.
    */
   private _createWorkspace = (): void => {
+    if (this._creatingWorkspace) return;
     const ref = mintClientRef();
     this._pendingCreateRef = ref;
     this._creatingWorkspace = true;
-    this.requestUpdate(); // trigger re-render so button disables immediately
     this._socket?.createWorkspace(undefined, ref);
   };
 
