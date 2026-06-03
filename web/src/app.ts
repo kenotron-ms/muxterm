@@ -230,16 +230,27 @@ export class MuxApp extends LitElement {
       if (msg.type === SessiondType.Composition && store.panes.length === 0) {
         this._createPaneOptimistic();
       }
-      // Auto-switch when the workspace we just created is confirmed by the daemon.
-      if (
-        msg.type === SessiondType.WorkspaceCreated &&
-        msg.clientRef === this._pendingCreateRef
-      ) {
-        this._pendingCreateRef = null;
-        this._creatingWorkspace = false;
-        // WorkspaceController.onMessage already calls socket.attach() for every
-        // WorkspaceCreated — don't duplicate it or we get two Composition replies
-        // and double _createPaneOptimistic() calls.
+      // Clear the creating-workspace loading state once the server confirms the
+      // workspace exists. Two paths because workspace-created echoes the clientRef
+      // only when the Go struct serialises it (omitempty drops empty strings), so
+      // the fast path may be silently skipped on some server builds.
+      //
+      // Fast path: workspace-created reply with matching clientRef.
+      // Fallback:  workspace-list is always broadcast after every mutation; if it
+      //            contains a workspace carrying our clientRef the create succeeded.
+      const ourRef = this._pendingCreateRef;
+      if (ourRef) {
+        const confirmedByCreated =
+          msg.type === SessiondType.WorkspaceCreated && msg.clientRef === ourRef;
+        const confirmedByList =
+          msg.type === SessiondType.WorkspaceList &&
+          (msg.workspaces ?? []).some((w) => w.clientRef === ourRef);
+        if (confirmedByCreated || confirmedByList) {
+          this._pendingCreateRef = null;
+          this._creatingWorkspace = false;
+          // WorkspaceController.onMessage calls socket.attach() on WorkspaceCreated.
+          // Don't duplicate it here.
+        }
       }
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
