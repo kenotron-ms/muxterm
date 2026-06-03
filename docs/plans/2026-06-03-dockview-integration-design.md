@@ -113,10 +113,10 @@ Implements dockview's `IContentRenderer`. A plain class — not a Lit element �
 **`element`** — a bare `div`. dockview owns it as the panel's DOM container. xterm.js renders its canvas directly into this div. No shadow root.
 
 **`init(params)`:**
-- `params.api.id` gives the pane ID string → parse to number
+- `params.api.id` gives the pane ID string → parse to number. This is the same value passed as `opts.id` to the `TerminalRenderer` constructor — dockview preserves the panel id through the component lifecycle.
 - Call `terminalRegistry.get(paneId)` to retrieve the already-ensured terminal
 - Append the xterm.js `element` to `this.element`
-- If the terminal is not yet in the registry (timing gap before `PaneAdded` confirms): store the pane ID, retry on next `layout()` call
+- If the terminal is not in the registry when `init()` is called, store the pane ID and attempt mount on the next `layout()` call. If still absent on the second call, log a warning and leave unmounted. In practice this path should never be reached: the reconciler calls `this._dv.addPanel()` only after `PaneAdded` arrives from sessiond, which means `terminalRegistry.ensure()` has already run in `app.ts` `willUpdate`.
 
 **`layout(width, height)`:**
 - Called by dockview on every panel resize
@@ -125,7 +125,7 @@ Implements dockview's `IContentRenderer`. A plain class — not a Lit element �
 - Replaces the `ResizeObserver` that `<mux-pane>` previously owned
 - dockview only calls `layout()` on visible, mounted panels — `fit()` always has valid dimensions
 
-**`focus()`:** Focuses the xterm.js terminal. Called by dockview when the panel receives focus. Only one terminal is focused at a time.
+**`focus()`:** Called by dockview's internal focus tracking when focus moves between panels programmatically. The `onDidActivePanelChange` handler in `MuxDock` independently calls `terminalRegistry.get(paneId)?.focus()` for user-initiated tab switches. Both paths may fire for the same event — the double-call is intentional belt-and-suspenders and idempotent on xterm.js.
 
 **`dispose()`:**
 - Removes the xterm.js element from `this.element`
@@ -139,7 +139,7 @@ Implements dockview's `IContentRenderer`. A plain class — not a Lit element �
 - Replace `<mux-composition>` with `<mux-dock>`
 - Remove the `arrange()` call from `willUpdate` — dockview handles layout internally
 - Props passed to `<mux-dock>` simplify to: `panes`, `activePaneId`, `workspaceKey` — no `arrangement` object
-- Continue to call `terminalRegistry.ensure(paneId, { onInput, onResize })` for each pane in `willUpdate` — terminal lifecycle ownership stays in `app.ts`
+- Continue to call `terminalRegistry.ensure(paneId, { onInput, onResize })` for each pane in `willUpdate` — terminal lifecycle ownership stays in `app.ts`. `onInput: (data: string) => void` — invoked with raw bytes from the xterm.js terminal; calls `socket.sendPaneInput(paneId, data)` to forward keystrokes to the PTY. `onResize: (cols, rows) => void` — calls `reportResize(paneId, cols, rows)` which sends a resize frame to sessiond.
 
 ---
 
@@ -164,7 +164,7 @@ User clicks split button
   → store updates
   → app.ts re-renders, passes updated panes prop to <mux-dock>
   → updated() runs reconciliation
-  → dv.addPanel() called
+  → this._dv.addPanel() called
   → TerminalRenderer.init() attaches xterm.js
 ```
 
@@ -204,14 +204,14 @@ Reconciliation runs in Lit's `updated()` lifecycle hook when `panes`, `activePan
 1. Set `_settingActive = true` for the entire reset operation
 2. For each panel in `_panels`: call `panel.api.close()` → triggers `TerminalRenderer.dispose()` → removes xterm.js element from container, leaves terminal alive in registry
 3. Clear `_panels` map
-4. Add panels for the new workspace's panes (pane-ID order, single default tab group)
+4. Add panels for the new workspace's panes in the order they appear in the `panes` array prop as delivered by the store, which preserves sessiond insertion order (single default tab group)
 5. Set active panel
 6. Set `_settingActive = false` (in a `finally` block)
 
 ### Pane list changed (same workspace)
 
 - Diff `_panels` map against incoming `panes` array
-- Pane in `panes` but not in `_panels` → `this._dv.addPanel({ id: String(paneId), component: 'terminal' })`, add to `_panels`
+- Pane in `panes` but not in `_panels` → `this._dv.addPanel({ id: String(paneId), component: 'terminal' })`, add to `_panels`. New panels are added to the currently active tab group as a new tab. If no active group exists (e.g., during initial population), dockview creates one.
 - Pane in `_panels` but not in `panes` → `panel.api.close()`, remove from `_panels`
 
 ### Active pane sync
@@ -244,7 +244,7 @@ One `DockviewComponent` instance lives for the full `<mux-dock>` element lifetim
 
 **Scrollback is preserved across workspace switches.** `TerminalRenderer.dispose()` removes the xterm.js element from the dockview container but leaves the terminal in `terminalRegistry`. When switching back to a previous workspace, `TerminalRenderer.init()` retrieves the same terminal instance (with the same scrollback buffer) and mounts it in the new container.
 
-**Layout is not preserved per workspace** (initial version). When returning to workspace A, panes are added in a single default tab group in pane-ID order. Per-workspace layout memory can be added later without changing the public interface.
+**Layout is not preserved per workspace** (initial version). When returning to workspace A, panes are added in a single default tab group in the order they appear in the `panes` array prop as delivered by the store, which preserves sessiond insertion order. Per-workspace layout memory can be added later without changing the public interface.
 
 The `_settingActive` flag governs the entire workspace switch operation. During reset, dockview fires `onDidActivePanelChange` events as panels are added. These are suppressed until the reset completes.
 
@@ -283,6 +283,8 @@ static styles = css`
 `;
 ```
 
+These values match the Tokyo Night palette already used throughout muxterm's existing component styles.
+
 The 113 KB CSS bundle includes all 11 bundled themes — no CSS tree-shaking is available from dockview-core. The cost is acceptable for a complete layout engine.
 
 ---
@@ -291,7 +293,7 @@ The 113 KB CSS bundle includes all 11 bundled themes — no CSS tree-shaking is 
 
 | Scenario | Handling |
 |---|---|
-| Terminal not yet in registry at `init()` time (timing gap before `PaneAdded` confirms) | Store pane ID, retry on next `layout()` call |
+| Terminal not yet in registry at `init()` time (timing gap before `PaneAdded` confirms) | Store pane ID and attempt mount on the next `layout()` call. If still absent on the second call, log a warning and leave unmounted. In practice this path should never be reached: the reconciler calls `this._dv.addPanel()` only after `PaneAdded` arrives from sessiond, which means `terminalRegistry.ensure()` has already run in `app.ts` `willUpdate`. |
 | `_settingActive` not cleared after exception | Always clear in a `finally` block |
 | `panel.api.close()` during workspace reset fires `onDidActivePanelChange` | Suppressed by `_settingActive` guard |
 | `TerminalRenderer.dispose()` called for a pane whose terminal was never attached | No-op — element removal is idempotent |
@@ -313,8 +315,8 @@ The 113 KB CSS bundle includes all 11 bundled themes — no CSS tree-shaking is 
 
 ## Testing Strategy
 
-- **Smoke test:** Open muxterm, create 3 panes, drag tabs to reorder — verify sessiond state unchanged, no feedback loop in console
-- **Firefox DnD:** Test tab drag on Firefox before merging; document result
+- **Smoke test:** Open muxterm, create 3 panes, drag tabs to reorder — verify sessiond state unchanged, verify `onDidActivePanelChange` fires exactly once per user tab click (use browser DevTools → Performance → Event Log or add a temporary counter in the handler)
+- **Firefox DnD:** Test tab drag on Firefox before merging; if tab drag fails on Firefox: document the failure, file it against issue #932, and assess whether the pointer-events DnD backend is sufficient for muxterm's use case before the branch merges.
 - **Workspace switch:** Switch workspaces 5 times, switch back — verify scrollback buffer intact in all terminals
 - **Resize:** Drag sash, verify `reportResize` fires with correct cols/rows, verify PTY output wraps at new width
 - **Pane removal:** Close a pane from sessiond, verify dockview panel disappears cleanly, verify no orphan terminals
