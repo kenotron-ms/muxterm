@@ -132,6 +132,60 @@ func TestCloseWorkspaceBroadcastsListToActor(t *testing.T) {
 	}
 }
 
+// TestPaneExitAutoCloseBroadcastsListToAllConnections verifies that when a
+// workspace is auto-reaped after its last pane exits, a broadcastAll with a
+// TypeWorkspaceList is sent so that unattached connections also learn about
+// the removal — not just subscribers of that workspace.
+func TestPaneExitAutoCloseBroadcastsListToAllConnections(t *testing.T) {
+	_, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	// Client B connects first: unattached, guaranteed in s.conns before the
+	// pane-exit happens.
+	b := newTClient(t, socketPath)
+
+	// Client A creates "short-lived" workspace, attaches, then spawns a pane
+	// running `true` which exits immediately, causing the workspace to be
+	// auto-reaped (remaining == 0 → ReapIfEmpty).
+	a := newTClient(t, socketPath)
+	a.send(&Message{Type: TypeCreateWorkspace, CID: 1, Name: "short-lived"})
+	ws1ID := a.waitCtrl(TypeWorkspaceCreated).WorkspaceID
+	a.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: ws1ID})
+	a.waitCtrl(TypeComposition)
+	a.send(&Message{Type: TypeCreatePane, CID: 3, Cmd: []string{"true"}})
+	a.waitCtrl(TypePaneCreated)
+	a.waitCtrl(TypePaneAdded)
+
+	// B must eventually receive a TypeWorkspaceList that does NOT contain
+	// ws1ID. Drain workspace-list messages that still include ws1 (from the
+	// create-workspace broadcastAll) using a 5s deadline loop.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case msg, ok := <-b.ctrl:
+			if !ok {
+				t.Fatal("connection closed while waiting for workspace-list without ws1")
+			}
+			if msg.Type != TypeWorkspaceList {
+				continue
+			}
+			found := false
+			for _, ws := range msg.Workspaces {
+				if ws.WorkspaceID == ws1ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return // success: B received a list that no longer contains ws1
+			}
+			// ws1ID still present; keep draining — the post-reap broadcast will follow.
+		case <-deadline:
+			t.Fatalf("timeout: B did not receive workspace-list without ws1ID %q", ws1ID)
+		}
+	}
+}
+
 // TestRenameWorkspaceBroadcastsListToCrossWorkspaceClient verifies that
 // renaming a workspace triggers a broadcastAll(workspace-list) so clients
 // attached to OTHER workspaces also receive the updated list immediately.

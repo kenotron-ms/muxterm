@@ -194,7 +194,7 @@ func (s *Server) handlePaneExit(wsID string, paneID int) {
 	s.broadcast(wsID, &Message{Type: TypePaneClosed, WorkspaceID: wsID, PaneID: paneID})
 	if remaining == 0 {
 		if removed, _ := s.reg.ReapIfEmpty(wsID); removed {
-			s.broadcast(wsID, &Message{Type: TypeWorkspaceClosed, WorkspaceID: wsID})
+			s.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: s.reg.List()})
 		}
 	}
 }
