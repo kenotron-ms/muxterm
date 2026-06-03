@@ -464,9 +464,7 @@ export class MuxApp extends LitElement {
               class="ws-create-input"
               type="text"
               placeholder="Workspace name"
-              .value="${this._createModalName}"
               ?disabled="${this._creatingWorkspace}"
-              @input="${(e: Event) => { this._createModalName = (e.target as HTMLInputElement).value; }}"
               @keydown="${this._onCreateModalKeyDown}"
             />
             <div class="ws-create-row">
@@ -539,7 +537,10 @@ export class MuxApp extends LitElement {
   };
 
   private _submitCreate = (): void => {
-    const name = this._createModalName.trim();
+    // Read directly from the DOM — more reliable than state on mobile where
+    // IME/autocorrect can delay @input events, leaving _createModalName stale.
+    const input = this.shadowRoot?.querySelector<HTMLInputElement>('.ws-create-input');
+    const name = (input?.value ?? this._createModalName).trim();
     if (!name || this._creatingWorkspace) return;
     this._creatingWorkspace = true;
     this._socket?.createWorkspace(name);
