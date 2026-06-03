@@ -275,6 +275,11 @@ export class MuxApp extends LitElement {
     const liveIds = new Set<number>();
     for (const pane of store.panes) {
       const paneId = pane.paneId;
+      // Skip provisional overlay panes: _nextTempPaneId starts at -1 and
+      // decrements, so any negative id is a transient optimistic placeholder.
+      // Mounting a terminal on a provisional pane produces a phantom cursor
+      // that flickers once the real positive-id pane settles.
+      if (paneId < 0) continue;
       terminalRegistry.ensure(paneId, {
         onInput: (data) => this._socket?.sendPaneInput(paneId, data),
         // Active-view-wins: only rendered/visible panes own a live

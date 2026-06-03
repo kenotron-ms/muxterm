@@ -217,6 +217,53 @@ describe('MuxApp one-terminal-per-workspace', () => {
   });
 });
 
+describe('MuxApp _syncTerminals negative-pane guard', () => {
+  let el: MuxApp;
+
+  afterEach(() => {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    store.applySessiond({ type: SessiondType.WorkspaceList, workspaces: [] });
+    (store as unknown as { _pending: Map<string, unknown> })._pending.clear();
+    store.applySessiond({ type: SessiondType.Composition, workspaceId: '', panes: [] });
+    terminalRegistry.prune(new Set());
+    el = null as unknown as MuxApp;
+  });
+
+  it('does not create a terminal for a provisional negative pane ID', async () => {
+    el = await fixture();
+    // Attach an empty workspace so the store has an active composition.
+    store.applySessiond({ type: SessiondType.Composition, workspaceId: 'w1', panes: [] });
+
+    // Push an optimistic pane with a provisional negative paneId (-777).
+    store.mutate({
+      optimistic: (draft) => draft.panes.push({ paneId: -777, cols: 0, rows: 0 }),
+      settled: () => false,
+    });
+
+    el.requestUpdate();
+    await el.updateComplete;
+
+    // The provisional pane must NOT have a terminal created for it.
+    expect(terminalRegistry.getTerminal(-777)).toBeNull();
+  });
+
+  it('still creates a terminal for a positive (real) pane ID', async () => {
+    el = await fixture();
+    // Apply a composition with a real positive paneId.
+    store.applySessiond({
+      type: SessiondType.Composition,
+      workspaceId: 'w1',
+      panes: [{ paneId: 42, cols: 80, rows: 24 }],
+    });
+
+    el.requestUpdate();
+    await el.updateComplete;
+
+    // A real pane MUST have a terminal created for it.
+    expect(terminalRegistry.getTerminal(42)).not.toBeNull();
+  });
+});
+
 describe('MuxApp switch restores, never double-spawns', () => {
   let el: MuxApp;
 
