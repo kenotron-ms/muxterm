@@ -221,6 +221,47 @@ describe('workspace-created handler', () => {
   });
 });
 
+describe('MuxStore.hasPendingKind', () => {
+  it('returns true when a non-errored mutation with matching kind is pending', () => {
+    const store = new MuxStore();
+    store.mutate({
+      kind: 'create',
+      optimistic: () => {},
+      settled: () => false,
+    });
+    expect(store.hasPendingKind('create')).toBe(true);
+  });
+
+  it('returns false when no mutation of that kind is pending', () => {
+    const store = new MuxStore();
+    store.mutate({
+      kind: 'rename',
+      optimistic: () => {},
+      settled: () => false,
+    });
+    expect(store.hasPendingKind('create')).toBe(false);
+  });
+
+  it('returns false when the only matching mutation is errored', () => {
+    vi.useFakeTimers();
+    const store = new MuxStore();
+    store.mutate({
+      kind: 'create',
+      timeoutMs: 100,
+      optimistic: () => {},
+      settled: () => false,
+    });
+    vi.advanceTimersByTime(101);
+    expect(store.hasPendingKind('create')).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('returns false when store has no pending mutations', () => {
+    const store = new MuxStore();
+    expect(store.hasPendingKind('create')).toBe(false);
+  });
+});
+
 describe('clientRef threading through base', () => {
   it('workspace-list entries keep clientRef', () => {
     const store = new MuxStore();

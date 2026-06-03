@@ -338,6 +338,7 @@ export class MuxApp extends LitElement {
             .workspaces="${store.workspaces}"
             .currentWorkspaceId="${store.attached ?? ''}"
             .erroredMutations="${store.erroredMutations}"
+            .createPending="${store.hasPendingKind('create')}"
             @workspace-selected="${this._onWorkspaceSelected}"
             @workspace-create="${this._createWorkspaceOptimistic}"
             @workspace-rename="${this._onWorkspaceRename}"

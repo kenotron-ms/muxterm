@@ -111,6 +111,13 @@ export class MuxStore {
     return out;
   }
 
+  hasPendingKind(kind: string): boolean {
+    for (const record of this._pending.values()) {
+      if (!record.errored && record.kind === kind) return true;
+    }
+    return false;
+  }
+
   setActivePane(paneId: number): void {
     if (this._activePaneId === paneId) return;
     this._activePaneId = paneId;

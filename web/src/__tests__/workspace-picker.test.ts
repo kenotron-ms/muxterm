@@ -117,6 +117,22 @@ describe('MuxWorkspacePicker', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it('disables the new-workspace button when createPending is true', async () => {
+    el = await fixture(makeWorkspaces());
+    el.createPending = true;
+    await el.updateComplete;
+    const newBtn = el.shadowRoot!.querySelector('button.ws-new') as HTMLButtonElement;
+    expect(newBtn.disabled).toBe(true);
+  });
+
+  it('does not disable the new-workspace button when createPending is false', async () => {
+    el = await fixture(makeWorkspaces());
+    el.createPending = false;
+    await el.updateComplete;
+    const newBtn = el.shadowRoot!.querySelector('button.ws-new') as HTMLButtonElement;
+    expect(newBtn.disabled).toBe(false);
+  });
+
   it('dispatches workspace-rename with workspaceId and name from prompt', async () => {
     el = await fixture(makeWorkspaces());
     vi.spyOn(window, 'prompt').mockReturnValue('  renamed  ');

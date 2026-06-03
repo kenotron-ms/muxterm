@@ -181,6 +181,13 @@ export class MuxWorkspacePicker extends LitElement {
       border-color: #89b4fa;
       background: #1f2335;
     }
+
+    .ws-new:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      border-color: #45475a;
+      background: transparent;
+    }
   `;
 
   @property({ attribute: false })
@@ -191,6 +198,9 @@ export class MuxWorkspacePicker extends LitElement {
 
   @property({ attribute: false })
   erroredMutations: PickerErroredMutation[] = [];
+
+  @property({ type: Boolean })
+  createPending = false;
 
   private _emit(name: string, detail?: unknown): void {
     this.dispatchEvent(
@@ -292,7 +302,7 @@ export class MuxWorkspacePicker extends LitElement {
               `;
             })}
           </div>
-          <button class="ws-new" @click="${this._onCreate}">
+          <button class="ws-new" ?disabled="${this.createPending}" @click="${this._onCreate}">
             ${icon(Plus, { size: 14 })}
             <span>New workspace…</span>
           </button>
