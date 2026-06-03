@@ -16,15 +16,6 @@ const composition = (
   panes,
 });
 
-const workspaceRenamed = (
-  workspaceId: string,
-  name: string,
-): SessiondMessage => ({
-  type: SessiondType.WorkspaceRenamed,
-  workspaceId,
-  name,
-});
-
 describe('MuxStore optimistic-mutation seam', () => {
   it('applies an optimistic rename over the base in store.workspaces', () => {
     const store = new MuxStore();
@@ -145,13 +136,13 @@ describe('settle after applySessiond', () => {
     // Overlay shows 'new' before the authoritative echo lands.
     expect(store.workspaces[0].name).toBe('new');
 
-    // Authoritative echo lands: settled(base) becomes true, overlay vanishes.
-    store.applySessiond(workspaceRenamed('ws-1', 'new'));
+    // Authoritative echo lands via workspace-list snapshot: settled(base) becomes true, overlay vanishes.
+    store.applySessiond(workspaceList([{ workspaceId: 'ws-1', name: 'new', paneCount: 0 }]));
     expect(store.workspaces[0].name).toBe('new');
     expect(store.erroredMutations).toEqual([]);
 
     // Overlay is truly gone: a later base change shows through unobstructed.
-    store.applySessiond(workspaceRenamed('ws-1', 'newer'));
+    store.applySessiond(workspaceList([{ workspaceId: 'ws-1', name: 'newer', paneCount: 0 }]));
     expect(store.workspaces[0].name).toBe('newer');
   });
 });

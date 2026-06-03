@@ -116,38 +116,37 @@ describe('MuxStore sessiond multiplexer path', () => {
     expect(store.composition.activePaneId).toBe(9);
   });
 
-  it('clears attachment on workspace-closed and ignores a trailing pane-closed', () => {
+  it('workspace-closed is a no-op (server now sends workspace-list snapshots instead)', () => {
     const store = new MuxStore();
     store.applySessiond(
       workspaceList([{ workspaceId: 'ws-1', name: 'dev', paneCount: 1 }]),
     );
     store.applySessiond(composition('ws-1', [{ paneId: 5, cols: 80, rows: 24 }]));
     store.applySessiond(workspaceClosed('ws-1'));
-    expect(store.attached).toBeNull();
-    expect(store.panes).toEqual([]);
-    expect(store.composition).toEqual({ paneIds: [], activePaneId: 0 });
-    expect(store.workspaces).toEqual([]);
-    // Trailing pane-closed for the now-detached workspace is ignored.
-    store.applySessiond(paneClosed(5));
-    expect(store.panes).toEqual([]);
+    // Dead handler: hits default: return — state is unchanged.
+    expect(store.attached).toBe('ws-1');
+    expect(store.panes.map((p) => p.paneId)).toEqual([5]);
+    expect(store.workspaces.map((w) => w.workspaceId)).toEqual(['ws-1']);
   });
 
-  it('updates the workspace label on workspace-renamed', () => {
+  it('workspace-renamed is a no-op (server now sends workspace-list snapshots with updated names)', () => {
     const store = new MuxStore();
     store.applySessiond(
       workspaceList([{ workspaceId: 'ws-1', name: 'dev', paneCount: 0 }]),
     );
     store.applySessiond(workspaceRenamed('ws-1', 'prod'));
-    expect(store.workspaces[0].name).toBe('prod');
+    // Dead handler: hits default: return — name remains unchanged.
+    expect(store.workspaces[0].name).toBe('dev');
   });
 
-  it('clears the workspace label when workspace-renamed omits the name', () => {
+  it('workspace-renamed with no name is a no-op (server sends workspace-list instead)', () => {
     const store = new MuxStore();
     store.applySessiond(
       workspaceList([{ workspaceId: 'ws-1', name: 'dev', paneCount: 0 }]),
     );
     store.applySessiond(workspaceRenamed('ws-1'));
-    expect(store.workspaces[0].name).toBeUndefined();
+    // Dead handler: hits default: return — name remains unchanged.
+    expect(store.workspaces[0].name).toBe('dev');
   });
 
   it('notifies subscribers on composition changes', () => {
@@ -156,6 +155,21 @@ describe('MuxStore sessiond multiplexer path', () => {
     store.subscribe(listener);
     store.applySessiond(composition('ws-1', [{ paneId: 5, cols: 80, rows: 24 }]));
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears attachment when the attached workspace is absent from a workspace-list snapshot', () => {
+    const store = new MuxStore();
+    store.applySessiond(
+      workspaceList([{ workspaceId: 'ws-1', name: 'dev', paneCount: 1 }]),
+    );
+    store.applySessiond(composition('ws-1', [{ paneId: 5, cols: 80, rows: 24 }]));
+    // ws-1 is gone from the snapshot (server closed it and broadcast a new list)
+    store.applySessiond(workspaceList([{ workspaceId: 'ws-2', name: 'other', paneCount: 0 }]));
+    expect(store.attached).toBeNull();
+    expect(store.panes).toEqual([]);
+    expect(store.composition).toEqual({ paneIds: [], activePaneId: 0 });
+    // ws-2 is still present in the workspace list
+    expect(store.workspaces.map((w) => w.workspaceId)).toEqual(['ws-2']);
   });
 });
 

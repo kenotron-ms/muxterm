@@ -131,6 +131,12 @@ export class MuxStore {
     switch (msg.type) {
       case SessiondType.WorkspaceList:
         this._workspaces = msg.workspaces ?? [];
+        // If the currently attached workspace was removed, clear attachment state.
+        if (this._attached !== null && !this._workspaces.some(w => w.workspaceId === this._attached)) {
+          this._attached = null;
+          this._panes = [];
+          this._activePaneId = 0;
+        }
         break;
 
       // composition reply: binds us to a workspace and replaces panes wholesale.
@@ -167,19 +173,6 @@ export class MuxStore {
         break;
       }
 
-      case SessiondType.WorkspaceClosed: {
-        const workspaceId = msg.workspaceId ?? null;
-        this._workspaces = this._workspaces.filter(
-          (w) => w.workspaceId !== workspaceId,
-        );
-        if (this._attached === workspaceId) {
-          this._attached = null;
-          this._panes = [];
-          this._activePaneId = 0;
-        }
-        break;
-      }
-
       case SessiondType.WorkspaceCreated: {
         // Idempotent: actor + broadcast echoes of the same event converge to one
         // entry.  Mirror the PaneAdded guard style.
@@ -193,15 +186,6 @@ export class MuxStore {
             paneCount: 0,
           },
         ];
-        break;
-      }
-
-      case SessiondType.WorkspaceRenamed: {
-        this._workspaces = this._workspaces.map((w) =>
-          w.workspaceId === msg.workspaceId
-            ? { ...w, name: msg.name ? msg.name : undefined }
-            : w,
-        );
         break;
       }
 

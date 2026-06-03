@@ -46,13 +46,15 @@ describe('MuxStore base immutability', () => {
     expect(store.panes[0].title).toBe('shell');
   });
 
-  it('applies WorkspaceRenamed immutably without mutating prior snapshots', () => {
+  it('applies WorkspaceList immutably without mutating prior snapshots', () => {
     const store = seeded();
     const before = store.workspaces;
     store.applySessiond({
-      type: SessiondType.WorkspaceRenamed,
-      workspaceId: 'w1',
-      name: 'renamed',
+      type: SessiondType.WorkspaceList,
+      workspaces: [
+        { workspaceId: 'w1', name: 'renamed', paneCount: 1 },
+        { workspaceId: 'w2', paneCount: 2 },
+      ],
     });
     const after = store.workspaces;
     expect(after).not.toBe(before);
