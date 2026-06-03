@@ -171,7 +171,7 @@ export class MuxApp extends LitElement {
   @state()
   private _creatingWorkspace = false;
 
-  private _pendingCreateRef: string | null = null;
+
 
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
@@ -230,27 +230,12 @@ export class MuxApp extends LitElement {
       if (msg.type === SessiondType.Composition && store.panes.length === 0) {
         this._createPaneOptimistic();
       }
-      // Clear the creating-workspace loading state once the server confirms the
-      // workspace exists. Two paths because workspace-created echoes the clientRef
-      // only when the Go struct serialises it (omitempty drops empty strings), so
-      // the fast path may be silently skipped on some server builds.
-      //
-      // Fast path: workspace-created reply with matching clientRef.
-      // Fallback:  workspace-list is always broadcast after every mutation; if it
-      //            contains a workspace carrying our clientRef the create succeeded.
-      const ourRef = this._pendingCreateRef;
-      if (ourRef) {
-        const confirmedByCreated =
-          msg.type === SessiondType.WorkspaceCreated && msg.clientRef === ourRef;
-        const confirmedByList =
-          msg.type === SessiondType.WorkspaceList &&
-          (msg.workspaces ?? []).some((w) => w.clientRef === ourRef);
-        if (confirmedByCreated || confirmedByList) {
-          this._pendingCreateRef = null;
-          this._creatingWorkspace = false;
-          // WorkspaceController.onMessage calls socket.attach() on WorkspaceCreated.
-          // Don't duplicate it here.
-        }
+      // Server confirmed the workspace was created — clear the loading state.
+      // Exactly one create is in-flight at a time (button disabled during pending),
+      // so any WorkspaceCreated while _creatingWorkspace is true is ours.
+      // WorkspaceController.onMessage(WorkspaceCreated) handles socket.attach().
+      if (msg.type === SessiondType.WorkspaceCreated && this._creatingWorkspace) {
+        this._creatingWorkspace = false;
       }
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
@@ -266,7 +251,6 @@ export class MuxApp extends LitElement {
       this._showReconnectOverlay = true;
       this._reconnectMessage = 'Connection lost. Reconnecting...';
       this._creatingWorkspace = false;
-      this._pendingCreateRef = null;
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
@@ -412,12 +396,12 @@ export class MuxApp extends LitElement {
    * WorkspaceCreated reply arrives with the matching clientRef. No provisional
    * row is inserted — the flag is the only local state change.
    */
-  private _createWorkspace = (): void => {
+  private _createWorkspace = (e: CustomEvent<{ name: string }>): void => {
     if (this._creatingWorkspace) return;
-    const ref = mintClientRef();
-    this._pendingCreateRef = ref;
     this._creatingWorkspace = true;
-    this._socket?.createWorkspace(undefined, ref);
+    this._socket?.createWorkspace(e.detail.name);
+    // WorkspaceController.onMessage(WorkspaceCreated) handles socket.attach().
+    // _creatingWorkspace is cleared when WorkspaceCreated arrives (below).
   };
 
   /**

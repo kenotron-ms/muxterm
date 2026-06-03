@@ -40,7 +40,7 @@ export class MuxWorkspacePicker extends LitElement {
       border-radius: 8px;
       padding: 8px;
       width: max-content;
-      min-width: 220px;
+      min-width: 240px;
       max-width: 360px;
       max-height: 70vh;
       overflow-y: auto;
@@ -76,13 +76,8 @@ export class MuxWorkspacePicker extends LitElement {
       transition: background-color 0.12s;
     }
 
-    .ws-item:hover {
-      background: #2a2b3c;
-    }
-
-    .ws-item.sel {
-      background: #283457;
-    }
+    .ws-item:hover { background: #2a2b3c; }
+    .ws-item.sel  { background: #283457; }
 
     .ws-item.errored {
       border-color: #f38ba8;
@@ -95,9 +90,7 @@ export class MuxWorkspacePicker extends LitElement {
       margin-right: 4px;
     }
 
-    .ws-item.errored .row-action {
-      color: #f38ba8;
-    }
+    .ws-item.errored .row-action { color: #f38ba8; }
 
     .ws-sel {
       display: flex;
@@ -151,15 +144,11 @@ export class MuxWorkspacePicker extends LitElement {
     }
 
     .ws-item:hover .row-action,
-    .ws-item.sel .row-action {
-      opacity: 1;
-    }
+    .ws-item.sel   .row-action { opacity: 1; }
 
-    /* Always show actions on touch devices — no hover available */
+    /* Touch devices: no hover, always show actions */
     @media (pointer: coarse) {
-      .row-action {
-        opacity: 1;
-      }
+      .row-action { opacity: 1; }
     }
 
     .row-action:hover {
@@ -167,7 +156,7 @@ export class MuxWorkspacePicker extends LitElement {
       color: #cdd6f4;
     }
 
-    /* Inline rename edit row */
+    /* Shared inline input (used by both rename and create form) */
     .ws-edit-row {
       display: flex;
       align-items: center;
@@ -189,10 +178,76 @@ export class MuxWorkspacePicker extends LitElement {
     }
 
     .ws-edit-input:focus {
-      border-color: #89b4fa;
-      box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2);
+      box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.25);
     }
 
+    .ws-edit-input:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Create form — appears at the bottom instead of the "New workspace" button */
+    .ws-create-form {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .ws-create-form .ws-edit-input {
+      width: 100%;
+    }
+
+    .ws-create-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .ws-create-btn {
+      flex: 1;
+      padding: 8px 12px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      border: none;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.12s;
+    }
+
+    .ws-create-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .ws-create-btn:not(:disabled):hover {
+      opacity: 0.85;
+    }
+
+    .ws-create-cancel {
+      padding: 8px 12px;
+      background: transparent;
+      color: #6c7086;
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .ws-create-cancel:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .ws-create-cancel:not(:disabled):hover {
+      background: #2a2b3c;
+      color: #cdd6f4;
+    }
+
+    /* "New workspace" button — shown when form is hidden */
     .ws-new {
       display: flex;
       align-items: center;
@@ -214,13 +269,6 @@ export class MuxWorkspacePicker extends LitElement {
       border-color: #89b4fa;
       background: #1f2335;
     }
-
-    .ws-new:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-      border-color: #45475a;
-      background: transparent;
-    }
   `;
 
   @property({ attribute: false })
@@ -235,17 +283,37 @@ export class MuxWorkspacePicker extends LitElement {
   @property({ type: Boolean })
   createPending = false;
 
+  // Rename state
   @state() private _editingId: string | null = null;
   @state() private _editingValue = '';
 
+  // Create form state
+  @state() private _showCreateForm = false;
+  @state() private _createName = '';
+
+  protected override updated(changed: Map<PropertyKey, unknown>): void {
+    // Close create form when server confirms the workspace was created.
+    if (changed.has('createPending') && !this.createPending && this._showCreateForm) {
+      this._showCreateForm = false;
+      this._createName = '';
+    }
+    // Auto-focus create input when form opens.
+    if (changed.has('_showCreateForm') && this._showCreateForm) {
+      requestAnimationFrame(() => {
+        this.shadowRoot?.querySelector<HTMLInputElement>('.ws-create-input')?.focus();
+      });
+    }
+    // Auto-focus rename input when edit row opens.
+    if (changed.has('_editingId') && this._editingId !== null) {
+      requestAnimationFrame(() => {
+        this.shadowRoot?.querySelector<HTMLInputElement>('.ws-edit-input')?.focus();
+        this.shadowRoot?.querySelector<HTMLInputElement>('.ws-edit-input')?.select();
+      });
+    }
+  }
+
   private _emit(name: string, detail?: unknown): void {
-    this.dispatchEvent(
-      new CustomEvent(name, {
-        bubbles: true,
-        composed: true,
-        detail,
-      }),
-    );
+    this.dispatchEvent(new CustomEvent(name, { bubbles: true, composed: true, detail }));
   }
 
   private _onSelect(workspaceId: string): void {
@@ -253,32 +321,39 @@ export class MuxWorkspacePicker extends LitElement {
     this._emit('workspace-selected', { workspaceId });
   }
 
+  // Create form
   private _onCreate(): void {
-    this._emit('workspace-create');
+    this._showCreateForm = true;
   }
 
+  private _onCreateKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'Enter') { e.preventDefault(); this._submitCreate(); }
+    if (e.key === 'Escape') { e.preventDefault(); this._cancelCreate(); }
+  }
+
+  private _submitCreate(): void {
+    const name = this._createName.trim();
+    if (!name || this.createPending) return;
+    this._emit('workspace-create', { name });
+    // createPending will go true (set by parent), form stays open showing spinner.
+    // updated() will close the form when createPending goes back to false.
+  }
+
+  private _cancelCreate(): void {
+    this._showCreateForm = false;
+    this._createName = '';
+  }
+
+  // Rename
   private _onRename(e: Event, workspaceId: string, currentLabel: string): void {
     e.stopPropagation();
     this._editingId = workspaceId;
     this._editingValue = currentLabel;
-    // Auto-focus the input after Lit renders the edit row.
-    requestAnimationFrame(() => {
-      const input = this.shadowRoot?.querySelector<HTMLInputElement>('.ws-edit-input');
-      if (input) {
-        input.focus();
-        input.select();
-      }
-    });
   }
 
   private _onEditKeyDown(e: KeyboardEvent): void {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      this._commitEdit();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      this._cancelEdit();
-    }
+    if (e.key === 'Enter') { e.preventDefault(); this._commitEdit(); }
+    if (e.key === 'Escape') { e.preventDefault(); this._cancelEdit(); }
   }
 
   private _commitEdit(): void {
@@ -286,9 +361,7 @@ export class MuxWorkspacePicker extends LitElement {
     const workspaceId = this._editingId;
     this._editingId = null;
     this._editingValue = '';
-    if (workspaceId) {
-      this._emit('workspace-rename', { workspaceId, name });
-    }
+    if (workspaceId) this._emit('workspace-rename', { workspaceId, name });
   }
 
   private _cancelEdit(): void {
@@ -313,6 +386,7 @@ export class MuxWorkspacePicker extends LitElement {
 
   private _onOverlayClick(): void {
     this._editingId = null;
+    this._cancelCreate();
     this._emit('close-picker');
   }
 
@@ -337,33 +411,16 @@ export class MuxWorkspacePicker extends LitElement {
                             class="ws-edit-input"
                             type="text"
                             .value="${this._editingValue}"
-                            @input="${(e: Event) => {
-                              this._editingValue = (e.target as HTMLInputElement).value;
-                            }}"
+                            @input="${(e: Event) => { this._editingValue = (e.target as HTMLInputElement).value; }}"
                             @keydown="${this._onEditKeyDown}"
                             @click="${(e: Event) => e.stopPropagation()}"
                           />
-                          <button
-                            class="row-action"
-                            title="Confirm rename"
-                            @click="${(e: Event) => { e.stopPropagation(); this._commitEdit(); }}"
-                          >
-                            ${icon(Check, { size: 14 })}
-                          </button>
-                          <button
-                            class="row-action"
-                            title="Cancel"
-                            @click="${(e: Event) => { e.stopPropagation(); this._cancelEdit(); }}"
-                          >
-                            ${icon(X, { size: 14 })}
-                          </button>
+                          <button class="row-action" title="Confirm" @click="${(e: Event) => { e.stopPropagation(); this._commitEdit(); }}">${icon(Check, { size: 14 })}</button>
+                          <button class="row-action" title="Cancel"  @click="${(e: Event) => { e.stopPropagation(); this._cancelEdit(); }}">${icon(X, { size: 14 })}</button>
                         </div>
                       `
                     : html`
-                        <button
-                          class="ws-sel"
-                          @click="${() => this._onSelect(w.workspaceId)}"
-                        >
+                        <button class="ws-sel" @click="${() => this._onSelect(w.workspaceId)}">
                           <span class="ws-check">${current ? icon(Check, { size: 12 }) : ''}</span>
                           <span class="ws-name">${label}</span>
                           <span class="ws-meta">${w.paneCount} ${w.paneCount === 1 ? 'pane' : 'panes'}</span>
@@ -371,46 +428,56 @@ export class MuxWorkspacePicker extends LitElement {
                         ${errored
                           ? html`
                               <span class="ws-err-msg">failed</span>
-                              <button
-                                class="row-action ws-retry"
-                                title="Retry"
-                                @click="${(e: Event) => this._onRetry(e, errored.id)}"
-                              >
-                                ${icon(RotateCcw, { size: 14 })}
-                              </button>
-                              <button
-                                class="row-action ws-dismiss"
-                                title="Dismiss"
-                                @click="${(e: Event) => this._onDismiss(e, errored.id)}"
-                              >
-                                ${icon(X, { size: 14 })}
-                              </button>
+                              <button class="row-action" title="Retry"   @click="${(e: Event) => this._onRetry(e, errored.id)}">${icon(RotateCcw, { size: 14 })}</button>
+                              <button class="row-action" title="Dismiss" @click="${(e: Event) => this._onDismiss(e, errored.id)}">${icon(X, { size: 14 })}</button>
                             `
                           : html`
-                              <button
-                                class="row-action ws-rename"
-                                title="Rename"
-                                @click="${(e: Event) => this._onRename(e, w.workspaceId, label)}"
-                              >
-                                ${icon(Pencil, { size: 14 })}
-                              </button>
-                              <button
-                                class="row-action ws-close"
-                                title="Close"
-                                @click="${(e: Event) => this._onClose(e, w.workspaceId)}"
-                              >
-                                ${icon(X, { size: 14 })}
-                              </button>
+                              <button class="row-action" title="Rename" @click="${(e: Event) => this._onRename(e, w.workspaceId, label)}">${icon(Pencil, { size: 14 })}</button>
+                              <button class="row-action" title="Close"  @click="${(e: Event) => this._onClose(e, w.workspaceId)}">${icon(X, { size: 14 })}</button>
                             `}
                       `}
                 </div>
               `;
             })}
           </div>
-          <button class="ws-new" ?disabled="${this.createPending}" @click="${this._onCreate}">
-            ${icon(Plus, { size: 14 })}
-            <span>New workspace…</span>
-          </button>
+
+          ${this._showCreateForm
+            ? html`
+                <div class="ws-create-form">
+                  <input
+                    class="ws-create-input ws-edit-input"
+                    type="text"
+                    placeholder="Workspace name"
+                    .value="${this._createName}"
+                    ?disabled="${this.createPending}"
+                    @input="${(e: Event) => { this._createName = (e.target as HTMLInputElement).value; }}"
+                    @keydown="${this._onCreateKeyDown}"
+                    @click="${(e: Event) => e.stopPropagation()}"
+                  />
+                  <div class="ws-create-actions">
+                    <button
+                      class="ws-create-btn"
+                      ?disabled="${this.createPending || !this._createName.trim()}"
+                      @click="${(e: Event) => { e.stopPropagation(); this._submitCreate(); }}"
+                    >
+                      ${this.createPending ? 'Creating…' : 'Create'}
+                    </button>
+                    <button
+                      class="ws-create-cancel"
+                      ?disabled="${this.createPending}"
+                      @click="${(e: Event) => { e.stopPropagation(); this._cancelCreate(); }}"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              `
+            : html`
+                <button class="ws-new" @click="${this._onCreate}">
+                  ${icon(Plus, { size: 14 })}
+                  <span>New workspace…</span>
+                </button>
+              `}
         </div>
       </div>
     `;
