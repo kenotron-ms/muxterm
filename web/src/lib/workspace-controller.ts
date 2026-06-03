@@ -100,6 +100,13 @@ export class WorkspaceController {
           } else {
             this.socket.createWorkspace();
           }
+        } else if (this.store.attached === null && (msg.workspaces ?? []).length > 0) {
+          // The active workspace was deleted (e.g. user closed it). Pick the best
+          // surviving workspace from MRU and attach automatically.
+          const target = chooseRecoveryTarget(msg.workspaces ?? [], '', this._mru.order());
+          if (target.action === 'attach') {
+            this.socket.attach(target.workspaceId);
+          }
         }
         break;
       }
