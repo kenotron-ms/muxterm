@@ -475,7 +475,7 @@ export class MuxApp extends LitElement {
               >Cancel</button>
               <button
                 class="ws-create-confirm"
-                ?disabled="${this._creatingWorkspace || !this._createModalName.trim()}"
+                ?disabled="${this._creatingWorkspace}"
                 @click="${this._submitCreate}"
               >${this._creatingWorkspace ? 'Creating…' : 'Create'}</button>
             </div>

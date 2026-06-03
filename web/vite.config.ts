@@ -6,6 +6,12 @@ export default defineConfig({
     outDir: 'dist',
     target: 'es2021',
   },
+  server: {
+    port: 5173,
+    proxy: {
+      '/ws': { target: 'ws://127.0.0.1:9090', ws: true, changeOrigin: true },
+    },
+  },
   test: {
     environment: 'happy-dom',
     include: ['src/**/*.test.ts'],
