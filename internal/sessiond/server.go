@@ -263,6 +263,7 @@ func (c *conn) handle(msg Message) {
 		c.reply(&Message{Type: TypeWorkspaceList, CID: msg.CID, Workspaces: c.srv.reg.List()})
 	case TypeRenameWorkspace:
 		if c.srv.reg.RenameWorkspace(msg.WorkspaceID, msg.Name) {
+			c.reply(&Message{Type: TypeOK, CID: msg.CID})
 			c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
 		} else {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
@@ -338,6 +339,7 @@ func (c *conn) closeWorkspace(msg Message) {
 	for _, p := range panes {
 		p.Close()
 	}
+	c.reply(&Message{Type: TypeOK, CID: msg.CID})
 	c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
 }
 

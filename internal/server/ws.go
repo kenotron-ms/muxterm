@@ -170,18 +170,18 @@ func (c *Client) handleTextInput(data []byte) {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
 		}
-		c.sendMessage(&sessiond.Message{
-			Type:        sessiond.TypeOK,
-			CID:         msg.CID,
-			WorkspaceID: msg.WorkspaceID,
-		})
+		if wsList, err := c.daemon.ListWorkspaces(); err == nil {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: wsList})
+		}
 
 	case sessiond.TypeCloseWorkspace:
 		if err := c.daemon.CloseWorkspace(msg.WorkspaceID); err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
 		}
-		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
+		if wsList, err := c.daemon.ListWorkspaces(); err == nil {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: wsList})
+		}
 
 	case sessiond.TypeCreatePane:
 		paneID, err := c.daemon.CreatePane(msg.Cmd)
