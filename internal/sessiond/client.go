@@ -57,6 +57,9 @@ type Handlers struct {
 	// OnWorkspaceRenamed fires when the workspace identified by workspaceID is
 	// relabeled to name.
 	OnWorkspaceRenamed func(workspaceID, name string)
+	// OnWorkspaceList fires when the server pushes a full workspace snapshot
+	// (after any mutation that changes workspace state).
+	OnWorkspaceList func(workspaces []WorkspaceInfo)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -315,6 +318,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeWorkspaceRenamed:
 		if h.OnWorkspaceRenamed != nil {
 			h.OnWorkspaceRenamed(msg.WorkspaceID, msg.Name)
+		}
+	case TypeWorkspaceList:
+		if h.OnWorkspaceList != nil {
+			h.OnWorkspaceList(msg.Workspaces)
 		}
 	}
 }

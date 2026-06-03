@@ -161,6 +161,8 @@ func (c *Client) handleTextInput(data []byte) {
 			Type:        sessiond.TypeWorkspaceCreated,
 			CID:         msg.CID,
 			WorkspaceID: id,
+			Name:        msg.Name,
+			ClientRef:   msg.ClientRef,
 		})
 
 	case sessiond.TypeRenameWorkspace:
@@ -334,6 +336,9 @@ func (h *Hub) attachClient(c *Client) error {
 		},
 		OnWorkspaceRenamed: func(workspaceID, name string) {
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceRenamed, WorkspaceID: workspaceID, Name: name})
+		},
+		OnWorkspaceList: func(workspaces []sessiond.WorkspaceInfo) {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: workspaces})
 		},
 	})
 
