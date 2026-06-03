@@ -314,6 +314,7 @@ export class MuxApp extends LitElement {
         : html`
             <mux-composition
               .arrangement="${arrangement}"
+              workspaceKey="${store.attached ?? ''}"
               @pane-select="${this._onActivePane}"
               @pane-focus="${this._onActivePane}"
             ></mux-composition>

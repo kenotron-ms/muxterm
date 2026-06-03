@@ -83,6 +83,22 @@ export class MuxComposition extends LitElement {
   @property({ attribute: false })
   arrangement: Arrangement = { mode: 'tiling', order: [], visible: [], active: null };
 
+  /**
+   * Opaque token that identifies the currently-attached workspace.
+   * Included in the Lit `keyed()` key for every `<mux-pane>` so that when
+   * the user switches workspaces, Lit destroys the old pane element and
+   * creates a fresh one — firing `connectedCallback` → `terminalRegistry.attach`.
+   *
+   * Without this, every workspace's first pane has id 1, so `keyed(paneId)`
+   * collides across workspaces and Lit silently reuses the element, leaving
+   * the terminal unattached and the viewport blank.
+   *
+   * Within the same workspace the key is stable: the element survives
+   * arrangement / mode / active-pane updates (scrollback is preserved).
+   */
+  @property()
+  workspaceKey = '';
+
   private _select(paneId: number): void {
     this.dispatchEvent(
       new CustomEvent('pane-select', {
@@ -94,10 +110,20 @@ export class MuxComposition extends LitElement {
   }
 
   private _renderPane(paneId: number) {
-    // Key by paneId so Lit gives every distinct pane its own dedicated shell
-    // element; the terminal lives in terminalRegistry and survives remount.
+    // Key by "${workspaceKey}:${paneId}" so Lit gives every distinct pane its
+    // own dedicated shell element.
+    //
+    // WHY the workspace prefix matters: pane ids are workspace-local (both
+    // workspaces can have a pane with id 1). Without the prefix, switching
+    // workspaces leaves the key unchanged → Lit reuses the existing element →
+    // connectedCallback never re-fires → the newly-ensure()'d terminal is never
+    // attached → blank viewport.
+    //
+    // Within the same workspace the key is stable across arrangement / mode /
+    // active-pane updates, so the element survives those re-renders and the
+    // xterm.js scroll history is preserved.
     return keyed(
-      paneId,
+      `${this.workspaceKey}:${paneId}`,
       html`<mux-pane
         pane-id="${paneId}"
         ?active="${paneId === this.arrangement.active}"
