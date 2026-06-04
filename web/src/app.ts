@@ -378,6 +378,10 @@ export class MuxApp extends LitElement {
   }
 
   private _syncTerminals(): void {
+    // Establish the workspace context so composite registry keys are correct.
+    // This must be called before ensure() so pane terminals land in the right
+    // workspace slot and don't collide with same-id panes in other workspaces.
+    terminalRegistry.setWorkspace(store.attached ?? '');
     const liveIds = new Set<number>();
     for (const pane of store.panes) {
       const paneId = pane.paneId;
@@ -419,8 +423,9 @@ export class MuxApp extends LitElement {
             <mux-dock
               .panes="${panes}"
               .activePaneId="${store.activePaneId}"
-              workspaceKey="${store.attached ?? ''}"
+              .workspaceKey="${store.attached ?? ''}"
               @pane-select="${this._onActivePane}"
+              @pane-close="${this._onClosePane}"
             ></mux-dock>
           `}
       <mux-status-bar
@@ -612,14 +617,34 @@ export class MuxApp extends LitElement {
 
   /**
    * Switch the attached workspace. The daemon's composition reply re-populates
-   * the store, so we only dispose the previous workspace's terminals (paneIds
-   * are reused across workspaces) and request the attach.
+   * the store, which triggers _syncTerminals() to call setWorkspace() with the
+   * new ID — isolating pane terminals via composite keys so scrollback from
+   * the previous workspace survives for when we switch back.
    */
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     this._showWorkspacePicker = false;
     if (e.detail.workspaceId === store.attached) return;
-    terminalRegistry.disposeAll();
+    // Do NOT call disposeAll() — workspace-scoped composite keys in
+    // terminalRegistry isolate paneIds across workspaces, so old terminals
+    // stay alive with their scrollback until explicitly pruned or disposed.
     this._socket?.attach(e.detail.workspaceId);
+  };
+
+  /**
+   * Handle a pane-close event dispatched by mux-dock when the user clicks
+   * the dockview tab close (X) button. Prune the terminal from the registry
+   * so the xterm instance is cleaned up, while the server-side PTY continues
+   * until the workspace is closed or the connection drops.
+   */
+  private _onClosePane = (e: CustomEvent<{ paneId: number }>): void => {
+    const closedPaneId = e.detail.paneId;
+    // Prune only the closed pane — keep all other live panes' terminals.
+    const remaining = new Set(
+      store.panes
+        .filter((p) => p.paneId >= 0 && p.paneId !== closedPaneId)
+        .map((p) => p.paneId),
+    );
+    terminalRegistry.prune(remaining);
   };
 
   private _onLauncherAction = (): void => {

@@ -176,7 +176,10 @@ describe('MuxApp', () => {
       expect(picker).toBeTruthy();
     });
 
-    it('_onWorkspaceSelected disposes terminals and attaches the chosen workspace', async () => {
+    it('_onWorkspaceSelected attaches the chosen workspace without disposing terminals', async () => {
+      // Workspace switching now uses workspace-scoped composite keys in
+      // terminalRegistry, so old terminals are NOT disposed on switch — they
+      // survive so scrollback is available when switching back.
       el = await fixture();
       const disposeSpy = vi.spyOn(terminalRegistry, 'disposeAll');
       const attached: string[] = [];
@@ -191,7 +194,7 @@ describe('MuxApp', () => {
         new CustomEvent('workspace-selected', { detail: { workspaceId: 'ws-2' } }),
       );
 
-      expect(disposeSpy).toHaveBeenCalled();
+      expect(disposeSpy).not.toHaveBeenCalled(); // scrollback-preserving: no dispose on switch
       expect(attached).toContain('ws-2');
       expect((el as any)._showWorkspacePicker).toBe(false);
     });

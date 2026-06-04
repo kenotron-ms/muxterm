@@ -73,10 +73,22 @@ interface PaneEntry {
 }
 
 // Module-level state — never re-created between tab switches.
-const _map = new Map<number, PaneEntry>();
-// Data written for a paneId before ensure() was called.
-const _preEnsureBuffer = new Map<number, (Uint8Array | string)[]>();
+// Keys are composite "${workspaceId}:${paneId}" so paneId reuse across
+// workspaces never causes cross-workspace scrollback bleed. Switching the
+// attached workspace changes _currentWorkspaceId without disposing old
+// workspace terminals, so scrollback is preserved when switching back.
+const _map = new Map<string, PaneEntry>();
+// Data written for a (workspace, pane) before ensure() was called.
+const _preEnsureBuffer = new Map<string, (Uint8Array | string)[]>();
 const _encoder = new TextEncoder();
+
+// Current workspace — set by setWorkspace() on every composition update.
+let _currentWorkspaceId = '';
+
+/** Compute the composite registry key for the current workspace. */
+function _key(paneId: number): string {
+  return `${_currentWorkspaceId}:${paneId}`;
+}
 
 function _isVisible(el: HTMLElement): boolean {
   // offsetParent is null when element is display:none or disconnected.
@@ -85,14 +97,25 @@ function _isVisible(el: HTMLElement): boolean {
 
 export const terminalRegistry = {
   /**
+   * Set the current workspace ID. All subsequent calls to ensure(), write(),
+   * attach(), etc. will operate on panes within this workspace.
+   * Call this whenever the attached workspace changes so that workspace-local
+   * paneIds (reused across workspaces) are isolated correctly.
+   */
+  setWorkspace(workspaceId: string): void {
+    _currentWorkspaceId = workspaceId;
+  },
+
+  /**
    * Idempotent: creates a Terminal for paneId if one does not exist.
    * Call this for every known pane on every state update so that terminals
    * are ready before their mux-pane shell connects to the DOM.
    */
   ensure(paneId: number, handlers: PaneHandlers): void {
-    if (_map.has(paneId)) {
+    const key = _key(paneId);
+    if (_map.has(key)) {
       // Update handlers so reconnected sockets get fresh callbacks.
-      _map.get(paneId)!.handlers = handlers;
+      _map.get(key)!.handlers = handlers;
       return;
     }
 
@@ -141,13 +164,13 @@ export const terminalRegistry = {
       entry.handlers.onResize(cols, rows);
     });
 
-    _map.set(paneId, entry);
+    _map.set(key, entry);
 
     // Drain any data that arrived before ensure() was called.
-    const preBuffer = _preEnsureBuffer.get(paneId);
+    const preBuffer = _preEnsureBuffer.get(key);
     if (preBuffer) {
       for (const chunk of preBuffer) entry.pendingData.push(chunk);
-      _preEnsureBuffer.delete(paneId);
+      _preEnsureBuffer.delete(key);
     }
   },
 
@@ -158,7 +181,8 @@ export const terminalRegistry = {
    * preserving all scrollback.
    */
   attach(paneId: number, container: HTMLElement): void {
-    const entry = _map.get(paneId);
+    const key = _key(paneId);
+    const entry = _map.get(key);
     if (!entry) return;
 
     if (!entry.opened) {
@@ -171,7 +195,8 @@ export const terminalRegistry = {
       if (typeof document !== 'undefined' && document.fonts?.ready) {
         document.fonts.ready.then(() => {
           requestAnimationFrame(() => {
-            if (_map.has(paneId)) terminalRegistry.fitIfVisible(paneId);
+            // Use the captured composite key to check the map.
+            if (_map.has(key)) terminalRegistry.fitIfVisible(paneId);
           });
         });
       }
@@ -211,7 +236,7 @@ export const terminalRegistry = {
    * continue to feed it via write(). The scrollback is fully preserved.
    */
   detach(paneId: number): void {
-    const entry = _map.get(paneId);
+    const entry = _map.get(_key(paneId));
     if (!entry) return;
 
     // Stop ResizeObserver so the hidden pane doesn't get spurious resizes.
@@ -231,7 +256,7 @@ export const terminalRegistry = {
    * No-op if the terminal has never been opened or is not in the DOM.
    */
   fitIfVisible(paneId: number): void {
-    const entry = _map.get(paneId);
+    const entry = _map.get(_key(paneId));
     if (!entry || !entry.opened) return;
     if (!_isVisible(entry.hostEl)) return;
     entry.fitAddon.fit();
@@ -239,7 +264,7 @@ export const terminalRegistry = {
 
   /** Focus the terminal for keyboard input. */
   focus(paneId: number): void {
-    _map.get(paneId)?.term.focus();
+    _map.get(_key(paneId))?.term.focus();
   },
 
   /**
@@ -249,7 +274,8 @@ export const terminalRegistry = {
    * and drained when ensure() is later called.
    */
   write(paneId: number, data: Uint8Array | string): void {
-    const entry = _map.get(paneId);
+    const key = _key(paneId);
+    const entry = _map.get(key);
     if (entry) {
       if (entry.opened) {
         entry.term.write(data);
@@ -259,8 +285,8 @@ export const terminalRegistry = {
       }
     } else {
       // Pre-ensure buffer: ensure() hasn't been called yet.
-      if (!_preEnsureBuffer.has(paneId)) _preEnsureBuffer.set(paneId, []);
-      _preEnsureBuffer.get(paneId)!.push(data);
+      if (!_preEnsureBuffer.has(key)) _preEnsureBuffer.set(key, []);
+      _preEnsureBuffer.get(key)!.push(data);
     }
   },
 
@@ -280,47 +306,52 @@ export const terminalRegistry = {
   },
 
   /**
-   * Dispose terminals for pane IDs that are no longer live in tmux.
-   * Call with the set of all currently live pane IDs after each state sync.
+   * Dispose terminals for pane IDs that are no longer live in the current
+   * workspace. Only affects the current workspace's panes; terminals from
+   * other workspaces are left alive so their scrollback is preserved.
    */
   prune(liveIds: Set<number>): void {
-    for (const [paneId, entry] of _map.entries()) {
+    const prefix = `${_currentWorkspaceId}:`;
+    for (const [key, entry] of _map.entries()) {
+      if (!key.startsWith(prefix)) continue; // preserve other workspaces
+      const paneId = parseInt(key.slice(prefix.length), 10);
       if (!liveIds.has(paneId)) {
         entry.resizeObserver?.disconnect();
         if (entry.resizeTimer !== undefined) clearTimeout(entry.resizeTimer);
         entry.term.dispose();
-        _map.delete(paneId);
+        _map.delete(key);
       }
     }
     // Also clear pre-ensure buffer for panes that will never exist.
-    for (const paneId of _preEnsureBuffer.keys()) {
-      if (!liveIds.has(paneId)) _preEnsureBuffer.delete(paneId);
+    for (const key of _preEnsureBuffer.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const paneId = parseInt(key.slice(prefix.length), 10);
+      if (!liveIds.has(paneId)) _preEnsureBuffer.delete(key);
     }
   },
 
   /**
-   * Dispose every terminal in the registry.
-   * Called when switching the attached workspace: panes are keyed by
-   * workspace-local paneId, and paneIds are reused across workspaces, so the
-   * previous workspace's terminals must be torn down to avoid paneId
-   * collisions / cross-workspace scrollback bleed.
+   * Dispose every terminal in the registry (all workspaces).
+   * Use for full teardown on disconnect or test cleanup.
+   * For workspace switching, prefer setWorkspace() instead — it preserves
+   * scrollback by not disposing terminals from the previous workspace.
    */
   disposeAll(): void {
-    for (const [paneId, entry] of _map.entries()) {
+    for (const [, entry] of _map.entries()) {
       entry.resizeObserver?.disconnect();
       if (entry.resizeTimer !== undefined) clearTimeout(entry.resizeTimer);
       entry.term.dispose();
-      _map.delete(paneId);
     }
+    _map.clear();
     _preEnsureBuffer.clear();
   },
 
   /**
-   * Return the Terminal instance for a pane, or null if not ensured.
-   * Used by mux-pane for getVisibleContent() / getBufferLines() delegation.
+   * Return the Terminal instance for a pane in the current workspace, or null
+   * if not ensured. Used by mux-dock for getTerminalContent().
    */
   getTerminal(paneId: number): Terminal | null {
-    return _map.get(paneId)?.term ?? null;
+    return _map.get(_key(paneId))?.term ?? null;
   },
 
   /**
@@ -328,7 +359,7 @@ export const terminalRegistry = {
    * Returns null if the paneId is not known to the registry.
    */
   snapshot(paneId: number): StructuredSnapshot | null {
-    const entry = _map.get(paneId);
+    const entry = _map.get(_key(paneId));
     if (!entry) return null;
     return serializeSnapshot(entry.term as unknown as SnapshotSource);
   },

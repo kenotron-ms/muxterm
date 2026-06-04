@@ -95,6 +95,14 @@ export class MuxDock extends LitElement {
   private _dv: DockviewComponent | null = null;
   private _panels = new Map<number, IDockviewPanel>();
   private _settingActive = false;
+  /**
+   * Pane IDs closed by the user via the dockview tab X button.
+   * These are excluded from reconciler re-adds (Case 2) until the
+   * workspace changes (Case 1 clears this set).
+   */
+  private _locallyClosedPanes = new Set<number>();
+  /** True while we're programmatically removing panels to suppress pane-close events. */
+  private _removingPanels = false;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -111,6 +119,25 @@ export class MuxDock extends LitElement {
       this.dispatchEvent(new CustomEvent('pane-select', { detail: { paneId }, bubbles: true, composed: true }));
       terminalRegistry.focus(paneId);
     });
+    // Detect when the user closes a tab via the dockview close (X) button.
+    // We track these as "locally closed" so the reconciler doesn't re-add them.
+    this._dv.onDidRemovePanel((panel) => {
+      if (this._removingPanels) return; // programmatic removal — ignore
+      const paneId = parseInt(panel.id, 10);
+      if (this._panels.has(paneId)) {
+        this._panels.delete(paneId);
+        this._locallyClosedPanes.add(paneId);
+        this.dispatchEvent(
+          new CustomEvent('pane-close', { detail: { paneId }, bubbles: true, composed: true }),
+        );
+      }
+      // Force dockview to re-layout so the remaining panel fills the space.
+      requestAnimationFrame(() => {
+        if (this._dv) {
+          this._dv.layout(this.offsetWidth, this.offsetHeight, true);
+        }
+      });
+    });
   }
 
   override disconnectedCallback(): void {
@@ -125,7 +152,10 @@ export class MuxDock extends LitElement {
     // Case 1: workspaceKey changed → full panel reset
     if (changed.has('workspaceKey')) {
       this._settingActive = true;
+      this._removingPanels = true;
       try {
+        // Clear locally-closed set: new workspace starts fresh.
+        this._locallyClosedPanes.clear();
         // Close all existing panels
         for (const [, panel] of this._panels) {
           this._dv.removePanel(panel);
@@ -149,6 +179,7 @@ export class MuxDock extends LitElement {
         }
       } finally {
         this._settingActive = false;
+        this._removingPanels = false;
       }
       return;
     }
@@ -157,17 +188,23 @@ export class MuxDock extends LitElement {
     if (changed.has('panes')) {
       const currentPaneIds = new Set(this.panes.filter((p) => p.paneId >= 0).map((p) => p.paneId));
 
-      // Remove panels for gone panes
-      for (const [paneId, panel] of this._panels) {
-        if (!currentPaneIds.has(paneId)) {
-          this._dv.removePanel(panel);
-          this._panels.delete(paneId);
+      // Remove panels for panes that were removed server-side.
+      // Guard with _removingPanels so onDidRemovePanel doesn't re-fire pane-close.
+      this._removingPanels = true;
+      try {
+        for (const [paneId, panel] of this._panels) {
+          if (!currentPaneIds.has(paneId)) {
+            this._dv.removePanel(panel);
+            this._panels.delete(paneId);
+          }
         }
+      } finally {
+        this._removingPanels = false;
       }
 
-      // Add panels for new panes
+      // Add panels for new panes, skipping panes the user closed locally.
       for (const pane of this.panes.filter((p) => p.paneId >= 0)) {
-        if (!this._panels.has(pane.paneId)) {
+        if (!this._panels.has(pane.paneId) && !this._locallyClosedPanes.has(pane.paneId)) {
           const panel = this._dv.addPanel({
             id: String(pane.paneId),
             component: 'terminal',
