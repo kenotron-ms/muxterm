@@ -21,6 +21,27 @@ class TerminalRenderer implements IContentRenderer {
     this._paneId = parseInt(id, 10);
     const el = document.createElement('div');
     el.style.cssText = 'width:100%;height:100%;overflow:hidden;';
+
+    // Isolate xterm's pointer events from dockview's panel drag-and-drop.
+    //
+    // dockview's ContentContainer wraps every panel in `.dv-content-container`
+    // and attaches a pointer-backend drop target to it. That drop target calls
+    // event.preventDefault() on pointerdown to drive panel DnD. Because this
+    // element lives INSIDE `.dv-content-container`, a pointerdown that begins a
+    // text-selection drag bubbles up and gets preventDefault()'d — which kills
+    // xterm.js's own mouse-based selection (xterm sets `user-select: none` on
+    // itself and implements selection via its SelectionService, not native
+    // selection). The old `<mux-pane>` was immune because its terminal lived in
+    // a shadow root; light DOM removed that boundary.
+    //
+    // stopPropagation() keeps these events from reaching dockview's drop target
+    // while leaving xterm's listeners (on descendants) fully functional. Panel
+    // focus uses focus/blur events, not pointer events, so it is unaffected.
+    const swallow = (e: Event): void => e.stopPropagation();
+    el.addEventListener('pointerdown', swallow);
+    el.addEventListener('pointermove', swallow);
+    el.addEventListener('pointerup', swallow);
+
     this.element = el;
   }
 
