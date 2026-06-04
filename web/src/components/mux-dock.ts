@@ -15,6 +15,7 @@ class TerminalRenderer implements IContentRenderer {
   readonly element: HTMLElement;
   private readonly _paneId: number;
   private _pendingMount = false;
+  private _attached = false;
 
   constructor(id: string) {
     this._paneId = parseInt(id, 10);
@@ -24,24 +25,30 @@ class TerminalRenderer implements IContentRenderer {
   }
 
   init(): void {
-    // Defer attach until after the browser has painted and dockview has settled
-    // its panel dimensions. Without this, the terminal opens at wrong dimensions,
-    // the buffered PTY replay renders garbled ($$$$~~~~~), and a subsequent fit
-    // can't fix already-drawn content.
-    requestAnimationFrame(() => {
-      if (terminalRegistry.getTerminal(this._paneId) !== null) {
-        terminalRegistry.attach(this._paneId, this.element);
-      } else {
-        this._pendingMount = true;
-        console.warn(`[mux-dock] TerminalRenderer.init: pane ${this._paneId} not yet in registry — deferring attach`);
-      }
-    });
+    // Do NOT attach here. Dockview calls init() before the panel has final
+    // layout dimensions. Attaching here (even via rAF) causes the terminal
+    // to open at wrong cols/rows, making the PTY replay garbled ($$$$~~~~~).
+    // We attach in the first layout() call instead, which is guaranteed to
+    // fire after dockview has settled the panel size.
+    if (terminalRegistry.getTerminal(this._paneId) === null) {
+      this._pendingMount = true;
+    }
   }
 
   layout(): void {
-    if (this._pendingMount && terminalRegistry.getTerminal(this._paneId) !== null) {
-      this._pendingMount = false;
-      terminalRegistry.attach(this._paneId, this.element);
+    if (!this._attached) {
+      // First layout() call — dockview has now settled the panel dimensions.
+      // Safe to open the terminal here; it will open at the correct size and
+      // the PTY replay will render without garbling.
+      if (terminalRegistry.getTerminal(this._paneId) !== null) {
+        this._attached = true;
+        this._pendingMount = false;
+        terminalRegistry.attach(this._paneId, this.element);
+        // attach() calls fitIfVisible() internally, so we're done.
+        return;
+      }
+      // Registry not ready yet — will retry on next layout() call.
+      return;
     }
     terminalRegistry.fitIfVisible(this._paneId);
   }
@@ -82,80 +89,6 @@ class SplitButton {
 
   init(): void { /* nothing to initialise */ }
   dispose(): void { this.element.remove(); }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RenameableTab
-// Custom tab renderer: shows pane title, double-click to rename inline.
-// ─────────────────────────────────────────────────────────────────────────────
-
-class RenameableTab {
-  readonly element: HTMLElement;
-  private readonly _span: HTMLSpanElement;
-  private readonly _input: HTMLInputElement;
-  private _paneId = 0;
-  private _title = '';
-
-  constructor(private readonly _customTitles: Map<number, string>) {
-    this.element = document.createElement('div');
-    this.element.className = 'mux-tab-label';
-
-    this._span = document.createElement('span');
-    this._span.className = 'mux-tab-label__text';
-
-    this._input = document.createElement('input');
-    this._input.className = 'mux-tab-label__input';
-    this._input.type = 'text';
-    this._input.style.display = 'none';
-
-    this.element.appendChild(this._span);
-    this.element.appendChild(this._input);
-
-    this._span.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      this._startEdit();
-    });
-    this._input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); this._commit(); }
-      if (e.key === 'Escape') { e.preventDefault(); this._cancel(); }
-      e.stopPropagation(); // don't leak keystrokes to dockview / xterm
-    });
-    this._input.addEventListener('blur', () => this._commit());
-  }
-
-  init(params: { api: { id: string; title?: string } }): void {
-    this._paneId = parseInt(params.api.id, 10);
-    // Use stored custom title if one exists, otherwise use the panel default.
-    this._title = this._customTitles.get(this._paneId) ?? params.api.title ?? `Pane ${this._paneId}`;
-    this._span.textContent = this._title;
-  }
-
-  // update() is optional in ITabRenderer; title changes are handled via init() +
-  // the double-click rename flow.  No external callers pass a new title here.
-
-  dispose(): void {}
-
-  private _startEdit(): void {
-    this._input.value = this._title;
-    this._input.style.display = '';
-    this._span.style.display = 'none';
-    this._input.focus();
-    this._input.select();
-  }
-
-  private _commit(): void {
-    const next = this._input.value.trim() || this._title;
-    this._title = next;
-    this._customTitles.set(this._paneId, next);
-    this._span.textContent = next;
-    this._input.style.display = 'none';
-    this._span.style.display = '';
-  }
-
-  private _cancel(): void {
-    this._input.style.display = 'none';
-    this._span.style.display = '';
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -305,45 +238,28 @@ export class MuxDock extends LitElement {
           background: rgba(122, 162, 247, 0.25);
         }
 
-        /* Renameable tab label */
-        mux-dock .mux-tab-label {
-          display: flex;
-          align-items: center;
-          height: 100%;
-          padding: 0 4px;
-          max-width: 160px;
-          overflow: hidden;
-        }
-        mux-dock .mux-tab-label__text {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          user-select: none;
-          cursor: default;
-        }
-        mux-dock .mux-tab-label__text:hover {
-          color: #c0caf5;
-        }
-        mux-dock .mux-tab-label__input {
-          width: 100%;
-          min-width: 60px;
+        /* Inline tab rename input */
+        mux-dock .mux-tab-rename-input {
           background: #24283b;
           color: #c0caf5;
           border: 1px solid #7aa2f7;
           border-radius: 3px;
-          padding: 1px 4px;
+          padding: 0 4px;
           font: inherit;
           font-size: inherit;
           outline: none;
+          width: 100px;
+          min-width: 60px;
+          max-width: 160px;
         }
       `;
       target.appendChild(style);
     }
 
     this.classList.add('dockview-theme-dark');
+    this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => new TerminalRenderer(opts.id),
-      createTabComponent: () => new RenameableTab(this._customTitles),
       createRightHeaderActionComponent: () =>
         new SplitButton(() => {
           this.dispatchEvent(
@@ -382,6 +298,50 @@ export class MuxDock extends LitElement {
     this._dv?.dispose();
     this._dv = null;
   }
+
+  /** Handle double-click on a dockview default tab — starts inline rename. */
+  private _onTabDblClick = (e: MouseEvent): void => {
+    const tabContent = (e.target as Element).closest?.('.dv-default-tab-content') as HTMLElement | null;
+    if (!tabContent) return;
+
+    // Use the active panel for the pane ID. By the time dblclick fires, the
+    // single-click has already activated this tab, so activePanel is correct.
+    const activePanel = this._dv?.activePanel;
+    if (!activePanel) return;
+
+    const paneId = parseInt(activePanel.id, 10);
+    const currentTitle = tabContent.textContent ?? '';
+
+    // Hide the tab text and insert an input in its place.
+    tabContent.style.display = 'none';
+    const input = document.createElement('input');
+    input.className = 'mux-tab-rename-input';
+    input.value = currentTitle;
+    tabContent.parentElement?.insertBefore(input, tabContent.nextSibling);
+    input.focus();
+    input.select();
+
+    const finish = (save: boolean): void => {
+      const next = save ? (input.value.trim() || currentTitle) : currentTitle;
+      input.remove();
+      tabContent.style.display = '';
+      tabContent.textContent = next;
+      if (save && next !== currentTitle) {
+        this._customTitles.set(paneId, next);
+      }
+    };
+
+    input.addEventListener('blur', () => finish(true), { once: true });
+    input.addEventListener('keydown', (ev) => {
+      ev.stopPropagation(); // prevent dockview / xterm from seeing keystrokes
+      if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+      if (ev.key === 'Escape') {
+        // Remove the blur listener before removing the input
+        input.replaceWith(input); // detach + reattach tricks the once listener off
+        finish(false);
+      }
+    });
+  };
 
   override updated(changed: Map<string, unknown>): void {
     if (!this._dv) return;
