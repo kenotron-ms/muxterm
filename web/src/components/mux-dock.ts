@@ -98,26 +98,70 @@ export class MuxDock extends LitElement {
           width: 100%;
           height: 100%;
         }
+
         /* Tokyo Night color overrides for dockview */
         mux-dock .dv-dockview {
           --dv-background-color: #1a1b26;
           --dv-separator-border: #292e42;
-          --dv-tabs-and-actions-container-background-color: #16161e;
+
+          /* Tab bar — slightly lighter than content to create visual separation */
+          --dv-tabs-and-actions-container-background-color: #1f2335;
+
+          /* Active group tabs */
           --dv-activegroup-visiblepanel-tab-background-color: #1a1b26;
-          --dv-activegroup-hiddenpanel-tab-background-color: #16161e;
-          --dv-inactivegroup-visiblepanel-tab-background-color: #16161e;
-          --dv-inactivegroup-hiddenpanel-tab-background-color: #16161e;
+          --dv-activegroup-hiddenpanel-tab-background-color: #1f2335;
+
+          /* Inactive group tabs */
+          --dv-inactivegroup-visiblepanel-tab-background-color: #1f2335;
+          --dv-inactivegroup-hiddenpanel-tab-background-color: #1f2335;
+
           --dv-tab-divider-color: #292e42;
+
+          /* Text: active tab bright, inactive tabs readable (not #565f89 — too dark) */
           --dv-activegroup-visiblepanel-tab-color: #c0caf5;
-          --dv-activegroup-hiddenpanel-tab-color: #565f89;
-          --dv-inactivegroup-visiblepanel-tab-color: #565f89;
+          --dv-activegroup-hiddenpanel-tab-color: #a9b1d6;
+          --dv-inactivegroup-visiblepanel-tab-color: #a9b1d6;
           --dv-inactivegroup-hiddenpanel-tab-color: #565f89;
+
+          /* Close button — set explicit size so it renders */
+          --dv-tab-close-icon-size: 10px;
+
+          /* Drag interaction */
           --dv-drag-over-background-color: rgba(122, 162, 247, 0.15);
           --dv-drag-over-border-color: #7aa2f7;
           --dv-drop-target-background: rgba(122, 162, 247, 0.1);
         }
+
+        /* Active tab accent line (top border) — VS Code style.
+           dockview-theme-dark doesn't include this rule; add it here. */
+        mux-dock .dv-groupview.dv-active-group .dv-tab.dv-active-tab {
+          border-top: 2px solid #7aa2f7 !important;
+        }
+        mux-dock .dv-groupview.dv-active-group .dv-tab.dv-inactive-tab,
+        mux-dock .dv-groupview.dv-inactive-group .dv-tab {
+          border-top: 2px solid transparent;
+        }
+
+        /* Close button: show on hover and always on the active tab.
+           dockview renders .dv-default-tab-action (not .dv-tab-close-btn). */
+        mux-dock .dv-tab .dv-default-tab-action {
+          opacity: 0;
+          transition: opacity 0.15s;
+        }
+        mux-dock .dv-tab .dv-default-tab-action svg {
+          fill: #a9b1d6;
+        }
+        mux-dock .dv-tab:hover .dv-default-tab-action,
+        mux-dock .dv-tab.dv-active-tab .dv-default-tab-action {
+          opacity: 1;
+        }
       `;
-      document.head.appendChild(style);
+      // mux-dock lives inside mux-app's shadow DOM.
+      // Rules injected into document.head cannot pierce shadow boundaries.
+      // Inject into the containing ShadowRoot so selectors reach dockview elements.
+      const root = this.getRootNode();
+      const target = root instanceof ShadowRoot ? root : document.head;
+      target.appendChild(style);
     }
 
     this.classList.add('dockview-theme-dark');
