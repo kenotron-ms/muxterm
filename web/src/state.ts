@@ -90,6 +90,10 @@ export class MuxStore {
 
   // Pure device-independent projection of the frozen PaneInfo[] for the layout
   // engine. Keeps lib/layout.ts free of wire types.
+  get activePaneId(): number {
+    return this._activePaneId;
+  }
+
   get composition(): Composition {
     return {
       // Exclude provisional overlay panes (negative IDs) from the layout so

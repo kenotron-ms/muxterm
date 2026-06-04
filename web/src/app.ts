@@ -401,7 +401,6 @@ export class MuxApp extends LitElement {
     // Exclude provisional overlay panes (negative IDs) from layout decisions.
     // They have no terminal and should not render as blank tiles.
     const panes = store.panes.filter((p) => p.paneId >= 0);
-    const arrangement = this._arrangement();
 
     return html`
       <mux-title-bar @launcher-action="${this._onLauncherAction}"></mux-title-bar>
@@ -417,12 +416,12 @@ export class MuxApp extends LitElement {
             </div>
           `
         : html`
-            <mux-composition
-              .arrangement="${arrangement}"
+            <mux-dock
+              .panes="${panes}"
+              .activePaneId="${store.activePaneId}"
               workspaceKey="${store.attached ?? ''}"
               @pane-select="${this._onActivePane}"
-              @pane-focus="${this._onActivePane}"
-            ></mux-composition>
+            ></mux-dock>
           `}
       <mux-status-bar
         .workspaces="${store.workspaces}"
