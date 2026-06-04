@@ -2,7 +2,7 @@ import { LitElement } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import type { IDockviewPanel, IContentRenderer } from 'dockview-core';
 import { DockviewComponent } from 'dockview-core';
-import 'dockview-core/dist/styles/dockview.css';
+import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
 import { terminalRegistry } from '../lib/terminal-registry.js';
 import type { SessiondPaneInfo } from '../types.js';
 
@@ -83,12 +83,24 @@ export class MuxDock extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
 
-    // Inject Tokyo Night theme overrides for dockview into document.head.
-    // static styles cannot be used here because createRenderRoot() returns
-    // `this` (light DOM mode, required for dockview). In light DOM mode Lit's
-    // adoptStyles() is never called — the static styles block is dead code.
-    // Injecting a <style> tag into document.head is the correct workaround.
-    if (!document.getElementById(STYLE_ID)) {
+    // mux-dock is a light-DOM element but lives inside mux-app's ShadowRoot.
+    // All styles must be injected into that ShadowRoot — document.head styles
+    // cannot pierce a shadow boundary.
+    const root = this.getRootNode();
+    const target = root instanceof ShadowRoot ? root : document.head;
+
+    // Inject dockview's full CSS (base layout + all themes) into the shadow root.
+    // Must live here so dockview's theme class selectors can reach panel elements.
+    const BASE_ID = 'dockview-base-css';
+    if (!target.querySelector(`#${BASE_ID}`)) {
+      const base = document.createElement('style');
+      base.id = BASE_ID;
+      base.textContent = dockviewCss;
+      target.appendChild(base);
+    }
+
+    // Inject Tokyo Night overrides on top of dockview-theme-dark.
+    if (!target.querySelector(`#${STYLE_ID}`)) {
       const style = document.createElement('style');
       style.id = STYLE_ID;
       style.textContent = `
@@ -99,51 +111,53 @@ export class MuxDock extends LitElement {
           height: 100%;
         }
 
-        /* Tokyo Night color overrides for dockview */
+        /* Tokyo Night overrides — sit on top of dockview-theme-dark */
         mux-dock .dv-dockview {
           --dv-background-color: #1a1b26;
           --dv-separator-border: #292e42;
 
-          /* Tab bar — slightly lighter than content to create visual separation */
+          /* Tab bar — visible separation from terminal content */
           --dv-tabs-and-actions-container-background-color: #1f2335;
+          --dv-group-view-background-color: #1a1b26;
 
           /* Active group tabs */
           --dv-activegroup-visiblepanel-tab-background-color: #1a1b26;
           --dv-activegroup-hiddenpanel-tab-background-color: #1f2335;
-
           /* Inactive group tabs */
           --dv-inactivegroup-visiblepanel-tab-background-color: #1f2335;
           --dv-inactivegroup-hiddenpanel-tab-background-color: #1f2335;
 
           --dv-tab-divider-color: #292e42;
 
-          /* Text: active tab bright, inactive tabs readable (not #565f89 — too dark) */
+          /* Text: active tab bright, inactive tabs readable */
           --dv-activegroup-visiblepanel-tab-color: #c0caf5;
           --dv-activegroup-hiddenpanel-tab-color: #a9b1d6;
           --dv-inactivegroup-visiblepanel-tab-color: #a9b1d6;
           --dv-inactivegroup-hiddenpanel-tab-color: #565f89;
 
-          /* Close button — set explicit size so it renders */
+          /* Sash (resize handle) */
+          --dv-sash-color: #292e42;
+          --dv-active-sash-color: #7aa2f7;
+
+          /* Close button */
           --dv-tab-close-icon-size: 10px;
 
-          /* Drag interaction */
+          /* Drag */
           --dv-drag-over-background-color: rgba(122, 162, 247, 0.15);
           --dv-drag-over-border-color: #7aa2f7;
           --dv-drop-target-background: rgba(122, 162, 247, 0.1);
         }
 
-        /* Active tab accent line (top border) — VS Code style.
-           dockview-theme-dark doesn't include this rule; add it here. */
-        mux-dock .dv-groupview.dv-active-group .dv-tab.dv-active-tab {
+        /* Active tab accent line — applied to any active tab regardless of
+           group focus state so it shows on initial render too. */
+        mux-dock .dv-tab.dv-active-tab {
           border-top: 2px solid #7aa2f7 !important;
         }
-        mux-dock .dv-groupview.dv-active-group .dv-tab.dv-inactive-tab,
-        mux-dock .dv-groupview.dv-inactive-group .dv-tab {
+        mux-dock .dv-tab.dv-inactive-tab {
           border-top: 2px solid transparent;
         }
 
-        /* Close button: show on hover and always on the active tab.
-           dockview renders .dv-default-tab-action (not .dv-tab-close-btn). */
+        /* Close button — show on hover + always on active tab */
         mux-dock .dv-tab .dv-default-tab-action {
           opacity: 0;
           transition: opacity 0.15s;
@@ -156,11 +170,6 @@ export class MuxDock extends LitElement {
           opacity: 1;
         }
       `;
-      // mux-dock lives inside mux-app's shadow DOM.
-      // Rules injected into document.head cannot pierce shadow boundaries.
-      // Inject into the containing ShadowRoot so selectors reach dockview elements.
-      const root = this.getRootNode();
-      const target = root instanceof ShadowRoot ? root : document.head;
       target.appendChild(style);
     }
 
@@ -177,10 +186,8 @@ export class MuxDock extends LitElement {
       this.dispatchEvent(new CustomEvent('pane-select', { detail: { paneId }, bubbles: true, composed: true }));
       terminalRegistry.focus(paneId);
     });
-    // Detect when the user closes a tab via the dockview close (X) button.
-    // We track these as "locally closed" so the reconciler doesn't re-add them.
     this._dv.onDidRemovePanel((panel) => {
-      if (this._removingPanels) return; // programmatic removal — ignore
+      if (this._removingPanels) return;
       const paneId = parseInt(panel.id, 10);
       if (this._panels.has(paneId)) {
         this._panels.delete(paneId);
@@ -189,7 +196,6 @@ export class MuxDock extends LitElement {
           new CustomEvent('pane-close', { detail: { paneId }, bubbles: true, composed: true }),
         );
       }
-      // Force dockview to re-layout so the remaining panel fills the space.
       requestAnimationFrame(() => {
         if (this._dv) {
           this._dv.layout(this.offsetWidth, this.offsetHeight, true);
