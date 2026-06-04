@@ -5,8 +5,83 @@
 // Saved state holds only what cannot be recomputed (peer order + active pane);
 // everything else (visibility, mode) is derived from the live composition via
 // the pure arrange() engine.
+//
+// Types and arrange() engine formerly in lib/layout.ts; inlined here after the
+// composition stack was replaced with dockview-core.
 
-import { arrange, type Arrangement, type Composition, type ViewportClass } from './layout.js';
+// ---------------------------------------------------------------------------
+// Viewport classification
+// ---------------------------------------------------------------------------
+
+export type ViewportClass = 'wide' | 'medium' | 'narrow';
+
+// ---------------------------------------------------------------------------
+// Composition
+// ---------------------------------------------------------------------------
+
+/** Device-independent projection of the frozen PaneInfo[]. */
+export interface Composition {
+  paneIds: number[];
+  activePaneId: number;
+}
+
+// ---------------------------------------------------------------------------
+// Arrangement engine
+// ---------------------------------------------------------------------------
+
+/** How panes are presented: side-by-side tiles or one-at-a-time tabs. */
+export type ArrangementMode = 'tiling' | 'tabbed';
+
+/** Result of arranging a composition for a viewport class. */
+export interface Arrangement {
+  mode: ArrangementMode;
+  order: number[];
+  visible: number[];
+  active: number | null;
+}
+
+/** Maximum number of simultaneously visible panes per viewport class. */
+const MAX_VISIBLE: Record<ViewportClass, number> = {
+  wide: Infinity,
+  medium: 2,
+  narrow: 1,
+};
+
+/**
+ * Arrange a composition for a viewport class.
+ *
+ * Panes are peers; order is preserved. The active pane is always visible.
+ * Wide tiles every pane, medium tiles at most two, narrow tabs to a single
+ * pane. Visible panes are re-sorted into stable peer order for deterministic
+ * rendering.
+ */
+export function arrange(composition: Composition, viewportClass: ViewportClass): Arrangement {
+  const order = [...composition.paneIds];
+  const mode: ArrangementMode = viewportClass === 'narrow' ? 'tabbed' : 'tiling';
+
+  if (order.length === 0) {
+    return { mode, order: [], visible: [], active: null };
+  }
+
+  const active = order.includes(composition.activePaneId) ? composition.activePaneId : order[0];
+
+  const cap = Math.min(MAX_VISIBLE[viewportClass], order.length);
+  const startIndex = order.indexOf(active);
+
+  const chosen = new Set<number>();
+  for (let i = 0; i < cap; i++) {
+    chosen.add(order[(startIndex + i) % order.length]);
+  }
+
+  // Re-sort visible into stable peer (order) sequence for deterministic render.
+  const visible = order.filter((id) => chosen.has(id));
+
+  return { mode, order, visible, active };
+}
+
+// ---------------------------------------------------------------------------
+// Persistence
+// ---------------------------------------------------------------------------
 
 /** Persisted arrangement state: only the bits arrange() cannot recompute. */
 export interface SavedArrangement {

@@ -10,8 +10,6 @@
 
 import type { MuxStore } from '../state.js';
 import { SessiondType, SessiondErrorCode, type SessiondMessage } from '../types';
-import { arrange, viewportClassFor, type Arrangement } from './layout.js';
-import { ArrangementStore } from './arrangement-store.js';
 import { WorkspaceMru } from './workspace-mru.js';
 import { chooseRecoveryTarget } from './workspace-recovery.js';
 
@@ -30,7 +28,6 @@ export interface WorkspaceSocket {
 
 export class WorkspaceController {
   private _mru = new WorkspaceMru();
-  private _arrangements = new ArrangementStore();
   // null = not recovering; '' = bootstrap default (attach first listed);
   // otherwise the id of the workspace we are recovering away from.
   private _recoveringFrom: string | null = null;
@@ -125,15 +122,5 @@ export class WorkspaceController {
   /** Active-view-wins: forward a pane resize for the focused composition. */
   reportResize(paneId: number, cols: number, rows: number): void {
     this.socket.resize(paneId, cols, rows);
-  }
-
-  /** Select the arrangement for the attached workspace at this viewport width. */
-  currentArrangement(viewportWidthPx: number): Arrangement {
-    const profile = viewportClassFor(viewportWidthPx);
-    const wsId = this.store.attached;
-    if (!wsId) {
-      return arrange(this.store.composition, profile);
-    }
-    return this._arrangements.load(wsId, profile, this.store.composition);
   }
 }

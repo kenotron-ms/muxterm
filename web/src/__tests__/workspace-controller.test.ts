@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MuxStore } from '../state.js';
 import { SessiondType, SessiondErrorCode, type SessiondMessage } from '../types';
-import { arrange } from '../lib/layout.js';
 import { WorkspaceController, type WorkspaceSocket } from '../lib/workspace-controller.js';
 
 const LAST_WS_KEY = 'muxterm.lastWorkspaceId';
@@ -124,18 +123,4 @@ describe('WorkspaceController', () => {
     expect(socket.createWorkspace).not.toHaveBeenCalled();
   });
 
-  it('computes the arrangement for the current viewport width', () => {
-    feed(composition('ws-1', [1, 2]));
-
-    const wide = controller.currentArrangement(1200);
-    expect(wide.mode).toBe('tiling');
-    expect(wide.visible).toEqual([1, 2]);
-
-    const narrow = controller.currentArrangement(500);
-    expect(narrow.mode).toBe('tabbed');
-    expect(narrow.visible).toHaveLength(1);
-
-    // Sanity: matches the pure engine for the unsaved default.
-    expect(wide).toEqual(arrange(store.composition, 'wide'));
-  });
 });

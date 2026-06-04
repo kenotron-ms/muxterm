@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ArrangementStore, storageKey } from '../lib/arrangement-store.js';
-import type { SavedArrangement } from '../lib/arrangement-store.js';
-import { arrange } from '../lib/layout.js';
-import type { Composition } from '../lib/layout.js';
+import { ArrangementStore, arrange, storageKey } from '../lib/arrangement-store.js';
+import type { Composition, SavedArrangement } from '../lib/arrangement-store.js';
 
 const comp = (paneIds: number[], activePaneId: number): Composition => ({
   paneIds,

@@ -4,7 +4,7 @@ import type {
   SessiondPaneInfo,
 } from './types';
 import { SessiondType } from './types';
-import type { Composition } from './lib/layout.js';
+import type { Composition } from './lib/arrangement-store.js';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from './lib/config.js';
 
 // --- optimistic-mutation seam -----------------------------------------------
