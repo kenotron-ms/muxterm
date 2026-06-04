@@ -2,7 +2,7 @@ import { LitElement, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import type { IDockviewPanel, IContentRenderer } from 'dockview-core';
 import { DockviewComponent } from 'dockview-core';
-import 'dockview-core/dist/styles/dockview-core.css';
+import 'dockview-core/dist/styles/dockview.css';
 import { terminalRegistry } from '../lib/terminal-registry.js';
 import type { SessiondPaneInfo } from '../types.js';
 
