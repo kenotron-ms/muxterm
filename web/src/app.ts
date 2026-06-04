@@ -8,13 +8,11 @@ import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js
 import { parseResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, resolvePalette } from './lib/theme.js';
-import { arrange, viewportClassFor, type Arrangement } from './lib/layout.js';
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
 import './components/status-bar.js';
-import './components/pane.js';
-import './components/composition.js';
+import './components/mux-dock.js';
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 import type { LauncherAction } from './components/launcher-menu.js';
@@ -243,9 +241,6 @@ export class MuxApp extends LitElement {
   _version = 0;
 
   @state()
-  _viewportWidth = typeof window !== 'undefined' ? window.innerWidth || 1024 : 1024;
-
-  @state()
   _connectionStatus: 'connected' | 'disconnected' | 'reconnecting' = 'disconnected';
 
   @state()
@@ -277,12 +272,6 @@ export class MuxApp extends LitElement {
     }
   };
 
-  /** Track the live viewport width so the responsive arrangement reflows. */
-  private _onWindowResize = (): void => {
-    const w = window.innerWidth || 1024;
-    if (w !== this._viewportWidth) this._viewportWidth = w;
-  };
-
   /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
    *  selectors like document.querySelector('[data-launcher-open]') work. */
   private _onOpenLauncherAttr = (): void => {
@@ -296,8 +285,6 @@ export class MuxApp extends LitElement {
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
     // Escape closes the workspace picker.
     document.addEventListener('keydown', this._onDocKeyDown);
-    window.addEventListener('resize', this._onWindowResize);
-
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
@@ -359,7 +346,6 @@ export class MuxApp extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     document.removeEventListener('keydown', this._onDocKeyDown);
-    window.removeEventListener('resize', this._onWindowResize);
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -409,14 +395,6 @@ export class MuxApp extends LitElement {
       liveIds.add(paneId);
     }
     terminalRegistry.prune(liveIds);
-  }
-
-  /** Compute the current arrangement for the measured viewport class. */
-  private _arrangement(): Arrangement {
-    if (this._controller) {
-      return this._controller.currentArrangement(this._viewportWidth);
-    }
-    return arrange(store.composition, viewportClassFor(this._viewportWidth));
   }
 
   render() {
