@@ -24,12 +24,18 @@ class TerminalRenderer implements IContentRenderer {
   }
 
   init(): void {
-    if (terminalRegistry.getTerminal(this._paneId) !== null) {
-      terminalRegistry.attach(this._paneId, this.element);
-    } else {
-      this._pendingMount = true;
-      console.warn(`[mux-dock] TerminalRenderer.init: pane ${this._paneId} not yet in registry — deferring attach`);
-    }
+    // Defer attach until after the browser has painted and dockview has settled
+    // its panel dimensions. Without this, the terminal opens at wrong dimensions,
+    // the buffered PTY replay renders garbled ($$$$~~~~~), and a subsequent fit
+    // can't fix already-drawn content.
+    requestAnimationFrame(() => {
+      if (terminalRegistry.getTerminal(this._paneId) !== null) {
+        terminalRegistry.attach(this._paneId, this.element);
+      } else {
+        this._pendingMount = true;
+        console.warn(`[mux-dock] TerminalRenderer.init: pane ${this._paneId} not yet in registry — deferring attach`);
+      }
+    });
   }
 
   layout(): void {
@@ -79,6 +85,80 @@ class SplitButton {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// RenameableTab
+// Custom tab renderer: shows pane title, double-click to rename inline.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class RenameableTab {
+  readonly element: HTMLElement;
+  private readonly _span: HTMLSpanElement;
+  private readonly _input: HTMLInputElement;
+  private _paneId = 0;
+  private _title = '';
+
+  constructor(private readonly _customTitles: Map<number, string>) {
+    this.element = document.createElement('div');
+    this.element.className = 'mux-tab-label';
+
+    this._span = document.createElement('span');
+    this._span.className = 'mux-tab-label__text';
+
+    this._input = document.createElement('input');
+    this._input.className = 'mux-tab-label__input';
+    this._input.type = 'text';
+    this._input.style.display = 'none';
+
+    this.element.appendChild(this._span);
+    this.element.appendChild(this._input);
+
+    this._span.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      this._startEdit();
+    });
+    this._input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); this._commit(); }
+      if (e.key === 'Escape') { e.preventDefault(); this._cancel(); }
+      e.stopPropagation(); // don't leak keystrokes to dockview / xterm
+    });
+    this._input.addEventListener('blur', () => this._commit());
+  }
+
+  init(params: { api: { id: string; title?: string } }): void {
+    this._paneId = parseInt(params.api.id, 10);
+    // Use stored custom title if one exists, otherwise use the panel default.
+    this._title = this._customTitles.get(this._paneId) ?? params.api.title ?? `Pane ${this._paneId}`;
+    this._span.textContent = this._title;
+  }
+
+  // update() is optional in ITabRenderer; title changes are handled via init() +
+  // the double-click rename flow.  No external callers pass a new title here.
+
+  dispose(): void {}
+
+  private _startEdit(): void {
+    this._input.value = this._title;
+    this._input.style.display = '';
+    this._span.style.display = 'none';
+    this._input.focus();
+    this._input.select();
+  }
+
+  private _commit(): void {
+    const next = this._input.value.trim() || this._title;
+    this._title = next;
+    this._customTitles.set(this._paneId, next);
+    this._span.textContent = next;
+    this._input.style.display = 'none';
+    this._span.style.display = '';
+  }
+
+  private _cancel(): void {
+    this._input.style.display = 'none';
+    this._span.style.display = '';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MuxDock
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -99,6 +179,8 @@ export class MuxDock extends LitElement {
   private _dv: DockviewComponent | null = null;
   private _panels = new Map<number, IDockviewPanel>();
   private _settingActive = false;
+  /** User-defined pane names — persists across workspace switches for the session. */
+  private _customTitles = new Map<number, string>();
   /**
    * Pane IDs closed by the user via the dockview tab X button.
    * These are excluded from reconciler re-adds (Case 2) until the
@@ -222,6 +304,38 @@ export class MuxDock extends LitElement {
         mux-dock .mux-split-btn:active {
           background: rgba(122, 162, 247, 0.25);
         }
+
+        /* Renameable tab label */
+        mux-dock .mux-tab-label {
+          display: flex;
+          align-items: center;
+          height: 100%;
+          padding: 0 4px;
+          max-width: 160px;
+          overflow: hidden;
+        }
+        mux-dock .mux-tab-label__text {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          user-select: none;
+          cursor: default;
+        }
+        mux-dock .mux-tab-label__text:hover {
+          color: #c0caf5;
+        }
+        mux-dock .mux-tab-label__input {
+          width: 100%;
+          min-width: 60px;
+          background: #24283b;
+          color: #c0caf5;
+          border: 1px solid #7aa2f7;
+          border-radius: 3px;
+          padding: 1px 4px;
+          font: inherit;
+          font-size: inherit;
+          outline: none;
+        }
       `;
       target.appendChild(style);
     }
@@ -229,6 +343,7 @@ export class MuxDock extends LitElement {
     this.classList.add('dockview-theme-dark');
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => new TerminalRenderer(opts.id),
+      createTabComponent: () => new RenameableTab(this._customTitles),
       createRightHeaderActionComponent: () =>
         new SplitButton(() => {
           this.dispatchEvent(
@@ -289,7 +404,7 @@ export class MuxDock extends LitElement {
           const panel = this._dv.addPanel({
             id: String(pane.paneId),
             component: 'terminal',
-            title: pane.title ?? `Pane ${pane.paneId}`,
+            title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
           });
           this._panels.set(pane.paneId, panel);
         }
@@ -330,7 +445,7 @@ export class MuxDock extends LitElement {
           const panel = this._dv.addPanel({
             id: String(pane.paneId),
             component: 'terminal',
-            title: pane.title ?? `Pane ${pane.paneId}`,
+            title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
           });
           this._panels.set(pane.paneId, panel);
         }
