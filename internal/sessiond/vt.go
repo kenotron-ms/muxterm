@@ -3,60 +3,131 @@ package sessiond
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/x/vt"
 )
 
-// VTBuffer feeds bytes to a headless cell-grid emulator (charmbracelet/x/vt)
-// and serializes the live grid on Replay. Unlike RawBuffer/TrackedBuffer, there
-// is no scrollback ring and no synthetic preamble: trimming happens inside the
-// emulator on whole lines, so sticky state (SGR pen, cursor, alt-screen) is
-// always reconstructed from the live grid.
+// VTBuffer feeds bytes to a concurrency-safe headless cell-grid emulator
+// (charmbracelet/x/vt SafeEmulator) and serializes the live grid plus
+// scrollback history on Replay.
+//
+// Compared with RawBuffer, this fixes garbled terminal text on reconnect:
+// raw ANSI cursor-positioning sequences replay incorrectly when the terminal
+// dimensions differ from when they were recorded, but a grid snapshot is
+// always correct regardless of dimensions.
 //
 // Documented trade-offs:
-//   - Two-emulator drift: x/vt here vs xterm.js in the browser. The x/vt oracle
-//     in the golden tests CANNOT catch this drift because it measures Replay
-//     against the same x/vt implementation.
+//   - Two-emulator drift: x/vt here vs xterm.js in the browser. Golden tests
+//     CANNOT catch this drift because they measure Replay against the same x/vt
+//     implementation.
 //   - Heavier memory: a full cell grid (plus emulator scrollback) per pane,
 //     versus a flat byte ring.
 type VTBuffer struct {
-	emu *vt.Emulator
+	// mu serialises all accesses to emu.  Using our own RWMutex (rather than
+	// relying solely on SafeEmulator's internal lock) ensures that Replay's
+	// multi-step read — IsAltScreen, Scrollback, Render, CursorPosition — is
+	// atomic: no Write can slip in between those calls and leave us with a
+	// partially-updated snapshot.
+	mu  sync.RWMutex
+	emu *vt.SafeEmulator
 }
 
-// NewVTBuffer returns a VTBuffer backed by a w x h emulator grid.
+// NewVTBuffer returns a VTBuffer backed by a w×h SafeEmulator with a 2000-line
+// scrollback. The 2000-line budget is comparable to the old RawBuffer's ~1 MiB
+// byte ring.
 func NewVTBuffer(w, h int) *VTBuffer {
-	return &VTBuffer{emu: vt.NewEmulator(w, h)}
+	emu := vt.NewSafeEmulator(w, h)
+	emu.SetScrollbackSize(2000)
+	return &VTBuffer{emu: emu}
 }
 
-// Write forwards p directly to the emulator, which interprets the byte stream
-// and updates the live grid.
+// Write forwards p directly to the underlying emulator under the write lock,
+// which interprets the byte stream and updates the live grid.
 func (b *VTBuffer) Write(p []byte) (int, error) {
-	return b.emu.Write(p)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// Access the underlying Emulator directly: b.mu already excludes
+	// concurrent reads, so the SafeEmulator's own per-method lock is not
+	// needed here and calling the raw method avoids nested locking.
+	return b.emu.Emulator.Write(p)
+}
+
+// Resize updates the emulator grid to the new dimensions.  Non-positive values
+// are ignored to guard against invalid PTY states during pane teardown.
+func (b *VTBuffer) Resize(cols, rows int) {
+	if cols <= 0 || rows <= 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.emu.Emulator.Resize(cols, rows)
 }
 
 // Replay serializes the current emulator grid into a byte stream that, when fed
-// to a fresh emulator, reproduces the visible screen.
+// to a fresh emulator, reproduces the visible screen and scrollback history.
 func (b *VTBuffer) Replay() []byte {
-	return serializeGrid(b.emu)
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	// Pass the underlying *vt.Emulator: we hold b.mu.RLock(), so all state is
+	// stable for the duration of the call.
+	return serializeGrid(b.emu.Emulator)
 }
 
 // serializeGrid emits a self-contained byte stream that reconstructs the
-// emulator's visible screen: clear + home, the styled grid render, then a
-// restored cursor position. If the emulator is on the alternate screen, the
-// stream first switches into it.
+// emulator's scrollback history and visible screen.
+//
+// Alt-screen path: switches into the alt screen, clears, renders, restores
+// cursor.  Scrollback is not applicable in alt-screen mode.
+//
+// Primary-screen path:
+//  1. Clear + home.
+//  2. Scrollback lines (oldest→newest), each rendered with ANSI styling via
+//     uv.Line.Render() and terminated with CRLF.  A reconnecting client feeds
+//     these to its own terminal emulator; they scroll into the emulator's
+//     scrollback as new visible content arrives.
+//  3. Visible grid: emu.Render() with bare LF promoted to CRLF so the fresh
+//     emulator doesn't stair-step each row.
+//  4. Cursor restored to its live position via an absolute CUP sequence.
+//
+// NOTE: uv.Line.Render() emits fully ANSI-styled output.  If a scrollback line
+// carries no SGR attributes (typical for plain-text shells) the output is the
+// same as the plain-text form.  Styled scrollback (coloured prompts, vim
+// status lines that scrolled away) is preserved with full colour fidelity.
 func serializeGrid(emu *vt.Emulator) []byte {
 	var out []byte
+
 	if emu.IsAltScreen() {
+		// Reconnecting into alt-screen mode: switch the fresh terminal into
+		// alt screen first, then paint the current grid.
 		out = append(out, esc+"[?1049h"...)
+		out = append(out, esc+"[2J"...)
+		out = append(out, esc+"[H"...)
+		out = append(out, strings.ReplaceAll(emu.Render(), "\n", "\r\n")...)
+		pos := emu.CursorPosition()
+		out = append(out, fmt.Sprintf(esc+"[%d;%dH", pos.Y+1, pos.X+1)...)
+		return out
 	}
-	// Clear screen and home the cursor before painting the grid.
+
+	// Primary screen: clear, emit scrollback, then the visible grid.
 	out = append(out, esc+"[2J"...)
 	out = append(out, esc+"[H"...)
-	// Render() emits the styled screen (ANSI SGR + content), unlike String()
-	// which is plain text. It separates rows with a bare LF; feeding that to a
-	// fresh emulator would stair-step each row (LF moves down but not to column
-	// 0), so promote each LF to CR+LF.
+
+	// Emit scrollback lines so reconnecting clients see prior output.
+	// uv.Line.Render() produces the ANSI-styled form of each scrollback line.
+	// Lines have had trailing blank cells trimmed by the emulator already
+	// (Scrollback.Push trims trailing empty cells before storing).
+	sb := emu.Scrollback()
+	for _, line := range sb.Lines() {
+		out = append(out, line.Render()...)
+		out = append(out, "\r\n"...)
+	}
+
+	// Visible grid: Render() emits the styled screen (ANSI SGR + content),
+	// unlike String() which is plain text. Rows are separated by bare LF;
+	// promote each to CR+LF so a fresh emulator doesn't stair-step.
 	out = append(out, strings.ReplaceAll(emu.Render(), "\n", "\r\n")...)
+
 	// Restore the cursor to its live position. uv.Position (image.Point) X/Y
 	// are 0-based; terminal CUP rows/cols are 1-based.
 	pos := emu.CursorPosition()

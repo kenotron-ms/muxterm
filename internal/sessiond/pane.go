@@ -44,7 +44,7 @@ func resolveArgv(argv []string) []string {
 }
 
 // NewPane starts a child process attached to a new PTY sized cols x rows and
-// begins streaming its output. buf may be nil (a default RawBuffer is used);
+// begins streaming its output. buf may be nil (a default VTBuffer is used);
 // onData and onExit may be nil.
 func NewPane(
 	localID int,
@@ -55,10 +55,14 @@ func NewPane(
 	onExit func(localID int),
 ) (*Pane, error) {
 	if buf == nil {
-		// v1 default: RawBuffer. See the "Buffer bake-off result (Phase 5)"
-		// decision record in docs/plans/2026-06-01-session-persistence-design.md
-		// (Tracked/VT remain drop-in upgrades behind the PaneBuffer seam).
-		buf = NewRawBuffer(0)
+		// Production default: VTBuffer (screen-state replay). Raw byte replay
+		// (RawBuffer) garbles the terminal on reconnect when the client's
+		// dimensions differ from when the bytes were recorded — ANSI cursor-
+		// positioning sequences apply relative to the original grid size.
+		// VTBuffer serializes the live cell grid, which is always correct
+		// regardless of dimension changes. See the decision record in
+		// docs/plans/2026-06-01-session-persistence-design.md.
+		buf = NewVTBuffer(cols, rows)
 	}
 	argv = resolveArgv(argv)
 
@@ -117,13 +121,17 @@ func (p *Pane) Write(input []byte) (int, error) {
 	return p.ptmx.Write(input)
 }
 
-// Resize updates the stored dimensions and resizes the PTY.
+// Resize updates the stored dimensions, resizes the PTY, and notifies the
+// buffer so that grid-aware implementations (VTBuffer) can resize their
+// internal cell grid to match.
 func (p *Pane) Resize(cols, rows int) error {
 	p.mu.Lock()
 	p.cols = cols
 	p.rows = rows
 	p.mu.Unlock()
-	return pty.Setsize(p.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+	err := pty.Setsize(p.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+	p.buf.Resize(cols, rows)
+	return err
 }
 
 // Replay returns a copy of the pane's scrollback buffer.

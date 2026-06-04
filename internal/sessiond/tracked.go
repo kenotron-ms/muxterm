@@ -287,6 +287,10 @@ func nextSafeBoundary(ring []byte, from int) int {
 	return len(ring)
 }
 
+// Resize is a no-op for TrackedBuffer; it stores raw byte sequences and its
+// preamble-based replay is dimension-agnostic.
+func (b *TrackedBuffer) Resize(cols, rows int) {}
+
 // Replay returns a synthetic preamble that re-establishes the sticky state at
 // the trim boundary (title, alt-screen mode, SGR pen, cursor) followed by the
 // retained content: the single alt-screen frame when on the alternate screen,

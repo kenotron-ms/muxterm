@@ -8,12 +8,17 @@ import (
 // defaultBufferBudget is the default per-pane scrollback budget (~1 MiB).
 const defaultBufferBudget = 1 << 20
 
-// PaneBuffer is the per-pane scrollback seam. v1 ships RawBuffer; richer
-// implementations (TrackedBuffer/VTBuffer) are deferred to Phase 5 behind
-// this interface.
+// PaneBuffer is the per-pane scrollback seam. The production default is
+// VTBuffer (screen-state replay). RawBuffer remains available for testing;
+// TrackedBuffer is a third alternative behind this same interface.
 type PaneBuffer interface {
 	Write(p []byte) (int, error)
 	Replay() []byte
+	// Resize notifies the buffer that the terminal dimensions have changed.
+	// Implementations that model a cell grid (VTBuffer) must resize their
+	// internal state so subsequent Replay output matches the new dimensions.
+	// Implementations that are dimension-agnostic (RawBuffer) may ignore it.
+	Resize(cols, rows int)
 }
 
 // RawBuffer is a budgeted byte ring with newline-boundary trimming and
@@ -59,6 +64,10 @@ func (b *RawBuffer) trimLocked() {
 	copy(retained, b.buf[cut:])
 	b.buf = retained
 }
+
+// Resize is a no-op for RawBuffer; raw byte replay carries no grid state and
+// is dimension-agnostic.
+func (b *RawBuffer) Resize(cols, rows int) {}
 
 // Replay returns a copy of the retained bytes. The returned slice never aliases
 // internal state.

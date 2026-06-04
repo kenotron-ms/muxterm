@@ -61,3 +61,27 @@ func TestRawBufferReplayReturnsCopy(t *testing.T) {
 func TestRawBufferImplementsPaneBuffer(t *testing.T) {
 	var _ PaneBuffer = NewRawBuffer(0)
 }
+
+func TestRawBufferResizeIsNoOp(t *testing.T) {
+	b := NewRawBuffer(0)
+	if _, err := b.Write([]byte("before resize\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	snapshot := b.Replay()
+
+	// Resize must not alter the stored bytes in any way.
+	b.Resize(120, 40)
+
+	after := b.Replay()
+	if !bytes.Equal(snapshot, after) {
+		t.Fatalf("Resize mutated RawBuffer content:\nbefore: %q\nafter:  %q", snapshot, after)
+	}
+
+	// Second resize with edge-case dimensions is also a no-op.
+	b.Resize(0, 0)
+	b.Resize(-1, -1)
+	afterEdge := b.Replay()
+	if !bytes.Equal(snapshot, afterEdge) {
+		t.Fatalf("Resize(0,0) or Resize(-1,-1) mutated RawBuffer content: %q", afterEdge)
+	}
+}
