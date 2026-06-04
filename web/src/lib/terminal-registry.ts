@@ -185,21 +185,12 @@ export const terminalRegistry = {
     const entry = _map.get(key);
     if (!entry) return;
 
+    const isFirstOpen = !entry.opened;
+
     if (!entry.opened) {
       // Open terminal in the stable host element — only ever called once.
       entry.term.open(entry.hostEl);
       entry.opened = true;
-
-      // Second fit after fonts settle (SF Mono / JetBrains Mono may not be
-      // loaded at open() time). Guard for environments without document.fonts.
-      if (typeof document !== 'undefined' && document.fonts?.ready) {
-        document.fonts.ready.then(() => {
-          requestAnimationFrame(() => {
-            // Use the captured composite key to check the map.
-            if (_map.has(key)) terminalRegistry.fitIfVisible(paneId);
-          });
-        });
-      }
     }
 
     // Move (or insert) the host element into the new container.
@@ -218,14 +209,40 @@ export const terminalRegistry = {
       entry.resizeObserver = ro;
     }
 
-    // Eager fit so tmux gets correct dimensions before capture-pane output.
+    // Eager fit — gives the PTY correct dimensions as soon as possible.
     terminalRegistry.fitIfVisible(paneId);
 
-    // Drain data that arrived while the terminal was not yet open.
-    for (const chunk of entry.pendingData) {
-      entry.term.write(chunk);
+    if (isFirstOpen) {
+      // Defer the pendingData drain until after the custom font has loaded.
+      // fitAddon.fit() uses character cell pixel dimensions to calculate
+      // cols/rows. If SF Mono / JetBrains Mono hasn't loaded yet, it falls
+      // back to generic monospace metrics → wrong cols/rows → replay bytes
+      // (PTY buffer from sessiond) write ANSI cursor sequences at wrong
+      // dimensions → garbled $$$$~~~~~ at the top of the terminal.
+      // Draining AFTER fonts.ready guarantees the re-fit uses real metrics
+      // before any replay data touches the terminal grid.
+      const drainPending = (): void => {
+        if (!_map.has(key)) return;
+        terminalRegistry.fitIfVisible(paneId); // re-fit with real font metrics
+        const pending = entry.pendingData.splice(0);
+        for (const chunk of pending) {
+          entry.term.write(chunk);
+        }
+      };
+      if (typeof document !== 'undefined' && document.fonts?.ready) {
+        document.fonts.ready.then(() => requestAnimationFrame(drainPending));
+      } else {
+        requestAnimationFrame(drainPending);
+      }
+    } else {
+      // Re-attach after workspace switch: pendingData is typically empty
+      // (live data flowed directly while opened=true), so this is a no-op
+      // in normal operation. Drain synchronously for correctness.
+      for (const chunk of entry.pendingData) {
+        entry.term.write(chunk);
+      }
+      entry.pendingData = [];
     }
-    entry.pendingData = [];
 
     entry.term.focus();
   },
