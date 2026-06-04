@@ -1,4 +1,4 @@
-import { LitElement, css } from 'lit';
+import { LitElement } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import type { IDockviewPanel, IContentRenderer } from 'dockview-core';
 import { DockviewComponent } from 'dockview-core';
@@ -54,39 +54,15 @@ class TerminalRenderer implements IContentRenderer {
 // MuxDock
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Unique ID for the injected mux-dock style tag; prevents double-inject. */
+const STYLE_ID = 'mux-dock-styles';
+
 @customElement('mux-dock')
 export class MuxDock extends LitElement {
   // Light DOM is REQUIRED for dockview CSS and DnD to work.
   override createRenderRoot() {
     return this;
   }
-
-  static styles = css`
-    mux-dock {
-      display: block;
-      flex: 1;
-      width: 100%;
-      height: 100%;
-    }
-    /* Tokyo Night color overrides for dockview */
-    mux-dock .dv-dockview {
-      --dv-background-color: #1a1b26;
-      --dv-separator-border: #292e42;
-      --dv-tabs-and-actions-container-background-color: #16161e;
-      --dv-activegroup-visiblepanel-tab-background-color: #1a1b26;
-      --dv-activegroup-hiddenpanel-tab-background-color: #16161e;
-      --dv-inactivegroup-visiblepanel-tab-background-color: #16161e;
-      --dv-inactivegroup-hiddenpanel-tab-background-color: #16161e;
-      --dv-tab-divider-color: #292e42;
-      --dv-activegroup-visiblepanel-tab-color: #c0caf5;
-      --dv-activegroup-hiddenpanel-tab-color: #565f89;
-      --dv-inactivegroup-visiblepanel-tab-color: #565f89;
-      --dv-inactivegroup-hiddenpanel-tab-color: #565f89;
-      --dv-drag-over-background-color: rgba(122, 162, 247, 0.15);
-      --dv-drag-over-border-color: #7aa2f7;
-      --dv-drop-target-background: rgba(122, 162, 247, 0.1);
-    }
-  `;
 
   @property({ attribute: false }) panes: SessiondPaneInfo[] = [];
   @property({ attribute: false }) activePaneId = -1;
@@ -106,6 +82,44 @@ export class MuxDock extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+
+    // Inject Tokyo Night theme overrides for dockview into document.head.
+    // static styles cannot be used here because createRenderRoot() returns
+    // `this` (light DOM mode, required for dockview). In light DOM mode Lit's
+    // adoptStyles() is never called — the static styles block is dead code.
+    // Injecting a <style> tag into document.head is the correct workaround.
+    if (!document.getElementById(STYLE_ID)) {
+      const style = document.createElement('style');
+      style.id = STYLE_ID;
+      style.textContent = `
+        mux-dock {
+          display: block;
+          flex: 1;
+          width: 100%;
+          height: 100%;
+        }
+        /* Tokyo Night color overrides for dockview */
+        mux-dock .dv-dockview {
+          --dv-background-color: #1a1b26;
+          --dv-separator-border: #292e42;
+          --dv-tabs-and-actions-container-background-color: #16161e;
+          --dv-activegroup-visiblepanel-tab-background-color: #1a1b26;
+          --dv-activegroup-hiddenpanel-tab-background-color: #16161e;
+          --dv-inactivegroup-visiblepanel-tab-background-color: #16161e;
+          --dv-inactivegroup-hiddenpanel-tab-background-color: #16161e;
+          --dv-tab-divider-color: #292e42;
+          --dv-activegroup-visiblepanel-tab-color: #c0caf5;
+          --dv-activegroup-hiddenpanel-tab-color: #565f89;
+          --dv-inactivegroup-visiblepanel-tab-color: #565f89;
+          --dv-inactivegroup-hiddenpanel-tab-color: #565f89;
+          --dv-drag-over-background-color: rgba(122, 162, 247, 0.15);
+          --dv-drag-over-border-color: #7aa2f7;
+          --dv-drop-target-background: rgba(122, 162, 247, 0.1);
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
     this.classList.add('dockview-theme-dark');
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => new TerminalRenderer(opts.id),
@@ -231,7 +245,7 @@ export class MuxDock extends LitElement {
 
   /**
    * Read xterm.js buffer for playwright verification.
-   * Returns the visible viewport content as a newline-joined string.
+   * Returns the full scrollback buffer content as a newline-joined string.
    */
   getTerminalContent(paneId: number): string {
     const term = terminalRegistry.getTerminal(paneId);

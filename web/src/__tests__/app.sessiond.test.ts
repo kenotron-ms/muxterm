@@ -60,7 +60,7 @@ describe('MuxApp sessiond render path', () => {
     el = null as unknown as MuxApp;
   });
 
-  it('renders mux-composition with the arranged composition panes', async () => {
+  it('passes the composed panes to mux-dock', async () => {
     el = await fixture();
     applyComposition([
       { paneId: 5, cols: 80, rows: 24 },
@@ -68,9 +68,12 @@ describe('MuxApp sessiond render path', () => {
     ]);
     await el.updateComplete;
 
-    const comp = el.shadowRoot!.querySelector('mux-composition') as any;
-    expect(comp).toBeTruthy();
-    expect(comp.arrangement.visible).toEqual([5, 6]);
+    const dock = el.shadowRoot!.querySelector('mux-dock') as any;
+    expect(dock).toBeTruthy();
+    // Both panes should be passed to mux-dock
+    const paneIds = dock.panes.map((p: { paneId: number }) => p.paneId);
+    expect(paneIds).toContain(5);
+    expect(paneIds).toContain(6);
   });
 
   it('ensures a terminal per sessiond pane and routes input to the socket', async () => {
@@ -116,7 +119,7 @@ describe('MuxApp sessiond render path', () => {
     ensureSpy.mockRestore();
   });
 
-  it('sets the active pane when mux-composition emits pane-select', async () => {
+  it('sets the active pane when mux-dock emits pane-select', async () => {
     el = await fixture();
     applyComposition([
       { paneId: 5, cols: 80, rows: 24 },
@@ -125,8 +128,8 @@ describe('MuxApp sessiond render path', () => {
     await el.updateComplete;
 
     const setActiveSpy = vi.spyOn(store, 'setActivePane');
-    const comp = el.shadowRoot!.querySelector('mux-composition')!;
-    comp.dispatchEvent(
+    const dock = el.shadowRoot!.querySelector('mux-dock')!;
+    dock.dispatchEvent(
       new CustomEvent('pane-select', { bubbles: true, composed: true, detail: { paneId: 6 } }),
     );
     expect(setActiveSpy).toHaveBeenCalledWith(6);

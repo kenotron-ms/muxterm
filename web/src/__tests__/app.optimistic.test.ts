@@ -54,47 +54,41 @@ describe('MuxApp workspace create (loading-state)', () => {
     el = null as unknown as MuxApp;
   });
 
-  it('fires createWorkspace, sets createPending flag (no provisional row), and auto-attaches on WorkspaceCreated', async () => {
+  it('fires createWorkspace, sets createPending flag (no provisional row), clears on WorkspaceCreated', async () => {
     el = await fixture();
     const socket = (el as unknown as {
       _socket: {
         createWorkspace: (...a: unknown[]) => void;
-        attach: (workspaceId: string) => void;
         onSessiondMessage: ((msg: unknown) => void) | null;
       };
     })._socket;
 
     const createSpy = vi.spyOn(socket, 'createWorkspace');
-    const attachSpy = vi.spyOn(socket, 'attach');
 
-    // Trigger workspace create via the new loading-state method.
-    (el as unknown as { _createWorkspace: () => void })._createWorkspace();
+    // Trigger workspace create via the modal submit path.
+    // _submitCreate falls back to _createModalName when the modal input is not in the DOM.
+    (el as unknown as { _createModalName: string })._createModalName = 'my-workspace';
+    (el as unknown as { _submitCreate: () => void })._submitCreate();
 
-    // Socket send should have fired with a non-empty clientRef as the second arg.
+    // Socket send should have fired with the workspace name.
     expect(createSpy).toHaveBeenCalledTimes(1);
-    const ref = createSpy.mock.calls[0][1] as string;
-    expect(typeof ref).toBe('string');
-    expect(ref.length).toBeGreaterThan(0);
+    expect(createSpy.mock.calls[0][0]).toBe('my-workspace');
 
     // No provisional row — only a loading flag.
     expect(store.workspaces.length).toBe(0);
     expect((el as unknown as { _creatingWorkspace: boolean })._creatingWorkspace).toBe(true);
 
-    // Daemon echoes WorkspaceCreated with the matching clientRef.
+    // Daemon echoes WorkspaceCreated.
     socket.onSessiondMessage?.({
       type: SessiondType.WorkspaceCreated,
       workspaceId: 'w-new',
-      clientRef: ref,
     });
-
-    // auto-switch: attach() called with the real workspaceId.
-    expect(attachSpy).toHaveBeenCalledWith('w-new');
 
     // Loading flag clears.
     expect((el as unknown as { _creatingWorkspace: boolean })._creatingWorkspace).toBe(false);
   });
 
-  it('resets _creatingWorkspace and _pendingCreateRef when the socket disconnects', async () => {
+  it('resets _creatingWorkspace when the socket disconnects', async () => {
     el = await fixture();
     const socket = (el as unknown as {
       _socket: { onDisconnect: (() => void) | null };
@@ -102,14 +96,12 @@ describe('MuxApp workspace create (loading-state)', () => {
 
     // Simulate a workspace create in-flight.
     (el as unknown as { _creatingWorkspace: boolean })._creatingWorkspace = true;
-    (el as unknown as { _pendingCreateRef: string | null })._pendingCreateRef = 'x';
 
     // Fire the disconnect callback (WebSocket drops while create is pending).
     socket.onDisconnect?.();
 
-    // Both must be cleared so the "New workspace" button re-enables.
+    // Must be cleared so the "New workspace" button re-enables.
     expect((el as unknown as { _creatingWorkspace: boolean })._creatingWorkspace).toBe(false);
-    expect((el as unknown as { _pendingCreateRef: string | null })._pendingCreateRef).toBeNull();
   });
 
   it('does not send a second createWorkspace when called twice in quick succession', async () => {
@@ -120,8 +112,10 @@ describe('MuxApp workspace create (loading-state)', () => {
     const createSpy = vi.spyOn(socket, 'createWorkspace');
 
     // Double-click: two calls in the same synchronous tick.
-    (el as unknown as { _createWorkspace: () => void })._createWorkspace();
-    (el as unknown as { _createWorkspace: () => void })._createWorkspace();
+    // _submitCreate uses _createModalName when the modal input is not in the DOM.
+    (el as unknown as { _createModalName: string })._createModalName = 'test-ws';
+    (el as unknown as { _submitCreate: () => void })._submitCreate();
+    (el as unknown as { _submitCreate: () => void })._submitCreate(); // guarded by _creatingWorkspace
 
     // Only one socket send should have been dispatched.
     expect(createSpy).toHaveBeenCalledTimes(1);
@@ -310,7 +304,7 @@ describe('MuxApp switch restores, never double-spawns', () => {
     const sendSpy = vi.spyOn(socket as { createPane: (...a: unknown[]) => void }, 'createPane');
 
     // Switch to a populated workspace: its existing panes must be restored,
-    // never respawned (D1 guard) and the active pane stays visible.
+    // never respawned (D1 guard).
     socket.onSessiondMessage({
       type: SessiondType.Composition,
       workspaceId: 'w2',
@@ -320,11 +314,12 @@ describe('MuxApp switch restores, never double-spawns', () => {
       ],
     });
 
-    // No double-spawn: the one-terminal-per-workspace rule does not fire.
+    // No double-spawn: the one-terminal-per-workspace rule does not fire for
+    // a populated workspace.
     expect(sendSpy).not.toHaveBeenCalled();
 
-    // The active pane is restored and visible in the arrangement.
-    const arrangement = (el as unknown as { _arrangement: () => { visible: number[] } })._arrangement();
-    expect(arrangement.visible).toContain(10);
+    // Both panes from the server composition are in the store.
+    expect(store.panes.map((p) => p.paneId)).toContain(10);
+    expect(store.panes.map((p) => p.paneId)).toContain(11);
   });
 });

@@ -75,20 +75,20 @@ describe('MuxApp', () => {
     expect(ctor).toBeDefined();
   });
 
-  it('renders mux-composition (the live sessiond render surface); no mux-workspace', async () => {
+  it('renders mux-dock (the dockview render surface); no mux-workspace', async () => {
     el = await fixture();
-    const composition = el.shadowRoot!.querySelector('mux-composition');
-    expect(composition).toBeTruthy();
+    const dock = el.shadowRoot!.querySelector('mux-dock');
+    expect(dock).toBeTruthy();
     // The legacy tmux mux-workspace path is dead — it must NOT render.
     expect(el.shadowRoot!.querySelector('mux-workspace')).toBeNull();
   });
 
-  it('renders a mux-pane host per composition pane', async () => {
+  it('passes the composition panes to mux-dock', async () => {
     el = await fixture();
-    const composition = el.shadowRoot!.querySelector('mux-composition')!;
-    await (composition as any).updateComplete;
-    const panes = composition.shadowRoot!.querySelectorAll('mux-pane');
-    expect(panes.length).toBe(2);
+    const dock = el.shadowRoot!.querySelector('mux-dock') as any;
+    expect(dock).toBeTruthy();
+    // Both panes (IDs 5 and 6) should be passed to the dock component.
+    expect(dock.panes.length).toBe(2);
   });
 
   it('passes the attached workspace id to the status bar', async () => {
@@ -212,14 +212,14 @@ describe('MuxApp', () => {
   });
 
   describe('Title Bar + Launcher', () => {
-    it('renders title bar above the composition', async () => {
+    it('renders title bar above mux-dock', async () => {
       el = await fixture();
       const titleBar = el.shadowRoot!.querySelector('mux-title-bar');
       expect(titleBar).toBeTruthy();
-      const composition = el.shadowRoot!.querySelector('mux-composition');
-      expect(composition).toBeTruthy();
-      // title bar must come before composition in DOM order
-      const position = titleBar!.compareDocumentPosition(composition!);
+      const dock = el.shadowRoot!.querySelector('mux-dock');
+      expect(dock).toBeTruthy();
+      // title bar must come before mux-dock in DOM order
+      const position = titleBar!.compareDocumentPosition(dock!);
       expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 

@@ -15,7 +15,7 @@ import './components/status-bar.js';
 import './components/mux-dock.js';
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
-import type { LauncherAction } from './components/launcher-menu.js';
+
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
 import { SessiondType } from './types.js';
