@@ -426,6 +426,7 @@ export class MuxApp extends LitElement {
               .workspaceKey="${store.attached ?? ''}"
               @pane-select="${this._onActivePane}"
               @pane-close="${this._onClosePane}"
+              @pane-create="${this._createPaneOptimistic}"
             ></mux-dock>
           `}
       <mux-status-bar

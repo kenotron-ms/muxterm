@@ -51,6 +51,34 @@ class TerminalRenderer implements IContentRenderer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SplitButton
+// Right-side header action: one button per tab group that creates a new pane.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class SplitButton {
+  readonly element: HTMLElement;
+
+  constructor(private readonly _onSplit: () => void) {
+    const btn = document.createElement('button');
+    btn.className = 'mux-split-btn';
+    btn.title = 'Split pane';
+    // VS Code-style split icon: two side-by-side rectangles
+    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
+      <rect x="1" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
+      <rect x="9" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
+    </svg>`;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._onSplit();
+    });
+    this.element = btn;
+  }
+
+  init(): void { /* nothing to initialise */ }
+  dispose(): void { this.element.remove(); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MuxDock
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -169,6 +197,31 @@ export class MuxDock extends LitElement {
         mux-dock .dv-tab.dv-active-tab .dv-default-tab-action {
           opacity: 1;
         }
+
+        /* Split pane button — top-right of every tab group */
+        mux-dock .mux-split-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 28px;
+          height: 28px;
+          margin: auto 4px;
+          padding: 0;
+          border: none;
+          border-radius: 4px;
+          background: transparent;
+          color: #a9b1d6;
+          cursor: pointer;
+          flex-shrink: 0;
+          transition: background 0.12s, color 0.12s;
+        }
+        mux-dock .mux-split-btn:hover {
+          background: rgba(122, 162, 247, 0.15);
+          color: #c0caf5;
+        }
+        mux-dock .mux-split-btn:active {
+          background: rgba(122, 162, 247, 0.25);
+        }
       `;
       target.appendChild(style);
     }
@@ -176,7 +229,12 @@ export class MuxDock extends LitElement {
     this.classList.add('dockview-theme-dark');
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => new TerminalRenderer(opts.id),
-      createRightHeaderActionComponent: undefined,
+      createRightHeaderActionComponent: () =>
+        new SplitButton(() => {
+          this.dispatchEvent(
+            new CustomEvent('pane-create', { bubbles: true, composed: true }),
+          );
+        }),
       createLeftHeaderActionComponent: undefined,
     });
     this._dv.onDidActivePanelChange((panel) => {
