@@ -5,9 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"mime"
 	"net/http"
 	"time"
 )
+
+func init() {
+	// Go's mime package has no built-in mapping for the PWA manifest
+	// extension. Without this, http.FileServer serves manifest.webmanifest as
+	// application/octet-stream and some browsers reject it.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
 
 // Config holds the configuration for creating a new Server.
 type Config struct {

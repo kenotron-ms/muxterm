@@ -6,13 +6,13 @@ import { WorkspaceController, type WorkspaceSocket } from '../lib/workspace-cont
 const LAST_WS_KEY = 'muxterm.lastWorkspaceId';
 
 function makeSocket(): WorkspaceSocket & {
-  attach: ReturnType<typeof vi.fn>;
+  attachWithBreakpoint: ReturnType<typeof vi.fn>;
   createWorkspace: ReturnType<typeof vi.fn>;
   listWorkspaces: ReturnType<typeof vi.fn>;
   resize: ReturnType<typeof vi.fn>;
 } {
   return {
-    attach: vi.fn(),
+    attachWithBreakpoint: vi.fn(),
     createWorkspace: vi.fn(),
     listWorkspaces: vi.fn(),
     resize: vi.fn(),
@@ -56,23 +56,23 @@ describe('WorkspaceController', () => {
   it('bootstrap with no stored id lists then attaches the first workspace', () => {
     controller.bootstrap();
     expect(socket.listWorkspaces).toHaveBeenCalledTimes(1);
-    expect(socket.attach).not.toHaveBeenCalled();
+    expect(socket.attachWithBreakpoint).not.toHaveBeenCalled();
 
     feed(workspaceList(['ws-1', 'ws-2']));
-    expect(socket.attach).toHaveBeenCalledWith('ws-1');
+    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-1', expect.any(String));
   });
 
   it('bootstrap with a stored id attaches it directly', () => {
     localStorage.setItem(LAST_WS_KEY, 'ws-stored');
     controller.bootstrap();
-    expect(socket.attach).toHaveBeenCalledWith('ws-stored');
+    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-stored', expect.any(String));
     expect(socket.listWorkspaces).not.toHaveBeenCalled();
   });
 
   it('records MRU + persists last workspace on composition reply', () => {
     feed(composition('ws-1'));
     expect(localStorage.getItem(LAST_WS_KEY)).toBe('ws-1');
-    expect(socket.attach).not.toHaveBeenCalled();
+    expect(socket.attachWithBreakpoint).not.toHaveBeenCalled();
   });
 
   it('on workspace-closed of the attached workspace recovers to the MRU survivor', () => {
@@ -84,7 +84,7 @@ describe('WorkspaceController', () => {
     expect(socket.listWorkspaces).toHaveBeenCalledTimes(1);
 
     feed(workspaceList(['ws-1']));
-    expect(socket.attach).toHaveBeenCalledWith('ws-1');
+    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-1', expect.any(String));
   });
 
   it('on workspace-closed with no survivors requests a fresh workspace', () => {
@@ -94,12 +94,12 @@ describe('WorkspaceController', () => {
 
     feed(workspaceList([]));
     expect(socket.createWorkspace).toHaveBeenCalledTimes(1);
-    expect(socket.attach).not.toHaveBeenCalled();
+    expect(socket.attachWithBreakpoint).not.toHaveBeenCalled();
   });
 
   it('attaches a freshly-created workspace on workspace-created reply', () => {
     feed({ type: SessiondType.WorkspaceCreated, workspaceId: 'ws-new' });
-    expect(socket.attach).toHaveBeenCalledWith('ws-new');
+    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-new', expect.any(String));
   });
 
   it('on unknown-workspace error clears the stale stored id and re-lists', () => {
@@ -113,13 +113,13 @@ describe('WorkspaceController', () => {
     expect(socket.listWorkspaces).toHaveBeenCalledTimes(1);
 
     feed(workspaceList(['ws-other']));
-    expect(socket.attach).toHaveBeenCalledWith('ws-other');
+    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-other', expect.any(String));
   });
 
   it('ignores non-recovery errors (e.g. pane-spawn-failed)', () => {
     feed({ type: SessiondType.Error, code: SessiondErrorCode.PaneSpawnFailed });
     expect(socket.listWorkspaces).not.toHaveBeenCalled();
-    expect(socket.attach).not.toHaveBeenCalled();
+    expect(socket.attachWithBreakpoint).not.toHaveBeenCalled();
     expect(socket.createWorkspace).not.toHaveBeenCalled();
   });
 

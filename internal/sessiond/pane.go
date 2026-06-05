@@ -139,12 +139,19 @@ func (p *Pane) Replay() []byte {
 	return p.buf.Replay()
 }
 
+// SetTitle sets the pane's display title under lock.
+func (p *Pane) SetTitle(name string) {
+	p.mu.Lock()
+	p.Title = name
+	p.mu.Unlock()
+}
+
 // Info returns a frozen snapshot of this pane's identity and dimensions.
 func (p *Pane) Info() PaneInfo {
 	p.mu.Lock()
-	cols, rows := p.cols, p.rows
+	cols, rows, title := p.cols, p.rows, p.Title
 	p.mu.Unlock()
-	return PaneInfo{PaneID: p.LocalID, Cols: cols, Rows: rows, Title: p.Title}
+	return PaneInfo{PaneID: p.LocalID, Cols: cols, Rows: rows, Title: title}
 }
 
 // Close kills the child (if any) and closes the PTY, which ends the read loop

@@ -60,6 +60,9 @@ type Handlers struct {
 	// OnWorkspaceList fires when the server pushes a full workspace snapshot
 	// (after any mutation that changes workspace state).
 	OnWorkspaceList func(workspaces []WorkspaceInfo)
+	// OnPaneRenamed fires when the pane identified by paneID is relabeled to
+	// name.
+	OnPaneRenamed func(paneID int, name string)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -236,19 +239,35 @@ func (c *Client) CloseWorkspace(workspaceID string) error {
 type Composition struct {
 	WorkspaceID string
 	Panes       []PaneInfo
+	Layout      string
 }
 
 // Attach binds this connection to the workspace identified by workspaceID and
-// returns its single composition reply. Empty Panes is valid (an empty
+// returns its single composition reply. breakpoint is the active CSS breakpoint
+// token (e.g. "desktop"); pass "" when unknown. Empty Panes is valid (an empty
 // workspace), not silence. After this reply, per-pane replay bytes arrive as
 // pane-data frames (routed to Handlers), followed by live output. An unknown or
 // stale workspace id surfaces as a *DaemonError with Code == CodeUnknownWorkspace.
-func (c *Client) Attach(workspaceID string) (Composition, error) {
-	reply, err := c.request(&Message{Type: TypeAttach, WorkspaceID: workspaceID})
+func (c *Client) Attach(workspaceID, breakpoint string) (Composition, error) {
+	reply, err := c.request(&Message{Type: TypeAttach, WorkspaceID: workspaceID, Breakpoint: breakpoint})
 	if err != nil {
 		return Composition{}, err
 	}
-	return Composition{WorkspaceID: reply.WorkspaceID, Panes: reply.Panes}, nil
+	return Composition{WorkspaceID: reply.WorkspaceID, Panes: reply.Panes, Layout: reply.Layout}, nil
+}
+
+// RenamePane sets the display name of the pane identified by the
+// workspace-local paneID to name.
+func (c *Client) RenamePane(paneID int, name string) error {
+	_, err := c.request(&Message{Type: TypeRenamePane, PaneID: paneID, Name: name})
+	return err
+}
+
+// SaveLayout persists a serialised layout blob for the workspace identified by
+// workspaceID at the given breakpoint.
+func (c *Client) SaveLayout(workspaceID, breakpoint, layout string) error {
+	_, err := c.request(&Message{Type: TypeSaveLayout, WorkspaceID: workspaceID, Breakpoint: breakpoint, Layout: layout})
+	return err
 }
 
 // CreatePane forks a PTY in the connection's currently-attached workspace and
@@ -322,6 +341,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeWorkspaceList:
 		if h.OnWorkspaceList != nil {
 			h.OnWorkspaceList(msg.Workspaces)
+		}
+	case TypePaneRenamed:
+		if h.OnPaneRenamed != nil {
+			h.OnPaneRenamed(msg.PaneID, msg.Name)
 		}
 	}
 }

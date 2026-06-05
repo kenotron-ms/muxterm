@@ -270,6 +270,8 @@ func TestTypeConstants(t *testing.T) {
 		{TypeAttach, "attach"},
 		{TypeCreatePane, "create-pane"},
 		{TypeResize, "resize"},
+		{TypeRenamePane, "rename-pane"},
+		{TypeSaveLayout, "save-layout"},
 		// Replies (daemon -> client, echo request cid)
 		{TypeWorkspaceCreated, "workspace-created"},
 		{TypeWorkspaceList, "workspace-list"},
@@ -281,6 +283,7 @@ func TestTypeConstants(t *testing.T) {
 		{TypePaneClosed, "pane-closed"},
 		{TypeWorkspaceClosed, "workspace-closed"},
 		{TypeWorkspaceRenamed, "workspace-renamed"},
+		{TypePaneRenamed, "pane-renamed"},
 		// Error envelope
 		{TypeError, "error"},
 		// Error codes (Message.Code values)
@@ -292,5 +295,34 @@ func TestTypeConstants(t *testing.T) {
 		if c.got != c.want {
 			t.Errorf("constant = %q, want %q", c.got, c.want)
 		}
+	}
+}
+
+// TestMessageRoundTripBreakpointLayout verifies that Breakpoint and Layout survive
+// a JSON marshal/unmarshal cycle unchanged.
+func TestMessageRoundTripBreakpointLayout(t *testing.T) {
+	original := Message{
+		Type:        TypeSaveLayout,
+		CID:         42,
+		WorkspaceID: "ws1",
+		Breakpoint:  "desktop",
+		Layout:      `{"panels":[{"id":"p1"}]}`,
+	}
+	data, err := json.Marshal(&original)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var decoded Message
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(original, decoded) {
+		t.Errorf("round-trip mismatch\n original: %+v\n decoded:  %+v", original, decoded)
+	}
+	if decoded.Breakpoint != "desktop" {
+		t.Errorf("Breakpoint = %q, want %q", decoded.Breakpoint, "desktop")
+	}
+	if decoded.Layout != `{"panels":[{"id":"p1"}]}` {
+		t.Errorf("Layout = %q, want %q", decoded.Layout, `{"panels":[{"id":"p1"}]}`)
 	}
 }

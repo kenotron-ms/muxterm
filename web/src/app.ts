@@ -19,6 +19,7 @@ import './components/reconnect-overlay.js';
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
 import { SessiondType } from './types.js';
+import { currentLayoutMode } from './lib/breakpoint.js';
 
 // Optimistic panes use a strictly-negative temp paneId so they never collide
 // with the daemon's positive workspace-local ids (which start at 1); the real
@@ -424,9 +425,13 @@ export class MuxApp extends LitElement {
               .panes="${panes}"
               .activePaneId="${store.activePaneId}"
               .workspaceKey="${store.attached ?? ''}"
+              .layout="${store.layout}"
+              .narrow="${currentLayoutMode() === 'narrow'}"
               @pane-select="${this._onActivePane}"
               @pane-close="${this._onClosePane}"
               @pane-create="${this._createPaneOptimistic}"
+              @pane-rename="${this._onPaneRename}"
+              @layout-save="${this._onLayoutSave}"
             ></mux-dock>
           `}
       <mux-status-bar
@@ -628,7 +633,7 @@ export class MuxApp extends LitElement {
     // Do NOT call disposeAll() — workspace-scoped composite keys in
     // terminalRegistry isolate paneIds across workspaces, so old terminals
     // stay alive with their scrollback until explicitly pruned or disposed.
-    this._socket?.attach(e.detail.workspaceId);
+    this._socket?.attachWithBreakpoint(e.detail.workspaceId, currentLayoutMode());
   };
 
   /**
@@ -646,6 +651,18 @@ export class MuxApp extends LitElement {
         .map((p) => p.paneId),
     );
     terminalRegistry.prune(remaining);
+  };
+
+  private _onPaneRename = (e: CustomEvent<{ paneId: number; name: string }>): void => {
+    this._socket?.renamePane(e.detail.paneId, e.detail.name);
+  };
+
+  private _onLayoutSave = (e: CustomEvent<{ layout: string }>): void => {
+    const ws = store.attached;
+    if (!ws) return;
+    // Narrow (phone) has no persisted layout — it's a tab view only.
+    if (currentLayoutMode() !== 'wide') return;
+    this._socket?.saveLayout(ws, 'wide', e.detail.layout);
   };
 
   private _onLauncherAction = (): void => {

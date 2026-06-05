@@ -32,13 +32,17 @@ func (f *fakeDaemonConn) CloseWorkspace(workspaceID string) error {
 	return nil
 }
 
-func (f *fakeDaemonConn) Attach(workspaceID string) (sessiond.Composition, error) {
+func (f *fakeDaemonConn) Attach(workspaceID, breakpoint string) (sessiond.Composition, error) {
 	f.attached = workspaceID
 	return sessiond.Composition{
 		WorkspaceID: workspaceID,
 		Panes:       []sessiond.PaneInfo{{PaneID: 1, Cols: 80, Rows: 24}},
 	}, nil
 }
+
+func (f *fakeDaemonConn) RenamePane(paneID int, name string) error { return nil }
+
+func (f *fakeDaemonConn) SaveLayout(workspaceID, breakpoint, layout string) error { return nil }
 
 func (f *fakeDaemonConn) CreatePane(cmd []string) (int, error) {
 	return f.createdID, nil

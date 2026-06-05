@@ -29,6 +29,8 @@ const (
 	TypeAttach          = "attach"
 	TypeCreatePane      = "create-pane"
 	TypeResize          = "resize"
+	TypeRenamePane      = "rename-pane"
+	TypeSaveLayout      = "save-layout"
 
 	// Replies (daemon -> client, echo request cid).
 	TypeWorkspaceCreated = "workspace-created"
@@ -42,6 +44,7 @@ const (
 	TypePaneClosed       = "pane-closed"
 	TypeWorkspaceClosed  = "workspace-closed"
 	TypeWorkspaceRenamed = "workspace-renamed"
+	TypePaneRenamed      = "pane-renamed"
 
 	// Error envelope.
 	TypeError = "error"
@@ -135,6 +138,8 @@ type Message struct {
 	Rows        int             `json:"rows,omitempty"`        //
 	Cmd         []string        `json:"cmd,omitempty"`         // argv, empty => default $SHELL
 	Title       string          `json:"title,omitempty"`       //
+	Breakpoint  string          `json:"breakpoint,omitempty"`  // responsive layout key (opaque to daemon)
+	Layout      string          `json:"layout,omitempty"`      // opaque dockview layout JSON blob
 	Workspaces  []WorkspaceInfo `json:"workspaces,omitempty"`  //
 	Panes       []PaneInfo      `json:"panes,omitempty"`       //
 	Code        string          `json:"code,omitempty"`        // error code

@@ -118,7 +118,7 @@ func (s *Server) unsubscribeLocked(c *conn) {
 //  1. composition reply FIRST (always sent, nil panes when empty),
 //  2. per-pane replay data frames enqueued BEFORE the conn is marked live,
 //  3. mark live so later broadcasts land strictly AFTER replay frames.
-func (s *Server) attachConn(c *conn, wsID string, cid uint64) {
+func (s *Server) attachConn(c *conn, wsID string, cid uint64, breakpoint string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -128,6 +128,7 @@ func (s *Server) attachConn(c *conn, wsID string, cid uint64) {
 		CID:         cid,
 		WorkspaceID: wsID,
 		Panes:       s.reg.PaneInfos(wsID),
+		Layout:      s.reg.Layout(wsID, breakpoint),
 	})
 
 	// (2) replay frames before going live.
@@ -281,6 +282,22 @@ func (c *conn) handle(msg Message) {
 		if p, ok := c.srv.reg.Pane(c.attached, msg.PaneID); ok {
 			_ = p.Resize(msg.Cols, msg.Rows)
 		}
+	case TypeRenamePane:
+		if c.attached != "" && c.srv.reg.RenamePane(c.attached, msg.PaneID, msg.Name) {
+			c.reply(&Message{Type: TypeOK, CID: msg.CID})
+			// Tell other attached clients so they update live.
+			c.srv.broadcast(c.attached, &Message{Type: TypePaneRenamed, PaneID: msg.PaneID, Name: msg.Name})
+		}
+	case TypeSaveLayout:
+		wsID := msg.WorkspaceID
+		if wsID == "" {
+			wsID = c.attached
+		}
+		if c.srv.reg.SaveLayout(wsID, msg.Breakpoint, msg.Layout) {
+			c.reply(&Message{Type: TypeOK, CID: msg.CID})
+		} else {
+			c.replyError(msg.CID, CodeUnknownWorkspace, "cannot save layout")
+		}
 	}
 }
 
@@ -291,7 +308,7 @@ func (c *conn) attach(msg Message) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
 		return
 	}
-	c.srv.attachConn(c, msg.WorkspaceID, msg.CID)
+	c.srv.attachConn(c, msg.WorkspaceID, msg.CID, msg.Breakpoint)
 }
 
 // createPane spawns a pane in the connection's attached workspace, ACKs the

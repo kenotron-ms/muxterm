@@ -1,6 +1,6 @@
 import { LitElement } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import type { IDockviewPanel, IContentRenderer } from 'dockview-core';
+import type { IDockviewPanel, IContentRenderer, SerializedDockview } from 'dockview-core';
 import { DockviewComponent } from 'dockview-core';
 import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
 import { terminalRegistry } from '../lib/terminal-registry.js';
@@ -138,6 +138,13 @@ export class MuxDock extends LitElement {
   @property({ attribute: false }) panes: SessiondPaneInfo[] = [];
   @property({ attribute: false }) activePaneId = -1;
   @property({ attribute: false }) workspaceKey = '';
+  @property({ attribute: false }) layout = '';
+  /**
+   * Narrow (phone) mode: a tab view only. No split button, no saved/restored
+   * layout — all panes collapse into a single dockview group as tabs. Wide
+   * (tablet + PC) gets the full split layout with save/restore.
+   */
+  @property({ attribute: false, type: Boolean }) narrow = false;
 
   private _dv: DockviewComponent | null = null;
   private _panels = new Map<number, IDockviewPanel>();
@@ -152,6 +159,10 @@ export class MuxDock extends LitElement {
   private _locallyClosedPanes = new Set<number>();
   /** True while we're programmatically removing panels to suppress pane-close events. */
   private _removingPanels = false;
+  /** Debounce timer for layout-save events. */
+  private _layoutSaveTimer: number | undefined;
+  /** True while restoring a layout via fromJSON — suppresses layout-save echoes. */
+  private _restoringLayout = false;
   /**
    * Where the NEXT newly-added pane should be placed:
    *   'tab'   — a new tab in the active group (the "+" button)
@@ -169,6 +180,17 @@ export class MuxDock extends LitElement {
     this._nextPlacement = placement;
     this._splitReferenceId = placement === 'split' ? (this._dv?.activePanel?.id ?? null) : null;
     this.dispatchEvent(new CustomEvent('pane-create', { bubbles: true, composed: true }));
+  }
+
+  private _scheduleLayoutSave(): void {
+    if (this.narrow) return; // narrow (phone) is a tab view — no persisted layout
+    if (this._restoringLayout) return; // don't echo a save while we're restoring
+    if (this._layoutSaveTimer !== undefined) clearTimeout(this._layoutSaveTimer);
+    this._layoutSaveTimer = window.setTimeout(() => {
+      if (!this._dv) return;
+      const json = JSON.stringify(this._dv.toJSON());
+      this.dispatchEvent(new CustomEvent('layout-save', { detail: { layout: json }, bubbles: true, composed: true }));
+    }, 400);
   }
 
   override connectedCallback(): void {
@@ -194,7 +216,12 @@ export class MuxDock extends LitElement {
       target.appendChild(base);
     }
 
-    // Inject Tokyo Night overrides on top of dockview-theme-dark.
+    // We use dockview's built-in "abyss" theme (applied via the
+    // dockview-theme-abyss class below). It already ships the clean, flat look
+    // we want: transparent sashes (single 1px separator hairline), zero tab
+    // margins/radius, and a subtle active-tab line indicator. The overrides
+    // here are purely functional muxterm chrome layered on top — we do NOT
+    // re-skin dockview's colors so the abyss palette renders authentically.
     if (!target.querySelector(`#${STYLE_ID}`)) {
       const style = document.createElement('style');
       style.id = STYLE_ID;
@@ -204,52 +231,6 @@ export class MuxDock extends LitElement {
           flex: 1;
           width: 100%;
           height: 100%;
-        }
-
-        /* Tokyo Night overrides — sit on top of dockview-theme-dark */
-        mux-dock .dv-dockview {
-          --dv-background-color: #1a1b26;
-          --dv-separator-border: #292e42;
-
-          /* Tab bar — visible separation from terminal content */
-          --dv-tabs-and-actions-container-background-color: #1f2335;
-          --dv-group-view-background-color: #1a1b26;
-
-          /* Active group tabs */
-          --dv-activegroup-visiblepanel-tab-background-color: #1a1b26;
-          --dv-activegroup-hiddenpanel-tab-background-color: #1f2335;
-          /* Inactive group tabs */
-          --dv-inactivegroup-visiblepanel-tab-background-color: #1f2335;
-          --dv-inactivegroup-hiddenpanel-tab-background-color: #1f2335;
-
-          --dv-tab-divider-color: #292e42;
-
-          /* Text: active tab bright, inactive tabs readable */
-          --dv-activegroup-visiblepanel-tab-color: #c0caf5;
-          --dv-activegroup-hiddenpanel-tab-color: #a9b1d6;
-          --dv-inactivegroup-visiblepanel-tab-color: #a9b1d6;
-          --dv-inactivegroup-hiddenpanel-tab-color: #565f89;
-
-          /* Sash (resize handle) */
-          --dv-sash-color: #292e42;
-          --dv-active-sash-color: #7aa2f7;
-
-          /* Close button */
-          --dv-tab-close-icon-size: 10px;
-
-          /* Drag */
-          --dv-drag-over-background-color: rgba(122, 162, 247, 0.15);
-          --dv-drag-over-border-color: #7aa2f7;
-          --dv-drop-target-background: rgba(122, 162, 247, 0.1);
-        }
-
-        /* Active tab accent line — applied to any active tab regardless of
-           group focus state so it shows on initial render too. */
-        mux-dock .dv-tab.dv-active-tab {
-          border-top: 2px solid #7aa2f7 !important;
-        }
-        mux-dock .dv-tab.dv-inactive-tab {
-          border-top: 2px solid transparent;
         }
 
         /* Close button — show on hover + always on active tab */
@@ -320,7 +301,7 @@ export class MuxDock extends LitElement {
       target.appendChild(style);
     }
 
-    this.classList.add('dockview-theme-dark');
+    this.classList.add('dockview-theme-abyss');
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => new TerminalRenderer(opts.id),
@@ -331,9 +312,13 @@ export class MuxDock extends LitElement {
       //   split  → right slot → far right (split into a side-by-side group)
       createLeftHeaderActionComponent: () =>
         new HeaderButton(ADD_ICON, 'New pane', () => this._requestPane('tab')),
+      // Narrow (phone) is a tab view only — no split button.
       createRightHeaderActionComponent: () =>
-        new HeaderButton(SPLIT_ICON, 'Split pane', () => this._requestPane('split')),
+        this.narrow
+          ? new HeaderButton('', '', () => {})
+          : new HeaderButton(SPLIT_ICON, 'Split pane', () => this._requestPane('split')),
     });
+    this._dv.onDidLayoutChange(() => this._scheduleLayoutSave());
     this._dv.onDidActivePanelChange((panel) => {
       if (this._settingActive) return;
       if (!panel) return;
@@ -394,6 +379,7 @@ export class MuxDock extends LitElement {
       tabContent.textContent = next;
       if (save && next !== currentTitle) {
         this._customTitles.set(paneId, next);
+        this.dispatchEvent(new CustomEvent('pane-rename', { detail: { paneId, name: next }, bubbles: true, composed: true }));
       }
     };
 
@@ -425,14 +411,66 @@ export class MuxDock extends LitElement {
         }
         this._panels.clear();
 
-        // Add fresh panels for panes with valid paneId
-        for (const pane of this.panes.filter((p) => p.paneId >= 0)) {
-          const panel = this._dv.addPanel({
-            id: String(pane.paneId),
-            component: 'terminal',
-            title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
-          });
-          this._panels.set(pane.paneId, panel);
+        // Seed _customTitles from server-stored titles (arrive in composition panes).
+        for (const pane of this.panes) {
+          if (pane.title) this._customTitles.set(pane.paneId, pane.title);
+        }
+
+        // Try to restore the saved dockview layout (wide mode only). Narrow
+        // (phone) is a tab view only: skip restore so all panes collapse into a
+        // single dockview group as tabs.
+        const alive = new Set(this.panes.filter((p) => p.paneId >= 0).map((p) => p.paneId));
+        let restored = false;
+        if (!this.narrow && this.layout) {
+          try {
+            this._restoringLayout = true;
+            this._dv.fromJSON(JSON.parse(this.layout) as SerializedDockview);
+            // Rebuild the panel map from whatever fromJSON recreated.
+            this._panels.clear();
+            for (const panel of this._dv.panels) {
+              this._panels.set(parseInt(panel.id, 10), panel);
+            }
+            // Prune panels whose pane died while we were away.
+            // (_removingPanels is already true from outer guard — no inner reset needed.)
+            // Snapshot entries before iterating since we mutate _panels in the loop.
+            for (const [paneId, panel] of Array.from(this._panels)) {
+              if (!alive.has(paneId)) {
+                this._dv.removePanel(panel);
+                this._panels.delete(paneId);
+              }
+            }
+            // Add any alive panes that weren't in the saved layout (created elsewhere).
+            for (const pane of this.panes.filter((p) => p.paneId >= 0)) {
+              if (!this._panels.has(pane.paneId)) {
+                const panel = this._dv.addPanel({
+                  id: String(pane.paneId),
+                  component: 'terminal',
+                  title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
+                });
+                this._panels.set(pane.paneId, panel);
+              }
+            }
+            restored = this._panels.size > 0;
+          } catch {
+            // Corrupt/incompatible layout — fall back to a clean tab build.
+            restored = false;
+            this._panels.clear();
+            this._dv.clear();
+          } finally {
+            this._restoringLayout = false;
+          }
+        }
+
+        if (!restored) {
+          // Existing behavior: add fresh panels for panes with valid paneId as tabs.
+          for (const pane of this.panes.filter((p) => p.paneId >= 0)) {
+            const panel = this._dv.addPanel({
+              id: String(pane.paneId),
+              component: 'terminal',
+              title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
+            });
+            this._panels.set(pane.paneId, panel);
+          }
         }
 
         // Set active panel

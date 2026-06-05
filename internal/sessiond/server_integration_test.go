@@ -243,6 +243,110 @@ func TestIntegrationAttachUnknownThenRecover(t *testing.T) {
 	c.waitData("recovered")
 }
 
+// TestIntegrationLayoutPersistenceOnAttach verifies that save-layout persists a
+// layout blob for a given breakpoint, that a re-attaching client with the same
+// breakpoint receives that blob in the composition Layout field, and that
+// attaching with a different (unsaved) breakpoint returns an empty Layout.
+func TestIntegrationLayoutPersistenceOnAttach(t *testing.T) {
+	_, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	a := newTClient(t, socketPath)
+
+	// Create and attach to a workspace.
+	a.send(&Message{Type: TypeCreateWorkspace, CID: 1, Name: "layout-test"})
+	wsID := a.waitCtrl(TypeWorkspaceCreated).WorkspaceID
+	a.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: wsID})
+	a.waitCtrl(TypeComposition)
+
+	// Save a layout blob for the "desktop" breakpoint.
+	const blob = `{"panels":[{"id":"main"}]}`
+	a.send(&Message{Type: TypeSaveLayout, CID: 3, WorkspaceID: wsID, Breakpoint: "desktop", Layout: blob})
+	ok := a.waitCtrl(TypeOK)
+	if ok.CID != 3 {
+		t.Fatalf("save-layout ok CID = %d, want 3", ok.CID)
+	}
+
+	// A fresh client attaching with breakpoint="desktop" must see the blob in
+	// the composition reply.
+	b := newTClient(t, socketPath)
+	b.send(&Message{Type: TypeAttach, CID: 10, WorkspaceID: wsID, Breakpoint: "desktop"})
+	comp := b.waitCtrl(TypeComposition)
+	if comp.Layout != blob {
+		t.Fatalf("composition Layout (desktop) = %q, want %q", comp.Layout, blob)
+	}
+
+	// A fresh client attaching with breakpoint="mobile" (nothing saved) must
+	// see an empty layout.
+	c := newTClient(t, socketPath)
+	c.send(&Message{Type: TypeAttach, CID: 20, WorkspaceID: wsID, Breakpoint: "mobile"})
+	comp2 := c.waitCtrl(TypeComposition)
+	if comp2.Layout != "" {
+		t.Fatalf("composition Layout (mobile) = %q, want \"\" (no layout saved for mobile)", comp2.Layout)
+	}
+}
+
+// TestIntegrationRenamePaneBroadcasts verifies rename-pane:
+//   - returns TypeOK to the sender,
+//   - broadcasts TypePaneRenamed (with correct PaneID/Name) to other subscribers,
+//   - the new title appears in a subsequent fresh-attach composition.
+func TestIntegrationRenamePaneBroadcasts(t *testing.T) {
+	_, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	// Client A creates a workspace, attaches, and spawns a long-lived pane.
+	a := newTClient(t, socketPath)
+	a.send(&Message{Type: TypeCreateWorkspace, CID: 1, Name: "rename-test"})
+	wsID := a.waitCtrl(TypeWorkspaceCreated).WorkspaceID
+	a.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: wsID})
+	a.waitCtrl(TypeComposition)
+	a.send(&Message{Type: TypeCreatePane, CID: 3, Cmd: []string{"cat"}})
+	paneID := a.waitCtrl(TypePaneCreated).PaneID
+	a.waitCtrl(TypePaneAdded)
+
+	// Client B attaches to the same workspace before the rename, so it will
+	// receive the broadcast.
+	b := newTClient(t, socketPath)
+	b.send(&Message{Type: TypeAttach, CID: 10, WorkspaceID: wsID})
+	b.waitCtrl(TypeComposition)
+
+	// Client A renames the pane.
+	a.send(&Message{Type: TypeRenamePane, CID: 4, PaneID: paneID, Name: "mytitle"})
+	ok := a.waitCtrl(TypeOK)
+	if ok.CID != 4 {
+		t.Fatalf("rename-pane ok CID = %d, want 4", ok.CID)
+	}
+
+	// Client B must receive the pane-renamed broadcast.
+	renamed := b.waitCtrl(TypePaneRenamed)
+	if renamed.PaneID != paneID {
+		t.Fatalf("pane-renamed PaneID = %d, want %d", renamed.PaneID, paneID)
+	}
+	if renamed.Name != "mytitle" {
+		t.Fatalf("pane-renamed Name = %q, want %q", renamed.Name, "mytitle")
+	}
+
+	// A fresh client C must see the updated title in the composition reply.
+	c := newTClient(t, socketPath)
+	c.send(&Message{Type: TypeAttach, CID: 20, WorkspaceID: wsID})
+	comp := c.waitCtrl(TypeComposition)
+	if len(comp.Panes) == 0 {
+		t.Fatal("composition has no panes for fresh attach after rename")
+	}
+	var found bool
+	for _, p := range comp.Panes {
+		if p.PaneID == paneID {
+			found = true
+			if p.Title != "mytitle" {
+				t.Fatalf("composition Pane %d Title = %q, want %q", paneID, p.Title, "mytitle")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("pane %d not found in composition panes %+v", paneID, comp.Panes)
+	}
+}
+
 // TestIntegrationReplayBeforeLiveOnAttach proves a freshly attaching client
 // receives the composition for pre-existing panes (NOT a pane-added) and that
 // scrollback replay is delivered BEFORE any subsequent live output.

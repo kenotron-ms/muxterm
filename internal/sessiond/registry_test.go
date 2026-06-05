@@ -155,3 +155,97 @@ func TestRegistryPaneInfosReportsFrozenPaneInfo(t *testing.T) {
 		t.Fatalf("PaneInfos(unknown) = non-nil, want nil")
 	}
 }
+
+// TestRegistrySaveLayoutRoundTrip saves a layout blob for a known workspace/breakpoint
+// and verifies Layout returns it; a different breakpoint returns ""; an unknown
+// workspace returns "".
+func TestRegistrySaveLayoutRoundTrip(t *testing.T) {
+	r := NewRegistry()
+	ws := r.AddWorkspace("w", "")
+
+	const blob = `{"panels":[]}`
+
+	if !r.SaveLayout(ws, "desktop", blob) {
+		t.Fatal("SaveLayout(known ws, non-empty breakpoint) = false, want true")
+	}
+
+	got := r.Layout(ws, "desktop")
+	if got != blob {
+		t.Fatalf("Layout(ws, \"desktop\") = %q, want %q", got, blob)
+	}
+
+	// Different breakpoint returns "".
+	if got := r.Layout(ws, "mobile"); got != "" {
+		t.Fatalf("Layout(ws, \"mobile\") = %q, want \"\" (no layout saved for mobile)", got)
+	}
+
+	// Unknown workspace returns "".
+	if got := r.Layout("bogus", "desktop"); got != "" {
+		t.Fatalf("Layout(\"bogus\", \"desktop\") = %q, want \"\" (unknown workspace)", got)
+	}
+}
+
+// TestRegistrySaveLayoutFailureCases verifies SaveLayout returns false for an unknown
+// workspace and for an empty breakpoint; an empty layout string is allowed (clear).
+func TestRegistrySaveLayoutFailureCases(t *testing.T) {
+	r := NewRegistry()
+	ws := r.AddWorkspace("w", "")
+
+	// Unknown workspace.
+	if r.SaveLayout("bogus", "desktop", "blob") {
+		t.Fatal("SaveLayout(unknown ws, ...) = true, want false")
+	}
+
+	// Empty breakpoint.
+	if r.SaveLayout(ws, "", "blob") {
+		t.Fatal("SaveLayout(known ws, \"\", ...) = true, want false (empty breakpoint rejected)")
+	}
+
+	// Empty layout string is allowed (acts as a clear).
+	if !r.SaveLayout(ws, "desktop", "") {
+		t.Fatal("SaveLayout(known ws, breakpoint, \"\") = false, want true (empty layout is allowed)")
+	}
+	if got := r.Layout(ws, "desktop"); got != "" {
+		t.Fatalf("Layout after SaveLayout(empty) = %q, want \"\"", got)
+	}
+}
+
+// TestRegistryRenamePaneSetsTitle verifies RenamePane updates the pane's title
+// as seen through PaneInfos.
+func TestRegistryRenamePaneSetsTitle(t *testing.T) {
+	r := NewRegistry()
+	ws := r.AddWorkspace("w", "")
+	pid, _ := r.AllocPaneID(ws)
+	r.PutPane(ws, &Pane{LocalID: pid, cols: 80, rows: 24})
+
+	if !r.RenamePane(ws, pid, "my-title") {
+		t.Fatal("RenamePane(known ws, known pane, name) = false, want true")
+	}
+
+	infos := r.PaneInfos(ws)
+	if len(infos) != 1 {
+		t.Fatalf("PaneInfos len = %d, want 1", len(infos))
+	}
+	if infos[0].Title != "my-title" {
+		t.Fatalf("PaneInfos[0].Title = %q, want %q", infos[0].Title, "my-title")
+	}
+}
+
+// TestRegistryRenamePaneFailureCases verifies RenamePane returns false for an
+// unknown workspace and for an unknown pane.
+func TestRegistryRenamePaneFailureCases(t *testing.T) {
+	r := NewRegistry()
+	ws := r.AddWorkspace("w", "")
+	pid, _ := r.AllocPaneID(ws)
+	r.PutPane(ws, &Pane{LocalID: pid})
+
+	// Unknown workspace.
+	if r.RenamePane("bogus", pid, "title") {
+		t.Fatal("RenamePane(unknown ws, ...) = true, want false")
+	}
+
+	// Unknown pane.
+	if r.RenamePane(ws, 999, "title") {
+		t.Fatal("RenamePane(known ws, unknown pane, ...) = true, want false")
+	}
+}

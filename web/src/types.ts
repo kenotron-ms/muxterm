@@ -29,6 +29,8 @@ export const SessiondType = {
   Attach: 'attach',
   CreatePane: 'create-pane',
   Resize: 'resize',
+  RenamePane: 'rename-pane',
+  SaveLayout: 'save-layout',
   // Replies (server -> requesting client)
   WorkspaceCreated: 'workspace-created',
   WorkspaceList: 'workspace-list',
@@ -40,6 +42,7 @@ export const SessiondType = {
   PaneClosed: 'pane-closed',
   WorkspaceClosed: 'workspace-closed',
   WorkspaceRenamed: 'workspace-renamed',
+  PaneRenamed: 'pane-renamed',
   // Error
   Error: 'error',
 } as const;
@@ -86,6 +89,8 @@ export interface SessiondMessage {
   panes?: SessiondPaneInfo[];
   code?: SessiondErrorCodeValue;
   error?: string;
+  breakpoint?: string;
+  layout?: string;
 }
 
 // ---------------------------------------------------------------------------

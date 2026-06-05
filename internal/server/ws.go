@@ -127,7 +127,7 @@ func (c *Client) handleTextInput(data []byte) {
 
 	switch msg.Type {
 	case sessiond.TypeAttach:
-		comp, err := c.daemon.Attach(msg.WorkspaceID)
+		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint)
 		if err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
@@ -137,6 +137,7 @@ func (c *Client) handleTextInput(data []byte) {
 			CID:         msg.CID,
 			WorkspaceID: comp.WorkspaceID,
 			Panes:       comp.Panes,
+			Layout:      comp.Layout,
 		})
 
 	case sessiond.TypeListWorkspaces:
@@ -200,6 +201,20 @@ func (c *Client) handleTextInput(data []byte) {
 		if err := c.daemon.Resize(msg.PaneID, msg.Cols, msg.Rows); err != nil {
 			log.Printf("handleTextInput: resize error: %v", err)
 		}
+
+	case sessiond.TypeRenamePane:
+		if err := c.daemon.RenamePane(msg.PaneID, msg.Name); err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
+
+	case sessiond.TypeSaveLayout:
+		if err := c.daemon.SaveLayout(msg.WorkspaceID, msg.Breakpoint, msg.Layout); err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
 
 	default:
 		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
@@ -339,6 +354,9 @@ func (h *Hub) attachClient(c *Client) error {
 		},
 		OnWorkspaceList: func(workspaces []sessiond.WorkspaceInfo) {
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: workspaces})
+		},
+		OnPaneRenamed: func(paneID int, name string) {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneRenamed, PaneID: paneID, Name: name})
 		},
 	})
 

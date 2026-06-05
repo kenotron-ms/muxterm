@@ -9,10 +9,11 @@ import (
 // Workspace is one daemon-managed workspace. Its panes use workspace-local ids
 // allocated by the Registry, independent of any other workspace.
 type Workspace struct {
-	ID         string        // daemon-allocated, e.g. "w1"
-	Name       string        // optional label; "" means unnamed
-	ClientRef  string        // client-minted optimistic-create correlation id; "" when none
-	Panes      map[int]*Pane // keyed by workspace-local pane id
+	ID         string            // daemon-allocated, e.g. "w1"
+	Name       string            // optional label; "" means unnamed
+	ClientRef  string            // client-minted optimistic-create correlation id; "" when none
+	Panes      map[int]*Pane     // keyed by workspace-local pane id
+	Layouts    map[string]string // breakpoint label -> opaque dockview layout JSON
 	nextPaneID int
 }
 
@@ -43,6 +44,7 @@ func (r *Registry) addWorkspaceLocked(name, clientRef string) string {
 		Name:      name,
 		ClientRef: clientRef,
 		Panes:     make(map[int]*Pane),
+		Layouts:   make(map[string]string),
 	}
 	return id
 }
@@ -168,6 +170,51 @@ func (r *Registry) PaneInfos(wsID string) []PaneInfo {
 		infos = append(infos, ws.Panes[id].Info())
 	}
 	return infos
+}
+
+// SaveLayout stores an opaque layout blob for (wsID, breakpoint). Returns false
+// for an unknown workspace or an empty breakpoint. An empty layout is allowed
+// (acts as a clear).
+func (r *Registry) SaveLayout(wsID, breakpoint, layout string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok || breakpoint == "" {
+		return false
+	}
+	if ws.Layouts == nil {
+		ws.Layouts = make(map[string]string)
+	}
+	ws.Layouts[breakpoint] = layout
+	return true
+}
+
+// Layout returns the stored layout blob for (wsID, breakpoint), or "" if none.
+func (r *Registry) Layout(wsID, breakpoint string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok || ws.Layouts == nil {
+		return ""
+	}
+	return ws.Layouts[breakpoint]
+}
+
+// RenamePane sets the title of a pane. Returns false for an unknown workspace
+// or pane.
+func (r *Registry) RenamePane(wsID string, paneID int, name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok {
+		return false
+	}
+	p, ok := ws.Panes[paneID]
+	if !ok {
+		return false
+	}
+	p.SetTitle(name)
+	return true
 }
 
 // RemovePane deletes paneID from wsID and returns the removed pane, the number

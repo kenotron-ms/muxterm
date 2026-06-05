@@ -62,11 +62,16 @@ export class MuxStore {
   private _attached: string | null = null;
   private _panes: SessiondPaneInfo[] = [];
   private _activePaneId = 0;
+  private _layout = '';
   private _pending: Map<string, PendingRecord> = new Map();
   private _mutationSeq = 0;
 
   get config(): ResolvedConfig {
     return this._config;
+  }
+
+  get layout(): string {
+    return this._layout;
   }
 
   setConfig(cfg: ResolvedConfig): void {
@@ -150,6 +155,7 @@ export class MuxStore {
         this._attached = msg.workspaceId ?? null;
         this._panes = [...(msg.panes ?? [])];
         this._activePaneId = this._panes[0]?.paneId ?? 0;
+        this._layout = msg.layout ?? '';
         break;
       }
 
@@ -192,6 +198,13 @@ export class MuxStore {
             paneCount: 0,
           },
         ];
+        break;
+      }
+
+      case SessiondType.PaneRenamed: {
+        const paneId = msg.paneId ?? 0;
+        const p = this._panes.find((x) => x.paneId === paneId);
+        if (p) p.title = msg.name;
         break;
       }
 

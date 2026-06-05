@@ -76,6 +76,20 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.Attach, workspaceId });
   }
 
+  /** Attach, telling the daemon our responsive breakpoint so it returns the
+   *  matching saved layout in the composition reply. */
+  attachWithBreakpoint(workspaceId: string, breakpoint: string): void {
+    this.sendSessiond({ type: SessiondType.Attach, workspaceId, breakpoint });
+  }
+
+  renamePane(paneId: number, name: string): void {
+    this.sendSessiond({ type: SessiondType.RenamePane, paneId, name });
+  }
+
+  saveLayout(workspaceId: string, breakpoint: string, layout: string): void {
+    this.sendSessiond({ type: SessiondType.SaveLayout, workspaceId, breakpoint, layout });
+  }
+
   /** Request the list of workspaces. */
   listWorkspaces(): void {
     this.sendSessiond({ type: SessiondType.ListWorkspaces });
