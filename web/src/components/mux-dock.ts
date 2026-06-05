@@ -3,6 +3,7 @@ import { customElement, property } from 'lit/decorators.js';
 import type { IDockviewPanel, IContentRenderer, SerializedDockview } from 'dockview-core';
 import { DockviewComponent } from 'dockview-core';
 import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
+import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { terminalRegistry } from '../lib/terminal-registry.js';
 import type { SessiondPaneInfo } from '../types.js';
 
@@ -58,17 +59,50 @@ class TerminalRenderer implements IContentRenderer {
 
   layout(): void {
     if (!this._attached) {
-      // First layout() call — dockview has now settled the panel dimensions.
-      // Safe to open the terminal here; it will open at the correct size and
-      // the PTY replay will render without garbling.
-      if (terminalRegistry.getTerminal(this._paneId) !== null) {
+      // Attach (open the xterm surface) only once the panel element is BOTH
+      // connected to the live shadow DOM AND has real pixel dimensions.
+      //
+      // The `isConnected` gate is critical for the layout-restore path:
+      // dockview's fromJSON() builds groups in a DETACHED subtree and calls
+      // layout() on the active panel BEFORE appending that subtree to the DOM.
+      // Attaching then would:
+      //   - inject xterm.css via container.getRootNode() into the wrong root
+      //     (a detached fragment, not mux-app's shadow root) → measurement
+      //     elements leak as $$$$~~~~;
+      //   - set the terminal `opened` flag while the element is unsized, so the
+      //     PTY replay (arriving as later WebSocket frames) writes directly at
+      //     the wrong cols/rows → repeated/garbled prompt; and
+      //   - bypass pendingData, so the deferred fonts.ready drain has nothing
+      //     to replay → missing scrollback history.
+      //
+      // Gating on isConnected defers attach to the post-append layout() call
+      // (from gridview.layout()), when the element is in the shadow DOM with
+      // real dimensions. Replay then queues in pendingData while opened=false
+      // and is drained at the correct, font-settled size — the same path the
+      // fresh-tab flow already uses successfully.
+      //
+      // Gate ONLY on isConnected — NOT on offsetWidth/offsetHeight. During a
+      // fromJSON restore dockview lays the grid out at 0x0 first (its
+      // ResizeObserver settles real dimensions a frame later), so a re-shown
+      // non-active panel's element is connected but momentarily 0-sized. If we
+      // also required offsetWidth>0 here, that panel would never attach (its
+      // only layout() call arrives at 0x0) and would render blank/historyless
+      // until an unrelated resize. attach() calls fitIfVisible(), which itself
+      // no-ops while the element is invisible/zero-sized and re-fits correctly
+      // on the next ResizeObserver tick — so attaching at 0x0 is safe.
+      if (
+        terminalRegistry.getTerminal(this._paneId) !== null &&
+        this.element.isConnected
+      ) {
         this._attached = true;
         this._pendingMount = false;
         terminalRegistry.attach(this._paneId, this.element);
         // attach() calls fitIfVisible() internally, so we're done.
         return;
       }
-      // Registry not ready yet — will retry on next layout() call.
+      // Not ready yet (registry missing, or element still detached) — retry on
+      // the next layout() call, which dockview fires once the panel is in the
+      // live DOM.
       return;
     }
     terminalRegistry.fitIfVisible(this._paneId);
@@ -202,9 +236,25 @@ export class MuxDock extends LitElement {
     const root = this.getRootNode();
     const target = root instanceof ShadowRoot ? root : document.head;
 
-    // NOTE: xterm.js's stylesheet is injected by terminal-registry at terminal
-    // attach time (using the terminal container's own getRootNode), so it lands
-    // in the exact root where the terminal renders. See ensureXtermCss().
+    // Inject xterm.js's stylesheet into the SAME root as dockview's CSS, here at
+    // connect time. This is deterministic: mux-dock reliably lives inside
+    // mux-app's ShadowRoot, so this.getRootNode() resolves to that ShadowRoot
+    // and the stylesheet is present BEFORE any terminal attaches.
+    //
+    // Doing it here (rather than lazily per-terminal at attach time via the
+    // container's getRootNode) avoids a race: during dockview's fromJSON layout
+    // restore, a panel's element can attach while still in a detached subtree,
+    // so its getRootNode() returns a document fragment and xterm.css lands in
+    // document.head — which cannot pierce the shadow boundary, leaving xterm's
+    // measurement elements unstyled and leaking as $$$$~~~~. Injecting once,
+    // early, into the shadow root sidesteps the timing entirely.
+    const XTERM_BASE_ID = 'xterm-base-css';
+    if (!target.querySelector(`#${XTERM_BASE_ID}`)) {
+      const xt = document.createElement('style');
+      xt.id = XTERM_BASE_ID;
+      xt.textContent = xtermCss;
+      target.appendChild(xt);
+    }
 
     // Inject dockview's full CSS (base layout + all themes) into the shadow root.
     // Must live here so dockview's theme class selectors can reach panel elements.
@@ -325,6 +375,10 @@ export class MuxDock extends LitElement {
       const paneId = parseInt(panel.id, 10);
       this.dispatchEvent(new CustomEvent('pane-select', { detail: { paneId }, bubbles: true, composed: true }));
       terminalRegistry.focus(paneId);
+      // Persist the new active selection: onDidLayoutChange does NOT fire on a
+      // pure active-tab switch, so without this the saved layout keeps a stale
+      // activeView and the wrong pane is selected after a refresh.
+      this._scheduleLayoutSave();
     });
     this._dv.onDidRemovePanel((panel) => {
       if (this._removingPanels) return;
@@ -473,10 +527,24 @@ export class MuxDock extends LitElement {
           }
         }
 
-        // Set active panel
-        const activePanel = this._panels.get(this.activePaneId);
-        if (activePanel) {
-          activePanel.api.setActive();
+        if (restored) {
+          // fromJSON already restored the saved active group + per-group active
+          // view. Do NOT force activePaneId (which the store hard-codes to
+          // panes[0]) — that would clobber the restored selection. Instead,
+          // sync the store to dockview's restored truth so they agree.
+          const restoredActive = this._dv.activePanel?.id;
+          if (restoredActive !== undefined) {
+            const paneId = parseInt(restoredActive, 10);
+            this.dispatchEvent(
+              new CustomEvent('pane-select', { detail: { paneId }, bubbles: true, composed: true }),
+            );
+          }
+        } else {
+          // Fresh tab build — honor the store's active pane.
+          const activePanel = this._panels.get(this.activePaneId);
+          if (activePanel) {
+            activePanel.api.setActive();
+          }
         }
       } finally {
         this._settingActive = false;

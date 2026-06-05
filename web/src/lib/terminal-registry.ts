@@ -55,7 +55,9 @@ export function buildTerminalConfig(cfg: ResolvedConfig) {
     theme: resolvePalette(cfg.theme.palette),
     fontFamily: cfg.font.family,
     fontSize: cfg.font.size,
-    lineHeight: 1.2, // non-overridable
+    lineHeight: 1.0, // non-overridable; matches Zellij's web client. A
+    // non-integer line height makes each row a fractional pixel tall, and the
+    // rounding leaves 1px gaps that show as thin lines between rows.
     cursorBlink: cfg.terminal.cursorBlink,
     cursorStyle: cfg.terminal.cursorStyle,
     scrollback: cfg.terminal.scrollback,
@@ -220,10 +222,11 @@ export const terminalRegistry = {
       entry.opened = true;
     }
 
-    // Ensure xterm.js's stylesheet is present in the root that hosts this
-    // container (shadow root or document) BEFORE the terminal is parented in,
-    // so its helper elements are hidden the moment they render.
-    ensureXtermCss(container);
+    // NOTE: xterm.js's stylesheet is injected deterministically into mux-app's
+    // ShadowRoot by mux-dock at connect time (before any terminal attaches), so
+    // it is already present in the root where this terminal renders. We no
+    // longer inject it lazily here — doing so via the container's getRootNode()
+    // raced with dockview's fromJSON restore and could land in document.head.
 
     // Move (or insert) the host element into the new container.
     container.appendChild(entry.hostEl);
@@ -261,7 +264,18 @@ export const terminalRegistry = {
           entry.term.write(chunk);
         }
       };
-      if (typeof document !== 'undefined' && document.fonts?.ready) {
+      // Drain the replay/scrollback as soon as possible. If the custom font is
+      // already loaded (the common case — cached on refresh), fit + drain
+      // SYNCHRONOUSLY now so the history is on screen immediately and cannot be
+      // interleaved with live output that arrives in the deferral window. Only
+      // when the font is genuinely still loading do we defer to fonts.ready, so
+      // the re-fit uses correct cell metrics before replay touches the grid.
+      const fontsReady =
+        typeof document !== 'undefined' &&
+        (document.fonts?.status === 'loaded' || document.fonts === undefined);
+      if (fontsReady) {
+        drainPending();
+      } else if (typeof document !== 'undefined' && document.fonts?.ready) {
         document.fonts.ready.then(() => requestAnimationFrame(drainPending));
       } else {
         requestAnimationFrame(drainPending);
@@ -327,15 +341,6 @@ export const terminalRegistry = {
     const entry = _map.get(key);
     if (entry) {
       if (entry.opened) {
-        // DIAG: direct write path (replay arriving after opened=true).
-        const s = typeof data === 'string' ? data : new TextDecoder().decode(data);
-        if (s.includes('\x1b[2J') || s.length > 60) {
-          // eslint-disable-next-line no-console
-          console.log(
-            `[DIAG write-direct] pane=${paneId} dims=${entry.term.cols}x${entry.term.rows} ` +
-              `bytes=${data.length} preview=${JSON.stringify(s.slice(0, 140))}`,
-          );
-        }
         entry.term.write(data);
       } else {
         // Queued until first attach.
