@@ -85,10 +85,11 @@ class TerminalRenderer implements IContentRenderer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HeaderActions
-// Right-side header actions for each tab group:
-//   [+]    — add a new pane as a TAB in this group
-//   [split] — split this group into a new side-by-side group
+// HeaderButton
+// A single icon button used as a dockview header action. Two are mounted per
+// group, in different dockview header slots:
+//   [+]    — left action slot (renders right after the tabs): new pane as a TAB
+//   [split] — right action slot (far right): split into a side-by-side group
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ADD_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -101,35 +102,19 @@ const SPLIT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="1
   <rect x="9" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
 </svg>`;
 
-class HeaderActions {
+class HeaderButton {
   readonly element: HTMLElement;
 
-  constructor(onAdd: () => void, onSplit: () => void) {
-    const wrap = document.createElement('div');
-    wrap.className = 'mux-header-actions';
-
-    const add = document.createElement('button');
-    add.className = 'mux-header-btn';
-    add.title = 'New pane';
-    add.innerHTML = ADD_ICON;
-    add.addEventListener('click', (e) => {
+  constructor(icon: string, title: string, onClick: () => void) {
+    const btn = document.createElement('button');
+    btn.className = 'mux-header-btn';
+    btn.title = title;
+    btn.innerHTML = icon;
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      onAdd();
+      onClick();
     });
-
-    const split = document.createElement('button');
-    split.className = 'mux-header-btn';
-    split.title = 'Split pane';
-    split.innerHTML = SPLIT_ICON;
-    split.addEventListener('click', (e) => {
-      e.stopPropagation();
-      onSplit();
-    });
-
-    // "+" sits closest to the tabs, split to its right (VS Code ordering).
-    wrap.appendChild(add);
-    wrap.appendChild(split);
-    this.element = wrap;
+    this.element = btn;
   }
 
   init(): void { /* nothing to initialise */ }
@@ -280,8 +265,8 @@ export class MuxDock extends LitElement {
           opacity: 1;
         }
 
-        /* Split pane button — top-right of every tab group */
-        mux-dock .mux-split-btn {
+        /* Header action icon buttons ("+" after the tabs, split far right) */
+        mux-dock .mux-header-btn {
           display: flex;
           align-items: center;
           justify-content: center;
@@ -297,11 +282,11 @@ export class MuxDock extends LitElement {
           flex-shrink: 0;
           transition: background 0.12s, color 0.12s;
         }
-        mux-dock .mux-split-btn:hover {
+        mux-dock .mux-header-btn:hover {
           background: rgba(122, 162, 247, 0.15);
           color: #c0caf5;
         }
-        mux-dock .mux-split-btn:active {
+        mux-dock .mux-header-btn:active {
           background: rgba(122, 162, 247, 0.25);
         }
 
@@ -327,12 +312,15 @@ export class MuxDock extends LitElement {
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => new TerminalRenderer(opts.id),
+      // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
+      // The "left" slot therefore renders immediately after the tabs (before
+      // the grow-to-fill void), and the "right" slot renders far right.
+      //   "+"    → left slot  → sits just right of the tabs (new pane as a TAB)
+      //   split  → right slot → far right (split into a side-by-side group)
+      createLeftHeaderActionComponent: () =>
+        new HeaderButton(ADD_ICON, 'New pane', () => this._requestPane('tab')),
       createRightHeaderActionComponent: () =>
-        new HeaderActions(
-          () => this._requestPane('tab'),
-          () => this._requestPane('split'),
-        ),
-      createLeftHeaderActionComponent: undefined,
+        new HeaderButton(SPLIT_ICON, 'Split pane', () => this._requestPane('split')),
     });
     this._dv.onDidActivePanelChange((panel) => {
       if (this._settingActive) return;
