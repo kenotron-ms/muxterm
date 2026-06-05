@@ -1,6 +1,6 @@
 import { LitElement } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import type { IDockviewPanel, IContentRenderer, SerializedDockview } from 'dockview-core';
+import type { IDockviewPanel, IContentRenderer, SerializedDockview, DockviewGroupPanel } from 'dockview-core';
 import { DockviewComponent } from 'dockview-core';
 import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
@@ -208,11 +208,25 @@ export class MuxDock extends LitElement {
   private _nextPlacement: 'tab' | 'split' = 'tab';
   /** ID of the panel to split from when _nextPlacement === 'split'. */
   private _splitReferenceId: string | null = null;
+  /**
+   * ID of a panel in the group whose "+" / split button was clicked. The new
+   * pane is placed relative to THIS group, so clicking "+" on an inactive
+   * group adds the tab there (and activates it) — not in the active group.
+   */
+  private _placementReferenceId: string | null = null;
 
-  /** Record the desired placement and ask the app to create a backing pane. */
-  private _requestPane(placement: 'tab' | 'split'): void {
+  /**
+   * Record the desired placement and ask the app to create a backing pane.
+   * `group` is the dockview group whose header button was clicked; the new
+   * pane is positioned relative to it so the click target is honored.
+   */
+  private _requestPane(placement: 'tab' | 'split', group?: DockviewGroupPanel): void {
     this._nextPlacement = placement;
-    this._splitReferenceId = placement === 'split' ? (this._dv?.activePanel?.id ?? null) : null;
+    // Prefer the clicked group's active panel as the reference; fall back to
+    // the globally active panel only if the group is unknown.
+    this._placementReferenceId =
+      group?.activePanel?.id ?? this._dv?.activePanel?.id ?? null;
+    this._splitReferenceId = placement === 'split' ? this._placementReferenceId : null;
     this.dispatchEvent(new CustomEvent('pane-create', { bubbles: true, composed: true }));
   }
 
@@ -266,12 +280,15 @@ export class MuxDock extends LitElement {
       target.appendChild(base);
     }
 
-    // We use dockview's built-in "abyss" theme (applied via the
-    // dockview-theme-abyss class below). It already ships the clean, flat look
-    // we want: transparent sashes (single 1px separator hairline), zero tab
-    // margins/radius, and a subtle active-tab line indicator. The overrides
-    // here are purely functional muxterm chrome layered on top — we do NOT
-    // re-skin dockview's colors so the abyss palette renders authentically.
+    // Base = dockview's built-in "abyss" theme (for its flat STRUCTURE only:
+    // zero tab radius/margin, transparent sashes). We re-skin all of its COLORS
+    // to Tokyo Night below so the tab bar matches muxterm's title bar and
+    // follows VS Code's tab hierarchy:
+    //   • active tab background == terminal body (#1a1b26) → tab "merges" into
+    //     the content, the VS Code selected-tab look,
+    //   • tab bar + inactive tabs share the title bar surface (#16161e) with
+    //     dimmer text, so unselected tabs recede,
+    //   • the active tab carries a blue top accent border as the selection cue.
     if (!target.querySelector(`#${STYLE_ID}`)) {
       const style = document.createElement('style');
       style.id = STYLE_ID;
@@ -281,6 +298,53 @@ export class MuxDock extends LitElement {
           flex: 1;
           width: 100%;
           height: 100%;
+        }
+
+        /* Tokyo Night re-skin of dockview (over the abyss base). Variables set
+           on .dv-dockview override the abyss palette via inheritance. */
+        mux-dock .dv-dockview {
+          --dv-background-color: #1a1b26;
+
+          /* Panel CONTENT background. Must equal the terminal background so the
+             few sub-character pixels left when xterm can't fill the pane to an
+             exact row height don't bleed a contrasting color. */
+          --dv-group-view-background-color: #1a1b26;
+
+          /* Tab bar surface — same as the title bar (#16161e) so the chrome
+             reads as one continuous dark band. */
+          --dv-tabs-and-actions-container-background-color: #16161e;
+
+          /* Active group: selected tab merges into the body, others blend into
+             the bar. */
+          --dv-activegroup-visiblepanel-tab-background-color: #1a1b26;
+          --dv-activegroup-hiddenpanel-tab-background-color: #16161e;
+          /* Inactive group (unfocused split): same hierarchy, no extra dimming
+             of the surfaces — only the text dims. */
+          --dv-inactivegroup-visiblepanel-tab-background-color: #1a1b26;
+          --dv-inactivegroup-hiddenpanel-tab-background-color: #16161e;
+
+          /* Text: selected bright, unselected dim. */
+          --dv-activegroup-visiblepanel-tab-color: #c0caf5;
+          --dv-activegroup-hiddenpanel-tab-color: #565f89;
+          --dv-inactivegroup-visiblepanel-tab-color: #a9b1d6;
+          --dv-inactivegroup-hiddenpanel-tab-color: #565f89;
+
+          /* Hairline separators kept subtle. */
+          --dv-separator-border: #292e42;
+          --dv-tab-divider-color: #16161e;
+
+          /* Resize sash: invisible track, accent only while dragging. */
+          --dv-sash-color: transparent;
+          --dv-active-sash-color: #7aa2f7;
+        }
+
+        /* Selection cue: a blue top accent on the visible (selected) tab, a
+           transparent reserve on every other tab so heights stay aligned. */
+        mux-dock .dv-tab {
+          border-top: 2px solid transparent;
+        }
+        mux-dock .dv-tab.dv-active-tab {
+          border-top: 2px solid #7aa2f7 !important;
         }
 
         /* Close button — show on hover + always on active tab */
@@ -360,13 +424,15 @@ export class MuxDock extends LitElement {
       // the grow-to-fill void), and the "right" slot renders far right.
       //   "+"    → left slot  → sits just right of the tabs (new pane as a TAB)
       //   split  → right slot → far right (split into a side-by-side group)
-      createLeftHeaderActionComponent: () =>
-        new HeaderButton(ADD_ICON, 'New pane', () => this._requestPane('tab')),
+      // The factory receives the dockview group its header belongs to, so the
+      // "+" / split on an INACTIVE group still targets THAT group.
+      createLeftHeaderActionComponent: (group) =>
+        new HeaderButton(ADD_ICON, 'New pane', () => this._requestPane('tab', group)),
       // Narrow (phone) is a tab view only — no split button.
-      createRightHeaderActionComponent: () =>
+      createRightHeaderActionComponent: (group) =>
         this.narrow
           ? new HeaderButton('', '', () => {})
-          : new HeaderButton(SPLIT_ICON, 'Split pane', () => this._requestPane('split')),
+          : new HeaderButton(SPLIT_ICON, 'Split pane', () => this._requestPane('split', group)),
     });
     this._dv.onDidLayoutChange(() => this._scheduleLayoutSave());
     this._dv.onDidActivePanelChange((panel) => {
@@ -579,14 +645,20 @@ export class MuxDock extends LitElement {
             component: 'terminal',
             title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
           };
-          // Honor a pending "split" request: place this pane in a new group to
-          // the right of the panel that was active when split was clicked.
+          // Honor a pending placement request, positioned relative to the group
+          // whose header button was clicked (so "+" / split on an INACTIVE
+          // group targets THAT group, not the active one).
           if (this._nextPlacement === 'split' && this._splitReferenceId !== null) {
+            // New side-by-side group to the right of the clicked group.
             opts.position = { referencePanel: this._splitReferenceId, direction: 'right' };
+          } else if (this._nextPlacement === 'tab' && this._placementReferenceId !== null) {
+            // New tab WITHIN the clicked group (also activates that group).
+            opts.position = { referencePanel: this._placementReferenceId, direction: 'within' };
           }
           // Reset placement intent now that it's been consumed.
           this._nextPlacement = 'tab';
           this._splitReferenceId = null;
+          this._placementReferenceId = null;
           const panel = this._dv.addPanel(opts);
           this._panels.set(pane.paneId, panel);
         }
