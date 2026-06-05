@@ -270,9 +270,10 @@ export class MuxDock extends LitElement {
           display: flex;
           align-items: center;
           justify-content: center;
+          align-self: center;
           width: 28px;
           height: 28px;
-          margin: auto 4px;
+          margin: 0 4px;
           padding: 0;
           border: none;
           border-radius: 4px;
@@ -288,6 +289,17 @@ export class MuxDock extends LitElement {
         }
         mux-dock .mux-header-btn:active {
           background: rgba(122, 162, 247, 0.25);
+        }
+
+        /* dockview's action containers shrink-wrap their button and sit at the
+           header's top edge, so the 28px button is top-pinned in the 35px bar.
+           Make the containers full-height and center their content so the
+           "+" / split buttons line up with the vertical middle of the tabs. */
+        mux-dock .dv-left-actions-container,
+        mux-dock .dv-right-actions-container {
+          display: flex;
+          align-items: center;
+          height: 100%;
         }
 
         /* Inline tab rename input */
