@@ -85,27 +85,51 @@ class TerminalRenderer implements IContentRenderer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SplitButton
-// Right-side header action: one button per tab group that creates a new pane.
+// HeaderActions
+// Right-side header actions for each tab group:
+//   [+]    — add a new pane as a TAB in this group
+//   [split] — split this group into a new side-by-side group
 // ─────────────────────────────────────────────────────────────────────────────
 
-class SplitButton {
+const ADD_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
+  <path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+</svg>`;
+
+// VS Code-style split icon: two side-by-side rectangles.
+const SPLIT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
+  <rect x="1" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
+  <rect x="9" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
+</svg>`;
+
+class HeaderActions {
   readonly element: HTMLElement;
 
-  constructor(private readonly _onSplit: () => void) {
-    const btn = document.createElement('button');
-    btn.className = 'mux-split-btn';
-    btn.title = 'Split pane';
-    // VS Code-style split icon: two side-by-side rectangles
-    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
-      <rect x="1" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
-      <rect x="9" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
-    </svg>`;
-    btn.addEventListener('click', (e) => {
+  constructor(onAdd: () => void, onSplit: () => void) {
+    const wrap = document.createElement('div');
+    wrap.className = 'mux-header-actions';
+
+    const add = document.createElement('button');
+    add.className = 'mux-header-btn';
+    add.title = 'New pane';
+    add.innerHTML = ADD_ICON;
+    add.addEventListener('click', (e) => {
       e.stopPropagation();
-      this._onSplit();
+      onAdd();
     });
-    this.element = btn;
+
+    const split = document.createElement('button');
+    split.className = 'mux-header-btn';
+    split.title = 'Split pane';
+    split.innerHTML = SPLIT_ICON;
+    split.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onSplit();
+    });
+
+    // "+" sits closest to the tabs, split to its right (VS Code ordering).
+    wrap.appendChild(add);
+    wrap.appendChild(split);
+    this.element = wrap;
   }
 
   init(): void { /* nothing to initialise */ }
@@ -143,6 +167,24 @@ export class MuxDock extends LitElement {
   private _locallyClosedPanes = new Set<number>();
   /** True while we're programmatically removing panels to suppress pane-close events. */
   private _removingPanels = false;
+  /**
+   * Where the NEXT newly-added pane should be placed:
+   *   'tab'   — a new tab in the active group (the "+" button)
+   *   'split' — a new side-by-side group split off the active panel (the
+   *             "split" button)
+   * The reconciler reads this when the real (server-assigned) pane arrives,
+   * then resets it to the 'tab' default.
+   */
+  private _nextPlacement: 'tab' | 'split' = 'tab';
+  /** ID of the panel to split from when _nextPlacement === 'split'. */
+  private _splitReferenceId: string | null = null;
+
+  /** Record the desired placement and ask the app to create a backing pane. */
+  private _requestPane(placement: 'tab' | 'split'): void {
+    this._nextPlacement = placement;
+    this._splitReferenceId = placement === 'split' ? (this._dv?.activePanel?.id ?? null) : null;
+    this.dispatchEvent(new CustomEvent('pane-create', { bubbles: true, composed: true }));
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -286,11 +328,10 @@ export class MuxDock extends LitElement {
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => new TerminalRenderer(opts.id),
       createRightHeaderActionComponent: () =>
-        new SplitButton(() => {
-          this.dispatchEvent(
-            new CustomEvent('pane-create', { bubbles: true, composed: true }),
-          );
-        }),
+        new HeaderActions(
+          () => this._requestPane('tab'),
+          () => this._requestPane('split'),
+        ),
       createLeftHeaderActionComponent: undefined,
     });
     this._dv.onDidActivePanelChange((panel) => {
@@ -427,11 +468,20 @@ export class MuxDock extends LitElement {
       // Add panels for new panes, skipping panes the user closed locally.
       for (const pane of this.panes.filter((p) => p.paneId >= 0)) {
         if (!this._panels.has(pane.paneId) && !this._locallyClosedPanes.has(pane.paneId)) {
-          const panel = this._dv.addPanel({
+          const opts: Parameters<NonNullable<typeof this._dv>['addPanel']>[0] = {
             id: String(pane.paneId),
             component: 'terminal',
             title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
-          });
+          };
+          // Honor a pending "split" request: place this pane in a new group to
+          // the right of the panel that was active when split was clicked.
+          if (this._nextPlacement === 'split' && this._splitReferenceId !== null) {
+            opts.position = { referencePanel: this._splitReferenceId, direction: 'right' };
+          }
+          // Reset placement intent now that it's been consumed.
+          this._nextPlacement = 'tab';
+          this._splitReferenceId = null;
+          const panel = this._dv.addPanel(opts);
           this._panels.set(pane.paneId, panel);
         }
       }
