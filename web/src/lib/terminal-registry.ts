@@ -13,7 +13,34 @@
 
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { resolvePalette } from './theme.js';
+
+/**
+ * Ensure xterm.js's stylesheet is present in the root node that actually
+ * contains the terminal element. xterm renders inside whatever shadow root
+ * (or document) hosts the dockview panel; WITHOUT its stylesheet, xterm's
+ * internal helper elements (.xterm-helpers, .xterm-char-measure-element,
+ * .xterm-helper-textarea) are not position/visibility-hidden and leak into
+ * view as garbled runs of $ and ~.
+ *
+ * Injecting at attach time using the host element's OWN getRootNode()
+ * guarantees the stylesheet lands in the exact root where the terminal lives —
+ * no reliance on a parent component's render-root timing.
+ */
+const XTERM_STYLE_ID = 'xterm-base-css';
+function ensureXtermCss(node: Node): void {
+  const root = node.getRootNode();
+  const target: ShadowRoot | Document =
+    root instanceof ShadowRoot ? root : document;
+  // For a Document target, styles live in <head>.
+  const host: ParentNode = target instanceof ShadowRoot ? target : document.head;
+  if ((host as ParentNode).querySelector(`#${XTERM_STYLE_ID}`)) return;
+  const style = document.createElement('style');
+  style.id = XTERM_STYLE_ID;
+  style.textContent = xtermCss;
+  (host as Node).appendChild(style);
+}
 import { serializeSnapshot } from './snapshot.js';
 import type { StructuredSnapshot, SnapshotSource } from './snapshot.js';
 import type { ResolvedConfig } from './config.js';
@@ -193,6 +220,11 @@ export const terminalRegistry = {
       entry.opened = true;
     }
 
+    // Ensure xterm.js's stylesheet is present in the root that hosts this
+    // container (shadow root or document) BEFORE the terminal is parented in,
+    // so its helper elements are hidden the moment they render.
+    ensureXtermCss(container);
+
     // Move (or insert) the host element into the new container.
     container.appendChild(entry.hostEl);
 
@@ -295,6 +327,15 @@ export const terminalRegistry = {
     const entry = _map.get(key);
     if (entry) {
       if (entry.opened) {
+        // DIAG: direct write path (replay arriving after opened=true).
+        const s = typeof data === 'string' ? data : new TextDecoder().decode(data);
+        if (s.includes('\x1b[2J') || s.length > 60) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[DIAG write-direct] pane=${paneId} dims=${entry.term.cols}x${entry.term.rows} ` +
+              `bytes=${data.length} preview=${JSON.stringify(s.slice(0, 140))}`,
+          );
+        }
         entry.term.write(data);
       } else {
         // Queued until first attach.

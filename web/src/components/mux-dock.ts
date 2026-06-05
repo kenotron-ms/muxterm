@@ -121,7 +121,7 @@ const STYLE_ID = 'mux-dock-styles';
 
 @customElement('mux-dock')
 export class MuxDock extends LitElement {
-  // Light DOM is REQUIRED for dockview CSS and DnD to work.
+  // Light DOM is REQUIRED for dockview DnD to work.
   override createRenderRoot() {
     return this;
   }
@@ -152,6 +152,10 @@ export class MuxDock extends LitElement {
     // cannot pierce a shadow boundary.
     const root = this.getRootNode();
     const target = root instanceof ShadowRoot ? root : document.head;
+
+    // NOTE: xterm.js's stylesheet is injected by terminal-registry at terminal
+    // attach time (using the terminal container's own getRootNode), so it lands
+    // in the exact root where the terminal renders. See ensureXtermCss().
 
     // Inject dockview's full CSS (base layout + all themes) into the shadow root.
     // Must live here so dockview's theme class selectors can reach panel elements.
