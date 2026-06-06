@@ -33,6 +33,14 @@ export class WorkspaceController {
   // null = not recovering; '' = bootstrap default (attach first listed);
   // otherwise the id of the workspace we are recovering away from.
   private _recoveringFrom: string | null = null;
+  // True while we've sent an attach that hasn't yet been confirmed by a
+  // composition reply. Prevents the server-pushed workspace-list (sent by
+  // attachClient on every new WS connection) from triggering a spurious
+  // second attach when bootstrap() already sent one directly. Without this
+  // guard, two compositions arrive: the first correctly restores the saved
+  // active pane, but the second resets _activePaneId = panes[0], causing
+  // Case 3 in mux-dock to switch away from the restored pane.
+  private _attachInFlight = false;
 
   constructor(
     private store: MuxStore,
@@ -43,6 +51,7 @@ export class WorkspaceController {
   bootstrap(): void {
     const stored = localStorage.getItem(LAST_WS_KEY);
     if (stored !== null) {
+      this._attachInFlight = true;
       this.socket.attachWithBreakpoint(stored, currentLayoutMode(), terminalRegistry.getOffsets());
       return;
     }
@@ -56,6 +65,7 @@ export class WorkspaceController {
       // attach reply: binds us to a workspace -> record MRU + persist last.
       case SessiondType.Composition: {
         const id = msg.workspaceId ?? '';
+        this._attachInFlight = false; // attach confirmed
         this._mru.touch(id);
         localStorage.setItem(LAST_WS_KEY, id);
         break;
@@ -99,9 +109,14 @@ export class WorkspaceController {
           } else {
             this.socket.createWorkspace();
           }
-        } else if (this.store.attached === null && (msg.workspaces ?? []).length > 0) {
+        } else if (!this._attachInFlight && this.store.attached === null && (msg.workspaces ?? []).length > 0) {
           // The active workspace was deleted (e.g. user closed it). Pick the best
           // surviving workspace from MRU and attach automatically.
+          // Guard: skip if bootstrap() already sent a direct attach (_attachInFlight).
+          // The server pushes a workspace-list on every new connection (via attachClient)
+          // which arrives while the bootstrap attach is still in flight. Without the
+          // guard, this branch fires a second attach → second composition → resets
+          // _activePaneId = panes[0], overriding the layout-restored active pane.
           const target = chooseRecoveryTarget(msg.workspaces ?? [], '', this._mru.order());
           if (target.action === 'attach') {
             this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode(), terminalRegistry.getOffsets());
