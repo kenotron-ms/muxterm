@@ -169,7 +169,7 @@ type errDaemonConn struct {
 	*fakeDaemonConn
 }
 
-func (e *errDaemonConn) Attach(workspaceID, breakpoint string) (sessiond.Composition, error) {
+func (e *errDaemonConn) Attach(workspaceID, breakpoint string, offsets []sessiond.PaneOffset) (sessiond.Composition, error) {
 	return sessiond.Composition{}, &sessiond.DaemonError{
 		Code:        sessiond.CodeUnknownWorkspace,
 		Err:         "no such workspace",

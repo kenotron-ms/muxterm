@@ -70,6 +70,10 @@ export interface SessiondPaneInfo {
   rows: number;
   title?: string;
   clientRef?: string;
+  /** Absolute byte sequence of the first replayed byte for this pane.
+   *  Omitted (undefined) when 0. Set by the server on each composition reply
+   *  so the client can anchor its delta-replay offset tracking. */
+  seq?: number;
 }
 
 export interface SessiondMessage {
@@ -91,6 +95,9 @@ export interface SessiondMessage {
   error?: string;
   breakpoint?: string;
   layout?: string;
+  /** Per-pane absolute byte offsets sent by the client on (re)attach so the
+   *  server can replay only the delta since the client's last known position. */
+  offsets?: { paneId: number; seq: number }[];
 }
 
 // ---------------------------------------------------------------------------

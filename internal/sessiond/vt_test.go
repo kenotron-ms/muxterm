@@ -1,6 +1,7 @@
 package sessiond
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"sync"
@@ -135,6 +136,55 @@ func TestVTBufferScrollbackRoundTrip(t *testing.T) {
 	screen := fresh.String()
 	if !strings.Contains(screen, fmt.Sprintf("line-%03d", totalLines)) {
 		t.Errorf("last line not visible on fresh emulator screen:\n%s", screen)
+	}
+}
+
+// TestVTBufferSeq verifies that Seq() tracks total bytes ever written.
+func TestVTBufferSeq(t *testing.T) {
+	b := NewVTBuffer(80, 24)
+	if got := b.Seq(); got != 0 {
+		t.Fatalf("Seq() before any writes = %d, want 0", got)
+	}
+	data := []byte("hello\r\n")
+	if _, err := b.Write(data); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := b.Seq(); got != uint64(len(data)) {
+		t.Fatalf("Seq() after Write = %d, want %d", got, len(data))
+	}
+}
+
+// TestVTBufferReplayFromIgnoresSince verifies that VTBuffer.ReplayFrom always
+// returns the full screen-state replay from seq 0, ignoring the since argument.
+// VTBuffer is a degraded (screen-state) implementation: it cannot seek into a
+// raw byte log, so every caller gets the full current screen regardless of since.
+func TestVTBufferReplayFromIgnoresSince(t *testing.T) {
+	b := NewVTBuffer(80, 24)
+	if _, err := b.Write([]byte("content\r\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	seq := b.Seq()
+	if seq == 0 {
+		t.Fatal("expected non-zero Seq after write")
+	}
+
+	// Both calls must return the same full screen-state replay, starting at 0.
+	data0, start0 := b.ReplayFrom(0)
+	dataSeq, startSeq := b.ReplayFrom(seq)
+
+	if start0 != 0 {
+		t.Fatalf("ReplayFrom(0) start = %d, want 0", start0)
+	}
+	if startSeq != 0 {
+		t.Fatalf("ReplayFrom(seq) start = %d, want 0 (VTBuffer always replays from 0)", startSeq)
+	}
+	if len(data0) == 0 {
+		t.Fatal("ReplayFrom(0) returned empty data")
+	}
+	// since is ignored: both calls must produce identical output.
+	if !bytes.Equal(data0, dataSeq) {
+		t.Fatalf("VTBuffer.ReplayFrom: data for since=0 (%d bytes) != data for since=Seq (%d bytes)",
+			len(data0), len(dataSeq))
 	}
 }
 

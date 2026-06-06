@@ -29,8 +29,9 @@ type VTBuffer struct {
 	// multi-step read — IsAltScreen, Scrollback, Render, CursorPosition — is
 	// atomic: no Write can slip in between those calls and leave us with a
 	// partially-updated snapshot.
-	mu  sync.RWMutex
-	emu *vt.SafeEmulator
+	mu    sync.RWMutex
+	emu   *vt.SafeEmulator
+	total uint64 // total bytes ever written
 }
 
 // NewVTBuffer returns a VTBuffer backed by a w×h SafeEmulator with a 2000-line
@@ -47,6 +48,7 @@ func NewVTBuffer(w, h int) *VTBuffer {
 func (b *VTBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.total += uint64(len(p))
 	// Access the underlying Emulator directly: b.mu already excludes
 	// concurrent reads, so the SafeEmulator's own per-method lock is not
 	// needed here and calling the raw method avoids nested locking.
@@ -72,6 +74,20 @@ func (b *VTBuffer) Replay() []byte {
 	// Pass the underlying *vt.Emulator: we hold b.mu.RLock(), so all state is
 	// stable for the duration of the call.
 	return serializeGrid(b.emu.Emulator)
+}
+
+// ReplayFrom ignores since and returns (b.Replay(), 0): VTBuffer serializes the
+// live cell grid (not a seekable raw byte log), so every caller always receives
+// the full current screen-state replay anchored at absolute sequence 0.
+func (b *VTBuffer) ReplayFrom(_ uint64) (data []byte, start uint64) {
+	return b.Replay(), 0
+}
+
+// Seq returns the total bytes ever written to this buffer.
+func (b *VTBuffer) Seq() uint64 {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.total
 }
 
 // serializeGrid emits a self-contained byte stream that reconstructs the

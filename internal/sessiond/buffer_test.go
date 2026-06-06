@@ -62,6 +62,95 @@ func TestRawBufferImplementsPaneBuffer(t *testing.T) {
 	var _ PaneBuffer = NewRawBuffer(0)
 }
 
+// TestRawBufferSeqAndReplayFrom verifies the absolute-sequence tracking and
+// delta-replay semantics of RawBuffer without any trimming.
+func TestRawBufferSeqAndReplayFrom(t *testing.T) {
+	b := NewRawBuffer(0)
+	_, _ = b.Write([]byte("abc"))
+	_, _ = b.Write([]byte("def"))
+
+	// Seq tracks total bytes ever written.
+	if got := b.Seq(); got != 6 {
+		t.Fatalf("Seq() = %d, want 6", got)
+	}
+
+	// ReplayFrom(0): all retained bytes, start=0.
+	data, start := b.ReplayFrom(0)
+	if !bytes.Equal(data, []byte("abcdef")) {
+		t.Fatalf("ReplayFrom(0) data = %q, want \"abcdef\"", data)
+	}
+	if start != 0 {
+		t.Fatalf("ReplayFrom(0) start = %d, want 0", start)
+	}
+
+	// ReplayFrom(3): bytes from absolute seq 3 onwards.
+	data, start = b.ReplayFrom(3)
+	if !bytes.Equal(data, []byte("def")) {
+		t.Fatalf("ReplayFrom(3) data = %q, want \"def\"", data)
+	}
+	if start != 3 {
+		t.Fatalf("ReplayFrom(3) start = %d, want 3", start)
+	}
+
+	// ReplayFrom(6): at or beyond total → nil, total.
+	data, start = b.ReplayFrom(6)
+	if data != nil {
+		t.Fatalf("ReplayFrom(6) data = %q, want nil", data)
+	}
+	if start != 6 {
+		t.Fatalf("ReplayFrom(6) start = %d, want 6", start)
+	}
+}
+
+// TestRawBufferSeqAndReplayFromAfterTrim verifies that ReplayFrom clamps to the
+// oldest retained byte when since is before the trim boundary.
+func TestRawBufferSeqAndReplayFromAfterTrim(t *testing.T) {
+	b := NewRawBuffer(8)
+	// Write 11 bytes; trimLocked drops "123\n" (cut=4) → retained="456\n789" (7 bytes).
+	// total=11, oldest=11-7=4.
+	_, _ = b.Write([]byte("123\n456\n789"))
+
+	if got := b.Seq(); got != 11 {
+		t.Fatalf("Seq() = %d, want 11", got)
+	}
+
+	// ReplayFrom(0) clamps to oldest retained byte (seq=4).
+	data, start := b.ReplayFrom(0)
+	if start != 4 {
+		t.Fatalf("ReplayFrom(0) start = %d, want 4 (oldest retained)", start)
+	}
+	if !bytes.Equal(data, []byte("456\n789")) {
+		t.Fatalf("ReplayFrom(0) data = %q, want \"456\\n789\"", data)
+	}
+
+	// ReplayFrom(4) starts at exactly the oldest retained byte.
+	data, start = b.ReplayFrom(4)
+	if start != 4 {
+		t.Fatalf("ReplayFrom(4) start = %d, want 4", start)
+	}
+	if !bytes.Equal(data, []byte("456\n789")) {
+		t.Fatalf("ReplayFrom(4) data = %q, want \"456\\n789\"", data)
+	}
+
+	// ReplayFrom(8): from index 8-4=4 into retained buf → "789".
+	data, start = b.ReplayFrom(8)
+	if start != 8 {
+		t.Fatalf("ReplayFrom(8) start = %d, want 8", start)
+	}
+	if !bytes.Equal(data, []byte("789")) {
+		t.Fatalf("ReplayFrom(8) data = %q, want \"789\"", data)
+	}
+
+	// ReplayFrom(11): at or beyond total → nil, total.
+	data, start = b.ReplayFrom(11)
+	if data != nil {
+		t.Fatalf("ReplayFrom(11) data = %q, want nil", data)
+	}
+	if start != 11 {
+		t.Fatalf("ReplayFrom(11) start = %d, want 11", start)
+	}
+}
+
 func TestRawBufferResizeIsNoOp(t *testing.T) {
 	b := NewRawBuffer(0)
 	if _, err := b.Write([]byte("before resize\n")); err != nil {

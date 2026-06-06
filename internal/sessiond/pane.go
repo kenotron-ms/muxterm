@@ -126,6 +126,16 @@ func (p *Pane) Write(input []byte) (int, error) {
 // internal cell grid to match.
 func (p *Pane) Resize(cols, rows int) error {
 	p.mu.Lock()
+	// Idempotent: if the dimensions are unchanged, skip pty.Setsize entirely.
+	// Setsize delivers SIGWINCH, which makes the shell redraw its prompt; those
+	// redraw bytes are appended to the scrollback buffer. A client re-attaching
+	// (refresh/reconnect) fits to the SAME size the PTY already has, so without
+	// this guard every attach injects a redundant prompt redraw that accumulates
+	// in the buffer (one stray prompt fragment per refresh).
+	if cols == p.cols && rows == p.rows {
+		p.mu.Unlock()
+		return nil
+	}
 	p.cols = cols
 	p.rows = rows
 	p.mu.Unlock()
@@ -138,6 +148,17 @@ func (p *Pane) Resize(cols, rows int) error {
 func (p *Pane) Replay() []byte {
 	return p.buf.Replay()
 }
+
+// ReplayFrom returns the retained bytes whose absolute sequence is >= since
+// and the absolute sequence of the first returned byte. It delegates directly
+// to the underlying PaneBuffer.
+func (p *Pane) ReplayFrom(since uint64) (data []byte, start uint64) {
+	return p.buf.ReplayFrom(since)
+}
+
+// Seq returns the total bytes ever written to this pane's buffer (including
+// bytes that have since been trimmed from the scrollback ring).
+func (p *Pane) Seq() uint64 { return p.buf.Seq() }
 
 // SetTitle sets the pane's display title under lock.
 func (p *Pane) SetTitle(name string) {

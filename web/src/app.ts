@@ -305,6 +305,28 @@ export class MuxApp extends LitElement {
     this._socket.onSessiondMessage = (msg) => {
       store.applySessiond(msg);
       this._controller?.onMessage(msg);
+      // Delta-replay anchor setup: must run synchronously here, BEFORE binary
+      // replay frames are processed.  Lit's willUpdate/_syncTerminals fires on
+      // the next render cycle, which is AFTER the replay frames arrive, so we
+      // cannot use _syncTerminals() for this.
+      //
+      // Flow per attach:
+      //   1. ensure() → creates/reuses entry (seqBase=0/current, seqBytes=0/current)
+      //   2. setSeqAnchor(pane.seq) → seqBase=anchor, seqBytes=0
+      //   3. replay frames arrive → write() increments seqBytes from the anchor
+      //   4. next (re)attach → getOffsets() → seqBase+seqBytes = absolute position
+      if (msg.type === SessiondType.Composition) {
+        terminalRegistry.setWorkspace(msg.workspaceId ?? '');
+        for (const pane of (msg.panes ?? [])) {
+          const paneId = pane.paneId;
+          if (paneId < 0) continue;
+          terminalRegistry.ensure(paneId, {
+            onInput: (data) => this._socket?.sendPaneInput(paneId, data),
+            onResize: (cols, rows) => this._controller?.reportResize(paneId, cols, rows),
+          });
+          terminalRegistry.setSeqAnchor(paneId, pane.seq ?? 0);
+        }
+      }
       // One-terminal-per-workspace: when a composition is applied and the folded
       // store has zero panes, auto-spawn exactly one. Guarding on the FOLDED
       // getter means an already-overlaid optimistic pane suppresses a double-spawn.

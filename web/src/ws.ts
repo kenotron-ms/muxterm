@@ -77,9 +77,13 @@ export class MuxSocket {
   }
 
   /** Attach, telling the daemon our responsive breakpoint so it returns the
-   *  matching saved layout in the composition reply. */
-  attachWithBreakpoint(workspaceId: string, breakpoint: string): void {
-    this.sendSessiond({ type: SessiondType.Attach, workspaceId, breakpoint });
+   *  matching saved layout in the composition reply.
+   *  When offsets is non-empty, the daemon replays only bytes the client has
+   *  not yet received (delta replay); omitting offsets requests a full replay. */
+  attachWithBreakpoint(workspaceId: string, breakpoint: string, offsets?: { paneId: number; seq: number }[]): void {
+    const msg: SessiondMessage = { type: SessiondType.Attach, workspaceId, breakpoint };
+    if (offsets && offsets.length > 0) msg.offsets = offsets;
+    this.sendSessiond(msg);
   }
 
   renamePane(paneId: number, name: string): void {

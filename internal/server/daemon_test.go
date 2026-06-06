@@ -32,7 +32,7 @@ func (f *fakeDaemonConn) CloseWorkspace(workspaceID string) error {
 	return nil
 }
 
-func (f *fakeDaemonConn) Attach(workspaceID, breakpoint string) (sessiond.Composition, error) {
+func (f *fakeDaemonConn) Attach(workspaceID, breakpoint string, offsets []sessiond.PaneOffset) (sessiond.Composition, error) {
 	f.attached = workspaceID
 	return sessiond.Composition{
 		WorkspaceID: workspaceID,

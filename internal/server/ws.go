@@ -127,7 +127,7 @@ func (c *Client) handleTextInput(data []byte) {
 
 	switch msg.Type {
 	case sessiond.TypeAttach:
-		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint)
+		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint, msg.Offsets)
 		if err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return

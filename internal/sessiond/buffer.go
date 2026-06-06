@@ -14,6 +14,15 @@ const defaultBufferBudget = 1 << 20
 type PaneBuffer interface {
 	Write(p []byte) (int, error)
 	Replay() []byte
+	// ReplayFrom returns the bytes whose absolute sequence is >= since,
+	// and the absolute sequence (start) of the first returned byte.
+	// If since is at or beyond total, returns (nil, total).
+	// Implementations that are not byte-log–based (e.g. VTBuffer) may
+	// ignore since and always return (Replay(), 0).
+	ReplayFrom(since uint64) (data []byte, start uint64)
+	// Seq returns the total bytes ever written to this buffer (including
+	// bytes that have since been trimmed).
+	Seq() uint64
 	// Resize notifies the buffer that the terminal dimensions have changed.
 	// Implementations that model a cell grid (VTBuffer) must resize their
 	// internal state so subsequent Replay output matches the new dimensions.
@@ -28,6 +37,7 @@ type RawBuffer struct {
 	mu     sync.Mutex
 	buf    []byte
 	budget int
+	total  uint64 // total bytes ever written, including trimmed bytes
 }
 
 // NewRawBuffer returns a RawBuffer with the given budget. A budget <= 0 uses
@@ -44,6 +54,7 @@ func NewRawBuffer(budget int) *RawBuffer {
 func (b *RawBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.total += uint64(len(p))
 	b.buf = append(b.buf, p...)
 	b.trimLocked()
 	return len(p), nil
@@ -77,4 +88,32 @@ func (b *RawBuffer) Replay() []byte {
 	out := make([]byte, len(b.buf))
 	copy(out, b.buf)
 	return out
+}
+
+// ReplayFrom returns the retained bytes whose absolute sequence is >= since,
+// and the absolute sequence (start) of the first returned byte. The absolute
+// sequence of the byte at retained index i is (b.total - uint64(len(b.buf))) + i.
+// If since is at or beyond total, returns (nil, total).
+func (b *RawBuffer) ReplayFrom(since uint64) (data []byte, start uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	oldest := b.total - uint64(len(b.buf)) // absolute seq of buf[0]
+	from := since
+	if from < oldest {
+		from = oldest
+	}
+	if from >= b.total {
+		return nil, b.total
+	}
+	idx := int(from - oldest) // index into b.buf
+	out := make([]byte, len(b.buf)-idx)
+	copy(out, b.buf[idx:])
+	return out, from
+}
+
+// Seq returns the absolute total bytes ever written (including trimmed bytes).
+func (b *RawBuffer) Seq() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.total
 }

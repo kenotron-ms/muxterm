@@ -3,6 +3,7 @@ package sessiond
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"net"
 	"testing"
 	"time"
@@ -344,6 +345,169 @@ func TestIntegrationRenamePaneBroadcasts(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("pane %d not found in composition panes %+v", paneID, comp.Panes)
+	}
+}
+
+// TestIntegrationDeltaReplayNoOffsets verifies that attaching with no offsets
+// delivers the full scrollback replay and that the composition PaneInfo.Seq is 0
+// (oldest retained = 0 for a small buffer that has never been trimmed).
+func TestIntegrationDeltaReplayNoOffsets(t *testing.T) {
+	srv, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	a := newTClient(t, socketPath)
+	a.send(&Message{Type: TypeCreateWorkspace, CID: 1, Name: "delta-noff"})
+	wsID := a.waitCtrl(TypeWorkspaceCreated).WorkspaceID
+	a.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: wsID})
+	a.waitCtrl(TypeComposition)
+	a.send(&Message{Type: TypeCreatePane, CID: 3, Cmd: []string{"cat"}})
+	paneID := a.waitCtrl(TypePaneCreated).PaneID
+	a.waitCtrl(TypePaneAdded)
+
+	// Write data that will become replay for the next attaching client.
+	a.sendInput(paneID, []byte("noffset-replay\n"))
+	a.waitData("noffset-replay")
+	time.Sleep(200 * time.Millisecond)
+
+	// Confirm the pane buffer has accumulated bytes.
+	p, ok := srv.Registry().Pane(wsID, paneID)
+	if !ok {
+		t.Fatal("pane not found in registry")
+	}
+	if p.Seq() == 0 {
+		t.Fatal("expected non-zero Seq after writing data")
+	}
+
+	// Attach B with no offsets → full replay.
+	b := newTClient(t, socketPath)
+	b.send(&Message{Type: TypeAttach, CID: 10, WorkspaceID: wsID})
+	comp := b.waitCtrl(TypeComposition)
+
+	if len(comp.Panes) != 1 {
+		t.Fatalf("composition Panes = %d, want 1", len(comp.Panes))
+	}
+	// No trim → oldest = 0 → Seq = 0 (omitted in JSON, zero-value in Go).
+	if comp.Panes[0].Seq != 0 {
+		t.Errorf("no-offset attach: PaneInfo.Seq = %d, want 0 (no trim)", comp.Panes[0].Seq)
+	}
+
+	// Drive a live line; "noffset-replay" must appear before it (replay ordering).
+	a.sendInput(paneID, []byte("noffset-live\n"))
+	acc := b.waitData("noffset-live")
+	if !bytes.Contains(acc, []byte("noffset-replay")) {
+		t.Fatalf("no-offset attach: replay missing from stream, got %q", acc)
+	}
+	si := bytes.Index(acc, []byte("noffset-replay"))
+	li := bytes.Index(acc, []byte("noffset-live"))
+	if si > li {
+		t.Fatalf("replay ordering violated: noffset-replay at %d after noffset-live at %d", si, li)
+	}
+}
+
+// TestIntegrationDeltaReplayAtMaxOffset verifies that attaching with offset
+// math.MaxUint64 suppresses all replay: the client should NOT receive any
+// pre-existing pane data before its first live output.
+func TestIntegrationDeltaReplayAtMaxOffset(t *testing.T) {
+	_, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	a := newTClient(t, socketPath)
+	a.send(&Message{Type: TypeCreateWorkspace, CID: 1, Name: "delta-max"})
+	wsID := a.waitCtrl(TypeWorkspaceCreated).WorkspaceID
+	a.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: wsID})
+	a.waitCtrl(TypeComposition)
+	a.send(&Message{Type: TypeCreatePane, CID: 3, Cmd: []string{"cat"}})
+	paneID := a.waitCtrl(TypePaneCreated).PaneID
+	a.waitCtrl(TypePaneAdded)
+
+	a.sendInput(paneID, []byte("pre-max-data\n"))
+	a.waitData("pre-max-data")
+	time.Sleep(200 * time.Millisecond)
+
+	// Attach B with MaxUint64 offset → no replay; Seq = current total.
+	b := newTClient(t, socketPath)
+	b.send(&Message{Type: TypeAttach, CID: 10, WorkspaceID: wsID,
+		Offsets: []PaneOffset{{PaneID: paneID, Seq: math.MaxUint64}}})
+	comp := b.waitCtrl(TypeComposition)
+
+	if len(comp.Panes) != 1 {
+		t.Fatalf("composition Panes = %d, want 1", len(comp.Panes))
+	}
+	// Seq should equal total (> 0 since data was written).
+	if comp.Panes[0].Seq == 0 {
+		t.Errorf("max-offset attach: PaneInfo.Seq = 0, want > 0 (= total)")
+	}
+
+	// Drive a live line; "pre-max-data" must NOT arrive before it.
+	a.sendInput(paneID, []byte("post-max-live\n"))
+	acc := b.waitData("post-max-live")
+	if bytes.Contains(acc, []byte("pre-max-data")) {
+		t.Fatalf("max-offset attach: pre-max-data replayed despite MaxUint64 offset: %q", acc)
+	}
+}
+
+// TestIntegrationDeltaReplayPartialOffset verifies true delta replay: the
+// client sends the seq it last consumed (seqAfterEpoch1) and receives only
+// the bytes written after that point (epoch2), not the earlier bytes (epoch1).
+func TestIntegrationDeltaReplayPartialOffset(t *testing.T) {
+	srv, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	a := newTClient(t, socketPath)
+	a.send(&Message{Type: TypeCreateWorkspace, CID: 1, Name: "delta-part"})
+	wsID := a.waitCtrl(TypeWorkspaceCreated).WorkspaceID
+	a.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: wsID})
+	a.waitCtrl(TypeComposition)
+	a.send(&Message{Type: TypeCreatePane, CID: 3, Cmd: []string{"cat"}})
+	paneID := a.waitCtrl(TypePaneCreated).PaneID
+	a.waitCtrl(TypePaneAdded)
+
+	// Write epoch-1; wait until confirmed in the buffer.
+	a.sendInput(paneID, []byte("delta-epoch1-only\n"))
+	a.waitData("delta-epoch1-only")
+	time.Sleep(100 * time.Millisecond)
+
+	// Record the absolute seq after epoch-1 is fully written to the buffer.
+	p, ok := srv.Registry().Pane(wsID, paneID)
+	if !ok {
+		t.Fatal("pane not found in registry")
+	}
+	seqAfterEpoch1 := p.Seq()
+	if seqAfterEpoch1 == 0 {
+		t.Fatal("expected non-zero seq after epoch1")
+	}
+
+	// Write epoch-2 AFTER recording the boundary; it will be the replay delta.
+	a.sendInput(paneID, []byte("delta-epoch2-only\n"))
+	a.waitData("delta-epoch2-only")
+	time.Sleep(100 * time.Millisecond)
+
+	// Attach B with offset = seqAfterEpoch1 → only epoch-2 bytes are replayed.
+	b := newTClient(t, socketPath)
+	b.send(&Message{Type: TypeAttach, CID: 10, WorkspaceID: wsID,
+		Offsets: []PaneOffset{{PaneID: paneID, Seq: seqAfterEpoch1}}})
+	comp := b.waitCtrl(TypeComposition)
+
+	if len(comp.Panes) != 1 {
+		t.Fatalf("composition Panes = %d, want 1", len(comp.Panes))
+	}
+	// The server anchors the replay at seqAfterEpoch1 (within the retained window).
+	if comp.Panes[0].Seq != seqAfterEpoch1 {
+		t.Errorf("partial-offset attach: PaneInfo.Seq = %d, want %d (= seqAfterEpoch1)",
+			comp.Panes[0].Seq, seqAfterEpoch1)
+	}
+
+	// Drive a live probe so B flushes its queued replay.
+	a.sendInput(paneID, []byte("delta-live-probe\n"))
+	acc := b.waitData("delta-live-probe")
+
+	// epoch-2 must be in the replay window.
+	if !bytes.Contains(acc, []byte("delta-epoch2-only")) {
+		t.Fatalf("partial-offset: expected delta-epoch2-only in replay, got %q", acc)
+	}
+	// epoch-1 must NOT appear (it was before the offset).
+	if bytes.Contains(acc, []byte("delta-epoch1-only")) {
+		t.Fatalf("partial-offset: delta-epoch1-only replayed despite offset past it, got %q", acc)
 	}
 }
 

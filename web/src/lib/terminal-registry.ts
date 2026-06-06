@@ -95,10 +95,27 @@ interface PaneEntry {
   lastRows: number;
   /** True once term.open(hostEl) has been called (on first attach). */
   opened: boolean;
+  /** True once the initial replay has been flushed at a settled layout size; gates direct writes. */
+  ready: boolean;
   /** Data buffered before first attach (before term.open). */
   pendingData: (Uint8Array | string)[];
   resizeObserver: ResizeObserver | null;
   resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Delta-replay offset tracking — split into a base + running bytes count
+   * so setSeqAnchor() can cleanly reset to a server-reported absolute anchor.
+   *
+   * seq = seqBase + seqBytes
+   *
+   * seqBase: absolute anchor set by setSeqAnchor() from the composition reply.
+   *   Represents the server's seq of the first replayed byte for this attach.
+   * seqBytes: bytes received since the last setSeqAnchor() call.
+   *   Incremented by write() for every incoming frame (replay + live).
+   *
+   * On a fresh entry, both are 0 until the composition anchor is applied.
+   */
+  seqBase: number;
+  seqBytes: number;
 }
 
 // Module-level state — never re-created between tab switches.
@@ -117,6 +134,29 @@ let _currentWorkspaceId = '';
 /** Compute the composite registry key for the current workspace. */
 function _key(paneId: number): string {
   return `${_currentWorkspaceId}:${paneId}`;
+}
+
+// Minimum container pixels below which a fit is treated as a transient layout
+// artifact (dockview settle/teardown), not a real terminal size. The observed
+// transients measured ~10x4 cells (a few tens of px); a real pane is hundreds.
+// 120x60px ≈ a tiny-but-plausible terminal floor, comfortably above the churn.
+const _MIN_FIT_WIDTH = 120;
+const _MIN_FIT_HEIGHT = 60;
+
+/**
+ * Fit the terminal ONLY when the container has a plausible (non-degenerate)
+ * size. Returns true if a fit was applied. During dockview settle/teardown the
+ * container briefly measures tiny (e.g. 10x4 cells); fitting then would push
+ * that bogus size through term.onResize to the server, triggering a SIGWINCH
+ * prompt redraw that accumulates a stray prompt fragment in the scrollback on
+ * every refresh. Suppressing the fit keeps the PTY size stable across reloads.
+ */
+function _fitIfPlausible(entry: PaneEntry): boolean {
+  const w = entry.hostEl.offsetWidth;
+  const h = entry.hostEl.offsetHeight;
+  if (w < _MIN_FIT_WIDTH || h < _MIN_FIT_HEIGHT) return false;
+  entry.fitAddon.fit();
+  return true;
 }
 
 function _isVisible(el: HTMLElement): boolean {
@@ -164,9 +204,12 @@ export const terminalRegistry = {
       lastCols: -1,
       lastRows: -1,
       opened: false,
+      ready: false,
       pendingData: [],
       resizeObserver: null,
       resizeTimer: undefined,
+      seqBase: 0,
+      seqBytes: 0,
     };
 
     // Forward text input (keystrokes + SGR mouse) as UTF-8 bytes.
@@ -196,9 +239,15 @@ export const terminalRegistry = {
     _map.set(key, entry);
 
     // Drain any data that arrived before ensure() was called.
+    // Also accumulate the byte lengths into seqBytes so the pre-ensure bytes
+    // are included in the offset count (setSeqAnchor will reset from here if
+    // called immediately after, which is the normal composition flow).
     const preBuffer = _preEnsureBuffer.get(key);
     if (preBuffer) {
-      for (const chunk of preBuffer) entry.pendingData.push(chunk);
+      for (const chunk of preBuffer) {
+        entry.pendingData.push(chunk);
+        entry.seqBytes += typeof chunk === 'string' ? chunk.length : chunk.byteLength;
+      }
       _preEnsureBuffer.delete(key);
     }
   },
@@ -213,8 +262,6 @@ export const terminalRegistry = {
     const key = _key(paneId);
     const entry = _map.get(key);
     if (!entry) return;
-
-    const isFirstOpen = !entry.opened;
 
     if (!entry.opened) {
       // Open terminal in the stable host element — only ever called once.
@@ -231,65 +278,29 @@ export const terminalRegistry = {
     // Move (or insert) the host element into the new container.
     container.appendChild(entry.hostEl);
 
-    // ResizeObserver: 50ms debounce, fit only when visible.
+    // ResizeObserver: 50ms debounce. On each tick, drive settle-or-fit:
+    // before the layout has stabilised (_settleAndDrain not yet run), attempt
+    // to settle; once ready, just refit on container resizes.
     // Reconnect on each attach (was disconnected in detach()).
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(() => {
         if (entry.resizeTimer !== undefined) clearTimeout(entry.resizeTimer);
         entry.resizeTimer = setTimeout(() => {
-          requestAnimationFrame(() => terminalRegistry.fitIfVisible(paneId));
+          requestAnimationFrame(() => {
+            if (!entry.ready) terminalRegistry._settleAndDrain(paneId);
+            else terminalRegistry.fitIfVisible(paneId);
+          });
         }, 50);
       });
       ro.observe(entry.hostEl);
       entry.resizeObserver = ro;
     }
-
-    // Eager fit — gives the PTY correct dimensions as soon as possible.
-    terminalRegistry.fitIfVisible(paneId);
-
-    if (isFirstOpen) {
-      // Defer the pendingData drain until after the custom font has loaded.
-      // fitAddon.fit() uses character cell pixel dimensions to calculate
-      // cols/rows. If SF Mono / JetBrains Mono hasn't loaded yet, it falls
-      // back to generic monospace metrics → wrong cols/rows → replay bytes
-      // (PTY buffer from sessiond) write ANSI cursor sequences at wrong
-      // dimensions → garbled $$$$~~~~~ at the top of the terminal.
-      // Draining AFTER fonts.ready guarantees the re-fit uses real metrics
-      // before any replay data touches the terminal grid.
-      const drainPending = (): void => {
-        if (!_map.has(key)) return;
-        terminalRegistry.fitIfVisible(paneId); // re-fit with real font metrics
-        const pending = entry.pendingData.splice(0);
-        for (const chunk of pending) {
-          entry.term.write(chunk);
-        }
-      };
-      // Drain the replay/scrollback as soon as possible. If the custom font is
-      // already loaded (the common case — cached on refresh), fit + drain
-      // SYNCHRONOUSLY now so the history is on screen immediately and cannot be
-      // interleaved with live output that arrives in the deferral window. Only
-      // when the font is genuinely still loading do we defer to fonts.ready, so
-      // the re-fit uses correct cell metrics before replay touches the grid.
-      const fontsReady =
-        typeof document !== 'undefined' &&
-        (document.fonts?.status === 'loaded' || document.fonts === undefined);
-      if (fontsReady) {
-        drainPending();
-      } else if (typeof document !== 'undefined' && document.fonts?.ready) {
-        document.fonts.ready.then(() => requestAnimationFrame(drainPending));
-      } else {
-        requestAnimationFrame(drainPending);
-      }
-    } else {
-      // Re-attach after workspace switch: pendingData is typically empty
-      // (live data flowed directly while opened=true), so this is a no-op
-      // in normal operation. Drain synchronously for correctness.
-      for (const chunk of entry.pendingData) {
-        entry.term.write(chunk);
-      }
-      entry.pendingData = [];
-    }
-
+    // Defensive kick: if the element is already at its final size and the
+    // observer's initial callback is delayed, still attempt to settle.
+    requestAnimationFrame(() => {
+      if (!entry.ready) terminalRegistry._settleAndDrain(paneId);
+      else terminalRegistry.fitIfVisible(paneId);
+    });
     entry.term.focus();
   },
 
@@ -315,6 +326,43 @@ export const terminalRegistry = {
   },
 
   /**
+   * Render the initial replay ONCE, at the settled layout size. Called from the
+   * debounced ResizeObserver (after the panel size has stopped changing for the
+   * debounce window) and a defensive rAF kick. No-ops until the terminal is
+   * opened, visible, has a real (non-zero) size, and the custom font is loaded —
+   * so fitAddon.fit() computes correct cols/rows and the PTY replay never renders
+   * at a transient tiny size (which caused wrapped garble + repeated prompts on
+   * rapid refresh). Flushes pendingData in arrival order, then flips `ready` so
+   * subsequent writes go direct.
+   */
+  _settleAndDrain(paneId: number): void {
+    const entry = _map.get(_key(paneId));
+    if (!entry || !entry.opened || entry.ready) return;
+    if (!_isVisible(entry.hostEl)) return;
+    if (entry.hostEl.offsetWidth <= 0 || entry.hostEl.offsetHeight <= 0) return;
+    const fontsReady =
+      typeof document === 'undefined' ||
+      !document.fonts ||
+      document.fonts.status === 'loaded';
+    if (!fontsReady) {
+      void document.fonts.ready.then(() =>
+        requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId)),
+      );
+      return;
+    }
+    // Guard against fitting at a transient/degenerate size: during dockview
+    // settle/teardown the container briefly measures tiny (e.g. 10x4), and
+    // fitAddon.fit() would push that size through term.onResize to the server,
+    // triggering a SIGWINCH prompt redraw that accumulates in the scrollback
+    // (one stray prompt fragment per refresh). Only drain once a plausible
+    // size is measured; otherwise wait for the next ResizeObserver tick.
+    if (!_fitIfPlausible(entry)) return;
+    const pending = entry.pendingData.splice(0);
+    for (const chunk of pending) entry.term.write(chunk);
+    entry.ready = true;
+  },
+
+  /**
    * Fit the terminal to its container — only when the host element is visible.
    * No-op if the terminal has never been opened or is not in the DOM.
    */
@@ -322,7 +370,7 @@ export const terminalRegistry = {
     const entry = _map.get(_key(paneId));
     if (!entry || !entry.opened) return;
     if (!_isVisible(entry.hostEl)) return;
-    entry.fitAddon.fit();
+    _fitIfPlausible(entry);
   },
 
   /** Focus the terminal for keyboard input. */
@@ -335,22 +383,72 @@ export const terminalRegistry = {
    * terminal is hidden (background window stays current). If ensure() has not
    * yet been called for paneId, the data is buffered in a pre-ensure queue
    * and drained when ensure() is later called.
+   *
+   * Every incoming frame increments the entry's seqBytes (replay + live), so
+   * getOffsets() always reflects the total bytes received since the last anchor.
+   * Pre-ensure bytes are counted when ensure() drains the pre-ensure buffer.
    */
   write(paneId: number, data: Uint8Array | string): void {
     const key = _key(paneId);
     const entry = _map.get(key);
     if (entry) {
-      if (entry.opened) {
+      // Count every incoming byte against the current anchor regardless of
+      // whether the terminal is opened (direct write) or still pending attach.
+      entry.seqBytes += typeof data === 'string' ? data.length : data.byteLength;
+      if (entry.ready) {
         entry.term.write(data);
       } else {
-        // Queued until first attach.
+        // Queued until the layout settles + initial drain.
         entry.pendingData.push(data);
       }
     } else {
       // Pre-ensure buffer: ensure() hasn't been called yet.
+      // Byte counts for these chunks are added to seqBytes when ensure() drains.
       if (!_preEnsureBuffer.has(key)) _preEnsureBuffer.set(key, []);
       _preEnsureBuffer.get(key)!.push(data);
     }
+  },
+
+  /**
+   * Anchor a pane's absolute byte sequence to the server-reported start
+   * (the seq of the first replayed byte). Called when a composition arrives,
+   * BEFORE the replay frames for that pane are processed.
+   *
+   * Sets seqBase = anchor and seqBytes = 0 so that every subsequent write()
+   * call accumulates from this anchor.  The resulting seq = seqBase + seqBytes
+   * is the client's absolute offset, ready to send on the next (re)attach.
+   *
+   * Ordering: ensure() must be called first so the entry exists.  In the
+   * composition handler ensure() → setSeqAnchor() runs synchronously before
+   * any binary replay frames are delivered.
+   */
+  setSeqAnchor(paneId: number, anchor: number): void {
+    const entry = _map.get(_key(paneId));
+    if (!entry) return;
+    entry.seqBase = anchor;
+    entry.seqBytes = 0;
+  },
+
+  /**
+   * Per-pane absolute byte offsets for all live terminals in the CURRENT
+   * workspace, to send on (re)attach so the server replays only the delta.
+   *
+   * Returns [{paneId, seq}] for every entry in the current workspace.
+   * seq = seqBase + seqBytes = the absolute position of the next expected byte.
+   *
+   * On a fresh load there are no entries → returns [] → server does a full
+   * replay (today's behaviour).  On reconnect the live terminals report their
+   * positions → server replays only newer bytes.
+   */
+  getOffsets(): { paneId: number; seq: number }[] {
+    const prefix = `${_currentWorkspaceId}:`;
+    const result: { paneId: number; seq: number }[] = [];
+    for (const [key, entry] of _map.entries()) {
+      if (!key.startsWith(prefix)) continue;
+      const paneId = parseInt(key.slice(prefix.length), 10);
+      result.push({ paneId, seq: entry.seqBase + entry.seqBytes });
+    }
+    return result;
   },
 
   /**

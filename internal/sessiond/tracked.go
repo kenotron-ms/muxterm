@@ -92,6 +92,7 @@ type TrackedBuffer struct {
 	altFrame []byte
 	parser   *ansi.Parser
 	tracker  modeTracker
+	total    uint64 // total bytes ever written, including trimmed bytes
 }
 
 // NewTrackedBuffer returns a TrackedBuffer with the default budget.
@@ -214,10 +215,21 @@ func itoa(n int) string {
 	return string(buf[i:])
 }
 
+// Seq returns the total bytes ever written to this buffer (including trimmed).
+func (b *TrackedBuffer) Seq() uint64 { return b.total }
+
+// ReplayFrom ignores since and returns (b.Replay(), 0): TrackedBuffer is a
+// preamble+ring design, not a seekable byte log, so every caller receives the
+// full current preamble+ring replay anchored at absolute sequence 0.
+func (b *TrackedBuffer) ReplayFrom(_ uint64) (data []byte, start uint64) {
+	return b.Replay(), 0
+}
+
 // Write parses p (for future mode tracking), appends it to the ring, trims to
 // budget, and reports len(p) bytes consumed. The (int, error) signature matches
 // the Phase-1 PaneBuffer seam and io.Writer.
 func (b *TrackedBuffer) Write(p []byte) (int, error) {
+	b.total += uint64(len(p))
 	wasAlt := b.tracker.altScreen
 	b.parser.Parse(p)
 	nowAlt := b.tracker.altScreen

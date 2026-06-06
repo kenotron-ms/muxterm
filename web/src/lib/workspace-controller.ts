@@ -13,6 +13,7 @@ import { SessiondType, SessiondErrorCode, type SessiondMessage } from '../types'
 import { WorkspaceMru } from './workspace-mru.js';
 import { chooseRecoveryTarget } from './workspace-recovery.js';
 import { currentLayoutMode } from './breakpoint.js';
+import { terminalRegistry } from './terminal-registry.js';
 
 const LAST_WS_KEY = 'muxterm.lastWorkspaceId';
 
@@ -21,7 +22,7 @@ const LAST_WS_KEY = 'muxterm.lastWorkspaceId';
  * lets tests inject a fakeSocket of plain spies without the full socket.
  */
 export interface WorkspaceSocket {
-  attachWithBreakpoint(workspaceId: string, breakpoint: string): void;
+  attachWithBreakpoint(workspaceId: string, breakpoint: string, offsets?: { paneId: number; seq: number }[]): void;
   createWorkspace(name?: string): void;
   listWorkspaces(): void;
   resize(paneId: number, cols: number, rows: number): void;
@@ -42,7 +43,7 @@ export class WorkspaceController {
   bootstrap(): void {
     const stored = localStorage.getItem(LAST_WS_KEY);
     if (stored !== null) {
-      this.socket.attachWithBreakpoint(stored, currentLayoutMode());
+      this.socket.attachWithBreakpoint(stored, currentLayoutMode(), terminalRegistry.getOffsets());
       return;
     }
     this._recoveringFrom = '';
@@ -94,7 +95,7 @@ export class WorkspaceController {
           );
           this._recoveringFrom = null;
           if (target.action === 'attach') {
-            this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode());
+            this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode(), terminalRegistry.getOffsets());
           } else {
             this.socket.createWorkspace();
           }
@@ -103,7 +104,7 @@ export class WorkspaceController {
           // surviving workspace from MRU and attach automatically.
           const target = chooseRecoveryTarget(msg.workspaces ?? [], '', this._mru.order());
           if (target.action === 'attach') {
-            this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode());
+            this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode(), terminalRegistry.getOffsets());
           }
         }
         break;
@@ -111,7 +112,7 @@ export class WorkspaceController {
 
       // no-survivor recovery path: attach the freshly-created workspace.
       case SessiondType.WorkspaceCreated: {
-        this.socket.attachWithBreakpoint(msg.workspaceId ?? '', currentLayoutMode());
+        this.socket.attachWithBreakpoint(msg.workspaceId ?? '', currentLayoutMode(), terminalRegistry.getOffsets());
         break;
       }
 

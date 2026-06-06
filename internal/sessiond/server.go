@@ -118,26 +118,56 @@ func (s *Server) unsubscribeLocked(c *conn) {
 //  1. composition reply FIRST (always sent, nil panes when empty),
 //  2. per-pane replay data frames enqueued BEFORE the conn is marked live,
 //  3. mark live so later broadcasts land strictly AFTER replay frames.
-func (s *Server) attachConn(c *conn, wsID string, cid uint64, breakpoint string) {
+//
+// offsets carries the client's last-known absolute seq per pane so only the
+// delta since that position is replayed. An absent or zero entry means full
+// replay from the oldest retained byte.
+func (s *Server) attachConn(c *conn, wsID string, cid uint64, breakpoint string, offsets []PaneOffset) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Build a fast-lookup map: paneID → client's last-known seq.
+	want := make(map[int]uint64, len(offsets))
+	for _, o := range offsets {
+		want[o.PaneID] = o.Seq
+	}
+
+	// Iterate panes in deterministic order, computing the per-pane replay
+	// delta and building the PaneInfo slice with the anchor Seq in one pass.
+	paneIDs := s.reg.PaneIDs(wsID)
+	paneInfos := make([]PaneInfo, 0, len(paneIDs))
+	type replayItem struct {
+		paneID uint32
+		data   []byte
+	}
+	replays := make([]replayItem, 0, len(paneIDs))
+
+	for _, paneID := range paneIDs {
+		p, ok := s.reg.Pane(wsID, paneID)
+		if !ok {
+			continue
+		}
+		info := p.Info()
+		data, start := p.ReplayFrom(want[paneID])
+		info.Seq = start
+		paneInfos = append(paneInfos, info)
+		if len(data) > 0 {
+			replays = append(replays, replayItem{uint32(paneID), data})
+		}
+	}
 
 	// (1) composition reply first.
 	c.sub.enqueueControl(&Message{
 		Type:        TypeComposition,
 		CID:         cid,
 		WorkspaceID: wsID,
-		Panes:       s.reg.PaneInfos(wsID),
+		Panes:       paneInfos,
 		Layout:      s.reg.Layout(wsID, breakpoint),
 	})
 
 	// (2) replay frames before going live.
-	for _, paneID := range s.reg.PaneIDs(wsID) {
-		if p, ok := s.reg.Pane(wsID, paneID); ok {
-			if replay := p.Replay(); len(replay) > 0 {
-				c.sub.enqueuePaneData(uint32(paneID), replay)
-			}
-		}
+	for _, r := range replays {
+		c.sub.enqueuePaneData(r.paneID, r.data)
 	}
 
 	// Re-attach: drop any prior workspace subscription first so this conn never
@@ -308,7 +338,7 @@ func (c *conn) attach(msg Message) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
 		return
 	}
-	c.srv.attachConn(c, msg.WorkspaceID, msg.CID, msg.Breakpoint)
+	c.srv.attachConn(c, msg.WorkspaceID, msg.CID, msg.Breakpoint, msg.Offsets)
 }
 
 // createPane spawns a pane in the connection's attached workspace, ACKs the

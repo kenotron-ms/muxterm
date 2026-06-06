@@ -20,6 +20,26 @@ function makeContainer(): HTMLElement {
   return div;
 }
 
+/**
+ * Stub the geometry on the hostEl (container's first child) so that
+ * _settleAndDrain's visibility + size guards pass, then invoke the drain.
+ *
+ * Under the new model, the initial replay is not flushed in attach() itself —
+ * it only drains once _settleAndDrain() sees a real, settled size.  In the
+ * happy-dom test environment offsetParent/offsetWidth/offsetHeight are always
+ * 0/null, so we provide them here to satisfy the guards.
+ */
+function settleEntry(paneId: number, container: HTMLElement): void {
+  // hostEl is appended to container by attach(); get it via firstElementChild.
+  const hostEl = container.firstElementChild as HTMLElement;
+  if (hostEl) {
+    Object.defineProperty(hostEl, 'offsetParent', { value: document.body, configurable: true });
+    Object.defineProperty(hostEl, 'offsetWidth', { value: 800, configurable: true });
+    Object.defineProperty(hostEl, 'offsetHeight', { value: 600, configurable: true });
+  }
+  terminalRegistry._settleAndDrain(paneId);
+}
+
 describe('terminalRegistry', () => {
   // Clean up ALL registry state between tests so the singleton doesn't leak.
   afterEach(() => {
@@ -137,11 +157,17 @@ describe('terminalRegistry', () => {
       const term = terminalRegistry.getTerminal(30) as any;
 
       // Data should be in pendingData at this point (not yet written to term)
-      // — it will drain on attach
+      // — it will drain when the layout settles via _settleAndDrain.
       const container = makeContainer();
       terminalRegistry.attach(30, container);
 
-      // After attach, pendingData is drained into term.write()
+      // attach() does NOT drain synchronously — layout must settle first.
+      expect(term.getWrittenData().length).toBe(0);
+
+      // Drive the settle explicitly (geometry + _settleAndDrain).
+      settleEntry(30, container);
+
+      // After settling, pendingData is flushed into term.write() in arrival order.
       const written = term.getWrittenData();
       const hasBuffered = written.some((u: Uint8Array) => {
         return new TextDecoder().decode(u) === 'buffered';
@@ -149,16 +175,22 @@ describe('terminalRegistry', () => {
       expect(hasBuffered).toBe(true);
     });
 
-    it('write after ensure but before attach queues in pendingData and drains on attach', () => {
+    it('write after ensure but before attach queues in pendingData and drains on settle', () => {
       terminalRegistry.ensure(31, handlers());
       terminalRegistry.write(31, 'pre-attach');
 
       const term = terminalRegistry.getTerminal(31) as any;
-      // Not yet written to terminal
+      // Not yet written to terminal (pre-attach)
       expect(term.getWrittenData().length).toBe(0);
 
       const container = makeContainer();
       terminalRegistry.attach(31, container);
+
+      // Still not written — attach does NOT drain; layout must settle first.
+      expect(term.getWrittenData().length).toBe(0);
+
+      // Drive settle: stub geometry and invoke _settleAndDrain.
+      settleEntry(31, container);
 
       const written = term.getWrittenData();
       const hasData = written.some((u: Uint8Array) =>
@@ -181,16 +213,39 @@ describe('terminalRegistry', () => {
       expect(container.firstChild).toBeTruthy();
     });
 
-    it('write after attach goes directly to terminal', () => {
+    it('write after settle goes directly to terminal (ready=true)', () => {
       terminalRegistry.ensure(41, handlers());
       const container = makeContainer();
       terminalRegistry.attach(41, container);
 
+      // Settle the layout first so ready flips to true.
+      settleEntry(41, container);
+
+      // Now write goes directly to term.write() (not buffered).
       terminalRegistry.write(41, 'direct');
 
       const term = terminalRegistry.getTerminal(41) as any;
       const hasData = term.getWrittenData().some((u: Uint8Array) =>
         new TextDecoder().decode(u) === 'direct',
+      );
+      expect(hasData).toBe(true);
+    });
+
+    it('write after attach but before settle is buffered in pendingData', () => {
+      terminalRegistry.ensure(42, handlers());
+      const container = makeContainer();
+      terminalRegistry.attach(42, container);
+
+      // Write while ready=false — must be buffered, NOT sent to terminal yet.
+      terminalRegistry.write(42, 'not-yet-direct');
+
+      const term = terminalRegistry.getTerminal(42) as any;
+      expect(term.getWrittenData().length).toBe(0);
+
+      // Settle — the buffered write is drained at the correct size.
+      settleEntry(42, container);
+      const hasData = term.getWrittenData().some((u: Uint8Array) =>
+        new TextDecoder().decode(u) === 'not-yet-direct',
       );
       expect(hasData).toBe(true);
     });
@@ -258,9 +313,10 @@ describe('terminalRegistry', () => {
       // Not attached yet — terminal not opened
       terminalRegistry.resetAll();
 
-      // After reset, attach and check no stale data drained
+      // After reset, attach then settle; the cleared pendingData must not appear.
       const container = makeContainer();
       terminalRegistry.attach(62, container);
+      settleEntry(62, container);
 
       const term = terminalRegistry.getTerminal(62) as any;
       const written = term.getWrittenData();
@@ -304,6 +360,8 @@ describe('terminalRegistry', () => {
       terminalRegistry.ensure(80, handlers());
       const container = makeContainer();
       terminalRegistry.attach(80, container);
+      // Settle so any pending data (there should be none) would have been drained.
+      settleEntry(80, container);
 
       const term = terminalRegistry.getTerminal(80) as any;
       const hasGhost = term.getWrittenData().some(
@@ -381,7 +439,7 @@ describe('buildTerminalConfig', () => {
 
   it('always sets non-overridable fields (lineHeight, allowTransparency, convertEol)', () => {
     const cfg = buildTerminalConfig(DEFAULT_RESOLVED_CONFIG);
-    expect(cfg.lineHeight).toBe(1.2);
+    expect(cfg.lineHeight).toBe(1.0);
     expect(cfg.allowTransparency).toBe(false);
     expect(cfg.convertEol).toBe(false);
   });

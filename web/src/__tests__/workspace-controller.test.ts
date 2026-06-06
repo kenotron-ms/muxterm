@@ -59,13 +59,13 @@ describe('WorkspaceController', () => {
     expect(socket.attachWithBreakpoint).not.toHaveBeenCalled();
 
     feed(workspaceList(['ws-1', 'ws-2']));
-    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-1', expect.any(String));
+    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-1', expect.any(String), expect.any(Array));
   });
 
   it('bootstrap with a stored id attaches it directly', () => {
     localStorage.setItem(LAST_WS_KEY, 'ws-stored');
     controller.bootstrap();
-    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-stored', expect.any(String));
+    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-stored', expect.any(String), expect.any(Array));
     expect(socket.listWorkspaces).not.toHaveBeenCalled();
   });
 
@@ -84,7 +84,7 @@ describe('WorkspaceController', () => {
     expect(socket.listWorkspaces).toHaveBeenCalledTimes(1);
 
     feed(workspaceList(['ws-1']));
-    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-1', expect.any(String));
+    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-1', expect.any(String), expect.any(Array));
   });
 
   it('on workspace-closed with no survivors requests a fresh workspace', () => {
@@ -99,7 +99,7 @@ describe('WorkspaceController', () => {
 
   it('attaches a freshly-created workspace on workspace-created reply', () => {
     feed({ type: SessiondType.WorkspaceCreated, workspaceId: 'ws-new' });
-    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-new', expect.any(String));
+    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-new', expect.any(String), expect.any(Array));
   });
 
   it('on unknown-workspace error clears the stale stored id and re-lists', () => {
@@ -113,7 +113,7 @@ describe('WorkspaceController', () => {
     expect(socket.listWorkspaces).toHaveBeenCalledTimes(1);
 
     feed(workspaceList(['ws-other']));
-    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-other', expect.any(String));
+    expect(socket.attachWithBreakpoint).toHaveBeenCalledWith('ws-other', expect.any(String), expect.any(Array));
   });
 
   it('ignores non-recovery errors (e.g. pane-spawn-failed)', () => {
