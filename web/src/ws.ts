@@ -132,6 +132,12 @@ export class MuxSocket {
     this.sendSessiond(msg);
   }
 
+  /** Kill the pane's PTY on the server side. The server broadcasts pane-closed
+   *  to all subscribers; the client prunes the terminal on receipt. */
+  closePane(paneId: number): void {
+    this.sendSessiond({ type: SessiondType.ClosePane, paneId });
+  }
+
   /**
    * Report a pane's measured rendered grid (active-view-wins by construction:
    * only visible panes own a live ResizeObserver, so tabbed-away panes never

@@ -98,6 +98,28 @@ interface PaneEntry {
   opened: boolean;
   /** True once the initial replay has been flushed at a settled layout size; gates direct writes. */
   ready: boolean;
+  /**
+   * True while a _settleAndDrain drain sequence is in progress (write callbacks
+   * in-flight). Prevents a second concurrent _settleAndDrain call (from
+   * ResizeObserver or a second rAF kick) from splicing pendingData again and
+   * setting ready=true prematurely. (RC-2)
+   */
+  draining: boolean;
+  /**
+   * Monotonically-incrementing generation counter. Captured in write-callback
+   * closures at drain time. If the counter has been incremented (pane closed,
+   * reset, or workspace-switched) by the time a callback fires, the callback
+   * is silently dropped. (RC-3, RC-5)
+   */
+  generation: number;
+  /**
+   * Number of replay bytes the client expects to receive for this attach.
+   * Computed as composition.pane.totalSeq - composition.pane.seq.
+   * _settleAndDrain refuses to set ready=true until seqBytes >= expectedReplayBytes,
+   * closing the settle-before-replay race window (RC-1).
+   * 0 for fresh panes (no replay expected).
+   */
+  expectedReplayBytes: number;
   /** Data buffered before first attach (before term.open). */
   pendingData: (Uint8Array | string)[];
   resizeObserver: ResizeObserver | null;
@@ -208,6 +230,9 @@ export const terminalRegistry = {
       lastRows: -1,
       opened: false,
       ready: false,
+      draining: false,
+      generation: 0,
+      expectedReplayBytes: 0,
       pendingData: [],
       resizeObserver: null,
       resizeTimer: undefined,
@@ -381,8 +406,13 @@ export const terminalRegistry = {
   _settleAndDrain(paneId: number): void {
     const entry = _map.get(_key(paneId));
     if (!entry || !entry.opened || entry.ready) return;
+
+    // Guard RC-2: only one drain sequence at a time.
+    if (entry.draining) return;
+
     if (!_isVisible(entry.hostEl)) return;
     if (entry.hostEl.offsetWidth <= 0 || entry.hostEl.offsetHeight <= 0) return;
+
     const fontsReady =
       typeof document === 'undefined' ||
       !document.fonts ||
@@ -393,45 +423,57 @@ export const terminalRegistry = {
       );
       return;
     }
-    // Guard against fitting at a transient/degenerate size: during dockview
-    // settle/teardown the container briefly measures tiny (e.g. 10x4), and
-    // fitAddon.fit() would push that size through term.onResize to the server,
-    // triggering a SIGWINCH prompt redraw that accumulates in the scrollback
-    // (one stray prompt fragment per refresh). Only drain once a plausible
-    // size is measured; otherwise wait for the next ResizeObserver tick.
+
     if (!_fitIfPlausible(entry)) {
       muxLog('registry settle', `pane=${paneId} NOT plausible size yet`,
         { w: entry.hostEl.offsetWidth, h: entry.hostEl.offsetHeight });
       return;
     }
+
+    // Guard RC-1: BARRIER — don't settle until all expected replay bytes have
+    // arrived. expectedReplayBytes = composition.pane.totalSeq - pane.seq.
+    // If seqBytes < expectedReplayBytes, replay is still in-flight; reschedule.
+    if (entry.seqBytes < entry.expectedReplayBytes) {
+      muxLog('registry settle', `pane=${paneId} waiting for replay`,
+        { seqBytes: entry.seqBytes, expectedReplayBytes: entry.expectedReplayBytes });
+      requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId));
+      return;
+    }
+
     const pending = entry.pendingData.splice(0);
     muxLog('registry settle', `pane=${paneId} settling`,
       { pendingChunks: pending.length,
         pendingBytes: pending.reduce((s, c) => s + (typeof c === 'string' ? c.length : c.byteLength), 0),
-        seqBase: entry.seqBase, seqBytes: entry.seqBytes,
+        seqBase: entry.seqBase, seqBytes: entry.seqBytes, expected: entry.expectedReplayBytes,
         w: entry.hostEl.offsetWidth, h: entry.hostEl.offsetHeight });
+
     if (pending.length === 0) {
-      muxLog('registry ready', `pane=${paneId} READY (empty pending — POSSIBLE RACE if replay in flight)`,
+      // All replay bytes received (seqBytes >= expectedReplayBytes) but nothing
+      // in pendingData — happens for fresh panes with zero expectedReplayBytes,
+      // or panes where all replay data arrived before open() was called (opened
+      // straight from pendingData queue via ensure pre-buffer path). Safe to
+      // mark ready immediately.
+      muxLog('registry ready', `pane=${paneId} READY (no pending — fresh or pre-buffered)`,
         { seqBase: entry.seqBase, seqBytes: entry.seqBytes });
       entry.ready = true;
       return;
     }
-    // Use xterm.js write callbacks to set ready ONLY after xterm.js has
-    // finished processing every replay chunk.  xterm.js buffers writes
-    // internally and processes them in a later animation frame, so by the time
-    // the callbacks fire the onData handlers have already run for any terminal
-    // capability queries embedded in the replay data.  Keeping ready=false
-    // throughout that window means those onData responses (CPR, DA1/DA2,
-    // DECRQSS, DECRPM, OSC 10/11, focus events) are suppressed and never
-    // forwarded to the PTY — preventing the echo-loop garble.
+
+    // Mark draining: prevents RC-2 concurrent _settleAndDrain calls.
+    entry.draining = true;
+    // Capture generation: write callbacks check this to detect cancellation
+    // from prune/resetForReattach (RC-3, RC-6).
+    const myGeneration = entry.generation;
     let remaining = pending.length;
     const onWriteDone = () => {
+      // Stale callback — pane was closed or reset while writes were in-flight.
+      if (entry.generation !== myGeneration) return;
       if (--remaining !== 0) return;
       muxLog('registry ready', `pane=${paneId} READY (after drain)`,
         { seqBase: entry.seqBase, seqBytes: entry.seqBytes });
       entry.ready = true;
-      // Drain any live PTY data that arrived while the replay writes were in
-      // flight (entry.ready was false so they queued in pendingData).
+      entry.draining = false;
+      // Drain any live PTY data that arrived during the drain window.
       const live = entry.pendingData.splice(0);
       if (live.length > 0) {
         muxLog('registry settle', `pane=${paneId} draining live data after replay`,
@@ -516,13 +558,50 @@ export const terminalRegistry = {
    * composition handler ensure() → setSeqAnchor() runs synchronously before
    * any binary replay frames are delivered.
    */
-  setSeqAnchor(paneId: number, anchor: number): void {
+  /**
+   * Anchor a pane's absolute byte sequence to the server-reported start.
+   * Called when a composition arrives, BEFORE any replay frames are processed.
+   *
+   * @param anchor   seq field from composition — first byte of the replay window
+   * @param totalSeq totalSeq field from composition — total bytes ever written
+   *                 Client computes expectedReplayBytes = totalSeq - anchor.
+   *                 Omit (or pass 0) for zero-seq fresh panes.
+   */
+  setSeqAnchor(paneId: number, anchor: number, totalSeq = 0): void {
     const entry = _map.get(_key(paneId));
     if (!entry) return;
-    muxLog('registry anchor', `pane=${paneId} seqBase=${anchor} (was ${entry.seqBase})`,
+    const expected = totalSeq > anchor ? totalSeq - anchor : 0;
+    muxLog('registry anchor', `pane=${paneId} seqBase=${anchor} totalSeq=${totalSeq} expected=${expected}`,
       { pendingData: entry.pendingData.length, seqBytes: entry.seqBytes, ready: entry.ready });
     entry.seqBase = anchor;
     entry.seqBytes = 0;
+    entry.expectedReplayBytes = expected;
+  },
+
+  /**
+   * Reset a pane's settle state for re-attachment (reconnect).
+   * Called from the composition handler when an entry already exists (reconnect),
+   * BEFORE any replay frames can arrive. Increments generation to cancel any
+   * in-flight write callbacks from the previous session. (RC-6)
+   */
+  resetForReattach(paneId: number): void {
+    const entry = _map.get(_key(paneId));
+    if (!entry) return;
+    muxLog('registry reset', `pane=${paneId} resetting for reattach`,
+      { ready: entry.ready, draining: entry.draining, generation: entry.generation });
+    entry.ready = false;
+    entry.draining = false;
+    entry.pendingData = [];
+    entry.generation++;          // cancel in-flight write callbacks
+    entry.seqBase = 0;
+    entry.seqBytes = 0;
+    entry.expectedReplayBytes = 0;
+    entry._directWriteLog = 0;
+  },
+
+  /** Whether term.open() has been called for paneId. Used by mux-dock BUG-C fix. */
+  isOpened(paneId: number): boolean {
+    return _map.get(_key(paneId))?.opened ?? false;
   },
 
   /**
@@ -573,6 +652,7 @@ export const terminalRegistry = {
       if (!key.startsWith(prefix)) continue; // preserve other workspaces
       const paneId = parseInt(key.slice(prefix.length), 10);
       if (!liveIds.has(paneId)) {
+        entry.generation++;          // cancel any in-flight write callbacks
         entry.resizeObserver?.disconnect();
         if (entry.resizeTimer !== undefined) clearTimeout(entry.resizeTimer);
         entry.term.dispose();

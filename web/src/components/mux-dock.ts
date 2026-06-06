@@ -71,23 +71,19 @@ class TerminalRenderer implements IContentRenderer {
         { isConnected: this.element.isConnected, hasTerminal,
           w: this.element.offsetWidth, h: this.element.offsetHeight,
           isActive: this._isActivePane(this._paneId) });
-      if (
-        hasTerminal &&
-        this.element.isConnected
-      ) {
+      if (hasTerminal && this.element.isConnected) {
         this._attached = true;
         this._pendingMount = false;
-        // Focus ONLY if this is the active pane. attach() focusing every pane
-        // during a multi-group restore would make dockview activate each pane's
-        // group in turn (onDidFocus), clobbering the restored active-group
-        // selection. The active pane is whatever the store/restore selected.
         terminalRegistry.attach(this._paneId, this.element, this._isActivePane(this._paneId));
-        // attach() calls fitIfVisible() internally, so we're done.
         return;
       }
-      // Not ready yet (registry missing, or element still detached) — retry on
-      // the next layout() call, which dockview fires once the panel is in the
-      // live DOM.
+      // BUG C fix: dockview only calls layout() on the ACTIVE panel after DOM
+      // append. Non-active panels get layout(isConnected=false) once and then
+      // nothing. Self-schedule a rAF so every panel retries after the append —
+      // one extra frame costs nothing and guarantees all panels open.
+      if (hasTerminal && !this.element.isConnected) {
+        requestAnimationFrame(() => this.layout());
+      }
       return;
     }
     terminalRegistry.fitIfVisible(this._paneId);

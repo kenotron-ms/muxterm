@@ -318,7 +318,7 @@ export class MuxApp extends LitElement {
       //   4. next (re)attach → getOffsets() → seqBase+seqBytes = absolute position
       if (msg.type === SessiondType.Composition) {
         muxLog('app composition', `workspaceId=${msg.workspaceId}`, {
-          panes: (msg.panes ?? []).map(p => ({ paneId: p.paneId, seq: p.seq ?? 0 })),
+          panes: (msg.panes ?? []).map(p => ({ paneId: p.paneId, seq: p.seq ?? 0, totalSeq: p.totalSeq ?? 0 })),
           hasLayout: !!msg.layout,
           storeActivePaneId: store.activePaneId,
         });
@@ -326,11 +326,17 @@ export class MuxApp extends LitElement {
         for (const pane of (msg.panes ?? [])) {
           const paneId = pane.paneId;
           if (paneId < 0) continue;
+          // On reconnect an entry already exists with ready=true from the prior
+          // session. Reset it before replay frames arrive so the barrier gate
+          // works correctly (RC-6).
+          if (terminalRegistry.isOpened(paneId)) {
+            terminalRegistry.resetForReattach(paneId);
+          }
           terminalRegistry.ensure(paneId, {
             onInput: (data) => this._socket?.sendPaneInput(paneId, data),
             onResize: (cols, rows) => this._controller?.reportResize(paneId, cols, rows),
           });
-          terminalRegistry.setSeqAnchor(paneId, pane.seq ?? 0);
+          terminalRegistry.setSeqAnchor(paneId, pane.seq ?? 0, pane.totalSeq ?? 0);
         }
       }
       // One-terminal-per-workspace: when a composition is applied and the folded
@@ -674,7 +680,12 @@ export class MuxApp extends LitElement {
    */
   private _onClosePane = (e: CustomEvent<{ paneId: number }>): void => {
     const closedPaneId = e.detail.paneId;
-    // Prune only the closed pane — keep all other live panes' terminals.
+    // Tell the server to kill the PTY. The server will broadcast pane-closed,
+    // which removes the pane from store._panes. Pruning the terminal now
+    // (before pane-closed) is correct: the user already removed the panel from
+    // the dock, and the generation counter in the registry will cancel any
+    // in-flight write callbacks.
+    this._socket?.closePane(closedPaneId);
     const remaining = new Set(
       store.panes
         .filter((p) => p.paneId >= 0 && p.paneId !== closedPaneId)

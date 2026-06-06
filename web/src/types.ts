@@ -28,6 +28,7 @@ export const SessiondType = {
   CloseWorkspace: 'close-workspace',
   Attach: 'attach',
   CreatePane: 'create-pane',
+  ClosePane: 'close-pane',
   Resize: 'resize',
   RenamePane: 'rename-pane',
   SaveLayout: 'save-layout',
@@ -74,6 +75,10 @@ export interface SessiondPaneInfo {
    *  Omitted (undefined) when 0. Set by the server on each composition reply
    *  so the client can anchor its delta-replay offset tracking. */
   seq?: number;
+  /** Total bytes ever written to this pane's buffer.
+   *  expectedReplayBytes = totalSeq - seq. Used by the client settle barrier
+   *  (RC-1) to defer ready=true until all replay data has arrived. */
+  totalSeq?: number;
 }
 
 export interface SessiondMessage {

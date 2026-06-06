@@ -150,6 +150,7 @@ func (s *Server) attachConn(c *conn, wsID string, cid uint64, breakpoint string,
 		info := p.Info()
 		data, start := p.ReplayFrom(want[paneID])
 		info.Seq = start
+		info.TotalSeq = p.Seq() // client computes expectedReplayBytes = TotalSeq - Seq
 		paneInfos = append(paneInfos, info)
 		if len(data) > 0 {
 			replays = append(replays, replayItem{uint32(paneID), data})
@@ -305,6 +306,8 @@ func (c *conn) handle(msg Message) {
 		c.attach(msg)
 	case TypeCreatePane:
 		c.createPane(msg)
+	case TypeClosePane:
+		c.closePane(msg)
 	case TypeResize:
 		if c.attached == "" {
 			return
@@ -371,6 +374,26 @@ func (c *conn) createPane(msg Message) {
 	c.srv.reg.PutPane(wsID, p)
 	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
 	c.srv.broadcast(wsID, &Message{Type: TypePaneAdded, WorkspaceID: wsID, PaneID: localID, Cols: cols, Rows: rows, ClientRef: msg.ClientRef})
+}
+
+// closePane kills the pane identified by msg.PaneID in the connection's
+// attached workspace, then broadcasts the pane-closed event to all subscribers.
+// It is a no-op for unknown pane IDs (idempotent).
+func (c *conn) closePane(msg Message) {
+	wsID := c.attached
+	if wsID == "" {
+		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
+		return
+	}
+	p, _, ok := c.srv.reg.RemovePane(wsID, msg.PaneID)
+	if !ok {
+		// Pane already gone; send ok so the client doesn't hang.
+		c.reply(&Message{Type: TypeOK, CID: msg.CID})
+		return
+	}
+	p.Close()
+	c.reply(&Message{Type: TypeOK, CID: msg.CID})
+	c.srv.broadcast(wsID, &Message{Type: TypePaneClosed, PaneID: msg.PaneID})
 }
 
 // closeWorkspace removes a workspace and kills its panes, then broadcasts the

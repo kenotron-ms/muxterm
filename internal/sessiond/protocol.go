@@ -28,6 +28,7 @@ const (
 	TypeCloseWorkspace  = "close-workspace"
 	TypeAttach          = "attach"
 	TypeCreatePane      = "create-pane"
+	TypeClosePane       = "close-pane"
 	TypeResize          = "resize"
 	TypeRenamePane      = "rename-pane"
 	TypeSaveLayout      = "save-layout"
@@ -165,9 +166,10 @@ type WorkspaceInfo struct {
 
 // PaneInfo is one entry in a composition reply or pane-added event.
 type PaneInfo struct {
-	PaneID int    `json:"paneId"`
-	Cols   int    `json:"cols"`
-	Rows   int    `json:"rows"`
-	Title  string `json:"title,omitempty"`
-	Seq    uint64 `json:"seq,omitempty"` // absolute seq of the first replayed byte (anchor)
+	PaneID   int    `json:"paneId"`
+	Cols     int    `json:"cols"`
+	Rows     int    `json:"rows"`
+	Title    string `json:"title,omitempty"`
+	Seq      uint64 `json:"seq,omitempty"`      // absolute seq of the first replayed byte (anchor)
+	TotalSeq uint64 `json:"totalSeq,omitempty"` // total bytes ever written; client computes expectedReplayBytes = TotalSeq - Seq
 }

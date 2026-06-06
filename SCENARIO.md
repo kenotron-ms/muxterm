@@ -162,8 +162,10 @@ const splitId = dock.activePaneId;
 ```
 Assert: `splitId !== pane1Id`
 
-**4.4** Click pane 1 (left panel) to give it focus.  
-Assert: `dock.activePaneId === pane1Id`
+**4.4** Click pane 1 (the original/left panel) to give it focus.  
+Assert: `dock.activePaneId === pane1Id`  
+> This step is required before refresh — it sets up the active-pane-persistence assertion.
+> The split creates a new pane which becomes active; click back to pane1 to test that pane1 survives as the active selection.
 
 **4.5** Refresh the browser.  
 Wait until status bar shows **connected**.
