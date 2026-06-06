@@ -1,6 +1,15 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
+import { execSync } from 'child_process';
 import { VitePWA } from 'vite-plugin-pwa';
+
+const gitSha = (() => {
+  try {
+    return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+})();
 
 export default defineConfig({
   plugins: [
@@ -52,6 +61,10 @@ export default defineConfig({
       devOptions: { enabled: false },
     }),
   ],
+  define: {
+    // Baked in at build time; also available in vitest since it reads this config.
+    __GIT_SHA__: JSON.stringify(gitSha),
+  },
   build: {
     outDir: 'dist',
     target: 'es2021',

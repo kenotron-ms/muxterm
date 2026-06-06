@@ -40,6 +40,14 @@ export class MuxTitleBar extends LitElement {
       flex-shrink: 0;
     }
 
+    .brand-sha {
+      font-size: 10px;
+      font-weight: 400;
+      font-family: monospace;
+      color: ${unsafeCSS(CHROME.textDim)};
+      letter-spacing: 0;
+    }
+
     .right {
       display: flex;
       align-items: center;
@@ -143,6 +151,7 @@ export class MuxTitleBar extends LitElement {
       <div class="brand">
         <span class="brand-dot"></span>
         <span>muxterm</span>
+        <span class="brand-sha">${__GIT_SHA__}</span>
       </div>
       <div class="right">
         <button
