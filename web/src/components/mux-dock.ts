@@ -15,11 +15,13 @@ import type { SessiondPaneInfo } from '../types.js';
 class TerminalRenderer implements IContentRenderer {
   readonly element: HTMLElement;
   private readonly _paneId: number;
+  private readonly _isActivePane: (paneId: number) => boolean;
   private _pendingMount = false;
   private _attached = false;
 
-  constructor(id: string) {
+  constructor(id: string, isActivePane: (paneId: number) => boolean) {
     this._paneId = parseInt(id, 10);
+    this._isActivePane = isActivePane;
     const el = document.createElement('div');
     el.style.cssText = 'width:100%;height:100%;overflow:hidden;';
 
@@ -96,7 +98,11 @@ class TerminalRenderer implements IContentRenderer {
       ) {
         this._attached = true;
         this._pendingMount = false;
-        terminalRegistry.attach(this._paneId, this.element);
+        // Focus ONLY if this is the active pane. attach() focusing every pane
+        // during a multi-group restore would make dockview activate each pane's
+        // group in turn (onDidFocus), clobbering the restored active-group
+        // selection. The active pane is whatever the store/restore selected.
+        terminalRegistry.attach(this._paneId, this.element, this._isActivePane(this._paneId));
         // attach() calls fitIfVisible() internally, so we're done.
         return;
       }
@@ -228,6 +234,37 @@ export class MuxDock extends LitElement {
       group?.activePanel?.id ?? this._dv?.activePanel?.id ?? null;
     this._splitReferenceId = placement === 'split' ? this._placementReferenceId : null;
     this.dispatchEvent(new CustomEvent('pane-create', { bubbles: true, composed: true }));
+  }
+
+  /**
+   * Extract the saved GLOBAL active pane id from the persisted layout JSON.
+   * dockview's fromJSON restores each group's per-group activeView but does NOT
+   * reliably re-activate the top-level activeGroup, so we read it ourselves:
+   * find the grid leaf whose group id === activeGroup, and return that leaf's
+   * activeView (the pane id). Returns undefined if the layout can't tell us.
+   */
+  private _activePaneIdFromSavedLayout(): string | undefined {
+    try {
+      const parsed = JSON.parse(this.layout) as SerializedDockview & { activeGroup?: string };
+      const activeGroup = parsed.activeGroup;
+      if (activeGroup === undefined) return undefined;
+      // Walk the grid tree to find the leaf node whose data.id === activeGroup.
+      let found: string | undefined;
+      const visit = (node: { type?: string; data?: unknown }): void => {
+        if (found !== undefined || !node) return;
+        if (node.type === 'leaf') {
+          const d = node.data as { id?: string; activeView?: string } | undefined;
+          if (d?.id === activeGroup) found = d.activeView;
+          return;
+        }
+        const children = (node.data as { type?: string }[] | undefined) ?? [];
+        for (const child of children) visit(child as { type?: string; data?: unknown });
+      };
+      visit(parsed.grid?.root as { type?: string; data?: unknown });
+      return found;
+    } catch {
+      return undefined;
+    }
   }
 
   private _scheduleLayoutSave(): void {
@@ -418,7 +455,7 @@ export class MuxDock extends LitElement {
     this.classList.add('dockview-theme-abyss');
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
-      createComponent: (opts) => new TerminalRenderer(opts.id),
+      createComponent: (opts) => new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId),
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
       // The "left" slot therefore renders immediately after the tabs (before
       // the grow-to-fill void), and the "right" slot renders far right.
@@ -594,16 +631,40 @@ export class MuxDock extends LitElement {
         }
 
         if (restored) {
-          // fromJSON already restored the saved active group + per-group active
-          // view. Do NOT force activePaneId (which the store hard-codes to
-          // panes[0]) — that would clobber the restored selection. Instead,
-          // sync the store to dockview's restored truth so they agree.
-          const restoredActive = this._dv.activePanel?.id;
-          if (restoredActive !== undefined) {
-            const paneId = parseInt(restoredActive, 10);
+          // dockview's fromJSON restores each group's per-group activeView, but
+          // does NOT reliably re-activate the saved top-level activeGroup — it
+          // reverts the GLOBAL active panel to the first group. So explicitly
+          // re-activate the panel named by the saved layout's activeGroup +
+          // that group's activeView. Fall back to dockview's own activePanel
+          // only if the saved layout can't tell us.
+          const activePaneId = this._activePaneIdFromSavedLayout() ?? this._dv.activePanel?.id;
+          if (activePaneId !== undefined) {
+            const paneId = parseInt(String(activePaneId), 10);
+            const panel = this._panels.get(paneId);
+            if (panel) {
+              // setActive makes this panel's group the GLOBAL active group.
+              panel.api.setActive();
+            }
+            // Do NOT force store's activePaneId (hard-coded to panes[0]) — sync
+            // the store to the restored selection instead.
             this.dispatchEvent(
               new CustomEvent('pane-select', { detail: { paneId }, bubbles: true, composed: true }),
             );
+            // Re-assert as the LAST word. The synchronous setActive(above) holds
+            // through the microtask but is clobbered on the next animation frame:
+            // terminals attach via a deferred rAF and each calls term.focus(),
+            // and dockview activates a group on focus (onDidFocus). The attach
+            // focus-storm lands on the stale store-default pane, reverting the
+            // active group. Re-activating AND focusing the restored pane after
+            // those frames makes it stick (and leaves it keyboard-focused).
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                if (this._panels.get(paneId)?.api.setActive) {
+                  this._panels.get(paneId)?.api.setActive();
+                  terminalRegistry.focus(paneId);
+                }
+              });
+            });
           }
         } else {
           // Fresh tab build — honor the store's active pane.

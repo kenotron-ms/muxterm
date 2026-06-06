@@ -257,8 +257,13 @@ export const terminalRegistry = {
    * On first call: opens the terminal (term.open). On subsequent calls
    * (re-attach after tab switch): re-parents the existing host element,
    * preserving all scrollback.
+   *
+   * `focus` defaults to false. Pass true ONLY for the active pane: focusing a
+   * terminal makes dockview activate its group (onDidFocus), so focusing every
+   * pane during a multi-group layout restore would clobber the restored active
+   * group. The active pane is focused explicitly by the caller.
    */
-  attach(paneId: number, container: HTMLElement): void {
+  attach(paneId: number, container: HTMLElement, focus = false): void {
     const key = _key(paneId);
     const entry = _map.get(key);
     if (!entry) return;
@@ -301,7 +306,12 @@ export const terminalRegistry = {
       if (!entry.ready) terminalRegistry._settleAndDrain(paneId);
       else terminalRegistry.fitIfVisible(paneId);
     });
-    entry.term.focus();
+    // Only focus when explicitly requested (i.e. this is the active pane). On a
+    // multi-group layout restore EVERY pane attaches; if each one grabbed focus,
+    // dockview's onDidFocus would activate that pane's group, and the last
+    // attach would clobber the restored active-group selection. Focusing only
+    // the active pane keeps the restored cross-group selection intact.
+    if (focus) entry.term.focus();
   },
 
   /**
