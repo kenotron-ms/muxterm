@@ -27,12 +27,16 @@ export class Terminal {
     this.element = container;
   }
 
-  write(data: Uint8Array | string): void {
+  // callback matches xterm.js Terminal.write(data, callback?) signature.
+  // Called synchronously in the mock so _settleAndDrain's onWriteDone counter
+  // resolves inside the same tick, keeping test assertions simple.
+  write(data: Uint8Array | string, callback?: () => void): void {
     if (typeof data === 'string') {
       this._writtenData.push(new TextEncoder().encode(data));
     } else {
       this._writtenData.push(data);
     }
+    callback?.();
   }
 
   onData(cb: (data: string) => void): void {

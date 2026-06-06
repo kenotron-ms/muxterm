@@ -28,7 +28,7 @@ func TestDefaults(t *testing.T) {
 	}
 
 	// Font
-	wantFamily := "'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'Fira Code', 'Menlo', 'Consolas', monospace"
+	wantFamily := "Monospace"
 	if cfg.Font.Family != wantFamily {
 		t.Errorf("Font.Family: got %q, want %q", cfg.Font.Family, wantFamily)
 	}

@@ -213,15 +213,26 @@ export const terminalRegistry = {
     };
 
     // Forward text input (keystrokes + SGR mouse) as UTF-8 bytes.
+    // Gate on entry.ready: xterm.js processes writes asynchronously, so when
+    // _settleAndDrain flushes the replay queue, capability queries embedded in
+    // the PTY stream (CPR ESC[6n, DA1/DA2, DECRQSS, OSC 10/11, DECRPM, …) are
+    // processed by xterm.js AFTER ready is set. Without this gate those query
+    // responses fire through onData → sendPaneInput → PTY master. bash/readline
+    // has already timed out by then; the PTY echoes the unexpected bytes back as
+    // visible output, the charmbracelet emulator renders them as literal
+    // characters (DCS body after stripping ESC P, etc.), and the garble gets
+    // baked into the VTBuffer replay — compounding on every subsequent reload.
     term.onData((data: string) => {
+      if (!entry.ready) return;
       entry.handlers.onInput(_encoder.encode(data));
     });
 
     // Forward legacy binary mouse reports (X10/UTF-8 encoding).
     // onBinary is part of the xterm.js public API but may not exist on all
-    // mock implementations — guard defensively.
+    // mock implementations — guard defensively. Same ready gate as onData.
     if (typeof (term as any).onBinary === 'function') {
       (term as any).onBinary((data: string) => {
+        if (!entry.ready) return;
         const bytes = new Uint8Array(data.length);
         for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i) & 0xff;
         entry.handlers.onInput(bytes);
@@ -368,8 +379,30 @@ export const terminalRegistry = {
     // size is measured; otherwise wait for the next ResizeObserver tick.
     if (!_fitIfPlausible(entry)) return;
     const pending = entry.pendingData.splice(0);
-    for (const chunk of pending) entry.term.write(chunk);
-    entry.ready = true;
+    if (pending.length === 0) {
+      entry.ready = true;
+      return;
+    }
+    // Use xterm.js write callbacks to set ready ONLY after xterm.js has
+    // finished processing every replay chunk.  xterm.js buffers writes
+    // internally and processes them in a later animation frame, so by the time
+    // the callbacks fire the onData handlers have already run for any terminal
+    // capability queries embedded in the replay data.  Keeping ready=false
+    // throughout that window means those onData responses (CPR, DA1/DA2,
+    // DECRQSS, DECRPM, OSC 10/11, focus events) are suppressed and never
+    // forwarded to the PTY — preventing the echo-loop garble.
+    let remaining = pending.length;
+    const onWriteDone = () => {
+      if (--remaining !== 0) return;
+      entry.ready = true;
+      // Drain any live PTY data that arrived while the replay writes were in
+      // flight (entry.ready was false so they queued in pendingData).
+      const live = entry.pendingData.splice(0);
+      for (const chunk of live) entry.term.write(chunk);
+    };
+    for (const chunk of pending) {
+      entry.term.write(chunk, onWriteDone);
+    }
   },
 
   /**

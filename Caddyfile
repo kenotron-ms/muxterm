@@ -1,0 +1,26 @@
+# muxterm — in-instance loopback hop for the HOST Caddy.
+#
+# Topology:
+#   Browser
+#     -> host Caddy            (muxterm.ampbox.io, see /mnt/services/muxterm.caddy)
+#     -> THIS Caddy            (10.66.204.209:8090, instance IP — reachable by host)
+#     -> muxterm               (127.0.0.1:9090, loopback)
+#
+# Why this hop exists: muxterm's SPA carries no auth token; it relies on the
+# server's localhost auth-bypass (internal/server/auth.go IsLocalhost). The host
+# Caddy connects from a non-loopback IP, which would force a 30s token the SPA
+# can't supply. By terminating here and dialing muxterm over 127.0.0.1, muxterm
+# always sees a loopback peer, so remote users get in token-free. WebSocket
+# upgrades (tmux control mode) pass through reverse_proxy automatically.
+#
+# Run with:  caddy run --config ./Caddyfile   (started for you by `make dev`)
+
+:8090 {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:9090
+
+	log {
+		output file ./tmp/caddy.log
+		format console
+	}
+}

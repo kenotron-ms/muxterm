@@ -31,8 +31,11 @@ export interface ResolvedConfig {
 export const DEFAULT_RESOLVED_CONFIG: ResolvedConfig = {
   theme: { palette: 'tokyo-night' },
   font: {
-    family:
-      "'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'Fira Code', 'Menlo', 'Consolas', monospace",
+    // Match Zellij's web client, which sets xterm's fontFamily to "Monospace".
+    // This resolves to the OS-configured default monospace font (via fontconfig
+    // on Linux), which is properly hinted and renders crisply — unlike a stack
+    // of named fonts that aren't installed and fall through to a poor fallback.
+    family: 'Monospace',
     size: 13,
   },
   terminal: {

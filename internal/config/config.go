@@ -90,7 +90,9 @@ func Defaults() Config {
 			Palette: "tokyo-night",
 		},
 		Font: FontConfig{
-			Family: "'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'Fira Code', 'Menlo', 'Consolas', monospace",
+			// Match Zellij's web client ("Monospace"): resolves to the
+			// OS-configured default monospace font, which renders crisply.
+			Family: "Monospace",
 			Size:   13,
 		},
 		Terminal: TerminalConfig{

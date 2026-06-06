@@ -69,6 +69,11 @@ describe('terminalRegistry', () => {
       terminalRegistry.ensure(3, h1);
       terminalRegistry.ensure(3, h2);
 
+      // Settle so that onData is forwarded (entry.ready must be true).
+      const container = makeContainer();
+      terminalRegistry.attach(3, container);
+      settleEntry(3, container);
+
       // Simulate input — should call h2.onInput, not h1.onInput
       const term = terminalRegistry.getTerminal(3) as any;
       term.simulateInput('x');
@@ -85,6 +90,10 @@ describe('terminalRegistry', () => {
     it('encodes text input as Uint8Array and calls handlers.onInput', () => {
       const h = handlers();
       terminalRegistry.ensure(10, h);
+      // Must settle so entry.ready=true before onData is forwarded.
+      const container = makeContainer();
+      terminalRegistry.attach(10, container);
+      settleEntry(10, container);
 
       const term = terminalRegistry.getTerminal(10) as any;
       term.simulateInput('hello');
@@ -93,6 +102,27 @@ describe('terminalRegistry', () => {
       const arg = (h.onInput as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array;
       expect(arg).toBeInstanceOf(Uint8Array);
       expect(new TextDecoder().decode(arg)).toBe('hello');
+    });
+
+    it('suppresses onData before settle — replay-phase gate prevents garbled-text bug', () => {
+      // Root cause: xterm.js processes writes asynchronously; when
+      // _settleAndDrain flushes the pendingData queue, capability queries
+      // embedded in the PTY stream (CPR ESC[6n, DA1/DA2, DECRQSS, etc.) are
+      // processed by xterm.js and fire via onData. Without this gate those
+      // responses reach the PTY after readline has already timed out, the PTY
+      // echoes them back, and the VTBuffer stores them as visible garble.
+      const h = handlers();
+      terminalRegistry.ensure(12, h);
+      const container = makeContainer();
+      terminalRegistry.attach(12, container);
+      // Deliberately NOT settling — entry.ready is still false.
+
+      const term = terminalRegistry.getTerminal(12) as any;
+      // Simulate a CPR response that xterm.js would emit via onData while
+      // processing ESC[6n embedded in the replay buffer.
+      term.simulateInput('\x1b[2;2R');
+
+      expect(h.onInput).not.toHaveBeenCalled();
     });
   });
 
@@ -103,6 +133,10 @@ describe('terminalRegistry', () => {
     it('encodes binary input as Uint8Array and calls handlers.onInput', () => {
       const h = handlers();
       terminalRegistry.ensure(11, h);
+      // Must settle so entry.ready=true before onBinary is forwarded.
+      const container = makeContainer();
+      terminalRegistry.attach(11, container);
+      settleEntry(11, container);
 
       const term = terminalRegistry.getTerminal(11) as any;
       // simulateBinaryInput is added to the mock in setup.ts
@@ -114,6 +148,18 @@ describe('terminalRegistry', () => {
       expect(arg[0]).toBe(1);
       expect(arg[1]).toBe(2);
       expect(arg[2]).toBe(3);
+    });
+
+    it('suppresses onBinary before settle — replay-phase gate', () => {
+      const h = handlers();
+      terminalRegistry.ensure(13, h);
+      const container = makeContainer();
+      terminalRegistry.attach(13, container);
+      // Deliberately NOT settling — entry.ready is still false.
+
+      const term = terminalRegistry.getTerminal(13) as any;
+      term.simulateBinaryInput('\x01\x02');
+      expect(h.onInput).not.toHaveBeenCalled();
     });
   });
 
