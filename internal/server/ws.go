@@ -209,6 +209,15 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
 
+	case sessiond.TypeClosePane:
+		if err := c.daemon.ClosePane(msg.PaneID); err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		// The daemon broadcasts pane-closed to all subscribers; the ok
+		// here is just an ack back to the requesting client.
+		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
+
 	case sessiond.TypeSaveLayout:
 		if err := c.daemon.SaveLayout(msg.WorkspaceID, msg.Breakpoint, msg.Layout); err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)

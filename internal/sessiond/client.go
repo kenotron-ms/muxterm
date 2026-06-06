@@ -291,6 +291,14 @@ func (c *Client) CreatePane(cmd []string) (int, error) {
 	return reply.PaneID, nil
 }
 
+// ClosePane asks the daemon to kill the pane identified by paneID and remove it
+// from the attached workspace. The daemon broadcasts a pane-closed event to all
+// subscribers on success.
+func (c *Client) ClosePane(paneID int) error {
+	_, err := c.request(&Message{Type: TypeClosePane, PaneID: paneID})
+	return err
+}
+
 // Input forwards keystroke bytes to the pane identified by the workspace-local
 // paneID as a binary FramePaneData frame, matching the live-output framing so
 // serve can bridge the body without rewriting it. It is connection-scoped: the

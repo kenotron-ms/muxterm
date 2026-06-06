@@ -16,6 +16,7 @@ type DaemonConn interface {
 	RenamePane(paneID int, name string) error
 	SaveLayout(workspaceID, breakpoint, layout string) error
 	CreatePane(cmd []string) (int, error)
+	ClosePane(paneID int) error
 	Input(paneID uint32, data []byte) error
 	Resize(paneID, cols, rows int) error
 	SetHandlers(h sessiond.Handlers)
