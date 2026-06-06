@@ -15,6 +15,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { resolvePalette } from './theme.js';
+import { muxLog } from './mux-log.js';
 
 /**
  * Ensure xterm.js's stylesheet is present in the root node that actually
@@ -101,6 +102,8 @@ interface PaneEntry {
   pendingData: (Uint8Array | string)[];
   resizeObserver: ResizeObserver | null;
   resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Log throttle: count of direct writes already logged. */
+  _directWriteLog: number;
   /**
    * Delta-replay offset tracking — split into a base + running bytes count
    * so setSeqAnchor() can cleanly reset to a server-reported absolute anchor.
@@ -210,7 +213,10 @@ export const terminalRegistry = {
       resizeTimer: undefined,
       seqBase: 0,
       seqBytes: 0,
+      _directWriteLog: 0,
     };
+
+    muxLog('registry ensure', `created pane=${paneId}`, { key });
 
     // Forward text input (keystrokes + SGR mouse) as UTF-8 bytes.
     // Gate on entry.ready: xterm.js processes writes asynchronously, so when
@@ -223,7 +229,18 @@ export const terminalRegistry = {
     // characters (DCS body after stripping ESC P, etc.), and the garble gets
     // baked into the VTBuffer replay — compounding on every subsequent reload.
     term.onData((data: string) => {
-      if (!entry.ready) return;
+      if (!entry.ready) {
+        // Escape sequences in data → log first 40 chars for diagnosis
+        if (/\x1b/.test(data)) {
+          muxLog('registry onData', `SUPPRESSED (not ready) pane=${paneId}`,
+            { preview: JSON.stringify(data.slice(0, 60)) });
+        }
+        return;
+      }
+      if (/\x1b/.test(data)) {
+        muxLog('registry onData', `FORWARDED (ready) pane=${paneId}`,
+          { preview: JSON.stringify(data.slice(0, 60)) });
+      }
       entry.handlers.onInput(_encoder.encode(data));
     });
 
@@ -281,8 +298,13 @@ export const terminalRegistry = {
 
     if (!entry.opened) {
       // Open terminal in the stable host element — only ever called once.
+      muxLog('registry attach', `term.open pane=${paneId} focus=${focus}`,
+        { pending: entry.pendingData.length, seqBase: entry.seqBase, seqBytes: entry.seqBytes });
       entry.term.open(entry.hostEl);
       entry.opened = true;
+    } else {
+      muxLog('registry attach', `re-attach pane=${paneId} focus=${focus}`,
+        { pending: entry.pendingData.length, ready: entry.ready });
     }
 
     // NOTE: xterm.js's stylesheet is injected deterministically into mux-app's
@@ -377,9 +399,20 @@ export const terminalRegistry = {
     // triggering a SIGWINCH prompt redraw that accumulates in the scrollback
     // (one stray prompt fragment per refresh). Only drain once a plausible
     // size is measured; otherwise wait for the next ResizeObserver tick.
-    if (!_fitIfPlausible(entry)) return;
+    if (!_fitIfPlausible(entry)) {
+      muxLog('registry settle', `pane=${paneId} NOT plausible size yet`,
+        { w: entry.hostEl.offsetWidth, h: entry.hostEl.offsetHeight });
+      return;
+    }
     const pending = entry.pendingData.splice(0);
+    muxLog('registry settle', `pane=${paneId} settling`,
+      { pendingChunks: pending.length,
+        pendingBytes: pending.reduce((s, c) => s + (typeof c === 'string' ? c.length : c.byteLength), 0),
+        seqBase: entry.seqBase, seqBytes: entry.seqBytes,
+        w: entry.hostEl.offsetWidth, h: entry.hostEl.offsetHeight });
     if (pending.length === 0) {
+      muxLog('registry ready', `pane=${paneId} READY (empty pending — POSSIBLE RACE if replay in flight)`,
+        { seqBase: entry.seqBase, seqBytes: entry.seqBytes });
       entry.ready = true;
       return;
     }
@@ -394,10 +427,16 @@ export const terminalRegistry = {
     let remaining = pending.length;
     const onWriteDone = () => {
       if (--remaining !== 0) return;
+      muxLog('registry ready', `pane=${paneId} READY (after drain)`,
+        { seqBase: entry.seqBase, seqBytes: entry.seqBytes });
       entry.ready = true;
       // Drain any live PTY data that arrived while the replay writes were in
       // flight (entry.ready was false so they queued in pendingData).
       const live = entry.pendingData.splice(0);
+      if (live.length > 0) {
+        muxLog('registry settle', `pane=${paneId} draining live data after replay`,
+          { chunks: live.length });
+      }
       for (const chunk of live) entry.term.write(chunk);
     };
     for (const chunk of pending) {
@@ -435,13 +474,25 @@ export const terminalRegistry = {
     const key = _key(paneId);
     const entry = _map.get(key);
     if (entry) {
+      const bytes = typeof data === 'string' ? data.length : data.byteLength;
       // Count every incoming byte against the current anchor regardless of
       // whether the terminal is opened (direct write) or still pending attach.
-      entry.seqBytes += typeof data === 'string' ? data.length : data.byteLength;
+      entry.seqBytes += bytes;
       if (entry.ready) {
+        // Log only the first few direct writes so we can see if replay arrives post-ready
+        if (entry._directWriteLog < 5) {
+          entry._directWriteLog++;
+          muxLog('registry write', `DIRECT #${entry._directWriteLog} pane=${paneId} bytes=${bytes}`,
+            { seqBase: entry.seqBase, seqBytes: entry.seqBytes });
+        }
         entry.term.write(data);
       } else {
         // Queued until the layout settles + initial drain.
+        // Only log first 5 buffered writes to avoid spam
+        if (entry.pendingData.length < 5) {
+          muxLog('registry write', `BUFFERED pane=${paneId} bytes=${bytes} pending=${entry.pendingData.length}`,
+            { opened: entry.opened, seqBase: entry.seqBase, seqBytes: entry.seqBytes });
+        }
         entry.pendingData.push(data);
       }
     } else {
@@ -468,6 +519,8 @@ export const terminalRegistry = {
   setSeqAnchor(paneId: number, anchor: number): void {
     const entry = _map.get(_key(paneId));
     if (!entry) return;
+    muxLog('registry anchor', `pane=${paneId} seqBase=${anchor} (was ${entry.seqBase})`,
+      { pendingData: entry.pendingData.length, seqBytes: entry.seqBytes, ready: entry.ready });
     entry.seqBase = anchor;
     entry.seqBytes = 0;
   },

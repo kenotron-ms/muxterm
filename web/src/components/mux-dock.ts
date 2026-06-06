@@ -5,6 +5,7 @@ import { DockviewComponent } from 'dockview-core';
 import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { terminalRegistry } from '../lib/terminal-registry.js';
+import { muxLog } from '../lib/mux-log.js';
 import type { SessiondPaneInfo } from '../types.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -54,46 +55,24 @@ class TerminalRenderer implements IContentRenderer {
     // to open at wrong cols/rows, making the PTY replay garbled ($$$$~~~~~).
     // We attach in the first layout() call instead, which is guaranteed to
     // fire after dockview has settled the panel size.
-    if (terminalRegistry.getTerminal(this._paneId) === null) {
+    const hasTerminal = terminalRegistry.getTerminal(this._paneId) !== null;
+    if (!hasTerminal) {
       this._pendingMount = true;
     }
+    muxLog('renderer init', `pane=${this._paneId}`, { hasTerminal, pendingMount: this._pendingMount });
   }
 
   layout(): void {
     if (!this._attached) {
       // Attach (open the xterm surface) only once the panel element is BOTH
       // connected to the live shadow DOM AND has real pixel dimensions.
-      //
-      // The `isConnected` gate is critical for the layout-restore path:
-      // dockview's fromJSON() builds groups in a DETACHED subtree and calls
-      // layout() on the active panel BEFORE appending that subtree to the DOM.
-      // Attaching then would:
-      //   - inject xterm.css via container.getRootNode() into the wrong root
-      //     (a detached fragment, not mux-app's shadow root) → measurement
-      //     elements leak as $$$$~~~~;
-      //   - set the terminal `opened` flag while the element is unsized, so the
-      //     PTY replay (arriving as later WebSocket frames) writes directly at
-      //     the wrong cols/rows → repeated/garbled prompt; and
-      //   - bypass pendingData, so the deferred fonts.ready drain has nothing
-      //     to replay → missing scrollback history.
-      //
-      // Gating on isConnected defers attach to the post-append layout() call
-      // (from gridview.layout()), when the element is in the shadow DOM with
-      // real dimensions. Replay then queues in pendingData while opened=false
-      // and is drained at the correct, font-settled size — the same path the
-      // fresh-tab flow already uses successfully.
-      //
-      // Gate ONLY on isConnected — NOT on offsetWidth/offsetHeight. During a
-      // fromJSON restore dockview lays the grid out at 0x0 first (its
-      // ResizeObserver settles real dimensions a frame later), so a re-shown
-      // non-active panel's element is connected but momentarily 0-sized. If we
-      // also required offsetWidth>0 here, that panel would never attach (its
-      // only layout() call arrives at 0x0) and would render blank/historyless
-      // until an unrelated resize. attach() calls fitIfVisible(), which itself
-      // no-ops while the element is invisible/zero-sized and re-fits correctly
-      // on the next ResizeObserver tick — so attaching at 0x0 is safe.
+      const hasTerminal = terminalRegistry.getTerminal(this._paneId) !== null;
+      muxLog('renderer layout', `pane=${this._paneId} not-yet-attached`,
+        { isConnected: this.element.isConnected, hasTerminal,
+          w: this.element.offsetWidth, h: this.element.offsetHeight,
+          isActive: this._isActivePane(this._paneId) });
       if (
-        terminalRegistry.getTerminal(this._paneId) !== null &&
+        hasTerminal &&
         this.element.isConnected
       ) {
         this._attached = true;
@@ -557,6 +536,9 @@ export class MuxDock extends LitElement {
 
     // Case 1: workspaceKey changed → full panel reset
     if (changed.has('workspaceKey')) {
+      muxLog('dock case1', `workspaceKey changed`,
+        { workspaceKey: this.workspaceKey, panes: this.panes.map(p => p.paneId),
+          activePaneId: this.activePaneId, hasLayout: !!this.layout });
       this._settingActive = true;
       this._removingPanels = true;
       try {
@@ -581,6 +563,7 @@ export class MuxDock extends LitElement {
         if (!this.narrow && this.layout) {
           try {
             this._restoringLayout = true;
+            muxLog('dock restore', 'calling fromJSON', { layoutLength: this.layout.length });
             this._dv.fromJSON(JSON.parse(this.layout) as SerializedDockview);
             // Rebuild the panel map from whatever fromJSON recreated.
             this._panels.clear();
@@ -608,8 +591,10 @@ export class MuxDock extends LitElement {
               }
             }
             restored = this._panels.size > 0;
-          } catch {
+            muxLog('dock restore', 'fromJSON complete', { panelCount: this._panels.size, restored });
+          } catch (e) {
             // Corrupt/incompatible layout — fall back to a clean tab build.
+            muxLog('dock restore', 'fromJSON FAILED — falling back', { err: String(e) });
             restored = false;
             this._panels.clear();
             this._dv.clear();
@@ -637,10 +622,15 @@ export class MuxDock extends LitElement {
           // re-activate the panel named by the saved layout's activeGroup +
           // that group's activeView. Fall back to dockview's own activePanel
           // only if the saved layout can't tell us.
-          const activePaneId = this._activePaneIdFromSavedLayout() ?? this._dv.activePanel?.id;
+          const _fromLayout = this._activePaneIdFromSavedLayout();
+          const _fromDv = this._dv.activePanel?.id;
+          muxLog('dock restore', 'active pane resolution',
+            { fromLayout: _fromLayout, fromDockview: _fromDv, storeActivePaneId: this.activePaneId });
+          const activePaneId = _fromLayout ?? _fromDv;
           if (activePaneId !== undefined) {
             const paneId = parseInt(String(activePaneId), 10);
             const panel = this._panels.get(paneId);
+            muxLog('dock restore', `setActive pane=${paneId}`, { panelFound: !!panel });
             if (panel) {
               // setActive makes this panel's group the GLOBAL active group.
               panel.api.setActive();
@@ -728,6 +718,8 @@ export class MuxDock extends LitElement {
 
     // Case 3: activePaneId changed → set active panel
     if (changed.has('activePaneId')) {
+      muxLog('dock case3', `activePaneId changed to ${this.activePaneId}`,
+        { panels: [...this._panels.keys()], prevActivePaneId: changed.get('activePaneId') });
       const panel = this._panels.get(this.activePaneId);
       if (panel && !panel.api.isActive) {
         this._settingActive = true;

@@ -6,6 +6,7 @@ import type {
 import { SessiondType } from './types';
 import type { Composition } from './lib/arrangement-store.js';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from './lib/config.js';
+import { muxLog } from './lib/mux-log.js';
 
 // --- optimistic-mutation seam -----------------------------------------------
 // A pending mutation overlays an optimistic patch over a COPY of the
@@ -131,6 +132,7 @@ export class MuxStore {
 
   setActivePane(paneId: number): void {
     if (this._activePaneId === paneId) return;
+    muxLog('state active', `setActivePane ${this._activePaneId} → ${paneId}`);
     this._activePaneId = paneId;
     this._notify();
   }
@@ -154,7 +156,10 @@ export class MuxStore {
       case SessiondType.Composition: {
         this._attached = msg.workspaceId ?? null;
         this._panes = [...(msg.panes ?? [])];
-        this._activePaneId = this._panes[0]?.paneId ?? 0;
+        const newActivePaneId = this._panes[0]?.paneId ?? 0;
+        muxLog('state composition', `activePaneId set to panes[0]=${newActivePaneId}`,
+          { paneIds: this._panes.map(p => p.paneId), prevActive: this._activePaneId });
+        this._activePaneId = newActivePaneId;
         this._layout = msg.layout ?? '';
         break;
       }

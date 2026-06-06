@@ -20,6 +20,7 @@ import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
 import { SessiondType } from './types.js';
 import { currentLayoutMode } from './lib/breakpoint.js';
+import { muxLog, muxLogReset } from './lib/mux-log.js';
 
 // Optimistic panes use a strictly-negative temp paneId so they never collide
 // with the daemon's positive workspace-local ids (which start at 1); the real
@@ -316,6 +317,11 @@ export class MuxApp extends LitElement {
       //   3. replay frames arrive → write() increments seqBytes from the anchor
       //   4. next (re)attach → getOffsets() → seqBase+seqBytes = absolute position
       if (msg.type === SessiondType.Composition) {
+        muxLog('app composition', `workspaceId=${msg.workspaceId}`, {
+          panes: (msg.panes ?? []).map(p => ({ paneId: p.paneId, seq: p.seq ?? 0 })),
+          hasLayout: !!msg.layout,
+          storeActivePaneId: store.activePaneId,
+        });
         terminalRegistry.setWorkspace(msg.workspaceId ?? '');
         for (const pane of (msg.panes ?? [])) {
           const paneId = pane.paneId;
@@ -356,6 +362,8 @@ export class MuxApp extends LitElement {
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
+      muxLogReset();
+      muxLog('app reconnect', 'WS connected, bootstrapping');
       // On (re)connect: attach the last/known workspace, or list + attach the
       // first. This is where the initial composition sync is requested.
       this._controller?.bootstrap();
