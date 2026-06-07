@@ -719,16 +719,12 @@ export class MuxApp extends LitElement {
   }
 
   /**
-   * Handle a pane-close event from mux-dock. Mouse closes keep the original
-   * instant, permanent behavior. Touch/pen closes are deferred for 10s with an
-   * undo toast (see _startDeferredClose).
+   * Handle a pane-close event from mux-dock. All closes (mouse, touch, pen)
+   * are deferred for 10s with an undo toast so accidental closes are
+   * recoverable regardless of input device (see _startDeferredClose).
    */
   private _onClosePane = (e: CustomEvent<{ paneId: number; touch: boolean; title: string }>): void => {
-    if (e.detail.touch) {
-      this._startDeferredClose(e.detail.paneId, e.detail.title);
-      return;
-    }
-    this._executeClose(e.detail.paneId);
+    this._startDeferredClose(e.detail.paneId, e.detail.title);
   };
 
   /** Begin a 10-second grace period for a touch/pen close. */

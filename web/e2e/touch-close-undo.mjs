@@ -145,14 +145,19 @@ try {
   const goneServer = pevalJson(`JSON.stringify(window.__muxStore.panes.map(p=>p.paneId))`);
   check('pane absent from server state after expiry', !goneServer.includes(target), { goneServer });
 
-  // ── Scenario 3: mouse close -> instant, no pending ───────────────────────
-  console.log('Scenario 3: mouse close (instant)');
+  // ── Scenario 3: mouse close -> undo toast (same as touch) ────────────────
+  console.log('Scenario 3: mouse close + undo');
   const remaining = pevalJson(`JSON.stringify(window.__muxStore.panes.filter(p=>p.paneId>=0).map(p=>p.paneId))`);
   const mouseTarget = remaining[remaining.length - 1];
   pcli('eval', `${HELPERS}; _closePane(${mouseTarget}, 'mouse')`);
   sleep(300);
   const pending3 = pevalJson(`JSON.stringify(window.__muxPendingCloses())`);
-  check('no pending close for mouse close', !pending3.includes(mouseTarget), { pending3 });
+  check('pending close registered for mouse close', pending3.includes(mouseTarget), { pending3 });
+  // undo it too
+  pcli('eval', `window.__muxUndoClose(${mouseTarget})`);
+  sleep(500);
+  const afterMouse = pevalJson(`JSON.stringify(window.__muxStore.panes.filter(p=>p.paneId>=0).map(p=>p.paneId))`);
+  check('pane present again after mouse undo', afterMouse.includes(mouseTarget), { afterMouse });
 
   console.log('');
   if (failures > 0) { console.error(`${failures} check(s) FAILED`); process.exit(1); }
