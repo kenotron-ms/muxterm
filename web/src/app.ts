@@ -413,6 +413,10 @@ export class MuxApp extends LitElement {
       this._socket.disconnect();
       this._socket = null;
     }
+    // Clear any pending deferred-close timers (guards against test-suite timer bleed)
+    for (const handle of this._pendingCloses.values()) clearTimeout(handle);
+    this._pendingCloses.clear();
+    this._pendingClosesMeta.clear();
   }
 
   /**

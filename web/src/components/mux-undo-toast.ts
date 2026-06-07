@@ -50,7 +50,7 @@ export class MuxUndoToast extends LitElement {
     }
 
     .undo {
-      /* 44px minimum touch target — easy to hit under time pressure. */
+      /* 44px minimum touch target height; width fills at least half the toast so it's easy to hit on narrow screens. */
       min-height: 44px;
       min-width: 44%;
       padding: 0 18px;
