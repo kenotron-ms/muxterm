@@ -52,6 +52,11 @@ export interface PendingRecord extends MutationSpec {
 
 const DEFAULT_MUTATION_TIMEOUT_MS = 5000;
 
+interface BellRecord {
+  lastFiredAt: number; // ms timestamp when bell last fired
+  ackedAt:     number; // ms timestamp when user last acknowledged (0 = never)
+}
+
 export class MuxStore {
   private _listeners: Set<() => void> = new Set();
   private _config: ResolvedConfig = DEFAULT_RESOLVED_CONFIG;
@@ -66,6 +71,8 @@ export class MuxStore {
   private _layout = '';
   private _pending: Map<string, PendingRecord> = new Map();
   private _mutationSeq = 0;
+  private _bellPanes:      Map<number, BellRecord> = new Map();
+  private _bellWorkspaces: Map<string,  BellRecord> = new Map();
 
   get config(): ResolvedConfig {
     return this._config;
@@ -135,6 +142,43 @@ export class MuxStore {
     muxLog('state active', `setActivePane ${this._activePaneId} → ${paneId}`);
     this._activePaneId = paneId;
     this._notify();
+  }
+
+  markBell(paneId: number, wsId: string): void {
+    const now = Date.now();
+    const paneRecord = this._bellPanes.get(paneId) ?? { lastFiredAt: 0, ackedAt: 0 };
+    paneRecord.lastFiredAt = now;
+    this._bellPanes.set(paneId, paneRecord);
+    const wsRecord = this._bellWorkspaces.get(wsId) ?? { lastFiredAt: 0, ackedAt: 0 };
+    wsRecord.lastFiredAt = now;
+    this._bellWorkspaces.set(wsId, wsRecord);
+    this._notify();
+  }
+
+  ackPane(paneId: number): void {
+    const r = this._bellPanes.get(paneId);
+    if (!r) return;
+    r.ackedAt = Date.now();
+    this._notify();
+  }
+
+  ackWorkspace(wsId: string): void {
+    const r = this._bellWorkspaces.get(wsId);
+    if (!r) return;
+    r.ackedAt = Date.now();
+    this._notify();
+  }
+
+  paneBellActive(paneId: number): boolean {
+    const r = this._bellPanes.get(paneId);
+    if (!r) return false;
+    return r.lastFiredAt > r.ackedAt;
+  }
+
+  workspaceBellActive(wsId: string): boolean {
+    const r = this._bellWorkspaces.get(wsId);
+    if (!r) return false;
+    return r.lastFiredAt > r.ackedAt;
   }
 
   // Apply a sessiond control-protocol message. Workspace and composition state
