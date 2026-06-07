@@ -310,11 +310,13 @@ export const terminalRegistry = {
     {
       let _touchY = 0;
       let _accumulated = 0;
+      // passive:true — we don't call preventDefault here so the browser still
+      // fires the synthetic click after a tap (needed for pane selection/focus).
+      // touch-action:none on the hostEl already suppresses browser pan/zoom.
       hostEl.addEventListener('touchstart', (e: TouchEvent) => {
         _touchY = e.touches[0].clientY;
         _accumulated = 0;
-        e.preventDefault();
-      }, { passive: false });
+      }, { passive: true });
       hostEl.addEventListener('touchmove', (e: TouchEvent) => {
         const y = e.touches[0].clientY;
         // Positive delta = finger moved up = scroll down (content moves up).
