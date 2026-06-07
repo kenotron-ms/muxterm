@@ -88,8 +88,10 @@ Optional chaining (`?.`) means no existing caller breaks.
 In `_syncTerminals()` where terminal handlers are provided, add:
 
 ```ts
-onBell: (paneId) => store.markBell(paneId, currentWorkspaceId)
+onBell: (paneId) => store.markBell(paneId, store.currentWorkspaceId)
 ```
+
+> `currentWorkspaceId` must be read from the store **inside the callback at bell-fire time**, not captured as a closure variable at handler-registration time. Capturing it outside the callback means bells fired after a workspace switch are attributed to the wrong workspace.
 
 Ack wiring:
 - On pane focus event → `store.ackPane(paneId)`
@@ -108,7 +110,7 @@ Lit component. Receives reactive inputs from `MuxStore.subscribe()`:
 - `bellWorkspaces` derived from `MuxStore`
 - `connected: boolean`
 
-**Layout:** flex row, 44px height, no boxes around workspace labels (touch-friendly without visual clutter). Each workspace is a `<button>` with no border/background, `padding: 0 16px`, `min-height: 44px`. Active workspace: `font-weight: 600`. Bell workspace: `●` prefix in amber. Connection dot: `margin-left: auto` at far right. `+` button for new workspace, same behaviour as today.
+**Layout:** flex row, 44px height, no boxes around workspace labels (touch-friendly without visual clutter). Each workspace is a `<button>` with no border/background, `padding: 0 16px`, `min-height: 44px`. Active workspace: `font-weight: 600`. Bell workspace: `●` prefix in amber — only when `workspaceBellActive(wsId)` is true AND the workspace is not the currently active workspace. Bells on the active workspace are suppressed in the dock bar (they are visible via pane tab dots above). Connection dot: `margin-left: auto` at far right. `+` button for new workspace, same behaviour as today.
 
 **On tap:** emit `workspace-switch` event + call `store.ackWorkspace(wsId)`.
 
@@ -173,7 +175,8 @@ muxterm          dev  ›  build  ▾
 - Lists all panes in the current workspace
 - Each entry shows `●` prefix if `store.paneBellActive(paneId)` is true
 - Active pane shows `✓` indicator
-- Tapping a pane entry: closes dropdown, fires pane-select event, `store.ackPane(paneId)`
+- Tapping a pane entry: closes dropdown, emits a `pane-select` custom DOM event (same event shape as `mux-dock`'s existing `pane-select`), calls `store.ackPane(paneId)`
+- `mux-app.ts` handles the `pane-select` event from `mux-pane-picker` the same way it handles it from `mux-dock`: calls `store.setActivePane(paneId)` and activates the corresponding Dockview panel via `this._dv.api.getPanel(panelId).api.setActive()`. No new event handler needed — the same listener already bubbles from both sources.
 
 **Reactive inputs** (from `MuxStore.subscribe()`):
 - `panes: SessiondPaneInfo[]`
@@ -185,7 +188,7 @@ muxterm          dev  ›  build  ▾
 
 ## Design Tokens
 
-This feature introduces four new CSS custom properties and uses three existing ones.
+This feature introduces five new CSS custom properties and uses three existing ones.
 The canonical definitions and values live in [DESIGN.md](../../../../DESIGN.md).
 
 ### New tokens (to be added to `web/src/lib/theme.ts`)
