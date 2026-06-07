@@ -110,6 +110,35 @@ Lit component. Receives reactive inputs from `MuxStore.subscribe()`:
 
 **On tap:** emit `workspace-switch` event + call `store.ackWorkspace(wsId)`.
 
+## Design Tokens
+
+This feature introduces four new CSS custom properties and uses three existing ones.
+The canonical definitions and values live in [DESIGN.md](../../../../DESIGN.md).
+
+### New tokens (to be added to `web/src/lib/theme.ts`)
+
+| Token | Usage in this feature | Proposed value |
+|---|---|---|
+| `--mux-bell` | Color of the `●` indicator on tabs and dock slots | `var(--mux-warn)` |
+| `--mux-dock-height` | Height of the dock bar row — sets the touch target | `44px` |
+| `--mux-dock-item-padding` | Horizontal padding on each workspace slot | `0 16px` |
+| `--mux-dock-font-size` | Workspace label font size | `0.85rem` |
+| `--mux-dock-active-weight` | Font weight for the active workspace label | `600` |
+
+### Existing tokens consumed
+
+| Token | Used for |
+|---|---|
+| `--mux-fg` | Inactive workspace label color |
+| `--mux-accent` | Active workspace label color (alternative to bold weight) |
+| `--mux-ok` / `--mux-error` | Connection indicator dot (carried over from status bar) |
+
+### Bell indicator character
+
+`●` (U+25CF BLACK CIRCLE) — prepended to the label with a 4px gap.
+Chosen over an SVG icon: zero-dependency, renders in both system-ui and monospace fonts,
+semantically neutral. See DESIGN.md Alternatives Considered.
+
 ## UI Sketch
 
 ```
