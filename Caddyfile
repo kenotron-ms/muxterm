@@ -1,10 +1,14 @@
-# muxterm — in-instance loopback hop for the HOST Caddy.
+# muxterm DEV — in-instance loopback hop for the HOST Caddy (dev instance).
 #
 # Topology:
 #   Browser
-#     -> host Caddy            (muxterm.ampbox.io, see /mnt/services/muxterm.caddy)
-#     -> THIS Caddy            (10.66.204.209:8090, instance IP — reachable by host)
-#     -> muxterm               (127.0.0.1:9090, loopback)
+#     -> host Caddy            (muxterm-dev.ampbox.io, see /mnt/services/muxterm-dev.caddy)
+#     -> THIS Caddy            (10.66.204.209:8091, instance IP — reachable by host)
+#     -> muxterm dev           (127.0.0.1:9091, loopback)
+#
+# Production runs on :9090 via systemd (binary: ~/.local/bin/muxterm).
+# Dev runs on :9091 via `make dev` / air (binary: ./bin/muxterm).
+# The two never conflict: different binary, different port, different host URL.
 #
 # Why this hop exists: muxterm's SPA carries no auth token; it relies on the
 # server's localhost auth-bypass (internal/server/auth.go IsLocalhost). The host
@@ -15,9 +19,9 @@
 #
 # Run with:  caddy run --config ./Caddyfile   (started for you by `make dev`)
 
-:8090 {
+:8091 {
 	encode zstd gzip
-	reverse_proxy 127.0.0.1:9090
+	reverse_proxy 127.0.0.1:9091
 
 	log {
 		output file ./tmp/caddy.log
