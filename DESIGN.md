@@ -69,6 +69,8 @@ and dock bar feature. See `docs/superpowers/specs/2026-06-07-attention-managemen
 | `--mux-dock-item-padding` | Horizontal padding on each dock workspace item | `0 16px` |
 | `--mux-dock-font-size` | Workspace label font size in the dock | `0.85rem` |
 | `--mux-dock-active-weight` | Font weight for the active workspace label | `600` |
+| `--mux-tab-max-width` | Maximum/default pane tab width on desktop | `180px` |
+| `--mux-tab-min-width` | Minimum pane tab width before label truncates | `80px` |
 
 ### Spacing and layout
 

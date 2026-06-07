@@ -36,9 +36,11 @@ Bell state lives in `MuxStore`. `terminal-registry.ts` wires the xterm.js callba
 | `web/src/lib/terminal-registry.ts` | Wire `onBell` callback in `PaneHandlers` |
 | `web/src/lib/state.ts` | Add bell state to `MuxStore` |
 | `web/src/app.ts` | Provide `onBell`, call `ackPane`/`ackWorkspace` |
-| `web/src/components/mux-dock.ts` | Render pane tab dots |
+| `web/src/components/mux-dock.ts` | Render pane tab dots; add `.dv-tab` CSS overrides (min/max width); add `@media` rule hiding Dockview tabs at ≤768px |
 | `web/src/components/mux-dock-bar.ts` | **New** — replaces `mux-status-bar` |
 | `web/src/components/mux-status-bar.ts` | **Deleted** |
+| `web/src/components/mux-title-bar.ts` | Add `mux-pane-picker` on mobile; breadcrumb hidden on desktop via CSS |
+| `web/src/components/mux-pane-picker.ts` | **New** — mobile pane switcher component |
 
 ## Components
 
@@ -110,6 +112,77 @@ Lit component. Receives reactive inputs from `MuxStore.subscribe()`:
 
 **On tap:** emit `workspace-switch` event + call `store.ackWorkspace(wsId)`.
 
+## Responsive Layout Strategy
+
+A single CSS media query (`max-width: 768px`) switches the UI between two modes:
+
+**Desktop (>768px):**
+- Dockview renders tabs, split panes, and drag-and-drop as today
+- Pane tabs auto-size between `--mux-tab-min-width` and `--mux-tab-max-width`
+- Dockview's built-in horizontal scroll handles overflow when tabs exceed container width
+- `mux-pane-picker` breadcrumb hidden (via CSS `display: none`)
+
+**Mobile (≤768px):**
+- Dockview tab strip hidden via CSS (`display: none` on `.dv-tabs-and-actions-container`)
+- Dockview remains mounted — terminal buffers and PTY state preserved, no re-init cost
+- Active pane fills 100% of the available area
+- `mux-pane-picker` breadcrumb visible in the title bar
+
+The breakpoint is CSS-only. No JS viewport detection, no store state for layout mode.
+
+## Desktop Tab Sizing
+
+Two new CSS tokens control pane tab width, applied as overrides to Dockview's `.dv-tab` inside `mux-dock.ts`'s static styles:
+
+| Token | Value | Rationale |
+|---|---|---|
+| `--mux-tab-max-width` | `180px` | Comfortable default — fits most pane names |
+| `--mux-tab-min-width` | `80px` | Fits ~5 chars + `●` + `×`; label truncates before them |
+
+CSS:
+```css
+.dv-tab {
+  flex: 1 1 var(--mux-tab-max-width);
+  min-width: var(--mux-tab-min-width);
+  max-width: var(--mux-tab-max-width);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+```
+
+At `80px`, a tab `● build` becomes `● bui…×` — the bell dot and close button remain visible since truncation hits the label text first. When tabs overflow the strip even at min-width, Dockview's built-in horizontal scroll (`.dv-scrollbar-horizontal`, confirmed in dockview-core CSS) handles it. No custom overflow dropdown needed.
+
+At ≤768px, Dockview tabs are hidden entirely — tab sizing only applies on desktop.
+
+## Mobile Pane Switcher — mux-pane-picker
+
+New Lit component `mux-pane-picker.ts` renders inside `mux-title-bar`. Visible only on mobile (≤768px via CSS).
+
+**Title bar layout on mobile:**
+```
+muxterm          dev  ›  build  ▾
+```
+
+- Left: existing branding
+- Right: `[workspace] › [pane name] ▾` — tappable breadcrumb
+- `●` prefix on the active pane name only if that pane has an uncleared bell (edge case — bells normally auto-ack on pane switch)
+- `▾` indicates the element is tappable
+
+**Dropdown** (opens anchored below the title bar on tap):
+- Lists all panes in the current workspace
+- Each entry shows `●` prefix if `store.paneBellActive(paneId)` is true
+- Active pane shows `✓` indicator
+- Tapping a pane entry: closes dropdown, fires pane-select event, `store.ackPane(paneId)`
+
+**Reactive inputs** (from `MuxStore.subscribe()`):
+- `panes: SessiondPaneInfo[]`
+- `activePaneId: number`
+- `bellPanes` derived from `MuxStore`
+- `activeWorkspaceName: string`
+
+**No new tokens** — uses existing `--mux-fg`, `--mux-accent`, `--mux-bell`, `--mux-bg`, `--mux-border`.
+
 ## Design Tokens
 
 This feature introduces four new CSS custom properties and uses three existing ones.
@@ -178,18 +251,40 @@ semantically neutral. See DESIGN.md Alternatives Considered.
 
 ## Testing Strategy
 
-### Unit tests (vitest — pure logic)
+### Primary verification: DTU + Playwright (browser automation)
 
-- `MuxStore.markBell(paneId, wsId)` → `paneBellActive` and `workspaceBellActive` both return `true`.
-- `ackPane(paneId)` after `markBell` → `paneBellActive` returns `false`, `workspaceBellActive` still `true`.
-- `ackWorkspace(wsId)` after `markBell` → `workspaceBellActive` returns `false`, `paneBellActive` still `true`.
-- New `markBell` after an ack → both become active again (timestamp ordering).
+This is the authoritative verification for all UI changes in this feature. Unit tests do not cover visual layout, CSS breakpoints, or the bell-dot rendering pipeline adequately. Per AGENTS.md, Lit components are not unit-tested with vitest.
 
-### E2E tests (Playwright)
+**Verification flow:**
+1. Build muxterm binary + web assets
+2. Launch in a DTU (Digital Twin Universe) — isolated container, no localhost dependency
+3. Run Playwright against the DTU with two viewport profiles:
 
-- **Pane tab dot:** fire bell in a background pane; verify the tab text includes `●`; focus the pane; verify the `●` is gone.
-- **Dock dot:** fire bell in a background workspace; verify the dock label includes `●`; switch to that workspace; verify the `●` is gone.
-- **Touch target:** verify dock bar height ≥ 44px.
+**Desktop viewport (1280×800):**
+- Bell dot on pane tab: write `\a` to a background pane → verify `●` prefix on that tab
+- Bell dot on dock slot: write `\a` in a background workspace → verify `●` on dock slot → switch to workspace → verify dot clears
+- Tab sizing: verify tabs flex between `--mux-tab-min-width` and `--mux-tab-max-width` values
+- Dockview scroll: open enough panes to overflow the tab strip → verify horizontal scroll
+
+**Mobile viewport (390×844, triggers ≤768px breakpoint):**
+- Verify Dockview tab strip is hidden
+- Verify single pane fills 100% of the area
+- Verify `workspace › pane ▾` breadcrumb appears in the title bar
+- Tap breadcrumb → verify dropdown shows all panes with correct bell state
+- Tap a pane with `●` → verify pane switches and bell dot clears
+- Verify dock bar is present and workspace switching works
+
+**Extend `/muxterm-verify` skill** with the above as named scenarios so they run automatically on every future pane/WebSocket/reconnect change.
+
+### Unit tests (vitest — pure logic only)
+
+Only the `MuxStore` bell state methods qualify as pure logic:
+- `markBell(paneId, wsId)` → `paneBellActive` and `workspaceBellActive` both true
+- `ackPane(paneId)` after `markBell` → `paneBellActive` false, `workspaceBellActive` still true
+- `ackWorkspace(wsId)` after `markBell` → `workspaceBellActive` false, `paneBellActive` still true
+- New `markBell` after ack → both active again (timestamp ordering)
+
+No Lit component tests. No DOM fixture tests. Playwright is the proof.
 
 ## Open Questions
 
