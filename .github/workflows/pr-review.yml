@@ -1,0 +1,39 @@
+# Amplifier-powered automated PR review.
+# Posts a structured review comment when a PR is opened.
+# Requires: ANTHROPIC_API_KEY set in repo Secrets → Actions.
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened]
+
+# Minimum permissions: read the code, write a comment.
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # required — agent needs the full diff
+
+      - uses: microsoft/amplifier-app-actions@main
+        with:
+          bundle: git+https://github.com/microsoft/amplifier-app-actions@main#subdirectory=bundles/pr-review.bundle.md
+          prompt: |
+            A pull request was opened on muxterm, a terminal multiplexer with:
+            - Go backend: session daemon (PTY management), WebSocket relay server
+            - TypeScript/Lit 3 frontend: custom elements, dockview tab layout, xterm.js terminals
+            - Communication: binary WebSocket protocol between browser and Go server
+
+            Review the diff carefully. Pay particular attention to:
+            - WebSocket message protocol correctness (new message types, field naming)
+            - Go concurrency safety (mutex coverage, goroutine lifecycle, channel usage)
+            - Lit component lifecycle (connectedCallback/disconnectedCallback cleanup, memory leaks)
+            - xterm.js terminal state management (registry pruning, scrollback preservation)
+            - CSS layout and z-index interactions in the dockview shell
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
