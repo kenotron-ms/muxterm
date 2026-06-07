@@ -35,7 +35,7 @@ Bell state lives in `MuxStore`. `terminal-registry.ts` wires the xterm.js callba
 |------|--------|
 | `web/src/lib/terminal-registry.ts` | Wire `onBell` callback in `PaneHandlers` |
 | `web/src/lib/state.ts` | Add bell state to `MuxStore` |
-| `web/src/app.ts` | Provide `onBell`, call `ackPane`/`ackWorkspace`; also add `@pane-select` binding to `<mux-title-bar>` element in the render template |
+| `web/src/app.ts` | Provide `onBell`; call `ackPane` on pane focus; move `@workspace-switch` listener binding from the deleted `<mux-status-bar>` to `<mux-dock-bar>`; add `@pane-select` binding to `<mux-title-bar>` |
 | `web/src/components/mux-dock.ts` | Render pane tab dots; add `.dv-tab` CSS overrides (min/max width); add `@media` rule hiding Dockview tabs at ≤768px |
 | `web/src/components/mux-dock-bar.ts` | **New** — replaces `mux-status-bar` |
 | `web/src/components/mux-status-bar.ts` | **Deleted** |
@@ -95,7 +95,7 @@ onBell: (paneId) => store.markBell(paneId, store.attached ?? '')
 
 Ack wiring:
 - On pane focus event → `store.ackPane(paneId)`
-- On workspace switch → `store.ackWorkspace(wsId)`
+- Workspace acks are owned by `mux-dock-bar` (called directly on tap, before the `workspace-switch` event fires). `mux-app.ts` does NOT also call `ackWorkspace` — there is only one call site.
 
 ### mux-dock.ts (`web/src/components/mux-dock.ts`)
 
@@ -179,7 +179,7 @@ muxterm          dev  ›  build  ▾
 - `mux-app.ts` handles `pane-select` via a Lit template binding on the `mux-dock` element (`@pane-select="${this._onActivePane}"`). Because `mux-pane-picker` lives inside `mux-title-bar` — a separate DOM subtree — its events do not bubble to the `mux-dock` binding. `mux-app.ts` must also add `@pane-select="${this._onActivePane}"` to its `<mux-title-bar>` template binding. The handler itself (`_onActivePane`) is unchanged — it calls `store.setActivePane(paneId)` and activates the Dockview panel.
 
 **Reactive inputs** (from `MuxStore.subscribe()`):
-- `panes: SessiondPaneInfo[]`
+- `panes: SessiondPaneInfo[]` (type confirmed at `web/src/types.ts:68`)
 - `activePaneId: number`
 - Bell state is read directly by calling `store.paneBellActive(paneId)` in the Lit render template per pane row — no separate `bellPanes` property is passed in. The store's `subscribe()` triggers re-renders when bell state changes.
 - `activeWorkspaceName: string`
