@@ -19,6 +19,7 @@ export class Terminal {
   _onDataCbs: Array<(data: string) => void> = [];
   _onBinaryCbs: Array<(data: string) => void> = [];
   _onResizeCbs: Array<(size: { cols: number; rows: number }) => void> = [];
+  _onBellCbs: Array<() => void> = [];
   _writtenData: Uint8Array[] = [];
 
   open(container: HTMLElement): void {
@@ -52,6 +53,11 @@ export class Terminal {
     this._onResizeCbs.push(cb);
   }
 
+  /** Added: forward bell (\a) events. */
+  onBell(cb: () => void): void {
+    this._onBellCbs.push(cb);
+  }
+
   loadAddon(_addon: unknown): void {
     // noop
   }
@@ -60,6 +66,7 @@ export class Terminal {
     this._onDataCbs = [];
     this._onBinaryCbs = [];
     this._onResizeCbs = [];
+    this._onBellCbs = [];
     this._writtenData = [];
     this.element = null;
   }
@@ -96,6 +103,13 @@ export class Terminal {
   simulateBinaryInput(data: string): void {
     for (const cb of this._onBinaryCbs) {
       cb(data);
+    }
+  }
+
+  /** Added: trigger bell callbacks (for onBell testing). */
+  simulateBell(): void {
+    for (const cb of this._onBellCbs) {
+      cb();
     }
   }
 }

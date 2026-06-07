@@ -83,6 +83,8 @@ export interface PaneHandlers {
   onInput: (data: Uint8Array) => void;
   /** Called (idempotently) when the terminal cols/rows change. */
   onResize: (cols: number, rows: number) => void;
+  /** Called when the terminal fires a bell (\a). Optional — no-ops if absent. */
+  onBell?: (paneId: number) => void;
 }
 
 interface PaneEntry {
@@ -297,6 +299,12 @@ export const terminalRegistry = {
       entry.lastCols = cols;
       entry.lastRows = rows;
       entry.handlers.onResize(cols, rows);
+    });
+
+    // Forward bell (\a) to the registered handler via optional chaining —
+    // safe to call even when onBell is not provided.
+    term.onBell(() => {
+      entry.handlers.onBell?.(paneId);
     });
 
     // Touch scroll — xterm.js v6 regressed native touch-scroll support

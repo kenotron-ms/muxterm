@@ -81,6 +81,21 @@ describe('terminalRegistry', () => {
       expect(h2.onInput).toHaveBeenCalled();
       expect(h1.onInput).not.toHaveBeenCalled();
     });
+
+    it('calls onBell with paneId when terminal fires a bell', () => {
+      const onBell = vi.fn();
+      terminalRegistry.ensure(4, { onInput: vi.fn(), onResize: vi.fn(), onBell });
+      const term = terminalRegistry.getTerminal(4) as any;
+      term.simulateBell();
+      expect(onBell).toHaveBeenCalledWith(4);
+    });
+
+    it('does not throw when onBell is absent and terminal fires a bell', () => {
+      // handlers() does not include onBell — should be a no-op, not a crash.
+      terminalRegistry.ensure(5, handlers());
+      const term = terminalRegistry.getTerminal(5) as any;
+      expect(() => term.simulateBell()).not.toThrow();
+    });
   });
 
   // ──────────────────────────────────────────────────────────
