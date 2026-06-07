@@ -33,5 +33,8 @@ Thumbs.db
 # Scratch / reference material (not source)
 tmp/
 
+# Digital Twin Universe generated profiles (ephemeral, workspace-specific)
+.amplifier/digital-twin-universe/
+
 # Git worktrees
 .worktrees/
