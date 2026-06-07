@@ -32,3 +32,6 @@ Thumbs.db
 
 # Scratch / reference material (not source)
 tmp/
+
+# Git worktrees
+.worktrees/
