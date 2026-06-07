@@ -116,13 +116,13 @@ Lit component. Receives reactive inputs from `MuxStore.subscribe()`:
 ┌──────────────────────────────────────────────────────┐
 │  muxterm                                             │
 ├──────────────────────────────────────────────────────┤
-│  agent ×  │  ● build ×  │  ◉ tests ×               │  ← pane tabs with dots
+│  agent ×  │  ● build ×  │  ● tests ×               │  ← pane tabs with dots
 ├──────────────────────────────────────────────────────┤
 │  >                                                   │
 │  _                                                   │
 ├──────────────────────────────────────────────────────┤
 │                                                      │
-│    dev        ● ci        ◉ infra        +          │  ← dock bar (no boxes)
+│    dev        ● ci        ● infra        +       ●  │  ← dock bar (no boxes)
 │                                                      │
 └──────────────────────────────────────────────────────┘
 ```
