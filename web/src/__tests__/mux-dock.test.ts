@@ -17,6 +17,28 @@ describe('MuxDock', () => {
     expect(typeof (el as unknown as { reopenPane: unknown }).reopenPane).toBe('function');
   });
 
+  it('exposes an allowReconcile(paneIds) method', () => {
+    el = document.createElement('mux-dock') as MuxDock;
+    document.body.appendChild(el);
+    expect(typeof (el as unknown as { allowReconcile: unknown }).allowReconcile).toBe('function');
+  });
+
+  it('allowReconcile removes ids from _locallyClosedPanes so the reconciler can re-add them', () => {
+    el = document.createElement('mux-dock') as MuxDock;
+    document.body.appendChild(el);
+    const inner = el as unknown as {
+      _locallyClosedPanes: Set<number>;
+      allowReconcile: (ids: Iterable<number>) => void;
+    };
+    inner._locallyClosedPanes.add(1);
+    inner._locallyClosedPanes.add(2);
+    inner._locallyClosedPanes.add(3);
+    inner.allowReconcile([1, 3]);
+    expect(inner._locallyClosedPanes.has(1)).toBe(false);
+    expect(inner._locallyClosedPanes.has(2)).toBe(true);  // untouched
+    expect(inner._locallyClosedPanes.has(3)).toBe(false);
+  });
+
   it('pane-close event dispatched by the dock carries touch and title fields', async () => {
     el = document.createElement('mux-dock') as MuxDock;
     document.body.appendChild(el);

@@ -785,6 +785,17 @@ export class MuxDock extends LitElement {
     this._panels.set(paneId, panel);
     panel.api.setActive();
   }
+
+  /**
+   * Re-enable reconciliation for a set of pane IDs that were locally closed
+   * but whose server-side PTY survived (e.g. grace-period cancel on disconnect).
+   * The reconciler will re-add their tabs on the next render cycle.
+   */
+  allowReconcile(paneIds: Iterable<number>): void {
+    for (const id of paneIds) {
+      this._locallyClosedPanes.delete(id);
+    }
+  }
 }
 
 declare global {

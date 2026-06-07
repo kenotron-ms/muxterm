@@ -18,7 +18,7 @@ describe('MuxUndoToast', () => {
     el.remove();
   });
 
-  it('initialises _remaining to ceil(duration / 1000)', () => {
+  it('initialises _remaining to round(duration / 1000)', () => {
     // duration=3000 → remaining=3
     expect((el as unknown as { _remaining: number })._remaining).toBe(3);
   });

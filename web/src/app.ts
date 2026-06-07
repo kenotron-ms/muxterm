@@ -389,9 +389,14 @@ export class MuxApp extends LitElement {
       this._creatingWorkspace = false;
       // Cancel grace-period timers: can't guarantee closePane delivery
       // while disconnected; don't prune terminals that may survive reconnect.
+      // Capture ids BEFORE clearing the map
+      const pendingIds = [...this._pendingCloses.keys()];
       for (const handle of this._pendingCloses.values()) clearTimeout(handle);
       this._pendingCloses.clear();
       this._pendingClosesMeta.clear();
+      // Re-enable reconciler for panes whose grace period was aborted —
+      // their PTY is still alive on the server.
+      this._dock?.allowReconcile(pendingIds);
       this.requestUpdate();
     };
     this._socket.onReconnect = () => {

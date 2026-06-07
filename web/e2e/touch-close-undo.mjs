@@ -5,7 +5,7 @@
  * Verifies three scenarios against a running muxterm server:
  *   1. Touch close -> toast/pending-close appears -> Undo -> pane present + xterm buffer intact.
  *   2. Touch close -> force-expire (DEV seam) -> pane absent from server state.
- *   3. Mouse close -> no pending close -> pane closes immediately.
+ *   3. Mouse close -> undo toast appears -> undo -> pane present (same as touch).
  *
  * Usage:  node web/e2e/touch-close-undo.mjs [--url http://localhost:9090]
  *
