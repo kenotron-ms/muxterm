@@ -170,7 +170,12 @@ export class MuxDock extends LitElement {
    */
   private _locallyClosedPanes = new Set<number>();
   /** Pointer type that initiated the most recent interaction ('mouse' | 'touch' | 'pen').
-   *  Read in onDidRemovePanel to decide whether a close should be deferred. */
+   *  Read in onDidRemovePanel to decide whether a close should be deferred.
+   *  NOTE: best-effort — if two tabs are closed within a single animation frame,
+   *  the second pointerdown overwrites this before the first onDidRemovePanel fires.
+   *  Currently harmless (all close types share the same grace duration). Revisit
+   *  with a per-tab WeakMap if per-input-type durations are ever added.
+   */
   private _lastPointerType: string = 'mouse';
   /** Bound capture-phase handler so we can remove it in disconnectedCallback. */
   private _onPointerDownCapture = (e: PointerEvent): void => {

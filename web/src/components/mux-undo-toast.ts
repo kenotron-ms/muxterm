@@ -133,7 +133,6 @@ export class MuxUndoToast extends LitElement {
         composed: true,
       }),
     );
-    this.remove();
   }
 
   override render() {

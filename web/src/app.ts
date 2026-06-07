@@ -753,6 +753,9 @@ export class MuxApp extends LitElement {
 
   /** Perform the actual kill: tell the server, prune the terminal, and clear bookkeeping. */
   private _executeClose(paneId: number): void {
+    // Guard: if no pending close exists for this pane, it was already cancelled
+    // (e.g. via undo) — do nothing. This makes the method truly idempotent.
+    if (!this._pendingCloses.has(paneId)) return;
     // Cancel the pending handle whether called by the timer itself or directly
     // (e.g. __muxForceExpire DEV seam). clearTimeout on an already-fired handle
     // is a no-op, so the normal timer-driven path is unaffected.
