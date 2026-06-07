@@ -46,9 +46,11 @@ By the time `onDidRemovePanel` fires, `_lastPointerType` is already set correctl
 
 `pen` is treated the same as `touch` — same accidental-close risk on tablets with a stylus.
 
-The existing `pane-close` CustomEvent detail gains a `touch: boolean` field (`true` for `'touch' | 'pen'`, `false` for `'mouse'`). Mouse closes (`touch: false`) take the existing instant-kill path in `mux-app._onClosePane` unchanged.
+The existing `pane-close` CustomEvent detail gains a `touch: boolean` field (`true` for `'touch' | 'pen'`, `false` for `'mouse'`) and a `title: string` field. The title is captured from the dockview `panel` object inside the `onDidRemovePanel` handler (before `_panels.delete()` is called), using `panel.title ?? \`Pane ${paneId}\`` as the value. This is the same text shown in the dockview tab, typically the shell or process name. Mouse closes (`touch: false`) take the existing instant-kill path in `mux-app._onClosePane` unchanged.
 
-No new APIs, no polling. One listener, one field on an existing event.
+The updated event detail is `{ paneId, touch: boolean, title: string }`.
+
+No new APIs, no polling. One listener, two fields on an existing event.
 
 ### Component 2: Deferred Kill — 10-Second Grace Period (`mux-app`)
 
@@ -121,7 +123,10 @@ A new Lit custom element.
 [ status bar ]
 ```
 
-**Self-cleanup**: on expiry or undo, the component dispatches a `pane-close-resolved` event (or similar), `mux-app` removes the paneId from `_pendingCloses`, and the component drops from the render tree.
+**Self-cleanup**:
+
+- **Undo path**: the toast dispatches `pane-close-resolved` with the paneId → `mux-app` cancels the timer, removes from `_pendingCloses`, and drops the toast from the render tree.
+- **Expiry path**: `mux-app`'s `_executeClose` sends the close, removes from `_pendingCloses`, and drops the toast from the render tree by re-rendering. The toast does NOT dispatch any event on expiry — it simply disconnects.
 
 ## Data Flow
 
@@ -146,7 +151,7 @@ Per the project's `AGENTS.md`, UI validation uses Playwright with xterm.js buffe
 Three test cases:
 
 1. **Touch close + Undo**: simulate a touch tap on the close button → verify the toast appears → tap Undo → verify the panel is still present → check that xterm buffer content is intact.
-2. **Touch close + expiry**: simulate a touch tap on the close button → wait 10s → verify the pane is absent from server state.
+2. **Touch close + expiry**: simulate a touch tap on the close button → wait 10s (Use `page.clock` fake timers or `page.clock.tick(10_000)` to avoid a literal 10-second test wait.) → verify the pane is absent from server state.
 3. **Mouse close**: simulate a mouse click on the close button → verify no toast appears → verify the pane closes immediately.
 
 ## Files Affected
