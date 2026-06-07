@@ -96,6 +96,7 @@ export class MuxUndoToast extends LitElement {
   @state() private _armed = false;
 
   private _interval: ReturnType<typeof setInterval> | undefined;
+  private _rafHandle: number | undefined;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -108,11 +109,15 @@ export class MuxUndoToast extends LitElement {
       }
     }, 1000);
     // Arm the bar transition on the next frame so it animates from 100% to 0%.
-    requestAnimationFrame(() => { this._armed = true; });
+    this._rafHandle = requestAnimationFrame(() => { this._armed = true; });
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    if (this._rafHandle !== undefined) {
+      cancelAnimationFrame(this._rafHandle);
+      this._rafHandle = undefined;
+    }
     if (this._interval !== undefined) {
       clearInterval(this._interval);
       this._interval = undefined;

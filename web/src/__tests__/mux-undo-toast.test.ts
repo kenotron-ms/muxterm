@@ -37,6 +37,14 @@ describe('MuxUndoToast', () => {
     clearSpy.mockRestore();
   });
 
+  it('disconnectedCallback cancels the pending rAF handle', () => {
+    const cancelSpy = vi.spyOn(globalThis, 'cancelAnimationFrame');
+    const rafHandle = (el as unknown as { _rafHandle: number | undefined })._rafHandle;
+    el.remove();
+    expect(cancelSpy).toHaveBeenCalledWith(rafHandle);
+    cancelSpy.mockRestore();
+  });
+
   it('Undo button dispatches pane-close-resolved with correct paneId', async () => {
     const events: CustomEvent<{ paneId: number }>[] = [];
     document.addEventListener('pane-close-resolved', (e) => events.push(e as CustomEvent<{ paneId: number }>), { once: true });

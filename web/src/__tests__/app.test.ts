@@ -281,6 +281,27 @@ describe('MuxApp', () => {
       expect(overlay).toBeTruthy();
     });
 
+    it('onDisconnect clears pending close timers', async () => {
+      el = await fixture();
+      const socket = (el as any)._socket;
+      const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+      // Plant a fake pending-close entry
+      const fakeHandle = setTimeout(() => {}, 60_000);
+      (el as any)._pendingCloses.set(7, fakeHandle);
+      (el as any)._pendingClosesMeta.set(7, { title: 'vim' });
+
+      clearSpy.mockClear();
+      socket.onDisconnect?.();
+      await el.updateComplete;
+
+      expect(clearSpy).toHaveBeenCalledWith(fakeHandle);
+      expect((el as any)._pendingCloses.size).toBe(0);
+      expect((el as any)._pendingClosesMeta.size).toBe(0);
+      clearSpy.mockRestore();
+      clearTimeout(fakeHandle);
+    });
+
     it('hides overlay when onReconnect fires', async () => {
       el = await fixture();
       const socket = (el as any)._socket;

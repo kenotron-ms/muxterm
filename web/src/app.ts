@@ -387,6 +387,12 @@ export class MuxApp extends LitElement {
       this._showReconnectOverlay = true;
       this._reconnectMessage = 'Connection lost. Reconnecting...';
       this._creatingWorkspace = false;
+      // Cancel grace-period timers: can't guarantee closePane delivery
+      // while disconnected; don't prune terminals that may survive reconnect.
+      for (const handle of this._pendingCloses.values()) clearTimeout(handle);
+      this._pendingCloses.clear();
+      this._pendingClosesMeta.clear();
+      this.requestUpdate();
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
