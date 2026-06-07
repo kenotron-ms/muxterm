@@ -86,7 +86,7 @@ export class MuxUndoToast extends LitElement {
   /** The pane this toast can restore. */
   @property({ type: Number }) paneId = -1;
   /** The dockview tab title at close time, e.g. "vim" or "Pane 3". */
-  @property({ type: String }) title = '';
+  @property({ type: String }) paneTitle = '';
   /** Grace period in milliseconds. */
   @property({ type: Number }) duration = 10000;
 
@@ -138,7 +138,7 @@ export class MuxUndoToast extends LitElement {
       : `width:100%;`;
     return html`
       <div class="row">
-        <span class="label">${this.title} closed</span>
+        <span class="label">${this.paneTitle} closed</span>
         <button class="undo" @click=${this._onUndo}>Undo</button>
         <span class="seconds">${this._remaining}s</span>
       </div>

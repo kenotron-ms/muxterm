@@ -85,7 +85,7 @@ export class MuxApp extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 1000;
+      z-index: 1000; /* above undo toasts (z-index: 900) */
       color: #e0af68;
       font-size: 16px;
     }
@@ -102,7 +102,7 @@ export class MuxApp extends LitElement {
       display: flex;
       flex-direction: column-reverse;
       gap: 8px;
-      z-index: 1000;
+      z-index: 900; /* below reconnect overlay */
       pointer-events: none;
     }
     .undo-toast-stack > * {
@@ -501,7 +501,7 @@ export class MuxApp extends LitElement {
           ([paneId, meta]) => html`
             <mux-undo-toast
               .paneId=${paneId}
-              .title=${meta.title}
+              .paneTitle=${meta.title}
               .duration=${10000}
             ></mux-undo-toast>
           `,
@@ -707,6 +707,7 @@ export class MuxApp extends LitElement {
     for (const handle of this._pendingCloses.values()) clearTimeout(handle);
     this._pendingCloses.clear();
     this._pendingClosesMeta.clear();
+    this.requestUpdate(); // dismiss ghost toasts immediately
     // Do NOT call disposeAll() — workspace-scoped composite keys in
     // terminalRegistry isolate paneIds across workspaces, so old terminals
     // stay alive with their scrollback until explicitly pruned or disposed.
@@ -722,6 +723,7 @@ export class MuxApp extends LitElement {
    * Handle a pane-close event from mux-dock. All closes (mouse, touch, pen)
    * are deferred for 10s with an undo toast so accidental closes are
    * recoverable regardless of input device (see _startDeferredClose).
+   * Note: e.detail.touch is available for future per-input-type behaviour.
    */
   private _onClosePane = (e: CustomEvent<{ paneId: number; touch: boolean; title: string }>): void => {
     this._startDeferredClose(e.detail.paneId, e.detail.title);
@@ -729,6 +731,9 @@ export class MuxApp extends LitElement {
 
   /** Begin a 10-second grace period for a touch/pen close. */
   private _startDeferredClose(paneId: number, title: string): void {
+    // Guard: if a timer already exists for this pane, clear it before replacing.
+    const existing = this._pendingCloses.get(paneId);
+    if (existing !== undefined) clearTimeout(existing);
     const handle = setTimeout(() => this._executeClose(paneId), 10_000);
     this._pendingCloses.set(paneId, handle);
     this._pendingClosesMeta.set(paneId, { title });

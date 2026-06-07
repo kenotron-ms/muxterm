@@ -172,6 +172,10 @@ export class MuxDock extends LitElement {
   /** Pointer type that initiated the most recent interaction ('mouse' | 'touch' | 'pen').
    *  Read in onDidRemovePanel to decide whether a close should be deferred. */
   private _lastPointerType: string = 'mouse';
+  /** Bound capture-phase handler so we can remove it in disconnectedCallback. */
+  private _onPointerDownCapture = (e: PointerEvent): void => {
+    this._lastPointerType = e.pointerType || 'mouse';
+  };
   /** True while we're programmatically removing panels to suppress pane-close events. */
   private _removingPanels = false;
   /** Debounce timer for layout-save events. */
@@ -430,11 +434,7 @@ export class MuxDock extends LitElement {
     // Record the pointer type that starts each interaction. The capture phase
     // guarantees we see it before dockview processes the click and fires
     // onDidRemovePanel, so the close branch knows whether it was a touch/pen.
-    this.addEventListener(
-      'pointerdown',
-      (e: PointerEvent) => { this._lastPointerType = e.pointerType || 'mouse'; },
-      { capture: true },
-    );
+    this.addEventListener('pointerdown', this._onPointerDownCapture, { capture: true });
     this.classList.add('dockview-theme-abyss');
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
@@ -473,6 +473,9 @@ export class MuxDock extends LitElement {
         // Capture the tab title BEFORE deleting the panel record — the toast
         // labels itself "<title> closed". Falls back to "Pane N".
         const title = panel.title ?? `Pane ${paneId}`;
+        // touch is retained in the event detail for observability and future use
+        // (e.g. per-input-type grace period durations), even though _onClosePane
+        // no longer branches on it.
         const touch = this._lastPointerType === 'touch' || this._lastPointerType === 'pen';
         this._panels.delete(paneId);
         this._locallyClosedPanes.add(paneId);
@@ -494,6 +497,7 @@ export class MuxDock extends LitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.removeEventListener('pointerdown', this._onPointerDownCapture, { capture: true });
     this._dv?.dispose();
     this._dv = null;
   }
