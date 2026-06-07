@@ -169,6 +169,9 @@ export class MuxDock extends LitElement {
    * workspace changes (Case 1 clears this set).
    */
   private _locallyClosedPanes = new Set<number>();
+  /** Pointer type that initiated the most recent interaction ('mouse' | 'touch' | 'pen').
+   *  Read in onDidRemovePanel to decide whether a close should be deferred. */
+  private _lastPointerType: string = 'mouse';
   /** True while we're programmatically removing panels to suppress pane-close events. */
   private _removingPanels = false;
   /** Debounce timer for layout-save events. */
@@ -424,6 +427,14 @@ export class MuxDock extends LitElement {
       target.appendChild(style);
     }
 
+    // Record the pointer type that starts each interaction. The capture phase
+    // guarantees we see it before dockview processes the click and fires
+    // onDidRemovePanel, so the close branch knows whether it was a touch/pen.
+    this.addEventListener(
+      'pointerdown',
+      (e: PointerEvent) => { this._lastPointerType = e.pointerType || 'mouse'; },
+      { capture: true },
+    );
     this.classList.add('dockview-theme-abyss');
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
@@ -459,10 +470,18 @@ export class MuxDock extends LitElement {
       if (this._removingPanels) return;
       const paneId = parseInt(panel.id, 10);
       if (this._panels.has(paneId)) {
+        // Capture the tab title BEFORE deleting the panel record — the toast
+        // labels itself "<title> closed". Falls back to "Pane N".
+        const title = panel.title ?? `Pane ${paneId}`;
+        const touch = this._lastPointerType === 'touch' || this._lastPointerType === 'pen';
         this._panels.delete(paneId);
         this._locallyClosedPanes.add(paneId);
         this.dispatchEvent(
-          new CustomEvent('pane-close', { detail: { paneId }, bubbles: true, composed: true }),
+          new CustomEvent('pane-close', {
+            detail: { paneId, touch, title },
+            bubbles: true,
+            composed: true,
+          }),
         );
       }
       requestAnimationFrame(() => {
@@ -739,6 +758,28 @@ export class MuxDock extends LitElement {
       if (line) lines.push(line.translateToString(true));
     }
     return lines.join('\n');
+  }
+
+  /**
+   * Undo a local close: re-enable the reconciler for this pane and re-add its
+   * dockview panel immediately. The server never heard about the close during
+   * the grace period, so store.panes still has the entry, the PTY is alive, and
+   * terminalRegistry still holds the xterm instance — the panel comes back with
+   * full scrollback. Position is NOT preserved (re-adds at the default slot).
+   */
+  reopenPane(paneId: number): void {
+    this._locallyClosedPanes.delete(paneId);
+    if (!this._dv) return;
+    if (this._panels.has(paneId)) return; // already on screen, nothing to do
+    const pane = this.panes.find((p) => p.paneId === paneId);
+    if (!pane) return; // pane no longer exists (e.g. process exited during grace)
+    const panel = this._dv.addPanel({
+      id: String(paneId),
+      component: 'terminal',
+      title: this._customTitles.get(paneId) ?? pane.title ?? `Pane ${paneId}`,
+    });
+    this._panels.set(paneId, panel);
+    panel.api.setActive();
   }
 }
 
