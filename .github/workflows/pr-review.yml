@@ -5,7 +5,7 @@ name: PR Review
 
 on:
   pull_request:
-    types: [opened, reopened]
+    types: [opened, reopened, synchronize]
 
 # Minimum permissions: read the code, write a comment.
 permissions:
@@ -14,6 +14,10 @@ permissions:
 
 jobs:
   review:
+    # Only run for contributors (PRs from within the repo, not forks).
+    # Keeps secrets safe and avoids noise from external contributors until
+    # they're ready to be reviewed.
+    if: github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
