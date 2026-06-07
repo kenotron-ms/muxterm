@@ -748,6 +748,12 @@ export class MuxApp extends LitElement {
 
   /** Perform the actual kill: tell the server, prune the terminal, and clear bookkeeping. */
   private _executeClose(paneId: number): void {
+    // Cancel the pending handle whether called by the timer itself or directly
+    // (e.g. __muxForceExpire DEV seam). clearTimeout on an already-fired handle
+    // is a no-op, so the normal timer-driven path is unaffected.
+    const handle = this._pendingCloses.get(paneId);
+    if (handle !== undefined) clearTimeout(handle);
+
     this._socket?.closePane(paneId);
     const remaining = new Set(
       store.panes

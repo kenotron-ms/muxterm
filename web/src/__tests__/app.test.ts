@@ -332,6 +332,82 @@ describe('MuxApp', () => {
       expect(overlay!.getAttribute('message')).toBe('Session ended by admin');
     });
   });
+
+  describe('deferred close state machine', () => {
+    it('_startDeferredClose registers timer and meta, replaces duplicate gracefully', async () => {
+      el = await fixture();
+      const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+      // Plant a pre-existing pending close for pane 42
+      const fakeHandle = setTimeout(() => {}, 60_000);
+      (el as any)._pendingCloses.set(42, fakeHandle);
+      (el as any)._pendingClosesMeta.set(42, { title: 'old-title' });
+
+      clearSpy.mockClear();
+
+      // Replace it with a new deferred close for the same pane
+      (el as any)._startDeferredClose(42, 'new-title');
+
+      // Old handle should have been cleared
+      expect(clearSpy).toHaveBeenCalledWith(fakeHandle);
+      // A new handle should be registered
+      expect((el as any)._pendingCloses.has(42)).toBe(true);
+      // Meta should reflect the latest title
+      expect((el as any)._pendingClosesMeta.get(42)?.title).toBe('new-title');
+
+      clearSpy.mockRestore();
+      clearTimeout((el as any)._pendingCloses.get(42));
+      clearTimeout(fakeHandle);
+    });
+
+    it('_executeClose calls socket.closePane, clears maps, cancels timer', async () => {
+      el = await fixture();
+      const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+      const socket = (el as any)._socket;
+      const closePaneSpy = vi.spyOn(socket, 'closePane').mockImplementation(() => {});
+
+      const fakeHandle = setTimeout(() => {}, 60_000);
+      (el as any)._pendingCloses.set(7, fakeHandle);
+      (el as any)._pendingClosesMeta.set(7, { title: 'vim' });
+
+      clearSpy.mockClear();
+      (el as any)._executeClose(7);
+      await el.updateComplete;
+
+      expect(closePaneSpy).toHaveBeenCalledWith(7);
+      expect(clearSpy).toHaveBeenCalledWith(fakeHandle);
+      expect((el as any)._pendingCloses.size).toBe(0);
+      expect((el as any)._pendingClosesMeta.size).toBe(0);
+
+      clearSpy.mockRestore();
+      closePaneSpy.mockRestore();
+      clearTimeout(fakeHandle);
+    });
+
+    it('_onUndoPaneClose cancels timer and clears maps', async () => {
+      el = await fixture();
+      const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+      const fakeHandle = setTimeout(() => {}, 60_000);
+      (el as any)._pendingCloses.set(9, fakeHandle);
+      (el as any)._pendingClosesMeta.set(9, { title: 'bash' });
+
+      clearSpy.mockClear();
+
+      // Call the handler directly (mirrors the __muxUndoClose DEV seam)
+      (el as any)._onUndoPaneClose(
+        new CustomEvent('pane-close-resolved', { detail: { paneId: 9 } }) as CustomEvent<{ paneId: number }>,
+      );
+      await el.updateComplete;
+
+      expect(clearSpy).toHaveBeenCalledWith(fakeHandle);
+      expect((el as any)._pendingCloses.size).toBe(0);
+      expect((el as any)._pendingClosesMeta.size).toBe(0);
+
+      clearSpy.mockRestore();
+      clearTimeout(fakeHandle);
+    });
+  });
 });
 
 describe('installKeybindings', () => {

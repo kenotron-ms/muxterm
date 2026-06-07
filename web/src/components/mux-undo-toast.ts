@@ -100,7 +100,7 @@ export class MuxUndoToast extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this._remaining = Math.ceil(this.duration / 1000);
+    this._remaining = Math.round(this.duration / 1000);
     this._interval = setInterval(() => {
       this._remaining -= 1;
       if (this._remaining <= 0) {
@@ -108,7 +108,8 @@ export class MuxUndoToast extends LitElement {
         this.remove();
       }
     }, 1000);
-    // Arm the bar transition on the next frame so it animates from 100% to 0%.
+    // The bar transition starts one rAF (~16 ms) after the timer; the visual
+    // lag is imperceptible at the 10 s default duration.
     this._rafHandle = requestAnimationFrame(() => { this._armed = true; });
   }
 
