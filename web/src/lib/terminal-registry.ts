@@ -222,7 +222,10 @@ export const terminalRegistry = {
 
     // Host element: a plain div that moves between shadow-DOM containers.
     const hostEl = document.createElement('div');
-    hostEl.style.cssText = 'width:100%;height:100%;';
+    // touch-action:none tells the browser we handle all touch gestures ourselves,
+    // preventing it from firing default pan/zoom behaviors that would fight our
+    // manual touch-scroll handler below.
+    hostEl.style.cssText = 'width:100%;height:100%;touch-action:none;';
 
     const term = new Terminal(TERMINAL_CONFIG);
     const fitAddon = new FitAddon();
@@ -295,6 +298,37 @@ export const terminalRegistry = {
       entry.lastRows = rows;
       entry.handlers.onResize(cols, rows);
     });
+
+    // Touch scroll — xterm.js v6 regressed native touch-scroll support
+    // (upstream issue #5489). Wire it manually: track finger Y delta and
+    // convert to term.scrollLines() calls. We accumulate sub-line fractions
+    // so a slow drag still scrolls smoothly rather than only firing at whole-
+    // line boundaries.
+    //
+    // Cell height = fontSize * lineHeight. lineHeight is hardcoded 1.0 (see
+    // buildTerminalConfig), so cell height ≈ fontSize pixels.
+    {
+      let _touchY = 0;
+      let _accumulated = 0;
+      hostEl.addEventListener('touchstart', (e: TouchEvent) => {
+        _touchY = e.touches[0].clientY;
+        _accumulated = 0;
+        e.preventDefault();
+      }, { passive: false });
+      hostEl.addEventListener('touchmove', (e: TouchEvent) => {
+        const y = e.touches[0].clientY;
+        // Positive delta = finger moved up = scroll down (content moves up).
+        _accumulated += _touchY - y;
+        _touchY = y;
+        const cellH = term.options.fontSize ?? 13;
+        const lines = Math.trunc(_accumulated / cellH);
+        if (lines !== 0) {
+          term.scrollLines(lines);
+          _accumulated -= lines * cellH;
+        }
+        e.preventDefault();
+      }, { passive: false });
+    }
 
     _map.set(key, entry);
 
