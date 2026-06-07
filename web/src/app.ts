@@ -13,6 +13,8 @@ import { applyThemeTokens, resolvePalette } from './lib/theme.js';
 import './components/title-bar.js';
 import './components/status-bar.js';
 import './components/mux-dock.js';
+import type { MuxDock } from './components/mux-dock.js';
+import './components/mux-undo-toast.js';
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 
@@ -90,6 +92,21 @@ export class MuxApp extends LitElement {
 
     .overlay.hidden {
       display: none;
+    }
+
+    .undo-toast-stack {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 8px;
+      z-index: 1000;
+      pointer-events: none;
+    }
+    .undo-toast-stack > * {
+      pointer-events: auto;
     }
 
     /* ── Centered workspace-create modal ── */
@@ -262,6 +279,12 @@ export class MuxApp extends LitElement {
 
   @state()
   private _createModalName = '';
+
+  /** Active grace-period timers, keyed by paneId. Presence => a deferred close
+   *  is pending and a toast is shown. */
+  private _pendingCloses = new Map<number, ReturnType<typeof setTimeout>>();
+  /** Per-pending metadata for rendering each toast (the tab title at close). */
+  private _pendingClosesMeta = new Map<number, { title: string }>();
 
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
@@ -469,6 +492,17 @@ export class MuxApp extends LitElement {
               @layout-save="${this._onLayoutSave}"
             ></mux-dock>
           `}
+      <div class="undo-toast-stack" @pane-close-resolved=${this._onUndoPaneClose}>
+        ${[...this._pendingClosesMeta.entries()].map(
+          ([paneId, meta]) => html`
+            <mux-undo-toast
+              .paneId=${paneId}
+              .title=${meta.title}
+              .duration=${10000}
+            ></mux-undo-toast>
+          `,
+        )}
+      </div>
       <mux-status-bar
         .workspaces="${store.workspaces}"
         .currentWorkspaceId="${store.attached ?? ''}"
@@ -665,32 +699,65 @@ export class MuxApp extends LitElement {
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     this._showWorkspacePicker = false;
     if (e.detail.workspaceId === store.attached) return;
+    // Cancel any in-flight grace timers: panes survive on the server.
+    for (const handle of this._pendingCloses.values()) clearTimeout(handle);
+    this._pendingCloses.clear();
+    this._pendingClosesMeta.clear();
     // Do NOT call disposeAll() — workspace-scoped composite keys in
     // terminalRegistry isolate paneIds across workspaces, so old terminals
     // stay alive with their scrollback until explicitly pruned or disposed.
     this._socket?.attachWithBreakpoint(e.detail.workspaceId, currentLayoutMode());
   };
 
+  /** The live <mux-dock> element in our shadow root, or null when absent. */
+  private get _dock(): MuxDock | null {
+    return (this.renderRoot as ShadowRoot).querySelector('mux-dock');
+  }
+
   /**
-   * Handle a pane-close event dispatched by mux-dock when the user clicks
-   * the dockview tab close (X) button. Prune the terminal from the registry
-   * so the xterm instance is cleaned up, while the server-side PTY continues
-   * until the workspace is closed or the connection drops.
+   * Handle a pane-close event from mux-dock. Mouse closes keep the original
+   * instant, permanent behavior. Touch/pen closes are deferred for 10s with an
+   * undo toast (see _startDeferredClose).
    */
-  private _onClosePane = (e: CustomEvent<{ paneId: number }>): void => {
-    const closedPaneId = e.detail.paneId;
-    // Tell the server to kill the PTY. The server will broadcast pane-closed,
-    // which removes the pane from store._panes. Pruning the terminal now
-    // (before pane-closed) is correct: the user already removed the panel from
-    // the dock, and the generation counter in the registry will cancel any
-    // in-flight write callbacks.
-    this._socket?.closePane(closedPaneId);
+  private _onClosePane = (e: CustomEvent<{ paneId: number; touch: boolean; title: string }>): void => {
+    if (e.detail.touch) {
+      this._startDeferredClose(e.detail.paneId, e.detail.title);
+      return;
+    }
+    this._executeClose(e.detail.paneId);
+  };
+
+  /** Begin a 10-second grace period for a touch/pen close. */
+  private _startDeferredClose(paneId: number, title: string): void {
+    const handle = setTimeout(() => this._executeClose(paneId), 10_000);
+    this._pendingCloses.set(paneId, handle);
+    this._pendingClosesMeta.set(paneId, { title });
+    this.requestUpdate();
+  }
+
+  /** Perform the actual kill: tell the server, prune the terminal, and clear bookkeeping. */
+  private _executeClose(paneId: number): void {
+    this._socket?.closePane(paneId);
     const remaining = new Set(
       store.panes
-        .filter((p) => p.paneId >= 0 && p.paneId !== closedPaneId)
+        .filter((p) => p.paneId >= 0 && p.paneId !== paneId)
         .map((p) => p.paneId),
     );
     terminalRegistry.prune(remaining);
+    this._pendingCloses.delete(paneId);
+    this._pendingClosesMeta.delete(paneId);
+    this.requestUpdate();
+  }
+
+  /** Undo a pending close: cancel the timer, clear bookkeeping, reopen the pane. */
+  private _onUndoPaneClose = (e: CustomEvent<{ paneId: number }>): void => {
+    const { paneId } = e.detail;
+    const handle = this._pendingCloses.get(paneId);
+    if (handle !== undefined) clearTimeout(handle);
+    this._pendingCloses.delete(paneId);
+    this._pendingClosesMeta.delete(paneId);
+    this._dock?.reopenPane(paneId);
+    this.requestUpdate();
   };
 
   private _onPaneRename = (e: CustomEvent<{ paneId: number; name: string }>): void => {
@@ -753,5 +820,35 @@ if (import.meta.env.DEV) {
 
   (window as unknown as Record<string, unknown>)['__muxRegistry'] = {
     peek: (paneId: number) => terminalRegistry.getTerminal(paneId),
+  };
+
+  // Touch-close-undo E2E seams -------------------------------------------
+  const _app = (): MuxApp | null => document.querySelector('mux-app');
+
+  (window as unknown as Record<string, unknown>)['__muxPendingCloses'] = (): number[] => {
+    const app = _app() as unknown as { _pendingCloses?: Map<number, unknown> } | null;
+    return app?._pendingCloses ? [...app._pendingCloses.keys()] : [];
+  };
+
+  (window as unknown as Record<string, unknown>)['__muxUndoClose'] = (paneId: number): void => {
+    const app = _app() as unknown as { _onUndoPaneClose?: (e: CustomEvent<{ paneId: number }>) => void } | null;
+    app?._onUndoPaneClose?.(new CustomEvent('pane-close-resolved', { detail: { paneId } }) as CustomEvent<{ paneId: number }>);
+  };
+
+  (window as unknown as Record<string, unknown>)['__muxForceExpire'] = (paneId: number): void => {
+    const app = _app() as unknown as { _executeClose?: (id: number) => void } | null;
+    app?._executeClose?.(paneId);
+  };
+
+  (window as unknown as Record<string, unknown>)['__muxCloseButtonFor'] = (paneId: number): Element | null => {
+    const dock = _app()?.shadowRoot?.querySelector('mux-dock');
+    if (!dock) return null;
+    const tabs = [...dock.querySelectorAll('.dv-tab')];
+    const dockAny = dock as unknown as { _panels?: Map<number, unknown> };
+    const ids = dockAny._panels ? [...dockAny._panels.keys()] : [];
+    const idx = ids.indexOf(paneId);
+    if (idx < 0) return null;
+    const tab = tabs[idx];
+    return tab?.querySelector('.dv-default-tab-action') ?? null;
   };
 }
