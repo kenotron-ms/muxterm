@@ -204,7 +204,7 @@ func TestAttachReturnsComposition(t *testing.T) {
 	defer c.Close()
 	go c.Run()
 
-	comp, err := c.Attach("w1", "", nil)
+	comp, err := c.Attach("w1", "")
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestAttachEmptyCompositionIsValid(t *testing.T) {
 	defer c.Close()
 	go c.Run()
 
-	comp, err := c.Attach("empty", "", nil)
+	comp, err := c.Attach("empty", "")
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestAttachUnknownWorkspace(t *testing.T) {
 	defer c.Close()
 	go c.Run()
 
-	_, err = c.Attach("nope", "", nil)
+	_, err = c.Attach("nope", "")
 	if err == nil {
 		t.Fatal("Attach: expected error, got nil")
 	}

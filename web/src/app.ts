@@ -306,19 +306,18 @@ export class MuxApp extends LitElement {
     this._socket.onSessiondMessage = (msg) => {
       store.applySessiond(msg);
       this._controller?.onMessage(msg);
-      // Delta-replay anchor setup: must run synchronously here, BEFORE binary
-      // replay frames are processed.  Lit's willUpdate/_syncTerminals fires on
-      // the next render cycle, which is AFTER the replay frames arrive, so we
-      // cannot use _syncTerminals() for this.
+      // Replay setup: must run synchronously here, BEFORE binary replay frames
+      // are processed. Lit's willUpdate/_syncTerminals fires on the next render
+      // cycle, which is AFTER the replay frames arrive as macrotasks.
       //
       // Flow per attach:
-      //   1. ensure() → creates/reuses entry (seqBase=0/current, seqBytes=0/current)
-      //   2. setSeqAnchor(pane.seq) → seqBase=anchor, seqBytes=0
-      //   3. replay frames arrive → write() increments seqBytes from the anchor
-      //   4. next (re)attach → getOffsets() → seqBase+seqBytes = absolute position
+      //   1. ensure() → creates/reuses entry
+      //   2. setExpectedReplayBytes(pane.totalSeq) → how many bytes to wait for
+      //   3. replay frames arrive → write() accumulates into pendingData
+      //   4. _settleAndDrain waits until replayBytes >= expected, then drains
       if (msg.type === SessiondType.Composition) {
         muxLog('app composition', `workspaceId=${msg.workspaceId}`, {
-          panes: (msg.panes ?? []).map(p => ({ paneId: p.paneId, seq: p.seq ?? 0, totalSeq: p.totalSeq ?? 0 })),
+          panes: (msg.panes ?? []).map(p => ({ paneId: p.paneId, totalSeq: p.totalSeq ?? 0 })),
           hasLayout: !!msg.layout,
           storeActivePaneId: store.activePaneId,
         });
@@ -336,7 +335,7 @@ export class MuxApp extends LitElement {
             onInput: (data) => this._socket?.sendPaneInput(paneId, data),
             onResize: (cols, rows) => this._controller?.reportResize(paneId, cols, rows),
           });
-          terminalRegistry.setSeqAnchor(paneId, pane.seq ?? 0, pane.totalSeq ?? 0);
+          terminalRegistry.setExpectedReplayBytes(paneId, pane.totalSeq ?? 0);
         }
       }
       // One-terminal-per-workspace: when a composition is applied and the folded

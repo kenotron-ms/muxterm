@@ -99,6 +99,13 @@ interface PaneEntry {
   /** True once the initial replay has been flushed at a settled layout size; gates direct writes. */
   ready: boolean;
   /**
+   * Timestamp (performance.now()) when _settleAndDrain first passed visibility
+   * and plausibility checks and entered the RC-1 wait. Used to enforce a
+   * timeout escape so a byte-count mismatch can never permanently block the
+   * terminal from becoming usable.
+   */
+  _settleWaitStart: number;
+  /**
    * True while a _settleAndDrain drain sequence is in progress (write callbacks
    * in-flight). Prevents a second concurrent _settleAndDrain call (from
    * ResizeObserver or a second rAF kick) from splicing pendingData again and
@@ -114,7 +121,7 @@ interface PaneEntry {
   generation: number;
   /**
    * Number of replay bytes the client expects to receive for this attach.
-   * Computed as composition.pane.totalSeq - composition.pane.seq.
+   * Set from composition.pane.totalSeq (exact byte length of the replay data).
    * _settleAndDrain refuses to set ready=true until seqBytes >= expectedReplayBytes,
    * closing the settle-before-replay race window (RC-1).
    * 0 for fresh panes (no replay expected).
@@ -127,19 +134,11 @@ interface PaneEntry {
   /** Log throttle: count of direct writes already logged. */
   _directWriteLog: number;
   /**
-   * Delta-replay offset tracking — split into a base + running bytes count
-   * so setSeqAnchor() can cleanly reset to a server-reported absolute anchor.
-   *
-   * seq = seqBase + seqBytes
-   *
-   * seqBase: absolute anchor set by setSeqAnchor() from the composition reply.
-   *   Represents the server's seq of the first replayed byte for this attach.
-   * seqBytes: bytes received since the last setSeqAnchor() call.
-   *   Incremented by write() for every incoming frame (replay + live).
-   *
-   * On a fresh entry, both are 0 until the composition anchor is applied.
+   * Bytes received since the last attach cycle (replay + live).
+   * Incremented by write() for every incoming frame.
+   * Used by the RC-1 barrier: seqBytes >= expectedReplayBytes means all
+   * replay data has arrived and draining can proceed.
    */
-  seqBase: number;
   seqBytes: number;
 }
 
@@ -149,8 +148,16 @@ interface PaneEntry {
 // attached workspace changes _currentWorkspaceId without disposing old
 // workspace terminals, so scrollback is preserved when switching back.
 const _map = new Map<string, PaneEntry>();
-// Data written for a (workspace, pane) before ensure() was called.
-const _preEnsureBuffer = new Map<string, (Uint8Array | string)[]>();
+// Data written for a pane before ensure() was called for that workspace.
+// Keyed by paneId ONLY (not workspace) to survive the race where binary
+// replay frames arrive before the Composition text frame has been processed
+// (concurrent WebSocket writes from different Go goroutines mean the binary
+// frame can arrive first, when _currentWorkspaceId is still '').
+// When ensure() creates an entry it drains this buffer into the entry.
+const _preEnsureBuffer = new Map<number, (Uint8Array | string)[]>();
+// Containers registered via setContainer() before ensure() was called.
+// When ensure() later creates the entry, it immediately calls attach().
+const _pendingContainers = new Map<string, { container: HTMLElement; focus: boolean }>();
 const _encoder = new TextEncoder();
 
 // Current workspace — set by setWorkspace() on every composition update.
@@ -236,9 +243,9 @@ export const terminalRegistry = {
       pendingData: [],
       resizeObserver: null,
       resizeTimer: undefined,
-      seqBase: 0,
       seqBytes: 0,
       _directWriteLog: 0,
+      _settleWaitStart: 0,
     };
 
     muxLog('registry ensure', `created pane=${paneId}`, { key });
@@ -292,16 +299,30 @@ export const terminalRegistry = {
     _map.set(key, entry);
 
     // Drain any data that arrived before ensure() was called.
-    // Also accumulate the byte lengths into seqBytes so the pre-ensure bytes
-    // are included in the offset count (setSeqAnchor will reset from here if
-    // called immediately after, which is the normal composition flow).
-    const preBuffer = _preEnsureBuffer.get(key);
+    // Pre-ensure buffer is keyed by paneId only (not workspace) so data
+    // written before _currentWorkspaceId was set (binary frames racing ahead
+    // of the Composition text frame) is still found here.
+    // Accumulate byte lengths into seqBytes so the RC-1 barrier counts
+    // any pre-ensure replay bytes correctly.
+    const preBuffer = _preEnsureBuffer.get(paneId);
     if (preBuffer) {
       for (const chunk of preBuffer) {
         entry.pendingData.push(chunk);
-        entry.seqBytes += typeof chunk === 'string' ? chunk.length : chunk.byteLength;
+        entry.seqBytes += typeof chunk === 'string' ? chunk.length : (chunk as Uint8Array).byteLength;
       }
-      _preEnsureBuffer.delete(key);
+      _preEnsureBuffer.delete(paneId);
+    }
+
+    // If a container was registered via setContainer() before ensure() was
+    // called, attach now that the terminal entry exists. Use rAF so that all
+    // synchronous composition-message setup (setExpectedReplayBytes etc.) has
+    // run before we open the terminal — this keeps the same ordering guarantee
+    // as the layout()-based path.
+    const pendingContainer = _pendingContainers.get(key);
+    if (pendingContainer) {
+      _pendingContainers.delete(key);
+      const { container, focus } = pendingContainer;
+      requestAnimationFrame(() => terminalRegistry.attach(paneId, container, focus));
     }
   },
 
@@ -324,7 +345,7 @@ export const terminalRegistry = {
     if (!entry.opened) {
       // Open terminal in the stable host element — only ever called once.
       muxLog('registry attach', `term.open pane=${paneId} focus=${focus}`,
-        { pending: entry.pendingData.length, seqBase: entry.seqBase, seqBytes: entry.seqBytes });
+        { pending: entry.pendingData.length, seqBytes: entry.seqBytes });
       entry.term.open(entry.hostEl);
       entry.opened = true;
     } else {
@@ -370,6 +391,31 @@ export const terminalRegistry = {
     // attach would clobber the restored active-group selection. Focusing only
     // the active pane keeps the restored cross-group selection intact.
     if (focus) entry.term.focus();
+  },
+
+  /**
+   * Register the DOM container for a pane's terminal.
+   *
+   * This is the primary attachment API for TerminalRenderer. It is
+   * INDEPENDENT of render order: if the terminal entry already exists
+   * (ensure() ran first), attach() is called immediately. If ensure()
+   * hasn't run yet, the container is stored and attach() is called when
+   * ensure() later creates the entry.
+   *
+   * This decouples terminal initialization from Lit/dockview lifecycle
+   * callbacks — the registry manages the pairing, not the component.
+   */
+  setContainer(paneId: number, container: HTMLElement, focus = false): void {
+    const key = _key(paneId);
+    const entry = _map.get(key);
+    if (entry) {
+      // Entry already exists — attach immediately.
+      terminalRegistry.attach(paneId, container, focus);
+    } else {
+      // Entry not yet created — store and attach when ensure() runs.
+      muxLog('registry setContainer', `deferred pane=${paneId}`, { key });
+      _pendingContainers.set(key, { container, focus });
+    }
   },
 
   /**
@@ -427,24 +473,43 @@ export const terminalRegistry = {
     if (!_fitIfPlausible(entry)) {
       muxLog('registry settle', `pane=${paneId} NOT plausible size yet`,
         { w: entry.hostEl.offsetWidth, h: entry.hostEl.offsetHeight });
+      // Retry on the next frame — the ResizeObserver debounce also retries,
+      // but an extra rAF costs nothing and catches the case where the container
+      // grows to its final size before the observer's first callback fires.
+      requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId));
       return;
     }
 
     // Guard RC-1: BARRIER — don't settle until all expected replay bytes have
-    // arrived. expectedReplayBytes = composition.pane.totalSeq - pane.seq.
-    // If seqBytes < expectedReplayBytes, replay is still in-flight; reschedule.
+    // arrived. expectedReplayBytes = composition.pane.totalSeq (exact replay
+    // byte count set by the server). If seqBytes < expectedReplayBytes, replay
+    // is still in-flight; reschedule.
+    //
+    // Timeout escape: if we have been waiting longer than 3 s since the first
+    // settle attempt we drain whatever data has arrived rather than blocking
+    // the terminal permanently. A byte-count mismatch (server/client encoding
+    // discrepancy, packet loss on reconnect, etc.) should never make the
+    // terminal permanently unusable.
     if (entry.seqBytes < entry.expectedReplayBytes) {
-      muxLog('registry settle', `pane=${paneId} waiting for replay`,
+      const now = performance.now();
+      if (entry._settleWaitStart === 0) entry._settleWaitStart = now;
+      const waited = now - entry._settleWaitStart;
+      if (waited < 3000) {
+        muxLog('registry settle', `pane=${paneId} waiting for replay`,
+          { seqBytes: entry.seqBytes, expectedReplayBytes: entry.expectedReplayBytes,
+            waitedMs: Math.round(waited) });
+        requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId));
+        return;
+      }
+      muxLog('registry settle', `pane=${paneId} RC-1 TIMEOUT — draining with partial replay`,
         { seqBytes: entry.seqBytes, expectedReplayBytes: entry.expectedReplayBytes });
-      requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId));
-      return;
     }
 
     const pending = entry.pendingData.splice(0);
     muxLog('registry settle', `pane=${paneId} settling`,
       { pendingChunks: pending.length,
         pendingBytes: pending.reduce((s, c) => s + (typeof c === 'string' ? c.length : c.byteLength), 0),
-        seqBase: entry.seqBase, seqBytes: entry.seqBytes, expected: entry.expectedReplayBytes,
+        seqBytes: entry.seqBytes, expected: entry.expectedReplayBytes,
         w: entry.hostEl.offsetWidth, h: entry.hostEl.offsetHeight });
 
     if (pending.length === 0) {
@@ -454,7 +519,7 @@ export const terminalRegistry = {
       // straight from pendingData queue via ensure pre-buffer path). Safe to
       // mark ready immediately.
       muxLog('registry ready', `pane=${paneId} READY (no pending — fresh or pre-buffered)`,
-        { seqBase: entry.seqBase, seqBytes: entry.seqBytes });
+        { seqBytes: entry.seqBytes });
       entry.ready = true;
       return;
     }
@@ -470,7 +535,7 @@ export const terminalRegistry = {
       if (entry.generation !== myGeneration) return;
       if (--remaining !== 0) return;
       muxLog('registry ready', `pane=${paneId} READY (after drain)`,
-        { seqBase: entry.seqBase, seqBytes: entry.seqBytes });
+        { seqBytes: entry.seqBytes });
       entry.ready = true;
       entry.draining = false;
       // Drain any live PTY data that arrived during the drain window.
@@ -508,8 +573,7 @@ export const terminalRegistry = {
    * yet been called for paneId, the data is buffered in a pre-ensure queue
    * and drained when ensure() is later called.
    *
-   * Every incoming frame increments the entry's seqBytes (replay + live), so
-   * getOffsets() always reflects the total bytes received since the last anchor.
+   * Every incoming frame increments the entry's seqBytes (replay + live).
    * Pre-ensure bytes are counted when ensure() drains the pre-ensure buffer.
    */
   write(paneId: number, data: Uint8Array | string): void {
@@ -517,15 +581,14 @@ export const terminalRegistry = {
     const entry = _map.get(key);
     if (entry) {
       const bytes = typeof data === 'string' ? data.length : data.byteLength;
-      // Count every incoming byte against the current anchor regardless of
-      // whether the terminal is opened (direct write) or still pending attach.
+      // Count every incoming byte so the RC-1 barrier knows when replay is complete.
       entry.seqBytes += bytes;
       if (entry.ready) {
         // Log only the first few direct writes so we can see if replay arrives post-ready
         if (entry._directWriteLog < 5) {
           entry._directWriteLog++;
           muxLog('registry write', `DIRECT #${entry._directWriteLog} pane=${paneId} bytes=${bytes}`,
-            { seqBase: entry.seqBase, seqBytes: entry.seqBytes });
+            { seqBytes: entry.seqBytes });
         }
         entry.term.write(data);
       } else {
@@ -533,49 +596,43 @@ export const terminalRegistry = {
         // Only log first 5 buffered writes to avoid spam
         if (entry.pendingData.length < 5) {
           muxLog('registry write', `BUFFERED pane=${paneId} bytes=${bytes} pending=${entry.pendingData.length}`,
-            { opened: entry.opened, seqBase: entry.seqBase, seqBytes: entry.seqBytes });
+            { opened: entry.opened, seqBytes: entry.seqBytes });
         }
         entry.pendingData.push(data);
       }
     } else {
-      // Pre-ensure buffer: ensure() hasn't been called yet.
-      // Byte counts for these chunks are added to seqBytes when ensure() drains.
-      if (!_preEnsureBuffer.has(key)) _preEnsureBuffer.set(key, []);
-      _preEnsureBuffer.get(key)!.push(data);
+      // Pre-ensure buffer: ensure() hasn't been called yet for this pane in the
+      // current workspace. Keyed by paneId only so data survives the race where
+      // binary replay frames arrive before _currentWorkspaceId is set (i.e.
+      // before the Composition text frame is processed).
+      if (!_preEnsureBuffer.has(paneId)) _preEnsureBuffer.set(paneId, []);
+      _preEnsureBuffer.get(paneId)!.push(data);
     }
   },
 
   /**
    * Anchor a pane's absolute byte sequence to the server-reported start
-   * (the seq of the first replayed byte). Called when a composition arrives,
-   * BEFORE the replay frames for that pane are processed.
-   *
-   * Sets seqBase = anchor and seqBytes = 0 so that every subsequent write()
-   * call accumulates from this anchor.  The resulting seq = seqBase + seqBytes
-   * is the client's absolute offset, ready to send on the next (re)attach.
-   *
-   * Ordering: ensure() must be called first so the entry exists.  In the
-   * composition handler ensure() → setSeqAnchor() runs synchronously before
-   * any binary replay frames are delivered.
-   */
   /**
-   * Anchor a pane's absolute byte sequence to the server-reported start.
+   * Set how many replay bytes to expect for this pane.
    * Called when a composition arrives, BEFORE any replay frames are processed.
+   * replayLen = composition.pane.totalSeq (exact byte length of replay data).
    *
-   * @param anchor   seq field from composition — first byte of the replay window
-   * @param totalSeq totalSeq field from composition — total bytes ever written
-   *                 Client computes expectedReplayBytes = totalSeq - anchor.
-   *                 Omit (or pass 0) for zero-seq fresh panes.
+   * Ordering: ensure() must be called first. The composition handler calls
+   * ensure() → setExpectedReplayBytes() synchronously before any binary replay
+   * frames are delivered as macrotasks.
    */
-  setSeqAnchor(paneId: number, anchor: number, totalSeq = 0): void {
+  setExpectedReplayBytes(paneId: number, replayLen: number): void {
     const entry = _map.get(_key(paneId));
     if (!entry) return;
-    const expected = totalSeq > anchor ? totalSeq - anchor : 0;
-    muxLog('registry anchor', `pane=${paneId} seqBase=${anchor} totalSeq=${totalSeq} expected=${expected}`,
+    // Do NOT reset seqBytes here. If binary replay frames arrived before the
+    // Composition text frame (concurrent Go goroutine write race), ensure() has
+    // already drained them into pendingData and incremented seqBytes. Resetting
+    // seqBytes to 0 would make the RC-1 barrier wait forever for data that has
+    // already arrived. Keep seqBytes as-is so the barrier correctly detects
+    // "all replay received" when seqBytes >= expectedReplayBytes.
+    muxLog('registry anchor', `pane=${paneId} expectedReplayBytes=${replayLen}`,
       { pendingData: entry.pendingData.length, seqBytes: entry.seqBytes, ready: entry.ready });
-    entry.seqBase = anchor;
-    entry.seqBytes = 0;
-    entry.expectedReplayBytes = expected;
+    entry.expectedReplayBytes = replayLen;
   },
 
   /**
@@ -593,10 +650,10 @@ export const terminalRegistry = {
     entry.draining = false;
     entry.pendingData = [];
     entry.generation++;          // cancel in-flight write callbacks
-    entry.seqBase = 0;
     entry.seqBytes = 0;
     entry.expectedReplayBytes = 0;
     entry._directWriteLog = 0;
+    entry._settleWaitStart = 0;  // reset timeout so fresh reconnect gets a full 3s window
   },
 
   /** Whether term.open() has been called for paneId. Used by mux-dock BUG-C fix. */
@@ -604,27 +661,7 @@ export const terminalRegistry = {
     return _map.get(_key(paneId))?.opened ?? false;
   },
 
-  /**
-   * Per-pane absolute byte offsets for all live terminals in the CURRENT
-   * workspace, to send on (re)attach so the server replays only the delta.
-   *
-   * Returns [{paneId, seq}] for every entry in the current workspace.
-   * seq = seqBase + seqBytes = the absolute position of the next expected byte.
-   *
-   * On a fresh load there are no entries → returns [] → server does a full
-   * replay (today's behaviour).  On reconnect the live terminals report their
-   * positions → server replays only newer bytes.
-   */
-  getOffsets(): { paneId: number; seq: number }[] {
-    const prefix = `${_currentWorkspaceId}:`;
-    const result: { paneId: number; seq: number }[] = [];
-    for (const [key, entry] of _map.entries()) {
-      if (!key.startsWith(prefix)) continue;
-      const paneId = parseInt(key.slice(prefix.length), 10);
-      result.push({ paneId, seq: entry.seqBase + entry.seqBytes });
-    }
-    return result;
-  },
+
 
   /**
    * Reset all terminals (ESC c = RIS).
@@ -660,10 +697,14 @@ export const terminalRegistry = {
       }
     }
     // Also clear pre-ensure buffer for panes that will never exist.
-    for (const key of _preEnsureBuffer.keys()) {
+    for (const paneId of _preEnsureBuffer.keys()) {
+      if (!liveIds.has(paneId)) _preEnsureBuffer.delete(paneId);
+    }
+    // Clear pending containers for pruned panes.
+    for (const key of _pendingContainers.keys()) {
       if (!key.startsWith(prefix)) continue;
       const paneId = parseInt(key.slice(prefix.length), 10);
-      if (!liveIds.has(paneId)) _preEnsureBuffer.delete(key);
+      if (!liveIds.has(paneId)) _pendingContainers.delete(key);
     }
   },
 
@@ -681,6 +722,7 @@ export const terminalRegistry = {
     }
     _map.clear();
     _preEnsureBuffer.clear();
+    _pendingContainers.clear();
   },
 
   /**

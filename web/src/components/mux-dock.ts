@@ -17,7 +17,6 @@ class TerminalRenderer implements IContentRenderer {
   readonly element: HTMLElement;
   private readonly _paneId: number;
   private readonly _isActivePane: (paneId: number) => boolean;
-  private _pendingMount = false;
   private _attached = false;
 
   constructor(id: string, isActivePane: (paneId: number) => boolean) {
@@ -53,37 +52,35 @@ class TerminalRenderer implements IContentRenderer {
     // Do NOT attach here. Dockview calls init() before the panel has final
     // layout dimensions. Attaching here (even via rAF) causes the terminal
     // to open at wrong cols/rows, making the PTY replay garbled ($$$$~~~~~).
-    // We attach in the first layout() call instead, which is guaranteed to
-    // fire after dockview has settled the panel size.
-    const hasTerminal = terminalRegistry.getTerminal(this._paneId) !== null;
-    if (!hasTerminal) {
-      this._pendingMount = true;
-    }
-    muxLog('renderer init', `pane=${this._paneId}`, { hasTerminal, pendingMount: this._pendingMount });
+    // Attachment is deferred to the first layout() call (element connected +
+    // has real dimensions) via terminalRegistry.setContainer().
+    muxLog('renderer init', `pane=${this._paneId}`, {
+      hasTerminal: terminalRegistry.getTerminal(this._paneId) !== null,
+    });
   }
 
   layout(): void {
     if (!this._attached) {
-      // Attach (open the xterm surface) only once the panel element is BOTH
-      // connected to the live shadow DOM AND has real pixel dimensions.
-      const hasTerminal = terminalRegistry.getTerminal(this._paneId) !== null;
       muxLog('renderer layout', `pane=${this._paneId} not-yet-attached`,
-        { isConnected: this.element.isConnected, hasTerminal,
+        { isConnected: this.element.isConnected,
           w: this.element.offsetWidth, h: this.element.offsetHeight,
           isActive: this._isActivePane(this._paneId) });
-      if (hasTerminal && this.element.isConnected) {
-        this._attached = true;
-        this._pendingMount = false;
-        terminalRegistry.attach(this._paneId, this.element, this._isActivePane(this._paneId));
+
+      if (!this.element.isConnected) {
+        // Panel not in DOM yet — retry next frame (dockview only calls layout()
+        // on the active panel after DOM append; inactive panels get one
+        // isConnected=false call and nothing after).
+        requestAnimationFrame(() => this.layout());
         return;
       }
-      // BUG C fix: dockview only calls layout() on the ACTIVE panel after DOM
-      // append. Non-active panels get layout(isConnected=false) once and then
-      // nothing. Self-schedule a rAF so every panel retries after the append —
-      // one extra frame costs nothing and guarantees all panels open.
-      if (hasTerminal && !this.element.isConnected) {
-        requestAnimationFrame(() => this.layout());
-      }
+
+      // Element is connected. Hand off to the registry's independent lifecycle:
+      // setContainer() either calls attach() immediately (if ensure() already
+      // ran) or stores the container for attach() to be called when ensure()
+      // runs later. Either way the terminal opens without depending on a
+      // specific render-cycle ordering.
+      this._attached = true;
+      terminalRegistry.setContainer(this._paneId, this.element, this._isActivePane(this._paneId));
       return;
     }
     terminalRegistry.fitIfVisible(this._paneId);

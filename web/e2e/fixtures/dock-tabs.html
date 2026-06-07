@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dock-tabs stress fixture</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #f0f0f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── tab bar ── */
+    .tab-bar {
+      display: flex;
+      align-items: center;
+      background: #1a1a2e;
+      border-bottom: 1px solid #333;
+      padding: 4px 6px;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .tab {
+      padding: 3px 14px;
+      border: none;
+      border-radius: 4px;
+      background: #16213e;
+      color: #aaa;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+      transition: background 0.1s, color 0.1s;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    .tab:hover:not(.active) {
+      background: #1f3060;
+      color: #ccc;
+    }
+
+    .tab.active {
+      background: #0f3460;
+      color: #fff;
+      font-weight: 600;
+    }
+
+    /* ── panels ── */
+    .panels {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .panel {
+      position: absolute;
+      inset: 0;
+      display: none;
+      padding: 24px;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .panel.active {
+      display: flex;
+    }
+
+    .panel-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .panel-subtitle {
+      color: #888;
+      font-size: 12px;
+    }
+
+    .panel-body {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #bbb;
+    }
+
+    /* per-panel accent colours */
+    .panel[data-panel-id="alpha"] .panel-title { color: #56b0e8; }
+    .panel[data-panel-id="alpha"] .panel-body  { background: #0e1f33; border: 1px solid #1a3a5c; }
+
+    .panel[data-panel-id="beta"] .panel-title  { color: #6dd58c; }
+    .panel[data-panel-id="beta"] .panel-body   { background: #0e2218; border: 1px solid #1a4030; }
+
+    .panel[data-panel-id="gamma"] .panel-title { color: #e8a056; }
+    .panel[data-panel-id="gamma"] .panel-body  { background: #2a1a08; border: 1px solid #4a3010; }
+
+    /* ── status bar ── */
+    .status-bar {
+      flex-shrink: 0;
+      background: #111;
+      border-top: 1px solid #222;
+      padding: 2px 8px;
+      font-size: 11px;
+      color: #555;
+      display: flex;
+      gap: 16px;
+    }
+
+    .status-bar span { color: #888; }
+  </style>
+</head>
+<body>
+
+  <!-- ── tab bar ── -->
+  <div class="tab-bar" role="tablist" aria-label="dock panels">
+    <button class="tab active" role="tab" aria-selected="true"
+            data-tab-id="alpha" aria-controls="panel-alpha">Alpha</button>
+    <button class="tab" role="tab" aria-selected="false"
+            data-tab-id="beta"  aria-controls="panel-beta">Beta</button>
+    <button class="tab" role="tab" aria-selected="false"
+            data-tab-id="gamma" aria-controls="panel-gamma">Gamma</button>
+  </div>
+
+  <!-- ── panels ── -->
+  <div class="panels">
+
+    <div class="panel active" id="panel-alpha" role="tabpanel"
+         aria-labelledby="tab-alpha" data-panel-id="alpha">
+      <div class="panel-title">Panel Alpha</div>
+      <div class="panel-subtitle">First panel — default selection</div>
+      <div class="panel-body">
+        Alpha content. Tab persistence stress test fixture.<br>
+        This panel is shown when "alpha" is the active selection.
+      </div>
+    </div>
+
+    <div class="panel" id="panel-beta" role="tabpanel"
+         aria-labelledby="tab-beta" data-panel-id="beta">
+      <div class="panel-title">Panel Beta</div>
+      <div class="panel-subtitle">Second panel</div>
+      <div class="panel-body">
+        Beta content.<br>
+        Visible when "beta" is the last selected tab before refresh.
+      </div>
+    </div>
+
+    <div class="panel" id="panel-gamma" role="tabpanel"
+         aria-labelledby="tab-gamma" data-panel-id="gamma">
+      <div class="panel-title">Panel Gamma</div>
+      <div class="panel-subtitle">Third panel</div>
+      <div class="panel-body">
+        Gamma content.<br>
+        Visible when "gamma" is the last selected tab before refresh.
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── status bar ── -->
+  <div class="status-bar">
+    <div>active: <span id="status-active">–</span></div>
+    <div>loads: <span id="status-loads">0</span></div>
+    <div>last-click: <span id="status-last-click">–</span></div>
+  </div>
+
+  <script>
+    'use strict';
+
+    const STORAGE_KEY = 'dock-tabs-fixture:active';
+    const TAB_IDS = ['alpha', 'beta', 'gamma'];
+
+    // ── load counter (persisted separately so we can track refreshes)
+    const loadCountKey = 'dock-tabs-fixture:load-count';
+    const loadCount = (parseInt(localStorage.getItem(loadCountKey) || '0', 10) || 0) + 1;
+    localStorage.setItem(loadCountKey, String(loadCount));
+
+    // ── DOM refs
+    const tabs   = Object.fromEntries(
+      [...document.querySelectorAll('.tab')].map(el => [el.dataset.tabId, el])
+    );
+    const panels = Object.fromEntries(
+      [...document.querySelectorAll('.panel')].map(el => [el.dataset.panelId, el])
+    );
+    const statusActive    = document.getElementById('status-active');
+    const statusLoads     = document.getElementById('status-loads');
+    const statusLastClick = document.getElementById('status-last-click');
+
+    statusLoads.textContent = String(loadCount);
+
+    // ── core: activate a tab
+    function activateTab(id) {
+      if (!TAB_IDS.includes(id)) id = TAB_IDS[0];
+
+      TAB_IDS.forEach(tid => {
+        const isActive = tid === id;
+        tabs[tid].classList.toggle('active', isActive);
+        tabs[tid].setAttribute('aria-selected', String(isActive));
+        panels[tid].classList.toggle('active', isActive);
+      });
+
+      localStorage.setItem(STORAGE_KEY, id);
+      statusActive.textContent = id;
+    }
+
+    // ── on load: restore last active tab
+    const stored = localStorage.getItem(STORAGE_KEY);
+    activateTab(TAB_IDS.includes(stored) ? stored : TAB_IDS[0]);
+
+    // ── click handlers
+    TAB_IDS.forEach(id => {
+      tabs[id].addEventListener('click', () => {
+        activateTab(id);
+        statusLastClick.textContent = id + ' @ ' + new Date().toISOString().slice(11, 23);
+      });
+    });
+
+    // ── test API (used by dock-tab-stress.mjs)
+    window.__test = {
+      /** Returns the persisted active tab ID (from localStorage). */
+      getActiveTab() {
+        return localStorage.getItem(STORAGE_KEY);
+      },
+
+      /** Returns the tab ID that currently has the .active CSS class in the DOM. */
+      getActiveDomTab() {
+        const el = document.querySelector('.tab.active');
+        return el ? el.dataset.tabId : null;
+      },
+
+      /** Returns the tab ID whose panel is currently visible in the DOM. */
+      getActivePanelDom() {
+        const el = document.querySelector('.panel.active');
+        return el ? el.dataset.panelId : null;
+      },
+
+      /** Returns the number of times this page has been loaded (across refreshes). */
+      getLoadCount() {
+        return loadCount;
+      },
+
+      /** Programmatically activate a tab (for test setup without triggering click). */
+      setTab(id) {
+        activateTab(id);
+      },
+
+      /** Returns the full state object. */
+      getState() {
+        return {
+          stored:    localStorage.getItem(STORAGE_KEY),
+          domTab:    this.getActiveDomTab(),
+          domPanel:  this.getActivePanelDom(),
+          loadCount: loadCount,
+          consistent: localStorage.getItem(STORAGE_KEY) === this.getActiveDomTab()
+                   && this.getActiveDomTab() === this.getActivePanelDom(),
+        };
+      },
+    };
+  </script>
+</body>
+</html>

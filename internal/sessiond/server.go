@@ -119,21 +119,13 @@ func (s *Server) unsubscribeLocked(c *conn) {
 //  2. per-pane replay data frames enqueued BEFORE the conn is marked live,
 //  3. mark live so later broadcasts land strictly AFTER replay frames.
 //
-// offsets carries the client's last-known absolute seq per pane so only the
-// delta since that position is replayed. An absent or zero entry means full
-// replay from the oldest retained byte.
-func (s *Server) attachConn(c *conn, wsID string, cid uint64, breakpoint string, offsets []PaneOffset) {
+func (s *Server) attachConn(c *conn, wsID string, cid uint64, breakpoint string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Build a fast-lookup map: paneID → client's last-known seq.
-	want := make(map[int]uint64, len(offsets))
-	for _, o := range offsets {
-		want[o.PaneID] = o.Seq
-	}
-
-	// Iterate panes in deterministic order, computing the per-pane replay
-	// delta and building the PaneInfo slice with the anchor Seq in one pass.
+	// Always replay the full retained buffer — no delta tracking.
+	// TotalSeq = len(replayBytes) so the client knows exactly how many bytes
+	// to expect and can drain once they all arrive.
 	paneIDs := s.reg.PaneIDs(wsID)
 	paneInfos := make([]PaneInfo, 0, len(paneIDs))
 	type replayItem struct {
@@ -148,9 +140,8 @@ func (s *Server) attachConn(c *conn, wsID string, cid uint64, breakpoint string,
 			continue
 		}
 		info := p.Info()
-		data, start := p.ReplayFrom(want[paneID])
-		info.Seq = start
-		info.TotalSeq = p.Seq() // client computes expectedReplayBytes = TotalSeq - Seq
+		data := p.Replay()
+		info.TotalSeq = uint64(len(data))
 		paneInfos = append(paneInfos, info)
 		if len(data) > 0 {
 			replays = append(replays, replayItem{uint32(paneID), data})
@@ -341,7 +332,7 @@ func (c *conn) attach(msg Message) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
 		return
 	}
-	c.srv.attachConn(c, msg.WorkspaceID, msg.CID, msg.Breakpoint, msg.Offsets)
+	c.srv.attachConn(c, msg.WorkspaceID, msg.CID, msg.Breakpoint)
 }
 
 // createPane spawns a pane in the connection's attached workspace, ACKs the

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -127,7 +128,7 @@ func (c *Client) handleTextInput(data []byte) {
 
 	switch msg.Type {
 	case sessiond.TypeAttach:
-		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint, msg.Offsets)
+		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint)
 		if err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
@@ -371,7 +372,19 @@ func (h *Hub) attachClient(c *Client) error {
 
 	go func() {
 		if err := dc.Run(); err != nil {
+			// net.ErrClosed means hub.Remove closed the daemon connection while
+			// dc.Run was blocked in ReadFrame — this is the normal teardown path
+			// (readPump exited → hub.Remove → c.daemon.Close → dc.Run unblocks).
+			// Don't log noise on every normal browser disconnect.
+			//
+			// Any other error means the daemon dropped unexpectedly (crash, EOF,
+			// etc.) while the browser WebSocket may still be open. Remove the
+			// client so the WebSocket is closed and the browser reconnects.
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			log.Printf("attachClient: daemon run exited: %v", err)
+			h.Remove(c)
 		}
 	}()
 
@@ -389,13 +402,16 @@ func (h *Hub) attachClient(c *Client) error {
 	return nil
 }
 
-// Add registers a client in the hub and attaches its daemon connection.
+// Add registers a client in the hub and attaches its daemon connection. If
+// attachment fails the client is immediately removed so the WebSocket is
+// closed and the browser can reconnect rather than hanging in a broken state.
 func (h *Hub) Add(c *Client) {
 	h.mu.Lock()
 	h.clients[c] = true
 	h.mu.Unlock()
 	if err := h.attachClient(c); err != nil {
 		log.Printf("Add: attachClient error: %v", err)
+		h.Remove(c)
 	}
 }
 

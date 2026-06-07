@@ -22,7 +22,7 @@ const LAST_WS_KEY = 'muxterm.lastWorkspaceId';
  * lets tests inject a fakeSocket of plain spies without the full socket.
  */
 export interface WorkspaceSocket {
-  attachWithBreakpoint(workspaceId: string, breakpoint: string, offsets?: { paneId: number; seq: number }[]): void;
+  attachWithBreakpoint(workspaceId: string, breakpoint: string): void;
   createWorkspace(name?: string): void;
   listWorkspaces(): void;
   resize(paneId: number, cols: number, rows: number): void;
@@ -52,7 +52,7 @@ export class WorkspaceController {
     const stored = localStorage.getItem(LAST_WS_KEY);
     if (stored !== null) {
       this._attachInFlight = true;
-      this.socket.attachWithBreakpoint(stored, currentLayoutMode(), terminalRegistry.getOffsets());
+      this.socket.attachWithBreakpoint(stored, currentLayoutMode());
       return;
     }
     this._recoveringFrom = '';
@@ -105,7 +105,7 @@ export class WorkspaceController {
           );
           this._recoveringFrom = null;
           if (target.action === 'attach') {
-            this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode(), terminalRegistry.getOffsets());
+            this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode());
           } else {
             this.socket.createWorkspace();
           }
@@ -119,7 +119,7 @@ export class WorkspaceController {
           // _activePaneId = panes[0], overriding the layout-restored active pane.
           const target = chooseRecoveryTarget(msg.workspaces ?? [], '', this._mru.order());
           if (target.action === 'attach') {
-            this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode(), terminalRegistry.getOffsets());
+            this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode());
           }
         }
         break;
@@ -127,7 +127,7 @@ export class WorkspaceController {
 
       // no-survivor recovery path: attach the freshly-created workspace.
       case SessiondType.WorkspaceCreated: {
-        this.socket.attachWithBreakpoint(msg.workspaceId ?? '', currentLayoutMode(), terminalRegistry.getOffsets());
+        this.socket.attachWithBreakpoint(msg.workspaceId ?? '', currentLayoutMode());
         break;
       }
 

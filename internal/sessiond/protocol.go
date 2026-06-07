@@ -124,14 +124,6 @@ func ReadFrame(r io.Reader) (kind byte, payload []byte, err error) {
 	return buf[0], buf[1:], nil
 }
 
-// PaneOffset is the absolute byte sequence a client already holds for a pane,
-// sent on attach so the daemon can replay only the delta since that position.
-// The JSON tag is FROZEN per the v1 wire protocol contract.
-type PaneOffset struct {
-	PaneID int    `json:"paneId"`
-	Seq    uint64 `json:"seq"`
-}
-
 // Message is the single control envelope. Every request, reply, event, and
 // error is this struct with a different Type. The JSON tags are FROZEN per the
 // v1 wire protocol contract (see
@@ -151,7 +143,6 @@ type Message struct {
 	Layout      string          `json:"layout,omitempty"`      // opaque dockview layout JSON blob
 	Workspaces  []WorkspaceInfo `json:"workspaces,omitempty"`  //
 	Panes       []PaneInfo      `json:"panes,omitempty"`       //
-	Offsets     []PaneOffset    `json:"offsets,omitempty"`     // client-known absolute seq per pane (attach)
 	Code        string          `json:"code,omitempty"`        // error code
 	Error       string          `json:"error,omitempty"`       // human-readable error text
 }
@@ -170,6 +161,5 @@ type PaneInfo struct {
 	Cols     int    `json:"cols"`
 	Rows     int    `json:"rows"`
 	Title    string `json:"title,omitempty"`
-	Seq      uint64 `json:"seq,omitempty"`      // absolute seq of the first replayed byte (anchor)
-	TotalSeq uint64 `json:"totalSeq,omitempty"` // total bytes ever written; client computes expectedReplayBytes = TotalSeq - Seq
+	TotalSeq uint64 `json:"totalSeq,omitempty"` // exact byte length of the replay data for this pane
 }

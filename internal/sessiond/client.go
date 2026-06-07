@@ -244,18 +244,16 @@ type Composition struct {
 
 // Attach binds this connection to the workspace identified by workspaceID and
 // returns its single composition reply. breakpoint is the active CSS breakpoint
-// token (e.g. "desktop"); pass "" when unknown. offsets carries the client's
-// last-known absolute seq per pane for delta replay; pass nil for a full replay.
-// Empty Panes is valid (an empty workspace), not silence. After this reply,
-// per-pane replay bytes arrive as pane-data frames (routed to Handlers),
-// followed by live output. An unknown or stale workspace id surfaces as a
-// *DaemonError with Code == CodeUnknownWorkspace.
-func (c *Client) Attach(workspaceID, breakpoint string, offsets []PaneOffset) (Composition, error) {
+// token (e.g. "desktop"); pass "" when unknown. Always replays the full retained
+// buffer — no delta tracking. Empty Panes is valid (an empty workspace), not
+// silence. After this reply, per-pane replay bytes arrive as pane-data frames
+// (routed to Handlers), followed by live output. An unknown or stale workspace
+// id surfaces as a *DaemonError with Code == CodeUnknownWorkspace.
+func (c *Client) Attach(workspaceID, breakpoint string) (Composition, error) {
 	reply, err := c.request(&Message{
 		Type:        TypeAttach,
 		WorkspaceID: workspaceID,
 		Breakpoint:  breakpoint,
-		Offsets:     offsets,
 	})
 	if err != nil {
 		return Composition{}, err
