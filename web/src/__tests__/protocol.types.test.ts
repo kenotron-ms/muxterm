@@ -18,7 +18,10 @@ describe('sessiond protocol types', () => {
       CloseWorkspace: 'close-workspace',
       Attach: 'attach',
       CreatePane: 'create-pane',
+      ClosePane: 'close-pane',
       Resize: 'resize',
+      RenamePane: 'rename-pane',
+      SaveLayout: 'save-layout',
       WorkspaceCreated: 'workspace-created',
       WorkspaceList: 'workspace-list',
       Composition: 'composition',
@@ -28,6 +31,7 @@ describe('sessiond protocol types', () => {
       PaneClosed: 'pane-closed',
       WorkspaceClosed: 'workspace-closed',
       WorkspaceRenamed: 'workspace-renamed',
+      PaneRenamed: 'pane-renamed',
       Error: 'error',
     });
   });

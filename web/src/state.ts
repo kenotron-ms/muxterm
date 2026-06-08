@@ -66,6 +66,10 @@ export class MuxStore {
   private _layout = '';
   private _pending: Map<string, PendingRecord> = new Map();
   private _mutationSeq = 0;
+  /** Workspace IDs that have an unacknowledged activity bell. */
+  private _bellWorkspaces: Set<string> = new Set();
+  /** Pane IDs that have an unacknowledged activity bell. */
+  private _bellPanes: Set<number> = new Set();
 
   get config(): ResolvedConfig {
     return this._config;
@@ -130,6 +134,54 @@ export class MuxStore {
     return false;
   }
 
+  /** Returns true if the workspace has an unacknowledged activity bell. */
+  workspaceBellActive(wsId: string): boolean {
+    return this._bellWorkspaces.has(wsId);
+  }
+
+  /**
+   * Acknowledge (clear) the activity bell for a workspace.
+   * Notifies subscribers so bell indicators are removed immediately.
+   */
+  ackWorkspace(wsId: string): void {
+    if (!this._bellWorkspaces.has(wsId)) return;
+    this._bellWorkspaces.delete(wsId);
+    this._notify();
+  }
+
+  /** Returns true if the pane has an unacknowledged activity bell. */
+  paneBellActive(paneId: number): boolean {
+    return this._bellPanes.has(paneId);
+  }
+
+  /**
+   * Acknowledge (clear) the activity bell for a pane.
+   * Notifies subscribers so bell indicators are removed immediately.
+   */
+  ackPane(paneId: number): void {
+    if (!this._bellPanes.has(paneId)) return;
+    this._bellPanes.delete(paneId);
+    this._notify();
+  }
+
+  /**
+   * Ring the activity bell for a pane.
+   * Notifies subscribers so bell indicators appear immediately.
+   */
+  ringPane(paneId: number): void {
+    this._bellPanes.add(paneId);
+    this._notify();
+  }
+
+  /**
+   * Ring the activity bell for a workspace.
+   * Notifies subscribers so bell indicators appear immediately.
+   */
+  ringWorkspace(workspaceId: string): void {
+    this._bellWorkspaces.add(workspaceId);
+    this._notify();
+  }
+
   setActivePane(paneId: number): void {
     if (this._activePaneId === paneId) return;
     muxLog('state active', `setActivePane ${this._activePaneId} → ${paneId}`);
@@ -144,6 +196,12 @@ export class MuxStore {
     switch (msg.type) {
       case SessiondType.WorkspaceList:
         this._workspaces = msg.workspaces ?? [];
+        // Prune stale workspace bell entries for workspaces that no longer exist.
+        for (const wsId of this._bellWorkspaces) {
+          if (!this._workspaces.some((w) => w.workspaceId === wsId)) {
+            this._bellWorkspaces.delete(wsId);
+          }
+        }
         // If the currently attached workspace was removed, clear attachment state.
         if (this._attached !== null && !this._workspaces.some(w => w.workspaceId === this._attached)) {
           this._attached = null;
@@ -184,6 +242,7 @@ export class MuxStore {
         if (this._attached === null) break;
         const paneId = msg.paneId ?? 0;
         this._panes = this._panes.filter((p) => p.paneId !== paneId);
+        this._bellPanes.delete(paneId);
         if (this._activePaneId === paneId) {
           this._activePaneId = this._panes[0]?.paneId ?? 0;
         }

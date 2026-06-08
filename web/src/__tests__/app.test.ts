@@ -184,7 +184,7 @@ describe('MuxApp', () => {
       const disposeSpy = vi.spyOn(terminalRegistry, 'disposeAll');
       const attached: string[] = [];
       (el as any)._socket = {
-        attach: (id: string) => attached.push(id),
+        attachWithBreakpoint: (id: string) => attached.push(id),
         connected: true,
         disconnect: () => {},
       };
@@ -236,6 +236,21 @@ describe('MuxApp', () => {
       );
       await el.updateComplete;
       expect((el as any)._showWorkspacePicker).toBe(false);
+    });
+
+    it('pane-select from mux-title-bar activates the selected pane via _onActivePane', async () => {
+      el = await fixture(); // fixture creates composition with panes 5 and 6
+      const setActiveSpy = vi.spyOn(store, 'setActivePane');
+      const titleBar = el.shadowRoot!.querySelector('mux-title-bar')!;
+      titleBar.dispatchEvent(
+        new CustomEvent('pane-select', {
+          bubbles: true,
+          composed: true,
+          detail: { paneId: 6 },
+        }),
+      );
+      await el.updateComplete;
+      expect(setActiveSpy).toHaveBeenCalledWith(6);
     });
   });
 

@@ -117,15 +117,25 @@ describe('MuxWorkspacePicker', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('dispatches workspace-rename with workspaceId and name from prompt', async () => {
+  it('dispatches workspace-rename via inline edit confirmation', async () => {
     el = await fixture(makeWorkspaces());
-    vi.spyOn(window, 'prompt').mockReturnValue('  renamed  ');
     const handler = vi.fn();
     el.addEventListener('workspace-rename', handler as EventListener);
 
     const renameBtn = el.shadowRoot!.querySelectorAll('button.ws-rename')[2] as HTMLButtonElement;
     expect(renameBtn).toBeTruthy();
     renameBtn.click();
+    await el.updateComplete;
+
+    const input = el.shadowRoot!.querySelector('.ws-edit-input') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    input.value = '  renamed  ';
+    input.dispatchEvent(new Event('input'));
+    await el.updateComplete;
+
+    const confirmBtn = el.shadowRoot!.querySelector('button[title="Confirm"]') as HTMLButtonElement;
+    expect(confirmBtn).toBeTruthy();
+    confirmBtn.click();
 
     expect(handler).toHaveBeenCalledTimes(1);
     const event = handler.mock.calls[0][0] as CustomEvent<{ workspaceId: string; name: string }>;

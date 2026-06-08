@@ -46,6 +46,7 @@ import { serializeSnapshot } from './snapshot.js';
 import type { StructuredSnapshot, SnapshotSource } from './snapshot.js';
 import type { ResolvedConfig } from './config.js';
 import { DEFAULT_RESOLVED_CONFIG } from './config.js';
+import { store } from '../state.js';
 
 /**
  * Build an xterm.js Terminal options object from a ResolvedConfig.
@@ -297,6 +298,12 @@ export const terminalRegistry = {
       entry.lastCols = cols;
       entry.lastRows = rows;
       entry.handlers.onResize(cols, rows);
+    });
+
+    // Ring the pane bell on BEL character — drives bell-dot indicators.
+    term.onBell(() => {
+      // Don't ring if this pane is already active — user is already looking at it.
+      if (paneId !== store.activePaneId) store.ringPane(paneId);
     });
 
     // Touch scroll — xterm.js v6 regressed native touch-scroll support
