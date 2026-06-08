@@ -291,6 +291,11 @@ describe('MuxApp', () => {
       (el as any)._pendingCloses.set(7, fakeHandle);
       (el as any)._pendingClosesMeta.set(7, { title: 'vim' });
 
+      // Spy on allowReconcile before onDisconnect fires so we can assert it was
+      // called with the aborted pane IDs (lets the reconciler re-add tabs on reconnect).
+      const dock = el.shadowRoot!.querySelector('mux-dock') as any;
+      const allowReconcileSpy = vi.spyOn(dock, 'allowReconcile');
+
       clearSpy.mockClear();
       socket.onDisconnect?.();
       await el.updateComplete;
@@ -298,6 +303,9 @@ describe('MuxApp', () => {
       expect(clearSpy).toHaveBeenCalledWith(fakeHandle);
       expect((el as any)._pendingCloses.size).toBe(0);
       expect((el as any)._pendingClosesMeta.size).toBe(0);
+      // The dock's allowReconcile should have been called with the pane IDs
+      // so the reconciler can re-add their tabs on reconnect.
+      expect(allowReconcileSpy).toHaveBeenCalledWith([7]);
       clearSpy.mockRestore();
       clearTimeout(fakeHandle);
     });

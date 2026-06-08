@@ -110,7 +110,10 @@ export class MuxUndoToast extends LitElement {
     }, 1000);
     // The bar transition starts one rAF (~16 ms) after the timer; the visual
     // lag is imperceptible at the 10 s default duration.
-    this._rafHandle = requestAnimationFrame(() => { this._armed = true; });
+    this._rafHandle = requestAnimationFrame(() => {
+      this._armed = true;
+      this._rafHandle = undefined; // already fired; clear so disconnectedCallback skips it
+    });
   }
 
   override disconnectedCallback(): void {
@@ -133,6 +136,10 @@ export class MuxUndoToast extends LitElement {
         composed: true,
       }),
     );
+    // dispatchEvent is synchronous: _onUndoPaneClose has fully run before we get
+    // here. Calling remove() immediately gives instant visual feedback rather
+    // than waiting for Lit's microtask re-render.
+    this.remove();
   }
 
   override render() {
