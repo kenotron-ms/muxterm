@@ -434,6 +434,7 @@ export class MuxApp extends LitElement {
     for (const handle of this._pendingCloses.values()) clearTimeout(handle);
     this._pendingCloses.clear();
     this._pendingClosesMeta.clear();
+    this._closingPanes.clear();
   }
 
   /**
@@ -732,6 +733,7 @@ export class MuxApp extends LitElement {
     for (const handle of this._pendingCloses.values()) clearTimeout(handle);
     this._pendingCloses.clear();
     this._pendingClosesMeta.clear();
+    this._closingPanes.clear();
     this.requestUpdate(); // dismiss ghost toasts immediately
     // Do NOT call disposeAll() — workspace-scoped composite keys in
     // terminalRegistry isolate paneIds across workspaces, so old terminals
@@ -792,6 +794,9 @@ export class MuxApp extends LitElement {
   /** Undo a pending close: cancel the timer, clear bookkeeping, reopen the pane. */
   private _onUndoPaneClose = (e: CustomEvent<{ paneId: number }>): void => {
     const { paneId } = e.detail;
+    // If the grace period already expired and _executeClose committed the close,
+    // undo is no longer possible — the close was sent to the server.
+    if (this._closingPanes.has(paneId)) return;
     const handle = this._pendingCloses.get(paneId);
     if (handle !== undefined) clearTimeout(handle);
     this._pendingCloses.delete(paneId);
