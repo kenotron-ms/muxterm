@@ -66,6 +66,8 @@ export class MuxStore {
   private _layout = '';
   private _pending: Map<string, PendingRecord> = new Map();
   private _mutationSeq = 0;
+  /** Workspace IDs that have an unacknowledged activity bell. */
+  private _bellWorkspaces: Set<string> = new Set();
 
   get config(): ResolvedConfig {
     return this._config;
@@ -128,6 +130,21 @@ export class MuxStore {
       if (!record.errored && record.kind === kind) return true;
     }
     return false;
+  }
+
+  /** Returns true if the workspace has an unacknowledged activity bell. */
+  workspaceBellActive(wsId: string): boolean {
+    return this._bellWorkspaces.has(wsId);
+  }
+
+  /**
+   * Acknowledge (clear) the activity bell for a workspace.
+   * Notifies subscribers so bell indicators are removed immediately.
+   */
+  ackWorkspace(wsId: string): void {
+    if (!this._bellWorkspaces.has(wsId)) return;
+    this._bellWorkspaces.delete(wsId);
+    this._notify();
   }
 
   setActivePane(paneId: number): void {
