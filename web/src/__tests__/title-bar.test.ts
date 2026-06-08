@@ -63,6 +63,12 @@ describe('MuxTitleBar', () => {
     expect(el.shadowRoot!.querySelector('mux-launcher-menu')).toBeNull();
   });
 
+  it('renders mux-pane-picker in shadow DOM', async () => {
+    el = await fixture();
+    const picker = el.shadowRoot!.querySelector('mux-pane-picker');
+    expect(picker).toBeTruthy();
+  });
+
   it('re-emits launcher-action and closes menu after selection', async () => {
     el = await fixture();
     const launcherBtn = el.shadowRoot!.querySelector('.launcher-btn') as HTMLButtonElement;

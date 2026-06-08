@@ -85,6 +85,12 @@ export function paletteToCSSVars(p: Palette): Record<string, string> {
     '--mux-warn': p.yellow,
     '--mux-error': p.red,
     '--mux-ok': p.green,
+    // New tokens for attention management + dock redesign
+    '--mux-bell':               'var(--mux-warn)',  // bell indicator dot color
+    '--mux-dock-height':        '44px',             // dock bar row height / touch target
+    '--mux-dock-item-padding':  '0 16px',           // horizontal padding on each dock slot
+    '--mux-dock-font-size':     '0.85rem',          // workspace label font size
+    '--mux-dock-active-weight': '600',              // active workspace label font weight
   };
 }
 

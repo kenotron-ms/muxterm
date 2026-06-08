@@ -7,6 +7,7 @@ import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { terminalRegistry } from '../lib/terminal-registry.js';
 import { muxLog } from '../lib/mux-log.js';
 import type { SessiondPaneInfo } from '../types.js';
+import { store } from '../state.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TerminalRenderer
@@ -262,6 +263,26 @@ export class MuxDock extends LitElement {
     }, 400);
   }
 
+  private _refreshBellTitles(): void {
+    for (const [paneId, panel] of this._panels) {
+      const rawTitle =
+        this._customTitles.get(paneId) ??
+        this.panes.find((p) => p.paneId === paneId)?.title ??
+        `Pane ${paneId}`;
+      const tabEl = (panel as unknown as { view?: { tab?: { element?: HTMLElement } } })
+        .view?.tab?.element?.querySelector<HTMLElement>('.dv-default-tab-content');
+      if (!tabEl) continue;
+      tabEl.textContent = '';
+      if (store.paneBellActive(paneId)) {
+        const bell = document.createElement('span');
+        bell.className = 'mux-bell-prefix';
+        bell.textContent = '● ';
+        tabEl.appendChild(bell);
+      }
+      tabEl.appendChild(document.createTextNode(rawTitle));
+    }
+  }
+
   override connectedCallback(): void {
     super.connectedCallback();
 
@@ -360,9 +381,16 @@ export class MuxDock extends LitElement {
         }
 
         /* Selection cue: a blue top accent on the visible (selected) tab, a
-           transparent reserve on every other tab so heights stay aligned. */
+           transparent reserve on every other tab so heights stay aligned.
+           Tab sizing tokens allow host to control width via CSS custom props. */
         mux-dock .dv-tab {
           border-top: 2px solid transparent;
+          flex: 1 1 var(--mux-tab-max-width, 180px);
+          min-width: var(--mux-tab-min-width, 80px);
+          max-width: var(--mux-tab-max-width, 180px);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         mux-dock .dv-tab.dv-active-tab {
           border-top: 2px solid #7aa2f7 !important;
@@ -432,6 +460,19 @@ export class MuxDock extends LitElement {
           min-width: 60px;
           max-width: 160px;
         }
+
+        /* Bell dot prefix on pane tabs */
+        mux-dock .mux-bell-prefix {
+          color: var(--mux-bell, #e0af68);
+          font-style: normal;
+        }
+
+        /* Mobile: hide tab bar on narrow viewports */
+        @media (max-width: 768px) {
+          mux-dock .dv-tabs-and-actions-container {
+            display: none !important;
+          }
+        }
       `;
       target.appendChild(style);
     }
@@ -464,8 +505,13 @@ export class MuxDock extends LitElement {
       if (this._settingActive) return;
       if (!panel) return;
       const paneId = parseInt(panel.id, 10);
+      store.ackPane(paneId); // clear bell indicator when tab is focused directly
       this.dispatchEvent(new CustomEvent('pane-select', { detail: { paneId }, bubbles: true, composed: true }));
-      terminalRegistry.focus(paneId);
+      // Defer focus to next frame: calling term.focus() synchronously inside the
+      // dockview tab-click handler fires BEFORE the browser finishes resolving
+      // focus for the clicked tab element, so the browser steals it back. An rAF
+      // defers until after the click event is fully processed.
+      requestAnimationFrame(() => terminalRegistry.focus(paneId));
       // Persist the new active selection: onDidLayoutChange does NOT fire on a
       // pure active-tab switch, so without this the saved layout keeps a stale
       // activeView and the wrong pane is selected after a refresh.
@@ -518,7 +564,7 @@ export class MuxDock extends LitElement {
     if (!activePanel) return;
 
     const paneId = parseInt(activePanel.id, 10);
-    const currentTitle = tabContent.textContent ?? '';
+    const currentTitle = (tabContent.textContent ?? '').replace(/^● /, '');
 
     // Hide the tab text and insert an input in its place.
     tabContent.style.display = 'none';
@@ -533,7 +579,14 @@ export class MuxDock extends LitElement {
       const next = save ? (input.value.trim() || currentTitle) : currentTitle;
       input.remove();
       tabContent.style.display = '';
-      tabContent.textContent = next;
+      tabContent.textContent = '';
+      if (store.paneBellActive(paneId)) {
+        const bell = document.createElement('span');
+        bell.className = 'mux-bell-prefix';
+        bell.textContent = '● ';
+        tabContent.appendChild(bell);
+      }
+      tabContent.appendChild(document.createTextNode(next));
       if (save && next !== currentTitle) {
         this._customTitles.set(paneId, next);
         this.dispatchEvent(new CustomEvent('pane-rename', { detail: { paneId, name: next }, bubbles: true, composed: true }));
@@ -688,6 +741,7 @@ export class MuxDock extends LitElement {
         this._settingActive = false;
         this._removingPanels = false;
       }
+      this._refreshBellTitles();
       return;
     }
 
@@ -749,8 +803,22 @@ export class MuxDock extends LitElement {
         } finally {
           this._settingActive = false;
         }
+        // onDidActivePanelChange is suppressed while _settingActive=true, so
+        // focus would never be placed in the terminal for programmatic pane
+        // switches (store-driven: pane-picker, initial load, workspace restore).
+        // rAF: same reason as onDidActivePanelChange — defer until after the
+        // browser finishes resolving focus for the panel/tab element.
+        const paneIdToFocus = this.activePaneId;
+        requestAnimationFrame(() => terminalRegistry.focus(paneIdToFocus));
       }
     }
+    // Bell dot updates are reactive without a direct store.subscribe() here:
+    // mux-app.render() passes store.panes.filter() which always returns a new
+    // array reference on every store notification. Lit tracks the new reference
+    // as a changed property and triggers this updated() call, which then calls
+    // _refreshBellTitles(). If the render path ever caches the filtered array,
+    // this reactivity chain would silently break — hence this comment.
+    this._refreshBellTitles();
   }
 
   /**

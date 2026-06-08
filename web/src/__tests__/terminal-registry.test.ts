@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 // terminal-registry is a module-level singleton — import it directly.
 // @xterm/xterm is aliased to setup.ts mock (see vite.config.ts),
@@ -80,6 +80,13 @@ describe('terminalRegistry', () => {
 
       expect(h2.onInput).toHaveBeenCalled();
       expect(h1.onInput).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when terminal fires a bell (bell is handled internally by registry)', () => {
+      // Bell is wired directly to store.ringPane inside the registry — no onBell in PaneHandlers.
+      terminalRegistry.ensure(5, handlers());
+      const term = terminalRegistry.getTerminal(5) as any;
+      expect(() => term.simulateBell()).not.toThrow();
     });
   });
 

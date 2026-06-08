@@ -12,7 +12,7 @@ import { applyThemeTokens, resolvePalette } from './lib/theme.js';
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
-import './components/status-bar.js';
+import './components/mux-dock-bar.js';
 import './components/mux-dock.js';
 import type { MuxDock } from './components/mux-dock.js';
 import './components/mux-undo-toast.js';
@@ -264,9 +264,6 @@ export class MuxApp extends LitElement {
   _connectionStatus: 'connected' | 'disconnected' | 'reconnecting' = 'disconnected';
 
   @state()
-  _showWorkspacePicker = false;
-
-  @state()
   _showReconnectOverlay = false;
 
   @state()
@@ -295,13 +292,6 @@ export class MuxApp extends LitElement {
   private _unsubscribe: (() => void) | null = null;
   private _controller: WorkspaceController | null = null;
 
-  /** Close the workspace picker on Escape. */
-  private _onDocKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && this._showWorkspacePicker) {
-      this._showWorkspacePicker = false;
-    }
-  };
-
   /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
    *  selectors like document.querySelector('[data-launcher-open]') work. */
   private _onOpenLauncherAttr = (): void => {
@@ -313,8 +303,6 @@ export class MuxApp extends LitElement {
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
-    // Escape closes the workspace picker.
-    document.addEventListener('keydown', this._onDocKeyDown);
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
@@ -422,7 +410,6 @@ export class MuxApp extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
-    document.removeEventListener('keydown', this._onDocKeyDown);
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -499,7 +486,10 @@ export class MuxApp extends LitElement {
     const panes = store.panes.filter((p) => p.paneId >= 0);
 
     return html`
-      <mux-title-bar @launcher-action="${this._onLauncherAction}"></mux-title-bar>
+      <mux-title-bar
+        @launcher-action="${this._onLauncherAction}"
+        @pane-select="${this._onActivePane}"
+      ></mux-title-bar>
       ${panes.length === 0
         ? html`
             <div class="empty-workspace">
@@ -538,12 +528,13 @@ export class MuxApp extends LitElement {
           `,
         )}
       </div>
-      <mux-status-bar
+      <mux-dock-bar
         .workspaces="${store.workspaces}"
-        .currentWorkspaceId="${store.attached ?? ''}"
+        .activeWorkspaceId="${store.attached ?? ''}"
         connectionStatus="${this._connectionStatus}"
-        @open-workspace-picker="${this._onOpenWorkspacePicker}"
-      ></mux-status-bar>
+        @workspace-switch="${this._onWorkspaceSelected}"
+        @workspace-create="${this._onOpenCreateModal}"
+      ></mux-dock-bar>
       <div class="overlay ${this._connectionStatus === 'connected' ? 'hidden' : ''}">
         Connecting to muxterm...
       </div>
@@ -579,30 +570,14 @@ export class MuxApp extends LitElement {
             message="${this._reconnectMessage}"
           ></mux-reconnect-overlay>`
         : ''}
-      ${this._showWorkspacePicker
-        ? html`<mux-workspace-picker
-            .workspaces="${store.workspaces}"
-            .currentWorkspaceId="${store.attached ?? ''}"
-            .erroredMutations="${store.erroredMutations}"
-            .createPending="${this._creatingWorkspace}"
-            @workspace-selected="${this._onWorkspaceSelected}"
-            @workspace-create="${this._onOpenCreateModal}"
-            @workspace-rename="${this._onWorkspaceRename}"
-            @workspace-close="${this._onWorkspaceClose}"
-            @workspace-retry="${(e: CustomEvent<{ mutationId: string }>) =>
-              store.retry(e.detail.mutationId)}"
-            @workspace-dismiss="${(e: CustomEvent<{ mutationId: string }>) =>
-              store.dismiss(e.detail.mutationId)}"
-            @close-picker="${() => {
-              this._showWorkspacePicker = false;
-            }}"
-          ></mux-workspace-picker>`
-        : ''}
+      <!-- Phase 3: mux-workspace-picker (rename, close, retry/dismiss) will be re-introduced here -->
     `;
   }
 
   /** Client-local active-pane selection (sessiond has no select-pane message). */
   private _onActivePane = (e: CustomEvent<{ paneId: number }>): void => {
+    // ackPane is the component's responsibility (mux-pane-picker._selectPane or
+    // mux-dock onDidActivePanelChange). Do not ack here — the component already did.
     store.setActivePane(e.detail.paneId);
   };
 
@@ -618,7 +593,6 @@ export class MuxApp extends LitElement {
    * row is inserted — the flag is the only local state change.
    */
   private _onOpenCreateModal = (): void => {
-    this._showWorkspacePicker = false;
     this._showCreateModal = true;
     this._createModalName = '';
   };
@@ -681,9 +655,7 @@ export class MuxApp extends LitElement {
     }
   };
 
-  private _onOpenWorkspacePicker = (): void => {
-    this._showWorkspacePicker = !this._showWorkspacePicker;
-  };
+  // Phase 3: _onOpenWorkspacePicker will be re-introduced here for workspace management UI.
 
   /**
    * Rename a workspace optimistically: the overlay shows the new name instantly,
@@ -732,7 +704,6 @@ export class MuxApp extends LitElement {
    * the previous workspace survives for when we switch back.
    */
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
-    this._showWorkspacePicker = false;
     if (e.detail.workspaceId === store.attached) return;
     // _pendingCloses: grace period only — closePane was never sent, PTY survives on server.
     for (const handle of this._pendingCloses.values()) clearTimeout(handle);
@@ -827,8 +798,8 @@ export class MuxApp extends LitElement {
 
   private _onLauncherAction = (): void => {
     /* ⋯ menu is app-level only; presentational this round; workspace creation
-       lives in the status-bar switcher, so launcher actions must never open the
-       picker */
+       is handled by mux-dock-bar. Phase 3 will wire launcher actions to
+       workspace management. */
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {

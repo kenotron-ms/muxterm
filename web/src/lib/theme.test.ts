@@ -23,4 +23,13 @@ describe('paletteToCSSVars', () => {
     expect(vars['--mux-fg']).toBe('#a9b1d6');
     expect(vars['--mux-accent']).toBe('#7aa2f7');
   });
+
+  it('emits attention management and dock design tokens', () => {
+    const vars = paletteToCSSVars(resolvePalette('tokyo-night'));
+    expect(vars['--mux-bell']).toBe('var(--mux-warn)');
+    expect(vars['--mux-dock-height']).toBe('44px');
+    expect(vars['--mux-dock-item-padding']).toBe('0 16px');
+    expect(vars['--mux-dock-font-size']).toBe('0.85rem');
+    expect(vars['--mux-dock-active-weight']).toBe('600');
+  });
 });
