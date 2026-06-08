@@ -3,6 +3,7 @@ import { customElement, state } from 'lit/decorators.js';
 import type { PropertyValues } from 'lit';
 import { CHROME } from '../lib/theme.js';
 import './launcher-menu.js';
+import './mux-pane-picker.js';
 import { icon } from '../lib/icons.js';
 import { Ellipsis } from 'lucide';
 
@@ -153,6 +154,7 @@ export class MuxTitleBar extends LitElement {
         <span>muxterm</span>
         <span class="brand-sha">${__GIT_SHA__}</span>
       </div>
+      <mux-pane-picker></mux-pane-picker>
       <div class="right">
         <button
           class="launcher-btn"
