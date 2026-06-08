@@ -431,6 +431,10 @@ export class MuxApp extends LitElement {
         // Active-view-wins: only rendered/visible panes own a live
         // ResizeObserver, so tabbed-away panes never report a resize.
         onResize: (cols, rows) => this._controller?.reportResize(paneId, cols, rows),
+        // Read store.attached inside the callback at bell-fire time — NOT at
+        // registration time — so workspace switches after registration still
+        // attribute bells to the correct workspace.
+        onBell: (bellPaneId) => store.markBell(bellPaneId, store.attached ?? ''),
       });
       liveIds.add(paneId);
     }
@@ -535,6 +539,7 @@ export class MuxApp extends LitElement {
   /** Client-local active-pane selection (sessiond has no select-pane message). */
   private _onActivePane = (e: CustomEvent<{ paneId: number }>): void => {
     store.setActivePane(e.detail.paneId);
+    store.ackPane(e.detail.paneId);
   };
 
   /** Empty-state button: create a connection-scoped pane in the workspace. */

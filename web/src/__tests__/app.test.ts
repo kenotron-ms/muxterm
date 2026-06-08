@@ -252,6 +252,44 @@ describe('MuxApp', () => {
     });
   });
 
+  describe('Bell Attention', () => {
+    it('_syncTerminals registers onBell so a terminal bell calls store.markBell with paneId and attached workspace', async () => {
+      // store.attached is 'ws-1' from applyComposition() in fixture()
+      el = await fixture();
+
+      // Pane 5 was registered via _syncTerminals — get its mock terminal.
+      const term = terminalRegistry.getTerminal(5) as any;
+      expect(term).toBeTruthy();
+
+      // Before bell: pane bell is inactive.
+      expect(store.paneBellActive(5)).toBe(false);
+
+      // Fire bell — onBell callback must call store.markBell(5, 'ws-1').
+      term.simulateBell();
+
+      expect(store.paneBellActive(5)).toBe(true);
+      expect(store.workspaceBellActive('ws-1')).toBe(true);
+    });
+
+    it('_onActivePane calls store.ackPane to clear the pane bell indicator on focus', async () => {
+      el = await fixture();
+
+      // Set up bell state for pane 5.
+      store.markBell(5, 'ws-1');
+      expect(store.paneBellActive(5)).toBe(true);
+
+      // Simulate pane-select event triggering _onActivePane.
+      (el as any)._onActivePane(
+        new CustomEvent('pane-select', { detail: { paneId: 5 } }),
+      );
+
+      // ackPane must have cleared the pane bell.
+      expect(store.paneBellActive(5)).toBe(false);
+      // Workspace bell is NOT cleared by ackPane alone.
+      expect(store.workspaceBellActive('ws-1')).toBe(true);
+    });
+  });
+
   describe('Reconnect Overlay', () => {
     it('does not render reconnect overlay by default', async () => {
       el = await fixture();
