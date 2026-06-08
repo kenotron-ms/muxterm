@@ -302,7 +302,8 @@ export const terminalRegistry = {
 
     // Ring the pane bell on BEL character — drives bell-dot indicators.
     term.onBell(() => {
-      store.ringPane(paneId);
+      // Don't ring if this pane is already active — user is already looking at it.
+      if (paneId !== store.activePaneId) store.ringPane(paneId);
     });
 
     // Touch scroll — xterm.js v6 regressed native touch-scroll support

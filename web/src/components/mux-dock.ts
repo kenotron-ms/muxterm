@@ -505,6 +505,7 @@ export class MuxDock extends LitElement {
       if (this._settingActive) return;
       if (!panel) return;
       const paneId = parseInt(panel.id, 10);
+      store.ackPane(paneId); // clear bell indicator when tab is focused directly
       this.dispatchEvent(new CustomEvent('pane-select', { detail: { paneId }, bubbles: true, composed: true }));
       terminalRegistry.focus(paneId);
       // Persist the new active selection: onDidLayoutChange does NOT fire on a
