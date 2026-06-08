@@ -68,6 +68,8 @@ export class MuxStore {
   private _mutationSeq = 0;
   /** Workspace IDs that have an unacknowledged activity bell. */
   private _bellWorkspaces: Set<string> = new Set();
+  /** Pane IDs that have an unacknowledged activity bell. */
+  private _bellPanes: Set<number> = new Set();
 
   get config(): ResolvedConfig {
     return this._config;
@@ -144,6 +146,30 @@ export class MuxStore {
   ackWorkspace(wsId: string): void {
     if (!this._bellWorkspaces.has(wsId)) return;
     this._bellWorkspaces.delete(wsId);
+    this._notify();
+  }
+
+  /** Returns true if the pane has an unacknowledged activity bell. */
+  paneBellActive(paneId: number): boolean {
+    return this._bellPanes.has(paneId);
+  }
+
+  /**
+   * Acknowledge (clear) the activity bell for a pane.
+   * Notifies subscribers so bell indicators are removed immediately.
+   */
+  ackPane(paneId: number): void {
+    if (!this._bellPanes.has(paneId)) return;
+    this._bellPanes.delete(paneId);
+    this._notify();
+  }
+
+  /**
+   * Ring the activity bell for a pane.
+   * Notifies subscribers so bell indicators appear immediately.
+   */
+  ringPane(paneId: number): void {
+    this._bellPanes.add(paneId);
     this._notify();
   }
 
