@@ -7,6 +7,7 @@ import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { terminalRegistry } from '../lib/terminal-registry.js';
 import { muxLog } from '../lib/mux-log.js';
 import type { SessiondPaneInfo } from '../types.js';
+import { store } from '../state.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TerminalRenderer
@@ -250,6 +251,26 @@ export class MuxDock extends LitElement {
     }, 400);
   }
 
+  private _refreshBellTitles(): void {
+    for (const [paneId, panel] of this._panels) {
+      const rawTitle =
+        this._customTitles.get(paneId) ??
+        this.panes.find((p) => p.paneId === paneId)?.title ??
+        `Pane ${paneId}`;
+      const tabEl = (panel as unknown as { view?: { tab?: { element?: HTMLElement } } })
+        .view?.tab?.element?.querySelector<HTMLElement>('.dv-default-tab-content');
+      if (!tabEl) continue;
+      tabEl.textContent = '';
+      if (store.paneBellActive(paneId)) {
+        const bell = document.createElement('span');
+        bell.className = 'mux-bell-prefix';
+        bell.textContent = '● ';
+        tabEl.appendChild(bell);
+      }
+      tabEl.appendChild(document.createTextNode(rawTitle));
+    }
+  }
+
   override connectedCallback(): void {
     super.connectedCallback();
 
@@ -420,6 +441,15 @@ export class MuxDock extends LitElement {
           min-width: 60px;
           max-width: 160px;
         }
+
+        /* Bell dot prefix on pane tabs */
+        mux-dock .mux-bell-prefix { color: var(--mux-bell, #e0af68); font-style: normal; }
+
+        /* Tab sizing tokens */
+        mux-dock .dv-tab { flex: 1 1 var(--mux-tab-max-width, 180px); min-width: var(--mux-tab-min-width, 80px); max-width: var(--mux-tab-max-width, 180px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* Mobile: hide tab bar */
+        @media (max-width: 768px) { mux-dock .dv-tabs-and-actions-container { display: none !important; } }
       `;
       target.appendChild(style);
     }
@@ -490,7 +520,7 @@ export class MuxDock extends LitElement {
     if (!activePanel) return;
 
     const paneId = parseInt(activePanel.id, 10);
-    const currentTitle = tabContent.textContent ?? '';
+    const currentTitle = (tabContent.textContent ?? '').replace(/^● /, '');
 
     // Hide the tab text and insert an input in its place.
     tabContent.style.display = 'none';
@@ -505,7 +535,14 @@ export class MuxDock extends LitElement {
       const next = save ? (input.value.trim() || currentTitle) : currentTitle;
       input.remove();
       tabContent.style.display = '';
-      tabContent.textContent = next;
+      tabContent.textContent = '';
+      if (store.paneBellActive(paneId)) {
+        const bell = document.createElement('span');
+        bell.className = 'mux-bell-prefix';
+        bell.textContent = '● ';
+        tabContent.appendChild(bell);
+      }
+      tabContent.appendChild(document.createTextNode(next));
       if (save && next !== currentTitle) {
         this._customTitles.set(paneId, next);
         this.dispatchEvent(new CustomEvent('pane-rename', { detail: { paneId, name: next }, bubbles: true, composed: true }));
@@ -660,6 +697,7 @@ export class MuxDock extends LitElement {
         this._settingActive = false;
         this._removingPanels = false;
       }
+      this._refreshBellTitles();
       return;
     }
 
@@ -723,6 +761,7 @@ export class MuxDock extends LitElement {
         }
       }
     }
+    this._refreshBellTitles();
   }
 
   /**
