@@ -11,7 +11,7 @@ import { applyThemeTokens, resolvePalette } from './lib/theme.js';
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
-import './components/status-bar.js';
+import './components/mux-dock-bar.js';
 import './components/mux-dock.js';
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
@@ -473,12 +473,13 @@ export class MuxApp extends LitElement {
               @layout-save="${this._onLayoutSave}"
             ></mux-dock>
           `}
-      <mux-status-bar
+      <mux-dock-bar
         .workspaces="${store.workspaces}"
-        .currentWorkspaceId="${store.attached ?? ''}"
+        .activeWorkspaceId="${store.attached ?? ''}"
         connectionStatus="${this._connectionStatus}"
-        @open-workspace-picker="${this._onOpenWorkspacePicker}"
-      ></mux-status-bar>
+        @workspace-switch="${this._onWorkspaceSelected}"
+        @workspace-create="${this._onOpenCreateModal}"
+      ></mux-dock-bar>
       <div class="overlay ${this._connectionStatus === 'connected' ? 'hidden' : ''}">
         Connecting to muxterm...
       </div>
