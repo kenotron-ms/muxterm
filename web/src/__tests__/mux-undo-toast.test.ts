@@ -45,6 +45,13 @@ describe('MuxUndoToast', () => {
     cancelSpy.mockRestore();
   });
 
+  it('row has role="alert" aria-live="assertive" aria-atomic="true"', async () => {
+    const row = el.shadowRoot!.querySelector('.row');
+    expect(row!.getAttribute('role')).toBe('alert');
+    expect(row!.getAttribute('aria-live')).toBe('assertive');
+    expect(row!.getAttribute('aria-atomic')).toBe('true');
+  });
+
   it('Undo button dispatches pane-close-resolved with correct paneId', async () => {
     const events: CustomEvent<{ paneId: number }>[] = [];
     document.addEventListener('pane-close-resolved', (e) => events.push(e as CustomEvent<{ paneId: number }>), { once: true });

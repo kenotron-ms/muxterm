@@ -368,6 +368,31 @@ describe('MuxApp', () => {
       clearTimeout(fakeHandle);
     });
 
+    it('_syncTerminals does not call ensure() for a just-closed pane', async () => {
+      el = await fixture();
+      const socket = (el as any)._socket;
+      vi.spyOn(socket, 'closePane').mockImplementation(() => {});
+
+      // pane 5 is in the composition; plant a pending close for it
+      (el as any)._pendingCloses.set(5, setTimeout(() => {}, 60_000));
+      (el as any)._pendingClosesMeta.set(5, { title: 'vim' });
+
+      // Execute the close — prunes the terminal, but server hasn't acked yet
+      // so store.panes still contains pane 5.
+      (el as any)._executeClose(5);
+
+      const ensureSpy = vi.spyOn(terminalRegistry, 'ensure');
+      ensureSpy.mockClear();
+
+      // Trigger _syncTerminals directly (mirrors willUpdate behavior)
+      (el as any)._syncTerminals();
+
+      // ensure should NOT be called for pane 5 — it's in _closingPanes
+      expect(ensureSpy).not.toHaveBeenCalledWith(5, expect.anything());
+
+      ensureSpy.mockRestore();
+    });
+
     it('_executeClose calls socket.closePane, clears maps, cancels timer', async () => {
       el = await fixture();
       const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
@@ -400,6 +425,11 @@ describe('MuxApp', () => {
       (el as any)._pendingCloses.set(9, fakeHandle);
       (el as any)._pendingClosesMeta.set(9, { title: 'bash' });
 
+      // Spy on the dock's reopenPane method — same pattern as allowReconcile spy
+      // in the onDisconnect test.
+      const dock = el.shadowRoot!.querySelector('mux-dock') as any;
+      const reopenPaneSpy = vi.spyOn(dock, 'reopenPane');
+
       clearSpy.mockClear();
 
       // Call the handler directly (mirrors the __muxUndoClose DEV seam)
@@ -411,6 +441,7 @@ describe('MuxApp', () => {
       expect(clearSpy).toHaveBeenCalledWith(fakeHandle);
       expect((el as any)._pendingCloses.size).toBe(0);
       expect((el as any)._pendingClosesMeta.size).toBe(0);
+      expect(reopenPaneSpy).toHaveBeenCalledWith(9);
 
       clearSpy.mockRestore();
       clearTimeout(fakeHandle);

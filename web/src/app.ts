@@ -285,6 +285,10 @@ export class MuxApp extends LitElement {
   private _pendingCloses = new Map<number, ReturnType<typeof setTimeout>>();
   /** Per-pending metadata for rendering each toast (the tab title at close). */
   private _pendingClosesMeta = new Map<number, { title: string }>();
+  /** Pane IDs for which closePane has been sent but the server hasn't removed
+   *  the pane from store.panes yet. _syncTerminals skips ensure() for these so
+   *  the terminal isn't phantom-recreated between the close send and the ACK. */
+  private _closingPanes = new Set<number>();
 
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
@@ -464,6 +468,10 @@ export class MuxApp extends LitElement {
       // Mounting a terminal on a provisional pane produces a phantom cursor
       // that flickers once the real positive-id pane settles.
       if (paneId < 0) continue;
+      // Skip panes where closePane has been sent but the server hasn't removed
+      // them from store.panes yet — recreating the terminal here would produce
+      // a phantom entry that conflicts with the in-flight close.
+      if (this._closingPanes.has(paneId)) continue;
       terminalRegistry.ensure(paneId, {
         onInput: (data) => this._socket?.sendPaneInput(paneId, data),
         // Active-view-wins: only rendered/visible panes own a live
@@ -473,6 +481,10 @@ export class MuxApp extends LitElement {
       liveIds.add(paneId);
     }
     terminalRegistry.prune(liveIds);
+    // Clean up _closingPanes entries the server has now removed from store.panes.
+    for (const id of this._closingPanes) {
+      if (!store.panes.some((p) => p.paneId === id)) this._closingPanes.delete(id);
+    }
   }
 
   render() {
@@ -771,6 +783,7 @@ export class MuxApp extends LitElement {
     terminalRegistry.prune(remaining);
     this._pendingCloses.delete(paneId);
     this._pendingClosesMeta.delete(paneId);
+    this._closingPanes.add(paneId); // prevent _syncTerminals from recreating the terminal
     this.requestUpdate();
   }
 

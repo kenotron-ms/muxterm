@@ -149,7 +149,7 @@ export class MuxUndoToast extends LitElement {
       ? `width:0%;transition:width ${secs}s linear;`
       : `width:100%;`;
     return html`
-      <div class="row">
+      <div class="row" role="alert" aria-live="assertive" aria-atomic="true">
         <span class="label">${this.paneTitle} closed</span>
         <button class="undo" @click=${this._onUndo}>Undo</button>
         <span class="seconds">${this._remaining}s</span>
