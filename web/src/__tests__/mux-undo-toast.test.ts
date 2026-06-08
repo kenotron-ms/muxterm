@@ -18,9 +18,8 @@ describe('MuxUndoToast', () => {
     el.remove();
   });
 
-  it('initialises _remaining to round(duration / 1000)', () => {
-    // duration=3000 → remaining=3
-    expect((el as unknown as { _remaining: number })._remaining).toBe(3);
+  it('initialises _remaining to duration / 1000', () => {
+    expect((el as unknown as { _remaining: number })._remaining).toBe(3); // 3000 / 1000
   });
 
   it('_armed flips to true after a rAF', async () => {

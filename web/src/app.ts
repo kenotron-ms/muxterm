@@ -485,9 +485,11 @@ export class MuxApp extends LitElement {
     }
     terminalRegistry.prune(liveIds);
     // Clean up _closingPanes entries the server has now removed from store.panes.
+    const toDelete = new Set<number>();
     for (const id of this._closingPanes) {
-      if (!store.panes.some((p) => p.paneId === id)) this._closingPanes.delete(id);
+      if (!store.panes.some((p) => p.paneId === id)) toDelete.add(id);
     }
+    for (const id of toDelete) this._closingPanes.delete(id);
   }
 
   render() {
@@ -729,12 +731,15 @@ export class MuxApp extends LitElement {
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     this._showWorkspacePicker = false;
     if (e.detail.workspaceId === store.attached) return;
-    // Cancel any in-flight grace timers: panes survive on the server.
+    // _pendingCloses: grace period only — closePane was never sent, PTY survives on server.
     for (const handle of this._pendingCloses.values()) clearTimeout(handle);
     this._pendingCloses.clear();
     this._pendingClosesMeta.clear();
+    // _closingPanes: closePane was already sent, PTY is dying. Call allowReconcile so the
+    // reconciler doesn't recreate phantom terminals for panes whose close is in-flight.
+    this._dock?.allowReconcile([...this._closingPanes]);
     this._closingPanes.clear();
-    this.requestUpdate(); // dismiss ghost toasts immediately
+    this.requestUpdate();
     // Do NOT call disposeAll() — workspace-scoped composite keys in
     // terminalRegistry isolate paneIds across workspaces, so old terminals
     // stay alive with their scrollback until explicitly pruned or disposed.

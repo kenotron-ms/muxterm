@@ -100,9 +100,9 @@ export class MuxUndoToast extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this._remaining = Math.round(this.duration / 1000);
+    this._remaining = this.duration / 1000;
     this._interval = setInterval(() => {
-      this._remaining -= 1;
+      this._remaining = Math.max(0, this._remaining - 1);
       if (this._remaining <= 0) {
         // Expiry fallback — parent re-render normally removes us first.
         this.remove();
@@ -152,7 +152,7 @@ export class MuxUndoToast extends LitElement {
       <div class="row" role="alert" aria-live="assertive" aria-atomic="true">
         <span class="label">${this.paneTitle} closed</span>
         <button class="undo" @click=${this._onUndo}>Undo</button>
-        <span class="seconds">${this._remaining}s</span>
+        <span class="seconds">${Math.ceil(this._remaining)}s</span>
       </div>
       <div class="track"><div class="bar" style=${barStyle}></div></div>
     `;
