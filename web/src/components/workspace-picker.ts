@@ -288,11 +288,11 @@ export class MuxWorkspacePicker extends LitElement {
                     </button>
                     ${errored ? html`
                       <span class="ws-err-msg">failed</span>
-                      <button class="row-action" title="Retry"   @click="${(e: Event) => this._onRetry(e, errored.id)}">${icon(RotateCcw, { size: 14 })}</button>
-                      <button class="row-action" title="Dismiss" @click="${(e: Event) => this._onDismiss(e, errored.id)}">${icon(X, { size: 14 })}</button>
+                      <button class="row-action ws-retry"   title="Retry"   @click="${(e: Event) => this._onRetry(e, errored.id)}">${icon(RotateCcw, { size: 14 })}</button>
+                      <button class="row-action ws-dismiss" title="Dismiss" @click="${(e: Event) => this._onDismiss(e, errored.id)}">${icon(X, { size: 14 })}</button>
                     ` : html`
-                      <button class="row-action" title="Rename" @click="${(e: Event) => this._onRename(e, w.workspaceId, label)}">${icon(Pencil, { size: 14 })}</button>
-                      <button class="row-action" title="Close"  @click="${(e: Event) => this._onClose(e, w.workspaceId)}">${icon(X, { size: 14 })}</button>
+                      <button class="row-action ws-rename" title="Rename" @click="${(e: Event) => this._onRename(e, w.workspaceId, label)}">${icon(Pencil, { size: 14 })}</button>
+                      <button class="row-action ws-close"  title="Close"  @click="${(e: Event) => this._onClose(e, w.workspaceId)}">${icon(X, { size: 14 })}</button>
                     `}
                   `}
                 </div>

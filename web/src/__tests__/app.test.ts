@@ -91,11 +91,11 @@ describe('MuxApp', () => {
     expect(dock.panes.length).toBe(2);
   });
 
-  it('passes the attached workspace id to the status bar', async () => {
+  it('passes the attached workspace id to the dock bar', async () => {
     el = await fixture();
-    const statusBar = el.shadowRoot!.querySelector('mux-status-bar') as any;
-    expect(statusBar).toBeTruthy();
-    expect(statusBar.currentWorkspaceId).toBe('ws-1');
+    const dockBar = el.shadowRoot!.querySelector('mux-dock-bar') as any;
+    expect(dockBar).toBeTruthy();
+    expect(dockBar.activeWorkspaceId).toBe('ws-1');
   });
 
   it('renders overlay div', async () => {
@@ -133,20 +133,20 @@ describe('MuxApp', () => {
 
   it('renders empty state gracefully when no panes', async () => {
     el = await fixture(false);
-    // Title bar and status bar always present; no composition.
+    // Title bar and dock bar always present; no composition.
     const titleBar = el.shadowRoot!.querySelector('mux-title-bar');
     expect(titleBar).toBeTruthy();
-    const statusBar = el.shadowRoot!.querySelector('mux-status-bar');
-    expect(statusBar).toBeTruthy();
+    const dockBar = el.shadowRoot!.querySelector('mux-dock-bar');
+    expect(dockBar).toBeTruthy();
     expect(el.shadowRoot!.querySelector('mux-composition')).toBeNull();
     expect(el.shadowRoot!.querySelector('.empty-workspace')).toBeTruthy();
   });
 
-  it('passes the workspace list to the status bar', async () => {
+  it('passes the workspace list to the dock bar', async () => {
     el = await fixture();
-    const statusBar = el.shadowRoot!.querySelector('mux-status-bar') as any;
-    expect(statusBar).toBeTruthy();
-    expect(Array.isArray(statusBar.workspaces)).toBe(true);
+    const dockBar = el.shadowRoot!.querySelector('mux-dock-bar') as any;
+    expect(dockBar).toBeTruthy();
+    expect(Array.isArray(dockBar.workspaces)).toBe(true);
   });
 
   it('disconnects socket on disconnectedCallback', async () => {
@@ -168,13 +168,8 @@ describe('MuxApp', () => {
       expect(picker).toBeNull();
     });
 
-    it('renders workspace picker when _showWorkspacePicker is true', async () => {
-      el = await fixture();
-      (el as any)._showWorkspacePicker = true;
-      await el.updateComplete;
-      const picker = el.shadowRoot!.querySelector('mux-workspace-picker');
-      expect(picker).toBeTruthy();
-    });
+    // Phase 3: workspace picker (rename, close, retry/dismiss) will be
+    // re-introduced via mux-dock-bar. Tests for that UI live in Phase 3.
 
     it('_onWorkspaceSelected attaches the chosen workspace without disposing terminals', async () => {
       // Workspace switching now uses workspace-scoped composite keys in
@@ -184,30 +179,17 @@ describe('MuxApp', () => {
       const disposeSpy = vi.spyOn(terminalRegistry, 'disposeAll');
       const attached: string[] = [];
       (el as any)._socket = {
-        attach: (id: string) => attached.push(id),
+        attachWithBreakpoint: (id: string) => attached.push(id),
         connected: true,
         disconnect: () => {},
       };
-      (el as any)._showWorkspacePicker = true;
 
       (el as any)._onWorkspaceSelected(
-        new CustomEvent('workspace-selected', { detail: { workspaceId: 'ws-2' } }),
+        new CustomEvent('workspace-switch', { detail: { workspaceId: 'ws-2' } }),
       );
 
       expect(disposeSpy).not.toHaveBeenCalled(); // scrollback-preserving: no dispose on switch
       expect(attached).toContain('ws-2');
-      expect((el as any)._showWorkspacePicker).toBe(false);
-    });
-
-    it('open-workspace-picker from mux-status-bar opens the workspace picker', async () => {
-      el = await fixture();
-      expect((el as any)._showWorkspacePicker).toBe(false);
-      const statusBar = el.shadowRoot!.querySelector('mux-status-bar')!;
-      statusBar.dispatchEvent(
-        new CustomEvent('open-workspace-picker', { bubbles: true, composed: true }),
-      );
-      await el.updateComplete;
-      expect((el as any)._showWorkspacePicker).toBe(true);
     });
   });
 
@@ -223,9 +205,11 @@ describe('MuxApp', () => {
       expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
-    it('app-level launcher actions do NOT open the workspace picker', async () => {
+    it('app-level launcher actions do NOT crash and do not open workspace picker', async () => {
+      // Workspace picker is handled by mux-dock-bar (Phase 3).
+      // Launcher actions on the title bar should be handled without opening a
+      // workspace picker (that UI lives in mux-dock-bar).
       el = await fixture();
-      expect((el as any)._showWorkspacePicker).toBe(false);
       const titleBar = el.shadowRoot!.querySelector('mux-title-bar')!;
       titleBar.dispatchEvent(
         new CustomEvent('launcher-action', {
@@ -235,7 +219,8 @@ describe('MuxApp', () => {
         }),
       );
       await el.updateComplete;
-      expect((el as any)._showWorkspacePicker).toBe(false);
+      // Workspace picker is not rendered in this phase — dock-bar owns it in Phase 3
+      expect(el.shadowRoot!.querySelector('mux-workspace-picker')).toBeNull();
     });
   });
 
