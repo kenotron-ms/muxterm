@@ -52,11 +52,6 @@ export interface PendingRecord extends MutationSpec {
 
 const DEFAULT_MUTATION_TIMEOUT_MS = 5000;
 
-interface BellRecord {
-  lastFiredAt: number; // ms timestamp when bell last fired
-  ackedAt:     number; // ms timestamp when user last acknowledged (0 = never)
-}
-
 export class MuxStore {
   private _listeners: Set<() => void> = new Set();
   private _config: ResolvedConfig = DEFAULT_RESOLVED_CONFIG;
@@ -71,8 +66,10 @@ export class MuxStore {
   private _layout = '';
   private _pending: Map<string, PendingRecord> = new Map();
   private _mutationSeq = 0;
-  private _bellPanes:      Map<number, BellRecord> = new Map();
-  private _bellWorkspaces: Map<string,  BellRecord> = new Map();
+  /** Workspace IDs that have an unacknowledged activity bell. */
+  private _bellWorkspaces: Set<string> = new Set();
+  /** Pane IDs that have an unacknowledged activity bell. */
+  private _bellPanes: Set<number> = new Set();
 
   get config(): ResolvedConfig {
     return this._config;
@@ -137,48 +134,50 @@ export class MuxStore {
     return false;
   }
 
+  /** Returns true if the workspace has an unacknowledged activity bell. */
+  workspaceBellActive(wsId: string): boolean {
+    return this._bellWorkspaces.has(wsId);
+  }
+
+  /**
+   * Acknowledge (clear) the activity bell for a workspace.
+   * Notifies subscribers so bell indicators are removed immediately.
+   */
+  ackWorkspace(wsId: string): void {
+    if (!this._bellWorkspaces.has(wsId)) return;
+    this._bellWorkspaces.delete(wsId);
+    this._notify();
+  }
+
+  /** Returns true if the pane has an unacknowledged activity bell. */
+  paneBellActive(paneId: number): boolean {
+    return this._bellPanes.has(paneId);
+  }
+
+  /**
+   * Acknowledge (clear) the activity bell for a pane.
+   * Notifies subscribers so bell indicators are removed immediately.
+   */
+  ackPane(paneId: number): void {
+    if (!this._bellPanes.has(paneId)) return;
+    this._bellPanes.delete(paneId);
+    this._notify();
+  }
+
+  /**
+   * Ring the activity bell for a pane.
+   * Notifies subscribers so bell indicators appear immediately.
+   */
+  ringPane(paneId: number): void {
+    this._bellPanes.add(paneId);
+    this._notify();
+  }
+
   setActivePane(paneId: number): void {
     if (this._activePaneId === paneId) return;
     muxLog('state active', `setActivePane ${this._activePaneId} → ${paneId}`);
     this._activePaneId = paneId;
     this._notify();
-  }
-
-  markBell(paneId: number, wsId: string): void {
-    const now = Date.now();
-    const paneRecord = this._bellPanes.get(paneId) ?? { lastFiredAt: 0, ackedAt: 0 };
-    paneRecord.lastFiredAt = now;
-    this._bellPanes.set(paneId, paneRecord);
-    const wsRecord = this._bellWorkspaces.get(wsId) ?? { lastFiredAt: 0, ackedAt: 0 };
-    wsRecord.lastFiredAt = now;
-    this._bellWorkspaces.set(wsId, wsRecord);
-    this._notify();
-  }
-
-  ackPane(paneId: number): void {
-    const r = this._bellPanes.get(paneId);
-    if (!r) return;
-    r.ackedAt = Date.now();
-    this._notify();
-  }
-
-  ackWorkspace(wsId: string): void {
-    const r = this._bellWorkspaces.get(wsId);
-    if (!r) return;
-    r.ackedAt = Date.now();
-    this._notify();
-  }
-
-  paneBellActive(paneId: number): boolean {
-    const r = this._bellPanes.get(paneId);
-    if (!r) return false;
-    return r.lastFiredAt > r.ackedAt;
-  }
-
-  workspaceBellActive(wsId: string): boolean {
-    const r = this._bellWorkspaces.get(wsId);
-    if (!r) return false;
-    return r.lastFiredAt > r.ackedAt;
   }
 
   // Apply a sessiond control-protocol message. Workspace and composition state
