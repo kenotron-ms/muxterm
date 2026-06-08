@@ -60,4 +60,27 @@ describe('MuxUndoToast', () => {
     expect(events).toHaveLength(1);
     expect(events[0].detail.paneId).toBe(42);
   });
+
+  it('bar CSS transition uses exact duration/1000 (not Math.round) so non-round durations are accurate', async () => {
+    // Create a toast with a non-round duration (2500ms) so Math.round gives 3 but
+    // exact division gives 2.5 — the bar transition must use the exact value.
+    const toast = document.createElement('mux-undo-toast') as MuxUndoToast;
+    toast.paneId = 99;
+    toast.paneTitle = 'zsh';
+    toast.duration = 2500;
+    document.body.appendChild(toast);
+    await toast.updateComplete;
+
+    // Arm the transition (mirrors the rAF callback in connectedCallback)
+    (toast as unknown as { _armed: boolean })._armed = true;
+    await toast.updateComplete;
+
+    const bar = toast.shadowRoot!.querySelector('.bar') as HTMLElement;
+    const style = bar.getAttribute('style') ?? '';
+    // Must use 2.5s, NOT 3s (which Math.round(2500/1000) would give)
+    expect(style).toContain('2.5s');
+    expect(style).not.toContain('3s');
+
+    toast.remove();
+  });
 });

@@ -310,6 +310,27 @@ describe('MuxApp', () => {
       clearTimeout(fakeHandle);
     });
 
+    it('onDisconnect clears _closingPanes and includes their IDs in allowReconcile', async () => {
+      el = await fixture();
+      const socket = (el as any)._socket;
+
+      // Simulate a pane that was committed (moved from _pendingCloses to _closingPanes
+      // by _executeClose) but the server ACK hasn't arrived yet.
+      (el as any)._closingPanes.add(11);
+
+      const dock = el.shadowRoot!.querySelector('mux-dock') as any;
+      const allowReconcileSpy = vi.spyOn(dock, 'allowReconcile');
+
+      socket.onDisconnect?.();
+      await el.updateComplete;
+
+      // _closingPanes must be cleared so the pane doesn't become a zombie on reconnect.
+      expect((el as any)._closingPanes.size).toBe(0);
+      // allowReconcile must include the closing pane ID so the reconciler can
+      // re-add its tab when the server confirms the pane is still alive.
+      expect(allowReconcileSpy).toHaveBeenCalledWith(expect.arrayContaining([11]));
+    });
+
     it('hides overlay when onReconnect fires', async () => {
       el = await fixture();
       const socket = (el as any)._socket;

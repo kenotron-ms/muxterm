@@ -143,10 +143,10 @@ export class MuxUndoToast extends LitElement {
   }
 
   override render() {
-    const secs = Math.round(this.duration / 1000);
+    const transDuration = this.duration / 1000;
     // When armed, drive width to 0 over `duration`; before that, full width.
     const barStyle = this._armed
-      ? `width:0%;transition:width ${secs}s linear;`
+      ? `width:0%;transition:width ${transDuration}s linear;`
       : `width:100%;`;
     return html`
       <div class="row" role="alert" aria-live="assertive" aria-atomic="true">
