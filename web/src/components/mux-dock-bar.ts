@@ -72,6 +72,7 @@ export class MuxDockBar extends LitElement {
     .conn-dot.reconnecting { color: var(--mux-error, #f7768e); }
   `;
 
+  // TODO: wire connectionStatus from app WebSocket state when mux-dock-bar is mounted in app.ts
   @state() connectionStatus: 'connected' | 'disconnected' | 'reconnecting' = 'disconnected';
 
   @state() private _version = 0;

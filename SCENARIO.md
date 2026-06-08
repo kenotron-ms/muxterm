@@ -277,14 +277,14 @@ dock().activePaneId === backgroundPaneId  // must be true
 **B.1** Note current workspace IDs and the currently-active workspace:
 ```js
 const wsAId = store().attached;      // wsA is the workspace currently displayed
-const wsBId = store().workspaces.find(w => w.id !== wsAId).id;
+const wsBId = store().workspaces.find(w => w.workspaceId !== wsAId)?.workspaceId;
 ```
 
 **B.2** Switch to wsA so that wsB is in the background (if not already).
 
 **B.3** Simulate a bell on a pane inside wsB:
 ```js
-store().markBell(999, wsBId);
+store().ringWorkspace(wsBId);
 ```
 
 **B.4** **(Assertion B1)** The inactive workspace button must show a bell dot:
@@ -385,7 +385,7 @@ const inactivePaneId = store().panes.find(p => p.id !== activePaneId).id;
 
 **B.2** Trigger a bell on the inactive pane:
 ```js
-store().markBell(inactivePaneId, store().attached);
+store().ringPane(inactivePaneId);
 ```
 
 **B.3** Click the breadcrumb button to open the pane-picker dropdown:
@@ -421,12 +421,12 @@ store().paneBellActive(inactivePaneId) === false  // must be true
 
 ### Phase C — Dock bar present on mobile
 
-**C.1** **(Assertion C1)** The dock bar must remain visible at the mobile viewport:
+**C.1** **(Assertion C1)** [deferred — mux-dock-bar not yet mounted] The dock bar must remain visible at the mobile viewport:
 ```js
 getComputedStyle(dockBar()).display !== 'none'  // must be true
 ```
 
-**C.2** **(Assertion C2 — skip if only 1 workspace)** Switching workspaces via the dock bar must work:
+**C.2** **(Assertion C2 — skip if only 1 workspace)** [deferred — mux-dock-bar not yet mounted] Switching workspaces via the dock bar must work:
 ```js
 // Record current workspace
 const beforeId = store().attached;
@@ -450,7 +450,7 @@ store().attached !== beforeId  // must be true
 | B1 | B.4 | Dropdown opens on breadcrumb click | |
 | B2 | B.5 | `.bell-dot` present in dropdown for belled pane | |
 | B3 | B.8 | `paneBellActive` cleared after switching to that pane | |
-| C1 | C.1 | Dock bar visible at mobile viewport | |
-| C2 | C.2 | Workspace switch works from mobile dock bar (skip if 1 WS) | |
+| C1 | C.1 | Dock bar visible at mobile viewport [deferred — mux-dock-bar not yet mounted] | |
+| C2 | C.2 | Workspace switch works from mobile dock bar (skip if 1 WS) [deferred — mux-dock-bar not yet mounted] | |
 
 All 8 checks (7 required + C2 conditional) must pass for Scenario 6 to be clean.

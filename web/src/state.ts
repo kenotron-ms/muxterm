@@ -196,6 +196,12 @@ export class MuxStore {
     switch (msg.type) {
       case SessiondType.WorkspaceList:
         this._workspaces = msg.workspaces ?? [];
+        // Prune stale workspace bell entries for workspaces that no longer exist.
+        for (const wsId of this._bellWorkspaces) {
+          if (!this._workspaces.some((w) => w.workspaceId === wsId)) {
+            this._bellWorkspaces.delete(wsId);
+          }
+        }
         // If the currently attached workspace was removed, clear attachment state.
         if (this._attached !== null && !this._workspaces.some(w => w.workspaceId === this._attached)) {
           this._attached = null;
@@ -236,6 +242,7 @@ export class MuxStore {
         if (this._attached === null) break;
         const paneId = msg.paneId ?? 0;
         this._panes = this._panes.filter((p) => p.paneId !== paneId);
+        this._bellPanes.delete(paneId);
         if (this._activePaneId === paneId) {
           this._activePaneId = this._panes[0]?.paneId ?? 0;
         }
