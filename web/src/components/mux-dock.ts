@@ -507,7 +507,11 @@ export class MuxDock extends LitElement {
       const paneId = parseInt(panel.id, 10);
       store.ackPane(paneId); // clear bell indicator when tab is focused directly
       this.dispatchEvent(new CustomEvent('pane-select', { detail: { paneId }, bubbles: true, composed: true }));
-      terminalRegistry.focus(paneId);
+      // Defer focus to next frame: calling term.focus() synchronously inside the
+      // dockview tab-click handler fires BEFORE the browser finishes resolving
+      // focus for the clicked tab element, so the browser steals it back. An rAF
+      // defers until after the click event is fully processed.
+      requestAnimationFrame(() => terminalRegistry.focus(paneId));
       // Persist the new active selection: onDidLayoutChange does NOT fire on a
       // pure active-tab switch, so without this the saved layout keeps a stale
       // activeView and the wrong pane is selected after a refresh.
@@ -802,8 +806,10 @@ export class MuxDock extends LitElement {
         // onDidActivePanelChange is suppressed while _settingActive=true, so
         // focus would never be placed in the terminal for programmatic pane
         // switches (store-driven: pane-picker, initial load, workspace restore).
-        // Call it explicitly here so keyboard input works immediately.
-        terminalRegistry.focus(this.activePaneId);
+        // rAF: same reason as onDidActivePanelChange — defer until after the
+        // browser finishes resolving focus for the panel/tab element.
+        const paneIdToFocus = this.activePaneId;
+        requestAnimationFrame(() => terminalRegistry.focus(paneIdToFocus));
       }
     }
     // Bell dot updates are reactive without a direct store.subscribe() here:
