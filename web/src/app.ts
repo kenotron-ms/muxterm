@@ -1,4 +1,5 @@
 import { LitElement, html, css } from 'lit';
+import { repeat } from 'lit/directives/repeat.js';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
@@ -525,7 +526,9 @@ export class MuxApp extends LitElement {
             ></mux-dock>
           `}
       <div class="undo-toast-stack" @pane-close-resolved=${this._onUndoPaneClose}>
-        ${[...this._pendingClosesMeta.entries()].map(
+        ${repeat(
+          [...this._pendingClosesMeta.entries()],
+          ([paneId]) => paneId,
           ([paneId, meta]) => html`
             <mux-undo-toast
               .paneId=${paneId}
