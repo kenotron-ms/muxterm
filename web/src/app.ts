@@ -490,7 +490,10 @@ export class MuxApp extends LitElement {
     const panes = store.panes.filter((p) => p.paneId >= 0);
 
     return html`
-      <mux-title-bar @launcher-action="${this._onLauncherAction}"></mux-title-bar>
+      <mux-title-bar
+        @launcher-action="${this._onLauncherAction}"
+        @pane-select="${this._onActivePane}"
+      ></mux-title-bar>
       ${panes.length === 0
         ? html`
             <div class="empty-workspace">
