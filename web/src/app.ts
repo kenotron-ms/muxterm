@@ -13,6 +13,7 @@ import { applyThemeTokens, resolvePalette } from './lib/theme.js';
 import './components/title-bar.js';
 import './components/mux-dock-bar.js';
 import './components/mux-dock.js';
+// Phase 3: workspace-picker will be re-introduced for workspace management (rename, close, retry/dismiss).
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 
@@ -246,9 +247,6 @@ export class MuxApp extends LitElement {
   _connectionStatus: 'connected' | 'disconnected' | 'reconnecting' = 'disconnected';
 
   @state()
-  _showWorkspacePicker = false;
-
-  @state()
   _showReconnectOverlay = false;
 
   @state()
@@ -267,13 +265,6 @@ export class MuxApp extends LitElement {
   private _unsubscribe: (() => void) | null = null;
   private _controller: WorkspaceController | null = null;
 
-  /** Close the workspace picker on Escape. */
-  private _onDocKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && this._showWorkspacePicker) {
-      this._showWorkspacePicker = false;
-    }
-  };
-
   /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
    *  selectors like document.querySelector('[data-launcher-open]') work. */
   private _onOpenLauncherAttr = (): void => {
@@ -285,8 +276,6 @@ export class MuxApp extends LitElement {
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
-    // Escape closes the workspace picker.
-    document.addEventListener('keydown', this._onDocKeyDown);
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
@@ -381,7 +370,6 @@ export class MuxApp extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
-    document.removeEventListener('keydown', this._onDocKeyDown);
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -515,25 +503,7 @@ export class MuxApp extends LitElement {
             message="${this._reconnectMessage}"
           ></mux-reconnect-overlay>`
         : ''}
-      ${this._showWorkspacePicker
-        ? html`<mux-workspace-picker
-            .workspaces="${store.workspaces}"
-            .currentWorkspaceId="${store.attached ?? ''}"
-            .erroredMutations="${store.erroredMutations}"
-            .createPending="${this._creatingWorkspace}"
-            @workspace-selected="${this._onWorkspaceSelected}"
-            @workspace-create="${this._onOpenCreateModal}"
-            @workspace-rename="${this._onWorkspaceRename}"
-            @workspace-close="${this._onWorkspaceClose}"
-            @workspace-retry="${(e: CustomEvent<{ mutationId: string }>) =>
-              store.retry(e.detail.mutationId)}"
-            @workspace-dismiss="${(e: CustomEvent<{ mutationId: string }>) =>
-              store.dismiss(e.detail.mutationId)}"
-            @close-picker="${() => {
-              this._showWorkspacePicker = false;
-            }}"
-          ></mux-workspace-picker>`
-        : ''}
+      <!-- Phase 3: mux-workspace-picker (rename, close, retry/dismiss) will be re-introduced here -->
     `;
   }
 
@@ -555,7 +525,6 @@ export class MuxApp extends LitElement {
    * row is inserted — the flag is the only local state change.
    */
   private _onOpenCreateModal = (): void => {
-    this._showWorkspacePicker = false;
     this._showCreateModal = true;
     this._createModalName = '';
   };
@@ -618,9 +587,7 @@ export class MuxApp extends LitElement {
     }
   };
 
-  private _onOpenWorkspacePicker = (): void => {
-    this._showWorkspacePicker = !this._showWorkspacePicker;
-  };
+  // Phase 3: _onOpenWorkspacePicker will be re-introduced here for workspace management UI.
 
   /**
    * Rename a workspace optimistically: the overlay shows the new name instantly,
@@ -669,7 +636,6 @@ export class MuxApp extends LitElement {
    * the previous workspace survives for when we switch back.
    */
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
-    this._showWorkspacePicker = false;
     if (e.detail.workspaceId === store.attached) return;
     // Do NOT call disposeAll() — workspace-scoped composite keys in
     // terminalRegistry isolate paneIds across workspaces, so old terminals
@@ -713,8 +679,8 @@ export class MuxApp extends LitElement {
 
   private _onLauncherAction = (): void => {
     /* ⋯ menu is app-level only; presentational this round; workspace creation
-       lives in the status-bar switcher, so launcher actions must never open the
-       picker */
+       is handled by mux-dock-bar. Phase 3 will wire launcher actions to
+       workspace management. */
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {

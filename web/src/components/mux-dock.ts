@@ -369,9 +369,16 @@ export class MuxDock extends LitElement {
         }
 
         /* Selection cue: a blue top accent on the visible (selected) tab, a
-           transparent reserve on every other tab so heights stay aligned. */
+           transparent reserve on every other tab so heights stay aligned.
+           Tab sizing tokens allow host to control width via CSS custom props. */
         mux-dock .dv-tab {
           border-top: 2px solid transparent;
+          flex: 1 1 var(--mux-tab-max-width, 180px);
+          min-width: var(--mux-tab-min-width, 80px);
+          max-width: var(--mux-tab-max-width, 180px);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         mux-dock .dv-tab.dv-active-tab {
           border-top: 2px solid #7aa2f7 !important;
@@ -443,13 +450,17 @@ export class MuxDock extends LitElement {
         }
 
         /* Bell dot prefix on pane tabs */
-        mux-dock .mux-bell-prefix { color: var(--mux-bell, #e0af68); font-style: normal; }
+        mux-dock .mux-bell-prefix {
+          color: var(--mux-bell, #e0af68);
+          font-style: normal;
+        }
 
-        /* Tab sizing tokens */
-        mux-dock .dv-tab { flex: 1 1 var(--mux-tab-max-width, 180px); min-width: var(--mux-tab-min-width, 80px); max-width: var(--mux-tab-max-width, 180px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-        /* Mobile: hide tab bar */
-        @media (max-width: 768px) { mux-dock .dv-tabs-and-actions-container { display: none !important; } }
+        /* Mobile: hide tab bar on narrow viewports */
+        @media (max-width: 768px) {
+          mux-dock .dv-tabs-and-actions-container {
+            display: none !important;
+          }
+        }
       `;
       target.appendChild(style);
     }
@@ -761,6 +772,12 @@ export class MuxDock extends LitElement {
         }
       }
     }
+    // Bell dot updates are reactive without a direct store.subscribe() here:
+    // mux-app.render() passes store.panes.filter() which always returns a new
+    // array reference on every store notification. Lit tracks the new reference
+    // as a changed property and triggers this updated() call, which then calls
+    // _refreshBellTitles(). If the render path ever caches the filtered array,
+    // this reactivity chain would silently break — hence this comment.
     this._refreshBellTitles();
   }
 
