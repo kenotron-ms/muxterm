@@ -10,23 +10,25 @@ describe('MuxStore bell state', () => {
     vi.useRealTimers();
   });
 
-  it('markBell activates both pane and workspace indicators and notifies subscribers', () => {
+  it('ringPane + ringWorkspace activates both pane and workspace indicators and notifies subscribers', () => {
     const store = new MuxStore();
     const listener = vi.fn();
     store.subscribe(listener);
 
-    store.markBell(1, 'ws-a');
+    store.ringPane(1);
+    store.ringWorkspace('ws-a');
 
     expect(store.paneBellActive(1)).toBe(true);
     expect(store.workspaceBellActive('ws-a')).toBe(true);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it('re-bell after ack re-activates both indicators', () => {
     const store = new MuxStore();
 
     vi.setSystemTime(1000);
-    store.markBell(2, 'ws-b');
+    store.ringPane(2);
+    store.ringWorkspace('ws-b');
 
     vi.setSystemTime(2000);
     store.ackPane(2);
@@ -38,14 +40,16 @@ describe('MuxStore bell state', () => {
 
     // Re-bell re-activates both
     vi.setSystemTime(3000);
-    store.markBell(2, 'ws-b');
+    store.ringPane(2);
+    store.ringWorkspace('ws-b');
     expect(store.paneBellActive(2)).toBe(true);
     expect(store.workspaceBellActive('ws-b')).toBe(true);
   });
 
   it('ackPane clears pane bell but not workspace bell', () => {
     const store = new MuxStore();
-    store.markBell(3, 'ws-c');
+    store.ringPane(3);
+    store.ringWorkspace('ws-c');
 
     store.ackPane(3);
 
@@ -55,7 +59,8 @@ describe('MuxStore bell state', () => {
 
   it('ackWorkspace clears workspace bell but not pane bell', () => {
     const store = new MuxStore();
-    store.markBell(4, 'ws-d');
+    store.ringPane(4);
+    store.ringWorkspace('ws-d');
 
     store.ackWorkspace('ws-d');
 
@@ -81,7 +86,8 @@ describe('MuxStore bell state', () => {
 
   it('ackPane notifies subscribers', () => {
     const store = new MuxStore();
-    store.markBell(5, 'ws-e');
+    store.ringPane(5);
+    store.ringWorkspace('ws-e');
 
     const listener = vi.fn();
     store.subscribe(listener);
@@ -92,7 +98,8 @@ describe('MuxStore bell state', () => {
 
   it('ackWorkspace notifies subscribers', () => {
     const store = new MuxStore();
-    store.markBell(6, 'ws-f');
+    store.ringPane(6);
+    store.ringWorkspace('ws-f');
 
     const listener = vi.fn();
     store.subscribe(listener);
@@ -103,14 +110,16 @@ describe('MuxStore bell state', () => {
 
   it('ackPane and ackWorkspace are independent — acking in either order works', () => {
     const store1 = new MuxStore();
-    store1.markBell(7, 'ws-g');
+    store1.ringPane(7);
+    store1.ringWorkspace('ws-g');
     store1.ackWorkspace('ws-g');
     store1.ackPane(7);
     expect(store1.paneBellActive(7)).toBe(false);
     expect(store1.workspaceBellActive('ws-g')).toBe(false);
 
     const store2 = new MuxStore();
-    store2.markBell(8, 'ws-h');
+    store2.ringPane(8);
+    store2.ringWorkspace('ws-h');
     store2.ackPane(8);
     store2.ackWorkspace('ws-h');
     expect(store2.paneBellActive(8)).toBe(false);
@@ -120,8 +129,10 @@ describe('MuxStore bell state', () => {
   it('pane and workspace bells are independent across different panes and workspaces', () => {
     const store = new MuxStore();
 
-    store.markBell(10, 'ws-i');
-    store.markBell(11, 'ws-j');
+    store.ringPane(10);
+    store.ringWorkspace('ws-i');
+    store.ringPane(11);
+    store.ringWorkspace('ws-j');
 
     // Ack pane 10 and ws-j
     store.ackPane(10);

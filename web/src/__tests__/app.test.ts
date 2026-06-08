@@ -253,7 +253,7 @@ describe('MuxApp', () => {
   });
 
   describe('Bell Attention', () => {
-    it('_syncTerminals registers onBell so a terminal bell calls store.markBell with paneId and attached workspace', async () => {
+    it('_syncTerminals wires bell so a terminal bell calls store.ringPane with paneId', async () => {
       // store.attached is 'ws-1' from applyComposition() in fixture()
       el = await fixture();
 
@@ -275,7 +275,8 @@ describe('MuxApp', () => {
       el = await fixture();
 
       // Set up bell state for pane 5.
-      store.markBell(5, 'ws-1');
+      store.ringPane(5);
+      store.ringWorkspace('ws-1');
       expect(store.paneBellActive(5)).toBe(true);
 
       // Simulate pane-select event triggering _onActivePane.
