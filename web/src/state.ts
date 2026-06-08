@@ -173,6 +173,15 @@ export class MuxStore {
     this._notify();
   }
 
+  /**
+   * Ring the activity bell for a workspace.
+   * Notifies subscribers so bell indicators appear immediately.
+   */
+  ringWorkspace(workspaceId: string): void {
+    this._bellWorkspaces.add(workspaceId);
+    this._notify();
+  }
+
   setActivePane(paneId: number): void {
     if (this._activePaneId === paneId) return;
     muxLog('state active', `setActivePane ${this._activePaneId} → ${paneId}`);

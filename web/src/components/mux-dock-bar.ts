@@ -1,9 +1,8 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { customElement, state } from 'lit/decorators.js';
 import { store } from '../state.js';
 import { CHROME } from '../lib/theme.js';
 import { workspaceLabel } from './workspace-picker.js';
-import type { SessiondWorkspaceInfo } from '../types.js';
 
 // TODO(deferred): mux-dock-bar is built and tested but not yet mounted in app.ts.
 // Integration (replacing mux-status-bar) is deferred to a follow-up task.
@@ -73,9 +72,7 @@ export class MuxDockBar extends LitElement {
     .conn-dot.reconnecting { color: var(--mux-error, #f7768e); }
   `;
 
-  @property({ attribute: false }) workspaces: SessiondWorkspaceInfo[] = [];
-  @property({ attribute: false }) activeWorkspaceId = '';
-  @property({ attribute: false }) connectionStatus: 'connected' | 'disconnected' | 'reconnecting' = 'disconnected';
+  @state() connectionStatus: 'connected' | 'disconnected' | 'reconnecting' = 'disconnected';
 
   @state() private _version = 0;
   private _unsubscribe: (() => void) | null = null;
@@ -114,9 +111,11 @@ export class MuxDockBar extends LitElement {
   }
 
   override render() {
+    void this._version; // suppress unused-variable lint; triggers re-render on store change
+    const activeWorkspaceId = store.attached ?? '';
     return html`
-      ${this.workspaces.map((ws) => {
-        const isActive = ws.workspaceId === this.activeWorkspaceId;
+      ${store.workspaces.map((ws) => {
+        const isActive = ws.workspaceId === activeWorkspaceId;
         const showBell = !isActive && store.workspaceBellActive(ws.workspaceId);
         return html`
           <button

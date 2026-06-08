@@ -537,7 +537,8 @@ export class MuxApp extends LitElement {
 
   /** Client-local active-pane selection (sessiond has no select-pane message). */
   private _onActivePane = (e: CustomEvent<{ paneId: number }>): void => {
-    store.ackPane(e.detail.paneId);
+    // ackPane is the component's responsibility (mux-pane-picker._selectPane or
+    // mux-dock onDidActivePanelChange). Do not ack here — the component already did.
     store.setActivePane(e.detail.paneId);
   };
 
