@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 // terminal-registry is a module-level singleton — import it directly.
 // @xterm/xterm is aliased to setup.ts mock (see vite.config.ts),
