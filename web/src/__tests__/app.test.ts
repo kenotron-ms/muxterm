@@ -304,6 +304,56 @@ describe('MuxApp', () => {
       expect(overlay).toBeTruthy();
     });
 
+    it('onDisconnect clears pending close timers', async () => {
+      el = await fixture();
+      const socket = (el as any)._socket;
+      const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+      // Plant a fake pending-close entry
+      const fakeHandle = setTimeout(() => {}, 60_000);
+      (el as any)._pendingCloses.set(7, fakeHandle);
+      (el as any)._pendingClosesMeta.set(7, { title: 'vim' });
+
+      // Spy on allowReconcile before onDisconnect fires so we can assert it was
+      // called with the aborted pane IDs (lets the reconciler re-add tabs on reconnect).
+      const dock = el.shadowRoot!.querySelector('mux-dock') as any;
+      const allowReconcileSpy = vi.spyOn(dock, 'allowReconcile');
+
+      clearSpy.mockClear();
+      socket.onDisconnect?.();
+      await el.updateComplete;
+
+      expect(clearSpy).toHaveBeenCalledWith(fakeHandle);
+      expect((el as any)._pendingCloses.size).toBe(0);
+      expect((el as any)._pendingClosesMeta.size).toBe(0);
+      // The dock's allowReconcile should have been called with the pane IDs
+      // so the reconciler can re-add their tabs on reconnect.
+      expect(allowReconcileSpy).toHaveBeenCalledWith([7]);
+      clearSpy.mockRestore();
+      clearTimeout(fakeHandle);
+    });
+
+    it('onDisconnect clears _closingPanes and includes their IDs in allowReconcile', async () => {
+      el = await fixture();
+      const socket = (el as any)._socket;
+
+      // Simulate a pane that was committed (moved from _pendingCloses to _closingPanes
+      // by _executeClose) but the server ACK hasn't arrived yet.
+      (el as any)._closingPanes.add(11);
+
+      const dock = el.shadowRoot!.querySelector('mux-dock') as any;
+      const allowReconcileSpy = vi.spyOn(dock, 'allowReconcile');
+
+      socket.onDisconnect?.();
+      await el.updateComplete;
+
+      // _closingPanes must be cleared so the pane doesn't become a zombie on reconnect.
+      expect((el as any)._closingPanes.size).toBe(0);
+      // allowReconcile must include the closing pane ID so the reconciler can
+      // re-add its tab when the server confirms the pane is still alive.
+      expect(allowReconcileSpy).toHaveBeenCalledWith(expect.arrayContaining([11]));
+    });
+
     it('hides overlay when onReconnect fires', async () => {
       el = await fixture();
       const socket = (el as any)._socket;
@@ -332,6 +382,113 @@ describe('MuxApp', () => {
       const overlay = el.shadowRoot!.querySelector('mux-reconnect-overlay');
       expect(overlay).toBeTruthy();
       expect(overlay!.getAttribute('message')).toBe('Session ended by admin');
+    });
+  });
+
+  describe('deferred close state machine', () => {
+    it('_startDeferredClose registers timer and meta, replaces duplicate gracefully', async () => {
+      el = await fixture();
+      const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+      // Plant a pre-existing pending close for pane 42
+      const fakeHandle = setTimeout(() => {}, 60_000);
+      (el as any)._pendingCloses.set(42, fakeHandle);
+      (el as any)._pendingClosesMeta.set(42, { title: 'old-title' });
+
+      clearSpy.mockClear();
+
+      // Replace it with a new deferred close for the same pane
+      (el as any)._startDeferredClose(42, 'new-title');
+
+      // Old handle should have been cleared
+      expect(clearSpy).toHaveBeenCalledWith(fakeHandle);
+      // A new handle should be registered
+      expect((el as any)._pendingCloses.has(42)).toBe(true);
+      // Meta should reflect the latest title
+      expect((el as any)._pendingClosesMeta.get(42)?.title).toBe('new-title');
+
+      clearSpy.mockRestore();
+      clearTimeout((el as any)._pendingCloses.get(42));
+      clearTimeout(fakeHandle);
+    });
+
+    it('_syncTerminals does not call ensure() for a just-closed pane', async () => {
+      el = await fixture();
+      const socket = (el as any)._socket;
+      vi.spyOn(socket, 'closePane').mockImplementation(() => {});
+
+      // pane 5 is in the composition; plant a pending close for it
+      (el as any)._pendingCloses.set(5, setTimeout(() => {}, 60_000));
+      (el as any)._pendingClosesMeta.set(5, { title: 'vim' });
+
+      // Execute the close — prunes the terminal, but server hasn't acked yet
+      // so store.panes still contains pane 5.
+      (el as any)._executeClose(5);
+
+      const ensureSpy = vi.spyOn(terminalRegistry, 'ensure');
+      ensureSpy.mockClear();
+
+      // Trigger _syncTerminals directly (mirrors willUpdate behavior)
+      (el as any)._syncTerminals();
+
+      // ensure should NOT be called for pane 5 — it's in _closingPanes
+      expect(ensureSpy).not.toHaveBeenCalledWith(5, expect.anything());
+
+      ensureSpy.mockRestore();
+    });
+
+    it('_executeClose calls socket.closePane, clears maps, cancels timer', async () => {
+      el = await fixture();
+      const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+      const socket = (el as any)._socket;
+      const closePaneSpy = vi.spyOn(socket, 'closePane').mockImplementation(() => {});
+
+      const fakeHandle = setTimeout(() => {}, 60_000);
+      (el as any)._pendingCloses.set(7, fakeHandle);
+      (el as any)._pendingClosesMeta.set(7, { title: 'vim' });
+
+      clearSpy.mockClear();
+      (el as any)._executeClose(7);
+      await el.updateComplete;
+
+      expect(closePaneSpy).toHaveBeenCalledWith(7);
+      expect(clearSpy).toHaveBeenCalledWith(fakeHandle);
+      expect((el as any)._pendingCloses.size).toBe(0);
+      expect((el as any)._pendingClosesMeta.size).toBe(0);
+
+      clearSpy.mockRestore();
+      closePaneSpy.mockRestore();
+      clearTimeout(fakeHandle);
+    });
+
+    it('_onUndoPaneClose cancels timer and clears maps', async () => {
+      el = await fixture();
+      const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+      const fakeHandle = setTimeout(() => {}, 60_000);
+      (el as any)._pendingCloses.set(9, fakeHandle);
+      (el as any)._pendingClosesMeta.set(9, { title: 'bash' });
+
+      // Spy on the dock's reopenPane method — same pattern as allowReconcile spy
+      // in the onDisconnect test.
+      const dock = el.shadowRoot!.querySelector('mux-dock') as any;
+      const reopenPaneSpy = vi.spyOn(dock, 'reopenPane');
+
+      clearSpy.mockClear();
+
+      // Call the handler directly (mirrors the __muxUndoClose DEV seam)
+      (el as any)._onUndoPaneClose(
+        new CustomEvent('pane-close-resolved', { detail: { paneId: 9 } }) as CustomEvent<{ paneId: number }>,
+      );
+      await el.updateComplete;
+
+      expect(clearSpy).toHaveBeenCalledWith(fakeHandle);
+      expect((el as any)._pendingCloses.size).toBe(0);
+      expect((el as any)._pendingClosesMeta.size).toBe(0);
+      expect(reopenPaneSpy).toHaveBeenCalledWith(9);
+
+      clearSpy.mockRestore();
+      clearTimeout(fakeHandle);
     });
   });
 });
