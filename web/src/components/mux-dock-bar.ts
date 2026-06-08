@@ -5,6 +5,10 @@ import { CHROME } from '../lib/theme.js';
 import { workspaceLabel } from './workspace-picker.js';
 import type { SessiondWorkspaceInfo } from '../types.js';
 
+// TODO(deferred): mux-dock-bar is built and tested but not yet mounted in app.ts.
+// Integration (replacing mux-status-bar) is deferred to a follow-up task.
+// When ready, import MuxDockBar in app.ts and replace <mux-status-bar> with
+// <mux-dock-bar> in the app render template.
 @customElement('mux-dock-bar')
 export class MuxDockBar extends LitElement {
   static styles = css`

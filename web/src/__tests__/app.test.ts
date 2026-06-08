@@ -184,7 +184,7 @@ describe('MuxApp', () => {
       const disposeSpy = vi.spyOn(terminalRegistry, 'disposeAll');
       const attached: string[] = [];
       (el as any)._socket = {
-        attach: (id: string) => attached.push(id),
+        attachWithBreakpoint: (id: string) => attached.push(id),
         connected: true,
         disconnect: () => {},
       };

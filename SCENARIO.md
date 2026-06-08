@@ -203,3 +203,254 @@ isClean(cs) && cs.includes('split pane')
 | 9 | 4.7 | Both split terminals clean | |
 
 All 9 checks must pass for a clean run.
+
+---
+
+## Scenario 5 — Bell Indicators: Desktop (1280×800)
+
+### Setup helpers
+
+```js
+// Shadow-pierce to dock and store
+const dock    = () => document.querySelector('mux-app').shadowRoot.querySelector('mux-dock');
+const dockBar = () => document.querySelector('mux-app').shadowRoot.querySelector('mux-dock-bar');
+const store   = () => document.querySelector('mux-app').shadowRoot.querySelector('mux-dock').__store;
+```
+
+---
+
+### Phase A — Pane tab bell dot
+
+**A.1** Open two panes in the same group so one is in the background.
+
+**A.2** In devtools console, fire a bell on the background pane:
+```js
+const term = dock().getPane(backgroundPaneId)._term;
+term._core._onBell.fire();
+```
+
+**A.3** Read tab labels via the dockview DOM:
+```js
+const tabs = dock().querySelectorAll('.dv-default-tab-content');
+```
+
+**A.4** **(Assertion A1)** The tab label for the background pane must start with `●`:
+```js
+const bgTab = [...tabs].find(t => t.dataset.paneId == backgroundPaneId);
+bgTab.textContent.trimStart().startsWith('●')  // must be true
+```
+
+**A.5** Note the current active pane ID:
+```js
+const before = dock().activePaneId;
+```
+
+**A.6** Click the background pane tab to give it focus.
+
+**A.7** Wait one animation frame / 100 ms.
+
+**A.8** Re-read the tab labels:
+```js
+const tabs2 = dock().querySelectorAll('.dv-default-tab-content');
+```
+
+**A.9** **(Assertion A2)** The `●` prefix must now be gone:
+```js
+const bgTab2 = [...tabs2].find(t => t.dataset.paneId == backgroundPaneId);
+!bgTab2.textContent.trimStart().startsWith('●')  // must be true
+```
+
+**A.10** Assert the pane is now active:
+```js
+dock().activePaneId === backgroundPaneId  // must be true
+```
+
+**A.11** Assert no other tab has a spurious `●`:
+```js
+[...tabs2].every(t => !t.textContent.trimStart().startsWith('●'))  // must be true
+```
+
+---
+
+### Phase B — Workspace dock slot bell dot
+
+**B.1** Note current workspace IDs and the currently-active workspace:
+```js
+const wsAId = store().attached;      // wsA is the workspace currently displayed
+const wsBId = store().workspaces.find(w => w.id !== wsAId).id;
+```
+
+**B.2** Switch to wsA so that wsB is in the background (if not already).
+
+**B.3** Simulate a bell on a pane inside wsB:
+```js
+store().markBell(999, wsBId);
+```
+
+**B.4** **(Assertion B1)** The inactive workspace button must show a bell dot:
+```js
+const bar = dockBar();
+bar.shadowRoot.querySelector('.ws-btn:not(.active) .bell-dot') !== null  // must be true
+```
+
+**B.5** Click the wsB workspace button to switch to it.
+
+**B.6** Wait for the workspace to become active (status bar updates).
+
+**B.7** **(Assertion B2)** After switching, no bell dot must remain on any workspace button:
+```js
+bar.shadowRoot.querySelector('.ws-btn .bell-dot') === null  // must be true
+```
+
+**B.8** Assert `store().workspaceBellActive(wsBId)` returns `false`.
+
+---
+
+### Phase C — Tab sizing
+
+**C.1** **(Assertion C1)** Read the computed style of a tab element and assert the min/max-width constraints:
+```js
+const tab = dock().querySelector('.dv-default-tab');
+const cs  = getComputedStyle(tab);
+parseInt(cs.minWidth) >= 79 && parseInt(cs.maxWidth) <= 181  // must be true
+```
+
+---
+
+### Pass/Fail Checklist — Scenario 5
+
+| # | Phase | Assertion | Result |
+|---|-------|-----------|--------|
+| A1 | A.4 | Tab label starts with `●` when background pane has bell | |
+| A2 | A.9 | `●` prefix removed after pane focused | |
+| B1 | B.4 | Inactive workspace button shows `.bell-dot` | |
+| B2 | B.7 | `.bell-dot` absent after switching to that workspace | |
+| C1 | C.1 | Tab `minWidth ≥ 79px` and `maxWidth ≤ 181px` | |
+
+All 5 checks must pass for Scenario 5 to be clean.
+
+---
+
+## Scenario 6 — Bell Indicators: Mobile (390×844 — iPhone 14 Pro)
+
+> Set the browser viewport to **390 × 844** (iPhone 14 Pro) before starting this scenario.
+> Use responsive-design mode in DevTools or launch the browser with `--window-size=390,844`.
+
+### Setup helpers
+
+```js
+const app      = () => document.querySelector('mux-app');
+const dock     = () => app().shadowRoot.querySelector('mux-dock');
+const dockBar  = () => app().shadowRoot.querySelector('mux-dock-bar');
+const titleBar = () => app().shadowRoot.querySelector('mux-title-bar');
+const store    = () => dock().__store;
+```
+
+---
+
+### Phase A — Layout at mobile breakpoint
+
+**A.1** Navigate to `http://localhost:9090` at the 390 × 844 viewport.  
+Wait until status bar shows **connected**.
+
+**A.2** **(Assertion A1)** The dockview tab strip must be hidden at this viewport:
+```js
+const tabContainer = dock().querySelector('.dv-tabs-and-actions-container');
+getComputedStyle(tabContainer).display === 'none'  // must be true
+```
+
+**A.3** **(Assertion A2)** The `mux-pane-picker` component must be visible in the title bar:
+```js
+const picker = titleBar().shadowRoot.querySelector('mux-pane-picker');
+picker !== null && getComputedStyle(picker).display !== 'none'  // must be true
+```
+
+**A.4** **(Assertion A3)** The breadcrumb text must contain both `›` (separator) and `▾` (dropdown caret):
+```js
+const breadcrumb = titleBar().shadowRoot
+  .querySelector('mux-pane-picker')
+  .shadowRoot.querySelector('.breadcrumb');
+breadcrumb.textContent.includes('›') && breadcrumb.textContent.includes('▾')  // must be true
+```
+
+---
+
+### Phase B — Pane switching via breadcrumb
+
+**B.1** Note the active pane ID and an inactive pane ID:
+```js
+const activePaneId   = dock().activePaneId;
+const inactivePaneId = store().panes.find(p => p.id !== activePaneId).id;
+```
+
+**B.2** Trigger a bell on the inactive pane:
+```js
+store().markBell(inactivePaneId, store().attached);
+```
+
+**B.3** Click the breadcrumb button to open the pane-picker dropdown:
+```js
+titleBar().shadowRoot.querySelector('mux-pane-picker').shadowRoot
+  .querySelector('.breadcrumb').click();
+```
+
+**B.4** **(Assertion B1)** The dropdown must now be visible:
+```js
+const picker = titleBar().shadowRoot.querySelector('mux-pane-picker').shadowRoot;
+picker.querySelector('.dropdown') !== null  // must be true
+```
+
+**B.5** **(Assertion B2)** The dropdown must contain at least one `.bell-dot` element for the pane with the bell:
+```js
+picker.querySelectorAll('.dropdown .bell-dot').length > 0  // must be true
+```
+
+**B.6** Click the inactive pane item in the dropdown:
+```js
+picker.querySelector('.pane-item:not(.active)').click();
+```
+
+**B.7** Wait one animation frame / 100 ms.
+
+**B.8** **(Assertion B3)** The bell on the previously-inactive pane must now be cleared:
+```js
+store().paneBellActive(inactivePaneId) === false  // must be true
+```
+
+---
+
+### Phase C — Dock bar present on mobile
+
+**C.1** **(Assertion C1)** The dock bar must remain visible at the mobile viewport:
+```js
+getComputedStyle(dockBar()).display !== 'none'  // must be true
+```
+
+**C.2** **(Assertion C2 — skip if only 1 workspace)** Switching workspaces via the dock bar must work:
+```js
+// Record current workspace
+const beforeId = store().attached;
+
+// Click a different workspace button
+dockBar().shadowRoot.querySelector('.ws-btn:not(.active)').click();
+
+// Wait for switch, then check
+store().attached !== beforeId  // must be true
+```
+
+---
+
+### Pass/Fail Checklist — Scenario 6
+
+| # | Phase | Assertion | Result |
+|---|-------|-----------|--------|
+| A1 | A.2 | Tab strip hidden at 390 px viewport | |
+| A2 | A.3 | `mux-pane-picker` visible in title bar | |
+| A3 | A.4 | Breadcrumb contains `›` and `▾` | |
+| B1 | B.4 | Dropdown opens on breadcrumb click | |
+| B2 | B.5 | `.bell-dot` present in dropdown for belled pane | |
+| B3 | B.8 | `paneBellActive` cleared after switching to that pane | |
+| C1 | C.1 | Dock bar visible at mobile viewport | |
+| C2 | C.2 | Workspace switch works from mobile dock bar (skip if 1 WS) | |
+
+All 8 checks (7 required + C2 conditional) must pass for Scenario 6 to be clean.
