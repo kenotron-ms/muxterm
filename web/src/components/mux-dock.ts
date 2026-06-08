@@ -385,7 +385,14 @@ export class MuxDock extends LitElement {
            Tab sizing tokens allow host to control width via CSS custom props. */
         mux-dock .dv-tab {
           border-top: 2px solid transparent;
-          flex: 1 1 var(--mux-tab-max-width, 180px);
+          /* flex-grow: 0 — tabs start at flex-basis and DON'T expand to fill
+             the header. With flex-grow: 1 (old value) a single tab filled the
+             entire header, making the label look content-sized because it was
+             left-aligned inside a very wide element.
+             flex-shrink: 1 — tabs compress when many are open (down to min-width),
+             then the container scrolls horizontally. Dockview sets flex-shrink: 0
+             on .dv-tab but this selector is more specific so it wins. */
+          flex: 0 1 var(--mux-tab-max-width, 180px);
           min-width: var(--mux-tab-min-width, 80px);
           max-width: var(--mux-tab-max-width, 180px);
           overflow: hidden;
