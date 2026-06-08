@@ -16,9 +16,10 @@ async function fixture(
   workspaces: SessiondWorkspaceInfo[] = [],
   activeWorkspaceId = '',
 ): Promise<MuxDockBar> {
+  // Component is fully store-driven: mock store getters so render sees test data.
+  vi.spyOn(store, 'workspaces', 'get').mockReturnValue(workspaces);
+  vi.spyOn(store, 'attached', 'get').mockReturnValue(activeWorkspaceId || null);
   const el = document.createElement('mux-dock-bar') as MuxDockBar;
-  el.workspaces = workspaces;
-  el.activeWorkspaceId = activeWorkspaceId;
   document.body.appendChild(el);
   await el.updateComplete;
   return el;
@@ -178,11 +179,12 @@ describe('MuxDockBar — workspaceLabel integration', () => {
 
   afterEach(() => {
     if (el && el.parentNode) el.parentNode.removeChild(el);
+    vi.restoreAllMocks();
   });
 
   it('uses workspace name when available', async () => {
+    vi.spyOn(store, 'workspaces', 'get').mockReturnValue([{ workspaceId: 'ws-9', name: 'alpha', paneCount: 0 }]);
     el = document.createElement('mux-dock-bar') as MuxDockBar;
-    el.workspaces = [{ workspaceId: 'ws-9', name: 'alpha', paneCount: 0 }];
     document.body.appendChild(el);
     await el.updateComplete;
     const btn = el.shadowRoot!.querySelector('.ws-btn');
@@ -190,8 +192,8 @@ describe('MuxDockBar — workspaceLabel integration', () => {
   });
 
   it('falls back to id-derived label for unnamed workspaces', async () => {
+    vi.spyOn(store, 'workspaces', 'get').mockReturnValue([{ workspaceId: 'ws-3', paneCount: 0 }]);
     el = document.createElement('mux-dock-bar') as MuxDockBar;
-    el.workspaces = [{ workspaceId: 'ws-3', paneCount: 0 }];
     document.body.appendChild(el);
     await el.updateComplete;
     const btn = el.shadowRoot!.querySelector('.ws-btn');

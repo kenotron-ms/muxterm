@@ -46,6 +46,7 @@ import { serializeSnapshot } from './snapshot.js';
 import type { StructuredSnapshot, SnapshotSource } from './snapshot.js';
 import type { ResolvedConfig } from './config.js';
 import { DEFAULT_RESOLVED_CONFIG } from './config.js';
+import { store } from '../state.js';
 
 /**
  * Build an xterm.js Terminal options object from a ResolvedConfig.
@@ -83,8 +84,6 @@ export interface PaneHandlers {
   onInput: (data: Uint8Array) => void;
   /** Called (idempotently) when the terminal cols/rows change. */
   onResize: (cols: number, rows: number) => void;
-  /** Called when the terminal fires a bell (\a). Optional — no-ops if absent. */
-  onBell?: (paneId: number) => void;
 }
 
 interface PaneEntry {
@@ -301,10 +300,9 @@ export const terminalRegistry = {
       entry.handlers.onResize(cols, rows);
     });
 
-    // Forward bell (\a) to the registered handler via optional chaining —
-    // safe to call even when onBell is not provided.
+    // Ring the pane bell on BEL character — drives bell-dot indicators.
     term.onBell(() => {
-      entry.handlers.onBell?.(paneId);
+      store.ringPane(paneId);
     });
 
     // Touch scroll — xterm.js v6 regressed native touch-scroll support

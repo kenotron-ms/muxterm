@@ -53,7 +53,7 @@ export class Terminal {
     this._onResizeCbs.push(cb);
   }
 
-  /** Added: forward bell (\a) events. */
+  /** Added: register a BEL character callback (mirrors xterm.js Terminal.onBell). */
   onBell(cb: () => void): void {
     this._onBellCbs.push(cb);
   }
