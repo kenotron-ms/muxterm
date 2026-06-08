@@ -642,6 +642,17 @@ export const terminalRegistry = {
             { opened: entry.opened, seqBytes: entry.seqBytes });
         }
         entry.pendingData.push(data);
+        // RC-7: if all expected replay bytes have now arrived, kick _settleAndDrain
+        // via rAF. The initial rAF from attach() fires before replay arrives and
+        // returns early (seqBytes < expectedReplayBytes). The ResizeObserver only
+        // fires on container size changes — won't fire if the restored layout is the
+        // same size as before reload. Without this, ready stays false until the 3s
+        // timeout or a manual detach/reattach cycle.
+        if (!entry.draining
+          && entry.expectedReplayBytes > 0
+          && entry.seqBytes >= entry.expectedReplayBytes) {
+          requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId));
+        }
       }
     } else {
       // Pre-ensure buffer: ensure() hasn't been called yet for this pane in the

@@ -799,6 +799,11 @@ export class MuxDock extends LitElement {
         } finally {
           this._settingActive = false;
         }
+        // onDidActivePanelChange is suppressed while _settingActive=true, so
+        // focus would never be placed in the terminal for programmatic pane
+        // switches (store-driven: pane-picker, initial load, workspace restore).
+        // Call it explicitly here so keyboard input works immediately.
+        terminalRegistry.focus(this.activePaneId);
       }
     }
     // Bell dot updates are reactive without a direct store.subscribe() here:
