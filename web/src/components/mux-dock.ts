@@ -180,6 +180,13 @@ const SPLIT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="1
   <rect x="9" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
 </svg>`;
 
+// Browser/globe icon: circle with horizontal latitude lines and a center longitude ellipse.
+const BROWSER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
+  <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/>
+  <ellipse cx="8" cy="8" rx="2.5" ry="6" stroke="currentColor" stroke-width="1.3"/>
+  <path d="M2.5 5.5h11M2.5 10.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+</svg>`;
+
 class HeaderButton {
   readonly element: HTMLElement;
 
@@ -227,6 +234,8 @@ export class MuxDock extends LitElement {
   private _dv: DockviewComponent | null = null;
   private _panels = new Map<number, IDockviewPanel>();
   private _settingActive = false;
+  private _browserPopoverOpen = false;
+  private _browserPopoverGroup: DockviewGroupPanel | null = null;
   /** User-defined pane names — persists across workspace switches for the session. */
   private _customTitles = new Map<number, string>();
   /**
@@ -284,6 +293,99 @@ export class MuxDock extends LitElement {
       group?.activePanel?.id ?? this._dv?.activePanel?.id ?? null;
     this._splitReferenceId = placement === 'split' ? this._placementReferenceId : null;
     this.dispatchEvent(new CustomEvent('pane-create', { bubbles: true, composed: true }));
+  }
+
+  /** Toggle the browser port popover open/closed for the given group. */
+  private _toggleBrowserPopover(group: DockviewGroupPanel): void {
+    if (this._browserPopoverOpen) {
+      this._closeBrowserPopover();
+    } else {
+      this._browserPopoverOpen = true;
+      this._browserPopoverGroup = group;
+      this._renderBrowserPopover();
+    }
+  }
+
+  /** Close and remove the browser port popover, resetting state. */
+  private _closeBrowserPopover(): void {
+    this.querySelector('.mux-browser-popover')?.remove();
+    this._browserPopoverOpen = false;
+    this._browserPopoverGroup = null;
+  }
+
+  /** Render the browser port popover and append it to this element. */
+  private _renderBrowserPopover(): void {
+    // Remove any stale popover first.
+    this.querySelector('.mux-browser-popover')?.remove();
+
+    const popover = document.createElement('div');
+    popover.className = 'mux-browser-popover';
+
+    const label = document.createElement('label');
+    label.textContent = 'Port';
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '1';
+    input.max = '65535';
+    input.placeholder = '5173';
+
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'mux-browser-error';
+
+    const openBtn = document.createElement('button');
+    openBtn.className = 'mux-browser-open-btn';
+    openBtn.textContent = 'Open';
+
+    popover.appendChild(label);
+    popover.appendChild(input);
+    popover.appendChild(errorDiv);
+    popover.appendChild(openBtn);
+    this.appendChild(popover);
+
+    // Autofocus the input.
+    input.focus();
+
+    const submit = (): void => {
+      const portStr = input.value.trim();
+      const port = parseInt(portStr, 10);
+      if (!portStr || isNaN(port) || port < 1 || port > 65535) {
+        errorDiv.textContent = 'Enter a port between 1 and 65535';
+        return;
+      }
+      this._closeBrowserPopover();
+      this.dispatchEvent(
+        new CustomEvent('browser-pane-open', {
+          bubbles: true,
+          composed: true,
+          detail: { browserPort: port },
+        }),
+      );
+    };
+
+    openBtn.addEventListener('click', submit);
+
+    input.addEventListener('keydown', (e: KeyboardEvent) => {
+      // Prevent dockview from intercepting keystrokes in the popover.
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submit();
+      } else if (e.key === 'Escape') {
+        this._closeBrowserPopover();
+      }
+    });
+
+    // Click-outside dismissal: delay so the triggering click doesn't immediately close.
+    setTimeout(() => {
+      const onDocClick = (e: MouseEvent): void => {
+        if (!popover.contains(e.target as Node)) {
+          document.removeEventListener('click', onDocClick, true);
+          this._closeBrowserPopover();
+        }
+      };
+      document.addEventListener('click', onDocClick, true);
+    }, 0);
   }
 
   /**
@@ -547,6 +649,73 @@ export class MuxDock extends LitElement {
             display: none !important;
           }
         }
+
+        /* Browser port popover */
+        mux-dock .mux-browser-popover {
+          position: absolute;
+          z-index: 200;
+          background: #1a1b26;
+          border: 1px solid #292e42;
+          border-radius: 6px;
+          display: flex;
+          flex-direction: column;
+          padding: 12px;
+          gap: 8px;
+          min-width: 180px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        }
+        mux-dock .mux-browser-popover label {
+          color: #a9b1d6;
+          font-size: 0.75rem;
+          font-weight: 600;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+        mux-dock .mux-browser-popover input[type='number'] {
+          background: #24283b;
+          color: #c0caf5;
+          border: 1px solid #414868;
+          border-radius: 4px;
+          padding: 4px 8px;
+          font: inherit;
+          font-size: 0.875rem;
+          outline: none;
+          width: 100%;
+          box-sizing: border-box;
+        }
+        mux-dock .mux-browser-popover input[type='number']:focus {
+          border-color: #7aa2f7;
+        }
+        /* Hide spin buttons */
+        mux-dock .mux-browser-popover input[type='number']::-webkit-inner-spin-button,
+        mux-dock .mux-browser-popover input[type='number']::-webkit-outer-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        mux-dock .mux-browser-popover input[type='number'] {
+          -moz-appearance: textfield;
+          appearance: textfield;
+        }
+        mux-dock .mux-browser-open-btn {
+          background: #3d59a1;
+          color: #c0caf5;
+          border: none;
+          border-radius: 4px;
+          padding: 5px 10px;
+          font: inherit;
+          font-size: 0.875rem;
+          cursor: pointer;
+          transition: background 0.12s;
+        }
+        mux-dock .mux-browser-open-btn:hover {
+          background: #7aa2f7;
+          color: #1a1b26;
+        }
+        mux-dock .mux-browser-error {
+          color: #f7768e;
+          font-size: 0.75rem;
+          min-height: 1em;
+        }
       `;
       target.appendChild(style);
     }
@@ -575,11 +744,32 @@ export class MuxDock extends LitElement {
       // "+" / split on an INACTIVE group still targets THAT group.
       createLeftHeaderActionComponent: (group) =>
         new HeaderButton(ADD_ICON, 'New pane', () => this._requestPane('tab', group)),
-      // Narrow (phone) is a tab view only — no split button.
-      createRightHeaderActionComponent: (group) =>
-        this.narrow
-          ? new HeaderButton('', '', () => {})
-          : new HeaderButton(SPLIT_ICON, 'Split pane', () => this._requestPane('split', group)),
+      // Narrow (phone) is a tab view only — no split button, no browser button.
+      createRightHeaderActionComponent: (group) => {
+        if (this.narrow) {
+          return new HeaderButton('', '', () => {});
+        }
+        // Wide: [⌂] browser button + [⊠] split button in a flex row container.
+        const container = document.createElement('div');
+        container.style.cssText = 'display:flex;flex-direction:row;align-items:center;';
+        const browserBtn = new HeaderButton(BROWSER_ICON, 'Open browser pane', () =>
+          this._toggleBrowserPopover(group),
+        );
+        const splitBtn = new HeaderButton(SPLIT_ICON, 'Split pane', () =>
+          this._requestPane('split', group),
+        );
+        container.appendChild(browserBtn.element);
+        container.appendChild(splitBtn.element);
+        return {
+          element: container,
+          init(): void { /* nothing to initialise */ },
+          dispose(): void {
+            browserBtn.dispose();
+            splitBtn.dispose();
+            container.remove();
+          },
+        };
+      },
     });
     this._dv.onDidLayoutChange(() => this._scheduleLayoutSave());
     this._dv.onDidActivePanelChange((panel) => {
@@ -691,6 +881,7 @@ export class MuxDock extends LitElement {
 
     // Case 1: workspaceKey changed → full panel reset
     if (changed.has('workspaceKey')) {
+      this._closeBrowserPopover();
       muxLog('dock case1', `workspaceKey changed`,
         { workspaceKey: this.workspaceKey, panes: this.panes.map(p => p.paneId),
           activePaneId: this.activePaneId, hasLayout: !!this.layout });
