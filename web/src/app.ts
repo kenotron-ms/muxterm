@@ -18,6 +18,7 @@ import type { MuxDock } from './components/mux-dock.js';
 import './components/mux-undo-toast.js';
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
+import './components/browser-surface.js';
 
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
