@@ -151,10 +151,10 @@ export class MuxUndoToast extends LitElement {
     return html`
       <div class="row" role="alert" aria-live="assertive" aria-atomic="true">
         <span class="label">${this.paneTitle} closed</span>
-        <button class="undo" @click=${this._onUndo}>Undo</button>
+        <button class="undo" @click="${this._onUndo}">Undo</button>
         <span class="seconds">${Math.ceil(this._remaining)}s</span>
       </div>
-      <div class="track"><div class="bar" style=${barStyle}></div></div>
+      <div class="track"><div class="bar" style="${barStyle}"></div></div>
     `;
   }
 }

@@ -521,15 +521,15 @@ export class MuxApp extends LitElement {
               @layout-save="${this._onLayoutSave}"
             ></mux-dock>
           `}
-      <div class="undo-toast-stack" @pane-close-resolved=${this._onUndoPaneClose}>
+      <div class="undo-toast-stack" @pane-close-resolved="${this._onUndoPaneClose}">
         ${repeat(
           [...this._pendingClosesMeta.entries()],
           ([paneId]) => paneId,
           ([paneId, meta]) => html`
             <mux-undo-toast
-              .paneId=${paneId}
-              .paneTitle=${meta.title}
-              .duration=${10000}
+              .paneId="${paneId}"
+              .paneTitle="${meta.title}"
+              .duration="${10000}"
             ></mux-undo-toast>
           `,
         )}
