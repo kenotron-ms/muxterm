@@ -1,6 +1,7 @@
 import { LitElement } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import type { IDockviewPanel, IContentRenderer, SerializedDockview, DockviewGroupPanel } from 'dockview-core';
+import type { MuxBrowserSurface } from './browser-surface.js';
 import { DockviewComponent } from 'dockview-core';
 import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
@@ -94,6 +95,70 @@ class TerminalRenderer implements IContentRenderer {
   dispose(): void {
     // Does NOT destroy the terminal — PTY stays alive, scrollback preserved.
     terminalRegistry.detach(this._paneId);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BrowserRenderer
+// Bridges the dockview panel lifecycle to a mux-browser-surface element.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class BrowserRenderer implements IContentRenderer {
+  readonly element: HTMLElement;
+  private readonly _paneId: number;
+  private readonly _port: number;
+  private readonly _path: string;
+  private _surface: MuxBrowserSurface | null = null;
+
+  constructor(id: string, port: number, path: string) {
+    this._paneId = parseInt(id, 10);
+    this._port = port;
+    this._path = path;
+    const el = document.createElement('div');
+    el.style.cssText = 'width:100%;height:100%;overflow:hidden;';
+    this.element = el;
+  }
+
+  init(): void {
+    const proxyUrl = `${location.origin}/p/${this._port}${this._path}`;
+    const surface = document.createElement('mux-browser-surface') as MuxBrowserSurface;
+    surface.url = proxyUrl;
+    this.element.appendChild(surface);
+    this._surface = surface;
+
+    this.element.addEventListener('url-change', (e: Event) => {
+      const { url } = (e as CustomEvent<{ url: string }>).detail;
+      try {
+        const parsed = new URL(url);
+        const prefix = `/p/${this._port}`;
+        const browserPath = parsed.pathname.startsWith(prefix)
+          ? parsed.pathname.slice(prefix.length) || '/'
+          : parsed.pathname;
+        this.element.dispatchEvent(
+          new CustomEvent('pane-navigate', {
+            bubbles: true,
+            composed: true,
+            detail: { paneId: this._paneId, browserPath },
+          }),
+        );
+      } catch {
+        // silently ignore malformed URLs
+      }
+    });
+  }
+
+  layout(): void {
+    // no-op
+  }
+
+  focus(): void {
+    const input = this._surface?.shadowRoot?.querySelector<HTMLInputElement>('.address');
+    input?.focus();
+  }
+
+  dispose(): void {
+    this._surface?.remove();
+    this._surface = null;
   }
 }
 
