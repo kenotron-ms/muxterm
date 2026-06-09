@@ -16,6 +16,15 @@ type Pane struct {
 	LocalID int
 	Title   string // settable; OSC 0/2 title capture is a later phase
 
+	// SurfaceKind is "browser" for browser panes; empty string means "terminal".
+	// Set once at construction; immutable thereafter.
+	SurfaceKind string
+	// Browser-only: the proxied port, stored path, and optional auth headers.
+	// All immutable except BrowserPath, which SetBrowserPath() updates.
+	BrowserPort  int
+	BrowserPath  string
+	ProxyHeaders map[string]string
+
 	mu   sync.Mutex // guards cols/rows
 	cols int
 	rows int
@@ -91,6 +100,22 @@ func NewPane(
 	return p, nil
 }
 
+// NewBrowserPane creates a lightweight browser-only pane (no PTY or buffer).
+// If path is empty, it defaults to "/".
+func NewBrowserPane(localID, port int, path string, headers map[string]string) *Pane {
+	if path == "" {
+		path = "/"
+	}
+	return &Pane{
+		LocalID:      localID,
+		Title:        fmt.Sprintf(":%d", port),
+		SurfaceKind:  "browser",
+		BrowserPort:  port,
+		BrowserPath:  path,
+		ProxyHeaders: headers,
+	}
+}
+
 // readLoop pumps PTY output into the buffer and onData callback until the PTY
 // closes, then reaps the child and fires onExit exactly once.
 func (p *Pane) readLoop() {
@@ -117,7 +142,11 @@ func (p *Pane) readLoop() {
 }
 
 // Write sends input to the child's stdin (the PTY master).
+// For browser panes (ptmx == nil), input is silently discarded.
 func (p *Pane) Write(input []byte) (int, error) {
+	if p.ptmx == nil {
+		return 0, nil // browser pane: no PTY
+	}
 	return p.ptmx.Write(input)
 }
 
@@ -139,26 +168,45 @@ func (p *Pane) Resize(cols, rows int) error {
 	p.cols = cols
 	p.rows = rows
 	p.mu.Unlock()
+	if p.ptmx == nil {
+		return nil // browser pane: no PTY to resize
+	}
 	err := pty.Setsize(p.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
-	p.buf.Resize(cols, rows)
+	if p.buf != nil {
+		p.buf.Resize(cols, rows)
+	}
 	return err
 }
 
 // Replay returns a copy of the pane's scrollback buffer.
+// For browser panes (buf == nil), returns nil.
 func (p *Pane) Replay() []byte {
+	if p.buf == nil {
+		return nil // browser pane: no buffer
+	}
 	return p.buf.Replay()
 }
 
 // ReplayFrom returns the retained bytes whose absolute sequence is >= since
 // and the absolute sequence of the first returned byte. It delegates directly
 // to the underlying PaneBuffer.
+// For browser panes (buf == nil), returns nil, 0.
 func (p *Pane) ReplayFrom(since uint64) (data []byte, start uint64) {
+	if p.buf == nil {
+		return nil, 0
+	}
 	return p.buf.ReplayFrom(since)
 }
 
 // Seq returns the total bytes ever written to this pane's buffer (including
 // bytes that have since been trimmed from the scrollback ring).
-func (p *Pane) Seq() uint64 { return p.buf.Seq() }
+// For browser panes (buf == nil), returns 0.
+func (p *Pane) Seq() uint64 {
+	if p.buf == nil {
+		return 0
+	}
+	return p.buf.Seq()
+}
 
 // SetTitle sets the pane's display title under lock.
 func (p *Pane) SetTitle(name string) {
@@ -167,12 +215,29 @@ func (p *Pane) SetTitle(name string) {
 	p.mu.Unlock()
 }
 
+// SetBrowserPath updates the pane's browser navigation path under lock.
+func (p *Pane) SetBrowserPath(path string) {
+	p.mu.Lock()
+	p.BrowserPath = path
+	p.mu.Unlock()
+}
+
 // Info returns a frozen snapshot of this pane's identity and dimensions.
 func (p *Pane) Info() PaneInfo {
 	p.mu.Lock()
 	cols, rows, title := p.cols, p.rows, p.Title
+	surfaceKind, browserPort, browserPath, proxyHeaders := p.SurfaceKind, p.BrowserPort, p.BrowserPath, p.ProxyHeaders
 	p.mu.Unlock()
-	return PaneInfo{PaneID: p.LocalID, Cols: cols, Rows: rows, Title: title}
+	return PaneInfo{
+		PaneID:       p.LocalID,
+		Cols:         cols,
+		Rows:         rows,
+		Title:        title,
+		SurfaceKind:  surfaceKind,
+		BrowserPort:  browserPort,
+		BrowserPath:  browserPath,
+		ProxyHeaders: proxyHeaders,
+	}
 }
 
 // Close kills the child (if any) and closes the PTY, which ends the read loop
