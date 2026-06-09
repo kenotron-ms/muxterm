@@ -1,66 +1,102 @@
-/**
- * demo/frontend/src/main.ts
- *
- * Vite + TypeScript frontend for the muxterm demo.
- * Uses absolute localhost:9002 URLs so it works when proxied through
- * muxterm's /p/5173/ browser-pane proxy (the proxy rewrites the host).
- */
+const BACKEND_HTTP = 'http://localhost:9002';
+const BACKEND_WS = 'ws://localhost:9002';
 
-const API_BASE = 'http://localhost:9002';
-const WS_URL = 'ws://localhost:9002/ws';
-
-interface Item {
+interface StatusItem {
   id: number;
-  name: string;
-  status: 'active' | 'idle';
+  status: 'ok' | 'warn' | 'error';
+  label: string;
+  ts: string;
 }
 
-interface WsMessage {
-  type: string;
-  message?: string;
-  payload?: unknown;
+type WsMessage =
+  | { type: 'snapshot'; items: StatusItem[] }
+  | { type: 'item'; item: StatusItem };
+
+function renderItem(item: StatusItem, prepend: boolean): void {
+  const itemsDiv = document.getElementById('items');
+  if (!itemsDiv) return;
+
+  const div = document.createElement('div');
+  div.className = `item ${item.status}`;
+  div.dataset['id'] = String(item.id);
+
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'label';
+  labelSpan.textContent = item.label;
+
+  const statusSpan = document.createElement('span');
+  statusSpan.className = 'status';
+  statusSpan.textContent = item.status;
+
+  const tsSpan = document.createElement('span');
+  tsSpan.className = 'ts';
+  tsSpan.textContent = item.ts ? new Date(item.ts).toLocaleTimeString() : '';
+
+  div.appendChild(labelSpan);
+  div.appendChild(statusSpan);
+  div.appendChild(tsSpan);
+
+  if (prepend) {
+    itemsDiv.prepend(div);
+    // Trim to 50 visible items
+    while (itemsDiv.children.length > 50) {
+      const last = itemsDiv.lastElementChild;
+      if (last) {
+        itemsDiv.removeChild(last);
+      } else {
+        break;
+      }
+    }
+  } else {
+    itemsDiv.appendChild(div);
+  }
 }
 
-async function loadItems(): Promise<void> {
-  const statusEl = document.getElementById('status')!;
-  const listEl = document.getElementById('items')!;
-
+async function loadInitial(): Promise<void> {
   try {
-    const resp = await fetch(`${API_BASE}/api/items`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const items: Item[] = await resp.json() as Item[];
+    const response = await fetch(`${BACKEND_HTTP}/api/items`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const items = (await response.json()) as StatusItem[];
 
-    statusEl.textContent = `Loaded ${items.length} items from ${API_BASE}`;
-    listEl.innerHTML = items
-      .map(
-        (item) =>
-          `<li><span class="${item.status}">[${item.status}]</span> #${item.id} — ${item.name}</li>`,
-      )
-      .join('');
+    const statusLine = document.getElementById('status-line');
+    if (statusLine) {
+      statusLine.textContent = `Loaded ${items.length} items`;
+    }
   } catch (err) {
-    statusEl.textContent = `Error: ${String(err)} — is the backend running on port 9002?`;
+    const statusLine = document.getElementById('status-line');
+    if (statusLine) statusLine.textContent = `Failed to load items: ${err}`;
+    throw err;
   }
 }
 
 function connectWebSocket(): void {
-  const wsEl = document.getElementById('ws-status')!;
-  try {
-    const ws = new WebSocket(WS_URL);
-    ws.onopen = () => {
-      wsEl.textContent = `WebSocket connected to ${WS_URL}`;
-      ws.send(JSON.stringify({ hello: 'muxterm demo' }));
-    };
-    ws.onmessage = (ev: MessageEvent<string>) => {
-      const msg = JSON.parse(ev.data) as WsMessage;
-      wsEl.textContent = `WS message: ${msg.type} — ${JSON.stringify(msg.payload ?? msg.message)}`;
-    };
-    ws.onerror = () => {
-      wsEl.textContent = `WebSocket error — is the backend running on port 9002?`;
-    };
-  } catch {
-    wsEl.textContent = `WebSocket not available`;
-  }
+  const ws = new WebSocket(`${BACKEND_WS}/ws`);
+
+  ws.addEventListener('message', (event: MessageEvent) => {
+    const data = JSON.parse(event.data as string) as WsMessage;
+
+    if (data.type === 'snapshot') {
+      const itemsDiv = document.getElementById('items');
+      if (itemsDiv) {
+        itemsDiv.innerHTML = '';
+      }
+      data.items.forEach((item) => {
+        renderItem(item, false);
+      });
+      const statusLine = document.getElementById('status-line');
+      if (statusLine) statusLine.textContent = `${data.items.length} items — live`;
+    } else if (data.type === 'item') {
+      renderItem(data.item, true);
+    }
+  });
+
+  ws.addEventListener('close', () => {
+    setTimeout(connectWebSocket, 3000);
+  });
 }
 
-loadItems();
-connectWebSocket();
+loadInitial()
+  .then(connectWebSocket)
+  .catch((err: unknown) => {
+    console.error('Startup failed:', err);
+  });
