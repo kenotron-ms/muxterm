@@ -49,11 +49,16 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // No precaching — every request always goes to the network.
-        // The SW exists only to satisfy the PWA installability requirement
-        // (launch icon, standalone display mode) without ever serving stale content.
+        // No precaching — every request goes to the network.
+        // The SW exists for PWA installability (launch icon, standalone mode)
+        // and will be used for browser-tab notification features.
         globPatterns: [],
-        // Wipe caches left by any previous SW version on next activate.
+        // navigateFallback: null — do NOT let the SW intercept navigation
+        // requests and serve a cached index.html. Without this, the SW caches
+        // the first index.html it sees and serves it forever, causing users to
+        // see stale app versions after a deploy.
+        navigateFallback: null,
+        // Wipe caches left by any previous SW version on activate.
         cleanupOutdatedCaches: true,
       },
       // Keep the SW out of `vite dev` and the vitest build so local dev and
