@@ -380,22 +380,37 @@ export class MuxDock extends LitElement {
           --dv-active-sash-color: #7aa2f7;
         }
 
-        /* Selection cue: a blue top accent on the visible (selected) tab, a
-           transparent reserve on every other tab so heights stay aligned.
-           Tab sizing tokens allow host to control width via CSS custom props. */
+        /* Chrome-like tab sizing — three rules fight Dockview's flex defaults:
+           (browser-confirmed measurements at http://127.0.0.1:9090/)
+
+           Problem: .dv-scrollable has flex-grow:0 for multi-tab (Dockview only
+           sets flex-grow:1 on the single-tab full-width path). .dv-void-container
+           has flex-grow:1 and steals ALL free header space first. Tabs then shrink
+           into whatever crumbs remain (measured: 83px on desktop, 80px on mobile).
+
+           Fix — three !important overrides to win against Dockview's rules:
+           1. Scrollable claims the free space.
+           2. Void container stops stealing it.
+           3. Tabs don't compress — overflow right into the scrollable area,
+              which has overflow:hidden + Dockview's scrollbar to navigate them. */
+
+        /* 1. Scrollable fills the header (minus action buttons) */
+        mux-dock .dv-scrollable {
+          flex-grow: 1 !important;
+        }
+
+        /* 2. Void container (drag target) gets zero free space */
+        mux-dock .dv-void-container {
+          flex-grow: 0 !important;
+        }
+
+        /* 3. Tabs stay at flex-basis (180px); overflow scrolls */
         mux-dock .dv-tab {
           border-top: 2px solid transparent;
-          /* Chrome-like tab sizing: fixed comfortable width, shrinks when crowded.
-             We need !important on flex-grow because Dockview has a high-specificity
-             rule (.dv-single-tab.dv-full-width-single-tab .dv-tab { flex-grow: 1 })
-             that expands the lone tab to fill the entire header — making it look
-             content-sized. Our selector is only 0,1,1 specificity vs Dockview's
-             0,4,0, so !important is the right tool here. */
-          flex-grow: 0 !important;
-          flex-shrink: 1;
+          flex-grow: 0 !important;   /* beats dv-single-tab full-width rule */
+          flex-shrink: 0 !important; /* beats dv-tab { flex-shrink:0 } default; no compression */
           flex-basis: var(--mux-tab-max-width, 180px);
-          /* Dockview also zeros out padding on the single-tab case — restore it. */
-          padding: 0.25rem 0.5rem !important;
+          padding: 0.25rem 0.5rem !important; /* restored — dv-single-tab zeros it */
           min-width: var(--mux-tab-min-width, 80px);
           max-width: var(--mux-tab-max-width, 180px);
           overflow: hidden;
