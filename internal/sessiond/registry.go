@@ -233,3 +233,21 @@ func (r *Registry) RemovePane(wsID string, paneID int) (*Pane, int, bool) {
 	delete(ws.Panes, paneID)
 	return p, len(ws.Panes), true
 }
+
+// UpdateBrowserPath sets a browser pane's stored navigation path after
+// the user navigates within the proxied app. Returns false for an unknown
+// workspace or pane. Silently no-ops for terminal panes.
+func (r *Registry) UpdateBrowserPath(wsID string, paneID int, path string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok {
+		return false
+	}
+	p, ok := ws.Panes[paneID]
+	if !ok {
+		return false
+	}
+	p.SetBrowserPath(path)
+	return true
+}

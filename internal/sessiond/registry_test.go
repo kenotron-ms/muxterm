@@ -249,3 +249,76 @@ func TestRegistryRenamePaneFailureCases(t *testing.T) {
 		t.Fatal("RenamePane(known ws, unknown pane, ...) = true, want false")
 	}
 }
+
+// TestRegistry_UpdateBrowserPath verifies UpdateBrowserPath sets the browser
+// navigation path on a known pane and returns true.
+func TestRegistry_UpdateBrowserPath(t *testing.T) {
+	r := NewRegistry()
+	wsID := r.AddWorkspace("w", "")
+	localID, _ := r.AllocPaneID(wsID)
+	p := NewBrowserPane(localID, 5173, "/", nil)
+	r.PutPane(wsID, p)
+
+	if !r.UpdateBrowserPath(wsID, localID, "/dashboard") {
+		t.Fatal("UpdateBrowserPath(known ws, known pane, path) = false, want true")
+	}
+
+	got, ok := r.Pane(wsID, localID)
+	if !ok {
+		t.Fatalf("Pane(%q, %d) not found after UpdateBrowserPath", wsID, localID)
+	}
+	if got.BrowserPath != "/dashboard" {
+		t.Fatalf("BrowserPath = %q, want %q", got.BrowserPath, "/dashboard")
+	}
+}
+
+// TestRegistry_UpdateBrowserPath_UnknownPane verifies UpdateBrowserPath returns
+// false when the pane id is not found in the workspace.
+func TestRegistry_UpdateBrowserPath_UnknownPane(t *testing.T) {
+	r := NewRegistry()
+	wsID := r.AddWorkspace("w", "")
+
+	if r.UpdateBrowserPath(wsID, 999, "/path") {
+		t.Fatal("UpdateBrowserPath(known ws, unknown pane, ...) = true, want false")
+	}
+}
+
+// TestRegistry_UpdateBrowserPath_UnknownWorkspace verifies UpdateBrowserPath
+// returns false when the workspace id does not exist.
+func TestRegistry_UpdateBrowserPath_UnknownWorkspace(t *testing.T) {
+	r := NewRegistry()
+
+	if r.UpdateBrowserPath("no-such-ws", 1, "/path") {
+		t.Fatal("UpdateBrowserPath(unknown ws, ...) = true, want false")
+	}
+}
+
+// TestRegistry_PaneInfos_IncludesBrowserPane verifies PaneInfos correctly
+// exposes browser-pane fields (SurfaceKind, BrowserPort, BrowserPath,
+// ProxyHeaders).
+func TestRegistry_PaneInfos_IncludesBrowserPane(t *testing.T) {
+	r := NewRegistry()
+	wsID := r.AddWorkspace("w", "")
+	localID, _ := r.AllocPaneID(wsID)
+	headers := map[string]string{"Authorization": "Bearer tok"}
+	p := NewBrowserPane(localID, 9002, "/items", headers)
+	r.PutPane(wsID, p)
+
+	infos := r.PaneInfos(wsID)
+	if len(infos) != 1 {
+		t.Fatalf("PaneInfos len = %d, want 1", len(infos))
+	}
+	info := infos[0]
+	if info.SurfaceKind != "browser" {
+		t.Fatalf("SurfaceKind = %q, want %q", info.SurfaceKind, "browser")
+	}
+	if info.BrowserPort != 9002 {
+		t.Fatalf("BrowserPort = %d, want 9002", info.BrowserPort)
+	}
+	if info.BrowserPath != "/items" {
+		t.Fatalf("BrowserPath = %q, want %q", info.BrowserPath, "/items")
+	}
+	if info.ProxyHeaders["Authorization"] != "Bearer tok" {
+		t.Fatalf("ProxyHeaders[\"Authorization\"] = %q, want %q", info.ProxyHeaders["Authorization"], "Bearer tok")
+	}
+}
