@@ -356,7 +356,16 @@ func (c *Client) dispatchEvent(msg *Message) {
 	switch msg.Type {
 	case TypePaneAdded:
 		if h.OnPaneAdded != nil {
-			h.OnPaneAdded(PaneInfo{PaneID: msg.PaneID, Cols: msg.Cols, Rows: msg.Rows, Title: msg.Title})
+			h.OnPaneAdded(PaneInfo{
+				PaneID:       msg.PaneID,
+				Cols:         msg.Cols,
+				Rows:         msg.Rows,
+				Title:        msg.Title,
+				SurfaceKind:  msg.SurfaceKind,
+				BrowserPort:  msg.BrowserPort,
+				BrowserPath:  msg.BrowserPath,
+				ProxyHeaders: msg.ProxyHeaders,
+			})
 		}
 	case TypePaneClosed:
 		if h.OnPaneClosed != nil {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/user/muxterm/internal/proxy"
+	"github.com/user/muxterm/internal/sessiond"
 )
 
 func init() {
@@ -193,5 +194,5 @@ func (s *Server) handleCreatePane(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(struct {
 		Type   string `json:"type"`
 		PaneID int    `json:"paneId"`
-	}{"pane-created", paneID})
+	}{sessiond.TypePaneCreated, paneID})
 }

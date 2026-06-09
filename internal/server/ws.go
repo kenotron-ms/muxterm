@@ -186,7 +186,15 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 
 	case sessiond.TypeCreatePane:
-		paneID, err := c.daemon.CreatePane(msg.Cmd)
+		var (
+			paneID int
+			err    error
+		)
+		if msg.SurfaceKind == "browser" {
+			paneID, err = c.daemon.CreateBrowserPane(msg.BrowserPort, msg.BrowserPath, msg.ProxyHeaders)
+		} else {
+			paneID, err = c.daemon.CreatePane(msg.Cmd)
+		}
 		if err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
@@ -358,11 +366,15 @@ func (h *Hub) attachClient(c *Client) error {
 		},
 		OnPaneAdded: func(pane sessiond.PaneInfo) {
 			c.sendMessage(&sessiond.Message{
-				Type:   sessiond.TypePaneAdded,
-				PaneID: pane.PaneID,
-				Cols:   pane.Cols,
-				Rows:   pane.Rows,
-				Title:  pane.Title,
+				Type:         sessiond.TypePaneAdded,
+				PaneID:       pane.PaneID,
+				Cols:         pane.Cols,
+				Rows:         pane.Rows,
+				Title:        pane.Title,
+				SurfaceKind:  pane.SurfaceKind,
+				BrowserPort:  pane.BrowserPort,
+				BrowserPath:  pane.BrowserPath,
+				ProxyHeaders: pane.ProxyHeaders,
 			})
 		},
 		OnPaneClosed: func(paneID int) {
