@@ -304,6 +304,9 @@ export class MuxApp extends LitElement {
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
+    // Browser pane / navigation events bubble up from child components.
+    this.addEventListener('browser-pane-open', this._onBrowserPaneOpen);
+    this.addEventListener('pane-navigate', this._onPaneNavigate);
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
@@ -411,6 +414,8 @@ export class MuxApp extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
+    this.removeEventListener('browser-pane-open', this._onBrowserPaneOpen);
+    this.removeEventListener('pane-navigate', this._onPaneNavigate);
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -636,6 +641,17 @@ export class MuxApp extends LitElement {
       settled: (base) => base.panes.some((p) => p.clientRef === ref),
     });
     this._socket?.createPane(undefined, ref);
+  };
+
+  private _onBrowserPaneOpen = (e: Event): void => {
+    const { browserPort } = (e as CustomEvent<{ browserPort: number }>).detail;
+    if (browserPort < 1 || browserPort > 65535) return;
+    this._socket?.createBrowserPane(browserPort, '/');
+  };
+
+  private _onPaneNavigate = (e: Event): void => {
+    const { paneId, browserPath } = (e as CustomEvent<{ paneId: number; browserPath: string }>).detail;
+    this._socket?.updatePanePath(paneId, browserPath);
   };
 
   private _handleControlMessage = (msg: Record<string, unknown>): void => {
