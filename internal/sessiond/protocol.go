@@ -32,6 +32,7 @@ const (
 	TypeResize          = "resize"
 	TypeRenamePane      = "rename-pane"
 	TypeSaveLayout      = "save-layout"
+	TypePaneUpdate      = "pane-update" // request: client → daemon, updates browserPath after navigation
 
 	// Replies (daemon -> client, echo request cid).
 	TypeWorkspaceCreated = "workspace-created"
@@ -145,6 +146,12 @@ type Message struct {
 	Panes       []PaneInfo      `json:"panes,omitempty"`       //
 	Code        string          `json:"code,omitempty"`        // error code
 	Error       string          `json:"error,omitempty"`       // human-readable error text
+
+	// Browser pane fields (used in create-pane and pane-added for browser surface kinds)
+	SurfaceKind  string            `json:"surfaceKind,omitempty"`
+	BrowserPort  int               `json:"browserPort,omitempty"`
+	BrowserPath  string            `json:"browserPath,omitempty"`
+	ProxyHeaders map[string]string `json:"proxyHeaders,omitempty"`
 }
 
 // WorkspaceInfo is one entry in a workspace-list reply.
@@ -157,9 +164,15 @@ type WorkspaceInfo struct {
 
 // PaneInfo is one entry in a composition reply or pane-added event.
 type PaneInfo struct {
-	PaneID   int    `json:"paneId"`
-	Cols     int    `json:"cols"`
-	Rows     int    `json:"rows"`
-	Title    string `json:"title,omitempty"`
-	TotalSeq uint64 `json:"totalSeq,omitempty"` // exact byte length of the replay data for this pane
+	PaneID      int    `json:"paneId"`
+	SurfaceKind string `json:"surfaceKind,omitempty"` // "terminal" | "browser"; absent = "terminal"
+	Cols        int    `json:"cols,omitempty"`
+	Rows        int    `json:"rows,omitempty"`
+	Title       string `json:"title,omitempty"`
+	TotalSeq    uint64 `json:"totalSeq,omitempty"` // exact byte length of the replay data for this pane
+
+	// Browser-only fields (absent for terminal panes)
+	BrowserPort  int               `json:"browserPort,omitempty"`
+	BrowserPath  string            `json:"browserPath,omitempty"`
+	ProxyHeaders map[string]string `json:"proxyHeaders,omitempty"`
 }
