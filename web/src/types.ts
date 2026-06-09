@@ -32,6 +32,7 @@ export const SessiondType = {
   Resize: 'resize',
   RenamePane: 'rename-pane',
   SaveLayout: 'save-layout',
+  PaneUpdate: 'pane-update',
   // Replies (server -> requesting client)
   WorkspaceCreated: 'workspace-created',
   WorkspaceList: 'workspace-list',
@@ -79,6 +80,11 @@ export interface SessiondPaneInfo {
    *  expectedReplayBytes = totalSeq - seq. Used by the client settle barrier
    *  (RC-1) to defer ready=true until all replay data has arrived. */
   totalSeq?: number;
+  // Browser-only fields (present when surfaceKind === 'browser')
+  surfaceKind?: SurfaceKind;
+  browserPort?: number;
+  browserPath?: string;
+  proxyHeaders?: Record<string, string>;
 }
 
 export interface SessiondMessage {
@@ -100,6 +106,11 @@ export interface SessiondMessage {
   error?: string;
   breakpoint?: string;
   layout?: string;
+  // Present when type === 'create-pane' or 'pane-added' for browser panes
+  surfaceKind?: SurfaceKind;
+  browserPort?: number;
+  browserPath?: string;
+  proxyHeaders?: Record<string, string>;
   /** Per-pane absolute byte offsets sent by the client on (re)attach so the
    *  server can replay only the delta since the client's last known position. */
   offsets?: { paneId: number; seq: number }[];

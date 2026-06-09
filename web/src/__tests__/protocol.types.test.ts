@@ -7,6 +7,7 @@ import {
   type SessiondMessage,
   type SessiondWorkspaceInfo,
   type SessiondPaneInfo,
+  type SurfaceKind,
 } from '../types';
 
 describe('sessiond protocol types', () => {
@@ -22,6 +23,7 @@ describe('sessiond protocol types', () => {
       Resize: 'resize',
       RenamePane: 'rename-pane',
       SaveLayout: 'save-layout',
+      PaneUpdate: 'pane-update',
       WorkspaceCreated: 'workspace-created',
       WorkspaceList: 'workspace-list',
       Composition: 'composition',
@@ -34,6 +36,10 @@ describe('sessiond protocol types', () => {
       PaneRenamed: 'pane-renamed',
       Error: 'error',
     });
+  });
+
+  it('SessiondType.PaneUpdate is pane-update', () => {
+    expect(SessiondType.PaneUpdate).toBe('pane-update');
   });
 
   it('SessiondErrorCode mirrors the frozen Go error-code map', () => {
@@ -99,5 +105,56 @@ describe('clientRef correlation field', () => {
   it('allows clientRef on a pane info', () => {
     const pane: SessiondPaneInfo = { paneId: 1, cols: 80, rows: 24, clientRef: 'tmp-1' };
     expect(pane.clientRef).toBe('tmp-1');
+  });
+});
+
+describe('browser pane fields', () => {
+  it('SessiondPaneInfo accepts optional browser fields', () => {
+    const kind: SurfaceKind = 'browser';
+    const pane: SessiondPaneInfo = {
+      paneId: 2,
+      cols: 0,
+      rows: 0,
+      surfaceKind: kind,
+      browserPort: 3000,
+      browserPath: '/app',
+      proxyHeaders: { 'X-Custom': 'value' },
+    };
+    expect(pane.surfaceKind).toBe('browser');
+    expect(pane.browserPort).toBe(3000);
+    expect(pane.browserPath).toBe('/app');
+    expect(pane.proxyHeaders).toEqual({ 'X-Custom': 'value' });
+  });
+
+  it('SessiondPaneInfo browser fields are optional', () => {
+    // Must compile without browser fields
+    const pane: SessiondPaneInfo = { paneId: 1, cols: 80, rows: 24 };
+    expect(pane.surfaceKind).toBeUndefined();
+    expect(pane.browserPort).toBeUndefined();
+    expect(pane.browserPath).toBeUndefined();
+    expect(pane.proxyHeaders).toBeUndefined();
+  });
+
+  it('SessiondMessage accepts optional browser fields for create-pane / pane-added', () => {
+    const msg: SessiondMessage = {
+      type: SessiondType.CreatePane,
+      paneId: 2,
+      surfaceKind: 'browser',
+      browserPort: 8080,
+      browserPath: '/dashboard',
+      proxyHeaders: { Authorization: 'Bearer tok' },
+    };
+    expect(msg.surfaceKind).toBe('browser');
+    expect(msg.browserPort).toBe(8080);
+    expect(msg.browserPath).toBe('/dashboard');
+    expect(msg.proxyHeaders).toEqual({ Authorization: 'Bearer tok' });
+  });
+
+  it('SessiondMessage browser fields are optional', () => {
+    const msg: SessiondMessage = { type: SessiondType.CreatePane, paneId: 1 };
+    expect(msg.surfaceKind).toBeUndefined();
+    expect(msg.browserPort).toBeUndefined();
+    expect(msg.browserPath).toBeUndefined();
+    expect(msg.proxyHeaders).toBeUndefined();
   });
 });
