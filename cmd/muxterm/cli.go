@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 )
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode   string // local, serve, sessiond, deploy, install, uninstall, version
-	Addr   string // listen address
-	Secret string // auth token for serve mode
-	Target string // SSH target for deploy mode
+	Mode        string // local, serve, sessiond, deploy, install, uninstall, version, open-browser
+	Addr        string // listen address
+	Secret      string // auth token for serve mode
+	Target      string // SSH target for deploy mode
+	BrowserPort int    // open-browser mode only: the port to open as a browser pane
 }
 
 // ParseArgs parses command-line arguments and returns a Config.
@@ -36,6 +38,8 @@ func ParseArgs(args []string) (Config, error) {
 		return Config{Mode: "version"}, nil
 	case "install":
 		return parseInstall(args[1:])
+	case "open-browser":
+		return parseOpenBrowser(args[1:])
 	case "uninstall":
 		return Config{Mode: "uninstall"}, nil
 	default:
@@ -89,5 +93,29 @@ func parseInstall(args []string) (Config, error) {
 		Mode:   "install",
 		Addr:   *addr,
 		Secret: *secret,
+	}, nil
+}
+
+func parseOpenBrowser(args []string) (Config, error) {
+	fs := flag.NewFlagSet("open-browser", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	addr := fs.String("addr", "localhost:8080", "listen address")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if fs.NArg() < 1 {
+		return Config{}, fmt.Errorf("open-browser requires a port argument")
+	}
+	port, err := strconv.Atoi(fs.Arg(0))
+	if err != nil {
+		return Config{}, fmt.Errorf("open-browser: invalid port %q: %w", fs.Arg(0), err)
+	}
+	if port < 1 || port > 65535 {
+		return Config{}, fmt.Errorf("open-browser: port %d out of range (1–65535)", port)
+	}
+	return Config{
+		Mode:        "open-browser",
+		Addr:        *addr,
+		BrowserPort: port,
 	}, nil
 }
