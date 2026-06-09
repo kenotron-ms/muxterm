@@ -1,0 +1,16 @@
+{
+  "name": "muxterm-demo-frontend",
+  "version": "1.0.0",
+  "description": "Demo frontend for muxterm browser pane — Vite + TypeScript, talks to localhost:9002",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vite": "^5.2.10"
+  }
+}
