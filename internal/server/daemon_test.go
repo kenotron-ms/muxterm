@@ -50,6 +50,10 @@ func (f *fakeDaemonConn) CreatePane(cmd []string) (int, error) {
 	return f.createdID, nil
 }
 
+func (f *fakeDaemonConn) CreateBrowserPane(port int, path string, headers map[string]string) (int, error) {
+	return f.createdID, nil
+}
+
 func (f *fakeDaemonConn) Input(paneID uint32, data []byte) error {
 	f.inputs = append(f.inputs, string(data))
 	return nil

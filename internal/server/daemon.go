@@ -16,6 +16,8 @@ type DaemonConn interface {
 	RenamePane(paneID int, name string) error
 	SaveLayout(workspaceID, breakpoint, layout string) error
 	CreatePane(cmd []string) (int, error)
+	// CreateBrowserPane creates a browser pane in the attached workspace.
+	CreateBrowserPane(port int, path string, headers map[string]string) (int, error)
 	ClosePane(paneID int) error
 	Input(paneID uint32, data []byte) error
 	Resize(paneID, cols, rows int) error

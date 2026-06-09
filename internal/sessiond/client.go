@@ -289,6 +289,25 @@ func (c *Client) CreatePane(cmd []string) (int, error) {
 	return reply.PaneID, nil
 }
 
+// CreateBrowserPane creates a browser pane with the given port, path, and
+// optional extra headers. Returns the server-assigned workspace-local pane ID.
+func (c *Client) CreateBrowserPane(port int, path string, headers map[string]string) (int, error) {
+	if path == "" {
+		path = "/"
+	}
+	reply, err := c.request(&Message{
+		Type:         TypeCreatePane,
+		SurfaceKind:  "browser",
+		BrowserPort:  port,
+		BrowserPath:  path,
+		ProxyHeaders: headers,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return reply.PaneID, nil
+}
+
 // ClosePane asks the daemon to kill the pane identified by paneID and remove it
 // from the attached workspace. The daemon broadcasts a pane-closed event to all
 // subscribers on success.
