@@ -8,6 +8,8 @@ import (
 	"mime"
 	"net/http"
 	"time"
+
+	"github.com/user/muxterm/internal/proxy"
 )
 
 func init() {
@@ -46,6 +48,15 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/token", s.handleToken)
 	s.mux.HandleFunc("GET /ws", s.handleWS)
+
+	// Proxy routes: /sw.js and /p/{port}/ for browser pane content serving.
+	s.mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) {
+		proxy.ServeServiceWorker(w, r)
+	})
+	s.mux.Handle("/p/", proxy.NewHandler("localhost", nil)) // ProxyHeaders injection deferred to v2
+
+	// REST endpoint for CLI and agent automation: create a browser pane without a WebSocket.
+	s.mux.HandleFunc("POST /api/pane", s.handleCreatePane)
 
 	if cfg.StaticFS != nil {
 		s.mux.Handle("/", http.FileServer(http.FS(cfg.StaticFS)))
@@ -122,4 +133,65 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.handleWSImpl(w, r)
+}
+
+type createPaneRequest struct {
+	SurfaceKind  string            `json:"surfaceKind"`
+	BrowserPort  int               `json:"browserPort"`
+	BrowserPath  string            `json:"browserPath"`
+	ProxyHeaders map[string]string `json:"proxyHeaders"`
+}
+
+// handleCreatePane handles POST /api/pane for the CLI open-browser command.
+// Only accepts requests from localhost. Creates a browser pane in the default
+// workspace by dialing sessiond directly.
+func (s *Server) handleCreatePane(w http.ResponseWriter, r *http.Request) {
+	if !IsLocalhost(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req createPaneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.SurfaceKind != "browser" {
+		http.Error(w, "only surfaceKind=browser is supported", http.StatusBadRequest)
+		return
+	}
+	if req.BrowserPort <= 0 || req.BrowserPort > 65535 {
+		http.Error(w, "browserPort must be 1–65535", http.StatusBadRequest)
+		return
+	}
+	if req.BrowserPath == "" {
+		req.BrowserPath = "/"
+	}
+	conn, err := s.hub.Dial()
+	if err != nil {
+		http.Error(w, "sessiond unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer conn.Close()
+	errCh := make(chan error, 1)
+	go func() { errCh <- conn.Run() }()
+	workspaces, err := conn.ListWorkspaces()
+	if err != nil || len(workspaces) == 0 {
+		http.Error(w, "no workspace available", http.StatusInternalServerError)
+		return
+	}
+	wsID := workspaces[0].WorkspaceID
+	if _, err := conn.Attach(wsID, ""); err != nil {
+		http.Error(w, "attach failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	paneID, err := conn.CreateBrowserPane(req.BrowserPort, req.BrowserPath, req.ProxyHeaders)
+	if err != nil {
+		http.Error(w, "create pane failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Type   string `json:"type"`
+		PaneID int    `json:"paneId"`
+	}{"pane-created", paneID})
 }

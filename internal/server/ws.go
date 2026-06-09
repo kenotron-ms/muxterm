@@ -319,6 +319,18 @@ func (h *Hub) SetDialer(d DialFunc) {
 	h.dial = d
 }
 
+// Dial creates a new daemon connection using the hub's configured dialer.
+// Returns an error if no dialer is set (server not fully initialized).
+func (h *Hub) Dial() (DaemonConn, error) {
+	h.mu.Lock()
+	dial := h.dial
+	h.mu.Unlock()
+	if dial == nil {
+		return nil, fmt.Errorf("server: no sessiond dialer configured")
+	}
+	return dial()
+}
+
 // attachClient dials a daemon for the browser, installs relay handlers that
 // forward daemon events to the browser, starts the connection's read loop, and
 // seeds the browser with config and the workspace list.
