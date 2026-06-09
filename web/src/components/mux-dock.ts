@@ -110,10 +110,10 @@ class BrowserRenderer implements IContentRenderer {
   private readonly _path: string;
   private _surface: MuxBrowserSurface | null = null;
 
-  constructor(id: string, port: number, path: string) {
+  constructor(id: string, pane: SessiondPaneInfo) {
     this._paneId = parseInt(id, 10);
-    this._port = port;
-    this._path = path;
+    this._port = pane.browserPort ?? 0;
+    this._path = pane.browserPath ?? '/';
     const el = document.createElement('div');
     el.style.cssText = 'width:100%;height:100%;overflow:hidden;';
     this.element = el;
@@ -558,7 +558,14 @@ export class MuxDock extends LitElement {
     this.classList.add('dockview-theme-abyss');
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
-      createComponent: (opts) => new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId),
+      createComponent: (opts) => {
+        if (opts.name === 'browser') {
+          const pane = this.panes.find((p) => p.paneId === parseInt(opts.id, 10));
+          if (!pane) throw new Error(`No pane found for id ${opts.id}`);
+          return new BrowserRenderer(opts.id, pane);
+        }
+        return new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId);
+      },
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
       // The "left" slot therefore renders immediately after the tabs (before
       // the grow-to-fill void), and the "right" slot renders far right.
@@ -732,7 +739,7 @@ export class MuxDock extends LitElement {
               if (!this._panels.has(pane.paneId)) {
                 const panel = this._dv.addPanel({
                   id: String(pane.paneId),
-                  component: 'terminal',
+                  component: pane.surfaceKind ?? 'terminal',
                   title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
                 });
                 this._panels.set(pane.paneId, panel);
@@ -756,7 +763,7 @@ export class MuxDock extends LitElement {
           for (const pane of this.panes.filter((p) => p.paneId >= 0)) {
             const panel = this._dv.addPanel({
               id: String(pane.paneId),
-              component: 'terminal',
+              component: pane.surfaceKind ?? 'terminal',
               title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
             });
             this._panels.set(pane.paneId, panel);
@@ -842,7 +849,7 @@ export class MuxDock extends LitElement {
         if (!this._panels.has(pane.paneId) && !this._locallyClosedPanes.has(pane.paneId)) {
           const opts: Parameters<NonNullable<typeof this._dv>['addPanel']>[0] = {
             id: String(pane.paneId),
-            component: 'terminal',
+            component: pane.surfaceKind ?? 'terminal',
             title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
           };
           // Honor a pending placement request, positioned relative to the group
@@ -926,7 +933,7 @@ export class MuxDock extends LitElement {
     if (!pane) return; // pane no longer exists (e.g. process exited during grace)
     const panel = this._dv.addPanel({
       id: String(paneId),
-      component: 'terminal',
+      component: pane.surfaceKind ?? 'terminal',
       title: this._customTitles.get(paneId) ?? pane.title ?? `Pane ${paneId}`,
     });
     this._panels.set(paneId, panel);
