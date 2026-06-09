@@ -128,6 +128,23 @@ export class MuxSocket {
     this.sendSessiond(msg);
   }
 
+  /** Create a browser-surface pane. path defaults to '/' when falsy. */
+  createBrowserPane(port: number, path: string = '/', clientRef?: string): void {
+    const msg: SessiondMessage = {
+      type: SessiondType.CreatePane,
+      surfaceKind: 'browser',
+      browserPort: port,
+      browserPath: path || '/',
+    };
+    if (clientRef) msg.clientRef = clientRef;
+    this.sendSessiond(msg);
+  }
+
+  /** Update the browser path for an existing browser pane. */
+  updatePanePath(paneId: number, browserPath: string): void {
+    this.sendSessiond({ type: SessiondType.PaneUpdate, paneId, browserPath });
+  }
+
   /** Kill the pane's PTY on the server side. The server broadcasts pane-closed
    *  to all subscribers; the client prunes the terminal on receipt. */
   closePane(paneId: number): void {
