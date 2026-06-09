@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,5 +180,123 @@ func TestRunUninstall_PrintsConfirmation(t *testing.T) {
 	})
 	if !strings.Contains(out, "muxterm service removed") {
 		t.Errorf("expected confirmation message, got %q", out)
+	}
+}
+
+// --- runOpenBrowser tests ---
+
+func TestRunOpenBrowser_Signature(t *testing.T) {
+	// Compile-time check that runOpenBrowser has the expected signature.
+	var fn func(Config) error = runOpenBrowser
+	_ = fn
+}
+
+func TestRunOpenBrowser_ConnectionFailure(t *testing.T) {
+	// When muxterm is not running, should return error containing "not running or not reachable".
+	cfg := Config{
+		Mode:        "open-browser",
+		Addr:        "localhost:1", // port 1 is reserved, never has a listener
+		BrowserPort: 5173,
+	}
+	err := runOpenBrowser(cfg)
+	if err == nil {
+		t.Fatal("expected error on connection failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "not running or not reachable") {
+		t.Errorf("expected 'not running or not reachable' in error, got %q", err.Error())
+	}
+}
+
+func TestRunOpenBrowser_503Response(t *testing.T) {
+	// When server returns 503, should return sessiond-not-available error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	cfg := Config{
+		Mode:        "open-browser",
+		Addr:        addr,
+		BrowserPort: 5173,
+	}
+	err := runOpenBrowser(cfg)
+	if err == nil {
+		t.Fatal("expected error on 503, got nil")
+	}
+	if !strings.Contains(err.Error(), "sessiond is not available") {
+		t.Errorf("expected 'sessiond is not available' in error, got %q", err.Error())
+	}
+}
+
+func TestRunOpenBrowser_NonOKResponse(t *testing.T) {
+	// When server returns non-200 (not 503), should return "server returned %d: <body>".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, "internal error")
+	}))
+	defer srv.Close()
+
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	cfg := Config{
+		Mode:        "open-browser",
+		Addr:        addr,
+		BrowserPort: 5173,
+	}
+	err := runOpenBrowser(cfg)
+	if err == nil {
+		t.Fatal("expected error on 500, got nil")
+	}
+	if !strings.Contains(err.Error(), "server returned 500") {
+		t.Errorf("expected 'server returned 500' in error, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "internal error") {
+		t.Errorf("expected body in error, got %q", err.Error())
+	}
+}
+
+func TestRunOpenBrowser_Success(t *testing.T) {
+	// On 200 response, should print "browser pane opened: port <N>" and return nil.
+	var gotPath, gotContentType, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotContentType = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	cfg := Config{
+		Mode:        "open-browser",
+		Addr:        addr,
+		BrowserPort: 5173,
+	}
+	var out string
+	out = captureStdout(t, func() {
+		err := runOpenBrowser(cfg)
+		if err != nil {
+			t.Errorf("unexpected error on success: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "browser pane opened: port 5173") {
+		t.Errorf("expected 'browser pane opened: port 5173', got %q", out)
+	}
+	if gotPath != "/api/pane" {
+		t.Errorf("expected POST to /api/pane, got %q", gotPath)
+	}
+	if gotContentType != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %q", gotContentType)
+	}
+	if !strings.Contains(gotBody, `"surfaceKind":"browser"`) {
+		t.Errorf("expected surfaceKind in body, got %q", gotBody)
+	}
+	if !strings.Contains(gotBody, `"browserPort":5173`) {
+		t.Errorf("expected browserPort in body, got %q", gotBody)
+	}
+	if !strings.Contains(gotBody, `"browserPath":"/"`) {
+		t.Errorf("expected browserPath in body, got %q", gotBody)
 	}
 }
