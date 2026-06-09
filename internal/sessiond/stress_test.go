@@ -251,7 +251,7 @@ func TestStress_PaneLifecycle(t *testing.T) {
 		c.send(&Message{
 			Type: TypeCreatePane,
 			CID:  uint64(10 + i),
-			Cmd:  []string{"true"}, // exits immediately, no output
+			Cmd:  []string{"sleep", "300"}, // stays alive until explicitly closed
 		})
 		paneID := c.waitCtrl(TypePaneCreated).PaneID
 		c.waitCtrl(TypePaneAdded)
@@ -321,11 +321,13 @@ func TestStress_ConcurrentPaneIO(t *testing.T) {
 			c.waitCtrl(TypeComposition)
 
 			// Each worker owns exactly one pane — its echo output is unique.
+			// The trailing "cat" keeps the pane alive until explicitly
+			// closed, preventing workspace auto-reap during creation.
 			marker := fmt.Sprintf("io-worker-%d", i)
 			c.send(&Message{
 				Type: TypeCreatePane,
 				CID:  2,
-				Cmd:  []string{"sh", "-c", "echo " + marker},
+				Cmd:  []string{"sh", "-c", "echo " + marker + "; cat"},
 			})
 			c.waitCtrl(TypePaneCreated)
 			// TypePaneAdded will be broadcast to ALL subscribers in this
@@ -338,6 +340,11 @@ func TestStress_ConcurrentPaneIO(t *testing.T) {
 	}
 
 	wg.Wait()
+
+	// Close the workspace to kill all still-alive panes and avoid resource
+	// leaks from the long-running "cat" commands above.
+	coord.send(&Message{Type: TypeCloseWorkspace, CID: 2, WorkspaceID: wsID})
+	coord.waitCtrl(TypeOK)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
