@@ -27,16 +27,31 @@ export class MuxBrowserSurface extends LitElement {
       align-items: center;
       padding: 4px 8px;
       gap: 6px;
-      background: var(--mux-bg);
-      border-bottom: 1px solid var(--mux-border);
+      background: #1a1b26;
+      border-bottom: 1px solid #292e42;
       flex-shrink: 0;
+    }
+
+    .nav-btn {
+      background: none;
+      border: none;
+      color: #a9b1d6;
+      cursor: pointer;
+      font-size: 16px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .nav-btn:hover {
+      background: #292e42;
     }
 
     .address {
       flex: 1;
-      background: var(--mux-bg);
-      color: var(--mux-fg);
-      border: 1px solid var(--mux-border);
+      background: #1a1b26;
+      color: #a9b1d6;
+      border: 1px solid #292e42;
       border-radius: 4px;
       padding: 4px 8px;
       font-size: 13px;
@@ -45,7 +60,7 @@ export class MuxBrowserSurface extends LitElement {
     }
 
     .address:focus {
-      border-color: var(--mux-accent);
+      border-color: #7aa2f7;
     }
 
     iframe {
@@ -75,6 +90,9 @@ export class MuxBrowserSurface extends LitElement {
   render() {
     return html`
       <div class="bar">
+        <button class="nav-btn" @click="${() => (this.shadowRoot!.querySelector('iframe') as HTMLIFrameElement)?.contentWindow?.history.back()}" title="Back">‹</button>
+        <button class="nav-btn" @click="${() => (this.shadowRoot!.querySelector('iframe') as HTMLIFrameElement)?.contentWindow?.history.forward()}" title="Forward">›</button>
+        <button class="nav-btn" @click="${() => (this.shadowRoot!.querySelector('iframe') as HTMLIFrameElement)?.contentWindow?.location.reload()}" title="Refresh">↺</button>
         <input
           class="address"
           type="text"
@@ -84,7 +102,7 @@ export class MuxBrowserSurface extends LitElement {
       </div>
       <iframe
         src="${this.url}"
-        sandbox="allow-scripts allow-same-origin allow-forms"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
       ></iframe>
     `;
   }

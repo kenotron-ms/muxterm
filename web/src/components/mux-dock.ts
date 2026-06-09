@@ -296,13 +296,13 @@ export class MuxDock extends LitElement {
   }
 
   /** Toggle the browser port popover open/closed for the given group. */
-  private _toggleBrowserPopover(group: DockviewGroupPanel): void {
+  private _toggleBrowserPopover(group: DockviewGroupPanel, triggerEl: HTMLElement): void {
     if (this._browserPopoverOpen) {
       this._closeBrowserPopover();
     } else {
       this._browserPopoverOpen = true;
       this._browserPopoverGroup = group;
-      this._renderBrowserPopover();
+      this._renderBrowserPopover(triggerEl);
     }
   }
 
@@ -314,12 +314,19 @@ export class MuxDock extends LitElement {
   }
 
   /** Render the browser port popover and append it to this element. */
-  private _renderBrowserPopover(): void {
+  private _renderBrowserPopover(triggerEl: HTMLElement): void {
     // Remove any stale popover first.
     this.querySelector('.mux-browser-popover')?.remove();
 
     const popover = document.createElement('div');
     popover.className = 'mux-browser-popover';
+
+    // Anchor the popover directly below the trigger button using fixed positioning
+    // so it appears regardless of where mux-dock sits in the DOM flow.
+    const rect = triggerEl.getBoundingClientRect();
+    popover.style.position = 'fixed';
+    popover.style.top = `${rect.bottom + 4}px`;
+    popover.style.right = `${window.innerWidth - rect.right}px`;
 
     const label = document.createElement('label');
     label.textContent = 'Port';
@@ -652,7 +659,6 @@ export class MuxDock extends LitElement {
 
         /* Browser port popover */
         mux-dock .mux-browser-popover {
-          position: absolute;
           z-index: 200;
           background: #1a1b26;
           border: 1px solid #292e42;
@@ -753,7 +759,7 @@ export class MuxDock extends LitElement {
         const container = document.createElement('div');
         container.style.cssText = 'display:flex;flex-direction:row;align-items:center;';
         const browserBtn = new HeaderButton(BROWSER_ICON, 'Open browser pane', () =>
-          this._toggleBrowserPopover(group),
+          this._toggleBrowserPopover(group, browserBtn.element),
         );
         const splitBtn = new HeaderButton(SPLIT_ICON, 'Split pane', () =>
           this._requestPane('split', group),

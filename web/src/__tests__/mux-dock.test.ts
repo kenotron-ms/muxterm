@@ -117,28 +117,55 @@ describe('MuxDock — browser popover', () => {
     expect(el.querySelector('.mux-browser-popover')).toBeNull();
   });
 
+  /** Helper: create a fake trigger element with controllable getBoundingClientRect(). */
+  function makeTrigger(bottom: number, right: number): HTMLElement {
+    const btn = document.createElement('button');
+    btn.getBoundingClientRect = () =>
+      ({ bottom, right, top: 0, left: 0, width: right, height: bottom } as DOMRect);
+    return btn;
+  }
+
   it('_renderBrowserPopover appends a .mux-browser-popover with a number input to the dock', () => {
     el = createDock();
     const inner = el as unknown as {
       _browserPopoverOpen: boolean;
-      _renderBrowserPopover: () => void;
+      _renderBrowserPopover: (triggerEl: HTMLElement) => void;
     };
     inner._browserPopoverOpen = true;
-    inner._renderBrowserPopover();
+    inner._renderBrowserPopover(makeTrigger(50, 200));
     const popover = el.querySelector('.mux-browser-popover');
     expect(popover).not.toBeNull();
     const input = popover!.querySelector('input[type="number"]');
     expect(input).not.toBeNull();
   });
 
+  it('_renderBrowserPopover uses position:fixed anchored to the trigger element', () => {
+    el = createDock();
+    const inner = el as unknown as {
+      _browserPopoverOpen: boolean;
+      _renderBrowserPopover: (triggerEl: HTMLElement) => void;
+    };
+    inner._browserPopoverOpen = true;
+
+    const triggerEl = makeTrigger(48, 300);
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1024);
+    inner._renderBrowserPopover(triggerEl);
+
+    const popover = el.querySelector('.mux-browser-popover') as HTMLElement;
+    expect(popover).not.toBeNull();
+    expect(popover.style.position).toBe('fixed');
+    expect(popover.style.top).toBe('52px');          // rect.bottom(48) + 4
+    expect(popover.style.right).toBe('724px');        // innerWidth(1024) - rect.right(300)
+  });
+
   it('browser-pane-open event is dispatched with browserPort when a valid port is submitted', () => {
     el = createDock();
     const inner = el as unknown as {
       _browserPopoverOpen: boolean;
-      _renderBrowserPopover: () => void;
+      _renderBrowserPopover: (triggerEl: HTMLElement) => void;
     };
     inner._browserPopoverOpen = true;
-    inner._renderBrowserPopover();
+    inner._renderBrowserPopover(makeTrigger(50, 200));
 
     const popover = el.querySelector('.mux-browser-popover')!;
     const input = popover.querySelector('input') as HTMLInputElement;
@@ -160,11 +187,11 @@ describe('MuxDock — browser popover', () => {
     el = createDock();
     const inner = el as unknown as {
       _browserPopoverOpen: boolean;
-      _renderBrowserPopover: () => void;
+      _renderBrowserPopover: (triggerEl: HTMLElement) => void;
       _closeBrowserPopover: () => void;
     };
     inner._browserPopoverOpen = true;
-    inner._renderBrowserPopover();
+    inner._renderBrowserPopover(makeTrigger(50, 200));
 
     const closeSpy = vi.spyOn(inner, '_closeBrowserPopover');
 

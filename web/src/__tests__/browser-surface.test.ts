@@ -52,4 +52,29 @@ describe('MuxBrowserSurface', () => {
     expect(received[0].composed).toBe(true);
     expect(received[0].detail).toEqual({ url: 'https://new-url.com' });
   });
+
+  it('renders three .nav-btn buttons (back, forward, refresh)', async () => {
+    el = await fixture('about:blank');
+    const navBtns = el.shadowRoot!.querySelectorAll('.nav-btn');
+    expect(navBtns.length).toBe(3);
+  });
+
+  it('iframe sandbox includes allow-popups', async () => {
+    el = await fixture('about:blank');
+    const iframe = el.shadowRoot!.querySelector('iframe');
+    expect(iframe!.getAttribute('sandbox')).toContain('allow-popups');
+  });
+
+  it('CSS does not reference undefined CSS variables for bg/fg/border/accent', async () => {
+    el = await fixture('about:blank');
+    // Collect all stylesheet text from the component's adopted styles
+    const styles = (el.constructor as typeof MuxBrowserSurface).styles;
+    const cssText = Array.isArray(styles)
+      ? styles.map((s) => s.toString()).join('\n')
+      : String(styles);
+    expect(cssText).not.toContain('var(--mux-bg)');
+    expect(cssText).not.toContain('var(--mux-fg)');
+    expect(cssText).not.toContain('var(--mux-border)');
+    expect(cssText).not.toContain('var(--mux-accent)');
+  });
 });
