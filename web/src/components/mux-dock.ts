@@ -380,31 +380,15 @@ export class MuxDock extends LitElement {
           --dv-active-sash-color: #7aa2f7;
         }
 
-        /* Chrome-like tab sizing — three rules fight Dockview's flex defaults:
-           (browser-confirmed measurements at http://127.0.0.1:9090/)
+        /* Chrome-like tab sizing.
+           Dockview DOM order: [scrollable+tabs] [left-actions (+)] [void] [right-actions (split)]
+           The void has flex-grow:1 by default — it fills the gap so split lands far right.
+           The problem was tabs had flex-shrink:1 so they compressed into whatever space the
+           void left. Fix: tabs get flex-shrink:0 so they stay 180px. When many tabs overflow
+           the scrollable, Dockview's horizontal scroll handles it. Void stays at default
+           flex-grow:1 — no override needed. */
 
-           Problem: .dv-scrollable has flex-grow:0 for multi-tab (Dockview only
-           sets flex-grow:1 on the single-tab full-width path). .dv-void-container
-           has flex-grow:1 and steals ALL free header space first. Tabs then shrink
-           into whatever crumbs remain (measured: 83px on desktop, 80px on mobile).
-
-           Fix — three !important overrides to win against Dockview's rules:
-           1. Scrollable claims the free space.
-           2. Void container stops stealing it.
-           3. Tabs don't compress — overflow right into the scrollable area,
-              which has overflow:hidden + Dockview's scrollbar to navigate them. */
-
-        /* 1. Scrollable fills the header (minus action buttons) */
-        mux-dock .dv-scrollable {
-          flex-grow: 1 !important;
-        }
-
-        /* 2. Void container (drag target) gets zero free space */
-        mux-dock .dv-void-container {
-          flex-grow: 0 !important;
-        }
-
-        /* 3. Tabs stay at flex-basis (180px); overflow scrolls */
+        /* Tabs stay at 180px — no grow, no shrink */
         mux-dock .dv-tab {
           border-top: 2px solid transparent;
           flex-grow: 0 !important;   /* beats dv-single-tab full-width rule */
