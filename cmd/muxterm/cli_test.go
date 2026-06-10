@@ -79,16 +79,34 @@ func TestParseArgs_Version(t *testing.T) {
 	}
 }
 
-func TestParseArgs_UnknownCommand_FallsBackToLocal(t *testing.T) {
-	cfg, err := ParseArgs([]string{"bogus"})
+func TestParseArgs_UnknownCommand_ReturnsError(t *testing.T) {
+	_, err := ParseArgs([]string{"bogus"})
+	if err == nil {
+		t.Fatal("expected error for unknown command, got nil")
+	}
+}
+
+func TestParseArgs_HelpFlags(t *testing.T) {
+	for _, arg := range []string{"--help", "-h", "help"} {
+		t.Run(arg, func(t *testing.T) {
+			cfg, err := ParseArgs([]string{arg})
+			if err != nil {
+				t.Fatalf("ParseArgs(%q): unexpected error: %v", arg, err)
+			}
+			if cfg.Mode != "help" {
+				t.Errorf("ParseArgs(%q): Mode = %q, want %q", arg, cfg.Mode, "help")
+			}
+		})
+	}
+}
+
+func TestParseArgs_Doctor(t *testing.T) {
+	cfg, err := ParseArgs([]string{"doctor"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Mode != "local" {
-		t.Errorf("Mode = %q, want %q", cfg.Mode, "local")
-	}
-	if cfg.Addr != "localhost:8080" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "localhost:8080")
+	if cfg.Mode != "doctor" {
+		t.Errorf("Mode = %q, want %q", cfg.Mode, "doctor")
 	}
 }
 

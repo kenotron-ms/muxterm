@@ -10,12 +10,28 @@ import (
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode        string // local, serve, sessiond, deploy, install, uninstall, version, open-browser
+	Mode        string // local, serve, sessiond, deploy, install, uninstall, doctor, version, open-browser, help
 	Addr        string // listen address
 	Secret      string // auth token for serve mode
 	NoAuth      bool   // skip WebSocket auth check (dev only — never use in production)
 	Target      string // SSH target for deploy mode
 	BrowserPort int    // open-browser mode only: the port to open as a browser pane
+}
+
+// printUsage writes top-level help to w.
+func printUsage(w io.Writer) {
+	fmt.Fprintln(w, "muxterm — browser-based terminal multiplexer")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  muxterm                     Open in browser (localhost:8080, default)")
+	fmt.Fprintln(w, "  muxterm serve [flags]       Start server for remote access")
+	fmt.Fprintln(w, "  muxterm install [flags]     Install as a system service")
+	fmt.Fprintln(w, "  muxterm uninstall           Remove system service")
+	fmt.Fprintln(w, "  muxterm deploy <host>       Deploy to a remote host via SSH")
+	fmt.Fprintln(w, "  muxterm doctor              Check daemon and service status")
+	fmt.Fprintln(w, "  muxterm version             Print version")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Run 'muxterm <command> --help' for command-specific flags.")
 }
 
 // ParseArgs parses command-line arguments and returns a Config.
@@ -29,6 +45,8 @@ func ParseArgs(args []string) (Config, error) {
 	}
 
 	switch args[0] {
+	case "--help", "-h", "help":
+		return Config{Mode: "help"}, nil
 	case "serve":
 		return parseServe(args[1:])
 	case "sessiond":
@@ -43,21 +61,27 @@ func ParseArgs(args []string) (Config, error) {
 		return parseOpenBrowser(args[1:])
 	case "uninstall":
 		return Config{Mode: "uninstall"}, nil
+	case "doctor":
+		return Config{Mode: "doctor"}, nil
 	default:
-		// Unknown command falls back to local mode.
-		return Config{
-			Mode: "local",
-			Addr: "localhost:8080",
-		}, nil
+		return Config{}, fmt.Errorf("unknown command %q\n\nRun 'muxterm --help' for usage.", args[0])
 	}
 }
 
 func parseServe(args []string) (Config, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs.SetOutput(os.Stdout)
 	addr := fs.String("addr", "0.0.0.0:8080", "listen address")
-	secret := fs.String("secret", "", "auth secret")
-	noAuth := fs.Bool("no-auth", false, "skip WebSocket auth check (dev only)")
+	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
+	noAuth := fs.Bool("no-auth", false, "skip WebSocket auth check (dev only — never use in production)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stdout, "Usage: muxterm serve [flags]")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Start muxterm server for remote/shared access with optional authentication.")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Flags:")
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -71,7 +95,15 @@ func parseServe(args []string) (Config, error) {
 
 func parseDeploy(args []string) (Config, error) {
 	fs := flag.NewFlagSet("deploy", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs.SetOutput(os.Stdout)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stdout, "Usage: muxterm deploy <host>")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Deploy muxterm to a remote host via SSH.")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Arguments:")
+		fmt.Fprintln(os.Stdout, "  <host>    SSH target (e.g. user@hostname)")
+	}
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -86,9 +118,17 @@ func parseDeploy(args []string) (Config, error) {
 
 func parseInstall(args []string) (Config, error) {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
+	fs.SetOutput(os.Stdout)
 	addr := fs.String("addr", "localhost:8080", "listen address for the service")
 	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stdout, "Usage: muxterm install [flags]")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Install muxterm as a system service (systemd on Linux, launchd on macOS).")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Flags:")
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -34,11 +36,16 @@ func tmuxCutoverWarning() string {
 func main() {
 	cfg, err := ParseArgs(os.Args[1:])
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
 	switch cfg.Mode {
+	case "help":
+		printUsage(os.Stdout)
 	case "local":
 		if err := runLocal(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -74,9 +81,76 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "doctor":
+		if err := runDoctor(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "version":
 		fmt.Printf("muxterm %s\n", version)
 	}
+}
+
+// runDoctor reports the status of the muxterm daemon and system service.
+func runDoctor() error {
+	const (
+		ok   = "\u2713" // ✓
+		fail = "\u2717" // ✗
+	)
+
+	fmt.Printf("muxterm %s\n\n", version)
+
+	// Daemon
+	sock, err := sessiond.SocketPath()
+	if err != nil {
+		fmt.Printf("  %s  daemon:  could not determine socket path: %v\n", fail, err)
+	} else {
+		fmt.Printf("     socket:  %s\n", sock)
+		if _, err := os.Stat(sock); os.IsNotExist(err) {
+			fmt.Printf("  %s  daemon:  not running (socket not found)\n", fail)
+			fmt.Printf("     hint:    start with 'muxterm' or check service logs\n")
+		} else {
+			c, dialErr := sessiond.Dial(sock)
+			if dialErr != nil {
+				fmt.Printf("  %s  daemon:  socket exists but connection failed: %v\n", fail, dialErr)
+			} else {
+				c.Close() //nolint:errcheck
+				fmt.Printf("  %s  daemon:  running\n", ok)
+			}
+		}
+	}
+
+	// Log
+	if logPath, err := sessiond.DefaultLogPath(); err == nil {
+		if _, err := os.Stat(logPath); err == nil {
+			fmt.Printf("     log:     %s\n", logPath)
+		}
+	}
+
+	// Service
+	fmt.Println()
+	switch runtime.GOOS {
+	case "darwin":
+		plistPath := service.LaunchdPlistPath()
+		if _, err := os.Stat(plistPath); err == nil {
+			fmt.Printf("  %s  service: launchd agent installed\n", ok)
+			fmt.Printf("     plist:   %s\n", plistPath)
+		} else {
+			fmt.Printf("  %s  service: not installed\n", fail)
+			fmt.Printf("     hint:    run 'muxterm install' to auto-start on login\n")
+		}
+	default:
+		unitPath := service.SystemdUnitPath()
+		if _, err := os.Stat(unitPath); err == nil {
+			fmt.Printf("  %s  service: systemd unit installed\n", ok)
+			fmt.Printf("     unit:    %s\n", unitPath)
+		} else {
+			fmt.Printf("  %s  service: not installed\n", fail)
+			fmt.Printf("     hint:    run 'muxterm install' to auto-start on login\n")
+		}
+	}
+
+	return nil
 }
 
 // newSessiondDialerForSocket returns a DialFunc that dials the sessiond daemon
