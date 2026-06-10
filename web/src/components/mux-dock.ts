@@ -224,6 +224,9 @@ export class MuxDock extends LitElement {
   @property({ attribute: false }) activePaneId = -1;
   @property({ attribute: false }) workspaceKey = '';
   @property({ attribute: false }) layout = '';
+
+  /** Test hook: exposes the MuxStore instance for E2E verification scripts. */
+  readonly __store = store;
   /**
    * Narrow (phone) mode: a tab view only. No split button, no saved/restored
    * layout — all panes collapse into a single dockview group as tabs. Wide

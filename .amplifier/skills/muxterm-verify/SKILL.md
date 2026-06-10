@@ -58,6 +58,19 @@ Append this block to the scenario content when delegating:
 
 Base URL: `http://localhost:9090` (or the URL provided by the user).
 
+**FIRST: clear any stale PWA/service-worker cache before running scenarios.**
+Navigate to the base URL, then immediately run this cache-clearing snippet before
+doing anything else:
+```js
+// Unregister all service workers and clear caches so a stale demo app
+// cannot interfere with the real production frontend.
+const regs = await navigator.serviceWorker.getRegistrations();
+for (const r of regs) await r.unregister();
+const keys = await caches.keys();
+for (const k of keys) await caches.delete(k);
+```
+Then hard-reload: `location.reload(true)` and wait 3 seconds for the real app to boot.
+
 Use a fresh browser session (no cached state). For every JS snippet in the scenario,
 use agent-browser's eval mechanism.
 
