@@ -152,6 +152,7 @@ func runServe(cfg Config) error {
 		Addr:     cfg.Addr,
 		Secret:   secret,
 		StaticFS: mustSubFS(webstatic.Dist, "dist"),
+		NoAuth:   cfg.NoAuth,
 	})
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
 	srv.Hub().SetResolvedConfig(resolved)

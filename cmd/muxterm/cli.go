@@ -13,6 +13,7 @@ type Config struct {
 	Mode        string // local, serve, sessiond, deploy, install, uninstall, version, open-browser
 	Addr        string // listen address
 	Secret      string // auth token for serve mode
+	NoAuth      bool   // skip WebSocket auth check (dev only — never use in production)
 	Target      string // SSH target for deploy mode
 	BrowserPort int    // open-browser mode only: the port to open as a browser pane
 }
@@ -56,6 +57,7 @@ func parseServe(args []string) (Config, error) {
 	fs.SetOutput(io.Discard)
 	addr := fs.String("addr", "0.0.0.0:8080", "listen address")
 	secret := fs.String("secret", "", "auth secret")
+	noAuth := fs.Bool("no-auth", false, "skip WebSocket auth check (dev only)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -63,6 +65,7 @@ func parseServe(args []string) (Config, error) {
 		Mode:   "serve",
 		Addr:   *addr,
 		Secret: *secret,
+		NoAuth: *noAuth,
 	}, nil
 }
 

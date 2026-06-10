@@ -25,12 +25,14 @@ type Config struct {
 	Addr     string
 	Secret   string
 	StaticFS fs.FS
+	NoAuth   bool // skip token/localhost auth check (dev only)
 }
 
 // Server is the HTTP server for muxterm.
 type Server struct {
 	addr   string
 	secret string
+	noAuth bool
 	mux    *http.ServeMux
 	hub    *Hub
 }
@@ -42,6 +44,7 @@ func New(cfg Config) *Server {
 	s := &Server{
 		addr:   cfg.Addr,
 		secret: cfg.Secret,
+		noAuth: cfg.NoAuth,
 		mux:    http.NewServeMux(),
 		hub:    NewHub(nil),
 	}
