@@ -1,4 +1,4 @@
-.PHONY: build dev install-stable test clean web
+.PHONY: build dev demo demo-install install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -14,22 +14,46 @@ CADDY := $(shell command -v caddy 2>/dev/null || echo $(HOME)/go/bin/caddy)
 build: web
 	go build -o bin/muxterm ./cmd/muxterm
 
-# Dev mode: Vite watch (frontend) + in-instance Caddy + air (Go hot-reload).
-#   - Vite rebuilds web/dist on frontend changes
+# Dev mode: demo backend + demo frontend + Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
+#   - demo/backend  node server.mjs on :9002  (log: tmp/demo-backend.out)
+#   - demo/frontend Vite dev server on :5173   (log: tmp/demo-frontend.out)
+#   - Vite rebuilds web/dist on muxterm frontend changes
 #   - air detects web/dist + Go changes and rebuilds/restarts muxterm DEV on
 #     127.0.0.1:9091 (loopback — serve args set in .air.toml)
 #   - in-instance Caddy listens on the instance IP :8091 and proxies to the app,
 #     so muxterm sees a loopback peer (auth-bypass) and the host Caddy can reach it
 #   - Production (systemd) runs separately on :9090 from ~/.local/bin/muxterm — undisturbed.
+# First run: `make demo-install` to install demo npm deps.
 # Exposed by the HOST Caddy at https://muxterm-dev.ampbox.io (see /mnt/services/muxterm-dev.caddy)
-# Ctrl-C stops all three. Requires: air + caddy.
+# Ctrl-C stops all processes. Requires: air + caddy.
 dev:
 	@mkdir -p tmp
-	@cd $(WEB_SRC) && npx vite build --watch >/dev/null & VITE_PID=$$!; \
+	@(cd demo/backend  && exec node server.mjs)                  > tmp/demo-backend.out  2>&1 & DEMO_BACKEND_PID=$$!; \
+	(cd demo/frontend && exec ./node_modules/.bin/vite)           > tmp/demo-frontend.out 2>&1 & DEMO_FRONTEND_PID=$$!; \
+	cd $(WEB_SRC) && npx vite build --watch >/dev/null & VITE_PID=$$!; \
 	$(CADDY) run --config ./Caddyfile > tmp/caddy.out 2>&1 & CADDY_PID=$$!; \
-	trap 'kill $$VITE_PID $$CADDY_PID 2>/dev/null || true' EXIT INT TERM; \
-	echo "dev stack: muxterm -> 127.0.0.1:9091 | instance Caddy -> 10.66.204.209:8091 | host -> https://muxterm-dev.ampbox.io"; \
+	trap 'kill $$DEMO_BACKEND_PID $$DEMO_FRONTEND_PID $$VITE_PID $$CADDY_PID 2>/dev/null || true' EXIT INT TERM; \
+	echo "dev stack:"; \
+	echo "  muxterm       http://127.0.0.1:9091  (air hot-reload)"; \
+	echo "  demo backend  http://localhost:9002   (log: tmp/demo-backend.out)"; \
+	echo "  demo frontend http://localhost:5173   (log: tmp/demo-frontend.out)"; \
 	$(AIR)
+
+# Install demo npm dependencies (run once, or after package.json changes).
+demo-install:
+	cd demo/backend  && npm install
+	cd demo/frontend && npm install
+
+# Start demo services only — assumes muxterm is already running at :9091.
+# Ctrl-C stops both. Requires: demo-install run at least once.
+demo:
+	@mkdir -p tmp
+	@(cd demo/backend  && exec node server.mjs)         > tmp/demo-backend.out  2>&1 & DEMO_BACKEND_PID=$$!; \
+	(cd demo/frontend && exec ./node_modules/.bin/vite)  > tmp/demo-frontend.out 2>&1 & DEMO_FRONTEND_PID=$$!; \
+	trap 'kill $$DEMO_BACKEND_PID $$DEMO_FRONTEND_PID 2>/dev/null || true' EXIT INT TERM; \
+	echo "demo backend  http://localhost:9002   (log: tmp/demo-backend.out)"; \
+	echo "demo frontend http://localhost:5173   (log: tmp/demo-frontend.out)"; \
+	wait
 
 # Build the production binary from origin/main and install to the stable path.
 # This is what systemd runs — separate from ./bin/muxterm used by `make dev`.
