@@ -233,6 +233,9 @@ export class MuxStore {
           rows: msg.rows ?? 0,
           title: msg.title,
           clientRef: msg.clientRef,
+          surfaceKind: msg.surfaceKind,
+          browserPort: msg.browserPort,
+          browserPath: msg.browserPath,
         });
         break;
       }
