@@ -8,6 +8,7 @@ bin/
 # Frontend
 node_modules/
 web/dist/
+demo/frontend/dist/
 web/package-lock.json
 
 # IDE/Editor

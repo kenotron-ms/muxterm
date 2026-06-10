@@ -16,7 +16,7 @@ build: web
 
 # Dev mode: demo backend + demo frontend + Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
 #   - demo/backend  node server.mjs on :9002  (log: tmp/demo-backend.out)
-#   - demo/frontend Vite dev server on :5173   (log: tmp/demo-frontend.out)
+#   - demo/frontend Vite build+preview on :5173  (log: tmp/demo-frontend.out)
 #   - Vite rebuilds web/dist on muxterm frontend changes
 #   - air detects web/dist + Go changes and rebuilds/restarts muxterm DEV on
 #     127.0.0.1:9091 (loopback — serve args set in .air.toml)
@@ -28,8 +28,8 @@ build: web
 # Ctrl-C stops all processes. Requires: air + caddy.
 dev:
 	@mkdir -p tmp
-	@(cd demo/backend  && exec node server.mjs)                  > tmp/demo-backend.out  2>&1 & DEMO_BACKEND_PID=$$!; \
-	(cd demo/frontend && exec ./node_modules/.bin/vite)           > tmp/demo-frontend.out 2>&1 & DEMO_FRONTEND_PID=$$!; \
+	@(cd demo/backend  && exec node server.mjs)                                                 > tmp/demo-backend.out  2>&1 & DEMO_BACKEND_PID=$$!; \
+	(cd demo/frontend && ./node_modules/.bin/vite build --minify false && exec ./node_modules/.bin/vite preview) > tmp/demo-frontend.out 2>&1 & DEMO_FRONTEND_PID=$$!; \
 	cd $(WEB_SRC) && npx vite build --watch >/dev/null & VITE_PID=$$!; \
 	$(CADDY) run --config ./Caddyfile > tmp/caddy.out 2>&1 & CADDY_PID=$$!; \
 	trap 'kill $$DEMO_BACKEND_PID $$DEMO_FRONTEND_PID $$VITE_PID $$CADDY_PID 2>/dev/null || true' EXIT INT TERM; \
@@ -48,8 +48,8 @@ demo-install:
 # Ctrl-C stops both. Requires: demo-install run at least once.
 demo:
 	@mkdir -p tmp
-	@(cd demo/backend  && exec node server.mjs)         > tmp/demo-backend.out  2>&1 & DEMO_BACKEND_PID=$$!; \
-	(cd demo/frontend && exec ./node_modules/.bin/vite)  > tmp/demo-frontend.out 2>&1 & DEMO_FRONTEND_PID=$$!; \
+	@(cd demo/backend  && exec node server.mjs)                                                 > tmp/demo-backend.out  2>&1 & DEMO_BACKEND_PID=$$!; \
+	(cd demo/frontend && ./node_modules/.bin/vite build --minify false && exec ./node_modules/.bin/vite preview) > tmp/demo-frontend.out 2>&1 & DEMO_FRONTEND_PID=$$!; \
 	trap 'kill $$DEMO_BACKEND_PID $$DEMO_FRONTEND_PID 2>/dev/null || true' EXIT INT TERM; \
 	echo "demo backend  http://localhost:9002   (log: tmp/demo-backend.out)"; \
 	echo "demo frontend http://localhost:5173   (log: tmp/demo-frontend.out)"; \
