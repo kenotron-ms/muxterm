@@ -82,4 +82,3 @@ func (wt *workspaceTools) closeWorkspace(args map[string]any) (string, error) {
 
 	return jsonText(map[string]any{"ok": true}), nil
 }
-

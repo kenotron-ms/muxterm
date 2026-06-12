@@ -147,4 +147,3 @@ func (tt *terminalTools) getScreen(args map[string]any) (string, error) {
 		"cursor": cursor,
 	}), nil
 }
-

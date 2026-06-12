@@ -132,4 +132,3 @@ func (lt *layoutTools) listPanes(args map[string]any) (string, error) {
 func (lt *layoutTools) getLayout(_ map[string]any) (string, error) {
 	return lt.c.conn.GetLayout()
 }
-
