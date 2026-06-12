@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/muxterm/internal/server"
+	"github.com/kenotron-ms/muxterm/internal/server"
 )
 
 // captureStdout runs fn and returns whatever it printed to os.Stdout.

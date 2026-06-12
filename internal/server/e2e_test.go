@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/user/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // startEchoDaemon launches a scripted Unix-socket daemon that speaks the frozen

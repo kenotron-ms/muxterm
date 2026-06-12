@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"github.com/user/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // fakeDaemonConn is a test double satisfying DaemonConn. It records the calls it

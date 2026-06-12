@@ -16,13 +16,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/user/muxterm/internal/config"
-	"github.com/user/muxterm/internal/deploy"
-	"github.com/user/muxterm/internal/mcp"
-	"github.com/user/muxterm/internal/server"
-	"github.com/user/muxterm/internal/service"
-	"github.com/user/muxterm/internal/sessiond"
-	webstatic "github.com/user/muxterm/web"
+	"github.com/kenotron-ms/muxterm/internal/config"
+	"github.com/kenotron-ms/muxterm/internal/deploy"
+	"github.com/kenotron-ms/muxterm/internal/mcp"
+	"github.com/kenotron-ms/muxterm/internal/server"
+	"github.com/kenotron-ms/muxterm/internal/service"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	webstatic "github.com/kenotron-ms/muxterm/web"
 )
 
 var version = "dev"

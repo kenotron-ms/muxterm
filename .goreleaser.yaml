@@ -53,11 +53,11 @@ changelog:
 
 brews:
   - name: muxterm
-    homepage: "https://github.com/user/muxterm"
+    homepage: "https://github.com/kenotron-ms/muxterm"
     description: "Web-first terminal multiplexer with MCP agent integration"
     license: "MIT"
     repository:
-      owner: user
+      owner: kenotron-ms
       name: homebrew-tap
       branch: main
     folder: Formula

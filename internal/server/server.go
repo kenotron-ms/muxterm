@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/user/muxterm/internal/proxy"
-	"github.com/user/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/proxy"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 func init() {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // startMCPTestServer starts a real sessiond daemon on a short socket path

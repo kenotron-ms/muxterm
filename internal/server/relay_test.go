@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/user/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // newTestHub builds a Hub whose dialer always returns the supplied DaemonConn,

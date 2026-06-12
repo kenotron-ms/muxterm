@@ -1,4 +1,4 @@
-module github.com/user/muxterm
+module github.com/kenotron-ms/muxterm
 
 go 1.24.2
 

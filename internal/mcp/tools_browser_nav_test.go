@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // browserResponder attaches a second sessiond client to wsID acting as the

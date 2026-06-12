@@ -6,19 +6,17 @@ A web-first terminal multiplexer. Persistent sessions, split panes, and a browse
 
 ### macOS — Homebrew
 ```bash
-brew install user/tap/muxterm
+brew install kenotron-ms/tap/muxterm
 ```
 
 ### macOS / Linux — curl
 ```bash
-curl -fsSL https://github.com/user/muxterm/releases/latest/download/muxterm_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar -xz -C /usr/local/bin muxterm
+curl -fsSL https://github.com/kenotron-ms/muxterm/releases/latest/download/muxterm_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar -xz -C /usr/local/bin muxterm
 ```
 
 ### Windows — Scoop (coming soon)
 
-Pre-built binaries for each platform are attached to every [GitHub Release](https://github.com/user/muxterm/releases).
-
-> **Note:** Replace `user` in the install commands with the real GitHub username once the repo is published.
+Pre-built binaries for each platform are attached to every [GitHub Release](https://github.com/kenotron-ms/muxterm/releases).
 
 ## What is this?
 

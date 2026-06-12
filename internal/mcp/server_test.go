@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/user/muxterm/internal/mcp"
+	"github.com/kenotron-ms/muxterm/internal/mcp"
 )
 
 // rpcEnvelope is a minimal struct for reading both results and errors from the server.

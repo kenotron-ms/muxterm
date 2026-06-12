@@ -1,6 +1,6 @@
 package server
 
-import "github.com/user/muxterm/internal/sessiond"
+import "github.com/kenotron-ms/muxterm/internal/sessiond"
 
 // DaemonConn is the serve-side seam over a single sessiond connection. One
 // DaemonConn backs exactly one browser WebSocket: the serve layer dials a fresh

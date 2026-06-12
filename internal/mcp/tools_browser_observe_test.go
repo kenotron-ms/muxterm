@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // TestBrowserSnapshotReturnsTree verifies that browserSnapshot sends action

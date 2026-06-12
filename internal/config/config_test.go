@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/user/muxterm/internal/config"
+	"github.com/kenotron-ms/muxterm/internal/config"
 )
 
 // writeTempConfig writes contents to a config.toml file inside t.TempDir()
