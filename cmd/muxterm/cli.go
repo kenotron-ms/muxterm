@@ -10,12 +10,14 @@ import (
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode        string // local, serve, sessiond, deploy, install, uninstall, doctor, version, open-browser, help
+	Mode        string // local, serve, sessiond, deploy, install, uninstall, doctor, version, open-browser, mcp, help
 	Addr        string // listen address
 	Secret      string // auth token for serve mode
 	NoAuth      bool   // skip WebSocket auth check (dev only — never use in production)
 	Target      string // SSH target for deploy mode
 	BrowserPort int    // open-browser mode only: the port to open as a browser pane
+	Transport   string // mcp mode: transport type ("stdio"); SSE arrives in Phase 5
+	MCPPort     int    // mcp mode: SSE port (Phase 5, parsed but rejected for now)
 }
 
 // printUsage writes top-level help to w.
@@ -29,6 +31,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm uninstall           Remove system service")
 	fmt.Fprintln(w, "  muxterm deploy <host>       Deploy to a remote host via SSH")
 	fmt.Fprintln(w, "  muxterm doctor              Check daemon and service status")
+	fmt.Fprintln(w, "  muxterm mcp [flags]         Start MCP server (stdio transport)")
 	fmt.Fprintln(w, "  muxterm version             Print version")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Run 'muxterm <command> --help' for command-specific flags.")
@@ -63,9 +66,35 @@ func ParseArgs(args []string) (Config, error) {
 		return Config{Mode: "uninstall"}, nil
 	case "doctor":
 		return Config{Mode: "doctor"}, nil
+	case "mcp":
+		return parseMCP(args[1:])
 	default:
 		return Config{}, fmt.Errorf("unknown command %q\n\nRun 'muxterm --help' for usage.", args[0])
 	}
+}
+
+func parseMCP(args []string) (Config, error) {
+	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	transport := fs.String("transport", "stdio", "MCP transport type (only 'stdio' supported; SSE arrives in Phase 5)")
+	port := fs.Int("port", 9092, "MCP SSE port (Phase 5, parsed but rejected for now)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stdout, "Usage: muxterm mcp [flags]")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Start MCP server using stdio transport (JSON-RPC 2.0 over stdin/stdout).")
+		fmt.Fprintln(os.Stdout, "stdout is the JSON-RPC transport; all logging goes to stderr.")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Flags:")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	return Config{
+		Mode:      "mcp",
+		Transport: *transport,
+		MCPPort:   *port,
+	}, nil
 }
 
 func parseServe(args []string) (Config, error) {

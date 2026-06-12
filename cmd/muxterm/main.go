@@ -18,6 +18,7 @@ import (
 
 	"github.com/user/muxterm/internal/config"
 	"github.com/user/muxterm/internal/deploy"
+	"github.com/user/muxterm/internal/mcp"
 	"github.com/user/muxterm/internal/server"
 	"github.com/user/muxterm/internal/service"
 	"github.com/user/muxterm/internal/sessiond"
@@ -86,8 +87,13 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "mcp":
+		if err := runMCPCommand(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "version":
-		fmt.Printf("muxterm %s\n", version)
+		fmt.Printf("muxterm %s (MCP: stdio)\n", version)
 	}
 }
 
@@ -340,6 +346,24 @@ func runOpenBrowser(cfg Config) error {
 	io.Copy(io.Discard, resp.Body) //nolint:errcheck
 	fmt.Printf("browser pane opened: port %d\n", cfg.BrowserPort)
 	return nil
+}
+
+// runMCPCommand starts the MCP server with stdio transport. stdout is the
+// JSON-RPC transport; all logging is redirected to stderr so it does not
+// corrupt the wire protocol. Only the "stdio" transport is supported in Phase
+// 4; SSE will be added in Phase 5.
+func runMCPCommand(cfg Config) error {
+	if cfg.Transport != "stdio" {
+		return fmt.Errorf("unsupported MCP transport %q: only stdio supported; SSE arrives in Phase 5", cfg.Transport)
+	}
+	// Redirect all log output to stderr so stdout stays clean for JSON-RPC.
+	log.SetOutput(os.Stderr)
+
+	srv, closer := mcp.NewStdioServer()
+	defer closer() //nolint:errcheck
+
+	log.Printf("mcp: stdio server ready")
+	return srv.Run()
 }
 
 // mustSubFS returns a sub-FS rooted at dir, panicking on error (embed paths
