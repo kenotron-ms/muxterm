@@ -547,3 +547,21 @@ func TestWorks_ProxyHeadersInjectedIntoProxiedRequest(t *testing.T) {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer tok123")
 	}
 }
+
+// TestInjectShimContainsAgentBridge verifies that the bridge IIFE appended to
+// shimScript contains all required identifiers so that a parent frame can
+// communicate with the proxied page via postMessage.
+func TestInjectShimContainsAgentBridge(t *testing.T) {
+	result := string(injectShim([]byte("<html><head></head><body></body></html>")))
+	for _, want := range []string{
+		"mux-shim-ready",
+		"handleAction",
+		"mux-page-navigated",
+		"function snapshot()",
+		"function resolveTarget(",
+	} {
+		if !strings.Contains(result, want) {
+			t.Errorf("injectShim result does not contain %q", want)
+		}
+	}
+}

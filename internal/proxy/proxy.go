@@ -90,6 +90,152 @@ const shimScript = `<script>
 
   console.debug('[muxterm shim] active — fetch + XHR + WebSocket covered');
 })();
+
+/* muxterm agent bridge — postMessage command interface */
+(function() {
+  'use strict';
+
+  const _refs = new Map();
+
+  function isVisible(el) {
+    var s = window.getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+  }
+
+  function isInteractive(el) {
+    var tag = el.tagName;
+    if (tag === 'A' || tag === 'BUTTON' || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    if (el.hasAttribute('onclick') || el.hasAttribute('tabindex')) return true;
+    return false;
+  }
+
+  function getImplicitRole(el) {
+    var roles = {
+      'A': 'link', 'BUTTON': 'button', 'INPUT': 'textbox', 'TEXTAREA': 'textbox',
+      'SELECT': 'combobox', 'IMG': 'img', 'NAV': 'navigation', 'MAIN': 'main',
+      'HEADER': 'banner', 'FOOTER': 'contentinfo', 'FORM': 'form',
+      'TABLE': 'table', 'LI': 'listitem', 'UL': 'list', 'OL': 'list',
+      'H1': 'heading', 'H2': 'heading', 'H3': 'heading',
+      'H4': 'heading', 'H5': 'heading', 'H6': 'heading'
+    };
+    return roles[el.tagName] || '';
+  }
+
+  function getAccessibleName(el) {
+    var label = el.getAttribute('aria-label');
+    if (label) return label;
+    var alt = el.getAttribute('alt');
+    if (alt) return alt;
+    var title = el.getAttribute('title');
+    if (title) return title;
+    if (el.tagName === 'INPUT') {
+      var ph = el.getAttribute('placeholder');
+      if (ph) return ph;
+    }
+    if (el.tagName === 'BUTTON' || el.tagName === 'A') return (el.textContent || '').slice(0, 50);
+    return '';
+  }
+
+  function buildTree(el, depth, counter) {
+    var lines = [];
+    var children = el.children;
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      if (!isVisible(child)) continue;
+      var role = child.getAttribute('role') || getImplicitRole(child);
+      var name = getAccessibleName(child);
+      var ref = '';
+      if (isInteractive(child) || role || name) {
+        counter[0]++;
+        var id = 'e' + counter[0];
+        _refs.set(id, child);
+        ref = ' [ref=' + id + ']';
+      }
+      var extra = '';
+      var ph = child.getAttribute('placeholder');
+      if (ph) extra += ' [placeholder=' + ph + ']';
+      var cs = window.getComputedStyle(child);
+      if (cs.cursor === 'pointer') extra += ' [cursor=pointer]';
+      var tag = child.tagName;
+      var level = '';
+      if (tag === 'H1') level = ' [level=1]';
+      else if (tag === 'H2') level = ' [level=2]';
+      else if (tag === 'H3') level = ' [level=3]';
+      else if (tag === 'H4') level = ' [level=4]';
+      else if (tag === 'H5') level = ' [level=5]';
+      else if (tag === 'H6') level = ' [level=6]';
+      var indent = '';
+      for (var d = 0; d < depth; d++) indent += '  ';
+      var line = indent + '- ' + (role || tag.toLowerCase()) + (name ? ' "' + name + '"' : '');
+      if (child.childNodes.length === 1 && child.childNodes[0].nodeType === 3) {
+        var text = (child.textContent || '').trim();
+        if (text && !name) line += ' "' + text.slice(0, 80) + '"';
+      }
+      line += ref + extra + level;
+      lines.push(line);
+      var sub = buildTree(child, depth + 1, counter);
+      for (var j = 0; j < sub.length; j++) lines.push(sub[j]);
+    }
+    return lines;
+  }
+
+  function snapshot() {
+    _refs.clear();
+    var counter = [0];
+    var lines = buildTree(document.body, 0, counter);
+    return {snapshot: lines.join('\n')};
+  }
+
+  function resolveTarget(refOrSelector) {
+    if (!refOrSelector) throw new Error('target is empty');
+    if (/^e\d+$/.test(refOrSelector)) {
+      var el = _refs.get(refOrSelector);
+      if (!el) throw new Error('ref ' + refOrSelector + ' not found \u2014 call snapshot first');
+      return el;
+    }
+    var found = document.querySelector(refOrSelector);
+    if (!found) throw new Error('no element matches ' + refOrSelector);
+    return found;
+  }
+
+  function handleAction(msg) {
+    switch (msg.action) {
+      case 'snapshot':  return Promise.resolve(snapshot());
+      case 'click':     return click(msg.ref || msg.selector);
+      case 'fill':      return fill(msg.ref || msg.selector, msg.value || '');
+      case 'type_':     return type_(msg.value);
+      case 'press':     return press(msg.key);
+      case 'hover':     return hover(msg.ref || msg.selector);
+      case 'select_':   return select_(msg.ref || msg.selector, msg.value);
+      case 'eval_':     return eval_(msg.expr, msg.ref);
+      case 'goBack':    return goBack();
+      case 'goForward': return goForward();
+      case 'reload':    return reload();
+      default:          return Promise.reject('unknown action: ' + msg.action);
+    }
+  }
+
+  window.addEventListener('message', function(ev) {
+    var msg = ev.data;
+    if (typeof msg.type !== 'string' || msg.type.indexOf('mux-') !== 0) return;
+    var cid = msg.cid;
+    handleAction(msg).then(function(result) {
+      window.parent.postMessage(Object.assign({}, result, {type: msg.type + '-result', cid: cid}), '*');
+    }).catch(function(err) {
+      window.parent.postMessage({type: msg.type + '-result', cid: cid, error: String(err)}, '*');
+    });
+  });
+
+  window.parent.postMessage({type: 'mux-shim-ready', url: location.href}, '*');
+
+  if (navigator.serviceWorker) {
+    navigator.serviceWorker.addEventListener('message', function(ev) {
+      if (ev.data.type === 'mux-page-navigated') {
+        window.parent.postMessage({type: 'mux-page-navigated', url: ev.data.url}, '*');
+      }
+    });
+  }
+})();
 </script>`
 
 // swScript is served at /sw.js.
