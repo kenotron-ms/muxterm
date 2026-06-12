@@ -101,7 +101,7 @@ const swRegistrationSnippet = `<script>
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/p/sw.js', { scope: '/p/' })
     .then(function(r) { console.log('[bridge-poc] SW registered', r.scope); })
-    .catch(function(e) { console.log('[bridge-poc] SW registration failed', e); });
+    .catch(function(e) { console.error('[bridge-poc] SW registration failed', e); });
 }
 </script>`
 

@@ -1,6 +1,7 @@
 # Binaries
 bin/
 /muxterm
+/bridge-poc
 *.exe
 *.dll
 *.so
