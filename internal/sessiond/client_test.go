@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -20,9 +21,19 @@ type fakeDaemon struct {
 
 // newFakeDaemon starts a fake daemon that accepts exactly one connection and
 // passes the accepted net.Conn to handler in a goroutine.
+//
+// We use os.MkdirTemp("/tmp", ...) rather than t.TempDir() to avoid macOS's
+// 104-byte limit on Unix socket paths: t.TempDir() can produce paths like
+// /var/folders/_j/<long-hash>/T/<TestName><random>/001/ that exceed the limit
+// when combined with the socket filename and a long test name.
 func newFakeDaemon(t *testing.T, handler func(conn net.Conn)) *fakeDaemon {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "fake.sock")
+	dir, err := os.MkdirTemp("/tmp", "mux")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)

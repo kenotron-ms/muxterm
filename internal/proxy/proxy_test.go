@@ -601,3 +601,53 @@ func TestInjectShimContainsAgentBridge(t *testing.T) {
 		}
 	}
 }
+
+// TestShimActionStringsMatchSpec verifies that handleAction uses the spec-defined
+// public action strings ('type', 'select', 'eval', 'go-back', 'go-forward')
+// rather than leaking internal JS function names (type_, select_, goBack…).
+func TestShimActionStringsMatchSpec(t *testing.T) {
+	result := string(injectShim([]byte("<html><head></head><body></body></html>")))
+	for _, want := range []string{
+		"case 'type':",
+		"case 'select':",
+		"case 'eval':",
+		"case 'go-back':",
+		"case 'go-forward':",
+	} {
+		if !strings.Contains(result, want) {
+			t.Errorf("handleAction switch missing spec-compliant case string %q", want)
+		}
+	}
+	for _, leaked := range []string{
+		"case 'type_':",
+		"case 'select_':",
+		"case 'eval_':",
+		"case 'goBack':",
+		"case 'goForward':",
+	} {
+		if strings.Contains(result, leaked) {
+			t.Errorf("handleAction switch leaks internal JS name as public API string: %q", leaked)
+		}
+	}
+}
+
+// TestShimFillSupportsTextarea verifies that fill() and type_() fall back to the
+// HTMLTextAreaElement native setter so they don't crash on <textarea> elements.
+func TestShimFillSupportsTextarea(t *testing.T) {
+	result := string(injectShim([]byte("<html><head></head><body></body></html>")))
+	if !strings.Contains(result, "HTMLTextAreaElement") {
+		t.Error("fill()/type_() missing HTMLTextAreaElement fallback — crashes on <textarea> elements")
+	}
+}
+
+// TestAgentSWScriptHasNoLeakyNavigationsArray verifies that the /p/sw.js service
+// worker does not maintain an unbounded array of navigation URLs, which would
+// leak memory indefinitely in long-running browser sessions.
+func TestAgentSWScriptHasNoLeakyNavigationsArray(t *testing.T) {
+	rr := httptest.NewRecorder()
+	ServeAgentServiceWorker(rr, httptest.NewRequest("GET", "/p/sw.js", nil))
+	body := rr.Body.String()
+	if strings.Contains(body, "const navigations") {
+		t.Error("pSwScript contains unbounded navigations[] array — memory leak in long-running SWs; remove it")
+	}
+}
