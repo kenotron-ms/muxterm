@@ -198,6 +198,82 @@ const shimScript = `<script>
     return found;
   }
 
+  function click(target) {
+    var el = resolveTarget(target);
+    el.click();
+    return Promise.resolve({ok: true});
+  }
+
+  function fill(target, value) {
+    var el = resolveTarget(target);
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+    return Promise.resolve({ok: true});
+  }
+
+  function type_(value) {
+    var el = document.activeElement || document.body;
+    var chars = value.split('');
+    for (var i = 0; i < chars.length; i++) {
+      var ch = chars[i];
+      el.dispatchEvent(new KeyboardEvent('keydown', {key: ch, bubbles: true}));
+      el.dispatchEvent(new KeyboardEvent('keypress', {key: ch, bubbles: true}));
+      var tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(el, el.value + ch);
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+      }
+      el.dispatchEvent(new KeyboardEvent('keyup', {key: ch, bubbles: true}));
+    }
+    return Promise.resolve({ok: true});
+  }
+
+  function press(key) {
+    var el = document.activeElement || document.body;
+    el.dispatchEvent(new KeyboardEvent('keydown', {key: key, bubbles: true}));
+    el.dispatchEvent(new KeyboardEvent('keyup', {key: key, bubbles: true}));
+    if (key === 'Enter') {
+      var tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'BUTTON') {
+        el.dispatchEvent(new Event('submit', {bubbles: true}));
+        if (el.form) el.form.dispatchEvent(new Event('submit', {bubbles: true}));
+      }
+    }
+    return Promise.resolve({ok: true});
+  }
+
+  function hover(target) {
+    var el = resolveTarget(target);
+    el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
+    el.dispatchEvent(new MouseEvent('mouseenter', {bubbles: true}));
+    return Promise.resolve({ok: true});
+  }
+
+  function select_(target, value) {
+    var el = resolveTarget(target);
+    if (el.tagName !== 'SELECT') throw new Error('element is not a SELECT');
+    el.value = value;
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+    return Promise.resolve({ok: true});
+  }
+
+  function eval_(expr, ref) {
+    try {
+      var el = ref ? resolveTarget(ref) : undefined;
+      var fn = new Function('el', 'return (' + expr + ')');
+      var result = fn(el);
+      if (result && typeof result.then === 'function') {
+        return result.then(function(v) { return {result: v}; });
+      }
+      return Promise.resolve({result: result});
+    } catch(e) {
+      return Promise.reject(e);
+    }
+  }
+
   function handleAction(msg) {
     switch (msg.action) {
       case 'snapshot':  return Promise.resolve(snapshot());

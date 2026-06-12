@@ -548,6 +548,25 @@ func TestWorks_ProxyHeadersInjectedIntoProxiedRequest(t *testing.T) {
 	}
 }
 
+// TestInjectShimContainsInteractionCommands verifies that the bridge IIFE
+// contains all DOM interaction command implementations referenced by handleAction.
+func TestInjectShimContainsInteractionCommands(t *testing.T) {
+	result := string(injectShim([]byte("<html><head></head><body></body></html>")))
+	for _, want := range []string{
+		"function click(",
+		"function fill(",
+		"function type_(",
+		"function press(",
+		"function hover(",
+		"function select_(",
+		"function eval_(",
+	} {
+		if !strings.Contains(result, want) {
+			t.Errorf("injectShim result does not contain %q", want)
+		}
+	}
+}
+
 // TestInjectShimContainsAgentBridge verifies that the bridge IIFE appended to
 // shimScript contains all required identifiers so that a parent frame can
 // communicate with the proxied page via postMessage.
