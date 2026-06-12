@@ -2,6 +2,29 @@
 
 A web-first terminal multiplexer. Persistent sessions, split panes, and a browser UI — backed by a custom Go session daemon, not tmux.
 
+## Install
+
+### macOS — Homebrew
+```bash
+brew install user/tap/muxterm
+```
+
+### macOS / Linux — curl
+```bash
+curl -fsSL https://github.com/user/muxterm/releases/latest/download/muxterm_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar -xz -C /usr/local/bin muxterm
+```
+
+### Go install (builds from source — requires Go 1.22+ and Node.js 18+)
+```bash
+go install github.com/user/muxterm/cmd/muxterm@latest
+```
+
+### Windows — Scoop (coming soon)
+
+Pre-built binaries for each platform are attached to every [GitHub Release](https://github.com/user/muxterm/releases).
+
+> **Note:** Replace `user` in the install commands with the real GitHub username once the repo is published.
+
 ## What is this?
 
 muxterm is a terminal multiplexer where the UI lives in a browser. Open splits, create workspaces, resize panes — all standard multiplexer behavior, except it's HTML and xterm.js instead of ncurses, and it runs as a web app you install once and connect to from anywhere.
