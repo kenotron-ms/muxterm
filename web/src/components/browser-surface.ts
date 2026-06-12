@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { customElement, property } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 
 /**
  * mux-browser-surface — NON-terminal pixel-box surface.
@@ -46,6 +46,13 @@ export class MuxBrowserSurface extends LitElement {
     .nav-btn:hover {
       background: #292e42;
     }
+    .nav-btn:disabled {
+      opacity: 0.3;
+      cursor: default;
+    }
+    .nav-btn:disabled:hover {
+      background: none;
+    }
 
     .address {
       flex: 1;
@@ -74,9 +81,24 @@ export class MuxBrowserSurface extends LitElement {
   @property({ type: String })
   url = 'about:blank';
 
+  // Client-side history stack for back/forward navigation.
+  // Tracks URLs committed via the address bar. In-frame link clicks are
+  // cross-origin and cannot be observed, so they are not tracked here.
+  private _historyPrev: string[] = [];
+  private _historyNext: string[] = [];
+
+  @state() private _canGoBack = false;
+  @state() private _canGoForward = false;
+
   private _onAddressChange(e: Event): void {
     const input = e.target as HTMLInputElement;
     const newUrl = input.value;
+    if (newUrl !== this.url) {
+      this._historyPrev.push(this.url);
+      this._historyNext = [];
+      this._canGoBack = this._historyPrev.length > 0;
+      this._canGoForward = false;
+    }
     this.url = newUrl;
     this.dispatchEvent(
       new CustomEvent('url-change', {
@@ -85,6 +107,22 @@ export class MuxBrowserSurface extends LitElement {
         detail: { url: newUrl },
       }),
     );
+  }
+
+  private _goBack(): void {
+    if (this._historyPrev.length === 0) return;
+    this._historyNext.unshift(this.url);
+    this.url = this._historyPrev.pop()!;
+    this._canGoBack = this._historyPrev.length > 0;
+    this._canGoForward = this._historyNext.length > 0;
+  }
+
+  private _goForward(): void {
+    if (this._historyNext.length === 0) return;
+    this._historyPrev.push(this.url);
+    this.url = this._historyNext.shift()!;
+    this._canGoBack = this._historyPrev.length > 0;
+    this._canGoForward = this._historyNext.length > 0;
   }
 
   private _reload(): void {
@@ -130,22 +168,27 @@ export class MuxBrowserSurface extends LitElement {
   }
 
   render() {
-    // sandbox intentionally omits allow-same-origin.
+    // sandbox intentionally omits allow-same-origin. See security note above.
     //
-    // allow-scripts + allow-same-origin defeats the sandbox entirely: a script
-    // in the frame can reach parent.document (same origin via proxy), remove the
-    // sandbox attribute, and reload — escaping all restrictions and gaining full
-    // access to muxterm's DOM, auth tokens, and WebSocket.
-    //
-    // Without allow-same-origin the frame gets an opaque origin: no DOM escape,
-    // no sandbox removal. The trade-offs:
-    //   - localStorage / cookies in the frame are blocked (opaque origin has no
-    //     storage). Most embedded dev servers don't need this.
-    //   - contentWindow.history is cross-origin and throws, so back/forward
-    //     buttons are removed. Reload works via iframe.src assignment instead.
+    // Back/forward use a client-side URL history stack rather than
+    // contentWindow.history (which throws cross-origin without allow-same-origin).
+    // They track address-bar navigations; in-frame link clicks are not tracked
+    // since we cannot observe cross-origin navigations.
     return html`
       <div class="bar">
-        <button class="nav-btn" @click="${this._reload}" title="Refresh">↺</button>
+        <button
+          class="nav-btn"
+          @click="${this._goBack}"
+          .disabled="${!this._canGoBack}"
+          title="Back"
+        >&#x2039;</button>
+        <button
+          class="nav-btn"
+          @click="${this._goForward}"
+          .disabled="${!this._canGoForward}"
+          title="Forward"
+        >&#x203A;</button>
+        <button class="nav-btn" @click="${this._reload}" title="Refresh">&#x21BA;</button>
         <input
           class="address"
           type="text"

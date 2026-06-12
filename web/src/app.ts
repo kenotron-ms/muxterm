@@ -654,9 +654,19 @@ export class MuxApp extends LitElement {
   };
 
   private _onBrowserPaneOpen = (e: Event): void => {
-    const { browserPort } = (e as CustomEvent<{ browserPort: number }>).detail;
-    if (browserPort < 1 || browserPort > 65535) return;
-    this._socket?.createBrowserPane(browserPort, '/');
+    const { browserUrl } = (e as CustomEvent<{ browserUrl: string }>).detail;
+    // Determine if this is a local proxy URL or a direct external URL
+    let port = 0;
+    let path = browserUrl;
+    try {
+      const parsed = new URL(browserUrl);
+      const hostname = parsed.hostname;
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        port = parsed.port ? parseInt(parsed.port, 10) : 80;
+        path = parsed.pathname || '/';
+      }
+    } catch { /* use defaults */ }
+    this._socket?.createBrowserPane(port, path);
   };
 
   private _onPaneNavigate = (e: Event): void => {

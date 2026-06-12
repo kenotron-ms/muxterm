@@ -123,7 +123,11 @@ class BrowserRenderer implements IContentRenderer {
   }
 
   init(): void {
-    const proxyUrl = `${location.origin}/p/${this._port}${this._path}`;
+    // port=0 means the path IS the full URL (external/direct).
+    // port>0 means proxy through /p/{port}/.
+    const proxyUrl = this._port === 0
+      ? this._path
+      : `${location.origin}/p/${this._port}${this._path}`;
     const surface = document.createElement('mux-browser-surface') as MuxBrowserSurface;
     surface.url = proxyUrl;
     this.element.appendChild(surface);
@@ -148,22 +152,23 @@ class BrowserRenderer implements IContentRenderer {
 
     this.element.addEventListener('url-change', (e: Event) => {
       const { url } = (e as CustomEvent<{ url: string }>).detail;
-      try {
-        const parsed = new URL(url);
-        const prefix = `/p/${this._port}`;
-        const browserPath = parsed.pathname.startsWith(prefix)
-          ? parsed.pathname.slice(prefix.length) || '/'
-          : parsed.pathname;
-        this.element.dispatchEvent(
-          new CustomEvent('pane-navigate', {
-            bubbles: true,
-            composed: true,
-            detail: { paneId: this._paneId, browserPath },
-          }),
-        );
-      } catch {
-        // silently ignore malformed URLs
+      let browserPath = url;
+      if (this._port > 0) {
+        try {
+          const parsed = new URL(url);
+          const prefix = `/p/${this._port}`;
+          browserPath = parsed.pathname.startsWith(prefix)
+            ? parsed.pathname.slice(prefix.length) || '/'
+            : parsed.pathname;
+        } catch { /* use url as-is */ }
       }
+      this.element.dispatchEvent(
+        new CustomEvent('pane-navigate', {
+          bubbles: true,
+          composed: true,
+          detail: { paneId: this._paneId, browserPath },
+        }),
+      );
     });
   }
 
@@ -367,13 +372,11 @@ export class MuxDock extends LitElement {
     popover.style.right = `${window.innerWidth - rect.right}px`;
 
     const label = document.createElement('label');
-    label.textContent = 'Port';
+    label.textContent = 'URL';
 
     const input = document.createElement('input');
-    input.type = 'number';
-    input.min = '1';
-    input.max = '65535';
-    input.placeholder = '5173';
+    input.type = 'text';
+    input.placeholder = 'http://localhost:5173';
 
     const errorDiv = document.createElement('div');
     errorDiv.className = 'mux-browser-error';
@@ -392,18 +395,31 @@ export class MuxDock extends LitElement {
     input.focus();
 
     const submit = (): void => {
-      const portStr = input.value.trim();
-      const port = parseInt(portStr, 10);
-      if (!portStr || isNaN(port) || port < 1 || port > 65535) {
-        errorDiv.textContent = 'Enter a port between 1 and 65535';
+      let rawUrl = input.value.trim();
+      if (!rawUrl) {
+        errorDiv.textContent = 'Enter a URL';
         return;
       }
+      // If it looks like a bare host:port (e.g. "localhost:5173" or "5173"), prepend http://
+      if (!/^https?:\/\//i.test(rawUrl)) {
+        // bare port number → localhost shorthand
+        if (/^\d+$/.test(rawUrl)) rawUrl = `http://localhost:${rawUrl}`;
+        else rawUrl = `http://${rawUrl}`;
+      }
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(rawUrl);
+      } catch {
+        errorDiv.textContent = 'Enter a valid URL';
+        return;
+      }
+      void parsedUrl; // used for validation only
       this._closeBrowserPopover();
       this.dispatchEvent(
         new CustomEvent('browser-pane-open', {
           bubbles: true,
           composed: true,
-          detail: { browserPort: port },
+          detail: { browserUrl: rawUrl },
         }),
       );
     };
@@ -725,7 +741,7 @@ export class MuxDock extends LitElement {
           letter-spacing: 0.04em;
           text-transform: uppercase;
         }
-        mux-dock .mux-browser-popover input[type='number'] {
+        mux-dock .mux-browser-popover input[type='text'] {
           background: #24283b;
           color: #c0caf5;
           border: 1px solid #414868;
@@ -737,18 +753,8 @@ export class MuxDock extends LitElement {
           width: 100%;
           box-sizing: border-box;
         }
-        mux-dock .mux-browser-popover input[type='number']:focus {
+        mux-dock .mux-browser-popover input[type='text']:focus {
           border-color: #7aa2f7;
-        }
-        /* Hide spin buttons */
-        mux-dock .mux-browser-popover input[type='number']::-webkit-inner-spin-button,
-        mux-dock .mux-browser-popover input[type='number']::-webkit-outer-spin-button {
-          -webkit-appearance: none;
-          margin: 0;
-        }
-        mux-dock .mux-browser-popover input[type='number'] {
-          -moz-appearance: textfield;
-          appearance: textfield;
         }
         mux-dock .mux-browser-open-btn {
           background: #3d59a1;

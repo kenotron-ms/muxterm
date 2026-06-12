@@ -59,6 +59,57 @@ describe('MuxBrowserSurface', () => {
     expect(navBtns.length).toBe(3);
   });
 
+  it('back button is disabled initially (no history to go back to)', async () => {
+    el = await fixture('about:blank');
+    const navBtns = el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.nav-btn');
+    // First button is Back
+    expect(navBtns[0].disabled).toBe(true);
+  });
+
+  it('forward button is disabled initially (no forward history)', async () => {
+    el = await fixture('about:blank');
+    const navBtns = el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.nav-btn');
+    // Second button is Forward
+    expect(navBtns[1].disabled).toBe(true);
+  });
+
+  it('back button becomes enabled after an address-bar navigation', async () => {
+    el = await fixture('about:blank');
+    const input = el.shadowRoot!.querySelector('.address') as HTMLInputElement;
+
+    // Navigate to a new URL via the address bar
+    input.value = 'https://example.com';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await el.updateComplete;
+
+    const navBtns = el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.nav-btn');
+    // Back should now be enabled
+    expect(navBtns[0].disabled).toBe(false);
+    // Forward should still be disabled (we haven't gone back yet)
+    expect(navBtns[1].disabled).toBe(true);
+  });
+
+  it('forward button becomes enabled after going back', async () => {
+    el = await fixture('about:blank');
+    const input = el.shadowRoot!.querySelector('.address') as HTMLInputElement;
+
+    // Navigate forward
+    input.value = 'https://example.com';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await el.updateComplete;
+
+    // Go back via the back button
+    const navBtns = el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.nav-btn');
+    navBtns[0].click();
+    await el.updateComplete;
+
+    const navBtnsAfter = el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.nav-btn');
+    // Back is now disabled (back at start)
+    expect(navBtnsAfter[0].disabled).toBe(true);
+    // Forward is now enabled
+    expect(navBtnsAfter[1].disabled).toBe(false);
+  });
+
   it('iframe sandbox includes allow-popups', async () => {
     el = await fixture('about:blank');
     const iframe = el.shadowRoot!.querySelector('iframe');

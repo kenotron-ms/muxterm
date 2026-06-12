@@ -60,70 +60,57 @@ describe('browser-pane-open and pane-navigate event handlers', () => {
     terminalRegistry.prune(new Set());
   });
 
-  // ── _onBrowserPaneOpen handler ────────────────────────────────────────────
+  // ── _onBrowserPaneOpen handler (browserUrl API) ──────────────────────────
 
-  it('_onBrowserPaneOpen calls createBrowserPane(port, "/") for a valid port', async () => {
+  it('_onBrowserPaneOpen calls createBrowserPane(port, "/") for a localhost URL', async () => {
     el = await fixture();
     const socket = (el as any)._socket;
     const spy = vi.spyOn(socket, 'createBrowserPane').mockImplementation(() => {});
 
     (el as any)._onBrowserPaneOpen(
-      new CustomEvent('browser-pane-open', { detail: { browserPort: 3000 } }),
+      new CustomEvent('browser-pane-open', { detail: { browserUrl: 'http://localhost:3000' } }),
     );
 
     expect(spy).toHaveBeenCalledWith(3000, '/');
     spy.mockRestore();
   });
 
-  it('_onBrowserPaneOpen does NOT call createBrowserPane when port is 0 (invalid)', async () => {
+  it('_onBrowserPaneOpen calls createBrowserPane(port, path) for a localhost URL with path', async () => {
     el = await fixture();
     const socket = (el as any)._socket;
     const spy = vi.spyOn(socket, 'createBrowserPane').mockImplementation(() => {});
 
     (el as any)._onBrowserPaneOpen(
-      new CustomEvent('browser-pane-open', { detail: { browserPort: 0 } }),
+      new CustomEvent('browser-pane-open', { detail: { browserUrl: 'http://localhost:5173/app' } }),
     );
 
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith(5173, '/app');
     spy.mockRestore();
   });
 
-  it('_onBrowserPaneOpen does NOT call createBrowserPane when port is 65536 (out of range)', async () => {
+  it('_onBrowserPaneOpen calls createBrowserPane(0, url) for an external URL', async () => {
     el = await fixture();
     const socket = (el as any)._socket;
     const spy = vi.spyOn(socket, 'createBrowserPane').mockImplementation(() => {});
 
     (el as any)._onBrowserPaneOpen(
-      new CustomEvent('browser-pane-open', { detail: { browserPort: 65536 } }),
+      new CustomEvent('browser-pane-open', { detail: { browserUrl: 'https://google.com' } }),
     );
 
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith(0, 'https://google.com');
     spy.mockRestore();
   });
 
-  it('_onBrowserPaneOpen calls createBrowserPane for boundary port 1', async () => {
+  it('_onBrowserPaneOpen calls createBrowserPane(port, "/") for http://127.0.0.1 (treated as localhost)', async () => {
     el = await fixture();
     const socket = (el as any)._socket;
     const spy = vi.spyOn(socket, 'createBrowserPane').mockImplementation(() => {});
 
     (el as any)._onBrowserPaneOpen(
-      new CustomEvent('browser-pane-open', { detail: { browserPort: 1 } }),
+      new CustomEvent('browser-pane-open', { detail: { browserUrl: 'http://127.0.0.1:5000' } }),
     );
 
-    expect(spy).toHaveBeenCalledWith(1, '/');
-    spy.mockRestore();
-  });
-
-  it('_onBrowserPaneOpen calls createBrowserPane for boundary port 65535', async () => {
-    el = await fixture();
-    const socket = (el as any)._socket;
-    const spy = vi.spyOn(socket, 'createBrowserPane').mockImplementation(() => {});
-
-    (el as any)._onBrowserPaneOpen(
-      new CustomEvent('browser-pane-open', { detail: { browserPort: 65535 } }),
-    );
-
-    expect(spy).toHaveBeenCalledWith(65535, '/');
+    expect(spy).toHaveBeenCalledWith(5000, '/');
     spy.mockRestore();
   });
 
@@ -144,13 +131,13 @@ describe('browser-pane-open and pane-navigate event handlers', () => {
 
   // ── Event listener registration in connectedCallback ─────────────────────
 
-  it('dispatching browser-pane-open on the element triggers createBrowserPane', async () => {
+  it('dispatching browser-pane-open with browserUrl on the element triggers createBrowserPane', async () => {
     el = await fixture();
     const socket = (el as any)._socket;
     const spy = vi.spyOn(socket, 'createBrowserPane').mockImplementation(() => {});
 
     el.dispatchEvent(
-      new CustomEvent('browser-pane-open', { detail: { browserPort: 8080 } }),
+      new CustomEvent('browser-pane-open', { detail: { browserUrl: 'http://localhost:8080' } }),
     );
 
     expect(spy).toHaveBeenCalledWith(8080, '/');

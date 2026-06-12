@@ -125,7 +125,7 @@ describe('MuxDock — browser popover', () => {
     return btn;
   }
 
-  it('_renderBrowserPopover appends a .mux-browser-popover with a number input to the dock', () => {
+  it('_renderBrowserPopover appends a .mux-browser-popover with a text input (URL, not port number) to the dock', () => {
     el = createDock();
     const inner = el as unknown as {
       _browserPopoverOpen: boolean;
@@ -135,8 +135,11 @@ describe('MuxDock — browser popover', () => {
     inner._renderBrowserPopover(makeTrigger(50, 200));
     const popover = el.querySelector('.mux-browser-popover');
     expect(popover).not.toBeNull();
-    const input = popover!.querySelector('input[type="number"]');
-    expect(input).not.toBeNull();
+    // Must be a text input (URL entry), NOT a number input (port entry)
+    const textInput = popover!.querySelector('input[type="text"]');
+    expect(textInput).not.toBeNull();
+    const numberInput = popover!.querySelector('input[type="number"]');
+    expect(numberInput).toBeNull();
   });
 
   it('_renderBrowserPopover uses position:fixed anchored to the trigger element', () => {
@@ -158,7 +161,7 @@ describe('MuxDock — browser popover', () => {
     expect(popover.style.right).toBe('724px');        // innerWidth(1024) - rect.right(300)
   });
 
-  it('browser-pane-open event is dispatched with browserPort when a valid port is submitted', () => {
+  it('browser-pane-open event is dispatched with browserUrl (full URL string) when a URL is submitted', () => {
     el = createDock();
     const inner = el as unknown as {
       _browserPopoverOpen: boolean;
@@ -171,16 +174,66 @@ describe('MuxDock — browser popover', () => {
     const input = popover.querySelector('input') as HTMLInputElement;
     const btn = popover.querySelector('.mux-browser-open-btn') as HTMLButtonElement;
 
-    let receivedDetail: { browserPort: number } | null = null;
+    let receivedDetail: { browserUrl: string } | null = null;
     el.addEventListener('browser-pane-open', (e) => {
-      receivedDetail = (e as CustomEvent<{ browserPort: number }>).detail;
+      receivedDetail = (e as CustomEvent<{ browserUrl: string }>).detail;
     });
 
-    input.value = '3000';
+    input.value = 'http://localhost:3000';
     btn.click();
 
     expect(receivedDetail).not.toBeNull();
-    expect(receivedDetail!.browserPort).toBe(3000);
+    expect(receivedDetail!.browserUrl).toBe('http://localhost:3000');
+  });
+
+  it('browser-pane-open normalizes a bare port number to http://localhost:{port}', () => {
+    el = createDock();
+    const inner = el as unknown as {
+      _browserPopoverOpen: boolean;
+      _renderBrowserPopover: (triggerEl: HTMLElement) => void;
+    };
+    inner._browserPopoverOpen = true;
+    inner._renderBrowserPopover(makeTrigger(50, 200));
+
+    const popover = el.querySelector('.mux-browser-popover')!;
+    const input = popover.querySelector('input') as HTMLInputElement;
+    const btn = popover.querySelector('.mux-browser-open-btn') as HTMLButtonElement;
+
+    let receivedDetail: { browserUrl: string } | null = null;
+    el.addEventListener('browser-pane-open', (e) => {
+      receivedDetail = (e as CustomEvent<{ browserUrl: string }>).detail;
+    });
+
+    input.value = '5173';
+    btn.click();
+
+    expect(receivedDetail).not.toBeNull();
+    expect(receivedDetail!.browserUrl).toBe('http://localhost:5173');
+  });
+
+  it('browser-pane-open accepts an external https URL', () => {
+    el = createDock();
+    const inner = el as unknown as {
+      _browserPopoverOpen: boolean;
+      _renderBrowserPopover: (triggerEl: HTMLElement) => void;
+    };
+    inner._browserPopoverOpen = true;
+    inner._renderBrowserPopover(makeTrigger(50, 200));
+
+    const popover = el.querySelector('.mux-browser-popover')!;
+    const input = popover.querySelector('input') as HTMLInputElement;
+    const btn = popover.querySelector('.mux-browser-open-btn') as HTMLButtonElement;
+
+    let receivedDetail: { browserUrl: string } | null = null;
+    el.addEventListener('browser-pane-open', (e) => {
+      receivedDetail = (e as CustomEvent<{ browserUrl: string }>).detail;
+    });
+
+    input.value = 'https://google.com';
+    btn.click();
+
+    expect(receivedDetail).not.toBeNull();
+    expect(receivedDetail!.browserUrl).toBe('https://google.com');
   });
 
   it('Escape keydown on popover input calls _closeBrowserPopover', () => {
