@@ -33,13 +33,17 @@ const (
 	TypeRenamePane      = "rename-pane"
 	TypeSaveLayout      = "save-layout"
 	TypePaneUpdate      = "pane-update" // request: client → daemon, updates browserPath after navigation
+	TypeScreenSnapshot  = "screen-snapshot"  // request: MCP → daemon, VT grid for a pane
+	TypeGetLayout       = "get-layout"       // request: MCP → daemon, ASCII layout diagram
 
 	// Replies (daemon -> client, echo request cid).
 	TypeWorkspaceCreated = "workspace-created"
 	TypeWorkspaceList    = "workspace-list"
 	TypeComposition      = "composition"
 	TypePaneCreated      = "pane-created"
-	TypeOK               = "ok"
+	TypeOK                    = "ok"
+	TypeScreenSnapshotResult  = "screen-snapshot-result"
+	TypeLayoutResult          = "layout-result"
 
 	// Events (daemon -> all subscribers, cid=0).
 	TypePaneAdded        = "pane-added"
@@ -47,6 +51,9 @@ const (
 	TypeWorkspaceClosed  = "workspace-closed"
 	TypeWorkspaceRenamed = "workspace-renamed"
 	TypePaneRenamed      = "pane-renamed"
+	TypeBrowserAction    = "browser-action"   // relay browser DOM command to/from SW bridge
+	TypeLayoutCommand    = "layout-command"   // relay layout mutation to browser clients
+	TypeShellPrompt      = "shell-prompt"     // OSC 133 prompt/command lifecycle
 
 	// Error envelope.
 	TypeError = "error"
@@ -152,6 +159,24 @@ type Message struct {
 	BrowserPort  int               `json:"browserPort,omitempty"`
 	BrowserPath  string            `json:"browserPath,omitempty"`
 	ProxyHeaders map[string]string `json:"proxyHeaders,omitempty"`
+
+	// MCP relay fields (browser-action, screen-snapshot-result, shell-prompt, get-layout).
+	Action     string     `json:"action,omitempty"`     // browser-action verb: click/fill/...
+	Ref        string     `json:"ref,omitempty"`        // element ref e1,e2 from snapshot
+	Selector   string     `json:"selector,omitempty"`   // CSS selector
+	Value      string     `json:"value,omitempty"`      // input value for fill/type
+	Key        string     `json:"key,omitempty"`        // keyboard key for press
+	Expression string     `json:"expr,omitempty"`       // JS expression for eval
+	Text       string     `json:"text,omitempty"`       // plain-text result: screen snapshot, eval
+	ExitCode   int        `json:"exitCode,omitempty"`   // OSC 133 command exit code
+	Cursor     *CursorPos `json:"cursor,omitempty"`     // cursor {row,col} for screen snapshot
+	ASCII      string     `json:"ascii,omitempty"`      // ASCII layout diagram, get-layout result
+}
+
+// CursorPos is a 0-indexed terminal cursor position carried by screen-snapshot-result.
+type CursorPos struct {
+	Row int `json:"row"`
+	Col int `json:"col"`
 }
 
 // WorkspaceInfo is one entry in a workspace-list reply.
