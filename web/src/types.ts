@@ -47,6 +47,13 @@ export const SessiondType = {
   PaneRenamed: 'pane-renamed',
   // Error
   Error: 'error',
+  // Browser-action relay (server → client → iframe → client → server)
+  BrowserAction: 'browser-action',
+  BrowserActionResult: 'browser-action-result',
+  // Layout / snapshot relay
+  LayoutCommand: 'layout-command',
+  ScreenSnapshot: 'screen-snapshot',
+  GetLayout: 'get-layout',
 } as const;
 
 export type SessiondMessageType = (typeof SessiondType)[keyof typeof SessiondType];

@@ -90,6 +90,11 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.SaveLayout, workspaceId, breakpoint, layout });
   }
 
+  /** Send a browser-action-result envelope back to the server. */
+  sendBrowserActionResult(detail: Record<string, unknown>): void {
+    this.sendSessiond({ type: SessiondType.BrowserActionResult, ...detail } as unknown as SessiondMessage);
+  }
+
   /** Request the list of workspaces. */
   listWorkspaces(): void {
     this.sendSessiond({ type: SessiondType.ListWorkspaces });
@@ -213,6 +218,13 @@ export class MuxSocket {
         // so the two paths never collide.)
         if (typeof raw.type === 'string') {
           this.onSessiondMessage?.(raw as unknown as SessiondMessage);
+          // Relay-only types: dispatch as window CustomEvents so app.ts and
+          // mux-dock can handle them without coupling to the socket directly.
+          if (raw.type === SessiondType.BrowserAction) {
+            window.dispatchEvent(new CustomEvent('browser-action', { detail: raw }));
+          } else if (raw.type === SessiondType.LayoutCommand) {
+            window.dispatchEvent(new CustomEvent('layout-command', { detail: raw }));
+          }
         }
       }
     };

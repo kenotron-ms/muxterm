@@ -115,7 +115,10 @@ class BrowserRenderer implements IContentRenderer {
     this._port = pane.browserPort ?? 0;
     this._path = pane.browserPath ?? '/';
     const el = document.createElement('div');
-    el.style.cssText = 'width:100%;height:100%;overflow:hidden;';
+    // position:relative is required so the absolutely-positioned drag shield
+    // is contained within this element rather than escaping to the nearest
+    // positioned ancestor.
+    el.style.cssText = 'width:100%;height:100%;overflow:hidden;position:relative;';
     this.element = el;
   }
 
@@ -125,6 +128,23 @@ class BrowserRenderer implements IContentRenderer {
     surface.url = proxyUrl;
     this.element.appendChild(surface);
     this._surface = surface;
+
+    // Transparent shield div: covers the iframe during dockview tab drags.
+    //
+    // iframes have their own browsing context — when the pointer drifts over an
+    // iframe during a dockview drag gesture the iframe captures pointermove and
+    // pointerup, starving dockview's drag handler so the drag silently dies or
+    // gets stuck. Terminal panels are immune because xterm.js lives in a canvas
+    // inside the same document. Browser panels need an explicit fix.
+    //
+    // The shield is an invisible <div> sitting above the iframe (z-index:10).
+    // MuxDock activates it (display:block) when onWillDragPanel fires and
+    // deactivates it (display:none) on document pointerup so pointer events
+    // reach dockview, not the iframe, while a drag is in flight.
+    const shield = document.createElement('div');
+    shield.className = 'mux-drag-shield';
+    shield.style.cssText = 'position:absolute;inset:0;z-index:10;display:none;';
+    this.element.appendChild(shield);
 
     this.element.addEventListener('url-change', (e: Event) => {
       const { url } = (e as CustomEvent<{ url: string }>).detail;
@@ -154,6 +174,11 @@ class BrowserRenderer implements IContentRenderer {
   focus(): void {
     const input = this._surface?.shadowRoot?.querySelector<HTMLInputElement>('.address');
     input?.focus();
+  }
+
+  /** Exposes the underlying MuxBrowserSurface for browser-action relay. */
+  get surface(): MuxBrowserSurface | null {
+    return this._surface;
   }
 
   dispose(): void {
@@ -236,6 +261,8 @@ export class MuxDock extends LitElement {
 
   private _dv: DockviewComponent | null = null;
   private _panels = new Map<number, IDockviewPanel>();
+  /** Tracks live BrowserRenderer instances by paneId for browser-action relay. */
+  private _browserRenderers = new Map<number, BrowserRenderer>();
   private _settingActive = false;
   private _browserPopoverOpen = false;
   private _browserPopoverGroup: DockviewGroupPanel | null = null;
@@ -258,6 +285,14 @@ export class MuxDock extends LitElement {
   /** Bound capture-phase handler so we can remove it in disconnectedCallback. */
   private _onPointerDownCapture = (e: PointerEvent): void => {
     this._lastPointerType = e.pointerType || 'mouse';
+  };
+  /**
+   * Bound document pointerup handler — deactivates browser-pane drag shields
+   * after a dockview drag gesture ends. Registered in capture phase so it fires
+   * even if the pointer is released over an iframe.
+   */
+  private _onDragPointerUp = (): void => {
+    this._setDragShields(false);
   };
   /** True while we're programmatically removing panels to suppress pane-close events. */
   private _removingPanels = false;
@@ -426,6 +461,16 @@ export class MuxDock extends LitElement {
       return found;
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * Show or hide drag shields on all browser panes in this dock.
+   * Called with `true` when dockview reports a drag start, `false` on pointerup.
+   */
+  private _setDragShields(active: boolean): void {
+    for (const el of this.querySelectorAll<HTMLElement>('.mux-drag-shield')) {
+      el.style.display = active ? 'block' : 'none';
     }
   }
 
@@ -733,6 +778,9 @@ export class MuxDock extends LitElement {
     // guarantees we see it before dockview processes the click and fires
     // onDidRemovePanel, so the close branch knows whether it was a touch/pen.
     this.addEventListener('pointerdown', this._onPointerDownCapture, { capture: true });
+    // Capture-phase pointerup on the document deactivates browser-pane drag
+    // shields after any dockview drag gesture ends (including releases over iframes).
+    document.addEventListener('pointerup', this._onDragPointerUp, { capture: true });
     this.classList.add('dockview-theme-abyss');
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
@@ -740,7 +788,10 @@ export class MuxDock extends LitElement {
         if (opts.name === 'browser') {
           const pane = this.panes.find((p) => p.paneId === parseInt(opts.id, 10));
           if (!pane) throw new Error(`No pane found for id ${opts.id}`);
-          return new BrowserRenderer(opts.id, pane);
+          const paneId = parseInt(opts.id, 10);
+          const renderer = new BrowserRenderer(opts.id, pane);
+          this._browserRenderers.set(paneId, renderer);
+          return renderer;
         }
         return new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId);
       },
@@ -781,6 +832,10 @@ export class MuxDock extends LitElement {
       },
     });
     this._dv.onDidLayoutChange(() => this._scheduleLayoutSave());
+    // Activate drag shields on all browser panes when a dockview drag starts so
+    // the iframe doesn't swallow pointermove/pointerup during the gesture.
+    this._dv.onWillDragPanel(() => this._setDragShields(true));
+    this._dv.onWillDragGroup(() => this._setDragShields(true));
     this._dv.onDidActivePanelChange((panel) => {
       if (this._settingActive) return;
       if (!panel) return;
@@ -829,8 +884,10 @@ export class MuxDock extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.removeEventListener('pointerdown', this._onPointerDownCapture, { capture: true });
+    document.removeEventListener('pointerup', this._onDragPointerUp, { capture: true });
     this._dv?.dispose();
     this._dv = null;
+    this._browserRenderers.clear();
   }
 
   /** Handle double-click on a dockview default tab — starts inline rename. */
@@ -904,6 +961,7 @@ export class MuxDock extends LitElement {
           this._dv.removePanel(panel);
         }
         this._panels.clear();
+        this._browserRenderers.clear();
 
         // Seed _customTitles from server-stored titles (arrive in composition panes).
         for (const pane of this.panes) {
@@ -1038,6 +1096,7 @@ export class MuxDock extends LitElement {
           if (!currentPaneIds.has(paneId)) {
             this._dv.removePanel(panel);
             this._panels.delete(paneId);
+            this._browserRenderers.delete(paneId);
           }
         }
       } finally {
@@ -1149,6 +1208,36 @@ export class MuxDock extends LitElement {
     for (const id of paneIds) {
       this._locallyClosedPanes.delete(id);
     }
+  }
+
+  /**
+   * Browser-action relay: forward a server-sent browser-action message to the
+   * target pane's MuxBrowserSurface iframe shim via postMessage, then emit the
+   * shim's response as a browser-action-result CustomEvent.
+   */
+  async sendBrowserAction(msg: Record<string, unknown>): Promise<void> {
+    const paneId = typeof msg.paneId === 'number' ? msg.paneId : -1;
+    const renderer = this._browserRenderers.get(paneId);
+    if (!renderer || !renderer.surface) {
+      this._emitBrowserActionResult({ ...msg, error: 'pane-not-found' });
+      return;
+    }
+    try {
+      const result = await renderer.surface.receiveBrowserAction(paneId, msg);
+      this._emitBrowserActionResult({ ...result, paneId });
+    } catch (err: unknown) {
+      this._emitBrowserActionResult({ paneId, error: String(err) });
+    }
+  }
+
+  private _emitBrowserActionResult(result: Record<string, unknown>): void {
+    this.dispatchEvent(
+      new CustomEvent('browser-action-result', {
+        detail: result,
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 }
 

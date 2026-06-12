@@ -307,6 +307,10 @@ export class MuxApp extends LitElement {
     // Browser pane / navigation events bubble up from child components.
     this.addEventListener('browser-pane-open', this._onBrowserPaneOpen);
     this.addEventListener('pane-navigate', this._onPaneNavigate);
+    // Browser-action relay: window CustomEvent from ws.ts → mux-dock → iframe.
+    window.addEventListener('browser-action', this._onBrowserAction);
+    // Browser-action result: bubbles up from mux-dock → send back over socket.
+    this.addEventListener('browser-action-result', this._onBrowserActionResult);
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
@@ -416,6 +420,8 @@ export class MuxApp extends LitElement {
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     this.removeEventListener('browser-pane-open', this._onBrowserPaneOpen);
     this.removeEventListener('pane-navigate', this._onPaneNavigate);
+    window.removeEventListener('browser-action', this._onBrowserAction);
+    this.removeEventListener('browser-action-result', this._onBrowserActionResult);
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -652,6 +658,18 @@ export class MuxApp extends LitElement {
   private _onPaneNavigate = (e: Event): void => {
     const { paneId, browserPath } = (e as CustomEvent<{ paneId: number; browserPath: string }>).detail;
     this._socket?.updatePanePath(paneId, browserPath);
+  };
+
+  /** Forward a browser-action from the server (via window CustomEvent) to the dock. */
+  private _onBrowserAction = (e: Event): void => {
+    const msg = (e as CustomEvent).detail as Record<string, unknown>;
+    void this._dock?.sendBrowserAction(msg);
+  };
+
+  /** Forward a browser-action-result (bubbled from mux-dock) back over the socket. */
+  private _onBrowserActionResult = (e: Event): void => {
+    const detail = (e as CustomEvent).detail as Record<string, unknown>;
+    this._socket?.sendBrowserActionResult(detail);
   };
 
   private _handleControlMessage = (msg: Record<string, unknown>): void => {
