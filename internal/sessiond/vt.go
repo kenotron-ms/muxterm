@@ -83,6 +83,32 @@ func (b *VTBuffer) ReplayFrom(_ uint64) (data []byte, start uint64) {
 	return b.Replay(), 0
 }
 
+// ScreenText returns a plain-text snapshot of the visible screen with trailing
+// whitespace-only rows trimmed. String() (not Render()) is used because String()
+// emits the cell content without ANSI SGR attributes, exactly as noted in
+// serializeGrid's comment ("String() which is plain text").
+func (b *VTBuffer) ScreenText() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	plain := b.emu.Emulator.String()
+	lines := strings.Split(plain, "\n")
+	// Trim trailing whitespace-only lines (the emulator pads the grid to its
+	// full height; unused rows appear as blank strings or spaces).
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// CursorPos returns the cursor's 0-based (row, col) on the visible screen.
+// uv.Position is image.Point with X = column and Y = row.
+func (b *VTBuffer) CursorPos() (row, col int) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	pos := b.emu.Emulator.CursorPosition()
+	return pos.Y, pos.X
+}
+
 // Seq returns the total bytes ever written to this buffer.
 func (b *VTBuffer) Seq() uint64 {
 	b.mu.RLock()

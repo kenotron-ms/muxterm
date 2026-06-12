@@ -327,6 +327,31 @@ func (c *conn) handle(msg Message) {
 			// Silently no-op for unknown pane IDs (design intent).
 			c.srv.reg.UpdateBrowserPath(c.attached, msg.PaneID, msg.BrowserPath)
 		}
+	case TypeScreenSnapshot:
+		if c.attached == "" {
+			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
+			return
+		}
+		p, ok := c.srv.reg.Pane(c.attached, msg.PaneID)
+		if !ok {
+			c.replyError(msg.CID, "pane-not-found", "pane not found")
+			return
+		}
+		vb, ok := p.buf.(*VTBuffer)
+		if !ok {
+			// Non-VT pane (browser pane with nil buf, or RawBuffer): return
+			// empty text so the caller still gets a well-formed reply.
+			c.reply(&Message{Type: TypeScreenSnapshotResult, CID: msg.CID, PaneID: msg.PaneID})
+			return
+		}
+		row, col := vb.CursorPos()
+		c.reply(&Message{
+			Type:   TypeScreenSnapshotResult,
+			CID:    msg.CID,
+			PaneID: msg.PaneID,
+			Text:   vb.ScreenText(),
+			Cursor: &CursorPos{Row: row, Col: col},
+		})
 	}
 }
 
