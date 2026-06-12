@@ -206,7 +206,8 @@ const shimScript = `<script>
 
   function fill(target, value) {
     var el = resolveTarget(target);
-    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    var proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
     setter.call(el, value);
     el.dispatchEvent(new Event('input', {bubbles: true}));
     el.dispatchEvent(new Event('change', {bubbles: true}));
@@ -274,6 +275,11 @@ const shimScript = `<script>
     }
   }
 
+  function gotoUrl(url) {
+    location.href = url;
+    return Promise.resolve({ok: true});
+  }
+
   function goBack() {
     window.history.back();
     return Promise.resolve({ok: true});
@@ -294,18 +300,19 @@ const shimScript = `<script>
 
   function handleAction(msg) {
     switch (msg.action) {
-      case 'snapshot':  return Promise.resolve(snapshot());
-      case 'click':     return click(msg.ref || msg.selector);
-      case 'fill':      return fill(msg.ref || msg.selector, msg.value || '');
-      case 'type_':     return type_(msg.value);
-      case 'press':     return press(msg.key);
-      case 'hover':     return hover(msg.ref || msg.selector);
-      case 'select_':   return select_(msg.ref || msg.selector, msg.value);
-      case 'eval_':     return eval_(msg.expr, msg.ref);
-      case 'goBack':    return goBack();
-      case 'goForward': return goForward();
-      case 'reload':    return reload();
-      default:          return Promise.reject('unknown action: ' + msg.action);
+      case 'snapshot':   return Promise.resolve(snapshot());
+      case 'click':      return click(msg.ref || msg.selector);
+      case 'fill':       return fill(msg.ref || msg.selector, msg.value || '');
+      case 'type':       return type_(msg.value);
+      case 'press':      return press(msg.key);
+      case 'hover':      return hover(msg.ref || msg.selector);
+      case 'select':     return select_(msg.ref || msg.selector, msg.value);
+      case 'eval':       return eval_(msg.expr, msg.ref);
+      case 'go-back':    return goBack();
+      case 'go-forward': return goForward();
+      case 'reload':     return reload();
+      case 'goto':       return gotoUrl(msg.value);
+      default:           return Promise.reject('unknown action: ' + msg.action);
     }
   }
 
@@ -371,12 +378,10 @@ self.addEventListener('fetch', event => {
 // No Service-Worker-Allowed header is needed because the script path (/p/sw.js)
 // already covers the declared scope (/p/).
 const pSwScript = `
-const navigations = [];
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', e => {
   if (e.request.mode === 'navigate') {
-    navigations.push(e.request.url);
     self.clients.matchAll().then(clients => clients.forEach(c => c.postMessage({type:'mux-page-navigated', url:e.request.url})));
   }
   // falls through without intercepting
