@@ -62,7 +62,7 @@ describe('browser-pane-open and pane-navigate event handlers', () => {
 
   // ── _onBrowserPaneOpen handler (browserUrl API) ──────────────────────────
 
-  it('_onBrowserPaneOpen calls createBrowserPane(port, "/") for a localhost URL', async () => {
+  it('_onBrowserPaneOpen calls createBrowserPane(0, url) for a localhost URL', async () => {
     el = await fixture();
     const socket = (el as any)._socket;
     const spy = vi.spyOn(socket, 'createBrowserPane').mockImplementation(() => {});
@@ -71,11 +71,11 @@ describe('browser-pane-open and pane-navigate event handlers', () => {
       new CustomEvent('browser-pane-open', { detail: { browserUrl: 'http://localhost:3000' } }),
     );
 
-    expect(spy).toHaveBeenCalledWith(3000, '/');
+    expect(spy).toHaveBeenCalledWith(0, 'http://localhost:3000');
     spy.mockRestore();
   });
 
-  it('_onBrowserPaneOpen calls createBrowserPane(port, path) for a localhost URL with path', async () => {
+  it('_onBrowserPaneOpen calls createBrowserPane(0, url) for a localhost URL with path', async () => {
     el = await fixture();
     const socket = (el as any)._socket;
     const spy = vi.spyOn(socket, 'createBrowserPane').mockImplementation(() => {});
@@ -84,7 +84,7 @@ describe('browser-pane-open and pane-navigate event handlers', () => {
       new CustomEvent('browser-pane-open', { detail: { browserUrl: 'http://localhost:5173/app' } }),
     );
 
-    expect(spy).toHaveBeenCalledWith(5173, '/app');
+    expect(spy).toHaveBeenCalledWith(0, 'http://localhost:5173/app');
     spy.mockRestore();
   });
 
@@ -101,7 +101,7 @@ describe('browser-pane-open and pane-navigate event handlers', () => {
     spy.mockRestore();
   });
 
-  it('_onBrowserPaneOpen calls createBrowserPane(port, "/") for http://127.0.0.1 (treated as localhost)', async () => {
+  it('_onBrowserPaneOpen calls createBrowserPane(0, url) for http://127.0.0.1', async () => {
     el = await fixture();
     const socket = (el as any)._socket;
     const spy = vi.spyOn(socket, 'createBrowserPane').mockImplementation(() => {});
@@ -110,7 +110,7 @@ describe('browser-pane-open and pane-navigate event handlers', () => {
       new CustomEvent('browser-pane-open', { detail: { browserUrl: 'http://127.0.0.1:5000' } }),
     );
 
-    expect(spy).toHaveBeenCalledWith(5000, '/');
+    expect(spy).toHaveBeenCalledWith(0, 'http://127.0.0.1:5000');
     spy.mockRestore();
   });
 
@@ -140,7 +140,7 @@ describe('browser-pane-open and pane-navigate event handlers', () => {
       new CustomEvent('browser-pane-open', { detail: { browserUrl: 'http://localhost:8080' } }),
     );
 
-    expect(spy).toHaveBeenCalledWith(8080, '/');
+    expect(spy).toHaveBeenCalledWith(0, 'http://localhost:8080');
     spy.mockRestore();
   });
 

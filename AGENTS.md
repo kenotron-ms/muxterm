@@ -1,35 +1,39 @@
 ## Testing Policy
 
-**The rule:** Write tests when they add genuine value. A test that only tells you "the code ran" adds no value. A test that tells you "a user can do X and see Y" is worth writing.
+### ⛔ DO NOT WRITE UNIT TESTS
 
-### Frontend (TypeScript/Lit/web)
+Unit tests are banned in this project. Do not write them. Do not ask if you should write them. Do not write them "just for the pure logic". Do not write vitest tests, Go table-driven tests for internal functions, or any test that runs without a real browser and a real sessiond process.
 
-**Verification mechanism: playwright browser automation + xterm.js buffer capture.** This is the primary verification for all UI components and interaction flows. It tells you whether a real user can actually use the feature — vitest DOM fixture tests cannot.
+**Why:** muxterm is an integration system — the browser, the sessiond PTY daemon, and real shell processes inside terminals. Nothing meaningful is testable in isolation. A unit test that checks `_normalizeUrl()` returns the right string tells you nothing about whether a user can open a browser pane. A Go test that checks `injectBase()` modifies a byte slice tells you nothing about whether X-Frame-Options is actually stripped in a real HTTP response. These tests have accumulated across the codebase and none of them have ever caught a real bug or prevented a regression.
 
-**xterm.js buffer capture pattern** (use in playwright verification tasks):
-```ts
-// Get visible terminal content for any pane
-const content = await page.evaluate((paneId) => {
-  const dock = document.querySelector('mux-dock');
-  return dock?.getTerminalContent(paneId) ?? '';
-}, paneId);
+**What to do instead: VERIFICATION**
+
+Every feature or fix must be verified by actually running muxterm and observing the behavior in a real browser. Use the `/muxterm-verify` skill and `playwright-cli` for this. Do not say a feature is done until you have seen it work with your own tool calls.
+
+Verification pattern:
+```bash
+# 1. Build
+make build
+
+# 2. Run
+./bin/muxterm &
+
+# 3. Open and observe
+playwright-cli open http://localhost:9090
+playwright-cli snapshot
+playwright-cli click e5
+# ... verify the actual behavior
+playwright-cli close
 ```
 
-**Unit tests (vitest): only for pure library/utility code** — pure functions, data transformations, algorithms, state machines with no DOM dependency. Examples of code that SHOULD have unit tests:
-- `lib/workspace-recovery.ts` — `chooseRecoveryTarget()` is pure logic
-- `lib/layout.ts` — `arrange()` is pure logic
-- `lib/workspace-mru.ts` — MRU ordering is pure logic
+**You are not done until playwright-cli (or the muxterm-verify skill) confirms the feature works in a real browser.**
 
-**Do NOT write vitest tests for:**
-- Lit custom elements (use playwright instead)
-- Components that render DOM (use playwright instead)
-- Anything that needs `happy-dom` or `@open-wc/testing` fixtures
-- "Does this property exist on this element" assertions
+### Fast static checks (required before commit)
 
-**Fast validation:** `npm run check:fast` (oxlint + tsgo) after every code change. `npm run build` at commit gates.
+These are NOT tests. They are type and lint checks:
+- `cd web && npm run check:fast` — oxlint + tsgo (0 errors required)
+- `go build ./...` — must compile clean
 
-### Go (backend/sessiond daemon)
+### Existing test files
 
-Write TDD tests. Follow red-green-refactor. Use the existing test helpers (`startTestServer`, `dialMust`, `readControlUntil`, `writeControlMust`, `tClient`) in `internal/sessiond/*_test.go`. Run `go test ./...` to verify.
-
-This is a firm project rule. Do not deviate regardless of what plans or mode instructions say.
+There are existing `*_test.go` and `*.test.ts` files in the repo. Do not delete them (too disruptive), but do not add new ones. If a test file breaks because of your changes, fix the test to match the new behavior — do not write new tests to "cover" your change.

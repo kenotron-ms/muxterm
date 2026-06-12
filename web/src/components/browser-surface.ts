@@ -70,6 +70,77 @@ export class MuxBrowserSurface extends LitElement {
       border-color: #7aa2f7;
     }
 
+    .nav-btn.fwd-active {
+      color: #7aa2f7;
+      background: rgba(122, 162, 247, 0.12);
+    }
+
+    .fwd-bar {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      background: #1a1b26;
+      border: 1px solid #7aa2f7;
+      border-radius: 4px;
+      padding: 0 4px;
+      font-size: 13px;
+      font-family: inherit;
+      min-width: 0;
+      gap: 0;
+    }
+
+    .fwd-label {
+      color: #7aa2f7;
+      font-weight: 700;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      flex-shrink: 0;
+      padding: 0 4px 0 2px;
+      user-select: none;
+    }
+
+    .fwd-host {
+      color: #565f89;
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    .fwd-port {
+      background: none;
+      border: none;
+      color: #c0caf5;
+      width: 4ch;
+      font: inherit;
+      font-size: 13px;
+      outline: none;
+      padding: 0;
+      -moz-appearance: textfield;
+      appearance: textfield;
+    }
+    .fwd-port::-webkit-inner-spin-button,
+    .fwd-port::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .fwd-sep {
+      color: #565f89;
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    .fwd-path {
+      background: none;
+      border: none;
+      color: #c0caf5;
+      flex: 1;
+      font: inherit;
+      font-size: 13px;
+      outline: none;
+      padding: 0 2px;
+      min-width: 0;
+    }
+
     iframe {
       flex: 1;
       border: none;
@@ -89,10 +160,22 @@ export class MuxBrowserSurface extends LitElement {
 
   @state() private _canGoBack = false;
   @state() private _canGoForward = false;
+  @state() private _fwdMode = false;
+  @state() private _fwdPort = '5173';
+  @state() private _fwdPath = '/';
+
+  private _normalizeUrl(raw: string): string {
+    const s = raw.trim();
+    if (!s || s === 'about:blank') return 'about:blank';
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^\d+$/.test(s)) return `http://localhost:${s}`;
+    if (/^(localhost|127\.0\.0\.1)(:\d+)?/.test(s)) return `http://${s}`;
+    return `https://${s}`;
+  }
 
   private _onAddressChange(e: Event): void {
     const input = e.target as HTMLInputElement;
-    const newUrl = input.value;
+    const newUrl = this._normalizeUrl(input.value);
     if (newUrl !== this.url) {
       this._historyPrev.push(this.url);
       this._historyNext = [];
@@ -133,6 +216,71 @@ export class MuxBrowserSurface extends LitElement {
     if (iframe) iframe.src = this.url;
   }
 
+  private _toggleFwdMode(): void {
+    this._fwdMode = !this._fwdMode;
+    if (this._fwdMode && this.url && this.url !== 'about:blank') {
+      try {
+        const u = new URL(this.url);
+        if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+          this._fwdPort = u.port || '80';
+          this._fwdPath = u.pathname || '/';
+        }
+      } catch { /* keep defaults */ }
+    }
+  }
+
+  private _applyFwd(): void {
+    const port = parseInt(this._fwdPort, 10);
+    if (isNaN(port) || port < 1 || port > 65535) return;
+    const path = this._fwdPath.startsWith('/') ? this._fwdPath : `/${this._fwdPath}`;
+    const newUrl = `http://localhost:${port}${path}`;
+    if (newUrl !== this.url) {
+      this._historyPrev.push(this.url);
+      this._historyNext = [];
+      this._canGoBack = true;
+      this._canGoForward = false;
+    }
+    this.url = newUrl;
+    this.dispatchEvent(new CustomEvent('url-change', {
+      bubbles: true, composed: true, detail: { url: newUrl },
+    }));
+  }
+
+  private _onFwdPortChange(e: Event): void {
+    this._fwdPort = (e.target as HTMLInputElement).value;
+    this._applyFwd();
+  }
+
+  private _onFwdPathChange(e: Event): void {
+    const raw = (e.target as HTMLInputElement).value;
+    this._fwdPath = raw.startsWith('/') ? raw : `/${raw}`;
+    this._applyFwd();
+  }
+
+  private _onFwdKeydown(e: KeyboardEvent): void {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); this._applyFwd(); }
+  }
+
+  private _onAddressKeydown(e: KeyboardEvent): void {
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const input = e.target as HTMLInputElement;
+      const newUrl = this._normalizeUrl(input.value);
+      if (newUrl !== this.url) {
+        this._historyPrev.push(this.url);
+        this._historyNext = [];
+        this._canGoBack = true;
+        this._canGoForward = false;
+      }
+      this.url = newUrl;
+      this.dispatchEvent(new CustomEvent('url-change', {
+        bubbles: true, composed: true, detail: { url: newUrl },
+      }));
+    }
+  }
+
   /**
    * Browser-action relay: forward a command to the iframe shim via postMessage
    * and await the shim's response (cid-matched reply) with a 10-second timeout.
@@ -168,38 +316,56 @@ export class MuxBrowserSurface extends LitElement {
   }
 
   render() {
-    // sandbox intentionally omits allow-same-origin. See security note above.
-    //
-    // Back/forward use a client-side URL history stack rather than
-    // contentWindow.history (which throws cross-origin without allow-same-origin).
-    // They track address-bar navigations; in-frame link clicks are not tracked
-    // since we cannot observe cross-origin navigations.
+    // sandbox omits allow-same-origin intentionally (see security comment above).
+    // Back/forward: client-side history stack, no contentWindow access needed.
+    // External URLs route through /x/ proxy (X-Frame-Options stripped, no JS injected).
+
+    const addressValue = this.url === 'about:blank' ? '' : this.url;
+
+    // Port-forward mode icon: two opposing horizontal arrows
+    const fwdIcon = html`<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 16 16" fill="none">
+      <path d="M2 5.5h9M9 3.5l2 2-2 2M14 10.5H5M7 8.5l-2 2 2 2"
+        stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+
     return html`
       <div class="bar">
-        <button
-          class="nav-btn"
-          @click="${this._goBack}"
-          .disabled="${!this._canGoBack}"
-          title="Back"
-        >&#x2039;</button>
-        <button
-          class="nav-btn"
-          @click="${this._goForward}"
-          .disabled="${!this._canGoForward}"
-          title="Forward"
-        >&#x203A;</button>
+        <button class="nav-btn" @click="${this._goBack}"
+          .disabled="${!this._canGoBack}" title="Back">&#x2039;</button>
+        <button class="nav-btn" @click="${this._goForward}"
+          .disabled="${!this._canGoForward}" title="Forward">&#x203A;</button>
         <button class="nav-btn" @click="${this._reload}" title="Refresh">&#x21BA;</button>
-        <input
-          class="address"
-          type="text"
-          .value="${this.url}"
-          @change="${this._onAddressChange}"
-        />
+
+        ${this._fwdMode ? html`
+          <div class="fwd-bar">
+            <span class="fwd-label">fwd</span>
+            <span class="fwd-host">localhost:</span>
+            <input class="fwd-port" type="number" min="1" max="65535"
+              .value="${this._fwdPort}"
+              @change="${this._onFwdPortChange}"
+              @keydown="${this._onFwdKeydown}" />
+            <span class="fwd-sep">/</span>
+            <input class="fwd-path" type="text"
+              .value="${this._fwdPath.replace(/^\//, '')}"
+              @change="${this._onFwdPathChange}"
+              @keydown="${this._onFwdKeydown}"
+              placeholder="path" />
+          </div>
+        ` : html`
+          <input class="address" type="text"
+            .value="${addressValue}"
+            @change="${this._onAddressChange}"
+            @keydown="${this._onAddressKeydown}"
+            placeholder="https://" />
+        `}
+
+        <button class="nav-btn ${this._fwdMode ? 'fwd-active' : ''}"
+          @click="${this._toggleFwdMode}"
+          title="${this._fwdMode ? 'Exit forward mode' : 'Forward mode: embed a local port'}">
+          ${fwdIcon}
+        </button>
       </div>
-      <iframe
-        src="${this.url}"
-        sandbox="allow-scripts allow-forms allow-popups"
-      ></iframe>
+      <iframe src="${this.url}" sandbox="allow-scripts allow-forms allow-popups"></iframe>
     `;
   }
 }

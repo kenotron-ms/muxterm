@@ -127,14 +127,19 @@ class BrowserRenderer implements IContentRenderer {
     // port>0 means proxy through /p/{port}/.
     let proxyUrl: string;
     if (this._port === 0) {
-      // External URL — route through /x/ proxy so X-Frame-Options is stripped.
-      try {
-        const u = new URL(this._path);
-        // Use /x/{host}{pathname}{search} — the Go handler strips frame-blocking headers
-        // and injects only <base href>, no JS.
-        proxyUrl = `${location.origin}/x/${u.host}${u.pathname}${u.search}`;
-      } catch {
-        proxyUrl = this._path; // fallback for malformed URLs
+      // about:blank (initial empty state) — load directly, no proxy needed.
+      if (!this._path || this._path === 'about:blank') {
+        proxyUrl = 'about:blank';
+      } else {
+        // External URL — route through /x/ proxy so X-Frame-Options is stripped.
+        try {
+          const u = new URL(this._path);
+          // Use /x/{host}{pathname}{search} — the Go handler strips frame-blocking headers
+          // and injects only <base href>, no JS.
+          proxyUrl = `${location.origin}/x/${u.host}${u.pathname}${u.search}`;
+        } catch {
+          proxyUrl = this._path; // fallback for malformed URLs
+        }
       }
     } else {
       proxyUrl = `${location.origin}/p/${this._port}${this._path}`;
@@ -289,8 +294,6 @@ export class MuxDock extends LitElement {
   /** Tracks live BrowserRenderer instances by paneId for browser-action relay. */
   private _browserRenderers = new Map<number, BrowserRenderer>();
   private _settingActive = false;
-  private _browserPopoverOpen = false;
-  private _browserPopoverGroup: DockviewGroupPanel | null = null;
   /** User-defined pane names — persists across workspace switches for the session. */
   private _customTitles = new Map<number, string>();
   /**
@@ -356,117 +359,6 @@ export class MuxDock extends LitElement {
       group?.activePanel?.id ?? this._dv?.activePanel?.id ?? null;
     this._splitReferenceId = placement === 'split' ? this._placementReferenceId : null;
     this.dispatchEvent(new CustomEvent('pane-create', { bubbles: true, composed: true }));
-  }
-
-  /** Toggle the browser port popover open/closed for the given group. */
-  private _toggleBrowserPopover(group: DockviewGroupPanel, triggerEl: HTMLElement): void {
-    if (this._browserPopoverOpen) {
-      this._closeBrowserPopover();
-    } else {
-      this._browserPopoverOpen = true;
-      this._browserPopoverGroup = group;
-      this._renderBrowserPopover(triggerEl);
-    }
-  }
-
-  /** Close and remove the browser port popover, resetting state. */
-  private _closeBrowserPopover(): void {
-    this.querySelector('.mux-browser-popover')?.remove();
-    this._browserPopoverOpen = false;
-    this._browserPopoverGroup = null;
-  }
-
-  /** Render the browser port popover and append it to this element. */
-  private _renderBrowserPopover(triggerEl: HTMLElement): void {
-    // Remove any stale popover first.
-    this.querySelector('.mux-browser-popover')?.remove();
-
-    const popover = document.createElement('div');
-    popover.className = 'mux-browser-popover';
-
-    // Anchor the popover directly below the trigger button using fixed positioning
-    // so it appears regardless of where mux-dock sits in the DOM flow.
-    const rect = triggerEl.getBoundingClientRect();
-    popover.style.position = 'fixed';
-    popover.style.top = `${rect.bottom + 4}px`;
-    popover.style.right = `${window.innerWidth - rect.right}px`;
-
-    const label = document.createElement('label');
-    label.textContent = 'URL';
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = 'http://localhost:5173';
-
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'mux-browser-error';
-
-    const openBtn = document.createElement('button');
-    openBtn.className = 'mux-browser-open-btn';
-    openBtn.textContent = 'Open';
-
-    popover.appendChild(label);
-    popover.appendChild(input);
-    popover.appendChild(errorDiv);
-    popover.appendChild(openBtn);
-    this.appendChild(popover);
-
-    // Autofocus the input.
-    input.focus();
-
-    const submit = (): void => {
-      let rawUrl = input.value.trim();
-      if (!rawUrl) {
-        errorDiv.textContent = 'Enter a URL';
-        return;
-      }
-      // If it looks like a bare host:port (e.g. "localhost:5173" or "5173"), prepend http://
-      if (!/^https?:\/\//i.test(rawUrl)) {
-        // bare port number → localhost shorthand
-        if (/^\d+$/.test(rawUrl)) rawUrl = `http://localhost:${rawUrl}`;
-        else rawUrl = `http://${rawUrl}`;
-      }
-      let parsedUrl: URL;
-      try {
-        parsedUrl = new URL(rawUrl);
-      } catch {
-        errorDiv.textContent = 'Enter a valid URL';
-        return;
-      }
-      void parsedUrl; // used for validation only
-      this._closeBrowserPopover();
-      this.dispatchEvent(
-        new CustomEvent('browser-pane-open', {
-          bubbles: true,
-          composed: true,
-          detail: { browserUrl: rawUrl },
-        }),
-      );
-    };
-
-    openBtn.addEventListener('click', submit);
-
-    input.addEventListener('keydown', (e: KeyboardEvent) => {
-      // Prevent dockview from intercepting keystrokes in the popover.
-      e.stopPropagation();
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        submit();
-      } else if (e.key === 'Escape') {
-        this._closeBrowserPopover();
-      }
-    });
-
-    // Click-outside dismissal: delay so the triggering click doesn't immediately close.
-    setTimeout(() => {
-      const onDocClick = (e: MouseEvent): void => {
-        if (!popover.contains(e.target as Node)) {
-          document.removeEventListener('click', onDocClick, true);
-          this._closeBrowserPopover();
-        }
-      };
-      document.addEventListener('click', onDocClick, true);
-    }, 0);
   }
 
   /**
@@ -741,61 +633,6 @@ export class MuxDock extends LitElement {
           }
         }
 
-        /* Browser port popover */
-        mux-dock .mux-browser-popover {
-          z-index: 200;
-          background: #1a1b26;
-          border: 1px solid #292e42;
-          border-radius: 6px;
-          display: flex;
-          flex-direction: column;
-          padding: 12px;
-          gap: 8px;
-          min-width: 180px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-        }
-        mux-dock .mux-browser-popover label {
-          color: #a9b1d6;
-          font-size: 0.75rem;
-          font-weight: 600;
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
-        }
-        mux-dock .mux-browser-popover input[type='text'] {
-          background: #24283b;
-          color: #c0caf5;
-          border: 1px solid #414868;
-          border-radius: 4px;
-          padding: 4px 8px;
-          font: inherit;
-          font-size: 0.875rem;
-          outline: none;
-          width: 100%;
-          box-sizing: border-box;
-        }
-        mux-dock .mux-browser-popover input[type='text']:focus {
-          border-color: #7aa2f7;
-        }
-        mux-dock .mux-browser-open-btn {
-          background: #3d59a1;
-          color: #c0caf5;
-          border: none;
-          border-radius: 4px;
-          padding: 5px 10px;
-          font: inherit;
-          font-size: 0.875rem;
-          cursor: pointer;
-          transition: background 0.12s;
-        }
-        mux-dock .mux-browser-open-btn:hover {
-          background: #7aa2f7;
-          color: #1a1b26;
-        }
-        mux-dock .mux-browser-error {
-          color: #f7768e;
-          font-size: 0.75rem;
-          min-height: 1em;
-        }
       `;
       target.appendChild(style);
     }
@@ -838,9 +675,13 @@ export class MuxDock extends LitElement {
         // Wide: [⌂] browser button + [⊠] split button in a flex row container.
         const container = document.createElement('div');
         container.style.cssText = 'display:flex;flex-direction:row;align-items:center;';
-        const browserBtn = new HeaderButton(BROWSER_ICON, 'Open browser pane', () =>
-          this._toggleBrowserPopover(group, browserBtn.element),
-        );
+        const browserBtn = new HeaderButton(BROWSER_ICON, 'Open browser pane', () => {
+          this.dispatchEvent(new CustomEvent('browser-pane-open', {
+            bubbles: true,
+            composed: true,
+            detail: { browserUrl: '' },
+          }));
+        });
         const splitBtn = new HeaderButton(SPLIT_ICON, 'Split pane', () =>
           this._requestPane('split', group),
         );
@@ -973,7 +814,6 @@ export class MuxDock extends LitElement {
 
     // Case 1: workspaceKey changed → full panel reset
     if (changed.has('workspaceKey')) {
-      this._closeBrowserPopover();
       muxLog('dock case1', `workspaceKey changed`,
         { workspaceKey: this.workspaceKey, panes: this.panes.map(p => p.paneId),
           activePaneId: this.activePaneId, hasLayout: !!this.layout });

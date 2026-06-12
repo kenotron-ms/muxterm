@@ -413,7 +413,7 @@ func (c *conn) createPane(msg Message) {
 		return
 	}
 	if msg.SurfaceKind == "browser" {
-		if msg.BrowserPort < 1 || msg.BrowserPort > 65535 {
+		if msg.BrowserPort < 0 || msg.BrowserPort > 65535 {
 			c.replyError(msg.CID, "invalid-port", "browserPort must be 1\u201365535")
 			return
 		}
