@@ -1,26 +1,24 @@
 # muxterm
 
-A web-native tmux client. Tabs, panes, and splits in your browser, powered by tmux control mode.
+A web-first terminal multiplexer. Persistent sessions, split panes, and a browser UI — backed by a custom Go session daemon, not tmux.
 
 ## What is this?
 
-muxterm gives you a browser-based terminal that's backed by tmux. Click tabs to switch windows. See panes as real split views. Drag to resize. All powered by tmux underneath — your sessions persist, your config works, your plugins apply.
+muxterm is a terminal multiplexer where the UI lives in a browser. Open splits, create workspaces, resize panes — all standard multiplexer behavior, except it's HTML and xterm.js instead of ncurses, and it runs as a web app you install once and connect to from anywhere.
 
-Built for people who want the power of tmux without the learning curve. If you've used Claude Code or similar AI tools and want remote terminal access, muxterm makes that simple.
-
-## How it works
+The session daemon is a standalone Go process that owns your PTYs directly. It survives HTTP server restarts. When you reconnect, it replays a clean screen state — not a raw byte stream — so full-screen apps like vim and htop come back correctly at whatever size your window happens to be.
 
 ```
-Browser (Lit + ghostty-web)
-    ↕ WebSocket
-Go server (muxterm)
-    ↕ tmux control mode (-CC)
-tmux server
+Browser (Lit + xterm.js + dockview)
+    ↕ WebSocket (binary-framed protocol)
+Go server (HTTP + WS relay)
+    ↕ Unix socket
+sessiond (PTY daemon)
     ↕ PTY
 your shells
 ```
 
-muxterm connects to tmux via control mode — the same protocol iTerm2 uses for its tmux integration. Each tmux window is a clickable tab. Each pane is a separate terminal canvas rendered by ghostty-web (libghostty compiled to WASM). One WebSocket, real-time state sync.
+No tmux required.
 
 ## Quick start
 
@@ -28,10 +26,10 @@ muxterm connects to tmux via control mode — the same protocol iTerm2 uses for 
 # Build
 make build
 
-# Run locally (opens browser, connects to local tmux)
+# Run locally (opens browser, connects to local sessiond)
 ./bin/muxterm
 
-# Run as a service
+# Run as a service (remote access, with token auth)
 ./bin/muxterm serve --addr 0.0.0.0:8080
 
 # Install as a system service (survives reboots)
@@ -41,35 +39,45 @@ make build
 ./bin/muxterm deploy user@myserver.com
 ```
 
-## Requirements
-
-- **tmux** 3.2+ (control mode support)
-- **Go** 1.22+ (to build)
-- **Node.js** 18+ (to build frontend)
-
 ## Features
 
-- **Tabs** — tmux windows as clickable browser tabs
-- **Split panes** — each pane is its own terminal canvas, laid out with CSS flex
-- **Resize** — drag pane borders to resize (sends `resize-pane` to tmux)
-- **ghostty-web** — terminal rendering via libghostty WASM (battle-tested parser from Ghostty)
-- **Real-time** — tmux control mode events stream directly to the browser, no polling
-- **Session persistence** — tmux sessions survive disconnects, reboots, and server restarts
+- **Workspaces** — named groups of panes, switch between them from a bar at the top
+- **Split panes** — real DOM layout via dockview; drag to resize, arbitrary nesting
+- **Clean reconnects** — server-side VT emulation replays a live cell-grid snapshot, not raw bytes; full-screen apps restore correctly at any window size
+- **Browser pane** — embed a running local web app (e.g. a dev server on port 3000) as a mux pane, proxied through the server
+- **PWA** — installable as a standalone desktop or mobile app; service worker for offline support
+- **Palette-derived chrome** — UI colors are derived from the active terminal palette automatically
+- **Session persistence** — the sessiond daemon detaches from the HTTP server; your shells survive server restarts, deploys, and reboots
+- **Single binary** — Go binary with embedded frontend; no external runtime besides a shell
+- **Auth** — HMAC token-based auth with localhost bypass
 - **Service install** — `muxterm install` sets up systemd (Linux) or launchd (macOS)
 - **Push deploy** — `muxterm deploy user@host` copies the binary and installs remotely
-- **Single binary** — Go binary with embedded frontend, no runtime deps besides tmux
-- **Auth** — HMAC token-based auth with localhost bypass
 
 ## Architecture
 
 | Component | Role |
 |-----------|------|
-| `cmd/muxterm/` | CLI — serve, install, uninstall, deploy |
-| `internal/tmux/` | tmux control mode parser, state model, layout parser |
-| `internal/server/` | HTTP + WebSocket server, auth, pane I/O routing |
+| `cmd/muxterm/` | CLI — serve, install, uninstall, deploy, sessiond, doctor |
+| `internal/sessiond/` | PTY daemon — workspace/pane registry, VT emulation, reconnect replay |
+| `internal/server/` | HTTP + WebSocket relay, auth, browser-pane proxy |
 | `internal/service/` | Cross-platform service install (systemd/launchd) |
 | `internal/deploy/` | Push-to-remote via SSH |
-| `web/src/` | Lit web components + ghostty-web terminal rendering |
+| `web/src/` | Lit web components, xterm.js terminal rendering, dockview split layout |
+
+### Session daemon
+
+`sessiond` is a separate Unix socket daemon that manages PTYs independently of the HTTP server. Each pane is a real PTY running `$SHELL`. The daemon auto-starts when the first browser client connects, and keeps running when the server restarts.
+
+For reconnect, `sessiond` runs a headless VT emulator (`charmbracelet/x/vt`) per pane with 2000-line scrollback. On attach, it serializes the live cell grid and sends it as a clean replay — so reconnecting to a vim session doesn't produce garbage at the wrong terminal size.
+
+### Protocol
+
+One WebSocket per browser tab, backed by one Unix socket connection to `sessiond`. Frames are binary-prefixed: `[4-byte length][1-byte kind][payload]`. Pane I/O is raw bytes with a 4-byte pane ID prefix. Control messages are JSON. The protocol is frozen — sessiond and the HTTP relay can be updated independently as long as the frame format is stable.
+
+## Requirements
+
+- **Go** 1.22+
+- **Node.js** 18+
 
 ## Development
 
@@ -85,11 +93,14 @@ cd web && npm install && npm run build
 
 # Run frontend tests
 cd web && npm test
+
+# Fast frontend checks (lint + types, no build)
+cd web && npm run check:fast
 ```
 
 ## Design
 
-See [docs/design.md](docs/design.md) for the full architecture and design decisions.
+See [docs/design.md](docs/design.md) for architecture details and decision rationale.
 
 ## License
 
