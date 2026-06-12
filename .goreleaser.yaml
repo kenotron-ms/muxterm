@@ -1,0 +1,67 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - npm --prefix web ci --prefer-offline
+    - npm --prefix web run build
+
+builds:
+  - id: muxterm
+    main: ./cmd/muxterm
+    binary: muxterm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+      - "^style:"
+      - Merge pull request
+      - Merge branch
+
+brews:
+  - name: muxterm
+    homepage: "https://github.com/user/muxterm"
+    description: "Web-first terminal multiplexer with MCP agent integration"
+    license: "MIT"
+    repository:
+      owner: user
+      name: homebrew-tap
+      branch: main
+    folder: Formula
+    install: |
+      bin.install "muxterm"
+    test: |
+      system "#{bin}/muxterm", "version"
