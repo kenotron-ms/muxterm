@@ -63,6 +63,11 @@ type Handlers struct {
 	// OnPaneRenamed fires when the pane identified by paneID is relabeled to
 	// name.
 	OnPaneRenamed func(paneID int, name string)
+	// OnBrowserAction fires when a browser-action command is broadcast to the
+	// workspace (CID == 0). paneID identifies the target browser pane; action
+	// is the DOM verb (click/fill/press/eval/…); ref, value, key, and expr
+	// carry the verb's operands.
+	OnBrowserAction func(paneID int, action, ref, value, key, expr string)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -386,6 +391,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypePaneRenamed:
 		if h.OnPaneRenamed != nil {
 			h.OnPaneRenamed(msg.PaneID, msg.Name)
+		}
+	case TypeBrowserAction:
+		if h.OnBrowserAction != nil {
+			h.OnBrowserAction(msg.PaneID, msg.Action, msg.Ref, msg.Value, msg.Key, msg.Expression)
 		}
 	}
 }

@@ -327,6 +327,13 @@ func (c *conn) handle(msg Message) {
 			// Silently no-op for unknown pane IDs (design intent).
 			c.srv.reg.UpdateBrowserPath(c.attached, msg.PaneID, msg.BrowserPath)
 		}
+	case TypeBrowserAction:
+		if c.attached == "" {
+			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
+			return
+		}
+		msg.CID = 0
+		c.srv.broadcast(c.attached, &msg)
 	case TypeScreenSnapshot:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
