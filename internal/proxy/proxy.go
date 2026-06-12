@@ -274,6 +274,24 @@ const shimScript = `<script>
     }
   }
 
+  function goBack() {
+    window.history.back();
+    return Promise.resolve({ok: true});
+  }
+
+  function goForward() {
+    window.history.forward();
+    return Promise.resolve({ok: true});
+  }
+
+  function reload() {
+    // runs inside the frame; the frame has no same-origin access to its parent,
+    // so self-navigate via location.replace rather than location.reload()
+    var href = location.href;
+    location.replace(href);
+    return Promise.resolve({ok: true});
+  }
+
   function handleAction(msg) {
     switch (msg.action) {
       case 'snapshot':  return Promise.resolve(snapshot());

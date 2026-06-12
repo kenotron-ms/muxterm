@@ -567,6 +567,23 @@ func TestInjectShimContainsInteractionCommands(t *testing.T) {
 	}
 }
 
+// TestInjectShimContainsNavigationCommands verifies that the bridge IIFE
+// contains goBack, goForward, and reload function implementations.
+// reload must use location.replace(href) instead of location.reload()
+// because the shim runs inside the frame.
+func TestInjectShimContainsNavigationCommands(t *testing.T) {
+	result := string(injectShim([]byte("<html><head></head><body></body></html>")))
+	for _, want := range []string{
+		"function goBack(",
+		"function goForward(",
+		"location.replace(",
+	} {
+		if !strings.Contains(result, want) {
+			t.Errorf("injectShim result does not contain %q", want)
+		}
+	}
+}
+
 // TestInjectShimContainsAgentBridge verifies that the bridge IIFE appended to
 // shimScript contains all required identifiers so that a parent frame can
 // communicate with the proxied page via postMessage.
