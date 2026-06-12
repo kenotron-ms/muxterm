@@ -7,7 +7,7 @@ import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { terminalRegistry } from '../lib/terminal-registry.js';
 import { muxLog } from '../lib/mux-log.js';
-import type { SessiondPaneInfo } from '../types.js';
+import type { SessiondPaneInfo, LayoutCommand } from '../types.js';
 import { store } from '../state.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1211,21 +1211,68 @@ export class MuxDock extends LitElement {
   }
 
   /**
-   * Phase 2 routing plumbing: receive a layout-command from the server via
-   * app.ts and emit a layout-command-received receipt event proving the
-   * plumbing works. Real dockview operations (create-pane, rename-pane,
-   * close-pane, switch-workspace) land in Phase 3/4.
+   * Execute a layout command from the server: create-pane, rename-pane,
+   * close-pane, or switch-workspace. Replaces the Phase 2 stub.
    */
-  handleLayoutCommand(msg: Record<string, unknown>): void {
-    // eslint-disable-next-line no-console
-    console.debug('[mux-dock] layout-command received (Phase 2 stub):', msg);
-    this.dispatchEvent(
-      new CustomEvent('layout-command-received', {
-        detail: msg,
-        bubbles: true,
-        composed: true,
-      }),
-    );
+  handleLayoutCommand(msg: LayoutCommand): void {
+    const dv = this._dv;
+    if (!dv) return;
+    switch (msg.command) {
+      case 'create-pane': {
+        this._nextPlacement = msg.placement === 'tab' ? 'tab' : 'split';
+        if (msg.referencePaneId !== undefined && msg.placement !== 'tab') {
+          this._splitReferenceId = String(msg.referencePaneId);
+        }
+        this._placementReferenceId = msg.referencePaneId !== undefined
+          ? String(msg.referencePaneId)
+          : (dv.activePanel?.id ?? null);
+        this.dispatchEvent(
+          new CustomEvent('pane-create', {
+            bubbles: true,
+            composed: true,
+            detail: { kind: msg.kind, url: msg.url },
+          }),
+        );
+        break;
+      }
+      case 'rename-pane': {
+        if (msg.paneId === undefined) return;
+        this._customTitles.set(msg.paneId, msg.name ?? '');
+        const panel = this._panels.get(msg.paneId);
+        if (panel) {
+          const tabContent = (panel as unknown as { view?: { tab?: { element?: HTMLElement } } })
+            .view?.tab?.element?.querySelector('.dv-default-tab-content');
+          if (tabContent) tabContent.textContent = msg.name ?? '';
+        }
+        this.dispatchEvent(
+          new CustomEvent('pane-rename', {
+            bubbles: true,
+            composed: true,
+            detail: { paneId: msg.paneId, name: msg.name ?? '' },
+          }),
+        );
+        break;
+      }
+      case 'close-pane': {
+        if (msg.paneId === undefined) return;
+        const panel = this._panels.get(msg.paneId);
+        if (panel && this._dv) {
+          this._dv.removePanel(panel);
+        }
+        break;
+      }
+      case 'switch-workspace': {
+        if (!msg.workspaceId) return;
+        this.dispatchEvent(
+          new CustomEvent('workspace-switch', {
+            bubbles: true,
+            composed: true,
+            detail: { workspaceId: msg.workspaceId },
+          }),
+        );
+        break;
+      }
+    }
   }
 
   /**

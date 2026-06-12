@@ -147,3 +147,21 @@ export function decodePaneFrame(buf: ArrayBuffer): { paneId: number; data: Uint8
   const data = new Uint8Array(buf, 4);
   return { paneId, data };
 }
+
+// ---------------------------------------------------------------------------
+// Layout commands (server → client)
+//
+// Describes a dockview operation requested by a server-side agent.
+// ---------------------------------------------------------------------------
+
+/** A layout command sent by the server to manipulate the dockview UI. */
+export interface LayoutCommand {
+  command: 'create-pane' | 'rename-pane' | 'close-pane' | 'switch-workspace';
+  paneId?: number;
+  name?: string;
+  kind?: 'terminal' | 'browser';
+  placement?: 'tab' | 'split-right' | 'split-left' | 'split-above' | 'split-below';
+  referencePaneId?: number;
+  url?: string;
+  workspaceId?: string;
+}

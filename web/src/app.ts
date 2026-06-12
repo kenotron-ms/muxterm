@@ -22,7 +22,7 @@ import './components/browser-surface.js';
 
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
-import { SessiondType } from './types.js';
+import { SessiondType, type LayoutCommand } from './types.js';
 import { currentLayoutMode } from './lib/breakpoint.js';
 import { muxLog, muxLogReset } from './lib/mux-log.js';
 
@@ -527,6 +527,7 @@ export class MuxApp extends LitElement {
               @pane-close="${this._onClosePane}"
               @pane-create="${this._createPaneOptimistic}"
               @pane-rename="${this._onPaneRename}"
+              @workspace-switch="${this._onWorkspaceSelected}"
               @layout-save="${this._onLayoutSave}"
             ></mux-dock>
           `}
@@ -671,7 +672,7 @@ export class MuxApp extends LitElement {
 
   /** Forward a layout-command from the server (via window CustomEvent) to the dock. */
   private _onLayoutCommand = (e: Event): void => {
-    const msg = (e as CustomEvent).detail as Record<string, unknown>;
+    const msg = (e as CustomEvent<LayoutCommand>).detail;
     this._dock?.handleLayoutCommand(msg);
   };
 
