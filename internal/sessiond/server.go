@@ -341,6 +341,15 @@ func (c *conn) handle(msg Message) {
 		}
 		msg.CID = 0
 		c.srv.broadcast(c.attached, &msg)
+	case TypeGetLayout:
+		if c.attached == "" {
+			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
+			return
+		}
+		layout := c.srv.reg.Layout(c.attached, "wide")
+		panes := c.srv.reg.PaneInfos(c.attached)
+		ascii := ASCIILayout(layout, panes, -1)
+		c.reply(&Message{Type: TypeLayoutResult, CID: msg.CID, ASCII: ascii})
 	case TypeScreenSnapshot:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
