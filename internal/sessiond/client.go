@@ -75,6 +75,11 @@ type Handlers struct {
 	// Field mapping (placement=Selector, referencePane=Cols) is provisional —
 	// Phase 3/4 finalizes the exact semantics.
 	OnLayoutCommand func(command string, paneID int, placement string, referencePane int)
+	// OnShellPrompt fires when the daemon broadcasts a TypeShellPrompt event
+	// triggered by an OSC 133 ;D (command-done) marker in the pane's PTY output.
+	// paneID is the workspace-local pane id; exitCode is the value carried in the
+	// OSC 133 ;D;N sequence (0 when absent).
+	OnShellPrompt func(paneID int, exitCode int)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -273,6 +278,27 @@ func (c *Client) Attach(workspaceID, breakpoint string) (Composition, error) {
 	return Composition{WorkspaceID: reply.WorkspaceID, Panes: reply.Panes, Layout: reply.Layout}, nil
 }
 
+// ScreenSnapshot requests a VT-grid snapshot of the pane identified by the
+// workspace-local paneID. The daemon replies with TypeScreenSnapshotResult
+// carrying Text (visible cell content), Cursor (0-indexed row/col), and PaneID.
+// For non-VT panes (browser pane or RawBuffer), the reply has empty Text and a
+// nil Cursor; the *Message itself is always non-nil on success.
+func (c *Client) ScreenSnapshot(paneID int) (*Message, error) {
+	return c.request(&Message{Type: TypeScreenSnapshot, PaneID: paneID})
+}
+
+// GetLayout requests an ASCII layout diagram of the currently-attached
+// workspace. The daemon replies with TypeLayoutResult carrying the ASCII field.
+// Returns an empty string when no layout has been saved for the attached
+// workspace.
+func (c *Client) GetLayout() (string, error) {
+	reply, err := c.request(&Message{Type: TypeGetLayout})
+	if err != nil {
+		return "", err
+	}
+	return reply.ASCII, nil
+}
+
 // RenamePane sets the display name of the pane identified by the
 // workspace-local paneID to name.
 func (c *Client) RenamePane(paneID int, name string) error {
@@ -417,6 +443,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeLayoutCommand:
 		if h.OnLayoutCommand != nil {
 			h.OnLayoutCommand(msg.Action, msg.PaneID, msg.Selector, msg.Cols)
+		}
+	case TypeShellPrompt:
+		if h.OnShellPrompt != nil {
+			h.OnShellPrompt(msg.PaneID, msg.ExitCode)
 		}
 	}
 }
