@@ -68,6 +68,13 @@ type Handlers struct {
 	// is the DOM verb (click/fill/press/eval/…); ref, value, key, and expr
 	// carry the verb's operands.
 	OnBrowserAction func(paneID int, action, ref, value, key, expr string)
+	// OnLayoutCommand fires when a layout-command is broadcast to the workspace
+	// (CID == 0). command is the verb (e.g. create-pane/rename-pane/close-pane/
+	// switch-workspace); paneID identifies the target pane; placement carries
+	// the split placement token; referencePane is the reference pane id.
+	// Field mapping (placement=Selector, referencePane=Cols) is provisional —
+	// Phase 3/4 finalizes the exact semantics.
+	OnLayoutCommand func(command string, paneID int, placement string, referencePane int)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -395,6 +402,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeBrowserAction:
 		if h.OnBrowserAction != nil {
 			h.OnBrowserAction(msg.PaneID, msg.Action, msg.Ref, msg.Value, msg.Key, msg.Expression)
+		}
+	case TypeLayoutCommand:
+		if h.OnLayoutCommand != nil {
+			h.OnLayoutCommand(msg.Action, msg.PaneID, msg.Selector, msg.Cols)
 		}
 	}
 }

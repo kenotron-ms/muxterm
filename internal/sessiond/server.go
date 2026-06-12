@@ -334,6 +334,13 @@ func (c *conn) handle(msg Message) {
 		}
 		msg.CID = 0
 		c.srv.broadcast(c.attached, &msg)
+	case TypeLayoutCommand:
+		if c.attached == "" {
+			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
+			return
+		}
+		msg.CID = 0
+		c.srv.broadcast(c.attached, &msg)
 	case TypeScreenSnapshot:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
