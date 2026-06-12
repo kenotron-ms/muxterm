@@ -125,6 +125,7 @@ func (c *Client) AttachWorkspace(workspaceID string) error {
 	c.workspace = workspaceID
 	c.outputBufs = make(map[int][]byte)
 	c.promptChans = make(map[int]chan int)
+	c.browserResultChans = make(map[int]chan *sessiond.Message)
 	c.mu.Unlock()
 	return nil
 }

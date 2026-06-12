@@ -45,11 +45,11 @@ func TestBrowserInteractActionStrings(t *testing.T) {
 		},
 		{
 			// CRITICAL: tool argument is named "text" but must map to Value field,
-			// not Text. The shim's type_ action reads msg.value.
+			// not Text. The shim's type action reads msg.value.
 			name:       "type",
 			call:       bt.browserType,
 			args:       map[string]any{"pane_id": 1, "text": "abc"},
-			wantAction: "type_",
+			wantAction: "type",
 			wantValue:  "abc",
 		},
 		{
@@ -70,7 +70,7 @@ func TestBrowserInteractActionStrings(t *testing.T) {
 			name:       "select",
 			call:       bt.browserSelect,
 			args:       map[string]any{"pane_id": 1, "ref": "e9", "value": "opt1"},
-			wantAction: "select_",
+			wantAction: "select",
 			wantRef:    "e9",
 			wantValue:  "opt1",
 		},

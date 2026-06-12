@@ -20,7 +20,7 @@ func (bt *browserTools) browserFill(args map[string]any) (string, error) {
 }
 
 // browserType types text into the focused element.
-// CRITICAL: the tool argument is named "text" but the shim's type_ action reads
+// CRITICAL: the tool argument is named "text" but the shim's type action reads
 // msg.value — so we map the text arg onto the Value field (JSON "value"), not
 // the Text field (JSON "text").
 func (bt *browserTools) browserType(args map[string]any) (string, error) {
@@ -28,7 +28,7 @@ func (bt *browserTools) browserType(args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return bt.callAction(args, "type_", map[string]any{"value": text})
+	return bt.callAction(args, "type", map[string]any{"value": text})
 }
 
 // browserPress presses a keyboard key (e.g. "Enter", "Tab", "ArrowDown").
@@ -56,5 +56,5 @@ func (bt *browserTools) browserSelect(args map[string]any) (string, error) {
 	}
 	ref, _ := args["ref"].(string)
 	sel, _ := args["selector"].(string)
-	return bt.callAction(args, "select_", map[string]any{"ref": ref, "selector": sel, "value": value})
+	return bt.callAction(args, "select", map[string]any{"ref": ref, "selector": sel, "value": value})
 }

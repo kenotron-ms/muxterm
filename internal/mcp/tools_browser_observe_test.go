@@ -42,7 +42,7 @@ func TestBrowserSnapshotReturnsTree(t *testing.T) {
 	}
 }
 
-// TestBrowserEvalReturnsResult verifies that browserEval sends action "eval_"
+// TestBrowserEvalReturnsResult verifies that browserEval sends action "eval"
 // and returns {"result":<json>} with the value from the shim's Result field.
 func TestBrowserEvalReturnsResult(t *testing.T) {
 	socketPath, cancel := startMCPTestServer(t)
@@ -60,8 +60,8 @@ func TestBrowserEvalReturnsResult(t *testing.T) {
 	}
 	select {
 	case a := <-actions:
-		if a.Action != "eval_" {
-			t.Errorf("shim received action=%q, want eval_", a.Action)
+		if a.Action != "eval" {
+			t.Errorf("shim received action=%q, want eval", a.Action)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no browser-action received")

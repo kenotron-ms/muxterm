@@ -46,7 +46,7 @@ func (bt *browserTools) browserEval(args map[string]any) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), browserTimeout)
 	defer cancel()
-	res, err := bt.c.SendBrowserAction(ctx, paneID, "eval_", params)
+	res, err := bt.c.SendBrowserAction(ctx, paneID, "eval", params)
 	if err != nil {
 		return "", err
 	}

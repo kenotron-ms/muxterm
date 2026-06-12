@@ -62,40 +62,56 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 	}
 	registerAllTools(srv, wrap)
 
+	// attachOnce guards the one-time workspace attach for resources/list.
+	// Calling c.conn.Attach repeatedly replays the full retained output buffer
+	// for every pane, generating spurious notifications/resources/updated events
+	// on every resources/list call. We attach once and cache the pane list.
+	var (
+		attachOnce  sync.Once
+		attachedRes []map[string]any
+	)
 	srv.SetResourceProvider(
-		// list closure: dial lazily, install output notifier, attach workspace,
-		// return one descriptor per pane.
+		// list closure: dial lazily, attach workspace exactly once, return cached
+		// pane descriptors. Subsequent resources/list calls return the same list
+		// without re-attaching or replaying output buffers.
 		func() []map[string]any {
 			c, err := lc.get()
 			if err != nil {
 				return nil
 			}
-			c.SetOutputNotifier(func(paneID int) {
-				srv.NotifyResourceUpdated(fmt.Sprintf("pane://%d", paneID))
-			})
-			ws := c.Workspace()
-			comp, err := c.conn.Attach(ws, "wide")
-			if err != nil {
-				return nil
-			}
-			resources := make([]map[string]any, 0, len(comp.Panes))
-			for _, p := range comp.Panes {
-				resources = append(resources, map[string]any{
-					"uri":      fmt.Sprintf("pane://%d", p.PaneID),
-					"name":     fmt.Sprintf("Pane %d output", p.PaneID),
-					"mimeType": "text/plain",
+			attachOnce.Do(func() {
+				c.SetOutputNotifier(func(paneID int) {
+					srv.NotifyResourceUpdated(fmt.Sprintf("pane://%d", paneID))
 				})
-			}
-			return resources
+				ws := c.Workspace()
+				comp, attachErr := c.conn.Attach(ws, "wide")
+				if attachErr != nil {
+					return
+				}
+				res := make([]map[string]any, 0, len(comp.Panes))
+				for _, p := range comp.Panes {
+					res = append(res, map[string]any{
+						"uri":      fmt.Sprintf("pane://%d", p.PaneID),
+						"name":     fmt.Sprintf("Pane %d output", p.PaneID),
+						"mimeType": "text/plain",
+					})
+				}
+				attachedRes = res
+			})
+			return attachedRes
 		},
 		// read closure: dial lazily, parse paneID from uri, return screen text.
+		// Returns an error immediately on malformed URIs to avoid sending pane 0
+		// to the daemon with a confusing error message.
 		func(uri string) (string, error) {
 			c, err := lc.get()
 			if err != nil {
 				return "", err
 			}
 			var paneID int
-			fmt.Sscanf(uri, "pane://%d", &paneID)
+			if n, _ := fmt.Sscanf(uri, "pane://%d", &paneID); n != 1 {
+				return "", fmt.Errorf("invalid resource URI: %q", uri)
+			}
 			snap, err := c.conn.ScreenSnapshot(paneID)
 			if err != nil {
 				return "", err
