@@ -311,6 +311,8 @@ export class MuxApp extends LitElement {
     window.addEventListener('browser-action', this._onBrowserAction);
     // Browser-action result: bubbles up from mux-dock → send back over socket.
     this.addEventListener('browser-action-result', this._onBrowserActionResult);
+    // Layout-command relay: window CustomEvent from ws.ts → mux-dock routing.
+    window.addEventListener('layout-command', this._onLayoutCommand);
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
@@ -422,6 +424,7 @@ export class MuxApp extends LitElement {
     this.removeEventListener('pane-navigate', this._onPaneNavigate);
     window.removeEventListener('browser-action', this._onBrowserAction);
     this.removeEventListener('browser-action-result', this._onBrowserActionResult);
+    window.removeEventListener('layout-command', this._onLayoutCommand);
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -664,6 +667,12 @@ export class MuxApp extends LitElement {
   private _onBrowserAction = (e: Event): void => {
     const msg = (e as CustomEvent).detail as Record<string, unknown>;
     void this._dock?.sendBrowserAction(msg);
+  };
+
+  /** Forward a layout-command from the server (via window CustomEvent) to the dock. */
+  private _onLayoutCommand = (e: Event): void => {
+    const msg = (e as CustomEvent).detail as Record<string, unknown>;
+    this._dock?.handleLayoutCommand(msg);
   };
 
   /** Forward a browser-action-result (bubbled from mux-dock) back over the socket. */

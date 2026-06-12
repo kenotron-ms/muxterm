@@ -1211,6 +1211,24 @@ export class MuxDock extends LitElement {
   }
 
   /**
+   * Phase 2 routing plumbing: receive a layout-command from the server via
+   * app.ts and emit a layout-command-received receipt event proving the
+   * plumbing works. Real dockview operations (create-pane, rename-pane,
+   * close-pane, switch-workspace) land in Phase 3/4.
+   */
+  handleLayoutCommand(msg: Record<string, unknown>): void {
+    // eslint-disable-next-line no-console
+    console.debug('[mux-dock] layout-command received (Phase 2 stub):', msg);
+    this.dispatchEvent(
+      new CustomEvent('layout-command-received', {
+        detail: msg,
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  /**
    * Browser-action relay: forward a server-sent browser-action message to the
    * target pane's MuxBrowserSurface iframe shim via postMessage, then emit the
    * shim's response as a browser-action-result CustomEvent.
