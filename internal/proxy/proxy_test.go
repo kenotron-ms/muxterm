@@ -651,3 +651,154 @@ func TestAgentSWScriptHasNoLeakyNavigationsArray(t *testing.T) {
 		t.Error("pSwScript contains unbounded navigations[] array — memory leak in long-running SWs; remove it")
 	}
 }
+
+// ─── External proxy tests ──────────────────────────────────────────────────────
+
+// TestExternal_XFrameOptionsStripped verifies that X-Frame-Options returned by
+// the upstream is stripped by NewExternalHandler so the page can load in an
+// iframe.
+func TestExternal_XFrameOptionsStripped(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, "hello") //nolint:errcheck
+	}))
+	defer upstream.Close()
+
+	mux := http.NewServeMux()
+	mux.Handle("/x/", NewExternalHandler())
+	proxy := httptest.NewServer(mux)
+	defer proxy.Close()
+
+	// Override the handler to hit the test upstream instead of the real host.
+	// We test by making a request through a local proxy server that wraps our
+	// handler, then using a test upstream server.
+	// Since NewExternalHandler dials the real host, we need a different approach:
+	// test handleExternalProxy directly with our upstream URL.
+	req := httptest.NewRequest("GET", "/x/example.com/", nil)
+	rr := httptest.NewRecorder()
+	handleExternalProxy(rr, req, upstream.URL+"/", "example.com")
+
+	if rr.Header().Get("X-Frame-Options") != "" {
+		t.Errorf("X-Frame-Options should be stripped, got %q", rr.Header().Get("X-Frame-Options"))
+	}
+}
+
+// TestExternal_BaseHrefInjected verifies that a <base href="/x/{host}/"> element
+// is injected into the <head> of proxied HTML responses.
+func TestExternal_BaseHrefInjected(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, "<head><title>test</title></head>") //nolint:errcheck
+	}))
+	defer upstream.Close()
+
+	req := httptest.NewRequest("GET", "/x/example.com/", nil)
+	rr := httptest.NewRecorder()
+	handleExternalProxy(rr, req, upstream.URL+"/", "example.com")
+
+	body := rr.Body.String()
+	if !strings.Contains(body, `<base href="/x/example.com/">`) {
+		t.Errorf("body should contain <base href> tag, got: %q", body)
+	}
+}
+
+// TestExternal_NonHtmlPassedThrough verifies that non-HTML responses are passed
+// through without modification (no <base href> injected).
+func TestExternal_NonHtmlPassedThrough(t *testing.T) {
+	jsBody := `console.log("hello");`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		io.WriteString(w, jsBody) //nolint:errcheck
+	}))
+	defer upstream.Close()
+
+	req := httptest.NewRequest("GET", "/x/example.com/app.js", nil)
+	rr := httptest.NewRecorder()
+	handleExternalProxy(rr, req, upstream.URL+"/app.js", "example.com")
+
+	body := rr.Body.String()
+	if strings.Contains(body, "<base href") {
+		t.Errorf("non-HTML response should not have <base href> injected, got: %q", body)
+	}
+	if body != jsBody {
+		t.Errorf("body = %q, want %q", body, jsBody)
+	}
+}
+
+// TestInjectBase_WithAttributes verifies that injectBase inserts <base href>
+// correctly even when the <head> tag has attributes like lang="en".
+func TestInjectBase_WithAttributes(t *testing.T) {
+	html := []byte(`<html><head lang="en"><title>Test</title></head><body></body></html>`)
+	result := injectBase(html, "example.com")
+	s := string(result)
+
+	// The base tag should appear after <head lang="en">, not prepended to body
+	baseIdx := strings.Index(s, `<base href="/x/example.com/">`)
+	headIdx := strings.Index(s, `<head lang="en">`)
+	titleIdx := strings.Index(s, "<title>")
+
+	if baseIdx == -1 {
+		t.Error("injectBase result should contain <base href> tag")
+	}
+	if headIdx == -1 {
+		t.Error("result should still contain <head lang=\"en\">")
+	}
+	if baseIdx != -1 && headIdx != -1 && baseIdx < headIdx {
+		t.Errorf("<base href> (pos %d) must appear after <head lang=\"en\"> (pos %d)", baseIdx, headIdx)
+	}
+	if baseIdx != -1 && titleIdx != -1 && baseIdx > titleIdx {
+		t.Errorf("<base href> (pos %d) must appear before <title> (pos %d)", baseIdx, titleIdx)
+	}
+}
+
+// TestFindHeadInsertPoint_Variants tests that findHeadInsertPoint correctly
+// finds the insert point for various <head> tag formats.
+func TestFindHeadInsertPoint_Variants(t *testing.T) {
+	cases := []struct {
+		name     string
+		html     string
+		wantText string // text that should appear at the insert point
+		wantNeg1 bool   // expect -1 (no head found)
+	}{
+		{
+			name:     "plain <head>",
+			html:     "<html><head><title>T</title></head></html>",
+			wantText: "<title>",
+		},
+		{
+			name:     "<head lang=en>",
+			html:     `<html><head lang="en"><title>T</title></head></html>`,
+			wantText: "<title>",
+		},
+		{
+			name:     "<HEAD> uppercase",
+			html:     "<HTML><HEAD><TITLE>T</TITLE></HEAD></HTML>",
+			wantText: "<TITLE>",
+		},
+		{
+			name:     "no head tag",
+			html:     "<html><body>no head</body></html>",
+			wantNeg1: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			idx := findHeadInsertPoint([]byte(tc.html))
+			if tc.wantNeg1 {
+				if idx != -1 {
+					t.Errorf("findHeadInsertPoint = %d, want -1", idx)
+				}
+				return
+			}
+			if idx == -1 {
+				t.Fatalf("findHeadInsertPoint = -1, want non-negative")
+			}
+			got := tc.html[idx:]
+			if !strings.HasPrefix(got, tc.wantText) {
+				t.Errorf("text at insert point = %q, want prefix %q", got[:min(len(got), 20)], tc.wantText)
+			}
+		})
+	}
+}

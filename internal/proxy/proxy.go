@@ -534,6 +534,14 @@ func proxyHTTP(w http.ResponseWriter, r *http.Request, targetHost, port, path st
 		case "content-security-policy", "x-content-security-policy", "x-webkit-csp":
 			// Would block injected scripts.
 			continue
+		case "x-frame-options":
+			// Drop — we proxy through our origin so the browser doesn't need
+			// the original site's frame policy.
+			continue
+		case "cross-origin-opener-policy",
+			"cross-origin-embedder-policy",
+			"cross-origin-resource-policy":
+			continue
 		case "location":
 			// Handled separately below — rewrite localhost redirects.
 			continue
@@ -593,15 +601,31 @@ func rewriteLocationHeader(loc, currentPort string) string {
 	return result
 }
 
+// findHeadInsertPoint returns the index just after the opening <head...> tag,
+// or -1 if not found. Handles <head>, <head lang="en">, <HEAD>, etc.
+func findHeadInsertPoint(html []byte) int {
+	lower := bytes.ToLower(html)
+	headTag := []byte("<head")
+	idx := bytes.Index(lower, headTag)
+	if idx < 0 {
+		return -1
+	}
+	// Find the closing > of this tag
+	close := bytes.IndexByte(lower[idx:], '>')
+	if close < 0 {
+		return -1
+	}
+	return idx + close + 1
+}
+
 // injectShim inserts shimScript as the first child of <head> (case-insensitive).
+// Handles <head>, <head lang="en">, <HEAD>, etc.
 // Falls back to prepending to the document if no <head> is found.
 func injectShim(html []byte) []byte {
 	shim := []byte(shimScript)
-	lower := bytes.ToLower(html)
 
-	headOpen := []byte("<head>")
-	if idx := bytes.Index(lower, headOpen); idx >= 0 {
-		at := idx + len(headOpen)
+	at := findHeadInsertPoint(html)
+	if at >= 0 {
 		out := make([]byte, 0, len(html)+len(shim))
 		out = append(out, html[:at]...)
 		out = append(out, shim...)
@@ -613,6 +637,24 @@ func injectShim(html []byte) []byte {
 	out := make([]byte, 0, len(html)+len(shim))
 	out = append(out, shim...)
 	out = append(out, html...)
+	return out
+}
+
+// injectBase inserts <base href="/x/{hostPath}/"> immediately after the
+// opening <head> tag so relative URLs in proxied external pages resolve
+// through the /x/ proxy route rather than to the muxterm origin root.
+// Only an HTML element — no JavaScript is injected.
+func injectBase(html []byte, hostPath string) []byte {
+	tag := []byte(fmt.Sprintf(`<base href="/x/%s/">`, hostPath))
+	at := findHeadInsertPoint(html)
+	if at < 0 {
+		// No <head> tag — prepend to document
+		return append(tag, html...)
+	}
+	out := make([]byte, 0, len(html)+len(tag))
+	out = append(out, html[:at]...)
+	out = append(out, tag...)
+	out = append(out, html[at:]...)
 	return out
 }
 
@@ -681,6 +723,100 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, targetHost, port, pa
 	}()
 
 	<-errc
+}
+
+// NewExternalHandler returns an http.Handler that proxies requests of the
+// form /x/{host}/{rest} to https://{host}/{rest}. It strips frame-blocking
+// headers (X-Frame-Options, CSP, COEP/COOP/CORP) and injects a <base href>
+// element so relative URLs stay within the proxy. No JavaScript is injected.
+func NewExternalHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Extract host from /x/{host}/...
+		tail := strings.TrimPrefix(r.URL.Path, "/x/")
+		slashIdx := strings.IndexByte(tail, '/')
+		var host, rest string
+		if slashIdx < 0 {
+			host = tail
+			rest = "/"
+		} else {
+			host = tail[:slashIdx]
+			rest = tail[slashIdx:]
+		}
+		if host == "" {
+			http.Error(w, "missing host", http.StatusBadRequest)
+			return
+		}
+		// Build upstream URL (always HTTPS for external)
+		upstream := "https://" + host + rest
+		if r.URL.RawQuery != "" {
+			upstream += "?" + r.URL.RawQuery
+		}
+
+		handleExternalProxy(w, r, upstream, host)
+	})
+}
+
+func handleExternalProxy(w http.ResponseWriter, r *http.Request, upstreamURL, host string) {
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, r.Body)
+	if err != nil {
+		http.Error(w, "bad upstream", http.StatusBadGateway)
+		return
+	}
+	// Forward safe request headers
+	for key, vals := range r.Header {
+		switch strings.ToLower(key) {
+		case "host", "connection", "proxy-connection",
+			"keep-alive", "transfer-encoding", "upgrade":
+			continue
+		}
+		for _, v := range vals {
+			req.Header.Add(key, v)
+		}
+	}
+	req.Header.Set("Accept-Encoding", "identity") // prevent gzip so we can inject
+
+	resp, err := noFollowClient.Do(req)
+	if err != nil {
+		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy response headers, stripping frame-blocking ones
+	for key, vals := range resp.Header {
+		switch strings.ToLower(key) {
+		case "content-length",
+			"content-encoding",
+			"content-security-policy",
+			"x-content-security-policy",
+			"x-webkit-csp",
+			"x-frame-options",
+			"cross-origin-opener-policy",
+			"cross-origin-embedder-policy",
+			"cross-origin-resource-policy":
+			continue
+		}
+		for _, v := range vals {
+			w.Header().Add(key, v)
+		}
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(ct, "text/html") {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, "read error", http.StatusBadGateway)
+			return
+		}
+		body = injectBase(body, host)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		w.WriteHeader(resp.StatusCode)
+		w.Write(body) //nolint:errcheck
+		return
+	}
+
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body) //nolint:errcheck
 }
 
 // parseSubprotocols splits the Sec-Websocket-Protocol request header on comma.

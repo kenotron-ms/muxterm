@@ -123,11 +123,22 @@ class BrowserRenderer implements IContentRenderer {
   }
 
   init(): void {
-    // port=0 means the path IS the full URL (external/direct).
+    // port=0 means the path is a full external URL — route through /x/ proxy.
     // port>0 means proxy through /p/{port}/.
-    const proxyUrl = this._port === 0
-      ? this._path
-      : `${location.origin}/p/${this._port}${this._path}`;
+    let proxyUrl: string;
+    if (this._port === 0) {
+      // External URL — route through /x/ proxy so X-Frame-Options is stripped.
+      try {
+        const u = new URL(this._path);
+        // Use /x/{host}{pathname}{search} — the Go handler strips frame-blocking headers
+        // and injects only <base href>, no JS.
+        proxyUrl = `${location.origin}/x/${u.host}${u.pathname}${u.search}`;
+      } catch {
+        proxyUrl = this._path; // fallback for malformed URLs
+      }
+    } else {
+      proxyUrl = `${location.origin}/p/${this._port}${this._path}`;
+    }
     const surface = document.createElement('mux-browser-surface') as MuxBrowserSurface;
     surface.url = proxyUrl;
     this.element.appendChild(surface);
@@ -160,6 +171,15 @@ class BrowserRenderer implements IContentRenderer {
           browserPath = parsed.pathname.startsWith(prefix)
             ? parsed.pathname.slice(prefix.length) || '/'
             : parsed.pathname;
+        } catch { /* use url as-is */ }
+      } else {
+        // External proxy: convert /x/{host}/path back to https://{host}/path
+        try {
+          const parsed = new URL(url);
+          const match = parsed.pathname.match(/^\/x\/([^/]+)(.*)/);
+          if (match) {
+            browserPath = `https://${match[1]}${match[2]}${parsed.search}`;
+          }
         } catch { /* use url as-is */ }
       }
       this.element.dispatchEvent(

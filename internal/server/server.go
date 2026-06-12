@@ -61,6 +61,7 @@ func New(cfg Config) *Server {
 		proxy.ServeAgentServiceWorker(w, r)
 	})
 	s.mux.Handle("/p/", proxy.NewHandler("localhost", nil)) // ProxyHeaders injection deferred to v2
+	s.mux.Handle("/x/", proxy.NewExternalHandler())
 
 	// REST endpoint for CLI and agent automation: create a browser pane without a WebSocket.
 	s.mux.HandleFunc("POST /api/pane", s.handleCreatePane)
