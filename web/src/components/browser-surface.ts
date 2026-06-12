@@ -152,6 +152,13 @@ export class MuxBrowserSurface extends LitElement {
   @property({ type: String })
   url = 'about:blank';
 
+  /**
+   * Localhost port for /p/ proxy routing. Set by BrowserRenderer when the
+   * pane was created for a specific local port. 0 = auto-detect from URL.
+   */
+  @property({ type: Number })
+  port = 0;
+
   // Client-side history stack for back/forward navigation.
   // Tracks URLs committed via the address bar. In-frame link clicks are
   // cross-origin and cannot be observed, so they are not tracked here.
@@ -208,12 +215,43 @@ export class MuxBrowserSurface extends LitElement {
     this._canGoForward = this._historyNext.length > 0;
   }
 
+  /**
+   * Compute the iframe src from the display URL.
+   *
+   * this.url holds what the user sees and types (e.g. "https://google.com").
+   * The iframe always loads through the muxterm proxy so X-Frame-Options is
+   * stripped. Never point the iframe directly at an external origin.
+   *
+   *   localhost / 127.0.0.1  →  /p/{port}{path}    (this.port when set by
+   *                                                   BrowserRenderer; URL's
+   *                                                   own port otherwise)
+   *   any other host          →  /x/{host}{path}    (external proxy)
+   *   about:blank / empty     →  about:blank
+   */
+  private _iframeSrc(): string {
+    const u = this.url;
+    if (!u || u === 'about:blank') return 'about:blank';
+    try {
+      const parsed = new URL(u);
+      if (this.port > 0) {
+        // BrowserRenderer-managed local proxy pane
+        return `/p/${this.port}${parsed.pathname}${parsed.search}`;
+      }
+      if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+        // User typed a localhost URL — derive port from the URL itself
+        const localPort = parsed.port ? parseInt(parsed.port, 10) : 80;
+        return `/p/${localPort}${parsed.pathname}${parsed.search}`;
+      }
+      // External URL — strip X-Frame-Options via /x/ proxy (no JS injected)
+      return `/x/${parsed.host}${parsed.pathname}${parsed.search}`;
+    } catch {
+      return u; // fallback for special schemes (blob:, data:, etc.)
+    }
+  }
+
   private _reload(): void {
-    // Setting src on the element we own is a same-document attribute write —
-    // no cross-origin window access required. Using this.url (not iframe.src)
-    // avoids the no-self-assign lint rule and is the canonical source of truth.
     const iframe = this.shadowRoot!.querySelector('iframe') as HTMLIFrameElement | null;
-    if (iframe) iframe.src = this.url;
+    if (iframe) iframe.src = this._iframeSrc();
   }
 
   private _toggleFwdMode(): void {
@@ -365,7 +403,7 @@ export class MuxBrowserSurface extends LitElement {
           ${fwdIcon}
         </button>
       </div>
-      <iframe src="${this.url}" sandbox="allow-scripts allow-forms allow-popups"></iframe>
+      <iframe src="${this._iframeSrc()}" sandbox="allow-scripts allow-forms allow-popups"></iframe>
     `;
   }
 }

@@ -123,29 +123,14 @@ class BrowserRenderer implements IContentRenderer {
   }
 
   init(): void {
-    // port=0 means the path is a full external URL — route through /x/ proxy.
-    // port>0 means proxy through /p/{port}/.
-    let proxyUrl: string;
-    if (this._port === 0) {
-      // about:blank (initial empty state) — load directly, no proxy needed.
-      if (!this._path || this._path === 'about:blank') {
-        proxyUrl = 'about:blank';
-      } else {
-        // External URL — route through /x/ proxy so X-Frame-Options is stripped.
-        try {
-          const u = new URL(this._path);
-          // Use /x/{host}{pathname}{search} — the Go handler strips frame-blocking headers
-          // and injects only <base href>, no JS.
-          proxyUrl = `${location.origin}/x/${u.host}${u.pathname}${u.search}`;
-        } catch {
-          proxyUrl = this._path; // fallback for malformed URLs
-        }
-      }
-    } else {
-      proxyUrl = `${location.origin}/p/${this._port}${this._path}`;
-    }
     const surface = document.createElement('mux-browser-surface') as MuxBrowserSurface;
-    surface.url = proxyUrl;
+    // Pass the display URL directly — MuxBrowserSurface._iframeSrc() handles
+    // all proxy routing automatically:
+    //   localhost / 127.0.0.1  →  /p/{port}{path}
+    //   any other host         →  /x/{host}{path}   (strips X-Frame-Options)
+    //   about:blank / empty    →  about:blank
+    surface.url = this._path || 'about:blank';
+    surface.port = this._port;
     this.element.appendChild(surface);
     this._surface = surface;
 
@@ -167,31 +152,15 @@ class BrowserRenderer implements IContentRenderer {
     this.element.appendChild(shield);
 
     this.element.addEventListener('url-change', (e: Event) => {
+      // surface.url is always the display URL (e.g. "https://google.com").
+      // _iframeSrc() in MuxBrowserSurface handles the /x/ or /p/ proxy routing
+      // transparently — we just forward the display URL to sessiond for storage.
       const { url } = (e as CustomEvent<{ url: string }>).detail;
-      let browserPath = url;
-      if (this._port > 0) {
-        try {
-          const parsed = new URL(url);
-          const prefix = `/p/${this._port}`;
-          browserPath = parsed.pathname.startsWith(prefix)
-            ? parsed.pathname.slice(prefix.length) || '/'
-            : parsed.pathname;
-        } catch { /* use url as-is */ }
-      } else {
-        // External proxy: convert /x/{host}/path back to https://{host}/path
-        try {
-          const parsed = new URL(url);
-          const match = parsed.pathname.match(/^\/x\/([^/]+)(.*)/);
-          if (match) {
-            browserPath = `https://${match[1]}${match[2]}${parsed.search}`;
-          }
-        } catch { /* use url as-is */ }
-      }
       this.element.dispatchEvent(
         new CustomEvent('pane-navigate', {
           bubbles: true,
           composed: true,
-          detail: { paneId: this._paneId, browserPath },
+          detail: { paneId: this._paneId, browserPath: url },
         }),
       );
     });
