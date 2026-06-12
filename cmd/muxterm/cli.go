@@ -83,6 +83,7 @@ func parseMCP(args []string) (Config, error) {
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Start MCP server using stdio transport (JSON-RPC 2.0 over stdin/stdout).")
 		fmt.Fprintln(os.Stdout, "stdout is the JSON-RPC transport; all logging goes to stderr.")
+		fmt.Fprintln(os.Stdout, "Exposes terminal, workspace, layout, and browser automation tools, plus pane:// resources.")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Flags:")
 		fs.PrintDefaults()

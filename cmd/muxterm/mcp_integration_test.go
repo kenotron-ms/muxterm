@@ -106,10 +106,10 @@ func TestMCPInitializeOverStdio(t *testing.T) {
 	}
 }
 
-// TestMCPToolsListReturns12Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 12 tools
+// TestMCPToolsListReturns25Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 25 tools
 // in the expected order — all without a running sessiond daemon.
-func TestMCPToolsListReturns12Tools(t *testing.T) {
+func TestMCPToolsListReturns25Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 
 	input := strings.Join([]string{
@@ -176,6 +176,19 @@ func TestMCPToolsListReturns12Tools(t *testing.T) {
 		"close_pane",
 		"list_panes",
 		"get_layout",
+		"browser_goto",
+		"browser_go_back",
+		"browser_go_forward",
+		"browser_reload",
+		"browser_click",
+		"browser_fill",
+		"browser_type",
+		"browser_press",
+		"browser_hover",
+		"browser_select",
+		"browser_snapshot",
+		"browser_eval",
+		"browser_screenshot",
 	}
 
 	tools := resp.Result.Tools
