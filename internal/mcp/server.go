@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 )
 
 // Protocol and server version constants.
@@ -41,6 +42,16 @@ type Server struct {
 	out   *json.Encoder
 	tools map[string]*tool
 	order []string // registration order for stable tools/list output
+
+	outMu sync.Mutex // serializes all writes to out (responses + notifications)
+
+	// Resource provider hooks. Both may be nil (resources disabled).
+	resourceList func() []map[string]any
+	resourceRead func(uri string) (string, error)
+
+	// Subscription state.
+	subsMu        sync.Mutex
+	subscriptions map[string]bool
 }
 
 // NewServer constructs a Server wired to os.Stdin and os.Stdout.
@@ -53,10 +64,21 @@ func NewServer() *Server {
 // Used by tests with bytes.Buffer.
 func NewServerWithIO(in io.Reader, out io.Writer) *Server {
 	return &Server{
-		in:    bufio.NewReader(in),
-		out:   json.NewEncoder(out),
-		tools: make(map[string]*tool),
+		in:            bufio.NewReader(in),
+		out:           json.NewEncoder(out),
+		tools:         make(map[string]*tool),
+		subscriptions: make(map[string]bool),
 	}
+}
+
+// SetResourceProvider installs the list and read hooks for MCP resources.
+// Either or both may be nil to disable resources.
+func (s *Server) SetResourceProvider(
+	list func() []map[string]any,
+	read func(uri string) (string, error),
+) {
+	s.resourceList = list
+	s.resourceRead = read
 }
 
 // Register adds or updates a tool. If the name is new, it is appended to the
@@ -155,6 +177,26 @@ func (s *Server) handleLine(line string) {
 			s.handleToolsCall(req.ID, req.Params)
 		}
 
+	case "resources/list":
+		if !notification {
+			s.handleResourcesList(req.ID)
+		}
+
+	case "resources/read":
+		if !notification {
+			s.handleResourcesRead(req.ID, req.Params)
+		}
+
+	case "resources/subscribe":
+		if !notification {
+			s.handleResourcesSubscribe(req.ID, req.Params)
+		}
+
+	case "resources/unsubscribe":
+		if !notification {
+			s.handleResourcesUnsubscribe(req.ID, req.Params)
+		}
+
 	default:
 		if !notification {
 			s.writeError(req.ID, codeMethodNotFound, fmt.Sprintf("method not found: %s", req.Method))
@@ -167,7 +209,8 @@ func (s *Server) handleInitialize(id json.RawMessage) {
 	result := map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities": map[string]any{
-			"tools": map[string]any{},
+			"tools":     map[string]any{},
+			"resources": map[string]any{"subscribe": true},
 		},
 		"serverInfo": map[string]any{
 			"name":    "muxterm",
@@ -233,9 +276,117 @@ func (s *Server) handleToolsCall(id json.RawMessage, rawParams json.RawMessage) 
 	s.writeResult(id, result)
 }
 
+// handleResourcesList responds to 'resources/list' with all provider resources.
+func (s *Server) handleResourcesList(id json.RawMessage) {
+	var resources []map[string]any
+	if s.resourceList != nil {
+		resources = s.resourceList()
+	}
+	if resources == nil {
+		resources = []map[string]any{}
+	}
+	s.writeResult(id, map[string]any{"resources": resources})
+}
+
+// handleResourcesRead responds to 'resources/read' with the content of the named resource.
+func (s *Server) handleResourcesRead(id json.RawMessage, rawParams json.RawMessage) {
+	var params struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(rawParams, &params); err != nil {
+		s.writeError(id, codeInvalidParams, "invalid params")
+		return
+	}
+	if params.URI == "" {
+		s.writeError(id, codeInvalidParams, "invalid params: missing uri")
+		return
+	}
+	if s.resourceRead == nil {
+		s.writeError(id, codeInternalError, "resources not available")
+		return
+	}
+	text, err := s.resourceRead(params.URI)
+	if err != nil {
+		s.writeError(id, codeInternalError, err.Error())
+		return
+	}
+	s.writeResult(id, map[string]any{
+		"contents": []map[string]any{
+			{
+				"uri":      params.URI,
+				"mimeType": "text/plain",
+				"text":     text,
+			},
+		},
+	})
+}
+
+// handleResourcesSubscribe records the URI in the subscriptions map.
+func (s *Server) handleResourcesSubscribe(id json.RawMessage, rawParams json.RawMessage) {
+	var params struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(rawParams, &params); err != nil {
+		s.writeError(id, codeInvalidParams, "invalid params")
+		return
+	}
+	s.subsMu.Lock()
+	s.subscriptions[params.URI] = true
+	s.subsMu.Unlock()
+	s.writeResult(id, map[string]any{})
+}
+
+// handleResourcesUnsubscribe removes the URI from the subscriptions map.
+func (s *Server) handleResourcesUnsubscribe(id json.RawMessage, rawParams json.RawMessage) {
+	var params struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(rawParams, &params); err != nil {
+		s.writeError(id, codeInvalidParams, "invalid params")
+		return
+	}
+	s.subsMu.Lock()
+	delete(s.subscriptions, params.URI)
+	s.subsMu.Unlock()
+	s.writeResult(id, map[string]any{})
+}
+
+// NotifyResourceUpdated sends a notifications/resources/updated notification if
+// uri is subscribed. Safe to call from any goroutine.
+func (s *Server) NotifyResourceUpdated(uri string) {
+	s.subsMu.Lock()
+	subscribed := s.subscriptions[uri]
+	s.subsMu.Unlock()
+	if !subscribed {
+		return
+	}
+	s.writeNotification("notifications/resources/updated", map[string]any{"uri": uri})
+}
+
+// writeNotification sends a JSON-RPC 2.0 notification (no id). outMu-guarded.
+func (s *Server) writeNotification(method string, params any) {
+	type notification struct {
+		JSONRPC string `json:"jsonrpc"`
+		Method  string `json:"method"`
+		Params  any    `json:"params"`
+	}
+	notif := notification{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+	}
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	if err := s.out.Encode(notif); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp: write notification error: %v\n", err)
+	}
+}
+
 // writeResult sends a JSON-RPC success response.
 // json.Encoder.Encode appends a newline — do not add an additional one.
 func (s *Server) writeResult(id json.RawMessage, result any) {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
 	resp := rpcResponse{
 		JSONRPC: "2.0",
 		ID:      nullIfEmpty(id),
@@ -249,6 +400,8 @@ func (s *Server) writeResult(id json.RawMessage, result any) {
 
 // writeError sends a JSON-RPC error response.
 func (s *Server) writeError(id json.RawMessage, code int, message string) {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
 	resp := rpcResponse{
 		JSONRPC: "2.0",
 		ID:      nullIfEmpty(id),

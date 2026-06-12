@@ -245,3 +245,118 @@ func TestNewServerCompiles(t *testing.T) {
 	// So just verify it exists via the type system
 	_ = mcp.NewServerWithIO // must be callable
 }
+
+// splitNonEmpty splits s by sep and removes empty strings.
+func splitNonEmpty(s, sep string) []string {
+	parts := strings.Split(s, sep)
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// TestResourcesListAndRead verifies resources/list and resources/read with an in-memory provider.
+func TestResourcesListAndRead(t *testing.T) {
+	var in bytes.Buffer
+	var out bytes.Buffer
+
+	srv := mcp.NewServerWithIO(&in, &out)
+	srv.SetResourceProvider(
+		func() []map[string]any {
+			return []map[string]any{
+				{"uri": "pane://1", "name": "Pane 1 output", "mimeType": "text/plain"},
+			}
+		},
+		func(uri string) (string, error) {
+			return "hello screen", nil
+		},
+	)
+
+	// Feed resources/list (id 5)
+	in.WriteString(`{"jsonrpc":"2.0","id":5,"method":"resources/list","params":{}}` + "\n")
+	// Feed resources/read uri pane://1 (id 6)
+	in.WriteString(`{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"pane://1"}}` + "\n")
+
+	if err := srv.Run(); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	var responses []rpcEnvelope
+	dec := json.NewDecoder(&out)
+	for dec.More() {
+		var env rpcEnvelope
+		if err := dec.Decode(&env); err != nil {
+			t.Fatalf("decode error: %v", err)
+		}
+		responses = append(responses, env)
+	}
+
+	if len(responses) != 2 {
+		t.Fatalf("expected 2 responses, got %d", len(responses))
+	}
+
+	// List response should contain "uri":"pane://1"
+	listResult := string(responses[0].Result)
+	if !strings.Contains(listResult, `"uri":"pane://1"`) {
+		t.Errorf("list response missing pane://1, got: %s", listResult)
+	}
+
+	// Read response should contain "text":"hello screen"
+	readResult := string(responses[1].Result)
+	if !strings.Contains(readResult, `"text":"hello screen"`) {
+		t.Errorf("read response missing hello screen, got: %s", readResult)
+	}
+}
+
+// TestResourcesSubscribeNotifies verifies subscribe enables resource-updated notifications.
+func TestResourcesSubscribeNotifies(t *testing.T) {
+	var in bytes.Buffer
+	var out bytes.Buffer
+
+	srv := mcp.NewServerWithIO(&in, &out)
+	srv.SetResourceProvider(
+		func() []map[string]any {
+			return []map[string]any{
+				{"uri": "pane://1", "name": "Pane 1 output", "mimeType": "text/plain"},
+			}
+		},
+		func(uri string) (string, error) { return "hello", nil },
+	)
+
+	// Before subscribe: NotifyResourceUpdated should emit nothing.
+	srv.NotifyResourceUpdated("pane://1")
+	if out.Len() != 0 {
+		t.Errorf("expected no output before subscribe, got: %s", out.String())
+	}
+
+	// Subscribe to pane://1.
+	in.WriteString(`{"jsonrpc":"2.0","id":7,"method":"resources/subscribe","params":{"uri":"pane://1"}}` + "\n")
+	if err := srv.Run(); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	// After subscribe: NotifyResourceUpdated should emit a notification.
+	srv.NotifyResourceUpdated("pane://1")
+
+	allOutput := out.String()
+	parts := splitNonEmpty(allOutput, "\n")
+
+	// We expect at least: subscribe response + notification.
+	if len(parts) < 2 {
+		t.Fatalf("expected at least 2 messages, got %d: %s", len(parts), allOutput)
+	}
+
+	// Find notification with method + uri.
+	found := false
+	for _, p := range parts {
+		if strings.Contains(p, `"notifications/resources/updated"`) && strings.Contains(p, `"pane://1"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no notifications/resources/updated for pane://1 in output:\n%s", allOutput)
+	}
+}

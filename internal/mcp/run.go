@@ -61,6 +61,48 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 		}
 	}
 	registerAllTools(srv, wrap)
+
+	srv.SetResourceProvider(
+		// list closure: dial lazily, install output notifier, attach workspace,
+		// return one descriptor per pane.
+		func() []map[string]any {
+			c, err := lc.get()
+			if err != nil {
+				return nil
+			}
+			c.SetOutputNotifier(func(paneID int) {
+				srv.NotifyResourceUpdated(fmt.Sprintf("pane://%d", paneID))
+			})
+			ws := c.Workspace()
+			comp, err := c.conn.Attach(ws, "wide")
+			if err != nil {
+				return nil
+			}
+			resources := make([]map[string]any, 0, len(comp.Panes))
+			for _, p := range comp.Panes {
+				resources = append(resources, map[string]any{
+					"uri":      fmt.Sprintf("pane://%d", p.PaneID),
+					"name":     fmt.Sprintf("Pane %d output", p.PaneID),
+					"mimeType": "text/plain",
+				})
+			}
+			return resources
+		},
+		// read closure: dial lazily, parse paneID from uri, return screen text.
+		func(uri string) (string, error) {
+			c, err := lc.get()
+			if err != nil {
+				return "", err
+			}
+			var paneID int
+			fmt.Sscanf(uri, "pane://%d", &paneID)
+			snap, err := c.conn.ScreenSnapshot(paneID)
+			if err != nil {
+				return "", err
+			}
+			return snap.Text, nil
+		},
+	)
 }
 
 // registerAllTools registers all 12 MCP tools on srv using wrap to convert

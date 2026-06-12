@@ -20,6 +20,7 @@ type Client struct {
 	outputBufs         map[int][]byte
 	promptChans        map[int]chan int
 	browserResultChans map[int]chan *sessiond.Message // keyed by paneID, one in-flight action per pane
+	outputNotifier     func(paneID int)               // called after each pane output append; nil = disabled
 }
 
 // Dial resolves the sessiond Unix socket path via sessiond.SocketPath and
@@ -56,7 +57,11 @@ func DialSocket(socketPath string) (*Client, error) {
 			c.mu.Lock()
 			id := int(paneID)
 			c.outputBufs[id] = append(c.outputBufs[id], data...)
+			notify := c.outputNotifier
 			c.mu.Unlock()
+			if notify != nil {
+				notify(id)
+			}
 		},
 		// OnShellPrompt delivers an OSC 133 command-done exit code to the
 		// armed prompt channel for the pane (if one exists). The send is
@@ -97,6 +102,15 @@ func DialSocket(socketPath string) (*Client, error) {
 // Close closes the underlying sessiond connection.
 func (c *Client) Close() error {
 	return c.conn.Close()
+}
+
+// SetOutputNotifier installs fn as the callback invoked (best-effort) after each
+// pane output append. fn receives the pane ID. Replaces any previous notifier.
+// Safe to call from any goroutine.
+func (c *Client) SetOutputNotifier(fn func(paneID int)) {
+	c.mu.Lock()
+	c.outputNotifier = fn
+	c.mu.Unlock()
 }
 
 // AttachWorkspace attaches this connection to workspaceID with breakpoint "wide",
