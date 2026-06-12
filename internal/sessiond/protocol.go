@@ -51,9 +51,10 @@ const (
 	TypeWorkspaceClosed  = "workspace-closed"
 	TypeWorkspaceRenamed = "workspace-renamed"
 	TypePaneRenamed      = "pane-renamed"
-	TypeBrowserAction    = "browser-action"   // relay browser DOM command to/from SW bridge
-	TypeLayoutCommand    = "layout-command"   // relay layout mutation to browser clients
-	TypeShellPrompt      = "shell-prompt"     // OSC 133 prompt/command lifecycle
+	TypeBrowserAction       = "browser-action"        // relay browser DOM command to/from SW bridge
+	TypeBrowserActionResult = "browser-action-result" // relay browser DOM command result back to MCP client
+	TypeLayoutCommand       = "layout-command"        // relay layout mutation to browser clients
+	TypeShellPrompt         = "shell-prompt"          // OSC 133 prompt/command lifecycle
 
 	// Error envelope.
 	TypeError = "error"
@@ -172,6 +173,11 @@ type Message struct {
 	ExitCode   int        `json:"exitCode,omitempty"`   // OSC 133 command exit code
 	Cursor     *CursorPos `json:"cursor,omitempty"`     // cursor {row,col} for screen snapshot
 	ASCII      string     `json:"ascii,omitempty"`      // ASCII layout diagram, get-layout result
+
+	// Browser action result fields (browser-action-result event, shim → MCP round-trip).
+	Snapshot string          `json:"snapshot,omitempty"` // accessibility tree YAML from browser_snapshot
+	Result   json.RawMessage `json:"result,omitempty"`   // JS eval result (any JSON value)
+	OK       bool            `json:"ok,omitempty"`       // true when action succeeded without error
 }
 
 // CursorPos is a 0-indexed terminal cursor position carried by screen-snapshot-result.

@@ -341,6 +341,13 @@ func (c *conn) handle(msg Message) {
 		}
 		msg.CID = 0
 		c.srv.broadcast(c.attached, &msg)
+	case TypeBrowserActionResult:
+		if c.attached == "" {
+			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
+			return
+		}
+		msg.CID = 0 // event fan-out; MCP client correlates by its own pending request
+		c.srv.broadcast(c.attached, &msg)
 	case TypeGetLayout:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")

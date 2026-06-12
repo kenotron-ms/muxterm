@@ -49,6 +49,40 @@ func TestBrowserActionBroadcast(t *testing.T) {
 	}
 }
 
+// TestBrowserActionResultBroadcast proves that when an attached conn sends a
+// browser-action-result, every subscriber to that workspace receives a
+// TypeBrowserActionResult event with CID == 0 (event fan-out; the MCP client
+// correlates by its own pending request).
+func TestBrowserActionResultBroadcast(t *testing.T) {
+	srv, socketPath, _, cancel := startTestServer(t)
+	defer cancel()
+
+	wsID := srv.Registry().List()[0].WorkspaceID
+
+	// conn A: the browser client that sends the result (shim → Go side).
+	a := newTClient(t, socketPath)
+	a.send(&Message{Type: TypeAttach, CID: 1, WorkspaceID: wsID})
+	a.waitCtrl(TypeComposition)
+
+	// conn B: the MCP client that should receive the broadcast.
+	b := newTClient(t, socketPath)
+	b.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: wsID})
+	b.waitCtrl(TypeComposition)
+
+	// conn A sends a browser-action-result with CID=77 (its own correlation id).
+	a.send(&Message{
+		Type:  TypeBrowserActionResult,
+		CID:   77,
+		Error: "bridge-not-ready",
+	})
+
+	// conn B should receive a TypeBrowserActionResult broadcast with CID cleared to 0.
+	msg := b.waitCtrl(TypeBrowserActionResult)
+	if msg.CID != 0 {
+		t.Fatalf("broadcast CID = %d, want 0 (CID must be cleared on broadcast)", msg.CID)
+	}
+}
+
 // TestLayoutCommandBroadcast proves that when an attached conn sends a
 // layout-command request, every subscriber to that workspace receives a
 // TypeLayoutCommand event with CID == 0 and the action field preserved.

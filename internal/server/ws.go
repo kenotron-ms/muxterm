@@ -234,6 +234,12 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
 
+	case sessiond.TypeBrowserActionResult:
+		// Fire-and-forget: the daemon broadcasts it to all workspace subscribers.
+		if err := c.daemon.BrowserActionResult(msg); err != nil {
+			log.Printf("handleTextInput: BrowserActionResult error: %v", err)
+		}
+
 	default:
 		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
 	}

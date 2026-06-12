@@ -64,6 +64,8 @@ func (f *fakeDaemonConn) Resize(paneID, cols, rows int) error {
 	return nil
 }
 
+func (f *fakeDaemonConn) BrowserActionResult(msg sessiond.Message) error { return nil }
+
 func (f *fakeDaemonConn) SetHandlers(h sessiond.Handlers) {
 	f.handlers = h
 }

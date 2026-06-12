@@ -347,6 +347,17 @@ func (c *Client) Resize(paneID, cols, rows int) error {
 	return WriteControl(c.conn, &Message{Type: TypeResize, PaneID: paneID, Cols: cols, Rows: rows})
 }
 
+// BrowserActionResult forwards a browser-action-result envelope from the
+// browser shim to the daemon, which broadcasts it to all workspace subscribers
+// (including the MCP client waiting for the result). It is fire-and-forget:
+// the daemon sends no reply.
+func (c *Client) BrowserActionResult(msg Message) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	msg.Type = TypeBrowserActionResult
+	return WriteControl(c.conn, &msg)
+}
+
 // dispatchPaneData routes a decoded pane-data frame to OnPaneOutput if set. It
 // runs on the read-loop goroutine, so the handler must not block for long.
 func (c *Client) dispatchPaneData(paneID uint32, data []byte) {

@@ -21,6 +21,7 @@ type DaemonConn interface {
 	ClosePane(paneID int) error
 	Input(paneID uint32, data []byte) error
 	Resize(paneID, cols, rows int) error
+	BrowserActionResult(msg sessiond.Message) error
 	SetHandlers(h sessiond.Handlers)
 	Run() error
 	Close() error
