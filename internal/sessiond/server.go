@@ -391,6 +391,11 @@ func (c *conn) createPane(msg Message) {
 		return
 	}
 	c.srv.reg.PutPane(wsID, p)
+	p.onPrompt = func(id int, msg *Message) {
+		msg.WorkspaceID = wsID
+		msg.PaneID = id
+		c.srv.broadcast(wsID, msg)
+	}
 	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
 	c.srv.broadcast(wsID, &Message{Type: TypePaneAdded, WorkspaceID: wsID, PaneID: localID, Cols: cols, Rows: rows, ClientRef: msg.ClientRef})
 }

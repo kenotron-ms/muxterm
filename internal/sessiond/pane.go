@@ -1,9 +1,11 @@
 package sessiond
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 
 	"github.com/creack/pty"
@@ -33,8 +35,9 @@ type Pane struct {
 	ptmx *os.File
 	buf  PaneBuffer
 
-	onData func(localID int, data []byte)
-	onExit func(localID int)
+	onData   func(localID int, data []byte)
+	onExit   func(localID int)
+	onPrompt func(localID int, msg *Message)
 
 	closeOnce sync.Once
 }
@@ -116,6 +119,57 @@ func NewBrowserPane(localID, port int, path string, headers map[string]string) *
 	}
 }
 
+// scanOSC133 searches data for an OSC 133;D sequence (command-done marker) and
+// returns the exit code and whether one was found. The terminator must be present
+// in the same read buffer (BEL \x07 or ST \x1b\\); partial sequences without a
+// terminator return (0, false) — do not buffer across reads.
+func scanOSC133(data []byte) (exitCode int, found bool) {
+	prefix := []byte("\x1b]133;D")
+	idx := bytes.Index(data, prefix)
+	if idx == -1 {
+		return 0, false
+	}
+	rest := data[idx+len(prefix):]
+
+	// Locate the earliest terminator: BEL (\x07) or ST (\x1b\\).
+	belIdx := bytes.IndexByte(rest, '\x07')
+	stIdx := bytes.Index(rest, []byte("\x1b\\"))
+
+	termIdx := -1
+	switch {
+	case belIdx == -1 && stIdx == -1:
+		// No terminator in this read — do not buffer across reads.
+		return 0, false
+	case belIdx == -1:
+		termIdx = stIdx
+	case stIdx == -1:
+		termIdx = belIdx
+	default:
+		if belIdx < stIdx {
+			termIdx = belIdx
+		} else {
+			termIdx = stIdx
+		}
+	}
+
+	params := rest[:termIdx]
+	if len(params) == 0 {
+		// \x1b]133;D<terminator> — done, code 0.
+		return 0, true
+	}
+	if params[0] != ';' {
+		// Unexpected content between D and terminator (e.g., "Done").
+		return 0, false
+	}
+	// params is ";exitcode" — skip the leading semicolon.
+	code, err := strconv.Atoi(string(params[1:]))
+	if err != nil {
+		// Malformed exit code; treat as done with code 0.
+		return 0, true
+	}
+	return code, true
+}
+
 // readLoop pumps PTY output into the buffer and onData callback until the PTY
 // closes, then reaps the child and fires onExit exactly once.
 func (p *Pane) readLoop() {
@@ -124,6 +178,9 @@ func (p *Pane) readLoop() {
 		n, err := p.ptmx.Read(chunk)
 		if n > 0 {
 			data := chunk[:n]
+			if code, prompted := scanOSC133(data); prompted && p.onPrompt != nil {
+				p.onPrompt(p.LocalID, &Message{Type: TypeShellPrompt, ExitCode: code})
+			}
 			_, _ = p.buf.Write(data)
 			if p.onData != nil {
 				cp := make([]byte, n)
