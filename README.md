@@ -52,6 +52,63 @@ make build
 - **Auth** — HMAC token-based auth with localhost bypass
 - **Service install** — `muxterm install` sets up systemd (Linux) or launchd (macOS)
 - **Push deploy** — `muxterm deploy user@host` copies the binary and installs remotely
+- **Agent integration (MCP)** — connect any MCP-compatible AI agent to drive workspaces, terminals, and browser panes
+
+## Agent integration (MCP)
+
+`muxterm mcp` exposes a [Model Context Protocol](https://modelcontextprotocol.io) server that lets any MCP-compatible AI agent drive workspaces, terminals, and browser panes. The server speaks JSON-RPC 2.0 over stdio and requires a running `muxterm` or `muxterm serve` instance to connect to.
+
+**25 tools** across 6 categories: workspace management, pane layout (with ASCII diagram for spatial awareness), terminal control (OSC 133 shell completion), browser navigation, browser interaction, and browser observation.
+
+### Amplifier
+
+Add to `.amplifier/mcp.json` (project) or `~/.amplifier/mcp.json` (global):
+
+```json
+{
+  "mcpServers": {
+    "muxterm": {
+      "command": "muxterm",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Claude Code
+
+```bash
+claude mcp add muxterm -- muxterm mcp
+```
+
+Or add to `.mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "muxterm": {
+      "command": "muxterm",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### OpenCode
+
+Add to `opencode.json` in your project root:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "muxterm": {
+      "type": "local",
+      "command": ["muxterm", "mcp"]
+    }
+  }
+}
+```
 
 ## Architecture
 
