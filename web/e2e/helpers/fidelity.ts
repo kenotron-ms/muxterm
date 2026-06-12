@@ -1,6 +1,8 @@
 /**
  * fidelity.ts — pure content-fidelity helper.
  *
+ * @deprecated Written for the tmux-backed architecture. The tmux oracle is no longer available.
+ *
  * PURE function — no playwright or tmux imports.
  * Importable by both Vitest unit tests and the playwright-cli-driven E2E script.
  *

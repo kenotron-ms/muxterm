@@ -1,5 +1,7 @@
 # 3-Source Harness Verification Notes
 
+> **Note:** This document predates the sessiond architecture and references tmux as a comparison oracle. It is kept for historical context.
+
 How to self-verify every pane re-parent against `make dev` using the
 three-source harness introduced in Phase 2.
 

@@ -79,7 +79,7 @@ describe('MuxApp', () => {
     el = await fixture();
     const dock = el.shadowRoot!.querySelector('mux-dock');
     expect(dock).toBeTruthy();
-    // The legacy tmux mux-workspace path is dead — it must NOT render.
+    // The legacy mux-workspace path is dead — it must NOT render.
     expect(el.shadowRoot!.querySelector('mux-workspace')).toBeNull();
   });
 

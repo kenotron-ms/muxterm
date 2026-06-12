@@ -1,5 +1,7 @@
 # E2E — Divider-Drag Resize Propagation
 
+> **Note:** This document predates the sessiond architecture and references tmux as a comparison oracle. It is kept for historical context.
+
 Drag the heavy region divider and prove the resize **propagates**: the smaller
 surface's xterm grid shrinks, a `refresh-client` reaches tmux (the window's
 reported size changes), and content/layout fidelity hold after settle.

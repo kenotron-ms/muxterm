@@ -8,7 +8,7 @@ import { CHROME } from '../lib/theme.js';
  * Displays read-only configuration information for muxterm v1.
  * Static/read-only for v1 — config editing is Phase 5.
  *
- * This surface uses normal responsive DOM — no xterm.js, no tmux cols×rows grid.
+ * This surface uses normal responsive DOM — no xterm.js, no terminal cols×rows grid.
  */
 @customElement('mux-settings-surface')
 export class MuxSettingsSurface extends LitElement {
@@ -86,7 +86,7 @@ export class MuxSettingsSurface extends LitElement {
         </div>
         <p class="about">
           muxterm is a browser-based terminal multiplexer frontend. It connects
-          to a tmux session over WebSocket and renders panes using xterm.js.
+          to a session over WebSocket and renders panes using xterm.js.
         </p>
       </div>
     `;

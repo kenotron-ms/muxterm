@@ -32,8 +32,7 @@ func (r *Registry) RenameWorkspace(id, name string) bool {
 	return true
 }
 
-// ReapIfEmpty removes the workspace wsID iff it has no panes (tmux-parity
-// auto-reap). If the removal leaves the registry empty, it creates and returns a
+// ReapIfEmpty removes the workspace wsID iff it has no panes (auto-reap). If the removal leaves the registry empty, it creates and returns a
 // fresh unnamed default as recreatedDefault so the next attach always lands
 // somewhere. It returns (removed, recreatedDefault); recreatedDefault is nil
 // unless a default was made. It returns (false, nil) for an unknown or non-empty

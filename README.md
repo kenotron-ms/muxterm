@@ -1,6 +1,6 @@
 # muxterm
 
-A web-first terminal multiplexer. Persistent sessions, split panes, and a browser UI — backed by a custom Go session daemon, not tmux.
+A web-first terminal multiplexer. Persistent sessions, split panes, and a browser UI — backed by a custom Go session daemon.
 
 ## Install
 
@@ -35,8 +35,6 @@ sessiond (PTY daemon)
     ↕ PTY
 your shells
 ```
-
-No tmux required.
 
 ## Quick start
 

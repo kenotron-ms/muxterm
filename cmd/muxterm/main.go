@@ -27,13 +27,6 @@ import (
 
 var version = "dev"
 
-// tmuxCutoverWarning returns the one-time first-start notice making the tmux
-// cutover explicit: muxterm now owns sessions via its own daemon (sessiond) and
-// does NOT migrate any pre-existing tmux sessions (a deliberate clean break).
-func tmuxCutoverWarning() string {
-	return "muxterm now uses its own session daemon (sessiond); pre-existing tmux sessions are NOT migrated. Run `muxterm doctor` for daemon status."
-}
-
 func main() {
 	cfg, err := ParseArgs(os.Args[1:])
 	if err != nil {
@@ -208,7 +201,6 @@ func runLocal(cfg Config) error {
 
 	go openBrowser("http://" + cfg.Addr)
 
-	log.Printf("notice: %s", tmuxCutoverWarning())
 	log.Printf("muxterm listening on %s", cfg.Addr)
 	return srv.ListenAndServe(ctx)
 }
@@ -246,7 +238,6 @@ func runServe(cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("generate token: %w", err)
 	}
-	log.Printf("notice: %s", tmuxCutoverWarning())
 	log.Printf("muxterm listening on %s", cfg.Addr)
 	log.Printf("access token: %s", token)
 

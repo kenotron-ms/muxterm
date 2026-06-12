@@ -5,7 +5,7 @@
  * Terminals are created once (in ensure()) and survive tab/window switches
  * (detach() only removes the DOM host element; the Terminal and its
  * scrollback buffer remain alive). The terminal is only disposed when the
- * pane closes in tmux (via prune()).
+ * pane closes (via prune()).
  *
  * This is the iTerm2 model: the client owns scrollback, and background
  * windows stay fed via write() even while their host element is detached.
@@ -64,7 +64,7 @@ export function buildTerminalConfig(cfg: ResolvedConfig) {
     cursorStyle: cfg.terminal.cursorStyle,
     scrollback: cfg.terminal.scrollback,
     allowTransparency: false, // non-overridable
-    convertEol: false, // tmux sends \r\n — don't double-convert; non-overridable
+    convertEol: false, // PTY sends \r\n — don't double-convert; non-overridable
   };
 }
 

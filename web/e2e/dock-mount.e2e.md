@@ -1,5 +1,7 @@
 # E2E — Dock Mount of 2 Surfaces (Content + Layout Fidelity)
 
+> **Note:** This document predates the sessiond architecture and references tmux as a comparison oracle. It is kept for historical context.
+
 First re-parenting test. Mount a second region and assert BOTH surfaces show
 correct content (CONTENT fidelity vs `tmux capture-pane`) and correct geometry
 (LAYOUT fidelity vs `playwright-cli`). Uses Phase-2 harness; no OCR.

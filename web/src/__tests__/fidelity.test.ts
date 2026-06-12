@@ -18,7 +18,7 @@ function makeSnap(rowText: string[], cols = 8): StructuredSnapshot {
 
 describe('compareContent', () => {
   it('passes when capture-pane text equals snapshot text per row (trailing blanks normalized)', () => {
-    // tmux right-trims; snapshot keeps trailing blanks → both normalised to 'hello' / 'world'
+    // terminal right-trims; snapshot keeps trailing blanks → both normalised to 'hello' / 'world'
     const snap = makeSnap(['hello   ', 'world   '], 8);
     const result = compareContent('hello\nworld', snap);
     expect(result.ok).toBe(true);

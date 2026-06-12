@@ -41,7 +41,7 @@ type TerminalConfig struct {
 }
 
 // KeysConfig defines muxterm's own UI keybindings.
-// These are muxterm UI actions only — never tmux keys.
+// These are muxterm UI actions only.
 type KeysConfig struct {
 	NextSession    string `toml:"next_session"     json:"next_session"`
 	Split          string `toml:"split"            json:"split"`

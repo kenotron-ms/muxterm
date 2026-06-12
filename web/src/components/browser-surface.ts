@@ -5,7 +5,7 @@ import { customElement, property } from 'lit/decorators.js';
  * mux-browser-surface — NON-terminal pixel-box surface.
  *
  * Renders a URL bar (.bar > .address) + an <iframe> that loads the given url.
- * This surface uses normal responsive DOM — no xterm.js, no tmux cols×rows grid.
+ * This surface uses normal responsive DOM — no xterm.js, no terminal cols×rows grid.
  *
  * Dispatches `url-change` (bubbles, composed) when the address bar commits a
  * new URL via the `change` event.

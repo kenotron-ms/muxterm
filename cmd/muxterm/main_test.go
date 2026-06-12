@@ -161,15 +161,6 @@ func TestRunInstall_AutoGeneratesSecretAndPrints(t *testing.T) {
 	runUninstall()
 }
 
-func TestTmuxCutoverWarningText(t *testing.T) {
-	got := tmuxCutoverWarning()
-	for _, want := range []string{"tmux", "not", "migrat"} {
-		if !strings.Contains(strings.ToLower(got), want) {
-			t.Errorf("tmuxCutoverWarning() = %q, want it to contain %q", got, want)
-		}
-	}
-}
-
 func TestRunUninstall_PrintsConfirmation(t *testing.T) {
 	// runUninstall should print confirmation message on success.
 	out := captureStdout(t, func() {
