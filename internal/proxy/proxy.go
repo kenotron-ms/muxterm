@@ -83,7 +83,7 @@ const shimScript = `<script>
 
   /* service worker (belt-and-suspenders: handles fetch on second+ load) */
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js', {scope: '/'})
+    navigator.serviceWorker.register('/p/sw.js', {scope: '/p/'})
       .then(function(r) { console.debug('[muxterm shim] SW registered, scope:', r.scope); })
       .catch(function(e) { console.warn('[muxterm shim] SW registration failed:', e); });
   }
@@ -125,6 +125,31 @@ self.addEventListener('fetch', event => {
   );
 });
 `
+
+// pSwScript is served at /p/sw.js with scope /p/.
+// Tracks navigation events and reports them to controlled clients via postMessage.
+// No Service-Worker-Allowed header is needed because the script path (/p/sw.js)
+// already covers the declared scope (/p/).
+const pSwScript = `
+const navigations = [];
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', e => {
+  if (e.request.mode === 'navigate') {
+    navigations.push(e.request.url);
+    self.clients.matchAll().then(clients => clients.forEach(c => c.postMessage({type:'mux-page-navigated', url:e.request.url})));
+  }
+  // falls through without intercepting
+});
+`
+
+// ServeAgentServiceWorker serves /p/sw.js — the agent-scoped service worker.
+// Scoped to /p/ so embedded proxied pages are isolated from muxterm's own origin surface.
+func ServeAgentServiceWorker(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	fmt.Fprint(w, pSwScript)
+}
 
 // HeadersFunc is called per proxy request to inject extra HTTP headers; may be nil.
 type HeadersFunc func(port int) map[string]string

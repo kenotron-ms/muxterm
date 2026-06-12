@@ -187,6 +187,29 @@ func TestCreatePane_Success(t *testing.T) {
 	}
 }
 
+// TestAgentServiceWorkerRoute verifies that GET /p/sw.js serves the agent service worker
+// scoped to /p/ with navigation reporting via postMessage.
+func TestAgentServiceWorkerRoute(t *testing.T) {
+	srv := New(Config{Secret: "test-secret"})
+
+	req := httptest.NewRequest(http.MethodGet, "/p/sw.js", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/javascript") {
+		t.Errorf("Content-Type = %q, want application/javascript", ct)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "mux-page-navigated") {
+		t.Error("agent sw.js body should contain 'mux-page-navigated'")
+	}
+}
+
 // TestCreatePane_DefaultPath verifies that an empty BrowserPath defaults to "/".
 func TestCreatePane_DefaultPath(t *testing.T) {
 	fake := &fakeDaemonConn{createdID: 7}
