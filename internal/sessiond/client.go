@@ -80,6 +80,10 @@ type Handlers struct {
 	// paneID is the workspace-local pane id; exitCode is the value carried in the
 	// OSC 133 ;D;N sequence (0 when absent).
 	OnShellPrompt func(paneID int, exitCode int)
+	// OnBrowserActionResult fires when the daemon broadcasts a
+	// TypeBrowserActionResult event (CID == 0). msg carries PaneID plus the
+	// result fields (OK, Snapshot, Result, Error).
+	OnBrowserActionResult func(msg *Message)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -384,6 +388,18 @@ func (c *Client) BrowserActionResult(msg Message) error {
 	return WriteControl(c.conn, &msg)
 }
 
+// SendBrowserAction sends a browser-action envelope to the daemon, which
+// broadcasts it to all workspace subscribers (including the browser shim
+// listening for DOM commands). It is fire-and-forget: the daemon sends no
+// reply. The caller must separately wait for a TypeBrowserActionResult event
+// (e.g., via Handlers.OnBrowserActionResult) to obtain the result.
+func (c *Client) SendBrowserAction(msg Message) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	msg.Type = TypeBrowserAction
+	return WriteControl(c.conn, &msg)
+}
+
 // dispatchPaneData routes a decoded pane-data frame to OnPaneOutput if set. It
 // runs on the read-loop goroutine, so the handler must not block for long.
 func (c *Client) dispatchPaneData(paneID uint32, data []byte) {
@@ -439,6 +455,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeBrowserAction:
 		if h.OnBrowserAction != nil {
 			h.OnBrowserAction(msg.PaneID, msg.Action, msg.Ref, msg.Value, msg.Key, msg.Expression)
+		}
+	case TypeBrowserActionResult:
+		if h.OnBrowserActionResult != nil {
+			h.OnBrowserActionResult(msg)
 		}
 	case TypeLayoutCommand:
 		if h.OnLayoutCommand != nil {

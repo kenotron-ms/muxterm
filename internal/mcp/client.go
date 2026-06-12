@@ -15,10 +15,11 @@ import (
 type Client struct {
 	conn *sessiond.Client
 
-	mu          sync.Mutex
-	workspace   string
-	outputBufs  map[int][]byte
-	promptChans map[int]chan int
+	mu                 sync.Mutex
+	workspace          string
+	outputBufs         map[int][]byte
+	promptChans        map[int]chan int
+	browserResultChans map[int]chan *sessiond.Message // keyed by paneID, one in-flight action per pane
 }
 
 // Dial resolves the sessiond Unix socket path via sessiond.SocketPath and
@@ -42,9 +43,10 @@ func DialSocket(socketPath string) (*Client, error) {
 	}
 
 	c := &Client{
-		conn:        conn,
-		outputBufs:  make(map[int][]byte),
-		promptChans: make(map[int]chan int),
+		conn:               conn,
+		outputBufs:         make(map[int][]byte),
+		promptChans:        make(map[int]chan int),
+		browserResultChans: make(map[int]chan *sessiond.Message),
 	}
 
 	conn.SetHandlers(sessiond.Handlers{
@@ -66,6 +68,21 @@ func DialSocket(socketPath string) (*Client, error) {
 			if ch != nil {
 				select {
 				case ch <- exitCode:
+				default:
+				}
+			}
+		},
+		// OnBrowserActionResult delivers a browser-action-result event to the
+		// in-flight SendBrowserAction call for the pane (if one exists). The
+		// send is non-blocking so a late or duplicate result never stalls the
+		// read loop.
+		OnBrowserActionResult: func(msg *sessiond.Message) {
+			c.mu.Lock()
+			ch := c.browserResultChans[msg.PaneID]
+			c.mu.Unlock()
+			if ch != nil {
+				select {
+				case ch <- msg:
 				default:
 				}
 			}
@@ -161,5 +178,62 @@ func (c *Client) WaitForPrompt(ctx context.Context, paneID int) (int, error) {
 		return code, nil
 	case <-ctx.Done():
 		return -1, ctx.Err()
+	}
+}
+
+// SendBrowserAction sends a browser-action to the daemon and waits for the
+// browser shim's TypeBrowserActionResult event for the same paneID. Result
+// correlation uses paneID (not CID) because the daemon zeroes CID on both
+// browser-action and browser-action-result broadcasts. Only one in-flight
+// action per pane is supported at a time.
+//
+// Optional params map supports keys: ref, selector, value, key, expr — each
+// mapped to the corresponding Message field. Timeout lives at the caller layer
+// (pass a context with a deadline). Returns the result message on success or
+// ctx.Err() on cancellation.
+func (c *Client) SendBrowserAction(ctx context.Context, paneID int, action string, params map[string]any) (*sessiond.Message, error) {
+	resultCh := make(chan *sessiond.Message, 1)
+
+	c.mu.Lock()
+	c.browserResultChans[paneID] = resultCh
+	c.mu.Unlock()
+
+	defer func() {
+		c.mu.Lock()
+		delete(c.browserResultChans, paneID)
+		c.mu.Unlock()
+	}()
+
+	msg := sessiond.Message{
+		PaneID: paneID,
+		Action: action,
+	}
+	if params != nil {
+		if ref, ok := params["ref"].(string); ok {
+			msg.Ref = ref
+		}
+		if selector, ok := params["selector"].(string); ok {
+			msg.Selector = selector
+		}
+		if value, ok := params["value"].(string); ok {
+			msg.Value = value
+		}
+		if key, ok := params["key"].(string); ok {
+			msg.Key = key
+		}
+		if expr, ok := params["expr"].(string); ok {
+			msg.Expression = expr
+		}
+	}
+
+	if err := c.conn.SendBrowserAction(msg); err != nil {
+		return nil, err
+	}
+
+	select {
+	case result := <-resultCh:
+		return result, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
