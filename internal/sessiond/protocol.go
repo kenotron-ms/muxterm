@@ -64,6 +64,7 @@ const (
 const (
 	CodeUnknownWorkspace = "unknown-workspace"
 	CodePaneSpawnFailed  = "pane-spawn-failed"
+	CodePaneNotFound     = "pane-not-found"
 )
 
 // writeFrame writes a single framed message: a 5-byte header consisting of a

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/creack/pty"
 )
@@ -35,9 +36,9 @@ type Pane struct {
 	ptmx *os.File
 	buf  PaneBuffer
 
-	onData   func(localID int, data []byte)
-	onExit   func(localID int)
-	onPrompt func(localID int, msg *Message)
+	onData      func(localID int, data []byte)
+	onExit      func(localID int)
+	onPromptPtr atomic.Pointer[func(int, *Message)] // written once (createPane), read by readLoop
 
 	closeOnce sync.Once
 }
@@ -178,8 +179,10 @@ func (p *Pane) readLoop() {
 		n, err := p.ptmx.Read(chunk)
 		if n > 0 {
 			data := chunk[:n]
-			if code, prompted := scanOSC133(data); prompted && p.onPrompt != nil {
-				p.onPrompt(p.LocalID, &Message{Type: TypeShellPrompt, ExitCode: code})
+			if code, prompted := scanOSC133(data); prompted {
+				if fn := p.onPromptPtr.Load(); fn != nil {
+					(*fn)(p.LocalID, &Message{Type: TypeShellPrompt, ExitCode: code})
+				}
 			}
 			_, _ = p.buf.Write(data)
 			if p.onData != nil {
