@@ -14,11 +14,6 @@ brew install user/tap/muxterm
 curl -fsSL https://github.com/user/muxterm/releases/latest/download/muxterm_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar -xz -C /usr/local/bin muxterm
 ```
 
-### Go install (builds from source — requires Go 1.22+ and Node.js 18+)
-```bash
-go install github.com/user/muxterm/cmd/muxterm@latest
-```
-
 ### Windows — Scoop (coming soon)
 
 Pre-built binaries for each platform are attached to every [GitHub Release](https://github.com/user/muxterm/releases).
