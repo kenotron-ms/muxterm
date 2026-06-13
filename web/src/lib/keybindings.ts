@@ -54,12 +54,20 @@ export function makeKeyHandler(
   };
 }
 
+/** Returns true when muxterm is running as an installed PWA in standalone mode. */
+function isPwa(): boolean {
+  return window.matchMedia('(display-mode: standalone)').matches;
+}
+
 /**
  * Installs fixed app-level keyboard shortcuts that override browser defaults.
  * These are not user-configurable — they make muxterm feel like a native app.
  *
- *   Cmd/Ctrl+W  — close the active pane  (prevents browser "close tab")
- *   Cmd/Ctrl+T  — open a new pane        (prevents browser "new tab")
+ *   Cmd/Ctrl+W        — close the active pane   (interceptable in all modes)
+ *   Cmd/Ctrl+Shift+T  — open a new pane          (interceptable in all modes)
+ *   Cmd/Ctrl+T        — open a new pane          (PWA standalone mode only —
+ *                        browsers handle Cmd+T at the process level in tab mode
+ *                        so preventDefault() has no effect there)
  *
  * Returns a cleanup function.
  */
@@ -67,14 +75,30 @@ export function installAppShortcuts(actions: Pick<UIActions, 'closePane' | 'newP
   const handler = (e: KeyboardEvent): void => {
     const mod = e.metaKey || e.ctrlKey;
     if (!mod) return;
+
     if (e.key === 'w' || e.key === 'W') {
       e.preventDefault();
       actions.closePane?.();
-    } else if (e.key === 't' || e.key === 'T') {
+      return;
+    }
+
+    // Cmd/Ctrl+Shift+T — new pane, works in all modes.
+    if ((e.key === 't' || e.key === 'T') && e.shiftKey) {
+      e.preventDefault();
+      actions.newPane?.();
+      return;
+    }
+
+    // Cmd/Ctrl+T — new pane only in PWA standalone mode.
+    // In regular browser tabs Chrome handles Cmd+T at the browser-process
+    // level before the renderer fires a keydown event, so preventDefault()
+    // cannot stop the new browser tab from opening.
+    if ((e.key === 't' || e.key === 'T') && !e.shiftKey && isPwa()) {
       e.preventDefault();
       actions.newPane?.();
     }
   };
+
   // Capture phase: intercept before the browser acts on these chords.
   window.addEventListener('keydown', handler, { capture: true });
   return () => window.removeEventListener('keydown', handler, { capture: true });
