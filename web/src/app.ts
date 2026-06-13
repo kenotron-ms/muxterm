@@ -357,21 +357,13 @@ export class MuxApp extends LitElement {
     // override the browser's native tab-close / new-tab actions so muxterm
     // feels like a native app. Installed once — not re-set on config changes.
     disposeAppShortcuts?.();
-    disposeAppShortcuts = installAppShortcuts(
-      {
-        // Remove the active panel from dockview, which triggers onDidRemovePanel
-        // → pane-close event → _startDeferredClose (deferred kill + undo toast).
-        // This mirrors exactly what clicking the tab X button does.
-        closePane: () => this._dock?.closeActivePanel(),
-        newPane: () => this._createPaneOptimistic(),
-      },
-      {
-        // beforeunload guard: if Chrome processes Cmd+W at the browser-process
-        // level (bypassing the capture-phase keydown handler), this fires before
-        // the window actually closes and shows "Leave site?" when panes are open.
-        hasPanes: () => store.panes.length > 0,
-      },
-    );
+    disposeAppShortcuts = installAppShortcuts({
+      // Remove the active panel from dockview, which triggers onDidRemovePanel
+      // → pane-close event → _startDeferredClose (deferred kill + undo toast).
+      // This mirrors exactly what clicking the tab X button does.
+      closePane: () => this._dock?.closeActivePanel(),
+      newPane: () => this._createPaneOptimistic(),
+    });
 
     // Re-render whenever wire state (composition / workspaces / config) changes.
     this._unsubscribe = store.subscribe(() => {

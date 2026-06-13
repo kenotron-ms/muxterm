@@ -70,22 +70,10 @@ function isPwa(): boolean {
  *                      browsers handle Cmd+T at the browser-process level in
  *                      tab mode so preventDefault() has no effect there)
  *
- * `options.hasPanes` — when provided, a `beforeunload` handler is installed as
- * a safety net. Chrome can process Cmd+W at the browser-process level before
- * the DOM keydown event fires (single-tab windows, specific focus states). If
- * the keydown capture handler fails to intercept it, `beforeunload` fires
- * before the window actually closes and shows the browser's "Leave site?"
- * confirmation dialog when panes are still open. Same pattern as Gmail,
- * Google Docs, VS Code web.
- *
  * Returns a cleanup function.
  */
 export function installAppShortcuts(
   actions: Pick<UIActions, 'closePane' | 'newPane'>,
-  options?: {
-    /** Return true when there are active panes — enables beforeunload guard. */
-    hasPanes?: () => boolean;
-  },
 ): () => void {
   const handler = (e: KeyboardEvent): void => {
     if (e.key === 'w' || e.key === 'W') {
