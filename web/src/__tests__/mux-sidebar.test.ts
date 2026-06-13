@@ -49,6 +49,8 @@ type SidebarPrivate = {
   _onRenameKeyDown(e: KeyboardEvent, wsId: string): void;
   _finishRename(e: Event, wsId: string): void;
   _renaming: string | null;
+  _onWsRemove(e: Event, wsId: string, name: string): void;
+  _pendingClose: Set<string>;
 };
 
 /** Cast sidebar to its private API for white-box testing. */
@@ -251,5 +253,115 @@ describe('MuxSidebar double-click rename', () => {
 
     expect(evt!.bubbles).toBe(true);
     expect(evt!.composed).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Workspace remove × button — grace period and undo
+// ---------------------------------------------------------------------------
+
+describe('MuxSidebar workspace-remove (× button) grace period', () => {
+  it('_onWsRemove adds the workspace ID to _pendingClose', () => {
+    const sidebar = new MuxSidebar();
+    const mockEvent = { stopPropagation: vi.fn() } as unknown as Event;
+
+    priv(sidebar)._onWsRemove(mockEvent, 'ws-temp', 'temp');
+
+    expect(priv(sidebar)._pendingClose.has('ws-temp')).toBe(true);
+  });
+
+  it('_onWsRemove dispatches workspace-close event with workspaceId and name', () => {
+    const sidebar = new MuxSidebar();
+    const captured: CustomEvent[] = [];
+    sidebar.addEventListener('workspace-close', (e) => captured.push(e as CustomEvent));
+
+    priv(sidebar)._onWsRemove({ stopPropagation: vi.fn() } as unknown as Event, 'ws-temp', 'temp');
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].detail).toEqual({ workspaceId: 'ws-temp', name: 'temp' });
+  });
+
+  it('_onWsRemove workspace-close event has bubbles=true and composed=true', () => {
+    const sidebar = new MuxSidebar();
+    let evt: CustomEvent | null = null;
+    sidebar.addEventListener('workspace-close', (e) => { evt = e as CustomEvent; });
+
+    priv(sidebar)._onWsRemove({ stopPropagation: vi.fn() } as unknown as Event, 'ws-1', 'My WS');
+
+    expect(evt).not.toBeNull();
+    expect(evt!.bubbles).toBe(true);
+    expect(evt!.composed).toBe(true);
+  });
+
+  it('_onWsRemove calls stopPropagation to prevent card click from firing', () => {
+    const sidebar = new MuxSidebar();
+    const stopPropagation = vi.fn();
+    priv(sidebar)._onWsRemove({ stopPropagation } as unknown as Event, 'ws-1', 'WS 1');
+
+    expect(stopPropagation).toHaveBeenCalledOnce();
+  });
+
+  it('_onWsRemove adding the same wsId twice still shows it once in _pendingClose', () => {
+    const sidebar = new MuxSidebar();
+    const mockEvent = { stopPropagation: vi.fn() } as unknown as Event;
+
+    priv(sidebar)._onWsRemove(mockEvent, 'ws-dup', 'dup');
+    priv(sidebar)._onWsRemove({ stopPropagation: vi.fn() } as unknown as Event, 'ws-dup', 'dup');
+
+    // Set deduplicates; workspace-close dispatched twice, _pendingClose still has the ID once
+    expect(priv(sidebar)._pendingClose.has('ws-dup')).toBe(true);
+    expect(priv(sidebar)._pendingClose.size).toBe(1);
+  });
+
+  it('_onWsRemove is tracked for multiple distinct workspaces', () => {
+    const sidebar = new MuxSidebar();
+
+    priv(sidebar)._onWsRemove({ stopPropagation: vi.fn() } as unknown as Event, 'ws-A', 'A');
+    priv(sidebar)._onWsRemove({ stopPropagation: vi.fn() } as unknown as Event, 'ws-B', 'B');
+
+    expect(priv(sidebar)._pendingClose.has('ws-A')).toBe(true);
+    expect(priv(sidebar)._pendingClose.has('ws-B')).toBe(true);
+    expect(priv(sidebar)._pendingClose.size).toBe(2);
+  });
+});
+
+describe('MuxSidebar.restoreWorkspace — undo removes pending-close state', () => {
+  it('restoreWorkspace removes the wsId from _pendingClose', () => {
+    const sidebar = new MuxSidebar();
+    priv(sidebar)._onWsRemove({ stopPropagation: vi.fn() } as unknown as Event, 'ws-temp', 'temp');
+    expect(priv(sidebar)._pendingClose.has('ws-temp')).toBe(true);
+
+    sidebar.restoreWorkspace('ws-temp');
+
+    expect(priv(sidebar)._pendingClose.has('ws-temp')).toBe(false);
+  });
+
+  it('restoreWorkspace on an unknown wsId is a no-op (does not throw)', () => {
+    const sidebar = new MuxSidebar();
+
+    expect(() => sidebar.restoreWorkspace('ws-nonexistent')).not.toThrow();
+    expect(priv(sidebar)._pendingClose.size).toBe(0);
+  });
+
+  it('restoreWorkspace replaces the set reference (Lit reactive property)', () => {
+    const sidebar = new MuxSidebar();
+    priv(sidebar)._onWsRemove({ stopPropagation: vi.fn() } as unknown as Event, 'ws-x', 'X');
+    const before = priv(sidebar)._pendingClose;
+
+    sidebar.restoreWorkspace('ws-x');
+
+    // A new Set instance must be assigned (Lit dirty-checks by reference for Set/Map)
+    expect(priv(sidebar)._pendingClose).not.toBe(before);
+  });
+
+  it('restoreWorkspace only removes the specified workspace, leaving others intact', () => {
+    const sidebar = new MuxSidebar();
+    priv(sidebar)._onWsRemove({ stopPropagation: vi.fn() } as unknown as Event, 'ws-1', 'One');
+    priv(sidebar)._onWsRemove({ stopPropagation: vi.fn() } as unknown as Event, 'ws-2', 'Two');
+
+    sidebar.restoreWorkspace('ws-1');
+
+    expect(priv(sidebar)._pendingClose.has('ws-1')).toBe(false);
+    expect(priv(sidebar)._pendingClose.has('ws-2')).toBe(true);
   });
 });
