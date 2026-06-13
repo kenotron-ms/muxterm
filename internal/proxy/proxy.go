@@ -775,12 +775,24 @@ func handleExternalProxy(w http.ResponseWriter, r *http.Request, upstreamURL, ho
 	}
 	req.Header.Set("Accept-Encoding", "identity") // prevent gzip so we can inject
 
-	resp, err := noFollowClient.Do(req)
+	// Follow redirects server-side so the browser never sees a 301 pointing
+	// directly at an external origin. If we used noFollowClient here and
+	// Google (or any site) returns 301 → https://www.google.com/, the browser
+	// would follow it outside our proxy and hit the real X-Frame-Options header.
+	externalClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := externalClient.Do(req)
 	if err != nil {
 		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
+
+	// Use the final URL (after any redirect chain) for <base href> injection
+	// so relative links in the page resolve correctly.
+	finalHost := host
+	if resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.Host != "" {
+		finalHost = resp.Request.URL.Host
+	}
 
 	// Copy response headers, stripping frame-blocking ones
 	for key, vals := range resp.Header {
@@ -808,7 +820,7 @@ func handleExternalProxy(w http.ResponseWriter, r *http.Request, upstreamURL, ho
 			http.Error(w, "read error", http.StatusBadGateway)
 			return
 		}
-		body = injectBase(body, host)
+		body = injectBase(body, finalHost)
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
 		w.WriteHeader(resp.StatusCode)
 		w.Write(body) //nolint:errcheck
