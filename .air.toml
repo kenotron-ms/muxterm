@@ -14,13 +14,15 @@ tmp_dir = "tmp"
   # reach it through the host Caddy without a token.
   args_bin = ["serve", "--addr", "127.0.0.1:9091"]
   cmd     = "go build -o ./bin/muxterm ./cmd/muxterm"
-  delay   = 300          # ms to wait after a change before rebuilding
+  delay   = 200          # ms to wait after a change before rebuilding
   stop_on_error = false
 
   # Dirs to watch (Go source + the Vite output dir).
   include_dir = ["cmd", "internal", "web/dist"]
-  # Only care about these extensions.
-  include_ext = ["go", "js", "html", "css"]
+  # "stamp" matches web/dist/build.stamp written by the rebuildSignal Vite
+  # plugin after ALL outputs (main bundle, sw.js, workbox-*.js) are flushed.
+  # One file → one rebuild, no cascading triggers from per-file Vite writes.
+  include_ext = ["go", "stamp"]
 
   # Never watch inside web/src — Vite owns that; we only care about its output.
   exclude_dir  = ["tmp", "vendor", "testdata", "web/src", "web/node_modules"]

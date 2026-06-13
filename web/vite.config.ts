@@ -1,7 +1,25 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import { resolve } from 'path';
 import { execSync } from 'child_process';
+import { writeFileSync } from 'node:fs';
 import { VitePWA } from 'vite-plugin-pwa';
+
+/**
+ * Writes a single sentinel file (dist/build.stamp) after ALL Vite outputs —
+ * including vite-plugin-pwa's service worker — are flushed to disk.
+ *
+ * air watches web/dist for files with extension "stamp" only, so a Vite
+ * rebuild triggers exactly one Go rebuild instead of cascading per-file
+ * rebuilds (main bundle → sw.js → workbox-*.js).
+ */
+const rebuildSignal = (): Plugin => ({
+  name: 'rebuild-signal',
+  apply: 'build',
+  enforce: 'post', // runs after vite-plugin-pwa's own closeBundle hook
+  closeBundle() {
+    writeFileSync('dist/build.stamp', String(Date.now()));
+  },
+});
 
 const gitSha = (() => {
   try {
@@ -13,6 +31,7 @@ const gitSha = (() => {
 
 export default defineConfig({
   plugins: [
+    rebuildSignal(),
     VitePWA({
       // Auto-update: a new SW activates and reloads clients on next visit.
       registerType: 'autoUpdate',
