@@ -99,21 +99,7 @@ export function installAppShortcuts(
     }
   };
 
-  // beforeunload guard: last line of defence if the keydown handler doesn't
-  // fire (e.g. Chrome processes Cmd+W at browser-process level). Only active
-  // while there are open panes — closing an empty muxterm works normally.
-  const onBeforeUnload = (e: BeforeUnloadEvent): void => {
-    if (options?.hasPanes?.()) {
-      e.preventDefault(); // triggers the browser's "Leave site?" dialog
-    }
-  };
-
   // Capture phase fires before any element handler — highest JS priority.
   window.addEventListener('keydown', handler, { capture: true });
-  window.addEventListener('beforeunload', onBeforeUnload);
-
-  return () => {
-    window.removeEventListener('keydown', handler, { capture: true });
-    window.removeEventListener('beforeunload', onBeforeUnload);
-  };
+  return () => window.removeEventListener('keydown', handler, { capture: true });
 }
