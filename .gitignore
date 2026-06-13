@@ -10,7 +10,7 @@ bin/
 node_modules/
 web/dist/
 demo/frontend/dist/
-web/package-lock.json
+# web/package-lock.json — committed for reproducible CI builds
 
 # IDE/Editor
 .vscode/
