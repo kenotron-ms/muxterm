@@ -9,6 +9,11 @@ import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js
 import { parseResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, resolvePalette } from './lib/theme.js';
+import { injectTerminalFont } from './lib/fonts.js';
+
+// Inject @font-face for the server-bundled Nerd Font as early as possible so
+// document.fonts.ready resolves with it before xterm.js tries to measure glyphs.
+injectTerminalFont();
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
@@ -352,13 +357,21 @@ export class MuxApp extends LitElement {
     // override the browser's native tab-close / new-tab actions so muxterm
     // feels like a native app. Installed once — not re-set on config changes.
     disposeAppShortcuts?.();
-    disposeAppShortcuts = installAppShortcuts({
-      // Remove the active panel from dockview, which triggers onDidRemovePanel
-      // → pane-close event → _startDeferredClose (deferred kill + undo toast).
-      // This mirrors exactly what clicking the tab X button does.
-      closePane: () => this._dock?.closeActivePanel(),
-      newPane: () => this._createPaneOptimistic(),
-    });
+    disposeAppShortcuts = installAppShortcuts(
+      {
+        // Remove the active panel from dockview, which triggers onDidRemovePanel
+        // → pane-close event → _startDeferredClose (deferred kill + undo toast).
+        // This mirrors exactly what clicking the tab X button does.
+        closePane: () => this._dock?.closeActivePanel(),
+        newPane: () => this._createPaneOptimistic(),
+      },
+      {
+        // beforeunload guard: if Chrome processes Cmd+W at the browser-process
+        // level (bypassing the capture-phase keydown handler), this fires before
+        // the window actually closes and shows "Leave site?" when panes are open.
+        hasPanes: () => store.panes.length > 0,
+      },
+    );
 
     // Re-render whenever wire state (composition / workspaces / config) changes.
     this._unsubscribe = store.subscribe(() => {

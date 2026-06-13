@@ -67,12 +67,26 @@ function isPwa(): boolean {
  *   Cmd+Ctrl+T      — open a new pane          (interceptable in all modes —
  *                      both modifiers together is not a Chrome-reserved chord)
  *   Cmd/Ctrl+T      — open a new pane          (PWA standalone mode only —
- *                      browsers handle Cmd+T at the process level in tab mode
- *                      so preventDefault() has no effect there)
+ *                      browsers handle Cmd+T at the browser-process level in
+ *                      tab mode so preventDefault() has no effect there)
+ *
+ * `options.hasPanes` — when provided, a `beforeunload` handler is installed as
+ * a safety net. Chrome can process Cmd+W at the browser-process level before
+ * the DOM keydown event fires (single-tab windows, specific focus states). If
+ * the keydown capture handler fails to intercept it, `beforeunload` fires
+ * before the window actually closes and shows the browser's "Leave site?"
+ * confirmation dialog when panes are still open. Same pattern as Gmail,
+ * Google Docs, VS Code web.
  *
  * Returns a cleanup function.
  */
-export function installAppShortcuts(actions: Pick<UIActions, 'closePane' | 'newPane'>): () => void {
+export function installAppShortcuts(
+  actions: Pick<UIActions, 'closePane' | 'newPane'>,
+  options?: {
+    /** Return true when there are active panes — enables beforeunload guard. */
+    hasPanes?: () => boolean;
+  },
+): () => void {
   const handler = (e: KeyboardEvent): void => {
     if (e.key === 'w' || e.key === 'W') {
       if (e.metaKey || e.ctrlKey) {
@@ -89,9 +103,7 @@ export function installAppShortcuts(actions: Pick<UIActions, 'closePane' | 'newP
         actions.newPane?.();
         return;
       }
-      // Cmd/Ctrl+T alone — only in PWA standalone mode. In regular browser
-      // tabs Chrome handles Cmd+T at the browser-process level before the
-      // renderer fires a keydown event, so preventDefault() has no effect.
+      // Cmd/Ctrl+T alone — only in PWA standalone mode.
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && isPwa()) {
         e.preventDefault();
         actions.newPane?.();
@@ -99,7 +111,21 @@ export function installAppShortcuts(actions: Pick<UIActions, 'closePane' | 'newP
     }
   };
 
-  // Capture phase: intercept before the browser acts on these chords.
+  // beforeunload guard: last line of defence if the keydown handler doesn't
+  // fire (e.g. Chrome processes Cmd+W at browser-process level). Only active
+  // while there are open panes — closing an empty muxterm works normally.
+  const onBeforeUnload = (e: BeforeUnloadEvent): void => {
+    if (options?.hasPanes?.()) {
+      e.preventDefault(); // triggers the browser's "Leave site?" dialog
+    }
+  };
+
+  // Capture phase fires before any element handler — highest JS priority.
   window.addEventListener('keydown', handler, { capture: true });
-  return () => window.removeEventListener('keydown', handler, { capture: true });
+  window.addEventListener('beforeunload', onBeforeUnload);
+
+  return () => {
+    window.removeEventListener('keydown', handler, { capture: true });
+    window.removeEventListener('beforeunload', onBeforeUnload);
+  };
 }
