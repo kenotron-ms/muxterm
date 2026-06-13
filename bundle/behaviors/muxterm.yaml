@@ -1,0 +1,27 @@
+bundle:
+  name: muxterm-behavior
+  version: 1.0.0
+  description: Wires the muxterm MCP server as a tool source and registers the muxterm-expert agent
+
+tools:
+  - module: tool-mcp
+    source: git+https://github.com/microsoft/amplifier-module-tool-mcp@main
+    config:
+      servers:
+        muxterm:
+          command: muxterm
+          args: ["mcp"]
+          # muxterm mcp connects to the running muxterm server via WebSocket.
+          # By default it targets localhost:8080. Override with MUXTERM_ADDR env var
+          # if your muxterm server is running on a different address.
+          #
+          # env:
+          #   MUXTERM_ADDR: "localhost:8311"
+
+agents:
+  include:
+    - muxterm:agents/muxterm-expert
+
+context:
+  include:
+    - muxterm:context/muxterm-awareness.md

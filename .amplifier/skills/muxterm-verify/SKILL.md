@@ -27,7 +27,7 @@ and a final PASS or FAIL verdict.
 
 ## Inputs
 
-- `<base_url>` — Base URL for muxterm (default: `http://localhost:9090`)
+- `<base_url>` — Base URL for muxterm (default: `http://localhost:8311`)
 
 ## Steps
 
@@ -56,7 +56,7 @@ Append this block to the scenario content when delegating:
 
 **Execution instructions for browser-operator:**
 
-Base URL: `http://localhost:9090` (or the URL provided by the user).
+Base URL: `http://localhost:8311` (or the URL provided by the user).
 
 **FIRST: clear any stale PWA/service-worker cache before running scenarios.**
 Navigate to the base URL, then immediately run this cache-clearing snippet before

@@ -5,7 +5,7 @@ Serves the muxterm browser terminal at **https://muxterm.ampbox.io**, gated by
 
 > ☠️ **Why this matters:** muxterm trusts loopback and has **no auth of its own**.
 > Reaching it = a shell on this machine. The oauth2-proxy gate is the ONLY thing
-> making it private. Never expose muxterm (:9090) or the old `:8090` hop directly.
+> making it private. Never expose muxterm (:8311) or the old `:8090` hop directly.
 
 ```
  Internet ──TLS──> Caddy (muxterm.ampbox.io)          [/mnt/services/muxterm.caddy]
@@ -13,7 +13,7 @@ Serves the muxterm browser terminal at **https://muxterm.ampbox.io**, gated by
                            oauth2-proxy  ──GitHub OAuth, allowlist=kenotron-ms──┐
                            (amplifier-muxterm-oauth.service, 0.0.0.0:4181)      │ authorized
                                                                                 ▼
-                                                  muxterm serve  127.0.0.1:9090 (loopback)
+                                                  muxterm serve  127.0.0.1:8311 (loopback)
                                                   (amplifier-muxterm-serve.service)
 ```
 
@@ -48,7 +48,7 @@ documented oauth2-proxy multi-subdomain pattern (`cookie-domain` +
   `redirect_uri=https://wiki.ampbox.io/oauth2/callback`. The shared-app flow works.
 
 > `amplifier-muxterm-serve.service` is installed but **not** enabled — muxterm is
-> still your hand-run `./bin/muxterm serve` on `:9090`. To hand it to systemd:
+> still your hand-run `./bin/muxterm serve` on `:8311`. To hand it to systemd:
 > stop the manual process, then `systemctl --user enable --now amplifier-muxterm-serve.service`.
 
 ## What you (Ken) still need to do

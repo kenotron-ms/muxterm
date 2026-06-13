@@ -19,7 +19,7 @@ that pane operations, browser refresh, and terminal replay are all working corre
 
 ## Prerequisites
 
-- muxterm server running at **http://localhost:9090** (adjust if different)
+- muxterm server running at **http://localhost:8311** (adjust if different)
 - Use a fresh private/incognito window to avoid stale PWA cache
 - The Go sessiond process must be running (not just the frontend dev server)
 
@@ -52,7 +52,7 @@ function isClean(text) {
 
 ## Phase 1 — Load, New Workspace, First Pane
 
-**1.1** Navigate to `http://localhost:9090`.  
+**1.1** Navigate to `http://localhost:8311`.  
 Wait until status bar (bottom strip) shows **connected** in green.
 
 **1.2** Click the workspace label in the status bar (bottom-left) to open the workspace picker.
@@ -350,7 +350,7 @@ const store    = () => dock().__store;
 
 ### Phase A — Layout at mobile breakpoint
 
-**A.1** Navigate to `http://localhost:9090` at the 390 × 844 viewport.  
+**A.1** Navigate to `http://localhost:8311` at the 390 × 844 viewport.  
 Wait until status bar shows **connected**.
 
 **A.2** **(Assertion A1)** The dockview tab strip must be hidden at this viewport:

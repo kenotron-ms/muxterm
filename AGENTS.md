@@ -19,7 +19,7 @@ make build
 ./bin/muxterm &
 
 # 3. Open and observe
-playwright-cli open http://localhost:9090
+playwright-cli open http://localhost:8311
 playwright-cli snapshot
 playwright-cli click e5
 # ... verify the actual behavior

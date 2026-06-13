@@ -34,15 +34,15 @@ func TestParseArgs_ServeDefaults(t *testing.T) {
 }
 
 func TestParseArgs_ServeWithFlags(t *testing.T) {
-	cfg, err := ParseArgs([]string{"serve", "--addr", "127.0.0.1:9090", "--secret", "mysecret"})
+	cfg, err := ParseArgs([]string{"serve", "--addr", "127.0.0.1:8311", "--secret", "mysecret"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Mode != "serve" {
 		t.Errorf("Mode = %q, want %q", cfg.Mode, "serve")
 	}
-	if cfg.Addr != "127.0.0.1:9090" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "127.0.0.1:9090")
+	if cfg.Addr != "127.0.0.1:8311" {
+		t.Errorf("Addr = %q, want %q", cfg.Addr, "127.0.0.1:8311")
 	}
 	if cfg.Secret != "mysecret" {
 		t.Errorf("Secret = %q, want %q", cfg.Secret, "mysecret")
@@ -127,15 +127,15 @@ func TestParseArgs_Install_DefaultFlags(t *testing.T) {
 }
 
 func TestParseArgs_Install_WithFlags(t *testing.T) {
-	cfg, err := ParseArgs([]string{"install", "--addr", "0.0.0.0:9090", "--secret", "mysecret"})
+	cfg, err := ParseArgs([]string{"install", "--addr", "0.0.0.0:8311", "--secret", "mysecret"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Mode != "install" {
 		t.Errorf("Mode = %q, want %q", cfg.Mode, "install")
 	}
-	if cfg.Addr != "0.0.0.0:9090" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "0.0.0.0:9090")
+	if cfg.Addr != "0.0.0.0:8311" {
+		t.Errorf("Addr = %q, want %q", cfg.Addr, "0.0.0.0:8311")
 	}
 	if cfg.Secret != "mysecret" {
 		t.Errorf("Secret = %q, want %q", cfg.Secret, "mysecret")
@@ -179,15 +179,15 @@ func TestParseArgs_OpenBrowser_ValidPort(t *testing.T) {
 }
 
 func TestParseArgs_OpenBrowser_CustomAddr(t *testing.T) {
-	cfg, err := ParseArgs([]string{"open-browser", "--addr", "0.0.0.0:9090", "5173"})
+	cfg, err := ParseArgs([]string{"open-browser", "--addr", "0.0.0.0:8311", "5173"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.Mode != "open-browser" {
 		t.Errorf("Mode = %q, want %q", cfg.Mode, "open-browser")
 	}
-	if cfg.Addr != "0.0.0.0:9090" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "0.0.0.0:9090")
+	if cfg.Addr != "0.0.0.0:8311" {
+		t.Errorf("Addr = %q, want %q", cfg.Addr, "0.0.0.0:8311")
 	}
 	if cfg.BrowserPort != 5173 {
 		t.Errorf("BrowserPort = %d, want %d", cfg.BrowserPort, 5173)

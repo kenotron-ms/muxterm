@@ -6,13 +6,13 @@ tmp_dir = "tmp"
 
 [build]
   bin     = "./bin/muxterm"
-  # Bind muxterm DEV to LOOPBACK only on port 9091 (prod uses 9090 via systemd).
+  # Bind muxterm DEV to LOOPBACK only on port 8312 (prod uses 8311 via systemd).
   # The in-instance Caddy (Caddyfile) listens on the instance IP :8091 and
   # proxies here over 127.0.0.1, so muxterm always sees a loopback peer and
   # its localhost auth-bypass applies (internal/server/auth.go).
   # The SPA has no token logic, so this loopback hop is what lets remote users
   # reach it through the host Caddy without a token.
-  args_bin = ["serve", "--addr", "127.0.0.1:9091"]
+  args_bin = ["serve", "--addr", "127.0.0.1:8312"]
   cmd     = "go build -o ./bin/muxterm ./cmd/muxterm"
   delay   = 200          # ms to wait after a change before rebuilding
   stop_on_error = false

@@ -96,7 +96,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/ws': { target: 'ws://127.0.0.1:9090', ws: true, changeOrigin: true },
+      '/ws': { target: 'ws://127.0.0.1:8312', ws: true, changeOrigin: true },
     },
   },
   test: {

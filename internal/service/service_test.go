@@ -27,7 +27,7 @@ func TestRenderSystemdUnit_ContainsBinaryPath(t *testing.T) {
 func TestRenderSystemdUnit_ContainsServeCommand(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
-		Addr:       "0.0.0.0:9090",
+		Addr:       "0.0.0.0:8311",
 		Secret:     "secret123",
 		SafePATH:   "/usr/bin",
 	}
@@ -35,7 +35,7 @@ func TestRenderSystemdUnit_ContainsServeCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderSystemdUnit() error: %v", err)
 	}
-	if !contains(out, "muxterm serve --addr 0.0.0.0:9090 --secret secret123") {
+	if !contains(out, "muxterm serve --addr 0.0.0.0:8311 --secret secret123") {
 		t.Errorf("output missing serve command with flags, got:\n%s", out)
 	}
 }
@@ -140,7 +140,7 @@ func TestRenderLaunchdPlist_ContainsLabel(t *testing.T) {
 func TestRenderLaunchdPlist_ContainsServeArgs(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
-		Addr:       "0.0.0.0:9090",
+		Addr:       "0.0.0.0:8311",
 		Secret:     "secret123",
 		SafePATH:   "/usr/bin",
 	}
@@ -151,7 +151,7 @@ func TestRenderLaunchdPlist_ContainsServeArgs(t *testing.T) {
 	for _, want := range []string{
 		"<string>serve</string>",
 		"<string>--addr</string>",
-		"<string>0.0.0.0:9090</string>",
+		"<string>0.0.0.0:8311</string>",
 		"<string>--secret</string>",
 		"<string>secret123</string>",
 	} {

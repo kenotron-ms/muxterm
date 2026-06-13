@@ -112,14 +112,14 @@ func TestRunUninstall_Signature(t *testing.T) {
 
 func TestRunInstall_PrintsAddrOnSuccess(t *testing.T) {
 	// When service.Install succeeds, runInstall should print the addr.
-	cfg := Config{Mode: "install", Addr: "localhost:9090", Secret: "provided-secret"}
+	cfg := Config{Mode: "install", Addr: "localhost:8311", Secret: "provided-secret"}
 	out := captureStdout(t, func() {
 		err := runInstall(cfg)
 		if err != nil {
 			t.Skipf("service.Install not available in this environment: %v", err)
 		}
 	})
-	if !strings.Contains(out, "http://localhost:9090") {
+	if !strings.Contains(out, "http://localhost:8311") {
 		t.Errorf("expected addr in output, got %q", out)
 	}
 	// Clean up installed service
@@ -128,7 +128,7 @@ func TestRunInstall_PrintsAddrOnSuccess(t *testing.T) {
 
 func TestRunInstall_NoAutoSecretPrintedWhenProvided(t *testing.T) {
 	// When cfg.Secret is provided, runInstall should NOT print auto-generated secret.
-	cfg := Config{Mode: "install", Addr: "localhost:9090", Secret: "provided-secret"}
+	cfg := Config{Mode: "install", Addr: "localhost:8311", Secret: "provided-secret"}
 	out := captureStdout(t, func() {
 		err := runInstall(cfg)
 		if err != nil {
@@ -144,7 +144,7 @@ func TestRunInstall_NoAutoSecretPrintedWhenProvided(t *testing.T) {
 
 func TestRunInstall_AutoGeneratesSecretAndPrints(t *testing.T) {
 	// When cfg.Secret is empty, runInstall should auto-generate and print it.
-	cfg := Config{Mode: "install", Addr: "localhost:9090", Secret: ""}
+	cfg := Config{Mode: "install", Addr: "localhost:8311", Secret: ""}
 	out := captureStdout(t, func() {
 		err := runInstall(cfg)
 		if err != nil {
@@ -154,7 +154,7 @@ func TestRunInstall_AutoGeneratesSecretAndPrints(t *testing.T) {
 	if !strings.Contains(out, "auto-generated secret:") {
 		t.Errorf("expected auto-generated secret in output, got %q", out)
 	}
-	if !strings.Contains(out, "http://localhost:9090") {
+	if !strings.Contains(out, "http://localhost:8311") {
 		t.Errorf("expected addr in output, got %q", out)
 	}
 	// Clean up installed service
