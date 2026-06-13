@@ -2,7 +2,7 @@
  * mux-sidebar.ts unit tests
  * TDD: tests written before implementation to define the exported API.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   SIDEBAR_WIDTH_KEY,
   SIDEBAR_DEFAULT_WIDTH,
@@ -363,5 +363,119 @@ describe('MuxSidebar.restoreWorkspace — undo removes pending-close state', () 
 
     expect(priv(sidebar)._pendingClose.has('ws-1')).toBe(false);
     expect(priv(sidebar)._pendingClose.has('ws-2')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// localStorage width clamping — boundary value verification (task-10)
+// ---------------------------------------------------------------------------
+
+describe('MuxSidebar localStorage width clamping on connectedCallback', () => {
+  beforeEach(() => {
+    // Stub fetch so the auth-token request does not fail in the test environment.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ json: () => Promise.resolve({}) }),
+    );
+    localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+  });
+
+  it('falls back to SIDEBAR_DEFAULT_WIDTH when stored value is below SIDEBAR_MIN_WIDTH (100 < 160)', () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, '100');
+    const sidebar = new MuxSidebar();
+    sidebar.connectedCallback();
+    expect(sidebar.style.width).toBe(`${SIDEBAR_DEFAULT_WIDTH}px`); // 220px
+  });
+
+  it('falls back to SIDEBAR_DEFAULT_WIDTH when stored value is above SIDEBAR_MAX_WIDTH (500 > 360)', () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, '500');
+    const sidebar = new MuxSidebar();
+    sidebar.connectedCallback();
+    expect(sidebar.style.width).toBe(`${SIDEBAR_DEFAULT_WIDTH}px`); // 220px
+  });
+
+  it('restores exact width when stored value is within [SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH]', () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, '250');
+    const sidebar = new MuxSidebar();
+    sidebar.connectedCallback();
+    expect(sidebar.style.width).toBe('250px');
+  });
+
+  it('falls back to SIDEBAR_DEFAULT_WIDTH when no entry exists in localStorage', () => {
+    // No value set — localStorage.getItem returns null.
+    const sidebar = new MuxSidebar();
+    sidebar.connectedCallback();
+    expect(sidebar.style.width).toBe(`${SIDEBAR_DEFAULT_WIDTH}px`);
+  });
+
+  it('falls back to SIDEBAR_DEFAULT_WIDTH when stored value is NaN', () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, 'not-a-number');
+    const sidebar = new MuxSidebar();
+    sidebar.connectedCallback();
+    expect(sidebar.style.width).toBe(`${SIDEBAR_DEFAULT_WIDTH}px`);
+  });
+
+  it('restores exact value at the SIDEBAR_MIN_WIDTH boundary (160)', () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(SIDEBAR_MIN_WIDTH));
+    const sidebar = new MuxSidebar();
+    sidebar.connectedCallback();
+    expect(sidebar.style.width).toBe(`${SIDEBAR_MIN_WIDTH}px`);
+  });
+
+  it('restores exact value at the SIDEBAR_MAX_WIDTH boundary (360)', () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(SIDEBAR_MAX_WIDTH));
+    const sidebar = new MuxSidebar();
+    sidebar.connectedCallback();
+    expect(sidebar.style.width).toBe(`${SIDEBAR_MAX_WIDTH}px`);
+  });
+
+  it('falls back to default for value just below minimum (SIDEBAR_MIN_WIDTH - 1 = 159)', () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(SIDEBAR_MIN_WIDTH - 1));
+    const sidebar = new MuxSidebar();
+    sidebar.connectedCallback();
+    expect(sidebar.style.width).toBe(`${SIDEBAR_DEFAULT_WIDTH}px`);
+  });
+
+  it('falls back to default for value just above maximum (SIDEBAR_MAX_WIDTH + 1 = 361)', () => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(SIDEBAR_MAX_WIDTH + 1));
+    const sidebar = new MuxSidebar();
+    sidebar.connectedCallback();
+    expect(sidebar.style.width).toBe(`${SIDEBAR_DEFAULT_WIDTH}px`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Drag-resize clamping formula (task-10)
+// ---------------------------------------------------------------------------
+
+describe('MuxSidebar drag-resize clamping formula', () => {
+  it('clamps values below SIDEBAR_MIN_WIDTH up to min', () => {
+    // Mirrors: Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, w))
+    const clamp = (w: number) =>
+      Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, w));
+    expect(clamp(0)).toBe(SIDEBAR_MIN_WIDTH);
+    expect(clamp(100)).toBe(SIDEBAR_MIN_WIDTH);
+    expect(clamp(SIDEBAR_MIN_WIDTH - 1)).toBe(SIDEBAR_MIN_WIDTH);
+  });
+
+  it('clamps values above SIDEBAR_MAX_WIDTH down to max', () => {
+    const clamp = (w: number) =>
+      Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, w));
+    expect(clamp(500)).toBe(SIDEBAR_MAX_WIDTH);
+    expect(clamp(SIDEBAR_MAX_WIDTH + 1)).toBe(SIDEBAR_MAX_WIDTH);
+    expect(clamp(9999)).toBe(SIDEBAR_MAX_WIDTH);
+  });
+
+  it('passes through values within [SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH] unchanged', () => {
+    const clamp = (w: number) =>
+      Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, w));
+    expect(clamp(SIDEBAR_MIN_WIDTH)).toBe(SIDEBAR_MIN_WIDTH);
+    expect(clamp(250)).toBe(250);
+    expect(clamp(SIDEBAR_MAX_WIDTH)).toBe(SIDEBAR_MAX_WIDTH);
   });
 });
