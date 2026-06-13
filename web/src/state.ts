@@ -2,6 +2,7 @@ import type {
   SessiondMessage,
   SessiondWorkspaceInfo,
   SessiondPaneInfo,
+  TunnelInfo,
 } from './types';
 import { SessiondType } from './types';
 import type { Composition } from './lib/arrangement-store.js';
@@ -70,6 +71,8 @@ export class MuxStore {
   private _bellWorkspaces: Set<string> = new Set();
   /** Pane IDs that have an unacknowledged activity bell. */
   private _bellPanes: Set<number> = new Set();
+  /** Active port-forward tunnels reported by the daemon. */
+  private _tunnels: TunnelInfo[] = [];
 
   get config(): ResolvedConfig {
     return this._config;
@@ -179,6 +182,33 @@ export class MuxStore {
    */
   ringWorkspace(workspaceId: string): void {
     this._bellWorkspaces.add(workspaceId);
+    this._notify();
+  }
+
+  // --- tunnel state --------------------------------------------------------
+
+  get tunnels(): readonly TunnelInfo[] {
+    return this._tunnels;
+  }
+
+  /** Add a tunnel idempotently (no-op if id already present). */
+  addTunnel(t: TunnelInfo): void {
+    if (this._tunnels.some((x) => x.id === t.id)) return;
+    this._tunnels = [...this._tunnels, t];
+    this._notify();
+  }
+
+  /** Remove a tunnel by id. No-op if not found. */
+  removeTunnel(id: string): void {
+    const next = this._tunnels.filter((x) => x.id !== id);
+    if (next.length === this._tunnels.length) return;
+    this._tunnels = next;
+    this._notify();
+  }
+
+  /** Replace the full tunnel list (e.g. on a tunnel-list reply). */
+  setTunnels(tunnels: TunnelInfo[]): void {
+    this._tunnels = [...tunnels];
     this._notify();
   }
 

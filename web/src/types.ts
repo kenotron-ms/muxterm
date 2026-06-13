@@ -54,9 +54,22 @@ export const SessiondType = {
   LayoutCommand: 'layout-command',
   ScreenSnapshot: 'screen-snapshot',
   GetLayout: 'get-layout',
+  // Tunnel management (client -> server and server -> client)
+  CreateTunnel: 'create-tunnel',
+  CloseTunnel: 'close-tunnel',
+  ListTunnels: 'list-tunnels',
+  TunnelCreated: 'tunnel-created',
+  TunnelClosed: 'tunnel-closed',
+  TunnelList: 'tunnel-list',
 } as const;
 
 export type SessiondMessageType = (typeof SessiondType)[keyof typeof SessiondType];
+
+/** Describes a single active tunnel (port-forward). */
+export interface TunnelInfo {
+  id: string;
+  port: number;
+}
 
 /** Frozen sessiond error-code vocabulary (mirrors Go's ErrCode constants). */
 export const SessiondErrorCode = {
@@ -121,6 +134,12 @@ export interface SessiondMessage {
   /** Per-pane absolute byte offsets sent by the client on (re)attach so the
    *  server can replay only the delta since the client's last known position. */
   offsets?: { paneId: number; seq: number }[];
+  /** Tunnel identifier (present on tunnel-created, tunnel-closed messages). */
+  tunnelId?: string;
+  /** Tunnel port number (present on create-tunnel request and tunnel-created reply). */
+  tunnelPort?: number;
+  /** List of active tunnels (present on tunnel-list reply). */
+  tunnels?: TunnelInfo[];
 }
 
 // ---------------------------------------------------------------------------

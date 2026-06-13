@@ -35,6 +35,20 @@ describe('sessiond protocol types', () => {
       WorkspaceRenamed: 'workspace-renamed',
       PaneRenamed: 'pane-renamed',
       Error: 'error',
+      // Browser-action relay
+      BrowserAction: 'browser-action',
+      BrowserActionResult: 'browser-action-result',
+      // Layout / snapshot relay
+      LayoutCommand: 'layout-command',
+      ScreenSnapshot: 'screen-snapshot',
+      GetLayout: 'get-layout',
+      // Tunnel management
+      CreateTunnel: 'create-tunnel',
+      CloseTunnel: 'close-tunnel',
+      ListTunnels: 'list-tunnels',
+      TunnelCreated: 'tunnel-created',
+      TunnelClosed: 'tunnel-closed',
+      TunnelList: 'tunnel-list',
     });
   });
 

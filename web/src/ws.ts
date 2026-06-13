@@ -134,6 +134,21 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.ClosePane, paneId });
   }
 
+  /** Request a new port-forward tunnel for the given port. */
+  createTunnel(port: number): void {
+    this.sendSessiond({ type: SessiondType.CreateTunnel, tunnelPort: port });
+  }
+
+  /** Close an existing tunnel by its server-assigned ID. */
+  closeTunnel(id: string): void {
+    this.sendSessiond({ type: SessiondType.CloseTunnel, tunnelId: id });
+  }
+
+  /** Request the list of active tunnels. */
+  listTunnels(): void {
+    this.sendSessiond({ type: SessiondType.ListTunnels });
+  }
+
   /**
    * Report a pane's measured rendered grid (active-view-wins by construction:
    * only visible panes own a live ResizeObserver, so tabbed-away panes never

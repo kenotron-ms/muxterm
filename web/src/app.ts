@@ -368,6 +368,16 @@ export class MuxApp extends LitElement {
         this._showCreateModal = false;
         this._createModalName = '';
       }
+      // Tunnel state synchronization
+      if (msg.type === SessiondType.TunnelCreated && msg.tunnelId) {
+        store.addTunnel({ id: msg.tunnelId, port: msg.tunnelPort ?? 0 });
+      }
+      if (msg.type === SessiondType.TunnelClosed && msg.tunnelId) {
+        store.removeTunnel(msg.tunnelId);
+      }
+      if (msg.type === SessiondType.TunnelList) {
+        store.setTunnels(msg.tunnels ?? []);
+      }
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
     // now optimistic so the provisional pane overlays instantly.
@@ -403,6 +413,8 @@ export class MuxApp extends LitElement {
       // On (re)connect: attach the last/known workspace, or list + attach the
       // first. This is where the initial composition sync is requested.
       this._controller?.bootstrap();
+      // Sync tunnel state on (re)connect so the UI stays consistent.
+      this._socket?.listTunnels();
     };
     this._socket.connect();
     this._connectionStatus = 'reconnecting';
