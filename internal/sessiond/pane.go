@@ -43,8 +43,14 @@ type Pane struct {
 	closeOnce sync.Once
 }
 
-// resolveArgv returns argv unchanged, or a single-element shell command when
-// argv is empty, falling back to $SHELL then /bin/sh.
+// resolveArgv returns argv unchanged, or a login-shell invocation when argv is
+// empty, falling back to $SHELL then /bin/sh.
+//
+// The -l flag makes the shell behave as a login shell: it sources ~/.zprofile,
+// ~/.bash_profile, ~/.profile etc., giving users the same environment they get
+// in Ghostty, iTerm2, tmux, and SSH interactive sessions. Without -l, PATH
+// additions from tools like brew, nvm, pyenv and rbenv are missing — especially
+// important when muxterm runs as a launchd service with a sparse environment.
 func resolveArgv(argv []string) []string {
 	if len(argv) > 0 {
 		return argv
@@ -53,7 +59,7 @@ func resolveArgv(argv []string) []string {
 	if shell == "" {
 		shell = "/bin/sh"
 	}
-	return []string{shell}
+	return []string{shell, "-l"}
 }
 
 // NewPane starts a child process attached to a new PTY sized cols x rows and
