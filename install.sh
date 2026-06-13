@@ -238,6 +238,17 @@ printf "%s muxterm to %s/muxterm...\n" "$INSTALL_ACTION" "$INSTALL_DIR"
 mv "$MUXTERM_TMP/muxterm" "$INSTALL_DIR/muxterm"
 
 # ---------------------------------------------------------------------------
+# Service setup / restart
+# ---------------------------------------------------------------------------
+if [ "$INSTALL_ACTION" = "Upgrading" ]; then
+  # Restart the existing service with the new binary
+  systemctl --user restart muxterm 2>/dev/null || true
+else
+  # First install — register the systemd user service
+  "$INSTALL_DIR/muxterm" install
+fi
+
+# ---------------------------------------------------------------------------
 # PATH detection + optional shell RC update
 # ---------------------------------------------------------------------------
 NEED_PATH=0
@@ -298,16 +309,16 @@ printf "\n"
 
 if [ "$INSTALL_ACTION" = "Upgrading" ]; then
   printf "${GREEN}${BOLD}muxterm upgraded %s → %s${RESET}\n" "$PREV_VERSION" "$VERSION"
+  printf "Service restarted via systemctl --user restart muxterm\n"
 else
-  printf "${GREEN}${BOLD}muxterm %s installed to ~/.local/bin/muxterm${RESET}\n" "$VERSION"
+  printf "${GREEN}${BOLD}muxterm %s installed and running${RESET}\n" "$VERSION"
   printf "\n"
-  printf "Next steps:\n"
-  printf "  muxterm                     # start in local mode (opens browser)\n"
-  printf "  muxterm install             # install as a background service (auto-start on login)\n"
+  printf "  Open: ${BOLD}http://localhost:8311${RESET}\n"
+  printf "\n"
   printf "  muxterm doctor              # check daemon and service status\n"
   printf "\n"
-  printf "To always run at boot (even when not logged in):\n"
-  printf "  sudo loginctl enable-linger %s   # run once, then 'muxterm install'\n" "$USER"
+  printf "To keep running after logout (optional, requires sudo once):\n"
+  printf "  sudo loginctl enable-linger %s\n" "$USER"
 fi
 
 if [ -n "$MODIFIED_FILE" ]; then
