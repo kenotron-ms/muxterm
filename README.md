@@ -9,9 +9,32 @@ A web-first terminal multiplexer. Persistent sessions, split panes, and a browse
 brew install kenotron-ms/tap/muxterm
 ```
 
-### macOS / Linux — curl
+### Linux
+
 ```bash
-curl -fsSL https://github.com/kenotron-ms/muxterm/releases/latest/download/muxterm_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz | tar -xz -C /usr/local/bin muxterm
+curl -fsSL https://raw.githubusercontent.com/kenotron-ms/muxterm/main/install.sh | bash
+```
+
+Or review first:
+```bash
+curl -fsSL https://raw.githubusercontent.com/kenotron-ms/muxterm/main/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
+**No sudo required.** The binary installs to `~/.local/bin` and PATH is configured automatically.
+
+**To run as a background service** (persists across reboots):
+```bash
+muxterm install
+# Optionally, to keep running even when logged out:
+sudo loginctl enable-linger $USER
+```
+
+**To upgrade:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/kenotron-ms/muxterm/main/install.sh | bash
+muxterm install  # restarts the service with the new binary
 ```
 
 ### Windows — Scoop (coming soon)
