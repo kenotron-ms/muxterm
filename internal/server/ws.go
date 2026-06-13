@@ -258,7 +258,10 @@ func (c *Client) handleTextInput(data []byte) {
 		})
 
 	case sessiond.TypeCloseTunnel:
-		c.hub.tunnels.Close(msg.TunnelID)
+		if ok := c.hub.tunnels.Close(msg.TunnelID); !ok {
+			c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("tunnel %q not found", msg.TunnelID))
+			return
+		}
 		c.sendMessage(&sessiond.Message{
 			Type:     sessiond.TypeTunnelClosed,
 			CID:      msg.CID,
@@ -356,12 +359,12 @@ func (h *Hub) SetResolvedConfig(cfg any) {
 }
 
 // NewHub creates a new Hub that dials a fresh daemon connection per browser via
-// dial. dial may be nil and supplied later via SetDialer.
+// dial. dial may be nil and supplied later via SetDialer. tunnels is nil until
+// set by the caller (server.New sets it via hub.tunnels = tunnels).
 func NewHub(dial DialFunc) *Hub {
 	return &Hub{
 		clients: make(map[*Client]bool),
 		dial:    dial,
-		tunnels: NewTunnelRegistry(),
 	}
 }
 

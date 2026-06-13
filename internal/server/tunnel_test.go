@@ -148,6 +148,7 @@ func TestTunnelProxy_Found(t *testing.T) {
 
 func TestHandleTextInput_TypeCreateTunnel(t *testing.T) {
 	hub := NewHub(nil)
+	hub.tunnels = NewTunnelRegistry()
 
 	var sentMessages [][]byte
 	c := newTestClient(hub, func(data []byte) error {
@@ -190,6 +191,7 @@ func TestHandleTextInput_TypeCreateTunnel(t *testing.T) {
 
 func TestHandleTextInput_TypeCloseTunnel(t *testing.T) {
 	hub := NewHub(nil)
+	hub.tunnels = NewTunnelRegistry()
 
 	// Pre-create a tunnel so we have a known ID to close.
 	id, err := hub.tunnels.Create(8080)
@@ -231,6 +233,7 @@ func TestHandleTextInput_TypeCloseTunnel(t *testing.T) {
 
 func TestHandleTextInput_TypeListTunnels(t *testing.T) {
 	hub := NewHub(nil)
+	hub.tunnels = NewTunnelRegistry()
 
 	// Pre-create a couple of tunnels.
 	_, _ = hub.tunnels.Create(1234)
