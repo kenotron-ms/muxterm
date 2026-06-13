@@ -588,6 +588,34 @@ export class MuxDock extends LitElement {
         }
       });
     });
+
+    // Middle-click on a dockview tab closes that pane.
+    // Uses the same onDidRemovePanel → pane-close flow as the tab X button,
+    // giving the user the same 10-second undo toast on accidental middle-clicks.
+    this.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.button !== 1) return; // only middle click
+      e.preventDefault(); // prevent the browser autoscroll cursor
+
+      // Walk the event path (composed — works across shadow boundaries) to find
+      // the dockview tab element. The class is confirmed by the CSS above.
+      const path = e.composedPath() as Element[];
+      const tabEl = path.find(
+        (el) => el instanceof Element && el.classList?.contains('dv-tab'),
+      ) as Element | undefined;
+      if (!tabEl) return;
+
+      // Match the found .dv-tab element to a panel.
+      // panel.view.tab.element is the inner .dv-default-tab child, NOT the .dv-tab
+      // container itself, so compare by containment: tabEl.contains(panelTabEl).
+      for (const [, panel] of this._panels) {
+        const panelTabEl = (panel as unknown as { view?: { tab?: { element?: HTMLElement } } })
+          .view?.tab?.element;
+        if (panelTabEl && tabEl.contains(panelTabEl)) {
+          if (this._dv) this._dv.removePanel(panel);
+          return;
+        }
+      }
+    });
   }
 
   override disconnectedCallback(): void {
@@ -880,6 +908,18 @@ export class MuxDock extends LitElement {
       if (line) lines.push(line.translateToString(true));
     }
     return lines.join('\n');
+  }
+
+  /**
+   * Close the currently active dockview panel programmatically, triggering the
+   * same pane-close event flow as the tab X-button (deferred close + undo toast).
+   * No-op if there is no active panel.
+   */
+  closeActivePanel(): void {
+    if (!this._dv) return;
+    const active = this._dv.activePanel;
+    if (!active) return;
+    this._dv.removePanel(active);
   }
 
   /**

@@ -7,7 +7,7 @@ import { MonitorX } from 'lucide';
 import { MuxSocket, buildWsUrl } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { parseResolvedConfig } from './lib/config.js';
-import { makeKeyHandler, type UIActions } from './lib/keybindings.js';
+import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, resolvePalette } from './lib/theme.js';
 
 // Side-effect imports — register child custom elements
@@ -50,6 +50,10 @@ const uiActions: UIActions = {
 /** Disposer for the currently-installed keydown handler. Re-set after each
  *  config frame so new key bindings take effect immediately. */
 let disposeKeys: (() => void) | undefined;
+
+/** Disposer for fixed app-level shortcuts (Cmd+W, Cmd+T). Installed once per
+ *  app connection and not re-set on config changes — these are not configurable. */
+let disposeAppShortcuts: (() => void) | undefined;
 
 /**
  * Installs a global keydown handler wired to the given UIActions.
@@ -344,6 +348,17 @@ export class MuxApp extends LitElement {
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
     disposeKeys = installKeybindings(uiActions);
+    // Install fixed app-level shortcuts (Cmd+W close, Cmd+T new pane). These
+    // override the browser's native tab-close / new-tab actions so muxterm
+    // feels like a native app. Installed once — not re-set on config changes.
+    disposeAppShortcuts?.();
+    disposeAppShortcuts = installAppShortcuts({
+      // Remove the active panel from dockview, which triggers onDidRemovePanel
+      // → pane-close event → _startDeferredClose (deferred kill + undo toast).
+      // This mirrors exactly what clicking the tab X button does.
+      closePane: () => this._dock?.closeActivePanel(),
+      newPane: () => this._createPaneOptimistic(),
+    });
 
     // Re-render whenever wire state (composition / workspaces / config) changes.
     this._unsubscribe = store.subscribe(() => {
@@ -461,6 +476,8 @@ export class MuxApp extends LitElement {
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
+    disposeAppShortcuts?.();
+    disposeAppShortcuts = undefined;
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;

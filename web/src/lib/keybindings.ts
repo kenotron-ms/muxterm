@@ -9,6 +9,8 @@ export interface UIActions {
   popOut?: () => void;
   openLauncher?: () => void;
   focusDriver?: () => void;
+  closePane?: () => void;
+  newPane?: () => void;
 }
 
 /** Normalizes a KeyboardEvent to a canonical chord string: ctrl+alt+shift+meta+key. */
@@ -50,4 +52,30 @@ export function makeKeyHandler(
       }
     }
   };
+}
+
+/**
+ * Installs fixed app-level keyboard shortcuts that override browser defaults.
+ * These are not user-configurable — they make muxterm feel like a native app.
+ *
+ *   Cmd/Ctrl+W  — close the active pane  (prevents browser "close tab")
+ *   Cmd/Ctrl+T  — open a new pane        (prevents browser "new tab")
+ *
+ * Returns a cleanup function.
+ */
+export function installAppShortcuts(actions: Pick<UIActions, 'closePane' | 'newPane'>): () => void {
+  const handler = (e: KeyboardEvent): void => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod) return;
+    if (e.key === 'w' || e.key === 'W') {
+      e.preventDefault();
+      actions.closePane?.();
+    } else if (e.key === 't' || e.key === 'T') {
+      e.preventDefault();
+      actions.newPane?.();
+    }
+  };
+  // Capture phase: intercept before the browser acts on these chords.
+  window.addEventListener('keydown', handler, { capture: true });
+  return () => window.removeEventListener('keydown', handler, { capture: true });
 }
