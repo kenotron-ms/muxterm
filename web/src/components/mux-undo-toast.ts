@@ -88,7 +88,7 @@ export class MuxUndoToast extends LitElement {
   /** The dockview tab title at close time, e.g. "vim" or "Pane 3". */
   @property({ type: String }) paneTitle = '';
   /** Grace period in milliseconds. */
-  @property({ type: Number }) duration = 10000;
+  @property({ type: Number }) duration = 5000;
 
   /** Remaining whole seconds shown in the numeric readout. */
   @state() private _remaining = 0;

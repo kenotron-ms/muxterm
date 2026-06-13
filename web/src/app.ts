@@ -799,7 +799,7 @@ export class MuxApp extends LitElement {
       if (entry.wsId === wsId) return;
     }
     const vid = this._wsVirtualId--;
-    const timer = setTimeout(() => this._executeWorkspaceClose(vid), 10_000);
+    const timer = setTimeout(() => this._executeWorkspaceClose(vid), 5_000);
     this._pendingWorkspaceCloses.set(vid, { timer, wsId, name });
     this._pendingClosesMeta.set(vid, { title: name });
     this.requestUpdate();
@@ -871,7 +871,7 @@ export class MuxApp extends LitElement {
     // Guard: if a timer already exists for this pane, clear it before replacing.
     const existing = this._pendingCloses.get(paneId);
     if (existing !== undefined) clearTimeout(existing);
-    const handle = setTimeout(() => this._executeClose(paneId), 10_000);
+    const handle = setTimeout(() => this._executeClose(paneId), 5_000);
     this._pendingCloses.set(paneId, handle);
     this._pendingClosesMeta.set(paneId, { title });
     this.requestUpdate();
