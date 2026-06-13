@@ -60,7 +60,7 @@ brews:
       owner: kenotron-ms
       name: homebrew-tap
       branch: main
-    folder: Formula
+    directory: Formula
     install: |
       bin.install "muxterm"
     test: |
