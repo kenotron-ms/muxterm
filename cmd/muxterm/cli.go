@@ -10,7 +10,7 @@ import (
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode        string // local, serve, sessiond, deploy, install, uninstall, doctor, version, open-browser, mcp, help
+	Mode        string // local, serve, sessiond, deploy, install, uninstall, doctor, version, open-browser, mcp, amplifier-install, help
 	Addr        string // listen address
 	Secret      string // auth token for serve mode
 	NoAuth      bool   // skip WebSocket auth check (dev only — never use in production)
@@ -32,6 +32,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm deploy <host>       Deploy to a remote host via SSH")
 	fmt.Fprintln(w, "  muxterm doctor              Check daemon and service status")
 	fmt.Fprintln(w, "  muxterm mcp [flags]         Start MCP server (stdio transport)")
+	fmt.Fprintln(w, "  muxterm amplifier install   Install muxterm bundle into Amplifier")
 	fmt.Fprintln(w, "  muxterm version             Print version")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Run 'muxterm <command> --help' for command-specific flags.")
@@ -68,8 +69,26 @@ func ParseArgs(args []string) (Config, error) {
 		return Config{Mode: "doctor"}, nil
 	case "mcp":
 		return parseMCP(args[1:])
+	case "amplifier":
+		return parseAmplifier(args[1:])
 	default:
 		return Config{}, fmt.Errorf("unknown command %q\n\nRun 'muxterm --help' for usage.", args[0])
+	}
+}
+
+func parseAmplifier(args []string) (Config, error) {
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stdout, "Usage: muxterm amplifier <command>")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Commands:")
+		fmt.Fprintln(os.Stdout, "  install    Add the muxterm bundle to Amplifier as an app bundle")
+		return Config{Mode: "help"}, nil
+	}
+	switch args[0] {
+	case "install":
+		return Config{Mode: "amplifier-install"}, nil
+	default:
+		return Config{}, fmt.Errorf("unknown amplifier command %q\n\nRun 'muxterm amplifier --help' for usage.", args[0])
 	}
 }
 

@@ -85,6 +85,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "amplifier-install":
+		if err := runAmplifierBundleInstall(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "version":
 		fmt.Printf("muxterm %s (MCP: stdio)\n", version)
 	}
@@ -336,6 +341,22 @@ func runOpenBrowser(cfg Config) error {
 
 	io.Copy(io.Discard, resp.Body) //nolint:errcheck
 	fmt.Printf("browser pane opened: port %d\n", cfg.BrowserPort)
+	return nil
+}
+
+// runAmplifierBundleInstall adds the muxterm Amplifier bundle as an app bundle
+// by running: amplifier bundle add --app git+https://github.com/kenotron-ms/muxterm@main#subdirectory=bundle
+// The --app flag makes the bundle active on every Amplifier session, not just
+// when explicitly selected.
+func runAmplifierBundleInstall() error {
+	const bundleURI = "git+https://github.com/kenotron-ms/muxterm@main#subdirectory=bundle"
+
+	cmd := exec.Command("amplifier", "bundle", "add", "--app", bundleURI)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("amplifier bundle add failed: %w\n\nMake sure 'amplifier' is installed and on your PATH.", err)
+	}
 	return nil
 }
 
