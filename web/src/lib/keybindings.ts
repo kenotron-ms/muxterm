@@ -63,39 +63,39 @@ function isPwa(): boolean {
  * Installs fixed app-level keyboard shortcuts that override browser defaults.
  * These are not user-configurable — they make muxterm feel like a native app.
  *
- *   Cmd/Ctrl+W        — close the active pane   (interceptable in all modes)
- *   Cmd/Ctrl+Shift+T  — open a new pane          (interceptable in all modes)
- *   Cmd/Ctrl+T        — open a new pane          (PWA standalone mode only —
- *                        browsers handle Cmd+T at the process level in tab mode
- *                        so preventDefault() has no effect there)
+ *   Cmd/Ctrl+W      — close the active pane   (interceptable in all modes)
+ *   Cmd+Ctrl+T      — open a new pane          (interceptable in all modes —
+ *                      both modifiers together is not a Chrome-reserved chord)
+ *   Cmd/Ctrl+T      — open a new pane          (PWA standalone mode only —
+ *                      browsers handle Cmd+T at the process level in tab mode
+ *                      so preventDefault() has no effect there)
  *
  * Returns a cleanup function.
  */
 export function installAppShortcuts(actions: Pick<UIActions, 'closePane' | 'newPane'>): () => void {
   const handler = (e: KeyboardEvent): void => {
-    const mod = e.metaKey || e.ctrlKey;
-    if (!mod) return;
-
     if (e.key === 'w' || e.key === 'W') {
-      e.preventDefault();
-      actions.closePane?.();
+      if (e.metaKey || e.ctrlKey) {
+        e.preventDefault();
+        actions.closePane?.();
+      }
       return;
     }
 
-    // Cmd/Ctrl+Shift+T — new pane, works in all modes.
-    if ((e.key === 't' || e.key === 'T') && e.shiftKey) {
-      e.preventDefault();
-      actions.newPane?.();
-      return;
-    }
-
-    // Cmd/Ctrl+T — new pane only in PWA standalone mode.
-    // In regular browser tabs Chrome handles Cmd+T at the browser-process
-    // level before the renderer fires a keydown event, so preventDefault()
-    // cannot stop the new browser tab from opening.
-    if ((e.key === 't' || e.key === 'T') && !e.shiftKey && isPwa()) {
-      e.preventDefault();
-      actions.newPane?.();
+    if (e.key === 't' || e.key === 'T') {
+      // Cmd+Ctrl+T — new pane, works in all modes. Not a browser-reserved chord.
+      if (e.metaKey && e.ctrlKey) {
+        e.preventDefault();
+        actions.newPane?.();
+        return;
+      }
+      // Cmd/Ctrl+T alone — only in PWA standalone mode. In regular browser
+      // tabs Chrome handles Cmd+T at the browser-process level before the
+      // renderer fires a keydown event, so preventDefault() has no effect.
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && isPwa()) {
+        e.preventDefault();
+        actions.newPane?.();
+      }
     }
   };
 
