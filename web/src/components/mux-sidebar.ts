@@ -3,6 +3,9 @@ import { customElement, state } from 'lit/decorators.js';
 import { store } from '../state.js';
 import { CHROME } from '../lib/theme.js';
 import { workspaceLabel } from './workspace-picker.js';
+import './launcher-menu.js';
+import { icon } from '../lib/icons.js';
+import { Ellipsis } from 'lucide';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -46,6 +49,42 @@ export class MuxSidebar extends LitElement {
       letter-spacing: 0.06em;
       border-bottom: 1px solid ${unsafeCSS(CHROME.border)};
       flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .launcher-btn {
+      width: 26px;
+      height: 22px;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      color: var(--mux-text-bright, #c0caf5);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      flex-shrink: 0;
+    }
+
+    .launcher-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .menu-anchor {
+      position: absolute;
+      top: 38px;
+      left: 8px;
+      z-index: 1500;
+    }
+
+    .lucide-icon {
+      display: inline-block;
+      vertical-align: middle;
+      flex-shrink: 0;
+      pointer-events: none;
     }
 
     .tabs {
@@ -365,8 +404,26 @@ export class MuxSidebar extends LitElement {
   @state() private _showPortInput = false;
   @state() private _authToken = '';
   @state() private _pendingClose = new Set<string>();
+  @state() private _menuOpen = false;
 
   private _unsub: (() => void) | null = null;
+
+  private _onOutsideClick = (e: MouseEvent): void => {
+    if (this._menuOpen && !e.composedPath().includes(this)) {
+      this._menuOpen = false;
+    }
+  };
+
+  private _onLauncherAction(e: Event): void {
+    e.stopPropagation();
+    this._menuOpen = false;
+    const customEvent = e as CustomEvent;
+    this.dispatchEvent(new CustomEvent('launcher-action', {
+      bubbles: true,
+      composed: true,
+      detail: customEvent.detail,
+    }));
+  }
 
   // ---------------------------------------------------------------------------
   // Lifecycle
@@ -374,6 +431,7 @@ export class MuxSidebar extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    document.addEventListener('mousedown', this._onOutsideClick);
 
     // Subscribe to store changes and trigger re-render by bumping _version.
     this._unsub = store.subscribe(() => {
@@ -411,6 +469,7 @@ export class MuxSidebar extends LitElement {
   }
 
   override disconnectedCallback(): void {
+    document.removeEventListener('mousedown', this._onOutsideClick);
     super.disconnectedCallback();
     this._unsub?.();
     this._unsub = null;
@@ -713,7 +772,21 @@ export class MuxSidebar extends LitElement {
   override render() {
     void this._version; // suppress unused-variable lint; triggers re-render on store change
     return html`
-      <div class="header">muxterm</div>
+      <div class="header">
+        <span>muxterm</span>
+        <button
+          class="launcher-btn"
+          title="Open menu"
+          @click="${() => { this._menuOpen = !this._menuOpen; }}"
+        >${icon(Ellipsis, { size: 15 })}</button>
+        ${this._menuOpen
+          ? html`<div class="menu-anchor">
+              <mux-launcher-menu
+                @launcher-action="${(e: Event) => this._onLauncherAction(e)}"
+              ></mux-launcher-menu>
+            </div>`
+          : ''}
+      </div>
       <div class="tabs">
         <button
           class="tab-btn ${this._tab === 'workspaces' ? 'active' : ''}"

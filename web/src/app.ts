@@ -540,10 +540,10 @@ export class MuxApp extends LitElement {
     const isWide = this._layoutMode === 'wide';
 
     return html`
-      <mux-title-bar
+      ${!isWide ? html`<mux-title-bar
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
-      ></mux-title-bar>
+      ></mux-title-bar>` : ''}
       <div class="content-area">
         ${isWide ? html`
           <mux-sidebar
@@ -553,6 +553,7 @@ export class MuxApp extends LitElement {
             @workspace-close="${this._onSidebarWorkspaceClose}"
             @tunnel-create="${this._onTunnelCreate}"
             @tunnel-close="${this._onTunnelClose}"
+            @launcher-action="${this._onLauncherAction}"
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
