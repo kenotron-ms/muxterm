@@ -51,6 +51,7 @@ changelog:
 
 brews:
   - name: muxterm
+    skip_upload: true  # TODO: fix GitHub App permissions for homebrew-tap push
     homepage: "https://github.com/kenotron-ms/muxterm"
     description: "Web-first terminal multiplexer with MCP agent integration"
     license: "MIT"
