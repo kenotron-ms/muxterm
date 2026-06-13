@@ -385,12 +385,8 @@ export class MuxSidebar extends LitElement {
       const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY);
       if (stored !== null) {
         const parsed = parseInt(stored, 10);
-        if (!Number.isNaN(parsed)) {
-          const clamped = Math.max(
-            SIDEBAR_MIN_WIDTH,
-            Math.min(SIDEBAR_MAX_WIDTH, parsed),
-          );
-          this.style.width = `${clamped}px`;
+        if (!Number.isNaN(parsed) && parsed >= SIDEBAR_MIN_WIDTH && parsed <= SIDEBAR_MAX_WIDTH) {
+          this.style.width = `${parsed}px`;
         } else {
           this.style.width = `${SIDEBAR_DEFAULT_WIDTH}px`;
         }
