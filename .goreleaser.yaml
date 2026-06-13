@@ -12,16 +12,14 @@ builds:
     binary: muxterm
     env:
       - CGO_ENABLED=0
+    # Windows is excluded: muxterm uses Unix PTYs and Unix domain sockets
+    # (sessiond.SocketPath) which are not available on Windows.
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
     ldflags:
       - -s -w
 
