@@ -90,11 +90,6 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.SaveLayout, workspaceId, breakpoint, layout });
   }
 
-  /** Send a browser-action-result envelope back to the server. */
-  sendBrowserActionResult(detail: Record<string, unknown>): void {
-    this.sendSessiond({ type: SessiondType.BrowserActionResult, ...detail } as unknown as SessiondMessage);
-  }
-
   /** Request the list of workspaces. */
   listWorkspaces(): void {
     this.sendSessiond({ type: SessiondType.ListWorkspaces });
@@ -131,23 +126,6 @@ export class MuxSocket {
     if (cmd && cmd.length > 0) msg.cmd = cmd;
     if (clientRef) msg.clientRef = clientRef;
     this.sendSessiond(msg);
-  }
-
-  /** Create a browser-surface pane. path defaults to '/' when falsy. */
-  createBrowserPane(port: number, path: string = '/', clientRef?: string): void {
-    const msg: SessiondMessage = {
-      type: SessiondType.CreatePane,
-      surfaceKind: 'browser',
-      browserPort: port,
-      browserPath: path || '/',
-    };
-    if (clientRef) msg.clientRef = clientRef;
-    this.sendSessiond(msg);
-  }
-
-  /** Update the browser path for an existing browser pane. */
-  updatePanePath(paneId: number, browserPath: string): void {
-    this.sendSessiond({ type: SessiondType.PaneUpdate, paneId, browserPath });
   }
 
   /** Kill the pane's PTY on the server side. The server broadcasts pane-closed

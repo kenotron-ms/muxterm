@@ -1,7 +1,6 @@
 import { LitElement } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import type { IDockviewPanel, IContentRenderer, SerializedDockview, DockviewGroupPanel } from 'dockview-core';
-import type { MuxBrowserSurface } from './browser-surface.js';
 import { DockviewComponent } from 'dockview-core';
 import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
@@ -99,94 +98,6 @@ class TerminalRenderer implements IContentRenderer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BrowserRenderer
-// Bridges the dockview panel lifecycle to a mux-browser-surface element.
-// ─────────────────────────────────────────────────────────────────────────────
-
-class BrowserRenderer implements IContentRenderer {
-  readonly element: HTMLElement;
-  private readonly _paneId: number;
-  private readonly _port: number;
-  private readonly _path: string;
-  private _surface: MuxBrowserSurface | null = null;
-
-  constructor(id: string, pane: SessiondPaneInfo) {
-    this._paneId = parseInt(id, 10);
-    this._port = pane.browserPort ?? 0;
-    this._path = pane.browserPath ?? '/';
-    const el = document.createElement('div');
-    // position:relative is required so the absolutely-positioned drag shield
-    // is contained within this element rather than escaping to the nearest
-    // positioned ancestor.
-    el.style.cssText = 'width:100%;height:100%;overflow:hidden;position:relative;';
-    this.element = el;
-  }
-
-  init(): void {
-    const surface = document.createElement('mux-browser-surface') as MuxBrowserSurface;
-    // Pass the display URL directly — MuxBrowserSurface._iframeSrc() handles
-    // all proxy routing automatically:
-    //   localhost / 127.0.0.1  →  /p/{port}{path}
-    //   any other host         →  /x/{host}{path}   (strips X-Frame-Options)
-    //   about:blank / empty    →  about:blank
-    surface.url = this._path || 'about:blank';
-    surface.port = this._port;
-    this.element.appendChild(surface);
-    this._surface = surface;
-
-    // Transparent shield div: covers the iframe during dockview tab drags.
-    //
-    // iframes have their own browsing context — when the pointer drifts over an
-    // iframe during a dockview drag gesture the iframe captures pointermove and
-    // pointerup, starving dockview's drag handler so the drag silently dies or
-    // gets stuck. Terminal panels are immune because xterm.js lives in a canvas
-    // inside the same document. Browser panels need an explicit fix.
-    //
-    // The shield is an invisible <div> sitting above the iframe (z-index:10).
-    // MuxDock activates it (display:block) when onWillDragPanel fires and
-    // deactivates it (display:none) on document pointerup so pointer events
-    // reach dockview, not the iframe, while a drag is in flight.
-    const shield = document.createElement('div');
-    shield.className = 'mux-drag-shield';
-    shield.style.cssText = 'position:absolute;inset:0;z-index:10;display:none;';
-    this.element.appendChild(shield);
-
-    this.element.addEventListener('url-change', (e: Event) => {
-      // surface.url is always the display URL (e.g. "https://google.com").
-      // _iframeSrc() in MuxBrowserSurface handles the /x/ or /p/ proxy routing
-      // transparently — we just forward the display URL to sessiond for storage.
-      const { url } = (e as CustomEvent<{ url: string }>).detail;
-      this.element.dispatchEvent(
-        new CustomEvent('pane-navigate', {
-          bubbles: true,
-          composed: true,
-          detail: { paneId: this._paneId, browserPath: url },
-        }),
-      );
-    });
-  }
-
-  layout(): void {
-    // no-op
-  }
-
-  focus(): void {
-    const input = this._surface?.shadowRoot?.querySelector<HTMLInputElement>('.address');
-    input?.focus();
-  }
-
-  /** Exposes the underlying MuxBrowserSurface for browser-action relay. */
-  get surface(): MuxBrowserSurface | null {
-    return this._surface;
-  }
-
-  dispose(): void {
-    this._surface?.remove();
-    this._surface = null;
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // HeaderButton
 // A single icon button used as a dockview header action. Two are mounted per
 // group, in different dockview header slots:
@@ -202,13 +113,6 @@ const ADD_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14"
 const SPLIT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
   <rect x="1" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
   <rect x="9" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
-</svg>`;
-
-// Browser/globe icon: circle with horizontal latitude lines and a center longitude ellipse.
-const BROWSER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
-  <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/>
-  <ellipse cx="8" cy="8" rx="2.5" ry="6" stroke="currentColor" stroke-width="1.3"/>
-  <path d="M2.5 5.5h11M2.5 10.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
 </svg>`;
 
 class HeaderButton {
@@ -260,8 +164,6 @@ export class MuxDock extends LitElement {
 
   private _dv: DockviewComponent | null = null;
   private _panels = new Map<number, IDockviewPanel>();
-  /** Tracks live BrowserRenderer instances by paneId for browser-action relay. */
-  private _browserRenderers = new Map<number, BrowserRenderer>();
   private _settingActive = false;
   /** User-defined pane names — persists across workspace switches for the session. */
   private _customTitles = new Map<number, string>();
@@ -617,14 +519,6 @@ export class MuxDock extends LitElement {
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => {
-        if (opts.name === 'browser') {
-          const pane = this.panes.find((p) => p.paneId === parseInt(opts.id, 10));
-          if (!pane) throw new Error(`No pane found for id ${opts.id}`);
-          const paneId = parseInt(opts.id, 10);
-          const renderer = new BrowserRenderer(opts.id, pane);
-          this._browserRenderers.set(paneId, renderer);
-          return renderer;
-        }
         return new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId);
       },
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
@@ -636,35 +530,14 @@ export class MuxDock extends LitElement {
       // "+" / split on an INACTIVE group still targets THAT group.
       createLeftHeaderActionComponent: (group) =>
         new HeaderButton(ADD_ICON, 'New pane', () => this._requestPane('tab', group)),
-      // Narrow (phone) is a tab view only — no split button, no browser button.
+      // Narrow (phone) is a tab view only — no split button.
       createRightHeaderActionComponent: (group) => {
         if (this.narrow) {
           return new HeaderButton('', '', () => {});
         }
-        // Wide: [⌂] browser button + [⊠] split button in a flex row container.
-        const container = document.createElement('div');
-        container.style.cssText = 'display:flex;flex-direction:row;align-items:center;';
-        const browserBtn = new HeaderButton(BROWSER_ICON, 'Open browser pane', () => {
-          this.dispatchEvent(new CustomEvent('browser-pane-open', {
-            bubbles: true,
-            composed: true,
-            detail: { browserUrl: '' },
-          }));
-        });
-        const splitBtn = new HeaderButton(SPLIT_ICON, 'Split pane', () =>
+        return new HeaderButton(SPLIT_ICON, 'Split pane', () =>
           this._requestPane('split', group),
         );
-        container.appendChild(browserBtn.element);
-        container.appendChild(splitBtn.element);
-        return {
-          element: container,
-          init(): void { /* nothing to initialise */ },
-          dispose(): void {
-            browserBtn.dispose();
-            splitBtn.dispose();
-            container.remove();
-          },
-        };
       },
     });
     this._dv.onDidLayoutChange(() => this._scheduleLayoutSave());
@@ -723,7 +596,6 @@ export class MuxDock extends LitElement {
     document.removeEventListener('pointerup', this._onDragPointerUp, { capture: true });
     this._dv?.dispose();
     this._dv = null;
-    this._browserRenderers.clear();
   }
 
   /** Handle double-click on a dockview default tab — starts inline rename. */
@@ -796,7 +668,6 @@ export class MuxDock extends LitElement {
           this._dv.removePanel(panel);
         }
         this._panels.clear();
-        this._browserRenderers.clear();
 
         // Seed _customTitles from server-stored titles (arrive in composition panes).
         for (const pane of this.panes) {
@@ -931,7 +802,6 @@ export class MuxDock extends LitElement {
           if (!currentPaneIds.has(paneId)) {
             this._dv.removePanel(panel);
             this._panels.delete(paneId);
-            this._browserRenderers.delete(paneId);
           }
         }
       } finally {
@@ -1110,35 +980,6 @@ export class MuxDock extends LitElement {
     }
   }
 
-  /**
-   * Browser-action relay: forward a server-sent browser-action message to the
-   * target pane's MuxBrowserSurface iframe shim via postMessage, then emit the
-   * shim's response as a browser-action-result CustomEvent.
-   */
-  async sendBrowserAction(msg: Record<string, unknown>): Promise<void> {
-    const paneId = typeof msg.paneId === 'number' ? msg.paneId : -1;
-    const renderer = this._browserRenderers.get(paneId);
-    if (!renderer || !renderer.surface) {
-      this._emitBrowserActionResult({ ...msg, error: 'pane-not-found' });
-      return;
-    }
-    try {
-      const result = await renderer.surface.receiveBrowserAction(paneId, msg);
-      this._emitBrowserActionResult({ ...result, paneId });
-    } catch (err: unknown) {
-      this._emitBrowserActionResult({ paneId, error: String(err) });
-    }
-  }
-
-  private _emitBrowserActionResult(result: Record<string, unknown>): void {
-    this.dispatchEvent(
-      new CustomEvent('browser-action-result', {
-        detail: result,
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
 }
 
 declare global {

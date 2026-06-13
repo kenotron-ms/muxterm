@@ -203,74 +203,6 @@ describe('MuxSocket sessiond senders', () => {
     expect(Array.from(data)).toEqual([104, 105]);
   });
 
-  it('createBrowserPane(port, path) emits CreatePane with surfaceKind browser and given port/path', () => {
-    const { mux, ws } = openSocket();
-    mux.createBrowserPane(3000, '/app');
-
-    expect(ws.sent).toHaveLength(1);
-    expect(lastJson(ws)).toEqual({
-      type: SessiondType.CreatePane,
-      surfaceKind: 'browser',
-      browserPort: 3000,
-      browserPath: '/app',
-    });
-  });
-
-  it('createBrowserPane(port) defaults path to "/"', () => {
-    const { mux, ws } = openSocket();
-    mux.createBrowserPane(8080);
-
-    expect(lastJson(ws)).toEqual({
-      type: SessiondType.CreatePane,
-      surfaceKind: 'browser',
-      browserPort: 8080,
-      browserPath: '/',
-    });
-  });
-
-  it('createBrowserPane with empty path defaults to "/"', () => {
-    const { mux, ws } = openSocket();
-    mux.createBrowserPane(4000, '');
-
-    expect(lastJson(ws)).toEqual({
-      type: SessiondType.CreatePane,
-      surfaceKind: 'browser',
-      browserPort: 4000,
-      browserPath: '/',
-    });
-  });
-
-  it('createBrowserPane includes clientRef when provided', () => {
-    const { mux, ws } = openSocket();
-    mux.createBrowserPane(5000, '/ui', 'ref-1');
-
-    const sent = lastJson(ws);
-    expect(sent.type).toBe(SessiondType.CreatePane);
-    expect(sent.surfaceKind).toBe('browser');
-    expect(sent.browserPort).toBe(5000);
-    expect(sent.browserPath).toBe('/ui');
-    expect(sent.clientRef).toBe('ref-1');
-  });
-
-  it('createBrowserPane omits clientRef when not provided', () => {
-    const { mux, ws } = openSocket();
-    mux.createBrowserPane(5000, '/ui');
-
-    expect('clientRef' in lastJson(ws)).toBe(false);
-  });
-
-  it('updatePanePath(paneId, browserPath) emits PaneUpdate with paneId and browserPath', () => {
-    const { mux, ws } = openSocket();
-    mux.updatePanePath(42, '/new-route');
-
-    expect(ws.sent).toHaveLength(1);
-    expect(lastJson(ws)).toEqual({
-      type: SessiondType.PaneUpdate,
-      paneId: 42,
-      browserPath: '/new-route',
-    });
-  });
-
   it('senders do not throw when the socket is not open', () => {
     const store = new MuxStore();
     const mux = new MuxSocket(store, 'ws://localhost:8080/ws');
@@ -283,8 +215,6 @@ describe('MuxSocket sessiond senders', () => {
       mux.renameWorkspace('ws-1', 'y');
       mux.closeWorkspace('ws-1');
       mux.createPane(['bash']);
-      mux.createBrowserPane(3000, '/');
-      mux.updatePanePath(1, '/path');
       mux.resize(1, 80, 24);
       mux.sendPaneInput(1, new Uint8Array([1, 2, 3]));
     }).not.toThrow();

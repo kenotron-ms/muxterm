@@ -18,7 +18,6 @@ import type { MuxDock } from './components/mux-dock.js';
 import './components/mux-undo-toast.js';
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
-import './components/browser-surface.js';
 
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
@@ -304,13 +303,6 @@ export class MuxApp extends LitElement {
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
-    // Browser pane / navigation events bubble up from child components.
-    this.addEventListener('browser-pane-open', this._onBrowserPaneOpen);
-    this.addEventListener('pane-navigate', this._onPaneNavigate);
-    // Browser-action relay: window CustomEvent from ws.ts → mux-dock → iframe.
-    window.addEventListener('browser-action', this._onBrowserAction);
-    // Browser-action result: bubbles up from mux-dock → send back over socket.
-    this.addEventListener('browser-action-result', this._onBrowserActionResult);
     // Layout-command relay: window CustomEvent from ws.ts → mux-dock routing.
     window.addEventListener('layout-command', this._onLayoutCommand);
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
@@ -420,10 +412,6 @@ export class MuxApp extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
-    this.removeEventListener('browser-pane-open', this._onBrowserPaneOpen);
-    this.removeEventListener('pane-navigate', this._onPaneNavigate);
-    window.removeEventListener('browser-action', this._onBrowserAction);
-    this.removeEventListener('browser-action-result', this._onBrowserActionResult);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     if (this._unsubscribe) {
       this._unsubscribe();
@@ -653,32 +641,10 @@ export class MuxApp extends LitElement {
     this._socket?.createPane(undefined, ref);
   };
 
-  private _onBrowserPaneOpen = (e: Event): void => {
-    const { browserUrl } = (e as CustomEvent<{ browserUrl: string }>).detail;
-    this._socket?.createBrowserPane(0, browserUrl || 'about:blank');
-  };
-
-  private _onPaneNavigate = (e: Event): void => {
-    const { paneId, browserPath } = (e as CustomEvent<{ paneId: number; browserPath: string }>).detail;
-    this._socket?.updatePanePath(paneId, browserPath);
-  };
-
-  /** Forward a browser-action from the server (via window CustomEvent) to the dock. */
-  private _onBrowserAction = (e: Event): void => {
-    const msg = (e as CustomEvent).detail as Record<string, unknown>;
-    void this._dock?.sendBrowserAction(msg);
-  };
-
   /** Forward a layout-command from the server (via window CustomEvent) to the dock. */
   private _onLayoutCommand = (e: Event): void => {
     const msg = (e as CustomEvent<LayoutCommand>).detail;
     this._dock?.handleLayoutCommand(msg);
-  };
-
-  /** Forward a browser-action-result (bubbled from mux-dock) back over the socket. */
-  private _onBrowserActionResult = (e: Event): void => {
-    const detail = (e as CustomEvent).detail as Record<string, unknown>;
-    this._socket?.sendBrowserActionResult(detail);
   };
 
   private _handleControlMessage = (msg: Record<string, unknown>): void => {
