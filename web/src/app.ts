@@ -18,6 +18,8 @@ import type { MuxDock } from './components/mux-dock.js';
 import './components/mux-undo-toast.js';
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
+import './components/mux-sidebar.js';
+import type { MuxSidebar } from './components/mux-sidebar.js';
 
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
@@ -254,6 +256,22 @@ export class MuxApp extends LitElement {
       background: #2f344d;
       border-color: #7aa2f7;
     }
+
+    .content-area {
+      flex: 1;
+      display: flex;
+      flex-direction: row;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .main-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 0;
+    }
   `;
 
   /** Bumped whenever the store notifies; drives Lit re-render off wire state. */
@@ -278,11 +296,19 @@ export class MuxApp extends LitElement {
   @state()
   private _createModalName = '';
 
+  @state()
+  private _layoutMode: 'wide' | 'narrow' = currentLayoutMode();
+
   /** Active grace-period timers, keyed by paneId. Presence => a deferred close
    *  is pending and a toast is shown. */
   private _pendingCloses = new Map<number, ReturnType<typeof setTimeout>>();
   /** Per-pending metadata for rendering each toast (the tab title at close). */
   private _pendingClosesMeta = new Map<number, { title: string }>();
+
+  /** Pending workspace grace-period closes, keyed by negative virtual ID. */
+  private _pendingWorkspaceCloses = new Map<number, { timer: ReturnType<typeof setTimeout>; wsId: string; name: string }>();
+  /** Monotonically-decreasing counter for workspace virtual IDs (never collides with pane IDs). */
+  private _wsVirtualId = -1000;
   /** Pane IDs for which closePane has been sent but the server hasn't removed
    *  the pane from store.panes yet. _syncTerminals skips ensure() for these so
    *  the terminal isn't phantom-recreated between the close send and the ACK. */
@@ -298,6 +324,12 @@ export class MuxApp extends LitElement {
     this.setAttribute('data-launcher-open', '');
   };
 
+  /** Handles window resize; updates _layoutMode when crossing the 768px threshold. */
+  private _onViewportResize = (): void => {
+    const mode = currentLayoutMode();
+    if (mode !== this._layoutMode) this._layoutMode = mode;
+  };
+
   connectedCallback(): void {
     super.connectedCallback();
 
@@ -305,6 +337,9 @@ export class MuxApp extends LitElement {
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
     // Layout-command relay: window CustomEvent from ws.ts → mux-dock routing.
     window.addEventListener('layout-command', this._onLayoutCommand);
+    // Update layout mode when the viewport crosses the 768px breakpoint.
+    window.addEventListener('resize', this._onViewportResize);
+    this._layoutMode = currentLayoutMode();
     // Apply default theme tokens immediately so --mux-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
@@ -425,6 +460,7 @@ export class MuxApp extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     window.removeEventListener('layout-command', this._onLayoutCommand);
+    window.removeEventListener('resize', this._onViewportResize);
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -438,6 +474,8 @@ export class MuxApp extends LitElement {
     this._pendingCloses.clear();
     this._pendingClosesMeta.clear();
     this._closingPanes.clear();
+    for (const entry of this._pendingWorkspaceCloses.values()) clearTimeout(entry.timer);
+    this._pendingWorkspaceCloses.clear();
   }
 
   /**
@@ -499,38 +537,62 @@ export class MuxApp extends LitElement {
     // Exclude provisional overlay panes (negative IDs) from layout decisions.
     // They have no terminal and should not render as blank tiles.
     const panes = store.panes.filter((p) => p.paneId >= 0);
+    const isWide = this._layoutMode === 'wide';
 
     return html`
       <mux-title-bar
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
       ></mux-title-bar>
-      ${panes.length === 0
-        ? html`
-            <div class="empty-workspace">
-              <div class="glyph">${icon(MonitorX, { size: 48 })}</div>
-              <div class="headline">No panes</div>
-              <div class="subtext">
-                This workspace has nothing running. Create a pane to get started.
-              </div>
-              <button @click="${this._onCreatePane}"><span>+</span> New pane</button>
-            </div>
-          `
-        : html`
-            <mux-dock
-              .panes="${panes}"
-              .activePaneId="${store.activePaneId}"
-              .workspaceKey="${store.attached ?? ''}"
-              .layout="${store.layout}"
-              .narrow="${currentLayoutMode() === 'narrow'}"
-              @pane-select="${this._onActivePane}"
-              @pane-close="${this._onClosePane}"
-              @pane-create="${this._createPaneOptimistic}"
-              @pane-rename="${this._onPaneRename}"
-              @workspace-switch="${this._onWorkspaceSelected}"
-              @layout-save="${this._onLayoutSave}"
-            ></mux-dock>
-          `}
+      <div class="content-area">
+        ${isWide ? html`
+          <mux-sidebar
+            @workspace-switch="${this._onWorkspaceSelected}"
+            @workspace-create="${this._onOpenCreateModal}"
+            @workspace-rename="${this._onWorkspaceRename}"
+            @workspace-close="${this._onSidebarWorkspaceClose}"
+            @tunnel-create="${this._onTunnelCreate}"
+            @tunnel-close="${this._onTunnelClose}"
+          ></mux-sidebar>
+        ` : ''}
+        <div class="main-pane">
+          ${panes.length === 0
+            ? html`
+                <div class="empty-workspace">
+                  <div class="glyph">${icon(MonitorX, { size: 48 })}</div>
+                  <div class="headline">No panes</div>
+                  <div class="subtext">
+                    This workspace has nothing running. Create a pane to get started.
+                  </div>
+                  <button @click="${this._onCreatePane}"><span>+</span> New pane</button>
+                </div>
+              `
+            : html`
+                <mux-dock
+                  .panes="${panes}"
+                  .activePaneId="${store.activePaneId}"
+                  .workspaceKey="${store.attached ?? ''}"
+                  .layout="${store.layout}"
+                  .narrow="${!isWide}"
+                  @pane-select="${this._onActivePane}"
+                  @pane-close="${this._onClosePane}"
+                  @pane-create="${this._createPaneOptimistic}"
+                  @pane-rename="${this._onPaneRename}"
+                  @workspace-switch="${this._onWorkspaceSelected}"
+                  @layout-save="${this._onLayoutSave}"
+                ></mux-dock>
+              `}
+        </div>
+        ${!isWide ? html`
+          <mux-dock-bar
+            .workspaces="${store.workspaces}"
+            .activeWorkspaceId="${store.attached ?? ''}"
+            connectionStatus="${this._connectionStatus}"
+            @workspace-switch="${this._onWorkspaceSelected}"
+            @workspace-create="${this._onOpenCreateModal}"
+          ></mux-dock-bar>
+        ` : ''}
+      </div>
       <div class="undo-toast-stack" @pane-close-resolved="${this._onUndoPaneClose}">
         ${repeat(
           [...this._pendingClosesMeta.entries()],
@@ -544,13 +606,6 @@ export class MuxApp extends LitElement {
           `,
         )}
       </div>
-      <mux-dock-bar
-        .workspaces="${store.workspaces}"
-        .activeWorkspaceId="${store.attached ?? ''}"
-        connectionStatus="${this._connectionStatus}"
-        @workspace-switch="${this._onWorkspaceSelected}"
-        @workspace-create="${this._onOpenCreateModal}"
-      ></mux-dock-bar>
       <div class="overlay ${this._connectionStatus === 'connected' ? 'hidden' : ''}">
         Connecting to muxterm...
       </div>
@@ -702,22 +757,32 @@ export class MuxApp extends LitElement {
   };
 
   /**
-   * Close a workspace optimistically: the overlay drops the row instantly, the
-   * socket send is the mutation's commit, and the daemon's workspace-list echo
-   * settles (by the id no longer existing) or times out the pending record.
+   * Handle workspace-close from the sidebar: starts a 10-second grace period
+   * (mirroring pane-close undo) keyed by a negative virtual ID so the undo
+   * toast machinery can handle it uniformly.
    */
-  private _onWorkspaceClose = (e: CustomEvent<{ workspaceId: string }>): void => {
-    const { workspaceId } = e.detail;
-    store.mutate({
-      workspaceId,
-      kind: 'close',
-      optimistic: (draft) => {
-        draft.workspaces = draft.workspaces.filter((w) => w.workspaceId !== workspaceId);
-      },
-      settled: (base) => !base.workspaces.some((w) => w.workspaceId === workspaceId),
-      commit: () => this._socket?.closeWorkspace(workspaceId),
-    });
+  private _onSidebarWorkspaceClose = (e: CustomEvent<{ workspaceId: string; name: string }>): void => {
+    const { workspaceId: wsId, name } = e.detail;
+    // Guard duplicate: if this workspace already has a pending close, skip.
+    for (const entry of this._pendingWorkspaceCloses.values()) {
+      if (entry.wsId === wsId) return;
+    }
+    const vid = this._wsVirtualId--;
+    const timer = setTimeout(() => this._executeWorkspaceClose(vid), 10_000);
+    this._pendingWorkspaceCloses.set(vid, { timer, wsId, name });
+    this._pendingClosesMeta.set(vid, { title: name });
+    this.requestUpdate();
   };
+
+  /** Actually close the workspace after the grace period expires. */
+  private _executeWorkspaceClose(vid: number): void {
+    const entry = this._pendingWorkspaceCloses.get(vid);
+    if (!entry) return;
+    this._pendingWorkspaceCloses.delete(vid);
+    this._pendingClosesMeta.delete(vid);
+    this._socket?.closeWorkspace(entry.wsId);
+    this.requestUpdate();
+  }
 
   /**
    * Switch the attached workspace. The daemon's composition reply re-populates
@@ -746,6 +811,19 @@ export class MuxApp extends LitElement {
   private get _dock(): MuxDock | null {
     return (this.renderRoot as ShadowRoot).querySelector('mux-dock');
   }
+
+  /** The live <mux-sidebar> element in our shadow root, or null when absent. */
+  private get _sidebar(): MuxSidebar | null {
+    return (this.renderRoot as ShadowRoot).querySelector('mux-sidebar');
+  }
+
+  private _onTunnelCreate = (e: CustomEvent<{ port: number }>): void => {
+    this._socket?.createTunnel(e.detail.port);
+  };
+
+  private _onTunnelClose = (e: CustomEvent<{ id: string }>): void => {
+    this._socket?.closeTunnel(e.detail.id);
+  };
 
   /**
    * Handle a pane-close event from mux-dock. All closes (mouse, touch, pen)
@@ -792,9 +870,19 @@ export class MuxApp extends LitElement {
     this.requestUpdate();
   }
 
-  /** Undo a pending close: cancel the timer, clear bookkeeping, reopen the pane. */
+  /** Undo a pending close: cancel the timer, clear bookkeeping, reopen the pane or workspace. */
   private _onUndoPaneClose = (e: CustomEvent<{ paneId: number }>): void => {
     const { paneId } = e.detail;
+    // Check if this is a workspace close undo first (negative virtual IDs).
+    if (this._pendingWorkspaceCloses.has(paneId)) {
+      const entry = this._pendingWorkspaceCloses.get(paneId)!;
+      clearTimeout(entry.timer);
+      this._pendingWorkspaceCloses.delete(paneId);
+      this._pendingClosesMeta.delete(paneId);
+      this._sidebar?.restoreWorkspace(entry.wsId);
+      this.requestUpdate();
+      return;
+    }
     // If the grace period already expired and _executeClose committed the close,
     // undo is no longer possible — the close was sent to the server.
     if (this._closingPanes.has(paneId)) return;
