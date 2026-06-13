@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"mime"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -27,27 +31,34 @@ type Config struct {
 
 // Server is the HTTP server for muxterm.
 type Server struct {
-	addr   string
-	secret string
-	noAuth bool
-	mux    *http.ServeMux
-	hub    *Hub
+	addr    string
+	secret  string
+	noAuth  bool
+	mux     *http.ServeMux
+	hub     *Hub
+	tunnels *TunnelRegistry
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
 // The Hub is created with a nil dialer; the per-browser daemon dialer is
 // injected later via s.hub.SetDialer.
 func New(cfg Config) *Server {
+	tunnels := NewTunnelRegistry()
+	hub := NewHub(nil)
+	hub.tunnels = tunnels
+
 	s := &Server{
-		addr:   cfg.Addr,
-		secret: cfg.Secret,
-		noAuth: cfg.NoAuth,
-		mux:    http.NewServeMux(),
-		hub:    NewHub(nil),
+		addr:    cfg.Addr,
+		secret:  cfg.Secret,
+		noAuth:  cfg.NoAuth,
+		mux:     http.NewServeMux(),
+		hub:     hub,
+		tunnels: tunnels,
 	}
 
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/token", s.handleToken)
+	s.mux.HandleFunc("/t/", s.handleTunnelProxy)
 	s.mux.HandleFunc("GET /ws", s.handleWS)
 
 	if cfg.StaticFS != nil {
@@ -125,4 +136,55 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.handleWSImpl(w, r)
+}
+
+// handleTunnelProxy reverse-proxies requests arriving at /t/{id}/... to the
+// local port registered under id. It returns 400 when no id segment is
+// present and 404 when the id is unknown.
+func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
+	// Strip the leading "/t/" prefix, then extract the id (up to the next '/').
+	rest := strings.TrimPrefix(r.URL.Path, "/t/")
+	if rest == "" {
+		http.Error(w, "tunnel id required", http.StatusBadRequest)
+		return
+	}
+
+	// Extract the ID segment (everything before the first '/').
+	id := rest
+	suffix := ""
+	if idx := strings.Index(rest, "/"); idx >= 0 {
+		id = rest[:idx]
+		suffix = rest[idx:]
+	}
+
+	if id == "" {
+		http.Error(w, "tunnel id required", http.StatusBadRequest)
+		return
+	}
+
+	port, ok := s.tunnels.Port(id)
+	if !ok {
+		http.Error(w, "tunnel not found", http.StatusNotFound)
+		return
+	}
+
+	target, err := url.Parse(fmt.Sprintf("http://localhost:%d", port))
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Clone the request and rewrite the URL path to strip the /t/{id} prefix
+	// before forwarding to the upstream.
+	cloned := r.Clone(r.Context())
+	cloned.URL = &url.URL{
+		Scheme:   target.Scheme,
+		Host:     target.Host,
+		Path:     suffix,
+		RawQuery: r.URL.RawQuery,
+	}
+	cloned.Host = target.Host
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ServeHTTP(w, cloned)
 }

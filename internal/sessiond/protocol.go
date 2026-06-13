@@ -58,6 +58,14 @@ const (
 
 	// Error envelope.
 	TypeError = "error"
+
+	// Tunnel messages (client ↔ serve, not forwarded to daemon).
+	TypeCreateTunnel  = "create-tunnel"
+	TypeCloseTunnel   = "close-tunnel"
+	TypeListTunnels   = "list-tunnels"
+	TypeTunnelCreated = "tunnel-created"
+	TypeTunnelClosed  = "tunnel-closed"
+	TypeTunnelList    = "tunnel-list"
 )
 
 // Error codes are the frozen Message.Code values carried by a TypeError
@@ -178,6 +186,17 @@ type Message struct {
 	Snapshot string          `json:"snapshot,omitempty"` // accessibility tree YAML from browser_snapshot
 	Result   json.RawMessage `json:"result,omitempty"`   // JS eval result (any JSON value)
 	OK       bool            `json:"ok,omitempty"`       // true when action succeeded without error
+
+	// Tunnel fields (create-tunnel, tunnel-created, close-tunnel, tunnel-list).
+	TunnelID   string       `json:"tunnelId,omitempty"`
+	TunnelPort int          `json:"tunnelPort,omitempty"`
+	Tunnels    []TunnelInfo `json:"tunnels,omitempty"`
+}
+
+// TunnelInfo is one entry in a tunnel-list reply.
+type TunnelInfo struct {
+	ID   string `json:"id"`
+	Port int    `json:"port"`
 }
 
 // CursorPos is a 0-indexed terminal cursor position carried by screen-snapshot-result.

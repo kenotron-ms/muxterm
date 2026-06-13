@@ -240,6 +240,43 @@ func (c *Client) handleTextInput(data []byte) {
 			log.Printf("handleTextInput: BrowserActionResult error: %v", err)
 		}
 
+	case sessiond.TypeCreateTunnel:
+		// Tunnel operations are handled entirely by the serve layer; they are
+		// never forwarded to the daemon. The daemon-nil guard above would have
+		// returned already, so c.daemon is guaranteed non-nil here, but the
+		// registry is on the hub rather than on the daemon.
+		id, err := c.hub.tunnels.Create(msg.TunnelPort)
+		if err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{
+			Type:       sessiond.TypeTunnelCreated,
+			CID:        msg.CID,
+			TunnelID:   id,
+			TunnelPort: msg.TunnelPort,
+		})
+
+	case sessiond.TypeCloseTunnel:
+		c.hub.tunnels.Close(msg.TunnelID)
+		c.sendMessage(&sessiond.Message{
+			Type:     sessiond.TypeTunnelClosed,
+			CID:      msg.CID,
+			TunnelID: msg.TunnelID,
+		})
+
+	case sessiond.TypeListTunnels:
+		entries := c.hub.tunnels.List()
+		tunnels := make([]sessiond.TunnelInfo, len(entries))
+		for i, e := range entries {
+			tunnels[i] = sessiond.TunnelInfo{ID: e.id, Port: e.port}
+		}
+		c.sendMessage(&sessiond.Message{
+			Type:    sessiond.TypeTunnelList,
+			CID:     msg.CID,
+			Tunnels: tunnels,
+		})
+
 	default:
 		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
 	}
@@ -305,7 +342,8 @@ type Hub struct {
 	clients        map[*Client]bool
 	mu             sync.RWMutex
 	dial           DialFunc
-	resolvedConfig any // muxterm-owned resolved config, shipped to clients on connect
+	resolvedConfig any              // muxterm-owned resolved config, shipped to clients on connect
+	tunnels        *TunnelRegistry  // shared tunnel registry for /t/{id}/ proxy
 }
 
 // SetResolvedConfig stores the resolved configuration on the hub. The config is
@@ -323,6 +361,7 @@ func NewHub(dial DialFunc) *Hub {
 	return &Hub{
 		clients: make(map[*Client]bool),
 		dial:    dial,
+		tunnels: NewTunnelRegistry(),
 	}
 }
 
