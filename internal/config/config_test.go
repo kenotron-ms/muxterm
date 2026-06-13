@@ -28,7 +28,7 @@ func TestDefaults(t *testing.T) {
 	}
 
 	// Font
-	wantFamily := "Monospace"
+	wantFamily := "JetBrainsMonoNerdFont"
 	if cfg.Font.Family != wantFamily {
 		t.Errorf("Font.Family: got %q, want %q", cfg.Font.Family, wantFamily)
 	}

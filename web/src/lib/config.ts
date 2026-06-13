@@ -31,11 +31,11 @@ export interface ResolvedConfig {
 export const DEFAULT_RESOLVED_CONFIG: ResolvedConfig = {
   theme: { palette: 'tokyo-night' },
   font: {
-    // Match Zellij's web client, which sets xterm's fontFamily to "Monospace".
-    // This resolves to the OS-configured default monospace font (via fontconfig
-    // on Linux), which is properly hinted and renders crisply — unlike a stack
-    // of named fonts that aren't installed and fall through to a poor fallback.
-    family: 'Monospace',
+    // Default to the server-bundled JetBrains Mono Nerd Font, served from
+    // /fonts/ by the muxterm server itself. This ensures Nerd Font glyphs
+    // (folder icons, git symbols, etc.) render correctly in any browser,
+    // regardless of what fonts are installed on the client machine.
+    family: 'JetBrainsMonoNerdFont',
     size: 13,
   },
   terminal: {

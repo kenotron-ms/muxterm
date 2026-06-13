@@ -90,9 +90,11 @@ func Defaults() Config {
 			Palette: "tokyo-night",
 		},
 		Font: FontConfig{
-			// Match Zellij's web client ("Monospace"): resolves to the
-			// OS-configured default monospace font, which renders crisply.
-			Family: "Monospace",
+			// Default to the server-bundled JetBrains Mono Nerd Font.
+			// The WOFF2 files are served from /fonts/ by the muxterm server,
+			// so Nerd Font glyphs render correctly in any browser without
+			// requiring the user to install fonts on their client machine.
+			Family: "JetBrainsMonoNerdFont",
 			Size:   13,
 		},
 		Terminal: TerminalConfig{
