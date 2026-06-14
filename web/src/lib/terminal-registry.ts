@@ -13,6 +13,7 @@
 
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebFontsAddon } from '@xterm/addon-web-fonts';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { resolvePalette } from './theme.js';
 import { muxLog } from './mux-log.js';
@@ -90,6 +91,7 @@ export interface PaneHandlers {
 interface PaneEntry {
   term: Terminal;
   fitAddon: FitAddon;
+  webFontsAddon: WebFontsAddon;
   /** Stable host element that moves between containers on attach/detach. */
   hostEl: HTMLElement;
   handlers: PaneHandlers;
@@ -203,47 +205,8 @@ function _fitIfPlausible(entry: PaneEntry): boolean {
   // back fires the event twice; the restore (back to 0) is the call that matters.
   // Math.round(0.001) = 0, so device.cell.width is unchanged — no layout side-effects.
   const ls = entry.term.options.letterSpacing ?? 0;
-  const colsBefore = entry.term.cols;
   entry.term.options.letterSpacing = ls === 0 ? 0.001 : 0;
   entry.term.options.letterSpacing = ls;
-  // Debug: verify what letter-spacing was actually set after the toggle
-  const rows = entry.hostEl.querySelector('.xterm-rows') as HTMLElement | null;
-  // Read the actual xterm WidthCache measure element (what _measure() actually uses)
-  const measureEl = entry.hostEl.querySelector('.xterm-char-measure-element') as HTMLElement | null;
-  let xtermMeasureW = 'no element';
-  if (measureEl) {
-    const origText = measureEl.textContent;
-    measureEl.textContent = 'W'.repeat(32);
-    xtermMeasureW = `${measureEl.offsetWidth}/32=${measureEl.offsetWidth/32}`;
-    measureEl.textContent = origText ?? '';
-  }
-  // Also measure in document.body for comparison
-  let docBodyMeasureW = 'N/A';
-  try {
-    const span = document.createElement('span');
-    span.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font-kerning:none;" +
-      `font-family:'${TERMINAL_FONT_FAMILY}';font-size:13px;`;
-    span.textContent = 'W'.repeat(32);
-    document.body.appendChild(span);
-    docBodyMeasureW = `${span.offsetWidth}/32=${span.offsetWidth/32}`;
-    document.body.removeChild(span);
-  } catch (_e) {}
-  // Compute what _setDefaultSpacing SHOULD give: css.cell.width = screenWidth / cols
-  const screenEl = rows?.parentElement as HTMLElement | null;
-  const screenW = screenEl ? parseFloat(screenEl.style.width) : -1;
-  const theoreticalCellW = screenW > 0 ? screenW / colsBefore : -1;
-  const theoreticalSpacing = theoreticalCellW > 0
-    ? theoreticalCellW - (measureEl ? measureEl.offsetWidth / 32 : 7.8125)
-    : -1;
-  muxLog('_fitIfPlausible', `ls toggle done`, {
-    cols: colsBefore,
-    rowsLS: rows?.style?.letterSpacing ?? 'not found',
-    xtermMeasureW,
-    docBodyMeasureW,
-    screenW,
-    theoreticalCellW: theoreticalCellW.toFixed(8),
-    theoreticalSpacing: theoreticalSpacing.toFixed(8),
-  });
   return true;
 }
 
@@ -285,11 +248,18 @@ export const terminalRegistry = {
 
     const term = new Terminal(TERMINAL_CONFIG);
     const fitAddon = new FitAddon();
+    // WebFontsAddon handles the post-font-load relayout officially:
+    // activate() schedules document.fonts.ready → relayout() → fontFamily toggle →
+    // _handleOptionsChanged() → _setDefaultSpacing() re-runs with correct metrics.
+    // No manual font-wait gates or fontFamily hacks needed anywhere else.
+    const webFontsAddon = new WebFontsAddon();
     term.loadAddon(fitAddon);
+    term.loadAddon(webFontsAddon);
 
     const entry: PaneEntry = {
       term,
       fitAddon,
+      webFontsAddon,
       hostEl,
       handlers,
       lastCols: -1,
@@ -441,45 +411,17 @@ export const terminalRegistry = {
     if (!entry) return;
 
     if (!entry.opened) {
-      // xterm.js measures character cell dimensions (width/height) exactly once,
-      // at term.open() time, and caches them permanently. If the custom @font-face
-      // font isn't loaded yet, xterm measures against the fallback monospace font
-      // and every subsequent fitAddon.fit() uses those wrong cell dimensions —
-      // characters appear too narrow or too wide (wrong kerning) for the life of
-      // the terminal. There is no public xterm.js API to force re-measurement
-      // after open(); the only correct fix is to delay open() until the font is
-      // confirmed ready. (See @xterm/addon-web-fonts for the official approach;
-      // we replicate its document.fonts.load() pattern directly here.)
-      //
-      // The rest of attach (container append, ResizeObserver) still runs below so
-      // the container is wired up. _settleAndDrain guards on entry.opened and
-      // returns early, so any premature calls from the ResizeObserver are safe
-      // no-ops until the font loads and open() fires.
-      const fontSpec = `400 1em '${TERMINAL_FONT_FAMILY}'`;
-      const doOpen = () => {
-        muxLog('registry attach', `term.open pane=${paneId} focus=${focus}`,
-          { pending: entry.pendingData.length, seqBytes: entry.seqBytes });
-        entry.term.open(entry.hostEl);
-        entry.opened = true;
-      };
-      if (!document.fonts || document.fonts.check(fontSpec)) {
-        doOpen();
-      } else {
-        // Safety net: font isn't loaded yet — defer term.open() until it is.
-        // In normal operation app.ts gates socket.connect() on document.fonts.load(),
-        // so this path is only reached if attach() is called before the font resolves
-        // (e.g. a programmatic attach during startup before the gate fires).
-        void document.fonts.load(fontSpec).then(() =>
-          requestAnimationFrame(() => {
-            if (entry.opened) return; // guard: concurrent attach beat us
-            doOpen();
-            // One extra rAF before settling: some browsers need a frame after font
-            // load for OffscreenCanvas measureText() to reflect the new typeface.
-            // No private API — just defer settle one frame to let rendering settle.
-            requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId));
-          }),
-        );
-      }
+      // Insert into DOM BEFORE term.open() so DomRenderer._setDefaultSpacing()
+      // measures correct WidthCache dimensions. When hostEl is detached,
+      // WidthCache._measure('W') returns offsetWidth=0, and letter-spacing is
+      // permanently wrong. WebFontsAddon (loaded in ensure()) handles the
+      // post-font-load relayout: document.fonts.ready → relayout() →
+      // fontFamily toggle → _handleOptionsChanged() → _setDefaultSpacing() corrects.
+      container.appendChild(entry.hostEl);
+      muxLog('registry attach', `term.open pane=${paneId} focus=${focus}`,
+        { pending: entry.pendingData.length, seqBytes: entry.seqBytes });
+      entry.term.open(entry.hostEl);
+      entry.opened = true;
     } else {
       muxLog('registry attach', `re-attach pane=${paneId} focus=${focus}`,
         { pending: entry.pendingData.length, ready: entry.ready });
@@ -511,35 +453,9 @@ export const terminalRegistry = {
       ro.observe(entry.hostEl);
       entry.resizeObserver = ro;
     }
-    // Defensive kick + letter-spacing correction.
-    //
-    // WHY letter-spacing is wrong after term.open():
-    //   term.open() calls DomRenderer constructor → _setDefaultSpacing() while
-    //   entry.hostEl is NOT yet in the DOM (container.appendChild runs below,
-    //   but term.open ran first above). WidthCache._measure('W') returns
-    //   el.offsetWidth = 0 → spacing = charSizeService.width (~7.8px) → wrong.
-    //
-    //   After append, charSizeService.measure() is called on every resize but
-    //   OffscreenCanvas always returns the same ~7.8px (no DOM dependency), so
-    //   onCharSizeChange never fires → handleCharSizeChanged() never runs →
-    //   _setDefaultSpacing() is never corrected for the life of the terminal.
-    //
-    // FIX (public API only):
-    //   Toggling terminal.options.fontFamily to a different value then back
-    //   triggers DomRenderer._handleOptionsChanged() on each change. That method
-    //   calls _widthCache.setFont() (clears the cache) + _setDefaultSpacing().
-    //   The RESTORE call runs _setDefaultSpacing() with entry.hostEl now IN the
-    //   DOM → widthCache.get('W') correctly returns ~7.8px → spacing ≈ 0.
+    // Kick settle/fit on the next frame. WebFontsAddon triggers its own relayout
+    // after document.fonts.ready, so no manual fontFamily toggle needed here.
     requestAnimationFrame(() => {
-      if (entry.opened && !entry.ready) {
-        const family = entry.term.options.fontFamily;
-        if (family) {
-          // Toggle to a different font (guaranteed different OffscreenCanvas measurement)
-          // so _handleOptionsChanged fires twice, the second time with correct widthCache.
-          entry.term.options.fontFamily = 'monospace';
-          entry.term.options.fontFamily = family;
-        }
-      }
       if (!entry.ready) terminalRegistry._settleAndDrain(paneId);
       else terminalRegistry.fitIfVisible(paneId);
     });
@@ -617,25 +533,14 @@ export const terminalRegistry = {
     if (!_isVisible(entry.hostEl)) return;
     if (entry.hostEl.offsetWidth <= 0 || entry.hostEl.offsetHeight <= 0) return;
 
-    // Check that the specific terminal font is loaded, not just that
-    // document.fonts.status === 'loaded'. The status check is unreliable:
-    // after injectTerminalFont() appends the @font-face rules, the browser
-    // hasn't started downloading the WOFF2 yet (fonts load lazily on first
-    // use), so status stays 'loaded' with zero pending downloads. Over a
-    // network the WOFF2 takes tens-to-hundreds of ms to arrive; xterm.js
-    // then measures glyphs with the fallback monospace font and locks in the
-    // wrong cell size — characters end up misaligned in every cell.
-    //
-    // document.fonts.check() returns false when the font isn't available yet
-    // even if @font-face is declared, so it correctly catches the race.
-    // document.fonts.load() explicitly queues the download.
-    const fontSpec = `400 1em '${TERMINAL_FONT_FAMILY}'`;
-    const fontsReady =
-      typeof document === 'undefined' ||
-      !document.fonts ||
-      document.fonts.check(fontSpec);
-    if (!fontsReady) {
-      void document.fonts.load(fontSpec).then(() =>
+    // Gate: don't settle until the custom font is loaded so fitAddon.fit()
+    // computes correct cell dimensions. fonts.ts kicks document.fonts.load()
+    // at startup to start the download; document.fonts.ready resolves once it
+    // completes. WebFontsAddon also calls relayout() after this, so spacing
+    // is correct before the terminal renders its first frame of content.
+    if (document.fonts &&
+        !document.fonts.check(`400 1em '${TERMINAL_FONT_FAMILY}'`)) {
+      void document.fonts.ready.then(() =>
         requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId)),
       );
       return;

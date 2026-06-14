@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-fonts": "^0.1.0",
     "@xterm/xterm": "^6.0.0",
     "dockview-core": "^6.6.1",
     "lit": "^3.2.0",

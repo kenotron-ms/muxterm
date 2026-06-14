@@ -9,10 +9,10 @@ import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js
 import { parseResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, resolvePalette } from './lib/theme.js';
-import { injectTerminalFont, TERMINAL_FONT_FAMILY } from './lib/fonts.js';
+import { injectTerminalFont } from './lib/fonts.js';
 
-// Inject @font-face for the server-bundled Nerd Font as early as possible so
-// document.fonts.ready resolves with it before xterm.js tries to measure glyphs.
+// Inject @font-face for the server-bundled Nerd Font as early as possible and
+// kick document.fonts.load() so the download starts before WebFontsAddon runs.
 injectTerminalFont();
 
 // Side-effect imports — register child custom elements
@@ -471,20 +471,12 @@ export class MuxApp extends LitElement {
       // Sync tunnel state on (re)connect so the UI stays consistent.
       this._socket?.listTunnels();
     };
-    // Gate the socket connection on the terminal font being loaded. This
-    // ensures every pane attach() call takes the synchronous term.open() path
-    // (document.fonts.check() = true), identical to how manually-opened new
-    // panes behave after the font has been available for seconds. Without this
-    // gate, page-load panes race the WOFF2 download: document.fonts.check()
-    // returns false, attach() defers term.open() asynchronously, and xterm
-    // measures glyphs in a different render cycle than expected.
-    //
-    // document.fonts.load() is a no-op if the font is already loaded (served
-    // from cache on repeat visits), so this adds near-zero latency in practice.
-    void (document.fonts
-      ? document.fonts.load(`400 1em '${TERMINAL_FONT_FAMILY}'`).catch(() => {})
-      : Promise.resolve()
-    ).then(() => this._socket?.connect());
+    // Connect immediately. WebFontsAddon (loaded per-terminal in ensure())
+    // handles font-load correctness: document.fonts.ready → relayout() →
+    // fontFamily toggle → _setDefaultSpacing() re-runs with correct metrics.
+    // _settleAndDrain gates the initial drain on document.fonts.check() as a
+    // belt-and-suspenders guard before the first content render.
+    this._socket?.connect();
     this._connectionStatus = 'reconnecting';
     this._pollConnectionStatus();
   }
