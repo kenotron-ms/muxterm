@@ -50,4 +50,14 @@ export function injectTerminalFont(): void {
 }
 `.trim();
   document.head.appendChild(style);
+
+  // Kick off the WOFF2 download immediately. @font-face alone is lazy —
+  // the browser won't fetch the file until something actually uses the font.
+  // document.fonts.load() starts the fetch now so the font is more likely
+  // to be ready before xterm.js calls term.open() and measures glyph dimensions.
+  // terminal-registry._settleAndDrain has a hard gate on document.fonts.check()
+  // as a safety net, but the earlier we start the download the better.
+  if (document.fonts) {
+    void document.fonts.load(`400 1em '${TERMINAL_FONT_FAMILY}'`);
+  }
 }

@@ -527,6 +527,16 @@ export const terminalRegistry = {
       return;
     }
 
+    // Force xterm.js to re-measure character cell dimensions with the now-loaded
+    // font. term.open() in attach() is what actually runs the glyph measurement
+    // (xterm creates a char-measure-element and measures it on the canvas), and
+    // that runs before _settleAndDrain — i.e. before we confirmed the font was
+    // ready. If the font wasn't loaded at open() time, xterm measured against the
+    // fallback monospace and cached those (wrong) cell dimensions. Reassigning
+    // fontFamily triggers xterm's charSizeService.measure() + renderer clear so
+    // fitAddon.fit() below calculates cols/rows against the correct cell size.
+    entry.term.options.fontFamily = entry.term.options.fontFamily ?? TERMINAL_FONT_FAMILY;
+
     if (!_fitIfPlausible(entry)) {
       muxLog('registry settle', `pane=${paneId} NOT plausible size yet`,
         { w: entry.hostEl.offsetWidth, h: entry.hostEl.offsetHeight });
