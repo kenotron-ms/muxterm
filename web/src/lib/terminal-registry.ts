@@ -638,6 +638,14 @@ export const terminalRegistry = {
       muxLog('registry ready', `pane=${paneId} READY (no pending — fresh or pre-buffered)`,
         { seqBytes: entry.seqBytes });
       entry.ready = true;
+      // Deferred re-fit: dockview may still be settling its layout when the first
+      // fit runs (e.g. restoring a saved layout on page load). If the container
+      // width shifted even 1px after the initial fit, the col count could be off
+      // (e.g. 190 cols instead of 189) making each cell slightly too narrow and
+      // causing individual glyphs to appear shifted. 200ms gives dockview time to
+      // reach its stable layout, then fitAddon.fit() recomputes — it's a no-op
+      // if cols are already correct, so this is safe for new panes too.
+      setTimeout(() => terminalRegistry.fitIfVisible(paneId), 200);
       return;
     }
 
@@ -655,6 +663,9 @@ export const terminalRegistry = {
         { seqBytes: entry.seqBytes });
       entry.ready = true;
       entry.draining = false;
+      // Same deferred re-fit as the fresh-pane path above — corrects any
+      // layout drift that occurred while replay was draining.
+      setTimeout(() => terminalRegistry.fitIfVisible(paneId), 200);
       // Drain any live PTY data that arrived during the drain window.
       const live = entry.pendingData.splice(0);
       if (live.length > 0) {
