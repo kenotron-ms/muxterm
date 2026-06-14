@@ -16,6 +16,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { resolvePalette } from './theme.js';
 import { muxLog } from './mux-log.js';
+import { TERMINAL_FONT_FAMILY } from './fonts.js';
 
 /**
  * Ensure xterm.js's stylesheet is present in the root node that actually
@@ -502,12 +503,25 @@ export const terminalRegistry = {
     if (!_isVisible(entry.hostEl)) return;
     if (entry.hostEl.offsetWidth <= 0 || entry.hostEl.offsetHeight <= 0) return;
 
+    // Check that the specific terminal font is loaded, not just that
+    // document.fonts.status === 'loaded'. The status check is unreliable:
+    // after injectTerminalFont() appends the @font-face rules, the browser
+    // hasn't started downloading the WOFF2 yet (fonts load lazily on first
+    // use), so status stays 'loaded' with zero pending downloads. Over a
+    // network the WOFF2 takes tens-to-hundreds of ms to arrive; xterm.js
+    // then measures glyphs with the fallback monospace font and locks in the
+    // wrong cell size — characters end up misaligned in every cell.
+    //
+    // document.fonts.check() returns false when the font isn't available yet
+    // even if @font-face is declared, so it correctly catches the race.
+    // document.fonts.load() explicitly queues the download.
+    const fontSpec = `400 1em '${TERMINAL_FONT_FAMILY}'`;
     const fontsReady =
       typeof document === 'undefined' ||
       !document.fonts ||
-      document.fonts.status === 'loaded';
+      document.fonts.check(fontSpec);
     if (!fontsReady) {
-      void document.fonts.ready.then(() =>
+      void document.fonts.load(fontSpec).then(() =>
         requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId)),
       );
       return;
