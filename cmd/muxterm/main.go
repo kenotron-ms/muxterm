@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -204,7 +205,11 @@ func runLocal(cfg Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	go openBrowser("http://" + cfg.Addr)
+	browserHost := cfg.Addr
+	if _, port, err := net.SplitHostPort(cfg.Addr); err == nil {
+		browserHost = "localhost:" + port
+	}
+	go openBrowser("http://" + browserHost)
 
 	log.Printf("muxterm listening on %s", cfg.Addr)
 	return srv.ListenAndServe(ctx)
