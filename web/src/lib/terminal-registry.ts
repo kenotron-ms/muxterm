@@ -457,9 +457,35 @@ export const terminalRegistry = {
       ro.observe(entry.hostEl);
       entry.resizeObserver = ro;
     }
-    // Defensive kick: if the element is already at its final size and the
-    // observer's initial callback is delayed, still attempt to settle.
+    // Defensive kick + letter-spacing correction.
+    //
+    // WHY letter-spacing is wrong after term.open():
+    //   term.open() calls DomRenderer constructor → _setDefaultSpacing() while
+    //   entry.hostEl is NOT yet in the DOM (container.appendChild runs below,
+    //   but term.open ran first above). WidthCache._measure('W') returns
+    //   el.offsetWidth = 0 → spacing = charSizeService.width (~7.8px) → wrong.
+    //
+    //   After append, charSizeService.measure() is called on every resize but
+    //   OffscreenCanvas always returns the same ~7.8px (no DOM dependency), so
+    //   onCharSizeChange never fires → handleCharSizeChanged() never runs →
+    //   _setDefaultSpacing() is never corrected for the life of the terminal.
+    //
+    // FIX (public API only):
+    //   Toggling terminal.options.fontFamily to a different value then back
+    //   triggers DomRenderer._handleOptionsChanged() on each change. That method
+    //   calls _widthCache.setFont() (clears the cache) + _setDefaultSpacing().
+    //   The RESTORE call runs _setDefaultSpacing() with entry.hostEl now IN the
+    //   DOM → widthCache.get('W') correctly returns ~7.8px → spacing ≈ 0.
     requestAnimationFrame(() => {
+      if (entry.opened && !entry.ready) {
+        const family = entry.term.options.fontFamily;
+        if (family) {
+          // Toggle to a different font (guaranteed different OffscreenCanvas measurement)
+          // so _handleOptionsChanged fires twice, the second time with correct widthCache.
+          entry.term.options.fontFamily = 'monospace';
+          entry.term.options.fontFamily = family;
+        }
+      }
       if (!entry.ready) terminalRegistry._settleAndDrain(paneId);
       else terminalRegistry.fitIfVisible(paneId);
     });
