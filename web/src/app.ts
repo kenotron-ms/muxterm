@@ -11,8 +11,8 @@ import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybi
 import { applyThemeTokens, resolvePalette } from './lib/theme.js';
 import { injectTerminalFont } from './lib/fonts.js';
 
-// Inject @font-face for the server-bundled Nerd Font as early as possible and
-// kick document.fonts.load() so the download starts before WebFontsAddon runs.
+// Inject @font-face for the server-bundled Nerd Font as early as possible so
+// the CSS rules are in place before WebFontsAddon.loadFonts() is called.
 injectTerminalFont();
 
 // Side-effect imports — register child custom elements
@@ -471,17 +471,7 @@ export class MuxApp extends LitElement {
       // Sync tunnel state on (re)connect so the UI stays consistent.
       this._socket?.listTunnels();
     };
-    // Gate on font readiness before connecting. The onData handler in
-    // terminal-registry suppresses xterm.js responses (DA1, OSC 11, etc.)
-    // while entry.ready is false, to prevent replay-embedded capability
-    // queries from being answered after bash has moved on. Without this gate,
-    // the socket connects before fonts are loaded, _settleAndDrain is deferred,
-    // and entry.ready is briefly false — enough time for a user-launched
-    // program (e.g. yazi) to send terminal queries that get silently dropped.
-    // document.fonts.ready resolves as soon as the font download completes
-    // (fonts.ts triggers document.fonts.load() at startup to kick the fetch),
-    // so this adds near-zero latency on repeat visits (served from cache).
-    void document.fonts.ready.then(() => this._socket?.connect());
+    this._socket.connect();
     this._connectionStatus = 'reconnecting';
     this._pollConnectionStatus();
   }

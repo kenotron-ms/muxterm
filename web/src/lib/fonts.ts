@@ -2,9 +2,10 @@
 //
 // The WOFF2 files live in web/public/fonts/ and are served by the muxterm
 // server itself, so the font works regardless of what the client has installed.
-// Call injectTerminalFont() once at app startup, before any xterm.js Terminal
-// is created. The terminal-registry already waits on document.fonts.ready, so
-// xterm will correctly delay rendering until the font is downloaded.
+// Call injectTerminalFont() once at app startup, before any terminal is created.
+// terminal-registry.ts calls WebFontsAddon.loadFonts() before term.open() per
+// the official xterm.js addon-web-fonts guidance, ensuring the font is fully
+// loaded before xterm measures glyph dimensions.
 
 /** CSS font-family name used in the @font-face declaration and in xterm config. */
 export const TERMINAL_FONT_FAMILY = 'JetBrainsMonoNerdFont';
@@ -50,15 +51,4 @@ export function injectTerminalFont(): void {
 }
 `.trim();
   document.head.appendChild(style);
-
-  // Kick off the WOFF2 download immediately. @font-face alone is lazy —
-  // the browser won't fetch until something actually uses the font. Calling
-  // document.fonts.load() here starts the download early AND registers the
-  // font as a pending load so document.fonts.ready waits for it. This lets
-  // WebFontsAddon (loaded per-terminal in ensure()) find the FontFace objects
-  // when relayout() calls _loadFonts(), and ensures _settleAndDrain's
-  // document.fonts.check() gate passes as soon as the font is ready.
-  if (document.fonts) {
-    void document.fonts.load(`400 1em '${TERMINAL_FONT_FAMILY}'`);
-  }
 }

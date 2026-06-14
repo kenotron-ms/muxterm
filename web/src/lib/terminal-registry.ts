@@ -192,21 +192,6 @@ function _fitIfPlausible(entry: PaneEntry): boolean {
   const h = entry.hostEl.offsetHeight;
   if (w < _MIN_FIT_WIDTH || h < _MIN_FIT_HEIGHT) return false;
   entry.fitAddon.fit();
-  // fitAddon.fit() → terminal.resize(cols, rows) → DomRenderer.handleResize() →
-  // _updateDimensions() updates css.cell.width — but does NOT call _setDefaultSpacing().
-  // The row container's letter-spacing (set by _setDefaultSpacing) is therefore stale:
-  // it was last computed before fit() changed the col count, using the wrong cell width.
-  //
-  // Any option change fires DomRenderer._handleOptionsChanged() which calls both
-  // _updateDimensions() and _setDefaultSpacing() — this re-computes letter-spacing
-  // with the correct post-fit css.cell.width.
-  //
-  // letterSpacing = 0 is the default. Setting it to a sub-pixel non-zero value and
-  // back fires the event twice; the restore (back to 0) is the call that matters.
-  // Math.round(0.001) = 0, so device.cell.width is unchanged — no layout side-effects.
-  const ls = entry.term.options.letterSpacing ?? 0;
-  entry.term.options.letterSpacing = ls === 0 ? 0.001 : 0;
-  entry.term.options.letterSpacing = ls;
   return true;
 }
 
@@ -248,10 +233,8 @@ export const terminalRegistry = {
 
     const term = new Terminal(TERMINAL_CONFIG);
     const fitAddon = new FitAddon();
-    // WebFontsAddon handles the post-font-load relayout officially:
-    // activate() schedules document.fonts.ready → relayout() → fontFamily toggle →
-    // _handleOptionsChanged() → _setDefaultSpacing() re-runs with correct metrics.
-    // No manual font-wait gates or fontFamily hacks needed anywhere else.
+    // WebFontsAddon: loadFonts() is called in attach() before term.open() per
+    // the official xterm.js addon-web-fonts guidance.
     const webFontsAddon = new WebFontsAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(webFontsAddon);
@@ -411,20 +394,32 @@ export const terminalRegistry = {
     if (!entry) return;
 
     if (!entry.opened) {
-      // Insert into DOM BEFORE term.open() so DomRenderer._setDefaultSpacing()
-      // measures correct WidthCache dimensions. When hostEl is detached,
-      // WidthCache._measure('W') returns offsetWidth=0, and letter-spacing is
-      // permanently wrong. WebFontsAddon (loaded in ensure()) handles the
-      // post-font-load relayout: document.fonts.ready → relayout() →
-      // fontFamily toggle → _handleOptionsChanged() → _setDefaultSpacing() corrects.
-      container.appendChild(entry.hostEl);
       muxLog('registry attach', `term.open pane=${paneId} focus=${focus}`,
         { pending: entry.pendingData.length, seqBytes: entry.seqBytes });
-      entry.term.open(entry.hostEl);
-      entry.opened = true;
+      // Official xterm.js WebFontsAddon pattern: insert into DOM before open()
+      // so xterm measures glyph dimensions with a non-zero container size, then
+      // gate term.open() on font load so metrics use the correct font.
+      // @font-face rules are already declared by injectTerminalFont() in fonts.ts.
+      container.appendChild(entry.hostEl);
+      const openTerminal = () => {
+        entry.term.open(entry.hostEl);
+        entry.opened = true;
+        // Only focus when explicitly requested (i.e. this is the active pane). On a
+        // multi-group layout restore EVERY pane attaches; if each one grabbed focus,
+        // dockview's onDidFocus would activate that pane's group, and the last
+        // attach would clobber the restored active-group selection. Focusing only
+        // the active pane keeps the restored cross-group selection intact.
+        if (focus) entry.term.focus();
+        requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId));
+      };
+      // Fall back to opening immediately if the font fails to load (e.g. offline).
+      entry.webFontsAddon.loadFonts([TERMINAL_FONT_FAMILY]).then(openTerminal, openTerminal);
     } else {
       muxLog('registry attach', `re-attach pane=${paneId} focus=${focus}`,
         { pending: entry.pendingData.length, ready: entry.ready });
+      // Move host element into the new container.
+      container.appendChild(entry.hostEl);
+      if (focus) entry.term.focus();
     }
 
     // NOTE: xterm.js's stylesheet is injected deterministically into mux-app's
@@ -432,9 +427,6 @@ export const terminalRegistry = {
     // it is already present in the root where this terminal renders. We no
     // longer inject it lazily here — doing so via the container's getRootNode()
     // raced with dockview's fromJSON restore and could land in document.head.
-
-    // Move (or insert) the host element into the new container.
-    container.appendChild(entry.hostEl);
 
     // ResizeObserver: 50ms debounce. On each tick, drive settle-or-fit:
     // before the layout has stabilised (_settleAndDrain not yet run), attempt
@@ -453,18 +445,13 @@ export const terminalRegistry = {
       ro.observe(entry.hostEl);
       entry.resizeObserver = ro;
     }
-    // Kick settle/fit on the next frame. WebFontsAddon triggers its own relayout
-    // after document.fonts.ready, so no manual fontFamily toggle needed here.
+    // For re-attach: kick settle/fit on the next frame. For first-open: no-op
+    // until loadFonts() resolves and sets entry.opened; the rAF inside
+    // openTerminal() handles the initial settle.
     requestAnimationFrame(() => {
       if (!entry.ready) terminalRegistry._settleAndDrain(paneId);
       else terminalRegistry.fitIfVisible(paneId);
     });
-    // Only focus when explicitly requested (i.e. this is the active pane). On a
-    // multi-group layout restore EVERY pane attaches; if each one grabbed focus,
-    // dockview's onDidFocus would activate that pane's group, and the last
-    // attach would clobber the restored active-group selection. Focusing only
-    // the active pane keeps the restored cross-group selection intact.
-    if (focus) entry.term.focus();
   },
 
   /**
@@ -517,11 +504,10 @@ export const terminalRegistry = {
    * Render the initial replay ONCE, at the settled layout size. Called from the
    * debounced ResizeObserver (after the panel size has stopped changing for the
    * debounce window) and a defensive rAF kick. No-ops until the terminal is
-   * opened, visible, has a real (non-zero) size, and the custom font is loaded —
-   * so fitAddon.fit() computes correct cols/rows and the PTY replay never renders
-   * at a transient tiny size (which caused wrapped garble + repeated prompts on
-   * rapid refresh). Flushes pendingData in arrival order, then flips `ready` so
-   * subsequent writes go direct.
+   * opened and visible with a real (non-zero) size — term.open() is only called
+   * after WebFontsAddon.loadFonts() resolves, so the font is already loaded by
+   * the time _settleAndDrain runs. Flushes pendingData in arrival order, then
+   * flips `ready` so subsequent writes go direct.
    */
   _settleAndDrain(paneId: number): void {
     const entry = _map.get(_key(paneId));
@@ -532,19 +518,6 @@ export const terminalRegistry = {
 
     if (!_isVisible(entry.hostEl)) return;
     if (entry.hostEl.offsetWidth <= 0 || entry.hostEl.offsetHeight <= 0) return;
-
-    // Gate: don't settle until the custom font is loaded so fitAddon.fit()
-    // computes correct cell dimensions. fonts.ts kicks document.fonts.load()
-    // at startup to start the download; document.fonts.ready resolves once it
-    // completes. WebFontsAddon also calls relayout() after this, so spacing
-    // is correct before the terminal renders its first frame of content.
-    if (document.fonts &&
-        !document.fonts.check(`400 1em '${TERMINAL_FONT_FAMILY}'`)) {
-      void document.fonts.ready.then(() =>
-        requestAnimationFrame(() => terminalRegistry._settleAndDrain(paneId)),
-      );
-      return;
-    }
 
     if (!_fitIfPlausible(entry)) {
       muxLog('registry settle', `pane=${paneId} NOT plausible size yet`,
@@ -597,14 +570,6 @@ export const terminalRegistry = {
       muxLog('registry ready', `pane=${paneId} READY (no pending — fresh or pre-buffered)`,
         { seqBytes: entry.seqBytes });
       entry.ready = true;
-      // Deferred re-fit: dockview may still be settling its layout when the first
-      // fit runs (e.g. restoring a saved layout on page load). If the container
-      // width shifted even 1px after the initial fit, the col count could be off
-      // (e.g. 190 cols instead of 189) making each cell slightly too narrow and
-      // causing individual glyphs to appear shifted. 200ms gives dockview time to
-      // reach its stable layout, then fitAddon.fit() recomputes — it's a no-op
-      // if cols are already correct, so this is safe for new panes too.
-      setTimeout(() => terminalRegistry.fitIfVisible(paneId), 200);
       return;
     }
 
@@ -622,9 +587,6 @@ export const terminalRegistry = {
         { seqBytes: entry.seqBytes });
       entry.ready = true;
       entry.draining = false;
-      // Same deferred re-fit as the fresh-pane path above — corrects any
-      // layout drift that occurred while replay was draining.
-      setTimeout(() => terminalRegistry.fitIfVisible(paneId), 200);
       // Drain any live PTY data that arrived during the drain window.
       const live = entry.pendingData.splice(0);
       if (live.length > 0) {
