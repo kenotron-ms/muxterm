@@ -58,7 +58,7 @@ demo:
 # Build the production binary from origin/main and install to the stable path.
 # This is what systemd runs — separate from ./bin/muxterm used by `make dev`.
 # Usage: git pull && make install-stable
-#        systemctl --user restart amplifier-muxterm-serve amplifier-muxterm-oauth
+#        systemctl --user restart muxterm muxterm-sessiond
 install-stable: web
 	@if ! git diff --quiet || ! git diff --cached --quiet; then \
 		echo "error: working tree is dirty — commit or stash changes before installing stable"; \
@@ -67,7 +67,7 @@ install-stable: web
 	@echo "Building stable binary from $$(git rev-parse --short HEAD) ($(shell git log -1 --format='%s'))..."
 	go build -o $(STABLE_BIN) ./cmd/muxterm
 	@echo "Installed: $(STABLE_BIN)"
-	@echo "Restart services: systemctl --user restart amplifier-muxterm-serve amplifier-muxterm-oauth"
+	@echo "Restart services: systemctl --user restart muxterm muxterm-sessiond"
 
 # Build the frontend only: install npm deps, run tsc + vite build, copy output.
 web:

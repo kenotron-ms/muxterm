@@ -99,6 +99,7 @@ type ServiceConfig struct {
 	Addr       string
 	Secret     string
 	SafePATH   string
+	Force      bool // stop and overwrite an existing installation
 }
 
 func DetectPlatform() string {
@@ -107,6 +108,6 @@ func DetectPlatform() string {
 
 func DefaultConfig() ServiceConfig {
 	return ServiceConfig{
-		Addr: "localhost:8080",
+		Addr: "0.0.0.0:8311",
 	}
 }

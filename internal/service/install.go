@@ -38,6 +38,15 @@ func Install(cfg ServiceConfig) error {
 }
 
 func installLinux(cfg ServiceConfig, webUnitPath, sessiondUnitPath string, cmd Commander) error {
+	// --force: stop any running services before overwriting unit files so the
+	// new config takes effect immediately on restart. Without this, systemd
+	// may keep the old ExecStart in memory until the next reboot.
+	if cfg.Force {
+		// Ignore errors — services may not be running yet on a first install.
+		_, _ = cmd.Run("systemctl", "--user", "stop", "muxterm.service")
+		_, _ = cmd.Run("systemctl", "--user", "stop", "muxterm-sessiond.service")
+	}
+
 	// Render and write the sessiond unit FIRST so it is in place before the web unit,
 	// which Wants/After it.
 	sessiondContent, err := RenderSessiondSystemdUnit(cfg)

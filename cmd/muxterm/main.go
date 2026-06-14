@@ -277,6 +277,7 @@ func runInstall(cfg Config) error {
 	svcCfg := service.ServiceConfig{
 		Addr:   cfg.Addr,
 		Secret: secret,
+		Force:  cfg.Force,
 	}
 	if err := service.Install(svcCfg); err != nil {
 		return err

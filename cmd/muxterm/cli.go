@@ -15,6 +15,7 @@ type Config struct {
 	Secret      string // auth token for serve mode
 	NoAuth      bool   // skip WebSocket auth check (dev only — never use in production)
 	Target      string // SSH target for deploy mode
+	Force       bool   // install: overwrite existing service installation
 	BrowserPort int    // open-browser mode only: the port to open as a browser pane
 	Transport   string // mcp mode: transport type ("stdio"); SSE arrives in Phase 5
 	MCPPort     int    // mcp mode: SSE port (Phase 5, parsed but rejected for now)
@@ -170,10 +171,12 @@ func parseInstall(args []string) (Config, error) {
 	fs.SetOutput(os.Stdout)
 	addr := fs.String("addr", "0.0.0.0:8311", "listen address for the service")
 	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
+	force := fs.Bool("force", false, "stop and overwrite an existing installation")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm install [flags]")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Install muxterm as a system service (systemd on Linux, launchd on macOS).")
+		fmt.Fprintln(os.Stdout, "Use --force to stop and overwrite an existing installation.")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Flags:")
 		fs.PrintDefaults()
@@ -185,6 +188,7 @@ func parseInstall(args []string) (Config, error) {
 		Mode:   "install",
 		Addr:   *addr,
 		Secret: *secret,
+		Force:  *force,
 	}, nil
 }
 
