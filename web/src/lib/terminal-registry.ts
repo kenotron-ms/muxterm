@@ -387,11 +387,38 @@ export const terminalRegistry = {
     if (!entry) return;
 
     if (!entry.opened) {
-      // Open terminal in the stable host element — only ever called once.
-      muxLog('registry attach', `term.open pane=${paneId} focus=${focus}`,
-        { pending: entry.pendingData.length, seqBytes: entry.seqBytes });
-      entry.term.open(entry.hostEl);
-      entry.opened = true;
+      // xterm.js measures character cell dimensions (width/height) exactly once,
+      // at term.open() time, and caches them permanently. If the custom @font-face
+      // font isn't loaded yet, xterm measures against the fallback monospace font
+      // and every subsequent fitAddon.fit() uses those wrong cell dimensions —
+      // characters appear too narrow or too wide (wrong kerning) for the life of
+      // the terminal. There is no public xterm.js API to force re-measurement
+      // after open(); the only correct fix is to delay open() until the font is
+      // confirmed ready. (See @xterm/addon-web-fonts for the official approach;
+      // we replicate its document.fonts.load() pattern directly here.)
+      //
+      // The rest of attach (container append, ResizeObserver) still runs below so
+      // the container is wired up. _settleAndDrain guards on entry.opened and
+      // returns early, so any premature calls from the ResizeObserver are safe
+      // no-ops until the font loads and open() fires.
+      const fontSpec = `400 1em '${TERMINAL_FONT_FAMILY}'`;
+      const doOpen = () => {
+        muxLog('registry attach', `term.open pane=${paneId} focus=${focus}`,
+          { pending: entry.pendingData.length, seqBytes: entry.seqBytes });
+        entry.term.open(entry.hostEl);
+        entry.opened = true;
+      };
+      if (!document.fonts || document.fonts.check(fontSpec)) {
+        doOpen();
+      } else {
+        void document.fonts.load(fontSpec).then(() =>
+          requestAnimationFrame(() => {
+            if (entry.opened) return; // guard: concurrent attach beat us
+            doOpen();
+            terminalRegistry._settleAndDrain(paneId);
+          }),
+        );
+      }
     } else {
       muxLog('registry attach', `re-attach pane=${paneId} focus=${focus}`,
         { pending: entry.pendingData.length, ready: entry.ready });
@@ -526,16 +553,6 @@ export const terminalRegistry = {
       );
       return;
     }
-
-    // Force xterm.js to re-measure character cell dimensions with the now-loaded
-    // font. term.open() in attach() is what actually runs the glyph measurement
-    // (xterm creates a char-measure-element and measures it on the canvas), and
-    // that runs before _settleAndDrain — i.e. before we confirmed the font was
-    // ready. If the font wasn't loaded at open() time, xterm measured against the
-    // fallback monospace and cached those (wrong) cell dimensions. Reassigning
-    // fontFamily triggers xterm's charSizeService.measure() + renderer clear so
-    // fitAddon.fit() below calculates cols/rows against the correct cell size.
-    entry.term.options.fontFamily = entry.term.options.fontFamily ?? TERMINAL_FONT_FAMILY;
 
     if (!_fitIfPlausible(entry)) {
       muxLog('registry settle', `pane=${paneId} NOT plausible size yet`,
