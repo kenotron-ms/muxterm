@@ -190,6 +190,21 @@ function _fitIfPlausible(entry: PaneEntry): boolean {
   const h = entry.hostEl.offsetHeight;
   if (w < _MIN_FIT_WIDTH || h < _MIN_FIT_HEIGHT) return false;
   entry.fitAddon.fit();
+  // fitAddon.fit() → terminal.resize(cols, rows) → DomRenderer.handleResize() →
+  // _updateDimensions() updates css.cell.width — but does NOT call _setDefaultSpacing().
+  // The row container's letter-spacing (set by _setDefaultSpacing) is therefore stale:
+  // it was last computed before fit() changed the col count, using the wrong cell width.
+  //
+  // Any option change fires DomRenderer._handleOptionsChanged() which calls both
+  // _updateDimensions() and _setDefaultSpacing() — this re-computes letter-spacing
+  // with the correct post-fit css.cell.width.
+  //
+  // letterSpacing = 0 is the default. Setting it to a sub-pixel non-zero value and
+  // back fires the event twice; the restore (back to 0) is the call that matters.
+  // Math.round(0.001) = 0, so device.cell.width is unchanged — no layout side-effects.
+  const ls = entry.term.options.letterSpacing ?? 0;
+  entry.term.options.letterSpacing = ls === 0 ? 0.001 : 0;
+  entry.term.options.letterSpacing = ls;
   return true;
 }
 
