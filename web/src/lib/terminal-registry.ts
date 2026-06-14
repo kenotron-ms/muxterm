@@ -415,7 +415,22 @@ export const terminalRegistry = {
           requestAnimationFrame(() => {
             if (entry.opened) return; // guard: concurrent attach beat us
             doOpen();
-            terminalRegistry._settleAndDrain(paneId);
+            // doOpen() → term.open() → charSizeService.measure() uses an OffscreenCanvas
+            // (xterm's TextMetricsMeasureStrategy). On some browsers the OffscreenCanvas
+            // context has not yet applied the just-loaded web font to measureText(), so
+            // the first measurement returns fallback-monospace metrics → wrong css.cell.width
+            // → FitAddon computes fewer cols than the container can fit.
+            //
+            // Waiting one more frame gives the canvas context time to reflect the font.
+            // Then we force a re-measure via xterm's internal charSizeService so that
+            // _updateDimensions() recomputes css.cell.width before fitAddon.fit() runs.
+            // charSizeService is a private API but FitAddon itself uses the same _core
+            // access pattern (noted as "TODO: Remove reliance on private API" in FitAddon.ts).
+            requestAnimationFrame(() => {
+              const core = (entry.term as any)._core;
+              core?._charSizeService?.measure();
+              terminalRegistry._settleAndDrain(paneId);
+            });
           }),
         );
       }
