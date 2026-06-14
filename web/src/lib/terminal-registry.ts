@@ -203,8 +203,47 @@ function _fitIfPlausible(entry: PaneEntry): boolean {
   // back fires the event twice; the restore (back to 0) is the call that matters.
   // Math.round(0.001) = 0, so device.cell.width is unchanged — no layout side-effects.
   const ls = entry.term.options.letterSpacing ?? 0;
+  const colsBefore = entry.term.cols;
   entry.term.options.letterSpacing = ls === 0 ? 0.001 : 0;
   entry.term.options.letterSpacing = ls;
+  // Debug: verify what letter-spacing was actually set after the toggle
+  const rows = entry.hostEl.querySelector('.xterm-rows') as HTMLElement | null;
+  // Read the actual xterm WidthCache measure element (what _measure() actually uses)
+  const measureEl = entry.hostEl.querySelector('.xterm-char-measure-element') as HTMLElement | null;
+  let xtermMeasureW = 'no element';
+  if (measureEl) {
+    const origText = measureEl.textContent;
+    measureEl.textContent = 'W'.repeat(32);
+    xtermMeasureW = `${measureEl.offsetWidth}/32=${measureEl.offsetWidth/32}`;
+    measureEl.textContent = origText ?? '';
+  }
+  // Also measure in document.body for comparison
+  let docBodyMeasureW = 'N/A';
+  try {
+    const span = document.createElement('span');
+    span.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font-kerning:none;" +
+      `font-family:'${TERMINAL_FONT_FAMILY}';font-size:13px;`;
+    span.textContent = 'W'.repeat(32);
+    document.body.appendChild(span);
+    docBodyMeasureW = `${span.offsetWidth}/32=${span.offsetWidth/32}`;
+    document.body.removeChild(span);
+  } catch (_e) {}
+  // Compute what _setDefaultSpacing SHOULD give: css.cell.width = screenWidth / cols
+  const screenEl = rows?.parentElement as HTMLElement | null;
+  const screenW = screenEl ? parseFloat(screenEl.style.width) : -1;
+  const theoreticalCellW = screenW > 0 ? screenW / colsBefore : -1;
+  const theoreticalSpacing = theoreticalCellW > 0
+    ? theoreticalCellW - (measureEl ? measureEl.offsetWidth / 32 : 7.8125)
+    : -1;
+  muxLog('_fitIfPlausible', `ls toggle done`, {
+    cols: colsBefore,
+    rowsLS: rows?.style?.letterSpacing ?? 'not found',
+    xtermMeasureW,
+    docBodyMeasureW,
+    screenW,
+    theoreticalCellW: theoreticalCellW.toFixed(8),
+    theoreticalSpacing: theoreticalSpacing.toFixed(8),
+  });
   return true;
 }
 
