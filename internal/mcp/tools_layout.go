@@ -15,10 +15,10 @@ func newLayoutTools(c *Client) *layoutTools {
 
 // createPane creates a new pane in the attached workspace. The pane kind
 // defaults to "terminal"; pass kind="browser" with browser_port and url for a
-// browser pane. An optional placement token (tab|split-right|split-left|
-// split-above|split-below) is included in the result as an advisory hint —
-// the actual split is executed by the browser-side dockview layer, not by the
-// MCP server.
+// browser pane. placement (tab|split-right|split-left|split-above|split-below)
+// and reference_pane (integer pane ID) are forwarded to the browser-side
+// dockview layer via the pane-added broadcast; the actual split is executed
+// there, not by the MCP server.
 func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 	kind, _ := args["kind"].(string)
 	if kind == "" {
@@ -27,11 +27,22 @@ func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 
 	placement, _ := args["placement"].(string)
 
+	// reference_pane is an optional integer; 0 means "use the active pane".
+	referencePaneID := 0
+	if v, ok := args["reference_pane"]; ok {
+		switch n := v.(type) {
+		case float64:
+			referencePaneID = int(n)
+		case int:
+			referencePaneID = n
+		}
+	}
+
 	var paneID int
 
 	switch kind {
 	case "terminal":
-		id, err := lt.c.conn.CreatePane(nil)
+		id, err := lt.c.conn.CreatePane(nil, placement, referencePaneID)
 		if err != nil {
 			return "", fmt.Errorf("creating terminal pane: %w", err)
 		}
@@ -43,7 +54,7 @@ func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 			return "", err
 		}
 		url, _ := args["url"].(string)
-		id, err := lt.c.conn.CreateBrowserPane(port, url, nil)
+		id, err := lt.c.conn.CreateBrowserPane(port, url, nil, placement, referencePaneID)
 		if err != nil {
 			return "", fmt.Errorf("creating browser pane: %w", err)
 		}
@@ -56,6 +67,9 @@ func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 	result := map[string]any{"pane_id": paneID}
 	if placement != "" {
 		result["placement"] = placement
+	}
+	if referencePaneID != 0 {
+		result["reference_pane"] = referencePaneID
 	}
 	return jsonText(result), nil
 }

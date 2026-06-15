@@ -170,6 +170,10 @@ type Message struct {
 	BrowserPath  string            `json:"browserPath,omitempty"`
 	ProxyHeaders map[string]string `json:"proxyHeaders,omitempty"`
 
+	// Layout placement fields (create-pane request → pane-added broadcast → browser dockview)
+	Placement      string `json:"placement,omitempty"`      // tab|split-right|split-left|split-above|split-below
+	ReferencePaneID int   `json:"referencePaneId,omitempty"` // pane to split relative to; 0 = active pane
+
 	// MCP relay fields (browser-action, screen-snapshot-result, shell-prompt, get-layout).
 	Action     string     `json:"action,omitempty"`     // browser-action verb: click/fill/...
 	Ref        string     `json:"ref,omitempty"`        // element ref e1,e2 from snapshot
@@ -226,4 +230,9 @@ type PaneInfo struct {
 	BrowserPort  int               `json:"browserPort,omitempty"`
 	BrowserPath  string            `json:"browserPath,omitempty"`
 	ProxyHeaders map[string]string `json:"proxyHeaders,omitempty"`
+
+	// Layout placement (only present on pane-added events from create-pane requests
+	// that carried an explicit placement token; absent means default/tab placement).
+	Placement       string `json:"placement,omitempty"`       // tab|split-right|split-left|split-above|split-below
+	ReferencePaneID int    `json:"referencePaneId,omitempty"` // pane to split relative to; 0 = active pane
 }

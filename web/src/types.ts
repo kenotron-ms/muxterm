@@ -140,6 +140,11 @@ export interface SessiondMessage {
   tunnelPort?: number;
   /** List of active tunnels (present on tunnel-list reply). */
   tunnels?: TunnelInfo[];
+  /** Layout placement for pane-added events from MCP/external create-pane requests.
+   *  Values: tab | split-right | split-left | split-above | split-below */
+  placement?: string;
+  /** Reference pane id for split placement (0 = active pane). */
+  referencePaneId?: number;
 }
 
 // ---------------------------------------------------------------------------

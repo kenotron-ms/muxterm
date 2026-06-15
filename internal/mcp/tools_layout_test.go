@@ -87,7 +87,7 @@ func TestGetLayoutReturnsASCII(t *testing.T) {
 	}
 
 	// Create a pane.
-	paneID, err := c.conn.CreatePane(nil)
+	paneID, err := c.conn.CreatePane(nil, "", 0)
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestRenamePane(t *testing.T) {
 	}
 
 	// Create a pane to rename.
-	paneID, err := c.conn.CreatePane(nil)
+	paneID, err := c.conn.CreatePane(nil, "", 0)
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestListPanesReturnsPaneID(t *testing.T) {
 	}
 
 	// Create a pane so there's something to list.
-	if _, err := c.conn.CreatePane(nil); err != nil {
+	if _, err := c.conn.CreatePane(nil, "", 0); err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
 

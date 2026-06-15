@@ -377,6 +377,15 @@ export class MuxApp extends LitElement {
     // (next-action decisions: bootstrap, MRU, recovery).
     this._controller = new WorkspaceController(store, this._socket);
     this._socket.onSessiondMessage = (msg) => {
+      // For pane-added events carrying an explicit placement token (e.g. from
+      // an MCP create_pane call), pre-wire the dock's placement intent BEFORE
+      // applySessiond() triggers the Lit reactive update that runs the
+      // reconciler. The dock reads _nextPlacement inside updated(), which runs
+      // synchronously during the next microtask render — setting it here (still
+      // synchronous) is safe because microtasks haven't run yet.
+      if (msg.type === SessiondType.PaneAdded && msg.placement) {
+        this._dock?.preparePlacementForPaneAdded(msg.placement, msg.referencePaneId);
+      }
       store.applySessiond(msg);
       this._controller?.onMessage(msg);
       // Replay setup: must run synchronously here, BEFORE binary replay frames

@@ -321,10 +321,17 @@ func (c *Client) SaveLayout(workspaceID, breakpoint, layout string) error {
 // returns the daemon-assigned workspace-local pane id from the pane-created
 // reply. It is connection-scoped: the request carries no workspaceId, targeting
 // whichever workspace this connection is attached to. cmd is the argv to exec;
-// an empty cmd means the daemon's default $SHELL. The browser spawns its
-// xterm.js instance on the resulting pane-added broadcast, NOT on this ack.
-func (c *Client) CreatePane(cmd []string) (int, error) {
-	reply, err := c.request(&Message{Type: TypeCreatePane, Cmd: cmd})
+// an empty cmd means the daemon's default $SHELL. placement and referencePaneID
+// control how the browser-side dockview layer positions the new pane; pass ""
+// and 0 for the default behaviour (append to active pane). The browser spawns
+// its xterm.js instance on the resulting pane-added broadcast, NOT on this ack.
+func (c *Client) CreatePane(cmd []string, placement string, referencePaneID int) (int, error) {
+	reply, err := c.request(&Message{
+		Type:            TypeCreatePane,
+		Cmd:             cmd,
+		Placement:       placement,
+		ReferencePaneID: referencePaneID,
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -332,17 +339,22 @@ func (c *Client) CreatePane(cmd []string) (int, error) {
 }
 
 // CreateBrowserPane creates a browser pane with the given port, path, and
-// optional extra headers. Returns the server-assigned workspace-local pane ID.
-func (c *Client) CreateBrowserPane(port int, path string, headers map[string]string) (int, error) {
+// optional extra headers. placement and referencePaneID control how the
+// browser-side dockview layer positions the new pane; pass "" and 0 for the
+// default behaviour (append to active pane). Returns the server-assigned
+// workspace-local pane ID.
+func (c *Client) CreateBrowserPane(port int, path string, headers map[string]string, placement string, referencePaneID int) (int, error) {
 	if path == "" {
 		path = "/"
 	}
 	reply, err := c.request(&Message{
-		Type:         TypeCreatePane,
-		SurfaceKind:  "browser",
-		BrowserPort:  port,
-		BrowserPath:  path,
-		ProxyHeaders: headers,
+		Type:            TypeCreatePane,
+		SurfaceKind:     "browser",
+		BrowserPort:     port,
+		BrowserPath:     path,
+		ProxyHeaders:    headers,
+		Placement:       placement,
+		ReferencePaneID: referencePaneID,
 	})
 	if err != nil {
 		return 0, err
@@ -422,14 +434,16 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypePaneAdded:
 		if h.OnPaneAdded != nil {
 			h.OnPaneAdded(PaneInfo{
-				PaneID:       msg.PaneID,
-				Cols:         msg.Cols,
-				Rows:         msg.Rows,
-				Title:        msg.Title,
-				SurfaceKind:  msg.SurfaceKind,
-				BrowserPort:  msg.BrowserPort,
-				BrowserPath:  msg.BrowserPath,
-				ProxyHeaders: msg.ProxyHeaders,
+				PaneID:          msg.PaneID,
+				Cols:            msg.Cols,
+				Rows:            msg.Rows,
+				Title:           msg.Title,
+				SurfaceKind:     msg.SurfaceKind,
+				BrowserPort:     msg.BrowserPort,
+				BrowserPath:     msg.BrowserPath,
+				ProxyHeaders:    msg.ProxyHeaders,
+				Placement:       msg.Placement,
+				ReferencePaneID: msg.ReferencePaneID,
 			})
 		}
 	case TypePaneClosed:

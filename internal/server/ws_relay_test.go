@@ -18,12 +18,12 @@ type trackingDaemonConn struct {
 	browserHeaders          map[string]string
 }
 
-func (f *trackingDaemonConn) CreatePane(cmd []string) (int, error) {
+func (f *trackingDaemonConn) CreatePane(cmd []string, placement string, referencePaneID int) (int, error) {
 	f.createPaneCalled = true
 	return f.createdID, nil
 }
 
-func (f *trackingDaemonConn) CreateBrowserPane(port int, path string, headers map[string]string) (int, error) {
+func (f *trackingDaemonConn) CreateBrowserPane(port int, path string, headers map[string]string, placement string, referencePaneID int) (int, error) {
 	f.createBrowserPaneCalled = true
 	f.browserPort = port
 	f.browserPath = path

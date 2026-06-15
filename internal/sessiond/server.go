@@ -413,7 +413,7 @@ func (c *conn) createPane(msg Message) {
 		return
 	}
 	if msg.SurfaceKind == "browser" {
-		if msg.BrowserPort < 0 || msg.BrowserPort > 65535 {
+		if msg.BrowserPort < 1 || msg.BrowserPort > 65535 {
 			c.replyError(msg.CID, "invalid-port", "browserPort must be 1\u201365535")
 			return
 		}
@@ -421,14 +421,16 @@ func (c *conn) createPane(msg Message) {
 		c.srv.reg.PutPane(wsID, p)
 		c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
 		c.srv.broadcast(wsID, &Message{
-			Type:        TypePaneAdded,
-			WorkspaceID: wsID,
-			PaneID:      localID,
-			SurfaceKind: "browser",
-			BrowserPort: msg.BrowserPort,
-			BrowserPath: msg.BrowserPath,
-			Title:       p.Title,
-			ClientRef:   msg.ClientRef,
+			Type:            TypePaneAdded,
+			WorkspaceID:     wsID,
+			PaneID:          localID,
+			SurfaceKind:     "browser",
+			BrowserPort:     msg.BrowserPort,
+			BrowserPath:     msg.BrowserPath,
+			Title:           p.Title,
+			ClientRef:       msg.ClientRef,
+			Placement:       msg.Placement,
+			ReferencePaneID: msg.ReferencePaneID,
 		})
 		return
 	}
@@ -453,7 +455,16 @@ func (c *conn) createPane(msg Message) {
 	}
 	p.onPromptPtr.Store(&onPromptFn)
 	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
-	c.srv.broadcast(wsID, &Message{Type: TypePaneAdded, WorkspaceID: wsID, PaneID: localID, Cols: cols, Rows: rows, ClientRef: msg.ClientRef})
+	c.srv.broadcast(wsID, &Message{
+		Type:            TypePaneAdded,
+		WorkspaceID:     wsID,
+		PaneID:          localID,
+		Cols:            cols,
+		Rows:            rows,
+		ClientRef:       msg.ClientRef,
+		Placement:       msg.Placement,
+		ReferencePaneID: msg.ReferencePaneID,
+	})
 }
 
 // closePane kills the pane identified by msg.PaneID in the connection's

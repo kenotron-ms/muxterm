@@ -98,6 +98,24 @@ class TerminalRenderer implements IContentRenderer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Placement helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Map a placement token (from MCP create_pane or layout-command) to the
+ * corresponding dockview AddPanelOptions direction.
+ * Anything unrecognised falls back to 'right'.
+ */
+function placementToDirection(placement: string | undefined): 'left' | 'right' | 'above' | 'below' {
+  switch (placement) {
+    case 'split-left':  return 'left';
+    case 'split-above': return 'above';
+    case 'split-below': return 'below';
+    default:            return 'right'; // split-right or unknown
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HeaderButton
 // A single icon button used as a dockview header action. Two are mounted per
 // group, in different dockview header slots:
@@ -208,6 +226,8 @@ export class MuxDock extends LitElement {
    * then resets it to the 'tab' default.
    */
   private _nextPlacement: 'tab' | 'split' = 'tab';
+  /** Dockview direction to use when _nextPlacement === 'split'. Defaults to 'right'. */
+  private _splitDirection: 'left' | 'right' | 'above' | 'below' = 'right';
   /** ID of the panel to split from when _nextPlacement === 'split'. */
   private _splitReferenceId: string | null = null;
   /**
@@ -848,14 +868,15 @@ export class MuxDock extends LitElement {
           // whose header button was clicked (so "+" / split on an INACTIVE
           // group targets THAT group, not the active one).
           if (this._nextPlacement === 'split' && this._splitReferenceId !== null) {
-            // New side-by-side group to the right of the clicked group.
-            opts.position = { referencePanel: this._splitReferenceId, direction: 'right' };
+            // New split group next to the reference panel in the requested direction.
+            opts.position = { referencePanel: this._splitReferenceId, direction: this._splitDirection };
           } else if (this._nextPlacement === 'tab' && this._placementReferenceId !== null) {
             // New tab WITHIN the clicked group (also activates that group).
             opts.position = { referencePanel: this._placementReferenceId, direction: 'within' };
           }
           // Reset placement intent now that it's been consumed.
           this._nextPlacement = 'tab';
+          this._splitDirection = 'right';
           this._splitReferenceId = null;
           this._placementReferenceId = null;
           const panel = this._dv.addPanel(opts);
@@ -956,6 +977,31 @@ export class MuxDock extends LitElement {
   }
 
   /**
+   * Pre-wire placement intent for an incoming pane-added event from a
+   * server-initiated (e.g. MCP) create-pane that carries placement info.
+   *
+   * Must be called synchronously BEFORE store.applySessiond() triggers the
+   * Lit reactive update that runs the reconciler. Unlike _requestPane, this
+   * does NOT dispatch 'pane-create' — the pane already exists server-side.
+   */
+  preparePlacementForPaneAdded(placement: string, referencePaneId?: number): void {
+    const refId = referencePaneId !== undefined && referencePaneId > 0
+      ? String(referencePaneId)
+      : (this._dv?.activePanel?.id ?? null);
+    if (placement === 'tab') {
+      this._nextPlacement = 'tab';
+      this._placementReferenceId = refId;
+      this._splitReferenceId = null;
+    } else {
+      // split-right | split-left | split-above | split-below
+      this._nextPlacement = 'split';
+      this._splitDirection = placementToDirection(placement);
+      this._splitReferenceId = refId;
+      this._placementReferenceId = refId;
+    }
+  }
+
+  /**
    * Execute a layout command from the server: create-pane, rename-pane,
    * close-pane, or switch-workspace. Replaces the Phase 2 stub.
    */
@@ -964,13 +1010,19 @@ export class MuxDock extends LitElement {
     if (!dv) return;
     switch (msg.command) {
       case 'create-pane': {
-        this._nextPlacement = msg.placement === 'tab' ? 'tab' : 'split';
-        if (msg.referencePaneId !== undefined && msg.placement !== 'tab') {
-          this._splitReferenceId = String(msg.referencePaneId);
-        }
-        this._placementReferenceId = msg.referencePaneId !== undefined
+        const refId = msg.referencePaneId !== undefined
           ? String(msg.referencePaneId)
           : (dv.activePanel?.id ?? null);
+        if (msg.placement === 'tab') {
+          this._nextPlacement = 'tab';
+          this._placementReferenceId = refId;
+          this._splitReferenceId = null;
+        } else {
+          this._nextPlacement = 'split';
+          this._splitDirection = placementToDirection(msg.placement);
+          this._splitReferenceId = refId;
+          this._placementReferenceId = refId;
+        }
         this.dispatchEvent(
           new CustomEvent('pane-create', {
             bubbles: true,

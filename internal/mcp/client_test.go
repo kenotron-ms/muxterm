@@ -103,7 +103,7 @@ func TestOutputBufferAccumulates(t *testing.T) {
 	}
 
 	// Create a pane that repeatedly writes output.
-	paneID, err := c.conn.CreatePane([]string{"echo", "hello-from-mcp"})
+	paneID, err := c.conn.CreatePane([]string{"echo", "hello-from-mcp"}, "", 0)
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestWaitForPromptResolves(t *testing.T) {
 	}
 
 	// Create a pane that emits an OSC 133 ;D;0 BEL sequence.
-	paneID, err := c.conn.CreatePane([]string{"sh", "-c", "printf '\\033]133;D;0\\007'"})
+	paneID, err := c.conn.CreatePane([]string{"sh", "-c", "printf '\\033]133;D;0\\007'"}, "", 0)
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}

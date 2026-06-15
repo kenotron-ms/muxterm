@@ -191,9 +191,9 @@ func (c *Client) handleTextInput(data []byte) {
 			err    error
 		)
 		if msg.SurfaceKind == "browser" {
-			paneID, err = c.daemon.CreateBrowserPane(msg.BrowserPort, msg.BrowserPath, msg.ProxyHeaders)
+			paneID, err = c.daemon.CreateBrowserPane(msg.BrowserPort, msg.BrowserPath, msg.ProxyHeaders, msg.Placement, msg.ReferencePaneID)
 		} else {
-			paneID, err = c.daemon.CreatePane(msg.Cmd)
+			paneID, err = c.daemon.CreatePane(msg.Cmd, msg.Placement, msg.ReferencePaneID)
 		}
 		if err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
@@ -414,15 +414,17 @@ func (h *Hub) attachClient(c *Client) error {
 		},
 		OnPaneAdded: func(pane sessiond.PaneInfo) {
 			c.sendMessage(&sessiond.Message{
-				Type:         sessiond.TypePaneAdded,
-				PaneID:       pane.PaneID,
-				Cols:         pane.Cols,
-				Rows:         pane.Rows,
-				Title:        pane.Title,
-				SurfaceKind:  pane.SurfaceKind,
-				BrowserPort:  pane.BrowserPort,
-				BrowserPath:  pane.BrowserPath,
-				ProxyHeaders: pane.ProxyHeaders,
+				Type:            sessiond.TypePaneAdded,
+				PaneID:          pane.PaneID,
+				Cols:            pane.Cols,
+				Rows:            pane.Rows,
+				Title:           pane.Title,
+				SurfaceKind:     pane.SurfaceKind,
+				BrowserPort:     pane.BrowserPort,
+				BrowserPath:     pane.BrowserPath,
+				ProxyHeaders:    pane.ProxyHeaders,
+				Placement:       pane.Placement,
+				ReferencePaneID: pane.ReferencePaneID,
 			})
 		},
 		OnPaneClosed: func(paneID int) {

@@ -90,7 +90,7 @@ func TestClientScreenSnapshotAndGetLayout(t *testing.T) {
 	if _, err := c.Attach("ws1", ""); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
-	if _, err := c.CreatePane([]string{"bash"}); err != nil {
+	if _, err := c.CreatePane([]string{"bash"}, "", 0); err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestClientOnShellPromptFires(t *testing.T) {
 
 	// Create a pane whose sole output is an OSC 133 ;D;0 BEL sequence.
 	// \033 = ESC (octal), \007 = BEL (octal) — interpreted by sh's printf.
-	if _, err := c.CreatePane([]string{"sh", "-c", "printf '\\033]133;D;0\\007'"}); err != nil {
+	if _, err := c.CreatePane([]string{"sh", "-c", "printf '\\033]133;D;0\\007'"}, "", 0); err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
 

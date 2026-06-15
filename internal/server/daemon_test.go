@@ -46,11 +46,11 @@ func (f *fakeDaemonConn) ClosePane(paneID int) error { return nil }
 
 func (f *fakeDaemonConn) SaveLayout(workspaceID, breakpoint, layout string) error { return nil }
 
-func (f *fakeDaemonConn) CreatePane(cmd []string) (int, error) {
+func (f *fakeDaemonConn) CreatePane(cmd []string, placement string, referencePaneID int) (int, error) {
 	return f.createdID, nil
 }
 
-func (f *fakeDaemonConn) CreateBrowserPane(port int, path string, headers map[string]string) (int, error) {
+func (f *fakeDaemonConn) CreateBrowserPane(port int, path string, headers map[string]string, placement string, referencePaneID int) (int, error) {
 	return f.createdID, nil
 }
 

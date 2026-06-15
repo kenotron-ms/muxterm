@@ -303,7 +303,7 @@ func TestCreatePaneReturnsID(t *testing.T) {
 	defer c.Close()
 	go c.Run()
 
-	id, err := c.CreatePane([]string{"bash"})
+	id, err := c.CreatePane([]string{"bash"}, "", 0)
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
