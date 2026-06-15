@@ -202,6 +202,11 @@ func runLocal(cfg Config) error {
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
 
+	// Publish serve-layer URL so the MCP server can discover the tunnel API.
+	if err := sessiond.WriteServerURL(cfg.Addr); err != nil {
+		log.Printf("muxterm: could not write server URL: %v", err)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -239,6 +244,11 @@ func runServe(cfg Config) error {
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
+
+	// Publish serve-layer URL so the MCP server can discover the tunnel API.
+	if err := sessiond.WriteServerURL(cfg.Addr); err != nil {
+		log.Printf("muxterm: could not write server URL: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

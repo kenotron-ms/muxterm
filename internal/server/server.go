@@ -58,6 +58,9 @@ func New(cfg Config) *Server {
 
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/token", s.handleToken)
+	s.mux.HandleFunc("GET /api/tunnels", s.handleTunnelList)
+	s.mux.HandleFunc("POST /api/tunnels", s.handleTunnelCreate)
+	s.mux.HandleFunc("DELETE /api/tunnels/{id}", s.handleTunnelClose)
 	s.mux.HandleFunc("/t/", s.handleTunnelProxy)
 	s.mux.HandleFunc("GET /ws", s.handleWS)
 
@@ -136,6 +139,67 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.handleWSImpl(w, r)
+}
+
+// handleTunnelList returns a JSON array of all active tunnels (id, port).
+// Restricted to localhost callers; the primary consumer is the MCP server.
+func (s *Server) handleTunnelList(w http.ResponseWriter, r *http.Request) {
+	if !IsLocalhost(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	entries := s.tunnels.List()
+	items := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		items = append(items, map[string]any{
+			"id":   e.id,
+			"port": e.port,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items) //nolint:errcheck
+}
+
+// handleTunnelCreate registers a new port-forward tunnel and returns the
+// assigned id. Body must be JSON {"port": <int>}. Restricted to localhost.
+func (s *Server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
+	if !IsLocalhost(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		Port int `json:"port"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Port == 0 {
+		http.Error(w, "port required", http.StatusBadRequest)
+		return
+	}
+	id, err := s.tunnels.Create(body.Port)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+		"id":   id,
+		"port": body.Port,
+	})
+}
+
+// handleTunnelClose deregisters the tunnel identified by the {id} path
+// segment. Returns 404 when the id is unknown. Restricted to localhost.
+func (s *Server) handleTunnelClose(w http.ResponseWriter, r *http.Request) {
+	if !IsLocalhost(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	id := r.PathValue("id")
+	if !s.tunnels.Close(id) {
+		http.Error(w, "tunnel not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true}) //nolint:errcheck
 }
 
 // handleTunnelProxy reverse-proxies requests arriving at /t/{id}/... to the

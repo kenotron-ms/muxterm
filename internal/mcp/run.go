@@ -17,6 +17,12 @@ type lazyClient struct {
 // get returns the Client, dialing on the first call. Subsequent calls return
 // the same cached result. On dial failure the error is wrapped as
 // "connect to sessiond: <cause>".
+//
+// After a successful dial, get auto-attaches to the first available workspace
+// so that pane and terminal tools work immediately without requiring an
+// explicit switch_workspace call. If no workspaces exist yet (empty daemon),
+// the connection remains unattached and switch_workspace must be called once
+// a workspace is created.
 func (lc *lazyClient) get() (*Client, error) {
 	lc.once.Do(func() {
 		c, err := Dial()
@@ -24,13 +30,19 @@ func (lc *lazyClient) get() (*Client, error) {
 			lc.err = fmt.Errorf("connect to sessiond: %w", err)
 			return
 		}
+		// Auto-attach to the first workspace so callers don't need to call
+		// switch_workspace before using pane or terminal tools. Ignore errors:
+		// if there are no workspaces the connection stays unattached.
+		if workspaces, wsErr := c.conn.ListWorkspaces(); wsErr == nil && len(workspaces) > 0 {
+			_ = c.AttachWorkspace(workspaces[0].WorkspaceID)
+		}
 		lc.c = c
 	})
 	return lc.c, lc.err
 }
 
 // NewStdioServer creates a Server wired to os.Stdin/Stdout and registers all
-// 25 MCP tools. The sessiond client is dialed lazily on the first tool call,
+// 15 MCP tools. The sessiond client is dialed lazily on the first tool call,
 // so initialize and tools/list work without a running daemon.
 //
 // The returned closer must be called when the server exits: it closes the
@@ -61,6 +73,7 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 		}
 	}
 	registerAllTools(srv, wrap)
+	registerTunnelTools(srv)
 
 	// attachOnce guards the one-time workspace attach for resources/list.
 	// Calling c.conn.Attach repeatedly replays the full retained output buffer
@@ -121,16 +134,17 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 	)
 }
 
-// registerAllTools registers all 25 MCP tools on srv using wrap to convert
-// func(*Client, map[string]any)(string,error) handlers into ToolFuncs.
-// Tools are registered in the canonical order:
+// registerAllTools registers the 12 sessiond-backed MCP tools on srv using
+// wrap to convert func(*Client, map[string]any)(string,error) handlers into
+// ToolFuncs. Tools are registered in the canonical order:
 //
 //	Terminal:   run_command, send_input, get_screen
 //	Workspace:  list_workspaces, create_workspace, switch_workspace, close_workspace
 //	Layout:     create_pane, rename_pane, close_pane, list_panes, get_layout
-//	Browser:    browser_goto, browser_go_back, browser_go_forward, browser_reload,
-//	            browser_click, browser_fill, browser_type, browser_press, browser_hover,
-//	            browser_select, browser_snapshot, browser_eval, browser_screenshot
+//
+// The 3 tunnel tools (list_tunnels, create_tunnel, close_tunnel) are registered
+// separately via registerTunnelTools because they go through the HTTP REST API
+// of the serve layer rather than the sessiond daemon.
 func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (string, error)) ToolFunc) {
 	// --- Terminal tools ---
 
@@ -326,215 +340,54 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 		}),
 	)
 
-	// --- Browser tools ---
+}
+
+// registerTunnelTools registers the 3 tunnel MCP tools directly on srv,
+// without going through the lazyClient. Tunnel tools communicate with the
+// serve-layer HTTP REST API (not the sessiond daemon), so they must not
+// require sessiond to be running.
+func registerTunnelTools(srv *Server) {
+	tt := newTunnelTools()
 
 	srv.Register(
-		"browser_goto",
-		"navigate browser pane to url, waits for load; equivalent to playwright page.goto()",
+		"list_tunnels",
+		"list all active tunnels with id and port",
 		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id": map[string]any{"type": "integer"},
-				"url":     map[string]any{"type": "string"},
-			},
-			"required": []string{"pane_id", "url"},
+			"type":       "object",
+			"properties": map[string]any{},
 		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserGoto(args)
-		}),
+		func(args map[string]any) (string, error) {
+			return tt.listTunnels(args)
+		},
 	)
 
 	srv.Register(
-		"browser_go_back",
-		"navigate browser pane back in history; equivalent to playwright page.goBack()",
+		"create_tunnel",
+		"create a new port-forward tunnel for the given local port; returns id and the /t/{id}/ proxy path",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"pane_id": map[string]any{"type": "integer"},
+				"port": map[string]any{"type": "integer"},
 			},
-			"required": []string{"pane_id"},
+			"required": []string{"port"},
 		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserGoBack(args)
-		}),
+		func(args map[string]any) (string, error) {
+			return tt.createTunnel(args)
+		},
 	)
 
 	srv.Register(
-		"browser_go_forward",
-		"navigate browser pane forward in history; equivalent to playwright page.goForward()",
+		"close_tunnel",
+		"close tunnel by id, removing the port-forward",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"pane_id": map[string]any{"type": "integer"},
+				"tunnel_id": map[string]any{"type": "string"},
 			},
-			"required": []string{"pane_id"},
+			"required": []string{"tunnel_id"},
 		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserGoForward(args)
-		}),
-	)
-
-	srv.Register(
-		"browser_reload",
-		"reload the current page in browser pane; equivalent to playwright page.reload()",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id": map[string]any{"type": "integer"},
-			},
-			"required": []string{"pane_id"},
+		func(args map[string]any) (string, error) {
+			return tt.closeTunnel(args)
 		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserReload(args)
-		}),
-	)
-
-	srv.Register(
-		"browser_click",
-		"click an element in browser pane by ref or css selector; equivalent to playwright locator.click()",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id":  map[string]any{"type": "integer"},
-				"ref":      map[string]any{"type": "string"},
-				"selector": map[string]any{"type": "string"},
-			},
-			"required": []string{"pane_id"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserClick(args)
-		}),
-	)
-
-	srv.Register(
-		"browser_fill",
-		"fill an input element in browser pane with value; equivalent to playwright locator.fill()",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id":  map[string]any{"type": "integer"},
-				"ref":      map[string]any{"type": "string"},
-				"selector": map[string]any{"type": "string"},
-				"value":    map[string]any{"type": "string"},
-			},
-			"required": []string{"pane_id", "value"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserFill(args)
-		}),
-	)
-
-	srv.Register(
-		"browser_type",
-		"type text into focused element in browser pane key-by-key; equivalent to playwright keyboard.type()",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id": map[string]any{"type": "integer"},
-				"text":    map[string]any{"type": "string"},
-			},
-			"required": []string{"pane_id", "text"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserType(args)
-		}),
-	)
-
-	srv.Register(
-		"browser_press",
-		"press a keyboard key in browser pane; equivalent to playwright keyboard.press()",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id": map[string]any{"type": "integer"},
-				"key":     map[string]any{"type": "string"},
-			},
-			"required": []string{"pane_id", "key"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserPress(args)
-		}),
-	)
-
-	srv.Register(
-		"browser_hover",
-		"hover over an element in browser pane by ref or css selector; equivalent to playwright locator.hover()",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id":  map[string]any{"type": "integer"},
-				"ref":      map[string]any{"type": "string"},
-				"selector": map[string]any{"type": "string"},
-			},
-			"required": []string{"pane_id"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserHover(args)
-		}),
-	)
-
-	srv.Register(
-		"browser_select",
-		"select option(s) in a <select> element in browser pane; equivalent to playwright locator.selectOption()",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id":  map[string]any{"type": "integer"},
-				"ref":      map[string]any{"type": "string"},
-				"selector": map[string]any{"type": "string"},
-				"value":    map[string]any{"type": "string"},
-			},
-			"required": []string{"pane_id", "value"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserSelect(args)
-		}),
-	)
-
-	srv.Register(
-		"browser_snapshot",
-		"take accessibility snapshot of browser pane for LLM-readable DOM inspection; returns aria tree",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id": map[string]any{"type": "integer"},
-			},
-			"required": []string{"pane_id"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserSnapshot(args)
-		}),
-	)
-
-	srv.Register(
-		"browser_eval",
-		"evaluate JavaScript expression in browser pane and return result; equivalent to playwright page.evaluate()",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id": map[string]any{"type": "integer"},
-				"expr":    map[string]any{"type": "string"},
-				"ref":     map[string]any{"type": "string"},
-			},
-			"required": []string{"pane_id", "expr"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserEval(args)
-		}),
-	)
-
-	srv.Register(
-		"browser_screenshot",
-		"capture PNG screenshot of browser pane and return base64-encoded image",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id": map[string]any{"type": "integer"},
-			},
-			"required": []string{"pane_id"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newBrowserTools(c).browserScreenshot(args)
-		}),
 	)
 }

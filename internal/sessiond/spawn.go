@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -128,4 +129,36 @@ func IsAlive(socketPath string) bool {
 	}
 	conn.Close()
 	return true
+}
+
+// serverURLPath returns the path to the file that records the serve layer's
+// HTTP base URL. It lives alongside the daemon socket in socketDir.
+func serverURLPath() string {
+	return filepath.Join(socketDir(), "server.url")
+}
+
+// WriteServerURL writes the HTTP base URL of the running serve layer to a
+// well-known file so that the MCP server process can discover it. addr is the
+// net.Listener address (e.g. ":8311" or "localhost:8311"); WriteServerURL
+// normalises it to "http://localhost:<port>".
+func WriteServerURL(addr string) error {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("parse addr %q: %w", addr, err)
+	}
+	if err := os.MkdirAll(socketDir(), 0o700); err != nil {
+		return fmt.Errorf("create socket dir: %w", err)
+	}
+	return os.WriteFile(serverURLPath(), []byte("http://localhost:"+port), 0o600)
+}
+
+// ServerURL returns the HTTP base URL of the running muxterm serve layer. It
+// reads the URL written by WriteServerURL at serve startup. Returns an error
+// when the file does not exist (serve process not running) or cannot be read.
+func ServerURL() (string, error) {
+	data, err := os.ReadFile(serverURLPath())
+	if err != nil {
+		return "", fmt.Errorf("server URL file (%s): %w (is muxterm serve running?)", serverURLPath(), err)
+	}
+	return strings.TrimSpace(string(data)), nil
 }
