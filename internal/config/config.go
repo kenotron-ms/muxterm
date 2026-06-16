@@ -3,9 +3,11 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 )
@@ -81,6 +83,53 @@ func Load(path string) (Config, error) {
 		return Defaults(), nil
 	}
 	return cfg, nil
+}
+
+// Merge returns a copy of base with non-zero fields from partial applied.
+// Rules:
+//   - string fields: applied if partial value is non-empty
+//   - int fields: applied if partial value is non-zero
+//   - bool fields: always applied from partial (Go zero bool is false;
+//     partial updates cannot clear a bool back to false — document this limitation)
+func Merge(base, partial Config) Config {
+	result := base
+	if partial.Theme.Palette != "" {
+		result.Theme.Palette = partial.Theme.Palette
+	}
+	if partial.Font.Family != "" {
+		result.Font.Family = partial.Font.Family
+	}
+	if partial.Font.Size != 0 {
+		result.Font.Size = partial.Font.Size
+	}
+	if partial.Terminal.CursorStyle != "" {
+		result.Terminal.CursorStyle = partial.Terminal.CursorStyle
+	}
+	result.Terminal.CursorBlink = partial.Terminal.CursorBlink
+	if partial.Terminal.Scrollback != 0 {
+		result.Terminal.Scrollback = partial.Terminal.Scrollback
+	}
+	if partial.Terminal.Bell != "" {
+		result.Terminal.Bell = partial.Terminal.Bell
+	}
+	return result
+}
+
+// Write encodes cfg as TOML and atomically writes it to path.
+// Parent directories are created if they do not exist.
+func Write(path string, cfg Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("config.Write: mkdir: %w", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("config.Write: create: %w", err)
+	}
+	defer f.Close()
+	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+		return fmt.Errorf("config.Write: encode: %w", err)
+	}
+	return nil
 }
 
 // Defaults returns a Config populated with hardcoded default values.
