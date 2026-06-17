@@ -83,8 +83,8 @@ export class MuxApp extends LitElement {
          to svh (smallest stable viewport) then 100vh for older browsers. */
       height: 100vh;    /* fallback for browsers without dvh support */
       height: 100dvh;   /* dynamic viewport — shrinks with mobile browser chrome */
-      background: #1a1b26;
-      color: #a9b1d6;
+      background: var(--chrome-body);
+      color: var(--mux-fg);
       overflow: hidden;
     }
 
@@ -94,12 +94,12 @@ export class MuxApp extends LitElement {
       right: 0;
       bottom: 0;
       left: 0;
-      background: rgba(26, 27, 38, 0.85);
+      background: color-mix(in srgb, var(--chrome-body) 85%, transparent);
       display: flex;
       align-items: center;
       justify-content: center;
       z-index: 1000; /* above undo toasts (z-index: 900) */
-      color: #e0af68;
+      color: var(--mux-warn);
       font-size: 16px;
     }
 
@@ -134,8 +134,8 @@ export class MuxApp extends LitElement {
     }
 
     .ws-create-dialog {
-      background: #1e1e2e;
-      border: 1px solid #45475a;
+      background: var(--chrome-body);
+      border: 1px solid var(--chrome-border);
       border-radius: 12px;
       padding: 28px 28px 24px;
       width: min(420px, calc(100vw - 40px));
@@ -147,17 +147,17 @@ export class MuxApp extends LitElement {
 
     .ws-create-dialog h3 {
       margin: 0;
-      color: #cdd6f4;
+      color: var(--chrome-text-bright);
       font-size: 17px;
       font-weight: 600;
     }
 
     .ws-create-input {
       width: 100%;
-      background: #313244;
-      border: 1px solid #45475a;
+      background: var(--chrome-hover);
+      border: 1px solid var(--chrome-border);
       border-radius: 6px;
-      color: #cdd6f4;
+      color: var(--chrome-text-bright);
       font: inherit;
       font-size: 15px;
       padding: 11px 14px;
@@ -167,8 +167,8 @@ export class MuxApp extends LitElement {
     }
 
     .ws-create-input:focus {
-      border-color: #89b4fa;
-      box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.25);
+      border-color: var(--chrome-accent);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--chrome-accent) 25%, transparent);
     }
 
     .ws-create-input:disabled { opacity: 0.5; }
@@ -181,8 +181,8 @@ export class MuxApp extends LitElement {
 
     .ws-create-confirm {
       padding: 10px 22px;
-      background: #89b4fa;
-      color: #1e1e2e;
+      background: var(--chrome-accent);
+      color: var(--chrome-body);
       border: none;
       border-radius: 7px;
       font: inherit;
@@ -199,8 +199,8 @@ export class MuxApp extends LitElement {
     .ws-create-cancel {
       padding: 10px 18px;
       background: transparent;
-      color: #6c7086;
-      border: 1px solid #45475a;
+      color: var(--chrome-text-dim);
+      border: 1px solid var(--chrome-border);
       border-radius: 7px;
       font: inherit;
       font-size: 14px;
@@ -209,7 +209,7 @@ export class MuxApp extends LitElement {
     }
 
     .ws-create-cancel:disabled { opacity: 0.45; cursor: not-allowed; }
-    .ws-create-cancel:not(:disabled):hover { background: #2a2b3c; color: #cdd6f4; }
+    .ws-create-cancel:not(:disabled):hover { background: var(--chrome-hover); color: var(--chrome-text-bright); }
 
     /* ── Overlay panel (settings / shortcuts / about) ── */
     .overlay-backdrop {
@@ -223,8 +223,8 @@ export class MuxApp extends LitElement {
     }
 
     .overlay-dialog {
-      background: #1a1b26;
-      border: 1px solid #292e42;
+      background: var(--chrome-body);
+      border: 1px solid var(--chrome-border);
       border-radius: 10px;
       width: min(600px, calc(100vw - 32px));
       height: min(80vh, 640px);
@@ -249,7 +249,7 @@ export class MuxApp extends LitElement {
       margin: 0 0 20px;
       font-size: 17px;
       font-weight: 600;
-      color: #c0caf5;
+      color: var(--chrome-text-bright);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -258,7 +258,7 @@ export class MuxApp extends LitElement {
     .info-panel .close-btn {
       background: transparent;
       border: none;
-      color: #565f89;
+      color: var(--chrome-text-dim);
       cursor: pointer;
       font-size: 18px;
       line-height: 1;
@@ -266,7 +266,7 @@ export class MuxApp extends LitElement {
       border-radius: 4px;
     }
 
-    .info-panel .close-btn:hover { color: #c0caf5; background: #1f2335; }
+    .info-panel .close-btn:hover { color: var(--chrome-text-bright); background: var(--chrome-hover); }
 
     .shortcut-grid {
       display: grid;
@@ -276,33 +276,33 @@ export class MuxApp extends LitElement {
 
     .shortcut-grid .sc-label {
       padding: 8px 0;
-      border-bottom: 1px solid #292e42;
+      border-bottom: 1px solid var(--chrome-border);
       font-size: 13px;
-      color: #565f89;
+      color: var(--chrome-text-dim);
     }
 
     .shortcut-grid .sc-key {
       padding: 8px 0;
-      border-bottom: 1px solid #292e42;
+      border-bottom: 1px solid var(--chrome-border);
       font-size: 12px;
-      color: #c0caf5;
+      color: var(--chrome-text-bright);
       font-family: 'JetBrainsMonoNerdFont', 'SF Mono', monospace;
       text-align: right;
     }
 
     .about-body {
       font-size: 13px;
-      color: #565f89;
+      color: var(--chrome-text-dim);
       line-height: 1.7;
     }
 
-    .about-body strong { color: #c0caf5; }
+    .about-body strong { color: var(--chrome-text-bright); }
 
     .about-sha {
       margin-top: 16px;
       font-family: 'JetBrainsMonoNerdFont', 'SF Mono', monospace;
       font-size: 11px;
-      color: #414868;
+      color: var(--chrome-text-dim);
     }
 
     /* Empty workspace state — shown when the attached workspace has no panes.
@@ -314,8 +314,8 @@ export class MuxApp extends LitElement {
       align-items: center;
       justify-content: center;
       gap: 16px;
-      background: #1a1b26;
-      color: #565f89;
+      background: var(--chrome-body);
+      color: var(--chrome-text-dim);
       user-select: none;
     }
 
@@ -332,13 +332,13 @@ export class MuxApp extends LitElement {
 
     .empty-workspace .headline {
       font-size: 16px;
-      color: #a9b1d6;
+      color: var(--mux-fg);
       font-weight: 600;
     }
 
     .empty-workspace .subtext {
       font-size: 13px;
-      color: #565f89;
+      color: var(--chrome-text-dim);
     }
 
     .empty-workspace button {
@@ -348,17 +348,17 @@ export class MuxApp extends LitElement {
       gap: 8px;
       padding: 8px 18px;
       font-size: 13px;
-      color: #c0caf5;
-      background: #24283b;
-      border: 1px solid #414868;
+      color: var(--chrome-text-bright);
+      background: var(--chrome-hover);
+      border: 1px solid var(--chrome-text-dim);
       border-radius: 6px;
       cursor: pointer;
       transition: background 0.12s ease, border-color 0.12s ease;
     }
 
     .empty-workspace button:hover {
-      background: #2f344d;
-      border-color: #7aa2f7;
+      background: var(--chrome-hover);
+      border-color: var(--chrome-accent);
     }
 
     .content-area {

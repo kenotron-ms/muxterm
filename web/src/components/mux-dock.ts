@@ -383,42 +383,41 @@ export class MuxDock extends LitElement {
           height: 100%;
         }
 
-        /* Tokyo Night re-skin of dockview (over the abyss base). Variables set
-           on .dv-dockview override the abyss palette via inheritance. */
+        /* Dockview re-skin: all values driven by CSS custom properties so the
+           entire tab strip + panel chrome follows the selected theme. */
         mux-dock .dv-dockview {
-          --dv-background-color: #1a1b26;
+          --dv-background-color: var(--chrome-body);
 
           /* Panel CONTENT background. Must equal the terminal background so the
              few sub-character pixels left when xterm can't fill the pane to an
-             exact row height don't bleed a contrasting color. */
-          --dv-group-view-background-color: #1a1b26;
+             exact row height don't bleed a contrasting color. --mux-bg is set
+             by applyThemeTokens() to the palette's background colour. */
+          --dv-group-view-background-color: var(--mux-bg);
 
-          /* Tab bar surface — same as the title bar (#16161e) so the chrome
-             reads as one continuous dark band. */
-          --dv-tabs-and-actions-container-background-color: #16161e;
+          /* Tab bar surface — same as the title bar so the chrome reads as one
+             continuous band. */
+          --dv-tabs-and-actions-container-background-color: var(--chrome-bar);
 
-          /* Active group: selected tab merges into the body, others blend into
-             the bar. */
-          --dv-activegroup-visiblepanel-tab-background-color: #1a1b26;
-          --dv-activegroup-hiddenpanel-tab-background-color: #16161e;
-          /* Inactive group (unfocused split): same hierarchy, no extra dimming
-             of the surfaces — only the text dims. */
-          --dv-inactivegroup-visiblepanel-tab-background-color: #1a1b26;
-          --dv-inactivegroup-hiddenpanel-tab-background-color: #16161e;
+          /* Active group: selected tab merges into the body, others into the bar. */
+          --dv-activegroup-visiblepanel-tab-background-color: var(--chrome-body);
+          --dv-activegroup-hiddenpanel-tab-background-color: var(--chrome-bar);
+          /* Inactive group (unfocused split): same hierarchy, no extra dimming. */
+          --dv-inactivegroup-visiblepanel-tab-background-color: var(--chrome-body);
+          --dv-inactivegroup-hiddenpanel-tab-background-color: var(--chrome-bar);
 
           /* Text: selected bright, unselected dim. */
-          --dv-activegroup-visiblepanel-tab-color: #c0caf5;
-          --dv-activegroup-hiddenpanel-tab-color: #565f89;
-          --dv-inactivegroup-visiblepanel-tab-color: #a9b1d6;
-          --dv-inactivegroup-hiddenpanel-tab-color: #565f89;
+          --dv-activegroup-visiblepanel-tab-color: var(--chrome-text-bright);
+          --dv-activegroup-hiddenpanel-tab-color: var(--chrome-text-dim);
+          --dv-inactivegroup-visiblepanel-tab-color: var(--mux-fg);
+          --dv-inactivegroup-hiddenpanel-tab-color: var(--chrome-text-dim);
 
           /* Hairline separators kept subtle. */
-          --dv-separator-border: #292e42;
-          --dv-tab-divider-color: #16161e;
+          --dv-separator-border: var(--chrome-border);
+          --dv-tab-divider-color: var(--chrome-bar);
 
           /* Resize sash: invisible track, accent only while dragging. */
           --dv-sash-color: transparent;
-          --dv-active-sash-color: #7aa2f7;
+          --dv-active-sash-color: var(--chrome-accent);
         }
 
         /* Chrome-like tab sizing.
@@ -443,7 +442,7 @@ export class MuxDock extends LitElement {
           white-space: nowrap;
         }
         mux-dock .dv-tab.dv-active-tab {
-          border-top: 2px solid #7aa2f7 !important;
+          border-top: 2px solid var(--chrome-accent) !important;
         }
 
         /* Close button — show on hover + always on active tab */
@@ -452,7 +451,7 @@ export class MuxDock extends LitElement {
           transition: opacity 0.15s;
         }
         mux-dock .dv-tab .dv-default-tab-action svg {
-          fill: #a9b1d6;
+          fill: var(--mux-fg);
         }
         mux-dock .dv-tab:hover .dv-default-tab-action,
         mux-dock .dv-tab.dv-active-tab .dv-default-tab-action {
@@ -472,17 +471,17 @@ export class MuxDock extends LitElement {
           border: none;
           border-radius: 4px;
           background: transparent;
-          color: #a9b1d6;
+          color: var(--mux-fg);
           cursor: pointer;
           flex-shrink: 0;
           transition: background 0.12s, color 0.12s;
         }
         mux-dock .mux-header-btn:hover {
-          background: rgba(122, 162, 247, 0.15);
-          color: #c0caf5;
+          background: color-mix(in srgb, var(--chrome-accent) 15%, transparent);
+          color: var(--chrome-text-bright);
         }
         mux-dock .mux-header-btn:active {
-          background: rgba(122, 162, 247, 0.25);
+          background: color-mix(in srgb, var(--chrome-accent) 25%, transparent);
         }
 
         /* dockview's action containers shrink-wrap their button and sit at the
@@ -498,9 +497,9 @@ export class MuxDock extends LitElement {
 
         /* Inline tab rename input */
         mux-dock .mux-tab-rename-input {
-          background: #24283b;
-          color: #c0caf5;
-          border: 1px solid #7aa2f7;
+          background: var(--chrome-bar);
+          color: var(--chrome-text-bright);
+          border: 1px solid var(--chrome-accent);
           border-radius: 3px;
           padding: 0 4px;
           font: inherit;
