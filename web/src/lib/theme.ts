@@ -137,12 +137,91 @@ export const NORD: Palette = {
   brightWhite: '#eceff4',
 };
 
+// ── Light themes ─────────────────────────────────────────────────────────────
+
+export const SOLARIZED_LIGHT: Palette = {
+  background: '#fdf6e3',
+  foreground: '#657b83',
+  cursor: '#586e75',
+  cursorAccent: '#fdf6e3',
+  selectionBackground: '#eee8d5',
+  black: '#073642',
+  red: '#dc322f',
+  green: '#859900',
+  yellow: '#b58900',
+  blue: '#268bd2',
+  magenta: '#d33682',
+  cyan: '#2aa198',
+  white: '#eee8d5',
+  brightBlack: '#002b36',
+  brightRed: '#cb4b16',
+  brightGreen: '#586e75',
+  brightYellow: '#657b83',
+  brightBlue: '#839496',
+  brightMagenta: '#6c71c4',
+  brightCyan: '#93a1a1',
+  brightWhite: '#fdf6e3',
+};
+
+export const ONE_LIGHT: Palette = {
+  background: '#fafafa',
+  foreground: '#383a42',
+  cursor: '#526fff',
+  cursorAccent: '#fafafa',
+  selectionBackground: '#d0d0d0',
+  black: '#383a42',
+  red: '#e45649',
+  green: '#50a14f',
+  yellow: '#c18401',
+  blue: '#4078f2',
+  magenta: '#a626a4',
+  cyan: '#0184bc',
+  white: '#a0a1a7',
+  brightBlack: '#4f525e',
+  brightRed: '#e45649',
+  brightGreen: '#50a14f',
+  brightYellow: '#c18401',
+  brightBlue: '#4078f2',
+  brightMagenta: '#a626a4',
+  brightCyan: '#0184bc',
+  brightWhite: '#a0a1a7',
+};
+
+export const GITHUB_LIGHT: Palette = {
+  background: '#ffffff',
+  foreground: '#1f2328',
+  cursor: '#0969da',
+  cursorAccent: '#ffffff',
+  selectionBackground: '#d3e8fd',
+  black: '#24292f',
+  red: '#cf222e',
+  green: '#116329',
+  yellow: '#4d2d00',
+  blue: '#0969da',
+  magenta: '#8250df',
+  cyan: '#1b7c83',
+  white: '#6e7781',
+  brightBlack: '#57606a',
+  brightRed: '#a40e26',
+  brightGreen: '#1a7f37',
+  brightYellow: '#633c01',
+  brightBlue: '#218bff',
+  brightMagenta: '#a475f9',
+  brightCyan: '#3192aa',
+  brightWhite: '#8c959f',
+};
+
 export const PALETTES: Record<string, Palette> = {
+  // Dark themes
   'tokyo-night': THEME,
   catppuccin: CATPPUCCIN,
   gruvbox: GRUVBOX,
   dracula: DRACULA,
   nord: NORD,
+  // Light themes
+  'solarized-light': SOLARIZED_LIGHT,
+  'one-light': ONE_LIGHT,
+  'github-light': GITHUB_LIGHT,
 };
 
 export function resolvePalette(name: string): Palette {

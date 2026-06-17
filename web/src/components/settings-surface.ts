@@ -11,12 +11,18 @@ interface ThemeCard {
   label: string;
 }
 
-const THEME_CARDS: ThemeCard[] = [
+const DARK_THEMES: ThemeCard[] = [
   { id: 'tokyo-night', label: 'Tokyo Night' },
   { id: 'catppuccin',  label: 'Catppuccin'  },
   { id: 'gruvbox',     label: 'Gruvbox'     },
   { id: 'dracula',     label: 'Dracula'     },
   { id: 'nord',        label: 'Nord'        },
+];
+
+const LIGHT_THEMES: ThemeCard[] = [
+  { id: 'solarized-light', label: 'Solarized' },
+  { id: 'one-light',       label: 'One Light' },
+  { id: 'github-light',    label: 'GitHub'    },
 ];
 
 /**
@@ -352,6 +358,36 @@ export class MuxSettingsSurface extends LitElement {
       line-height: 1.5;
     }
 
+    .notif-test-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 11px;
+      border-radius: 6px;
+      border: 1px solid ${unsafeCSS(CHROME.border)};
+      background: transparent;
+      color: ${unsafeCSS(CHROME.textDim)};
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      transition: border-color 0.12s, color 0.12s;
+    }
+    .notif-test-btn:hover {
+      border-color: ${unsafeCSS(CHROME.accent)};
+      color: ${unsafeCSS(CHROME.textBright)};
+    }
+
+    /* ── Theme section label ── */
+    .theme-section-label {
+      grid-column: 1 / -1;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: ${unsafeCSS(CHROME.textDim)};
+      padding-top: 8px;
+    }
+
     .divider {
       height: 1px;
       background: ${unsafeCSS(CHROME.border)};
@@ -456,6 +492,18 @@ export class MuxSettingsSurface extends LitElement {
     this._emit({ terminal: { ...this.config.terminal, bell } });
   }
 
+  private _sendTestNotification(): void {
+    try {
+      new Notification('muxterm', {
+        body: 'Notifications are working! You\'ll see this when a terminal bell fires in a background pane.',
+        tag: 'muxterm-test',
+        silent: false,
+      });
+    } catch (e) {
+      console.error('muxterm: test notification failed:', e);
+    }
+  }
+
   private async _requestNotificationPermission(): Promise<void> {
     if (this._notifRequesting) return;
     this._notifRequesting = true;
@@ -471,11 +519,8 @@ export class MuxSettingsSurface extends LitElement {
 
   // ── Render helpers ────────────────────────────────────────────────────────
 
-  private _renderThemeCards() {
-    const current = this.config?.theme.palette ?? 'tokyo-night';
-    return html`
-      <div class="theme-grid">
-        ${THEME_CARDS.map(card => {
+  private _renderThemeGroup(cards: ThemeCard[], current: string) {
+    return cards.map(card => {
           const palette = PALETTES[card.id];
           if (!palette) return html``;
           const isActive = current === card.id;
@@ -505,10 +550,23 @@ export class MuxSettingsSurface extends LitElement {
               ${isActive ? html`<div class="card-check">✓</div>` : ''}
             </div>
           `;
-        })}
+        });
+  }
+
+  private _renderThemeCards() {
+    const current = this.config?.theme.palette ?? 'tokyo-night';
+    return html`
+      <div class="theme-grid">
+        ${this._renderThemeGroup(DARK_THEMES, current)}
+      </div>
+      <p class="section-title" style="margin-top:16px">Light</p>
+      <div class="theme-grid">
+        ${this._renderThemeGroup(LIGHT_THEMES, current)}
       </div>
     `;
   }
+
+
 
   private _renderFontPicker() {
     const cfg = this.config;
@@ -563,7 +621,19 @@ export class MuxSettingsSurface extends LitElement {
 
     if (perm === 'granted') {
       return html`
-        <span class="notif-status granted">✓ Desktop Notifications: Enabled</span>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span class="notif-status granted">✓ Desktop Notifications: Enabled</span>
+          <button class="notif-test-btn" @click="${() => this._sendTestNotification()}">
+            Send test notification
+          </button>
+        </div>
+        <p class="notif-hint" style="margin-top:8px">
+          Notifications appear when a bell fires in a background pane.
+          If the test notification doesn't appear, check
+          <strong>System Settings → Notifications → [your browser]</strong>
+          and make sure "Allow Notifications" is on. macOS Focus / Do Not Disturb
+          also suppresses them.
+        </p>
       `;
     }
 
