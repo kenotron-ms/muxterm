@@ -328,10 +328,28 @@ export const terminalRegistry = {
       entry.handlers.onResize(cols, rows);
     });
 
-    // Ring the pane bell on BEL character — drives bell-dot indicators.
+    // Ring the pane bell on BEL character — drives bell-dot indicators and
+    // desktop notifications when permission is granted.
     term.onBell(() => {
       // Don't ring if this pane is already active — user is already looking at it.
-      if (paneId !== store.activePaneId) store.ringPane(paneId);
+      if (paneId === store.activePaneId) return;
+      store.ringPane(paneId);
+      // Fire a desktop notification if the user has granted permission. We use
+      // tag: so a rapid burst of bells produces only one notification per pane
+      // (the browser replaces the previous one). silent:true avoids a double
+      // system sound when bell is set to "audible".
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        try {
+          new Notification('muxterm', {
+            body: `Activity in pane ${paneId}`,
+            tag: `muxterm-pane-${paneId}`,
+            silent: true,
+          });
+        } catch {
+          // Notification constructor can throw in sandboxed iframes or
+          // browsers that don't support all options — ignore silently.
+        }
+      }
     });
 
     // Touch scroll — xterm.js v6 regressed native touch-scroll support
