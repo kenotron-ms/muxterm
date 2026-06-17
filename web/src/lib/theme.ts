@@ -2,18 +2,62 @@
 // Exported here so both terminal-registry (Terminal config) and
 // pane.ts (CSS background) share a single source of truth.
 
-// VS Code tab + chrome design tokens (Tokyo Night palette).
-export const CHROME = {
-  bar: '#16161e',         // title bar / tab strip / status bar background
-  body: '#1a1b26',        // surface body — active tab merges into this
-  border: '#292e42',      // hairline separators
-  textDim: '#565f89',     // inactive tab / muted labels
-  textBright: '#c0caf5',  // active tab / focused text
-  accent: '#7aa2f7',      // normal active-tab top line + focus accent
-  driverAccent: '#bb9af7', // driver region accent (magenta)
-  hover: '#1f2335',       // flat icon-button hover background
-  danger: '#f7768e',      // close-× hover
+// ── Chrome design token shapes ───────────────────────────────────────────────
+
+export interface ChromeTokens {
+  bar: string;         // title bar / tab strip / status bar background
+  body: string;        // surface body — active tab merges into this
+  border: string;      // hairline separators
+  textDim: string;     // inactive tab / muted labels
+  textBright: string;  // active tab / focused text
+  accent: string;      // normal active-tab top line + focus accent
+  driverAccent: string; // driver region accent
+  hover: string;       // flat icon-button hover background
+  danger: string;      // close-× hover / destructive action
+}
+
+// Dark chrome — Tokyo Night / default
+const CHROME_DARK: ChromeTokens = {
+  bar: '#16161e',
+  body: '#1a1b26',
+  border: '#292e42',
+  textDim: '#565f89',
+  textBright: '#c0caf5',
+  accent: '#7aa2f7',
+  driverAccent: '#bb9af7',
+  hover: '#1f2335',
+  danger: '#f7768e',
 };
+
+// Light chrome — used whenever a light terminal theme is selected
+const CHROME_LIGHT: ChromeTokens = {
+  bar: '#e8e8ed',
+  body: '#f2f2f7',
+  border: '#c6c6c8',
+  textDim: '#8e8e93',
+  textBright: '#1c1c1e',
+  accent: '#007aff',
+  driverAccent: '#5856d6',
+  hover: '#d8d8de',
+  danger: '#ff3b30',
+};
+
+/** The set of palette names that are considered light themes. */
+const LIGHT_THEME_IDS = new Set([
+  'solarized-light',
+  'one-light',
+  'github-light',
+]);
+
+export function isLightTheme(palette: string): boolean {
+  return LIGHT_THEME_IDS.has(palette);
+}
+
+// VS Code tab + chrome design tokens — kept as static dark reference for any
+// code that directly imports CHROME (type-checked constant access).
+// At runtime, always use CSS custom properties (var(--chrome-*)) which are
+// updated by applyChromeTokens() when the theme changes.
+export const CHROME: ChromeTokens = CHROME_DARK;
 
 export const THEME = {
   background: '#1a1b26',
@@ -65,9 +109,163 @@ export const GRUVBOX: Palette = {
   brightWhite: '#ebdbb2',
 };
 
+export const CATPPUCCIN: Palette = {
+  background: '#1e1e2e',
+  foreground: '#cdd6f4',
+  cursor: '#f5e0dc',
+  cursorAccent: '#1e1e2e',
+  selectionBackground: '#313244',
+  black: '#45475a',
+  red: '#f38ba8',
+  green: '#a6e3a1',
+  yellow: '#f9e2af',
+  blue: '#89b4fa',
+  magenta: '#cba6f7',
+  cyan: '#89dceb',
+  white: '#bac2de',
+  brightBlack: '#585b70',
+  brightRed: '#f38ba8',
+  brightGreen: '#a6e3a1',
+  brightYellow: '#f9e2af',
+  brightBlue: '#89b4fa',
+  brightMagenta: '#cba6f7',
+  brightCyan: '#89dceb',
+  brightWhite: '#a6adc8',
+};
+
+export const DRACULA: Palette = {
+  background: '#282a36',
+  foreground: '#f8f8f2',
+  cursor: '#f8f8f2',
+  cursorAccent: '#282a36',
+  selectionBackground: '#44475a',
+  black: '#21222c',
+  red: '#ff5555',
+  green: '#50fa7b',
+  yellow: '#f1fa8c',
+  blue: '#bd93f9',
+  magenta: '#ff79c6',
+  cyan: '#8be9fd',
+  white: '#f8f8f2',
+  brightBlack: '#6272a4',
+  brightRed: '#ff6e6e',
+  brightGreen: '#69ff94',
+  brightYellow: '#ffffa5',
+  brightBlue: '#d6acff',
+  brightMagenta: '#ff92df',
+  brightCyan: '#a4ffff',
+  brightWhite: '#ffffff',
+};
+
+export const NORD: Palette = {
+  background: '#2e3440',
+  foreground: '#d8dee9',
+  cursor: '#d8dee9',
+  cursorAccent: '#2e3440',
+  selectionBackground: '#434c5e',
+  black: '#3b4252',
+  red: '#bf616a',
+  green: '#a3be8c',
+  yellow: '#ebcb8b',
+  blue: '#81a1c1',
+  magenta: '#b48ead',
+  cyan: '#88c0d0',
+  white: '#e5e9f0',
+  brightBlack: '#4c566a',
+  brightRed: '#bf616a',
+  brightGreen: '#a3be8c',
+  brightYellow: '#ebcb8b',
+  brightBlue: '#81a1c1',
+  brightMagenta: '#b48ead',
+  brightCyan: '#8fbcbb',
+  brightWhite: '#eceff4',
+};
+
+// ── Light themes ─────────────────────────────────────────────────────────────
+
+export const SOLARIZED_LIGHT: Palette = {
+  background: '#fdf6e3',
+  foreground: '#657b83',
+  cursor: '#586e75',
+  cursorAccent: '#fdf6e3',
+  selectionBackground: '#eee8d5',
+  black: '#073642',
+  red: '#dc322f',
+  green: '#859900',
+  yellow: '#b58900',
+  blue: '#268bd2',
+  magenta: '#d33682',
+  cyan: '#2aa198',
+  white: '#eee8d5',
+  brightBlack: '#002b36',
+  brightRed: '#cb4b16',
+  brightGreen: '#586e75',
+  brightYellow: '#657b83',
+  brightBlue: '#839496',
+  brightMagenta: '#6c71c4',
+  brightCyan: '#93a1a1',
+  brightWhite: '#fdf6e3',
+};
+
+export const ONE_LIGHT: Palette = {
+  background: '#fafafa',
+  foreground: '#383a42',
+  cursor: '#526fff',
+  cursorAccent: '#fafafa',
+  selectionBackground: '#d0d0d0',
+  black: '#383a42',
+  red: '#e45649',
+  green: '#50a14f',
+  yellow: '#c18401',
+  blue: '#4078f2',
+  magenta: '#a626a4',
+  cyan: '#0184bc',
+  white: '#a0a1a7',
+  brightBlack: '#4f525e',
+  brightRed: '#e45649',
+  brightGreen: '#50a14f',
+  brightYellow: '#c18401',
+  brightBlue: '#4078f2',
+  brightMagenta: '#a626a4',
+  brightCyan: '#0184bc',
+  brightWhite: '#a0a1a7',
+};
+
+export const GITHUB_LIGHT: Palette = {
+  background: '#ffffff',
+  foreground: '#1f2328',
+  cursor: '#0969da',
+  cursorAccent: '#ffffff',
+  selectionBackground: '#d3e8fd',
+  black: '#24292f',
+  red: '#cf222e',
+  green: '#116329',
+  yellow: '#4d2d00',
+  blue: '#0969da',
+  magenta: '#8250df',
+  cyan: '#1b7c83',
+  white: '#6e7781',
+  brightBlack: '#57606a',
+  brightRed: '#a40e26',
+  brightGreen: '#1a7f37',
+  brightYellow: '#633c01',
+  brightBlue: '#218bff',
+  brightMagenta: '#a475f9',
+  brightCyan: '#3192aa',
+  brightWhite: '#8c959f',
+};
+
 export const PALETTES: Record<string, Palette> = {
+  // Dark themes
   'tokyo-night': THEME,
+  catppuccin: CATPPUCCIN,
   gruvbox: GRUVBOX,
+  dracula: DRACULA,
+  nord: NORD,
+  // Light themes
+  'solarized-light': SOLARIZED_LIGHT,
+  'one-light': ONE_LIGHT,
+  'github-light': GITHUB_LIGHT,
 };
 
 export function resolvePalette(name: string): Palette {
@@ -103,4 +301,26 @@ export function applyThemeTokens(
   for (const [k, v] of Object.entries(vars)) {
     root.style.setProperty(k, v);
   }
+}
+
+/**
+ * Apply --chrome-* CSS custom properties to the root element.
+ * Call this once at startup with the initial palette name, then again whenever
+ * the user changes the theme. All components use var(--chrome-*) so they
+ * update automatically without re-rendering.
+ */
+export function applyChromeTokens(
+  paletteName: string,
+  root: HTMLElement = document.documentElement,
+): void {
+  const tokens = isLightTheme(paletteName) ? CHROME_LIGHT : CHROME_DARK;
+  root.style.setProperty('--chrome-bar',           tokens.bar);
+  root.style.setProperty('--chrome-body',          tokens.body);
+  root.style.setProperty('--chrome-border',        tokens.border);
+  root.style.setProperty('--chrome-text-dim',      tokens.textDim);
+  root.style.setProperty('--chrome-text-bright',   tokens.textBright);
+  root.style.setProperty('--chrome-accent',        tokens.accent);
+  root.style.setProperty('--chrome-driver-accent', tokens.driverAccent);
+  root.style.setProperty('--chrome-hover',         tokens.hover);
+  root.style.setProperty('--chrome-danger',        tokens.danger);
 }

@@ -1,6 +1,5 @@
-import { LitElement, html, css, unsafeCSS } from 'lit';
+import { LitElement, html, css } from 'lit';
 import { customElement } from 'lit/decorators.js';
-import { CHROME } from '../lib/theme.js';
 import { icon } from '../lib/icons.js';
 import { Info, Keyboard, RefreshCw, Settings } from 'lucide';
 
@@ -11,8 +10,8 @@ export class MuxLauncherMenu extends LitElement {
   static styles = css`
     :host {
       display: block;
-      background: ${unsafeCSS(CHROME.bar)};
-      border: 1px solid ${unsafeCSS(CHROME.border)};
+      background: var(--chrome-bar);
+      border: 1px solid var(--chrome-border);
       border-radius: 6px;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
       padding: 4px;
@@ -21,7 +20,7 @@ export class MuxLauncherMenu extends LitElement {
 
     .divider {
       height: 1px;
-      background: ${unsafeCSS(CHROME.border)};
+      background: var(--chrome-border);
       margin: 4px 0;
     }
 
@@ -34,7 +33,7 @@ export class MuxLauncherMenu extends LitElement {
       background: transparent;
       border: none;
       border-radius: 4px;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
       font-size: 13px;
       font-family: inherit;
       cursor: pointer;
@@ -43,7 +42,7 @@ export class MuxLauncherMenu extends LitElement {
     }
 
     button:hover {
-      background: ${unsafeCSS(CHROME.hover)};
+      background: var(--chrome-hover);
     }
 
     .lucide-icon {

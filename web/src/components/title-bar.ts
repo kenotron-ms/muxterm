@@ -1,7 +1,6 @@
-import { LitElement, html, css, unsafeCSS } from 'lit';
+import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import type { PropertyValues } from 'lit';
-import { CHROME } from '../lib/theme.js';
 import './launcher-menu.js';
 import './mux-pane-picker.js';
 import { icon } from '../lib/icons.js';
@@ -14,8 +13,8 @@ export class MuxTitleBar extends LitElement {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      background: ${unsafeCSS(CHROME.bar)};
-      border-bottom: 1px solid ${unsafeCSS(CHROME.border)};
+      background: var(--chrome-bar);
+      border-bottom: 1px solid var(--chrome-border);
       height: 32px;
       padding: 0 8px;
       flex-shrink: 0;
@@ -28,7 +27,7 @@ export class MuxTitleBar extends LitElement {
       display: flex;
       align-items: center;
       gap: 6px;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
       font-size: 13px;
       font-weight: 600;
     }
@@ -37,7 +36,7 @@ export class MuxTitleBar extends LitElement {
       width: 10px;
       height: 10px;
       border-radius: 50%;
-      background: ${unsafeCSS(CHROME.accent)};
+      background: var(--chrome-accent);
       flex-shrink: 0;
     }
 
@@ -45,7 +44,7 @@ export class MuxTitleBar extends LitElement {
       font-size: 10px;
       font-weight: 400;
       font-family: monospace;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       letter-spacing: 0;
     }
 
@@ -61,7 +60,7 @@ export class MuxTitleBar extends LitElement {
       background: transparent;
       border: none;
       border-radius: 4px;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -71,7 +70,7 @@ export class MuxTitleBar extends LitElement {
     }
 
     .launcher-btn:hover {
-      background: ${unsafeCSS(CHROME.hover)};
+      background: var(--chrome-hover);
     }
 
     .menu-anchor {
@@ -147,6 +146,18 @@ export class MuxTitleBar extends LitElement {
     );
   }
 
+  private _onWorkspaceSwitch(e: Event): void {
+    e.stopPropagation();
+    const customEvent = e as CustomEvent;
+    this.dispatchEvent(
+      new CustomEvent('workspace-switch', {
+        bubbles: true,
+        composed: true,
+        detail: customEvent.detail,
+      }),
+    );
+  }
+
   render() {
     return html`
       <div class="brand">
@@ -154,7 +165,7 @@ export class MuxTitleBar extends LitElement {
         <span>muxterm</span>
         <span class="brand-sha">${__GIT_SHA__}</span>
       </div>
-      <mux-pane-picker></mux-pane-picker>
+      <mux-pane-picker @workspace-switch="${this._onWorkspaceSwitch}"></mux-pane-picker>
       <div class="right">
         <button
           class="launcher-btn"

@@ -1,7 +1,6 @@
-import { LitElement, html, css, unsafeCSS } from 'lit';
+import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from '../state.js';
-import { CHROME } from '../lib/theme.js';
 import { workspaceLabel } from './workspace-picker.js';
 
 // TODO(deferred): mux-dock-bar is built and tested but not yet mounted in app.ts.
@@ -14,8 +13,8 @@ export class MuxDockBar extends LitElement {
     :host {
       display: flex;
       flex-direction: row;
-      background: ${unsafeCSS(CHROME.bar)};
-      border-top: 1px solid ${unsafeCSS(CHROME.border)};
+      background: var(--chrome-bar);
+      border-top: 1px solid var(--chrome-border);
       height: var(--mux-dock-height, 44px);
       padding-bottom: env(safe-area-inset-bottom, 0px);
       font-size: var(--mux-dock-font-size, 0.85rem);

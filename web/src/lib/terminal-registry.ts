@@ -73,12 +73,32 @@ export function buildTerminalConfig(cfg: ResolvedConfig) {
 let TERMINAL_CONFIG = buildTerminalConfig(DEFAULT_RESOLVED_CONFIG);
 
 /**
- * Reconfigure the terminal defaults from a ResolvedConfig.
- * NOTE: No hot-reload in v1 — existing Terminals keep current options;
- * only Terminals created after this call pick up the new config.
+ * Reconfigure all terminals from a ResolvedConfig.
+ *
+ * - Updates TERMINAL_CONFIG so newly-created terminals pick up the new values.
+ * - Hot-reloads every existing open terminal: applies theme, font family, font
+ *   size, cursor style, and cursor blink immediately, then re-fits so column
+ *   counts stay correct after a font-size change.
+ *
+ * scrollback changes are intentionally excluded — xterm.js does not support
+ * shrinking/growing the scrollback buffer on a live terminal.
  */
 export function configureTerminals(cfg: ResolvedConfig): void {
-  TERMINAL_CONFIG = buildTerminalConfig(cfg);
+  const newConfig = buildTerminalConfig(cfg);
+  TERMINAL_CONFIG = newConfig;
+
+  for (const entry of _map.values()) {
+    if (!entry.opened) continue;
+    // Apply each option individually — xterm.js 5 accepts live option changes
+    // and schedules a re-render automatically.
+    entry.term.options.theme = newConfig.theme;
+    entry.term.options.fontFamily = newConfig.fontFamily;
+    entry.term.options.fontSize = newConfig.fontSize;
+    entry.term.options.cursorStyle = newConfig.cursorStyle;
+    entry.term.options.cursorBlink = newConfig.cursorBlink;
+    // Re-fit so a font-size change recalculates cols/rows correctly.
+    entry.fitAddon.fit();
+  }
 }
 
 export interface PaneHandlers {
@@ -308,10 +328,28 @@ export const terminalRegistry = {
       entry.handlers.onResize(cols, rows);
     });
 
-    // Ring the pane bell on BEL character — drives bell-dot indicators.
+    // Ring the pane bell on BEL character — drives bell-dot indicators and
+    // desktop notifications when permission is granted.
     term.onBell(() => {
       // Don't ring if this pane is already active — user is already looking at it.
-      if (paneId !== store.activePaneId) store.ringPane(paneId);
+      if (paneId === store.activePaneId) return;
+      store.ringPane(paneId);
+      // Fire a desktop notification if the user has granted permission. We use
+      // tag: so a rapid burst of bells produces only one notification per pane
+      // (the browser replaces the previous one). silent:true avoids a double
+      // system sound when bell is set to "audible".
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        try {
+          new Notification('muxterm', {
+            body: `Activity in pane ${paneId}`,
+            tag: `muxterm-pane-${paneId}`,
+            silent: true,
+          });
+        } catch {
+          // Notification constructor can throw in sandboxed iframes or
+          // browsers that don't support all options — ignore silently.
+        }
+      }
     });
 
     // Touch scroll — xterm.js v6 regressed native touch-scroll support

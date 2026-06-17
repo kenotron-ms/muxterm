@@ -194,11 +194,13 @@ func newSessiondDialer() server.DialFunc {
 // wires the per-browser sessiond dialer, opens a browser, and blocks until
 // shutdown.
 func runLocal(cfg Config) error {
-	srv := server.New(server.Config{
-		Addr:     cfg.Addr,
-		StaticFS: mustSubFS(webstatic.Dist, "dist"),
-	})
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
+	srv := server.New(server.Config{
+		Addr:          cfg.Addr,
+		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
+		ConfigPath:    config.DefaultPath(),
+		InitialConfig: resolved,
+	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
 
@@ -235,13 +237,15 @@ func runServe(cfg Config) error {
 		secret = s
 	}
 
-	srv := server.New(server.Config{
-		Addr:     cfg.Addr,
-		Secret:   secret,
-		StaticFS: mustSubFS(webstatic.Dist, "dist"),
-		NoAuth:   cfg.NoAuth,
-	})
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
+	srv := server.New(server.Config{
+		Addr:          cfg.Addr,
+		Secret:        secret,
+		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
+		NoAuth:        cfg.NoAuth,
+		ConfigPath:    config.DefaultPath(),
+		InitialConfig: resolved,
+	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
 

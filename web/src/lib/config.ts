@@ -1,3 +1,64 @@
+// ── Persistence helpers ──────────────────────────────────────────────────────
+
+/**
+ * Converts a TypeScript camelCase ResolvedConfig back to the Go snake_case
+ * format used by PATCH /api/config. Only includes user-settable fields
+ * (theme, font, terminal) — keys, workspace, and driver are not changed through
+ * the settings UI in Phase 5.
+ */
+export function configToGoJSON(cfg: ResolvedConfig): Record<string, unknown> {
+  return {
+    theme: {
+      palette: cfg.theme.palette,
+    },
+    font: {
+      family: cfg.font.family,
+      size: cfg.font.size,
+    },
+    terminal: {
+      cursor_style: cfg.terminal.cursorStyle,
+      cursor_blink: cfg.terminal.cursorBlink,
+      scrollback: cfg.terminal.scrollback,
+      bell: cfg.terminal.bell,
+    },
+  };
+}
+
+
+let _patchTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Debounced PATCH /api/config — sends a partial config object to the server,
+ * which merges it, writes to disk, and broadcasts to all connected clients.
+ *
+ * Calls are debounced at 500 ms so rapid slider / radio changes produce a
+ * single HTTP request. The server always applies the last-sent partial, so
+ * intermediate values are applied optimistically in-memory by the caller.
+ *
+ * The partial object uses the Go/TOML snake_case key names, not camelCase
+ * TypeScript names, because the server decodes a raw config.Config JSON.
+ *
+ * @param partial - Partial config in Go snake_case JSON format
+ *   e.g. { theme: { palette: "dracula" }, font: { size: 15 } }
+ */
+export function patchConfig(partial: Record<string, unknown>): void {
+  if (_patchTimer !== null) {
+    clearTimeout(_patchTimer);
+  }
+  _patchTimer = setTimeout(() => {
+    _patchTimer = null;
+    fetch('/api/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(partial),
+    }).catch((err: unknown) => {
+      // Log but do not roll back — the optimistic in-memory update already
+      // applied. A retry will happen on the next user interaction.
+      console.warn('patchConfig: PATCH /api/config failed:', err);
+    });
+  }, 500);
+}
+
 // ResolvedConfig mirrors Go internal/config.Config with camelCase keys.
 export interface ResolvedConfig {
   theme: { palette: string };
