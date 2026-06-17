@@ -227,7 +227,7 @@ export class MuxApp extends LitElement {
       border: 1px solid #292e42;
       border-radius: 10px;
       width: min(600px, calc(100vw - 32px));
-      max-height: min(80vh, 640px);
+      height: min(80vh, 640px);
       display: flex;
       flex-direction: column;
       box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
@@ -236,7 +236,8 @@ export class MuxApp extends LitElement {
 
     .overlay-body {
       flex: 1;
-      overflow-y: auto;
+      overflow: hidden;
+      min-height: 0;
     }
 
     /* shortcuts / about panels rendered inline */

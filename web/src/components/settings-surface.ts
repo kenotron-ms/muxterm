@@ -345,6 +345,13 @@ export class MuxSettingsSurface extends LitElement {
       text-decoration: underline;
     }
 
+    .notif-hint {
+      margin-top: 8px;
+      font-size: 11px;
+      color: ${unsafeCSS(CHROME.textDim)};
+      line-height: 1.5;
+    }
+
     .divider {
       height: 1px;
       background: ${unsafeCSS(CHROME.border)};
@@ -401,6 +408,7 @@ export class MuxSettingsSurface extends LitElement {
 
   @state() private _section: 'appearance' | 'notifications' = 'appearance';
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
+  @state() private _notifRequesting = false;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -449,11 +457,15 @@ export class MuxSettingsSurface extends LitElement {
   }
 
   private async _requestNotificationPermission(): Promise<void> {
+    if (this._notifRequesting) return;
+    this._notifRequesting = true;
     try {
       const result = await Notification.requestPermission();
       this._notifPermission = result;
     } catch {
       this._notifPermission = 'unsupported';
+    } finally {
+      this._notifRequesting = false;
     }
   }
 
@@ -570,11 +582,18 @@ export class MuxSettingsSurface extends LitElement {
       `;
     }
 
-    // default: not yet requested
+    // default: not yet requested (or dismissed without choosing)
     return html`
-      <button class="notif-btn" @click="${this._requestNotificationPermission}">
-        Enable Desktop Notifications
-      </button>
+      <button
+        class="notif-btn"
+        ?disabled="${this._notifRequesting}"
+        @click="${() => this._requestNotificationPermission()}"
+      >${this._notifRequesting ? 'Waiting for browser…' : 'Enable Desktop Notifications'}</button>
+      ${this._notifRequesting ? html`
+        <p class="notif-hint">
+          Look for a permission prompt in your browser's address bar or toolbar.
+        </p>
+      ` : ''}
     `;
   }
 

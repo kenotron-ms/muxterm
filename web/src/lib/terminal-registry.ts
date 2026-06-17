@@ -73,12 +73,32 @@ export function buildTerminalConfig(cfg: ResolvedConfig) {
 let TERMINAL_CONFIG = buildTerminalConfig(DEFAULT_RESOLVED_CONFIG);
 
 /**
- * Reconfigure the terminal defaults from a ResolvedConfig.
- * NOTE: No hot-reload in v1 — existing Terminals keep current options;
- * only Terminals created after this call pick up the new config.
+ * Reconfigure all terminals from a ResolvedConfig.
+ *
+ * - Updates TERMINAL_CONFIG so newly-created terminals pick up the new values.
+ * - Hot-reloads every existing open terminal: applies theme, font family, font
+ *   size, cursor style, and cursor blink immediately, then re-fits so column
+ *   counts stay correct after a font-size change.
+ *
+ * scrollback changes are intentionally excluded — xterm.js does not support
+ * shrinking/growing the scrollback buffer on a live terminal.
  */
 export function configureTerminals(cfg: ResolvedConfig): void {
-  TERMINAL_CONFIG = buildTerminalConfig(cfg);
+  const newConfig = buildTerminalConfig(cfg);
+  TERMINAL_CONFIG = newConfig;
+
+  for (const entry of _map.values()) {
+    if (!entry.opened) continue;
+    // Apply each option individually — xterm.js 5 accepts live option changes
+    // and schedules a re-render automatically.
+    entry.term.options.theme = newConfig.theme;
+    entry.term.options.fontFamily = newConfig.fontFamily;
+    entry.term.options.fontSize = newConfig.fontSize;
+    entry.term.options.cursorStyle = newConfig.cursorStyle;
+    entry.term.options.cursorBlink = newConfig.cursorBlink;
+    // Re-fit so a font-size change recalculates cols/rows correctly.
+    entry.fitAddon.fit();
+  }
 }
 
 export interface PaneHandlers {
