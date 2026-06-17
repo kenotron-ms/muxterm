@@ -1,5 +1,5 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 import { store } from '../state.js';
 import { workspaceLabel } from './workspace-picker.js';
 import './launcher-menu.js';
@@ -373,6 +373,46 @@ export class MuxSidebar extends LitElement {
       background: var(--chrome-hover);
     }
 
+    /* ---- version footer ---- */
+
+    .version-footer {
+      padding: 10px 12px 12px;
+      border-top: 1px solid var(--chrome-border);
+      font-size: 11px;
+      color: var(--chrome-text-dim);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .update-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--chrome-accent);
+      background: transparent;
+      color: var(--chrome-accent);
+      font: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .update-btn:hover { background: var(--chrome-accent); color: var(--chrome-body); }
+    .update-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .update-error {
+      font-size: 10px;
+      color: var(--chrome-danger);
+      padding: 0 12px 8px;
+      flex-shrink: 0;
+    }
+
     /* ---- drag resize handle ---- */
 
     .resize-handle {
@@ -397,6 +437,19 @@ export class MuxSidebar extends LitElement {
   // State
   // ---------------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------------
+  // Properties — set by the parent (mux-app)
+  // ---------------------------------------------------------------------------
+
+  /** Currently running binary version, e.g. "v0.4.0". Empty until first config msg. */
+  @property({ type: String }) serverVersion = '';
+  /** Newer release available on GitHub. Empty = no update pending. */
+  @property({ type: String }) latestVersion = '';
+
+  // ---------------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------------
+
   @state() private _tab: SidebarTab = 'workspaces';
   @state() private _version = 0;
   @state() private _renaming: string | null = null;
@@ -404,6 +457,8 @@ export class MuxSidebar extends LitElement {
   @state() private _authToken = '';
   @state() private _pendingClose = new Set<string>();
   @state() private _menuOpen = false;
+  @state() private _updating = false;
+  @state() private _updateError = '';
 
   private _unsub: (() => void) | null = null;
 
@@ -734,6 +789,50 @@ export class MuxSidebar extends LitElement {
   }
 
   // ---------------------------------------------------------------------------
+  // Version footer
+  // ---------------------------------------------------------------------------
+
+  private _renderVersionFooter() {
+    if (!this.serverVersion) return html``;
+
+    const hasUpdate = !!this.latestVersion && this.latestVersion !== this.serverVersion;
+
+    return html`
+      ${this._updateError
+        ? html`<div class="update-error">${this._updateError}</div>`
+        : ''}
+      <div class="version-footer">
+        <span>muxterm ${this.serverVersion}</span>
+        ${hasUpdate ? html`
+          <button
+            class="update-btn"
+            ?disabled="${this._updating}"
+            @click="${() => { void this._installUpdate(); }}"
+          >${this._updating ? 'Updating…' : `${this.latestVersion} ↑`}</button>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  private async _installUpdate(): Promise<void> {
+    if (this._updating) return;
+    this._updating = true;
+    this._updateError = '';
+    try {
+      const resp = await fetch('/api/update', { method: 'POST' });
+      if (!resp.ok) {
+        const text = await resp.text();
+        this._updateError = text || 'Update failed';
+        this._updating = false;
+      }
+      // If successful, server exits and reconnect overlay appears — no need to reset _updating.
+    } catch (e) {
+      this._updateError = String(e);
+      this._updating = false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Drag-to-resize
   // ---------------------------------------------------------------------------
 
@@ -805,6 +904,7 @@ export class MuxSidebar extends LitElement {
           ? this._renderWorkspaces()
           : this._renderTunnels()}
       </div>
+      ${this._renderVersionFooter()}
       <div
         class="resize-handle"
         @pointerdown="${(e: PointerEvent) => this._onResizeStart(e)}"

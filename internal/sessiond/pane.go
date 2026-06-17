@@ -40,6 +40,12 @@ type Pane struct {
 	onExit      func(localID int)
 	onPromptPtr atomic.Pointer[func(int, *Message)] // written once (createPane), read by readLoop
 
+	// procWait is set by RestorePane for adopted processes whose cmd.Wait()
+	// cannot be used (the exec.Cmd was not started by this process). When
+	// non-nil, readLoop calls procWait() instead of cmd.Wait() to reap the
+	// child after the PTY closes.
+	procWait func()
+
 	closeOnce sync.Once
 }
 
@@ -201,7 +207,11 @@ func (p *Pane) readLoop() {
 			break
 		}
 	}
-	_ = p.cmd.Wait()
+	if p.procWait != nil {
+		p.procWait()
+	} else if p.cmd != nil {
+		_ = p.cmd.Wait()
+	}
 	if p.onExit != nil {
 		p.onExit(p.LocalID)
 	}
@@ -304,6 +314,65 @@ func (p *Pane) Info() PaneInfo {
 		BrowserPath:  browserPath,
 		ProxyHeaders: proxyHeaders,
 	}
+}
+
+// RestorePane reconstructs a Pane from a live-upgrade handoff. It adopts the
+// already-running PTY at ptmx and the already-running child at pid, sets all
+// state fields directly, and starts the read loop goroutine. The caller must
+// have already written any scrollback bytes into buf before calling RestorePane
+// so the buffer reflects the correct replay state.
+func RestorePane(
+	ptmx *os.File,
+	pid, localID, cols, rows int,
+	title, surfaceKind string,
+	buf PaneBuffer,
+	onData func(int, []byte),
+	onExit func(int),
+) *Pane {
+	p := &Pane{
+		LocalID:     localID,
+		Title:       title,
+		SurfaceKind: surfaceKind,
+		cols:        cols,
+		rows:        rows,
+		ptmx:        ptmx,
+		buf:         buf,
+		onData:      onData,
+		onExit:      onExit,
+	}
+	if pid > 0 {
+		proc, err := os.FindProcess(pid)
+		if err == nil {
+			// Keep a Process handle so Close() can Kill() the child.
+			p.cmd = &exec.Cmd{}
+			p.cmd.Process = proc
+			// procWait is used by readLoop instead of cmd.Wait() because the
+			// Cmd was not started by this process and its internal state is
+			// uninitialised; using os.Process.Wait() directly is safe.
+			p.procWait = func() { _, _ = proc.Wait() }
+		}
+	}
+	go p.readLoop()
+	return p
+}
+
+// GetPtmxFD returns the raw OS file descriptor of this pane's PTY master.
+// The returned integer is valid for the lifetime of p.ptmx; callers must not
+// close it directly. Returns -1 and a non-nil error for browser panes or when
+// the underlying syscall fails.
+func (p *Pane) GetPtmxFD() (int, error) {
+	if p.ptmx == nil {
+		return -1, fmt.Errorf("sessiond: pane %d has no ptmx (browser pane?)", p.LocalID)
+	}
+	sc, err := p.ptmx.SyscallConn()
+	if err != nil {
+		return -1, fmt.Errorf("sessiond: SyscallConn: %w", err)
+	}
+	var fd int = -1
+	if err := sc.Control(func(f uintptr) { fd = int(f) }); err != nil {
+		return -1, fmt.Errorf("sessiond: Control: %w", err)
+	}
+	return fd, nil
 }
 
 // Close kills the child (if any) and closes the PTY, which ends the read loop

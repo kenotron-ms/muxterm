@@ -382,6 +382,12 @@ func (c *conn) handle(msg Message) {
 			Text:   vb.ScreenText(),
 			Cursor: &CursorPos{Row: row, Col: col},
 		})
+	case TypeHandoff:
+		// New sessiond requests a live-upgrade state transfer. HandleHandoff
+		// snapshots all state and PTY FDs, sends them to handoffSocket, then
+		// calls os.Exit(0). We do this in a goroutine so serve() can return and
+		// close the connection cleanly before the process exits.
+		go c.srv.HandleHandoff(msg.HandoffSocket)
 	}
 }
 
@@ -439,7 +445,7 @@ func (c *conn) createPane(msg Message) {
 		localID,
 		msg.Cmd,
 		cols, rows,
-		NewRawBuffer(0),
+		nil, // nil → NewPane installs VTBuffer (production default); required for get_screen/ScreenSnapshot
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
 		func(id int) { c.srv.handlePaneExit(wsID, id) },
 	)

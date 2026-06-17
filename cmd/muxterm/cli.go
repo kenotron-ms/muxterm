@@ -60,6 +60,8 @@ func ParseArgs(args []string) (Config, error) {
 		return parseDeploy(args[1:])
 	case "version":
 		return Config{Mode: "version"}, nil
+	case "version-json":
+		return Config{Mode: "version-json"}, nil
 	case "install":
 		return parseInstall(args[1:])
 	case "open-browser":
