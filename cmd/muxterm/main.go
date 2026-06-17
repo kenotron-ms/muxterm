@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/deploy"
@@ -27,6 +28,12 @@ import (
 )
 
 var version = "dev"
+
+// sessiondProto is incremented only when the sessiond state/wire format
+// changes incompatibly. A matching value between old and new binaries means
+// sessions survive an upgrade without a PTY handoff; a changed value triggers
+// the full SCM_RIGHTS handoff protocol. Most releases will never bump this.
+var sessiondProto = "1"
 
 func main() {
 	cfg, err := ParseArgs(os.Args[1:])
@@ -93,6 +100,11 @@ func main() {
 		}
 	case "version":
 		fmt.Printf("muxterm %s (MCP: stdio)\n", version)
+	case "version-json":
+		// Machine-readable version info used by the upgrade path: the new binary
+		// is invoked as `muxterm version-json` to determine whether sessiondProto
+		// changed and a PTY handoff is required.
+		fmt.Printf(`{"version":%q,"sessiondProto":%q}`+"\n", version, sessiondProto)
 	}
 }
 
@@ -200,9 +212,12 @@ func runLocal(cfg Config) error {
 		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
 		ConfigPath:    config.DefaultPath(),
 		InitialConfig: resolved,
+		Version:       version,
+		SessiondProto: sessiondProto,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
+	startVersionPoller(srv)
 
 	// Publish serve-layer URL so the MCP server can discover the tunnel API.
 	if err := sessiond.WriteServerURL(cfg.Addr); err != nil {
@@ -245,9 +260,12 @@ func runServe(cfg Config) error {
 		NoAuth:        cfg.NoAuth,
 		ConfigPath:    config.DefaultPath(),
 		InitialConfig: resolved,
+		Version:       version,
+		SessiondProto: sessiondProto,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
+	startVersionPoller(srv)
 
 	// Publish serve-layer URL so the MCP server can discover the tunnel API.
 	if err := sessiond.WriteServerURL(cfg.Addr); err != nil {
@@ -266,6 +284,31 @@ func runServe(cfg Config) error {
 	log.Printf("access token: %s", token)
 
 	return srv.ListenAndServe(ctx)
+}
+
+// startVersionPoller starts a background goroutine that polls the GitHub
+// releases API and updates the hub's latestVersion when a newer release is
+// found. The first check happens after a short delay so server startup is not
+// blocked; subsequent checks run every hour.
+func startVersionPoller(srv *server.Server) {
+	go func() {
+		// Delay the first check slightly so the server is fully initialised.
+		time.Sleep(10 * time.Second)
+		check := func() {
+			tag, _, _, err := server.FetchLatestRelease()
+			if err != nil || tag == "" || tag == version {
+				return
+			}
+			srv.Hub().SetLatestVersion(tag)
+			log.Printf("muxterm: update available: %s (current: %s)", tag, version)
+		}
+		check()
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			check()
+		}
+	}()
 }
 
 // runDeploy deploys muxterm to a remote host via SSH.
