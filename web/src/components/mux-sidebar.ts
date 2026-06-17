@@ -1,7 +1,6 @@
 import { LitElement, html, css, unsafeCSS } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from '../state.js';
-import { CHROME } from '../lib/theme.js';
 import { workspaceLabel } from './workspace-picker.js';
 import './launcher-menu.js';
 import { icon } from '../lib/icons.js';
@@ -28,8 +27,8 @@ export class MuxSidebar extends LitElement {
     :host {
       display: flex;
       flex-direction: column;
-      background: ${unsafeCSS(CHROME.bar)};
-      border-right: 1px solid ${unsafeCSS(CHROME.border)};
+      background: var(--chrome-bar);
+      border-right: 1px solid var(--chrome-border);
       width: 220px;
       min-width: ${unsafeCSS(String(SIDEBAR_MIN_WIDTH))}px;
       max-width: ${unsafeCSS(String(SIDEBAR_MAX_WIDTH))}px;
@@ -45,9 +44,9 @@ export class MuxSidebar extends LitElement {
       padding: 10px 12px 8px;
       font-size: 13px;
       font-weight: 700;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
       letter-spacing: 0.06em;
-      border-bottom: 1px solid ${unsafeCSS(CHROME.border)};
+      border-bottom: 1px solid var(--chrome-border);
       flex-shrink: 0;
       display: flex;
       align-items: center;
@@ -90,7 +89,7 @@ export class MuxSidebar extends LitElement {
     .tabs {
       display: flex;
       flex-direction: row;
-      border-bottom: 1px solid ${unsafeCSS(CHROME.border)};
+      border-bottom: 1px solid var(--chrome-border);
       flex-shrink: 0;
     }
 
@@ -100,7 +99,7 @@ export class MuxSidebar extends LitElement {
       background: transparent;
       border: none;
       border-bottom: 2px solid transparent;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       font: inherit;
       font-size: 12px;
       cursor: pointer;
@@ -108,12 +107,12 @@ export class MuxSidebar extends LitElement {
     }
 
     .tab-btn.active {
-      color: ${unsafeCSS(CHROME.textBright)};
-      border-bottom-color: ${unsafeCSS(CHROME.accent)};
+      color: var(--chrome-text-bright);
+      border-bottom-color: var(--chrome-accent);
     }
 
     .tab-btn:hover:not(.active) {
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
     }
 
     .tab-content {
@@ -134,12 +133,12 @@ export class MuxSidebar extends LitElement {
     }
 
     .ws-card:hover {
-      background: ${unsafeCSS(CHROME.hover)};
+      background: var(--chrome-hover);
     }
 
     .ws-card.active {
-      background: ${unsafeCSS(CHROME.hover)};
-      border-color: ${unsafeCSS(CHROME.accent)};
+      background: var(--chrome-hover);
+      border-color: var(--chrome-accent);
     }
 
     .ws-card.pending-close {
@@ -160,18 +159,18 @@ export class MuxSidebar extends LitElement {
     }
 
     .dot.active {
-      color: ${unsafeCSS(CHROME.accent)};
+      color: var(--chrome-accent);
     }
 
     .dot.inactive {
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
     }
 
     .ws-name {
       flex: 1;
       font-size: 13px;
       font-weight: 500;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -180,10 +179,10 @@ export class MuxSidebar extends LitElement {
 
     .ws-rename-input {
       flex: 1;
-      background: ${unsafeCSS(CHROME.body)};
-      border: 1px solid ${unsafeCSS(CHROME.accent)};
+      background: var(--chrome-body);
+      border: 1px solid var(--chrome-accent);
       border-radius: 3px;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
       font: inherit;
       font-size: 13px;
       padding: 1px 5px;
@@ -192,14 +191,14 @@ export class MuxSidebar extends LitElement {
     }
 
     .ws-rename-input:focus {
-      box-shadow: 0 0 0 2px ${unsafeCSS(CHROME.accent)}33;
+      box-shadow: 0 0 0 2px var(--chrome-accent)33;
     }
 
     .ws-remove-btn {
       flex-shrink: 0;
       background: transparent;
       border: none;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       cursor: pointer;
       padding: 1px 3px;
       border-radius: 3px;
@@ -215,12 +214,12 @@ export class MuxSidebar extends LitElement {
     }
 
     .ws-remove-btn:hover {
-      color: ${unsafeCSS(CHROME.danger)};
+      color: var(--chrome-danger);
     }
 
     .ws-hint {
       font-size: 11px;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       margin-top: 2px;
       padding-left: 12px;
       white-space: nowrap;
@@ -234,9 +233,9 @@ export class MuxSidebar extends LitElement {
       margin: 6px 6px 4px;
       padding: 7px 10px;
       background: transparent;
-      border: 1px dashed ${unsafeCSS(CHROME.textDim)};
+      border: 1px dashed var(--chrome-text-dim);
       border-radius: 5px;
-      color: ${unsafeCSS(CHROME.accent)};
+      color: var(--chrome-accent);
       font: inherit;
       font-size: 12px;
       text-align: left;
@@ -245,8 +244,8 @@ export class MuxSidebar extends LitElement {
     }
 
     .new-ws-btn:hover {
-      border-color: ${unsafeCSS(CHROME.accent)};
-      background: ${unsafeCSS(CHROME.hover)};
+      border-color: var(--chrome-accent);
+      background: var(--chrome-hover);
     }
 
     /* ---- tunnels tab ---- */
@@ -262,25 +261,25 @@ export class MuxSidebar extends LitElement {
     }
 
     .tunnel-row:hover {
-      background: ${unsafeCSS(CHROME.hover)};
+      background: var(--chrome-hover);
     }
 
     .tunnel-dot {
       font-size: 7px;
-      color: ${unsafeCSS(CHROME.accent)};
+      color: var(--chrome-accent);
       flex-shrink: 0;
       line-height: 1;
     }
 
     .tunnel-port {
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
       font-variant-numeric: tabular-nums;
       min-width: 42px;
     }
 
     .tunnel-id {
       flex: 1;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       font-family: monospace;
       font-size: 11px;
       white-space: nowrap;
@@ -293,7 +292,7 @@ export class MuxSidebar extends LitElement {
       flex-shrink: 0;
       background: transparent;
       border: none;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       cursor: pointer;
       padding: 2px 4px;
       border-radius: 3px;
@@ -303,12 +302,12 @@ export class MuxSidebar extends LitElement {
     }
 
     .tunnel-action-btn:hover {
-      color: ${unsafeCSS(CHROME.textBright)};
-      background: ${unsafeCSS(CHROME.hover)};
+      color: var(--chrome-text-bright);
+      background: var(--chrome-hover);
     }
 
     .tunnel-close-btn:hover {
-      color: ${unsafeCSS(CHROME.danger)};
+      color: var(--chrome-danger);
     }
 
     .port-input-row {
@@ -321,10 +320,10 @@ export class MuxSidebar extends LitElement {
 
     .port-input {
       flex: 1;
-      background: ${unsafeCSS(CHROME.body)};
-      border: 1px solid ${unsafeCSS(CHROME.border)};
+      background: var(--chrome-body);
+      border: 1px solid var(--chrome-border);
       border-radius: 3px;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
       font: inherit;
       font-size: 12px;
       padding: 4px 6px;
@@ -333,16 +332,16 @@ export class MuxSidebar extends LitElement {
     }
 
     .port-input:focus {
-      border-color: ${unsafeCSS(CHROME.accent)};
+      border-color: var(--chrome-accent);
     }
 
     .forward-btn {
       flex-shrink: 0;
       padding: 4px 8px;
-      background: ${unsafeCSS(CHROME.accent)};
+      background: var(--chrome-accent);
       border: none;
       border-radius: 3px;
-      color: ${unsafeCSS(CHROME.bar)};
+      color: var(--chrome-bar);
       font: inherit;
       font-size: 11px;
       font-weight: 600;
@@ -361,7 +360,7 @@ export class MuxSidebar extends LitElement {
       padding: 7px 10px;
       background: transparent;
       border: none;
-      color: ${unsafeCSS(CHROME.accent)};
+      color: var(--chrome-accent);
       font: inherit;
       font-size: 12px;
       text-align: left;
@@ -371,7 +370,7 @@ export class MuxSidebar extends LitElement {
     }
 
     .add-tunnel-btn:hover {
-      background: ${unsafeCSS(CHROME.hover)};
+      background: var(--chrome-hover);
     }
 
     /* ---- drag resize handle ---- */
@@ -389,7 +388,7 @@ export class MuxSidebar extends LitElement {
     }
 
     .resize-handle:hover {
-      background: ${unsafeCSS(CHROME.accent)};
+      background: var(--chrome-accent);
       opacity: 0.4;
     }
   `;

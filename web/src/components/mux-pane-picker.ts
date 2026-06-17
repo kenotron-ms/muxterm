@@ -1,7 +1,6 @@
-import { LitElement, html, css, unsafeCSS } from 'lit';
+import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from '../state.js';
-import { CHROME } from '../lib/theme.js';
 import { workspaceLabel } from './workspace-picker.js';
 
 @customElement('mux-pane-picker')
@@ -60,8 +59,8 @@ export class MuxPanePicker extends LitElement {
       position: absolute;
       top: calc(100% + 4px);
       right: 0;
-      background: ${unsafeCSS(CHROME.bar)};
-      border: 1px solid ${unsafeCSS(CHROME.border)};
+      background: var(--chrome-bar);
+      border: 1px solid var(--chrome-border);
       border-radius: 6px;
       min-width: 200px;
       max-width: 300px;
@@ -75,14 +74,14 @@ export class MuxPanePicker extends LitElement {
       font-weight: 600;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       padding: 4px 8px 2px;
       pointer-events: none;
     }
 
     .section-divider {
       height: 1px;
-      background: ${unsafeCSS(CHROME.border)};
+      background: var(--chrome-border);
       margin: 4px 4px;
     }
 

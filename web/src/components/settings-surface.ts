@@ -1,6 +1,6 @@
-import { LitElement, html, css, unsafeCSS } from 'lit';
+import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { CHROME, PALETTES } from '../lib/theme.js';
+import { PALETTES } from '../lib/theme.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
 
@@ -43,8 +43,8 @@ export class MuxSettingsSurface extends LitElement {
       flex-direction: column;
       width: 100%;
       height: 100%;
-      background: ${unsafeCSS(CHROME.body)};
-      color: ${unsafeCSS(CHROME.textBright)};
+      background: var(--chrome-body);
+      color: var(--chrome-text-bright);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       font-size: 13px;
       box-sizing: border-box;
@@ -57,7 +57,7 @@ export class MuxSettingsSurface extends LitElement {
       align-items: center;
       justify-content: space-between;
       padding: 16px 20px 14px;
-      border-bottom: 1px solid ${unsafeCSS(CHROME.border)};
+      border-bottom: 1px solid var(--chrome-border);
       flex-shrink: 0;
     }
 
@@ -65,13 +65,13 @@ export class MuxSettingsSurface extends LitElement {
       margin: 0;
       font-size: 15px;
       font-weight: 600;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
     }
 
     .close-btn {
       background: transparent;
       border: none;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       cursor: pointer;
       font-size: 18px;
       line-height: 1;
@@ -80,8 +80,8 @@ export class MuxSettingsSurface extends LitElement {
       transition: color 0.1s, background 0.1s;
     }
     .close-btn:hover {
-      color: ${unsafeCSS(CHROME.textBright)};
-      background: ${unsafeCSS(CHROME.hover)};
+      color: var(--chrome-text-bright);
+      background: var(--chrome-hover);
     }
 
     /* ── Body: sidebar + content ── */
@@ -95,7 +95,7 @@ export class MuxSettingsSurface extends LitElement {
     .sidebar {
       width: 156px;
       flex-shrink: 0;
-      border-right: 1px solid ${unsafeCSS(CHROME.border)};
+      border-right: 1px solid var(--chrome-border);
       padding: 12px 0;
       overflow-y: auto;
     }
@@ -109,18 +109,18 @@ export class MuxSettingsSurface extends LitElement {
       cursor: pointer;
       font-size: 13px;
       font-family: inherit;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       text-align: left;
       border-radius: 0;
       transition: color 0.1s, background 0.1s;
     }
     .sidebar-item:hover {
-      color: ${unsafeCSS(CHROME.textBright)};
-      background: ${unsafeCSS(CHROME.hover)};
+      color: var(--chrome-text-bright);
+      background: var(--chrome-hover);
     }
     .sidebar-item.active {
-      color: ${unsafeCSS(CHROME.textBright)};
-      background: ${unsafeCSS(CHROME.hover)};
+      color: var(--chrome-text-bright);
+      background: var(--chrome-hover);
       font-weight: 500;
     }
 
@@ -138,7 +138,7 @@ export class MuxSettingsSurface extends LitElement {
       font-weight: 600;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
     }
 
     .section-gap {
@@ -166,7 +166,7 @@ export class MuxSettingsSurface extends LitElement {
       transform: translateY(-1px);
     }
     .theme-card.active {
-      border-color: ${unsafeCSS(CHROME.accent)};
+      border-color: var(--chrome-accent);
     }
 
     .card-inner {
@@ -205,11 +205,11 @@ export class MuxSettingsSurface extends LitElement {
       font-size: 10px;
       text-align: center;
       padding: 5px 6px 6px;
-      color: ${unsafeCSS(CHROME.textDim)};
-      background: ${unsafeCSS(CHROME.bar)};
+      color: var(--chrome-text-dim);
+      background: var(--chrome-bar);
     }
     .theme-card.active .card-label {
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
     }
 
     .card-check {
@@ -217,7 +217,7 @@ export class MuxSettingsSurface extends LitElement {
       top: 5px;
       right: 7px;
       font-size: 10px;
-      color: ${unsafeCSS(CHROME.accent)};
+      color: var(--chrome-accent);
       font-weight: 700;
     }
 
@@ -238,11 +238,11 @@ export class MuxSettingsSurface extends LitElement {
       transition: background 0.1s;
     }
     .font-radio-label:hover {
-      background: ${unsafeCSS(CHROME.hover)};
+      background: var(--chrome-hover);
     }
 
     .font-radio-label input[type="radio"] {
-      accent-color: ${unsafeCSS(CHROME.accent)};
+      accent-color: var(--chrome-accent);
       width: 14px;
       height: 14px;
       cursor: pointer;
@@ -251,7 +251,7 @@ export class MuxSettingsSurface extends LitElement {
 
     .font-radio-name {
       flex: 1;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
     }
 
     /* ── Font size slider ── */
@@ -264,14 +264,14 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .size-label {
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       width: 64px;
       flex-shrink: 0;
     }
 
     input[type="range"] {
       flex: 1;
-      accent-color: ${unsafeCSS(CHROME.accent)};
+      accent-color: var(--chrome-accent);
       height: 4px;
       cursor: pointer;
     }
@@ -279,7 +279,7 @@ export class MuxSettingsSurface extends LitElement {
     .size-value {
       width: 28px;
       text-align: right;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
       font-feature-settings: 'tnum';
     }
 
@@ -287,11 +287,11 @@ export class MuxSettingsSurface extends LitElement {
     .font-preview {
       margin: 10px 0 0 10px;
       padding: 8px 12px;
-      background: ${unsafeCSS(CHROME.bar)};
-      border: 1px solid ${unsafeCSS(CHROME.border)};
+      background: var(--chrome-bar);
+      border: 1px solid var(--chrome-border);
       border-radius: 6px;
       font-size: 12px;
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
       overflow: hidden;
       white-space: nowrap;
     }
@@ -302,7 +302,7 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .notif-description {
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       line-height: 1.55;
       margin: 0 0 14px 0;
     }
@@ -313,38 +313,38 @@ export class MuxSettingsSurface extends LitElement {
       gap: 7px;
       padding: 7px 14px;
       border-radius: 6px;
-      border: 1px solid ${unsafeCSS(CHROME.accent)};
+      border: 1px solid var(--chrome-accent);
       background: transparent;
-      color: ${unsafeCSS(CHROME.accent)};
+      color: var(--chrome-accent);
       font: inherit;
       font-size: 13px;
       cursor: pointer;
       transition: background 0.12s, color 0.12s;
     }
     .notif-btn:hover {
-      background: ${unsafeCSS(CHROME.accent)};
-      color: ${unsafeCSS(CHROME.body)};
+      background: var(--chrome-accent);
+      color: var(--chrome-body);
     }
 
     .notif-status {
       display: inline-flex;
       align-items: center;
       gap: 7px;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       font-size: 13px;
     }
     .notif-status.granted {
       color: #9ece6a; /* tokyo-night green */
     }
     .notif-status.denied {
-      color: ${unsafeCSS(CHROME.danger)};
+      color: var(--chrome-danger);
     }
 
     .notif-help-link {
       display: inline-block;
       margin-top: 6px;
       font-size: 11px;
-      color: ${unsafeCSS(CHROME.accent)};
+      color: var(--chrome-accent);
       text-decoration: none;
     }
     .notif-help-link:hover {
@@ -354,7 +354,7 @@ export class MuxSettingsSurface extends LitElement {
     .notif-hint {
       margin-top: 8px;
       font-size: 11px;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       line-height: 1.5;
     }
 
@@ -364,17 +364,17 @@ export class MuxSettingsSurface extends LitElement {
       gap: 6px;
       padding: 5px 11px;
       border-radius: 6px;
-      border: 1px solid ${unsafeCSS(CHROME.border)};
+      border: 1px solid var(--chrome-border);
       background: transparent;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       font: inherit;
       font-size: 12px;
       cursor: pointer;
       transition: border-color 0.12s, color 0.12s;
     }
     .notif-test-btn:hover {
-      border-color: ${unsafeCSS(CHROME.accent)};
-      color: ${unsafeCSS(CHROME.textBright)};
+      border-color: var(--chrome-accent);
+      color: var(--chrome-text-bright);
     }
 
     /* ── Theme section label ── */
@@ -384,13 +384,13 @@ export class MuxSettingsSurface extends LitElement {
       font-weight: 600;
       letter-spacing: 0.07em;
       text-transform: uppercase;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
       padding-top: 8px;
     }
 
     .divider {
       height: 1px;
-      background: ${unsafeCSS(CHROME.border)};
+      background: var(--chrome-border);
       margin: 22px 0;
     }
 
@@ -411,11 +411,11 @@ export class MuxSettingsSurface extends LitElement {
       transition: background 0.1s;
     }
     .bell-radio-label:hover {
-      background: ${unsafeCSS(CHROME.hover)};
+      background: var(--chrome-hover);
     }
 
     .bell-radio-label input[type="radio"] {
-      accent-color: ${unsafeCSS(CHROME.accent)};
+      accent-color: var(--chrome-accent);
       width: 14px;
       height: 14px;
       margin-top: 1px;
@@ -430,12 +430,12 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .bell-radio-name {
-      color: ${unsafeCSS(CHROME.textBright)};
+      color: var(--chrome-text-bright);
     }
 
     .bell-radio-desc {
       font-size: 11px;
-      color: ${unsafeCSS(CHROME.textDim)};
+      color: var(--chrome-text-dim);
     }
   `;
 

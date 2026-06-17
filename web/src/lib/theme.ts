@@ -2,18 +2,62 @@
 // Exported here so both terminal-registry (Terminal config) and
 // pane.ts (CSS background) share a single source of truth.
 
-// VS Code tab + chrome design tokens (Tokyo Night palette).
-export const CHROME = {
-  bar: '#16161e',         // title bar / tab strip / status bar background
-  body: '#1a1b26',        // surface body — active tab merges into this
-  border: '#292e42',      // hairline separators
-  textDim: '#565f89',     // inactive tab / muted labels
-  textBright: '#c0caf5',  // active tab / focused text
-  accent: '#7aa2f7',      // normal active-tab top line + focus accent
-  driverAccent: '#bb9af7', // driver region accent (magenta)
-  hover: '#1f2335',       // flat icon-button hover background
-  danger: '#f7768e',      // close-× hover
+// ── Chrome design token shapes ───────────────────────────────────────────────
+
+export interface ChromeTokens {
+  bar: string;         // title bar / tab strip / status bar background
+  body: string;        // surface body — active tab merges into this
+  border: string;      // hairline separators
+  textDim: string;     // inactive tab / muted labels
+  textBright: string;  // active tab / focused text
+  accent: string;      // normal active-tab top line + focus accent
+  driverAccent: string; // driver region accent
+  hover: string;       // flat icon-button hover background
+  danger: string;      // close-× hover / destructive action
+}
+
+// Dark chrome — Tokyo Night / default
+const CHROME_DARK: ChromeTokens = {
+  bar: '#16161e',
+  body: '#1a1b26',
+  border: '#292e42',
+  textDim: '#565f89',
+  textBright: '#c0caf5',
+  accent: '#7aa2f7',
+  driverAccent: '#bb9af7',
+  hover: '#1f2335',
+  danger: '#f7768e',
 };
+
+// Light chrome — used whenever a light terminal theme is selected
+const CHROME_LIGHT: ChromeTokens = {
+  bar: '#e8e8ed',
+  body: '#f2f2f7',
+  border: '#c6c6c8',
+  textDim: '#8e8e93',
+  textBright: '#1c1c1e',
+  accent: '#007aff',
+  driverAccent: '#5856d6',
+  hover: '#d8d8de',
+  danger: '#ff3b30',
+};
+
+/** The set of palette names that are considered light themes. */
+const LIGHT_THEME_IDS = new Set([
+  'solarized-light',
+  'one-light',
+  'github-light',
+]);
+
+export function isLightTheme(palette: string): boolean {
+  return LIGHT_THEME_IDS.has(palette);
+}
+
+// VS Code tab + chrome design tokens — kept as static dark reference for any
+// code that directly imports CHROME (type-checked constant access).
+// At runtime, always use CSS custom properties (var(--chrome-*)) which are
+// updated by applyChromeTokens() when the theme changes.
+export const CHROME: ChromeTokens = CHROME_DARK;
 
 export const THEME = {
   background: '#1a1b26',
@@ -257,4 +301,26 @@ export function applyThemeTokens(
   for (const [k, v] of Object.entries(vars)) {
     root.style.setProperty(k, v);
   }
+}
+
+/**
+ * Apply --chrome-* CSS custom properties to the root element.
+ * Call this once at startup with the initial palette name, then again whenever
+ * the user changes the theme. All components use var(--chrome-*) so they
+ * update automatically without re-rendering.
+ */
+export function applyChromeTokens(
+  paletteName: string,
+  root: HTMLElement = document.documentElement,
+): void {
+  const tokens = isLightTheme(paletteName) ? CHROME_LIGHT : CHROME_DARK;
+  root.style.setProperty('--chrome-bar',           tokens.bar);
+  root.style.setProperty('--chrome-body',          tokens.body);
+  root.style.setProperty('--chrome-border',        tokens.border);
+  root.style.setProperty('--chrome-text-dim',      tokens.textDim);
+  root.style.setProperty('--chrome-text-bright',   tokens.textBright);
+  root.style.setProperty('--chrome-accent',        tokens.accent);
+  root.style.setProperty('--chrome-driver-accent', tokens.driverAccent);
+  root.style.setProperty('--chrome-hover',         tokens.hover);
+  root.style.setProperty('--chrome-danger',        tokens.danger);
 }

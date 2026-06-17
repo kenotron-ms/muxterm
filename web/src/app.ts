@@ -8,7 +8,7 @@ import { MuxSocket, buildWsUrl } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
-import { applyThemeTokens, resolvePalette } from './lib/theme.js';
+import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
 import { injectTerminalFont } from './lib/fonts.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
@@ -447,8 +447,9 @@ export class MuxApp extends LitElement {
     // Update layout mode when the viewport crosses the 768px breakpoint.
     window.addEventListener('resize', this._onViewportResize);
     this._layoutMode = currentLayoutMode();
-    // Apply default theme tokens immediately so --mux-* vars exist before any frame.
+    // Apply default theme tokens immediately so --mux-* and --chrome-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
+    applyChromeTokens(store.config.theme.palette);
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
     disposeKeys = installKeybindings(uiActions);
     // Install fixed app-level shortcuts (Cmd+W close, Cmd+T new pane). These
@@ -905,6 +906,7 @@ export class MuxApp extends LitElement {
       const cfg = parseResolvedConfig(msg['config']);
       store.setConfig(cfg);
       applyThemeTokens(resolvePalette(cfg.theme.palette));
+      applyChromeTokens(cfg.theme.palette);
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
@@ -1115,6 +1117,7 @@ export class MuxApp extends LitElement {
     if (!cfg) return;
     store.setConfig(cfg);
     applyThemeTokens(resolvePalette(cfg.theme.palette));
+    applyChromeTokens(cfg.theme.palette);
     configureTerminals(cfg);
     disposeKeys?.();
     disposeKeys = installKeybindings(uiActions);
