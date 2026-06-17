@@ -17,7 +17,16 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
-const githubReleaseAPI = "https://api.github.com/repos/kenotron-ms/muxterm/releases/latest"
+const githubReleaseAPIDefault = "https://api.github.com/repos/kenotron-ms/muxterm/releases/latest"
+
+// releasesAPIURL returns the GitHub releases API URL, allowing an override via
+// MUXTERM_RELEASES_API env var for testing in DTU environments.
+func releasesAPIURL() string {
+	if v := os.Getenv("MUXTERM_RELEASES_API"); v != "" {
+		return v
+	}
+	return githubReleaseAPIDefault
+}
 
 // githubRelease is the subset of the GitHub releases API response we need.
 type githubRelease struct {
@@ -35,7 +44,7 @@ type githubRelease struct {
 // no matching asset is found; returns a non-nil error on HTTP/JSON failure.
 func FetchLatestRelease() (tag, notes, downloadURL string, err error) {
 	client := &http.Client{Timeout: 15 * time.Second}
-	req, _ := http.NewRequest("GET", githubReleaseAPI, nil)
+	req, _ := http.NewRequest("GET", releasesAPIURL(), nil)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "muxterm-updater/1.0")
 

@@ -263,8 +263,10 @@ func ReceiveHandoffConn(conn *net.UnixConn, canonicalSocket string) (*Server, er
 				rawFD := receivedFDs[ps.FDIndex]
 				ptmx := os.NewFile(uintptr(rawFD), fmt.Sprintf("ptmx-pane%d", ps.LocalID))
 
-				// Restore scrollback into a new buffer.
-				buf := NewRawBuffer(0)
+				// Restore scrollback into a VTBuffer so get_screen works
+				// after the handoff. VTBuffer.Write() processes VT sequences
+				// through the emulator and reconstructs the grid state.
+				buf := NewVTBuffer(ps.Cols, ps.Rows)
 				if len(ps.Scrollback) > 0 {
 					_, _ = buf.Write(ps.Scrollback)
 				}

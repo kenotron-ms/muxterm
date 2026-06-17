@@ -445,7 +445,7 @@ func (c *conn) createPane(msg Message) {
 		localID,
 		msg.Cmd,
 		cols, rows,
-		NewRawBuffer(0),
+		nil, // nil → NewPane installs VTBuffer (production default); required for get_screen/ScreenSnapshot
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
 		func(id int) { c.srv.handlePaneExit(wsID, id) },
 	)
