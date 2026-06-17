@@ -11,7 +11,10 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
+
+	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
 )
 
 func init() {
@@ -23,10 +26,12 @@ func init() {
 
 // Config holds the configuration for creating a new Server.
 type Config struct {
-	Addr     string
-	Secret   string
-	StaticFS fs.FS
-	NoAuth   bool // skip token/localhost auth check (dev only)
+	Addr          string
+	Secret        string
+	StaticFS      fs.FS
+	NoAuth        bool            // skip token/localhost auth check (dev only)
+	ConfigPath    string          // path to write config.toml on PATCH /api/config (empty = skip writes)
+	InitialConfig muxcfg.Config   // initial resolved configuration (zero value = package defaults)
 }
 
 // Server is the HTTP server for muxterm.
@@ -37,6 +42,12 @@ type Server struct {
 	mux     *http.ServeMux
 	hub     *Hub
 	tunnels *TunnelRegistry
+
+	// configPath is the file path for persisting PATCH /api/config writes.
+	// Empty string means writes are skipped (dev/test mode).
+	configPath string
+	cfgMu      sync.RWMutex
+	cfg        muxcfg.Config
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -56,8 +67,18 @@ func New(cfg Config) *Server {
 		tunnels: tunnels,
 	}
 
+	s.configPath = cfg.ConfigPath
+	// Use the supplied initial config if it looks populated (palette is never
+	// empty in a real config), otherwise fall back to hardcoded defaults.
+	s.cfg = cfg.InitialConfig
+	if s.cfg.Theme.Palette == "" {
+		s.cfg = muxcfg.Defaults()
+	}
+
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/token", s.handleToken)
+	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
+	s.mux.HandleFunc("PATCH /api/config", s.handlePatchConfig)
 	s.mux.HandleFunc("GET /api/tunnels", s.handleTunnelList)
 	s.mux.HandleFunc("POST /api/tunnels", s.handleTunnelCreate)
 	s.mux.HandleFunc("DELETE /api/tunnels/{id}", s.handleTunnelClose)

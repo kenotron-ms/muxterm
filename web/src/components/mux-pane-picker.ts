@@ -63,11 +63,52 @@ export class MuxPanePicker extends LitElement {
       background: ${unsafeCSS(CHROME.bar)};
       border: 1px solid ${unsafeCSS(CHROME.border)};
       border-radius: 6px;
-      min-width: 180px;
-      max-width: 280px;
+      min-width: 200px;
+      max-width: 300px;
       z-index: 2000;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
       padding: 4px;
+    }
+
+    .section-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: ${unsafeCSS(CHROME.textDim)};
+      padding: 4px 8px 2px;
+      pointer-events: none;
+    }
+
+    .section-divider {
+      height: 1px;
+      background: ${unsafeCSS(CHROME.border)};
+      margin: 4px 4px;
+    }
+
+    .ws-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      padding: 6px 8px;
+      background: transparent;
+      border: none;
+      color: inherit;
+      font: inherit;
+      font-size: 0.85rem;
+      cursor: pointer;
+      border-radius: 4px;
+      text-align: left;
+    }
+
+    .ws-item:hover {
+      background: rgba(122, 162, 247, 0.12);
+    }
+
+    .ws-item.active {
+      color: var(--mux-accent, #7aa2f7);
+      font-weight: 600;
     }
 
     .pane-item {
@@ -106,7 +147,8 @@ export class MuxPanePicker extends LitElement {
       flex-shrink: 0;
     }
 
-    .pane-item.active .check {
+    .pane-item.active .check,
+    .ws-item.active .check {
       opacity: 1;
     }
   `;
@@ -153,6 +195,18 @@ export class MuxPanePicker extends LitElement {
     );
   }
 
+  private _selectWorkspace(workspaceId: string): void {
+    this._open = false;
+    store.ackWorkspace(workspaceId);
+    this.dispatchEvent(
+      new CustomEvent('workspace-switch', {
+        detail: { workspaceId },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   override render() {
     // Suppress unused-variable lint — _version is read to create a reactive
     // dependency so store subscription bumps trigger re-renders.
@@ -182,6 +236,27 @@ export class MuxPanePicker extends LitElement {
       ${this._open
         ? html`
             <div class="dropdown">
+              ${workspaces.length > 1 ? html`
+                <div class="section-label">Workspaces</div>
+                ${workspaces.map((w) => {
+                  const isActive = w.workspaceId === attached;
+                  const hasBell = !isActive && store.workspaceBellActive(w.workspaceId);
+                  return html`
+                    <button
+                      class="ws-item ${isActive ? 'active' : ''}"
+                      @click="${() => this._selectWorkspace(w.workspaceId)}"
+                    >
+                      ${hasBell
+                        ? html`<span class="bell-dot">●</span>`
+                        : html`<span class="bell-spacer"></span>`}
+                      <span class="pane-label">${workspaceLabel(w)}</span>
+                      <span class="check">✓</span>
+                    </button>
+                  `;
+                })}
+                <div class="section-divider"></div>
+                <div class="section-label">Panes</div>
+              ` : ''}
               ${validPanes.map((p) => {
                 const isActive = p.paneId === activePaneId;
                 const hasBell = store.paneBellActive(p.paneId);

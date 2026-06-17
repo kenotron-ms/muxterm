@@ -6,7 +6,7 @@ import { icon } from './lib/icons.js';
 import { MonitorX } from 'lucide';
 import { MuxSocket, buildWsUrl } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
-import { parseResolvedConfig } from './lib/config.js';
+import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, resolvePalette } from './lib/theme.js';
 import { injectTerminalFont } from './lib/fonts.js';
@@ -17,9 +17,10 @@ injectTerminalFont();
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';
-import './components/mux-dock-bar.js';
 import './components/mux-dock.js';
+import './components/settings-surface.js';
 import type { MuxDock } from './components/mux-dock.js';
+import type { LauncherAction } from './components/launcher-menu.js';
 import './components/mux-undo-toast.js';
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
@@ -48,7 +49,7 @@ const uiActions: UIActions = {
   split: () => {}, // wired to create-pane in connectedCallback
   maximizeRegion: () => {},
   popOut: () => {},
-  nextSession: () => {},
+  nextSession: () => {}, // wired to cycleTabInGroup in connectedCallback
   focusDriver: () => {},
 };
 
@@ -210,6 +211,99 @@ export class MuxApp extends LitElement {
     .ws-create-cancel:disabled { opacity: 0.45; cursor: not-allowed; }
     .ws-create-cancel:not(:disabled):hover { background: #2a2b3c; color: #cdd6f4; }
 
+    /* ── Overlay panel (settings / shortcuts / about) ── */
+    .overlay-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 3000;
+    }
+
+    .overlay-dialog {
+      background: #1a1b26;
+      border: 1px solid #292e42;
+      border-radius: 10px;
+      width: min(600px, calc(100vw - 32px));
+      max-height: min(80vh, 640px);
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+      overflow: hidden;
+    }
+
+    .overlay-body {
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    /* shortcuts / about panels rendered inline */
+    .info-panel {
+      padding: 24px 24px 32px;
+    }
+
+    .info-panel h2 {
+      margin: 0 0 20px;
+      font-size: 17px;
+      font-weight: 600;
+      color: #c0caf5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .info-panel .close-btn {
+      background: transparent;
+      border: none;
+      color: #565f89;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      padding: 0 4px;
+      border-radius: 4px;
+    }
+
+    .info-panel .close-btn:hover { color: #c0caf5; background: #1f2335; }
+
+    .shortcut-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0;
+    }
+
+    .shortcut-grid .sc-label {
+      padding: 8px 0;
+      border-bottom: 1px solid #292e42;
+      font-size: 13px;
+      color: #565f89;
+    }
+
+    .shortcut-grid .sc-key {
+      padding: 8px 0;
+      border-bottom: 1px solid #292e42;
+      font-size: 12px;
+      color: #c0caf5;
+      font-family: 'JetBrainsMonoNerdFont', 'SF Mono', monospace;
+      text-align: right;
+    }
+
+    .about-body {
+      font-size: 13px;
+      color: #565f89;
+      line-height: 1.7;
+    }
+
+    .about-body strong { color: #c0caf5; }
+
+    .about-sha {
+      margin-top: 16px;
+      font-family: 'JetBrainsMonoNerdFont', 'SF Mono', monospace;
+      font-size: 11px;
+      color: #414868;
+    }
+
     /* Empty workspace state — shown when the attached workspace has no panes.
        Fills the space the terminal composition would occupy. */
     .empty-workspace {
@@ -306,6 +400,9 @@ export class MuxApp extends LitElement {
   private _createModalName = '';
 
   @state()
+  private _overlayPanel: 'settings' | 'shortcuts' | 'about' | null = null;
+
+  @state()
   private _layoutMode: 'wide' | 'narrow' = currentLayoutMode();
 
   /** Active grace-period timers, keyed by paneId. Presence => a deferred close
@@ -363,6 +460,9 @@ export class MuxApp extends LitElement {
       // This mirrors exactly what clicking the tab X button does.
       closePane: () => this._dock?.closeActivePanel(),
       newPane: () => this._createPaneOptimistic(),
+      // Cycle tabs within the active pane's group only (not across split panes).
+      nextTab: () => this._dock?.cycleTabInGroup('next'),
+      prevTab: () => this._dock?.cycleTabInGroup('prev'),
     });
 
     // Re-render whenever wire state (composition / workspaces / config) changes.
@@ -574,6 +674,7 @@ export class MuxApp extends LitElement {
       ${!isWide ? html`<mux-title-bar
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
+        @workspace-switch="${this._onWorkspaceSelected}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
         ${isWide ? html`
@@ -615,15 +716,7 @@ export class MuxApp extends LitElement {
                 ></mux-dock>
               `}
         </div>
-        ${!isWide ? html`
-          <mux-dock-bar
-            .workspaces="${store.workspaces}"
-            .activeWorkspaceId="${store.attached ?? ''}"
-            connectionStatus="${this._connectionStatus}"
-            @workspace-switch="${this._onWorkspaceSelected}"
-            @workspace-create="${this._onOpenCreateModal}"
-          ></mux-dock-bar>
-        ` : ''}
+
       </div>
       <div class="undo-toast-stack" @pane-close-resolved="${this._onUndoPaneClose}">
         ${repeat(
@@ -633,7 +726,7 @@ export class MuxApp extends LitElement {
             <mux-undo-toast
               .paneId="${paneId}"
               .paneTitle="${meta.title}"
-              .duration="${10000}"
+              .duration="${5000}"
             ></mux-undo-toast>
           `,
         )}
@@ -664,6 +757,59 @@ export class MuxApp extends LitElement {
                 ?disabled="${this._creatingWorkspace}"
                 @click="${this._submitCreate}"
               >${this._creatingWorkspace ? 'Creating…' : 'Create'}</button>
+            </div>
+          </div>
+        </div>
+      ` : ''}
+      ${this._overlayPanel ? html`
+        <div class="overlay-backdrop" @click="${this._closeOverlayPanel}">
+          <div class="overlay-dialog" @click="${(e: Event) => e.stopPropagation()}">
+            <div class="overlay-body">
+              ${this._overlayPanel === 'settings' ? html`
+                <mux-settings-surface
+                  .config="${store.config}"
+                  serverAddr="${window.location.host}"
+                  @close="${this._closeOverlayPanel}"
+                  @config-change="${this._onConfigChange}"
+                ></mux-settings-surface>
+              ` : this._overlayPanel === 'shortcuts' ? html`
+                <div class="info-panel">
+                  <h2>Keyboard Shortcuts
+                    <button class="close-btn" @click="${this._closeOverlayPanel}">×</button>
+                  </h2>
+                  <div class="shortcut-grid">
+                    <span class="sc-label">New pane (any mode)</span>
+                    <span class="sc-key">Cmd+Ctrl+T</span>
+                    <span class="sc-label">Close pane</span>
+                    <span class="sc-key">Cmd+W / Ctrl+W</span>
+                    <span class="sc-label">Cycle tabs (forward)</span>
+                    <span class="sc-key">Ctrl+Tab</span>
+                    <span class="sc-label">Cycle tabs (backward)</span>
+                    <span class="sc-key">Ctrl+Shift+Tab</span>
+                    <span class="sc-label">Next session</span>
+                    <span class="sc-key">${store.config.keys.nextSession}</span>
+                    <span class="sc-label">Split pane</span>
+                    <span class="sc-key">${store.config.keys.split}</span>
+                    <span class="sc-label">Open launcher</span>
+                    <span class="sc-key">${store.config.keys.openLauncher}</span>
+                    <span class="sc-label">Focus driver</span>
+                    <span class="sc-key">${store.config.keys.focusDriver}</span>
+                  </div>
+                </div>
+              ` : html`
+                <div class="info-panel">
+                  <h2>About muxterm
+                    <button class="close-btn" @click="${this._closeOverlayPanel}">×</button>
+                  </h2>
+                  <div class="about-body">
+                    <p><strong>muxterm</strong> is a browser-based terminal multiplexer. It
+                    connects to a <code>sessiond</code> daemon over WebSocket and renders
+                    panes using xterm.js inside a dockview layout.</p>
+                    <p>Config file: <strong>~/.config/muxterm/config.toml</strong></p>
+                  </div>
+                  <div class="about-sha">build ${__GIT_SHA__}</div>
+                </div>
+              `}
             </div>
           </div>
         </div>
@@ -867,7 +1013,7 @@ export class MuxApp extends LitElement {
     this._startDeferredClose(e.detail.paneId, e.detail.title);
   };
 
-  /** Begin a 10-second grace period for a touch/pen close. */
+  /** Begin a 5-second grace period before committing a pane close. */
   private _startDeferredClose(paneId: number, title: string): void {
     // Guard: if a timer already exists for this pane, clear it before replacing.
     const existing = this._pendingCloses.get(paneId);
@@ -938,10 +1084,42 @@ export class MuxApp extends LitElement {
     this._socket?.saveLayout(ws, 'wide', e.detail.layout);
   };
 
-  private _onLauncherAction = (): void => {
-    /* ⋯ menu is app-level only; presentational this round; workspace creation
-       is handled by mux-dock-bar. Phase 3 will wire launcher actions to
-       workspace management. */
+  private _onLauncherAction = (e: Event): void => {
+    const action = (e as CustomEvent<{ action: LauncherAction }>).detail?.action;
+    switch (action) {
+      case 'settings':
+      case 'shortcuts':
+      case 'about':
+        this._overlayPanel = action;
+        break;
+      case 'reconnect':
+        window.location.reload();
+        break;
+    }
+  };
+
+  private _closeOverlayPanel = (): void => {
+    this._overlayPanel = null;
+  };
+
+  /**
+   * Apply a config change from the settings surface: update the store, then
+   * re-apply all three subsystems that read from config.
+   *   • theme tokens  — immediate (CSS vars)
+   *   • terminal config — affects new panes only (no hot-reload in v1)
+   *   • keybindings  — immediate (reinstalls the global keydown handler)
+   */
+  private _onConfigChange = (e: Event): void => {
+    const cfg = (e as CustomEvent<{ config: ResolvedConfig }>).detail?.config;
+    if (!cfg) return;
+    store.setConfig(cfg);
+    applyThemeTokens(resolvePalette(cfg.theme.palette));
+    configureTerminals(cfg);
+    disposeKeys?.();
+    disposeKeys = installKeybindings(uiActions);
+    // Persist the change: debounced PATCH /api/config → server merges,
+    // writes to disk, and broadcasts to all connected clients.
+    patchConfig(configToGoJSON(cfg));
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {

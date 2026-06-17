@@ -147,6 +147,18 @@ export class MuxTitleBar extends LitElement {
     );
   }
 
+  private _onWorkspaceSwitch(e: Event): void {
+    e.stopPropagation();
+    const customEvent = e as CustomEvent;
+    this.dispatchEvent(
+      new CustomEvent('workspace-switch', {
+        bubbles: true,
+        composed: true,
+        detail: customEvent.detail,
+      }),
+    );
+  }
+
   render() {
     return html`
       <div class="brand">
@@ -154,7 +166,7 @@ export class MuxTitleBar extends LitElement {
         <span>muxterm</span>
         <span class="brand-sha">${__GIT_SHA__}</span>
       </div>
-      <mux-pane-picker></mux-pane-picker>
+      <mux-pane-picker @workspace-switch="${this._onWorkspaceSwitch}"></mux-pane-picker>
       <div class="right">
         <button
           class="launcher-btn"

@@ -932,6 +932,38 @@ export class MuxDock extends LitElement {
   }
 
   /**
+   * Cycle to the next (or previous) tab within the active panel's dockview
+   * group. Deliberately does NOT cross split-pane group boundaries — only tabs
+   * in the same visual group as the currently focused panel are considered.
+   * No-op when there is no active panel or the group contains only one tab.
+   */
+  cycleTabInGroup(direction: 'next' | 'prev' = 'next'): void {
+    if (!this._dv) return;
+    const active = this._dv.activePanel;
+    if (!active) return;
+
+    // Collect all tracked panels that share the same dockview group, preserving
+    // _panels Map insertion order (= tab creation order, used as proxy for the
+    // visual tab sequence within the group).
+    const sameGroup: IDockviewPanel[] = [];
+    for (const panel of this._panels.values()) {
+      if (panel.group === active.group) sameGroup.push(panel);
+    }
+
+    if (sameGroup.length <= 1) return;
+
+    const cur = sameGroup.findIndex((p) => p.id === active.id);
+    if (cur === -1) return;
+
+    const next =
+      direction === 'next'
+        ? (cur + 1) % sameGroup.length
+        : (cur - 1 + sameGroup.length) % sameGroup.length;
+
+    sameGroup[next]?.api.setActive();
+  }
+
+  /**
    * Close the currently active dockview panel programmatically, triggering the
    * same pane-close event flow as the tab X-button (deferred close + undo toast).
    * No-op if there is no active panel.

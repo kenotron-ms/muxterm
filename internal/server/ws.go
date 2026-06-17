@@ -358,6 +358,23 @@ func (h *Hub) SetResolvedConfig(cfg any) {
 	h.resolvedConfig = cfg
 }
 
+// BroadcastConfig updates the hub's stored config and sends a {type:"config"}
+// frame to every currently-connected client. Used after a PATCH /api/config
+// write so all open browser tabs receive the updated configuration immediately.
+func (h *Hub) BroadcastConfig(cfg any) {
+	h.mu.Lock()
+	h.resolvedConfig = cfg
+	clients := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.Unlock()
+
+	for _, c := range clients {
+		c.sendConfig(cfg)
+	}
+}
+
 // NewHub creates a new Hub that dials a fresh daemon connection per browser via
 // dial. dial may be nil and supplied later via SetDialer. tunnels is nil until
 // set by the caller (server.New sets it via hub.tunnels = tunnels).

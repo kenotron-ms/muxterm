@@ -11,6 +11,8 @@ export interface UIActions {
   focusDriver?: () => void;
   closePane?: () => void;
   newPane?: () => void;
+  nextTab?: () => void;
+  prevTab?: () => void;
 }
 
 /** Normalizes a KeyboardEvent to a canonical chord string: ctrl+alt+shift+meta+key. */
@@ -73,7 +75,7 @@ function isPwa(): boolean {
  * Returns a cleanup function.
  */
 export function installAppShortcuts(
-  actions: Pick<UIActions, 'closePane' | 'newPane'>,
+  actions: Pick<UIActions, 'closePane' | 'newPane' | 'nextTab' | 'prevTab'>,
 ): () => void {
   const handler = (e: KeyboardEvent): void => {
     if (e.key === 'w' || e.key === 'W') {
@@ -95,6 +97,23 @@ export function installAppShortcuts(
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && isPwa()) {
         e.preventDefault();
         actions.newPane?.();
+      }
+      return;
+    }
+
+    // Ctrl+Tab / Ctrl+Shift+Tab — cycle tabs within the active pane group only.
+    // Browsers handle Ctrl+Tab at the browser-process level in tab mode, so
+    // preventDefault() has no effect there. Works reliably in PWA standalone
+    // mode (no browser tabs to switch). In tab mode the shortcut may still fire
+    // the action on focus change into the app, but it won't prevent the browser
+    // tab switch. Ctrl+Tab is not passed through terminals because it's
+    // intercepted in capture phase before the terminal keydown handler fires.
+    if (e.key === 'Tab' && e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (e.shiftKey) {
+        actions.prevTab?.();
+      } else {
+        actions.nextTab?.();
       }
     }
   };

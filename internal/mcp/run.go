@@ -60,8 +60,8 @@ func NewStdioServer() (*Server, func() error) {
 	return srv, closer
 }
 
-// registerWithLazy registers all 25 MCP tools on srv, wrapping each handler
-// so the sessiond client is resolved lazily via lc.get() on each tool call.
+// registerWithLazy registers all MCP tools on srv, wrapping sessiond-backed
+// handlers so the client is resolved lazily via lc.get() on each tool call.
 func registerWithLazy(srv *Server, lc *lazyClient) {
 	wrap := func(fn func(*Client, map[string]any) (string, error)) ToolFunc {
 		return func(args map[string]any) (string, error) {
@@ -74,6 +74,7 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 	}
 	registerAllTools(srv, wrap)
 	registerTunnelTools(srv)
+	registerConfigTools(srv)
 
 	// attachOnce guards the one-time workspace attach for resources/list.
 	// Calling c.conn.Attach repeatedly replays the full retained output buffer
