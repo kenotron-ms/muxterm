@@ -291,6 +291,9 @@ func runServe(cfg Config) error {
 // found. The first check happens after a short delay so server startup is not
 // blocked; subsequent checks run every hour.
 func startVersionPoller(srv *server.Server) {
+	if version == "dev" {
+		return // dev builds have no meaningful version to compare; skip entirely
+	}
 	go func() {
 		// Delay the first check slightly so the server is fully initialised.
 		time.Sleep(10 * time.Second)

@@ -105,6 +105,10 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if s.version == "dev" {
+		http.Error(w, "update not available for dev builds", http.StatusBadRequest)
+		return
+	}
 
 	// Resolve the current binary's real path (follow symlinks once).
 	execPath, err := os.Executable()
