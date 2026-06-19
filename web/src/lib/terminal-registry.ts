@@ -183,6 +183,7 @@ const _preEnsureBuffer = new Map<number, (Uint8Array | string)[]>();
 // When ensure() later creates the entry, it immediately calls attach().
 const _pendingContainers = new Map<string, { container: HTMLElement; focus: boolean }>();
 const _encoder = new TextEncoder();
+const _textDecoder = new TextDecoder('utf-8', { fatal: false });
 
 // Current workspace — set by setWorkspace() on every composition update.
 let _currentWorkspaceId = '';
@@ -218,6 +219,54 @@ function _fitIfPlausible(entry: PaneEntry): boolean {
 function _isVisible(el: HTMLElement): boolean {
   // offsetParent is null when element is display:none or disconnected.
   return el.isConnected && el.offsetParent !== null;
+}
+
+/**
+ * Return true when the incoming PTY chunk contains ANSI escape sequences that
+ * indicate the application is about to perform a full-area redraw. These
+ * patterns cause intermediate streaming states ("A", "AB", "ABC", …) to
+ * accumulate permanently in xterm.js's scrollback ring:
+ *
+ *  - Cursor-up sequences move within the *visible* viewport only; they cannot
+ *    reach lines already committed to scrollback.
+ *  - Each new "frame" of a streaming application pushes more lines into
+ *    scrollback before the cursor-up+erase can overwrite them.
+ *
+ * When one of these patterns is detected we call term.clear() *before* writing
+ * so that the accumulated intermediate states are discarded.  The application's
+ * clear/erase sequences then fire against a clean viewport, and only the final
+ * rendered output survives in scrollback.
+ *
+ * Two patterns are detected:
+ *
+ * 1. CSI 2J / CSI 3J — Erase entire display or erase scrollback+display.
+ *    Applications doing a full screen clear and redraw (e.g. `clear` / `cls`,
+ *    or amplifier-app-cli's viewport-fitting redraw).
+ *
+ * 2. CSI NА + CSI 0J (N ≥ 3) — Cursor-up N lines followed by erase-to-end.
+ *    The bubbletea/bubbles-viewport in-place update pattern: cursor back to the
+ *    top of the output area, erase everything below, rewrite updated content.
+ *    The N ≥ 3 threshold excludes single-line progress-bar updates (cursor-up
+ *    1–2 lines) from triggering an unnecessary scrollback clear.
+ */
+function _containsScrollbackPollutingRedraw(data: Uint8Array | string): boolean {
+  const text = typeof data === 'string' ? data : _textDecoder.decode(data);
+
+  // Pattern 1: ESC[2J (erase entire display) or ESC[3J (erase scrollback+display)
+  if (/\x1b\[[23]J/.test(text)) return true;
+
+  // Pattern 2: cursor-up N (N ≥ 3) followed by erase-to-end in the same chunk.
+  // ([3-9]|\d{2,}) matches single-digit 3-9 or any two-or-more-digit number.
+  const cursorUpRe = /\x1b\[(\d+)A/g;
+  let match: RegExpExecArray | null;
+  while ((match = cursorUpRe.exec(text)) !== null) {
+    if (parseInt(match[1], 10) >= 3) {
+      // Check if ESC[J or ESC[0J appears after this cursor-up in the same chunk.
+      if (/\x1b\[0?J/.test(text.slice(match.index + match[0].length))) return true;
+    }
+  }
+
+  return false;
 }
 
 export const terminalRegistry = {
@@ -676,6 +725,15 @@ export const terminalRegistry = {
           entry._directWriteLog++;
           muxLog('registry write', `DIRECT #${entry._directWriteLog} pane=${paneId} bytes=${bytes}`,
             { seqBytes: entry.seqBytes });
+        }
+        // When the PTY chunk signals a full-area redraw (clear screen or significant
+        // cursor-up + erase-to-end), discard accumulated intermediate scrollback states
+        // before writing. Without this, streaming applications that update output in-place
+        // leave "A", "AB", "ABC" snapshots permanently in xterm.js scrollback because
+        // cursor-up sequences only operate within the visible viewport. See
+        // _containsScrollbackPollutingRedraw() for the full detection logic.
+        if (_containsScrollbackPollutingRedraw(data)) {
+          entry.term.clear();
         }
         entry.term.write(data);
       } else {

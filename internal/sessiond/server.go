@@ -439,7 +439,12 @@ func (c *conn) createPane(msg Message) {
 		localID,
 		msg.Cmd,
 		cols, rows,
-		NewRawBuffer(0),
+		nil, // nil → NewPane installs VTBuffer (production default). Required for two reasons:
+		// 1. get_screen / TypeScreenSnapshot type-asserts p.buf.(*VTBuffer); RawBuffer here
+		//    makes every get_screen call return empty silently.
+		// 2. VTBuffer serializes the live cell grid on reconnect — no raw intermediate ANSI
+		//    sequences, dimension-correct regardless of client resize. (RC-9/9.6)
+		// This fix was in commit 20cc2c8 and lost in the v0.5.0 revert (6490164).
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
 		func(id int) { c.srv.handlePaneExit(wsID, id) },
 	)
