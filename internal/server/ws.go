@@ -299,20 +299,9 @@ func (c *Client) sendMessage(msg *sessiond.Message) {
 
 // sendConfig writes the serve-owned resolved configuration as a text frame.
 // This is a serve-local envelope ({"type":"config","config":cfg}), NOT a
-// sessiond message. The frame also carries the current binary version and the
-// latest available release version so the browser can show an update badge.
+// sessiond message.
 func (c *Client) sendConfig(cfg any) {
-	c.hub.mu.RLock()
-	ver := c.hub.version
-	latest := c.hub.latestVersion
-	c.hub.mu.RUnlock()
-
-	data, err := json.Marshal(map[string]any{
-		"type":          "config",
-		"config":        cfg,
-		"version":       ver,
-		"latestVersion": latest,
-	})
+	data, err := json.Marshal(map[string]any{"type": "config", "config": cfg})
 	if err != nil {
 		log.Printf("sendConfig: marshal error: %v", err)
 		return
@@ -356,14 +345,8 @@ type Hub struct {
 	clients        map[*Client]bool
 	mu             sync.RWMutex
 	dial           DialFunc
-	resolvedConfig any             // muxterm-owned resolved config, shipped to clients on connect
-	tunnels        *TunnelRegistry // shared tunnel registry for /t/{id}/ proxy
-
-	// version is the running binary version (e.g. "v0.4.0"); set in New().
-	// latestVersion is the newest available release tag from GitHub; updated
-	// by the background poll goroutine in main. Both are guarded by mu.
-	version       string
-	latestVersion string
+	resolvedConfig any              // muxterm-owned resolved config, shipped to clients on connect
+	tunnels        *TunnelRegistry  // shared tunnel registry for /t/{id}/ proxy
 }
 
 // SetResolvedConfig stores the resolved configuration on the hub. The config is
@@ -373,23 +356,6 @@ func (h *Hub) SetResolvedConfig(cfg any) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.resolvedConfig = cfg
-}
-
-// SetVersion stores the running binary version on the hub. It is included in
-// every {type:"config"} frame sent to browser clients.
-func (h *Hub) SetVersion(v string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.version = v
-}
-
-// SetLatestVersion stores the newest available release tag (e.g. "v0.5.0")
-// on the hub. When non-empty and different from version, the browser can show
-// an update badge. It is included in every {type:"config"} frame.
-func (h *Hub) SetLatestVersion(v string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.latestVersion = v
 }
 
 // BroadcastConfig updates the hub's stored config and sends a {type:"config"}

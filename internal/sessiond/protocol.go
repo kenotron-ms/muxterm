@@ -59,12 +59,6 @@ const (
 	// Error envelope.
 	TypeError = "error"
 
-	// TypeHandoff is sent by the new sessiond to the old sessiond to initiate
-	// a live-upgrade state transfer. The old sessiond responds by connecting
-	// to the handoff socket and writing all state + PTY FDs, then exits.
-	// This is a v2 addition; it is NOT part of the frozen v1 contract.
-	TypeHandoff = "handoff"
-
 	// Tunnel messages (client ↔ serve, not forwarded to daemon).
 	TypeCreateTunnel  = "create-tunnel"
 	TypeCloseTunnel   = "close-tunnel"
@@ -201,10 +195,6 @@ type Message struct {
 	TunnelID   string       `json:"tunnelId,omitempty"`
 	TunnelPort int          `json:"tunnelPort,omitempty"`
 	Tunnels    []TunnelInfo `json:"tunnels,omitempty"`
-
-	// HandoffSocket is the Unix socket path used during live-upgrade handoff.
-	// Carried only on TypeHandoff messages (v2 addition, not in frozen v1 contract).
-	HandoffSocket string `json:"handoffSocket,omitempty"`
 }
 
 // TunnelInfo is one entry in a tunnel-list reply.

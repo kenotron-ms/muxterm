@@ -406,14 +406,6 @@ export class MuxApp extends LitElement {
   @state()
   private _layoutMode: 'wide' | 'narrow' = currentLayoutMode();
 
-  /** Currently running binary version, e.g. "v0.4.0". Received in {type:"config"} envelope. */
-  @state()
-  private _serverVersion = '';
-
-  /** Newer release version available, e.g. "v0.5.0". Empty = no update pending. */
-  @state()
-  private _latestVersion = '';
-
   /** Active grace-period timers, keyed by paneId. Presence => a deferred close
    *  is pending and a toast is shown. */
   private _pendingCloses = new Map<number, ReturnType<typeof setTimeout>>();
@@ -696,8 +688,6 @@ export class MuxApp extends LitElement {
             @tunnel-create="${this._onTunnelCreate}"
             @tunnel-close="${this._onTunnelClose}"
             @launcher-action="${this._onLauncherAction}"
-            .serverVersion="${this._serverVersion}"
-            .latestVersion="${this._latestVersion}"
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
@@ -920,13 +910,6 @@ export class MuxApp extends LitElement {
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
-
-      // Parse version metadata from the envelope (not from msg.config — version
-      // fields are server metadata, not user config, and must never be PATCH'd back).
-      const serverVersion = typeof msg['version'] === 'string' ? msg['version'] : '';
-      const latestVersion = typeof msg['latestVersion'] === 'string' ? msg['latestVersion'] : '';
-      if (serverVersion !== this._serverVersion) this._serverVersion = serverVersion;
-      if (latestVersion !== this._latestVersion) this._latestVersion = latestVersion;
     }
   };
 
