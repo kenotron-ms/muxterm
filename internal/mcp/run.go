@@ -30,11 +30,14 @@ func (lc *lazyClient) get() (*Client, error) {
 			lc.err = fmt.Errorf("connect to sessiond: %w", err)
 			return
 		}
-		// Auto-attach to the first workspace so callers don't need to call
-		// switch_workspace before using pane or terminal tools. Ignore errors:
-		// if there are no workspaces the connection stays unattached.
+		// Record the first workspace ID so resources/list knows which workspace to
+		// attach later. We intentionally do NOT call AttachWorkspace here: that
+		// would trigger a full scrollback replay from the sessiond right now, and
+		// the resources/list Attach (below) will do the same replay — so doing it
+		// twice doubles the data on the Unix socket and risks the MCP-pipe
+		// deadlock on Linux that was the root cause of the v0.5.0 regression.
 		if workspaces, wsErr := c.conn.ListWorkspaces(); wsErr == nil && len(workspaces) > 0 {
-			_ = c.AttachWorkspace(workspaces[0].WorkspaceID)
+			c.setWorkspaceOnly(workspaces[0].WorkspaceID)
 		}
 		lc.c = c
 	})
@@ -94,14 +97,23 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 				return nil
 			}
 			attachOnce.Do(func() {
-				c.SetOutputNotifier(func(paneID int) {
-					srv.NotifyResourceUpdated(fmt.Sprintf("pane://%d", paneID))
-				})
 				ws := c.Workspace()
 				comp, attachErr := c.conn.Attach(ws, "wide")
 				if attachErr != nil {
 					return
 				}
+				// Set the notifier AFTER Attach completes.
+				// Attach replays the full scrollback for every pane; if the notifier
+				// is live during replay, conn.Run tries to write MCP notifications
+				// while the resources/list response is still pending — Amplifier is
+				// waiting for that response and not draining the pipe, so it fills up,
+				// conn.Run blocks, the sessiond socket backs up, and Attach never
+				// finishes. Setting the notifier here means replay is silent; only
+				// future live output fires notifications, at which point Amplifier is
+				// actively reading.
+				c.SetOutputNotifier(func(paneID int) {
+					srv.NotifyResourceUpdated(fmt.Sprintf("pane://%d", paneID))
+				})
 				res := make([]map[string]any, 0, len(comp.Panes))
 				for _, p := range comp.Panes {
 					res = append(res, map[string]any{
