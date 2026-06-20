@@ -15,7 +15,6 @@ import (
 	"time"
 
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
-	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 func init() {
@@ -30,10 +29,9 @@ type Config struct {
 	Addr          string
 	Secret        string
 	StaticFS      fs.FS
-	NoAuth        bool                     // skip token/localhost auth check (dev only)
-	ConfigPath    string                   // path to write config.toml on PATCH /api/config (empty = skip writes)
-	InitialConfig muxcfg.Config            // initial resolved configuration (zero value = package defaults)
-	BrowserManager *sessiond.BrowserManager // optional; nil disables /ws/browser CDP features
+	NoAuth        bool          // skip token/localhost auth check (dev only)
+	ConfigPath    string        // path to write config.toml on PATCH /api/config (empty = skip writes)
+	InitialConfig muxcfg.Config // initial resolved configuration (zero value = package defaults)
 }
 
 // Server is the HTTP server for muxterm.
