@@ -385,6 +385,25 @@ export class MuxBrowserPane extends LitElement {
     }
   }
 
+  private readonly _onPanelActivated = (e: Event): void => {
+    const detail = (e as CustomEvent<{ paneId: number }>).detail;
+    if (detail?.paneId !== this.paneId) return;
+    this._sendBrowserFocus();
+  };
+
+  private readonly _onWindowFocus = (): void => {
+    // Re-claim authority when the OS window regains focus.
+    this._sendBrowserFocus();
+  };
+
+  private readonly _onWindowBlur = (): void => {
+    wsBrowser.send({
+      type: SessiondType.BrowserInput,
+      paneId: this.paneId,
+      event: { type: 'browser-blur', clientId: this._clientId, deviceId: this._deviceId },
+    });
+  };
+
   // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------
@@ -401,6 +420,9 @@ export class MuxBrowserPane extends LitElement {
       onCursor: this._onCursor,
       onGranted: null,
     });
+    window.addEventListener('browser-pane-activated', this._onPanelActivated);
+    window.addEventListener('focus', this._onWindowFocus);
+    window.addEventListener('blur', this._onWindowBlur);
   }
 
   override disconnectedCallback(): void {
@@ -414,6 +436,9 @@ export class MuxBrowserPane extends LitElement {
       onCursor: null,
       onGranted: null,
     });
+    window.removeEventListener('browser-pane-activated', this._onPanelActivated);
+    window.removeEventListener('focus', this._onWindowFocus);
+    window.removeEventListener('blur', this._onWindowBlur);
     if (this._fpsTimer !== undefined) {
       clearInterval(this._fpsTimer);
       this._fpsTimer = undefined;

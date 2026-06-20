@@ -650,6 +650,12 @@ export class MuxDock extends LitElement {
       // focus for the clicked tab element, so the browser steals it back. An rAF
       // defers until after the click event is fully processed.
       requestAnimationFrame(() => terminalRegistry.focus(paneId));
+      // For browser-cdp panes: dispatch a window event so mux-browser-pane
+      // can send browser-focus and resume the Chromium screencast.
+      const paneInfo = this.panes.find((p) => p.paneId === paneId);
+      if (paneInfo?.surfaceKind === 'browser-cdp') {
+        window.dispatchEvent(new CustomEvent('browser-pane-activated', { detail: { paneId } }));
+      }
       // Persist the new active selection: onDidLayoutChange does NOT fire on a
       // pure active-tab switch, so without this the saved layout keeps a stale
       // activeView and the wrong pane is selected after a refresh.
