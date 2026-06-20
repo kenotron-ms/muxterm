@@ -22,6 +22,9 @@ export interface BrowserPaneCallbacks {
   onStatus: ((statusText: string) => void) | null;
   /** Invoked when the cursor shape changes (e.g. "pointer", "text", "default"). */
   onCursor: ((cursor: string) => void) | null;
+  /** Invoked when a browser-granted message arrives for this pane.
+   *  grantedClientId is the client that now holds input authority. */
+  onGranted: ((grantedClientId: string) => void) | null;
 }
 
 // Module-level singleton map: paneId → callbacks.
@@ -36,6 +39,7 @@ function _blankEntry(): BrowserPaneCallbacks {
     onDownload: null,
     onStatus: null,
     onCursor: null,
+    onGranted: null,
   };
 }
 
@@ -72,6 +76,7 @@ export const browserRegistry = {
     if ('onDownload' in cbs) entry.onDownload = cbs.onDownload ?? null;
     if ('onStatus' in cbs) entry.onStatus = cbs.onStatus ?? null;
     if ('onCursor' in cbs) entry.onCursor = cbs.onCursor ?? null;
+    if ('onGranted' in cbs) entry.onGranted = cbs.onGranted ?? null;
   },
 
   /**
@@ -123,6 +128,15 @@ export const browserRegistry = {
   },
 
   /**
+   * Dispatch a browser-granted notification to all panes for paneId.
+   * The grantedClientId is the client that now holds authority.
+   * No-op if pane is unknown or callback is not registered.
+   */
+  dispatchGranted(paneId: number, grantedClientId: string): void {
+    _map.get(paneId)?.onGranted?.(grantedClientId);
+  },
+
+  /**
    * Remove entries for pane IDs no longer in the live composition.
    * Clears all callbacks before deleting so any in-flight async frame
    * dispatch becomes a no-op rather than a stale call.
@@ -137,6 +151,7 @@ export const browserRegistry = {
         entry.onDownload = null;
         entry.onStatus = null;
         entry.onCursor = null;
+        entry.onGranted = null;
         _map.delete(paneId);
       }
     }

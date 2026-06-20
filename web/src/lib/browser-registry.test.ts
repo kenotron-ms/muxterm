@@ -234,6 +234,84 @@ describe('browserRegistry', () => {
     });
   });
 
+  describe('dispatchCursor()', () => {
+    it('registers onCursor callback and dispatchCursor() calls it', () => {
+      const paneId = 4001;
+      browserRegistry.ensure(paneId);
+
+      const onCursor = vi.fn();
+      browserRegistry.setCallbacks(paneId, { onCursor });
+
+      browserRegistry.dispatchCursor(paneId, 'pointer');
+
+      expect(onCursor).toHaveBeenCalledOnce();
+      expect(onCursor).toHaveBeenCalledWith('pointer');
+    });
+
+    it('dispatchCursor() is a no-op for unknown pane', () => {
+      expect(() =>
+        browserRegistry.dispatchCursor(99993, 'default')
+      ).not.toThrow();
+    });
+  });
+
+  describe('dispatchGranted()', () => {
+    it('registers onGranted callback and dispatchGranted() calls it', () => {
+      const paneId = 5001;
+      browserRegistry.ensure(paneId);
+
+      const onGranted = vi.fn();
+      browserRegistry.setCallbacks(paneId, { onGranted });
+
+      browserRegistry.dispatchGranted(paneId, 'client-abc');
+
+      expect(onGranted).toHaveBeenCalledOnce();
+      expect(onGranted).toHaveBeenCalledWith('client-abc');
+    });
+
+    it('dispatchGranted() is a no-op for unknown pane', () => {
+      expect(() =>
+        browserRegistry.dispatchGranted(99992, 'client-xyz')
+      ).not.toThrow();
+    });
+
+    it('dispatchGranted() is a no-op when onGranted is null', () => {
+      const paneId = 5002;
+      browserRegistry.ensure(paneId);
+
+      // No onGranted registered — should be no-op
+      expect(() =>
+        browserRegistry.dispatchGranted(paneId, 'client-xyz')
+      ).not.toThrow();
+    });
+
+    it('clears onGranted callback when null is passed via setCallbacks', () => {
+      const paneId = 5003;
+      browserRegistry.ensure(paneId);
+
+      const onGranted = vi.fn();
+      browserRegistry.setCallbacks(paneId, { onGranted });
+      browserRegistry.setCallbacks(paneId, { onGranted: null });
+
+      browserRegistry.dispatchGranted(paneId, 'client-abc');
+      expect(onGranted).not.toHaveBeenCalled();
+    });
+
+    it('prune() clears onGranted callback before removing pane', () => {
+      const paneId = 5004;
+      browserRegistry.ensure(paneId);
+
+      const onGranted = vi.fn();
+      browserRegistry.setCallbacks(paneId, { onGranted });
+
+      browserRegistry.prune(new Set());
+
+      // Pane removed — dispatch is a no-op
+      browserRegistry.dispatchGranted(paneId, 'client-abc');
+      expect(onGranted).not.toHaveBeenCalled();
+    });
+  });
+
   describe('type safety', () => {
     it('BrowserPaneCallbacks fields accept null', () => {
       const paneId = 3001;
@@ -246,6 +324,8 @@ describe('browserRegistry', () => {
         onError: null,
         onDownload: null,
         onStatus: null,
+        onCursor: null,
+        onGranted: null,
       };
 
       expect(() => browserRegistry.setCallbacks(paneId, cbs)).not.toThrow();
