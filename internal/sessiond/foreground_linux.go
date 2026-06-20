@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -71,6 +72,14 @@ func paneForegrounded(p *Pane) (argv []string, dir string, env map[string]string
 	}
 	if len(fgArgv) == 0 {
 		return
+	}
+
+	// setproctitle rewrites argv[0] in-place with the full title string
+	// (e.g. "amplifier resume abc123"), producing a single cmdline entry
+	// containing spaces. Split by fields so the restore command is
+	// correctly structured as an argv slice for exec.Command.
+	if len(fgArgv) == 1 && strings.Contains(fgArgv[0], " ") {
+		fgArgv = strings.Fields(fgArgv[0])
 	}
 
 	// Read the foreground process's working directory from /proc/<pgid>/cwd.

@@ -170,6 +170,13 @@ func darwinProcInfo(pid int) (argv []string, env map[string]string) {
 		rest = rest[j+1:]
 	}
 
+	// setproctitle rewrites argv[0] in-place as a single space-separated
+	// string (e.g. "amplifier resume abc123"). Split by fields so the
+	// restore command is correctly structured as an argv slice.
+	if len(args) == 1 && strings.Contains(args[0], " ") {
+		args = strings.Fields(args[0])
+	}
+
 	// Parse environment: KEY=VALUE\0 entries until an empty entry or end.
 	envMap := make(map[string]string)
 	for len(rest) > 0 {
