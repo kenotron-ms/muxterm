@@ -106,10 +106,16 @@ func TestMCPInitializeOverStdio(t *testing.T) {
 	}
 }
 
-// TestMCPToolsListReturns25Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 25 tools
+// TestMCPToolsListReturns17Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 17 tools
 // in the expected order — all without a running sessiond daemon.
-func TestMCPToolsListReturns25Tools(t *testing.T) {
+//
+// Tool count history:
+//   - Phase 1 (browser-cdp): removed 13 proxy-based browser_* tools (browser_goto,
+//     browser_click, etc.) as part of replacing the HTTP proxy with the CDP pane.
+//     Added list_tunnels/create_tunnel/close_tunnel (3) and get_config/update_config (2).
+//     Net change: 25 → 17 tools.
+func TestMCPToolsListReturns17Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 
 	input := strings.Join([]string{
@@ -164,6 +170,7 @@ func TestMCPToolsListReturns25Tools(t *testing.T) {
 	}
 
 	wantTools := []string{
+		// 12 sessiond-backed tools (terminal + workspace + layout)
 		"run_command",
 		"send_input",
 		"get_screen",
@@ -176,19 +183,13 @@ func TestMCPToolsListReturns25Tools(t *testing.T) {
 		"close_pane",
 		"list_panes",
 		"get_layout",
-		"browser_goto",
-		"browser_go_back",
-		"browser_go_forward",
-		"browser_reload",
-		"browser_click",
-		"browser_fill",
-		"browser_type",
-		"browser_press",
-		"browser_hover",
-		"browser_select",
-		"browser_snapshot",
-		"browser_eval",
-		"browser_screenshot",
+		// 3 tunnel tools (HTTP REST, registered via registerTunnelTools)
+		"list_tunnels",
+		"create_tunnel",
+		"close_tunnel",
+		// 2 config tools (HTTP REST, registered via registerConfigTools)
+		"get_config",
+		"update_config",
 	}
 
 	tools := resp.Result.Tools

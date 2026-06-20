@@ -29,12 +29,19 @@ func (bp *BrowserPage) HandleInput(msg BrowserInputMsg) error {
 		if k == 0 {
 			return nil // unknown key — ignore
 		}
+		// Keyboard.Press sends a single KeyDown CDP event and tracks the key
+		// in rod's internal pressed-set so subsequent keys inherit the correct
+		// modifier flags (e.g. ControlLeft held → 'c' gets the Ctrl modifier).
+		// It does NOT send KeyUp — that is Keyboard.Release / Keyboard.Type.
 		return bp.page.Keyboard.Press(k)
 	case "keyup":
 		k := keyFromName(msg.Key)
 		if k == 0 {
 			return nil // unknown key — ignore
 		}
+		// Keyboard.Release sends a single KeyUp CDP event and removes the key
+		// from rod's pressed-set. If the key was never pressed (state drift),
+		// it is a no-op — safe for out-of-order cleanup.
 		return bp.page.Keyboard.Release(k)
 	case "type":
 		return bp.page.InsertText(msg.Text)
