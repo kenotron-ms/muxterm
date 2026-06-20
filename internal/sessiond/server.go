@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,9 +19,16 @@ type Server struct {
 	reg    *Registry
 	socket string
 
-	mu   sync.Mutex
-	subs map[string]map[*conn]bool // workspaceId -> set of attached connections
+	mu    sync.Mutex
+	subs  map[string]map[*conn]bool // workspaceId -> set of attached connections
 	conns map[*conn]bool            // all live connections
+
+	// browserManager owns Chromium and CDPConn. Created in NewServer; never nil.
+	browserManager *BrowserManager
+	// browserPanes maps workspace-local paneID → workspaceID for all live browser-cdp
+	// panes. Protected by mu. Needed so broadcastBrowserData can scope to the right
+	// workspace subscribers.
+	browserPanes map[int]string
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -29,12 +37,22 @@ func NewServer(socketPath string) (*Server, error) {
 	if socketPath == "" {
 		return nil, errors.New("sessiond: empty socket path")
 	}
-	return &Server{
-		reg:    NewRegistry(),
-		socket: socketPath,
-		subs:   make(map[string]map[*conn]bool),
-		conns:  make(map[*conn]bool),
-	}, nil
+	s := &Server{
+		reg:          NewRegistry(),
+		socket:       socketPath,
+		subs:         make(map[string]map[*conn]bool),
+		conns:        make(map[*conn]bool),
+		browserPanes: make(map[int]string),
+	}
+	s.browserManager = NewBrowserManager(
+		func(paneID int, jpeg []byte) {
+			s.broadcastBrowserData(paneID, jpeg)
+		},
+		func(msg any) {
+			s.broadcastBrowserControlAny(msg)
+		},
+	)
+	return s, nil
 }
 
 // Registry exposes the server's Registry for tests and later phases.
@@ -203,6 +221,51 @@ func (s *Server) broadcastPaneData(wsID string, paneID int, data []byte) {
 	defer s.mu.Unlock()
 	for c := range s.subs[wsID] {
 		c.sub.enqueuePaneData(uint32(paneID), data)
+	}
+}
+
+// broadcastBrowserData enqueues a FrameBrowserData frame to every live
+// connection. It sends to s.conns (not workspace-scoped subs) because browser
+// relay connections (/ws/browser) are not workspace-attached; their OnBrowserFrame
+// handler forwards the frame to the WebSocket client. Terminal relay connections
+// have OnBrowserFrame == nil and silently drop it. Enqueue never blocks, so
+// holding s.mu is safe.
+func (s *Server) broadcastBrowserData(paneID int, jpeg []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.conns {
+		c.sub.enqueueBrowserData(uint32(paneID), jpeg)
+	}
+}
+
+// broadcastBrowserControlAny marshals msg (a BrowserURLMsg, BrowserProgressMsg,
+// BrowserErrorMsg, or map[string]any for browser-granted/browser-cursor) to its
+// original JSON bytes, stores those bytes in Message.RawPayload so the HTTP
+// server relay can forward them as-is to WebSocket clients, and enqueues the
+// result as a FrameControl frame to every live connection.
+func (s *Server) broadcastBrowserControlAny(msg any) {
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("sessiond: broadcastBrowserControlAny marshal: %v", err)
+		return
+	}
+	// Extract type and paneId from the raw JSON so we can populate Message fields.
+	var envelope struct {
+		Type   string `json:"type"`
+		PaneID int    `json:"paneId"`
+	}
+	_ = json.Unmarshal(raw, &envelope)
+
+	m := &Message{
+		Type:       envelope.Type,
+		PaneID:     envelope.PaneID,
+		RawPayload: json.RawMessage(raw),
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.conns {
+		c.sub.enqueueControl(m)
 	}
 }
 
