@@ -13,6 +13,16 @@ import (
 // Mouse coordinates are in Chromium viewport pixels (already mapped by client).
 // Returns nil for unknown event types (forward-compatible).
 func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) error {
+	// Authority guard: if the event carries a clientId and the client is not
+	// the current authority, silently drop mouse/keyboard input. Events without
+	// a clientId (legacy format) are allowed through for backward compat.
+	isInputEvent := msg.Type == "mousemove" || msg.Type == "mousedown" ||
+		msg.Type == "mouseup" || msg.Type == "wheel" ||
+		msg.Type == "keydown" || msg.Type == "keyup"
+	if isInputEvent && msg.ClientID != "" && !bp.manager.IsAuthority(bp.paneID, msg.ClientID) {
+		return nil // silently drop from non-authority clients
+	}
+
 	switch msg.Type {
 	case "mousemove":
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
@@ -103,9 +113,36 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 		})
 		return err
 
+	case "browser-focus":
+		// 1. Update Chromium viewport to match this client's canvas dimensions.
+		if msg.RenderWidth > 0 && msg.RenderHeight > 0 {
+			if err := bp.SetViewport(ctx, msg.RenderWidth, msg.RenderHeight); err != nil {
+				return fmt.Errorf("browser-focus SetViewport: %w", err)
+			}
+		}
+		// 2. Record this client as the input authority (last-focus-wins).
+		bp.manager.SetAuthority(bp.paneID, msg.ClientID)
+		// 3. Notify all connected clients who holds authority.
+		bp.manager.broadcastJSON(BrowserGrantedMsg{
+			Type:     TypeBrowserGranted,
+			PaneID:   bp.paneID,
+			ClientID: msg.ClientID,
+		})
+		// 4. Take a fresh screenshot so the canvas is not blank while screencast (re)starts.
+		if shot, err := bp.captureScreenshot(ctx); err == nil && len(shot) > 0 {
+			bp.manager.broadcast(bp.paneID, shot)
+		}
+		// 5. (Re)start the screencast.
+		return bp.startScreencast(ctx)
+
+	case "browser-blur":
+		// Client releases input authority.
+		bp.manager.ClearAuthority(bp.paneID, msg.ClientID)
+		return nil
+
 	case "browser-ready":
-		// Client canvas is mounted and ready. Restart screencast to ensure
-		// frames flow. The direct-to-client screenshot is handled in ws_browser.go.
+		// Legacy signal kept for backward compatibility during the Phase 1→2 transition.
+		// New clients send browser-focus instead. Restart screencast only.
 		return bp.startScreencast(ctx)
 
 	default:

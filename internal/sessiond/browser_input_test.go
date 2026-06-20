@@ -109,3 +109,110 @@ func TestHandleInput_BranchesExist(t *testing.T) {
 	var _ func(string) string = cdpMouseButton
 	var _ func(string) (string, string, string) = cdpKeyParams
 }
+
+// TestHandleInput_AuthorityGuard_DropsNonAuthority verifies that HandleInput
+// silently drops mouse/keyboard events from a client that does not hold
+// authority. The guard must return nil without touching the CDP connection
+// (which is nil here — reaching it would panic).
+func TestHandleInput_AuthorityGuard_DropsNonAuthority(t *testing.T) {
+	bm := NewBrowserManager(
+		func(paneID int, data []byte) {},
+		func(msg any) {},
+	)
+	bm.SetAuthority(1, "client-A") // client-A holds authority
+
+	bp := &BrowserPage{
+		paneID:  1,
+		manager: bm,
+		// cdp is nil: reaching it would panic, proving the guard returned early
+	}
+
+	// client-B (not the authority) sends mousemove — must be silently dropped.
+	err := bp.HandleInput(context.Background(), BrowserInputMsg{
+		Type:     "mousemove",
+		ClientID: "client-B",
+		X:        50,
+		Y:        50,
+	})
+	if err != nil {
+		t.Errorf("HandleInput non-authority drop: want nil error, got %v", err)
+	}
+}
+
+// TestHandleInput_BrowserBlur_ClearsAuthority verifies that a browser-blur
+// message from the current authority client clears that client's authority.
+// browser-blur must not touch CDP, so cdp can remain nil.
+func TestHandleInput_BrowserBlur_ClearsAuthority(t *testing.T) {
+	bm := NewBrowserManager(nil, nil)
+	bm.SetAuthority(1, "client-A")
+
+	bp := &BrowserPage{paneID: 1, manager: bm}
+
+	err := bp.HandleInput(context.Background(), BrowserInputMsg{
+		Type:     TypeBrowserBlur,
+		ClientID: "client-A",
+	})
+	if err != nil {
+		t.Errorf("browser-blur: got error %v; want nil", err)
+	}
+	if bm.IsAuthority(1, "client-A") {
+		t.Error("browser-blur: authority not cleared after blur")
+	}
+}
+
+// TestHandleInput_BrowserFocus_SetsAuthorityAndBroadcasts verifies that a
+// browser-focus message (a) records the sender as the input authority and
+// (b) broadcasts a BrowserGrantedMsg to all clients.
+//
+// Because the final step of browser-focus calls startScreencast (which
+// requires a live CDP connection), we run HandleInput in a goroutine and
+// recover from the nil-cdp panic, then inspect the side-effects that
+// occurred before the panic.
+func TestHandleInput_BrowserFocus_SetsAuthorityAndBroadcasts(t *testing.T) {
+	var grantedMsg BrowserGrantedMsg
+	var broadcastCount int
+
+	bm := NewBrowserManager(
+		func(paneID int, data []byte) {},
+		func(msg any) {
+			if g, ok := msg.(BrowserGrantedMsg); ok {
+				grantedMsg = g
+				broadcastCount++
+			}
+		},
+	)
+
+	bp := &BrowserPage{paneID: 1, manager: bm}
+	// cdp is nil; SetViewport is skipped (RenderWidth/Height == 0),
+	// but captureScreenshot/startScreencast will panic — recovered below.
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer func() { recover() }() // catch nil-cdp panic in captureScreenshot/startScreencast
+		bp.HandleInput(context.Background(), BrowserInputMsg{ //nolint:errcheck
+			Type:     TypeBrowserFocus,
+			ClientID: "client-X",
+			// RenderWidth/Height = 0 → SetViewport skipped
+		})
+	}()
+	<-done // happens-before: goroutine side-effects are visible here
+
+	if !bm.IsAuthority(1, "client-X") {
+		t.Error("browser-focus: authority not set after focus")
+	}
+	if broadcastCount == 0 {
+		t.Error("browser-focus: BrowserGrantedMsg not broadcast via broadcastJSON")
+	}
+	if broadcastCount > 0 {
+		if grantedMsg.ClientID != "client-X" {
+			t.Errorf("BrowserGrantedMsg.ClientID = %q; want %q", grantedMsg.ClientID, "client-X")
+		}
+		if grantedMsg.PaneID != 1 {
+			t.Errorf("BrowserGrantedMsg.PaneID = %d; want 1", grantedMsg.PaneID)
+		}
+		if grantedMsg.Type != TypeBrowserGranted {
+			t.Errorf("BrowserGrantedMsg.Type = %q; want %q", grantedMsg.Type, TypeBrowserGranted)
+		}
+	}
+}
