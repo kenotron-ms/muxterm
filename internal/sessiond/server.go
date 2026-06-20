@@ -404,7 +404,14 @@ func (c *conn) handle(msg Message) {
 	case TypeCreateBrowserPane:
 		c.createBrowserCDPPane(msg)
 	case TypeCloseBrowserPane:
-		c.closePane(msg) // reuse existing closePane: removes pane + broadcasts pane-closed
+		// Close the Chromium page before removing the pane from the registry.
+		c.srv.browserManager.ClosePage(msg.PaneID)
+		// Clean up the pane → workspace tracking entry.
+		c.srv.mu.Lock()
+		delete(c.srv.browserPanes, msg.PaneID)
+		c.srv.mu.Unlock()
+		// Reuse closePane: removes pane from registry, broadcasts pane-closed.
+		c.closePane(msg)
 	case TypeScreenSnapshot:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")

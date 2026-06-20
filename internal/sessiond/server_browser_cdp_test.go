@@ -208,3 +208,66 @@ func TestCreateBrowserCDPPane_TracksBrowserPanes(t *testing.T) {
 		t.Fatalf("browserPanes[%d] = %q, want %q", paneID, gotWS, wsID)
 	}
 }
+
+// TestCloseBrowserCDPPane_DeletesFromBrowserPanes verifies via net.Pipe that
+// TypeCloseBrowserPane removes the paneID → workspaceID mapping from
+// srv.browserPanes after handling the message.
+func TestCloseBrowserCDPPane_DeletesFromBrowserPanes(t *testing.T) {
+	srv, err := NewServer(filepath.Join(t.TempDir(), "sessiond.sock"))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	wsID := srv.reg.AddWorkspace("test", "")
+
+	// Allocate a pane ID and create a browser-cdp pane in the registry.
+	paneID, ok := srv.reg.AllocPaneID(wsID)
+	if !ok {
+		t.Fatal("AllocPaneID failed")
+	}
+	p := newBrowserCDPPane(paneID)
+	srv.reg.PutPane(wsID, p)
+
+	// Seed browserPanes as createBrowserCDPPane would.
+	srv.mu.Lock()
+	srv.browserPanes[paneID] = wsID
+	srv.mu.Unlock()
+
+	// Create a net.Pipe() connection and conn object.
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	c := newConn(srv, server)
+	c.attached = wsID
+
+	// Register conn as a subscriber so broadcast() can reach it.
+	srv.mu.Lock()
+	if srv.subs[wsID] == nil {
+		srv.subs[wsID] = make(map[*conn]bool)
+	}
+	srv.subs[wsID][c] = true
+	srv.mu.Unlock()
+
+	// Drain the client side so the subscriber's writeLoop doesn't stall.
+	go func() {
+		buf := make([]byte, 4096)
+		_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			if _, err := client.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Invoke the handler directly.
+	c.handle(Message{Type: TypeCloseBrowserPane, CID: 1, PaneID: paneID})
+
+	// handle is synchronous for the delete step; no sleep needed.
+	srv.mu.Lock()
+	_, stillTracked := srv.browserPanes[paneID]
+	srv.mu.Unlock()
+	if stillTracked {
+		t.Fatalf("browserPanes[%d] still present after TypeCloseBrowserPane; want deleted", paneID)
+	}
+}
