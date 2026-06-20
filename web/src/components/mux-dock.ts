@@ -8,6 +8,8 @@ import { terminalRegistry } from '../lib/terminal-registry.js';
 import { muxLog } from '../lib/mux-log.js';
 import type { SessiondPaneInfo, LayoutCommand } from '../types.js';
 import { store } from '../state.js';
+// Side-effect import: registers <mux-browser-pane> custom element
+import './mux-browser-pane.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TerminalRenderer
@@ -94,6 +96,41 @@ class TerminalRenderer implements IContentRenderer {
   dispose(): void {
     // Does NOT destroy the terminal — PTY stays alive, scrollback preserved.
     terminalRegistry.detach(this._paneId);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BrowserRenderer
+// Bridges the dockview panel lifecycle to mux-browser-pane (CDP browser panes).
+// ─────────────────────────────────────────────────────────────────────────────
+
+class BrowserRenderer implements IContentRenderer {
+  readonly element: HTMLElement;
+
+  constructor(id: string) {
+    const container = document.createElement('div');
+    container.style.cssText = 'width:100%;height:100%;overflow:hidden;display:flex;';
+    const pane = document.createElement('mux-browser-pane');
+    pane.setAttribute('pane-id', id);
+    pane.style.cssText = 'flex:1;min-width:0;';
+    container.appendChild(pane);
+    this.element = container;
+  }
+
+  init(): void {
+    // No-op: mux-browser-pane manages its own lifecycle via connectedCallback.
+  }
+
+  layout(): void {
+    // No-op: mux-browser-pane fills its container via CSS flex; no explicit sizing needed.
+  }
+
+  focus(): void {
+    // No-op: browser pane focus is handled by the iframe/webview itself.
+  }
+
+  dispose(): void {
+    // No-op: mux-browser-pane cleans up in its own disconnectedCallback.
   }
 }
 
@@ -538,6 +575,7 @@ export class MuxDock extends LitElement {
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => {
+        if (opts.name === 'browser-cdp') return new BrowserRenderer(opts.id);
         return new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId);
       },
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
@@ -994,6 +1032,15 @@ export class MuxDock extends LitElement {
     });
     this._panels.set(paneId, panel);
     panel.api.setActive();
+  }
+
+  /**
+   * Programmatically activate a pane by its numeric ID.
+   * No-op if the panel does not exist or is already active.
+   */
+  public activatePane(paneId: number): void {
+    const panel = this._panels.get(paneId);
+    if (panel && !panel.api.isActive) panel.api.setActive();
   }
 
   /**
