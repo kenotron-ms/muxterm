@@ -67,7 +67,11 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 	case "keydown":
 		key, code, text := cdpKeyParams(msg.Key)
 		params := map[string]any{
-			"type": "keyDown",
+			// rawKeyDown (not keyDown) triggers native browser actions:
+			// Backspace deletes, Enter submits/newlines, Tab focuses next, etc.
+			// keyDown only fires the JS keydown event — browser built-in
+			// actions are ignored. rawKeyDown = native OS key press.
+			"type": "rawKeyDown",
 			"key":  key,
 			"code": code,
 		}
