@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // BrowserManager manages all CDP browser pages for a single muxterm server.
@@ -196,6 +197,8 @@ func (bm *BrowserManager) ActivePaneIDs() []int {
 
 // ScreenshotPage takes a JPEG screenshot of the browser page for paneID and
 // returns the raw JPEG bytes. Returns an error if no page is open for paneID.
+// A 5-second deadline is applied so callers are never blocked permanently if
+// the Chrome CDP connection is slow or dead.
 func (bm *BrowserManager) ScreenshotPage(paneID int) ([]byte, error) {
 	bm.mu.Lock()
 	bp := bm.pages[paneID]
@@ -203,7 +206,9 @@ func (bm *BrowserManager) ScreenshotPage(paneID int) ([]byte, error) {
 	if bp == nil {
 		return nil, fmt.Errorf("no browser page for pane %d", paneID)
 	}
-	return bp.captureScreenshot(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return bp.captureScreenshot(ctx)
 }
 
 // GetPage returns the BrowserPage for paneID and whether it was found.

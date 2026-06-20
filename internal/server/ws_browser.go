@@ -136,12 +136,25 @@ func (s *Server) handleWSBrowserImpl(w http.ResponseWriter, r *http.Request) {
 	// Take a fresh screenshot for each active browser pane so the canvas is
 	// never blank on reconnect even when Chrome has stopped screencasting a
 	// static page (no visual changes → no new frames → stale or empty cache).
+	// Run in a goroutine so a slow or dead CDP connection never blocks the
+	// read loop from starting — if ScreenshotPage blocks here, browser-ready
+	// messages from the client are never processed.
 	if s.hub.browserManager != nil {
-		for _, paneID := range s.hub.browserManager.ActivePaneIDs() {
-			if shot, err := s.hub.browserManager.ScreenshotPage(paneID); err == nil && len(shot) > 0 {
-				frame := EncodeBinaryFrame(uint32(paneID), shot)
-				c.writeBinary(frame) // ignore error — client just connected
-			}
+		paneIDs := s.hub.browserManager.ActivePaneIDs()
+		if len(paneIDs) > 0 {
+			go func() {
+				for _, paneID := range paneIDs {
+					shot, err := s.hub.browserManager.ScreenshotPage(paneID)
+					if err != nil {
+						log.Printf("/ws/browser: connect screenshot pane %d: %v", paneID, err)
+						continue
+					}
+					if len(shot) > 0 {
+						frame := EncodeBinaryFrame(uint32(paneID), shot)
+						c.writeBinary(frame)
+					}
+				}
+			}()
 		}
 	}
 
@@ -187,7 +200,10 @@ func (s *Server) handleWSBrowserImpl(w http.ResponseWriter, r *http.Request) {
 		// For browser-ready: send a fresh screenshot directly to this client
 		// (not broadcast) so the canvas is immediately populated on mount.
 		if env.Event.Type == "browser-ready" && s.hub.browserManager != nil {
-			if shot, err := s.hub.browserManager.ScreenshotPage(env.PaneID); err == nil && len(shot) > 0 {
+			shot, err := s.hub.browserManager.ScreenshotPage(env.PaneID)
+			if err != nil {
+				log.Printf("/ws/browser: browser-ready screenshot pane %d: %v", env.PaneID, err)
+			} else if len(shot) > 0 {
 				frame := EncodeBinaryFrame(uint32(env.PaneID), shot)
 				c.writeBinary(frame)
 			}

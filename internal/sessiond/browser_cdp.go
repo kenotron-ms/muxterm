@@ -75,7 +75,24 @@ func dialCDP(ctx context.Context, wsURL string) (*CDPConn, error) {
 }
 
 func (c *CDPConn) readLoop() {
-	defer c.cancel()
+	defer func() {
+		c.cancel()
+		// Unblock every goroutine blocked in Call() so they return an error
+		// immediately instead of waiting forever for a response that will
+		// never arrive.  This matters most when context.Background() is
+		// passed (e.g. ScreenshotPage): without this drain those goroutines
+		// hang permanently and block the ws_browser.go read-loop from ever
+		// starting, so browser-ready messages are never processed.
+		c.pendMu.Lock()
+		for id, ch := range c.pending {
+			select {
+			case ch <- cdpResult{Error: &cdpError{Code: -1, Message: "cdp connection closed"}}:
+			default:
+			}
+			delete(c.pending, id)
+		}
+		c.pendMu.Unlock()
+	}()
 	for {
 		_, msg, err := c.conn.Read(c.ctx)
 		if err != nil {
@@ -145,7 +162,20 @@ func (c *CDPConn) Call(ctx context.Context, sessionID, method string, params any
 
 	select {
 	case <-ctx.Done():
+		// Caller's context was cancelled — clean up the pending entry so we
+		// don't leave a dangling channel in the map.  If Chrome responds
+		// after this point, readLoop will find the entry deleted and drop it.
+		c.pendMu.Lock()
+		delete(c.pending, id)
+		c.pendMu.Unlock()
 		return nil, ctx.Err()
+	case <-c.ctx.Done():
+		// The CDPConn itself was closed (readLoop already drained the map,
+		// but handle the race where c.ctx.Done() fires first here).
+		c.pendMu.Lock()
+		delete(c.pending, id)
+		c.pendMu.Unlock()
+		return nil, fmt.Errorf("cdp %s: connection closed", method)
 	case r := <-ch:
 		if r.Error != nil {
 			return nil, fmt.Errorf("cdp %s: %s (code %d)", method, r.Error.Message, r.Error.Code)
