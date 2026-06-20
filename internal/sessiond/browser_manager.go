@@ -22,9 +22,9 @@ type BrowserManager struct {
 	cdp           *CDPConn   // nil until first OpenPage call
 	pages         map[int]*BrowserPage
 	maxPages      int                 // v1: 1; remove check for multi-window
+	authorityID   map[int]string              // paneID → current input authority clientID
 	broadcast     func(paneID int, data []byte) // sends JPEG frames to /ws/browser clients
 	broadcastJSON func(msg any)                  // sends URL/error/progress JSON to /ws/browser
-	authority     map[int]string // paneID → clientID of current input authority
 }
 
 // BrowserPage manages one live Chromium tab. It owns the event loop goroutine
@@ -45,7 +45,7 @@ type BrowserPage struct {
 func NewBrowserManager(broadcast func(paneID int, data []byte), broadcastJSON func(msg any)) *BrowserManager {
 	return &BrowserManager{
 		pages:         make(map[int]*BrowserPage),
-		authority:     make(map[int]string),
+		authorityID:   make(map[int]string),
 		maxPages:      1,
 		broadcast:     broadcast,
 		broadcastJSON: broadcastJSON,
@@ -235,10 +235,14 @@ func (bm *BrowserManager) GetPage(paneID int) (*BrowserPage, bool) {
 
 // SetAuthority records clientID as the current input authority for paneID.
 // Last-focus-wins: the most recent browser-focus event always wins.
+// Lazily initializes authorityID if nil.
 func (bm *BrowserManager) SetAuthority(paneID int, clientID string) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
-	bm.authority[paneID] = clientID
+	if bm.authorityID == nil {
+		bm.authorityID = make(map[int]string)
+	}
+	bm.authorityID[paneID] = clientID
 }
 
 // ClearAuthority clears the input authority for paneID if the current authority
@@ -247,16 +251,20 @@ func (bm *BrowserManager) SetAuthority(paneID int, clientID string) {
 func (bm *BrowserManager) ClearAuthority(paneID int, clientID string) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
-	if bm.authority[paneID] == clientID {
-		delete(bm.authority, paneID)
+	if bm.authorityID[paneID] == clientID {
+		delete(bm.authorityID, paneID)
 	}
 }
 
 // IsAuthority reports whether clientID holds input authority for paneID.
+// Empty clientID never matches.
 func (bm *BrowserManager) IsAuthority(paneID int, clientID string) bool {
+	if clientID == "" {
+		return false
+	}
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
-	return bm.authority[paneID] == clientID
+	return bm.authorityID[paneID] == clientID
 }
 
 // Close stops all browser pages and kills the Chromium process. Called at
