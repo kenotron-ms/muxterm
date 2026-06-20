@@ -338,35 +338,10 @@ func (c *Client) CreatePane(cmd []string, placement string, referencePaneID int)
 	return reply.PaneID, nil
 }
 
-// CreateBrowserPane creates a browser pane with the given port, path, and
-// optional extra headers. placement and referencePaneID control how the
-// browser-side dockview layer positions the new pane; pass "" and 0 for the
-// default behaviour (append to active pane). Returns the server-assigned
-// workspace-local pane ID.
-func (c *Client) CreateBrowserPane(port int, path string, headers map[string]string, placement string, referencePaneID int) (int, error) {
-	if path == "" {
-		path = "/"
-	}
-	reply, err := c.request(&Message{
-		Type:            TypeCreatePane,
-		SurfaceKind:     "browser",
-		BrowserPort:     port,
-		BrowserPath:     path,
-		ProxyHeaders:    headers,
-		Placement:       placement,
-		ReferencePaneID: referencePaneID,
-	})
-	if err != nil {
-		return 0, err
-	}
-	return reply.PaneID, nil
-}
-
 // CreateBrowserCDPPane creates a browser-cdp surface pane in the attached workspace
-// and returns the server-assigned workspace-local pane ID. Unlike CreateBrowserPane
-// (which creates a proxy pane requiring a port and path), this method requires no
-// port or path: the HTTP server's BrowserManager starts the actual Chromium page
-// separately via BrowserManager.OpenPage(paneID) after receiving the pane-added broadcast.
+// and returns the server-assigned workspace-local pane ID. No port or path is needed:
+// the HTTP server's BrowserManager starts the actual Chromium page separately via
+// BrowserManager.OpenPage(paneID) after receiving the pane-added broadcast.
 func (c *Client) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
 	reply, err := c.request(&Message{
 		Type:            TypeCreateBrowserPane,
@@ -456,9 +431,6 @@ func (c *Client) dispatchEvent(msg *Message) {
 				Rows:            msg.Rows,
 				Title:           msg.Title,
 				SurfaceKind:     msg.SurfaceKind,
-				BrowserPort:     msg.BrowserPort,
-				BrowserPath:     msg.BrowserPath,
-				ProxyHeaders:    msg.ProxyHeaders,
 				Placement:       msg.Placement,
 				ReferencePaneID: msg.ReferencePaneID,
 			})

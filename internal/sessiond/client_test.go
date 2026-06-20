@@ -428,21 +428,18 @@ func TestInputAndResize(t *testing.T) {
 	}
 }
 
-// TestDispatchEvent_PaneAdded_PassesBrowserFields verifies that a TypePaneAdded message
-// from the daemon carries its browser-specific fields (SurfaceKind, BrowserPort, BrowserPath,
-// ProxyHeaders) all the way through dispatchEvent to the OnPaneAdded handler.
-func TestDispatchEvent_PaneAdded_PassesBrowserFields(t *testing.T) {
+// TestDispatchEvent_PaneAdded_PassesBrowserCDPSurfaceKind verifies that a TypePaneAdded message
+// from the daemon carries its SurfaceKind field all the way through dispatchEvent to the
+// OnPaneAdded handler (browser-cdp surface kind).
+func TestDispatchEvent_PaneAdded_PassesBrowserCDPSurfaceKind(t *testing.T) {
 	fd := newFakeDaemon(t, func(conn net.Conn) {
 		_ = WriteControl(conn, &Message{
-			Type:         TypePaneAdded,
-			PaneID:       9,
-			Cols:         100,
-			Rows:         30,
-			Title:        "chrome",
-			SurfaceKind:  "browser",
-			BrowserPort:  3000,
-			BrowserPath:  "/app",
-			ProxyHeaders: map[string]string{"X-Custom": "value"},
+			Type:        TypePaneAdded,
+			PaneID:      9,
+			Cols:        100,
+			Rows:        30,
+			Title:       "Browser",
+			SurfaceKind: "browser-cdp",
 		})
 		time.Sleep(100 * time.Millisecond)
 	})
@@ -464,17 +461,8 @@ func TestDispatchEvent_PaneAdded_PassesBrowserFields(t *testing.T) {
 
 	select {
 	case pane := <-ch:
-		if pane.SurfaceKind != "browser" {
-			t.Errorf("SurfaceKind = %q, want %q", pane.SurfaceKind, "browser")
-		}
-		if pane.BrowserPort != 3000 {
-			t.Errorf("BrowserPort = %d, want 3000", pane.BrowserPort)
-		}
-		if pane.BrowserPath != "/app" {
-			t.Errorf("BrowserPath = %q, want %q", pane.BrowserPath, "/app")
-		}
-		if pane.ProxyHeaders["X-Custom"] != "value" {
-			t.Errorf("ProxyHeaders[X-Custom] = %q, want %q", pane.ProxyHeaders["X-Custom"], "value")
+		if pane.SurfaceKind != "browser-cdp" {
+			t.Errorf("SurfaceKind = %q, want \"browser-cdp\"", pane.SurfaceKind)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for PaneAdded event")

@@ -12,10 +12,7 @@ import (
 type trackingDaemonConn struct {
 	fakeDaemonConn
 	createPaneCalled        bool
-	createBrowserPaneCalled bool
-	browserPort             int
-	browserPath             string
-	browserHeaders          map[string]string
+	createBrowserCDPPaneCalled bool
 }
 
 func (f *trackingDaemonConn) CreatePane(cmd []string, placement string, referencePaneID int) (int, error) {
@@ -23,19 +20,15 @@ func (f *trackingDaemonConn) CreatePane(cmd []string, placement string, referenc
 	return f.createdID, nil
 }
 
-func (f *trackingDaemonConn) CreateBrowserPane(port int, path string, headers map[string]string, placement string, referencePaneID int) (int, error) {
-	f.createBrowserPaneCalled = true
-	f.browserPort = port
-	f.browserPath = path
-	f.browserHeaders = headers
+func (f *trackingDaemonConn) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
+	f.createBrowserCDPPaneCalled = true
 	return f.createdID, nil
 }
 
-// TestAttachClient_OnPaneAdded_RelaysBrowserFields verifies that when the daemon fires a
-// TypePaneAdded event for a browser pane, the relay handler in attachClient sends a
-// TypePaneAdded message to the WS client that includes SurfaceKind, BrowserPort,
-// BrowserPath, and ProxyHeaders.
-func TestAttachClient_OnPaneAdded_RelaysBrowserFields(t *testing.T) {
+// TestAttachClient_OnPaneAdded_RelaysBrowserCDPSurfaceKind verifies that when the daemon fires a
+// TypePaneAdded event for a browser-cdp pane, the relay handler in attachClient sends a
+// TypePaneAdded message to the WS client that includes SurfaceKind "browser-cdp".
+func TestAttachClient_OnPaneAdded_RelaysBrowserCDPSurfaceKind(t *testing.T) {
 	fake := &fakeDaemonConn{createdID: 1}
 	h := NewHub(func() (DaemonConn, error) {
 		return fake, nil
@@ -64,16 +57,13 @@ func TestAttachClient_OnPaneAdded_RelaysBrowserFields(t *testing.T) {
 		t.Fatal("OnPaneAdded handler not set by attachClient")
 	}
 
-	// Trigger the OnPaneAdded handler with browser-specific fields.
+	// Trigger the OnPaneAdded handler with browser-cdp surface kind.
 	fake.handlers.OnPaneAdded(sessiond.PaneInfo{
-		PaneID:       5,
-		Cols:         120,
-		Rows:         30,
-		Title:        "DevTools",
-		SurfaceKind:  "browser",
-		BrowserPort:  4000,
-		BrowserPath:  "/debug",
-		ProxyHeaders: map[string]string{"X-Token": "abc"},
+		PaneID:      5,
+		Cols:        120,
+		Rows:        30,
+		Title:       "Browser",
+		SurfaceKind: "browser-cdp",
 	})
 
 	if captured == nil {
@@ -86,24 +76,14 @@ func TestAttachClient_OnPaneAdded_RelaysBrowserFields(t *testing.T) {
 	if msg.Type != sessiond.TypePaneAdded {
 		t.Errorf("Type = %q, want %q", msg.Type, sessiond.TypePaneAdded)
 	}
-	if msg.SurfaceKind != "browser" {
-		t.Errorf("SurfaceKind = %q, want %q", msg.SurfaceKind, "browser")
-	}
-	if msg.BrowserPort != 4000 {
-		t.Errorf("BrowserPort = %d, want 4000", msg.BrowserPort)
-	}
-	if msg.BrowserPath != "/debug" {
-		t.Errorf("BrowserPath = %q, want %q", msg.BrowserPath, "/debug")
-	}
-	if msg.ProxyHeaders["X-Token"] != "abc" {
-		t.Errorf("ProxyHeaders[X-Token] = %q, want %q", msg.ProxyHeaders["X-Token"], "abc")
+	if msg.SurfaceKind != "browser-cdp" {
+		t.Errorf("SurfaceKind = %q, want \"browser-cdp\"", msg.SurfaceKind)
 	}
 }
 
-// TestHandleTextInput_TypeCreatePane_BrowserSurfaceKind verifies that a TypeCreatePane
-// message with SurfaceKind="browser" routes to CreateBrowserPane (not CreatePane) so that
-// a browser-backed pane is created instead of a PTY-backed terminal pane.
-func TestHandleTextInput_TypeCreatePane_BrowserSurfaceKind(t *testing.T) {
+// TestHandleTextInput_TypeCreateBrowserPane_CallsCreateBrowserCDPPane verifies that a
+// TypeCreateBrowserPane message routes to CreateBrowserCDPPane (not CreatePane).
+func TestHandleTextInput_TypeCreateBrowserPane_CallsCreateBrowserCDPPane(t *testing.T) {
 	fake := &trackingDaemonConn{fakeDaemonConn: fakeDaemonConn{createdID: 10}}
 
 	var sentMessages [][]byte
@@ -122,28 +102,19 @@ func TestHandleTextInput_TypeCreatePane_BrowserSurfaceKind(t *testing.T) {
 	}
 	c.writeBinaryFn = func(data []byte) error { return nil }
 
-	// Send TypeCreatePane with SurfaceKind="browser".
+	// Send TypeCreateBrowserPane.
 	msg := sessiond.Message{
-		Type:        sessiond.TypeCreatePane,
-		CID:         99,
-		SurfaceKind: "browser",
-		BrowserPort: 5000,
-		BrowserPath: "/api",
+		Type: sessiond.TypeCreateBrowserPane,
+		CID:  99,
 	}
 	data, _ := json.Marshal(msg)
 	c.handleTextInput(data)
 
-	if !fake.createBrowserPaneCalled {
-		t.Fatal("expected CreateBrowserPane to be called for SurfaceKind=browser, but it was not")
+	if !fake.createBrowserCDPPaneCalled {
+		t.Fatal("expected CreateBrowserCDPPane to be called for TypeCreateBrowserPane, but it was not")
 	}
 	if fake.createPaneCalled {
-		t.Fatal("CreatePane should not be called when SurfaceKind=browser")
-	}
-	if fake.browserPort != 5000 {
-		t.Errorf("CreateBrowserPane port = %d, want 5000", fake.browserPort)
-	}
-	if fake.browserPath != "/api" {
-		t.Errorf("CreateBrowserPane path = %q, want %q", fake.browserPath, "/api")
+		t.Fatal("CreatePane should not be called for TypeCreateBrowserPane")
 	}
 }
 
@@ -176,7 +147,7 @@ func TestHandleTextInput_TypeCreatePane_TerminalSurfaceKind(t *testing.T) {
 	if !fake.createPaneCalled {
 		t.Fatal("expected CreatePane to be called when SurfaceKind is empty")
 	}
-	if fake.createBrowserPaneCalled {
-		t.Fatal("CreateBrowserPane should not be called when SurfaceKind is empty")
+	if fake.createBrowserCDPPaneCalled {
+		t.Fatal("CreateBrowserCDPPane should not be called when SurfaceKind is empty")
 	}
 }

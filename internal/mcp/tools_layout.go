@@ -49,12 +49,7 @@ func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 		paneID = id
 
 	case "browser":
-		port, err := argInt(args, "browser_port")
-		if err != nil {
-			return "", err
-		}
-		url, _ := args["url"].(string)
-		id, err := lt.c.conn.CreateBrowserPane(port, url, nil, placement, referencePaneID)
+		id, err := lt.c.conn.CreateBrowserCDPPane(placement, referencePaneID)
 		if err != nil {
 			return "", fmt.Errorf("creating browser pane: %w", err)
 		}
@@ -132,9 +127,6 @@ func (lt *layoutTools) listPanes(args map[string]any) (string, error) {
 			"pane_id": p.PaneID,
 			"kind":    kind,
 			"name":    p.Title,
-		}
-		if kind == "browser" {
-			item["hint"] = p.BrowserPath
 		}
 		items = append(items, item)
 	}

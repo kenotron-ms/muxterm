@@ -162,62 +162,11 @@ func TestParseArgs_Uninstall(t *testing.T) {
 	}
 }
 
-func TestParseArgs_OpenBrowser_ValidPort(t *testing.T) {
-	cfg, err := ParseArgs([]string{"open-browser", "5173"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Mode != "open-browser" {
-		t.Errorf("Mode = %q, want %q", cfg.Mode, "open-browser")
-	}
-	if cfg.Addr != "localhost:8311" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "localhost:8311")
-	}
-	if cfg.BrowserPort != 5173 {
-		t.Errorf("BrowserPort = %d, want %d", cfg.BrowserPort, 5173)
-	}
-}
-
-func TestParseArgs_OpenBrowser_CustomAddr(t *testing.T) {
-	cfg, err := ParseArgs([]string{"open-browser", "--addr", "0.0.0.0:8311", "5173"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Mode != "open-browser" {
-		t.Errorf("Mode = %q, want %q", cfg.Mode, "open-browser")
-	}
-	if cfg.Addr != "0.0.0.0:8311" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "0.0.0.0:8311")
-	}
-	if cfg.BrowserPort != 5173 {
-		t.Errorf("BrowserPort = %d, want %d", cfg.BrowserPort, 5173)
-	}
-}
-
-func TestParseArgs_OpenBrowser_MissingPort(t *testing.T) {
-	_, err := ParseArgs([]string{"open-browser"})
+// TestParseArgs_OpenBrowser_NowUnknown verifies that "open-browser" is no longer
+// a recognized command (browser panes now use CDP via TypeCreateBrowserPane).
+func TestParseArgs_OpenBrowser_NowUnknown(t *testing.T) {
+	_, err := ParseArgs([]string{"open-browser", "5173"})
 	if err == nil {
-		t.Fatal("expected error for open-browser without port, got nil")
-	}
-}
-
-func TestParseArgs_OpenBrowser_NonNumericPort(t *testing.T) {
-	_, err := ParseArgs([]string{"open-browser", "abc"})
-	if err == nil {
-		t.Fatal("expected error for non-numeric port, got nil")
-	}
-}
-
-func TestParseArgs_OpenBrowser_PortZero(t *testing.T) {
-	_, err := ParseArgs([]string{"open-browser", "0"})
-	if err == nil {
-		t.Fatal("expected error for port 0, got nil")
-	}
-}
-
-func TestParseArgs_OpenBrowser_PortTooLarge(t *testing.T) {
-	_, err := ParseArgs([]string{"open-browser", "99999"})
-	if err == nil {
-		t.Fatal("expected error for port 99999, got nil")
+		t.Fatal("expected error for open-browser (removed command), got nil")
 	}
 }

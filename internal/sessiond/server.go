@@ -322,31 +322,12 @@ func (c *conn) handle(msg Message) {
 		} else {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "cannot save layout")
 		}
-	case TypePaneUpdate:
-		if c.attached != "" {
-			// Silently no-op for unknown pane IDs (design intent).
-			c.srv.reg.UpdateBrowserPath(c.attached, msg.PaneID, msg.BrowserPath)
-		}
-	case TypeBrowserAction:
-		if c.attached == "" {
-			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
-			return
-		}
-		msg.CID = 0
-		c.srv.broadcast(c.attached, &msg)
 	case TypeLayoutCommand:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
 			return
 		}
 		msg.CID = 0
-		c.srv.broadcast(c.attached, &msg)
-	case TypeBrowserActionResult:
-		if c.attached == "" {
-			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
-			return
-		}
-		msg.CID = 0 // event fan-out; MCP client correlates by its own pending request
 		c.srv.broadcast(c.attached, &msg)
 	case TypeGetLayout:
 		if c.attached == "" {
@@ -402,9 +383,6 @@ func (c *conn) attach(msg Message) {
 // createPane spawns a pane in the connection's attached workspace, ACKs the
 // actor with the assigned id, then broadcasts a pane-added event to all
 // subscribers (pane-added covers only panes created AFTER attach).
-//
-// When msg.SurfaceKind is "browser" a lightweight browser pane (no PTY) is
-// created instead. BrowserPort must be in 1–65535 or an error is returned.
 func (c *conn) createPane(msg Message) {
 	wsID := c.attached
 	if wsID == "" || !c.srv.reg.Has(wsID) {
@@ -414,28 +392,6 @@ func (c *conn) createPane(msg Message) {
 	localID, ok := c.srv.reg.AllocPaneID(wsID)
 	if !ok {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
-		return
-	}
-	if msg.SurfaceKind == "browser" {
-		if msg.BrowserPort < 1 || msg.BrowserPort > 65535 {
-			c.replyError(msg.CID, "invalid-port", "browserPort must be 1\u201365535")
-			return
-		}
-		p := NewBrowserPane(localID, msg.BrowserPort, msg.BrowserPath, msg.ProxyHeaders)
-		c.srv.reg.PutPane(wsID, p)
-		c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
-		c.srv.broadcast(wsID, &Message{
-			Type:            TypePaneAdded,
-			WorkspaceID:     wsID,
-			PaneID:          localID,
-			SurfaceKind:     "browser",
-			BrowserPort:     msg.BrowserPort,
-			BrowserPath:     msg.BrowserPath,
-			Title:           p.Title,
-			ClientRef:       msg.ClientRef,
-			Placement:       msg.Placement,
-			ReferencePaneID: msg.ReferencePaneID,
-		})
 		return
 	}
 	cols, rows := sizeOrDefault(msg.Cols, msg.Rows)

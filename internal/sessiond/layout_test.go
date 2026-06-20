@@ -11,7 +11,7 @@ func TestASCIILayout(t *testing.T) {
 	panes := []PaneInfo{
 		{PaneID: 1, SurfaceKind: "terminal", Title: "terminal"},
 		{PaneID: 2, SurfaceKind: "terminal", Title: "terminal"},
-		{PaneID: 3, SurfaceKind: "browser", Title: "browser", BrowserPath: "/"},
+		{PaneID: 3, SurfaceKind: "browser-cdp", Title: "Browser"},
 	}
 
 	// Single leaf with one pane, views: ["1"]
@@ -111,7 +111,7 @@ func TestASCIILayout(t *testing.T) {
 			panes:    panes,
 			active:   -1,
 			wantTrim: false,
-			contains: []string{"[1]", "[3]", "terminal", "browser"},
+			contains: []string{"[1]", "[3]", "terminal", "Browser"},
 		},
 		{
 			name:     "multi-tab group",

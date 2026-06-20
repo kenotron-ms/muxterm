@@ -5,16 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"runtime"
-	"strings"
 	"syscall"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
@@ -68,11 +65,6 @@ func main() {
 		}
 	case "uninstall":
 		if err := runUninstall(); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-	case "open-browser":
-		if err := runOpenBrowser(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -354,32 +346,6 @@ func openBrowser(url string) {
 	if err := exec.Command(cmd, url).Start(); err != nil {
 		log.Printf("failed to open browser: %v", err)
 	}
-}
-
-// runOpenBrowser registers a browser pane with a running muxterm server by
-// POSTing to /api/pane. It reports actionable errors for the three failure
-// modes: server not reachable, sessiond not running (503), and other errors.
-func runOpenBrowser(cfg Config) error {
-	url := "http://" + cfg.Addr + "/api/pane"
-	body := fmt.Sprintf(`{"surfaceKind":"browser","browserPort":%d,"browserPath":"/"}`, cfg.BrowserPort)
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("muxterm not running or not reachable at %s", cfg.Addr)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusServiceUnavailable {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck
-		return fmt.Errorf("muxterm is running but sessiond is not available — is the daemon started?")
-	}
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-
-	io.Copy(io.Discard, resp.Body) //nolint:errcheck
-	fmt.Printf("browser pane opened: port %d\n", cfg.BrowserPort)
-	return nil
 }
 
 // runAmplifierBundleInstall adds the muxterm Amplifier bundle as an app bundle

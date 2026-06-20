@@ -5,20 +5,18 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 )
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode        string // local, serve, sessiond, deploy, install, uninstall, doctor, version, open-browser, mcp, amplifier-install, help
-	Addr        string // listen address
-	Secret      string // auth token for serve mode
-	NoAuth      bool   // skip WebSocket auth check (dev only — never use in production)
-	Target      string // SSH target for deploy mode
-	Force       bool   // install: overwrite existing service installation
-	BrowserPort int    // open-browser mode only: the port to open as a browser pane
-	Transport   string // mcp mode: transport type ("stdio"); SSE arrives in Phase 5
-	MCPPort     int    // mcp mode: SSE port (Phase 5, parsed but rejected for now)
+	Mode      string // local, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, amplifier-install, help
+	Addr      string // listen address
+	Secret    string // auth token for serve mode
+	NoAuth    bool   // skip WebSocket auth check (dev only — never use in production)
+	Target    string // SSH target for deploy mode
+	Force     bool   // install: overwrite existing service installation
+	Transport string // mcp mode: transport type ("stdio"); SSE arrives in Phase 5
+	MCPPort   int    // mcp mode: SSE port (Phase 5, parsed but rejected for now)
 }
 
 // printUsage writes top-level help to w.
@@ -62,8 +60,6 @@ func ParseArgs(args []string) (Config, error) {
 		return Config{Mode: "version"}, nil
 	case "install":
 		return parseInstall(args[1:])
-	case "open-browser":
-		return parseOpenBrowser(args[1:])
 	case "uninstall":
 		return Config{Mode: "uninstall"}, nil
 	case "doctor":
@@ -192,26 +188,4 @@ func parseInstall(args []string) (Config, error) {
 	}, nil
 }
 
-func parseOpenBrowser(args []string) (Config, error) {
-	fs := flag.NewFlagSet("open-browser", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	addr := fs.String("addr", "localhost:8311", "listen address")
-	if err := fs.Parse(args); err != nil {
-		return Config{}, err
-	}
-	if fs.NArg() < 1 {
-		return Config{}, fmt.Errorf("open-browser requires a port argument")
-	}
-	port, err := strconv.Atoi(fs.Arg(0))
-	if err != nil {
-		return Config{}, fmt.Errorf("open-browser: invalid port %q: %w", fs.Arg(0), err)
-	}
-	if port < 1 || port > 65535 {
-		return Config{}, fmt.Errorf("open-browser: port %d out of range (1–65535)", port)
-	}
-	return Config{
-		Mode:        "open-browser",
-		Addr:        *addr,
-		BrowserPort: port,
-	}, nil
-}
+

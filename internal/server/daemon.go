@@ -16,8 +16,6 @@ type DaemonConn interface {
 	RenamePane(paneID int, name string) error
 	SaveLayout(workspaceID, breakpoint, layout string) error
 	CreatePane(cmd []string, placement string, referencePaneID int) (int, error)
-	// CreateBrowserPane creates a browser pane in the attached workspace.
-	CreateBrowserPane(port int, path string, headers map[string]string, placement string, referencePaneID int) (int, error)
 	// CreateBrowserCDPPane creates a browser-cdp surface pane in the attached workspace.
 	// Returns the server-assigned workspace-local pane ID. HTTP server layer starts
 	// actual Chromium page separately via BrowserManager.OpenPage(paneID).

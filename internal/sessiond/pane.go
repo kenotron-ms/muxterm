@@ -19,14 +19,9 @@ type Pane struct {
 	LocalID int
 	Title   string // settable; OSC 0/2 title capture is a later phase
 
-	// SurfaceKind is "browser" for browser panes; empty string means "terminal".
+	// SurfaceKind is "browser-cdp" for browser panes; empty string means "terminal".
 	// Set once at construction; immutable thereafter.
 	SurfaceKind string
-	// Browser-only: the proxied port, stored path, and optional auth headers.
-	// All immutable except BrowserPath, which SetBrowserPath() updates.
-	BrowserPort  int
-	BrowserPath  string
-	ProxyHeaders map[string]string
 
 	mu   sync.Mutex // guards cols/rows
 	cols int
@@ -108,22 +103,6 @@ func NewPane(
 	}
 	go p.readLoop()
 	return p, nil
-}
-
-// NewBrowserPane creates a lightweight browser-only pane (no PTY or buffer).
-// If path is empty, it defaults to "/".
-func NewBrowserPane(localID, port int, path string, headers map[string]string) *Pane {
-	if path == "" {
-		path = "/"
-	}
-	return &Pane{
-		LocalID:      localID,
-		Title:        fmt.Sprintf(":%d", port),
-		SurfaceKind:  "browser",
-		BrowserPort:  port,
-		BrowserPath:  path,
-		ProxyHeaders: headers,
-	}
 }
 
 // scanOSC133 searches data for an OSC 133;D sequence (command-done marker) and
@@ -281,28 +260,18 @@ func (p *Pane) SetTitle(name string) {
 	p.mu.Unlock()
 }
 
-// SetBrowserPath updates the pane's browser navigation path under lock.
-func (p *Pane) SetBrowserPath(path string) {
-	p.mu.Lock()
-	p.BrowserPath = path
-	p.mu.Unlock()
-}
-
 // Info returns a frozen snapshot of this pane's identity and dimensions.
 func (p *Pane) Info() PaneInfo {
 	p.mu.Lock()
 	cols, rows, title := p.cols, p.rows, p.Title
-	surfaceKind, browserPort, browserPath, proxyHeaders := p.SurfaceKind, p.BrowserPort, p.BrowserPath, p.ProxyHeaders
+	surfaceKind := p.SurfaceKind
 	p.mu.Unlock()
 	return PaneInfo{
-		PaneID:       p.LocalID,
-		Cols:         cols,
-		Rows:         rows,
-		Title:        title,
-		SurfaceKind:  surfaceKind,
-		BrowserPort:  browserPort,
-		BrowserPath:  browserPath,
-		ProxyHeaders: proxyHeaders,
+		PaneID:      p.LocalID,
+		Cols:        cols,
+		Rows:        rows,
+		Title:       title,
+		SurfaceKind: surfaceKind,
 	}
 }
 

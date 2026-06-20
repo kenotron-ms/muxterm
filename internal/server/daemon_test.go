@@ -50,10 +50,6 @@ func (f *fakeDaemonConn) CreatePane(cmd []string, placement string, referencePan
 	return f.createdID, nil
 }
 
-func (f *fakeDaemonConn) CreateBrowserPane(port int, path string, headers map[string]string, placement string, referencePaneID int) (int, error) {
-	return f.createdID, nil
-}
-
 func (f *fakeDaemonConn) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
 	return f.createdID, nil
 }

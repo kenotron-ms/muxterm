@@ -250,75 +250,59 @@ func TestRegistryRenamePaneFailureCases(t *testing.T) {
 	}
 }
 
-// TestRegistry_UpdateBrowserPath verifies UpdateBrowserPath sets the browser
-// navigation path on a known pane and returns true.
-func TestRegistry_UpdateBrowserPath(t *testing.T) {
+// TestRegistry_BrowserCDPPane_PutAndGet verifies that a browser-cdp pane can
+// be put into the registry and retrieved with the correct SurfaceKind.
+func TestRegistry_BrowserCDPPane_PutAndGet(t *testing.T) {
 	r := NewRegistry()
 	wsID := r.AddWorkspace("w", "")
 	localID, _ := r.AllocPaneID(wsID)
-	p := NewBrowserPane(localID, 5173, "/", nil)
+	p := newBrowserCDPPane(localID)
 	r.PutPane(wsID, p)
-
-	if !r.UpdateBrowserPath(wsID, localID, "/dashboard") {
-		t.Fatal("UpdateBrowserPath(known ws, known pane, path) = false, want true")
-	}
 
 	got, ok := r.Pane(wsID, localID)
 	if !ok {
-		t.Fatalf("Pane(%q, %d) not found after UpdateBrowserPath", wsID, localID)
+		t.Fatalf("Pane(%q, %d) not found after PutPane", wsID, localID)
 	}
-	if got.BrowserPath != "/dashboard" {
-		t.Fatalf("BrowserPath = %q, want %q", got.BrowserPath, "/dashboard")
-	}
-}
-
-// TestRegistry_UpdateBrowserPath_UnknownPane verifies UpdateBrowserPath returns
-// false when the pane id is not found in the workspace.
-func TestRegistry_UpdateBrowserPath_UnknownPane(t *testing.T) {
-	r := NewRegistry()
-	wsID := r.AddWorkspace("w", "")
-
-	if r.UpdateBrowserPath(wsID, 999, "/path") {
-		t.Fatal("UpdateBrowserPath(known ws, unknown pane, ...) = true, want false")
+	if got.SurfaceKind != "browser-cdp" {
+		t.Fatalf("SurfaceKind = %q, want \"browser-cdp\"", got.SurfaceKind)
 	}
 }
 
-// TestRegistry_UpdateBrowserPath_UnknownWorkspace verifies UpdateBrowserPath
-// returns false when the workspace id does not exist.
-func TestRegistry_UpdateBrowserPath_UnknownWorkspace(t *testing.T) {
-	r := NewRegistry()
-
-	if r.UpdateBrowserPath("no-such-ws", 1, "/path") {
-		t.Fatal("UpdateBrowserPath(unknown ws, ...) = true, want false")
-	}
-}
-
-// TestRegistry_PaneInfos_IncludesBrowserPane verifies PaneInfos correctly
-// exposes browser-pane fields (SurfaceKind, BrowserPort, BrowserPath,
-// ProxyHeaders).
-func TestRegistry_PaneInfos_IncludesBrowserPane(t *testing.T) {
+// TestRegistry_BrowserCDPPane_Replay verifies that a browser-cdp pane returns
+// nil replay data (no buffer).
+func TestRegistry_BrowserCDPPane_Replay(t *testing.T) {
 	r := NewRegistry()
 	wsID := r.AddWorkspace("w", "")
 	localID, _ := r.AllocPaneID(wsID)
-	headers := map[string]string{"Authorization": "Bearer tok"}
-	p := NewBrowserPane(localID, 9002, "/items", headers)
+	p := newBrowserCDPPane(localID)
 	r.PutPane(wsID, p)
 
-	infos := r.PaneInfos(wsID)
-	if len(infos) != 1 {
-		t.Fatalf("PaneInfos len = %d, want 1", len(infos))
+	got, ok := r.Pane(wsID, localID)
+	if !ok {
+		t.Fatalf("Pane not found")
 	}
-	info := infos[0]
-	if info.SurfaceKind != "browser" {
-		t.Fatalf("SurfaceKind = %q, want %q", info.SurfaceKind, "browser")
+	if data := got.Replay(); data != nil {
+		t.Fatalf("Replay() = %v, want nil (browser-cdp has no buffer)", data)
 	}
-	if info.BrowserPort != 9002 {
-		t.Fatalf("BrowserPort = %d, want 9002", info.BrowserPort)
+}
+
+// TestRegistry_BrowserCDPPane_RemovePane verifies that a browser-cdp pane can
+// be removed from the registry.
+func TestRegistry_BrowserCDPPane_RemovePane(t *testing.T) {
+	r := NewRegistry()
+	wsID := r.AddWorkspace("w", "")
+	localID, _ := r.AllocPaneID(wsID)
+	p := newBrowserCDPPane(localID)
+	r.PutPane(wsID, p)
+
+	removed, remaining, ok := r.RemovePane(wsID, localID)
+	if !ok {
+		t.Fatal("RemovePane returned ok=false, want true")
 	}
-	if info.BrowserPath != "/items" {
-		t.Fatalf("BrowserPath = %q, want %q", info.BrowserPath, "/items")
+	if removed != p {
+		t.Fatal("RemovePane returned wrong pane")
 	}
-	if info.ProxyHeaders["Authorization"] != "Bearer tok" {
-		t.Fatalf("ProxyHeaders[\"Authorization\"] = %q, want %q", info.ProxyHeaders["Authorization"], "Bearer tok")
+	if remaining != 0 {
+		t.Fatalf("remaining = %d, want 0", remaining)
 	}
 }

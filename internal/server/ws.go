@@ -186,15 +186,7 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 
 	case sessiond.TypeCreatePane:
-		var (
-			paneID int
-			err    error
-		)
-		if msg.SurfaceKind == "browser" {
-			paneID, err = c.daemon.CreateBrowserPane(msg.BrowserPort, msg.BrowserPath, msg.ProxyHeaders, msg.Placement, msg.ReferencePaneID)
-		} else {
-			paneID, err = c.daemon.CreatePane(msg.Cmd, msg.Placement, msg.ReferencePaneID)
-		}
+		paneID, err := c.daemon.CreatePane(msg.Cmd, msg.Placement, msg.ReferencePaneID)
 		if err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
@@ -233,12 +225,6 @@ func (c *Client) handleTextInput(data []byte) {
 			return
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
-
-	case sessiond.TypeBrowserActionResult:
-		// Fire-and-forget: the daemon broadcasts it to all workspace subscribers.
-		if err := c.daemon.BrowserActionResult(msg); err != nil {
-			log.Printf("handleTextInput: BrowserActionResult error: %v", err)
-		}
 
 	case sessiond.TypeCreateTunnel:
 		// Tunnel operations are handled entirely by the serve layer; they are
@@ -475,9 +461,6 @@ func (h *Hub) attachClient(c *Client) error {
 				Rows:            pane.Rows,
 				Title:           pane.Title,
 				SurfaceKind:     pane.SurfaceKind,
-				BrowserPort:     pane.BrowserPort,
-				BrowserPath:     pane.BrowserPath,
-				ProxyHeaders:    pane.ProxyHeaders,
 				Placement:       pane.Placement,
 				ReferencePaneID: pane.ReferencePaneID,
 			})

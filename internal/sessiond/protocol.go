@@ -32,7 +32,6 @@ const (
 	TypeResize          = "resize"
 	TypeRenamePane      = "rename-pane"
 	TypeSaveLayout      = "save-layout"
-	TypePaneUpdate      = "pane-update" // request: client → daemon, updates browserPath after navigation
 	TypeScreenSnapshot  = "screen-snapshot"  // request: MCP → daemon, VT grid for a pane
 	TypeGetLayout       = "get-layout"       // request: MCP → daemon, ASCII layout diagram
 
@@ -174,9 +173,6 @@ type Message struct {
 
 	// Browser pane fields (used in create-pane and pane-added for browser surface kinds)
 	SurfaceKind  string            `json:"surfaceKind,omitempty"`
-	BrowserPort  int               `json:"browserPort,omitempty"`
-	BrowserPath  string            `json:"browserPath,omitempty"`
-	ProxyHeaders map[string]string `json:"proxyHeaders,omitempty"`
 
 	// Layout placement fields (create-pane request → pane-added broadcast → browser dockview)
 	Placement      string `json:"placement,omitempty"`      // tab|split-right|split-left|split-above|split-below
@@ -270,16 +266,11 @@ type WorkspaceInfo struct {
 // PaneInfo is one entry in a composition reply or pane-added event.
 type PaneInfo struct {
 	PaneID      int    `json:"paneId"`
-	SurfaceKind string `json:"surfaceKind,omitempty"` // "terminal" | "browser"; absent = "terminal"
+	SurfaceKind string `json:"surfaceKind,omitempty"` // "terminal" | "browser-cdp"; absent = "terminal"
 	Cols        int    `json:"cols,omitempty"`
 	Rows        int    `json:"rows,omitempty"`
 	Title       string `json:"title,omitempty"`
 	TotalSeq    uint64 `json:"totalSeq,omitempty"` // exact byte length of the replay data for this pane
-
-	// Browser-only fields (absent for terminal panes)
-	BrowserPort  int               `json:"browserPort,omitempty"`
-	BrowserPath  string            `json:"browserPath,omitempty"`
-	ProxyHeaders map[string]string `json:"proxyHeaders,omitempty"`
 
 	// Layout placement (only present on pane-added events from create-pane requests
 	// that carried an explicit placement token; absent means default/tab placement).

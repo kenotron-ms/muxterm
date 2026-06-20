@@ -156,65 +156,33 @@ func TestPaneTitleFieldIsSettable(t *testing.T) {
 	}
 }
 
-func TestNewBrowserPane_Fields(t *testing.T) {
-	p := NewBrowserPane(7, 5173, "/dashboard", map[string]string{"X-Token": "abc"})
+func TestNewBrowserCDPPane_SurfaceKind(t *testing.T) {
+	p := newBrowserCDPPane(7)
 	if p.LocalID != 7 {
 		t.Fatalf("LocalID = %d, want 7", p.LocalID)
 	}
-	if p.SurfaceKind != "browser" {
-		t.Fatalf("SurfaceKind = %q, want \"browser\"", p.SurfaceKind)
-	}
-	if p.BrowserPort != 5173 {
-		t.Fatalf("BrowserPort = %d, want 5173", p.BrowserPort)
-	}
-	if p.BrowserPath != "/dashboard" {
-		t.Fatalf("BrowserPath = %q, want \"/dashboard\"", p.BrowserPath)
-	}
-	if p.ProxyHeaders["X-Token"] != "abc" {
-		t.Fatalf("ProxyHeaders[\"X-Token\"] = %q, want \"abc\"", p.ProxyHeaders["X-Token"])
-	}
-	if p.Title != ":5173" {
-		t.Fatalf("Title = %q, want \":5173\"", p.Title)
+	if p.SurfaceKind != "browser-cdp" {
+		t.Fatalf("SurfaceKind = %q, want \"browser-cdp\"", p.SurfaceKind)
 	}
 }
 
-func TestNewBrowserPane_DefaultPath(t *testing.T) {
-	p := NewBrowserPane(1, 9002, "", nil)
-	if p.BrowserPath != "/" {
-		t.Fatalf("BrowserPath = %q, want \"/\"", p.BrowserPath)
+func TestNewBrowserCDPPane_NilBuf(t *testing.T) {
+	p := newBrowserCDPPane(1)
+	if got := p.Replay(); got != nil {
+		t.Fatalf("Replay() = %v, want nil (browser-cdp pane has no buffer)", got)
 	}
 }
 
-func TestNewBrowserPane_Info(t *testing.T) {
-	p := NewBrowserPane(3, 8080, "/api", nil)
+func TestNewBrowserCDPPane_Info(t *testing.T) {
+	p := newBrowserCDPPane(3)
 	info := p.Info()
 	if info.PaneID != 3 {
 		t.Fatalf("Info().PaneID = %d, want 3", info.PaneID)
 	}
-	if info.SurfaceKind != "browser" {
-		t.Fatalf("Info().SurfaceKind = %q, want \"browser\"", info.SurfaceKind)
-	}
-	if info.BrowserPort != 8080 {
-		t.Fatalf("Info().BrowserPort = %d, want 8080", info.BrowserPort)
-	}
-	if info.BrowserPath != "/api" {
-		t.Fatalf("Info().BrowserPath = %q, want \"/api\"", info.BrowserPath)
-	}
-	if got := p.Replay(); got != nil {
-		t.Fatalf("Replay() = %v, want nil", got)
-	}
-	if n, err := p.Write([]byte("hello")); n != 0 || err != nil {
-		t.Fatalf("Write() = (%d, %v), want (0, nil)", n, err)
+	if info.SurfaceKind != "browser-cdp" {
+		t.Fatalf("Info().SurfaceKind = %q, want \"browser-cdp\"", info.SurfaceKind)
 	}
 	// Close twice must not panic
 	p.Close()
 	p.Close()
-}
-
-func TestNewBrowserPane_SetBrowserPath(t *testing.T) {
-	p := NewBrowserPane(5, 3000, "/", nil)
-	p.SetBrowserPath("/about")
-	if p.BrowserPath != "/about" {
-		t.Fatalf("BrowserPath = %q, want \"/about\"", p.BrowserPath)
-	}
 }

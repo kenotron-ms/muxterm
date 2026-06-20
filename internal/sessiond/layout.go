@@ -100,8 +100,7 @@ func collectLeaves(node *dockNode) []dockLeaf {
 func renderGroup(leaf dockLeaf, paneByID map[int]PaneInfo, activePaneID int) string {
 	// Build tab labels: "[id]* kind" where * marks the active pane.
 	type tabEntry struct {
-		label       string
-		browserPath string
+		label string
 	}
 	tabs := make([]tabEntry, 0, len(leaf.Views))
 	for _, viewStr := range leaf.Views {
@@ -125,11 +124,7 @@ func renderGroup(leaf dockLeaf, paneByID map[int]PaneInfo, activePaneID int) str
 			marker = "*"
 		}
 		label := fmt.Sprintf("[%d]%s %s", id, marker, kind)
-		bp := ""
-		if ok && info.SurfaceKind == "browser" && viewStr == leaf.ActiveView {
-			bp = info.BrowserPath
-		}
-		tabs = append(tabs, tabEntry{label: label, browserPath: bp})
+		tabs = append(tabs, tabEntry{label: label})
 	}
 
 	// Build tab bar line by joining labels with " | ".
@@ -139,38 +134,20 @@ func renderGroup(leaf dockLeaf, paneByID map[int]PaneInfo, activePaneID int) str
 	}
 	tabLine := strings.Join(labels, " | ")
 
-	// Build the content hint from the active view's browser path (if any).
-	contentHint := ""
-	for _, t := range tabs {
-		if t.browserPath != "" {
-			contentHint = t.browserPath
-			break
-		}
-	}
-
-	// Determine box width: max of tab line and content hint lengths, minimum 4.
+	// Determine box width: max of tab line length, minimum 4.
 	width := 4
 	if len(tabLine) > width {
 		width = len(tabLine)
-	}
-	if len(contentHint) > width {
-		width = len(contentHint)
 	}
 
 	// Draw the box using box-drawing characters.
 	// ┌──────────┐
 	// │ tab bar  │
-	// ├──────────┤  (only if contentHint is non-empty)
-	// │ content  │  (only if contentHint is non-empty)
 	// └──────────┘
 	bar := strings.Repeat("─", width)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "┌%s┐\n", bar)
 	fmt.Fprintf(&sb, "│%-*s│\n", width, tabLine)
-	if contentHint != "" {
-		fmt.Fprintf(&sb, "├%s┤\n", bar)
-		fmt.Fprintf(&sb, "│%-*s│\n", width, contentHint)
-	}
 	fmt.Fprintf(&sb, "└%s┘", bar)
 	return sb.String()
 }
