@@ -1,6 +1,10 @@
 package server
 
-import "github.com/kenotron-ms/muxterm/internal/sessiond"
+import (
+	"encoding/json"
+
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
+)
 
 // DaemonConn is the serve-side seam over a single sessiond connection. One
 // DaemonConn backs exactly one browser WebSocket: the serve layer dials a fresh
@@ -24,6 +28,13 @@ type DaemonConn interface {
 	Input(paneID uint32, data []byte) error
 	Resize(paneID, cols, rows int) error
 	BrowserActionResult(msg sessiond.Message) error
+	// BrowserInput forwards a raw browser-input event JSON payload to the daemon.
+	BrowserInput(paneID int, clientID string, event json.RawMessage) error
+	// BrowserFocus sends a browser-focus event, claiming input authority and
+	// updating the Chromium viewport to renderWidth × renderHeight.
+	BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int) error
+	// BrowserBlur sends a browser-blur event, releasing input authority.
+	BrowserBlur(paneID int, clientID, deviceID string) error
 	SetHandlers(h sessiond.Handlers)
 	Run() error
 	Close() error
