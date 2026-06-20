@@ -84,6 +84,15 @@ type Handlers struct {
 	// TypeBrowserActionResult event (CID == 0). msg carries PaneID plus the
 	// result fields (OK, Snapshot, Result, Error).
 	OnBrowserActionResult func(msg *Message)
+	// OnBrowserFrame receives raw JPEG frames from the daemon's BrowserManager.
+	// paneID is the workspace-local pane id; data is the raw JPEG bytes.
+	// The handler must not block for long — offload slow work to another goroutine.
+	OnBrowserFrame func(paneID uint32, data []byte)
+	// OnBrowserMsg fires when the daemon broadcasts a browser JSON event:
+	// TypeBrowserURL, TypeBrowserDownloadProgress, TypeBrowserError, or
+	// TypeBrowserGranted. msg.RawPayload (if non-nil) carries the original JSON
+	// bytes for relay passthrough; msg.Type identifies the event kind.
+	OnBrowserMsg func(msg *Message)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -149,6 +158,9 @@ func (c *Client) Run() error {
 		case FramePaneData:
 			paneID, data := DecodePaneData(payload)
 			c.dispatchPaneData(paneID, data)
+		case FrameBrowserData:
+			paneID, data := DecodePaneData(payload) // same [4-byte LE paneId][body] format
+			c.dispatchBrowserFrame(paneID, data)
 		case FrameControl:
 			c.dispatchControl(payload)
 		}
@@ -404,11 +416,66 @@ func (c *Client) SendBrowserAction(msg Message) error {
 	return WriteControl(c.conn, &msg)
 }
 
+// BrowserFocus sends a browser-focus event to the daemon, claiming input
+// authority for paneID and updating the Chromium viewport to renderWidth ×
+// renderHeight. It is fire-and-forget: the daemon sends no direct reply (it
+// will broadcast browser-granted to all subscribers).
+func (c *Client) BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return WriteControl(c.conn, &Message{
+		Type:         TypeBrowserFocus,
+		PaneID:       paneID,
+		ClientID:     clientID,
+		DeviceID:     deviceID,
+		RenderWidth:  renderWidth,
+		RenderHeight: renderHeight,
+	})
+}
+
+// BrowserBlur sends a browser-blur event to the daemon, releasing input
+// authority for paneID if clientID currently holds it. Fire-and-forget.
+func (c *Client) BrowserBlur(paneID int, clientID, deviceID string) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return WriteControl(c.conn, &Message{
+		Type:     TypeBrowserBlur,
+		PaneID:   paneID,
+		ClientID: clientID,
+		DeviceID: deviceID,
+	})
+}
+
+// BrowserInput forwards a raw browser-input event JSON payload to the daemon.
+// The daemon routes it to BrowserPage.HandleInput only if clientID holds
+// input authority. Fire-and-forget.
+func (c *Client) BrowserInput(paneID int, clientID string, event json.RawMessage) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return WriteControl(c.conn, &Message{
+		Type:       TypeBrowserInput,
+		PaneID:     paneID,
+		ClientID:   clientID,
+		InputEvent: event,
+	})
+}
+
 // dispatchPaneData routes a decoded pane-data frame to OnPaneOutput if set. It
 // runs on the read-loop goroutine, so the handler must not block for long.
 func (c *Client) dispatchPaneData(paneID uint32, data []byte) {
 	c.hmu.Lock()
 	fn := c.handlers.OnPaneOutput
+	c.hmu.Unlock()
+	if fn != nil {
+		fn(paneID, data)
+	}
+}
+
+// dispatchBrowserFrame routes a decoded FrameBrowserData frame to OnBrowserFrame
+// if set. It runs on the read-loop goroutine, so the handler must not block for long.
+func (c *Client) dispatchBrowserFrame(paneID uint32, data []byte) {
+	c.hmu.Lock()
+	fn := c.handlers.OnBrowserFrame
 	c.hmu.Unlock()
 	if fn != nil {
 		fn(paneID, data)
@@ -470,6 +537,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeShellPrompt:
 		if h.OnShellPrompt != nil {
 			h.OnShellPrompt(msg.PaneID, msg.ExitCode)
+		}
+	case TypeBrowserURL, TypeBrowserDownloadProgress, TypeBrowserError, TypeBrowserGranted:
+		if h.OnBrowserMsg != nil {
+			h.OnBrowserMsg(msg)
 		}
 	}
 }
