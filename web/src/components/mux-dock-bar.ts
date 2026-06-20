@@ -58,35 +58,6 @@ export class MuxDockBar extends LitElement {
       cursor: pointer;
     }
 
-    .action-btn {
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      background: transparent;
-      border: none;
-      color: inherit;
-      cursor: pointer;
-      flex-shrink: 0;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.12s;
-    }
-
-    .action-btn:hover {
-      background: color-mix(in srgb, currentColor 15%, transparent);
-    }
-
-    .action-btn.browser-live {
-      color: var(--mux-ok, #9ece6a);
-    }
-
-    .action-btn svg {
-      width: 16px;
-      height: 16px;
-      pointer-events: none;
-    }
-
     .conn-dot {
       margin-left: auto;
       padding: 0 12px;
@@ -130,19 +101,6 @@ export class MuxDockBar extends LitElement {
     );
   }
 
-  private _onGlobeClick(): void {
-    const existing = store.panes.find((p) => p.surfaceKind === 'browser-cdp');
-    if (existing) {
-      window.dispatchEvent(
-        new CustomEvent('browser-pane-focus', {
-          detail: { paneId: existing.paneId },
-        }),
-      );
-    } else {
-      window.dispatchEvent(new CustomEvent('create-browser-pane'));
-    }
-  }
-
   private _onNewWsClick(): void {
     this.dispatchEvent(
       new CustomEvent('workspace-create', {
@@ -170,17 +128,6 @@ export class MuxDockBar extends LitElement {
         `;
       })}
       <button class="new-ws-btn" @click="${this._onNewWsClick}">+</button>
-      <button
-        class="action-btn ${store.panes.some((p) => p.surfaceKind === 'browser-cdp') ? 'browser-live' : ''}"
-        title="Open browser"
-        @click="${this._onGlobeClick}"
-      >
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="8" cy="8" r="6.5"/>
-          <path d="M1.5 8h13"/>
-          <path d="M8 1.5a9 9 0 0 1 2.5 6.5 9 9 0 0 1-2.5 6.5M8 1.5a9 9 0 0 0-2.5 6.5 9 9 0 0 0 2.5 6.5"/>
-        </svg>
-      </button>
       <div class="conn-dot ${this.connectionStatus}">●</div>
     `;
   }
