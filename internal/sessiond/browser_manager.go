@@ -123,6 +123,34 @@ func (bm *BrowserManager) ClosePage(paneID int) {
 	}
 }
 
+// ActivePaneIDs returns the pane IDs of all currently open browser pages. The
+// returned slice is a snapshot and not kept in any particular order.
+func (bm *BrowserManager) ActivePaneIDs() []int {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	ids := make([]int, 0, len(bm.pages))
+	for id := range bm.pages {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// ScreenshotPage takes a JPEG screenshot of the browser page for paneID and
+// returns the raw JPEG bytes. Returns an error if no page is open for paneID.
+func (bm *BrowserManager) ScreenshotPage(paneID int) ([]byte, error) {
+	bm.mu.Lock()
+	bp := bm.pages[paneID]
+	bm.mu.Unlock()
+	if bp == nil {
+		return nil, fmt.Errorf("no browser page for pane %d", paneID)
+	}
+	quality := 75
+	return bp.page.Screenshot(false, &proto.PageCaptureScreenshot{
+		Format:  proto.PageCaptureScreenshotFormatJpeg,
+		Quality: &quality,
+	})
+}
+
 // GetPage returns the BrowserPage for paneID and whether it was found.
 func (bm *BrowserManager) GetPage(paneID int) (*BrowserPage, bool) {
 	bm.mu.Lock()

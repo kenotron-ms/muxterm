@@ -1,6 +1,8 @@
 package sessiond
 
 import (
+	"time"
+
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -48,6 +50,30 @@ func (bp *BrowserPage) startScreencast() {
 		MaxHeight:     &maxHeight,
 		EveryNthFrame: &everyNthFrame,
 	}.Call(bp.page)
+
+	// Heartbeat: Chrome stops screencasting static pages (no visual change →
+	// no new frames). Every 2 seconds, stop and restart the screencast to
+	// force Chrome to emit at least one fresh frame. The goroutine exits when
+	// stopScreencast closes stopCh (called by ClosePage).
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				_ = proto.PageStopScreencast{}.Call(bp.page)
+				_ = proto.PageStartScreencast{
+					Format:        proto.PageStartScreencastFormatJpeg,
+					Quality:       &quality,
+					MaxWidth:      &maxWidth,
+					MaxHeight:     &maxHeight,
+					EveryNthFrame: &everyNthFrame,
+				}.Call(bp.page)
+			case <-bp.stopCh:
+				return
+			}
+		}
+	}()
 }
 
 // stopScreencast closes stopCh. The EachEvent goroutines exit when the page

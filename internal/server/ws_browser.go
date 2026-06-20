@@ -133,6 +133,18 @@ func (s *Server) handleWSBrowserImpl(w http.ResponseWriter, r *http.Request) {
 	}
 	s.hub.browserMu.Unlock()
 
+	// Take a fresh screenshot for each active browser pane so the canvas is
+	// never blank on reconnect even when Chrome has stopped screencasting a
+	// static page (no visual changes → no new frames → stale or empty cache).
+	if s.hub.browserManager != nil {
+		for _, paneID := range s.hub.browserManager.ActivePaneIDs() {
+			if shot, err := s.hub.browserManager.ScreenshotPage(paneID); err == nil && len(shot) > 0 {
+				frame := EncodeBinaryFrame(uint32(paneID), shot)
+				c.writeBinary(frame) // ignore error — client just connected
+			}
+		}
+	}
+
 	// Deferred cleanup: remove from registry, cancel context, close connection.
 	defer func() {
 		s.hub.browserMu.Lock()

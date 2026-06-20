@@ -142,6 +142,57 @@ func TestBrowserManagerCloseRemovesPages(t *testing.T) {
 	}
 }
 
+// TestActivePaneIDsEmpty verifies that ActivePaneIDs returns a non-nil empty
+// slice when no pages are open.
+func TestActivePaneIDsEmpty(t *testing.T) {
+	bm := NewBrowserManager(func(int, []byte) {}, func(any) {})
+
+	ids := bm.ActivePaneIDs()
+	if ids == nil {
+		t.Error("ActivePaneIDs should return non-nil slice, got nil")
+	}
+	if len(ids) != 0 {
+		t.Errorf("ActivePaneIDs should return empty slice for empty manager, got %v", ids)
+	}
+}
+
+// TestActivePaneIDsWithPages verifies that ActivePaneIDs returns all open pane
+// IDs without duplicates.
+func TestActivePaneIDsWithPages(t *testing.T) {
+	bm := NewBrowserManager(func(int, []byte) {}, func(any) {})
+	bm.mu.Lock()
+	bm.pages[3] = &BrowserPage{paneID: 3}
+	bm.pages[7] = &BrowserPage{paneID: 7}
+	bm.mu.Unlock()
+
+	ids := bm.ActivePaneIDs()
+	if len(ids) != 2 {
+		t.Fatalf("ActivePaneIDs should return 2 IDs, got %d: %v", len(ids), ids)
+	}
+	idSet := make(map[int]bool)
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	if !idSet[3] || !idSet[7] {
+		t.Errorf("ActivePaneIDs = %v, want {3, 7}", ids)
+	}
+}
+
+// TestScreenshotPageNotFound verifies that ScreenshotPage returns a descriptive
+// error when no page is open for the given pane ID.
+func TestScreenshotPageNotFound(t *testing.T) {
+	bm := NewBrowserManager(func(int, []byte) {}, func(any) {})
+
+	_, err := bm.ScreenshotPage(99)
+	if err == nil {
+		t.Fatal("ScreenshotPage should return error for unknown pane, got nil")
+	}
+	want := "no browser page for pane 99"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
 // TestNewBrowserCDPPane verifies the Pane returned by newBrowserCDPPane has the
 // expected fields set.
 func TestNewBrowserCDPPane(t *testing.T) {
