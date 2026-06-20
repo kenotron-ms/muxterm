@@ -34,6 +34,7 @@ export class BrowserSocket {
   onBrowserError: ((paneId: number, error: string) => void) | null = null;
   onBrowserStatus: ((paneId: number, text: string) => void) | null = null;
   onBrowserCursor: ((paneId: number, cursor: string) => void) | null = null;
+  onBrowserGranted: ((paneId: number, clientId: string) => void) | null = null;
   onDisconnect: (() => void) | null = null;
   onReconnect: (() => void) | null = null;
 
@@ -117,6 +118,11 @@ export class BrowserSocket {
           case 'browser-cursor':
             if (typeof msg['cursor'] === 'string') {
               this.onBrowserCursor?.(msg.paneId as number, msg['cursor'] as string);
+            }
+            break;
+          case 'browser-granted':
+            if (typeof msg['clientId'] === 'string') {
+              this.onBrowserGranted?.(msg.paneId as number, msg['clientId'] as string);
             }
             break;
         }
