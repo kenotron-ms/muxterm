@@ -6,11 +6,7 @@ import (
 	"github.com/go-rod/rod"
 )
 
-// ChromiumManager is defined in browser_chromium.go (added by Task 4).
-// This placeholder stub exists solely so that the browser_manager.go struct
-// field `chromium *ChromiumManager` compiles before Task 4 runs.
-// Task 4 replaces this stub with the full implementation.
-type ChromiumManager struct{}
+// ChromiumManager is defined in browser_chromium.go.
 
 // BrowserManager manages all CDP browser pages for a single muxterm server.
 // v1 allows at most one browser page (maxPages: 1). The underlying Chromium
