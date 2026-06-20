@@ -77,6 +77,15 @@ func serveSessiond(ctx context.Context, socketPath string) error {
 	srv.SnapshotPath = snapshotPath
 	srv.RestoreStrategies = cfg.Restore.Strategies
 
+	// Parse snapshot interval — default 30s if unset or invalid.
+	interval := cfg.Restore.SnapshotInterval
+	if interval == "" {
+		interval = "30s"
+	}
+	if d, err := time.ParseDuration(interval); err == nil && d > 0 {
+		srv.SnapshotInterval = d
+	}
+
 	log.Printf("muxterm sessiond listening on %s", socketPath)
 	return srv.ListenAndServe(ctx)
 }

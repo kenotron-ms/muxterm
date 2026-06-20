@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
 )
@@ -30,6 +31,11 @@ type Server struct {
 	// restore commands (e.g. "amplifier resume ${AMPLIFIER_SESSION_ID}").
 	// Loaded from [restore.strategies] in config.toml. Set by the caller.
 	RestoreStrategies []config.RestoreStrategy
+
+	// SnapshotInterval controls how often a background goroutine writes a
+	// periodic snapshot, independent of registry mutations. Zero disables
+	// periodic snapshots (mutation-triggered writes still occur).
+	SnapshotInterval time.Duration
 
 	mu    sync.Mutex
 	subs  map[string]map[*conn]bool // workspaceId -> set of attached connections
@@ -90,6 +96,23 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	// Cold-start: ensure the first attach always lands somewhere.
 	s.reg.EnsureDefault()
+
+	// Background periodic snapshot — captures foreground process changes
+	// (e.g. user typing "amplifier" in an existing pane) between mutations.
+	if s.SnapshotInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(s.SnapshotInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					s.writeSnapshot()
+				}
+			}
+		}()
+	}
 
 	go func() {
 		<-ctx.Done()

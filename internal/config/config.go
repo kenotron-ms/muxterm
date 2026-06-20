@@ -97,6 +97,12 @@ type RestoreConfig struct {
 	// Strategies is evaluated in order; the first matching strategy wins.
 	// If no strategy matches, the captured argv is used as-is.
 	Strategies []RestoreStrategy `toml:"strategies" json:"strategies"`
+
+	// SnapshotInterval is how often sessiond writes a background periodic
+	// snapshot, independent of registry mutations. Accepts any Go duration
+	// string (e.g. "30s", "1m"). Empty or "0" disables periodic snapshots
+	// (only mutation-triggered writes occur). Default: "30s".
+	SnapshotInterval string `toml:"snapshot_interval" json:"snapshot_interval"`
 }
 
 // DriverConfig controls the muxterm-agent driver lifecycle.
