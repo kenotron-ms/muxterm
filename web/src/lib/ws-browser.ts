@@ -33,6 +33,7 @@ export class BrowserSocket {
   onDownloadProgress: ((paneId: number, percent: number) => void) | null = null;
   onBrowserError: ((paneId: number, error: string) => void) | null = null;
   onBrowserStatus: ((paneId: number, text: string) => void) | null = null;
+  onBrowserCursor: ((paneId: number, cursor: string) => void) | null = null;
   onDisconnect: (() => void) | null = null;
   onReconnect: (() => void) | null = null;
 
@@ -112,6 +113,11 @@ export class BrowserSocket {
             break;
           case 'browser-status':
             this.onBrowserStatus?.(msg.paneId as number, msg.text as string);
+            break;
+          case 'browser-cursor':
+            if (typeof msg['cursor'] === 'string') {
+              this.onBrowserCursor?.(msg.paneId as number, msg['cursor'] as string);
+            }
             break;
         }
       }

@@ -3,6 +3,7 @@ package sessiond
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
@@ -14,7 +15,15 @@ import (
 func (bp *BrowserPage) HandleInput(msg BrowserInputMsg) error {
 	switch msg.Type {
 	case "mousemove":
-		return bp.page.Mouse.MoveLinear(proto.Point{X: msg.X, Y: msg.Y}, 1)
+		if err := bp.page.Mouse.MoveTo(proto.Point{X: msg.X, Y: msg.Y}); err != nil {
+			return err
+		}
+		// Throttle cursor checks to max 20/sec (every 50ms)
+		if time.Since(bp.lastCursorAt) >= 50*time.Millisecond {
+			bp.lastCursorAt = time.Now()
+			go bp.checkCursor(msg.X, msg.Y)
+		}
+		return nil
 	case "mousedown":
 		return bp.page.Mouse.Down(mouseButton(msg.Button), 1)
 	case "mouseup":
@@ -43,8 +52,6 @@ func (bp *BrowserPage) HandleInput(msg BrowserInputMsg) error {
 		// from rod's pressed-set. If the key was never pressed (state drift),
 		// it is a no-op — safe for out-of-order cleanup.
 		return bp.page.Keyboard.Release(k)
-	case "type":
-		return bp.page.InsertText(msg.Text)
 	case "navigate":
 		return bp.handleNavigate(msg.URL)
 	case "resize":
@@ -55,6 +62,35 @@ func (bp *BrowserPage) HandleInput(msg BrowserInputMsg) error {
 		})
 	default:
 		return nil
+	}
+}
+
+// checkCursor evaluates the CSS cursor style under (x, y) and broadcasts a
+// browser-cursor message when the cursor shape changes. It runs in a goroutine
+// so it never blocks the input dispatch loop. Results are throttled by the
+// caller (50 ms minimum gap between checks).
+func (bp *BrowserPage) checkCursor(x, y float64) {
+	res, err := bp.page.Eval(fmt.Sprintf(
+		`(() => { const el = document.elementFromPoint(%g, %g); return el ? getComputedStyle(el).cursor : 'default'; })()`,
+		x, y,
+	))
+	if err != nil {
+		return
+	}
+	cursor := res.Value.String()
+	if cursor == "" {
+		cursor = "default"
+	}
+	// Only broadcast when cursor actually changes
+	if cursor != bp.lastCursor {
+		bp.lastCursor = cursor
+		if bp.manager.broadcastJSON != nil {
+			bp.manager.broadcastJSON(map[string]any{
+				"type":   "browser-cursor",
+				"paneId": bp.paneID,
+				"cursor": cursor,
+			})
+		}
 	}
 }
 

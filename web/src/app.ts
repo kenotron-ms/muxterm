@@ -601,6 +601,7 @@ export class MuxApp extends LitElement {
     wsBrowser.onBrowserError = (paneId, error) => browserRegistry.dispatchError(paneId, error);
     wsBrowser.onDownloadProgress = (paneId, percent) => browserRegistry.dispatchDownload(paneId, percent);
     wsBrowser.onBrowserStatus = (paneId, text) => browserRegistry.dispatchStatus(paneId, text);
+    wsBrowser.onBrowserCursor = (paneId, cursor) => browserRegistry.dispatchCursor(paneId, cursor);
     wsBrowser.connect();
     window.addEventListener('create-browser-pane', this._onCreateBrowserPane);
     window.addEventListener('browser-pane-focus', this._onBrowserPaneFocus);

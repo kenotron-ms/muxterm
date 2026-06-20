@@ -20,6 +20,8 @@ export interface BrowserPaneCallbacks {
   onDownload: ((percent: number) => void) | null;
   /** Invoked with a status text update (e.g. "Loading…"). */
   onStatus: ((statusText: string) => void) | null;
+  /** Invoked when the cursor shape changes (e.g. "pointer", "text", "default"). */
+  onCursor: ((cursor: string) => void) | null;
 }
 
 // Module-level singleton map: paneId → callbacks.
@@ -33,6 +35,7 @@ function _blankEntry(): BrowserPaneCallbacks {
     onError: null,
     onDownload: null,
     onStatus: null,
+    onCursor: null,
   };
 }
 
@@ -68,6 +71,7 @@ export const browserRegistry = {
     if ('onError' in cbs) entry.onError = cbs.onError ?? null;
     if ('onDownload' in cbs) entry.onDownload = cbs.onDownload ?? null;
     if ('onStatus' in cbs) entry.onStatus = cbs.onStatus ?? null;
+    if ('onCursor' in cbs) entry.onCursor = cbs.onCursor ?? null;
   },
 
   /**
@@ -111,6 +115,14 @@ export const browserRegistry = {
   },
 
   /**
+   * Dispatch a cursor shape update to the registered onCursor callback.
+   * No-op if pane is unknown or callback is not registered.
+   */
+  dispatchCursor(paneId: number, cursor: string): void {
+    _map.get(paneId)?.onCursor?.(cursor);
+  },
+
+  /**
    * Remove entries for pane IDs no longer in the live composition.
    * Clears all callbacks before deleting so any in-flight async frame
    * dispatch becomes a no-op rather than a stale call.
@@ -124,6 +136,7 @@ export const browserRegistry = {
         entry.onError = null;
         entry.onDownload = null;
         entry.onStatus = null;
+        entry.onCursor = null;
         _map.delete(paneId);
       }
     }

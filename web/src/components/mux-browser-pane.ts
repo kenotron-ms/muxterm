@@ -360,6 +360,7 @@ export class MuxBrowserPane extends LitElement {
       onError: this._onError,
       onDownload: this._onDownload,
       onStatus: this._onStatus,
+      onCursor: this._onCursor,
     });
   }
 
@@ -371,6 +372,7 @@ export class MuxBrowserPane extends LitElement {
       onError: null,
       onDownload: null,
       onStatus: null,
+      onCursor: null,
     });
     if (this._fpsTimer !== undefined) {
       clearInterval(this._fpsTimer);
@@ -485,6 +487,10 @@ export class MuxBrowserPane extends LitElement {
     this._statusText = statusText;
   };
 
+  private readonly _onCursor = (cursor: string): void => {
+    if (this._canvas) this._canvas.style.cursor = cursor;
+  };
+
   // -------------------------------------------------------------------------
   // Coordinate mapping
   // -------------------------------------------------------------------------
@@ -519,7 +525,7 @@ export class MuxBrowserPane extends LitElement {
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mousedown', button: e.button, x, y },
+      event: { type: 'mousedown', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x, y },
     });
   };
 
@@ -528,7 +534,7 @@ export class MuxBrowserPane extends LitElement {
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mouseup', button: e.button, x, y },
+      event: { type: 'mouseup', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x, y },
     });
   };
 
@@ -550,10 +556,6 @@ export class MuxBrowserPane extends LitElement {
   // Keyboard relay
   // -------------------------------------------------------------------------
 
-  private _isPrintable(key: string): boolean {
-    return key.length === 1;
-  }
-
   private readonly _onKeyDown = (e: KeyboardEvent): void => {
     if (this._editingUrl) return;
     const isModifier =
@@ -561,21 +563,13 @@ export class MuxBrowserPane extends LitElement {
       e.key === 'Alt' ||
       e.key === 'Shift' ||
       e.key === 'Meta';
-    if (!isModifier) {
-      e.preventDefault();
-    }
+    if (!isModifier) e.preventDefault();
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
       event: { type: 'keydown', key: e.key },
     });
-    if (!isModifier && this._isPrintable(e.key)) {
-      wsBrowser.send({
-        type: SessiondType.BrowserInput,
-        paneId: this.paneId,
-        event: { type: 'type', text: e.key },
-      });
-    }
+    // NO type event — keydown/keyup carry text input via CDP key text field
   };
 
   private readonly _onKeyUp = (e: KeyboardEvent): void => {

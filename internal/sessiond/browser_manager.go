@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
@@ -30,10 +31,12 @@ type BrowserManager struct {
 // BrowserPage manages one live Chromium tab. It owns the screencast goroutine
 // and routes input to rod CDP calls.
 type BrowserPage struct {
-	paneID  int
-	page    *rod.Page
-	stopCh  chan struct{}
-	manager *BrowserManager
+	paneID       int
+	page         *rod.Page
+	stopCh       chan struct{}
+	manager      *BrowserManager
+	lastCursor   string    // last CSS cursor value broadcast to clients
+	lastCursorAt time.Time // time of last cursor check (throttle gate)
 }
 
 // NewBrowserManager creates a BrowserManager with broadcast callbacks.
