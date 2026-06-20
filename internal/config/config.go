@@ -67,6 +67,16 @@ type RestoreDetect struct {
 	// process's environment. Its value is available as ${ENV_VAR_NAME} in the
 	// Restore template.
 	Env string `toml:"env,omitempty" json:"env,omitempty"`
+
+	// Argv is a prefix string matched against the foreground process's full
+	// command line (argv[0] as set by setproctitle, or the joined argv).
+	// When matched, everything after the prefix is available as ${argv_suffix}
+	// in the Restore template.
+	//
+	// Example: detect = { argv = "amplifier session=" }
+	// matches a process whose title is "amplifier session=abc123" and makes
+	// ${argv_suffix} = "abc123".
+	Argv string `toml:"argv,omitempty" json:"argv,omitempty"`
 }
 
 // RestoreStrategy maps a detection condition to a restore command template.
@@ -75,6 +85,7 @@ type RestoreDetect struct {
 //
 // Template variables use shell-style ${NAME} syntax:
 //   - ${ENV_VAR_NAME} — value of any env var present in the process environment
+//   - ${argv_suffix} — portion of argv[0] after the detect.argv prefix
 //   - ${cwd} — working directory of the foreground process
 type RestoreStrategy struct {
 	Detect  RestoreDetect `toml:"detect" json:"detect"`

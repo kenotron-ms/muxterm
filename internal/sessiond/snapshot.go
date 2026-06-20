@@ -27,19 +27,36 @@ import (
 func resolveRestoreCommand(p *Pane, strategies []config.RestoreStrategy) (argv []string, dir string) {
 	fgArgv, fgDir, fgEnv := paneForegrounded(p)
 
+	// Join argv to a single string for argv prefix matching.
+	fgArgvStr := strings.Join(fgArgv, " ")
+
 	for _, s := range strategies {
-		if s.Detect.Env == "" {
-			continue
-		}
-		if _, ok := fgEnv[s.Detect.Env]; !ok {
-			continue
-		}
-		// Expand ${VAR} placeholders using the foreground env + built-ins.
 		cmd := s.Restore
-		for k, v := range fgEnv {
-			cmd = strings.ReplaceAll(cmd, "${"+k+"}", v)
+
+		switch {
+		case s.Detect.Argv != "":
+			// Prefix match against the full argv string (as set by setproctitle).
+			if !strings.HasPrefix(fgArgvStr, s.Detect.Argv) {
+				continue
+			}
+			suffix := fgArgvStr[len(s.Detect.Argv):]
+			cmd = strings.ReplaceAll(cmd, "${argv_suffix}", suffix)
+			cmd = strings.ReplaceAll(cmd, "${cwd}", fgDir)
+
+		case s.Detect.Env != "":
+			// Env var must be present in the foreground process's environment.
+			if _, ok := fgEnv[s.Detect.Env]; !ok {
+				continue
+			}
+			for k, v := range fgEnv {
+				cmd = strings.ReplaceAll(cmd, "${"+k+"}", v)
+			}
+			cmd = strings.ReplaceAll(cmd, "${cwd}", fgDir)
+
+		default:
+			continue
 		}
-		cmd = strings.ReplaceAll(cmd, "${cwd}", fgDir)
+
 		restoreArgv := strings.Fields(cmd)
 		if len(restoreArgv) == 0 {
 			continue
