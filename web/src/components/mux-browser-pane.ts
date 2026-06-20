@@ -346,7 +346,8 @@ export class MuxBrowserPane extends LitElement {
   private _renderScheduled = false;
   private _fpsFrameCount = 0;
   private _fpsTimer: ReturnType<typeof setInterval> | undefined;
-  private _resizeObserver: ResizeObserver | null = null;
+  // _resizeObserver intentionally removed — clients do not control the
+  // Chromium viewport. See comment in firstUpdated() for rationale.
 
   // -------------------------------------------------------------------------
   // Lifecycle
@@ -379,8 +380,7 @@ export class MuxBrowserPane extends LitElement {
       clearInterval(this._fpsTimer);
       this._fpsTimer = undefined;
     }
-    this._resizeObserver?.disconnect();
-    this._resizeObserver = null;
+    // No resize observer to disconnect.
     this._ctx = null;
     this._pendingFrame = null;
   }
@@ -402,25 +402,17 @@ export class MuxBrowserPane extends LitElement {
       this._fpsFrameCount = 0;
     }, 1000);
 
-    // ResizeObserver: notify server when canvas display size changes.
-    // Use entry.contentRect (the value ResizeObserver measured) rather than a
-    // fresh getBoundingClientRect() call — the latter can return a stale or
-    // pre-layout value when called inside the observer callback.
-    this._resizeObserver = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const { width, height } = entry.contentRect;
-      const w = Math.round(width);
-      const h = Math.round(height);
-      if (w > 0 && h > 0) {
-        wsBrowser.send({
-          type: SessiondType.BrowserInput,
-          paneId: this.paneId,
-          event: { type: 'resize', width: w, height: h },
-        });
-      }
-    });
-    this._resizeObserver.observe(this._canvas);
+    // No ResizeObserver resize relay to the server.
+    //
+    // Chromium's viewport is fixed by the server at page-creation time (e.g.
+    // 1280×720). ALL connected viewers receive the same frame stream and each
+    // independently scale the canvas to fit their own pane using the
+    // canvas.width / rect.width scale factors computed in _toViewport().
+    //
+    // If clients sent resize events, multiple viewers would race to set the
+    // Chromium viewport and each viewer's coordinate mapping would break every
+    // time another window resized its pane. Fixing the viewport server-side
+    // guarantees consistent coordinates regardless of how many windows are open.
 
     // Mouse event listeners
     this._canvas.addEventListener('mousemove', this._onMouseMove);
