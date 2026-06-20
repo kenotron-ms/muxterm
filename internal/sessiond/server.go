@@ -357,6 +357,10 @@ func (c *conn) handle(msg Message) {
 		panes := c.srv.reg.PaneInfos(c.attached)
 		ascii := ASCIILayout(layout, panes, -1)
 		c.reply(&Message{Type: TypeLayoutResult, CID: msg.CID, ASCII: ascii})
+	case TypeCreateBrowserPane:
+		c.createBrowserCDPPane(msg)
+	case TypeCloseBrowserPane:
+		c.closePane(msg) // reuse existing closePane: removes pane + broadcasts pane-closed
 	case TypeScreenSnapshot:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
@@ -507,6 +511,37 @@ func (c *conn) closeWorkspace(msg Message) {
 	}
 	c.reply(&Message{Type: TypeOK, CID: msg.CID})
 	c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
+}
+
+// createBrowserCDPPane creates a placeholder browser-cdp pane in the attached
+// workspace. It replies with TypePaneCreated and broadcasts TypePaneAdded with
+// SurfaceKind "browser-cdp". The HTTP server layer is responsible for starting
+// the actual Chromium page via BrowserManager.OpenPage(paneID) after receiving
+// the pane-added broadcast.
+func (c *conn) createBrowserCDPPane(msg Message) {
+	wsID := c.attached
+	if wsID == "" || !c.srv.reg.Has(wsID) {
+		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
+		return
+	}
+	localID, ok := c.srv.reg.AllocPaneID(wsID)
+	if !ok {
+		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
+		return
+	}
+	p := newBrowserCDPPane(localID)
+	c.srv.reg.PutPane(wsID, p)
+	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
+	c.srv.broadcast(wsID, &Message{
+		Type:            TypePaneAdded,
+		WorkspaceID:     wsID,
+		PaneID:          localID,
+		SurfaceKind:     "browser-cdp",
+		Title:           "Browser",
+		ClientRef:       msg.ClientRef,
+		Placement:       msg.Placement,
+		ReferencePaneID: msg.ReferencePaneID,
+	})
 }
 
 // reply enqueues a control reply to this connection.

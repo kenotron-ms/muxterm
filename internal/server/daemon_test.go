@@ -54,6 +54,10 @@ func (f *fakeDaemonConn) CreateBrowserPane(port int, path string, headers map[st
 	return f.createdID, nil
 }
 
+func (f *fakeDaemonConn) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
+	return f.createdID, nil
+}
+
 func (f *fakeDaemonConn) Input(paneID uint32, data []byte) error {
 	f.inputs = append(f.inputs, string(data))
 	return nil

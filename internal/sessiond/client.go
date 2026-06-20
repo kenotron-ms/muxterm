@@ -362,6 +362,23 @@ func (c *Client) CreateBrowserPane(port int, path string, headers map[string]str
 	return reply.PaneID, nil
 }
 
+// CreateBrowserCDPPane creates a browser-cdp surface pane in the attached workspace
+// and returns the server-assigned workspace-local pane ID. Unlike CreateBrowserPane
+// (which creates a proxy pane requiring a port and path), this method requires no
+// port or path: the HTTP server's BrowserManager starts the actual Chromium page
+// separately via BrowserManager.OpenPage(paneID) after receiving the pane-added broadcast.
+func (c *Client) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
+	reply, err := c.request(&Message{
+		Type:            TypeCreateBrowserPane,
+		Placement:       placement,
+		ReferencePaneID: referencePaneID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return reply.PaneID, nil
+}
+
 // ClosePane asks the daemon to kill the pane identified by paneID and remove it
 // from the attached workspace. The daemon broadcasts a pane-closed event to all
 // subscribers on success.
