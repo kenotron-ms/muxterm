@@ -598,14 +598,28 @@ export class MuxBrowserPane extends LitElement {
   // Coordinate mapping
   // -------------------------------------------------------------------------
 
-  private _toViewport(e: MouseEvent): { x: number; y: number } {
-    const rect = this._canvas.getBoundingClientRect();
-    const scaleX = this._canvas.width / rect.width;
-    const scaleY = this._canvas.height / rect.height;
-    return {
-      x: Math.round((e.clientX - rect.left) * scaleX),
-      y: Math.round((e.clientY - rect.top) * scaleY),
-    };
+  /**
+   * Map a MouseEvent's offsetX/offsetY into Chromium viewport coordinates
+   * using the stored letterbox transform.
+   *
+   * Returns null when:
+   *   - The letterbox transform is not yet initialised (no frames received)
+   *   - The click is in the black bars (outside the rendered frame area)
+   *
+   * offsetX/offsetY are relative to the canvas element itself (canvas-local
+   * CSS pixels), so no clientX/clientRect math is needed.
+   */
+  private _toViewport(e: MouseEvent): { x: number; y: number } | null {
+    const { dx, dy, scale, fw, fh } = this._letterbox;
+    if (scale === 0 || fw === 0 || fh === 0) return null;
+
+    const x = (e.offsetX - dx) / scale;
+    const y = (e.offsetY - dy) / scale;
+
+    // Reject clicks in the black bars (outside the rendered frame).
+    if (x < 0 || x > fw || y < 0 || y > fh) return null;
+
+    return { x: Math.round(x), y: Math.round(y) };
   }
 
   // -------------------------------------------------------------------------
@@ -613,31 +627,34 @@ export class MuxBrowserPane extends LitElement {
   // -------------------------------------------------------------------------
 
   private readonly _onMouseMove = (e: MouseEvent): void => {
-    const { x, y } = this._toViewport(e);
+    const coords = this._toViewport(e);
+    if (!coords) return;
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mousemove', x, y },
+      event: { type: 'mousemove', x: coords.x, y: coords.y },
     });
   };
 
   private readonly _onMouseDown = (e: MouseEvent): void => {
     e.preventDefault();
     this._canvas.focus();
-    const { x, y } = this._toViewport(e);
+    const coords = this._toViewport(e);
+    if (!coords) return;
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mousedown', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x, y },
+      event: { type: 'mousedown', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x: coords.x, y: coords.y },
     });
   };
 
   private readonly _onMouseUp = (e: MouseEvent): void => {
-    const { x, y } = this._toViewport(e);
+    const coords = this._toViewport(e);
+    if (!coords) return;
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mouseup', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x, y },
+      event: { type: 'mouseup', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x: coords.x, y: coords.y },
     });
   };
 
@@ -647,11 +664,12 @@ export class MuxBrowserPane extends LitElement {
 
   private readonly _onWheel = (e: WheelEvent): void => {
     e.preventDefault();
-    const { x, y } = this._toViewport(e);
+    const coords = this._toViewport(e);
+    if (!coords) return;
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'wheel', x, y, deltaX: e.deltaX, deltaY: e.deltaY },
+      event: { type: 'wheel', x: coords.x, y: coords.y, deltaX: e.deltaX, deltaY: e.deltaY },
     });
   };
 
