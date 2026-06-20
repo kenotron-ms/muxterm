@@ -164,16 +164,72 @@ func (c *CDPConn) Close() {
 // Chromium process management
 // ---------------------------------------------------------------------------
 
-// chromiumBin finds the Chromium binary.
-// Checks PATH first (chromium, chromium-browser, google-chrome, google-chrome-stable).
-// Falls back to downloading from chrome-for-testing API.
+// chromiumBin finds the Chromium binary using a four-step search:
+//  1. PATH (chromium, chromium-browser, google-chrome, google-chrome-stable)
+//  2. Binary previously downloaded by muxterm itself
+//  3. Binary cached by go-rod (common during development)
+//  4. Fresh download from chrome-for-testing API
 func chromiumBin() (string, error) {
+	// 1. PATH
 	for _, name := range []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable"} {
 		if path, err := exec.LookPath(name); err == nil {
 			return path, nil
 		}
 	}
+
+	// 2. Already downloaded by muxterm itself
+	if path := ownDownloadedBin(); path != "" {
+		return path, nil
+	}
+
+	// 3. go-rod cache (common during development / upgrade path)
+	if path := rodCachedBin(); path != "" {
+		return path, nil
+	}
+
+	// 4. Download fresh
 	return downloadChromium()
+}
+
+// ownDownloadedBin returns the path to the muxterm-downloaded binary if it
+// exists on disk, or "" otherwise.
+func ownDownloadedBin() string {
+	const version = "131.0.6778.85"
+	binPath := filepath.Join(chromiumDataDir(), version, chromiumBinRelPath())
+	if _, err := os.Stat(binPath); err == nil {
+		return binPath
+	}
+	return ""
+}
+
+// rodCachedBin returns the first usable binary found in go-rod's browser cache
+// directory (~/.cache/rod/browser), or "" if none is found.
+func rodCachedBin() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	base := filepath.Join(home, ".cache", "rod", "browser")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		for _, rel := range []string{
+			filepath.Join("Chromium.app", "Contents", "MacOS", "Chromium"),
+			filepath.Join("chrome-linux64", "chrome"),
+			"chrome",
+		} {
+			c := filepath.Join(base, e.Name(), rel)
+			if _, err := os.Stat(c); err == nil {
+				return c
+			}
+		}
+	}
+	return ""
 }
 
 // downloadChromium downloads a pinned Chromium build from chrome-for-testing
@@ -337,7 +393,7 @@ func launchChromium(ctx context.Context, binPath, profileDir string, progressCb 
 	}
 
 	cmd := exec.Command(binPath,
-		"--headless=new",
+		"--headless",
 		"--no-sandbox",
 		"--disable-dev-shm-usage",
 		"--disable-gpu",
