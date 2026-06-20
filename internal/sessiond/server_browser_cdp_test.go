@@ -1,7 +1,11 @@
 package sessiond
 
 import (
+	"encoding/json"
+	"net"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestCreateBrowserCDPPane_SucceedsAndBroadcasts verifies the full lifecycle of
@@ -131,5 +135,76 @@ func TestCloseBrowserCDPPane_ViaBrowserPaneType(t *testing.T) {
 	_, ok := srv.Registry().Pane(wsID, paneID)
 	if ok {
 		t.Fatal("pane still in registry after close via TypeCloseBrowserPane")
+	}
+}
+
+// TestCreateBrowserCDPPane_TracksBrowserPanes verifies that createBrowserCDPPane
+// records the paneID → workspaceID mapping in srv.browserPanes immediately after
+// the pane is registered. This is a unit test that calls the handler directly via
+// net.Pipe() (no Unix socket), so it runs on all platforms in CI.
+func TestCreateBrowserCDPPane_TracksBrowserPanes(t *testing.T) {
+	srv, err := NewServer(filepath.Join(t.TempDir(), "sessiond.sock"))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	// Create a workspace directly in the registry.
+	wsID := srv.reg.AddWorkspace("test", "")
+
+	// Create a net.Pipe() connection so reply() can write without blocking.
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	c := newConn(srv, server)
+	c.attached = wsID
+
+	// Call createBrowserCDPPane directly (same package).
+	// Use a goroutine so reading from client doesn't deadlock.
+	done := make(chan int, 1)
+	go func() {
+		msg := Message{Type: TypeCreateBrowserPane, CID: 1}
+		c.createBrowserCDPPane(msg)
+
+		// Read back the pane-created reply to confirm the function completed.
+		_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			kind, payload, err := ReadFrame(client)
+			if err != nil {
+				done <- -1
+				return
+			}
+			if kind != FrameControl {
+				continue
+			}
+			var reply Message
+			if err := json.Unmarshal(payload, &reply); err != nil {
+				continue
+			}
+			if reply.Type == TypePaneCreated {
+				done <- reply.PaneID
+				return
+			}
+		}
+	}()
+
+	var paneID int
+	select {
+	case id := <-done:
+		if id <= 0 {
+			t.Fatal("did not receive TypePaneCreated reply or read error")
+		}
+		paneID = id
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for TypePaneCreated reply")
+	}
+
+	// Verify browserPanes[paneID] == wsID.
+	srv.mu.Lock()
+	gotWS := srv.browserPanes[paneID]
+	srv.mu.Unlock()
+
+	if gotWS != wsID {
+		t.Fatalf("browserPanes[%d] = %q, want %q", paneID, gotWS, wsID)
 	}
 }

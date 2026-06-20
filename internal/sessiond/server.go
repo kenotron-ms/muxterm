@@ -534,9 +534,8 @@ func (c *conn) closeWorkspace(msg Message) {
 
 // createBrowserCDPPane creates a placeholder browser-cdp pane in the attached
 // workspace. It replies with TypePaneCreated and broadcasts TypePaneAdded with
-// SurfaceKind "browser-cdp". The HTTP server layer is responsible for starting
-// the actual Chromium page via BrowserManager.OpenPage(paneID) after receiving
-// the pane-added broadcast.
+// SurfaceKind "browser-cdp". The daemon starts the actual Chromium page
+// immediately after registering the pane.
 func (c *conn) createBrowserCDPPane(msg Message) {
 	wsID := c.attached
 	if wsID == "" || !c.srv.reg.Has(wsID) {
@@ -550,6 +549,21 @@ func (c *conn) createBrowserCDPPane(msg Message) {
 	}
 	p := newBrowserCDPPane(localID)
 	c.srv.reg.PutPane(wsID, p)
+
+	// Track pane → workspace mapping for browser frame broadcast.
+	c.srv.mu.Lock()
+	c.srv.browserPanes[localID] = wsID
+	c.srv.mu.Unlock()
+
+	// Start the Chromium page in the daemon. Run in a goroutine so a slow
+	// Chromium startup (or download) does not block the create-pane reply.
+	// Errors are surfaced via browser-error JSON broadcast to clients.
+	go func() {
+		if _, err := c.srv.browserManager.OpenPage(localID); err != nil {
+			log.Printf("sessiond: browserManager.OpenPage pane %d: %v", localID, err)
+		}
+	}()
+
 	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
 	c.srv.broadcast(wsID, &Message{
 		Type:            TypePaneAdded,
