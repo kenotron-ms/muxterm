@@ -181,8 +181,16 @@ func (s *Server) handleWSBrowserImpl(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue // No open page for this pane.
 		}
-		if err := bp.HandleInput(env.Event); err != nil {
+		if err := bp.HandleInput(ctx, env.Event); err != nil {
 			log.Printf("handleWSBrowserImpl: HandleInput error: %v", err)
+		}
+		// For browser-ready: send a fresh screenshot directly to this client
+		// (not broadcast) so the canvas is immediately populated on mount.
+		if env.Event.Type == "browser-ready" && s.hub.browserManager != nil {
+			if shot, err := s.hub.browserManager.ScreenshotPage(env.PaneID); err == nil && len(shot) > 0 {
+				frame := EncodeBinaryFrame(uint32(env.PaneID), shot)
+				c.writeBinary(frame)
+			}
 		}
 	}
 }

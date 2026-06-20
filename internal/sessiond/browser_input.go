@@ -1,204 +1,272 @@
 package sessiond
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/go-rod/rod/lib/input"
-	"github.com/go-rod/rod/lib/proto"
 )
 
-// HandleInput routes a BrowserInputMsg to the appropriate rod CDP call.
+// HandleInput routes a BrowserInputMsg to the appropriate raw CDP call.
 // Mouse coordinates are in Chromium viewport pixels (already mapped by client).
 // Returns nil for unknown event types (forward-compatible).
-func (bp *BrowserPage) HandleInput(msg BrowserInputMsg) error {
+func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) error {
 	switch msg.Type {
 	case "mousemove":
-		if err := bp.page.Mouse.MoveTo(proto.Point{X: msg.X, Y: msg.Y}); err != nil {
-			return err
-		}
-		// Throttle cursor checks to max 20/sec (every 50ms)
-		if time.Since(bp.lastCursorAt) >= 50*time.Millisecond {
-			bp.lastCursorAt = time.Now()
-			go bp.checkCursor(msg.X, msg.Y)
-		}
-		return nil
-	case "mousedown":
-		return bp.page.Mouse.Down(mouseButton(msg.Button), 1)
-	case "mouseup":
-		return bp.page.Mouse.Up(mouseButton(msg.Button), 1)
-	case "wheel":
-		if err := bp.page.Mouse.MoveLinear(proto.Point{X: msg.X, Y: msg.Y}, 1); err != nil {
-			return err
-		}
-		return bp.page.Mouse.Scroll(msg.DeltaX, msg.DeltaY, 1)
-	case "keydown":
-		k := keyFromName(msg.Key)
-		if k == 0 {
-			return nil // unknown key — ignore
-		}
-		// Keyboard.Press sends a single KeyDown CDP event and tracks the key
-		// in rod's internal pressed-set so subsequent keys inherit the correct
-		// modifier flags (e.g. ControlLeft held → 'c' gets the Ctrl modifier).
-		// It does NOT send KeyUp — that is Keyboard.Release / Keyboard.Type.
-		return bp.page.Keyboard.Press(k)
-	case "keyup":
-		k := keyFromName(msg.Key)
-		if k == 0 {
-			return nil // unknown key — ignore
-		}
-		// Keyboard.Release sends a single KeyUp CDP event and removes the key
-		// from rod's pressed-set. If the key was never pressed (state drift),
-		// it is a no-op — safe for out-of-order cleanup.
-		return bp.page.Keyboard.Release(k)
-	case "navigate":
-		return bp.handleNavigate(msg.URL)
-	case "resize":
-		return bp.page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
-			Width:             msg.Width,
-			Height:            msg.Height,
-			DeviceScaleFactor: 1,
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
+			"type": "mouseMoved",
+			"x":    msg.X,
+			"y":    msg.Y,
 		})
+		if err == nil {
+			bp.maybeSendCursor(ctx, msg.X, msg.Y)
+		}
+		return err
+
+	case "mousedown":
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
+			"type":       "mousePressed",
+			"x":          msg.X,
+			"y":          msg.Y,
+			"button":     cdpMouseButton(msg.Button),
+			"clickCount": 1,
+		})
+		return err
+
+	case "mouseup":
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
+			"type":       "mouseReleased",
+			"x":          msg.X,
+			"y":          msg.Y,
+			"button":     cdpMouseButton(msg.Button),
+			"clickCount": 1,
+		})
+		return err
+
+	case "wheel":
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
+			"type":   "mouseWheel",
+			"x":      msg.X,
+			"y":      msg.Y,
+			"deltaX": msg.DeltaX,
+			"deltaY": msg.DeltaY,
+		})
+		return err
+
+	case "keydown":
+		key, code, text := cdpKeyParams(msg.Key)
+		params := map[string]any{
+			"type": "keyDown",
+			"key":  key,
+			"code": code,
+		}
+		if text != "" {
+			params["text"] = text
+			params["unmodifiedText"] = text
+		}
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", params)
+		return err
+
+	case "keyup":
+		key, code, _ := cdpKeyParams(msg.Key)
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", map[string]any{
+			"type": "keyUp",
+			"key":  key,
+			"code": code,
+		})
+		return err
+
+	case "navigate":
+		return bp.handleNavigate(ctx, msg.URL)
+
+	case "resize":
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Emulation.setDeviceMetricsOverride", map[string]any{
+			"width":             msg.Width,
+			"height":            msg.Height,
+			"deviceScaleFactor": 1,
+			"mobile":            false,
+		})
+		return err
+
+	case "browser-ready":
+		// Client canvas is mounted and ready. Restart screencast to ensure
+		// frames flow. The direct-to-client screenshot is handled in ws_browser.go.
+		return bp.startScreencast(ctx)
+
 	default:
 		return nil
 	}
 }
 
-// checkCursor evaluates the CSS cursor style under (x, y) and broadcasts a
-// browser-cursor message when the cursor shape changes. It runs in a goroutine
-// so it never blocks the input dispatch loop. Results are throttled by the
-// caller (50 ms minimum gap between checks).
-func (bp *BrowserPage) checkCursor(x, y float64) {
-	res, err := bp.page.Eval(fmt.Sprintf(
-		`(() => { const el = document.elementFromPoint(%g, %g); return el ? getComputedStyle(el).cursor : 'default'; })()`,
-		x, y,
-	))
-	if err != nil {
-		return
-	}
-	cursor := res.Value.String()
-	if cursor == "" {
-		cursor = "default"
-	}
-	// Only broadcast when cursor actually changes
-	if cursor != bp.lastCursor {
-		bp.lastCursor = cursor
-		if bp.manager.broadcastJSON != nil {
-			bp.manager.broadcastJSON(map[string]any{
-				"type":   "browser-cursor",
-				"paneId": bp.paneID,
-				"cursor": cursor,
-			})
-		}
-	}
-}
-
-// handleNavigate routes a navigation URL to the appropriate rod CDP call.
+// handleNavigate routes a navigation URL to the appropriate CDP call.
 // Special pseudo-URLs "history:back", "history:forward", and "history:reload"
 // trigger browser history operations. A plain URL is auto-prefixed with
 // "https://" if it lacks a scheme. An empty URL returns an error.
-func (bp *BrowserPage) handleNavigate(url string) error {
+func (bp *BrowserPage) handleNavigate(ctx context.Context, url string) error {
 	switch url {
 	case "history:back":
-		return bp.page.NavigateBack()
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.goBack", nil)
+		return err
 	case "history:forward":
-		return bp.page.NavigateForward()
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.goForward", nil)
+		return err
 	case "history:reload":
-		return bp.page.Reload()
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.reload", nil)
+		return err
 	case "":
 		return fmt.Errorf("navigate: empty URL")
 	default:
 		if !strings.Contains(url, "://") {
 			url = "https://" + url
 		}
-		return bp.page.Navigate(url)
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.navigate", map[string]any{"url": url})
+		return err
 	}
 }
 
-// mouseButton converts a browser mouse button name to a proto.InputMouseButton.
+// cdpMouseButton converts a browser mouse button name to the CDP button string.
 // Unknown names default to left button.
-func mouseButton(name string) proto.InputMouseButton {
+func cdpMouseButton(name string) string {
 	switch name {
 	case "middle":
-		return proto.InputMouseButtonMiddle
+		return "middle"
 	case "right":
-		return proto.InputMouseButtonRight
+		return "right"
 	default:
-		return proto.InputMouseButtonLeft
+		return "left"
 	}
 }
 
-// keyFromName converts a browser KeyboardEvent.key string to a rod input.Key.
-// Returns 0 for unknown or unsupported keys (forward-compatible).
-func keyFromName(name string) input.Key {
-	// Single printable ASCII character.
-	if len(name) == 1 {
-		return input.Key(name[0])
+// cdpKeyParams converts a browser KeyboardEvent.key string to CDP key, code,
+// and text parameters for Input.dispatchKeyEvent.
+func cdpKeyParams(key string) (cdpKey, code, text string) {
+	// Single printable character
+	if len(key) == 1 {
+		return key, "Key" + strings.ToUpper(key), key
 	}
-	// Named keys.
-	switch name {
+	// Named keys
+	switch key {
 	case "Enter":
-		return input.Enter
+		return "Enter", "Enter", "\r"
 	case "Backspace":
-		return input.Backspace
+		return "Backspace", "Backspace", ""
 	case "Tab":
-		return input.Tab
+		return "Tab", "Tab", "\t"
 	case "Escape":
-		return input.Escape
+		return "Escape", "Escape", ""
 	case "Delete":
-		return input.Delete
+		return "Delete", "Delete", ""
 	case "ArrowLeft":
-		return input.ArrowLeft
+		return "ArrowLeft", "ArrowLeft", ""
 	case "ArrowRight":
-		return input.ArrowRight
+		return "ArrowRight", "ArrowRight", ""
 	case "ArrowUp":
-		return input.ArrowUp
+		return "ArrowUp", "ArrowUp", ""
 	case "ArrowDown":
-		return input.ArrowDown
+		return "ArrowDown", "ArrowDown", ""
 	case "Home":
-		return input.Home
+		return "Home", "Home", ""
 	case "End":
-		return input.End
+		return "End", "End", ""
 	case "PageUp":
-		return input.PageUp
+		return "PageUp", "PageUp", ""
 	case "PageDown":
-		return input.PageDown
+		return "PageDown", "PageDown", ""
 	case "F1":
-		return input.F1
+		return "F1", "F1", ""
 	case "F2":
-		return input.F2
+		return "F2", "F2", ""
 	case "F3":
-		return input.F3
+		return "F3", "F3", ""
 	case "F4":
-		return input.F4
+		return "F4", "F4", ""
 	case "F5":
-		return input.F5
+		return "F5", "F5", ""
 	case "F6":
-		return input.F6
+		return "F6", "F6", ""
 	case "F7":
-		return input.F7
+		return "F7", "F7", ""
 	case "F8":
-		return input.F8
+		return "F8", "F8", ""
 	case "F9":
-		return input.F9
+		return "F9", "F9", ""
 	case "F10":
-		return input.F10
+		return "F10", "F10", ""
 	case "F11":
-		return input.F11
+		return "F11", "F11", ""
 	case "F12":
-		return input.F12
+		return "F12", "F12", ""
 	case "Control":
-		return input.ControlLeft
+		return "Control", "ControlLeft", ""
 	case "Shift":
-		return input.ShiftLeft
+		return "Shift", "ShiftLeft", ""
 	case "Alt":
-		return input.AltLeft
+		return "Alt", "AltLeft", ""
 	case "Meta":
-		return input.MetaLeft
-	case "Space":
-		return input.Space
+		return "Meta", "MetaLeft", ""
+	case " ", "Space":
+		return " ", "Space", " "
 	default:
-		return 0
+		return key, key, ""
 	}
+}
+
+// Package-level cursor throttle state. Shared across all pages (v1: one page).
+var (
+	lastCursorMu  sync.Mutex
+	lastCursorVal string
+	lastCursorTs  time.Time
+)
+
+// maybeSendCursor evaluates the CSS cursor at (x,y) via Runtime.evaluate
+// and broadcasts a browser-cursor JSON message if the cursor changed.
+// Throttled to max 20/sec. Runs the evaluation in a goroutine.
+func (bp *BrowserPage) maybeSendCursor(ctx context.Context, x, y float64) {
+	lastCursorMu.Lock()
+	if time.Since(lastCursorTs) < 50*time.Millisecond {
+		lastCursorMu.Unlock()
+		return
+	}
+	lastCursorTs = time.Now()
+	lastCursorMu.Unlock()
+
+	go func() {
+		result, err := bp.cdp.Call(ctx, bp.sessionID, "Runtime.evaluate", map[string]any{
+			"expression": fmt.Sprintf(
+				"((x,y)=>{const el=document.elementFromPoint(x,y);return el?getComputedStyle(el).cursor:'default';})(%g,%g)",
+				x, y,
+			),
+			"returnByValue": true,
+		})
+		if err != nil {
+			return
+		}
+		var r struct {
+			Result struct {
+				Value string `json:"value"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(result, &r); err != nil {
+			return
+		}
+		cursor := r.Result.Value
+		if cursor == "" {
+			cursor = "default"
+		}
+		lastCursorMu.Lock()
+		changed := cursor != lastCursorVal
+		if changed {
+			lastCursorVal = cursor
+		}
+		lastCursorMu.Unlock()
+		if changed {
+			bp.manager.broadcastJSON(map[string]any{
+				"type":   "browser-cursor",
+				"paneId": bp.paneID,
+				"cursor": cursor,
+			})
+		}
+	}()
 }

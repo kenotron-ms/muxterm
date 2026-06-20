@@ -1,106 +1,98 @@
 package sessiond
 
 import (
+	"context"
 	"strings"
 	"testing"
-
-	"github.com/go-rod/rod/lib/input"
-	"github.com/go-rod/rod/lib/proto"
 )
 
-// TestMouseButton verifies the mouseButton helper maps button names to
-// proto.InputMouseButton values correctly.
-func TestMouseButton(t *testing.T) {
+// TestCDPMouseButton verifies cdpMouseButton maps button names to CDP button
+// strings correctly.
+func TestCDPMouseButton(t *testing.T) {
 	cases := []struct {
 		name string
-		want proto.InputMouseButton
+		want string
 	}{
-		{"left", proto.InputMouseButtonLeft},
-		{"middle", proto.InputMouseButtonMiddle},
-		{"right", proto.InputMouseButtonRight},
-		{"", proto.InputMouseButtonLeft},   // default
-		{"other", proto.InputMouseButtonLeft}, // default
+		{"left", "left"},
+		{"middle", "middle"},
+		{"right", "right"},
+		{"", "left"},     // default
+		{"other", "left"}, // default
 	}
 	for _, tc := range cases {
-		got := mouseButton(tc.name)
+		got := cdpMouseButton(tc.name)
 		if got != tc.want {
-			t.Errorf("mouseButton(%q) = %q; want %q", tc.name, got, tc.want)
+			t.Errorf("cdpMouseButton(%q) = %q; want %q", tc.name, got, tc.want)
 		}
 	}
 }
 
-// TestKeyFromName verifies keyFromName returns correct input.Key values
-// for known keys and 0 for unknown/unsupported keys.
-func TestKeyFromName(t *testing.T) {
+// TestCDPKeyParams verifies cdpKeyParams returns correct CDP key, code, and
+// text parameters for known key names.
+func TestCDPKeyParams(t *testing.T) {
 	cases := []struct {
-		name string
-		want input.Key
+		name     string
+		wantKey  string
+		wantCode string
+		wantText string
 	}{
-		// Single printable ASCII
-		{"a", input.Key('a')},
-		{"A", input.Key('A')},
-		{"z", input.Key('z')},
-		{"0", input.Key('0')},
+		// Single printable ASCII: key=char, code="Key"+upper(char), text=char
+		{"a", "a", "KeyA", "a"},
+		{"A", "A", "KeyA", "A"},
+		{"z", "z", "KeyZ", "z"},
 		// Named keys
-		{"Enter", input.Enter},
-		{"Backspace", input.Backspace},
-		{"Tab", input.Tab},
-		{"Escape", input.Escape},
-		{"Delete", input.Delete},
-		{"ArrowLeft", input.ArrowLeft},
-		{"ArrowRight", input.ArrowRight},
-		{"ArrowUp", input.ArrowUp},
-		{"ArrowDown", input.ArrowDown},
-		{"Home", input.Home},
-		{"End", input.End},
-		{"PageUp", input.PageUp},
-		{"PageDown", input.PageDown},
-		{"F1", input.F1},
-		{"F2", input.F2},
-		{"F3", input.F3},
-		{"F4", input.F4},
-		{"F5", input.F5},
-		{"F6", input.F6},
-		{"F7", input.F7},
-		{"F8", input.F8},
-		{"F9", input.F9},
-		{"F10", input.F10},
-		{"F11", input.F11},
-		{"F12", input.F12},
-		{"Control", input.ControlLeft},
-		{"Shift", input.ShiftLeft},
-		{"Alt", input.AltLeft},
-		{"Meta", input.MetaLeft},
-		{"Space", input.Space},
-		// Unknown/unsupported — must return 0
-		{"Unknown", 0},
-		{"CapsLock", 0},
-		{"", 0},
-		{"Unidentified", 0},
+		{"Enter", "Enter", "Enter", "\r"},
+		{"Backspace", "Backspace", "Backspace", ""},
+		{"Tab", "Tab", "Tab", "\t"},
+		{"Escape", "Escape", "Escape", ""},
+		{"Delete", "Delete", "Delete", ""},
+		{"ArrowLeft", "ArrowLeft", "ArrowLeft", ""},
+		{"ArrowRight", "ArrowRight", "ArrowRight", ""},
+		{"ArrowUp", "ArrowUp", "ArrowUp", ""},
+		{"ArrowDown", "ArrowDown", "ArrowDown", ""},
+		{"Home", "Home", "Home", ""},
+		{"End", "End", "End", ""},
+		{"PageUp", "PageUp", "PageUp", ""},
+		{"PageDown", "PageDown", "PageDown", ""},
+		{"F1", "F1", "F1", ""},
+		{"F12", "F12", "F12", ""},
+		{"Control", "Control", "ControlLeft", ""},
+		{"Shift", "Shift", "ShiftLeft", ""},
+		{"Alt", "Alt", "AltLeft", ""},
+		{"Meta", "Meta", "MetaLeft", ""},
+		{"Space", " ", "Space", " "},
+		// Unknown/unsupported — echoed as-is with empty text
+		{"Unknown", "Unknown", "Unknown", ""},
 	}
 	for _, tc := range cases {
-		got := keyFromName(tc.name)
-		if got != tc.want {
-			t.Errorf("keyFromName(%q) = %v; want %v", tc.name, got, tc.want)
+		gotKey, gotCode, gotText := cdpKeyParams(tc.name)
+		if gotKey != tc.wantKey {
+			t.Errorf("cdpKeyParams(%q).key = %q; want %q", tc.name, gotKey, tc.wantKey)
+		}
+		if gotCode != tc.wantCode {
+			t.Errorf("cdpKeyParams(%q).code = %q; want %q", tc.name, gotCode, tc.wantCode)
+		}
+		if gotText != tc.wantText {
+			t.Errorf("cdpKeyParams(%q).text = %q; want %q", tc.name, gotText, tc.wantText)
 		}
 	}
 }
 
 // TestHandleInput_DefaultCase verifies that HandleInput returns nil for an
-// unknown event type without panicking (no bp.page access needed).
+// unknown event type without panicking (no cdp.Call access needed).
 func TestHandleInput_DefaultCase(t *testing.T) {
-	bp := &BrowserPage{} // page is nil; default case must not touch it
-	err := bp.HandleInput(BrowserInputMsg{Type: "unknown-event-type"})
+	bp := &BrowserPage{} // cdp is nil; default case must not touch it
+	err := bp.HandleInput(context.Background(), BrowserInputMsg{Type: "unknown-event-type"})
 	if err != nil {
 		t.Errorf("HandleInput unknown type: got error %v; want nil", err)
 	}
 }
 
 // TestHandleNavigate_EmptyURL verifies handleNavigate returns an error for
-// an empty URL without invoking the rod.Page (page is nil).
+// an empty URL without invoking the CDP connection (cdp is nil).
 func TestHandleNavigate_EmptyURL(t *testing.T) {
-	bp := &BrowserPage{} // page is nil; empty-URL check must happen before page use
-	err := bp.handleNavigate("")
+	bp := &BrowserPage{} // cdp is nil; empty-URL check must happen before cdp use
+	err := bp.handleNavigate(context.Background(), "")
 	if err == nil {
 		t.Fatal("handleNavigate(\"\") returned nil; want error")
 	}
@@ -109,16 +101,11 @@ func TestHandleNavigate_EmptyURL(t *testing.T) {
 	}
 }
 
-// TestHandleInput_TypeSwitch verifies all branch constants exist and are
-// reachable. We exercise the "type" branch (InsertText with empty text)
-// and navigate-empty branch via nil-page checks.
-// This is a compile-time coverage test: if a branch refers to a non-existent
-// method, the package fails to build.
+// TestHandleInput_BranchesExist verifies HandleInput and helper functions
+// exist and have the correct signatures (compile-time check).
 func TestHandleInput_BranchesExist(t *testing.T) {
-	// Verify HandleInput and handleNavigate exist and have the right signatures
-	// by taking their addresses (compile check only).
-	var _ func(BrowserInputMsg) error = (&BrowserPage{}).HandleInput
-	var _ func(string) error = (&BrowserPage{}).handleNavigate
-	var _ func(string) proto.InputMouseButton = mouseButton
-	var _ func(string) input.Key = keyFromName
+	var _ func(context.Context, BrowserInputMsg) error = (&BrowserPage{}).HandleInput
+	var _ func(context.Context, string) error = (&BrowserPage{}).handleNavigate
+	var _ func(string) string = cdpMouseButton
+	var _ func(string) (string, string, string) = cdpKeyParams
 }

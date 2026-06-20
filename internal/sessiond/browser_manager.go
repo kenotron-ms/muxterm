@@ -2,15 +2,12 @@ package sessiond
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"sync"
-	"time"
-
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/proto"
 )
-
-// ChromiumManager is defined in browser_chromium.go.
 
 // BrowserManager manages all CDP browser pages for a single muxterm server.
 // v1 allows at most one browser page (maxPages: 1). The underlying Chromium
@@ -20,23 +17,23 @@ import (
 // /ws/browser WebSocket handlers can reach it.
 type BrowserManager struct {
 	mu            sync.Mutex
-	chromium      *ChromiumManager
-	browser       *rod.Browser
+	chromiumCmd   *exec.Cmd  // nil until first OpenPage call
+	cdp           *CDPConn   // nil until first OpenPage call
 	pages         map[int]*BrowserPage
-	maxPages      int                  // v1: 1; remove check for multi-window
+	maxPages      int                 // v1: 1; remove check for multi-window
 	broadcast     func(paneID int, data []byte) // sends JPEG frames to /ws/browser clients
-	broadcastJSON func(msg any)                 // sends URL/error/progress JSON to /ws/browser
+	broadcastJSON func(msg any)                  // sends URL/error/progress JSON to /ws/browser
 }
 
-// BrowserPage manages one live Chromium tab. It owns the screencast goroutine
-// and routes input to rod CDP calls.
+// BrowserPage manages one live Chromium tab. It owns the event loop goroutine
+// and routes input to raw CDP calls.
 type BrowserPage struct {
-	paneID       int
-	page         *rod.Page
-	stopCh       chan struct{}
-	manager      *BrowserManager
-	lastCursor   string    // last CSS cursor value broadcast to clients
-	lastCursorAt time.Time // time of last cursor check (throttle gate)
+	paneID    int
+	sessionID string          // CDP flattened session ID for this tab
+	targetID  string
+	cdp       *CDPConn        // shared with BrowserManager
+	manager   *BrowserManager
+	cancel    context.CancelFunc
 }
 
 // NewBrowserManager creates a BrowserManager with broadcast callbacks.
@@ -45,7 +42,6 @@ type BrowserPage struct {
 // values to fan-out as JSON.
 func NewBrowserManager(broadcast func(paneID int, data []byte), broadcastJSON func(msg any)) *BrowserManager {
 	return &BrowserManager{
-		chromium:      NewChromiumManager(),
 		pages:         make(map[int]*BrowserPage),
 		maxPages:      1,
 		broadcast:     broadcast,
@@ -63,62 +59,125 @@ func (bm *BrowserManager) OpenPage(paneID int) (*BrowserPage, error) {
 		return nil, fmt.Errorf("browser: v1 limit reached (%d page(s) already open)", len(bm.pages))
 	}
 
-	if bm.browser == nil {
-		browser, err := bm.chromium.Ensure(context.Background(), func(pct int) {
-			bm.broadcastJSON(BrowserProgressMsg{
-				Type:    TypeBrowserDownloadProgress,
-				PaneID:  paneID,
-				Percent: pct,
-			})
+	ctx := context.Background()
+
+	if bm.chromiumCmd == nil {
+		// Broadcast that we are starting (0%)
+		bm.broadcastJSON(BrowserProgressMsg{
+			Type:    TypeBrowserDownloadProgress,
+			PaneID:  paneID,
+			Percent: 0,
 		})
+
+		binPath, err := chromiumBin()
 		if err != nil {
 			bm.broadcastJSON(BrowserErrorMsg{
 				Type:   TypeBrowserError,
 				PaneID: paneID,
 				Error:  err.Error(),
 			})
-			return nil, fmt.Errorf("browser: ensure chromium: %w", err)
+			return nil, fmt.Errorf("browser: chromium binary: %w", err)
 		}
-		bm.browser = browser
+
+		profileDir := filepath.Join(chromiumDataDir(), "profile")
+		cmd, wsURL, err := launchChromium(ctx, binPath, profileDir, nil)
+		if err != nil {
+			bm.broadcastJSON(BrowserErrorMsg{
+				Type:   TypeBrowserError,
+				PaneID: paneID,
+				Error:  err.Error(),
+			})
+			return nil, fmt.Errorf("browser: launch chromium: %w", err)
+		}
+
+		cdp, err := dialCDP(ctx, wsURL)
+		if err != nil {
+			cmd.Process.Kill() //nolint:errcheck
+			return nil, fmt.Errorf("browser: dial CDP: %w", err)
+		}
+
+		bm.chromiumCmd = cmd
+		bm.cdp = cdp
+
+		// Broadcast that Chrome is ready (100%)
+		bm.broadcastJSON(BrowserProgressMsg{
+			Type:    TypeBrowserDownloadProgress,
+			PaneID:  paneID,
+			Percent: 100,
+		})
 	}
 
-	page, err := bm.browser.Page(proto.TargetCreateTarget{URL: "about:blank"})
+	// Create a new tab
+	result, err := bm.cdp.Call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"})
 	if err != nil {
-		return nil, fmt.Errorf("browser: open page: %w", err)
+		return nil, fmt.Errorf("browser: create target: %w", err)
+	}
+	var target struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := json.Unmarshal(result, &target); err != nil {
+		return nil, fmt.Errorf("browser: parse target: %w", err)
 	}
 
-	if err := page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
-		Width:             1280,
-		Height:            720,
-		DeviceScaleFactor: 1,
+	// Attach to tab with a flattened session
+	result, err = bm.cdp.Call(ctx, "", "Target.attachToTarget", map[string]any{
+		"targetId": target.TargetID,
+		"flatten":  true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("browser: attach to target: %w", err)
+	}
+	var session struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(result, &session); err != nil {
+		return nil, fmt.Errorf("browser: parse session: %w", err)
+	}
+
+	// Enable page events
+	if _, err := bm.cdp.Call(ctx, session.SessionID, "Page.enable", nil); err != nil {
+		return nil, fmt.Errorf("browser: Page.enable: %w", err)
+	}
+
+	// Set viewport to 1280×720
+	if _, err := bm.cdp.Call(ctx, session.SessionID, "Emulation.setDeviceMetricsOverride", map[string]any{
+		"width":             1280,
+		"height":            720,
+		"deviceScaleFactor": 1,
+		"mobile":            false,
 	}); err != nil {
-		_ = page.Close()
 		return nil, fmt.Errorf("browser: set viewport: %w", err)
 	}
 
+	pageCtx, cancel := context.WithCancel(ctx)
 	bp := &BrowserPage{
-		paneID:  paneID,
-		page:    page,
-		stopCh:  make(chan struct{}),
-		manager: bm,
+		paneID:    paneID,
+		sessionID: session.SessionID,
+		targetID:  target.TargetID,
+		cdp:       bm.cdp,
+		manager:   bm,
+		cancel:    cancel,
 	}
 	bm.pages[paneID] = bp
-	bp.startScreencast()
+	go bp.runEventLoop(pageCtx)
 	return bp, nil
 }
 
-// ClosePage stops the screencast, closes the tab, and removes the page from
-// the manager. Safe to call with an unknown paneID (no-op).
+// ClosePage cancels the page context, closes the CDP target, and removes the
+// page from the manager. Safe to call with an unknown paneID (no-op).
 func (bm *BrowserManager) ClosePage(paneID int) {
 	bm.mu.Lock()
 	bp := bm.pages[paneID]
 	delete(bm.pages, paneID)
+	cdp := bm.cdp
 	bm.mu.Unlock()
 
 	if bp != nil {
-		bp.stopScreencast()
-		if bp.page != nil {
-			_ = bp.page.Close()
+		if bp.cancel != nil {
+			bp.cancel()
+		}
+		if cdp != nil && bp.targetID != "" {
+			_, _ = cdp.Call(context.Background(), "", "Target.closeTarget", map[string]any{"targetId": bp.targetID})
 		}
 	}
 }
@@ -144,11 +203,7 @@ func (bm *BrowserManager) ScreenshotPage(paneID int) ([]byte, error) {
 	if bp == nil {
 		return nil, fmt.Errorf("no browser page for pane %d", paneID)
 	}
-	quality := 75
-	return bp.page.Screenshot(false, &proto.PageCaptureScreenshot{
-		Format:  proto.PageCaptureScreenshotFormatJpeg,
-		Quality: &quality,
-	})
+	return bp.captureScreenshot(context.Background())
 }
 
 // GetPage returns the BrowserPage for paneID and whether it was found.
@@ -168,18 +223,22 @@ func (bm *BrowserManager) Close() {
 		pages = append(pages, bp)
 	}
 	bm.pages = make(map[int]*BrowserPage)
-	browser := bm.browser
-	bm.browser = nil
+	cdp := bm.cdp
+	bm.cdp = nil
+	cmd := bm.chromiumCmd
+	bm.chromiumCmd = nil
 	bm.mu.Unlock()
 
 	for _, bp := range pages {
-		bp.stopScreencast()
-		if bp.page != nil {
-			_ = bp.page.Close()
+		if bp.cancel != nil {
+			bp.cancel()
 		}
 	}
-	if browser != nil {
-		_ = browser.Close()
+	if cdp != nil {
+		cdp.Close()
+	}
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
 }
 

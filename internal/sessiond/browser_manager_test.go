@@ -1,10 +1,10 @@
 package sessiond
 
 import (
+	"context"
+	"os/exec"
 	"sync"
 	"testing"
-
-	"github.com/go-rod/rod"
 )
 
 // TestBrowserManagerStructFields verifies BrowserManager has all required fields
@@ -16,11 +16,11 @@ func TestBrowserManagerStructFields(t *testing.T) {
 	// mu field: sync.Mutex (take address to avoid copy-lock lint warning)
 	var _ *sync.Mutex = &bm.mu
 
-	// chromium field: *ChromiumManager
-	var _ *ChromiumManager = bm.chromium
+	// chromiumCmd field: *exec.Cmd (nil until first OpenPage call)
+	var _ *exec.Cmd = bm.chromiumCmd
 
-	// browser field: *rod.Browser
-	var _ *rod.Browser = bm.browser
+	// cdp field: *CDPConn (nil until first OpenPage call)
+	var _ *CDPConn = bm.cdp
 
 	// pages field: map[int]*BrowserPage
 	var _ map[int]*BrowserPage = bm.pages
@@ -43,12 +43,18 @@ func TestBrowserPageStructFields(t *testing.T) {
 	// paneID field: int
 	var _ int = bp.paneID
 
-	// page field: *rod.Page
-	var _ *rod.Page = bp.page
+	// sessionID field: string (CDP flattened session ID)
+	var _ string = bp.sessionID
 
-	// stopCh field: chan struct{}
-	var _ chan struct{} = bp.stopCh
+	// targetID field: string (CDP target ID)
+	var _ string = bp.targetID
+
+	// cdp field: *CDPConn
+	var _ *CDPConn = bp.cdp
 
 	// manager field: *BrowserManager
 	var _ *BrowserManager = bp.manager
+
+	// cancel field: context.CancelFunc
+	var _ context.CancelFunc = bp.cancel
 }

@@ -4,7 +4,7 @@
 #   Browser
 #     -> host Caddy            (muxterm-dev.ampbox.io, see /mnt/services/muxterm-dev.caddy)
 #     -> THIS Caddy            (10.66.204.209:8091, instance IP — reachable by host)
-#     -> muxterm dev           (127.0.0.1:9091, loopback)
+#     -> muxterm dev           (127.0.0.1:8312, loopback)
 #
 # Production runs on :9090 via systemd (binary: ~/.local/bin/muxterm).
 # Dev runs on :9091 via `make dev` / air (binary: ./bin/muxterm).

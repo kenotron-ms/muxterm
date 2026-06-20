@@ -17,8 +17,12 @@ func TestNewBrowserManager(t *testing.T) {
 	if bm == nil {
 		t.Fatal("NewBrowserManager returned nil")
 	}
-	if bm.chromium == nil {
-		t.Error("chromium should be initialised")
+	// cdp and chromiumCmd are nil until first OpenPage (lazy start)
+	if bm.cdp != nil {
+		t.Error("cdp should be nil (lazy start)")
+	}
+	if bm.chromiumCmd != nil {
+		t.Error("chromiumCmd should be nil (lazy start)")
 	}
 	if bm.pages == nil {
 		t.Error("pages map should be initialised")
@@ -28,9 +32,6 @@ func TestNewBrowserManager(t *testing.T) {
 	}
 	if bm.maxPages != 1 {
 		t.Errorf("maxPages should be 1, got %d", bm.maxPages)
-	}
-	if bm.browser != nil {
-		t.Error("browser should be nil (lazy start)")
 	}
 
 	// Verify callbacks are wired.
@@ -106,7 +107,7 @@ func TestBrowserManagerGetPageFound(t *testing.T) {
 }
 
 // TestBrowserManagerCloseEmpty verifies that Close does not panic when there
-// are no open pages and no browser instance.
+// are no open pages and no Chromium instance.
 func TestBrowserManagerCloseEmpty(t *testing.T) {
 	bm := NewBrowserManager(func(int, []byte) {}, func(any) {})
 	// Should not panic.
@@ -125,8 +126,8 @@ func TestBrowserManagerCloseIdempotent(t *testing.T) {
 func TestBrowserManagerCloseRemovesPages(t *testing.T) {
 	bm := NewBrowserManager(func(int, []byte) {}, func(any) {})
 
-	// Insert a fake page with a non-nil stopCh so stopScreencast won't panic.
-	fake := &BrowserPage{paneID: 3, stopCh: make(chan struct{}), manager: bm}
+	// Insert a fake page with a non-nil cancel so Close won't panic.
+	fake := &BrowserPage{paneID: 3, cancel: func() {}, manager: bm}
 	bm.mu.Lock()
 	bm.pages[3] = fake
 	bm.mu.Unlock()

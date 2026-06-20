@@ -1,84 +1,106 @@
 package sessiond
 
 import (
-	"time"
-
-	"github.com/go-rod/rod/lib/proto"
+	"context"
+	"encoding/base64"
+	"encoding/json"
 )
 
-// startScreencast subscribes to Chromium's Page.screencastFrame events and
-// begins streaming JPEG frames to BrowserManager's broadcast callback. It also
-// subscribes to Page.frameNavigated to broadcast URL changes. Frames are sent
-// non-blocking (the hub uses non-blocking sends with drop semantics at the
-// WebSocket write layer). screencastFrameAck is called for every frame —
-// without this Chromium stops sending. Both EachEvent loops run for the pane's
-// lifetime and exit cleanly when the page context is cancelled by ClosePage.
-func (bp *BrowserPage) startScreencast() {
-	// Subscribe to JPEG frame events. EachEvent returns the event loop itself;
-	// `go ... ()` starts it immediately in a goroutine. PageScreencastFrame.Data
-	// is []byte — Go's json.Unmarshal already base64-decodes it into raw JPEG
-	// bytes, so no further decoding is needed.
-	go bp.page.EachEvent(func(e *proto.PageScreencastFrame) {
-		if len(e.Data) > 0 {
-			bp.manager.broadcast(bp.paneID, e.Data)
-		}
-		// Always ACK: without this Chromium stops sending frames.
-		proto.PageScreencastFrameAck{SessionID: e.SessionID}.Call(bp.page) //nolint:errcheck
-	})()
+// startScreencast sends Page.startScreencast to Chrome to begin JPEG frame
+// delivery. Chrome will emit Page.screencastFrame events until
+// Page.stopScreencast is called or the session ends. Returns the first CDP
+// error, if any.
+func (bp *BrowserPage) startScreencast(ctx context.Context) error {
+	_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.startScreencast", map[string]any{
+		"format":        "jpeg",
+		"quality":       75,
+		"maxWidth":      1280,
+		"maxHeight":     720,
+		"everyNthFrame": 1,
+	})
+	return err
+}
 
-	// Subscribe to navigation events to broadcast URL changes on main-frame
-	// navigations (ParentID == "" identifies the top-level frame).
-	go bp.page.EachEvent(func(e *proto.PageFrameNavigated) {
-		if e.Frame.ParentID == "" && e.Frame.URL != "" {
+// captureScreenshot takes a JPEG screenshot of the current page and returns
+// the raw JPEG bytes. Used for on-demand frames (e.g. browser-ready, reconnect).
+func (bp *BrowserPage) captureScreenshot(ctx context.Context) ([]byte, error) {
+	result, err := bp.cdp.Call(ctx, bp.sessionID, "Page.captureScreenshot", map[string]any{
+		"format":  "jpeg",
+		"quality": 75,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(result, &r); err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(r.Data)
+}
+
+// runEventLoop is the page's event goroutine. It starts the screencast then
+// reads from the shared CDPConn events channel, dispatching events whose
+// sessionID matches this page. For v1 (maxPages: 1) there is at most one page
+// so all non-browser-level events belong to this page.
+func (bp *BrowserPage) runEventLoop(ctx context.Context) {
+	_ = bp.startScreencast(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-bp.cdp.events:
+			if ev.SessionID != bp.sessionID {
+				// v1: only one page, so events should always match.
+				// Drop events from other sessions (none expected).
+				continue
+			}
+			bp.handleEvent(ctx, ev)
+		}
+	}
+}
+
+// handleEvent dispatches a CDP event for this page. Recognised events:
+//   - Page.screencastFrame: decode JPEG bytes, broadcast to clients, send ACK.
+//   - Page.frameNavigated:  broadcast URL on main-frame navigations.
+func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
+	switch ev.Method {
+	case "Page.screencastFrame":
+		var frame struct {
+			Data      string `json:"data"`
+			SessionID int    `json:"sessionId"`
+		}
+		if err := json.Unmarshal(ev.Params, &frame); err != nil {
+			return
+		}
+		jpegBytes, err := base64.StdEncoding.DecodeString(frame.Data)
+		if err == nil && len(jpegBytes) > 0 {
+			bp.manager.broadcast(bp.paneID, jpegBytes)
+		}
+		// ACK must be sent or Chrome stops sending frames.
+		bp.cdp.Call(ctx, bp.sessionID, "Page.screencastFrameAck", map[string]any{ //nolint:errcheck
+			"sessionId": frame.SessionID,
+		})
+
+	case "Page.frameNavigated":
+		var nav struct {
+			Frame struct {
+				URL      string `json:"url"`
+				ParentID string `json:"parentId"`
+			} `json:"frame"`
+		}
+		if err := json.Unmarshal(ev.Params, &nav); err != nil {
+			return
+		}
+		// Only broadcast for top-level frame navigations (parentId == "").
+		if nav.Frame.ParentID == "" && nav.Frame.URL != "" {
 			bp.manager.broadcastJSON(BrowserURLMsg{
 				Type:   TypeBrowserURL,
 				PaneID: bp.paneID,
-				URL:    e.Frame.URL,
+				URL:    nav.Frame.URL,
 			})
 		}
-	})()
-
-	// Start Chromium screencast: JPEG quality 75, 1280×720, every frame.
-	quality := 75
-	maxWidth := 1280
-	maxHeight := 720
-	everyNthFrame := 1
-	proto.PageStartScreencast{ //nolint:errcheck
-		Format:        proto.PageStartScreencastFormatJpeg,
-		Quality:       &quality,
-		MaxWidth:      &maxWidth,
-		MaxHeight:     &maxHeight,
-		EveryNthFrame: &everyNthFrame,
-	}.Call(bp.page)
-
-	// Heartbeat: Chrome stops screencasting static pages (no visual change →
-	// no new frames). Every 2 seconds, stop and restart the screencast to
-	// force Chrome to emit at least one fresh frame. The goroutine exits when
-	// stopScreencast closes stopCh (called by ClosePage).
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				_ = proto.PageStopScreencast{}.Call(bp.page)
-				_ = proto.PageStartScreencast{
-					Format:        proto.PageStartScreencastFormatJpeg,
-					Quality:       &quality,
-					MaxWidth:      &maxWidth,
-					MaxHeight:     &maxHeight,
-					EveryNthFrame: &everyNthFrame,
-				}.Call(bp.page)
-			case <-bp.stopCh:
-				return
-			}
-		}
-	}()
-}
-
-// stopScreencast closes stopCh. The EachEvent goroutines exit when the page
-// context is cancelled by ClosePage; stopCh is retained for any other
-// consumers that gate on pane teardown.
-func (bp *BrowserPage) stopScreencast() {
-	close(bp.stopCh)
+	}
 }

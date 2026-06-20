@@ -388,6 +388,13 @@ export class MuxBrowserPane extends LitElement {
     // Get 2D rendering context
     this._ctx = this._canvas.getContext('2d');
 
+    // Signal server that canvas is ready — triggers immediate screenshot
+    wsBrowser.send({
+      type: SessiondType.BrowserInput,
+      paneId: this.paneId,
+      event: { type: 'browser-ready' },
+    });
+
     // FPS counter: update every 1 second
     this._fpsTimer = setInterval(() => {
       this._fps = this._fpsFrameCount;
