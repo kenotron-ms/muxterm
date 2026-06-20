@@ -1,26 +1,24 @@
-# Browser CDP Pane — Phase 2: TypeScript/Lit Frontend
+# Browser CDP Pane — Phase 2: Frontend Implementation
 
-> **Execution:** Use the subagent-driven-development workflow to implement this plan.
+> **For execution:** Use `/execute-plan` mode or the subagent-driven-development recipe.
 
-**Goal:** Build the TypeScript/Lit frontend for the browser CDP pane: a dedicated `/ws/browser` WebSocket client, a browser pane registry, and the `<mux-browser-pane>` Lit component with canvas rendering, a Chrome-like toolbar, and full mouse/keyboard relay.
+**Goal:** Build the TypeScript/Lit frontend for the browser CDP pane: a dedicated `/ws/browser` WebSocket client, a browser pane registry, and the complete `<mux-browser-pane>` Lit component with canvas rendering, a Chrome-like toolbar, and full mouse/keyboard relay.
 
-**Architecture:** A dedicated `BrowserSocket` singleton connects to `/ws/browser` (separate from the main `/ws` to prevent JPEG frames from delaying keystrokes). A `browserRegistry` module-level singleton routes incoming frames to the correct `<mux-browser-pane>` Lit element. `mux-dock.ts` registers a `BrowserRenderer` dockview component factory that mounts `<mux-browser-pane>` for `surfaceKind: "browser-cdp"` panes. `app.ts` wires the registry into the composition handler and `_syncTerminals()` loop.
+**Architecture:** A dedicated `BrowserSocket` singleton connects to `/ws/browser` (separate from the main `/ws` to prevent JPEG frames from delaying keystrokes). A `browserRegistry` module-level singleton routes incoming frames and events to the correct `<mux-browser-pane>` Lit element. `mux-dock.ts` registers a `BrowserRenderer` dockview component factory that mounts `<mux-browser-pane>` for `surfaceKind: "browser-cdp"` panes. `app.ts` wires the registry into the composition handler and sync loop.
 
 **Tech Stack:** TypeScript (strict), Lit v3 (`@customElement`, `@property`, `@state`, `@query`), CSS custom properties (zero hardcoded colors), WebSocket binary framing (4-byte LE pane ID + JPEG), dockview-core `IContentRenderer`.
 
-**Assumes:** Phase 1 (Go backend) is complete. The Go server emits binary JPEG frames on `/ws/browser`, broadcasts `browser-url`/`browser-download-progress`/`browser-error` JSON, and handles `browser-input` JSON messages. Browser panes appear in the composition with `surfaceKind: "browser-cdp"`. `BrowserPort`/`BrowserPath` are removed from all Go types.
+**Verification:** Per-task: `cd web && npm run check:fast` (0 errors — tsgo + oxlint). Final task: agent-driven browser E2E using playwright-cli with semantic acceptance criteria.
+
+**No unit tests.** This project uses verification-driven development: write code → `npm run check:fast` → commit.
+
+**Assumes:** Phase 1 (Go backend) is complete. Task 1 (types.ts changes) is already on `main` as commit `2b0d601`. The worktree at `.worktrees/feat-browser-cdp-pane` needs to be rebased from main before work begins.
 
 ---
 
-## Verification command (every task)
-
-```
-cd web && npm run check:fast
-```
-
-Expected output: `0 errors` from tsgo, warnings from oxlint are OK. Any error = fix before committing.
-
 ## Commit footer (every commit)
+
+Every commit in this plan must end with:
 
 ```
 🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
@@ -30,203 +28,63 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
 
 ---
 
-## Task 1: Update `types.ts` — add browser CDP types, clean up old browser fields
+## Per-task verification command
 
-**Files:**
-- Modify: `web/src/types.ts`
-- Modify: `web/src/state.ts` (remove `browserPort`/`browserPath` from pane creation)
-- Fix: `web/src/__tests__/protocol.types.test.ts` (update broken browser tests)
-
-### Step 1: Edit `web/src/types.ts`
-
-**Add 6 new entries to `SessiondType`** (after `BrowserActionResult:`):
-
-```typescript
-// Browser CDP pane lifecycle (client -> server, over /ws)
-CreateBrowserPane: 'create-browser-pane',
-CloseBrowserPane: 'close-browser-pane',
-// Browser input relay (client -> server, over /ws/browser)
-BrowserInput: 'browser-input',
-// Browser notifications (server -> client, over /ws/browser)
-BrowserURL: 'browser-url',
-BrowserDownloadProgress: 'browser-download-progress',
-BrowserError: 'browser-error',
-```
-
-**Replace the `SurfaceKind` type** (line 7):
-
-Old:
-```typescript
-export type SurfaceKind = 'terminal' | 'driver' | 'browser' | 'settings';
-```
-
-New:
-```typescript
-export type SurfaceKind = 'terminal' | 'driver' | 'browser-cdp' | 'settings';
-```
-
-**Replace the `SessiondPaneInfo` interface** — remove old browser proxy fields and update the comment:
-
-Old (lines 89–108):
-```typescript
-export interface SessiondPaneInfo {
-  paneId: number;
-  cols: number;
-  rows: number;
-  title?: string;
-  clientRef?: string;
-  /** Absolute byte sequence of the first replayed byte for this pane.
-   *  Omitted (undefined) when 0. Set by the server on each composition reply
-   *  so the client can anchor its delta-replay offset tracking. */
-  seq?: number;
-  /** Total bytes ever written to this pane's buffer.
-   *  expectedReplayBytes = totalSeq - seq. Used by the client settle barrier
-   *  (RC-1) to defer ready=true until all replay data has arrived. */
-  totalSeq?: number;
-  // Browser-only fields (present when surfaceKind === 'browser')
-  surfaceKind?: SurfaceKind;
-  browserPort?: number;
-  browserPath?: string;
-  proxyHeaders?: Record<string, string>;
-}
-```
-
-New:
-```typescript
-export interface SessiondPaneInfo {
-  paneId: number;
-  cols: number;
-  rows: number;
-  title?: string;
-  clientRef?: string;
-  /** Absolute byte sequence of the first replayed byte for this pane.
-   *  Omitted (undefined) when 0. Set by the server on each composition reply
-   *  so the client can anchor its delta-replay offset tracking. */
-  seq?: number;
-  /** Total bytes ever written to this pane's buffer.
-   *  expectedReplayBytes = totalSeq - seq. Used by the client settle barrier
-   *  (RC-1) to defer ready=true until all replay data has arrived. */
-  totalSeq?: number;
-  /** Present for non-terminal panes; 'browser-cdp' uses canvas+CDP streaming. */
-  surfaceKind?: SurfaceKind;
-}
-```
-
-**In `SessiondMessage`** — remove the three browser proxy fields (find and delete):
-```typescript
-  surfaceKind?: SurfaceKind;
-  browserPort?: number;
-  browserPath?: string;
-  proxyHeaders?: Record<string, string>;
-```
-Replace with (keep surfaceKind, drop the others):
-```typescript
-  surfaceKind?: SurfaceKind;
-```
-
-**In `LayoutCommand`** — update the `kind` field type (line ~186):
-
-Old:
-```typescript
-  kind?: 'terminal' | 'browser';
-```
-
-New:
-```typescript
-  kind?: 'terminal' | 'browser-cdp';
-```
-
-### Step 2: Edit `web/src/state.ts`
-
-Find the block around line 266–268 that reads:
-```typescript
-          surfaceKind: msg.surfaceKind,
-          browserPort: msg.browserPort,
-          browserPath: msg.browserPath,
-```
-
-Replace with:
-```typescript
-          surfaceKind: msg.surfaceKind,
-```
-
-(Remove the `browserPort` and `browserPath` lines — they no longer exist on `SessiondMessage`.)
-
-### Step 3: Fix `web/src/__tests__/protocol.types.test.ts`
-
-The `describe('browser pane fields', ...)` block tests the old `'browser'` surface kind and `browserPort`/`browserPath`. Replace the entire `describe('browser pane fields', ...)` block with:
-
-```typescript
-describe('browser CDP pane fields', () => {
-  it('SessiondPaneInfo accepts browser-cdp surfaceKind', () => {
-    const kind: SurfaceKind = 'browser-cdp';
-    const pane: SessiondPaneInfo = {
-      paneId: 42,
-      cols: 0,
-      rows: 0,
-      surfaceKind: kind,
-    };
-    expect(pane.surfaceKind).toBe('browser-cdp');
-  });
-
-  it('SessiondPaneInfo surfaceKind is optional', () => {
-    const pane: SessiondPaneInfo = { paneId: 1, cols: 80, rows: 24 };
-    expect(pane.surfaceKind).toBeUndefined();
-  });
-
-  it('SessiondMessage accepts browser-cdp surfaceKind', () => {
-    const msg: SessiondMessage = {
-      type: SessiondType.PaneAdded,
-      paneId: 5,
-      surfaceKind: 'browser-cdp',
-    };
-    expect(msg.surfaceKind).toBe('browser-cdp');
-  });
-
-  it('SessiondMessage surfaceKind is optional', () => {
-    const msg: SessiondMessage = { type: SessiondType.CreatePane };
-    expect(msg.surfaceKind).toBeUndefined();
-  });
-});
-```
-
-Also add the new `SessiondType` keys to any assertion in the file that checks the full set of keys (search for a test that enumerates `SessiondType` values and add the 6 new ones).
-
-### Step 4: Verify
+After every code change, run:
 
 ```bash
 cd web && npm run check:fast
 ```
 
-Expected: `0 errors`. Warnings from oxlint (if any) are OK.
-
-### Step 5: Commit
-
-```bash
-git add web/src/types.ts web/src/state.ts web/src/__tests__/protocol.types.test.ts
-git commit -m "feat: add browser-cdp type constants, remove legacy browser proxy fields
-
-- Add CreateBrowserPane/CloseBrowserPane/BrowserInput/BrowserURL/
-  BrowserDownloadProgress/BrowserError to SessiondType
-- Replace SurfaceKind 'browser' with 'browser-cdp'
-- Remove browserPort/browserPath/proxyHeaders from SessiondPaneInfo and
-  SessiondMessage (Phase 1 already removed them from Go)
-- Update state.ts pane creation to match new shape
-- Fix protocol.types.test.ts to use 'browser-cdp'
-
-🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
-
-Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.com>"
-```
+Expected: `0 errors` from tsgo, warnings from oxlint are OK. Any error = fix before committing.
 
 ---
 
-## Task 2: Create `web/src/lib/ws-browser.ts` — dedicated `/ws/browser` WebSocket client
+## Codebase patterns (read before writing tasks)
+
+- **Import style:** use `.js` extensions on ALL relative imports (e.g. `'../lib/browser-registry.js'`, not `.ts`)
+- **Lit v3:** `@customElement`, `@property`, `@state`, `@query`, `html\`\``, `css\`\``
+- **Singleton pattern:** see `web/src/lib/terminal-registry.ts` — module-level `const _map` + exported singleton object
+- **WebSocket client pattern:** see `web/src/ws.ts` — `MuxSocket` class with `connect()`/`disconnect()`, exponential backoff reconnect, `sendSessiond()` private method
+- **IContentRenderer pattern:** see `TerminalRenderer` class in `web/src/components/mux-dock.ts`
+- **Action button pattern:** see `mux-dock-bar.ts` — `@customElement('mux-dock-bar')`, `store.subscribe()` for reactive state
+- **No `any` types** unless absolutely unavoidable (use `unknown` + type narrowing)
+
+---
+
+## Task 1: Rebase worktree from main (types.ts for free)
+
+**Context:** Task 1 from the original plan (types.ts changes) is already committed on `main` as `2b0d601`. The worktree just needs to rebase. No new code to write.
+
+**Files:** None to create or modify.
+
+**Step 1: Navigate to the worktree and rebase**
+
+```bash
+cd .worktrees/feat-browser-cdp-pane
+git rebase main
+```
+
+If there are no conflicts, the rebase applies cleanly. If there are conflicts (unexpected), resolve them following standard git conflict resolution.
+
+**Step 2: Verify**
+
+```bash
+cd web && npm run check:fast
+```
+
+Expected: `0 errors`. The types.ts changes from `2b0d601` are now in the worktree.
+
+**No commit needed** — the rebase brings existing commits from main.
+
+---
+
+## Task 2: Create `web/src/lib/ws-browser.ts`
 
 **Files:**
 - Create: `web/src/lib/ws-browser.ts`
 
-### Step 1: Write the file
+**Step 1: Write the file**
 
 ```typescript
 /**
@@ -240,6 +98,7 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
  *   JSON:   {type: "browser-url", paneId, url}
  *           {type: "browser-download-progress", paneId, percent}
  *           {type: "browser-error", paneId, error}
+ *           {type: "browser-status", paneId, text}
  *
  * Wire protocol (client → server):
  *   JSON:   {type: "browser-input", paneId, event: {...}}
@@ -264,6 +123,8 @@ export class BrowserSocket {
   onDownloadProgress: ((paneId: number, percent: number) => void) | null = null;
   /** Called when the browser pane encounters an error. */
   onBrowserError: ((paneId: number, error: string) => void) | null = null;
+  /** Called with the URL of the link currently under the cursor (empty = no link). */
+  onBrowserStatus: ((paneId: number, text: string) => void) | null = null;
 
   onDisconnect: (() => void) | null = null;
   onReconnect: (() => void) | null = null;
@@ -341,6 +202,8 @@ export class BrowserSocket {
             this.onDownloadProgress?.(paneId, msg['percent']);
           } else if (type === 'browser-error' && typeof msg['error'] === 'string') {
             this.onBrowserError?.(paneId, msg['error']);
+          } else if (type === 'browser-status' && typeof msg['text'] === 'string') {
+            this.onBrowserStatus?.(paneId, msg['text']);
           }
         } catch {
           // Malformed JSON — ignore silently
@@ -373,7 +236,7 @@ export function buildWsBrowserUrl(): string {
 export const wsBrowser = new BrowserSocket(buildWsBrowserUrl());
 ```
 
-### Step 2: Verify
+**Step 2: Verify**
 
 ```bash
 cd web && npm run check:fast
@@ -381,16 +244,18 @@ cd web && npm run check:fast
 
 Expected: `0 errors`.
 
-### Step 3: Commit
+**Step 3: Commit**
 
 ```bash
+cd .worktrees/feat-browser-cdp-pane
 git add web/src/lib/ws-browser.ts
 git commit -m "feat: add BrowserSocket — dedicated /ws/browser WebSocket client
 
 Separate connection from main /ws prevents JPEG frames from queuing
 behind terminal keystrokes. Auto-reconnects with exponential backoff
 (same policy as MuxSocket). Parses binary [paneId][JPEG] frames and
-browser-url/browser-download-progress/browser-error JSON messages.
+browser-url/browser-download-progress/browser-error/browser-status
+JSON messages.
 
 🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
 
@@ -399,12 +264,12 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
 
 ---
 
-## Task 3: Create `web/src/lib/browser-registry.ts` — browser pane state manager
+## Task 3: Create `web/src/lib/browser-registry.ts`
 
 **Files:**
 - Create: `web/src/lib/browser-registry.ts`
 
-### Step 1: Write the file
+**Step 1: Write the file**
 
 ```typescript
 /**
@@ -425,6 +290,8 @@ export interface BrowserPaneCallbacks {
   onError: ((error: string) => void) | null;
   /** Called with download progress (0–100) while Chromium downloads. */
   onDownload: ((percent: number) => void) | null;
+  /** Called with the URL of the link currently under the cursor (empty string = no link). */
+  onStatus: ((statusText: string) => void) | null;
 }
 
 const _map = new Map<number, BrowserPaneCallbacks>();
@@ -436,7 +303,7 @@ export const browserRegistry = {
    */
   ensure(paneId: number): void {
     if (_map.has(paneId)) return;
-    _map.set(paneId, { onFrame: null, onUrl: null, onError: null, onDownload: null });
+    _map.set(paneId, { onFrame: null, onUrl: null, onError: null, onDownload: null, onStatus: null });
   },
 
   /**
@@ -446,13 +313,14 @@ export const browserRegistry = {
   setCallbacks(paneId: number, cbs: Partial<BrowserPaneCallbacks>): void {
     let entry = _map.get(paneId);
     if (!entry) {
-      entry = { onFrame: null, onUrl: null, onError: null, onDownload: null };
+      entry = { onFrame: null, onUrl: null, onError: null, onDownload: null, onStatus: null };
       _map.set(paneId, entry);
     }
     if (cbs.onFrame !== undefined) entry.onFrame = cbs.onFrame;
     if (cbs.onUrl !== undefined) entry.onUrl = cbs.onUrl;
     if (cbs.onError !== undefined) entry.onError = cbs.onError;
     if (cbs.onDownload !== undefined) entry.onDownload = cbs.onDownload;
+    if (cbs.onStatus !== undefined) entry.onStatus = cbs.onStatus;
   },
 
   /** Route an incoming JPEG frame to the registered pane element. */
@@ -475,6 +343,11 @@ export const browserRegistry = {
     _map.get(paneId)?.onDownload?.(percent);
   },
 
+  /** Route a browser-status message to the registered pane element. */
+  dispatchStatus(paneId: number, statusText: string): void {
+    _map.get(paneId)?.onStatus?.(statusText);
+  },
+
   /**
    * Remove entries for pane IDs no longer in the live composition.
    * Call after terminalRegistry.prune() with the same liveIds set.
@@ -490,6 +363,7 @@ export const browserRegistry = {
           entry.onUrl = null;
           entry.onError = null;
           entry.onDownload = null;
+          entry.onStatus = null;
         }
         _map.delete(paneId);
       }
@@ -503,7 +377,7 @@ export const browserRegistry = {
 };
 ```
 
-### Step 2: Verify
+**Step 2: Verify**
 
 ```bash
 cd web && npm run check:fast
@@ -511,16 +385,18 @@ cd web && npm run check:fast
 
 Expected: `0 errors`.
 
-### Step 3: Commit
+**Step 3: Commit**
 
 ```bash
+cd .worktrees/feat-browser-cdp-pane
 git add web/src/lib/browser-registry.ts
 git commit -m "feat: add browserRegistry — per-pane callback routing for CDP panes
 
 Module-level singleton (mirrors terminal-registry pattern). Routes
-incoming JPEG frames, URL updates, and errors from BrowserSocket to
-the correct <mux-browser-pane> element via registered callbacks.
-Simpler than terminalRegistry: no xterm, no settle/drain, no scrollback.
+incoming JPEG frames, URL updates, errors, download progress, and
+status text from BrowserSocket to the correct <mux-browser-pane>
+element via registered callbacks. Simpler than terminalRegistry:
+no xterm, no settle/drain, no scrollback.
 
 🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
 
@@ -529,18 +405,18 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
 
 ---
 
-## Task 4: Create `web/src/components/mux-browser-pane.ts` — skeleton Lit element
+## Task 4: Create complete `web/src/components/mux-browser-pane.ts`
+
+Write the ENTIRE component in one task. This synthesizes what was previously Tasks 4–11. Do not split into multiple files or incremental patches.
 
 **Files:**
 - Create: `web/src/components/mux-browser-pane.ts`
 
-This task creates the element class with all state properties and lifecycle hooks but **no canvas or toolbar yet** — just enough to type-check and register the custom element.
-
-### Step 1: Write the file
+**Step 1: Write the complete file**
 
 ```typescript
 import { LitElement, html, css } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { customElement, property, state, query } from 'lit/decorators.js';
 import { browserRegistry } from '../lib/browser-registry.js';
 import { wsBrowser } from '../lib/ws-browser.js';
 import { SessiondType } from '../types.js';
@@ -555,614 +431,11 @@ import { SessiondType } from '../types.js';
  * Lifecycle:
  *   - Mounted by BrowserRenderer (mux-dock.ts) when a browser-cdp pane appears
  *   - pane-id attribute is set by BrowserRenderer to the numeric pane ID
- *   - connectedCallback registers frame/url/error callbacks with browserRegistry
- *   - disconnectedCallback clears those callbacks
+ *   - connectedCallback registers frame/url/error/download/status callbacks
+ *   - disconnectedCallback clears those callbacks and cleans up timers
  */
 @customElement('mux-browser-pane')
 export class MuxBrowserPane extends LitElement {
-  static styles = css`
-    :host {
-      display: flex;
-      flex-direction: column;
-      width: 100%;
-      height: 100%;
-      background: var(--chrome-body);
-      overflow: hidden;
-      position: relative;
-    }
-  `;
-
-  /** Numeric pane ID — set by BrowserRenderer via the pane-id attribute. */
-  @property({ type: Number, attribute: 'pane-id' }) paneId = 0;
-
-  /** Current page URL (updated via browser-url messages). */
-  @state() private _url = '';
-
-  /** Frames-per-second counter (updated every 60 frames). */
-  @state() private _fps = 0;
-
-  /** Whether the URL omnibox is in edit mode. */
-  @state() private _editingUrl = false;
-
-  /** URL being typed in the omnibox (mirrors _url when not editing). */
-  @state() private _urlInput = '';
-
-  /** Status bar text (hovered link URL). */
-  @state() private _statusText = '';
-
-  /** True while a Chromium download is in progress. */
-  @state() private _downloading = false;
-
-  /** Download progress 0–100. */
-  @state() private _downloadPercent = 0;
-
-  /** Error message, displayed if non-empty. */
-  @state() private _errorText = '';
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    // Ensure registry slot exists even if app.ts ensure() hasn't run yet
-    // (component can mount before the composition handler fires).
-    browserRegistry.ensure(this.paneId);
-    browserRegistry.setCallbacks(this.paneId, {
-      onFrame: this._onFrame,
-      onUrl: this._onUrl,
-      onError: this._onError,
-      onDownload: this._onDownload,
-    });
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    browserRegistry.setCallbacks(this.paneId, {
-      onFrame: null,
-      onUrl: null,
-      onError: null,
-      onDownload: null,
-    });
-  }
-
-  private _onFrame = (_jpegBytes: Uint8Array): void => {
-    // Canvas rendering added in Task 5
-  };
-
-  private _onUrl = (url: string): void => {
-    this._url = url;
-    if (!this._editingUrl) this._urlInput = url;
-  };
-
-  private _onError = (error: string): void => {
-    this._errorText = error;
-    this._downloading = false;
-  };
-
-  private _onDownload = (percent: number): void => {
-    this._downloading = percent < 100;
-    this._downloadPercent = percent;
-    if (percent >= 100) this._downloading = false;
-  };
-
-  override render() {
-    return html`
-      <div class="placeholder" style="
-        flex:1;display:flex;align-items:center;justify-content:center;
-        color:var(--chrome-text-dim);font-size:13px;
-      ">
-        Browser pane ${this.paneId}
-        ${this._downloading
-          ? html` — downloading Chromium ${this._downloadPercent}%`
-          : ''}
-        ${this._errorText
-          ? html` — <span style="color:var(--mux-error)">${this._errorText}</span>`
-          : ''}
-      </div>
-    `;
-  }
-}
-
-// Expose for BrowserRenderer type import
-export type { MuxBrowserPane };
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'mux-browser-pane': MuxBrowserPane;
-  }
-}
-
-// Suppress unused import warning — wsBrowser and SessiondType are used in later tasks
-void wsBrowser;
-void SessiondType;
-```
-
-### Step 2: Verify
-
-```bash
-cd web && npm run check:fast
-```
-
-Expected: `0 errors`.
-
-### Step 3: Commit
-
-```bash
-git add web/src/components/mux-browser-pane.ts
-git commit -m "feat: add mux-browser-pane skeleton Lit element
-
-Registers custom element, wires paneId property, connectedCallback
-registers frame/url/error/download callbacks with browserRegistry.
-No canvas or toolbar yet — placeholder div only.
-
-🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
-
-Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.com>"
-```
-
----
-
-## Task 5: Add canvas rendering to `mux-browser-pane.ts`
-
-**Files:**
-- Modify: `web/src/components/mux-browser-pane.ts`
-
-Replace the placeholder render with a real `<canvas>`, add the `_renderFrame()` method, add an FPS counter, and register the frame callback.
-
-### Step 1: Add imports and decorators at the top of the file
-
-Add `query` to the decorator imports:
-```typescript
-import { customElement, property, state, query } from 'lit/decorators.js';
-```
-
-### Step 2: Add canvas fields inside the class (after `_errorText`):
-
-```typescript
-  @query('#viewport') private _canvas!: HTMLCanvasElement;
-
-  private _ctx: CanvasRenderingContext2D | null = null;
-  /** Last image created for the pending frame (avoids creating two Image objects). */
-  private _pendingFrame: Uint8Array | null = null;
-  private _renderScheduled = false;
-
-  // FPS counter
-  private _fpsFrameCount = 0;
-  private _fpsTimer: ReturnType<typeof setInterval> | undefined;
-```
-
-### Step 3: Replace `_onFrame` with a real implementation:
-
-```typescript
-  private _onFrame = (jpegBytes: Uint8Array): void => {
-    // Latest-frame-wins: discard any pending frame that hasn't rendered yet.
-    this._pendingFrame = jpegBytes;
-    if (!this._renderScheduled) {
-      this._renderScheduled = true;
-      requestAnimationFrame(() => this._flushFrame());
-    }
-  };
-
-  private _flushFrame(): void {
-    this._renderScheduled = false;
-    const bytes = this._pendingFrame;
-    this._pendingFrame = null;
-    if (!bytes || !this._ctx) return;
-
-    const blob = new Blob([bytes], { type: 'image/jpeg' });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-      const canvas = this._canvas;
-      if (!canvas) { URL.revokeObjectURL(url); return; }
-      // Resize canvas to match the incoming frame dimensions (only when changed).
-      if (canvas.width !== img.naturalWidth) canvas.width = img.naturalWidth;
-      if (canvas.height !== img.naturalHeight) canvas.height = img.naturalHeight;
-      this._ctx?.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
-      this._fpsFrameCount++;
-    };
-    img.onerror = () => URL.revokeObjectURL(url);
-    img.src = url;
-  }
-```
-
-### Step 4: Add `firstUpdated` to get the 2D context and start FPS timer:
-
-```typescript
-  override firstUpdated(): void {
-    this._ctx = this._canvas.getContext('2d');
-    // FPS counter: sample over 1-second windows.
-    this._fpsTimer = setInterval(() => {
-      this._fps = this._fpsFrameCount;
-      this._fpsFrameCount = 0;
-    }, 1000);
-  }
-```
-
-### Step 5: Add `disconnectedCallback` cleanup for FPS timer:
-
-Add after `browserRegistry.setCallbacks(...)` in `disconnectedCallback`:
-```typescript
-    if (this._fpsTimer !== undefined) {
-      clearInterval(this._fpsTimer);
-      this._fpsTimer = undefined;
-    }
-    this._ctx = null;
-    this._pendingFrame = null;
-```
-
-### Step 6: Replace the `render()` method:
-
-```typescript
-  override render() {
-    return html`
-      <div class="browser-toolbar"><!-- toolbar added in Task 6 --></div>
-      <div class="canvas-wrap">
-        <canvas id="viewport" tabindex="0"></canvas>
-        <div class="status-bar">${this._statusText}</div>
-      </div>
-      ${this._downloading ? html`
-        <div class="download-overlay">
-          Downloading Chromium… ${this._downloadPercent}%
-        </div>
-      ` : ''}
-      ${this._errorText ? html`
-        <div class="error-banner">${this._errorText}</div>
-      ` : ''}
-    `;
-  }
-```
-
-### Step 7: Add minimal layout CSS to static styles:
-
-```typescript
-  static styles = css`
-    :host {
-      display: flex;
-      flex-direction: column;
-      width: 100%;
-      height: 100%;
-      background: var(--chrome-body);
-      overflow: hidden;
-      position: relative;
-    }
-
-    .browser-toolbar {
-      flex-shrink: 0;
-      height: 40px;
-      background: var(--chrome-bar);
-    }
-
-    .canvas-wrap {
-      flex: 1;
-      position: relative;
-      overflow: hidden;
-    }
-
-    canvas {
-      display: block;
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      cursor: default;
-      outline: none;
-    }
-
-    .status-bar {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      padding: 2px 8px;
-      font-size: 11px;
-      background: var(--chrome-bar);
-      color: var(--chrome-text-dim);
-      opacity: 0;
-      transition: opacity 0.15s;
-      pointer-events: none;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .status-bar.visible { opacity: 1; }
-
-    .download-overlay {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: color-mix(in srgb, var(--chrome-body) 85%, transparent);
-      color: var(--chrome-text-bright);
-      font-size: 14px;
-    }
-
-    .error-banner {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      padding: 8px 16px;
-      background: var(--mux-error);
-      color: var(--chrome-body);
-      font-size: 13px;
-    }
-  `;
-```
-
-Remove the `void wsBrowser; void SessiondType;` suppression lines from the end — they'll be used in later tasks (they were suppressors for Task 4 only).
-
-### Step 8: Verify
-
-```bash
-cd web && npm run check:fast
-```
-
-Expected: `0 errors`.
-
-### Step 9: Commit
-
-```bash
-git add web/src/components/mux-browser-pane.ts
-git commit -m "feat: add canvas JPEG rendering to mux-browser-pane
-
-- renderFrame via Blob URL + Image + ctx.drawImage (proven in spike)
-- Latest-frame-wins: rAF-scheduled _flushFrame discards stale frames
-- Canvas resizes when incoming frame dimensions change
-- 1-second FPS counter updates _fps state for the badge
-- Layout: toolbar placeholder + canvas-wrap + status-bar + overlays
-
-🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
-
-Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.com>"
-```
-
----
-
-## Task 6: Add browser toolbar to `mux-browser-pane.ts`
-
-**Files:**
-- Modify: `web/src/components/mux-browser-pane.ts`
-
-Replace the `<!-- toolbar added in Task 6 -->` placeholder with the real Chrome-like toolbar and wire the ResizeObserver for viewport resize relay.
-
-### Step 1: Add ResizeObserver field inside the class:
-
-```typescript
-  private _resizeObserver: ResizeObserver | null = null;
-```
-
-### Step 2: Wire ResizeObserver in `firstUpdated()` (after `this._ctx` assignment):
-
-```typescript
-    // ResizeObserver: notify Chromium when the canvas viewport changes size.
-    this._resizeObserver = new ResizeObserver(() => {
-      const rect = this._canvas.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        wsBrowser.send({
-          type: SessiondType.BrowserInput,
-          paneId: this.paneId,
-          event: { type: 'resize', width: Math.round(rect.width), height: Math.round(rect.height) },
-        });
-      }
-    });
-    this._resizeObserver.observe(this._canvas);
-```
-
-### Step 3: Add cleanup in `disconnectedCallback()`:
-
-```typescript
-    this._resizeObserver?.disconnect();
-    this._resizeObserver = null;
-```
-
-### Step 4: Replace the `render()` method with full toolbar HTML:
-
-```typescript
-  override render() {
-    const urlObj = this._parseUrl(this._url);
-
-    return html`
-      <div class="browser-toolbar">
-        <button
-          class="nav-btn"
-          title="Back"
-          @click=${this._goBack}
-        >
-          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M10 12L6 8l4-4" stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-        <button
-          class="nav-btn"
-          title="Forward"
-          @click=${this._goForward}
-        >
-          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M6 12l4-4-4-4" stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-
-        <div class="omnibox ${this._editingUrl ? 'editing' : ''}">
-          ${!this._editingUrl ? html`
-            <span class="lock-icon ${urlObj.isHttps ? 'https' : 'http'}">
-              ${urlObj.isHttps
-                ? html`<svg viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <rect x="1.5" y="5.5" width="9" height="8" rx="1"
-                      stroke="currentColor" stroke-width="1.2"/>
-                    <path d="M4 5.5V4a2 2 0 1 1 4 0v1.5"
-                      stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                  </svg>`
-                : html`<svg viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <rect x="1.5" y="5.5" width="9" height="8" rx="1"
-                      stroke="currentColor" stroke-width="1.2"/>
-                    <path d="M4 5.5V4a2 2 0 0 1 3.5-1.3"
-                      stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                  </svg>`}
-            </span>
-            <span class="url-host" @click=${this._startEditUrl}>${urlObj.host}</span>
-            <span class="url-path" @click=${this._startEditUrl}>${urlObj.path}</span>
-            <span class="omni-gap"></span>
-            <button class="reload-btn" title="Reload" @click=${this._reload}>
-              <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M3 8a5 5 0 1 0 1-3M3 5V2M3 5H6"
-                  stroke="currentColor" stroke-width="1.4"
-                  stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
-          ` : html`
-            <input
-              class="url-input"
-              type="text"
-              .value=${this._urlInput}
-              @input=${this._onUrlInput}
-              @keydown=${this._onUrlKeyDown}
-              @blur=${this._cancelEditUrl}
-            />
-          `}
-        </div>
-
-        <span class="fps-badge" title="Frames per second">${this._fps.toFixed(0)} fps</span>
-        <div class="live-dot" title="Live"></div>
-      </div>
-
-      <div class="canvas-wrap">
-        <canvas id="viewport" tabindex="0"></canvas>
-        <div class="status-bar ${this._statusText ? 'visible' : ''}">${this._statusText}</div>
-      </div>
-
-      ${this._downloading ? html`
-        <div class="download-overlay">
-          Downloading Chromium… ${this._downloadPercent}%
-        </div>
-      ` : ''}
-      ${this._errorText ? html`
-        <div class="error-banner">${this._errorText}</div>
-      ` : ''}
-    `;
-  }
-```
-
-### Step 5: Add URL parsing helper and navigation handlers:
-
-```typescript
-  private _parseUrl(url: string): { host: string; path: string; isHttps: boolean } {
-    if (!url) return { host: '', path: '', isHttps: false };
-    try {
-      const u = new URL(url);
-      return {
-        host: u.hostname,
-        path: u.pathname + u.search + u.hash,
-        isHttps: u.protocol === 'https:',
-      };
-    } catch {
-      return { host: url, path: '', isHttps: false };
-    }
-  }
-
-  private _goBack(): void {
-    wsBrowser.send({
-      type: SessiondType.BrowserInput,
-      paneId: this.paneId,
-      event: { type: 'navigate', url: 'history:back' },
-    });
-  }
-
-  private _goForward(): void {
-    wsBrowser.send({
-      type: SessiondType.BrowserInput,
-      paneId: this.paneId,
-      event: { type: 'navigate', url: 'history:forward' },
-    });
-  }
-
-  private _reload(): void {
-    wsBrowser.send({
-      type: SessiondType.BrowserInput,
-      paneId: this.paneId,
-      event: { type: 'navigate', url: 'history:reload' },
-    });
-  }
-
-  private _startEditUrl(): void {
-    this._urlInput = this._url;
-    this._editingUrl = true;
-    // Focus the input on the next render cycle.
-    requestAnimationFrame(() => {
-      this.shadowRoot?.querySelector<HTMLInputElement>('.url-input')?.select();
-    });
-  }
-
-  private _cancelEditUrl(): void {
-    this._editingUrl = false;
-    this._urlInput = this._url;
-  }
-
-  private _onUrlInput(e: Event): void {
-    this._urlInput = (e.target as HTMLInputElement).value;
-  }
-
-  private _onUrlKeyDown(e: KeyboardEvent): void {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      this._navigate(this._urlInput.trim());
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      this._cancelEditUrl();
-    }
-  }
-
-  private _navigate(url: string): void {
-    if (!url) return;
-    this._editingUrl = false;
-    wsBrowser.send({
-      type: SessiondType.BrowserInput,
-      paneId: this.paneId,
-      event: { type: 'navigate', url },
-    });
-  }
-```
-
-### Step 6: Remove suppressor imports if still present, ensure `SessiondType` and `wsBrowser` imports are kept.
-
-### Step 7: Verify
-
-```bash
-cd web && npm run check:fast
-```
-
-Expected: `0 errors`.
-
-### Step 8: Commit
-
-```bash
-git add web/src/components/mux-browser-pane.ts
-git commit -m "feat: add browser toolbar to mux-browser-pane
-
-Chrome-like toolbar: circular ghost nav buttons (back/forward SVG),
-pill omnibox with lock icon / host / path / reload-inside-pill,
-FPS badge and live dot. URL bar enters edit mode on click, navigates
-on Enter. ResizeObserver relays viewport size changes to Chromium.
-
-🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
-
-Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.com>"
-```
-
----
-
-## Task 7: Add complete theme CSS to `mux-browser-pane.ts`
-
-**Files:**
-- Modify: `web/src/components/mux-browser-pane.ts`
-
-Replace the minimal `static styles` block with the full zero-hardcoded-color CSS.
-
-### Step 1: Replace `static styles = css\`...\`` with the full block:
-
-```typescript
   static styles = css`
     :host {
       display: flex;
@@ -1176,7 +449,7 @@ Replace the minimal `static styles` block with the full zero-hardcoded-color CSS
       font-size: 13px;
     }
 
-    /* ── Toolbar ──────────────────────────────────────────────────────────── */
+    /* ── Toolbar ─────────────────────────────────────────────────────────── */
 
     .browser-toolbar {
       flex-shrink: 0;
@@ -1421,56 +694,171 @@ Replace the minimal `static styles` block with the full zero-hardcoded-color CSS
       font-size: 12px;
     }
   `;
-```
 
-Also update the download overlay in `render()` to use the progress bar:
+  /** Numeric pane ID — set by BrowserRenderer via the pane-id attribute. */
+  @property({ type: Number, attribute: 'pane-id' }) paneId = 0;
 
-```typescript
-      ${this._downloading ? html`
-        <div class="download-overlay">
-          <div>Downloading Chromium… ${this._downloadPercent}%</div>
-          <div class="download-bar">
-            <div class="download-fill" style="width:${this._downloadPercent}%"></div>
-          </div>
-        </div>
-      ` : ''}
-```
+  /** Current page URL (updated via browser-url messages). */
+  @state() private _url = '';
 
-### Step 2: Verify
+  /** Frames-per-second counter (updated every 1 second). */
+  @state() private _fps = 0;
 
-```bash
-cd web && npm run check:fast
-```
+  /** Whether the URL omnibox is in edit mode. */
+  @state() private _editingUrl = false;
 
-Expected: `0 errors`.
+  /** URL being typed in the omnibox (mirrors _url when not editing). */
+  @state() private _urlInput = '';
 
-### Step 3: Commit
+  /** Status bar text (hovered link URL). */
+  @state() private _statusText = '';
 
-```bash
-git add web/src/components/mux-browser-pane.ts
-git commit -m "feat: add complete theme CSS to mux-browser-pane
+  /** True while a Chromium download is in progress. */
+  @state() private _downloading = false;
 
-Zero hardcoded colors — all values use var(--chrome-*) and var(--mux-*)
-tokens set globally by applyChromeTokens(). Covers: circular ghost nav
-buttons, pill omnibox with reload inside, FPS badge, pulsing live dot,
-status bar, download progress bar, error banner. Updates across all
-8 muxterm palettes (dark + light) automatically.
+  /** Download progress 0–100. */
+  @state() private _downloadPercent = 0;
 
-🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
+  /** Error message, displayed if non-empty. */
+  @state() private _errorText = '';
 
-Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.com>"
-```
+  @query('#viewport') private _canvas!: HTMLCanvasElement;
 
----
+  private _ctx: CanvasRenderingContext2D | null = null;
+  /** Latest frame waiting to be drawn — latest-frame-wins pattern. */
+  private _pendingFrame: Uint8Array | null = null;
+  private _renderScheduled = false;
 
-## Task 8: Add mouse event relay to `mux-browser-pane.ts`
+  // FPS counter
+  private _fpsFrameCount = 0;
+  private _fpsTimer: ReturnType<typeof setInterval> | undefined;
 
-**Files:**
-- Modify: `web/src/components/mux-browser-pane.ts`
+  private _resizeObserver: ResizeObserver | null = null;
 
-### Step 1: Add coordinate mapping helper inside the class:
+  override connectedCallback(): void {
+    super.connectedCallback();
+    // Ensure registry slot exists even if app.ts ensure() hasn't run yet.
+    browserRegistry.ensure(this.paneId);
+    browserRegistry.setCallbacks(this.paneId, {
+      onFrame: this._onFrame,
+      onUrl: this._onUrl,
+      onError: this._onError,
+      onDownload: this._onDownload,
+      onStatus: this._onStatus,
+    });
+  }
 
-```typescript
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    browserRegistry.setCallbacks(this.paneId, {
+      onFrame: null,
+      onUrl: null,
+      onError: null,
+      onDownload: null,
+      onStatus: null,
+    });
+    if (this._fpsTimer !== undefined) {
+      clearInterval(this._fpsTimer);
+      this._fpsTimer = undefined;
+    }
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = null;
+    this._ctx = null;
+    this._pendingFrame = null;
+  }
+
+  override firstUpdated(): void {
+    this._ctx = this._canvas.getContext('2d');
+
+    // FPS counter: sample over 1-second windows.
+    this._fpsTimer = setInterval(() => {
+      this._fps = this._fpsFrameCount;
+      this._fpsFrameCount = 0;
+    }, 1000);
+
+    // ResizeObserver: notify Chromium when the canvas viewport changes size.
+    this._resizeObserver = new ResizeObserver(() => {
+      const rect = this._canvas.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        wsBrowser.send({
+          type: SessiondType.BrowserInput,
+          paneId: this.paneId,
+          event: { type: 'resize', width: Math.round(rect.width), height: Math.round(rect.height) },
+        });
+      }
+    });
+    this._resizeObserver.observe(this._canvas);
+
+    // Mouse events on the canvas — passive:false for wheel so we can preventDefault.
+    const cv = this._canvas;
+    cv.addEventListener('mousemove', (e) => this._onMouseMove(e));
+    cv.addEventListener('mousedown', (e) => this._onMouseDown(e));
+    cv.addEventListener('mouseup', (e) => this._onMouseUp(e));
+    cv.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
+    cv.addEventListener('mouseleave', () => { this._statusText = ''; });
+    // Keyboard events — canvas must have tabindex="0" to receive these.
+    cv.addEventListener('keydown', (e) => this._onKeyDown(e));
+    cv.addEventListener('keyup', (e) => this._onKeyUp(e));
+  }
+
+  // ── Registry callbacks ────────────────────────────────────────────────────
+
+  private _onFrame = (jpegBytes: Uint8Array): void => {
+    // Latest-frame-wins: discard any pending frame that hasn't rendered yet.
+    this._pendingFrame = jpegBytes;
+    if (!this._renderScheduled) {
+      this._renderScheduled = true;
+      requestAnimationFrame(() => this._flushFrame());
+    }
+  };
+
+  private _flushFrame(): void {
+    this._renderScheduled = false;
+    const bytes = this._pendingFrame;
+    this._pendingFrame = null;
+    if (!bytes || !this._ctx) return;
+
+    const blob = new Blob([bytes], { type: 'image/jpeg' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const canvas = this._canvas;
+      if (!canvas) { URL.revokeObjectURL(url); return; }
+      // Resize canvas to match the incoming frame dimensions (only when changed).
+      if (canvas.width !== img.naturalWidth) canvas.width = img.naturalWidth;
+      if (canvas.height !== img.naturalHeight) canvas.height = img.naturalHeight;
+      this._ctx?.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      this._fpsFrameCount++;
+    };
+    img.onerror = () => URL.revokeObjectURL(url);
+    img.src = url;
+  }
+
+  private _onUrl = (url: string): void => {
+    this._url = url;
+    // Always exit edit mode when the page reports a new URL — navigation succeeded.
+    this._editingUrl = false;
+    this._urlInput = url;
+  };
+
+  private _onError = (error: string): void => {
+    this._errorText = error;
+    this._downloading = false;
+  };
+
+  private _onDownload = (percent: number): void => {
+    this._downloading = percent < 100;
+    this._downloadPercent = percent;
+    if (percent >= 100) this._downloading = false;
+  };
+
+  private _onStatus = (statusText: string): void => {
+    this._statusText = statusText;
+  };
+
+  // ── Coordinate mapping ────────────────────────────────────────────────────
+
   /** Map a MouseEvent's client coordinates to Chromium viewport coordinates. */
   private _toViewport(e: MouseEvent): { x: number; y: number } {
     const canvas = this._canvas;
@@ -1483,11 +871,9 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
       y: Math.round((e.clientY - rect.top) * scaleY),
     };
   }
-```
 
-### Step 2: Add mouse event handler methods:
+  // ── Mouse event relay ─────────────────────────────────────────────────────
 
-```typescript
   private _onMouseMove(e: MouseEvent): void {
     const { x, y } = this._toViewport(e);
     wsBrowser.send({
@@ -1526,57 +912,9 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
       event: { type: 'wheel', x, y, deltaX: e.deltaX, deltaY: e.deltaY },
     });
   }
-```
 
-### Step 3: Wire up events in `firstUpdated()` after the ResizeObserver setup:
+  // ── Keyboard event relay ──────────────────────────────────────────────────
 
-```typescript
-    // Mouse events on the canvas — passive:false for wheel so we can preventDefault.
-    const cv = this._canvas;
-    cv.addEventListener('mousemove', (e) => this._onMouseMove(e));
-    cv.addEventListener('mousedown', (e) => this._onMouseDown(e));
-    cv.addEventListener('mouseup', (e) => this._onMouseUp(e));
-    cv.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
-    // Leave pointer when exiting canvas
-    cv.addEventListener('mouseleave', () => {
-      this._statusText = '';
-    });
-```
-
-### Step 4: Verify
-
-```bash
-cd web && npm run check:fast
-```
-
-Expected: `0 errors`.
-
-### Step 5: Commit
-
-```bash
-git add web/src/components/mux-browser-pane.ts
-git commit -m "feat: add mouse event relay to mux-browser-pane
-
-mousemove/mousedown/mouseup send coordinate-mapped events to Chromium.
-wheel uses {passive:false} + preventDefault so page scrolling works.
-Coordinates mapped via getBoundingClientRect() scale factors (proven
-in the spike). mouseleave clears the status bar.
-
-🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
-
-Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.com>"
-```
-
----
-
-## Task 9: Add keyboard event relay to `mux-browser-pane.ts`
-
-**Files:**
-- Modify: `web/src/components/mux-browser-pane.ts`
-
-### Step 1: Add `_isPrintable` helper:
-
-```typescript
   /**
    * Returns true for single printable characters (not modifier, arrow, function,
    * or control keys). Used to decide whether to send an additional 'type' event.
@@ -1584,11 +922,7 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
   private _isPrintable(key: string): boolean {
     return key.length === 1;
   }
-```
 
-### Step 2: Add keyboard event handlers:
-
-```typescript
   private _onKeyDown(e: KeyboardEvent): void {
     // Don't relay keystrokes that belong to browser chrome / omnibox editing.
     if (this._editingUrl) return;
@@ -1623,74 +957,76 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
       event: { type: 'keyup', key: e.key },
     });
   }
-```
 
-### Step 3: Wire keyboard events in `firstUpdated()` on the canvas:
+  // ── URL bar ───────────────────────────────────────────────────────────────
 
-```typescript
-    cv.addEventListener('keydown', (e) => this._onKeyDown(e));
-    cv.addEventListener('keyup', (e) => this._onKeyUp(e));
-```
+  private _parseUrl(url: string): { host: string; path: string; isHttps: boolean } {
+    if (!url) return { host: '', path: '', isHttps: false };
+    try {
+      const u = new URL(url);
+      return {
+        host: u.hostname,
+        path: u.pathname + u.search + u.hash,
+        isHttps: u.protocol === 'https:',
+      };
+    } catch {
+      return { host: url, path: '', isHttps: false };
+    }
+  }
 
-### Step 4: Verify
+  private _goBack(): void {
+    wsBrowser.send({
+      type: SessiondType.BrowserInput,
+      paneId: this.paneId,
+      event: { type: 'navigate', url: 'history:back' },
+    });
+  }
 
-```bash
-cd web && npm run check:fast
-```
+  private _goForward(): void {
+    wsBrowser.send({
+      type: SessiondType.BrowserInput,
+      paneId: this.paneId,
+      event: { type: 'navigate', url: 'history:forward' },
+    });
+  }
 
-Expected: `0 errors`.
+  private _reload(): void {
+    wsBrowser.send({
+      type: SessiondType.BrowserInput,
+      paneId: this.paneId,
+      event: { type: 'navigate', url: 'history:reload' },
+    });
+  }
 
-### Step 5: Commit
+  private _startEditUrl(): void {
+    this._urlInput = this._url;
+    this._editingUrl = true;
+    // Focus the input on the next render cycle.
+    requestAnimationFrame(() => {
+      this.shadowRoot?.querySelector<HTMLInputElement>('.url-input')?.select();
+    });
+  }
 
-```bash
-git add web/src/components/mux-browser-pane.ts
-git commit -m "feat: add keyboard event relay to mux-browser-pane
-
-keydown sends key name; printable chars also send a 'type' event so
-Chromium processes text input (proven in the spike). Modifier combos
-(Ctrl/Cmd+*) pass through without preventDefault. editingUrl guard
-prevents relaying keystrokes while the omnibox is open.
-
-🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
-
-Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.com>"
-```
-
----
-
-## Task 10: Add URL input handling to `mux-browser-pane.ts`
-
-**Files:**
-- Modify: `web/src/components/mux-browser-pane.ts`
-
-The URL bar and navigation handlers were added in Task 6. This task validates that URL updates from the server flow through correctly and ensures the omnibox edit/navigate cycle is complete and type-safe.
-
-### Step 1: Verify `_onUrl` callback updates both `_url` and `_urlInput`:
-
-Confirm the `_onUrl` handler reads:
-```typescript
-  private _onUrl = (url: string): void => {
-    this._url = url;
-    if (!this._editingUrl) this._urlInput = url;
-  };
-```
-
-If `_editingUrl` is true when a navigation completes (user typed a URL and is now loading), the omnibox should exit edit mode and reflect the actual loaded URL. Update `_onUrl`:
-
-```typescript
-  private _onUrl = (url: string): void => {
-    this._url = url;
-    // Always exit edit mode when the page reports a new URL — the navigation succeeded.
+  private _cancelEditUrl(): void {
     this._editingUrl = false;
-    this._urlInput = url;
-  };
-```
+    this._urlInput = this._url;
+  }
 
-### Step 2: Add a `_navigateToUrl` method used by both Enter and blur-with-partial-input:
+  private _onUrlInput(e: Event): void {
+    this._urlInput = (e.target as HTMLInputElement).value;
+  }
 
-Confirm `_navigate` (added in Task 6) already sends the right message. It should be:
+  private _onUrlKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      this._navigate(this._urlInput.trim());
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      this._cancelEditUrl();
+    }
+  }
 
-```typescript
   private _navigate(url: string): void {
     if (!url) return;
     this._editingUrl = false;
@@ -1702,144 +1038,130 @@ Confirm `_navigate` (added in Task 6) already sends the right message. It should
       event: { type: 'navigate', url: normalized },
     });
   }
-```
 
-### Step 3: Update `_onUrlKeyDown` to call `_navigate` not the old navigate:
+  // ── Render ────────────────────────────────────────────────────────────────
 
-Confirm it reads:
-```typescript
-  private _onUrlKeyDown(e: KeyboardEvent): void {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      this._navigate(this._urlInput.trim());
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      this._cancelEditUrl();
-    }
+  override render() {
+    const urlObj = this._parseUrl(this._url);
+
+    return html`
+      <div class="browser-toolbar">
+        <button
+          class="nav-btn"
+          title="Back"
+          @click=${this._goBack}
+        >
+          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M10 12L6 8l4-4" stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button
+          class="nav-btn"
+          title="Forward"
+          @click=${this._goForward}
+        >
+          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M6 12l4-4-4-4" stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
+        <div class="omnibox ${this._editingUrl ? 'editing' : ''}">
+          ${!this._editingUrl ? html`
+            <span class="lock-icon ${urlObj.isHttps ? 'https' : 'http'}">
+              ${urlObj.isHttps
+                ? html`<svg viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="1.5" y="5.5" width="9" height="8" rx="1"
+                      stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M4 5.5V4a2 2 0 1 1 4 0v1.5"
+                      stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  </svg>`
+                : html`<svg viewBox="0 0 12 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="1.5" y="5.5" width="9" height="8" rx="1"
+                      stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M4 5.5V4a2 2 0 0 1 3.5-1.3"
+                      stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  </svg>`}
+            </span>
+            <span class="url-host" @click=${this._startEditUrl}>${urlObj.host}</span>
+            <span class="url-path" @click=${this._startEditUrl}>${urlObj.path}</span>
+            <span class="omni-gap"></span>
+            <button class="reload-btn" title="Reload" @click=${this._reload}>
+              <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 8a5 5 0 1 0 1-3M3 5V2M3 5H6"
+                  stroke="currentColor" stroke-width="1.4"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          ` : html`
+            <input
+              class="url-input"
+              type="text"
+              .value=${this._urlInput}
+              @input=${this._onUrlInput}
+              @keydown=${this._onUrlKeyDown}
+              @blur=${this._cancelEditUrl}
+            />
+          `}
+        </div>
+
+        <span class="fps-badge" title="Frames per second">${this._fps.toFixed(0)} fps</span>
+        <div class="live-dot" title="Live"></div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="viewport" tabindex="0"></canvas>
+        <div class="status-bar ${this._statusText ? 'visible' : ''}">${this._statusText}</div>
+      </div>
+
+      ${this._downloading ? html`
+        <div class="download-overlay">
+          <div>Downloading Chromium… ${this._downloadPercent}%</div>
+          <div class="download-bar">
+            <div class="download-fill" style="width:${this._downloadPercent}%"></div>
+          </div>
+        </div>
+      ` : ''}
+      ${this._errorText ? html`
+        <div class="error-banner">${this._errorText}</div>
+      ` : ''}
+    `;
   }
-```
+}
 
-### Step 4: Verify
-
-```bash
-cd web && npm run check:fast
-```
-
-Expected: `0 errors`.
-
-### Step 5: Commit
-
-```bash
-git add web/src/components/mux-browser-pane.ts
-git commit -m "feat: complete URL input handling in mux-browser-pane
-
-- _onUrl exits edit mode when navigation completes (page confirms URL)
-- _navigate auto-prefixes https:// when scheme is absent (mirrors Go)
-- Escape in omnibox cancels edit and restores the current URL
-- Enter navigates and exits edit mode
-
-🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
-
-Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.com>"
-```
-
----
-
-## Task 11: Add status bar (hover link preview) to `mux-browser-pane.ts`
-
-**Files:**
-- Modify: `web/src/components/mux-browser-pane.ts`
-
-The status bar DOM element and CSS were added in Task 7. This task wires the `onStatus` callback from `browserRegistry` so that future `browser-status` server messages (not in Phase 1 but designed into the registry) populate the bar. Also adds a public `setStatus()` method for use by `BrowserRenderer` and tests.
-
-### Step 1: Add `onStatus` to `BrowserPaneCallbacks` in `browser-registry.ts`
-
-Open `web/src/lib/browser-registry.ts` and add to the interface:
-
-```typescript
-export interface BrowserPaneCallbacks {
-  onFrame: ((jpegBytes: Uint8Array) => void) | null;
-  onUrl: ((url: string) => void) | null;
-  onError: ((error: string) => void) | null;
-  onDownload: ((percent: number) => void) | null;
-  /** Called with the URL of the link currently under the cursor (empty string = no link). */
-  onStatus: ((statusText: string) => void) | null;
+declare global {
+  interface HTMLElementTagNameMap {
+    'mux-browser-pane': MuxBrowserPane;
+  }
 }
 ```
 
-In `ensure()`, add `onStatus: null` to the initial object:
-```typescript
-    _map.set(paneId, { onFrame: null, onUrl: null, onError: null, onDownload: null, onStatus: null });
-```
-
-Add `dispatchStatus()` to `browserRegistry`:
-```typescript
-  /** Route a browser-status message to the registered pane element. */
-  dispatchStatus(paneId: number, statusText: string): void {
-    _map.get(paneId)?.onStatus?.(statusText);
-  },
-```
-
-### Step 2: Update `ws-browser.ts` to handle `browser-status` messages
-
-In the JSON message handler inside `BrowserSocket._open()`, add after the `browser-error` check:
-
-```typescript
-          } else if (type === 'browser-status' && typeof msg['text'] === 'string') {
-            this.onBrowserStatus?.(paneId, msg['text']);
-          }
-```
-
-Add the callback property to `BrowserSocket`:
-```typescript
-  onBrowserStatus: ((paneId: number, text: string) => void) | null = null;
-```
-
-### Step 3: Wire `onStatus` in `mux-browser-pane.ts`
-
-Add `_onStatus` callback and register it:
-
-```typescript
-  private _onStatus = (statusText: string): void => {
-    this._statusText = statusText;
-  };
-```
-
-In `connectedCallback`, add to `setCallbacks`:
-```typescript
-      onStatus: this._onStatus,
-```
-
-In `disconnectedCallback`, add:
-```typescript
-      onStatus: null,
-```
-
-### Step 4: Wire `wsBrowser.onBrowserStatus` in `app.ts` (Task 14 will do the full wiring, but add the handler stub here in ws-browser.ts)
-
-In `ws-browser.ts`, the `wsBrowser` singleton already has `onBrowserStatus = null`. The `app.ts` Task 14 will set it to `(paneId, text) => browserRegistry.dispatchStatus(paneId, text)`.
-
-### Step 5: Verify both files
+**Step 2: Verify**
 
 ```bash
 cd web && npm run check:fast
 ```
 
-Expected: `0 errors`.
+Expected: `0 errors`. If oxlint warns about unused imports or anything else that is a lint warning (not an error), it is OK — do not suppress lint warnings with `eslint-disable` unless the warning is a false positive that cannot be fixed.
 
-### Step 6: Commit
+**Step 3: Commit**
 
 ```bash
-git add web/src/lib/browser-registry.ts web/src/lib/ws-browser.ts \
-         web/src/components/mux-browser-pane.ts
-git commit -m "feat: add status bar with browser-status event pipeline
+cd .worktrees/feat-browser-cdp-pane
+git add web/src/components/mux-browser-pane.ts
+git commit -m "feat: add complete mux-browser-pane Lit element
 
-- browserRegistry gains onStatus callback + dispatchStatus()
-- BrowserSocket gains onBrowserStatus handler + browser-status JSON parsing
-- mux-browser-pane registers _onStatus callback, updates _statusText state
-- Status bar div fades in (via .visible CSS class) when text is non-empty
-- Future: Phase 1 Go emits browser-status when CDP reports link hover
+Canvas JPEG rendering with latest-frame-wins rAF scheduling (Blob URL +
+Image + ctx.drawImage, proven in spike). Full Chrome-like toolbar:
+circular ghost nav buttons (back/forward SVG chevrons), pill omnibox
+with lock icon + host + path + reload-inside-pill, FPS badge, pulsing
+live dot. Zero hardcoded colors — all var(--chrome-*) and var(--mux-*).
+Mouse relay: mousemove/down/up/wheel with getBoundingClientRect scale
+factors. Keyboard relay: keydown + type for printable chars, editingUrl
+guard. URL bar: click to edit, Enter navigates with https:// auto-prefix,
+Escape cancels. ResizeObserver relays viewport size changes to Chromium.
+Status bar fades in for link hover previews.
 
 🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
 
@@ -1848,15 +1170,16 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
 
 ---
 
-## Task 12: Add globe button to `mux-dock-bar.ts` + `createBrowserPane()` to `ws.ts`
+## Task 5: Add `createBrowserPane()` and `closeBrowserPane()` to `web/src/ws.ts`
 
 **Files:**
-- Modify: `web/src/components/mux-dock-bar.ts`
 - Modify: `web/src/ws.ts`
 
-### Step 1: Add `createBrowserPane()` to `MuxSocket` in `ws.ts`
+**Step 1: Read `web/src/ws.ts`** to find the location of `listTunnels()` — add the new methods immediately after it.
 
-After `closeTunnel()` / `listTunnels()`, add:
+**Step 2: Add two methods to `MuxSocket`**
+
+After the `listTunnels()` method (around line 148 in the current file), add:
 
 ```typescript
   /** Request the server to open a new browser CDP pane. */
@@ -1870,11 +1193,44 @@ After `closeTunnel()` / `listTunnels()`, add:
   }
 ```
 
-### Step 2: Add the globe button to `mux-dock-bar.ts`
+**Step 3: Verify**
 
-**Add CSS** for the globe button before `.conn-dot`:
+```bash
+cd web && npm run check:fast
+```
 
-```typescript
+Expected: `0 errors`. (`SessiondType.CreateBrowserPane` and `SessiondType.CloseBrowserPane` were added to `types.ts` in commit `2b0d601`.)
+
+**Step 4: Commit**
+
+```bash
+cd .worktrees/feat-browser-cdp-pane
+git add web/src/ws.ts
+git commit -m "feat: add createBrowserPane/closeBrowserPane to MuxSocket
+
+Uses SessiondType.CreateBrowserPane and CloseBrowserPane added in the
+types.ts update (2b0d601). Methods follow the existing sendSessiond
+pattern — no-op when socket is not open.
+
+🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
+
+Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.com>"
+```
+
+---
+
+## Task 6: Add globe button to `web/src/components/mux-dock-bar.ts`
+
+**Files:**
+- Modify: `web/src/components/mux-dock-bar.ts`
+
+**Step 1: Read `web/src/components/mux-dock-bar.ts`** fully to understand the existing CSS, `@state` fields, and `render()` template.
+
+**Step 2: Add CSS for the globe action button**
+
+Inside `static styles = css\`...\``, add before the `.conn-dot` rule:
+
+```css
     .action-btn {
       display: flex;
       align-items: center;
@@ -1900,13 +1256,15 @@ After `closeTunnel()` / `listTunnels()`, add:
     }
 ```
 
-**Add the button handler**:
+**Step 3: Add the click handler method**
+
+Add this method to the `MuxDockBar` class (after `_onWsClick`):
 
 ```typescript
   private _onGlobeClick(): void {
     const existing = store.panes.find((p) => p.surfaceKind === 'browser-cdp');
     if (existing) {
-      // Activate the existing pane via a window event handled by app.ts.
+      // Activate the existing pane — app.ts listens for this window event.
       window.dispatchEvent(
         new CustomEvent('browser-pane-focus', { detail: { paneId: existing.paneId } }),
       );
@@ -1917,25 +1275,27 @@ After `closeTunnel()` / `listTunnels()`, add:
   }
 ```
 
-**Add the globe SVG button to `render()`**, immediately before the `conn-dot` div:
+**Step 4: Add the globe button to `render()`**
+
+Find the `conn-dot` div in the `render()` method. Add the globe button immediately BEFORE it (so it appears to the left of the connection dot):
 
 ```typescript
-      <button
-        class="action-btn ${store.panes.some(p => p.surfaceKind === 'browser-cdp') ? 'browser-live' : ''}"
-        title="Open browser"
-        @click=${this._onGlobeClick}
-      >
-        <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/>
-          <path d="M8 1.5C6.5 3.5 5.5 5.6 5.5 8s1 4.5 2.5 6.5M8 1.5C9.5 3.5 10.5 5.6 10.5 8s-1 4.5-2.5 6.5M1.5 8h13"
-            stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-          <path d="M2.5 5.5h11M2.5 10.5h11"
-            stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-        </svg>
-      </button>
+        <button
+          class="action-btn ${store.panes.some(p => p.surfaceKind === 'browser-cdp') ? 'browser-live' : ''}"
+          title="Open browser"
+          @click=${this._onGlobeClick}
+        >
+          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M8 1.5C6.5 3.5 5.5 5.6 5.5 8s1 4.5 2.5 6.5M8 1.5C9.5 3.5 10.5 5.6 10.5 8s-1 4.5-2.5 6.5M1.5 8h13"
+              stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <path d="M2.5 5.5h11M2.5 10.5h11"
+              stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
 ```
 
-### Step 3: Verify
+**Step 5: Verify**
 
 ```bash
 cd web && npm run check:fast
@@ -1943,18 +1303,19 @@ cd web && npm run check:fast
 
 Expected: `0 errors`.
 
-### Step 4: Commit
+**Step 6: Commit**
 
 ```bash
-git add web/src/components/mux-dock-bar.ts web/src/ws.ts
-git commit -m "feat: add globe browser button to mux-dock-bar + ws.ts createBrowserPane
+cd .worktrees/feat-browser-cdp-pane
+git add web/src/components/mux-dock-bar.ts
+git commit -m "feat: add globe browser button to mux-dock-bar
 
-- Globe button in mux-dock-bar right cluster:
-  - Green tint (--mux-ok) while any browser-cdp pane is live in store
-  - First click: dispatches window 'create-browser-pane' event
-  - Second click (pane live): dispatches window 'browser-pane-focus'
-- MuxSocket.createBrowserPane() / closeBrowserPane() methods added
-- Button + handler use window events (mux-dock-bar not yet in app tree)
+Globe button in right action cluster:
+- Green tint (--mux-ok) while any browser-cdp pane is live in store
+- First click: dispatches window 'create-browser-pane' CustomEvent
+- Second click (pane live): dispatches window 'browser-pane-focus'
+  with paneId so app.ts can focus the existing panel
+Button uses window events so mux-dock-bar stays decoupled from app.ts.
 
 🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
 
@@ -1963,23 +1324,28 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
 
 ---
 
-## Task 13: Register `browser-cdp` surface kind in `mux-dock.ts`
+## Task 7: Register `BrowserRenderer` in `web/src/components/mux-dock.ts`
 
 **Files:**
 - Modify: `web/src/components/mux-dock.ts`
 
-Add a `BrowserRenderer` class (parallel to `TerminalRenderer`) and update the dockview `createComponent` factory to use it for `browser-cdp` panes.
+**Step 1: Read `web/src/components/mux-dock.ts`** fully, specifically:
+- The `TerminalRenderer` class (understand the `IContentRenderer` interface: `element`, `init()`, `layout()`, `focus()`, `dispose()`)
+- The `createComponent` factory inside `connectedCallback` / `new DockviewComponent()`
+- The `_panels` Map (used by the `activatePane()` method you'll add)
 
-### Step 1: Add the import for `mux-browser-pane.ts` at the top of `mux-dock.ts`
+**Step 2: Add the side-effect import for `mux-browser-pane.ts`**
 
-After the existing imports, add:
+After the existing imports at the top of the file, add:
 
 ```typescript
 // Side-effect import: registers <mux-browser-pane> custom element
 import './mux-browser-pane.js';
 ```
 
-### Step 2: Add `BrowserRenderer` class after the `TerminalRenderer` class (before `HeaderButton`):
+**Step 3: Add `BrowserRenderer` class**
+
+Add this class immediately after `TerminalRenderer` (before the `HeaderButton` class or whatever comes next):
 
 ```typescript
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2010,9 +1376,9 @@ class BrowserRenderer implements IContentRenderer {
 }
 ```
 
-### Step 3: Update the `createComponent` factory in `connectedCallback`
+**Step 4: Update the `createComponent` factory**
 
-Find (in `connectedCallback`, inside `new DockviewComponent(this, {...})`):
+Find the `createComponent` callback inside `new DockviewComponent(this, {...})` in `connectedCallback`. It currently looks like:
 
 ```typescript
       createComponent: (opts) => {
@@ -2032,7 +1398,24 @@ Replace with:
       },
 ```
 
-### Step 4: Verify
+**Step 5: Add `activatePane()` public method to `MuxDock`**
+
+Find the end of the `MuxDock` class body (before the `declare global` block). Add:
+
+```typescript
+  /**
+   * Programmatically activate a pane by ID.
+   * Used by app.ts to focus an existing browser pane when the globe is clicked.
+   */
+  activatePane(paneId: number): void {
+    const panel = this._panels.get(paneId);
+    if (panel && !panel.api.isActive) {
+      panel.api.setActive();
+    }
+  }
+```
+
+**Step 6: Verify**
 
 ```bash
 cd web && npm run check:fast
@@ -2040,16 +1423,20 @@ cd web && npm run check:fast
 
 Expected: `0 errors`.
 
-### Step 5: Commit
+**Step 7: Commit**
 
 ```bash
+cd .worktrees/feat-browser-cdp-pane
 git add web/src/components/mux-dock.ts
-git commit -m "feat: register browser-cdp surface kind in mux-dock
+git commit -m "feat: register BrowserRenderer in mux-dock for browser-cdp surface kind
 
 BrowserRenderer implements IContentRenderer: creates a container div
 with a <mux-browser-pane pane-id=N> child. createComponent() factory
-checks opts.name for 'browser-cdp' and returns BrowserRenderer;
-all other kinds fall back to TerminalRenderer as before.
+checks opts.name for 'browser-cdp' and returns BrowserRenderer; all
+other kinds fall back to TerminalRenderer as before.
+
+Also adds MuxDock.activatePane(paneId) for programmatic panel focus —
+used by app.ts when the globe button is clicked on an existing pane.
 
 🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
 
@@ -2058,28 +1445,30 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
 
 ---
 
-## Task 14: Wire `browserRegistry` and `wsBrowser` into `app.ts`
+## Task 8: Wire `browserRegistry` + `wsBrowser` into `web/src/app.ts`
 
 **Files:**
 - Modify: `web/src/app.ts`
 
-This task wires four things:
-1. `wsBrowser.connect()` / `disconnect()` in `connectedCallback` / `disconnectedCallback`
-2. `wsBrowser` frame/url/error/download callbacks → `browserRegistry`
-3. `_syncTerminals()` skips browser-cdp panes for `terminalRegistry`, calls `browserRegistry.ensure()`
-4. Composition handler skips browser-cdp panes for terminal setup
-5. Window event listeners for `create-browser-pane` and `browser-pane-focus`
+**Step 1: Read `web/src/app.ts`** fully before editing. Key things to find:
+- The import block at the top
+- `connectedCallback()` — where `this._socket.connect()` is called
+- `disconnectedCallback()` — where socket cleanup happens
+- `onSessiondMessage` handler — the `SessiondType.Composition` branch with the `for (const pane of ...)` loop
+- `_syncTerminals()` — the `for (const pane of store.panes)` loop
 
-### Step 1: Add imports at the top of `app.ts`
+**Step 2: Add imports at the top of `app.ts`**
+
+After the existing imports, add:
 
 ```typescript
 import { browserRegistry } from './lib/browser-registry.js';
 import { wsBrowser } from './lib/ws-browser.js';
 ```
 
-### Step 2: Add window event handlers as class fields
+**Step 3: Add window event handler class fields**
 
-After `private _onViewportResize`:
+Find the existing private field declarations (near `_onViewportResize` or similar). Add:
 
 ```typescript
   /** Handle globe button's create-browser-pane window event. */
@@ -2097,24 +1486,9 @@ After `private _onViewportResize`:
   };
 ```
 
-### Step 3: Add `activatePane()` to `MuxDock` in `mux-dock.ts`
+**Step 4: Wire `wsBrowser` in `connectedCallback()`**
 
-> **Note:** Add this public method to `MuxDock` at the end of the class body (before the `declare global` block):
-
-```typescript
-  /**
-   * Programmatically activate a pane by ID.
-   * Used by app.ts to focus an existing browser pane when the globe is clicked.
-   */
-  activatePane(paneId: number): void {
-    const panel = this._panels.get(paneId);
-    if (panel && !panel.api.isActive) {
-      panel.api.setActive();
-    }
-  }
-```
-
-### Step 4: In `connectedCallback`, after `this._socket.connect()`, add:
+After the line `this._socket.connect()` (or wherever the main socket connects), add:
 
 ```typescript
     // Connect the dedicated browser WebSocket and wire frame/url/error routing.
@@ -2130,7 +1504,9 @@ After `private _onViewportResize`:
     window.addEventListener('browser-pane-focus', this._onBrowserPaneFocus);
 ```
 
-### Step 5: In `disconnectedCallback`, add cleanup:
+**Step 5: Clean up in `disconnectedCallback()`**
+
+After the existing socket disconnect/cleanup, add:
 
 ```typescript
     wsBrowser.disconnect();
@@ -2138,9 +1514,9 @@ After `private _onViewportResize`:
     window.removeEventListener('browser-pane-focus', this._onBrowserPaneFocus);
 ```
 
-### Step 6: Update the composition handler inside `onSessiondMessage`
+**Step 6: Update the `SessiondType.Composition` handler**
 
-Find the `if (msg.type === SessiondType.Composition)` block. Inside the `for (const pane of (msg.panes ?? []))` loop, add a guard so browser-cdp panes skip terminal setup:
+Find the `if (msg.type === SessiondType.Composition)` branch. Inside the `for (const pane of (msg.panes ?? []))` loop, add a guard at the top so browser-cdp panes skip terminal setup and go to `browserRegistry` instead:
 
 ```typescript
         for (const pane of (msg.panes ?? [])) {
@@ -2165,9 +1541,9 @@ Find the `if (msg.type === SessiondType.Composition)` block. Inside the `for (co
         }
 ```
 
-### Step 7: Update `_syncTerminals()` to handle browser-cdp panes
+**Step 7: Update `_syncTerminals()`**
 
-Find the `for (const pane of store.panes)` loop inside `_syncTerminals()` and add the browser-cdp guard:
+Find the `_syncTerminals()` method and the `for (const pane of store.panes)` loop inside it. Add the browser-cdp guard so browser panes go to `browserRegistry`, and add `browserRegistry.prune()` alongside `terminalRegistry.prune()`:
 
 ```typescript
   private _syncTerminals(): void {
@@ -2200,18 +1576,21 @@ Find the `for (const pane of store.panes)` loop inside `_syncTerminals()` and ad
   }
 ```
 
-### Step 8: Verify
+> **Note:** Match the exact surrounding code you find in `app.ts` — the snippet above is the intended shape, but adapt the edits to fit precisely within the existing method rather than wholesale-replacing if there are other lines present.
+
+**Step 8: Verify**
 
 ```bash
 cd web && npm run check:fast
 ```
 
-Expected: `0 errors`.
+Expected: `0 errors`. If there are type errors about `this._dock?.activatePane` not existing, confirm that `MuxDock` in `mux-dock.ts` has `activatePane()` declared as a public method (Task 7) and that the type import at the top of `app.ts` picks it up.
 
-### Step 9: Commit
+**Step 9: Commit**
 
 ```bash
-git add web/src/app.ts web/src/components/mux-dock.ts
+cd .worktrees/feat-browser-cdp-pane
+git add web/src/app.ts
 git commit -m "feat: wire browserRegistry + wsBrowser into app.ts composition pipeline
 
 - wsBrowser connects/disconnects with the main socket lifecycle
@@ -2222,7 +1601,6 @@ git commit -m "feat: wire browserRegistry + wsBrowser into app.ts composition pi
   terminalRegistry; both registries pruned with the same liveIds set
 - Window events: 'create-browser-pane' → socket.createBrowserPane();
   'browser-pane-focus' → dock.activatePane(paneId)
-- MuxDock.activatePane() added for programmatic pane activation
 
 🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
 
@@ -2231,48 +1609,98 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
 
 ---
 
-## Task 15: Final production build verification
+## Task 9 (Final): Build verification + agent-driven browser E2E
 
-**Files:** None (verification only)
+**Files:** None to create or modify — this is pure verification.
 
-### Step 1: Run the full production build
+---
+
+### Step 1: Full production build
 
 ```bash
 cd web && npm run build
 ```
 
-This runs `tsc --noEmit` (full type check, not just tsgo) then `vite build`.
+Expected: Clean build. No errors. Typical success indicator: `✓ built in X.XXs`. Warnings are OK.
 
-Expected output: Build completes with no errors. Warnings are OK. Final output is in `web/dist/`.
+If the build fails:
+- `tsc --noEmit` errors → TypeScript type errors not caught by tsgo. Fix each one.
+- `vite build` errors → bundler import resolution. Check that all relative imports use `.js` extensions.
+- Common issue: new file imported with `.ts` extension instead of `.js` — change to `.js`.
 
-Typical success indicators:
-```
-✓ built in X.XXs
-```
+If you fix anything, run `npm run check:fast` again first, then rebuild.
 
-### Step 2: If the build fails — diagnose
+---
 
-- `tsc --noEmit` errors: TypeScript type errors not caught by tsgo. Fix each one.
-- `vite build` errors: bundler import resolution issues. Check that all `.js` extension imports are correct.
-- Common issue: a new file imported with a `.ts` extension instead of `.js` — change to `.js`.
-
-### Step 3: Run the fast check one final time
+### Step 2: Build the Go binary
 
 ```bash
-cd web && npm run check:fast
+cd /path/to/worktree   # .worktrees/feat-browser-cdp-pane root
+go build -o bin/muxterm ./cmd/muxterm
 ```
 
-Expected: `0 errors`.
+Expected: Binary produced at `bin/muxterm` with no errors.
 
-### Step 4: Commit if any build fixes were needed
+---
 
-If Step 1 required any fixes, commit them:
+### Step 3: Start muxterm
 
 ```bash
+./bin/muxterm local
+```
+
+Expected: Server starts. You should see log output indicating it's listening on `http://localhost:8080`.
+
+---
+
+### Step 4: Agent-driven browser E2E verification using playwright-cli
+
+Open `http://localhost:8080` using playwright-cli. Then verify each acceptance criterion below — the agent reads snapshots and uses playwright-cli interactively to satisfy them. There is no pre-written script; the agent makes semantic judgments at each step.
+
+**Acceptance criteria (verify all of these):**
+
+1. **Globe button present** — the dock bar's right section contains a globe/world icon button. It has no green tint (no browser pane is open yet).
+
+2. **Click globe → browser pane opens** — after clicking the globe, a new dockview panel appears. The panel contains:
+   - Two circular navigation buttons (← back, → forward) on the left side of the toolbar
+   - A pill-shaped address bar (omnibox) in the center
+   - An FPS counter badge and a small status dot on the right of the toolbar
+
+3. **Canvas visible** — below the toolbar, a `<canvas>` element fills the remaining pane area.
+
+4. **Frames arrive** — wait a few seconds. The FPS badge in the toolbar shows a number greater than 0. (This confirms Chromium is running and streaming frames via CDP.)
+
+5. **URL populates** — the address bar shows a URL. It may be blank initially while Chromium initializes, then populates with the default page URL once loading completes.
+
+6. **Navigate to example.com** — click the address bar. It enters edit mode (shows a text input). Type `example.com` and press Enter. After a moment:
+   - The address bar exits edit mode and shows `https://example.com`
+   - The canvas renders the Example Domain page
+
+7. **Back button works** — click the ← back button. The address bar URL changes back to the previous URL (whatever was loaded before example.com).
+
+8. **Globe tint** — the globe button in the dock bar now shows a green tint (`--mux-ok` color), indicating a browser pane is live.
+
+9. **Second globe click = focus, not new pane** — click the globe again. It does NOT open a second browser pane. The existing pane is focused/activated. Only one browser pane exists.
+
+10. **Theme cohesion** — the toolbar background, omnibox, nav buttons, FPS badge, and live dot colors match the muxterm dark theme. No jarring mismatches or hardcoded colors that don't fit the palette.
+
+---
+
+### Step 5: Commit after successful verification
+
+```bash
+cd .worktrees/feat-browser-cdp-pane
 git add -A
-git commit -m "fix: resolve full tsc build errors from browser CDP phase 2
+git commit -m "test: verify browser CDP pane works end-to-end
 
-[describe specific fixes]
+Verified via agent-driven playwright-cli session:
+- Globe button opens browser pane in dockview
+- Canvas renders JPEG frames from Chromium at >0 FPS
+- URL bar populates and navigates on Enter (example.com)
+- Back button works
+- Globe tint turns green when pane is live
+- Second globe click focuses existing pane (no duplicate)
+- Theme colors match muxterm palette throughout
 
 🤖 Generated with [Amplifier](https://github.com/microsoft/amplifier)
 
@@ -2283,24 +1711,18 @@ Co-Authored-By: Amplifier <240397093+microsoft-amplifier@users.noreply.github.co
 
 ## Summary
 
-| Task | File(s) | What it adds |
+| Task | File(s) | What it does |
 |------|---------|--------------|
-| 1 | `types.ts`, `state.ts`, `protocol.types.test.ts` | Browser CDP type constants, remove old browser proxy types |
-| 2 | `lib/ws-browser.ts` | `BrowserSocket` + `wsBrowser` singleton |
-| 3 | `lib/browser-registry.ts` | `browserRegistry` per-pane callback routing |
-| 4 | `components/mux-browser-pane.ts` | Lit element skeleton, `@property paneId`, registry wiring |
-| 5 | `components/mux-browser-pane.ts` | Canvas rendering: `_renderFrame`, FPS counter, layout CSS |
-| 6 | `components/mux-browser-pane.ts` | Chrome-like toolbar: nav buttons, omnibox pill, reload inside pill, FPS badge, live dot, ResizeObserver |
-| 7 | `components/mux-browser-pane.ts` | Complete theme CSS — zero hardcoded colors, all `var(--chrome-*)` / `var(--mux-*)` |
-| 8 | `components/mux-browser-pane.ts` | Mouse event relay: mousemove/down/up/wheel with coordinate mapping |
-| 9 | `components/mux-browser-pane.ts` | Keyboard event relay: keydown/keyup/type |
-| 10 | `components/mux-browser-pane.ts` | URL input: Enter navigates, https:// auto-prefix, edit mode lifecycle |
-| 11 | `lib/browser-registry.ts`, `lib/ws-browser.ts`, `components/mux-browser-pane.ts` | Status bar + `browser-status` event pipeline |
-| 12 | `components/mux-dock-bar.ts`, `ws.ts` | Globe button + `createBrowserPane()` / `closeBrowserPane()` |
-| 13 | `components/mux-dock.ts` | `BrowserRenderer` + `createComponent` factory update, `activatePane()` |
-| 14 | `app.ts`, `components/mux-dock.ts` | Full wiring: connect/disconnect, composition, `_syncTerminals`, window events |
-| 15 | — | `npm run build` production verification |
+| 1 | — | Rebase worktree from main; gets types.ts (2b0d601) for free |
+| 2 | `lib/ws-browser.ts` (create) | `BrowserSocket` + `wsBrowser` singleton — dedicated `/ws/browser` WebSocket |
+| 3 | `lib/browser-registry.ts` (create) | `browserRegistry` per-pane callback routing — frame/url/error/download/status |
+| 4 | `components/mux-browser-pane.ts` (create) | Complete Lit element — canvas, toolbar, CSS, mouse/keyboard relay, URL bar, status bar |
+| 5 | `ws.ts` (modify) | `createBrowserPane()` / `closeBrowserPane()` on `MuxSocket` |
+| 6 | `components/mux-dock-bar.ts` (modify) | Globe button with green tint + window CustomEvent dispatch |
+| 7 | `components/mux-dock.ts` (modify) | `BrowserRenderer` + `createComponent` factory + `activatePane()` |
+| 8 | `app.ts` (modify) | Full wiring: wsBrowser lifecycle, composition handler, `_syncTerminals`, window events |
+| 9 | — | `npm run build` + Go binary build + agent-driven browser E2E via playwright-cli |
 
 **New files:** `web/src/lib/ws-browser.ts`, `web/src/lib/browser-registry.ts`, `web/src/components/mux-browser-pane.ts`
 
-**Modified files:** `web/src/types.ts`, `web/src/state.ts`, `web/src/__tests__/protocol.types.test.ts`, `web/src/ws.ts`, `web/src/app.ts`, `web/src/components/mux-dock.ts`, `web/src/components/mux-dock-bar.ts`
+**Modified files:** `web/src/ws.ts`, `web/src/components/mux-dock-bar.ts`, `web/src/components/mux-dock.ts`, `web/src/app.ts`
