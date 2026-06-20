@@ -24,6 +24,7 @@ type BrowserManager struct {
 	maxPages      int                 // v1: 1; remove check for multi-window
 	broadcast     func(paneID int, data []byte) // sends JPEG frames to /ws/browser clients
 	broadcastJSON func(msg any)                  // sends URL/error/progress JSON to /ws/browser
+	authority     map[int]string // paneID → clientID of current input authority
 }
 
 // BrowserPage manages one live Chromium tab. It owns the event loop goroutine
@@ -44,6 +45,7 @@ type BrowserPage struct {
 func NewBrowserManager(broadcast func(paneID int, data []byte), broadcastJSON func(msg any)) *BrowserManager {
 	return &BrowserManager{
 		pages:         make(map[int]*BrowserPage),
+		authority:     make(map[int]string),
 		maxPages:      1,
 		broadcast:     broadcast,
 		broadcastJSON: broadcastJSON,
@@ -183,6 +185,18 @@ func (bm *BrowserManager) ClosePage(paneID int) {
 	}
 }
 
+// SetViewport updates the Chromium viewport for this page to width × height.
+// Called on TypeBrowserFocus to resize Chromium to the focused client's canvas.
+func (bp *BrowserPage) SetViewport(ctx context.Context, width, height int) error {
+	_, err := bp.cdp.Call(ctx, bp.sessionID, "Emulation.setDeviceMetricsOverride", map[string]any{
+		"width":             width,
+		"height":            height,
+		"deviceScaleFactor": 1,
+		"mobile":            false,
+	})
+	return err
+}
+
 // ActivePaneIDs returns the pane IDs of all currently open browser pages. The
 // returned slice is a snapshot and not kept in any particular order.
 func (bm *BrowserManager) ActivePaneIDs() []int {
@@ -217,6 +231,32 @@ func (bm *BrowserManager) GetPage(paneID int) (*BrowserPage, bool) {
 	defer bm.mu.Unlock()
 	bp, ok := bm.pages[paneID]
 	return bp, ok
+}
+
+// SetAuthority records clientID as the current input authority for paneID.
+// Last-focus-wins: the most recent browser-focus event always wins.
+func (bm *BrowserManager) SetAuthority(paneID int, clientID string) {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	bm.authority[paneID] = clientID
+}
+
+// ClearAuthority clears the input authority for paneID if the current authority
+// matches clientID. Calling with the wrong clientID is a no-op (another client
+// has already claimed authority).
+func (bm *BrowserManager) ClearAuthority(paneID int, clientID string) {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	if bm.authority[paneID] == clientID {
+		delete(bm.authority, paneID)
+	}
+}
+
+// IsAuthority reports whether clientID holds input authority for paneID.
+func (bm *BrowserManager) IsAuthority(paneID int, clientID string) bool {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	return bm.authority[paneID] == clientID
 }
 
 // Close stops all browser pages and kills the Chromium process. Called at

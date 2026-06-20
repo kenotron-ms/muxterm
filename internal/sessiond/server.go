@@ -412,6 +412,60 @@ func (c *conn) handle(msg Message) {
 		c.srv.mu.Unlock()
 		// Reuse closePane: removes pane from registry, broadcasts pane-closed.
 		c.closePane(msg)
+	case TypeBrowserFocus:
+		bp, ok := c.srv.browserManager.GetPage(msg.PaneID)
+		if !ok {
+			return
+		}
+		// Last-focus-wins: this client immediately becomes the input authority.
+		c.srv.browserManager.SetAuthority(msg.PaneID, msg.ClientID)
+		// Resize Chromium to the focused client's canvas dimensions.
+		if msg.RenderWidth > 0 && msg.RenderHeight > 0 {
+			ctx := context.Background()
+			if err := bp.SetViewport(ctx, msg.RenderWidth, msg.RenderHeight); err != nil {
+				log.Printf("sessiond: SetViewport pane %d: %v", msg.PaneID, err)
+			}
+		}
+		// Capture an immediate screenshot so the client gets a frame right away,
+		// even if screencasting is paused. Run in a goroutine so a slow CDP call
+		// does not block the read loop.
+		paneID := msg.PaneID
+		go func() {
+			ctx := context.Background()
+			bp, ok := c.srv.browserManager.GetPage(paneID)
+			if !ok {
+				return
+			}
+			if shot, err := bp.captureScreenshot(ctx); err == nil && len(shot) > 0 {
+				c.srv.broadcastBrowserData(paneID, shot)
+			}
+		}()
+		// Broadcast browser-granted so all clients know who holds input authority.
+		c.srv.broadcastBrowserControlAny(map[string]any{
+			"type":     TypeBrowserGranted,
+			"paneId":   msg.PaneID,
+			"clientId": msg.ClientID,
+		})
+	case TypeBrowserBlur:
+		c.srv.browserManager.ClearAuthority(msg.PaneID, msg.ClientID)
+	case TypeBrowserInput:
+		bp, ok := c.srv.browserManager.GetPage(msg.PaneID)
+		if !ok {
+			return
+		}
+		// Silently drop input from non-authority clients (last-focus-wins).
+		if !c.srv.browserManager.IsAuthority(msg.PaneID, msg.ClientID) {
+			return
+		}
+		var inputMsg BrowserInputMsg
+		if err := json.Unmarshal(msg.InputEvent, &inputMsg); err != nil {
+			log.Printf("sessiond: TypeBrowserInput unmarshal: %v", err)
+			return
+		}
+		ctx := context.Background()
+		if err := bp.HandleInput(ctx, inputMsg); err != nil {
+			log.Printf("sessiond: HandleInput pane %d: %v", msg.PaneID, err)
+		}
 	case TypeScreenSnapshot:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
