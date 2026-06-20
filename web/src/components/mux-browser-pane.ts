@@ -539,10 +539,35 @@ export class MuxBrowserPane extends LitElement {
     img.src = url;
   }
 
+  /**
+   * Draw img centered in the canvas buffer maintaining aspect ratio.
+   * Fills the canvas width or height with the frame, leaving black bars
+   * on the opposite axis (pillarbox / letterbox). Stores the transform
+   * in this._letterbox for use by _toViewport().
+   *
+   * Design doc math:
+   *   s  = Math.min(cw / fw, ch / fh)   uniform scale to fit
+   *   dx = (cw - fw * s) / 2             horizontal offset (pillarbox bars)
+   *   dy = (ch - fh * s) / 2             vertical offset (letterbox bars)
+   */
   private _drawLetterboxed(img: HTMLImageElement): void {
-    // Stub — full implementation in Task 10.
     if (!this._ctx) return;
-    this._ctx.drawImage(img, 0, 0);
+    const cw = this._canvas.width;
+    const ch = this._canvas.height;
+    const fw = img.naturalWidth;
+    const fh = img.naturalHeight;
+
+    if (cw === 0 || ch === 0 || fw === 0 || fh === 0) return;
+
+    const scale = Math.min(cw / fw, ch / fh);
+    const dx = (cw - fw * scale) / 2;
+    const dy = (ch - fh * scale) / 2;
+
+    // Store for coordinate mapping in _toViewport.
+    this._letterbox = { dx, dy, scale, fw, fh };
+
+    this._ctx.clearRect(0, 0, cw, ch);
+    this._ctx.drawImage(img, dx, dy, fw * scale, fh * scale);
   }
 
   private readonly _onUrl = (url: string): void => {
