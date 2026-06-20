@@ -346,8 +346,10 @@ export class MuxBrowserPane extends LitElement {
   private _renderScheduled = false;
   private _fpsFrameCount = 0;
   private _fpsTimer: ReturnType<typeof setInterval> | undefined;
-  // _resizeObserver intentionally removed — clients do not control the
-  // Chromium viewport. See comment in firstUpdated() for rationale.
+  private _resizeObserver: ResizeObserver | undefined;
+  // Letterbox transform computed during the last frame draw.
+  // Used by _toViewport to map mouse coordinates into Chromium space.
+  private _letterbox = { dx: 0, dy: 0, scale: 1, fw: 0, fh: 0 };
 
   // Stable per-WebSocket-connection ID. Generated once per component instance.
   private readonly _clientId: string = Math.random().toString(36).slice(2);
@@ -443,7 +445,8 @@ export class MuxBrowserPane extends LitElement {
       clearInterval(this._fpsTimer);
       this._fpsTimer = undefined;
     }
-    // No resize observer to disconnect.
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = undefined;
     // Release input authority on unmount.
     wsBrowser.send({
       type: SessiondType.BrowserInput,
@@ -457,6 +460,23 @@ export class MuxBrowserPane extends LitElement {
   protected override firstUpdated(): void {
     // Get 2D rendering context
     this._ctx = this._canvas.getContext('2d');
+
+    this._resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      const w = Math.round(width);
+      const h = Math.round(height);
+      if (w > 0 && h > 0) {
+        this._canvas.width = w;
+        this._canvas.height = h;
+        // Re-get context: some browsers invalidate it on canvas resize.
+        this._ctx = this._canvas.getContext('2d');
+        // Report new render size to server so Chromium viewport tracks it.
+        this._sendBrowserFocus();
+      }
+    });
+    this._resizeObserver.observe(this._canvas);
 
     // Claim input authority and report canvas render size.
     this._sendBrowserFocus();
@@ -506,15 +526,9 @@ export class MuxBrowserPane extends LitElement {
     img.onload = () => {
       URL.revokeObjectURL(url);
       if (!this._ctx) return;
-      // Adjust canvas backing-store size to match natural image size
-      if (
-        this._canvas.width !== img.naturalWidth ||
-        this._canvas.height !== img.naturalHeight
-      ) {
-        this._canvas.width = img.naturalWidth;
-        this._canvas.height = img.naturalHeight;
-      }
-      this._ctx.drawImage(img, 0, 0);
+      // Canvas buffer is sized by ResizeObserver (CSS container size).
+      // Draw the frame with letterbox math — see _drawLetterboxed.
+      this._drawLetterboxed(img);
       this._fpsFrameCount++;
     };
 
@@ -523,6 +537,12 @@ export class MuxBrowserPane extends LitElement {
     };
 
     img.src = url;
+  }
+
+  private _drawLetterboxed(img: HTMLImageElement): void {
+    // Stub — full implementation in Task 10.
+    if (!this._ctx) return;
+    this._ctx.drawImage(img, 0, 0);
   }
 
   private readonly _onUrl = (url: string): void => {
