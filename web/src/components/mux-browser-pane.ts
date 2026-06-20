@@ -228,7 +228,8 @@ export class MuxBrowserPane extends LitElement {
       display: block;
       width: 100%;
       height: 100%;
-      object-fit: contain;
+      /* object-fit intentionally omitted: canvas is not a replaced element;
+         the property has no effect but can confuse browser layout in Lit shadow DOM. */
       outline: none;
     }
 
@@ -401,11 +402,16 @@ export class MuxBrowserPane extends LitElement {
       this._fpsFrameCount = 0;
     }, 1000);
 
-    // ResizeObserver: notify server when canvas display size changes
-    this._resizeObserver = new ResizeObserver(() => {
-      const rect = this._canvas.getBoundingClientRect();
-      const w = Math.round(rect.width);
-      const h = Math.round(rect.height);
+    // ResizeObserver: notify server when canvas display size changes.
+    // Use entry.contentRect (the value ResizeObserver measured) rather than a
+    // fresh getBoundingClientRect() call — the latter can return a stale or
+    // pre-layout value when called inside the observer callback.
+    this._resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      const w = Math.round(width);
+      const h = Math.round(height);
       if (w > 0 && h > 0) {
         wsBrowser.send({
           type: SessiondType.BrowserInput,

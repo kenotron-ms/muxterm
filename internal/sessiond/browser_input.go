@@ -26,6 +26,15 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 		return err
 
 	case "mousedown":
+		// Always move to the click position first so Chrome's internal cursor
+		// state is correct before the press event. Some elements (buttons,
+		// links, hit-test areas) only respond to mousePressed when a prior
+		// mouseMoved has placed the cursor there.
+		bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{ //nolint:errcheck
+			"type": "mouseMoved",
+			"x":   msg.X,
+			"y":   msg.Y,
+		})
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
 			"type":       "mousePressed",
 			"x":          msg.X,
