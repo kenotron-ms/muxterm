@@ -20,41 +20,6 @@ import (
 // monotonically increasing and unique within one process lifetime.
 var browserConnCounter atomic.Uint64
 
-// browserWSConn represents a connected /ws/browser WebSocket client. It owns
-// no terminal state; it only relays JPEG frames from the headless browser and
-// forwards input events back to the BrowserManager.
-type browserWSConn struct {
-	conn    *websocket.Conn
-	ctx     context.Context
-	cancel  context.CancelFunc
-	writeMu sync.Mutex
-}
-
-// writeBinary writes a binary frame to the connection with a 5-second timeout.
-// Errors are logged but not returned; a slow or dead client times out without
-// blocking the broadcast loop.
-func (c *browserWSConn) writeBinary(data []byte) {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	wctx, wcancel := context.WithTimeout(c.ctx, 5*time.Second)
-	defer wcancel()
-	if err := c.conn.Write(wctx, websocket.MessageBinary, data); err != nil {
-		log.Printf("browserWSConn.writeBinary: %v", err)
-	}
-}
-
-// writeText writes a text frame to the connection with a 5-second timeout.
-// Errors are logged but not returned.
-func (c *browserWSConn) writeText(data []byte) {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	wctx, wcancel := context.WithTimeout(c.ctx, 5*time.Second)
-	defer wcancel()
-	if err := c.conn.Write(wctx, websocket.MessageText, data); err != nil {
-		log.Printf("browserWSConn.writeText: %v", err)
-	}
-}
-
 // handleWSBrowserImpl handles the /ws/browser WebSocket upgrade and client
 // lifecycle. Each connection dials its own daemon connection and relays frames
 // bidirectionally between the WebSocket and the daemon.

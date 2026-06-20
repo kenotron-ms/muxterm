@@ -351,9 +351,8 @@ func (c *Client) CreatePane(cmd []string, placement string, referencePaneID int)
 }
 
 // CreateBrowserCDPPane creates a browser-cdp surface pane in the attached workspace
-// and returns the server-assigned workspace-local pane ID. No port or path is needed:
-// the HTTP server's BrowserManager starts the actual Chromium page separately via
-// BrowserManager.OpenPage(paneID) after receiving the pane-added broadcast.
+// and returns the server-assigned workspace-local pane ID. The daemon starts the
+// Chromium page immediately after registering the pane — no HTTP server involvement.
 func (c *Client) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
 	reply, err := c.request(&Message{
 		Type:            TypeCreateBrowserPane,

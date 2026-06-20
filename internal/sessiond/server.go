@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Server owns the daemon's Unix control socket, the workspace Registry, and the
@@ -421,8 +422,9 @@ func (c *conn) handle(msg Message) {
 		c.srv.browserManager.SetAuthority(msg.PaneID, msg.ClientID)
 		// Resize Chromium to the focused client's canvas dimensions.
 		if msg.RenderWidth > 0 && msg.RenderHeight > 0 {
-			ctx := context.Background()
-			if err := bp.SetViewport(ctx, msg.RenderWidth, msg.RenderHeight); err != nil {
+			vpCtx, vpCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer vpCancel()
+			if err := bp.SetViewport(vpCtx, msg.RenderWidth, msg.RenderHeight); err != nil {
 				log.Printf("sessiond: SetViewport pane %d: %v", msg.PaneID, err)
 			}
 		}
