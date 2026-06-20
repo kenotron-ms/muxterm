@@ -185,9 +185,12 @@ func (bm *BrowserManager) ClosePage(paneID int) {
 	}
 }
 
-// SetViewport updates the Chromium viewport for this page to width × height.
-// Called on TypeBrowserFocus to resize Chromium to the focused client's canvas.
+// SetViewport updates Chromium's render resolution for this page.
+// Calls Emulation.setDeviceMetricsOverride with the given dimensions.
+// A 5-second deadline is applied. Returns an error if CDP fails.
 func (bp *BrowserPage) SetViewport(ctx context.Context, width, height int) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	_, err := bp.cdp.Call(ctx, bp.sessionID, "Emulation.setDeviceMetricsOverride", map[string]any{
 		"width":             width,
 		"height":            height,
