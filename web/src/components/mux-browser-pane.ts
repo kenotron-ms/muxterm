@@ -374,15 +374,11 @@ export class MuxBrowserPane extends LitElement {
     const h = Math.round(rect.height);
     if (w > 0 && h > 0) {
       wsBrowser.send({
-        type: SessiondType.BrowserInput,
+        type: 'browser-focus',
         paneId: this.paneId,
-        event: {
-          type: 'browser-focus',
-          clientId: this._clientId,
-          deviceId: this._deviceId,
-          renderWidth: w,
-          renderHeight: h,
-        },
+        deviceId: this._deviceId,
+        renderWidth: w,
+        renderHeight: h,
       });
     }
   }
@@ -400,9 +396,9 @@ export class MuxBrowserPane extends LitElement {
 
   private readonly _onWindowBlur = (): void => {
     wsBrowser.send({
-      type: SessiondType.BrowserInput,
+      type: 'browser-blur',
       paneId: this.paneId,
-      event: { type: 'browser-blur', clientId: this._clientId, deviceId: this._deviceId },
+      deviceId: this._deviceId,
     });
   };
 
