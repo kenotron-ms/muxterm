@@ -203,6 +203,11 @@ func runLocal(cfg Config) error {
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
+	bm := sessiond.NewBrowserManager(
+		func(paneID int, data []byte) { srv.Hub().BroadcastBrowserFrame(paneID, data) },
+		func(msg any) { srv.Hub().BroadcastBrowserJSON(msg) },
+	)
+	srv.Hub().SetBrowserManager(bm)
 
 	// Publish serve-layer URL so the MCP server can discover the tunnel API.
 	if err := sessiond.WriteServerURL(cfg.Addr); err != nil {
@@ -211,6 +216,10 @@ func runLocal(cfg Config) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		<-ctx.Done()
+		bm.Close()
+	}()
 
 	browserHost := cfg.Addr
 	if _, port, err := net.SplitHostPort(cfg.Addr); err == nil {
@@ -248,6 +257,11 @@ func runServe(cfg Config) error {
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
+	bm := sessiond.NewBrowserManager(
+		func(paneID int, data []byte) { srv.Hub().BroadcastBrowserFrame(paneID, data) },
+		func(msg any) { srv.Hub().BroadcastBrowserJSON(msg) },
+	)
+	srv.Hub().SetBrowserManager(bm)
 
 	// Publish serve-layer URL so the MCP server can discover the tunnel API.
 	if err := sessiond.WriteServerURL(cfg.Addr); err != nil {
@@ -256,6 +270,10 @@ func runServe(cfg Config) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		<-ctx.Done()
+		bm.Close()
+	}()
 
 	// Generate and print access token
 	token, err := server.GenerateToken(secret)

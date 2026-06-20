@@ -15,6 +15,7 @@ import (
 	"time"
 
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 func init() {
@@ -29,9 +30,10 @@ type Config struct {
 	Addr          string
 	Secret        string
 	StaticFS      fs.FS
-	NoAuth        bool            // skip token/localhost auth check (dev only)
-	ConfigPath    string          // path to write config.toml on PATCH /api/config (empty = skip writes)
-	InitialConfig muxcfg.Config   // initial resolved configuration (zero value = package defaults)
+	NoAuth        bool                     // skip token/localhost auth check (dev only)
+	ConfigPath    string                   // path to write config.toml on PATCH /api/config (empty = skip writes)
+	InitialConfig muxcfg.Config            // initial resolved configuration (zero value = package defaults)
+	BrowserManager *sessiond.BrowserManager // optional; nil disables /ws/browser CDP features
 }
 
 // Server is the HTTP server for muxterm.
@@ -84,6 +86,11 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("DELETE /api/tunnels/{id}", s.handleTunnelClose)
 	s.mux.HandleFunc("/t/", s.handleTunnelProxy)
 	s.mux.HandleFunc("GET /ws", s.handleWS)
+	s.mux.HandleFunc("GET /ws/browser", s.handleWSBrowser)
+
+	if cfg.BrowserManager != nil {
+		hub.SetBrowserManager(cfg.BrowserManager)
+	}
 
 	if cfg.StaticFS != nil {
 		s.mux.Handle("/", http.FileServer(http.FS(cfg.StaticFS)))
@@ -160,6 +167,10 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.handleWSImpl(w, r)
+}
+
+func (s *Server) handleWSBrowser(w http.ResponseWriter, r *http.Request) {
+	s.handleWSBrowserImpl(w, r)
 }
 
 // handleTunnelList returns a JSON array of all active tunnels (id, port).
