@@ -22,7 +22,7 @@ func (bp *BrowserPage) startScreencast(ctx context.Context) error {
 }
 
 // captureScreenshot takes a JPEG screenshot of the current page and returns
-// the raw JPEG bytes. Used for on-demand frames (e.g. browser-ready, reconnect).
+// the raw JPEG bytes. Used for on-demand frames (e.g. browser-focus, reconnect).
 func (bp *BrowserPage) captureScreenshot(ctx context.Context) ([]byte, error) {
 	result, err := bp.cdp.Call(ctx, bp.sessionID, "Page.captureScreenshot", map[string]any{
 		"format":  "jpeg",

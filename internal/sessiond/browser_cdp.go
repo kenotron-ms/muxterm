@@ -82,7 +82,7 @@ func (c *CDPConn) readLoop() {
 		// never arrive.  This matters most when context.Background() is
 		// passed (e.g. ScreenshotPage): without this drain those goroutines
 		// hang permanently and block the ws_browser.go read-loop from ever
-		// starting, so browser-ready messages are never processed.
+		// starting, so browser-focus messages are never processed.
 		c.pendMu.Lock()
 		for id, ch := range c.pending {
 			select {
