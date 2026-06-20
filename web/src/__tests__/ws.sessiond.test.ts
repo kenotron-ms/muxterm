@@ -203,6 +203,22 @@ describe('MuxSocket sessiond senders', () => {
     expect(Array.from(data)).toEqual([104, 105]);
   });
 
+  it('createBrowserPane() emits flat {type:"create-browser-pane"}', () => {
+    const { mux, ws } = openSocket();
+    mux.createBrowserPane();
+
+    expect(ws.sent).toHaveLength(1);
+    expect(lastJson(ws)).toEqual({ type: SessiondType.CreateBrowserPane });
+  });
+
+  it('closeBrowserPane() emits flat {type:"close-browser-pane"}', () => {
+    const { mux, ws } = openSocket();
+    mux.closeBrowserPane();
+
+    expect(ws.sent).toHaveLength(1);
+    expect(lastJson(ws)).toEqual({ type: SessiondType.CloseBrowserPane });
+  });
+
   it('senders do not throw when the socket is not open', () => {
     const store = new MuxStore();
     const mux = new MuxSocket(store, 'ws://localhost:8080/ws');
@@ -217,6 +233,8 @@ describe('MuxSocket sessiond senders', () => {
       mux.createPane(['bash']);
       mux.resize(1, 80, 24);
       mux.sendPaneInput(1, new Uint8Array([1, 2, 3]));
+      mux.createBrowserPane();
+      mux.closeBrowserPane();
     }).not.toThrow();
   });
 });
