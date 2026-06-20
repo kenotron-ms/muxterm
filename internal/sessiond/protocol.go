@@ -12,8 +12,9 @@ import (
 // [4-byte BIG-ENDIAN length][1-byte kind][payload], where the length covers the
 // kind byte plus the payload.
 const (
-	FrameControl  byte = 0x01 // payload is JSON of the Message envelope
-	FramePaneData byte = 0x02 // payload is [4-byte LITTLE-ENDIAN paneId][raw bytes]
+	FrameControl     byte = 0x01 // payload is JSON of the Message envelope
+	FramePaneData    byte = 0x02 // payload is [4-byte LITTLE-ENDIAN paneId][raw bytes]
+	FrameBrowserData byte = 0x03 // payload is [4-byte LITTLE-ENDIAN paneId][raw JPEG bytes]
 )
 
 // Message Type strings name every frozen control envelope on the wire. No phase
@@ -65,6 +66,9 @@ const (
 	TypeBrowserURL              = "browser-url"
 	TypeBrowserDownloadProgress = "browser-download-progress"
 	TypeBrowserError            = "browser-error"
+	TypeBrowserFocus   = "browser-focus"   // client → sessiond: focus claim + viewport size
+	TypeBrowserBlur    = "browser-blur"    // client → sessiond: focus release
+	TypeBrowserGranted = "browser-granted" // sessiond → client: input authority notification
 
 	// Tunnel messages (client ↔ serve, not forwarded to daemon).
 	TypeCreateTunnel  = "create-tunnel"
@@ -119,6 +123,17 @@ func WritePaneData(w io.Writer, paneID uint32, data []byte) error {
 	binary.LittleEndian.PutUint32(payload[0:4], paneID)
 	copy(payload[4:], data)
 	return writeFrame(w, FramePaneData, payload)
+}
+
+// WriteBrowserData writes a FrameBrowserData frame whose payload is
+// [4-byte LITTLE-ENDIAN paneId][raw JPEG bytes]. Same framing as WritePaneData
+// but uses FrameBrowserData (0x03) so the HTTP server can distinguish JPEG frames
+// from PTY output frames.
+func WriteBrowserData(w io.Writer, paneID uint32, data []byte) error {
+	payload := make([]byte, 4+len(data))
+	binary.LittleEndian.PutUint32(payload[0:4], paneID)
+	copy(payload[4:], data)
+	return writeFrame(w, FrameBrowserData, payload)
 }
 
 // DecodePaneData splits a FramePaneData payload into its little-endian paneID
@@ -199,6 +214,14 @@ type Message struct {
 	TunnelID   string       `json:"tunnelId,omitempty"`
 	TunnelPort int          `json:"tunnelPort,omitempty"`
 	Tunnels    []TunnelInfo `json:"tunnels,omitempty"`
+
+	// Browser relay fields (browser-focus, browser-blur, browser-input, browser-granted).
+	ClientID     string          `json:"clientId,omitempty"`     // stable per /ws/browser connection
+	DeviceID     string          `json:"deviceId,omitempty"`     // localStorage UUID, stable per physical machine
+	RenderWidth  int             `json:"renderWidth,omitempty"`  // canvas CSS width in px at focus time
+	RenderHeight int             `json:"renderHeight,omitempty"` // canvas CSS height in px at focus time
+	InputEvent   json.RawMessage `json:"inputEvent,omitempty"`   // raw BrowserInputMsg JSON for browser-input
+	RawPayload   json.RawMessage `json:"rawPayload,omitempty"`   // original JSON bytes for relay passthrough
 }
 
 // TunnelInfo is one entry in a tunnel-list reply.
