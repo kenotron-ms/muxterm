@@ -2,9 +2,9 @@
  * Discriminates the four surface kinds.
  *
  * terminal / driver — cell-grid surfaces (cols×rows budget, xterm.js).
- * browser / settings — NON-terminal (pixel box, normal responsive DOM, NO terminal cell grid).
+ * browser-cdp / settings — NON-terminal (pixel box, normal responsive DOM, NO terminal cell grid).
  */
-export type SurfaceKind = 'terminal' | 'driver' | 'browser' | 'settings';
+export type SurfaceKind = 'terminal' | 'driver' | 'browser-cdp' | 'settings';
 
 /** Returns true for cell-grid surfaces that use the xterm.js terminal grid. */
 export function isTerminalSurface(kind: SurfaceKind): boolean {
@@ -50,6 +50,13 @@ export const SessiondType = {
   // Browser-action relay (server → client → iframe → client → server)
   BrowserAction: 'browser-action',
   BrowserActionResult: 'browser-action-result',
+  // Browser CDP pane management
+  CreateBrowserPane: 'create-browser-pane',
+  CloseBrowserPane: 'close-browser-pane',
+  BrowserInput: 'browser-input',
+  BrowserURL: 'browser-url',
+  BrowserDownloadProgress: 'browser-download-progress',
+  BrowserError: 'browser-error',
   // Layout / snapshot relay
   LayoutCommand: 'layout-command',
   ScreenSnapshot: 'screen-snapshot',
@@ -100,11 +107,7 @@ export interface SessiondPaneInfo {
    *  expectedReplayBytes = totalSeq - seq. Used by the client settle barrier
    *  (RC-1) to defer ready=true until all replay data has arrived. */
   totalSeq?: number;
-  // Browser-only fields (present when surfaceKind === 'browser')
   surfaceKind?: SurfaceKind;
-  browserPort?: number;
-  browserPath?: string;
-  proxyHeaders?: Record<string, string>;
 }
 
 export interface SessiondMessage {
@@ -126,11 +129,8 @@ export interface SessiondMessage {
   error?: string;
   breakpoint?: string;
   layout?: string;
-  // Present when type === 'create-pane' or 'pane-added' for browser panes
+  // Present when type === 'create-pane' or 'pane-added' for browser-cdp panes
   surfaceKind?: SurfaceKind;
-  browserPort?: number;
-  browserPath?: string;
-  proxyHeaders?: Record<string, string>;
   /** Per-pane absolute byte offsets sent by the client on (re)attach so the
    *  server can replay only the delta since the client's last known position. */
   offsets?: { paneId: number; seq: number }[];
@@ -183,7 +183,7 @@ export interface LayoutCommand {
   command: 'create-pane' | 'rename-pane' | 'close-pane' | 'switch-workspace';
   paneId?: number;
   name?: string;
-  kind?: 'terminal' | 'browser';
+  kind?: 'terminal' | 'browser-cdp';
   placement?: 'tab' | 'split-right' | 'split-left' | 'split-above' | 'split-below';
   referencePaneId?: number;
   url?: string;
