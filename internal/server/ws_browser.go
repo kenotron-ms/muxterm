@@ -64,6 +64,11 @@ func (h *Hub) BroadcastBrowserFrame(paneID int, data []byte) {
 	for _, c := range clients {
 		c.writeBinary(frame)
 	}
+
+	// Cache the frame so reconnecting clients receive it immediately on connect.
+	h.browserMu.Lock()
+	h.lastBrowserFrames[paneID] = frame
+	h.browserMu.Unlock()
 }
 
 // BroadcastBrowserJSON marshals msg to JSON and sends it as a text frame to
@@ -118,9 +123,14 @@ func (s *Server) handleWSBrowserImpl(w http.ResponseWriter, r *http.Request) {
 		cancel: cancel,
 	}
 
-	// Register in browserClients.
+	// Register in browserClients and replay any cached frames so the canvas is
+	// not blank after a page refresh (Chromium's screencast only emits new
+	// frames when the page changes; a static loaded page produces none).
 	s.hub.browserMu.Lock()
 	s.hub.browserClients[c] = true
+	for _, frame := range s.hub.lastBrowserFrames {
+		c.writeBinary(frame) // ignore error — buffer absorbs it before the read loop starts
+	}
 	s.hub.browserMu.Unlock()
 
 	// Deferred cleanup: remove from registry, cancel context, close connection.
