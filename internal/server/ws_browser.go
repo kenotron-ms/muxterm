@@ -55,52 +55,6 @@ func (c *browserWSConn) writeText(data []byte) {
 	}
 }
 
-// BroadcastBrowserFrame sends [4-byte LE paneId][JPEG bytes] to every
-// connected /ws/browser client. The frame is encoded once and fanned out;
-// the 5-second write timeout in writeBinary ensures a slow client cannot
-// stall others.
-func (h *Hub) BroadcastBrowserFrame(paneID int, data []byte) {
-	frame := EncodeBinaryFrame(uint32(paneID), data)
-
-	h.browserMu.RLock()
-	clients := make([]*browserWSConn, 0, len(h.browserClients))
-	for c := range h.browserClients {
-		clients = append(clients, c)
-	}
-	h.browserMu.RUnlock()
-
-	for _, c := range clients {
-		c.writeBinary(frame)
-	}
-
-	// Cache the frame so reconnecting clients receive it immediately on connect.
-	h.browserMu.Lock()
-	h.lastBrowserFrames[paneID] = frame
-	h.browserMu.Unlock()
-}
-
-// BroadcastBrowserJSON marshals msg to JSON and sends it as a text frame to
-// every connected /ws/browser client. Marshal errors are logged and the
-// broadcast is aborted early.
-func (h *Hub) BroadcastBrowserJSON(msg any) {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("BroadcastBrowserJSON: marshal error: %v", err)
-		return
-	}
-
-	h.browserMu.RLock()
-	clients := make([]*browserWSConn, 0, len(h.browserClients))
-	for c := range h.browserClients {
-		clients = append(clients, c)
-	}
-	h.browserMu.RUnlock()
-
-	for _, c := range clients {
-		c.writeText(data)
-	}
-}
-
 // handleWSBrowserImpl handles the /ws/browser WebSocket upgrade and client
 // lifecycle. Each connection dials its own daemon connection and relays frames
 // bidirectionally between the WebSocket and the daemon.

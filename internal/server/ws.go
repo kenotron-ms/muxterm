@@ -272,23 +272,9 @@ func (c *Client) handleTextInput(data []byte) {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
 		}
-		if c.hub.browserManager != nil {
-			if _, berr := c.hub.browserManager.OpenPage(paneID); berr != nil {
-				log.Printf("handleTextInput: browserManager.OpenPage pane %d: %v", paneID, berr)
-				// Don't fail client — daemon pane is created; browser will error separately
-			}
-		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneCreated, CID: msg.CID, PaneID: paneID, ClientRef: msg.ClientRef})
 
 	case sessiond.TypeCloseBrowserPane:
-		if c.hub.browserManager != nil {
-			c.hub.browserManager.ClosePage(msg.PaneID)
-		}
-		// Remove the cached frame so a client connecting after the pane is
-		// gone does not receive a stale frame for a non-existent pane.
-		c.hub.browserMu.Lock()
-		delete(c.hub.lastBrowserFrames, msg.PaneID)
-		c.hub.browserMu.Unlock()
 		if err := c.daemon.ClosePane(msg.PaneID); err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
@@ -362,11 +348,6 @@ type Hub struct {
 	dial           DialFunc
 	resolvedConfig any             // muxterm-owned resolved config, shipped to clients on connect
 	tunnels        *TunnelRegistry // shared tunnel registry for /t/{id}/ proxy
-
-	browserManager   *sessiond.BrowserManager // nil until set by SetBrowserManager
-	browserClients   map[*browserWSConn]bool  // /ws/browser WebSocket clients
-	browserMu        sync.RWMutex             // guards browserClients and lastBrowserFrames
-	lastBrowserFrames map[int][]byte           // paneID → last encoded binary frame (4-byte header + JPEG)
 }
 
 // SetResolvedConfig stores the resolved configuration on the hub. The config is
@@ -400,10 +381,8 @@ func (h *Hub) BroadcastConfig(cfg any) {
 // set by the caller (server.New sets it via hub.tunnels = tunnels).
 func NewHub(dial DialFunc) *Hub {
 	return &Hub{
-		clients:           make(map[*Client]bool),
-		dial:              dial,
-		browserClients:    make(map[*browserWSConn]bool),
-		lastBrowserFrames: make(map[int][]byte),
+		clients: make(map[*Client]bool),
+		dial:    dial,
 	}
 }
 
@@ -412,15 +391,6 @@ func (h *Hub) SetDialer(d DialFunc) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.dial = d
-}
-
-// SetBrowserManager installs the BrowserManager that opens and closes headless
-// browser pages on behalf of browser-cdp panes. Must be called before the first
-// TypeCreateBrowserPane message is processed; safe to call from any goroutine.
-func (h *Hub) SetBrowserManager(bm *sessiond.BrowserManager) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.browserManager = bm
 }
 
 // Dial creates a new daemon connection using the hub's configured dialer.

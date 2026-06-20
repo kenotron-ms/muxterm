@@ -10,35 +10,6 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
-// TestNewHub_BrowserClientsInitialized verifies that NewHub creates a Hub with
-// an initialized (non-nil) browserClients map so that /ws/browser registrations
-// and BroadcastBrowserFrame/BroadcastBrowserJSON don't panic on first use.
-func TestNewHub_BrowserClientsInitialized(t *testing.T) {
-	h := NewHub(nil)
-	h.browserMu.Lock()
-	defer h.browserMu.Unlock()
-	if h.browserClients == nil {
-		t.Fatal("NewHub: browserClients is nil; want initialized map")
-	}
-}
-
-// TestSetBrowserManager verifies that SetBrowserManager stores the manager in
-// Hub.browserManager so that handleTextInput and handleWSBrowserImpl can
-// retrieve it later.
-func TestSetBrowserManager(t *testing.T) {
-	h := NewHub(nil)
-	bm := sessiond.NewBrowserManager(func(int, []byte) {}, func(any) {})
-	h.SetBrowserManager(bm)
-
-	h.mu.RLock()
-	got := h.browserManager
-	h.mu.RUnlock()
-
-	if got != bm {
-		t.Fatal("SetBrowserManager: hub.browserManager was not set to the supplied BrowserManager")
-	}
-}
-
 // TestHandleTextInput_TypeCreateBrowserPane verifies that a TypeCreateBrowserPane
 // message calls daemon.CreateBrowserCDPPane and sends TypePaneCreated back.
 func TestHandleTextInput_TypeCreateBrowserPane(t *testing.T) {
@@ -130,14 +101,6 @@ func TestHandleTextInput_TypeCloseBrowserPane(t *testing.T) {
 	if reply.CID != 55 {
 		t.Errorf("reply.CID = %d, want 55", reply.CID)
 	}
-}
-
-// TestConfigBrowserManagerField is a compile-time assertion that the Config
-// struct exposes BrowserManager as a *sessiond.BrowserManager field. If the
-// field does not exist this file will not compile.
-func TestConfigBrowserManagerField(t *testing.T) {
-	var cfg Config
-	var _ *sessiond.BrowserManager = cfg.BrowserManager // compile-time check
 }
 
 // TestWSBrowserRouteRegistered verifies that GET /ws/browser is registered in

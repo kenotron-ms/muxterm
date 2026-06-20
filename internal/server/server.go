@@ -88,10 +88,6 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /ws", s.handleWS)
 	s.mux.HandleFunc("GET /ws/browser", s.handleWSBrowser)
 
-	if cfg.BrowserManager != nil {
-		hub.SetBrowserManager(cfg.BrowserManager)
-	}
-
 	if cfg.StaticFS != nil {
 		s.mux.Handle("/", http.FileServer(http.FS(cfg.StaticFS)))
 	}
