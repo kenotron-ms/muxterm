@@ -59,6 +59,14 @@ const (
 	// Error envelope.
 	TypeError = "error"
 
+	// Browser CDP pane messages (/ws/browser WebSocket).
+	TypeCreateBrowserPane       = "create-browser-pane"
+	TypeCloseBrowserPane        = "close-browser-pane"
+	TypeBrowserInput            = "browser-input"
+	TypeBrowserURL              = "browser-url"
+	TypeBrowserDownloadProgress = "browser-download-progress"
+	TypeBrowserError            = "browser-error"
+
 	// Tunnel messages (client ↔ serve, not forwarded to daemon).
 	TypeCreateTunnel  = "create-tunnel"
 	TypeCloseTunnel   = "close-tunnel"
@@ -201,6 +209,48 @@ type Message struct {
 type TunnelInfo struct {
 	ID   string `json:"id"`
 	Port int    `json:"port"`
+}
+
+// BrowserInputMsg is the event payload for {type:"browser-input"} JSON frames
+// sent by the browser client on /ws/browser. The Type field names the input
+// event (e.g. "click", "scroll", "keydown", "type", "navigate", "resize").
+// All geometry and value fields are optional; omit those not relevant to the event.
+type BrowserInputMsg struct {
+	Type   string  `json:"type"`
+	X      float64 `json:"x,omitempty"`      // pointer X coordinate
+	Y      float64 `json:"y,omitempty"`      // pointer Y coordinate
+	Button string  `json:"button,omitempty"` // left|middle|right
+	DeltaX float64 `json:"deltaX,omitempty"` // scroll delta X
+	DeltaY float64 `json:"deltaY,omitempty"` // scroll delta Y
+	Key    string  `json:"key,omitempty"`    // e.g. "Enter", "ArrowLeft", "a"
+	Text   string  `json:"text,omitempty"`   // for "type" events
+	URL    string  `json:"url,omitempty"`    // for "navigate" events; "history:back" etc.
+	Width  int     `json:"width,omitempty"`  // for "resize" events
+	Height int     `json:"height,omitempty"` // for "resize" events
+}
+
+// BrowserURLMsg is the {type:"browser-url"} frame sent by the server on
+// /ws/browser when the headless browser navigates to a new URL.
+type BrowserURLMsg struct {
+	Type   string `json:"type"`
+	PaneID int    `json:"paneId"`
+	URL    string `json:"url"`
+}
+
+// BrowserProgressMsg is the {type:"browser-download-progress"} frame sent
+// while Chromium is being downloaded. Percent is 0–100.
+type BrowserProgressMsg struct {
+	Type    string `json:"type"`
+	PaneID  int    `json:"paneId"`
+	Percent int    `json:"percent"`
+}
+
+// BrowserErrorMsg is the {type:"browser-error"} frame sent when a browser
+// operation fails (download failure, navigation error, Chromium crash).
+type BrowserErrorMsg struct {
+	Type   string `json:"type"`
+	PaneID int    `json:"paneId"`
+	Error  string `json:"error"`
 }
 
 // CursorPos is a 0-indexed terminal cursor position carried by screen-snapshot-result.
