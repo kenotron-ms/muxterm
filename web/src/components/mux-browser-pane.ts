@@ -349,6 +349,42 @@ export class MuxBrowserPane extends LitElement {
   // _resizeObserver intentionally removed — clients do not control the
   // Chromium viewport. See comment in firstUpdated() for rationale.
 
+  // Stable per-WebSocket-connection ID. Generated once per component instance.
+  private readonly _clientId: string = Math.random().toString(36).slice(2);
+
+  // Stable per-device ID persisted in localStorage.
+  private readonly _deviceId: string = MuxBrowserPane._getOrCreateDeviceId();
+
+  private static _getOrCreateDeviceId(): string {
+    const key = 'muxterm-device-id';
+    let id = localStorage.getItem(key);
+    if (!id) {
+      id = Math.random().toString(36).slice(2);
+      localStorage.setItem(key, id);
+    }
+    return id;
+  }
+
+  private _sendBrowserFocus(): void {
+    if (!this._canvas) return;
+    const rect = this._canvas.getBoundingClientRect();
+    const w = Math.round(rect.width);
+    const h = Math.round(rect.height);
+    if (w > 0 && h > 0) {
+      wsBrowser.send({
+        type: SessiondType.BrowserInput,
+        paneId: this.paneId,
+        event: {
+          type: 'browser-focus',
+          clientId: this._clientId,
+          deviceId: this._deviceId,
+          renderWidth: w,
+          renderHeight: h,
+        },
+      });
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------
@@ -363,6 +399,7 @@ export class MuxBrowserPane extends LitElement {
       onDownload: this._onDownload,
       onStatus: this._onStatus,
       onCursor: this._onCursor,
+      onGranted: null,
     });
   }
 
@@ -375,12 +412,19 @@ export class MuxBrowserPane extends LitElement {
       onDownload: null,
       onStatus: null,
       onCursor: null,
+      onGranted: null,
     });
     if (this._fpsTimer !== undefined) {
       clearInterval(this._fpsTimer);
       this._fpsTimer = undefined;
     }
     // No resize observer to disconnect.
+    // Release input authority on unmount.
+    wsBrowser.send({
+      type: SessiondType.BrowserInput,
+      paneId: this.paneId,
+      event: { type: 'browser-blur', clientId: this._clientId, deviceId: this._deviceId },
+    });
     this._ctx = null;
     this._pendingFrame = null;
   }
@@ -389,30 +433,14 @@ export class MuxBrowserPane extends LitElement {
     // Get 2D rendering context
     this._ctx = this._canvas.getContext('2d');
 
-    // Signal server that canvas is ready — triggers immediate screenshot
-    wsBrowser.send({
-      type: SessiondType.BrowserInput,
-      paneId: this.paneId,
-      event: { type: 'browser-ready' },
-    });
+    // Claim input authority and report canvas render size.
+    this._sendBrowserFocus();
 
     // FPS counter: update every 1 second
     this._fpsTimer = setInterval(() => {
       this._fps = this._fpsFrameCount;
       this._fpsFrameCount = 0;
     }, 1000);
-
-    // No ResizeObserver resize relay to the server.
-    //
-    // Chromium's viewport is fixed by the server at page-creation time (e.g.
-    // 1280×720). ALL connected viewers receive the same frame stream and each
-    // independently scale the canvas to fit their own pane using the
-    // canvas.width / rect.width scale factors computed in _toViewport().
-    //
-    // If clients sent resize events, multiple viewers would race to set the
-    // Chromium viewport and each viewer's coordinate mapping would break every
-    // time another window resized its pane. Fixing the viewport server-side
-    // guarantees consistent coordinates regardless of how many windows are open.
 
     // Mouse event listeners
     this._canvas.addEventListener('mousemove', this._onMouseMove);
