@@ -40,6 +40,11 @@ type Pane struct {
 	onExit      func(localID int)
 	onPromptPtr atomic.Pointer[func(int, *Message)] // written once (createPane), read by readLoop
 
+	// argv is the resolved command slice used to start this pane's process.
+	// It is captured at NewPane time and used by crash-recovery snapshots to
+	// re-spawn the pane after a daemon restart.
+	argv []string
+
 	// procWait is set by RestorePane for adopted processes whose cmd.Wait()
 	// cannot be used (the exec.Cmd was not started by this process). When
 	// non-nil, readLoop calls procWait() instead of cmd.Wait() to reap the
@@ -69,11 +74,13 @@ func resolveArgv(argv []string) []string {
 }
 
 // NewPane starts a child process attached to a new PTY sized cols x rows and
-// begins streaming its output. buf may be nil (a default VTBuffer is used);
-// onData and onExit may be nil.
+// begins streaming its output. dir sets the working directory; when empty the
+// process starts in $HOME (or the current working directory if $HOME is unset).
+// buf may be nil (a default VTBuffer is used); onData and onExit may be nil.
 func NewPane(
 	localID int,
 	argv []string,
+	dir string,
 	cols, rows int,
 	buf PaneBuffer,
 	onData func(localID int, data []byte),
@@ -93,8 +100,11 @@ func NewPane(
 
 	c := exec.Command(argv[0], argv[1:]...)
 	c.Env = append(os.Environ(), "TERM=xterm-256color")
-	if home := os.Getenv("HOME"); home != "" {
-		c.Dir = home
+	switch {
+	case dir != "":
+		c.Dir = dir
+	case os.Getenv("HOME") != "":
+		c.Dir = os.Getenv("HOME")
 	}
 
 	ptmx, err := pty.StartWithSize(c, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
@@ -104,6 +114,7 @@ func NewPane(
 
 	p := &Pane{
 		LocalID: localID,
+		argv:    argv,
 		cols:    cols,
 		rows:    rows,
 		cmd:     c,

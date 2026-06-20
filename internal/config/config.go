@@ -20,6 +20,7 @@ type Config struct {
 	Keys      KeysConfig      `toml:"keys"       json:"keys"`
 	Workspace WorkspaceConfig `toml:"workspace"  json:"workspace"`
 	Driver    DriverConfig    `toml:"driver"     json:"driver"`
+	Restore   RestoreConfig   `toml:"restore"    json:"restore"`
 }
 
 // ThemeConfig controls visual palette selection.
@@ -57,6 +58,34 @@ type KeysConfig struct {
 type WorkspaceConfig struct {
 	DefaultPresentation string   `toml:"default_presentation" json:"default_presentation"`
 	Rails               []string `toml:"rails"                json:"rails"`
+}
+
+// RestoreDetect specifies how to detect a process eligible for a custom
+// restore command. Exactly one field should be set.
+type RestoreDetect struct {
+	// Env names an environment variable that must be present in the foreground
+	// process's environment. Its value is available as ${ENV_VAR_NAME} in the
+	// Restore template.
+	Env string `toml:"env,omitempty" json:"env,omitempty"`
+}
+
+// RestoreStrategy maps a detection condition to a restore command template.
+// When the foreground process matches Detect, the Restore template is expanded
+// and used as the pane's restore command instead of the captured argv.
+//
+// Template variables use shell-style ${NAME} syntax:
+//   - ${ENV_VAR_NAME} — value of any env var present in the process environment
+//   - ${cwd} — working directory of the foreground process
+type RestoreStrategy struct {
+	Detect  RestoreDetect `toml:"detect" json:"detect"`
+	Restore string        `toml:"restore" json:"restore"`
+}
+
+// RestoreConfig controls crash-recovery restore behaviour.
+type RestoreConfig struct {
+	// Strategies is evaluated in order; the first matching strategy wins.
+	// If no strategy matches, the captured argv is used as-is.
+	Strategies []RestoreStrategy `toml:"strategies" json:"strategies"`
 }
 
 // DriverConfig controls the muxterm-agent driver lifecycle.

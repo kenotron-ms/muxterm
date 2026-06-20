@@ -35,6 +35,9 @@ type WSState struct {
 // PaneState is one pane's snapshot inside a WSState.
 // FDIndex is the index into the SCM_RIGHTS FD array received over the Unix
 // socket; -1 means this pane has no PTY (browser pane).
+// Argv is the resolved command slice used to start the pane's process. It is
+// populated by crash-recovery snapshots (writeCrashSnapshot) and ignored by
+// live-upgrade handoffs where the PTY FD is transferred directly.
 type PaneState struct {
 	LocalID      int               `json:"local_id"`
 	Title        string            `json:"title"`
@@ -43,6 +46,8 @@ type PaneState struct {
 	Rows         int               `json:"rows"`
 	PID          int               `json:"pid"`
 	FDIndex      int               `json:"fd_index"` // -1 for browser panes
+	Argv         []string          `json:"argv,omitempty"`
+	Dir          string            `json:"dir,omitempty"`
 	Scrollback   []byte            `json:"scrollback,omitempty"`
 	SeqTotal     uint64            `json:"seq_total,omitempty"`
 	BrowserPort  int               `json:"browser_port,omitempty"`
@@ -109,6 +114,7 @@ func (s *Server) HandleHandoff(handoffSocket string) {
 				SurfaceKind:  p.SurfaceKind,
 				Cols:         cols,
 				Rows:         rows,
+				Argv:         p.argv,
 				BrowserPort:  p.BrowserPort,
 				BrowserPath:  p.BrowserPath,
 				ProxyHeaders: p.ProxyHeaders,

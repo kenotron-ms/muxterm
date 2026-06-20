@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/kenotron-ms/muxterm/internal/config"
 )
 
 // Server owns the daemon's Unix control socket, the workspace Registry, and the
@@ -18,9 +21,19 @@ type Server struct {
 	reg    *Registry
 	socket string
 
-	mu   sync.Mutex
-	subs map[string]map[*conn]bool // workspaceId -> set of attached connections
-	conns map[*conn]bool            // all live connections
+	// SnapshotPath is the file path for the crash-recovery snapshot. When
+	// non-empty, writeSnapshot() serializes the registry to this path after
+	// each composition-changing mutation. Set by the caller after NewServer.
+	SnapshotPath string
+
+	// RestoreStrategies is evaluated at snapshot time to produce smarter
+	// restore commands (e.g. "amplifier resume ${AMPLIFIER_SESSION_ID}").
+	// Loaded from [restore.strategies] in config.toml. Set by the caller.
+	RestoreStrategies []config.RestoreStrategy
+
+	mu    sync.Mutex
+	subs  map[string]map[*conn]bool // workspaceId -> set of attached connections
+	conns map[*conn]bool             // all live connections
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -39,6 +52,18 @@ func NewServer(socketPath string) (*Server, error) {
 
 // Registry exposes the server's Registry for tests and later phases.
 func (s *Server) Registry() *Registry { return s.reg }
+
+// writeSnapshot serializes the current registry state to SnapshotPath. It is a
+// no-op when SnapshotPath is empty. Errors are logged but never returned — a
+// failed snapshot write is never fatal; worst case the next crash loses sessions.
+func (s *Server) writeSnapshot() {
+	if s.SnapshotPath == "" {
+		return
+	}
+	if err := writeCrashSnapshot(s.SnapshotPath, s.reg, s.RestoreStrategies); err != nil {
+		log.Printf("sessiond: write crash snapshot: %v", err)
+	}
+}
 
 // ListenAndServe creates the socket (0600 inside a 0700 dir), guarantees a
 // cold-start default workspace, and serves control connections until ctx is
@@ -220,6 +245,7 @@ func (s *Server) handlePaneExit(wsID string, paneID int) {
 			s.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: s.reg.List()})
 		}
 	}
+	s.writeSnapshot()
 }
 
 // conn is one control connection. attached holds the workspace this connection
@@ -282,12 +308,14 @@ func (c *conn) handle(msg Message) {
 		id := c.srv.reg.AddWorkspace(msg.Name, msg.ClientRef)
 		c.reply(&Message{Type: TypeWorkspaceCreated, CID: msg.CID, WorkspaceID: id, Name: msg.Name, ClientRef: msg.ClientRef})
 		c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
+		c.srv.writeSnapshot()
 	case TypeListWorkspaces:
 		c.reply(&Message{Type: TypeWorkspaceList, CID: msg.CID, Workspaces: c.srv.reg.List()})
 	case TypeRenameWorkspace:
 		if c.srv.reg.RenameWorkspace(msg.WorkspaceID, msg.Name) {
 			c.reply(&Message{Type: TypeOK, CID: msg.CID})
 			c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
+			c.srv.writeSnapshot()
 		} else {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
 		}
@@ -319,6 +347,7 @@ func (c *conn) handle(msg Message) {
 		}
 		if c.srv.reg.SaveLayout(wsID, msg.Breakpoint, msg.Layout) {
 			c.reply(&Message{Type: TypeOK, CID: msg.CID})
+			c.srv.writeSnapshot()
 		} else {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "cannot save layout")
 		}
@@ -438,12 +467,14 @@ func (c *conn) createPane(msg Message) {
 			Placement:       msg.Placement,
 			ReferencePaneID: msg.ReferencePaneID,
 		})
+		c.srv.writeSnapshot()
 		return
 	}
 	cols, rows := sizeOrDefault(msg.Cols, msg.Rows)
 	p, err := NewPane(
 		localID,
 		msg.Cmd,
+		"",   // dir: empty → NewPane defaults to $HOME
 		cols, rows,
 		nil, // nil → NewPane installs VTBuffer (production default); required for get_screen/ScreenSnapshot
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
@@ -454,6 +485,7 @@ func (c *conn) createPane(msg Message) {
 		return
 	}
 	c.srv.reg.PutPane(wsID, p)
+	c.srv.writeSnapshot()
 	onPromptFn := func(id int, msg *Message) {
 		msg.WorkspaceID = wsID
 		msg.PaneID = id
@@ -491,6 +523,7 @@ func (c *conn) closePane(msg Message) {
 	p.Close()
 	c.reply(&Message{Type: TypeOK, CID: msg.CID})
 	c.srv.broadcast(wsID, &Message{Type: TypePaneClosed, PaneID: msg.PaneID})
+	c.srv.writeSnapshot()
 }
 
 // closeWorkspace removes a workspace and kills its panes, then broadcasts the
@@ -508,6 +541,7 @@ func (c *conn) closeWorkspace(msg Message) {
 	}
 	c.reply(&Message{Type: TypeOK, CID: msg.CID})
 	c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
+	c.srv.writeSnapshot()
 }
 
 // reply enqueues a control reply to this connection.

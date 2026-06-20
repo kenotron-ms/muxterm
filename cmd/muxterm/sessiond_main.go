@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
@@ -37,18 +38,44 @@ func runSessiond(_ Config) error {
 
 // serveSessiond is the testable core of the daemon entrypoint. It ensures the
 // socket's parent directory exists, constructs the frozen Phase-1 server, and
-// runs it until ctx is cancelled. Binding and stale-socket cleanup are owned by
-// the daemon (NewServer/ListenAndServe) per the frozen contract; this returns
-// nil on a graceful (ctx-driven) shutdown.
+// runs it until ctx is cancelled. On startup it attempts crash recovery from a
+// snapshot file before accepting connections. Binding and stale-socket cleanup
+// are owned by the daemon (NewServer/ListenAndServe) per the frozen contract;
+// this returns nil on a graceful (ctx-driven) shutdown.
 func serveSessiond(ctx context.Context, socketPath string) error {
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
 		return fmt.Errorf("create socket dir: %w", err)
 	}
 
-	srv, err := sessiond.NewServer(socketPath)
-	if err != nil {
-		return fmt.Errorf("create sessiond server: %w", err)
+	snapshotPath := sessiond.DefaultSnapshotPath()
+
+	// Load user config for restore strategies.
+	cfg, _ := config.Load(config.DefaultPath())
+
+	// Attempt crash recovery. If a valid snapshot exists, re-spawn all saved
+	// panes so the user's workspaces survive a daemon crash or system reboot.
+	var srv *sessiond.Server
+	if snap, ok, err := sessiond.LoadCrashSnapshot(snapshotPath); err != nil {
+		log.Printf("muxterm sessiond: crash snapshot error (%v); starting fresh", err)
+	} else if ok && len(snap.Workspaces) > 0 {
+		log.Printf("muxterm sessiond: restoring %d workspace(s) from crash snapshot", len(snap.Workspaces))
+		restored, restoreErr := sessiond.RestoreFromCrashSnapshot(snap, socketPath)
+		if restoreErr != nil {
+			log.Printf("muxterm sessiond: crash restore failed (%v); starting fresh", restoreErr)
+		} else {
+			srv = restored
+		}
 	}
+
+	if srv == nil {
+		var err error
+		srv, err = sessiond.NewServer(socketPath)
+		if err != nil {
+			return fmt.Errorf("create sessiond server: %w", err)
+		}
+	}
+	srv.SnapshotPath = snapshotPath
+	srv.RestoreStrategies = cfg.Restore.Strategies
 
 	log.Printf("muxterm sessiond listening on %s", socketPath)
 	return srv.ListenAndServe(ctx)

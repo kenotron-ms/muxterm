@@ -152,6 +152,18 @@ func WriteServerURL(addr string) error {
 	return os.WriteFile(serverURLPath(), []byte("http://localhost:"+port), 0o600)
 }
 
+// DefaultSnapshotPath returns the path to the crash-recovery session snapshot.
+// It follows the XDG Base Directory spec for user data:
+//   - If XDG_DATA_HOME is set, uses $XDG_DATA_HOME/muxterm/session.json.
+//   - Otherwise falls back to ~/.local/share/muxterm/session.json.
+func DefaultSnapshotPath() string {
+	if base := os.Getenv("XDG_DATA_HOME"); base != "" {
+		return filepath.Join(base, "muxterm", "session.json")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share", "muxterm", "session.json")
+}
+
 // ServerURL returns the HTTP base URL of the running muxterm serve layer. It
 // reads the URL written by WriteServerURL at serve startup. Returns an error
 // when the file does not exist (serve process not running) or cannot be read.
