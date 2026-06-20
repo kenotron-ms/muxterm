@@ -230,10 +230,12 @@ type TunnelInfo struct {
 	Port int    `json:"port"`
 }
 
-// BrowserInputMsg is the event payload for {type:"browser-input"} JSON frames
-// sent by the browser client on /ws/browser. The Type field names the input
-// event (e.g. "click", "scroll", "keydown", "type", "navigate", "resize").
-// All geometry and value fields are optional; omit those not relevant to the event.
+// BrowserInputMsg is the event payload for {type:"browser-input"},
+// {type:"browser-focus"}, and {type:"browser-blur"} JSON frames sent by the
+// browser client on /ws/browser. The Type field names the input event (e.g.
+// "click", "scroll", "keydown", "type", "navigate", "resize", "browser-focus",
+// "browser-blur"). All geometry and value fields are optional; omit those not
+// relevant to the event.
 type BrowserInputMsg struct {
 	Type   string  `json:"type"`
 	X      float64 `json:"x,omitempty"`      // pointer X coordinate
@@ -246,6 +248,11 @@ type BrowserInputMsg struct {
 	URL    string  `json:"url,omitempty"`    // for "navigate" events; "history:back" etc.
 	Width  int     `json:"width,omitempty"`  // for "resize" events
 	Height int     `json:"height,omitempty"` // for "resize" events
+
+	ClientID     string `json:"clientId,omitempty"`     // stable per-connection ID (browser-focus/blur)
+	DeviceID     string `json:"deviceId,omitempty"`     // stable per-device ID (browser-focus/blur)
+	RenderWidth  int    `json:"renderWidth,omitempty"`  // canvas CSS width at focus time
+	RenderHeight int    `json:"renderHeight,omitempty"` // canvas CSS height at focus time
 }
 
 // BrowserURLMsg is the {type:"browser-url"} frame sent by the server on
@@ -270,6 +277,14 @@ type BrowserErrorMsg struct {
 	Type   string `json:"type"`
 	PaneID int    `json:"paneId"`
 	Error  string `json:"error"`
+}
+
+// BrowserGrantedMsg is the {type:"browser-granted"} frame sent to all /ws/browser
+// clients when a client claims input authority via browser-focus.
+type BrowserGrantedMsg struct {
+	Type     string `json:"type"`
+	PaneID   int    `json:"paneId"`
+	ClientID string `json:"clientId"` // the client that now holds authority
 }
 
 // CursorPos is a 0-indexed terminal cursor position carried by screen-snapshot-result.
