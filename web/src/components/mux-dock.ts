@@ -652,9 +652,20 @@ export class MuxDock extends LitElement {
       requestAnimationFrame(() => terminalRegistry.focus(paneId));
       // For browser-cdp panes: dispatch a window event so mux-browser-pane
       // can send browser-focus and resume the Chromium screencast.
+      // Deferred with rAF for the same reason terminal focus is deferred above:
+      // dispatching synchronously fires canvas.focus() while dockview still
+      // holds its own focus lock, so the browser steals it back immediately.
       const paneInfo = this.panes.find((p) => p.paneId === paneId);
       if (paneInfo?.surfaceKind === 'browser-cdp') {
-        window.dispatchEvent(new CustomEvent('browser-pane-activated', { detail: { paneId } }));
+        requestAnimationFrame(() => {
+          window.dispatchEvent(new CustomEvent('browser-pane-activated', { detail: { paneId } }));
+        });
+      } else {
+        // Signal to browser panes that they are no longer the active panel.
+        // Browser panes use this to stop capturing window-level keyboard events.
+        requestAnimationFrame(() => {
+          window.dispatchEvent(new CustomEvent('non-browser-pane-activated'));
+        });
       }
       // Persist the new active selection: onDidLayoutChange does NOT fire on a
       // pure active-tab switch, so without this the saved layout keeps a stale

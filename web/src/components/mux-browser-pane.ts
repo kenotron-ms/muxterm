@@ -13,6 +13,14 @@ import { wsBrowser } from '../lib/ws-browser.js';
 import { SessiondType } from '../types.js';
 
 // ---------------------------------------------------------------------------
+// Module-level active-pane tracker
+// ---------------------------------------------------------------------------
+
+// Tracks which browser pane (by paneId) currently holds input authority.
+// Used by the window-level keyboard listener to only capture when active.
+let _activeBrowserPaneId: number | null = null;
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -389,13 +397,17 @@ export class MuxBrowserPane extends LitElement {
       renderWidth: w,
       renderHeight: h,
     });
-    // Re-claim DOM focus whenever we claim input authority.
-    this._canvas?.focus({ preventScroll: true });
+    // Re-claim DOM focus whenever we claim input authority. Deferred with rAF
+    // so that any in-progress dockview focus management (which runs synchronously
+    // during a tab-click) settles before we claim the canvas. Without the defer,
+    // dockview steals focus back and keyboard events never reach the canvas.
+    requestAnimationFrame(() => this._canvas?.focus({ preventScroll: true }));
   }
 
   private readonly _onPanelActivated = (e: Event): void => {
     const detail = (e as CustomEvent<{ paneId: number }>).detail;
     if (detail?.paneId !== this.paneId) return;
+    _activeBrowserPaneId = this.paneId;
     this._sendBrowserFocus();
   };
 
@@ -463,6 +475,9 @@ export class MuxBrowserPane extends LitElement {
     window.addEventListener('browser-pane-activated', this._onPanelActivated);
     window.addEventListener('focus', this._onWindowFocus);
     window.addEventListener('blur', this._onWindowBlur);
+    window.addEventListener('keydown', this._onWindowKeyDown, { capture: true });
+    window.addEventListener('keyup', this._onWindowKeyUp, { capture: true });
+    window.addEventListener('non-browser-pane-activated', this._onNonBrowserPaneActivated);
     // Re-send browser-focus every time the /ws/browser socket (re)connects.
     // wsBrowser.send() is a no-op when not open, so firstUpdated / ResizeObserver
     // callbacks that fire before the socket is open silently drop the message.
@@ -495,6 +510,12 @@ export class MuxBrowserPane extends LitElement {
     window.removeEventListener('browser-pane-activated', this._onPanelActivated);
     window.removeEventListener('focus', this._onWindowFocus);
     window.removeEventListener('blur', this._onWindowBlur);
+    window.removeEventListener('keydown', this._onWindowKeyDown, { capture: true });
+    window.removeEventListener('keyup', this._onWindowKeyUp, { capture: true });
+    window.removeEventListener('non-browser-pane-activated', this._onNonBrowserPaneActivated);
+    if (_activeBrowserPaneId === this.paneId) {
+      _activeBrowserPaneId = null;
+    }
     wsBrowser.onReconnect = null;
     if (this._fpsTimer !== undefined) {
       clearInterval(this._fpsTimer);
@@ -769,6 +790,48 @@ export class MuxBrowserPane extends LitElement {
     });
   };
 
+  /**
+   * Window-level keydown capture for when the canvas doesn't hold DOM focus.
+   * Canvas focus is unreliable (dockview steals it), so we capture at window
+   * level and only forward when this is the active browser pane.
+   */
+  private readonly _onWindowKeyDown = (e: KeyboardEvent): void => {
+    // Only forward when this pane holds input authority.
+    if (_activeBrowserPaneId !== this.paneId) return;
+    // Never intercept URL bar editing.
+    if (this._editingUrl) return;
+    // If the event originated within our own shadow DOM (e.g. canvas already
+    // has focus), the canvas keydown listener handles it — avoid duplicate send.
+    if (e.composedPath().includes(this as unknown as EventTarget)) return;
+
+    const isModifier =
+      e.key === 'Control' || e.key === 'Alt' || e.key === 'Shift' || e.key === 'Meta';
+    if (!isModifier) e.preventDefault();
+    wsBrowser.send({
+      type: SessiondType.BrowserInput,
+      paneId: this.paneId,
+      event: { type: 'keydown', key: e.key, modifiers: this._cdpModifiers(e) },
+    });
+  };
+
+  private readonly _onWindowKeyUp = (e: KeyboardEvent): void => {
+    if (_activeBrowserPaneId !== this.paneId) return;
+    if (this._editingUrl) return;
+    if (e.composedPath().includes(this as unknown as EventTarget)) return;
+    wsBrowser.send({
+      type: SessiondType.BrowserInput,
+      paneId: this.paneId,
+      event: { type: 'keyup', key: e.key, modifiers: this._cdpModifiers(e) },
+    });
+  };
+
+  /** Called when any non-browser pane activates — clears our active status. */
+  private readonly _onNonBrowserPaneActivated = (): void => {
+    if (_activeBrowserPaneId === this.paneId) {
+      _activeBrowserPaneId = null;
+    }
+  };
+
   // -------------------------------------------------------------------------
   // URL bar logic
   // -------------------------------------------------------------------------
@@ -842,6 +905,8 @@ export class MuxBrowserPane extends LitElement {
 
   private _navigate(url: string): void {
     this._editingUrl = false;
+    _activeBrowserPaneId = this.paneId;
+    requestAnimationFrame(() => this._canvas?.focus({ preventScroll: true }));
     const target = /^https?:\/\//i.test(url) ? url : `https://${url}`;
     wsBrowser.send({
       type: SessiondType.BrowserInput,
