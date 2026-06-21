@@ -758,7 +758,7 @@ export class MuxBrowserPane extends LitElement {
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mousedown', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x: coords.x, y: coords.y, modifiers: this._cdpModifiers(e) },
+      event: { type: 'mousedown', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x: coords.x, y: coords.y, buttons: e.buttons, modifiers: this._cdpModifiers(e) },
     });
   };
 
@@ -774,7 +774,7 @@ export class MuxBrowserPane extends LitElement {
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mouseup', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x: coords.x, y: coords.y, modifiers: this._cdpModifiers(e) },
+      event: { type: 'mouseup', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x: coords.x, y: coords.y, buttons: e.buttons, modifiers: this._cdpModifiers(e) },
     });
   };
 

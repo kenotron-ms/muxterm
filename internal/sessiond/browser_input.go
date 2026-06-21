@@ -52,6 +52,8 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 			"type":      "mouseMoved",
 			"x":         msg.X,
 			"y":         msg.Y,
+			"button":    "none",
+			"buttons":   0,
 			"modifiers": msg.Modifiers,
 		})
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
@@ -59,6 +61,7 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 			"x":          msg.X,
 			"y":          msg.Y,
 			"button":     cdpMouseButton(msg.Button),
+			"buttons":    msg.Buttons,
 			"clickCount": 1,
 			"modifiers":  msg.Modifiers,
 		})
@@ -70,6 +73,7 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 			"x":          msg.X,
 			"y":          msg.Y,
 			"button":     cdpMouseButton(msg.Button),
+			"buttons":    msg.Buttons,
 			"clickCount": 1,
 			"modifiers":  msg.Modifiers,
 		})
