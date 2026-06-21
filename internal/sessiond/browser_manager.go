@@ -147,6 +147,25 @@ func (bm *BrowserManager) OpenPage(paneID int) (*BrowserPage, error) {
 		return nil, fmt.Errorf("browser: Page.enable: %w", err)
 	}
 
+	// Activate the target so headless Chrome treats it as the foreground tab.
+	// Without this, mouse drag events don't extend text selection because the
+	// document isn't considered "focused" by the browser process.
+	if _, err := bm.cdp.Call(ctx, "", "Target.activateTarget", map[string]any{
+		"targetId": target.TargetID,
+	}); err != nil {
+			_ = err // non-fatal
+	}
+
+	// Enable focus emulation so headless Chrome behaves as if the page has
+	// window focus. Playwright uses this same call. Without it, Blink's
+	// selection-extension logic on mousemove (buttons=1) is suppressed
+	// because the renderer considers the document unfocused.
+	if _, err := bm.cdp.Call(ctx, session.SessionID, "Emulation.setFocusEmulationEnabled", map[string]any{
+		"enabled": true,
+	}); err != nil {
+		_ = err // non-fatal
+	}
+
 	// Set initial viewport to 1280×720 at scale 1.0. The real deviceScaleFactor
 	// is not known yet — it arrives with the first browser-focus event from the
 	// client and is applied via SetViewport at that point.
