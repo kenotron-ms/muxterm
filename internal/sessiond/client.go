@@ -538,7 +538,7 @@ func (c *Client) dispatchEvent(msg *Message) {
 		if h.OnShellPrompt != nil {
 			h.OnShellPrompt(msg.PaneID, msg.ExitCode)
 		}
-	case TypeBrowserURL, TypeBrowserDownloadProgress, TypeBrowserError, TypeBrowserGranted:
+	case TypeBrowserURL, TypeBrowserDownloadProgress, TypeBrowserError, TypeBrowserGranted, TypeBrowserCursor:
 		if h.OnBrowserMsg != nil {
 			h.OnBrowserMsg(msg)
 		}

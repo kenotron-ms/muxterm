@@ -69,6 +69,7 @@ const (
 	TypeBrowserFocus   = "browser-focus"   // client → sessiond: focus claim + viewport size
 	TypeBrowserBlur    = "browser-blur"    // client → sessiond: focus release
 	TypeBrowserGranted = "browser-granted" // sessiond → client: input authority notification
+	TypeBrowserCursor  = "browser-cursor"  // sessiond → client: cursor shape update
 
 	// Tunnel messages (client ↔ serve, not forwarded to daemon).
 	TypeCreateTunnel  = "create-tunnel"
