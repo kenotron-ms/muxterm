@@ -113,9 +113,17 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 			params["windowsVirtualKeyCode"] = int(r)
 			params["nativeVirtualKeyCode"] = int(r)
 		}
-		if text != "" {
+		// Never include text/unmodifiedText for keyboard shortcuts (Ctrl+key,
+		// Meta/Cmd+key). Including text with rawKeyDown causes Chrome to fire a
+		// textInput event that overrides the shortcut's editing command
+		// (e.g. Ctrl+A → SelectAll gets overridden by textInput inserting "a").
+		// CDP modifier bits: Alt=1, Ctrl=2, Meta=4, Shift=8.
+		if text != "" && msg.Modifiers&(2|4) == 0 {
 			params["text"] = text
 			params["unmodifiedText"] = text
+		}
+		if cmds := cdpCommandsForShortcut(msg.Key, msg.Modifiers); len(cmds) > 0 {
+			params["commands"] = cmds
 		}
 		if _, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", params); err != nil {
 			return err
@@ -125,9 +133,8 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 		// rawKeyDown only fires the keydown DOM event; text insertion requires
 		// the textInput/char path. Control characters (\r, \t, etc.) are
 		// handled by rawKeyDown's native actions and must NOT get a char event.
-		// CDP modifier bits: Alt=1, Ctrl=2, Meta=4, Shift=8.
-		// Do NOT send a char event for Ctrl+key or Meta/Cmd+key — those are
-		// keyboard shortcuts (Ctrl+A=SelectAll, Ctrl+C=Copy, Cmd+V=Paste, etc.)
+		// Skip char entirely for Ctrl/Meta shortcuts — those are editing
+		// commands (SelectAll, Copy, Paste, etc.), not text insertion.
 		// and must be handled by rawKeyDown alone, not text insertion.
 		if r, _ := utf8.DecodeRuneInString(text); r != utf8.RuneError && r >= 0x20 && r != 0x7f && msg.Modifiers&(2|4) == 0 {
 			_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", map[string]any{
@@ -238,6 +245,43 @@ func (bp *BrowserPage) handleNavigate(ctx context.Context, url string) error {
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.navigate", map[string]any{"url": url})
 		return err
 	}
+}
+
+// cdpCommandsForShortcut returns the CDP editing commands array for a
+// Ctrl/Meta+key shortcut. Using semantic commands makes shortcuts
+// cross-platform: Ctrl+A and Cmd+A both execute "SelectAll" regardless of
+// whether Chrome is running on macOS or Linux.
+// Returns nil if the key combination has no editing command mapping.
+func cdpCommandsForShortcut(key string, modifiers int) []string {
+	// Only applies when Ctrl (2) or Meta/Cmd (4) is held.
+	if modifiers&(2|4) == 0 {
+		return nil
+	}
+	withShift := modifiers&8 != 0
+	switch strings.ToLower(key) {
+	case "a":
+		return []string{"SelectAll"}
+	case "c":
+		return []string{"Copy"}
+	case "v":
+		return []string{"Paste"}
+	case "x":
+		return []string{"Cut"}
+	case "z":
+		if withShift {
+			return []string{"Redo"}
+		}
+		return []string{"Undo"}
+	case "y":
+		return []string{"Redo"}
+	case "b":
+		return []string{"Bold"}
+	case "i":
+		return []string{"Italic"}
+	case "u":
+		return []string{"Underline"}
+	}
+	return nil
 }
 
 // cdpMouseButton converts a browser mouse button name to the CDP button string.

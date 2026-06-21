@@ -209,6 +209,62 @@ func TestHandleInput_BrowserBlur_ClearsAuthority(t *testing.T) {
 	}
 }
 
+// TestCDPCommandsForShortcut verifies cdpCommandsForShortcut returns the
+// correct CDP editing command array for Ctrl/Meta+key shortcuts, and nil for
+// non-shortcut combinations. This is the cross-platform fix: both Ctrl+A and
+// Cmd+A produce ["SelectAll"] regardless of the host OS.
+func TestCDPCommandsForShortcut(t *testing.T) {
+	const ctrl = 2
+	const meta = 4
+	const shift = 8
+
+	cases := []struct {
+		key       string
+		modifiers int
+		want      []string
+	}{
+		// Ctrl shortcuts
+		{"a", ctrl, []string{"SelectAll"}},
+		{"A", ctrl, []string{"SelectAll"}}, // uppercase also works
+		{"c", ctrl, []string{"Copy"}},
+		{"v", ctrl, []string{"Paste"}},
+		{"x", ctrl, []string{"Cut"}},
+		{"z", ctrl, []string{"Undo"}},
+		{"z", ctrl | shift, []string{"Redo"}},
+		{"y", ctrl, []string{"Redo"}},
+		{"b", ctrl, []string{"Bold"}},
+		{"i", ctrl, []string{"Italic"}},
+		{"u", ctrl, []string{"Underline"}},
+		// Meta/Cmd shortcuts (same commands)
+		{"a", meta, []string{"SelectAll"}},
+		{"c", meta, []string{"Copy"}},
+		{"v", meta, []string{"Paste"}},
+		{"x", meta, []string{"Cut"}},
+		{"z", meta, []string{"Undo"}},
+		{"z", meta | shift, []string{"Redo"}},
+		// No modifier — must return nil
+		{"a", 0, nil},
+		{"c", 0, nil},
+		// Alt only — not a shortcut modifier
+		{"a", 1, nil},
+		// Unknown key with Ctrl — must return nil
+		{"q", ctrl, nil},
+		{"p", ctrl, nil},
+	}
+	for _, tc := range cases {
+		got := cdpCommandsForShortcut(tc.key, tc.modifiers)
+		if len(got) != len(tc.want) {
+			t.Errorf("cdpCommandsForShortcut(%q, %d) = %v; want %v", tc.key, tc.modifiers, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("cdpCommandsForShortcut(%q, %d)[%d] = %q; want %q", tc.key, tc.modifiers, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
 // TestHandleInput_BrowserFocus_SetsAuthorityAndBroadcasts verifies that a
 // browser-focus message (a) records the sender as the input authority and
 // (b) broadcasts a BrowserGrantedMsg to all clients.
