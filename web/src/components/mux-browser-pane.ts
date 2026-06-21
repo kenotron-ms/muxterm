@@ -800,9 +800,13 @@ export class MuxBrowserPane extends LitElement {
     if (_activeBrowserPaneId !== this.paneId) return;
     // Never intercept URL bar editing.
     if (this._editingUrl) return;
-    // If the event originated within our own shadow DOM (e.g. canvas already
-    // has focus), the canvas keydown listener handles it — avoid duplicate send.
-    if (e.composedPath().includes(this as unknown as EventTarget)) return;
+    // Skip only when the event's innermost target IS the canvas — in that
+    // case the canvas keydown listener (_onKeyDown) handles it directly.
+    // Do NOT skip for shadow-host-targeted events (CDP/playwright fires on
+    // document.activeElement = mux-browser-pane when canvas has shadow-DOM
+    // focus) or document.body events (dockview may have stolen canvas focus).
+    const innermost = e.composedPath()[0] as EventTarget;
+    if (innermost === (this._canvas as unknown as EventTarget)) return;
 
     const isModifier =
       e.key === 'Control' || e.key === 'Alt' || e.key === 'Shift' || e.key === 'Meta';
@@ -817,7 +821,8 @@ export class MuxBrowserPane extends LitElement {
   private readonly _onWindowKeyUp = (e: KeyboardEvent): void => {
     if (_activeBrowserPaneId !== this.paneId) return;
     if (this._editingUrl) return;
-    if (e.composedPath().includes(this as unknown as EventTarget)) return;
+    const innermost = e.composedPath()[0] as EventTarget;
+    if (innermost === (this._canvas as unknown as EventTarget)) return;
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
