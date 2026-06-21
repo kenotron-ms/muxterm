@@ -28,7 +28,7 @@ import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
 import type { MuxSidebar } from './components/mux-sidebar.js';
-import './components/mux-dock-bar.js';
+
 
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
@@ -748,11 +748,7 @@ export class MuxApp extends LitElement {
         </div>
 
       </div>
-      <mux-dock-bar
-        .connectionStatus="${this._connectionStatus}"
-        @workspace-switch="${this._onWorkspaceSelected}"
-        @workspace-create="${this._onOpenCreateModal}"
-      ></mux-dock-bar>
+
       <div class="undo-toast-stack" @pane-close-resolved="${this._onUndoPaneClose}">
         ${repeat(
           [...this._pendingClosesMeta.entries()],
