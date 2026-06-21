@@ -110,6 +110,55 @@ func TestHandleInput_BranchesExist(t *testing.T) {
 	var _ func(string) (string, string, string) = cdpKeyParams
 }
 
+// TestWindowsVirtualKeyCodeMap verifies the map exists and contains correct
+// Windows virtual key codes (VK_* values) for non-printable keys. Chrome's CDP
+// Input.dispatchKeyEvent requires these for editing commands to fire — without
+// windowsVirtualKeyCode, rawKeyDown fires the DOM event but Chrome silently
+// skips Backspace deletion, arrow-key cursor movement, etc.
+func TestWindowsVirtualKeyCodeMap(t *testing.T) {
+	cases := []struct {
+		key     string
+		wantVK  int
+	}{
+		{"Backspace", 8},
+		{"Tab", 9},
+		{"Enter", 13},
+		{"Escape", 27},
+		{" ", 32},
+		{"Space", 32},
+		{"PageUp", 33},
+		{"PageDown", 34},
+		{"End", 35},
+		{"Home", 36},
+		{"ArrowLeft", 37},
+		{"Left", 37},
+		{"ArrowUp", 38},
+		{"Up", 38},
+		{"ArrowRight", 39},
+		{"Right", 39},
+		{"ArrowDown", 40},
+		{"Down", 40},
+		{"Insert", 45},
+		{"Delete", 46},
+		{"F1", 112},
+		{"F12", 123},
+		{"Shift", 16},
+		{"Control", 17},
+		{"Alt", 18},
+		{"Meta", 91},
+	}
+	for _, tc := range cases {
+		got, ok := windowsVirtualKeyCodeMap[tc.key]
+		if !ok {
+			t.Errorf("windowsVirtualKeyCodeMap[%q] missing; want %d", tc.key, tc.wantVK)
+			continue
+		}
+		if got != tc.wantVK {
+			t.Errorf("windowsVirtualKeyCodeMap[%q] = %d; want %d", tc.key, got, tc.wantVK)
+		}
+	}
+}
+
 // TestHandleInput_AuthorityGuard_DropsNonAuthority verifies that HandleInput
 // silently drops mouse/keyboard events from a client that does not hold
 // authority. The guard must return nil without touching the CDP connection

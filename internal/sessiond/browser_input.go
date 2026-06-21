@@ -82,15 +82,30 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 
 	case "keydown":
 		key, code, text := cdpKeyParams(msg.Key)
-		// rawKeyDown fires the keydown DOM event and triggers native browser
-		// actions (Backspace deletes, Enter submits forms/newlines in textareas,
-		// Tab moves focus, etc.). It does NOT insert text into inputs — the
-		// "text" field is silently ignored for rawKeyDown by Chrome's CDP.
+		// rawKeyDown fires the keydown DOM event. Chrome needs windowsVirtualKeyCode
+		// to dispatch editing commands for non-printable keys (Backspace deletes,
+		// Enter submits, arrow keys move cursor, Tab moves focus, etc.).
+		// Without this field, rawKeyDown fires the DOM event but Chrome silently
+		// skips the corresponding editing action.
 		params := map[string]any{
 			"type":      "rawKeyDown",
 			"key":       key,
 			"code":      code,
 			"modifiers": msg.Modifiers,
+		}
+		if kc, ok := windowsVirtualKeyCodeMap[msg.Key]; ok {
+			params["windowsVirtualKeyCode"] = kc
+			params["nativeVirtualKeyCode"] = kc
+		} else if len([]rune(msg.Key)) == 1 {
+			// Single printable character: keyCode is the Unicode code point
+			// (uppercase for letters). This fills the field even when msg.Key
+			// is e.g. "a" (keyCode=65) rather than being absent.
+			r := []rune(msg.Key)[0]
+			if r >= 'a' && r <= 'z' {
+				r -= 32 // uppercase: 'a'→'A' (65), etc.
+			}
+			params["windowsVirtualKeyCode"] = int(r)
+			params["nativeVirtualKeyCode"] = int(r)
 		}
 		if text != "" {
 			params["text"] = text
@@ -118,12 +133,24 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 
 	case "keyup":
 		key, code, _ := cdpKeyParams(msg.Key)
-		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", map[string]any{
+		upParams := map[string]any{
 			"type":      "keyUp",
 			"key":       key,
 			"code":      code,
 			"modifiers": msg.Modifiers,
-		})
+		}
+		if kc, ok := windowsVirtualKeyCodeMap[msg.Key]; ok {
+			upParams["windowsVirtualKeyCode"] = kc
+			upParams["nativeVirtualKeyCode"] = kc
+		} else if len([]rune(msg.Key)) == 1 {
+			r := []rune(msg.Key)[0]
+			if r >= 'a' && r <= 'z' {
+				r -= 32
+			}
+			upParams["windowsVirtualKeyCode"] = int(r)
+			upParams["nativeVirtualKeyCode"] = int(r)
+		}
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", upParams)
 		return err
 
 	case "navigate":
@@ -214,6 +241,37 @@ func cdpMouseButton(name string) string {
 	default:
 		return "left"
 	}
+}
+
+// windowsVirtualKeyCodeMap maps KeyboardEvent.key strings to Windows virtual
+// key codes (VK_* values). Chrome's CDP Input.dispatchKeyEvent requires this
+// for non-printable keys to trigger editing commands (Backspace, arrow keys,
+// Delete, Enter, Tab, etc.). Without it, rawKeyDown fires the DOM event but
+// Chrome doesn't dispatch the corresponding editing command.
+var windowsVirtualKeyCodeMap = map[string]int{
+	"Backspace": 8,
+	"Tab":       9,
+	"Enter":     13,
+	"Escape":    27,
+	" ":         32, // Space
+	"Space":     32,
+	"PageUp":    33,
+	"PageDown":  34,
+	"End":       35,
+	"Home":      36,
+	"ArrowLeft": 37, "Left": 37,
+	"ArrowUp": 38, "Up": 38,
+	"ArrowRight": 39, "Right": 39,
+	"ArrowDown": 40, "Down": 40,
+	"Insert": 45,
+	"Delete": 46,
+	"F1":     112, "F2": 113, "F3": 114, "F4": 115,
+	"F5":     116, "F6": 117, "F7": 118, "F8": 119,
+	"F9":     120, "F10": 121, "F11": 122, "F12": 123,
+	"Shift":   16,
+	"Control": 17,
+	"Alt":     18,
+	"Meta":    91,
 }
 
 // digitCodes maps digit characters to their CDP code names.
