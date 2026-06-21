@@ -21,6 +21,84 @@ describe('mux-browser-pane module', () => {
 });
 
 /**
+ * _toViewport clamping tests.
+ *
+ * Verifies that _toViewport(e, clamp=true) clamps out-of-bounds coordinates to
+ * the viewport edges rather than returning null, enabling drag-selection to
+ * reach the boundary when the pointer leaves the canvas.
+ */
+describe('_toViewport clamping', () => {
+  /** Create a minimal shell with a letterbox already set (no letterbox: full canvas = viewport). */
+  function makeShell(fw: number, fh: number) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const shell: any = {
+      _letterbox: { dx: 0, dy: 0, scale: 1, fw, fh },
+    };
+    return shell;
+  }
+
+  async function callToViewport(
+    shell: ReturnType<typeof makeShell>,
+    offsetX: number,
+    offsetY: number,
+    clamp: boolean,
+  ) {
+    const mod = await import('../components/mux-browser-pane.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const proto = (mod.MuxBrowserPane as any).prototype;
+    const fakeEvent = { offsetX, offsetY };
+    return proto._toViewport.call(shell, fakeEvent, clamp) as { x: number; y: number } | null;
+  }
+
+  it('returns null for out-of-bounds coords when clamp=false (existing behaviour)', async () => {
+    const shell = makeShell(800, 600);
+    const result = await callToViewport(shell, -10, 50, false);
+    expect(result).toBeNull();
+  });
+
+  it('clamps left-of-viewport to x=0 when clamp=true', async () => {
+    const shell = makeShell(800, 600);
+    const result = await callToViewport(shell, -10, 100, true);
+    expect(result).not.toBeNull();
+    expect(result!.x).toBe(0);
+    expect(result!.y).toBe(100);
+  });
+
+  it('clamps right-of-viewport to fw when clamp=true', async () => {
+    const shell = makeShell(800, 600);
+    const result = await callToViewport(shell, 900, 100, true);  // 900 > fw=800
+    expect(result).not.toBeNull();
+    expect(result!.x).toBe(800);
+    expect(result!.y).toBe(100);
+  });
+
+  it('clamps above-viewport to y=0 when clamp=true', async () => {
+    const shell = makeShell(800, 600);
+    const result = await callToViewport(shell, 100, -50, true);
+    expect(result).not.toBeNull();
+    expect(result!.x).toBe(100);
+    expect(result!.y).toBe(0);
+  });
+
+  it('clamps below-viewport to fh when clamp=true', async () => {
+    const shell = makeShell(800, 600);
+    const result = await callToViewport(shell, 100, 700, true);  // 700 > fh=600
+    expect(result).not.toBeNull();
+    expect(result!.x).toBe(100);
+    expect(result!.y).toBe(600);
+  });
+
+  it('_isDragging field exists on MuxBrowserPane prototype', async () => {
+    const mod = await import('../components/mux-browser-pane.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const instance = new (mod.MuxBrowserPane as any)();
+    // _isDragging should be a boolean field (false by default)
+    expect(typeof instance._isDragging).toBe('boolean');
+    expect(instance._isDragging).toBe(false);
+  });
+});
+
+/**
  * _drawLetterboxed letterbox math tests.
  *
  * Verifies that _drawLetterboxed computes and stores the correct letterbox

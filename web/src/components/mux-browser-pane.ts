@@ -359,6 +359,9 @@ export class MuxBrowserPane extends LitElement {
   // Letterbox transform computed during the last frame draw.
   // Used by _toViewport to map mouse coordinates into Chromium space.
   private _letterbox = { dx: 0, dy: 0, scale: 1, fw: 0, fh: 0 };
+  // True while a mouse button is held down (between mousedown and mouseup).
+  // Used to clamp coordinates during drag so selection can reach the viewport edge.
+  private _isDragging = false;
 
   // Stable per-WebSocket-connection ID. Generated once per component instance.
   private readonly _clientId: string = Math.random().toString(36).slice(2);
@@ -692,16 +695,18 @@ export class MuxBrowserPane extends LitElement {
    * offsetX/offsetY are relative to the canvas element itself (canvas-local
    * CSS pixels), so no clientX/clientRect math is needed.
    */
-  private _toViewport(e: MouseEvent): { x: number; y: number } | null {
+  private _toViewport(e: MouseEvent, clamp = false): { x: number; y: number } | null {
     const { dx, dy, scale, fw, fh } = this._letterbox;
-    if (scale === 0 || fw === 0 || fh === 0) return null;
-
-    const x = (e.offsetX - dx) / scale;
-    const y = (e.offsetY - dy) / scale;
-
-    // Reject clicks in the black bars (outside the rendered frame).
-    if (x < 0 || x > fw || y < 0 || y > fh) return null;
-
+    if (!fw || !fh) return null;
+    let x = (e.offsetX - dx) / scale;
+    let y = (e.offsetY - dy) / scale;
+    if (clamp) {
+      // During drag, clamp to viewport edges so selection can reach the boundary.
+      x = Math.max(0, Math.min(fw, x));
+      y = Math.max(0, Math.min(fh, y));
+    } else {
+      if (x < 0 || y < 0 || x > fw || y > fh) return null;
+    }
     return { x: Math.round(x), y: Math.round(y) };
   }
 
@@ -715,7 +720,7 @@ export class MuxBrowserPane extends LitElement {
   // -------------------------------------------------------------------------
 
   private readonly _onMouseMove = (e: MouseEvent): void => {
-    const coords = this._toViewport(e);
+    const coords = this._toViewport(e, this._isDragging);
     if (!coords) return;
     // Derive the primary held button name from the buttons bitmask.
     // CDP mouseMoved needs this to handle drag-selection and other
@@ -740,7 +745,14 @@ export class MuxBrowserPane extends LitElement {
 
   private readonly _onMouseDown = (e: MouseEvent): void => {
     e.preventDefault();
-    this._canvas.focus();
+    this._canvas.focus({ preventScroll: true });
+    // Capture pointer so mousemove/mouseup fire on the canvas even if the
+    // mouse leaves its bounds during drag-selection. MouseEvent does not
+    // expose pointerId in the type system, but at runtime browsers assign
+    // pointerId=1 for the primary mouse pointer; the cast is safe here and
+    // errors are swallowed by the try/catch.
+    try { this._canvas.setPointerCapture((e as PointerEvent).pointerId); } catch { /* ignore */ }
+    this._isDragging = true;
     const coords = this._toViewport(e);
     if (!coords) return;
     wsBrowser.send({
@@ -751,7 +763,13 @@ export class MuxBrowserPane extends LitElement {
   };
 
   private readonly _onMouseUp = (e: MouseEvent): void => {
-    const coords = this._toViewport(e);
+    this._isDragging = false;
+    try {
+      if (this._canvas.hasPointerCapture((e as PointerEvent).pointerId)) {
+        this._canvas.releasePointerCapture((e as PointerEvent).pointerId);
+      }
+    } catch { /* ignore */ }
+    const coords = this._toViewport(e, true);  // clamp on release too
     if (!coords) return;
     wsBrowser.send({
       type: SessiondType.BrowserInput,
