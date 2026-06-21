@@ -373,15 +373,22 @@ export class MuxBrowserPane extends LitElement {
     const rect = this._canvas.getBoundingClientRect();
     const w = Math.round(rect.width);
     const h = Math.round(rect.height);
-    if (w > 0 && h > 0) {
-      wsBrowser.send({
-        type: 'browser-focus',
-        paneId: this.paneId,
-        deviceId: this._deviceId,
-        renderWidth: w,
-        renderHeight: h,
-      });
-    }
+    if (w <= 0 || h <= 0) return;
+
+    // Optimistically update the coordinate mapping to the viewport we're
+    // about to request. Chrome will SetViewport(w, h) — so no letterboxing
+    // is expected. Any in-flight frames from the old viewport are discarded
+    // by the new _letterbox; the first frame at the new size re-confirms it.
+    // This prevents stale old-viewport letterbox from causing wrong clicks.
+    this._letterbox = { dx: 0, dy: 0, scale: 1, fw: w, fh: h };
+
+    wsBrowser.send({
+      type: 'browser-focus',
+      paneId: this.paneId,
+      deviceId: this._deviceId,
+      renderWidth: w,
+      renderHeight: h,
+    });
   }
 
   private readonly _onPanelActivated = (e: Event): void => {

@@ -65,11 +65,17 @@ export const browserRegistry = {
   /**
    * Register callbacks for a pane. Called by <mux-browser-pane> in connectedCallback.
    * Merges provided callbacks into the existing entry. Passing null for a field clears it.
-   * No-op if the pane has not been ensured.
+   * Creates the entry on demand if it doesn't exist — the component may mount before
+   * ensure() is called (e.g. pane-added fires before composition processing runs ensure()).
    */
   setCallbacks(paneId: number, cbs: Partial<BrowserPaneCallbacks>): void {
-    const entry = _map.get(paneId);
-    if (!entry) return;
+    let entry = _map.get(paneId);
+    if (!entry) {
+      // Create entry on demand — component may mount before ensure() is called
+      // (e.g. pane-added fires before composition processing runs ensure()).
+      entry = _blankEntry();
+      _map.set(paneId, entry);
+    }
     if ('onFrame' in cbs) entry.onFrame = cbs.onFrame ?? null;
     if ('onUrl' in cbs) entry.onUrl = cbs.onUrl ?? null;
     if ('onError' in cbs) entry.onError = cbs.onError ?? null;
