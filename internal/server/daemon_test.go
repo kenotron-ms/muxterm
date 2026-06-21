@@ -71,7 +71,7 @@ func (f *fakeDaemonConn) BrowserInput(paneID int, clientID string, event json.Ra
 	return nil
 }
 
-func (f *fakeDaemonConn) BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int) error {
+func (f *fakeDaemonConn) BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int, devicePixelRatio float64) error {
 	return nil
 }
 

@@ -13,9 +13,7 @@ import (
 func (bp *BrowserPage) startScreencast(ctx context.Context) error {
 	_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.startScreencast", map[string]any{
 		"format":        "jpeg",
-		"quality":       75,
-		"maxWidth":      1280,
-		"maxHeight":     720,
+		"quality":       90,
 		"everyNthFrame": 1,
 	})
 	return err
@@ -33,7 +31,7 @@ func (bp *BrowserPage) getCurrentURL() string {
 func (bp *BrowserPage) captureScreenshot(ctx context.Context) ([]byte, error) {
 	result, err := bp.cdp.Call(ctx, bp.sessionID, "Page.captureScreenshot", map[string]any{
 		"format":  "jpeg",
-		"quality": 75,
+		"quality": 90,
 	})
 	if err != nil {
 		return nil, err

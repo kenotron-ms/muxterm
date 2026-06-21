@@ -178,15 +178,23 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 		return bp.handleNavigate(ctx, msg.URL)
 
 	case "resize":
+		dpr := bp.devicePixelRatio
+		if dpr <= 0 {
+			dpr = 1.0
+		}
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Emulation.setDeviceMetricsOverride", map[string]any{
 			"width":             msg.Width,
 			"height":            msg.Height,
-			"deviceScaleFactor": 1,
+			"deviceScaleFactor": dpr,
 			"mobile":            false,
 		})
 		return err
 
 	case "browser-focus":
+		// Store client DPR so SetViewport uses the right deviceScaleFactor.
+		if msg.DevicePixelRatio > 0 {
+			bp.devicePixelRatio = msg.DevicePixelRatio
+		}
 		// 1. Update Chromium viewport to match this client's canvas dimensions.
 		if msg.RenderWidth > 0 && msg.RenderHeight > 0 {
 			if err := bp.SetViewport(ctx, msg.RenderWidth, msg.RenderHeight); err != nil {

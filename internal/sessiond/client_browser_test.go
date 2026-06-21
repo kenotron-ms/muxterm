@@ -257,7 +257,7 @@ func TestBrowserFocusSendsCorrectFrame(t *testing.T) {
 	defer c.Close()
 	go c.Run()
 
-	if err := c.BrowserFocus(5, "client-abc", "device-xyz", 1280, 720); err != nil {
+	if err := c.BrowserFocus(5, "client-abc", "device-xyz", 1280, 720, 0); err != nil {
 		t.Fatalf("BrowserFocus: %v", err)
 	}
 

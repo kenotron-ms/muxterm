@@ -420,6 +420,10 @@ func (c *conn) handle(msg Message) {
 		}
 		// Last-focus-wins: this client immediately becomes the input authority.
 		c.srv.browserManager.SetAuthority(msg.PaneID, msg.ClientID)
+		// Store client DPR so SetViewport uses the right deviceScaleFactor.
+		if msg.DevicePixelRatio > 0 {
+			bp.devicePixelRatio = msg.DevicePixelRatio
+		}
 		// Resize Chromium to the focused client's canvas dimensions.
 		if msg.RenderWidth > 0 && msg.RenderHeight > 0 {
 			vpCtx, vpCancel := context.WithTimeout(context.Background(), 5*time.Second)

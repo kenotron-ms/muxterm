@@ -31,8 +31,8 @@ type DaemonConn interface {
 	// BrowserInput forwards a raw browser-input event JSON payload to the daemon.
 	BrowserInput(paneID int, clientID string, event json.RawMessage) error
 	// BrowserFocus sends a browser-focus event, claiming input authority and
-	// updating the Chromium viewport to renderWidth × renderHeight.
-	BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int) error
+	// updating the Chromium viewport to renderWidth × renderHeight at devicePixelRatio.
+	BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int, devicePixelRatio float64) error
 	// BrowserBlur sends a browser-blur event, releasing input authority.
 	BrowserBlur(paneID int, clientID, deviceID string) error
 	SetHandlers(h sessiond.Handlers)

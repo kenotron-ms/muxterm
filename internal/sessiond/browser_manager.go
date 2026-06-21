@@ -36,7 +36,8 @@ type BrowserPage struct {
 	cdp        *CDPConn        // shared with BrowserManager
 	manager    *BrowserManager
 	cancel     context.CancelFunc
-	currentURL string // last navigated URL; set by handleEvent Page.frameNavigated
+	currentURL      string  // last navigated URL; set by handleEvent Page.frameNavigated
+	devicePixelRatio float64 // 1.0 when unset; set from browser-focus DevicePixelRatio
 	// currentURL is written only from runEventLoop and read from the
 	// TypeBrowserFocus goroutine — a plain field is acceptable for this
 	// non-critical URL display (no mutex needed).
@@ -146,11 +147,14 @@ func (bm *BrowserManager) OpenPage(paneID int) (*BrowserPage, error) {
 		return nil, fmt.Errorf("browser: Page.enable: %w", err)
 	}
 
-	// Set viewport to 1280×720
+	// Set initial viewport to 1280×720 at scale 1.0. The real deviceScaleFactor
+	// is not known yet — it arrives with the first browser-focus event from the
+	// client and is applied via SetViewport at that point.
+	dpr := 1.0
 	if _, err := bm.cdp.Call(ctx, session.SessionID, "Emulation.setDeviceMetricsOverride", map[string]any{
 		"width":             1280,
 		"height":            720,
-		"deviceScaleFactor": 1,
+		"deviceScaleFactor": dpr,
 		"mobile":            false,
 	}); err != nil {
 		return nil, fmt.Errorf("browser: set viewport: %w", err)
@@ -190,15 +194,20 @@ func (bm *BrowserManager) ClosePage(paneID int) {
 }
 
 // SetViewport updates Chromium's render resolution for this page.
-// Calls Emulation.setDeviceMetricsOverride with the given dimensions.
+// Calls Emulation.setDeviceMetricsOverride with the given dimensions and the
+// stored devicePixelRatio (set from the client's browser-focus event).
 // A 5-second deadline is applied. Returns an error if CDP fails.
 func (bp *BrowserPage) SetViewport(ctx context.Context, width, height int) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	dpr := bp.devicePixelRatio
+	if dpr <= 0 {
+		dpr = 1.0
+	}
 	_, err := bp.cdp.Call(ctx, bp.sessionID, "Emulation.setDeviceMetricsOverride", map[string]any{
 		"width":             width,
 		"height":            height,
-		"deviceScaleFactor": 1,
+		"deviceScaleFactor": dpr,
 		"mobile":            false,
 	})
 	return err

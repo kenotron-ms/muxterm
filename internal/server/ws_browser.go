@@ -119,12 +119,13 @@ func (s *Server) handleWSBrowserImpl(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var env struct {
-			Type         string          `json:"type"`
-			PaneID       int             `json:"paneId"`
-			Event        json.RawMessage `json:"event"`
-			DeviceID     string          `json:"deviceId"`
-			RenderWidth  int             `json:"renderWidth"`
-			RenderHeight int             `json:"renderHeight"`
+			Type             string          `json:"type"`
+			PaneID           int             `json:"paneId"`
+			Event            json.RawMessage `json:"event"`
+			DeviceID         string          `json:"deviceId"`
+			RenderWidth      int             `json:"renderWidth"`
+			RenderHeight     int             `json:"renderHeight"`
+			DevicePixelRatio float64         `json:"devicePixelRatio"`
 		}
 		if err := json.Unmarshal(data, &env); err != nil {
 			continue
@@ -132,7 +133,7 @@ func (s *Server) handleWSBrowserImpl(w http.ResponseWriter, r *http.Request) {
 
 		switch env.Type {
 		case sessiond.TypeBrowserFocus:
-			if err := dc.BrowserFocus(env.PaneID, clientID, env.DeviceID, env.RenderWidth, env.RenderHeight); err != nil {
+			if err := dc.BrowserFocus(env.PaneID, clientID, env.DeviceID, env.RenderWidth, env.RenderHeight, env.DevicePixelRatio); err != nil {
 				log.Printf("handleWSBrowserImpl: BrowserFocus: %v", err)
 			}
 		case sessiond.TypeBrowserBlur:

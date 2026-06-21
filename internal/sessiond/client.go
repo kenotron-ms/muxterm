@@ -417,18 +417,19 @@ func (c *Client) SendBrowserAction(msg Message) error {
 
 // BrowserFocus sends a browser-focus event to the daemon, claiming input
 // authority for paneID and updating the Chromium viewport to renderWidth ×
-// renderHeight. It is fire-and-forget: the daemon sends no direct reply (it
-// will broadcast browser-granted to all subscribers).
-func (c *Client) BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int) error {
+// renderHeight at devicePixelRatio. It is fire-and-forget: the daemon sends no
+// direct reply (it will broadcast browser-granted to all subscribers).
+func (c *Client) BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int, devicePixelRatio float64) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	return WriteControl(c.conn, &Message{
-		Type:         TypeBrowserFocus,
-		PaneID:       paneID,
-		ClientID:     clientID,
-		DeviceID:     deviceID,
-		RenderWidth:  renderWidth,
-		RenderHeight: renderHeight,
+		Type:             TypeBrowserFocus,
+		PaneID:           paneID,
+		ClientID:         clientID,
+		DeviceID:         deviceID,
+		RenderWidth:      renderWidth,
+		RenderHeight:     renderHeight,
+		DevicePixelRatio: devicePixelRatio,
 	})
 }
 

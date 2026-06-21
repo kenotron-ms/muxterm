@@ -216,12 +216,13 @@ type Message struct {
 	Tunnels    []TunnelInfo `json:"tunnels,omitempty"`
 
 	// Browser relay fields (browser-focus, browser-blur, browser-input, browser-granted).
-	ClientID     string          `json:"clientId,omitempty"`     // stable per /ws/browser connection
-	DeviceID     string          `json:"deviceId,omitempty"`     // localStorage UUID, stable per physical machine
-	RenderWidth  int             `json:"renderWidth,omitempty"`  // canvas CSS width in px at focus time
-	RenderHeight int             `json:"renderHeight,omitempty"` // canvas CSS height in px at focus time
-	InputEvent   json.RawMessage `json:"inputEvent,omitempty"`   // raw BrowserInputMsg JSON for browser-input
-	RawPayload   json.RawMessage `json:"rawPayload,omitempty"`   // original JSON bytes for relay passthrough
+	ClientID         string          `json:"clientId,omitempty"`         // stable per /ws/browser connection
+	DeviceID         string          `json:"deviceId,omitempty"`         // localStorage UUID, stable per physical machine
+	RenderWidth      int             `json:"renderWidth,omitempty"`      // canvas CSS width in px at focus time
+	RenderHeight     int             `json:"renderHeight,omitempty"`     // canvas CSS height in px at focus time
+	DevicePixelRatio float64         `json:"devicePixelRatio,omitempty"` // client window.devicePixelRatio; 0 means 1.0
+	InputEvent       json.RawMessage `json:"inputEvent,omitempty"`       // raw BrowserInputMsg JSON for browser-input
+	RawPayload       json.RawMessage `json:"rawPayload,omitempty"`       // original JSON bytes for relay passthrough
 }
 
 // TunnelInfo is one entry in a tunnel-list reply.
@@ -253,8 +254,9 @@ type BrowserInputMsg struct {
 
 	ClientID     string `json:"clientId,omitempty"`     // stable per-connection ID (browser-focus/blur)
 	DeviceID     string `json:"deviceId,omitempty"`     // stable per-device ID (browser-focus/blur)
-	RenderWidth  int    `json:"renderWidth,omitempty"`  // canvas CSS width at focus time
-	RenderHeight int    `json:"renderHeight,omitempty"` // canvas CSS height at focus time
+	RenderWidth     int     `json:"renderWidth,omitempty"`     // canvas CSS width at focus time
+	RenderHeight    int     `json:"renderHeight,omitempty"`    // canvas CSS height at focus time
+	DevicePixelRatio float64 `json:"devicePixelRatio,omitempty"` // client window.devicePixelRatio; 0 means 1.0
 }
 
 // BrowserURLMsg is the {type:"browser-url"} frame sent by the server on

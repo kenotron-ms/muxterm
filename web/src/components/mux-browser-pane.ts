@@ -399,6 +399,7 @@ export class MuxBrowserPane extends LitElement {
       deviceId: this._deviceId,
       renderWidth: w,
       renderHeight: h,
+      devicePixelRatio: window.devicePixelRatio,
     });
     // Re-claim DOM focus whenever we claim input authority. Deferred with rAF
     // so that any in-progress dockview focus management (which runs synchronously
