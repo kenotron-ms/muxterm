@@ -347,6 +347,7 @@ export class MuxBrowserPane extends LitElement {
   private _fpsFrameCount = 0;
   private _fpsTimer: ReturnType<typeof setInterval> | undefined;
   private _resizeObserver: ResizeObserver | undefined;
+  private _hasFirstUpdated = false;
   // Letterbox transform computed during the last frame draw.
   // Used by _toViewport to map mouse coordinates into Chromium space.
   private _letterbox = { dx: 0, dy: 0, scale: 1, fw: 0, fh: 0 };
@@ -402,6 +403,38 @@ export class MuxBrowserPane extends LitElement {
     });
   };
 
+  /**
+   * Returns the ResizeObserver callback used to track canvas size changes.
+   * Extracted into a method so it can be reused identically in firstUpdated()
+   * and connectedCallback() (the reconnect path).
+   */
+  private _makeResizeObserver(): ResizeObserverCallback {
+    return (entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      const w = Math.round(width);
+      const h = Math.round(height);
+      if (w <= 0 || h <= 0) return;
+
+      // Only reset the canvas buffer when dimensions actually change.
+      // Setting canvas.width/height to ANY value — even the same — clears
+      // all drawn content. This prevents erasing a freshly-drawn screenshot
+      // when a minor layout shift triggers a spurious ResizeObserver fire.
+      const bufferChanged = this._canvas.width !== w || this._canvas.height !== h;
+      if (bufferChanged) {
+        this._canvas.width = w;
+        this._canvas.height = h;
+        this._ctx = this._canvas.getContext('2d');
+      }
+
+      // Report new render size to server (focus + viewport update).
+      // Call even if buffer didn't change — the server needs the size signal
+      // when the pane first becomes visible after being hidden.
+      this._sendBrowserFocus();
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------
@@ -426,6 +459,16 @@ export class MuxBrowserPane extends LitElement {
     // callbacks that fire before the socket is open silently drop the message.
     // onReconnect fires exactly when the socket becomes OPEN, guaranteeing delivery.
     wsBrowser.onReconnect = () => this._sendBrowserFocus();
+
+    // If firstUpdated has already run (reconnect case), restart the ResizeObserver
+    // and re-acquire the canvas context. Both were cleared in disconnectedCallback().
+    if (this._hasFirstUpdated && this._canvas) {
+      if (!this._ctx) {
+        this._ctx = this._canvas.getContext('2d');
+      }
+      this._resizeObserver = new ResizeObserver(this._makeResizeObserver());
+      this._resizeObserver.observe(this._canvas);
+    }
   }
 
   override disconnectedCallback(): void {
@@ -455,38 +498,16 @@ export class MuxBrowserPane extends LitElement {
       paneId: this.paneId,
       event: { type: 'browser-blur', clientId: this._clientId, deviceId: this._deviceId },
     });
-    this._ctx = null;
     this._pendingFrame = null;
   }
 
   protected override firstUpdated(): void {
+    this._hasFirstUpdated = true;
+
     // Get 2D rendering context
     this._ctx = this._canvas.getContext('2d');
 
-    this._resizeObserver = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const { width, height } = entry.contentRect;
-      const w = Math.round(width);
-      const h = Math.round(height);
-      if (w <= 0 || h <= 0) return;
-
-      // Only reset the canvas buffer when dimensions actually change.
-      // Setting canvas.width/height to ANY value — even the same — clears
-      // all drawn content. This prevents erasing a freshly-drawn screenshot
-      // when a minor layout shift triggers a spurious ResizeObserver fire.
-      const bufferChanged = this._canvas.width !== w || this._canvas.height !== h;
-      if (bufferChanged) {
-        this._canvas.width = w;
-        this._canvas.height = h;
-        this._ctx = this._canvas.getContext('2d');
-      }
-
-      // Report new render size to server (focus + viewport update).
-      // Call even if buffer didn't change — the server needs the size signal
-      // when the pane first becomes visible after being hidden.
-      this._sendBrowserFocus();
-    });
+    this._resizeObserver = new ResizeObserver(this._makeResizeObserver());
     this._resizeObserver.observe(this._canvas);
 
     // Claim input authority and report canvas render size.
@@ -526,7 +547,14 @@ export class MuxBrowserPane extends LitElement {
   private _flushFrame(): void {
     this._renderScheduled = false;
     const pending = this._pendingFrame;
-    if (!pending || !this._ctx) return;
+    if (!pending) return;
+    // Re-acquire context if it was cleared (e.g. after disconnect/reconnect).
+    // CanvasRenderingContext2D is not invalidated by DOM removal — re-getting it
+    // returns the same live context.
+    if (!this._ctx && this._canvas) {
+      this._ctx = this._canvas.getContext('2d');
+    }
+    if (!this._ctx) return;
     this._pendingFrame = null;
 
     // .slice() produces Uint8Array<ArrayBuffer> (not SharedArrayBuffer), satisfying BlobPart
