@@ -616,8 +616,17 @@ export class MuxBrowserPane extends LitElement {
     const dx = (cw - fw * scale) / 2;
     const dy = (ch - fh * scale) / 2;
 
-    // Store for coordinate mapping in _toViewport.
-    this._letterbox = { dx, dy, scale, fw, fh };
+    // Only update the coordinate-mapping letterbox when this frame's dimensions
+    // match what we requested via browser-focus (fw === this._letterbox.fw).
+    // Stale frames from the previous viewport must NOT overwrite the mapping —
+    // they would make clicks land at wrong coordinates until the new viewport
+    // frames arrive.
+    //
+    // Exception: if _letterbox.fw === 0 (no viewport claimed yet), accept any
+    // frame to establish the initial mapping.
+    if (fw === this._letterbox.fw || this._letterbox.fw === 0) {
+      this._letterbox = { dx, dy, scale, fw, fh };
+    }
 
     this._ctx.clearRect(0, 0, cw, ch);
     this._ctx.drawImage(img, dx, dy, fw * scale, fh * scale);
