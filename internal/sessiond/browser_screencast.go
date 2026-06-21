@@ -21,25 +21,11 @@ func (bp *BrowserPage) startScreencast(ctx context.Context) error {
 	return err
 }
 
-// getCurrentURL returns the current page URL via Runtime.evaluate.
-// Used when reconnecting clients need the URL without a navigation event.
-func (bp *BrowserPage) getCurrentURL(ctx context.Context) (string, error) {
-	result, err := bp.cdp.Call(ctx, bp.sessionID, "Runtime.evaluate", map[string]any{
-		"expression":    "document.URL",
-		"returnByValue": true,
-	})
-	if err != nil {
-		return "", err
-	}
-	var r struct {
-		Result struct {
-			Value string `json:"value"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(result, &r); err != nil {
-		return "", err
-	}
-	return r.Result.Value, nil
+// getCurrentURL returns the URL of the most recent top-level navigation.
+// It reads the in-memory cache set by handleEvent, avoiding a CDP round-trip
+// at reconnect time (when Chrome may be mid-layout after SetViewport).
+func (bp *BrowserPage) getCurrentURL() string {
+	return bp.currentURL
 }
 
 // captureScreenshot takes a JPEG screenshot of the current page and returns
@@ -122,6 +108,8 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 				PaneID: bp.paneID,
 				URL:    nav.Frame.URL,
 			})
+			// Cache for getCurrentURL() at reconnect time.
+			bp.currentURL = nav.Frame.URL
 		}
 	}
 }

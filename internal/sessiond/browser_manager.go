@@ -30,12 +30,16 @@ type BrowserManager struct {
 // BrowserPage manages one live Chromium tab. It owns the event loop goroutine
 // and routes input to raw CDP calls.
 type BrowserPage struct {
-	paneID    int
-	sessionID string          // CDP flattened session ID for this tab
-	targetID  string
-	cdp       *CDPConn        // shared with BrowserManager
-	manager   *BrowserManager
-	cancel    context.CancelFunc
+	paneID     int
+	sessionID  string          // CDP flattened session ID for this tab
+	targetID   string
+	cdp        *CDPConn        // shared with BrowserManager
+	manager    *BrowserManager
+	cancel     context.CancelFunc
+	currentURL string // last navigated URL; set by handleEvent Page.frameNavigated
+	// currentURL is written only from runEventLoop and read from the
+	// TypeBrowserFocus goroutine — a plain field is acceptable for this
+	// non-critical URL display (no mutex needed).
 }
 
 // NewBrowserManager creates a BrowserManager with broadcast callbacks.

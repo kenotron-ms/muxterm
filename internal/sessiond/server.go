@@ -456,7 +456,7 @@ func (c *conn) handle(msg Message) {
 
 			// Restore the current URL. frameNavigated only fires on navigation,
 			// so reconnecting clients never see the URL unless we send it here.
-			if url, err := bp.getCurrentURL(ctx); err == nil && url != "" && url != "about:blank" {
+			if url := bp.getCurrentURL(); url != "" && url != "about:blank" {
 				c.srv.broadcastBrowserControlAny(BrowserURLMsg{
 					Type:   TypeBrowserURL,
 					PaneID: paneID,
