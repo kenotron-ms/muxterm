@@ -471,8 +471,39 @@ func (bp *BrowserPage) maybeSendCursor(ctx context.Context, x, y float64) {
 
 	go func() {
 		result, err := bp.cdp.Call(ctx, bp.sessionID, "Runtime.evaluate", map[string]any{
+			// Resolve cursor: auto → 'text' when over a selectable text node.
+			// getComputedStyle returns "auto" for plain text elements (<p>, <h1>,
+			// etc.), but browsers visually render "auto" as an I-beam when the
+			// pointer is over a text node. We detect this via caretRangeFromPoint.
+			//
+			// caretRangeFromPoint snaps to the NEAREST caret position, so it can
+			// return a text node even when the pointer is in blank margin area.
+			// We guard against this by walking up to the caret's nearest sized
+			// ancestor and verifying (x,y) falls within its bounding rect.
 			"expression": fmt.Sprintf(
-				"((x,y)=>{const el=document.elementFromPoint(x,y);return el?getComputedStyle(el).cursor:'default';})(%g,%g)",
+				`((x,y)=>{
+const el=document.elementFromPoint(x,y);
+if(!el)return'default';
+const s=getComputedStyle(el);
+const c=s.cursor;
+if(c!=='auto')return c;
+if(s.userSelect==='none')return'default';
+try{
+  const r=document.caretRangeFromPoint(x,y);
+  if(r&&r.startContainer.nodeType===3){
+    let node=r.startContainer.parentElement;
+    while(node&&node!==document.documentElement){
+      const rect=node.getBoundingClientRect();
+      if(rect.width>0&&rect.height>0){
+        if(x>=rect.left&&x<=rect.right&&y>=rect.top&&y<=rect.bottom)return'text';
+        break;
+      }
+      node=node.parentElement;
+    }
+  }
+}catch(_){}
+return'default';
+})(%g,%g)`,
 				x, y,
 			),
 			"returnByValue": true,
