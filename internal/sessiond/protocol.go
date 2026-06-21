@@ -240,7 +240,8 @@ type BrowserInputMsg struct {
 	Type   string  `json:"type"`
 	X      float64 `json:"x,omitempty"`      // pointer X coordinate
 	Y      float64 `json:"y,omitempty"`      // pointer Y coordinate
-	Button string  `json:"button,omitempty"` // left|middle|right
+	Button  string `json:"button,omitempty"`  // left|middle|right
+	Buttons int    `json:"buttons,omitempty"` // bitmask of currently-held buttons: 1=left,2=right,4=middle
 	DeltaX float64 `json:"deltaX,omitempty"` // scroll delta X
 	DeltaY float64 `json:"deltaY,omitempty"` // scroll delta Y
 	Key       string  `json:"key,omitempty"`       // e.g. "Enter", "ArrowLeft", "a"

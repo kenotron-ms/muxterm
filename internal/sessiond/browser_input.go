@@ -26,10 +26,16 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 
 	switch msg.Type {
 	case "mousemove":
+		btn := "none"
+		if msg.Button != "" {
+			btn = cdpMouseButton(msg.Button)
+		}
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
 			"type":      "mouseMoved",
 			"x":         msg.X,
 			"y":         msg.Y,
+			"button":    btn,
+			"buttons":   msg.Buttons,
 			"modifiers": msg.Modifiers,
 		})
 		if err == nil {
@@ -238,6 +244,8 @@ func cdpMouseButton(name string) string {
 		return "middle"
 	case "right":
 		return "right"
+	case "none":
+		return "none"
 	default:
 		return "left"
 	}

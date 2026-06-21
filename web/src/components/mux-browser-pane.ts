@@ -717,10 +717,24 @@ export class MuxBrowserPane extends LitElement {
   private readonly _onMouseMove = (e: MouseEvent): void => {
     const coords = this._toViewport(e);
     if (!coords) return;
+    // Derive the primary held button name from the buttons bitmask.
+    // CDP mouseMoved needs this to handle drag-selection and other
+    // press-while-move interactions.
+    const button: string =
+      e.buttons & 1 ? 'left' :
+      e.buttons & 4 ? 'middle' :
+      e.buttons & 2 ? 'right' : 'none';
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mousemove', x: coords.x, y: coords.y, modifiers: this._cdpModifiers(e) },
+      event: {
+        type: 'mousemove',
+        x: coords.x,
+        y: coords.y,
+        button,
+        buttons: e.buttons,
+        modifiers: this._cdpModifiers(e),
+      },
     });
   };
 
