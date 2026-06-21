@@ -469,14 +469,23 @@ export class MuxBrowserPane extends LitElement {
       const { width, height } = entry.contentRect;
       const w = Math.round(width);
       const h = Math.round(height);
-      if (w > 0 && h > 0) {
+      if (w <= 0 || h <= 0) return;
+
+      // Only reset the canvas buffer when dimensions actually change.
+      // Setting canvas.width/height to ANY value — even the same — clears
+      // all drawn content. This prevents erasing a freshly-drawn screenshot
+      // when a minor layout shift triggers a spurious ResizeObserver fire.
+      const bufferChanged = this._canvas.width !== w || this._canvas.height !== h;
+      if (bufferChanged) {
         this._canvas.width = w;
         this._canvas.height = h;
-        // Re-get context: some browsers invalidate it on canvas resize.
         this._ctx = this._canvas.getContext('2d');
-        // Report new render size to server so Chromium viewport tracks it.
-        this._sendBrowserFocus();
       }
+
+      // Report new render size to server (focus + viewport update).
+      // Call even if buffer didn't change — the server needs the size signal
+      // when the pane first becomes visible after being hidden.
+      this._sendBrowserFocus();
     });
     this._resizeObserver.observe(this._canvas);
 

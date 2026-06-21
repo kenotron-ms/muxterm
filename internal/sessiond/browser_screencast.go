@@ -21,6 +21,27 @@ func (bp *BrowserPage) startScreencast(ctx context.Context) error {
 	return err
 }
 
+// getCurrentURL returns the current page URL via Runtime.evaluate.
+// Used when reconnecting clients need the URL without a navigation event.
+func (bp *BrowserPage) getCurrentURL(ctx context.Context) (string, error) {
+	result, err := bp.cdp.Call(ctx, bp.sessionID, "Runtime.evaluate", map[string]any{
+		"expression":    "document.URL",
+		"returnByValue": true,
+	})
+	if err != nil {
+		return "", err
+	}
+	var r struct {
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(result, &r); err != nil {
+		return "", err
+	}
+	return r.Result.Value, nil
+}
+
 // captureScreenshot takes a JPEG screenshot of the current page and returns
 // the raw JPEG bytes. Used for on-demand frames (e.g. browser-focus, reconnect).
 func (bp *BrowserPage) captureScreenshot(ctx context.Context) ([]byte, error) {

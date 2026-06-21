@@ -438,8 +438,30 @@ func (c *conn) handle(msg Message) {
 			if !ok {
 				return
 			}
+
+			// Restart screencast — Chrome pauses screencasting on static pages.
+			// After reconnect, no frames flow until screencasting is restarted.
+			_ = bp.startScreencast(ctx)
+
+			// Brief wait: SetViewport triggers a Chrome layout/repaint cycle.
+			// captureScreenshot called immediately returns a blank or stale frame.
+			// 200ms is enough for Chrome to finish the viewport reflow.
+			time.Sleep(200 * time.Millisecond)
+
+			// Send a screenshot immediately so the client sees current content
+			// even if the page is static (no ongoing screencast frames).
 			if shot, err := bp.captureScreenshot(ctx); err == nil && len(shot) > 0 {
 				c.srv.broadcastBrowserData(paneID, shot)
+			}
+
+			// Restore the current URL. frameNavigated only fires on navigation,
+			// so reconnecting clients never see the URL unless we send it here.
+			if url, err := bp.getCurrentURL(ctx); err == nil && url != "" && url != "about:blank" {
+				c.srv.broadcastBrowserControlAny(BrowserURLMsg{
+					Type:   TypeBrowserURL,
+					PaneID: paneID,
+					URL:    url,
+				})
 			}
 		}()
 		// Broadcast browser-granted so all clients know who holds input authority.
