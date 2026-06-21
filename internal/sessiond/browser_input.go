@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // HandleInput routes a BrowserInputMsg to the appropriate raw CDP call.
@@ -81,11 +82,11 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 
 	case "keydown":
 		key, code, text := cdpKeyParams(msg.Key)
+		// rawKeyDown fires the keydown DOM event and triggers native browser
+		// actions (Backspace deletes, Enter submits forms/newlines in textareas,
+		// Tab moves focus, etc.). It does NOT insert text into inputs — the
+		// "text" field is silently ignored for rawKeyDown by Chrome's CDP.
 		params := map[string]any{
-			// rawKeyDown (not keyDown) triggers native browser actions:
-			// Backspace deletes, Enter submits/newlines, Tab focuses next, etc.
-			// keyDown only fires the JS keydown event — browser built-in
-			// actions are ignored. rawKeyDown = native OS key press.
 			"type":      "rawKeyDown",
 			"key":       key,
 			"code":      code,
@@ -95,8 +96,25 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 			params["text"] = text
 			params["unmodifiedText"] = text
 		}
-		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", params)
-		return err
+		if _, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", params); err != nil {
+			return err
+		}
+		// For printable characters, also dispatch a "char" event. This is what
+		// actually inserts text into a focused <input> or <textarea> in Chrome.
+		// rawKeyDown only fires the keydown DOM event; text insertion requires
+		// the textInput/char path. Control characters (\r, \t, etc.) are
+		// handled by rawKeyDown's native actions and must NOT get a char event.
+		if r, _ := utf8.DecodeRuneInString(text); r != utf8.RuneError && r >= 0x20 && r != 0x7f {
+			_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", map[string]any{
+				"type":           "char",
+				"key":            text,
+				"text":           text,
+				"unmodifiedText": text,
+				"modifiers":      msg.Modifiers,
+			})
+			return err
+		}
+		return nil
 
 	case "keyup":
 		key, code, _ := cdpKeyParams(msg.Key)
@@ -175,7 +193,9 @@ func (bp *BrowserPage) handleNavigate(ctx context.Context, url string) error {
 	case "":
 		return fmt.Errorf("navigate: empty URL")
 	default:
-		if !strings.Contains(url, "://") {
+		// Only prepend https:// for bare hostnames. Schemes like data:, about:,
+		// file:, blob: use a single colon (not ://), so we check for any colon.
+		if !strings.Contains(url, ":") {
 			url = "https://" + url
 		}
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.navigate", map[string]any{"url": url})
