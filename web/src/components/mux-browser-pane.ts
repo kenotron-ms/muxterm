@@ -421,6 +421,11 @@ export class MuxBrowserPane extends LitElement {
     window.addEventListener('browser-pane-activated', this._onPanelActivated);
     window.addEventListener('focus', this._onWindowFocus);
     window.addEventListener('blur', this._onWindowBlur);
+    // Re-send browser-focus every time the /ws/browser socket (re)connects.
+    // wsBrowser.send() is a no-op when not open, so firstUpdated / ResizeObserver
+    // callbacks that fire before the socket is open silently drop the message.
+    // onReconnect fires exactly when the socket becomes OPEN, guaranteeing delivery.
+    wsBrowser.onReconnect = () => this._sendBrowserFocus();
   }
 
   override disconnectedCallback(): void {
@@ -437,6 +442,7 @@ export class MuxBrowserPane extends LitElement {
     window.removeEventListener('browser-pane-activated', this._onPanelActivated);
     window.removeEventListener('focus', this._onWindowFocus);
     window.removeEventListener('blur', this._onWindowBlur);
+    wsBrowser.onReconnect = null;
     if (this._fpsTimer !== undefined) {
       clearInterval(this._fpsTimer);
       this._fpsTimer = undefined;
