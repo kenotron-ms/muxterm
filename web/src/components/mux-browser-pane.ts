@@ -389,6 +389,8 @@ export class MuxBrowserPane extends LitElement {
       renderWidth: w,
       renderHeight: h,
     });
+    // Re-claim DOM focus whenever we claim input authority.
+    this._canvas?.focus({ preventScroll: true });
   }
 
   private readonly _onPanelActivated = (e: Event): void => {
@@ -475,6 +477,7 @@ export class MuxBrowserPane extends LitElement {
       }
       this._resizeObserver = new ResizeObserver(this._makeResizeObserver());
       this._resizeObserver.observe(this._canvas);
+      this._canvas.focus({ preventScroll: true });
     }
   }
 
@@ -536,6 +539,10 @@ export class MuxBrowserPane extends LitElement {
     // Keyboard event listeners
     this._canvas.addEventListener('keydown', this._onKeyDown);
     this._canvas.addEventListener('keyup', this._onKeyUp);
+
+    // Claim DOM focus so keyboard events reach the canvas immediately.
+    // Without this, the user must click before typing works.
+    this._canvas.focus({ preventScroll: true });
   }
 
   // -------------------------------------------------------------------------
@@ -668,6 +675,11 @@ export class MuxBrowserPane extends LitElement {
     return { x: Math.round(x), y: Math.round(y) };
   }
 
+  /** Compute the CDP modifiers bitmask from a mouse or keyboard event. */
+  private _cdpModifiers(e: MouseEvent | KeyboardEvent): number {
+    return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
+  }
+
   // -------------------------------------------------------------------------
   // Mouse relay
   // -------------------------------------------------------------------------
@@ -678,7 +690,7 @@ export class MuxBrowserPane extends LitElement {
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mousemove', x: coords.x, y: coords.y },
+      event: { type: 'mousemove', x: coords.x, y: coords.y, modifiers: this._cdpModifiers(e) },
     });
   };
 
@@ -690,7 +702,7 @@ export class MuxBrowserPane extends LitElement {
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mousedown', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x: coords.x, y: coords.y },
+      event: { type: 'mousedown', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x: coords.x, y: coords.y, modifiers: this._cdpModifiers(e) },
     });
   };
 
@@ -700,7 +712,7 @@ export class MuxBrowserPane extends LitElement {
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'mouseup', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x: coords.x, y: coords.y },
+      event: { type: 'mouseup', button: (['left', 'middle', 'right'][e.button] ?? 'left'), x: coords.x, y: coords.y, modifiers: this._cdpModifiers(e) },
     });
   };
 
@@ -715,7 +727,7 @@ export class MuxBrowserPane extends LitElement {
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'wheel', x: coords.x, y: coords.y, deltaX: e.deltaX, deltaY: e.deltaY },
+      event: { type: 'wheel', x: coords.x, y: coords.y, deltaX: e.deltaX, deltaY: e.deltaY, modifiers: this._cdpModifiers(e) },
     });
   };
 
@@ -734,7 +746,7 @@ export class MuxBrowserPane extends LitElement {
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'keydown', key: e.key },
+      event: { type: 'keydown', key: e.key, modifiers: this._cdpModifiers(e) },
     });
     // NO type event — keydown/keyup carry text input via CDP key text field
   };
@@ -744,7 +756,7 @@ export class MuxBrowserPane extends LitElement {
     wsBrowser.send({
       type: SessiondType.BrowserInput,
       paneId: this.paneId,
-      event: { type: 'keyup', key: e.key },
+      event: { type: 'keyup', key: e.key, modifiers: this._cdpModifiers(e) },
     });
   };
 

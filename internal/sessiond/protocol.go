@@ -243,11 +243,12 @@ type BrowserInputMsg struct {
 	Button string  `json:"button,omitempty"` // left|middle|right
 	DeltaX float64 `json:"deltaX,omitempty"` // scroll delta X
 	DeltaY float64 `json:"deltaY,omitempty"` // scroll delta Y
-	Key    string  `json:"key,omitempty"`    // e.g. "Enter", "ArrowLeft", "a"
-	Text   string  `json:"text,omitempty"`   // for "type" events
-	URL    string  `json:"url,omitempty"`    // for "navigate" events; "history:back" etc.
-	Width  int     `json:"width,omitempty"`  // for "resize" events
-	Height int     `json:"height,omitempty"` // for "resize" events
+	Key       string  `json:"key,omitempty"`       // e.g. "Enter", "ArrowLeft", "a"
+	Text      string  `json:"text,omitempty"`      // for "type" events
+	URL       string  `json:"url,omitempty"`       // for "navigate" events; "history:back" etc.
+	Width     int     `json:"width,omitempty"`     // for "resize" events
+	Height    int     `json:"height,omitempty"`    // for "resize" events
+	Modifiers int     `json:"modifiers,omitempty"` // CDP modifiers bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8
 
 	ClientID     string `json:"clientId,omitempty"`     // stable per-connection ID (browser-focus/blur)
 	DeviceID     string `json:"deviceId,omitempty"`     // stable per-device ID (browser-focus/blur)

@@ -26,9 +26,10 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 	switch msg.Type {
 	case "mousemove":
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
-			"type": "mouseMoved",
-			"x":    msg.X,
-			"y":    msg.Y,
+			"type":      "mouseMoved",
+			"x":         msg.X,
+			"y":         msg.Y,
+			"modifiers": msg.Modifiers,
 		})
 		if err == nil {
 			bp.maybeSendCursor(ctx, msg.X, msg.Y)
@@ -41,9 +42,10 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 		// links, hit-test areas) only respond to mousePressed when a prior
 		// mouseMoved has placed the cursor there.
 		bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{ //nolint:errcheck
-			"type": "mouseMoved",
-			"x":   msg.X,
-			"y":   msg.Y,
+			"type":      "mouseMoved",
+			"x":         msg.X,
+			"y":         msg.Y,
+			"modifiers": msg.Modifiers,
 		})
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
 			"type":       "mousePressed",
@@ -51,6 +53,7 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 			"y":          msg.Y,
 			"button":     cdpMouseButton(msg.Button),
 			"clickCount": 1,
+			"modifiers":  msg.Modifiers,
 		})
 		return err
 
@@ -61,16 +64,18 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 			"y":          msg.Y,
 			"button":     cdpMouseButton(msg.Button),
 			"clickCount": 1,
+			"modifiers":  msg.Modifiers,
 		})
 		return err
 
 	case "wheel":
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchMouseEvent", map[string]any{
-			"type":   "mouseWheel",
-			"x":      msg.X,
-			"y":      msg.Y,
-			"deltaX": msg.DeltaX,
-			"deltaY": msg.DeltaY,
+			"type":      "mouseWheel",
+			"x":         msg.X,
+			"y":         msg.Y,
+			"deltaX":    msg.DeltaX,
+			"deltaY":    msg.DeltaY,
+			"modifiers": msg.Modifiers,
 		})
 		return err
 
@@ -81,9 +86,10 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 			// Backspace deletes, Enter submits/newlines, Tab focuses next, etc.
 			// keyDown only fires the JS keydown event — browser built-in
 			// actions are ignored. rawKeyDown = native OS key press.
-			"type": "rawKeyDown",
-			"key":  key,
-			"code": code,
+			"type":      "rawKeyDown",
+			"key":       key,
+			"code":      code,
+			"modifiers": msg.Modifiers,
 		}
 		if text != "" {
 			params["text"] = text
@@ -95,9 +101,10 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 	case "keyup":
 		key, code, _ := cdpKeyParams(msg.Key)
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", map[string]any{
-			"type": "keyUp",
-			"key":  key,
-			"code": code,
+			"type":      "keyUp",
+			"key":       key,
+			"code":      code,
+			"modifiers": msg.Modifiers,
 		})
 		return err
 
@@ -189,14 +196,32 @@ func cdpMouseButton(name string) string {
 	}
 }
 
+// digitCodes maps digit characters to their CDP code names.
+// Declared at package level to avoid allocating a new map on every call.
+var digitCodes = map[string]string{
+	"0": "Digit0", "1": "Digit1", "2": "Digit2", "3": "Digit3", "4": "Digit4",
+	"5": "Digit5", "6": "Digit6", "7": "Digit7", "8": "Digit8", "9": "Digit9",
+}
+
+// punctCodes maps punctuation characters (both unshifted and shifted) to CDP code names.
+// Declared at package level to avoid allocating a new map on every call.
+var punctCodes = map[string]string{
+	"-": "Minus", "=": "Equal", "[": "BracketLeft", "]": "BracketRight",
+	"\\": "Backslash", ";": "Semicolon", "'": "Quote", "`": "Backquote",
+	",": "Comma", ".": "Period", "/": "Slash",
+	// Shifted equivalents (same physical key, different character)
+	"_": "Minus", "+": "Equal", "{": "BracketLeft", "}": "BracketRight",
+	"|": "Backslash", ":": "Semicolon", "\"": "Quote", "~": "Backquote",
+	"<": "Comma", ">": "Period", "?": "Slash",
+	"!": "Digit1", "@": "Digit2", "#": "Digit3", "$": "Digit4", "%": "Digit5",
+	"^": "Digit6", "&": "Digit7", "*": "Digit8", "(": "Digit9", ")": "Digit0",
+}
+
 // cdpKeyParams converts a browser KeyboardEvent.key string to CDP key, code,
 // and text parameters for Input.dispatchKeyEvent.
 func cdpKeyParams(key string) (cdpKey, code, text string) {
-	// Single printable character
-	if len(key) == 1 {
-		return key, "Key" + strings.ToUpper(key), key
-	}
-	// Named keys
+	// 1. Named keys — checked first so e.g. Space isn't mishandled by the
+	//    single-char fallback below.
 	switch key {
 	case "Enter":
 		return "Enter", "Enter", "\r"
@@ -258,9 +283,25 @@ func cdpKeyParams(key string) (cdpKey, code, text string) {
 		return "Meta", "MetaLeft", ""
 	case " ", "Space":
 		return " ", "Space", " "
-	default:
-		return key, key, ""
 	}
+
+	// 2. Digit keys — e.g. "1" → Digit1, not "Key1".
+	if c, ok := digitCodes[key]; ok {
+		return key, c, key
+	}
+
+	// 3. Punctuation and their shifted equivalents — e.g. "-" → Minus, "!" → Digit1.
+	if c, ok := punctCodes[key]; ok {
+		return key, c, key
+	}
+
+	// 4. Fallback for other single printable characters (letters, etc.).
+	if len(key) == 1 {
+		return key, "Key" + strings.ToUpper(key), key
+	}
+
+	// 5. Unknown / composite key (e.g. "Dead", "Unidentified").
+	return key, key, ""
 }
 
 // Package-level cursor throttle state. Shared across all pages (v1: one page).
