@@ -125,7 +125,11 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 		// rawKeyDown only fires the keydown DOM event; text insertion requires
 		// the textInput/char path. Control characters (\r, \t, etc.) are
 		// handled by rawKeyDown's native actions and must NOT get a char event.
-		if r, _ := utf8.DecodeRuneInString(text); r != utf8.RuneError && r >= 0x20 && r != 0x7f {
+		// CDP modifier bits: Alt=1, Ctrl=2, Meta=4, Shift=8.
+		// Do NOT send a char event for Ctrl+key or Meta/Cmd+key — those are
+		// keyboard shortcuts (Ctrl+A=SelectAll, Ctrl+C=Copy, Cmd+V=Paste, etc.)
+		// and must be handled by rawKeyDown alone, not text insertion.
+		if r, _ := utf8.DecodeRuneInString(text); r != utf8.RuneError && r >= 0x20 && r != 0x7f && msg.Modifiers&(2|4) == 0 {
 			_, err := bp.cdp.Call(ctx, bp.sessionID, "Input.dispatchKeyEvent", map[string]any{
 				"type":           "char",
 				"key":            text,
