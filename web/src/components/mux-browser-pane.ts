@@ -677,17 +677,14 @@ export class MuxBrowserPane extends LitElement {
     const dx = (cw - fw * scale) / 2;
     const dy = (ch - fh * scale) / 2;
 
-    // Only draw frames whose dimensions match what we requested via browser-focus.
-    // Stale frames from a previous viewport (wrong DPR or wrong size) must be
-    // COMPLETELY SKIPPED — not just skipped for letterbox updates but not drawn
-    // at all. Drawing them creates persistent pillarboxing (black bars) because
-    // their aspect ratio differs from the canvas.
-    //
-    // Exception: _letterbox.fw === 0 means no viewport has been claimed yet;
-    // accept any frame to establish the initial mapping.
-    if (fw !== this._letterbox.fw && this._letterbox.fw !== 0) return;
-
-    this._letterbox = { dx, dy, scale, fw, fh };
+    // Always draw the frame. Update the letterbox only when dimensions match
+    // what we requested (fw === _letterbox.fw) to keep click mapping correct.
+    // We still draw wrong-size frames — they may appear briefly letterboxed but
+    // will be overwritten within milliseconds by the correct-size screenshot/
+    // screencast frames that follow. Rejecting them entirely caused blank canvas.
+    if (fw === this._letterbox.fw || this._letterbox.fw === 0) {
+      this._letterbox = { dx, dy, scale, fw, fh };
+    }
     this._ctx.clearRect(0, 0, cw, ch);
     this._ctx.drawImage(img, dx, dy, fw * scale, fh * scale);
   }
