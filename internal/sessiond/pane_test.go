@@ -33,7 +33,7 @@ func TestPaneEchoThenExit(t *testing.T) {
 		exitedID = localID
 		mu.Unlock()
 	}
-	p, err := NewPane(1, []string{"echo", "hello-pane"}, 80, 24, nil, nil, onExit)
+	p, err := NewPane(1, []string{"echo", "hello-pane"}, 80, 24, nil, nil, onExit, nil)
 	if err != nil {
 		t.Fatalf("NewPane: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestPaneInputIsEchoed(t *testing.T) {
 		got = append(got, data...)
 		mu.Unlock()
 	}
-	p, err := NewPane(2, []string{"cat"}, 80, 24, nil, onData, nil)
+	p, err := NewPane(2, []string{"cat"}, 80, 24, nil, onData, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPane: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestPaneInputIsEchoed(t *testing.T) {
 }
 
 func TestPaneResizeUpdatesInfo(t *testing.T) {
-	p, err := NewPane(3, []string{"cat"}, 80, 24, nil, nil, nil)
+	p, err := NewPane(3, []string{"cat"}, 80, 24, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPane: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestPaneResizeUpdatesInfo(t *testing.T) {
 }
 
 func TestPaneDefaultArgvUsesShell(t *testing.T) {
-	p, err := NewPane(4, nil, 80, 24, nil, nil, nil)
+	p, err := NewPane(4, nil, 80, 24, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPane with nil argv: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestPaneEnvAndCwd(t *testing.T) {
 		got = append(got, data...)
 		mu.Unlock()
 	}
-	p, err := NewPane(5, []string{"sh", "-c", "echo TERM=$TERM; echo PWD=$PWD"}, 80, 24, nil, onData, nil)
+	p, err := NewPane(5, []string{"sh", "-c", "echo TERM=$TERM; echo PWD=$PWD"}, 80, 24, nil, onData, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPane: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestPaneEnvAndCwd(t *testing.T) {
 }
 
 func TestPaneTitleFieldIsSettable(t *testing.T) {
-	p, err := NewPane(6, []string{"cat"}, 80, 24, nil, nil, nil)
+	p, err := NewPane(6, []string{"cat"}, 80, 24, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPane: %v", err)
 	}

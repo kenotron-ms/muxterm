@@ -547,6 +547,11 @@ func (c *conn) createPane(msg Message) {
 		return
 	}
 	cols, rows := sizeOrDefault(msg.Cols, msg.Rows)
+	onPromptFn := func(id int, m *Message) {
+		m.WorkspaceID = wsID
+		m.PaneID = id
+		c.srv.broadcast(wsID, m)
+	}
 	p, err := NewPane(
 		localID,
 		msg.Cmd,
@@ -559,18 +564,13 @@ func (c *conn) createPane(msg Message) {
 		// This fix was in commit 20cc2c8 and lost in the v0.5.0 revert (6490164).
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
 		func(id int) { c.srv.handlePaneExit(wsID, id) },
+		onPromptFn, // stored before readLoop starts — eliminates OSC 133 race
 	)
 	if err != nil {
 		c.replyError(msg.CID, CodePaneSpawnFailed, err.Error())
 		return
 	}
 	c.srv.reg.PutPane(wsID, p)
-	onPromptFn := func(id int, msg *Message) {
-		msg.WorkspaceID = wsID
-		msg.PaneID = id
-		c.srv.broadcast(wsID, msg)
-	}
-	p.onPromptPtr.Store(&onPromptFn)
 	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
 	c.srv.broadcast(wsID, &Message{
 		Type:            TypePaneAdded,

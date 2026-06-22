@@ -59,7 +59,14 @@ func resolveArgv(argv []string) []string {
 
 // NewPane starts a child process attached to a new PTY sized cols x rows and
 // begins streaming its output. buf may be nil (a default VTBuffer is used);
-// onData and onExit may be nil.
+// onData, onExit, and onPrompt may be nil.
+//
+// onPrompt is stored before the readLoop goroutine starts to eliminate the
+// race between the shell emitting OSC 133;D (prompt-ready signal) and the
+// caller registering the callback after NewPane returns. Without this, the
+// first prompt can fire while onPromptPtr is still nil and TypeShellPrompt
+// is silently dropped — causing clients that wait on TypeShellPrompt (e.g.
+// amplifier-app-cli) to hang indefinitely.
 func NewPane(
 	localID int,
 	argv []string,
@@ -67,6 +74,7 @@ func NewPane(
 	buf PaneBuffer,
 	onData func(localID int, data []byte),
 	onExit func(localID int),
+	onPrompt func(localID int, msg *Message),
 ) (*Pane, error) {
 	if buf == nil {
 		// Production default: VTBuffer (screen-state replay). Raw byte replay
@@ -100,6 +108,9 @@ func NewPane(
 		buf:     buf,
 		onData:  onData,
 		onExit:  onExit,
+	}
+	if onPrompt != nil {
+		p.onPromptPtr.Store(&onPrompt)
 	}
 	go p.readLoop()
 	return p, nil
