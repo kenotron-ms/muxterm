@@ -677,18 +677,17 @@ export class MuxBrowserPane extends LitElement {
     const dx = (cw - fw * scale) / 2;
     const dy = (ch - fh * scale) / 2;
 
-    // Only update the coordinate-mapping letterbox when this frame's dimensions
-    // match what we requested via browser-focus (fw === this._letterbox.fw).
-    // Stale frames from the previous viewport must NOT overwrite the mapping —
-    // they would make clicks land at wrong coordinates until the new viewport
-    // frames arrive.
+    // Only draw frames whose dimensions match what we requested via browser-focus.
+    // Stale frames from a previous viewport (wrong DPR or wrong size) must be
+    // COMPLETELY SKIPPED — not just skipped for letterbox updates but not drawn
+    // at all. Drawing them creates persistent pillarboxing (black bars) because
+    // their aspect ratio differs from the canvas.
     //
-    // Exception: if _letterbox.fw === 0 (no viewport claimed yet), accept any
-    // frame to establish the initial mapping.
-    if (fw === this._letterbox.fw || this._letterbox.fw === 0) {
-      this._letterbox = { dx, dy, scale, fw, fh };
-    }
+    // Exception: _letterbox.fw === 0 means no viewport has been claimed yet;
+    // accept any frame to establish the initial mapping.
+    if (fw !== this._letterbox.fw && this._letterbox.fw !== 0) return;
 
+    this._letterbox = { dx, dy, scale, fw, fh };
     this._ctx.clearRect(0, 0, cw, ch);
     this._ctx.drawImage(img, dx, dy, fw * scale, fh * scale);
   }
