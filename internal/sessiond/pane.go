@@ -180,12 +180,16 @@ func (p *Pane) readLoop() {
 					(*fn)(p.LocalID, &Message{Type: TypeShellPrompt, ExitCode: code})
 				}
 			}
-			_, _ = p.buf.Write(data)
+			// Deliver to subscribers before updating the VTBuffer so that
+			// VT emulator parsing (slow, O(n) ANSI state machine) never
+			// blocks the PTY drain or delays data reaching clients.
+			// onData is a non-blocking channel enqueue — safe to call first.
 			if p.onData != nil {
 				cp := make([]byte, n)
 				copy(cp, data)
 				p.onData(p.LocalID, cp)
 			}
+			_, _ = p.buf.Write(data)
 		}
 		if err != nil {
 			break

@@ -556,10 +556,9 @@ func (c *conn) createPane(msg Message) {
 		localID,
 		msg.Cmd,
 		cols, rows,
-		NewRawBuffer(0), // TODO: restore VTBuffer once amplifier-app-cli hang is diagnosed.
-		// VTBuffer (nil → gate in NewPane) breaks amplifier-app-cli: the app never shows its
-		// prompt. Reverted to RawBuffer (pre-b671766) to unblock. get_screen will return empty
-		// for terminal panes until this is fixed.
+		nil, // nil → NewPane installs VTBuffer. get_screen / TypeScreenSnapshot requires VTBuffer
+		// (type-asserts p.buf.(*VTBuffer)). Previously broken by buf.Write blocking onData
+		// in readLoop — fixed by moving onData before buf.Write (see pane.go readLoop).
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
 		func(id int) { c.srv.handlePaneExit(wsID, id) },
 		onPromptFn, // stored before readLoop starts — eliminates OSC 133 race
