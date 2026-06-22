@@ -356,6 +356,10 @@ export class MuxBrowserPane extends LitElement {
   private _fpsTimer: ReturnType<typeof setInterval> | undefined;
   private _resizeObserver: ResizeObserver | undefined;
   private _hasFirstUpdated = false;
+  // True once the first browser-focus has been sent with valid canvas dimensions.
+  // Frames received before viewport is initialized are suppressed so a Mac Retina
+  // client never renders an initial wrong-DPR frame from the default DPR=1 viewport.
+  private _viewportInitialized = false;
   // Letterbox transform computed during the last frame draw.
   // Used by _toViewport to map mouse coordinates into Chromium space.
   private _letterbox = { dx: 0, dy: 0, scale: 1, fw: 0, fh: 0 };
@@ -401,6 +405,9 @@ export class MuxBrowserPane extends LitElement {
       renderHeight: h,
       devicePixelRatio: window.devicePixelRatio,
     });
+    // Mark viewport as initialized — the server now knows our correct DPR/dimensions.
+    // Frames received before this point (at the old DPR=1 default) are suppressed.
+    this._viewportInitialized = true;
     // Re-claim DOM focus whenever we claim input authority. Deferred with rAF
     // so that any in-progress dockview focus management (which runs synchronously
     // during a tab-click) settles before we claim the canvas. Without the defer,
@@ -486,7 +493,12 @@ export class MuxBrowserPane extends LitElement {
     // wsBrowser.send() is a no-op when not open, so firstUpdated / ResizeObserver
     // callbacks that fire before the socket is open silently drop the message.
     // onReconnect fires exactly when the socket becomes OPEN, guaranteeing delivery.
-    wsBrowser.onReconnect = () => this._sendBrowserFocus();
+    wsBrowser.onReconnect = () => {
+      // Reset viewport flag so stale frames from the old viewport are suppressed
+      // until the new browser-focus has been sent with the current canvas dimensions.
+      this._viewportInitialized = false;
+      this._sendBrowserFocus();
+    };
 
     // If firstUpdated has already run (reconnect case), restart the ResizeObserver
     // and re-acquire the canvas context. Both were cleared in disconnectedCallback().
@@ -575,6 +587,11 @@ export class MuxBrowserPane extends LitElement {
   // -------------------------------------------------------------------------
 
   private readonly _onFrame = (jpegBytes: Uint8Array): void => {
+    // Suppress frames until the client has sent browser-focus with valid canvas
+    // dimensions. This prevents rendering an initial wrong-DPR frame that the
+    // server sends from its default DPR=1 viewport before the Mac Retina client's
+    // devicePixelRatio=2 is applied.
+    if (!this._viewportInitialized) return;
     // Latest-frame-wins: drop previous pending frame
     this._pendingFrame = jpegBytes;
     if (!this._renderScheduled) {
@@ -878,7 +895,7 @@ export class MuxBrowserPane extends LitElement {
     try {
       const parsed = new URL(url);
       return {
-        host: parsed.hostname,
+        host: parsed.host,  // includes port, e.g. "localhost:3000" not just "localhost"
         path: parsed.pathname + parsed.search + parsed.hash,
         isHttps: parsed.protocol === 'https:',
       };

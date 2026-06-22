@@ -481,14 +481,19 @@ func (c *conn) handle(msg Message) {
 		if !ok {
 			return
 		}
-		// Silently drop input from non-authority clients (last-focus-wins).
-		if !c.srv.browserManager.IsAuthority(msg.PaneID, msg.ClientID) {
-			return
-		}
 		var inputMsg BrowserInputMsg
 		if err := json.Unmarshal(msg.InputEvent, &inputMsg); err != nil {
 			log.Printf("sessiond: TypeBrowserInput unmarshal: %v", err)
 			return
+		}
+		// Navigate events (back/forward/reload) are UI-driven actions and always
+		// allowed regardless of input authority. Mouse/keyboard events require
+		// the client to hold authority so concurrent users don't fight over the
+		// same page — but navigation is page-level, not cursor-level.
+		if inputMsg.Type != "navigate" {
+			if !c.srv.browserManager.IsAuthority(msg.PaneID, msg.ClientID) {
+				return
+			}
 		}
 		ctx := context.Background()
 		if err := bp.HandleInput(ctx, inputMsg); err != nil {

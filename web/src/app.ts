@@ -547,16 +547,6 @@ export class MuxApp extends LitElement {
         this._showCreateModal = false;
         this._createModalName = '';
       }
-      // Tunnel state synchronization
-      if (msg.type === SessiondType.TunnelCreated && msg.tunnelId) {
-        store.addTunnel({ id: msg.tunnelId, port: msg.tunnelPort ?? 0 });
-      }
-      if (msg.type === SessiondType.TunnelClosed && msg.tunnelId) {
-        store.removeTunnel(msg.tunnelId);
-      }
-      if (msg.type === SessiondType.TunnelList) {
-        store.setTunnels(msg.tunnels ?? []);
-      }
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
     // now optimistic so the provisional pane overlays instantly.
@@ -592,8 +582,6 @@ export class MuxApp extends LitElement {
       // On (re)connect: attach the last/known workspace, or list + attach the
       // first. This is where the initial composition sync is requested.
       this._controller?.bootstrap();
-      // Sync tunnel state on (re)connect so the UI stays consistent.
-      this._socket?.listTunnels();
     };
     this._socket.connect();
     wsBrowser.onFrame = (paneId, jpegBytes) => browserRegistry.write(paneId, jpegBytes);
@@ -713,8 +701,6 @@ export class MuxApp extends LitElement {
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @workspace-close="${this._onSidebarWorkspaceClose}"
-            @tunnel-create="${this._onTunnelCreate}"
-            @tunnel-close="${this._onTunnelClose}"
             @launcher-action="${this._onLauncherAction}"
           ></mux-sidebar>
         ` : ''}
@@ -1026,14 +1012,6 @@ export class MuxApp extends LitElement {
   private get _sidebar(): MuxSidebar | null {
     return (this.renderRoot as ShadowRoot).querySelector('mux-sidebar');
   }
-
-  private _onTunnelCreate = (e: CustomEvent<{ port: number }>): void => {
-    this._socket?.createTunnel(e.detail.port);
-  };
-
-  private _onTunnelClose = (e: CustomEvent<{ id: string }>): void => {
-    this._socket?.closeTunnel(e.detail.id);
-  };
 
   /**
    * Handle a pane-close event from mux-dock. All closes (mouse, touch, pen)

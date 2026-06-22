@@ -71,13 +71,6 @@ const (
 	TypeBrowserGranted = "browser-granted" // sessiond → client: input authority notification
 	TypeBrowserCursor  = "browser-cursor"  // sessiond → client: cursor shape update
 
-	// Tunnel messages (client ↔ serve, not forwarded to daemon).
-	TypeCreateTunnel  = "create-tunnel"
-	TypeCloseTunnel   = "close-tunnel"
-	TypeListTunnels   = "list-tunnels"
-	TypeTunnelCreated = "tunnel-created"
-	TypeTunnelClosed  = "tunnel-closed"
-	TypeTunnelList    = "tunnel-list"
 )
 
 // Error codes are the frozen Message.Code values carried by a TypeError
@@ -211,11 +204,6 @@ type Message struct {
 	Result   json.RawMessage `json:"result,omitempty"`   // JS eval result (any JSON value)
 	OK       bool            `json:"ok,omitempty"`       // true when action succeeded without error
 
-	// Tunnel fields (create-tunnel, tunnel-created, close-tunnel, tunnel-list).
-	TunnelID   string       `json:"tunnelId,omitempty"`
-	TunnelPort int          `json:"tunnelPort,omitempty"`
-	Tunnels    []TunnelInfo `json:"tunnels,omitempty"`
-
 	// Browser relay fields (browser-focus, browser-blur, browser-input, browser-granted).
 	ClientID         string          `json:"clientId,omitempty"`         // stable per /ws/browser connection
 	DeviceID         string          `json:"deviceId,omitempty"`         // localStorage UUID, stable per physical machine
@@ -224,12 +212,6 @@ type Message struct {
 	DevicePixelRatio float64         `json:"devicePixelRatio,omitempty"` // client window.devicePixelRatio; 0 means 1.0
 	InputEvent       json.RawMessage `json:"inputEvent,omitempty"`       // raw BrowserInputMsg JSON for browser-input
 	RawPayload       json.RawMessage `json:"rawPayload,omitempty"`       // original JSON bytes for relay passthrough
-}
-
-// TunnelInfo is one entry in a tunnel-list reply.
-type TunnelInfo struct {
-	ID   string `json:"id"`
-	Port int    `json:"port"`
 }
 
 // BrowserInputMsg is the event payload for {type:"browser-input"},

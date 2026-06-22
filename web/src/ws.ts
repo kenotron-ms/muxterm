@@ -134,21 +134,6 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.ClosePane, paneId });
   }
 
-  /** Request a new port-forward tunnel for the given port. */
-  createTunnel(port: number): void {
-    this.sendSessiond({ type: SessiondType.CreateTunnel, tunnelPort: port });
-  }
-
-  /** Close an existing tunnel by its server-assigned ID. */
-  closeTunnel(id: string): void {
-    this.sendSessiond({ type: SessiondType.CloseTunnel, tunnelId: id });
-  }
-
-  /** Request the list of active tunnels. */
-  listTunnels(): void {
-    this.sendSessiond({ type: SessiondType.ListTunnels });
-  }
-
   /** Open a browser CDP pane on the server side. */
   createBrowserPane(): void {
     this.sendSessiond({ type: SessiondType.CreateBrowserPane });

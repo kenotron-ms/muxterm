@@ -49,13 +49,6 @@ describe('sessiond protocol types', () => {
       LayoutCommand: 'layout-command',
       ScreenSnapshot: 'screen-snapshot',
       GetLayout: 'get-layout',
-      // Tunnel management
-      CreateTunnel: 'create-tunnel',
-      CloseTunnel: 'close-tunnel',
-      ListTunnels: 'list-tunnels',
-      TunnelCreated: 'tunnel-created',
-      TunnelClosed: 'tunnel-closed',
-      TunnelList: 'tunnel-list',
     });
   });
 

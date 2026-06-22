@@ -15,8 +15,6 @@ export const SIDEBAR_DEFAULT_WIDTH = 220;
 export const SIDEBAR_MIN_WIDTH = 160;
 export const SIDEBAR_MAX_WIDTH = 360;
 
-export type SidebarTab = 'workspaces' | 'tunnels';
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -84,35 +82,6 @@ export class MuxSidebar extends LitElement {
       vertical-align: middle;
       flex-shrink: 0;
       pointer-events: none;
-    }
-
-    .tabs {
-      display: flex;
-      flex-direction: row;
-      border-bottom: 1px solid var(--chrome-border);
-      flex-shrink: 0;
-    }
-
-    .tab-btn {
-      flex: 1;
-      padding: 7px 0;
-      background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
-      color: var(--chrome-text-dim);
-      font: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      transition: color 0.12s, border-color 0.12s;
-    }
-
-    .tab-btn.active {
-      color: var(--chrome-text-bright);
-      border-bottom-color: var(--chrome-accent);
-    }
-
-    .tab-btn:hover:not(.active) {
-      color: var(--chrome-text-bright);
     }
 
     .tab-content {
@@ -248,131 +217,6 @@ export class MuxSidebar extends LitElement {
       background: var(--chrome-hover);
     }
 
-    /* ---- tunnels tab ---- */
-
-    .tunnel-row {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      padding: 5px 10px;
-      margin: 1px 6px;
-      border-radius: 4px;
-      font-size: 12px;
-    }
-
-    .tunnel-row:hover {
-      background: var(--chrome-hover);
-    }
-
-    .tunnel-dot {
-      font-size: 7px;
-      color: var(--chrome-accent);
-      flex-shrink: 0;
-      line-height: 1;
-    }
-
-    .tunnel-port {
-      color: var(--chrome-text-bright);
-      font-variant-numeric: tabular-nums;
-      min-width: 42px;
-    }
-
-    .tunnel-id {
-      flex: 1;
-      color: var(--chrome-text-dim);
-      font-family: monospace;
-      font-size: 11px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      min-width: 0;
-    }
-
-    .tunnel-action-btn {
-      flex-shrink: 0;
-      background: transparent;
-      border: none;
-      color: var(--chrome-text-dim);
-      cursor: pointer;
-      padding: 2px 4px;
-      border-radius: 3px;
-      font-size: 13px;
-      line-height: 1;
-      transition: color 0.12s, background 0.12s;
-    }
-
-    .tunnel-action-btn:hover {
-      color: var(--chrome-text-bright);
-      background: var(--chrome-hover);
-    }
-
-    .tunnel-close-btn:hover {
-      color: var(--chrome-danger);
-    }
-
-    .port-input-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 10px;
-      margin: 4px 6px;
-    }
-
-    .port-input {
-      flex: 1;
-      background: var(--chrome-body);
-      border: 1px solid var(--chrome-border);
-      border-radius: 3px;
-      color: var(--chrome-text-bright);
-      font: inherit;
-      font-size: 12px;
-      padding: 4px 6px;
-      outline: none;
-      min-width: 0;
-    }
-
-    .port-input:focus {
-      border-color: var(--chrome-accent);
-    }
-
-    .forward-btn {
-      flex-shrink: 0;
-      padding: 4px 8px;
-      background: var(--chrome-accent);
-      border: none;
-      border-radius: 3px;
-      color: var(--chrome-bar);
-      font: inherit;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity 0.12s;
-    }
-
-    .forward-btn:hover {
-      opacity: 0.85;
-    }
-
-    .add-tunnel-btn {
-      display: block;
-      width: calc(100% - 12px);
-      margin: 4px 6px;
-      padding: 7px 10px;
-      background: transparent;
-      border: none;
-      color: var(--chrome-accent);
-      font: inherit;
-      font-size: 12px;
-      text-align: left;
-      cursor: pointer;
-      border-radius: 4px;
-      transition: background 0.12s;
-    }
-
-    .add-tunnel-btn:hover {
-      background: var(--chrome-hover);
-    }
-
     /* ---- drag resize handle ---- */
 
     .resize-handle {
@@ -397,11 +241,8 @@ export class MuxSidebar extends LitElement {
   // State
   // ---------------------------------------------------------------------------
 
-  @state() private _tab: SidebarTab = 'workspaces';
   @state() private _version = 0;
   @state() private _renaming: string | null = null;
-  @state() private _showPortInput = false;
-  @state() private _authToken = '';
   @state() private _pendingClose = new Set<string>();
   @state() private _menuOpen = false;
 
@@ -454,17 +295,6 @@ export class MuxSidebar extends LitElement {
       this.style.width = `${SIDEBAR_DEFAULT_WIDTH}px`;
     }
 
-    // Fetch auth token for tunnel URL construction.
-    void fetch('/api/token')
-      .then((r) => r.json())
-      .then((data: { token?: unknown }) => {
-        if (typeof data.token === 'string') {
-          this._authToken = data.token;
-        }
-      })
-      .catch(() => {
-        // Ignore token fetch errors; URL copy will omit the token.
-      });
   }
 
   override disconnectedCallback(): void {
@@ -634,106 +464,6 @@ export class MuxSidebar extends LitElement {
   }
 
   // ---------------------------------------------------------------------------
-  // Tunnel helpers
-  // ---------------------------------------------------------------------------
-
-  private _submitPortInput(): void {
-    const input = this.shadowRoot?.querySelector<HTMLInputElement>('.port-input');
-    if (!input) return;
-    const port = parseInt(input.value, 10);
-    if (Number.isNaN(port) || port < 1 || port > 65535) return;
-    this.dispatchEvent(
-      new CustomEvent('tunnel-create', {
-        detail: { port },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-    this._showPortInput = false;
-  }
-
-  private _copyTunnelUrl(id: string): void {
-    const token = this._authToken;
-    const url = token
-      ? `${location.origin}/t/${id}/?token=${token}`
-      : `${location.origin}/t/${id}/`;
-    void navigator.clipboard.writeText(url).catch(() => {
-      // Ignore clipboard errors.
-    });
-  }
-
-  private _closeTunnel(id: string): void {
-    this.dispatchEvent(
-      new CustomEvent('tunnel-close', {
-        detail: { id },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Tunnel render
-  // ---------------------------------------------------------------------------
-
-  private _renderTunnels() {
-    return html`
-      ${store.tunnels.map(
-        (t) => html`
-          <div class="tunnel-row">
-            <span class="tunnel-dot">●</span>
-            <span class="tunnel-port">:${t.port}</span>
-            <span class="tunnel-id">${t.id}</span>
-            <button
-              class="tunnel-action-btn"
-              title="Copy URL"
-              @click="${() => this._copyTunnelUrl(t.id)}"
-            >⎘</button>
-            <button
-              class="tunnel-action-btn tunnel-close-btn"
-              title="Close tunnel"
-              @click="${() => this._closeTunnel(t.id)}"
-            >×</button>
-          </div>
-        `,
-      )}
-      ${this._showPortInput
-        ? html`
-            <div class="port-input-row">
-              <input
-                class="port-input"
-                type="number"
-                min="1"
-                max="65535"
-                placeholder="Port"
-                @keydown="${(e: KeyboardEvent) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    this._submitPortInput();
-                  } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    this._showPortInput = false;
-                  }
-                }}"
-              />
-              <button
-                class="forward-btn"
-                @click="${() => this._submitPortInput()}"
-              >Forward</button>
-            </div>
-          `
-        : html`
-            <button
-              class="add-tunnel-btn"
-              @click="${() => {
-                this._showPortInput = true;
-              }}"
-            >+ Forward a port</button>
-          `}
-    `;
-  }
-
-  // ---------------------------------------------------------------------------
   // Drag-to-resize
   // ---------------------------------------------------------------------------
 
@@ -786,24 +516,8 @@ export class MuxSidebar extends LitElement {
             </div>`
           : ''}
       </div>
-      <div class="tabs">
-        <button
-          class="tab-btn ${this._tab === 'workspaces' ? 'active' : ''}"
-          @click="${() => {
-            this._tab = 'workspaces';
-          }}"
-        >Workspaces</button>
-        <button
-          class="tab-btn ${this._tab === 'tunnels' ? 'active' : ''}"
-          @click="${() => {
-            this._tab = 'tunnels';
-          }}"
-        >Tunnels</button>
-      </div>
       <div class="tab-content">
-        ${this._tab === 'workspaces'
-          ? this._renderWorkspaces()
-          : this._renderTunnels()}
+        ${this._renderWorkspaces()}
       </div>
       <div
         class="resize-handle"

@@ -226,46 +226,6 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
 
-	case sessiond.TypeCreateTunnel:
-		// Tunnel operations are handled entirely by the serve layer; they are
-		// never forwarded to the daemon. The daemon-nil guard above would have
-		// returned already, so c.daemon is guaranteed non-nil here, but the
-		// registry is on the hub rather than on the daemon.
-		id, err := c.hub.tunnels.Create(msg.TunnelPort)
-		if err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
-			return
-		}
-		c.sendMessage(&sessiond.Message{
-			Type:       sessiond.TypeTunnelCreated,
-			CID:        msg.CID,
-			TunnelID:   id,
-			TunnelPort: msg.TunnelPort,
-		})
-
-	case sessiond.TypeCloseTunnel:
-		if ok := c.hub.tunnels.Close(msg.TunnelID); !ok {
-			c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("tunnel %q not found", msg.TunnelID))
-			return
-		}
-		c.sendMessage(&sessiond.Message{
-			Type:     sessiond.TypeTunnelClosed,
-			CID:      msg.CID,
-			TunnelID: msg.TunnelID,
-		})
-
-	case sessiond.TypeListTunnels:
-		entries := c.hub.tunnels.List()
-		tunnels := make([]sessiond.TunnelInfo, len(entries))
-		for i, e := range entries {
-			tunnels[i] = sessiond.TunnelInfo{ID: e.id, Port: e.port}
-		}
-		c.sendMessage(&sessiond.Message{
-			Type:    sessiond.TypeTunnelList,
-			CID:     msg.CID,
-			Tunnels: tunnels,
-		})
-
 	case sessiond.TypeCreateBrowserPane:
 		paneID, err := c.daemon.CreateBrowserCDPPane(msg.Placement, msg.ReferencePaneID)
 		if err != nil {
