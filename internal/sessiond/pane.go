@@ -3,6 +3,7 @@ package sessiond
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -111,6 +112,23 @@ func NewPane(
 	}
 	if onPrompt != nil {
 		p.onPromptPtr.Store(&onPrompt)
+	}
+	// If the buffer is a VTBuffer, drain its internal emulator reply pipe back
+	// to the PTY. The vt emulator writes terminal query responses (DA1, DA2,
+	// DSR, cursor-position, OSC color queries, in-band resize, etc.) into a
+	// synchronous io.Pipe. Without a reader on the other end, the first such
+	// response causes emu.Write → io.Pipe.Write to block forever, permanently
+	// hanging the readLoop goroutine.
+	//
+	// Forwarding the responses back to ptmx means the application (e.g. a
+	// Bubbletea TUI) actually receives the terminal's answers to its queries.
+	//
+	// Lifecycle note: this goroutine exits when ptmx.Write fails (ptmx closed
+	// on pane exit). It may briefly outlive Close() if blocked on emu.Read()
+	// waiting for a response that never arrives — acceptable given the small
+	// number of panes and that the emulator produces responses only on demand.
+	if vtb, ok := buf.(*VTBuffer); ok {
+		go func() { _, _ = io.Copy(ptmx, vtb) }()
 	}
 	go p.readLoop()
 	return p, nil

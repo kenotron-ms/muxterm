@@ -556,7 +556,9 @@ func (c *conn) createPane(msg Message) {
 		localID,
 		msg.Cmd,
 		cols, rows,
-		NewRawBuffer(0), // VTBuffer disabled — hangs amplifier-app-cli (charmbracelet/x/vt bug TBD)
+		nil, // nil → NewPane installs VTBuffer. get_screen / TypeScreenSnapshot requires VTBuffer.
+		// Emulator reply drain goroutine in NewPane forwards query responses back to the PTY
+		// (see pane.go) so the emulator's internal io.Pipe never blocks emu.Write().
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
 		func(id int) { c.srv.handlePaneExit(wsID, id) },
 		onPromptFn, // stored before readLoop starts — eliminates OSC 133 race

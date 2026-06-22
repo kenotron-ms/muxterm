@@ -43,6 +43,22 @@ func NewVTBuffer(w, h int) *VTBuffer {
 	return &VTBuffer{emu: emu}
 }
 
+// Read drains the emulator's internal reply pipe. When the emulator parses
+// terminal query sequences from the application — DA1 (\x1b[c), DA2 (\x1b[>c),
+// DSR / cursor-position (\x1b[6n), OSC 10/11/12 color queries, in-band resize
+// negotiation, etc. — it writes its responses into a synchronous io.Pipe
+// (e.pw). If nothing consumes the read side (e.pr), the very first such query
+// causes Emulator.Write to block forever, hanging the readLoop goroutine.
+//
+// Callers must drain this continuously in a dedicated goroutine and forward the
+// bytes back to the PTY so the application actually receives the responses.
+//
+// Safe to call concurrently with Write: SafeEmulator.Read is deliberately not
+// mutex-guarded because the io.Pipe itself provides the synchronisation.
+func (b *VTBuffer) Read(p []byte) (int, error) {
+	return b.emu.Read(p)
+}
+
 // Write forwards p directly to the underlying emulator under the write lock,
 // which interprets the byte stream and updates the live grid.
 func (b *VTBuffer) Write(p []byte) (int, error) {
