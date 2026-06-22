@@ -360,6 +360,9 @@ export class MuxBrowserPane extends LitElement {
   // Frames received before viewport is initialized are suppressed so a Mac Retina
   // client never renders an initial wrong-DPR frame from the default DPR=1 viewport.
   private _viewportInitialized = false;
+  // Fallback timer: if BrowserGranted doesn't arrive within 2 s of _sendBrowserFocus,
+  // force _viewportInitialized true so the canvas isn't permanently blank.
+  private _viewportFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   // Letterbox transform computed during the last frame draw.
   // Used by _toViewport to map mouse coordinates into Chromium space.
   private _letterbox = { dx: 0, dy: 0, scale: 1, fw: 0, fh: 0 };
@@ -391,12 +394,12 @@ export class MuxBrowserPane extends LitElement {
     if (w <= 0 || h <= 0) return;
 
     const dpr = window.devicePixelRatio || 1;
-    // Pre-set the letterbox to the PHYSICAL pixel dimensions we expect Chrome
-    // to send frames at (renderWidth × dpr). This lets the _drawLetterboxed guard
-    // (fw === _letterbox.fw) accept 2x frames on Retina without rejecting them as
-    // "wrong viewport". CSS-pixel clicks still map correctly because scale=1.0 and
-    // the bounds check uses these physical dimensions (offsetX always < CSS width).
-    this._letterbox = { dx: 0, dy: 0, scale: 1, fw: Math.round(w * dpr), fh: Math.round(h * dpr) };
+    // Set letterbox to CSS px dimensions. Chrome sends 2x JPEG frames (w×dpr wide)
+    // but those won't match _letterbox.fw=w, so the guard in _drawLetterboxed
+    // won't update the letterbox from 2x frames — which is correct. scale stays
+    // 1.0 so _toViewport produces CSS-px coordinates that match Chrome's logical
+    // viewport (also w CSS px wide). offsetX → x is a 1:1 identity.
+    this._letterbox = { dx: 0, dy: 0, scale: 1, fw: w, fh: h };
 
     wsBrowser.send({
       type: 'browser-focus',
@@ -406,13 +409,19 @@ export class MuxBrowserPane extends LitElement {
       renderHeight: h,
       devicePixelRatio: dpr,
     });
-    // Belt-and-suspenders: mark viewport as ready immediately so URL navigation
-    // and reconnects always render (even if BrowserGranted is delayed or lost).
-    // _onGranted will also set this to true when the server acknowledges the
-    // viewport, which is the preferred path — but this fallback prevents blank
-    // canvas when the grant round-trip is slow or the pane was hidden at focus
-    // time (making the grant redundant since the server already processed it).
-    this._viewportInitialized = true;
+    // Don't set _viewportInitialized here. Wait for BrowserGranted (server
+    // confirmation that stopScreencast drained old frames, new viewport applied,
+    // and 2x screenshot queued). Old frames are guaranteed to arrive BEFORE
+    // BrowserGranted in the FIFO subscriber queue — suppressing them here prevents
+    // the pillarboxed flash. _onGranted sets the flag when BrowserGranted arrives.
+    //
+    // Fallback: if BrowserGranted never arrives (hidden pane at reconnect,
+    // network hiccup) force the flag after 2 s so the canvas isn't permanently blank.
+    if (this._viewportFallbackTimer !== null) clearTimeout(this._viewportFallbackTimer);
+    this._viewportFallbackTimer = setTimeout(() => {
+      this._viewportFallbackTimer = null;
+      this._viewportInitialized = true;
+    }, 2000);
     // Re-claim DOM focus whenever we claim input authority. Deferred with rAF
     // so that any in-progress dockview focus management (which runs synchronously
     // during a tab-click) settles before we claim the canvas. Without the defer,
@@ -454,16 +463,16 @@ export class MuxBrowserPane extends LitElement {
       const h = Math.round(height);
       if (w <= 0 || h <= 0) return;
 
-      // Size the canvas buffer in DEVICE pixels (CSS px × devicePixelRatio) so
-      // 2x JPEG frames from the server map 1:1 to physical screen pixels on
-      // Retina displays instead of being bilinearly downsampled and re-upscaled.
-      const dpr = window.devicePixelRatio || 1;
-      const physW = Math.round(w * dpr);
-      const physH = Math.round(h * dpr);
-      const bufferChanged = this._canvas.width !== physW || this._canvas.height !== physH;
+      // Size the canvas buffer in CSS pixels. The server sends 2x JPEG frames
+      // (renderWidth × dpr pixels wide). Drawing a 2120px JPEG at scale=0.5
+      // into a 1060-wide canvas buffer means the browser's Retina compositing
+      // doubles it back to 2120 physical pixels — 1 JPEG px = 1 screen px = crisp.
+      // Using CSS px here also keeps _toViewport simple: offsetX (CSS px) maps
+      // directly to Chrome's logical viewport coordinates with scale=1.0, no dpr math.
+      const bufferChanged = this._canvas.width !== w || this._canvas.height !== h;
       if (bufferChanged) {
-        this._canvas.width = physW;
-        this._canvas.height = physH;
+        this._canvas.width = w;
+        this._canvas.height = h;
         this._ctx = this._canvas.getContext('2d');
       }
 
@@ -565,13 +574,12 @@ export class MuxBrowserPane extends LitElement {
     // renders into a correctly-sized buffer. Without this, canvas.width stays
     // at the HTML default (300) until ResizeObserver fires asynchronously,
     // causing _drawLetterboxed to render the screenshot at ~34px (invisible).
-    const dpr0 = window.devicePixelRatio || 1;
     const rect = this._canvas.getBoundingClientRect();
     const w0 = Math.round(rect.width);
     const h0 = Math.round(rect.height);
     if (w0 > 0 && h0 > 0) {
-      this._canvas.width = Math.round(w0 * dpr0);
-      this._canvas.height = Math.round(h0 * dpr0);
+      this._canvas.width = w0;
+      this._canvas.height = h0;
       this._ctx = this._canvas.getContext('2d');
     }
 
@@ -715,12 +723,16 @@ export class MuxBrowserPane extends LitElement {
     if (this._canvas) this._canvas.style.cursor = cursor;
   };
 
-  // BrowserGranted fires when the server has processed browser-focus:
-  // SetViewport applied (DPR=2 for Retina), 2x screenshot queued, 2x
-  // screencast started. Only now do we accept frames — this prevents
-  // rendering the stale 1x frames from the server's default viewport
-  // that arrive between socket-open and server processing our focus.
+  // BrowserGranted arrives when the server has processed browser-focus:
+  // stopScreencast drained old frames, SetViewport applied, 2x screenshot queued,
+  // 2x screencast starting. All old wrong-size frames are guaranteed to arrive
+  // BEFORE BrowserGranted in the FIFO subscriber queue. Setting the flag here
+  // means the first frame the client renders is the correct 2x screenshot.
   private readonly _onGranted = (_clientId: string): void => {
+    if (this._viewportFallbackTimer !== null) {
+      clearTimeout(this._viewportFallbackTimer);
+      this._viewportFallbackTimer = null;
+    }
     this._viewportInitialized = true;
   };
 
