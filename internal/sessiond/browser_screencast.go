@@ -10,12 +10,26 @@ import (
 // delivery. Chrome will emit Page.screencastFrame events until
 // Page.stopScreencast is called or the session ends. Returns the first CDP
 // error, if any.
+//
+// maxWidth/maxHeight are passed in physical device pixels (renderWidth * dpr)
+// so Chrome sends HiDPI frames on Retina displays. Pass 0 to let Chrome choose.
 func (bp *BrowserPage) startScreencast(ctx context.Context) error {
-	_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.startScreencast", map[string]any{
+	params := map[string]any{
 		"format":        "jpeg",
 		"quality":       90,
 		"everyNthFrame": 1,
-	})
+	}
+	if bp.renderWidth > 0 && bp.renderHeight > 0 {
+		dpr := bp.devicePixelRatio
+		if dpr <= 0 {
+			dpr = 1.0
+		}
+		// Ask Chrome to deliver frames at physical pixel dimensions so the
+		// client renders crisp frames on Retina (devicePixelRatio=2) displays.
+		params["maxWidth"] = int(float64(bp.renderWidth) * dpr)
+		params["maxHeight"] = int(float64(bp.renderHeight) * dpr)
+	}
+	_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.startScreencast", params)
 	return err
 }
 
@@ -109,17 +123,20 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 			// Cache for getCurrentURL() at reconnect time.
 			bp.currentURL = nav.Frame.URL
 
-			// Re-apply the stored viewport after every top-level navigation.
-			// Chrome resets Emulation.setDeviceMetricsOverride on navigation,
-			// causing the first screencast frame of the new page to arrive at
-			// deviceScaleFactor=1 (looks low-DPI on Retina clients). Re-applying
-			// here and sending an immediate screenshot ensures the client sees
-			// the page at the correct DPR without needing to resize the window.
+			// Re-apply viewport and restart the screencast after every top-level
+			// navigation. Chrome resets Emulation.setDeviceMetricsOverride on
+			// navigation, so without this the first frames of the new page arrive
+			// at deviceScaleFactor=1 (blurry on Retina). Restarting the screencast
+			// also re-applies the maxWidth/maxHeight HiDPI params.
+			//
+			// We do NOT send a captureScreenshot here: frameNavigated fires when
+			// the navigation is committed but the new page is still loading
+			// (blank/white). Sending that screenshot would display an empty page
+			// and confuse the client's letterbox state. The screencast delivers
+			// correct frames as the page renders.
 			if bp.renderWidth > 0 && bp.renderHeight > 0 {
 				_ = bp.SetViewport(ctx, bp.renderWidth, bp.renderHeight)
-				if shot, err := bp.captureScreenshot(ctx); err == nil && len(shot) > 0 {
-					bp.manager.broadcast(bp.paneID, shot)
-				}
+				_ = bp.startScreencast(ctx)
 			}
 		}
 	}

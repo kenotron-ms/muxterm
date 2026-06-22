@@ -38,8 +38,8 @@ type BrowserPage struct {
 	cancel     context.CancelFunc
 	currentURL      string  // last navigated URL; set by handleEvent Page.frameNavigated
 	devicePixelRatio float64 // 1.0 when unset; set from browser-focus DevicePixelRatio
-	renderWidth     int     // last viewport width from browser-focus; used to re-apply on navigation
-	renderHeight    int     // last viewport height from browser-focus; used to re-apply on navigation
+	renderWidth      int     // last CSS-px viewport width from browser-focus; used to re-apply on navigation
+	renderHeight     int     // last CSS-px viewport height from browser-focus; used to re-apply on navigation
 	// currentURL is written only from runEventLoop and read from the
 	// TypeBrowserFocus goroutine — a plain field is acceptable for this
 	// non-critical URL display (no mutex needed).
