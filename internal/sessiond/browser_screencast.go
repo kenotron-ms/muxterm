@@ -99,7 +99,7 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 		if err := json.Unmarshal(ev.Params, &nav); err != nil {
 			return
 		}
-		// Only broadcast for top-level frame navigations (parentId == "").
+		// Only handle top-level frame navigations (parentId == "").
 		if nav.Frame.ParentID == "" && nav.Frame.URL != "" {
 			bp.manager.broadcastJSON(BrowserURLMsg{
 				Type:   TypeBrowserURL,
@@ -108,6 +108,19 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 			})
 			// Cache for getCurrentURL() at reconnect time.
 			bp.currentURL = nav.Frame.URL
+
+			// Re-apply the stored viewport after every top-level navigation.
+			// Chrome resets Emulation.setDeviceMetricsOverride on navigation,
+			// causing the first screencast frame of the new page to arrive at
+			// deviceScaleFactor=1 (looks low-DPI on Retina clients). Re-applying
+			// here and sending an immediate screenshot ensures the client sees
+			// the page at the correct DPR without needing to resize the window.
+			if bp.renderWidth > 0 && bp.renderHeight > 0 {
+				_ = bp.SetViewport(ctx, bp.renderWidth, bp.renderHeight)
+				if shot, err := bp.captureScreenshot(ctx); err == nil && len(shot) > 0 {
+					bp.manager.broadcast(bp.paneID, shot)
+				}
+			}
 		}
 	}
 }

@@ -38,6 +38,8 @@ type BrowserPage struct {
 	cancel     context.CancelFunc
 	currentURL      string  // last navigated URL; set by handleEvent Page.frameNavigated
 	devicePixelRatio float64 // 1.0 when unset; set from browser-focus DevicePixelRatio
+	renderWidth     int     // last viewport width from browser-focus; used to re-apply on navigation
+	renderHeight    int     // last viewport height from browser-focus; used to re-apply on navigation
 	// currentURL is written only from runEventLoop and read from the
 	// TypeBrowserFocus goroutine — a plain field is acceptable for this
 	// non-critical URL display (no mutex needed).
@@ -229,6 +231,13 @@ func (bp *BrowserPage) SetViewport(ctx context.Context, width, height int) error
 		"deviceScaleFactor": dpr,
 		"mobile":            false,
 	})
+	if err == nil {
+		// Store so we can re-apply after Page.frameNavigated (Chrome resets
+		// deviceScaleFactor on navigation, causing the first frame of a new
+		// page to arrive at DPR=1 until the client's next browser-focus).
+		bp.renderWidth = width
+		bp.renderHeight = height
+	}
 	return err
 }
 

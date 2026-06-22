@@ -554,6 +554,19 @@ export class MuxBrowserPane extends LitElement {
     // Get 2D rendering context
     this._ctx = this._canvas.getContext('2d');
 
+    // Size the canvas buffer NOW from CSS layout so the first screenshot
+    // renders into a correctly-sized buffer. Without this, canvas.width stays
+    // at the HTML default (300) until ResizeObserver fires asynchronously,
+    // causing _drawLetterboxed to render the screenshot at ~34px (invisible).
+    const rect = this._canvas.getBoundingClientRect();
+    const w0 = Math.round(rect.width);
+    const h0 = Math.round(rect.height);
+    if (w0 > 0 && h0 > 0) {
+      this._canvas.width = w0;
+      this._canvas.height = h0;
+      this._ctx = this._canvas.getContext('2d');
+    }
+
     this._resizeObserver = new ResizeObserver(this._makeResizeObserver());
     this._resizeObserver.observe(this._canvas);
 
