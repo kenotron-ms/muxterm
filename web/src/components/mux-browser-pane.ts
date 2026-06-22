@@ -390,12 +390,13 @@ export class MuxBrowserPane extends LitElement {
     const h = Math.round(rect.height);
     if (w <= 0 || h <= 0) return;
 
-    // Optimistically update the coordinate mapping to the viewport we're
-    // about to request. Chrome will SetViewport(w, h) — so no letterboxing
-    // is expected. Any in-flight frames from the old viewport are discarded
-    // by the new _letterbox; the first frame at the new size re-confirms it.
-    // This prevents stale old-viewport letterbox from causing wrong clicks.
-    this._letterbox = { dx: 0, dy: 0, scale: 1, fw: w, fh: h };
+    const dpr = window.devicePixelRatio || 1;
+    // Pre-set the letterbox to the PHYSICAL pixel dimensions we expect Chrome
+    // to send frames at (renderWidth × dpr). This lets the _drawLetterboxed guard
+    // (fw === _letterbox.fw) accept 2x frames on Retina without rejecting them as
+    // "wrong viewport". CSS-pixel clicks still map correctly because scale=1.0 and
+    // the bounds check uses these physical dimensions (offsetX always < CSS width).
+    this._letterbox = { dx: 0, dy: 0, scale: 1, fw: Math.round(w * dpr), fh: Math.round(h * dpr) };
 
     wsBrowser.send({
       type: 'browser-focus',
@@ -403,11 +404,13 @@ export class MuxBrowserPane extends LitElement {
       deviceId: this._deviceId,
       renderWidth: w,
       renderHeight: h,
-      devicePixelRatio: window.devicePixelRatio,
+      devicePixelRatio: dpr,
     });
-    // Mark viewport as initialized — the server now knows our correct DPR/dimensions.
-    // Frames received before this point (at the old DPR=1 default) are suppressed.
-    this._viewportInitialized = true;
+    // Do NOT set _viewportInitialized here — the message is in-flight.
+    // Wait for BrowserGranted (server confirmation that SetViewport was applied
+    // and 2x screenshot/screencast are queued) before accepting frames.
+    // See _onGranted below. This prevents rendering stale 1x frames from the
+    // server's default DPR=1 viewport in the window before browser-focus lands.
     // Re-claim DOM focus whenever we claim input authority. Deferred with rAF
     // so that any in-progress dockview focus management (which runs synchronously
     // during a tab-click) settles before we claim the canvas. Without the defer,
@@ -449,14 +452,16 @@ export class MuxBrowserPane extends LitElement {
       const h = Math.round(height);
       if (w <= 0 || h <= 0) return;
 
-      // Only reset the canvas buffer when dimensions actually change.
-      // Setting canvas.width/height to ANY value — even the same — clears
-      // all drawn content. This prevents erasing a freshly-drawn screenshot
-      // when a minor layout shift triggers a spurious ResizeObserver fire.
-      const bufferChanged = this._canvas.width !== w || this._canvas.height !== h;
+      // Size the canvas buffer in DEVICE pixels (CSS px × devicePixelRatio) so
+      // 2x JPEG frames from the server map 1:1 to physical screen pixels on
+      // Retina displays instead of being bilinearly downsampled and re-upscaled.
+      const dpr = window.devicePixelRatio || 1;
+      const physW = Math.round(w * dpr);
+      const physH = Math.round(h * dpr);
+      const bufferChanged = this._canvas.width !== physW || this._canvas.height !== physH;
       if (bufferChanged) {
-        this._canvas.width = w;
-        this._canvas.height = h;
+        this._canvas.width = physW;
+        this._canvas.height = physH;
         this._ctx = this._canvas.getContext('2d');
       }
 
@@ -481,7 +486,7 @@ export class MuxBrowserPane extends LitElement {
       onDownload: this._onDownload,
       onStatus: this._onStatus,
       onCursor: this._onCursor,
-      onGranted: null,
+      onGranted: this._onGranted,
     });
     window.addEventListener('browser-pane-activated', this._onPanelActivated);
     window.addEventListener('focus', this._onWindowFocus);
@@ -558,12 +563,13 @@ export class MuxBrowserPane extends LitElement {
     // renders into a correctly-sized buffer. Without this, canvas.width stays
     // at the HTML default (300) until ResizeObserver fires asynchronously,
     // causing _drawLetterboxed to render the screenshot at ~34px (invisible).
+    const dpr0 = window.devicePixelRatio || 1;
     const rect = this._canvas.getBoundingClientRect();
     const w0 = Math.round(rect.width);
     const h0 = Math.round(rect.height);
     if (w0 > 0 && h0 > 0) {
-      this._canvas.width = w0;
-      this._canvas.height = h0;
+      this._canvas.width = Math.round(w0 * dpr0);
+      this._canvas.height = Math.round(h0 * dpr0);
       this._ctx = this._canvas.getContext('2d');
     }
 
@@ -709,6 +715,15 @@ export class MuxBrowserPane extends LitElement {
 
   private readonly _onCursor = (cursor: string): void => {
     if (this._canvas) this._canvas.style.cursor = cursor;
+  };
+
+  // BrowserGranted fires when the server has processed browser-focus:
+  // SetViewport applied (DPR=2 for Retina), 2x screenshot queued, 2x
+  // screencast started. Only now do we accept frames — this prevents
+  // rendering the stale 1x frames from the server's default viewport
+  // that arrive between socket-open and server processing our focus.
+  private readonly _onGranted = (_clientId: string): void => {
+    this._viewportInitialized = true;
   };
 
   // -------------------------------------------------------------------------
