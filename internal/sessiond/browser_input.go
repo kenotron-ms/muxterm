@@ -201,19 +201,30 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 				return fmt.Errorf("browser-focus SetViewport: %w", err)
 			}
 		}
-		// 2. Record this client as the input authority (last-focus-wins).
+		// 2. Stop the current screencast BEFORE notifying the client.
+		// Any frames still in-flight from the old screencast (wrong DPR / wrong
+		// size) will be queued in the subscriber before BrowserGranted arrives.
+		// Stopping here drains Chrome's pipeline so no stale frames can slip
+		// through after the client sets _viewportInitialized = true on grant.
+		_, _ = bp.cdp.Call(ctx, bp.sessionID, "Page.stopScreencast", nil)
+		// 3. Record this client as the input authority (last-focus-wins).
 		bp.manager.SetAuthority(bp.paneID, msg.ClientID)
-		// 3. Notify all connected clients who holds authority.
+		// 4. Notify all connected clients who holds authority. The client sets
+		// _viewportInitialized = true on this message and starts rendering.
+		// All frames between stop (step 2) and the new screencast (step 6) are
+		// guaranteed to be at the correct HiDPI size.
 		bp.manager.broadcastJSON(BrowserGrantedMsg{
 			Type:     TypeBrowserGranted,
 			PaneID:   bp.paneID,
 			ClientID: msg.ClientID,
 		})
-		// 4. Take a fresh screenshot so the canvas is not blank while screencast (re)starts.
+		// 5. Take a fresh screenshot so the canvas is not blank while screencast
+		// restarts. captureScreenshot runs after SetViewport, so it captures at
+		// the correct DPR. It arrives right after BrowserGranted in the queue.
 		if shot, err := bp.captureScreenshot(ctx); err == nil && len(shot) > 0 {
 			bp.manager.broadcast(bp.paneID, shot)
 		}
-		// 5. (Re)start the screencast.
+		// 6. (Re)start the screencast at HiDPI maxWidth/maxHeight.
 		return bp.startScreencast(ctx)
 
 	case "browser-blur":

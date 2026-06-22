@@ -406,11 +406,13 @@ export class MuxBrowserPane extends LitElement {
       renderHeight: h,
       devicePixelRatio: dpr,
     });
-    // Do NOT set _viewportInitialized here — the message is in-flight.
-    // Wait for BrowserGranted (server confirmation that SetViewport was applied
-    // and 2x screenshot/screencast are queued) before accepting frames.
-    // See _onGranted below. This prevents rendering stale 1x frames from the
-    // server's default DPR=1 viewport in the window before browser-focus lands.
+    // Belt-and-suspenders: mark viewport as ready immediately so URL navigation
+    // and reconnects always render (even if BrowserGranted is delayed or lost).
+    // _onGranted will also set this to true when the server acknowledges the
+    // viewport, which is the preferred path — but this fallback prevents blank
+    // canvas when the grant round-trip is slow or the pane was hidden at focus
+    // time (making the grant redundant since the server already processed it).
+    this._viewportInitialized = true;
     // Re-claim DOM focus whenever we claim input authority. Deferred with rAF
     // so that any in-progress dockview focus management (which runs synchronously
     // during a tab-click) settles before we claim the canvas. Without the defer,
