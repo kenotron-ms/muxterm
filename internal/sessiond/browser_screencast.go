@@ -135,6 +135,12 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 			// and confuse the client's letterbox state. The screencast delivers
 			// correct frames as the page renders.
 			if bp.renderWidth > 0 && bp.renderHeight > 0 {
+				// Stop the running screencast before re-applying the viewport.
+				// Without this, Chrome briefly reverts to its pre-SetViewport
+				// dimensions on navigation (e.g. 1280×720) and the still-running
+				// screencast delivers a wrong-height frame scaled to maxWidth,
+				// e.g. 667×375 into a 667×665 canvas → top/bottom letterbox bars.
+				_, _ = bp.cdp.Call(ctx, bp.sessionID, "Page.stopScreencast", nil)
 				_ = bp.SetViewport(ctx, bp.renderWidth, bp.renderHeight)
 				_ = bp.startScreencast(ctx)
 			}
