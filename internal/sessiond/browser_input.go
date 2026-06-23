@@ -249,10 +249,17 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 func (bp *BrowserPage) handleNavigate(ctx context.Context, url string) error {
 	switch url {
 	case "history:back":
-		_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.goBack", nil)
+		// Page.goBack / Page.goForward are not available in all Chrome versions.
+		// Use Runtime.evaluate with history.back() / history.forward() instead,
+		// which works in all headless Chrome versions.
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Runtime.evaluate", map[string]any{
+			"expression": "history.back()",
+		})
 		return err
 	case "history:forward":
-		_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.goForward", nil)
+		_, err := bp.cdp.Call(ctx, bp.sessionID, "Runtime.evaluate", map[string]any{
+			"expression": "history.forward()",
+		})
 		return err
 	case "history:reload":
 		_, err := bp.cdp.Call(ctx, bp.sessionID, "Page.reload", nil)

@@ -134,15 +134,16 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 			// (blank/white). Sending that screenshot would display an empty page
 			// and confuse the client's letterbox state. The screencast delivers
 			// correct frames as the page renders.
+			// Re-apply the cached client viewport dimensions after navigation.
+			// Chrome resets Emulation.setDeviceMetricsOverride on frameNavigated,
+			// so without this the new page renders at a default/wrong size.
+			//
+			// We do NOT stop/restart the screencast here. The screencast keeps
+			// running with the same maxWidth/maxHeight. The client (via ResizeObserver
+			// → browser-focus) is the authority on viewport size; bp.renderWidth/Height
+			// is the last size the client told us. Re-applying it here is enough.
 			if bp.renderWidth > 0 && bp.renderHeight > 0 {
-				// Stop the running screencast before re-applying the viewport.
-				// Without this, Chrome briefly reverts to its pre-SetViewport
-				// dimensions on navigation (e.g. 1280×720) and the still-running
-				// screencast delivers a wrong-height frame scaled to maxWidth,
-				// e.g. 667×375 into a 667×665 canvas → top/bottom letterbox bars.
-				_, _ = bp.cdp.Call(ctx, bp.sessionID, "Page.stopScreencast", nil)
 				_ = bp.SetViewport(ctx, bp.renderWidth, bp.renderHeight)
-				_ = bp.startScreencast(ctx)
 			}
 		}
 	}
