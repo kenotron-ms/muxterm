@@ -6,6 +6,56 @@ import (
 	"encoding/json"
 )
 
+// jpegHeight returns the pixel height encoded in a JPEG's SOF marker.
+// Returns 0 if the data is not a valid JPEG or the SOF marker is not found
+// in the first ~8 KB (it always appears well before the image data in
+// Chrome-generated screencasts). No full JPEG decode is needed — we only
+// scan the segment headers.
+func jpegHeight(data []byte) int {
+	if len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+		return 0
+	}
+	i := 2
+	for i+3 < len(data) {
+		if data[i] != 0xFF {
+			return 0
+		}
+		marker := data[i+1]
+		i += 2
+		if marker == 0xD8 { // extra SOI — skip
+			continue
+		}
+		if marker == 0xD9 || marker == 0xDA { // EOI or SOS — done
+			return 0
+		}
+		if i+2 > len(data) {
+			return 0
+		}
+		segLen := int(data[i])<<8 | int(data[i+1])
+		if segLen < 2 {
+			return 0
+		}
+		// SOF markers: C0-C3, C5-C7, C9-CB, CD-CF
+		isSOF := (marker >= 0xC0 && marker <= 0xC3) ||
+			(marker >= 0xC5 && marker <= 0xC7) ||
+			(marker >= 0xC9 && marker <= 0xCB) ||
+			(marker >= 0xCD && marker <= 0xCF)
+		if isSOF {
+			// SOF data layout (relative to segment start, after FF marker):
+			//   offset 0-1: segment length (2 bytes)
+			//   offset 2:   sample precision (1 byte)
+			//   offset 3-4: image height (2 bytes, big-endian)
+			//   offset 5-6: image width  (2 bytes, big-endian)
+			if i+4 < len(data) {
+				return int(data[i+3])<<8 | int(data[i+4])
+			}
+			return 0
+		}
+		i += segLen
+	}
+	return 0
+}
+
 // startScreencast sends Page.startScreencast to Chrome to begin JPEG frame
 // delivery. Chrome will emit Page.screencastFrame events until
 // Page.stopScreencast is called or the session ends. Returns the first CDP
@@ -90,37 +140,44 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 		var frame struct {
 			Data      string `json:"data"`
 			SessionID int    `json:"sessionId"`
-			Metadata  struct {
-				DeviceWidth  int `json:"deviceWidth"`
-				DeviceHeight int `json:"deviceHeight"`
-			} `json:"metadata"`
 		}
 		if err := json.Unmarshal(ev.Params, &frame); err != nil {
 			return
 		}
-		// Always ACK — Chrome stops sending if we don't, regardless of whether
-		// we forward the frame. Do this before any early-return below.
+		// Always ACK — Chrome stops sending frames if we don't ack, even for
+		// frames we intend to filter. Do this before any early-return below.
 		bp.cdp.Call(ctx, bp.sessionID, "Page.screencastFrameAck", map[string]any{ //nolint:errcheck
 			"sessionId": frame.SessionID,
 		})
-		// Filter out frames rendered at the wrong viewport size.
-		// Chrome resets Emulation.setDeviceMetricsOverride on frameNavigated,
-		// briefly reverting to its default viewport (1280×600 on this host:
-		// 1280 from openPage init, 600 from --ozone-override-screen-size=800,600).
-		// The screencast delivers one or two frames scaled from that wrong size
-		// before our SetViewport re-applies the client's dimensions.
-		// metadata.deviceWidth/Height are the CSS viewport dimensions Chrome used
-		// when rendering this frame — exactly what we need to detect wrong-size frames.
-		// Drop any frame that doesn't match the client-authoritative dimensions.
-		if bp.renderWidth > 0 && bp.renderHeight > 0 {
-			if frame.Metadata.DeviceWidth != bp.renderWidth || frame.Metadata.DeviceHeight != bp.renderHeight {
-				return
+		jpegBytes, err := base64.StdEncoding.DecodeString(frame.Data)
+		if err != nil || len(jpegBytes) == 0 {
+			return
+		}
+		// Filter frames that don't match the client-authoritative viewport height.
+		//
+		// On Page.frameNavigated Chrome briefly resets Emulation.setDeviceMetricsOverride
+		// to its default dimensions (1280×600 on this host: width from openPage init,
+		// height from --ozone-override-screen-size=800,600). The screencast is still
+		// running and delivers 1-2 frames at that wrong size before our SetViewport
+		// call in frameNavigated re-applies the correct dimensions.
+		//
+		// We use the JPEG's pixel height (from the SOF marker) to detect these frames.
+		// Wrong frames: 667×313 (1280×600 scaled to maxW=667).
+		// Correct frames: 667×665 (matching bp.renderHeight * dpr).
+		//
+		// Note: metadata.deviceWidth/Height in screencastFrame params is the DEVICE
+		// SCREEN size (800×600 from ozone), NOT the viewport CSS size — do not use it.
+		if bp.renderHeight > 0 {
+			dpr := bp.devicePixelRatio
+			if dpr <= 0 {
+				dpr = 1.0
+			}
+			expectedH := int(float64(bp.renderHeight) * dpr)
+			if h := jpegHeight(jpegBytes); h > 0 && h != expectedH {
+				return // wrong-viewport frame, drop silently
 			}
 		}
-		jpegBytes, err := base64.StdEncoding.DecodeString(frame.Data)
-		if err == nil && len(jpegBytes) > 0 {
-			bp.manager.broadcast(bp.paneID, jpegBytes)
-		}
+		bp.manager.broadcast(bp.paneID, jpegBytes)
 
 	case "Page.frameNavigated":
 		var nav struct {
@@ -142,25 +199,12 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 			// Cache for getCurrentURL() at reconnect time.
 			bp.currentURL = nav.Frame.URL
 
-			// Re-apply viewport and restart the screencast after every top-level
+			// Re-apply the client-authoritative viewport after every top-level
 			// navigation. Chrome resets Emulation.setDeviceMetricsOverride on
-			// navigation, so without this the first frames of the new page arrive
-			// at deviceScaleFactor=1 (blurry on Retina). Restarting the screencast
-			// also re-applies the maxWidth/maxHeight HiDPI params.
-			//
-			// We do NOT send a captureScreenshot here: frameNavigated fires when
-			// the navigation is committed but the new page is still loading
-			// (blank/white). Sending that screenshot would display an empty page
-			// and confuse the client's letterbox state. The screencast delivers
-			// correct frames as the page renders.
-			// Re-apply the cached client viewport dimensions after navigation.
-			// Chrome resets Emulation.setDeviceMetricsOverride on frameNavigated,
-			// so without this the new page renders at a default/wrong size.
-			//
-			// We do NOT stop/restart the screencast here. The screencast keeps
-			// running with the same maxWidth/maxHeight. The client (via ResizeObserver
-			// → browser-focus) is the authority on viewport size; bp.renderWidth/Height
-			// is the last size the client told us. Re-applying it here is enough.
+			// frameNavigated. We re-apply bp.renderWidth/Height (last size sent
+			// by the client via browser-focus / ResizeObserver). The screencast
+			// keeps running uninterrupted — wrong-size frames that arrive during
+			// the SetViewport round-trip are filtered by jpegHeight() above.
 			if bp.renderWidth > 0 && bp.renderHeight > 0 {
 				_ = bp.SetViewport(ctx, bp.renderWidth, bp.renderHeight)
 			}
