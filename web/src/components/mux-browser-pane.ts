@@ -680,6 +680,8 @@ export class MuxBrowserPane extends LitElement {
     const ch = this._canvas.height;
     const fw = img.naturalWidth;
     const fh = img.naturalHeight;
+    // TEMP DEBUG — remove before merge
+    console.log(`[mux-browser] frame=${fw}×${fh} canvas=${cw}×${ch} dpr=${window.devicePixelRatio} lb.fw=${this._letterbox.fw}`);
 
     if (cw === 0 || ch === 0 || fw === 0 || fh === 0) return;
 
