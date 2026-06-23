@@ -90,18 +90,37 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 		var frame struct {
 			Data      string `json:"data"`
 			SessionID int    `json:"sessionId"`
+			Metadata  struct {
+				DeviceWidth  int `json:"deviceWidth"`
+				DeviceHeight int `json:"deviceHeight"`
+			} `json:"metadata"`
 		}
 		if err := json.Unmarshal(ev.Params, &frame); err != nil {
 			return
+		}
+		// Always ACK — Chrome stops sending if we don't, regardless of whether
+		// we forward the frame. Do this before any early-return below.
+		bp.cdp.Call(ctx, bp.sessionID, "Page.screencastFrameAck", map[string]any{ //nolint:errcheck
+			"sessionId": frame.SessionID,
+		})
+		// Filter out frames rendered at the wrong viewport size.
+		// Chrome resets Emulation.setDeviceMetricsOverride on frameNavigated,
+		// briefly reverting to its default viewport (1280×600 on this host:
+		// 1280 from openPage init, 600 from --ozone-override-screen-size=800,600).
+		// The screencast delivers one or two frames scaled from that wrong size
+		// before our SetViewport re-applies the client's dimensions.
+		// metadata.deviceWidth/Height are the CSS viewport dimensions Chrome used
+		// when rendering this frame — exactly what we need to detect wrong-size frames.
+		// Drop any frame that doesn't match the client-authoritative dimensions.
+		if bp.renderWidth > 0 && bp.renderHeight > 0 {
+			if frame.Metadata.DeviceWidth != bp.renderWidth || frame.Metadata.DeviceHeight != bp.renderHeight {
+				return
+			}
 		}
 		jpegBytes, err := base64.StdEncoding.DecodeString(frame.Data)
 		if err == nil && len(jpegBytes) > 0 {
 			bp.manager.broadcast(bp.paneID, jpegBytes)
 		}
-		// ACK must be sent or Chrome stops sending frames.
-		bp.cdp.Call(ctx, bp.sessionID, "Page.screencastFrameAck", map[string]any{ //nolint:errcheck
-			"sessionId": frame.SessionID,
-		})
 
 	case "Page.frameNavigated":
 		var nav struct {
