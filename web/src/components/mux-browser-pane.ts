@@ -999,12 +999,19 @@ export class MuxBrowserPane extends LitElement {
   private _navigate(url: string): void {
     this._editingUrl = false;
     _activeBrowserPaneId = this.paneId;
-    requestAnimationFrame(() => this._canvas?.focus({ preventScroll: true }));
     const target = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-    wsBrowser.send({
-      type: SessiondType.BrowserInput,
-      paneId: this.paneId,
-      event: { type: 'navigate', url: target },
+    // Defer one rAF so Lit re-renders first (collapses the URL bar), the canvas
+    // regains its full height, and ResizeObserver fires _sendBrowserFocus(full_h).
+    // Without this, the navigate arrives while bp.renderHeight still holds the
+    // shrunk URL-bar-open height, frameNavigated startScreencast sends frames
+    // that are too short for the canvas → top/bottom black letterbox bars.
+    requestAnimationFrame(() => {
+      this._canvas?.focus({ preventScroll: true });
+      wsBrowser.send({
+        type: SessiondType.BrowserInput,
+        paneId: this.paneId,
+        event: { type: 'navigate', url: target },
+      });
     });
   }
 
