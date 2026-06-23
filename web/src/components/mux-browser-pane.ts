@@ -409,19 +409,7 @@ export class MuxBrowserPane extends LitElement {
       renderHeight: h,
       devicePixelRatio: dpr,
     });
-    // Don't set _viewportInitialized here. Wait for BrowserGranted (server
-    // confirmation that stopScreencast drained old frames, new viewport applied,
-    // and 2x screenshot queued). Old frames are guaranteed to arrive BEFORE
-    // BrowserGranted in the FIFO subscriber queue — suppressing them here prevents
-    // the pillarboxed flash. _onGranted sets the flag when BrowserGranted arrives.
-    //
-    // Fallback: if BrowserGranted never arrives (hidden pane at reconnect,
-    // network hiccup) force the flag after 2 s so the canvas isn't permanently blank.
-    if (this._viewportFallbackTimer !== null) clearTimeout(this._viewportFallbackTimer);
-    this._viewportFallbackTimer = setTimeout(() => {
-      this._viewportFallbackTimer = null;
-      this._viewportInitialized = true;
-    }, 2000);
+    this._viewportInitialized = true;
     // Re-claim DOM focus whenever we claim input authority. Deferred with rAF
     // so that any in-progress dockview focus management (which runs synchronously
     // during a tab-click) settles before we claim the canvas. Without the defer,
@@ -680,8 +668,7 @@ export class MuxBrowserPane extends LitElement {
     const ch = this._canvas.height;
     const fw = img.naturalWidth;
     const fh = img.naturalHeight;
-    // TEMP DEBUG — remove before merge
-    console.log(`[mux-browser] frame=${fw}×${fh} canvas=${cw}×${ch} dpr=${window.devicePixelRatio} lb.fw=${this._letterbox.fw}`);
+
 
     if (cw === 0 || ch === 0 || fw === 0 || fh === 0) return;
 
