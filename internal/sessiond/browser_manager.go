@@ -37,6 +37,7 @@ type BrowserPage struct {
 	manager    *BrowserManager
 	cancel     context.CancelFunc
 	currentURL      string  // last navigated URL; set by handleEvent Page.frameNavigated
+	mainFrameID     string  // CDP frame ID of the top-level frame; set on first frameNavigated
 	devicePixelRatio float64 // 1.0 when unset; set from browser-focus DevicePixelRatio
 	renderWidth      int     // last CSS-px viewport width from browser-focus; used to re-apply on navigation
 	renderHeight     int     // last CSS-px viewport height from browser-focus; used to re-apply on navigation

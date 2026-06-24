@@ -132,10 +132,36 @@ func (bp *BrowserPage) runEventLoop(ctx context.Context) {
 }
 
 // handleEvent dispatches a CDP event for this page. Recognised events:
-//   - Page.screencastFrame: decode JPEG bytes, broadcast to clients, send ACK.
-//   - Page.frameNavigated:  broadcast URL on main-frame navigations.
+//   - Page.frameStartedLoading: stop screencast before navigation commits.
+//   - Page.screencastFrame:     decode JPEG bytes, broadcast to clients, send ACK.
+//   - Page.frameNavigated:      restart screencast after navigation commits.
 func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 	switch ev.Method {
+	case "Page.frameStartedLoading":
+		// A top-level navigation has started but not yet committed.
+		// Chrome will reset Emulation.setDeviceMetricsOverride at commit time
+		// (Page.frameNavigated). If the screencast is still running then, Chrome
+		// delivers frames at the reverted viewport size (e.g. 1280×600) which
+		// appear as letterbox bars on the client.
+		//
+		// Stopping the screencast HERE — before commit — ensures Chrome is not
+		// screencasting when the viewport resets. Page.frameNavigated restarts it
+		// after re-applying the correct viewport. For navigations initiated via
+		// handleNavigate (URL bar, back/forward) the screencast is already stopped
+		// before we get here; this stop is idempotent.
+		//
+		// Filter to main frame only to avoid stopping the screencast for iframe
+		// sub-resource loads. mainFrameID is set on the first frameNavigated.
+		var fsl struct {
+			FrameID string `json:"frameId"`
+		}
+		if err := json.Unmarshal(ev.Params, &fsl); err != nil {
+			return
+		}
+		if bp.mainFrameID == "" || fsl.FrameID == bp.mainFrameID {
+			_, _ = bp.cdp.Call(ctx, bp.sessionID, "Page.stopScreencast", nil)
+		}
+
 	case "Page.screencastFrame":
 		var frame struct {
 			Data      string `json:"data"`
@@ -156,6 +182,7 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 	case "Page.frameNavigated":
 		var nav struct {
 			Frame struct {
+				ID       string `json:"id"`
 				URL      string `json:"url"`
 				ParentID string `json:"parentId"`
 			} `json:"frame"`
@@ -165,30 +192,26 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 		}
 		// Only handle top-level frame navigations (parentId == "").
 		if nav.Frame.ParentID == "" && nav.Frame.URL != "" {
+			// Track the main frame ID so frameStartedLoading can filter
+			// iframe sub-resource loads from real top-level navigations.
+			if bp.mainFrameID == "" {
+				bp.mainFrameID = nav.Frame.ID
+			}
+
 			bp.manager.broadcastJSON(BrowserURLMsg{
 				Type:   TypeBrowserURL,
 				PaneID: bp.paneID,
 				URL:    nav.Frame.URL,
 			})
-			// Cache for getCurrentURL() at reconnect time.
 			bp.currentURL = nav.Frame.URL
 
-			// Re-apply the client-authoritative viewport and restart the screencast
-			// after every top-level navigation.
-			//
-			// Chrome resets Emulation.setDeviceMetricsOverride on frameNavigated,
-			// briefly reverting to its default dimensions. If the screencast is
-			// still running at that moment it delivers frames at the wrong size
-			// (e.g. 1280×600 scaled to maxWidth → wrong height → letterbox bars).
-			//
-			// Fix: stop screencast → re-apply correct viewport → restart screencast.
-			// The stopScreencast CDP round-trip ensures Chrome has processed the
-			// stop before we re-apply the viewport, so no wrong frames are generated
-			// after the stop. For navigations via handleNavigate (URL bar, back,
-			// forward) the screencast is already stopped before we get here; the
-			// stop call here is idempotent and handles link-click navigations too.
+			// Re-apply the client-authoritative viewport and restart the screencast.
+			// Chrome resets Emulation.setDeviceMetricsOverride at navigation commit.
+			// The screencast was already stopped by frameStartedLoading (for link
+			// clicks) or handleNavigate (for URL bar / back / forward). This
+			// SetViewport + startScreencast re-establishes the correct viewport and
+			// resumes streaming at the right dimensions.
 			if bp.renderWidth > 0 && bp.renderHeight > 0 {
-				_, _ = bp.cdp.Call(ctx, bp.sessionID, "Page.stopScreencast", nil)
 				_ = bp.SetViewport(ctx, bp.renderWidth, bp.renderHeight)
 				_ = bp.startScreencast(ctx)
 			}
