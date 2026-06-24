@@ -144,40 +144,14 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 		if err := json.Unmarshal(ev.Params, &frame); err != nil {
 			return
 		}
-		// Always ACK — Chrome stops sending frames if we don't ack, even for
-		// frames we intend to filter. Do this before any early-return below.
+		// ACK must be sent or Chrome stops sending frames.
 		bp.cdp.Call(ctx, bp.sessionID, "Page.screencastFrameAck", map[string]any{ //nolint:errcheck
 			"sessionId": frame.SessionID,
 		})
 		jpegBytes, err := base64.StdEncoding.DecodeString(frame.Data)
-		if err != nil || len(jpegBytes) == 0 {
-			return
+		if err == nil && len(jpegBytes) > 0 {
+			bp.manager.broadcast(bp.paneID, jpegBytes)
 		}
-		// Filter frames that don't match the client-authoritative viewport height.
-		//
-		// On Page.frameNavigated Chrome briefly resets Emulation.setDeviceMetricsOverride
-		// to its default dimensions (1280×600 on this host: width from openPage init,
-		// height from --ozone-override-screen-size=800,600). The screencast is still
-		// running and delivers 1-2 frames at that wrong size before our SetViewport
-		// call in frameNavigated re-applies the correct dimensions.
-		//
-		// We use the JPEG's pixel height (from the SOF marker) to detect these frames.
-		// Wrong frames: 667×313 (1280×600 scaled to maxW=667).
-		// Correct frames: 667×665 (matching bp.renderHeight * dpr).
-		//
-		// Note: metadata.deviceWidth/Height in screencastFrame params is the DEVICE
-		// SCREEN size (800×600 from ozone), NOT the viewport CSS size — do not use it.
-		if bp.renderHeight > 0 {
-			dpr := bp.devicePixelRatio
-			if dpr <= 0 {
-				dpr = 1.0
-			}
-			expectedH := int(float64(bp.renderHeight) * dpr)
-			if h := jpegHeight(jpegBytes); h > 0 && h != expectedH {
-				return // wrong-viewport frame, drop silently
-			}
-		}
-		bp.manager.broadcast(bp.paneID, jpegBytes)
 
 	case "Page.frameNavigated":
 		var nav struct {
