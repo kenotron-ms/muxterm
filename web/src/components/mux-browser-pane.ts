@@ -421,7 +421,11 @@ export class MuxBrowserPane extends LitElement {
     const detail = (e as CustomEvent<{ paneId: number }>).detail;
     if (detail?.paneId !== this.paneId) return;
     _activeBrowserPaneId = this.paneId;
-    this._sendBrowserFocus();
+    // Defer one rAF: dockview fires panel-activated while it is still computing
+    // the panel's final CSS layout. Reading getBoundingClientRect() synchronously
+    // here returns an in-progress (smaller) size. After one frame, layout is
+    // complete and we get the correct canvas dimensions.
+    requestAnimationFrame(() => this._sendBrowserFocus());
   };
 
   private readonly _onWindowFocus = (): void => {
@@ -501,7 +505,11 @@ export class MuxBrowserPane extends LitElement {
       // Reset viewport flag so stale frames from the old viewport are suppressed
       // until the new browser-focus has been sent with the current canvas dimensions.
       this._viewportInitialized = false;
-      this._sendBrowserFocus();
+      // Defer one rAF so the browser has completed the current layout pass before
+      // we read getBoundingClientRect(). Without the defer, onReconnect fires the
+      // instant the WebSocket opens — which may be mid-layout if dockview is still
+      // animating the panel open. The deferred read always sees the stable size.
+      requestAnimationFrame(() => this._sendBrowserFocus());
     };
 
     // If firstUpdated has already run (reconnect case), restart the ResizeObserver

@@ -114,7 +114,12 @@ func (bp *BrowserPage) captureScreenshot(ctx context.Context) ([]byte, error) {
 // sessionID matches this page. For v1 (maxPages: 1) there is at most one page
 // so all non-browser-level events belong to this page.
 func (bp *BrowserPage) runEventLoop(ctx context.Context) {
-	_ = bp.startScreencast(ctx)
+	// Do NOT start the screencast here. The client is the authority on
+	// viewport dimensions. The screencast starts (at the correct size) only
+	// when the client sends its first browser-focus event, which triggers
+	// SetViewport + startScreencast in the browser-focus handler.
+	// Starting eagerly here would cast at Chrome's default 1280×720 viewport
+	// before the client has reported its canvas size.
 
 	for {
 		select {
