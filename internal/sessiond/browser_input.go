@@ -247,6 +247,14 @@ func (bp *BrowserPage) HandleInput(ctx context.Context, msg BrowserInputMsg) err
 // trigger browser history operations. A plain URL is auto-prefixed with
 // "https://" if it lacks a scheme. An empty URL returns an error.
 func (bp *BrowserPage) handleNavigate(ctx context.Context, url string) error {
+	// Stop the screencast before navigating so Chrome never sends frames at
+	// the wrong viewport size. On frameNavigated Chrome resets
+	// Emulation.setDeviceMetricsOverride; if the screencast is running at
+	// that moment it delivers frames scaled from the reverted viewport.
+	// Stopping here (before the navigation) means zero wrong frames reach
+	// the client. frameNavigated re-applies SetViewport and restarts.
+	_, _ = bp.cdp.Call(ctx, bp.sessionID, "Page.stopScreencast", nil)
+
 	switch url {
 	case "history:back":
 		// Page.goBack / Page.goForward are not available in all Chrome versions.

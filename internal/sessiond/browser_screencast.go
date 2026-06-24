@@ -173,14 +173,24 @@ func (bp *BrowserPage) handleEvent(ctx context.Context, ev cdpEvent) {
 			// Cache for getCurrentURL() at reconnect time.
 			bp.currentURL = nav.Frame.URL
 
-			// Re-apply the client-authoritative viewport after every top-level
-			// navigation. Chrome resets Emulation.setDeviceMetricsOverride on
-			// frameNavigated. We re-apply bp.renderWidth/Height (last size sent
-			// by the client via browser-focus / ResizeObserver). The screencast
-			// keeps running uninterrupted — wrong-size frames that arrive during
-			// the SetViewport round-trip are filtered by jpegHeight() above.
+			// Re-apply the client-authoritative viewport and restart the screencast
+			// after every top-level navigation.
+			//
+			// Chrome resets Emulation.setDeviceMetricsOverride on frameNavigated,
+			// briefly reverting to its default dimensions. If the screencast is
+			// still running at that moment it delivers frames at the wrong size
+			// (e.g. 1280×600 scaled to maxWidth → wrong height → letterbox bars).
+			//
+			// Fix: stop screencast → re-apply correct viewport → restart screencast.
+			// The stopScreencast CDP round-trip ensures Chrome has processed the
+			// stop before we re-apply the viewport, so no wrong frames are generated
+			// after the stop. For navigations via handleNavigate (URL bar, back,
+			// forward) the screencast is already stopped before we get here; the
+			// stop call here is idempotent and handles link-click navigations too.
 			if bp.renderWidth > 0 && bp.renderHeight > 0 {
+				_, _ = bp.cdp.Call(ctx, bp.sessionID, "Page.stopScreencast", nil)
 				_ = bp.SetViewport(ctx, bp.renderWidth, bp.renderHeight)
+				_ = bp.startScreencast(ctx)
 			}
 		}
 	}
