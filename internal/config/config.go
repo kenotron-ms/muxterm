@@ -77,6 +77,16 @@ type RestoreDetect struct {
 	// matches a process whose title is "amplifier session=abc123" and makes
 	// ${argv_suffix} = "abc123".
 	Argv string `toml:"argv,omitempty" json:"argv,omitempty"`
+
+	// File is a path to a file whose existence triggers this strategy. The
+	// file's trimmed content is available as ${file_content} in the Restore
+	// template. Supports ~ expansion.
+	//
+	// Example: detect = { file = "~/.local/share/muxterm/amplifier-session-id" }
+	// with restore = "amplifier resume ${file_content}" lets an Amplifier
+	// session:start hook write its session ID to disk so crash recovery can
+	// resume the exact session silently.
+	File string `toml:"file,omitempty" json:"file,omitempty"`
 }
 
 // RestoreStrategy maps a detection condition to a restore command template.
@@ -215,5 +225,28 @@ func Defaults() Config {
 			SharedWindowPolicy: "follow",
 			Launch:             "muxterm-agent",
 		},
+		Restore: RestoreConfig{
+			SnapshotInterval: "30s",
+			// Built-in strategy: when an Amplifier session:start hook has written
+			// the session ID to the well-known file, crash recovery resumes the
+			// exact Amplifier session instead of spawning a fresh shell.
+			Strategies: []RestoreStrategy{
+				{
+					Detect:  RestoreDetect{File: amplifierSessionIDPath()},
+					Restore: "amplifier resume ${file_content}",
+				},
+			},
+		},
 	}
+}
+
+// amplifierSessionIDPath returns the path where the muxterm Amplifier bundle
+// hook writes the active session ID for crash-recovery purposes.
+// Follows XDG Base Directory spec (XDG_DATA_HOME / ~/.local/share).
+func amplifierSessionIDPath() string {
+	if base := os.Getenv("XDG_DATA_HOME"); base != "" {
+		return filepath.Join(base, "muxterm", "amplifier-session-id")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share", "muxterm", "amplifier-session-id")
 }

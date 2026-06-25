@@ -19,14 +19,9 @@ type Pane struct {
 	LocalID int
 	Title   string // settable; OSC 0/2 title capture is a later phase
 
-	// SurfaceKind is "browser" for browser panes; empty string means "terminal".
+	// SurfaceKind is "browser-cdp" for browser panes; empty string means "terminal".
 	// Set once at construction; immutable thereafter.
 	SurfaceKind string
-	// Browser-only: the proxied port, stored path, and optional auth headers.
-	// All immutable except BrowserPath, which SetBrowserPath() updates.
-	BrowserPort  int
-	BrowserPath  string
-	ProxyHeaders map[string]string
 
 	mu   sync.Mutex // guards cols/rows
 	cols int
@@ -127,22 +122,6 @@ func NewPane(
 	return p, nil
 }
 
-// NewBrowserPane creates a lightweight browser-only pane (no PTY or buffer).
-// If path is empty, it defaults to "/".
-func NewBrowserPane(localID, port int, path string, headers map[string]string) *Pane {
-	if path == "" {
-		path = "/"
-	}
-	return &Pane{
-		LocalID:      localID,
-		Title:        fmt.Sprintf(":%d", port),
-		SurfaceKind:  "browser",
-		BrowserPort:  port,
-		BrowserPath:  path,
-		ProxyHeaders: headers,
-	}
-}
-
 // scanOSC133 searches data for an OSC 133;D sequence (command-done marker) and
 // returns the exit code and whether one was found. The terminator must be present
 // in the same read buffer (BEL \x07 or ST \x1b\\); partial sequences without a
@@ -228,6 +207,51 @@ func (p *Pane) readLoop() {
 	}
 }
 
+// GetPtmxFD returns the file descriptor of the PTY master so it can be
+// transferred via SCM_RIGHTS during a live-upgrade handoff.
+func (p *Pane) GetPtmxFD() (int, error) {
+	if p.ptmx == nil {
+		return -1, fmt.Errorf("sessiond: pane %d has no PTY", p.LocalID)
+	}
+	return int(p.ptmx.Fd()), nil
+}
+
+// RestorePane wraps an already-running PTY (received via SCM_RIGHTS during a
+// live-upgrade handoff) in a new Pane. The PTY master is supplied as ptmx and
+// the child's PID as pid so the pane can reap it with os.FindProcess. Unlike
+// NewPane, RestorePane never spawns a new process.
+func RestorePane(
+	ptmx *os.File,
+	pid int,
+	localID, cols, rows int,
+	title, surfaceKind string,
+	buf PaneBuffer,
+	onData func(int, []byte),
+	onExit func(int),
+) *Pane {
+	p := &Pane{
+		LocalID:     localID,
+		Title:       title,
+		SurfaceKind: surfaceKind,
+		cols:        cols,
+		rows:        rows,
+		ptmx:        ptmx,
+		buf:         buf,
+		onData:      onData,
+		onExit:      onExit,
+	}
+	if pid > 0 {
+		proc, _ := os.FindProcess(pid)
+		p.procWait = func() {
+			if proc != nil {
+				_, _ = proc.Wait()
+			}
+		}
+	}
+	go p.readLoop()
+	return p
+}
+
 // Write sends input to the child's stdin (the PTY master).
 // For browser panes (ptmx == nil), input is silently discarded.
 func (p *Pane) Write(input []byte) (int, error) {
@@ -302,88 +326,19 @@ func (p *Pane) SetTitle(name string) {
 	p.mu.Unlock()
 }
 
-// SetBrowserPath updates the pane's browser navigation path under lock.
-func (p *Pane) SetBrowserPath(path string) {
-	p.mu.Lock()
-	p.BrowserPath = path
-	p.mu.Unlock()
-}
-
 // Info returns a frozen snapshot of this pane's identity and dimensions.
 func (p *Pane) Info() PaneInfo {
 	p.mu.Lock()
 	cols, rows, title := p.cols, p.rows, p.Title
-	surfaceKind, browserPort, browserPath, proxyHeaders := p.SurfaceKind, p.BrowserPort, p.BrowserPath, p.ProxyHeaders
+	surfaceKind := p.SurfaceKind
 	p.mu.Unlock()
 	return PaneInfo{
-		PaneID:       p.LocalID,
-		Cols:         cols,
-		Rows:         rows,
-		Title:        title,
-		SurfaceKind:  surfaceKind,
-		BrowserPort:  browserPort,
-		BrowserPath:  browserPath,
-		ProxyHeaders: proxyHeaders,
-	}
-}
-
-// RestorePane reconstructs a Pane from a live-upgrade handoff. It adopts the
-// already-running PTY at ptmx and the already-running child at pid, sets all
-// state fields directly, and starts the read loop goroutine. The caller must
-// have already written any scrollback bytes into buf before calling RestorePane
-// so the buffer reflects the correct replay state.
-func RestorePane(
-	ptmx *os.File,
-	pid, localID, cols, rows int,
-	title, surfaceKind string,
-	buf PaneBuffer,
-	onData func(int, []byte),
-	onExit func(int),
-) *Pane {
-	p := &Pane{
-		LocalID:     localID,
+		PaneID:      p.LocalID,
+		Cols:        cols,
+		Rows:        rows,
 		Title:       title,
 		SurfaceKind: surfaceKind,
-		cols:        cols,
-		rows:        rows,
-		ptmx:        ptmx,
-		buf:         buf,
-		onData:      onData,
-		onExit:      onExit,
 	}
-	if pid > 0 {
-		proc, err := os.FindProcess(pid)
-		if err == nil {
-			// Keep a Process handle so Close() can Kill() the child.
-			p.cmd = &exec.Cmd{}
-			p.cmd.Process = proc
-			// procWait is used by readLoop instead of cmd.Wait() because the
-			// Cmd was not started by this process and its internal state is
-			// uninitialised; using os.Process.Wait() directly is safe.
-			p.procWait = func() { _, _ = proc.Wait() }
-		}
-	}
-	go p.readLoop()
-	return p
-}
-
-// GetPtmxFD returns the raw OS file descriptor of this pane's PTY master.
-// The returned integer is valid for the lifetime of p.ptmx; callers must not
-// close it directly. Returns -1 and a non-nil error for browser panes or when
-// the underlying syscall fails.
-func (p *Pane) GetPtmxFD() (int, error) {
-	if p.ptmx == nil {
-		return -1, fmt.Errorf("sessiond: pane %d has no ptmx (browser pane?)", p.LocalID)
-	}
-	sc, err := p.ptmx.SyscallConn()
-	if err != nil {
-		return -1, fmt.Errorf("sessiond: SyscallConn: %w", err)
-	}
-	var fd int = -1
-	if err := sc.Control(func(f uintptr) { fd = int(f) }); err != nil {
-		return -1, fmt.Errorf("sessiond: Control: %w", err)
-	}
-	return fd, nil
 }
 
 // Close kills the child (if any) and closes the PTY, which ends the read loop

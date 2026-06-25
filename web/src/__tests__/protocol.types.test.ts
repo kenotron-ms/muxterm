@@ -38,6 +38,13 @@ describe('sessiond protocol types', () => {
       // Browser-action relay
       BrowserAction: 'browser-action',
       BrowserActionResult: 'browser-action-result',
+      // Browser CDP pane management
+      CreateBrowserPane: 'create-browser-pane',
+      CloseBrowserPane: 'close-browser-pane',
+      BrowserInput: 'browser-input',
+      BrowserURL: 'browser-url',
+      BrowserDownloadProgress: 'browser-download-progress',
+      BrowserError: 'browser-error',
       // Layout / snapshot relay
       LayoutCommand: 'layout-command',
       ScreenSnapshot: 'screen-snapshot',
@@ -122,53 +129,34 @@ describe('clientRef correlation field', () => {
   });
 });
 
-describe('browser pane fields', () => {
-  it('SessiondPaneInfo accepts optional browser fields', () => {
-    const kind: SurfaceKind = 'browser';
+describe('browser CDP pane fields', () => {
+  it('SessiondPaneInfo accepts browser-cdp surfaceKind', () => {
+    const kind: SurfaceKind = 'browser-cdp';
     const pane: SessiondPaneInfo = {
       paneId: 2,
       cols: 0,
       rows: 0,
       surfaceKind: kind,
-      browserPort: 3000,
-      browserPath: '/app',
-      proxyHeaders: { 'X-Custom': 'value' },
     };
-    expect(pane.surfaceKind).toBe('browser');
-    expect(pane.browserPort).toBe(3000);
-    expect(pane.browserPath).toBe('/app');
-    expect(pane.proxyHeaders).toEqual({ 'X-Custom': 'value' });
+    expect(pane.surfaceKind).toBe('browser-cdp');
   });
 
-  it('SessiondPaneInfo browser fields are optional', () => {
-    // Must compile without browser fields
+  it('SessiondPaneInfo surfaceKind is optional', () => {
     const pane: SessiondPaneInfo = { paneId: 1, cols: 80, rows: 24 };
     expect(pane.surfaceKind).toBeUndefined();
-    expect(pane.browserPort).toBeUndefined();
-    expect(pane.browserPath).toBeUndefined();
-    expect(pane.proxyHeaders).toBeUndefined();
   });
 
-  it('SessiondMessage accepts optional browser fields for create-pane / pane-added', () => {
+  it('SessiondMessage accepts browser-cdp surfaceKind', () => {
     const msg: SessiondMessage = {
       type: SessiondType.CreatePane,
       paneId: 2,
-      surfaceKind: 'browser',
-      browserPort: 8080,
-      browserPath: '/dashboard',
-      proxyHeaders: { Authorization: 'Bearer tok' },
+      surfaceKind: 'browser-cdp',
     };
-    expect(msg.surfaceKind).toBe('browser');
-    expect(msg.browserPort).toBe(8080);
-    expect(msg.browserPath).toBe('/dashboard');
-    expect(msg.proxyHeaders).toEqual({ Authorization: 'Bearer tok' });
+    expect(msg.surfaceKind).toBe('browser-cdp');
   });
 
-  it('SessiondMessage browser fields are optional', () => {
+  it('SessiondMessage surfaceKind is optional', () => {
     const msg: SessiondMessage = { type: SessiondType.CreatePane, paneId: 1 };
     expect(msg.surfaceKind).toBeUndefined();
-    expect(msg.browserPort).toBeUndefined();
-    expect(msg.browserPath).toBeUndefined();
-    expect(msg.proxyHeaders).toBeUndefined();
   });
 });

@@ -112,6 +112,17 @@ func (c *Client) AttachWorkspace(workspaceID string) error {
 	return nil
 }
 
+// setWorkspaceOnly records workspaceID as the current workspace without
+// issuing an Attach request to the sessiond. Used by lc.get() to prime the
+// workspace field from ListWorkspaces, deferring the actual Attach (and its
+// scrollback replay) to the first resources/list call so the MCP stdout pipe
+// is never flooded before the client can read from it.
+func (c *Client) setWorkspaceOnly(workspaceID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.workspace = workspaceID
+}
+
 // Workspace returns the workspace ID this connection is attached to. Returns
 // an empty string before the first successful AttachWorkspace call.
 func (c *Client) Workspace() string {

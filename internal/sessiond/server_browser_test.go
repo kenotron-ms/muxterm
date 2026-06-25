@@ -1,182 +1,137 @@
 package sessiond
 
 import (
+	"bytes"
+	"encoding/json"
+	"net"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
-// TestCreateBrowserPane_SucceedsAndBroadcasts verifies the full lifecycle of
-// creating a browser pane: the actor gets a pane-created ACK with a positive
-// pane id, a pane-added broadcast carries the correct surface-kind and port,
-// and a second observer client also receives the pane-added broadcast.
-func TestCreateBrowserPane_SucceedsAndBroadcasts(t *testing.T) {
-	srv, socketPath, _, cancel := startTestServer(t)
-	defer cancel()
+// TestServerHasBrowserFields verifies that Server has the new browserManager
+// and browserPanes fields with the correct types. This is a compile-time test:
+// it fails to compile before the fields are added to the struct.
+func TestServerHasBrowserFields(t *testing.T) {
+	var s Server
+	// browserManager field: *BrowserManager
+	var _ *BrowserManager = s.browserManager
+	// browserPanes field: map[int]string
+	var _ map[int]string = s.browserPanes
+}
 
-	wsID := srv.Registry().List()[0].WorkspaceID
-
-	// Client A attaches.
-	a := newTClient(t, socketPath)
-	a.send(&Message{Type: TypeAttach, CID: 1, WorkspaceID: wsID})
-	a.waitCtrl(TypeComposition)
-
-	// Client B also attaches as an observer.
-	b := newTClient(t, socketPath)
-	b.send(&Message{Type: TypeAttach, CID: 2, WorkspaceID: wsID})
-	b.waitCtrl(TypeComposition)
-
-	// A sends a create-pane for a browser surface.
-	a.send(&Message{
-		Type:        TypeCreatePane,
-		CID:         3,
-		SurfaceKind: "browser",
-		BrowserPort: 5173,
-		BrowserPath: "/",
-	})
-
-	// A gets a pane-created reply with a positive pane id.
-	created := a.waitCtrl(TypePaneCreated)
-	if created.CID != 3 {
-		t.Fatalf("pane-created CID = %d, want 3", created.CID)
+// TestNewServerInitializesBrowserManager verifies that NewServer creates a
+// non-nil browserManager and a non-nil browserPanes map.
+func TestNewServerInitializesBrowserManager(t *testing.T) {
+	s, err := NewServer(filepath.Join(t.TempDir(), "sessiond.sock"))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
 	}
-	paneID := created.PaneID
-	if paneID <= 0 {
-		t.Fatalf("pane-created PaneID = %d, want > 0", paneID)
+	if s.browserManager == nil {
+		t.Fatal("browserManager is nil after NewServer")
 	}
-
-	// A receives the pane-added broadcast with correct surface kind and port.
-	addedA := a.waitCtrl(TypePaneAdded)
-	if addedA.PaneID != paneID {
-		t.Fatalf("A pane-added PaneID = %d, want %d", addedA.PaneID, paneID)
-	}
-	if addedA.SurfaceKind != "browser" {
-		t.Fatalf("A pane-added SurfaceKind = %q, want %q", addedA.SurfaceKind, "browser")
-	}
-	if addedA.BrowserPort != 5173 {
-		t.Fatalf("A pane-added BrowserPort = %d, want 5173", addedA.BrowserPort)
-	}
-
-	// B also receives the pane-added broadcast with the same pane id and surface kind.
-	addedB := b.waitCtrl(TypePaneAdded)
-	if addedB.PaneID != paneID {
-		t.Fatalf("B pane-added PaneID = %d, want %d", addedB.PaneID, paneID)
-	}
-	if addedB.SurfaceKind != "browser" {
-		t.Fatalf("B pane-added SurfaceKind = %q, want %q", addedB.SurfaceKind, "browser")
+	if s.browserPanes == nil {
+		t.Fatal("browserPanes is nil after NewServer")
 	}
 }
 
-// TestCreateBrowserPane_InvalidPort_Errors verifies that a browser pane with
-// port 0 is rejected with a TypeError reply carrying the correct CID.
-func TestCreateBrowserPane_InvalidPort_Errors(t *testing.T) {
-	srv, socketPath, _, cancel := startTestServer(t)
-	defer cancel()
-
-	wsID := srv.Registry().List()[0].WorkspaceID
-
-	a := newTClient(t, socketPath)
-	a.send(&Message{Type: TypeAttach, CID: 1, WorkspaceID: wsID})
-	a.waitCtrl(TypeComposition)
-
-	a.send(&Message{
-		Type:        TypeCreatePane,
-		CID:         3,
-		SurfaceKind: "browser",
-		BrowserPort: 0,
-	})
-
-	errMsg := a.waitCtrl(TypeError)
-	if errMsg.CID != 3 {
-		t.Fatalf("error CID = %d, want 3", errMsg.CID)
+// TestBroadcastBrowserDataFansOut verifies that broadcastBrowserData enqueues
+// a FrameBrowserData frame to every live connection.
+func TestBroadcastBrowserDataFansOut(t *testing.T) {
+	s, err := NewServer(filepath.Join(t.TempDir(), "sessiond.sock"))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
 	}
-	_ = srv
+
+	// Create an in-memory net.Pipe to act as a connection.
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	c := newConn(s, server)
+	s.mu.Lock()
+	s.conns[c] = true
+	s.mu.Unlock()
+
+	jpeg := []byte{0xFF, 0xD8, 0xFF, 0xE0} // minimal JPEG header bytes
+	s.broadcastBrowserData(42, jpeg)
+
+	// Read from the client side: should receive a FrameBrowserData frame.
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	kind, payload, err := ReadFrame(client)
+	if err != nil {
+		t.Fatalf("ReadFrame: %v", err)
+	}
+	if kind != FrameBrowserData {
+		t.Fatalf("frame kind = %d, want FrameBrowserData (%d)", kind, FrameBrowserData)
+	}
+	// FrameBrowserData has the same payload layout as FramePaneData.
+	paneID, data := DecodePaneData(payload)
+	if int(paneID) != 42 {
+		t.Fatalf("paneID = %d, want 42", paneID)
+	}
+	if !bytes.Equal(data, jpeg) {
+		t.Fatalf("data = %x, want %x", data, jpeg)
+	}
 }
 
-// TestPaneUpdate_UpdatesStoredPath verifies that a pane-update message updates
-// the stored browser path in the registry for the named pane.
-func TestPaneUpdate_UpdatesStoredPath(t *testing.T) {
-	srv, socketPath, _, cancel := startTestServer(t)
-	defer cancel()
-
-	wsID := srv.Registry().List()[0].WorkspaceID
-
-	a := newTClient(t, socketPath)
-	a.send(&Message{Type: TypeAttach, CID: 1, WorkspaceID: wsID})
-	a.waitCtrl(TypeComposition)
-
-	// Create a browser pane on port 9002.
-	a.send(&Message{
-		Type:        TypeCreatePane,
-		CID:         2,
-		SurfaceKind: "browser",
-		BrowserPort: 9002,
-		BrowserPath: "/",
-	})
-	created := a.waitCtrl(TypePaneCreated)
-	paneID := created.PaneID
-	a.waitCtrl(TypePaneAdded)
-
-	// Send a pane-update to navigate to /dashboard.
-	a.send(&Message{
-		Type:        TypePaneUpdate,
-		PaneID:      paneID,
-		BrowserPath: "/dashboard",
-	})
-
-	// Spin briefly to allow the server goroutine to process the update.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		p, ok := srv.Registry().Pane(wsID, paneID)
-		if ok {
-			info := p.Info()
-			if info.BrowserPath == "/dashboard" {
-				return // success
-			}
-		}
-		time.Sleep(5 * time.Millisecond)
+// TestBroadcastBrowserControlAnyFansOut verifies that broadcastBrowserControlAny
+// marshals msg to JSON, builds a Message with Type/PaneID/RawPayload, and
+// enqueues it as a FrameControl frame to every live connection.
+func TestBroadcastBrowserControlAnyFansOut(t *testing.T) {
+	s, err := NewServer(filepath.Join(t.TempDir(), "sessiond.sock"))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
 	}
-	p, _ := srv.Registry().Pane(wsID, paneID)
-	t.Fatalf("BrowserPath = %q after pane-update, want %q", p.Info().BrowserPath, "/dashboard")
-}
 
-// TestComposition_IncludesBrowserPane verifies that a fresh attach after
-// creating a browser pane includes that pane in the composition with the
-// correct surface kind and browser port.
-func TestComposition_IncludesBrowserPane(t *testing.T) {
-	srv, socketPath, _, cancel := startTestServer(t)
-	defer cancel()
+	// Create an in-memory net.Pipe to act as a connection.
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
 
-	wsID := srv.Registry().List()[0].WorkspaceID
+	c := newConn(s, server)
+	s.mu.Lock()
+	s.conns[c] = true
+	s.mu.Unlock()
 
-	a := newTClient(t, socketPath)
-	a.send(&Message{Type: TypeAttach, CID: 1, WorkspaceID: wsID})
-	a.waitCtrl(TypeComposition)
-
-	// Create a browser pane.
-	a.send(&Message{
-		Type:        TypeCreatePane,
-		CID:         2,
-		SurfaceKind: "browser",
-		BrowserPort: 5173,
-		BrowserPath: "/",
-	})
-	a.waitCtrl(TypePaneCreated)
-	a.waitCtrl(TypePaneAdded)
-
-	// A fresh client attaches and should see the browser pane in the composition.
-	b := newTClient(t, socketPath)
-	b.send(&Message{Type: TypeAttach, CID: 10, WorkspaceID: wsID})
-	comp := b.waitCtrl(TypeComposition)
-
-	if len(comp.Panes) != 1 {
-		t.Fatalf("composition Panes = %d, want 1", len(comp.Panes))
+	msg := BrowserURLMsg{
+		Type:   TypeBrowserURL,
+		PaneID: 7,
+		URL:    "https://example.com",
 	}
-	p := comp.Panes[0]
-	if p.SurfaceKind != "browser" {
-		t.Fatalf("composition Pane SurfaceKind = %q, want %q", p.SurfaceKind, "browser")
+	s.broadcastBrowserControlAny(msg)
+
+	// Read from the client side: should receive a FrameControl frame.
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	kind, payload, readErr := ReadFrame(client)
+	if readErr != nil {
+		t.Fatalf("ReadFrame: %v", readErr)
 	}
-	if p.BrowserPort != 5173 {
-		t.Fatalf("composition Pane BrowserPort = %d, want 5173", p.BrowserPort)
+	if kind != FrameControl {
+		t.Fatalf("frame kind = %d, want FrameControl (%d)", kind, FrameControl)
 	}
-	_ = srv
+
+	var got Message
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("unmarshal Message: %v", err)
+	}
+	if got.Type != TypeBrowserURL {
+		t.Fatalf("Message.Type = %q, want %q", got.Type, TypeBrowserURL)
+	}
+	if got.PaneID != 7 {
+		t.Fatalf("Message.PaneID = %d, want 7", got.PaneID)
+	}
+	if got.RawPayload == nil {
+		t.Fatal("Message.RawPayload is nil")
+	}
+	// Confirm RawPayload round-trips back to the original URL.
+	var raw struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(got.RawPayload, &raw); err != nil {
+		t.Fatalf("unmarshal RawPayload: %v", err)
+	}
+	if raw.URL != "https://example.com" {
+		t.Fatalf("RawPayload url = %q, want %q", raw.URL, "https://example.com")
+	}
 }

@@ -5,18 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"runtime"
-	"strings"
 	"syscall"
-	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/deploy"
@@ -28,12 +24,6 @@ import (
 )
 
 var version = "dev"
-
-// sessiondProto is incremented only when the sessiond state/wire format
-// changes incompatibly. A matching value between old and new binaries means
-// sessions survive an upgrade without a PTY handoff; a changed value triggers
-// the full SCM_RIGHTS handoff protocol. Most releases will never bump this.
-var sessiondProto = "1"
 
 func main() {
 	cfg, err := ParseArgs(os.Args[1:])
@@ -78,11 +68,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-	case "open-browser":
-		if err := runOpenBrowser(cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
 	case "doctor":
 		if err := runDoctor(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -100,11 +85,6 @@ func main() {
 		}
 	case "version":
 		fmt.Printf("muxterm %s (MCP: stdio)\n", version)
-	case "version-json":
-		// Machine-readable version info used by the upgrade path: the new binary
-		// is invoked as `muxterm version-json` to determine whether sessiondProto
-		// changed and a PTY handoff is required.
-		fmt.Printf(`{"version":%q,"sessiondProto":%q}`+"\n", version, sessiondProto)
 	}
 }
 
@@ -212,12 +192,9 @@ func runLocal(cfg Config) error {
 		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
 		ConfigPath:    config.DefaultPath(),
 		InitialConfig: resolved,
-		Version:       version,
-		SessiondProto: sessiondProto,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
-	startVersionPoller(srv)
 
 	// Publish serve-layer URL so the MCP server can discover the tunnel API.
 	if err := sessiond.WriteServerURL(cfg.Addr); err != nil {
@@ -260,12 +237,9 @@ func runServe(cfg Config) error {
 		NoAuth:        cfg.NoAuth,
 		ConfigPath:    config.DefaultPath(),
 		InitialConfig: resolved,
-		Version:       version,
-		SessiondProto: sessiondProto,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
-	startVersionPoller(srv)
 
 	// Publish serve-layer URL so the MCP server can discover the tunnel API.
 	if err := sessiond.WriteServerURL(cfg.Addr); err != nil {
@@ -284,34 +258,6 @@ func runServe(cfg Config) error {
 	log.Printf("access token: %s", token)
 
 	return srv.ListenAndServe(ctx)
-}
-
-// startVersionPoller starts a background goroutine that polls the GitHub
-// releases API and updates the hub's latestVersion when a newer release is
-// found. The first check happens after a short delay so server startup is not
-// blocked; subsequent checks run every hour.
-func startVersionPoller(srv *server.Server) {
-	if version == "dev" {
-		return // dev builds have no meaningful version to compare; skip entirely
-	}
-	go func() {
-		// Delay the first check slightly so the server is fully initialised.
-		time.Sleep(10 * time.Second)
-		check := func() {
-			tag, _, _, err := server.FetchLatestRelease()
-			if err != nil || tag == "" || tag == version {
-				return
-			}
-			srv.Hub().SetLatestVersion(tag)
-			log.Printf("muxterm: update available: %s (current: %s)", tag, version)
-		}
-		check()
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			check()
-		}
-	}()
 }
 
 // runDeploy deploys muxterm to a remote host via SSH.
@@ -382,32 +328,6 @@ func openBrowser(url string) {
 	if err := exec.Command(cmd, url).Start(); err != nil {
 		log.Printf("failed to open browser: %v", err)
 	}
-}
-
-// runOpenBrowser registers a browser pane with a running muxterm server by
-// POSTing to /api/pane. It reports actionable errors for the three failure
-// modes: server not reachable, sessiond not running (503), and other errors.
-func runOpenBrowser(cfg Config) error {
-	url := "http://" + cfg.Addr + "/api/pane"
-	body := fmt.Sprintf(`{"surfaceKind":"browser","browserPort":%d,"browserPath":"/"}`, cfg.BrowserPort)
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("muxterm not running or not reachable at %s", cfg.Addr)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusServiceUnavailable {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck
-		return fmt.Errorf("muxterm is running but sessiond is not available — is the daemon started?")
-	}
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-
-	io.Copy(io.Discard, resp.Body) //nolint:errcheck
-	fmt.Printf("browser pane opened: port %d\n", cfg.BrowserPort)
-	return nil
 }
 
 // runAmplifierBundleInstall adds the muxterm Amplifier bundle as an app bundle

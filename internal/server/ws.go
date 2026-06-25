@@ -186,15 +186,7 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 
 	case sessiond.TypeCreatePane:
-		var (
-			paneID int
-			err    error
-		)
-		if msg.SurfaceKind == "browser" {
-			paneID, err = c.daemon.CreateBrowserPane(msg.BrowserPort, msg.BrowserPath, msg.ProxyHeaders, msg.Placement, msg.ReferencePaneID)
-		} else {
-			paneID, err = c.daemon.CreatePane(msg.Cmd, msg.Placement, msg.ReferencePaneID)
-		}
+		paneID, err := c.daemon.CreatePane(msg.Cmd, msg.Placement, msg.ReferencePaneID)
 		if err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
@@ -233,12 +225,6 @@ func (c *Client) handleTextInput(data []byte) {
 			return
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
-
-	case sessiond.TypeBrowserActionResult:
-		// Fire-and-forget: the daemon broadcasts it to all workspace subscribers.
-		if err := c.daemon.BrowserActionResult(msg); err != nil {
-			log.Printf("handleTextInput: BrowserActionResult error: %v", err)
-		}
 
 	case sessiond.TypeCreateTunnel:
 		// Tunnel operations are handled entirely by the serve layer; they are
@@ -280,6 +266,21 @@ func (c *Client) handleTextInput(data []byte) {
 			Tunnels: tunnels,
 		})
 
+	case sessiond.TypeCreateBrowserPane:
+		paneID, err := c.daemon.CreateBrowserCDPPane(msg.Placement, msg.ReferencePaneID)
+		if err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneCreated, CID: msg.CID, PaneID: paneID, ClientRef: msg.ClientRef})
+
+	case sessiond.TypeCloseBrowserPane:
+		if err := c.daemon.ClosePane(msg.PaneID); err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
+
 	default:
 		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
 	}
@@ -299,20 +300,9 @@ func (c *Client) sendMessage(msg *sessiond.Message) {
 
 // sendConfig writes the serve-owned resolved configuration as a text frame.
 // This is a serve-local envelope ({"type":"config","config":cfg}), NOT a
-// sessiond message. The frame also carries the current binary version and the
-// latest available release version so the browser can show an update badge.
+// sessiond message.
 func (c *Client) sendConfig(cfg any) {
-	c.hub.mu.RLock()
-	ver := c.hub.version
-	latest := c.hub.latestVersion
-	c.hub.mu.RUnlock()
-
-	data, err := json.Marshal(map[string]any{
-		"type":          "config",
-		"config":        cfg,
-		"version":       ver,
-		"latestVersion": latest,
-	})
+	data, err := json.Marshal(map[string]any{"type": "config", "config": cfg})
 	if err != nil {
 		log.Printf("sendConfig: marshal error: %v", err)
 		return
@@ -358,12 +348,6 @@ type Hub struct {
 	dial           DialFunc
 	resolvedConfig any             // muxterm-owned resolved config, shipped to clients on connect
 	tunnels        *TunnelRegistry // shared tunnel registry for /t/{id}/ proxy
-
-	// version is the running binary version (e.g. "v0.4.0"); set in New().
-	// latestVersion is the newest available release tag from GitHub; updated
-	// by the background poll goroutine in main. Both are guarded by mu.
-	version       string
-	latestVersion string
 }
 
 // SetResolvedConfig stores the resolved configuration on the hub. The config is
@@ -373,23 +357,6 @@ func (h *Hub) SetResolvedConfig(cfg any) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.resolvedConfig = cfg
-}
-
-// SetVersion stores the running binary version on the hub. It is included in
-// every {type:"config"} frame sent to browser clients.
-func (h *Hub) SetVersion(v string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.version = v
-}
-
-// SetLatestVersion stores the newest available release tag (e.g. "v0.5.0")
-// on the hub. When non-empty and different from version, the browser can show
-// an update badge. It is included in every {type:"config"} frame.
-func (h *Hub) SetLatestVersion(v string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.latestVersion = v
 }
 
 // BroadcastConfig updates the hub's stored config and sends a {type:"config"}
@@ -471,9 +438,6 @@ func (h *Hub) attachClient(c *Client) error {
 				Rows:            pane.Rows,
 				Title:           pane.Title,
 				SurfaceKind:     pane.SurfaceKind,
-				BrowserPort:     pane.BrowserPort,
-				BrowserPath:     pane.BrowserPath,
-				ProxyHeaders:    pane.ProxyHeaders,
 				Placement:       pane.Placement,
 				ReferencePaneID: pane.ReferencePaneID,
 			})

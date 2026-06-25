@@ -29,11 +29,9 @@ type Config struct {
 	Addr          string
 	Secret        string
 	StaticFS      fs.FS
-	NoAuth        bool            // skip token/localhost auth check (dev only)
-	ConfigPath    string          // path to write config.toml on PATCH /api/config (empty = skip writes)
-	InitialConfig muxcfg.Config   // initial resolved configuration (zero value = package defaults)
-	Version       string          // binary version string (e.g. "v0.4.0") for /api/update-check
-	SessiondProto string          // sessiond protocol version for upgrade handoff gating
+	NoAuth        bool          // skip token/localhost auth check (dev only)
+	ConfigPath    string        // path to write config.toml on PATCH /api/config (empty = skip writes)
+	InitialConfig muxcfg.Config // initial resolved configuration (zero value = package defaults)
 }
 
 // Server is the HTTP server for muxterm.
@@ -50,12 +48,6 @@ type Server struct {
 	configPath string
 	cfgMu      sync.RWMutex
 	cfg        muxcfg.Config
-
-	// version is the binary version (e.g. "v0.4.0"), used by /api/update-check.
-	// sessiondProto is the sessiond protocol version, used to gate PTY handoff.
-	// Both are set once in New() and never mutated.
-	version       string
-	sessiondProto string
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -65,19 +57,14 @@ func New(cfg Config) *Server {
 	tunnels := NewTunnelRegistry()
 	hub := NewHub(nil)
 	hub.tunnels = tunnels
-	// Pre-populate version so the first sendConfig carries it without needing
-	// a separate SetVersion call from the caller.
-	hub.version = cfg.Version
 
 	s := &Server{
-		addr:          cfg.Addr,
-		secret:        cfg.Secret,
-		noAuth:        cfg.NoAuth,
-		mux:           http.NewServeMux(),
-		hub:           hub,
-		tunnels:       tunnels,
-		version:       cfg.Version,
-		sessiondProto: cfg.SessiondProto,
+		addr:    cfg.Addr,
+		secret:  cfg.Secret,
+		noAuth:  cfg.NoAuth,
+		mux:     http.NewServeMux(),
+		hub:     hub,
+		tunnels: tunnels,
 	}
 
 	s.configPath = cfg.ConfigPath
@@ -97,8 +84,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("DELETE /api/tunnels/{id}", s.handleTunnelClose)
 	s.mux.HandleFunc("/t/", s.handleTunnelProxy)
 	s.mux.HandleFunc("GET /ws", s.handleWS)
-	s.mux.HandleFunc("GET /api/update-check", s.handleUpdateCheck)
-	s.mux.HandleFunc("POST /api/update", s.handleUpdate)
+	s.mux.HandleFunc("GET /ws/browser", s.handleWSBrowser)
 
 	if cfg.StaticFS != nil {
 		s.mux.Handle("/", http.FileServer(http.FS(cfg.StaticFS)))
@@ -175,6 +161,10 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.handleWSImpl(w, r)
+}
+
+func (s *Server) handleWSBrowser(w http.ResponseWriter, r *http.Request) {
+	s.handleWSBrowserImpl(w, r)
 }
 
 // handleTunnelList returns a JSON array of all active tunnels (id, port).

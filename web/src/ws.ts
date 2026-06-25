@@ -149,6 +149,16 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.ListTunnels });
   }
 
+  /** Open a browser CDP pane on the server side. */
+  createBrowserPane(): void {
+    this.sendSessiond({ type: SessiondType.CreateBrowserPane });
+  }
+
+  /** Close the active browser CDP pane on the server side. */
+  closeBrowserPane(): void {
+    this.sendSessiond({ type: SessiondType.CloseBrowserPane });
+  }
+
   /**
    * Report a pane's measured rendered grid (active-view-wins by construction:
    * only visible panes own a live ResizeObserver, so tabbed-away panes never

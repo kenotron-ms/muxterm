@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
@@ -50,7 +51,7 @@ func (f *fakeDaemonConn) CreatePane(cmd []string, placement string, referencePan
 	return f.createdID, nil
 }
 
-func (f *fakeDaemonConn) CreateBrowserPane(port int, path string, headers map[string]string, placement string, referencePaneID int) (int, error) {
+func (f *fakeDaemonConn) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
 	return f.createdID, nil
 }
 
@@ -65,6 +66,18 @@ func (f *fakeDaemonConn) Resize(paneID, cols, rows int) error {
 }
 
 func (f *fakeDaemonConn) BrowserActionResult(msg sessiond.Message) error { return nil }
+
+func (f *fakeDaemonConn) BrowserInput(paneID int, clientID string, event json.RawMessage) error {
+	return nil
+}
+
+func (f *fakeDaemonConn) BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int, devicePixelRatio float64) error {
+	return nil
+}
+
+func (f *fakeDaemonConn) BrowserBlur(paneID int, clientID, deviceID string) error {
+	return nil
+}
 
 func (f *fakeDaemonConn) SetHandlers(h sessiond.Handlers) {
 	f.handlers = h

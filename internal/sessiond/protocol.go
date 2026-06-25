@@ -12,8 +12,9 @@ import (
 // [4-byte BIG-ENDIAN length][1-byte kind][payload], where the length covers the
 // kind byte plus the payload.
 const (
-	FrameControl  byte = 0x01 // payload is JSON of the Message envelope
-	FramePaneData byte = 0x02 // payload is [4-byte LITTLE-ENDIAN paneId][raw bytes]
+	FrameControl     byte = 0x01 // payload is JSON of the Message envelope
+	FramePaneData    byte = 0x02 // payload is [4-byte LITTLE-ENDIAN paneId][raw bytes]
+	FrameBrowserData byte = 0x03 // payload is [4-byte LITTLE-ENDIAN paneId][raw JPEG bytes]
 )
 
 // Message Type strings name every frozen control envelope on the wire. No phase
@@ -32,7 +33,6 @@ const (
 	TypeResize          = "resize"
 	TypeRenamePane      = "rename-pane"
 	TypeSaveLayout      = "save-layout"
-	TypePaneUpdate      = "pane-update" // request: client → daemon, updates browserPath after navigation
 	TypeScreenSnapshot  = "screen-snapshot"  // request: MCP → daemon, VT grid for a pane
 	TypeGetLayout       = "get-layout"       // request: MCP → daemon, ASCII layout diagram
 
@@ -59,11 +59,17 @@ const (
 	// Error envelope.
 	TypeError = "error"
 
-	// TypeHandoff is sent by the new sessiond to the old sessiond to initiate
-	// a live-upgrade state transfer. The old sessiond responds by connecting
-	// to the handoff socket and writing all state + PTY FDs, then exits.
-	// This is a v2 addition; it is NOT part of the frozen v1 contract.
-	TypeHandoff = "handoff"
+	// Browser CDP pane messages (/ws/browser WebSocket).
+	TypeCreateBrowserPane       = "create-browser-pane"
+	TypeCloseBrowserPane        = "close-browser-pane"
+	TypeBrowserInput            = "browser-input"
+	TypeBrowserURL              = "browser-url"
+	TypeBrowserDownloadProgress = "browser-download-progress"
+	TypeBrowserError            = "browser-error"
+	TypeBrowserFocus   = "browser-focus"   // client → sessiond: focus claim + viewport size
+	TypeBrowserBlur    = "browser-blur"    // client → sessiond: focus release
+	TypeBrowserGranted = "browser-granted" // sessiond → client: input authority notification
+	TypeBrowserCursor  = "browser-cursor"  // sessiond → client: cursor shape update
 
 	// Tunnel messages (client ↔ serve, not forwarded to daemon).
 	TypeCreateTunnel  = "create-tunnel"
@@ -120,6 +126,17 @@ func WritePaneData(w io.Writer, paneID uint32, data []byte) error {
 	return writeFrame(w, FramePaneData, payload)
 }
 
+// WriteBrowserData writes a FrameBrowserData frame whose payload is
+// [4-byte LITTLE-ENDIAN paneId][raw JPEG bytes]. Same framing as WritePaneData
+// but uses FrameBrowserData (0x03) so the HTTP server can distinguish JPEG frames
+// from PTY output frames.
+func WriteBrowserData(w io.Writer, paneID uint32, data []byte) error {
+	payload := make([]byte, 4+len(data))
+	binary.LittleEndian.PutUint32(payload[0:4], paneID)
+	copy(payload[4:], data)
+	return writeFrame(w, FrameBrowserData, payload)
+}
+
 // DecodePaneData splits a FramePaneData payload into its little-endian paneID
 // and raw body. A payload shorter than the 4-byte paneId header is malformed
 // and yields (0, nil) defensively rather than panicking.
@@ -172,9 +189,6 @@ type Message struct {
 
 	// Browser pane fields (used in create-pane and pane-added for browser surface kinds)
 	SurfaceKind  string            `json:"surfaceKind,omitempty"`
-	BrowserPort  int               `json:"browserPort,omitempty"`
-	BrowserPath  string            `json:"browserPath,omitempty"`
-	ProxyHeaders map[string]string `json:"proxyHeaders,omitempty"`
 
 	// Layout placement fields (create-pane request → pane-added broadcast → browser dockview)
 	Placement      string `json:"placement,omitempty"`      // tab|split-right|split-left|split-above|split-below
@@ -202,15 +216,80 @@ type Message struct {
 	TunnelPort int          `json:"tunnelPort,omitempty"`
 	Tunnels    []TunnelInfo `json:"tunnels,omitempty"`
 
-	// HandoffSocket is the Unix socket path used during live-upgrade handoff.
-	// Carried only on TypeHandoff messages (v2 addition, not in frozen v1 contract).
-	HandoffSocket string `json:"handoffSocket,omitempty"`
+	// Browser relay fields (browser-focus, browser-blur, browser-input, browser-granted).
+	ClientID         string          `json:"clientId,omitempty"`         // stable per /ws/browser connection
+	DeviceID         string          `json:"deviceId,omitempty"`         // localStorage UUID, stable per physical machine
+	RenderWidth      int             `json:"renderWidth,omitempty"`      // canvas CSS width in px at focus time
+	RenderHeight     int             `json:"renderHeight,omitempty"`     // canvas CSS height in px at focus time
+	DevicePixelRatio float64         `json:"devicePixelRatio,omitempty"` // client window.devicePixelRatio; 0 means 1.0
+	InputEvent       json.RawMessage `json:"inputEvent,omitempty"`       // raw BrowserInputMsg JSON for browser-input
+	RawPayload       json.RawMessage `json:"rawPayload,omitempty"`       // original JSON bytes for relay passthrough
 }
 
 // TunnelInfo is one entry in a tunnel-list reply.
 type TunnelInfo struct {
 	ID   string `json:"id"`
 	Port int    `json:"port"`
+}
+
+// BrowserInputMsg is the event payload for {type:"browser-input"},
+// {type:"browser-focus"}, and {type:"browser-blur"} JSON frames sent by the
+// browser client on /ws/browser. The Type field names the input event (e.g.
+// "click", "scroll", "keydown", "type", "navigate", "resize", "browser-focus",
+// "browser-blur"). All geometry and value fields are optional; omit those not
+// relevant to the event.
+type BrowserInputMsg struct {
+	Type   string  `json:"type"`
+	X      float64 `json:"x,omitempty"`      // pointer X coordinate
+	Y      float64 `json:"y,omitempty"`      // pointer Y coordinate
+	Button  string `json:"button,omitempty"`  // left|middle|right
+	Buttons int    `json:"buttons,omitempty"` // bitmask of currently-held buttons: 1=left,2=right,4=middle
+	DeltaX float64 `json:"deltaX,omitempty"` // scroll delta X
+	DeltaY float64 `json:"deltaY,omitempty"` // scroll delta Y
+	Key       string  `json:"key,omitempty"`       // e.g. "Enter", "ArrowLeft", "a"
+	Text      string  `json:"text,omitempty"`      // for "type" events
+	URL       string  `json:"url,omitempty"`       // for "navigate" events; "history:back" etc.
+	Width     int     `json:"width,omitempty"`     // for "resize" events
+	Height    int     `json:"height,omitempty"`    // for "resize" events
+	Modifiers int     `json:"modifiers,omitempty"` // CDP modifiers bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8
+
+	ClientID     string `json:"clientId,omitempty"`     // stable per-connection ID (browser-focus/blur)
+	DeviceID     string `json:"deviceId,omitempty"`     // stable per-device ID (browser-focus/blur)
+	RenderWidth     int     `json:"renderWidth,omitempty"`     // canvas CSS width at focus time
+	RenderHeight    int     `json:"renderHeight,omitempty"`    // canvas CSS height at focus time
+	DevicePixelRatio float64 `json:"devicePixelRatio,omitempty"` // client window.devicePixelRatio; 0 means 1.0
+}
+
+// BrowserURLMsg is the {type:"browser-url"} frame sent by the server on
+// /ws/browser when the headless browser navigates to a new URL.
+type BrowserURLMsg struct {
+	Type   string `json:"type"`
+	PaneID int    `json:"paneId"`
+	URL    string `json:"url"`
+}
+
+// BrowserProgressMsg is the {type:"browser-download-progress"} frame sent
+// while Chromium is being downloaded. Percent is 0–100.
+type BrowserProgressMsg struct {
+	Type    string `json:"type"`
+	PaneID  int    `json:"paneId"`
+	Percent int    `json:"percent"`
+}
+
+// BrowserErrorMsg is the {type:"browser-error"} frame sent when a browser
+// operation fails (download failure, navigation error, Chromium crash).
+type BrowserErrorMsg struct {
+	Type   string `json:"type"`
+	PaneID int    `json:"paneId"`
+	Error  string `json:"error"`
+}
+
+// BrowserGrantedMsg is the {type:"browser-granted"} frame sent to all /ws/browser
+// clients when a client claims input authority via browser-focus.
+type BrowserGrantedMsg struct {
+	Type     string `json:"type"`
+	PaneID   int    `json:"paneId"`
+	ClientID string `json:"clientId"` // the client that now holds authority
 }
 
 // CursorPos is a 0-indexed terminal cursor position carried by screen-snapshot-result.
@@ -230,16 +309,11 @@ type WorkspaceInfo struct {
 // PaneInfo is one entry in a composition reply or pane-added event.
 type PaneInfo struct {
 	PaneID      int    `json:"paneId"`
-	SurfaceKind string `json:"surfaceKind,omitempty"` // "terminal" | "browser"; absent = "terminal"
+	SurfaceKind string `json:"surfaceKind,omitempty"` // "terminal" | "browser-cdp"; absent = "terminal"
 	Cols        int    `json:"cols,omitempty"`
 	Rows        int    `json:"rows,omitempty"`
 	Title       string `json:"title,omitempty"`
 	TotalSeq    uint64 `json:"totalSeq,omitempty"` // exact byte length of the replay data for this pane
-
-	// Browser-only fields (absent for terminal panes)
-	BrowserPort  int               `json:"browserPort,omitempty"`
-	BrowserPath  string            `json:"browserPath,omitempty"`
-	ProxyHeaders map[string]string `json:"proxyHeaders,omitempty"`
 
 	// Layout placement (only present on pane-added events from create-pane requests
 	// that carried an explicit placement token; absent means default/tab placement).

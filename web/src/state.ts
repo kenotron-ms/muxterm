@@ -264,8 +264,6 @@ export class MuxStore {
           title: msg.title,
           clientRef: msg.clientRef,
           surfaceKind: msg.surfaceKind,
-          browserPort: msg.browserPort,
-          browserPath: msg.browserPath,
         });
         break;
       }

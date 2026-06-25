@@ -8,6 +8,8 @@ import { terminalRegistry } from '../lib/terminal-registry.js';
 import { muxLog } from '../lib/mux-log.js';
 import type { SessiondPaneInfo, LayoutCommand } from '../types.js';
 import { store } from '../state.js';
+// Side-effect import: registers <mux-browser-pane> custom element
+import './mux-browser-pane.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TerminalRenderer
@@ -98,6 +100,41 @@ class TerminalRenderer implements IContentRenderer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// BrowserRenderer
+// Bridges the dockview panel lifecycle to mux-browser-pane (CDP browser panes).
+// ─────────────────────────────────────────────────────────────────────────────
+
+class BrowserRenderer implements IContentRenderer {
+  readonly element: HTMLElement;
+
+  constructor(id: string) {
+    const container = document.createElement('div');
+    container.style.cssText = 'width:100%;height:100%;overflow:hidden;display:flex;';
+    const pane = document.createElement('mux-browser-pane');
+    pane.setAttribute('pane-id', id);
+    pane.style.cssText = 'flex:1;min-width:0;';
+    container.appendChild(pane);
+    this.element = container;
+  }
+
+  init(): void {
+    // No-op: mux-browser-pane manages its own lifecycle via connectedCallback.
+  }
+
+  layout(): void {
+    // No-op: mux-browser-pane fills its container via CSS flex; no explicit sizing needed.
+  }
+
+  focus(): void {
+    // No-op: browser pane focus is handled by the iframe/webview itself.
+  }
+
+  dispose(): void {
+    // No-op: mux-browser-pane cleans up in its own disconnectedCallback.
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Placement helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -131,6 +168,13 @@ const ADD_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14"
 const SPLIT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
   <rect x="1" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
   <rect x="9" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
+</svg>`;
+
+// Globe icon for the browser pane button.
+const BROWSER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
+  <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/>
+  <path d="M8 1.5C6.5 3.5 5.5 5.6 5.5 8s1 4.5 2.5 6.5M8 1.5C9.5 3.5 10.5 5.6 10.5 8s-1 4.5-2.5 6.5M1.5 8h13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+  <path d="M2.5 5.5h11M2.5 10.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
 </svg>`;
 
 class HeaderButton {
@@ -250,6 +294,19 @@ export class MuxDock extends LitElement {
       group?.activePanel?.id ?? this._dv?.activePanel?.id ?? null;
     this._splitReferenceId = placement === 'split' ? this._placementReferenceId : null;
     this.dispatchEvent(new CustomEvent('pane-create', { bubbles: true, composed: true }));
+  }
+
+  /**
+   * Open or focus the browser-cdp pane.
+   * If one already exists, activate its panel; otherwise fire a create event.
+   */
+  private _onBrowserButtonClick(): void {
+    const existing = store.panes.find((p) => p.surfaceKind === 'browser-cdp');
+    if (existing) {
+      this.activatePane(existing.paneId);
+    } else {
+      window.dispatchEvent(new CustomEvent('create-browser-pane'));
+    }
   }
 
   /**
@@ -538,6 +595,7 @@ export class MuxDock extends LitElement {
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => {
+        if (opts.name === 'browser-cdp') return new BrowserRenderer(opts.id);
         return new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId);
       },
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
@@ -549,14 +607,31 @@ export class MuxDock extends LitElement {
       // "+" / split on an INACTIVE group still targets THAT group.
       createLeftHeaderActionComponent: (group) =>
         new HeaderButton(ADD_ICON, 'New pane', () => this._requestPane('tab', group)),
-      // Narrow (phone) is a tab view only — no split button.
+      // Narrow (phone) is a tab view only — no split or browser button.
       createRightHeaderActionComponent: (group) => {
         if (this.narrow) {
           return new HeaderButton('', '', () => {});
         }
-        return new HeaderButton(SPLIT_ICON, 'Split pane', () =>
+        // Wide: [🌐 browser] + [⊠ split] in a flex row.
+        const container = document.createElement('div');
+        container.style.cssText = 'display:flex;flex-direction:row;align-items:center;';
+        const browserBtn = new HeaderButton(BROWSER_ICON, 'Open browser pane', () =>
+          this._onBrowserButtonClick(),
+        );
+        const splitBtn = new HeaderButton(SPLIT_ICON, 'Split pane', () =>
           this._requestPane('split', group),
         );
+        container.appendChild(browserBtn.element);
+        container.appendChild(splitBtn.element);
+        return {
+          element: container,
+          init(): void {},
+          dispose(): void {
+            browserBtn.dispose();
+            splitBtn.dispose();
+            container.remove();
+          },
+        };
       },
     });
     this._dv.onDidLayoutChange(() => this._scheduleLayoutSave());
@@ -575,6 +650,23 @@ export class MuxDock extends LitElement {
       // focus for the clicked tab element, so the browser steals it back. An rAF
       // defers until after the click event is fully processed.
       requestAnimationFrame(() => terminalRegistry.focus(paneId));
+      // For browser-cdp panes: dispatch a window event so mux-browser-pane
+      // can send browser-focus and resume the Chromium screencast.
+      // Deferred with rAF for the same reason terminal focus is deferred above:
+      // dispatching synchronously fires canvas.focus() while dockview still
+      // holds its own focus lock, so the browser steals it back immediately.
+      const paneInfo = this.panes.find((p) => p.paneId === paneId);
+      if (paneInfo?.surfaceKind === 'browser-cdp') {
+        requestAnimationFrame(() => {
+          window.dispatchEvent(new CustomEvent('browser-pane-activated', { detail: { paneId } }));
+        });
+      } else {
+        // Signal to browser panes that they are no longer the active panel.
+        // Browser panes use this to stop capturing window-level keyboard events.
+        requestAnimationFrame(() => {
+          window.dispatchEvent(new CustomEvent('non-browser-pane-activated'));
+        });
+      }
       // Persist the new active selection: onDidLayoutChange does NOT fire on a
       // pure active-tab switch, so without this the saved layout keeps a stale
       // activeView and the wrong pane is selected after a refresh.
@@ -994,6 +1086,15 @@ export class MuxDock extends LitElement {
     });
     this._panels.set(paneId, panel);
     panel.api.setActive();
+  }
+
+  /**
+   * Programmatically activate a pane by its numeric ID.
+   * No-op if the panel does not exist or is already active.
+   */
+  public activatePane(paneId: number): void {
+    const panel = this._panels.get(paneId);
+    if (panel && !panel.api.isActive) panel.api.setActive();
   }
 
   /**

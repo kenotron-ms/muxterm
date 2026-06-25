@@ -59,18 +59,6 @@ export function patchConfig(partial: Record<string, unknown>): void {
   }, 500);
 }
 
-/**
- * ServerInfo carries version metadata from the {type:"config"} WebSocket envelope.
- * These are server-level fields, not user configuration — they live outside
- * ResolvedConfig so they are never sent back via PATCH /api/config.
- */
-export interface ServerInfo {
-  /** Currently running binary version, e.g. "v0.4.0". Empty until first config message. */
-  version: string;
-  /** Newer release available on GitHub, e.g. "v0.5.0". Empty string = no update available. */
-  latestVersion: string;
-}
-
 // ResolvedConfig mirrors Go internal/config.Config with camelCase keys.
 export interface ResolvedConfig {
   theme: { palette: string };

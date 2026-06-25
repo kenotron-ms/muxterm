@@ -39,7 +39,14 @@ type Server struct {
 
 	mu    sync.Mutex
 	subs  map[string]map[*conn]bool // workspaceId -> set of attached connections
-	conns map[*conn]bool             // all live connections
+	conns map[*conn]bool            // all live connections
+
+	// browserManager owns Chromium and CDPConn. Created in NewServer; never nil.
+	browserManager *BrowserManager
+	// browserPanes maps workspace-local paneID → workspaceID for all live browser-cdp
+	// panes. Protected by mu. Needed so broadcastBrowserData can scope to the right
+	// workspace subscribers.
+	browserPanes map[int]string
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -48,12 +55,22 @@ func NewServer(socketPath string) (*Server, error) {
 	if socketPath == "" {
 		return nil, errors.New("sessiond: empty socket path")
 	}
-	return &Server{
-		reg:    NewRegistry(),
-		socket: socketPath,
-		subs:   make(map[string]map[*conn]bool),
-		conns:  make(map[*conn]bool),
-	}, nil
+	s := &Server{
+		reg:          NewRegistry(),
+		socket:       socketPath,
+		subs:         make(map[string]map[*conn]bool),
+		conns:        make(map[*conn]bool),
+		browserPanes: make(map[int]string),
+	}
+	s.browserManager = NewBrowserManager(
+		func(paneID int, jpeg []byte) {
+			s.broadcastBrowserData(paneID, jpeg)
+		},
+		func(msg any) {
+			s.broadcastBrowserControlAny(msg)
+		},
+	)
+	return s, nil
 }
 
 // Registry exposes the server's Registry for tests and later phases.
@@ -254,6 +271,51 @@ func (s *Server) broadcastPaneData(wsID string, paneID int, data []byte) {
 	}
 }
 
+// broadcastBrowserData enqueues a FrameBrowserData frame to every live
+// connection. It sends to s.conns (not workspace-scoped subs) because browser
+// relay connections (/ws/browser) are not workspace-attached; their OnBrowserFrame
+// handler forwards the frame to the WebSocket client. Terminal relay connections
+// have OnBrowserFrame == nil and silently drop it. Enqueue never blocks, so
+// holding s.mu is safe.
+func (s *Server) broadcastBrowserData(paneID int, jpeg []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.conns {
+		c.sub.enqueueBrowserData(uint32(paneID), jpeg)
+	}
+}
+
+// broadcastBrowserControlAny marshals msg (a BrowserURLMsg, BrowserProgressMsg,
+// BrowserErrorMsg, or map[string]any for browser-granted/browser-cursor) to its
+// original JSON bytes, stores those bytes in Message.RawPayload so the HTTP
+// server relay can forward them as-is to WebSocket clients, and enqueues the
+// result as a FrameControl frame to every live connection.
+func (s *Server) broadcastBrowserControlAny(msg any) {
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("sessiond: broadcastBrowserControlAny marshal: %v", err)
+		return
+	}
+	// Extract type and paneId from the raw JSON so we can populate Message fields.
+	var envelope struct {
+		Type   string `json:"type"`
+		PaneID int    `json:"paneId"`
+	}
+	_ = json.Unmarshal(raw, &envelope)
+
+	m := &Message{
+		Type:       envelope.Type,
+		PaneID:     envelope.PaneID,
+		RawPayload: json.RawMessage(raw),
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.conns {
+		c.sub.enqueueControl(m)
+	}
+}
+
 // handlePaneExit removes an exited pane and emits the frozen close events. It is
 // a no-op when the pane was already removed (e.g. via close-workspace) so no
 // duplicate events are produced.
@@ -374,31 +436,12 @@ func (c *conn) handle(msg Message) {
 		} else {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "cannot save layout")
 		}
-	case TypePaneUpdate:
-		if c.attached != "" {
-			// Silently no-op for unknown pane IDs (design intent).
-			c.srv.reg.UpdateBrowserPath(c.attached, msg.PaneID, msg.BrowserPath)
-		}
-	case TypeBrowserAction:
-		if c.attached == "" {
-			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
-			return
-		}
-		msg.CID = 0
-		c.srv.broadcast(c.attached, &msg)
 	case TypeLayoutCommand:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
 			return
 		}
 		msg.CID = 0
-		c.srv.broadcast(c.attached, &msg)
-	case TypeBrowserActionResult:
-		if c.attached == "" {
-			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
-			return
-		}
-		msg.CID = 0 // event fan-out; MCP client correlates by its own pending request
 		c.srv.broadcast(c.attached, &msg)
 	case TypeGetLayout:
 		if c.attached == "" {
@@ -409,6 +452,98 @@ func (c *conn) handle(msg Message) {
 		panes := c.srv.reg.PaneInfos(c.attached)
 		ascii := ASCIILayout(layout, panes, -1)
 		c.reply(&Message{Type: TypeLayoutResult, CID: msg.CID, ASCII: ascii})
+	case TypeCreateBrowserPane:
+		c.createBrowserCDPPane(msg)
+	case TypeCloseBrowserPane:
+		// Close the Chromium page before removing the pane from the registry.
+		c.srv.browserManager.ClosePage(msg.PaneID)
+		// Clean up the pane → workspace tracking entry.
+		c.srv.mu.Lock()
+		delete(c.srv.browserPanes, msg.PaneID)
+		c.srv.mu.Unlock()
+		// Reuse closePane: removes pane from registry, broadcasts pane-closed.
+		c.closePane(msg)
+	case TypeBrowserFocus:
+		bp, ok := c.srv.browserManager.GetPage(msg.PaneID)
+		if !ok {
+			return
+		}
+		// Last-focus-wins: this client immediately becomes the input authority.
+		c.srv.browserManager.SetAuthority(msg.PaneID, msg.ClientID)
+		// Store client DPR so SetViewport uses the right deviceScaleFactor.
+		if msg.DevicePixelRatio > 0 {
+			bp.devicePixelRatio = msg.DevicePixelRatio
+		}
+		// Resize Chromium to the focused client's canvas dimensions.
+		if msg.RenderWidth > 0 && msg.RenderHeight > 0 {
+			vpCtx, vpCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer vpCancel()
+			if err := bp.SetViewport(vpCtx, msg.RenderWidth, msg.RenderHeight); err != nil {
+				log.Printf("sessiond: SetViewport pane %d: %v", msg.PaneID, err)
+			}
+		}
+		// Capture an immediate screenshot so the client gets a frame right away,
+		// even if screencasting is paused. Run in a goroutine so a slow CDP call
+		// does not block the read loop.
+		paneID := msg.PaneID
+		go func() {
+			ctx := context.Background()
+			bp, ok := c.srv.browserManager.GetPage(paneID)
+			if !ok {
+				return
+			}
+
+			// Restart screencast — Chrome pauses screencasting on static pages.
+			// After reconnect, no frames flow until screencasting is restarted.
+			_ = bp.startScreencast(ctx)
+
+			// Brief wait: SetViewport triggers a Chrome layout/repaint cycle.
+			// captureScreenshot called immediately returns a blank or stale frame.
+			// 200ms is enough for Chrome to finish the viewport reflow.
+			time.Sleep(200 * time.Millisecond)
+
+			// Send a screenshot immediately so the client sees current content
+			// even if the page is static (no ongoing screencast frames).
+			if shot, err := bp.captureScreenshot(ctx); err == nil && len(shot) > 0 {
+				c.srv.broadcastBrowserData(paneID, shot)
+			}
+
+			// Restore the current URL. frameNavigated only fires on navigation,
+			// so reconnecting clients never see the URL unless we send it here.
+			if url := bp.getCurrentURL(); url != "" && url != "about:blank" {
+				c.srv.broadcastBrowserControlAny(BrowserURLMsg{
+					Type:   TypeBrowserURL,
+					PaneID: paneID,
+					URL:    url,
+				})
+			}
+		}()
+		// Broadcast browser-granted so all clients know who holds input authority.
+		c.srv.broadcastBrowserControlAny(map[string]any{
+			"type":     TypeBrowserGranted,
+			"paneId":   msg.PaneID,
+			"clientId": msg.ClientID,
+		})
+	case TypeBrowserBlur:
+		c.srv.browserManager.ClearAuthority(msg.PaneID, msg.ClientID)
+	case TypeBrowserInput:
+		bp, ok := c.srv.browserManager.GetPage(msg.PaneID)
+		if !ok {
+			return
+		}
+		// Silently drop input from non-authority clients (last-focus-wins).
+		if !c.srv.browserManager.IsAuthority(msg.PaneID, msg.ClientID) {
+			return
+		}
+		var inputMsg BrowserInputMsg
+		if err := json.Unmarshal(msg.InputEvent, &inputMsg); err != nil {
+			log.Printf("sessiond: TypeBrowserInput unmarshal: %v", err)
+			return
+		}
+		ctx := context.Background()
+		if err := bp.HandleInput(ctx, inputMsg); err != nil {
+			log.Printf("sessiond: HandleInput pane %d: %v", msg.PaneID, err)
+		}
 	case TypeScreenSnapshot:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
@@ -434,12 +569,6 @@ func (c *conn) handle(msg Message) {
 			Text:   vb.ScreenText(),
 			Cursor: &CursorPos{Row: row, Col: col},
 		})
-	case TypeHandoff:
-		// New sessiond requests a live-upgrade state transfer. HandleHandoff
-		// snapshots all state and PTY FDs, sends them to handoffSocket, then
-		// calls os.Exit(0). We do this in a goroutine so serve() can return and
-		// close the connection cleanly before the process exits.
-		go c.srv.HandleHandoff(msg.HandoffSocket)
 	}
 }
 
@@ -456,9 +585,6 @@ func (c *conn) attach(msg Message) {
 // createPane spawns a pane in the connection's attached workspace, ACKs the
 // actor with the assigned id, then broadcasts a pane-added event to all
 // subscribers (pane-added covers only panes created AFTER attach).
-//
-// When msg.SurfaceKind is "browser" a lightweight browser pane (no PTY) is
-// created instead. BrowserPort must be in 1–65535 or an error is returned.
 func (c *conn) createPane(msg Message) {
 	wsID := c.attached
 	if wsID == "" || !c.srv.reg.Has(wsID) {
@@ -499,7 +625,12 @@ func (c *conn) createPane(msg Message) {
 		msg.Cmd,
 		"",   // dir: empty → NewPane defaults to $HOME
 		cols, rows,
-		nil, // nil → NewPane installs VTBuffer (production default); required for get_screen/ScreenSnapshot
+		nil, // nil → NewPane installs VTBuffer (production default). Required for two reasons:
+		// 1. get_screen / TypeScreenSnapshot type-asserts p.buf.(*VTBuffer); RawBuffer here
+		//    makes every get_screen call return empty silently.
+		// 2. VTBuffer serializes the live cell grid on reconnect — no raw intermediate ANSI
+		//    sequences, dimension-correct regardless of client resize. (RC-9/9.6)
+		// This fix was in commit 20cc2c8 and lost in the v0.5.0 revert (6490164).
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
 		func(id int) { c.srv.handlePaneExit(wsID, id) },
 	)
@@ -565,6 +696,51 @@ func (c *conn) closeWorkspace(msg Message) {
 	c.reply(&Message{Type: TypeOK, CID: msg.CID})
 	c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
 	c.srv.writeSnapshot()
+}
+
+// createBrowserCDPPane creates a placeholder browser-cdp pane in the attached
+// workspace. It replies with TypePaneCreated and broadcasts TypePaneAdded with
+// SurfaceKind "browser-cdp". The daemon starts the actual Chromium page
+// immediately after registering the pane.
+func (c *conn) createBrowserCDPPane(msg Message) {
+	wsID := c.attached
+	if wsID == "" || !c.srv.reg.Has(wsID) {
+		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
+		return
+	}
+	localID, ok := c.srv.reg.AllocPaneID(wsID)
+	if !ok {
+		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
+		return
+	}
+	p := newBrowserCDPPane(localID)
+	c.srv.reg.PutPane(wsID, p)
+
+	// Track pane → workspace mapping for browser frame broadcast.
+	c.srv.mu.Lock()
+	c.srv.browserPanes[localID] = wsID
+	c.srv.mu.Unlock()
+
+	// Start the Chromium page in the daemon. Run in a goroutine so a slow
+	// Chromium startup (or download) does not block the create-pane reply.
+	// Errors are surfaced via browser-error JSON broadcast to clients.
+	go func() {
+		if _, err := c.srv.browserManager.OpenPage(localID); err != nil {
+			log.Printf("sessiond: browserManager.OpenPage pane %d: %v", localID, err)
+		}
+	}()
+
+	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
+	c.srv.broadcast(wsID, &Message{
+		Type:            TypePaneAdded,
+		WorkspaceID:     wsID,
+		PaneID:          localID,
+		SurfaceKind:     "browser-cdp",
+		Title:           "Browser",
+		ClientRef:       msg.ClientRef,
+		Placement:       msg.Placement,
+		ReferencePaneID: msg.ReferencePaneID,
+	})
 }
 
 // reply enqueues a control reply to this connection.

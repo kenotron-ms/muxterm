@@ -10,6 +10,8 @@ import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig }
 import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
 import { injectTerminalFont } from './lib/fonts.js';
+import { browserRegistry } from './lib/browser-registry.js';
+import { wsBrowser } from './lib/ws-browser.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
@@ -26,6 +28,7 @@ import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
 import type { MuxSidebar } from './components/mux-sidebar.js';
+
 
 import { WorkspaceController } from './lib/workspace-controller.js';
 import { mintClientRef } from './lib/client-ref.js';
@@ -406,14 +409,6 @@ export class MuxApp extends LitElement {
   @state()
   private _layoutMode: 'wide' | 'narrow' = currentLayoutMode();
 
-  /** Currently running binary version, e.g. "v0.4.0". Received in {type:"config"} envelope. */
-  @state()
-  private _serverVersion = '';
-
-  /** Newer release version available, e.g. "v0.5.0". Empty = no update pending. */
-  @state()
-  private _latestVersion = '';
-
   /** Active grace-period timers, keyed by paneId. Presence => a deferred close
    *  is pending and a toast is shown. */
   private _pendingCloses = new Map<number, ReturnType<typeof setTimeout>>();
@@ -443,6 +438,15 @@ export class MuxApp extends LitElement {
   private _onViewportResize = (): void => {
     const mode = currentLayoutMode();
     if (mode !== this._layoutMode) this._layoutMode = mode;
+  };
+
+  private _onCreateBrowserPane = (): void => { this._socket?.createBrowserPane(); };
+  private _onBrowserPaneFocus = (e: Event): void => {
+    const paneId = (e as CustomEvent<{ paneId: number }>).detail?.paneId;
+    if (paneId !== undefined) {
+      store.setActivePane(paneId);
+      this._dock?.activatePane(paneId);
+    }
   };
 
   connectedCallback(): void {
@@ -517,6 +521,7 @@ export class MuxApp extends LitElement {
         for (const pane of (msg.panes ?? [])) {
           const paneId = pane.paneId;
           if (paneId < 0) continue;
+          if (pane.surfaceKind === 'browser-cdp') { browserRegistry.ensure(paneId); continue; }
           // On reconnect an entry already exists with ready=true from the prior
           // session. Reset it before replay frames arrive so the barrier gate
           // works correctly (RC-6).
@@ -591,6 +596,16 @@ export class MuxApp extends LitElement {
       this._socket?.listTunnels();
     };
     this._socket.connect();
+    wsBrowser.onFrame = (paneId, jpegBytes) => browserRegistry.write(paneId, jpegBytes);
+    wsBrowser.onBrowserUrl = (paneId, url) => browserRegistry.dispatchUrl(paneId, url);
+    wsBrowser.onBrowserError = (paneId, error) => browserRegistry.dispatchError(paneId, error);
+    wsBrowser.onDownloadProgress = (paneId, percent) => browserRegistry.dispatchDownload(paneId, percent);
+    wsBrowser.onBrowserStatus = (paneId, text) => browserRegistry.dispatchStatus(paneId, text);
+    wsBrowser.onBrowserCursor = (paneId, cursor) => browserRegistry.dispatchCursor(paneId, cursor);
+    wsBrowser.onBrowserGranted = (paneId, clientId) => browserRegistry.dispatchGranted(paneId, clientId);
+    wsBrowser.connect();
+    window.addEventListener('create-browser-pane', this._onCreateBrowserPane);
+    window.addEventListener('browser-pane-focus', this._onBrowserPaneFocus);
     this._connectionStatus = 'reconnecting';
     this._pollConnectionStatus();
   }
@@ -600,6 +615,9 @@ export class MuxApp extends LitElement {
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
+    wsBrowser.disconnect();
+    window.removeEventListener('create-browser-pane', this._onCreateBrowserPane);
+    window.removeEventListener('browser-pane-focus', this._onBrowserPaneFocus);
     disposeAppShortcuts?.();
     disposeAppShortcuts = undefined;
     if (this._unsubscribe) {
@@ -657,6 +675,7 @@ export class MuxApp extends LitElement {
       // them from store.panes yet — recreating the terminal here would produce
       // a phantom entry that conflicts with the in-flight close.
       if (this._closingPanes.has(paneId)) continue;
+      if (pane.surfaceKind === 'browser-cdp') { browserRegistry.ensure(paneId); liveIds.add(paneId); continue; }
       terminalRegistry.ensure(paneId, {
         onInput: (data) => this._socket?.sendPaneInput(paneId, data),
         // Active-view-wins: only rendered/visible panes own a live
@@ -666,6 +685,7 @@ export class MuxApp extends LitElement {
       liveIds.add(paneId);
     }
     terminalRegistry.prune(liveIds);
+    browserRegistry.prune(liveIds);
     // Clean up _closingPanes entries the server has now removed from store.panes.
     const toDelete = new Set<number>();
     for (const id of this._closingPanes) {
@@ -696,8 +716,6 @@ export class MuxApp extends LitElement {
             @tunnel-create="${this._onTunnelCreate}"
             @tunnel-close="${this._onTunnelClose}"
             @launcher-action="${this._onLauncherAction}"
-            .serverVersion="${this._serverVersion}"
-            .latestVersion="${this._latestVersion}"
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
@@ -730,6 +748,7 @@ export class MuxApp extends LitElement {
         </div>
 
       </div>
+
       <div class="undo-toast-stack" @pane-close-resolved="${this._onUndoPaneClose}">
         ${repeat(
           [...this._pendingClosesMeta.entries()],
@@ -920,13 +939,6 @@ export class MuxApp extends LitElement {
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
-
-      // Parse version metadata from the envelope (not from msg.config — version
-      // fields are server metadata, not user config, and must never be PATCH'd back).
-      const serverVersion = typeof msg['version'] === 'string' ? msg['version'] : '';
-      const latestVersion = typeof msg['latestVersion'] === 'string' ? msg['latestVersion'] : '';
-      if (serverVersion !== this._serverVersion) this._serverVersion = serverVersion;
-      if (latestVersion !== this._latestVersion) this._latestVersion = latestVersion;
     }
   };
 

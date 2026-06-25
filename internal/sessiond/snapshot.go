@@ -13,6 +13,18 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/config"
 )
 
+// expandTilde replaces a leading "~" with the user's home directory.
+func expandTilde(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[1:])
+}
+
 // resolveRestoreCommand determines the best restore command for a pane.
 // It reads the foreground process's argv, working directory, and environment,
 // then evaluates each strategy in order. The first strategy whose detect
@@ -51,6 +63,21 @@ func resolveRestoreCommand(p *Pane, strategies []config.RestoreStrategy) (argv [
 			for k, v := range fgEnv {
 				cmd = strings.ReplaceAll(cmd, "${"+k+"}", v)
 			}
+			cmd = strings.ReplaceAll(cmd, "${cwd}", fgDir)
+
+		case s.Detect.File != "":
+			// File must exist and be non-empty. Its trimmed content is available
+			// as ${file_content} in the restore template.
+			path := expandTilde(s.Detect.File)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue // file missing — strategy doesn't apply
+			}
+			fileContent := strings.TrimSpace(string(data))
+			if fileContent == "" {
+				continue // empty file — strategy doesn't apply
+			}
+			cmd = strings.ReplaceAll(cmd, "${file_content}", fileContent)
 			cmd = strings.ReplaceAll(cmd, "${cwd}", fgDir)
 
 		default:
@@ -121,9 +148,6 @@ func writeCrashSnapshot(path string, reg *Registry, strategies []config.RestoreS
 				FDIndex:      -1, // not used for crash snapshots
 				Argv:         fgArgv,
 				Dir:          fgDir,
-				BrowserPort:  p.BrowserPort,
-				BrowserPath:  p.BrowserPath,
-				ProxyHeaders: p.ProxyHeaders,
 			}
 			wss.Panes = append(wss.Panes, ps)
 		}
@@ -217,7 +241,7 @@ func RestoreFromCrashSnapshot(snap HandoffPayload, socketPath string) (*Server, 
 			var p *Pane
 			switch ps.SurfaceKind {
 			case "browser":
-				p = NewBrowserPane(ps.LocalID, ps.BrowserPort, ps.BrowserPath, ps.ProxyHeaders)
+				p = newBrowserCDPPane(ps.LocalID)
 			default:
 				p, err = NewPane(
 					ps.LocalID,

@@ -18,6 +18,17 @@ tools:
           # env:
           #   MUXTERM_ADDR: "localhost:8311"
 
+hooks:
+  # On session:start, write the Amplifier session ID to disk so that muxterm's
+  # crash-recovery snapshot can resume the exact session with
+  # "amplifier resume <id>" instead of dropping the user into a bare shell.
+  # The file path written here must match detect.file in muxterm's
+  # restore.strategies config (muxterm default: $XDG_DATA_HOME/muxterm/amplifier-session-id).
+  - module: hooks-muxterm-session
+    source: git+https://github.com/kenotron-ms/muxterm@main#subdirectory=modules/hooks-muxterm-session
+    config:
+      only_root_sessions: true
+
 agents:
   include:
     - muxterm:agents/muxterm-expert

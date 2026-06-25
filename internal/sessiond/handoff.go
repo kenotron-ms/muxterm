@@ -109,19 +109,16 @@ func (s *Server) HandleHandoff(handoffSocket string) {
 			p.mu.Unlock()
 
 			ps := PaneState{
-				LocalID:      p.LocalID,
-				Title:        title,
-				SurfaceKind:  p.SurfaceKind,
-				Cols:         cols,
-				Rows:         rows,
-				Argv:         p.argv,
-				BrowserPort:  p.BrowserPort,
-				BrowserPath:  p.BrowserPath,
-				ProxyHeaders: p.ProxyHeaders,
-				FDIndex:      -1,
+				LocalID:     p.LocalID,
+				Title:       title,
+				SurfaceKind: p.SurfaceKind,
+				Cols:        cols,
+				Rows:        rows,
+				Argv:        p.argv,
+				FDIndex:     -1,
 			}
 
-			if p.SurfaceKind != "browser" && p.ptmx != nil {
+			if p.SurfaceKind != "browser-cdp" && p.ptmx != nil {
 				// Snapshot scrollback and sequence counter.
 				ps.Scrollback = p.Replay()
 				ps.SeqTotal = p.Seq()
@@ -257,8 +254,8 @@ func ReceiveHandoffConn(conn *net.UnixConn, canonicalSocket string) (*Server, er
 		for _, ps := range wss.Panes {
 			var p *Pane
 			switch ps.SurfaceKind {
-			case "browser":
-				p = NewBrowserPane(ps.LocalID, ps.BrowserPort, ps.BrowserPath, ps.ProxyHeaders)
+			case "browser-cdp":
+				p = newBrowserCDPPane(ps.LocalID)
 			default:
 				// Terminal pane — adopt the transferred PTY FD.
 				if ps.FDIndex < 0 || ps.FDIndex >= len(receivedFDs) {
