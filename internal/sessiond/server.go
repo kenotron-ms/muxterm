@@ -596,29 +596,6 @@ func (c *conn) createPane(msg Message) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
 		return
 	}
-	if msg.SurfaceKind == "browser" {
-		if msg.BrowserPort < 1 || msg.BrowserPort > 65535 {
-			c.replyError(msg.CID, "invalid-port", "browserPort must be 1\u201365535")
-			return
-		}
-		p := NewBrowserPane(localID, msg.BrowserPort, msg.BrowserPath, msg.ProxyHeaders)
-		c.srv.reg.PutPane(wsID, p)
-		c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
-		c.srv.broadcast(wsID, &Message{
-			Type:            TypePaneAdded,
-			WorkspaceID:     wsID,
-			PaneID:          localID,
-			SurfaceKind:     "browser",
-			BrowserPort:     msg.BrowserPort,
-			BrowserPath:     msg.BrowserPath,
-			Title:           p.Title,
-			ClientRef:       msg.ClientRef,
-			Placement:       msg.Placement,
-			ReferencePaneID: msg.ReferencePaneID,
-		})
-		c.srv.writeSnapshot()
-		return
-	}
 	cols, rows := sizeOrDefault(msg.Cols, msg.Rows)
 	p, err := NewPane(
 		localID,
