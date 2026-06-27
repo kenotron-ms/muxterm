@@ -421,14 +421,45 @@ export const terminalRegistry = {
       }, { passive: true });
       hostEl.addEventListener('touchmove', (e: TouchEvent) => {
         const y = e.touches[0].clientY;
-        // Positive delta = finger moved up = scroll down (content moves up).
-        _accumulated += _touchY - y;
+        // Finger up (y decreases) = scroll content down = wheel deltaY > 0.
+        const deltaY = _touchY - y;
         _touchY = y;
-        const cellH = term.options.fontSize ?? 13;
-        const lines = Math.trunc(_accumulated / cellH);
-        if (lines !== 0) {
-          term.scrollLines(lines);
-          _accumulated -= lines * cellH;
+        if (deltaY !== 0) {
+          // Two distinct paths, because xterm.js handles wheel differently per
+          // buffer (verified against the xterm v6 source + a live browser; see
+          // docs/plans/2026-06-26-touch-scroll-propagation-fix.md):
+          //
+          // - Alternate screen (opencode/claude/vim): no scrollback. xterm's own
+          //   wheel handler translates the event to arrow keys / SGR mouse reports
+          //   that reach the PTY. So we dispatch a synthetic WheelEvent into
+          //   .xterm-screen and let xterm do the (correct) translation.
+          //   term.scrollLines() is a no-op here — the original bug.
+          //
+          // - Normal screen: xterm's wheel handler does NOT emit anything; it
+          //   relies on the browser's NATIVE scroll of .xterm-viewport. A
+          //   synthetic dispatchEvent() does not trigger native default actions,
+          //   so a synthetic wheel would scroll nothing. We must call
+          //   term.scrollLines() directly (accumulating sub-line fractions for
+          //   smooth slow drags).
+          if (term.buffer.active.type === 'alternate') {
+            const screenEl = hostEl.querySelector('.xterm-screen') as HTMLElement | null;
+            if (screenEl) {
+              screenEl.dispatchEvent(new WheelEvent('wheel', {
+                deltaY,
+                deltaMode: 0, // pixels; xterm quantizes to lines itself
+                bubbles: true,
+                cancelable: true,
+              }));
+            }
+          } else {
+            _accumulated += deltaY;
+            const cellH = term.options.fontSize ?? 13;
+            const lines = Math.trunc(_accumulated / cellH);
+            if (lines !== 0) {
+              term.scrollLines(lines);
+              _accumulated -= lines * cellH;
+            }
+          }
         }
         e.preventDefault();
       }, { passive: false });
