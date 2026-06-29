@@ -173,12 +173,12 @@ interface PaneEntry {
 // workspace terminals, so scrollback is preserved when switching back.
 const _map = new Map<string, PaneEntry>();
 // Data written for a pane before ensure() was called for that workspace.
-// Keyed by paneId ONLY (not workspace) to survive the race where binary
-// replay frames arrive before the Composition text frame has been processed
-// (concurrent WebSocket writes from different Go goroutines mean the binary
-// frame can arrive first, when _currentWorkspaceId is still '').
+// Keyed by the SAME composite "${workspaceId}:${paneId}" as _map, because pane
+// output frames are now self-describing (they carry their owning workspace).
+// An out-of-order replay frame is therefore parked under its own workspace and
+// can never drain into a same-numbered pane of a different workspace.
 // When ensure() creates an entry it drains this buffer into the entry.
-const _preEnsureBuffer = new Map<number, (Uint8Array | string)[]>();
+const _preEnsureBuffer = new Map<string, (Uint8Array | string)[]>();
 // Containers registered via setContainer() before ensure() was called.
 // When ensure() later creates the entry, it immediately calls attach().
 const _pendingContainers = new Map<string, { container: HTMLElement; focus: boolean }>();
@@ -402,13 +402,33 @@ export const terminalRegistry = {
     });
 
     // Touch scroll — xterm.js v6 regressed native touch-scroll support
-    // (upstream issue #5489). Wire it manually: track finger Y delta and
-    // convert to term.scrollLines() calls. We accumulate sub-line fractions
-    // so a slow drag still scrolls smoothly rather than only firing at whole-
-    // line boundaries.
+    // (upstream issue #5489). Wire it manually: track finger Y delta and route
+    // it to the correct scroll mechanism for what is actually on screen.
     //
-    // Cell height = fontSize * lineHeight. lineHeight is hardcoded 1.0 (see
-    // buildTerminalConfig), so cell height ≈ fontSize pixels.
+    // There are THREE cases, gated on buffer type AND the app's mouse-tracking
+    // mode (term.modes.mouseTrackingMode). The earlier two-way (buffer-only)
+    // version was wrong for opencode: opencode runs alt-screen with mouse
+    // tracking OFF, so xterm converts a wheel into ARROW keys, which opencode
+    // routes to input-history instead of scrolling its viewport. Verified live:
+    // a real desktop mouse wheel does the same nothing. See
+    // docs/designs/2026-06-28-touch-scroll-mouse-mode-design (and the session
+    // transcript) for the buffer/mouse-mode evidence.
+    //
+    // 1. Normal buffer → term.scrollLines() against xterm's own scrollback.
+    //    (xterm relies on native viewport scroll, which dispatchEvent can't
+    //    trigger, so we scroll directly. Sub-line fractions accumulated for a
+    //    smooth slow drag. Cell height ≈ fontSize px; lineHeight is hardcoded 1.)
+    //
+    // 2. Alt-screen WITH mouse tracking (vim+mouse, htop, lazygit,
+    //    opencode-with-mouse) → dispatch a positioned WheelEvent so xterm emits
+    //    an SGR mouse-wheel report at the cell UNDER THE FINGER. clientX/clientY
+    //    are REQUIRED: without them xterm reports cell (1,1) and coordinate-
+    //    routing TUIs scroll the wrong pane (or nothing).
+    //
+    // 3. Alt-screen with mouse tracking OFF (opencode default) → send
+    //    PageUp/PageDown to the PTY. These are the conventional viewport-scroll
+    //    keys that pagers/TUIs honor and, unlike the Up/Down arrows xterm would
+    //    otherwise synthesize, they do NOT collide with line-editing/history.
     {
       let _touchY = 0;
       let _accumulated = 0;
@@ -420,38 +440,45 @@ export const terminalRegistry = {
         _accumulated = 0;
       }, { passive: true });
       hostEl.addEventListener('touchmove', (e: TouchEvent) => {
-        const y = e.touches[0].clientY;
+        const touch = e.touches[0];
+        const y = touch.clientY;
         // Finger up (y decreases) = scroll content down = wheel deltaY > 0.
         const deltaY = _touchY - y;
         _touchY = y;
         if (deltaY !== 0) {
-          // Two distinct paths, because xterm.js handles wheel differently per
-          // buffer (verified against the xterm v6 source + a live browser; see
-          // docs/plans/2026-06-26-touch-scroll-propagation-fix.md):
-          //
-          // - Alternate screen (opencode/claude/vim): no scrollback. xterm's own
-          //   wheel handler translates the event to arrow keys / SGR mouse reports
-          //   that reach the PTY. So we dispatch a synthetic WheelEvent into
-          //   .xterm-screen and let xterm do the (correct) translation.
-          //   term.scrollLines() is a no-op here — the original bug.
-          //
-          // - Normal screen: xterm's wheel handler does NOT emit anything; it
-          //   relies on the browser's NATIVE scroll of .xterm-viewport. A
-          //   synthetic dispatchEvent() does not trigger native default actions,
-          //   so a synthetic wheel would scroll nothing. We must call
-          //   term.scrollLines() directly (accumulating sub-line fractions for
-          //   smooth slow drags).
-          if (term.buffer.active.type === 'alternate') {
+          const isAlt = term.buffer.active.type === 'alternate';
+          const mouseOn = (term.modes?.mouseTrackingMode ?? 'none') !== 'none';
+
+          if (isAlt && mouseOn) {
+            // Case 2: positioned wheel → SGR mouse report at the finger's cell.
             const screenEl = hostEl.querySelector('.xterm-screen') as HTMLElement | null;
             if (screenEl) {
               screenEl.dispatchEvent(new WheelEvent('wheel', {
                 deltaY,
                 deltaMode: 0, // pixels; xterm quantizes to lines itself
+                clientX: touch.clientX,
+                clientY: touch.clientY,
                 bubbles: true,
                 cancelable: true,
               }));
             }
+          } else if (isAlt) {
+            // Case 3: mouse-off alt-screen → PageUp/PageDown. One page key per
+            // ~half a pane-height of drag (coarse, but it's the only viewport
+            // scroll such apps expose; tunable). Gate on ready so we never push
+            // input before the terminal is interactive.
+            _accumulated += deltaY;
+            const pagePx = Math.max(1, entry.hostEl.offsetHeight * 0.5);
+            while (_accumulated >= pagePx) {
+              if (entry.ready) entry.handlers.onInput(_encoder.encode('\x1b[6~')); // PageDown
+              _accumulated -= pagePx;
+            }
+            while (_accumulated <= -pagePx) {
+              if (entry.ready) entry.handlers.onInput(_encoder.encode('\x1b[5~')); // PageUp
+              _accumulated += pagePx;
+            }
           } else {
+            // Case 1: normal buffer → xterm scrollback.
             _accumulated += deltaY;
             const cellH = term.options.fontSize ?? 13;
             const lines = Math.trunc(_accumulated / cellH);
@@ -467,19 +494,19 @@ export const terminalRegistry = {
 
     _map.set(key, entry);
 
-    // Drain any data that arrived before ensure() was called.
-    // Pre-ensure buffer is keyed by paneId only (not workspace) so data
-    // written before _currentWorkspaceId was set (binary frames racing ahead
-    // of the Composition text frame) is still found here.
-    // Accumulate byte lengths into seqBytes so the RC-1 barrier counts
-    // any pre-ensure replay bytes correctly.
-    const preBuffer = _preEnsureBuffer.get(paneId);
+    // Drain any data that arrived before ensure() was called. The pre-ensure
+    // buffer is keyed by the same composite "${workspaceId}:${paneId}" as _map,
+    // so we look it up by this entry's exact key — out-of-order replay frames
+    // for THIS pane in THIS workspace are found, and frames for a same-numbered
+    // pane in another workspace are not. Accumulate byte lengths into seqBytes
+    // so the RC-1 barrier counts any pre-ensure replay bytes correctly.
+    const preBuffer = _preEnsureBuffer.get(key);
     if (preBuffer) {
       for (const chunk of preBuffer) {
         entry.pendingData.push(chunk);
         entry.seqBytes += typeof chunk === 'string' ? chunk.length : (chunk as Uint8Array).byteLength;
       }
-      _preEnsureBuffer.delete(paneId);
+      _preEnsureBuffer.delete(key);
     }
 
     // If a container was registered via setContainer() before ensure() was
@@ -743,8 +770,12 @@ export const terminalRegistry = {
    * Every incoming frame increments the entry's seqBytes (replay + live).
    * Pre-ensure bytes are counted when ensure() drains the pre-ensure buffer.
    */
-  write(paneId: number, data: Uint8Array | string): void {
-    const key = _key(paneId);
+  write(workspaceId: string, paneId: number, data: Uint8Array | string): void {
+    // Route by the OWNING workspace carried on the frame, never by the mutable
+    // _currentWorkspaceId global. Pane ids are workspace-local, so guessing the
+    // workspace races during attach/refresh and bleeds one workspace's pane N
+    // into another's. The frame is now self-describing, so routing is exact.
+    const key = `${workspaceId}:${paneId}`;
     const entry = _map.get(key);
     if (entry) {
       const bytes = typeof data === 'string' ? data.length : data.byteLength;
@@ -788,12 +819,12 @@ export const terminalRegistry = {
         }
       }
     } else {
-      // Pre-ensure buffer: ensure() hasn't been called yet for this pane in the
-      // current workspace. Keyed by paneId only so data survives the race where
-      // binary replay frames arrive before _currentWorkspaceId is set (i.e.
-      // before the Composition text frame is processed).
-      if (!_preEnsureBuffer.has(paneId)) _preEnsureBuffer.set(paneId, []);
-      _preEnsureBuffer.get(paneId)!.push(data);
+      // Pre-ensure buffer: ensure() hasn't been called yet for this pane.
+      // Keyed by the composite ${workspaceId}:${paneId} (NOT paneId alone) so a
+      // frame that arrives before its pane's terminal exists is parked under its
+      // own workspace and can never drain into a same-numbered pane of another.
+      if (!_preEnsureBuffer.has(key)) _preEnsureBuffer.set(key, []);
+      _preEnsureBuffer.get(key)!.push(data);
     }
   },
 
@@ -883,9 +914,13 @@ export const terminalRegistry = {
         _map.delete(key);
       }
     }
-    // Also clear pre-ensure buffer for panes that will never exist.
-    for (const paneId of _preEnsureBuffer.keys()) {
-      if (!liveIds.has(paneId)) _preEnsureBuffer.delete(paneId);
+    // Also clear pre-ensure buffer for panes of THIS workspace that will never
+    // exist. Keys are composite "${workspaceId}:${paneId}"; only touch the
+    // current workspace's entries so other workspaces' buffered data survives.
+    for (const key of _preEnsureBuffer.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const paneId = parseInt(key.slice(prefix.length), 10);
+      if (!liveIds.has(paneId)) _preEnsureBuffer.delete(key);
     }
     // Clear pending containers for pruned panes.
     for (const key of _pendingContainers.keys()) {

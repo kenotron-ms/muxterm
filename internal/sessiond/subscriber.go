@@ -14,10 +14,11 @@ const defaultSubscriberDepth = 256
 // outFrame is one queued write to a single client: a control message, a pane-data
 // frame, or a browser-data frame, distinguished by kind.
 type outFrame struct {
-	kind   byte     // FrameControl, FramePaneData, or FrameBrowserData
-	msg    *Message // set when kind == FrameControl
-	paneID uint32   // set when kind == FramePaneData or FrameBrowserData
-	data   []byte   // set when kind == FramePaneData or FrameBrowserData
+	kind        byte     // FrameControl, FramePaneOutput, or FrameBrowserData
+	msg         *Message // set when kind == FrameControl
+	workspaceID string   // set when kind == FramePaneOutput (owning workspace)
+	paneID      uint32   // set when kind == FramePaneOutput or FrameBrowserData
+	data        []byte   // set when kind == FramePaneOutput or FrameBrowserData
 }
 
 // subscriber serializes all writes to one client through a bounded queue drained
@@ -57,8 +58,8 @@ func (s *subscriber) writeLoop() {
 		case f := <-s.queue:
 			var err error
 			switch f.kind {
-			case FramePaneData:
-				err = WritePaneData(s.w, f.paneID, f.data)
+			case FramePaneOutput:
+				err = WritePaneOutput(s.w, f.workspaceID, f.paneID, f.data)
 			case FrameBrowserData:
 				err = WriteBrowserData(s.w, f.paneID, f.data)
 			default: // FrameControl
@@ -81,10 +82,10 @@ func (s *subscriber) enqueueControl(msg *Message) {
 
 // enqueuePaneData queues a pane-data frame for this client. The data is COPIED
 // into a fresh slice so the caller may reuse its buffer. It never blocks.
-func (s *subscriber) enqueuePaneData(paneID uint32, data []byte) {
+func (s *subscriber) enqueuePaneData(workspaceID string, paneID uint32, data []byte) {
 	cp := make([]byte, len(data))
 	copy(cp, data)
-	s.enqueue(outFrame{kind: FramePaneData, paneID: paneID, data: cp})
+	s.enqueue(outFrame{kind: FramePaneOutput, workspaceID: workspaceID, paneID: paneID, data: cp})
 }
 
 // enqueueBrowserData queues a browser-data frame (FrameBrowserData) for this

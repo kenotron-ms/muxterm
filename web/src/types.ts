@@ -153,6 +153,24 @@ export function decodePaneFrame(buf: ArrayBuffer): { paneId: number; data: Uint8
   return { paneId, data };
 }
 
+/**
+ * Decodes a pane-OUTPUT frame stamped with its owning workspace:
+ * [4-byte LE paneId][2-byte LE wsId length][wsId UTF-8][raw bytes].
+ * Output is routed by (workspaceId, paneId) so a frame can never bleed into a
+ * same-numbered pane of a different workspace during attach/refresh. Returned
+ * data aliases the input buffer (no copy).
+ */
+export function decodePaneOutputFrame(
+  buf: ArrayBuffer,
+): { workspaceId: string; paneId: number; data: Uint8Array } {
+  const view = new DataView(buf);
+  const paneId = view.getUint32(0, true);
+  const wsLen = view.getUint16(4, true);
+  const wsId = new TextDecoder().decode(new Uint8Array(buf, 6, wsLen));
+  const data = new Uint8Array(buf, 6 + wsLen);
+  return { workspaceId: wsId, paneId, data };
+}
+
 // ---------------------------------------------------------------------------
 // Layout commands (server → client)
 //

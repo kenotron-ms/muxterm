@@ -188,7 +188,7 @@ func TestSubscriberStalledDoesNotStarveFastClient(t *testing.T) {
 	for i := 0; i < frames; i++ {
 		data := []byte(fmt.Sprintf("frame-%d\n", i))
 		for _, sub := range subs {
-			sub.enqueuePaneData(1, data)
+			sub.enqueuePaneData("w1", 1, data)
 		}
 	}
 

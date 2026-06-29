@@ -178,7 +178,7 @@ func (s *Server) attachConn(c *conn, wsID string, cid uint64, breakpoint string)
 
 	// (2) replay frames before going live.
 	for _, r := range replays {
-		c.sub.enqueuePaneData(r.paneID, r.data)
+		c.sub.enqueuePaneData(wsID, r.paneID, r.data)
 	}
 
 	// Re-attach: drop any prior workspace subscription first so this conn never
@@ -221,7 +221,7 @@ func (s *Server) broadcastPaneData(wsID string, paneID int, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for c := range s.subs[wsID] {
-		c.sub.enqueuePaneData(uint32(paneID), data)
+		c.sub.enqueuePaneData(wsID, uint32(paneID), data)
 	}
 }
 

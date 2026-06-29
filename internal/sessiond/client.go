@@ -42,9 +42,10 @@ type pending struct {
 // dropped.
 type Handlers struct {
 	// OnPaneOutput receives live pane output (and attach replay) bytes for the
-	// workspace-local paneID. data is owned by the caller for the duration of
-	// the call only.
-	OnPaneOutput func(paneID uint32, data []byte)
+	// workspace-local paneID, stamped with workspaceID (the owning workspace) so
+	// routing never depends on mutable attach state. data is owned by the caller
+	// for the duration of the call only.
+	OnPaneOutput func(workspaceID string, paneID uint32, data []byte)
 	// OnPaneAdded fires when a pane is created in the attached workspace,
 	// carrying the frozen PaneInfo for the new pane.
 	OnPaneAdded func(pane PaneInfo)
@@ -155,11 +156,11 @@ func (c *Client) Run() error {
 			return err
 		}
 		switch kind {
-		case FramePaneData:
-			paneID, data := DecodePaneData(payload)
-			c.dispatchPaneData(paneID, data)
+		case FramePaneOutput:
+			workspaceID, paneID, data := DecodePaneOutput(payload)
+			c.dispatchPaneData(workspaceID, paneID, data)
 		case FrameBrowserData:
-			paneID, data := DecodePaneData(payload) // same [4-byte LE paneId][body] format
+			paneID, data := DecodePaneData(payload) // browser frames stay paneId-only
 			c.dispatchBrowserFrame(paneID, data)
 		case FrameControl:
 			c.dispatchControl(payload)
@@ -462,12 +463,12 @@ func (c *Client) BrowserInput(paneID int, clientID string, event json.RawMessage
 
 // dispatchPaneData routes a decoded pane-data frame to OnPaneOutput if set. It
 // runs on the read-loop goroutine, so the handler must not block for long.
-func (c *Client) dispatchPaneData(paneID uint32, data []byte) {
+func (c *Client) dispatchPaneData(workspaceID string, paneID uint32, data []byte) {
 	c.hmu.Lock()
 	fn := c.handlers.OnPaneOutput
 	c.hmu.Unlock()
 	if fn != nil {
-		fn(paneID, data)
+		fn(workspaceID, paneID, data)
 	}
 }
 

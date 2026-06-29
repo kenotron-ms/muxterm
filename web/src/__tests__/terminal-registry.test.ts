@@ -203,7 +203,7 @@ describe('terminalRegistry', () => {
   describe('write — pre-ensure buffering', () => {
     it('buffers write before ensure and drains into terminal after ensure+attach', () => {
       // Write BEFORE ensure
-      terminalRegistry.write(30, 'buffered');
+      terminalRegistry.write('', 30, 'buffered');
 
       // Now ensure
       terminalRegistry.ensure(30, handlers());
@@ -230,7 +230,7 @@ describe('terminalRegistry', () => {
 
     it('write after ensure but before attach queues in pendingData and drains on settle', () => {
       terminalRegistry.ensure(31, handlers());
-      terminalRegistry.write(31, 'pre-attach');
+      terminalRegistry.write('', 31, 'pre-attach');
 
       const term = terminalRegistry.getTerminal(31) as any;
       // Not yet written to terminal (pre-attach)
@@ -275,7 +275,7 @@ describe('terminalRegistry', () => {
       settleEntry(41, container);
 
       // Now write goes directly to term.write() (not buffered).
-      terminalRegistry.write(41, 'direct');
+      terminalRegistry.write('', 41, 'direct');
 
       const term = terminalRegistry.getTerminal(41) as any;
       const hasData = term.getWrittenData().some((u: Uint8Array) =>
@@ -290,7 +290,7 @@ describe('terminalRegistry', () => {
       terminalRegistry.attach(42, container);
 
       // Write while ready=false — must be buffered, NOT sent to terminal yet.
-      terminalRegistry.write(42, 'not-yet-direct');
+      terminalRegistry.write('', 42, 'not-yet-direct');
 
       const term = terminalRegistry.getTerminal(42) as any;
       expect(term.getWrittenData().length).toBe(0);
@@ -325,7 +325,7 @@ describe('terminalRegistry', () => {
       terminalRegistry.detach(51);
 
       // Should not throw
-      expect(() => terminalRegistry.write(51, 'after-detach')).not.toThrow();
+      expect(() => terminalRegistry.write('', 51, 'after-detach')).not.toThrow();
     });
   });
 
@@ -362,7 +362,7 @@ describe('terminalRegistry', () => {
 
     it('clears pendingData for unopened terminals', () => {
       terminalRegistry.ensure(62, handlers());
-      terminalRegistry.write(62, 'stale');
+      terminalRegistry.write('', 62, 'stale');
       // Not attached yet — terminal not opened
       terminalRegistry.resetAll();
 
@@ -404,7 +404,7 @@ describe('terminalRegistry', () => {
 
     it('also clears pre-ensure buffer for pruned paneIds', () => {
       // Write before ensure so it lands in pre-ensure buffer
-      terminalRegistry.write(80, 'ghost-data');
+      terminalRegistry.write('', 80, 'ghost-data');
 
       // Prune — paneId 80 is dead (not in liveIds)
       terminalRegistry.prune(new Set([]));

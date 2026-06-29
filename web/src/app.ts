@@ -551,8 +551,8 @@ export class MuxApp extends LitElement {
     // The split shortcut creates a connection-scoped pane (create-pane);
     // now optimistic so the provisional pane overlays instantly.
     uiActions.split = () => this._createPaneOptimistic();
-    this._socket.onPaneOutput((paneId: number, data: Uint8Array) => {
-      this._routePaneOutput(paneId, data);
+    this._socket.onPaneOutput((workspaceId: string, paneId: number, data: Uint8Array) => {
+      this._routePaneOutput(workspaceId, paneId, data);
     });
     this._socket.onControlMessage((msg: Record<string, unknown>) => {
       this._handleControlMessage(msg);
@@ -1133,10 +1133,12 @@ export class MuxApp extends LitElement {
     patchConfig(configToGoJSON(cfg));
   };
 
-  private _routePaneOutput(paneId: number, data: Uint8Array): void {
-    // Write directly to the registry — works for ALL panes (including
-    // background panes whose mux-pane element is not in the DOM).
-    terminalRegistry.write(paneId, data);
+  private _routePaneOutput(workspaceId: string, paneId: number, data: Uint8Array): void {
+    // Write directly to the registry, keyed by the OWNING workspace carried on
+    // the frame — works for ALL panes (including background panes whose
+    // mux-pane element is not in the DOM) and never bleeds across workspaces
+    // with the same workspace-local pane id.
+    terminalRegistry.write(workspaceId, paneId, data);
   }
 
   private _pollConnectionStatus(): void {
