@@ -385,8 +385,8 @@ func (h *Hub) attachClient(c *Client) error {
 	c.daemon = dc
 
 	dc.SetHandlers(sessiond.Handlers{
-		OnPaneOutput: func(workspaceID string, paneID uint32, data []byte) {
-			if err := c.writeBinary(EncodePaneOutputFrame(workspaceID, paneID, data)); err != nil {
+		OnPaneOutput: func(paneID uint32, data []byte) {
+			if err := c.writeBinary(EncodeBinaryFrame(paneID, data)); err != nil {
 				log.Printf("attachClient: pane output write error: %v", err)
 			}
 		},
@@ -516,27 +516,11 @@ func NewServerMsg(msgType string, payload interface{}) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// EncodeBinaryFrame creates a binary INPUT frame: [4-byte LE uint32 pane_id][data].
-// Used for browser->server keystroke input, which is paneId-only because the
-// server routes it to the connection's attached workspace authoritatively.
+// EncodeBinaryFrame creates a binary frame: [4-byte LE uint32 pane_id][data].
 func EncodeBinaryFrame(paneID uint32, data []byte) []byte {
 	frame := make([]byte, 4+len(data))
 	binary.LittleEndian.PutUint32(frame[:4], paneID)
 	copy(frame[4:], data)
-	return frame
-}
-
-// EncodePaneOutputFrame creates a binary OUTPUT frame stamped with the owning
-// workspace: [4-byte LE pane_id][2-byte LE wsId len][wsId][data]. The browser
-// routes pane output by (workspaceId, paneId) so a frame can never bleed into a
-// same-numbered pane of a different workspace during attach/refresh.
-func EncodePaneOutputFrame(workspaceID string, paneID uint32, data []byte) []byte {
-	ws := []byte(workspaceID)
-	frame := make([]byte, 4+2+len(ws)+len(data))
-	binary.LittleEndian.PutUint32(frame[:4], paneID)
-	binary.LittleEndian.PutUint16(frame[4:6], uint16(len(ws)))
-	copy(frame[6:6+len(ws)], ws)
-	copy(frame[6+len(ws):], data)
 	return frame
 }
 

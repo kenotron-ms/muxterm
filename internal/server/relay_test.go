@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"sync"
 	"testing"
@@ -119,22 +118,18 @@ func TestAttachRelaysCompositionAndOutput(t *testing.T) {
 		t.Fatalf("composition Panes = %d, want 1", len(comp.Panes))
 	}
 
-	// Pane output relays as a workspace-stamped binary frame:
-	// [4-byte LE paneId][2-byte LE wsIdLen][wsId][data].
-	fake.handlers.OnPaneOutput("w1", 1, []byte("hi"))
+	// Pane output relays as a binary frame.
+	fake.handlers.OnPaneOutput(1, []byte("hi"))
 	raw, ok := cap.lastBinary()
 	if !ok {
 		t.Fatalf("no binary frame relayed for pane output")
 	}
-	if len(raw) < 6 {
-		t.Fatalf("pane output frame too short: %d bytes", len(raw))
+	paneID, payload, err := DecodeBinaryFrame(raw)
+	if err != nil {
+		t.Fatalf("DecodeBinaryFrame: %v", err)
 	}
-	paneID := binary.LittleEndian.Uint32(raw[0:4])
-	wsLen := int(binary.LittleEndian.Uint16(raw[4:6]))
-	wsID := string(raw[6 : 6+wsLen])
-	payload := raw[6+wsLen:]
-	if paneID != 1 || wsID != "w1" || string(payload) != "hi" {
-		t.Errorf("decoded frame = (ws=%q, pane=%d, %q), want (\"w1\", 1, \"hi\")", wsID, paneID, payload)
+	if paneID != 1 || string(payload) != "hi" {
+		t.Errorf("decoded frame = (%d, %q), want (1, \"hi\")", paneID, payload)
 	}
 
 	// Lifecycle events relay as frozen messages.

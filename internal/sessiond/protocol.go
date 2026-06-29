@@ -13,16 +13,8 @@ import (
 // kind byte plus the payload.
 const (
 	FrameControl     byte = 0x01 // payload is JSON of the Message envelope
-	FramePaneData    byte = 0x02 // INPUT (client->daemon): [4-byte LE paneId][raw bytes]
+	FramePaneData    byte = 0x02 // payload is [4-byte LITTLE-ENDIAN paneId][raw bytes]
 	FrameBrowserData byte = 0x03 // payload is [4-byte LITTLE-ENDIAN paneId][raw JPEG bytes]
-	// FramePaneOutput is OUTPUT (daemon->client): live pane output + attach
-	// replay, stamped with the OWNING workspace so the client can route by
-	// (workspaceId, paneId) and never has to guess from mutable attach state.
-	// Pane ids are workspace-local (every workspace has a pane 1), so an
-	// un-namespaced output frame races during attach/refresh and bleeds one
-	// workspace's pane 1 into another's. Input (0x02) stays paneId-only because
-	// the daemon routes it to the connection's attached workspace authoritatively.
-	FramePaneOutput byte = 0x04 // [4-byte LE paneId][2-byte LE wsIdLen][wsId][raw bytes]
 )
 
 // Message Type strings name every frozen control envelope on the wire. No phase
@@ -146,35 +138,6 @@ func DecodePaneData(payload []byte) (paneID uint32, data []byte) {
 		return 0, nil
 	}
 	return binary.LittleEndian.Uint32(payload[0:4]), payload[4:]
-}
-
-// WritePaneOutput writes a FramePaneOutput frame whose payload is
-// [4-byte LE paneId][2-byte LE workspaceId length][workspaceId UTF-8][raw bytes].
-// The workspaceId names the pane's OWNING workspace so the receiver routes by
-// (workspaceId, paneId) instead of inferring the workspace from mutable attach
-// state (which races during attach/refresh because pane ids are workspace-local).
-func WritePaneOutput(w io.Writer, workspaceID string, paneID uint32, data []byte) error {
-	ws := []byte(workspaceID)
-	payload := make([]byte, 4+2+len(ws)+len(data))
-	binary.LittleEndian.PutUint32(payload[0:4], paneID)
-	binary.LittleEndian.PutUint16(payload[4:6], uint16(len(ws)))
-	copy(payload[6:6+len(ws)], ws)
-	copy(payload[6+len(ws):], data)
-	return writeFrame(w, FramePaneOutput, payload)
-}
-
-// DecodePaneOutput splits a FramePaneOutput payload into its workspaceId, paneId,
-// and raw body. A malformed/short payload yields ("", 0, nil) defensively.
-func DecodePaneOutput(payload []byte) (workspaceID string, paneID uint32, data []byte) {
-	if len(payload) < 6 {
-		return "", 0, nil
-	}
-	paneID = binary.LittleEndian.Uint32(payload[0:4])
-	wsLen := int(binary.LittleEndian.Uint16(payload[4:6]))
-	if len(payload) < 6+wsLen {
-		return "", paneID, nil
-	}
-	return string(payload[6 : 6+wsLen]), paneID, payload[6+wsLen:]
 }
 
 // ReadFrame reads one frame and returns its kind and payload. This is the

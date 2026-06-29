@@ -1,7 +1,7 @@
-import { SessiondType, encodePaneFrame, decodePaneOutputFrame, type SessiondMessage } from './types';
+import { SessiondType, encodePaneFrame, decodePaneFrame, type SessiondMessage } from './types';
 import type { MuxStore } from './state';
 
-export type PaneOutputCallback = (workspaceId: string, paneId: number, data: Uint8Array) => void;
+export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
 export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
 
 const BACKOFF_BASE = 1000;
@@ -187,11 +187,11 @@ export class MuxSocket {
     };
 
     ws.onmessage = (ev: MessageEvent) => {
-      // Binary pane-OUTPUT frame: [4-byte LE paneId][2-byte LE wsIdLen][wsId][raw bytes].
+      // Binary pane-data frame: [4-byte LE paneId][raw bytes].
       if (ev.data instanceof ArrayBuffer) {
-        if (ev.data.byteLength >= 6) {
-          const { workspaceId, paneId, data } = decodePaneOutputFrame(ev.data);
-          this._paneOutputCb?.(workspaceId, paneId, data);
+        if (ev.data.byteLength >= 4) {
+          const { paneId, data } = decodePaneFrame(ev.data);
+          this._paneOutputCb?.(paneId, data);
         }
         return;
       }

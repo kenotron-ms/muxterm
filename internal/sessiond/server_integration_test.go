@@ -51,8 +51,8 @@ func (c *tClient) readLoop() {
 				continue // skip undecodable control frame
 			}
 			c.ctrl <- &msg
-		case FramePaneOutput:
-			_, _, body := DecodePaneOutput(payload)
+		case FramePaneData:
+			_, body := DecodePaneData(payload)
 			cp := make([]byte, len(body))
 			copy(cp, body)
 			c.data <- cp

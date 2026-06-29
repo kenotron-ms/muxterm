@@ -262,22 +262,13 @@ describe('MuxSocket sessiond receive routing', () => {
   it('decodes a binary pane frame and forwards to onPaneOutput', () => {
     const { mux, ws } = openSocket();
 
-    const received: { workspaceId: string; paneId: number; data: Uint8Array }[] = [];
-    mux.onPaneOutput((workspaceId, paneId, data) => received.push({ workspaceId, paneId, data }));
+    const received: { paneId: number; data: Uint8Array }[] = [];
+    mux.onPaneOutput((paneId, data) => received.push({ paneId, data }));
 
-    // Workspace-stamped OUTPUT frame: [4-byte LE paneId][2-byte LE wsIdLen][wsId][data].
-    const wsId = 'ws-1';
-    const body = new Uint8Array([72, 105]); // "Hi"
-    const buf = new ArrayBuffer(4 + 2 + wsId.length + body.length);
-    const view = new DataView(buf);
-    view.setUint32(0, 9, true);
-    view.setUint16(4, wsId.length, true);
-    new Uint8Array(buf, 6).set(new TextEncoder().encode(wsId));
-    new Uint8Array(buf, 6 + wsId.length).set(body);
+    const buf = encodePaneFrame(9, new Uint8Array([72, 105])); // "Hi"
     ws.onmessage?.({ data: buf } as MessageEvent);
 
     expect(received).toHaveLength(1);
-    expect(received[0].workspaceId).toBe('ws-1');
     expect(received[0].paneId).toBe(9);
     expect(Array.from(received[0].data)).toEqual([72, 105]);
   });

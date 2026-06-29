@@ -494,7 +494,7 @@ func TestHandlersReceiveOutputAndEvents(t *testing.T) {
 	}
 
 	c.SetHandlers(Handlers{
-		OnPaneOutput: func(_ string, paneID uint32, data []byte) {
+		OnPaneOutput: func(paneID uint32, data []byte) {
 			add("out:" + itoa(int(paneID)) + ":" + string(data))
 		},
 		OnPaneAdded: func(pane PaneInfo) {

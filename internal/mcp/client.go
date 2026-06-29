@@ -51,7 +51,7 @@ func DialSocket(socketPath string) (*Client, error) {
 	conn.SetHandlers(sessiond.Handlers{
 		// OnPaneOutput appends raw PTY bytes to the per-pane output buffer.
 		// The handler runs on the read-loop goroutine so it must be fast.
-		OnPaneOutput: func(_ string, paneID uint32, data []byte) {
+		OnPaneOutput: func(paneID uint32, data []byte) {
 			c.mu.Lock()
 			id := int(paneID)
 			c.outputBufs[id] = append(c.outputBufs[id], data...)

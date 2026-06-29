@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"net"
 	"net/http/httptest"
@@ -67,10 +66,8 @@ func startEchoDaemon(t *testing.T) string {
 							// no reply
 						}
 					case sessiond.FramePaneData:
-						// Echo input back as a workspace-stamped OUTPUT frame,
-						// emulating the real daemon's daemon->client framing.
 						paneID, data := sessiond.DecodePaneData(payload)
-						_ = sessiond.WritePaneOutput(conn, "w1", paneID, data)
+						_ = sessiond.WritePaneData(conn, paneID, data)
 					}
 				}
 			}(conn)
@@ -161,17 +158,10 @@ func waitForBinary(t *testing.T, ctx context.Context, conn *websocket.Conn, want
 		if mt != websocket.MessageBinary {
 			continue
 		}
-		// Pane OUTPUT frames are workspace-stamped:
-		// [4-byte LE paneId][2-byte LE wsIdLen][wsId][data].
-		if len(data) < 6 {
+		paneID, payload, err := DecodeBinaryFrame(data)
+		if err != nil {
 			continue
 		}
-		paneID := binary.LittleEndian.Uint32(data[0:4])
-		wsLen := int(binary.LittleEndian.Uint16(data[4:6]))
-		if len(data) < 6+wsLen {
-			continue
-		}
-		payload := data[6+wsLen:]
 		if paneID == wantPane && string(payload) == wantData {
 			return
 		}
