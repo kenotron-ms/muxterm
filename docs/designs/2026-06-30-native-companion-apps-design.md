@@ -56,6 +56,8 @@ We considered three approaches and chose **Approach 1: "One pipe, native shells 
   - **Android:** `androidx.webkit` `ProxyController` (process-global; documented limitation).
   - **Local target** skips SSH and SOCKS entirely.
 
+**Reconciling "remembered forwards" with the two-channel model.** A Connection's forwards are **NOT** a general, user-editable port-forward list. They are exactly the **two fixed, system-managed channels** defined in Section 1 (revised): one `-L` control forward + one SOCKS browser channel. The Connection Manager establishes these two automatically when a remote connection is opened; there is **no** SSH-config-style arbitrary-forward editor in scope.
+
 ### Section 2 — Native App Architecture & Shared Protocol Contract
 
 The contract is a **written spec**, `muxterm-client-protocol.md`, covering:
@@ -71,7 +73,7 @@ Each app implements it natively. There is **no shared client binary**.
 
 | Brick | Responsibility | Apple | Android |
 |-------|----------------|-------|---------|
-| Connection Manager | Local/remote, SSH forwarding, reconnect | SwiftNIO SSH | sshj / MINA sshd |
+| Connection Manager | Local/remote, SSH forwarding, reconnect | SwiftNIO SSH | sshj (client) / MINA sshd (client) |
 | Protocol Client | Encode/decode `Message` + binary frames, CID correlation | URLSessionWebSocketTask | OkHttp WebSocket |
 | Terminal Pane | Render cell grid (see Section 3) | Metal / CoreGraphics | Compose Canvas |
 | Browser Pane | Client-rendered webview | WKWebView | Android WebView |
@@ -128,6 +130,14 @@ This **inverts** the old CDP model.
 | click, mousedown/up, drag, scroll, touch | injected JS dispatching synthetic `Pointer`/`Mouse`/`TouchEvent` at coords or on an element |
 | inject JS | `evaluateJavaScript` / `evaluateJavascript`, result returned |
 
+- **Targeting model (decision).** The `browser-command` `params` schema supports **both** targeting modes, playwright-style, and **both** native platforms MUST implement both:
+  - **Element targeting** via an optional `selector` (CSS selector) \u2014 preferred for agent/MCP use (stable, coordinate-free).
+  - **Coordinate targeting** via optional `x`,`y` (CSS pixels relative to the rendered page) \u2014 for spatial actions and drag.
+
+  An action carries **exactly one** of `{selector}` or `{x,y}`. The MCP tool surface exposes both. This keeps a single consistent `params` shape across Swift, Android, and the server-side MCP tool contract.
+
+- **JS evaluation timeout (decision).** `evaluateJavaScript` is governed by a **bounded timeout, default 30 seconds, configurable** \u2014 documented on the MCP tool surface \u2014 so an agent's injected script can never hang the pane or the tool call.
+
 - **Reaching the dev server (remote):** the webview routes through the SOCKS-over-SSH proxy (Section 1 revised), so `localhost:PORT` resolves to the dev box. Local target: no proxy.
 - **Port discovery:** reuse muxterm's existing listening-port tracking (sidebar "listening ports" / tunnels enumeration) and surface live ports as tappable suggestions; manual URL entry is always available.
 
@@ -138,6 +148,8 @@ This **inverts** the old CDP model.
 | `browser-command` | server → client | `{paneId, cid, action, params}` |
 | `browser-result` | client → server | `{cid, result \| error}` |
 | `browser-url` / `browser-load` | client → server | events |
+
+The two events are distinct: `browser-url` fires when a navigation / URL-bar change is **committed** (the address changed), while `browser-load` fires when the **page load completes**.
 
 Correlation reuses the existing `cid`.
 
@@ -158,6 +170,8 @@ This is the demolition half of the design. The *concepts* (pane id, focus author
 **Delete (web side):**
 
 - `mux-browser-pane.ts` (the canvas JPEG renderer), `browser-registry`, `BrowserSocket`. The web frontend **loses the browser tab entirely** — a browser-based client can't host a cross-origin webview (iframe/CSP), and that was the whole reason CDP existed. Per user decision, web users who want a browser open their own tab.
+
+**Web handling of `browser`-type panes (requirement).** A native client can create a `browser`-type pane at any time, and that pane then appears in the shared `composition`/`layout`. The web client **MUST gracefully tolerate** `surfaceKind: "browser"` panes it cannot render: in that pane slot it renders a **non-interactive placeholder** — a message such as *"Browser panes are available in the native apps"* — it does **not** error and does **not** break the surrounding layout. The web client treats such panes as opaque, render-only-as-placeholder slots and otherwise leaves the layout intact.
 
 **Keep / repurpose:**
 
