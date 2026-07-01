@@ -48,6 +48,22 @@ type Client struct {
 	// only ever attached to a single workspace at a time.
 	wsMu        sync.Mutex
 	workspaceID string
+
+	// attachSeq enforces the frozen "composition FIRST" ordering guarantee
+	// across the goroutine boundary between the daemon connection's read loop
+	// (which delivers the composition reply via request/reply correlation on
+	// one goroutine, then immediately continues its loop and dispatches the
+	// following replay pane-data frames via OnPaneOutput on that SAME
+	// goroutine) and this Client's own handleTextInput goroutine (which
+	// receives the composition reply and must forward it to the browser/app
+	// WebSocket). Without this lock, OnPaneOutput's writeBinary calls for
+	// replay frames race ahead of handleTextInput's sendMessage(composition)
+	// call and reach the wire first, since a buffered-channel handoff to the
+	// pending request does not yield the daemon read-loop goroutine. Held by
+	// handleTextInput for the full Attach()+sendMessage(composition) sequence,
+	// and by OnPaneOutput around every binary relay, so pane-data can never be
+	// written to the WebSocket while a composition send is in flight.
+	attachSeq sync.Mutex
 }
 
 // setWorkspaceID records the workspace this client is currently attached to.
@@ -151,8 +167,15 @@ func (c *Client) handleTextInput(data []byte) {
 
 	switch msg.Type {
 	case sessiond.TypeAttach:
+		// attachSeq must be held for the entire Attach()+sendMessage sequence:
+		// it also gates OnPaneOutput's binary relay (see attachClient), so no
+		// replay pane-data frame can reach the WebSocket before the
+		// composition reply that announces its pane, preserving the frozen
+		// "composition FIRST" wire ordering across the goroutine boundary.
+		c.attachSeq.Lock()
 		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint)
 		if err != nil {
+			c.attachSeq.Unlock()
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
 		}
@@ -164,6 +187,7 @@ func (c *Client) handleTextInput(data []byte) {
 			Panes:       comp.Panes,
 			Layout:      comp.Layout,
 		})
+		c.attachSeq.Unlock()
 
 	case sessiond.TypeListWorkspaces:
 		workspaces, err := c.daemon.ListWorkspaces()
@@ -424,7 +448,14 @@ func (h *Hub) attachClient(c *Client) error {
 
 	dc.SetHandlers(sessiond.Handlers{
 		OnPaneOutput: func(paneID uint32, data []byte) {
-			if err := c.writeBinary(EncodeBinaryFrame(paneID, data)); err != nil {
+			// Blocks while an Attach() reply is being forwarded to the
+			// browser/app WebSocket (see attachSeq), so replay frames for the
+			// pane just announced in that composition can never overtake it
+			// on the wire.
+			c.attachSeq.Lock()
+			err := c.writeBinary(EncodeBinaryFrame(paneID, data))
+			c.attachSeq.Unlock()
+			if err != nil {
 				log.Printf("attachClient: pane output write error: %v", err)
 			}
 		},
