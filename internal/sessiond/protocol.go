@@ -65,6 +65,8 @@ const (
 	TypeCloseBrowserPane  = "close-browser-pane"  // client → daemon: close a browser pane
 	TypeBrowserCommand    = "browser-command"     // relayed to workspace subs: {paneId, cid, action, params}
 	TypeBrowserResult     = "browser-result"      // relayed to workspace subs: {paneId, cid, result | error}
+	TypeBrowserURL        = "browser-url"         // client -> server -> workspace subs: navigation committed
+	TypeBrowserLoad       = "browser-load"        // client -> server -> workspace subs: page load complete
 )
 
 // Error codes are the frozen Message.Code values carried by a TypeError
@@ -198,6 +200,10 @@ type Message struct {
 	Snapshot string          `json:"snapshot,omitempty"` // accessibility tree YAML from browser_snapshot
 	Result   json.RawMessage `json:"result,omitempty"`   // JS eval result (any JSON value)
 	OK       bool            `json:"ok,omitempty"`       // true when action succeeded without error
+
+	// URL carries the committed/loaded URL for TypeBrowserURL and TypeBrowserLoad
+	// client-to-server browser pane navigation notifications.
+	URL string `json:"url,omitempty"`
 }
 
 // CursorPos is a 0-indexed terminal cursor position carried by screen-snapshot-result.

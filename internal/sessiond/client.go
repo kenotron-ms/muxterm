@@ -93,6 +93,14 @@ type Handlers struct {
 	// the workspace (echoing the command CID). msg carries PaneID, CID, Result
 	// (or Error).
 	OnBrowserResult func(msg *Message)
+	// OnBrowserURL fires when the daemon broadcasts a browser-url event: the
+	// client owning a browser pane committed a navigation. msg carries PaneID
+	// and URL.
+	OnBrowserURL func(msg *Message)
+	// OnBrowserLoad fires when the daemon broadcasts a browser-load event: the
+	// client owning a browser pane finished loading a page. msg carries PaneID
+	// and URL.
+	OnBrowserLoad func(msg *Message)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -438,6 +446,26 @@ func (c *Client) BrowserResult(paneID int, cid uint64, payload json.RawMessage) 
 	return WriteControl(c.conn, &Message{Type: TypeBrowserResult, PaneID: paneID, CID: cid, Result: payload})
 }
 
+// BrowserURL relays a browser-url notification to the daemon (URL navigation
+// committed in a client-rendered browser pane), which broadcasts it to all
+// subscribers of the attached workspace. Fire-and-forget: the daemon sends no
+// reply.
+func (c *Client) BrowserURL(paneID int, url string) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return WriteControl(c.conn, &Message{Type: TypeBrowserURL, PaneID: paneID, URL: url})
+}
+
+// BrowserLoad relays a browser-load notification to the daemon (page load
+// complete in a client-rendered browser pane), which broadcasts it to all
+// subscribers of the attached workspace. Fire-and-forget: the daemon sends no
+// reply.
+func (c *Client) BrowserLoad(paneID int, url string) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return WriteControl(c.conn, &Message{Type: TypeBrowserLoad, PaneID: paneID, URL: url})
+}
+
 // dispatchPaneData routes a decoded pane-data frame to OnPaneOutput if set. It
 // runs on the read-loop goroutine, so the handler must not block for long.
 func (c *Client) dispatchPaneData(paneID uint32, data []byte) {
@@ -512,6 +540,14 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeBrowserResult:
 		if h.OnBrowserResult != nil {
 			h.OnBrowserResult(msg)
+		}
+	case TypeBrowserURL:
+		if h.OnBrowserURL != nil {
+			h.OnBrowserURL(msg)
+		}
+	case TypeBrowserLoad:
+		if h.OnBrowserLoad != nil {
+			h.OnBrowserLoad(msg)
 		}
 	}
 }

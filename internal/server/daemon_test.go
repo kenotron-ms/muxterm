@@ -75,6 +75,10 @@ func (f *fakeDaemonConn) BrowserResult(paneID int, cid uint64, payload json.RawM
 	return nil
 }
 
+func (f *fakeDaemonConn) BrowserURL(paneID int, url string) error { return nil }
+
+func (f *fakeDaemonConn) BrowserLoad(paneID int, url string) error { return nil }
+
 func (f *fakeDaemonConn) SetHandlers(h sessiond.Handlers) {
 	f.handlers = h
 }

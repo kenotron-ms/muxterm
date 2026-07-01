@@ -34,6 +34,14 @@ type DaemonConn interface {
 	// BrowserResult relays a browser-result back to the daemon (broadcast to
 	// workspace subscribers, echoing the command cid).
 	BrowserResult(paneID int, cid uint64, payload json.RawMessage) error
+	// BrowserURL relays a browser-url notification to the daemon (broadcast to
+	// workspace subscribers): a client-rendered browser pane committed a
+	// navigation to url.
+	BrowserURL(paneID int, url string) error
+	// BrowserLoad relays a browser-load notification to the daemon (broadcast
+	// to workspace subscribers): a client-rendered browser pane finished
+	// loading url.
+	BrowserLoad(paneID int, url string) error
 	SetHandlers(h sessiond.Handlers)
 	Run() error
 	Close() error

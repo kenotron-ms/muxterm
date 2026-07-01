@@ -303,6 +303,21 @@ func (c *Client) handleTextInput(data []byte) {
 			log.Printf("handleTextInput: BrowserResult error: %v", err)
 		}
 
+	case sessiond.TypeBrowserURL:
+		// Client-to-server notification: URL navigation committed. Daemon
+		// broadcasts to workspace subscribers so MCP agents can observe
+		// navigation. Fire-and-forget.
+		if err := c.daemon.BrowserURL(msg.PaneID, msg.URL); err != nil {
+			log.Printf("handleTextInput: BrowserURL error: %v", err)
+		}
+
+	case sessiond.TypeBrowserLoad:
+		// Client-to-server notification: page load complete. Daemon broadcasts
+		// to workspace subscribers. Fire-and-forget.
+		if err := c.daemon.BrowserLoad(msg.PaneID, msg.URL); err != nil {
+			log.Printf("handleTextInput: BrowserLoad error: %v", err)
+		}
+
 	default:
 		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
 	}
@@ -504,6 +519,20 @@ func (h *Hub) attachClient(c *Client) error {
 				CID:    msg.CID,
 				Result: msg.Result,
 				Error:  msg.Error,
+			})
+		},
+		OnBrowserURL: func(msg *sessiond.Message) {
+			c.sendMessage(&sessiond.Message{
+				Type:   sessiond.TypeBrowserURL,
+				PaneID: msg.PaneID,
+				URL:    msg.URL,
+			})
+		},
+		OnBrowserLoad: func(msg *sessiond.Message) {
+			c.sendMessage(&sessiond.Message{
+				Type:   sessiond.TypeBrowserLoad,
+				PaneID: msg.PaneID,
+				URL:    msg.URL,
 			})
 		},
 	})
