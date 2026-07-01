@@ -2,9 +2,10 @@
  * Discriminates the four surface kinds.
  *
  * terminal / driver — cell-grid surfaces (cols×rows budget, xterm.js).
- * browser-cdp / settings — NON-terminal (pixel box, normal responsive DOM, NO terminal cell grid).
+ * browser / settings — NON-terminal. `browser` panes are client-rendered by the
+ *   native apps; the web client shows a non-interactive placeholder for them.
  */
-export type SurfaceKind = 'terminal' | 'driver' | 'browser-cdp' | 'settings';
+export type SurfaceKind = 'terminal' | 'driver' | 'browser' | 'settings';
 
 /** Returns true for cell-grid surfaces that use the xterm.js terminal grid. */
 export function isTerminalSurface(kind: SurfaceKind): boolean {
@@ -50,13 +51,11 @@ export const SessiondType = {
   // Browser-action relay (server → client → iframe → client → server)
   BrowserAction: 'browser-action',
   BrowserActionResult: 'browser-action-result',
-  // Browser CDP pane management
+  // Client-driven browser panes (native apps own the engine; web shows placeholder)
   CreateBrowserPane: 'create-browser-pane',
   CloseBrowserPane: 'close-browser-pane',
-  BrowserInput: 'browser-input',
-  BrowserURL: 'browser-url',
-  BrowserDownloadProgress: 'browser-download-progress',
-  BrowserError: 'browser-error',
+  BrowserCommand: 'browser-command',
+  BrowserResult: 'browser-result',
   // Layout / snapshot relay
   LayoutCommand: 'layout-command',
   ScreenSnapshot: 'screen-snapshot',
@@ -164,7 +163,7 @@ export interface LayoutCommand {
   command: 'create-pane' | 'rename-pane' | 'close-pane' | 'switch-workspace';
   paneId?: number;
   name?: string;
-  kind?: 'terminal' | 'browser-cdp';
+  kind?: 'terminal' | 'browser';
   placement?: 'tab' | 'split-right' | 'split-left' | 'split-above' | 'split-below';
   referencePaneId?: number;
   url?: string;

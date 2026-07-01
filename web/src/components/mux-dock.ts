@@ -8,8 +8,6 @@ import { terminalRegistry } from '../lib/terminal-registry.js';
 import { muxLog } from '../lib/mux-log.js';
 import type { SessiondPaneInfo, LayoutCommand } from '../types.js';
 import { store } from '../state.js';
-// Side-effect import: registers <mux-browser-pane> custom element
-import './mux-browser-pane.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TerminalRenderer
@@ -100,38 +98,32 @@ class TerminalRenderer implements IContentRenderer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BrowserRenderer
-// Bridges the dockview panel lifecycle to mux-browser-pane (CDP browser panes).
+// PlaceholderRenderer
+// Renders a non-interactive placeholder for client-rendered `browser` panes.
+// The web client cannot host a cross-origin webview, so browser panes created by
+// the native apps appear here as an opaque, render-only slot. It never errors and
+// never disturbs the surrounding dockview layout.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class BrowserRenderer implements IContentRenderer {
+class PlaceholderRenderer implements IContentRenderer {
   readonly element: HTMLElement;
 
-  constructor(id: string) {
-    const container = document.createElement('div');
-    container.style.cssText = 'width:100%;height:100%;overflow:hidden;display:flex;';
-    const pane = document.createElement('mux-browser-pane');
-    pane.setAttribute('pane-id', id);
-    pane.style.cssText = 'flex:1;min-width:0;';
-    container.appendChild(pane);
-    this.element = container;
+  constructor(_id: string) {
+    const el = document.createElement('div');
+    el.style.cssText =
+      'width:100%;height:100%;display:flex;align-items:center;justify-content:center;' +
+      'text-align:center;padding:24px;box-sizing:border-box;' +
+      'color:var(--chrome-text-dim);background:var(--chrome-body);user-select:none;font-size:13px;';
+    el.innerHTML =
+      '<div><div style="font-size:15px;color:var(--mux-fg);font-weight:600;margin-bottom:8px;">' +
+      'Browser pane</div><div>Browser panes are available in the native apps.</div></div>';
+    this.element = el;
   }
 
-  init(): void {
-    // No-op: mux-browser-pane manages its own lifecycle via connectedCallback.
-  }
-
-  layout(): void {
-    // No-op: mux-browser-pane fills its container via CSS flex; no explicit sizing needed.
-  }
-
-  focus(): void {
-    // No-op: browser pane focus is handled by the iframe/webview itself.
-  }
-
-  dispose(): void {
-    // No-op: mux-browser-pane cleans up in its own disconnectedCallback.
-  }
+  init(): void {}
+  layout(): void {}
+  focus(): void {}
+  dispose(): void {}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -301,12 +293,10 @@ export class MuxDock extends LitElement {
    * If one already exists, activate its panel; otherwise fire a create event.
    */
   private _onBrowserButtonClick(): void {
-    const existing = store.panes.find((p) => p.surfaceKind === 'browser-cdp');
-    if (existing) {
-      this.activatePane(existing.paneId);
-    } else {
-      window.dispatchEvent(new CustomEvent('create-browser-pane'));
-    }
+    // Web can only display a placeholder for browser panes (native apps own the
+    // engine). Focus an existing browser pane if present; otherwise do nothing.
+    const existing = store.panes.find((p) => p.surfaceKind === 'browser');
+    if (existing) this.activatePane(existing.paneId);
   }
 
   /**
@@ -595,7 +585,7 @@ export class MuxDock extends LitElement {
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
       createComponent: (opts) => {
-        if (opts.name === 'browser-cdp') return new BrowserRenderer(opts.id);
+        if (opts.name === 'browser') return new PlaceholderRenderer(opts.id);
         return new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId);
       },
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
@@ -656,10 +646,8 @@ export class MuxDock extends LitElement {
       // dispatching synchronously fires canvas.focus() while dockview still
       // holds its own focus lock, so the browser steals it back immediately.
       const paneInfo = this.panes.find((p) => p.paneId === paneId);
-      if (paneInfo?.surfaceKind === 'browser-cdp') {
-        requestAnimationFrame(() => {
-          window.dispatchEvent(new CustomEvent('browser-pane-activated', { detail: { paneId } }));
-        });
+      if (paneInfo?.surfaceKind === 'browser') {
+        // Placeholder pane: nothing to focus, no screencast to resume.
       } else {
         // Signal to browser panes that they are no longer the active panel.
         // Browser panes use this to stop capturing window-level keyboard events.

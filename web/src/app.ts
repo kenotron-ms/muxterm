@@ -10,8 +10,6 @@ import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig }
 import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
 import { injectTerminalFont } from './lib/fonts.js';
-import { browserRegistry } from './lib/browser-registry.js';
-import { wsBrowser } from './lib/ws-browser.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
@@ -440,15 +438,6 @@ export class MuxApp extends LitElement {
     if (mode !== this._layoutMode) this._layoutMode = mode;
   };
 
-  private _onCreateBrowserPane = (): void => { this._socket?.createBrowserPane(); };
-  private _onBrowserPaneFocus = (e: Event): void => {
-    const paneId = (e as CustomEvent<{ paneId: number }>).detail?.paneId;
-    if (paneId !== undefined) {
-      store.setActivePane(paneId);
-      this._dock?.activatePane(paneId);
-    }
-  };
-
   connectedCallback(): void {
     super.connectedCallback();
 
@@ -521,7 +510,10 @@ export class MuxApp extends LitElement {
         for (const pane of (msg.panes ?? [])) {
           const paneId = pane.paneId;
           if (paneId < 0) continue;
-          if (pane.surfaceKind === 'browser-cdp') { browserRegistry.ensure(paneId); continue; }
+          // Browser panes are client-rendered (native apps). The web client
+          // renders a placeholder (see mux-dock PlaceholderRenderer) and does no
+          // terminal setup for them.
+          if (pane.surfaceKind === 'browser') { continue; }
           // On reconnect an entry already exists with ready=true from the prior
           // session. Reset it before replay frames arrive so the barrier gate
           // works correctly (RC-6).
@@ -584,16 +576,6 @@ export class MuxApp extends LitElement {
       this._controller?.bootstrap();
     };
     this._socket.connect();
-    wsBrowser.onFrame = (paneId, jpegBytes) => browserRegistry.write(paneId, jpegBytes);
-    wsBrowser.onBrowserUrl = (paneId, url) => browserRegistry.dispatchUrl(paneId, url);
-    wsBrowser.onBrowserError = (paneId, error) => browserRegistry.dispatchError(paneId, error);
-    wsBrowser.onDownloadProgress = (paneId, percent) => browserRegistry.dispatchDownload(paneId, percent);
-    wsBrowser.onBrowserStatus = (paneId, text) => browserRegistry.dispatchStatus(paneId, text);
-    wsBrowser.onBrowserCursor = (paneId, cursor) => browserRegistry.dispatchCursor(paneId, cursor);
-    wsBrowser.onBrowserGranted = (paneId, clientId) => browserRegistry.dispatchGranted(paneId, clientId);
-    wsBrowser.connect();
-    window.addEventListener('create-browser-pane', this._onCreateBrowserPane);
-    window.addEventListener('browser-pane-focus', this._onBrowserPaneFocus);
     this._connectionStatus = 'reconnecting';
     this._pollConnectionStatus();
   }
@@ -603,9 +585,6 @@ export class MuxApp extends LitElement {
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
-    wsBrowser.disconnect();
-    window.removeEventListener('create-browser-pane', this._onCreateBrowserPane);
-    window.removeEventListener('browser-pane-focus', this._onBrowserPaneFocus);
     disposeAppShortcuts?.();
     disposeAppShortcuts = undefined;
     if (this._unsubscribe) {
@@ -663,7 +642,9 @@ export class MuxApp extends LitElement {
       // them from store.panes yet — recreating the terminal here would produce
       // a phantom entry that conflicts with the in-flight close.
       if (this._closingPanes.has(paneId)) continue;
-      if (pane.surfaceKind === 'browser-cdp') { browserRegistry.ensure(paneId); liveIds.add(paneId); continue; }
+      // Browser panes: opaque placeholder slots. Keep them in the live set so
+      // the dock doesn't prune the panel, but do no terminal/registry work.
+      if (pane.surfaceKind === 'browser') { liveIds.add(paneId); continue; }
       terminalRegistry.ensure(paneId, {
         onInput: (data) => this._socket?.sendPaneInput(paneId, data),
         // Active-view-wins: only rendered/visible panes own a live
@@ -673,7 +654,6 @@ export class MuxApp extends LitElement {
       liveIds.add(paneId);
     }
     terminalRegistry.prune(liveIds);
-    browserRegistry.prune(liveIds);
     // Clean up _closingPanes entries the server has now removed from store.panes.
     const toDelete = new Set<number>();
     for (const id of this._closingPanes) {
