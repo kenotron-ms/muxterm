@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -359,7 +358,6 @@ func (c *conn) handle(msg Message) {
 		// Client-to-server navigation notifications (URL committed / page load
 		// complete). Relay to every subscriber of the attached workspace so MCP
 		// agents can observe navigation without polling.
-		log.Printf("DEBUG conn.handle TypeBrowserURL/Load type=%s attached=%q paneID=%d url=%q", msg.Type, c.attached, msg.PaneID, msg.URL)
 		if c.attached == "" {
 			return
 		}
