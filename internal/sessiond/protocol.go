@@ -32,24 +32,24 @@ const (
 	TypeResize          = "resize"
 	TypeRenamePane      = "rename-pane"
 	TypeSaveLayout      = "save-layout"
-	TypeScreenSnapshot  = "screen-snapshot"  // request: MCP → daemon, VT grid for a pane
-	TypeGetLayout       = "get-layout"       // request: MCP → daemon, ASCII layout diagram
+	TypeScreenSnapshot  = "screen-snapshot" // request: MCP → daemon, VT grid for a pane
+	TypeGetLayout       = "get-layout"      // request: MCP → daemon, ASCII layout diagram
 
 	// Replies (daemon -> client, echo request cid).
-	TypeWorkspaceCreated = "workspace-created"
-	TypeWorkspaceList    = "workspace-list"
-	TypeComposition      = "composition"
-	TypePaneCreated      = "pane-created"
-	TypeOK                    = "ok"
-	TypeScreenSnapshotResult  = "screen-snapshot-result"
-	TypeLayoutResult          = "layout-result"
+	TypeWorkspaceCreated     = "workspace-created"
+	TypeWorkspaceList        = "workspace-list"
+	TypeComposition          = "composition"
+	TypePaneCreated          = "pane-created"
+	TypeOK                   = "ok"
+	TypeScreenSnapshotResult = "screen-snapshot-result"
+	TypeLayoutResult         = "layout-result"
 
 	// Events (daemon -> all subscribers, cid=0).
-	TypePaneAdded        = "pane-added"
-	TypePaneClosed       = "pane-closed"
-	TypeWorkspaceClosed  = "workspace-closed"
-	TypeWorkspaceRenamed = "workspace-renamed"
-	TypePaneRenamed      = "pane-renamed"
+	TypePaneAdded           = "pane-added"
+	TypePaneClosed          = "pane-closed"
+	TypeWorkspaceClosed     = "workspace-closed"
+	TypeWorkspaceRenamed    = "workspace-renamed"
+	TypePaneRenamed         = "pane-renamed"
 	TypeBrowserAction       = "browser-action"        // relay browser DOM command to/from SW bridge
 	TypeBrowserActionResult = "browser-action-result" // relay browser DOM command result back to MCP client
 	TypeLayoutCommand       = "layout-command"        // relay layout mutation to browser clients
@@ -164,23 +164,23 @@ type Message struct {
 	Error       string          `json:"error,omitempty"`       // human-readable error text
 
 	// Browser pane fields (used in create-pane and pane-added for browser surface kinds)
-	SurfaceKind  string            `json:"surfaceKind,omitempty"`
+	SurfaceKind string `json:"surfaceKind,omitempty"`
 
 	// Layout placement fields (create-pane request → pane-added broadcast → browser dockview)
-	Placement      string `json:"placement,omitempty"`      // tab|split-right|split-left|split-above|split-below
-	ReferencePaneID int   `json:"referencePaneId,omitempty"` // pane to split relative to; 0 = active pane
+	Placement       string `json:"placement,omitempty"`       // tab|split-right|split-left|split-above|split-below
+	ReferencePaneID int    `json:"referencePaneId,omitempty"` // pane to split relative to; 0 = active pane
 
 	// MCP relay fields (browser-action, screen-snapshot-result, shell-prompt, get-layout).
-	Action     string     `json:"action,omitempty"`     // browser-action verb: click/fill/...
-	Ref        string     `json:"ref,omitempty"`        // element ref e1,e2 from snapshot
-	Selector   string     `json:"selector,omitempty"`   // CSS selector
-	Value      string     `json:"value,omitempty"`      // input value for fill/type
-	Key        string     `json:"key,omitempty"`        // keyboard key for press
-	Expression string     `json:"expr,omitempty"`       // JS expression for eval
-	Text       string     `json:"text,omitempty"`       // plain-text result: screen snapshot, eval
-	ExitCode   int        `json:"exitCode,omitempty"`   // OSC 133 command exit code
-	Cursor     *CursorPos `json:"cursor,omitempty"`     // cursor {row,col} for screen snapshot
-	ASCII      string     `json:"ascii,omitempty"`      // ASCII layout diagram, get-layout result
+	Action     string     `json:"action,omitempty"`   // browser-action verb: click/fill/...
+	Ref        string     `json:"ref,omitempty"`      // element ref e1,e2 from snapshot
+	Selector   string     `json:"selector,omitempty"` // CSS selector
+	Value      string     `json:"value,omitempty"`    // input value for fill/type
+	Key        string     `json:"key,omitempty"`      // keyboard key for press
+	Expression string     `json:"expr,omitempty"`     // JS expression for eval
+	Text       string     `json:"text,omitempty"`     // plain-text result: screen snapshot, eval
+	ExitCode   int        `json:"exitCode,omitempty"` // OSC 133 command exit code
+	Cursor     *CursorPos `json:"cursor,omitempty"`   // cursor {row,col} for screen snapshot
+	ASCII      string     `json:"ascii,omitempty"`    // ASCII layout diagram, get-layout result
 
 	// Params carries the browser-command parameters as raw JSON for passthrough
 	// relay (TypeBrowserCommand). Schema (see docs/muxterm-client-protocol.md):

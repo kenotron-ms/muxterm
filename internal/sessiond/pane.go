@@ -20,7 +20,7 @@ type Pane struct {
 	LocalID int
 	Title   string // settable; OSC 0/2 title capture is a later phase
 
-	// SurfaceKind is "browser-cdp" for browser panes; empty string means "terminal".
+	// SurfaceKind is "browser" for browser panes; empty string means "terminal".
 	// Set once at construction; immutable thereafter.
 	SurfaceKind string
 
