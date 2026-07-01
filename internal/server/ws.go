@@ -40,6 +40,29 @@ type Client struct {
 	// capturing closures.
 	writeTextFn   func([]byte) error
 	writeBinaryFn func([]byte) error
+
+	// wsMu guards workspaceID, the workspace this client is currently attached
+	// to. It is set on a successful TypeAttach and read by daemon event relay
+	// handlers (e.g. OnPaneAdded) that need to stamp WorkspaceID onto events
+	// the daemon itself does not carry a workspace id on, since a client is
+	// only ever attached to a single workspace at a time.
+	wsMu        sync.Mutex
+	workspaceID string
+}
+
+// setWorkspaceID records the workspace this client is currently attached to.
+func (c *Client) setWorkspaceID(id string) {
+	c.wsMu.Lock()
+	c.workspaceID = id
+	c.wsMu.Unlock()
+}
+
+// getWorkspaceID returns the workspace this client is currently attached to,
+// or "" if it has not attached yet.
+func (c *Client) getWorkspaceID() string {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	return c.workspaceID
 }
 
 // newClient creates a new Client with a cancellable context and real WebSocket
@@ -133,6 +156,7 @@ func (c *Client) handleTextInput(data []byte) {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
 		}
+		c.setWorkspaceID(comp.WorkspaceID)
 		c.sendMessage(&sessiond.Message{
 			Type:        sessiond.TypeComposition,
 			CID:         msg.CID,
@@ -407,6 +431,7 @@ func (h *Hub) attachClient(c *Client) error {
 		OnPaneAdded: func(pane sessiond.PaneInfo) {
 			c.sendMessage(&sessiond.Message{
 				Type:            sessiond.TypePaneAdded,
+				WorkspaceID:     c.getWorkspaceID(),
 				PaneID:          pane.PaneID,
 				Cols:            pane.Cols,
 				Rows:            pane.Rows,
