@@ -156,31 +156,31 @@ func TestPaneTitleFieldIsSettable(t *testing.T) {
 	}
 }
 
-func TestNewBrowserCDPPane_SurfaceKind(t *testing.T) {
-	p := newBrowserCDPPane(7)
+func TestNewBrowserPane_SurfaceKind(t *testing.T) {
+	p := NewBrowserPane(7)
 	if p.LocalID != 7 {
 		t.Fatalf("LocalID = %d, want 7", p.LocalID)
 	}
-	if p.SurfaceKind != "browser-cdp" {
-		t.Fatalf("SurfaceKind = %q, want \"browser-cdp\"", p.SurfaceKind)
+	if p.SurfaceKind != "browser" {
+		t.Fatalf("SurfaceKind = %q, want \"browser\"", p.SurfaceKind)
 	}
 }
 
-func TestNewBrowserCDPPane_NilBuf(t *testing.T) {
-	p := newBrowserCDPPane(1)
+func TestNewBrowserPane_NilBuf(t *testing.T) {
+	p := NewBrowserPane(1)
 	if got := p.Replay(); got != nil {
-		t.Fatalf("Replay() = %v, want nil (browser-cdp pane has no buffer)", got)
+		t.Fatalf("Replay() = %v, want nil (browser pane has no buffer)", got)
 	}
 }
 
-func TestNewBrowserCDPPane_Info(t *testing.T) {
-	p := newBrowserCDPPane(3)
+func TestNewBrowserPane_Info(t *testing.T) {
+	p := NewBrowserPane(3)
 	info := p.Info()
 	if info.PaneID != 3 {
 		t.Fatalf("Info().PaneID = %d, want 3", info.PaneID)
 	}
-	if info.SurfaceKind != "browser-cdp" {
-		t.Fatalf("Info().SurfaceKind = %q, want \"browser-cdp\"", info.SurfaceKind)
+	if info.SurfaceKind != "browser" {
+		t.Fatalf("Info().SurfaceKind = %q, want \"browser\"", info.SurfaceKind)
 	}
 	// Close twice must not panic
 	p.Close()

@@ -250,31 +250,31 @@ func TestRegistryRenamePaneFailureCases(t *testing.T) {
 	}
 }
 
-// TestRegistry_BrowserCDPPane_PutAndGet verifies that a browser-cdp pane can
+// TestRegistry_BrowserPane_PutAndGet verifies that a browser pane can
 // be put into the registry and retrieved with the correct SurfaceKind.
-func TestRegistry_BrowserCDPPane_PutAndGet(t *testing.T) {
+func TestRegistry_BrowserPane_PutAndGet(t *testing.T) {
 	r := NewRegistry()
 	wsID := r.AddWorkspace("w", "")
 	localID, _ := r.AllocPaneID(wsID)
-	p := newBrowserCDPPane(localID)
+	p := NewBrowserPane(localID)
 	r.PutPane(wsID, p)
 
 	got, ok := r.Pane(wsID, localID)
 	if !ok {
 		t.Fatalf("Pane(%q, %d) not found after PutPane", wsID, localID)
 	}
-	if got.SurfaceKind != "browser-cdp" {
-		t.Fatalf("SurfaceKind = %q, want \"browser-cdp\"", got.SurfaceKind)
+	if got.SurfaceKind != "browser" {
+		t.Fatalf("SurfaceKind = %q, want \"browser\"", got.SurfaceKind)
 	}
 }
 
-// TestRegistry_BrowserCDPPane_Replay verifies that a browser-cdp pane returns
+// TestRegistry_BrowserPane_Replay verifies that a browser pane returns
 // nil replay data (no buffer).
-func TestRegistry_BrowserCDPPane_Replay(t *testing.T) {
+func TestRegistry_BrowserPane_Replay(t *testing.T) {
 	r := NewRegistry()
 	wsID := r.AddWorkspace("w", "")
 	localID, _ := r.AllocPaneID(wsID)
-	p := newBrowserCDPPane(localID)
+	p := NewBrowserPane(localID)
 	r.PutPane(wsID, p)
 
 	got, ok := r.Pane(wsID, localID)
@@ -282,17 +282,17 @@ func TestRegistry_BrowserCDPPane_Replay(t *testing.T) {
 		t.Fatalf("Pane not found")
 	}
 	if data := got.Replay(); data != nil {
-		t.Fatalf("Replay() = %v, want nil (browser-cdp has no buffer)", data)
+		t.Fatalf("Replay() = %v, want nil (browser pane has no buffer)", data)
 	}
 }
 
-// TestRegistry_BrowserCDPPane_RemovePane verifies that a browser-cdp pane can
+// TestRegistry_BrowserPane_RemovePane verifies that a browser pane can
 // be removed from the registry.
-func TestRegistry_BrowserCDPPane_RemovePane(t *testing.T) {
+func TestRegistry_BrowserPane_RemovePane(t *testing.T) {
 	r := NewRegistry()
 	wsID := r.AddWorkspace("w", "")
 	localID, _ := r.AllocPaneID(wsID)
-	p := newBrowserCDPPane(localID)
+	p := NewBrowserPane(localID)
 	r.PutPane(wsID, p)
 
 	removed, remaining, ok := r.RemovePane(wsID, localID)

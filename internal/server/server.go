@@ -84,7 +84,6 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("DELETE /api/tunnels/{id}", s.handleTunnelClose)
 	s.mux.HandleFunc("/t/", s.handleTunnelProxy)
 	s.mux.HandleFunc("GET /ws", s.handleWS)
-	s.mux.HandleFunc("GET /ws/browser", s.handleWSBrowser)
 
 	if cfg.StaticFS != nil {
 		s.mux.Handle("/", http.FileServer(http.FS(cfg.StaticFS)))
@@ -161,10 +160,6 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.handleWSImpl(w, r)
-}
-
-func (s *Server) handleWSBrowser(w http.ResponseWriter, r *http.Request) {
-	s.handleWSBrowserImpl(w, r)
 }
 
 // handleTunnelList returns a JSON array of all active tunnels (id, port).

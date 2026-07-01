@@ -316,3 +316,15 @@ func (p *Pane) Close() {
 		}
 	})
 }
+
+// NewBrowserPane returns a client-rendered browser pane handle: a registry entry
+// with the given workspace-local id, surfaceKind "browser", and no PTY. It holds
+// no OS resources — the browser engine lives entirely on the client. Write,
+// Resize, Replay, ReplayFrom, Seq, and Close all follow the existing bufferless
+// (ptmx == nil, buf == nil) pattern already handled by this file's methods.
+func NewBrowserPane(localID int) *Pane {
+	return &Pane{
+		LocalID:     localID,
+		SurfaceKind: "browser",
+	}
+}

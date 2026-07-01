@@ -227,7 +227,7 @@ func (c *Client) handleTextInput(data []byte) {
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
 
 	case sessiond.TypeCreateBrowserPane:
-		paneID, err := c.daemon.CreateBrowserCDPPane(msg.Placement, msg.ReferencePaneID)
+		paneID, err := c.daemon.CreateBrowserPane(msg.Placement, msg.ReferencePaneID)
 		if err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
@@ -240,6 +240,20 @@ func (c *Client) handleTextInput(data []byte) {
 			return
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
+
+	case sessiond.TypeBrowserCommand:
+		// Client (or agent, once MCP is wired) relays a command; daemon broadcasts
+		// it to the workspace so the pane's owner executes it. Fire-and-forget.
+		if err := c.daemon.BrowserCommand(msg.PaneID, msg.CID, msg.Params); err != nil {
+			log.Printf("handleTextInput: BrowserCommand error: %v", err)
+		}
+
+	case sessiond.TypeBrowserResult:
+		// Executing client returns the result; daemon broadcasts it back to the
+		// workspace (echoing cid) so the waiting requester receives it.
+		if err := c.daemon.BrowserResult(msg.PaneID, msg.CID, msg.Result); err != nil {
+			log.Printf("handleTextInput: BrowserResult error: %v", err)
+		}
 
 	default:
 		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
@@ -416,6 +430,25 @@ func (h *Hub) attachClient(c *Client) error {
 		},
 		OnPaneRenamed: func(paneID int, name string) {
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneRenamed, PaneID: paneID, Name: name})
+		},
+		OnBrowserCommand: func(msg *sessiond.Message) {
+			c.sendMessage(&sessiond.Message{
+				Type:     sessiond.TypeBrowserCommand,
+				PaneID:   msg.PaneID,
+				CID:      msg.CID,
+				Action:   msg.Action,
+				Selector: msg.Selector,
+				Params:   msg.Params,
+			})
+		},
+		OnBrowserResult: func(msg *sessiond.Message) {
+			c.sendMessage(&sessiond.Message{
+				Type:   sessiond.TypeBrowserResult,
+				PaneID: msg.PaneID,
+				CID:    msg.CID,
+				Result: msg.Result,
+				Error:  msg.Error,
+			})
 		},
 	})
 

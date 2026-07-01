@@ -12,7 +12,7 @@ import (
 type trackingDaemonConn struct {
 	fakeDaemonConn
 	createPaneCalled        bool
-	createBrowserCDPPaneCalled bool
+	createBrowserPaneCalled bool
 }
 
 func (f *trackingDaemonConn) CreatePane(cmd []string, placement string, referencePaneID int) (int, error) {
@@ -20,15 +20,15 @@ func (f *trackingDaemonConn) CreatePane(cmd []string, placement string, referenc
 	return f.createdID, nil
 }
 
-func (f *trackingDaemonConn) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
-	f.createBrowserCDPPaneCalled = true
+func (f *trackingDaemonConn) CreateBrowserPane(placement string, referencePaneID int) (int, error) {
+	f.createBrowserPaneCalled = true
 	return f.createdID, nil
 }
 
-// TestAttachClient_OnPaneAdded_RelaysBrowserCDPSurfaceKind verifies that when the daemon fires a
-// TypePaneAdded event for a browser-cdp pane, the relay handler in attachClient sends a
-// TypePaneAdded message to the WS client that includes SurfaceKind "browser-cdp".
-func TestAttachClient_OnPaneAdded_RelaysBrowserCDPSurfaceKind(t *testing.T) {
+// TestAttachClient_OnPaneAdded_RelaysBrowserSurfaceKind verifies that when the daemon fires a
+// TypePaneAdded event for a browser pane, the relay handler in attachClient sends a
+// TypePaneAdded message to the WS client that includes SurfaceKind "browser".
+func TestAttachClient_OnPaneAdded_RelaysBrowserSurfaceKind(t *testing.T) {
 	fake := &fakeDaemonConn{createdID: 1}
 	h := NewHub(func() (DaemonConn, error) {
 		return fake, nil
@@ -57,13 +57,13 @@ func TestAttachClient_OnPaneAdded_RelaysBrowserCDPSurfaceKind(t *testing.T) {
 		t.Fatal("OnPaneAdded handler not set by attachClient")
 	}
 
-	// Trigger the OnPaneAdded handler with browser-cdp surface kind.
+	// Trigger the OnPaneAdded handler with browser surface kind.
 	fake.handlers.OnPaneAdded(sessiond.PaneInfo{
 		PaneID:      5,
 		Cols:        120,
 		Rows:        30,
 		Title:       "Browser",
-		SurfaceKind: "browser-cdp",
+		SurfaceKind: "browser",
 	})
 
 	if captured == nil {
@@ -76,14 +76,14 @@ func TestAttachClient_OnPaneAdded_RelaysBrowserCDPSurfaceKind(t *testing.T) {
 	if msg.Type != sessiond.TypePaneAdded {
 		t.Errorf("Type = %q, want %q", msg.Type, sessiond.TypePaneAdded)
 	}
-	if msg.SurfaceKind != "browser-cdp" {
-		t.Errorf("SurfaceKind = %q, want \"browser-cdp\"", msg.SurfaceKind)
+	if msg.SurfaceKind != "browser" {
+		t.Errorf("SurfaceKind = %q, want \"browser\"", msg.SurfaceKind)
 	}
 }
 
-// TestHandleTextInput_TypeCreateBrowserPane_CallsCreateBrowserCDPPane verifies that a
-// TypeCreateBrowserPane message routes to CreateBrowserCDPPane (not CreatePane).
-func TestHandleTextInput_TypeCreateBrowserPane_CallsCreateBrowserCDPPane(t *testing.T) {
+// TestHandleTextInput_TypeCreateBrowserPane_CallsCreateBrowserPane verifies that a
+// TypeCreateBrowserPane message routes to CreateBrowserPane (not CreatePane).
+func TestHandleTextInput_TypeCreateBrowserPane_CallsCreateBrowserPane(t *testing.T) {
 	fake := &trackingDaemonConn{fakeDaemonConn: fakeDaemonConn{createdID: 10}}
 
 	var sentMessages [][]byte
@@ -110,8 +110,8 @@ func TestHandleTextInput_TypeCreateBrowserPane_CallsCreateBrowserCDPPane(t *test
 	data, _ := json.Marshal(msg)
 	c.handleTextInput(data)
 
-	if !fake.createBrowserCDPPaneCalled {
-		t.Fatal("expected CreateBrowserCDPPane to be called for TypeCreateBrowserPane, but it was not")
+	if !fake.createBrowserPaneCalled {
+		t.Fatal("expected CreateBrowserPane to be called for TypeCreateBrowserPane, but it was not")
 	}
 	if fake.createPaneCalled {
 		t.Fatal("CreatePane should not be called for TypeCreateBrowserPane")
@@ -147,7 +147,7 @@ func TestHandleTextInput_TypeCreatePane_TerminalSurfaceKind(t *testing.T) {
 	if !fake.createPaneCalled {
 		t.Fatal("expected CreatePane to be called when SurfaceKind is empty")
 	}
-	if fake.createBrowserCDPPaneCalled {
-		t.Fatal("CreateBrowserCDPPane should not be called when SurfaceKind is empty")
+	if fake.createBrowserPaneCalled {
+		t.Fatal("CreateBrowserPane should not be called when SurfaceKind is empty")
 	}
 }

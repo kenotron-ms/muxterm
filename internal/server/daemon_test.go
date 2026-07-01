@@ -51,7 +51,7 @@ func (f *fakeDaemonConn) CreatePane(cmd []string, placement string, referencePan
 	return f.createdID, nil
 }
 
-func (f *fakeDaemonConn) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
+func (f *fakeDaemonConn) CreateBrowserPane(placement string, referencePaneID int) (int, error) {
 	return f.createdID, nil
 }
 
@@ -67,15 +67,11 @@ func (f *fakeDaemonConn) Resize(paneID, cols, rows int) error {
 
 func (f *fakeDaemonConn) BrowserActionResult(msg sessiond.Message) error { return nil }
 
-func (f *fakeDaemonConn) BrowserInput(paneID int, clientID string, event json.RawMessage) error {
+func (f *fakeDaemonConn) BrowserCommand(paneID int, cid uint64, payload json.RawMessage) error {
 	return nil
 }
 
-func (f *fakeDaemonConn) BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int, devicePixelRatio float64) error {
-	return nil
-}
-
-func (f *fakeDaemonConn) BrowserBlur(paneID int, clientID, deviceID string) error {
+func (f *fakeDaemonConn) BrowserResult(paneID int, cid uint64, payload json.RawMessage) error {
 	return nil
 }
 

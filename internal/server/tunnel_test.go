@@ -1,12 +1,9 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // ---- TunnelRegistry unit tests ----

@@ -84,15 +84,15 @@ type Handlers struct {
 	// TypeBrowserActionResult event (CID == 0). msg carries PaneID plus the
 	// result fields (OK, Snapshot, Result, Error).
 	OnBrowserActionResult func(msg *Message)
-	// OnBrowserFrame receives raw JPEG frames from the daemon's BrowserManager.
-	// paneID is the workspace-local pane id; data is the raw JPEG bytes.
-	// The handler must not block for long — offload slow work to another goroutine.
-	OnBrowserFrame func(paneID uint32, data []byte)
-	// OnBrowserMsg fires when the daemon broadcasts a browser JSON event:
-	// TypeBrowserURL, TypeBrowserDownloadProgress, TypeBrowserError, or
-	// TypeBrowserGranted. msg.RawPayload (if non-nil) carries the original JSON
-	// bytes for relay passthrough; msg.Type identifies the event kind.
-	OnBrowserMsg func(msg *Message)
+	// OnBrowserCommand fires when the daemon broadcasts a browser-command to the
+	// workspace (CID carried for correlation). The client owning/focused on the
+	// pane executes it against its live webview. msg carries PaneID, CID,
+	// Action, Selector, and Params.
+	OnBrowserCommand func(msg *Message)
+	// OnBrowserResult fires when the daemon broadcasts a browser-result back to
+	// the workspace (echoing the command CID). msg carries PaneID, CID, Result
+	// (or Error).
+	OnBrowserResult func(msg *Message)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -158,9 +158,6 @@ func (c *Client) Run() error {
 		case FramePaneData:
 			paneID, data := DecodePaneData(payload)
 			c.dispatchPaneData(paneID, data)
-		case FrameBrowserData:
-			paneID, data := DecodePaneData(payload) // same [4-byte LE paneId][body] format
-			c.dispatchBrowserFrame(paneID, data)
 		case FrameControl:
 			c.dispatchControl(payload)
 		}
@@ -168,8 +165,13 @@ func (c *Client) Run() error {
 }
 
 // dispatchControl decodes a control payload into a Message and routes it. A
-// reply (CID != 0) is delivered to the waiting requester; an unsolicited event
-// (CID == 0) is dispatched to the event handlers.
+// reply to one of THIS connection's own pending requests (CID matches an
+// entry in c.pend) is delivered to the waiting requester. Everything else —
+// including events with CID == 0, and broadcasts that merely carry a
+// correlation id with no matching pending request (e.g. the browser-command /
+// browser-result relay, which preserves the caller's cid end-to-end but is
+// never registered as a pending request since it is fire-and-forget) — is
+// dispatched to the event handlers.
 func (c *Client) dispatchControl(payload []byte) {
 	var msg Message
 	if err := json.Unmarshal(payload, &msg); err != nil {
@@ -182,8 +184,8 @@ func (c *Client) dispatchControl(payload []byte) {
 		c.pendMu.Unlock()
 		if p != nil {
 			p.ch <- &msg
+			return
 		}
-		return
 	}
 	c.dispatchEvent(&msg)
 }
@@ -350,10 +352,11 @@ func (c *Client) CreatePane(cmd []string, placement string, referencePaneID int)
 	return reply.PaneID, nil
 }
 
-// CreateBrowserCDPPane creates a browser-cdp surface pane in the attached workspace
-// and returns the server-assigned workspace-local pane ID. The daemon starts the
-// Chromium page immediately after registering the pane — no HTTP server involvement.
-func (c *Client) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
+// CreateBrowserPane creates a client-rendered browser surface pane in the
+// attached workspace and returns the server-assigned workspace-local pane ID.
+// The daemon allocates only a pane handle (surfaceKind "browser"); the browser
+// engine lives entirely on the client.
+func (c *Client) CreateBrowserPane(placement string, referencePaneID int) (int, error) {
 	reply, err := c.request(&Message{
 		Type:            TypeCreateBrowserPane,
 		Placement:       placement,
@@ -415,49 +418,24 @@ func (c *Client) SendBrowserAction(msg Message) error {
 	return WriteControl(c.conn, &msg)
 }
 
-// BrowserFocus sends a browser-focus event to the daemon, claiming input
-// authority for paneID and updating the Chromium viewport to renderWidth ×
-// renderHeight at devicePixelRatio. It is fire-and-forget: the daemon sends no
-// direct reply (it will broadcast browser-granted to all subscribers).
-func (c *Client) BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int, devicePixelRatio float64) error {
+// BrowserCommand relays a browser-command to the daemon, which broadcasts it to
+// all subscribers of the attached workspace. payload is the pre-marshalled
+// command JSON ({action, params, ...}) stored in Params for passthrough.
+// Fire-and-forget: the daemon sends no direct reply; the executing client
+// returns a browser-result event.
+func (c *Client) BrowserCommand(paneID int, cid uint64, payload json.RawMessage) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return WriteControl(c.conn, &Message{
-		Type:             TypeBrowserFocus,
-		PaneID:           paneID,
-		ClientID:         clientID,
-		DeviceID:         deviceID,
-		RenderWidth:      renderWidth,
-		RenderHeight:     renderHeight,
-		DevicePixelRatio: devicePixelRatio,
-	})
+	return WriteControl(c.conn, &Message{Type: TypeBrowserCommand, PaneID: paneID, CID: cid, Params: payload})
 }
 
-// BrowserBlur sends a browser-blur event to the daemon, releasing input
-// authority for paneID if clientID currently holds it. Fire-and-forget.
-func (c *Client) BrowserBlur(paneID int, clientID, deviceID string) error {
+// BrowserResult relays a browser-result back to the daemon, which broadcasts it
+// to all subscribers of the attached workspace (echoing the command CID).
+// Fire-and-forget.
+func (c *Client) BrowserResult(paneID int, cid uint64, payload json.RawMessage) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return WriteControl(c.conn, &Message{
-		Type:     TypeBrowserBlur,
-		PaneID:   paneID,
-		ClientID: clientID,
-		DeviceID: deviceID,
-	})
-}
-
-// BrowserInput forwards a raw browser-input event JSON payload to the daemon.
-// The daemon routes it to BrowserPage.HandleInput only if clientID holds
-// input authority. Fire-and-forget.
-func (c *Client) BrowserInput(paneID int, clientID string, event json.RawMessage) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return WriteControl(c.conn, &Message{
-		Type:       TypeBrowserInput,
-		PaneID:     paneID,
-		ClientID:   clientID,
-		InputEvent: event,
-	})
+	return WriteControl(c.conn, &Message{Type: TypeBrowserResult, PaneID: paneID, CID: cid, Result: payload})
 }
 
 // dispatchPaneData routes a decoded pane-data frame to OnPaneOutput if set. It
@@ -465,17 +443,6 @@ func (c *Client) BrowserInput(paneID int, clientID string, event json.RawMessage
 func (c *Client) dispatchPaneData(paneID uint32, data []byte) {
 	c.hmu.Lock()
 	fn := c.handlers.OnPaneOutput
-	c.hmu.Unlock()
-	if fn != nil {
-		fn(paneID, data)
-	}
-}
-
-// dispatchBrowserFrame routes a decoded FrameBrowserData frame to OnBrowserFrame
-// if set. It runs on the read-loop goroutine, so the handler must not block for long.
-func (c *Client) dispatchBrowserFrame(paneID uint32, data []byte) {
-	c.hmu.Lock()
-	fn := c.handlers.OnBrowserFrame
 	c.hmu.Unlock()
 	if fn != nil {
 		fn(paneID, data)
@@ -538,9 +505,13 @@ func (c *Client) dispatchEvent(msg *Message) {
 		if h.OnShellPrompt != nil {
 			h.OnShellPrompt(msg.PaneID, msg.ExitCode)
 		}
-	case TypeBrowserURL, TypeBrowserDownloadProgress, TypeBrowserError, TypeBrowserGranted, TypeBrowserCursor:
-		if h.OnBrowserMsg != nil {
-			h.OnBrowserMsg(msg)
+	case TypeBrowserCommand:
+		if h.OnBrowserCommand != nil {
+			h.OnBrowserCommand(msg)
+		}
+	case TypeBrowserResult:
+		if h.OnBrowserResult != nil {
+			h.OnBrowserResult(msg)
 		}
 	}
 }

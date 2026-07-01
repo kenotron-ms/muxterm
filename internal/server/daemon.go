@@ -20,21 +20,20 @@ type DaemonConn interface {
 	RenamePane(paneID int, name string) error
 	SaveLayout(workspaceID, breakpoint, layout string) error
 	CreatePane(cmd []string, placement string, referencePaneID int) (int, error)
-	// CreateBrowserCDPPane creates a browser-cdp surface pane in the attached workspace.
-	// Returns the server-assigned workspace-local pane ID. HTTP server layer starts
-	// actual Chromium page separately via BrowserManager.OpenPage(paneID).
-	CreateBrowserCDPPane(placement string, referencePaneID int) (int, error)
+	// CreateBrowserPane allocates a client-rendered browser pane handle (surfaceKind
+	// "browser") in the attached workspace and returns its workspace-local id. No
+	// server-side engine is created.
+	CreateBrowserPane(placement string, referencePaneID int) (int, error)
 	ClosePane(paneID int) error
 	Input(paneID uint32, data []byte) error
 	Resize(paneID, cols, rows int) error
 	BrowserActionResult(msg sessiond.Message) error
-	// BrowserInput forwards a raw browser-input event JSON payload to the daemon.
-	BrowserInput(paneID int, clientID string, event json.RawMessage) error
-	// BrowserFocus sends a browser-focus event, claiming input authority and
-	// updating the Chromium viewport to renderWidth × renderHeight at devicePixelRatio.
-	BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int, devicePixelRatio float64) error
-	// BrowserBlur sends a browser-blur event, releasing input authority.
-	BrowserBlur(paneID int, clientID, deviceID string) error
+	// BrowserCommand relays a browser-command to the daemon (broadcast to workspace
+	// subscribers). payload is the pre-marshalled command JSON.
+	BrowserCommand(paneID int, cid uint64, payload json.RawMessage) error
+	// BrowserResult relays a browser-result back to the daemon (broadcast to
+	// workspace subscribers, echoing the command cid).
+	BrowserResult(paneID int, cid uint64, payload json.RawMessage) error
 	SetHandlers(h sessiond.Handlers)
 	Run() error
 	Close() error

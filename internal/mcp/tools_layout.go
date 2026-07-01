@@ -49,7 +49,7 @@ func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 		paneID = id
 
 	case "browser":
-		id, err := lt.c.conn.CreateBrowserCDPPane(placement, referencePaneID)
+		id, err := lt.c.conn.CreateBrowserPane(placement, referencePaneID)
 		if err != nil {
 			return "", fmt.Errorf("creating browser pane: %w", err)
 		}
