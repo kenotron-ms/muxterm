@@ -63,6 +63,11 @@ Secondary NSWindow(s) — via ⌘N, zero or more, non-singleton, close normally
 
 ## Components
 
+**Terminology: muxterm pane vs. Bonsplit pane.** The word "pane" is overloaded between the two systems referenced throughout this document — this mapping is load-bearing for correct event-handler implementation, not a naming nitpick:
+- muxterm protocol "pane" (a `paneId`, `create-pane`, `pane-closed`, `PaneState` — an individual terminal or browser session) = a Bonsplit **Tab**.
+- Bonsplit "pane" (`splitPane`, `closePane`, `shouldClosePane` — a split-leaf/tab-group container) = this design's "split leaf" / "tab group" — never a 1:1 match with a muxterm pane; one Bonsplit pane holds a tab strip of many muxterm panes.
+- Therefore: the server's `pane-closed` broadcast (a single muxterm session closing) must always be handled via `controller.closeTab(tabId)`, never `closePane()`/`shouldClosePane` — those Bonsplit APIs operate on the tab-group container and would destroy every tab in the group, an unrelated and much more destructive operation.
+
 **Bonsplit integration** — `BonsplitController`/`BonsplitView` is the concrete implementation of the tab-group+split content area:
 - `createTab()` / `splitPane(orientation:)` / `closeTab()` map directly onto terminal/browser tab operations and `⌘\` split.
 - `contentViewLifecycle: .keepAllAlive` — exactly matches the "don't dispose the terminal when its tab isn't frontmost" requirement; built into the library, not hand-rolled.
@@ -94,7 +99,9 @@ Secondary NSWindow(s) — via ⌘N, zero or more, non-singleton, close normally
 
 The app-level failures (SSH, browser channel, settle barrier) are already fully specified in the hi-fi doc's F1–F9 / DF1–DF6 failure-state screens — no redesign needed there; reference them directly. What follows is specific to the window/tab-group/multi-window layer.
 
-**Stale layout blob on restore.** A saved `treeSnapshot` may reference a `paneId` the server no longer has (pane closed elsewhere since last save). On restore, drop unresolvable leaves silently and let Bonsplit's `autoCloseEmptyPanes` config collapse the resulting empty pane — never show a broken/dangling tab, never error the whole workspace open over one stale reference.
+**Stale layout blob on restore.** A saved `treeSnapshot` may reference a `paneId` the server no longer has (pane closed elsewhere since last save). On restore, drop unresolvable leaves silently and let Bonsplit's `autoCloseEmptyPanes` config collapse the resulting empty pane — never show a broken/dangling tab, never error the whole workspace open over one stale reference. This covers a dangling reference *within* an otherwise-valid Bonsplit `treeSnapshot`; schema migration (a persisted blob that isn't Bonsplit-shaped at all) is a separate case, covered next.
+
+**Pre-migration layout blob (schema migration).** Workspaces already opened under the shipped M3 `TilingContainerView` have a persisted `layout` blob in that hand-rolled JSON schema, not a Bonsplit `treeSnapshot` — it will not parse as one at all. On restore, if the persisted `layout` blob doesn't parse as a valid Bonsplit tree schema, discard it entirely and fall back to a default single-pane layout (one tab group containing the workspace's panes in server-reported order), rather than attempting a best-effort parse of an incompatible schema. This is a one-time migration cost, not an ongoing concern — once a workspace is opened once under the new architecture, its persisted layout is always Bonsplit-schema going forward.
 
 **Pane closed by another client while open here.** Server broadcasts `pane-closed` → find the tab by `paneId` across ALL open windows (main + any `⌘N` secondaries) → call `controller.closeTab()` on each. This is the one place a single server event must fan out to multiple independent Bonsplit controllers — implement as a small registry mapping `paneId → [BonsplitController]` across live windows.
 
@@ -122,7 +129,7 @@ Respect `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion` — collapse
 
 Follows the project's existing "verify with reality" policy (no mocked SSH, no mocked protocol) with two complementary verification styles for this specific layer:
 
-1. **Structural verification via `agent-desktop`** (cheap, no screenshots — accessibility-tree based) for: window count/titles never duplicating the singleton main window, confirming a secondary `⌘N` window genuinely has no sidebar, confirming tab count/contents in a `TabGroupView` after a split. This approach already caught a real pane-count staleness bug earlier in this project using the same technique — prefer it over screenshots wherever the state is accessibility-tree-visible.
+1. **Structural verification via `agent-desktop`** (cheap, no screenshots — accessibility-tree based) for: window count/titles never duplicating the singleton main window, confirming a secondary `⌘N` window genuinely has no sidebar, confirming tab count/contents in a Bonsplit pane (one split leaf's tab group) after a split. This approach already caught a real pane-count staleness bug earlier in this project using the same technique — prefer it over screenshots wherever the state is accessibility-tree-visible.
 
 2. **Live protocol round-trips for multi-window reconciliation** — two real `ProtocolClient` connections attached to the SAME `workspaceId` against a real running `muxterm serve`, confirming both receive `pane-added`/`pane-closed` broadcasts and the daemon's existing active-view-wins multi-client-attach behavior works as documented (testing our consumption of that behavior, not re-deriving the protocol).
 
