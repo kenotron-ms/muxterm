@@ -210,12 +210,16 @@ func (s *Server) broadcastPaneData(wsID string, paneID int, data []byte) {
 // handlePaneExit removes an exited pane and emits the frozen close events. It is
 // a no-op when the pane was already removed (e.g. via close-workspace) so no
 // duplicate events are produced.
-func (s *Server) handlePaneExit(wsID string, paneID int) {
+func (s *Server) handlePaneExit(wsID string, paneID int, exitCode int, runtimeMs int64) {
 	_, remaining, ok := s.reg.RemovePane(wsID, paneID)
 	if !ok {
 		return
 	}
-	s.broadcast(wsID, &Message{Type: TypePaneClosed, WorkspaceID: wsID, PaneID: paneID})
+	code := exitCode
+	s.broadcast(wsID, &Message{
+		Type: TypePaneClosed, WorkspaceID: wsID, PaneID: paneID,
+		ProcessExitCode: &code, RuntimeMs: runtimeMs,
+	})
 	if remaining == 0 {
 		if removed, _ := s.reg.ReapIfEmpty(wsID); removed {
 			s.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: s.reg.List()})
@@ -429,7 +433,7 @@ func (c *conn) createPane(msg Message) {
 		// Emulator reply drain goroutine in NewPane forwards query responses back to the PTY
 		// (see pane.go) so the emulator's internal io.Pipe never blocks emu.Write().
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
-		func(id int) { c.srv.handlePaneExit(wsID, id) },
+		func(id int, exitCode int, runtimeMs int64) { c.srv.handlePaneExit(wsID, id, exitCode, runtimeMs) },
 		onPromptFn, // stored before readLoop starts — eliminates OSC 133 race
 	)
 	if err != nil {

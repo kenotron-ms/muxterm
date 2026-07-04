@@ -500,7 +500,7 @@ func TestHandlersReceiveOutputAndEvents(t *testing.T) {
 		OnPaneAdded: func(pane PaneInfo) {
 			add("added:" + itoa(pane.PaneID) + ":" + pane.Title)
 		},
-		OnPaneClosed: func(paneID int) {
+		OnPaneClosed: func(paneID int, processExitCode *int, runtimeMs int64) {
 			add("closed:" + itoa(paneID))
 		},
 		OnWorkspaceRenamed: func(workspaceID, name string) {

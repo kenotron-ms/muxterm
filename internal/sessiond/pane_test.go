@@ -23,14 +23,18 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) bool {
 
 func TestPaneEchoThenExit(t *testing.T) {
 	var (
-		mu       sync.Mutex
-		exited   bool
-		exitedID int
+		mu            sync.Mutex
+		exited        bool
+		exitedID      int
+		exitedCode    int
+		exitedRuntime int64
 	)
-	onExit := func(localID int) {
+	onExit := func(localID int, exitCode int, runtimeMilliseconds int64) {
 		mu.Lock()
 		exited = true
 		exitedID = localID
+		exitedCode = exitCode
+		exitedRuntime = runtimeMilliseconds
 		mu.Unlock()
 	}
 	p, err := NewPane(1, []string{"echo", "hello-pane"}, 80, 24, nil, nil, onExit, nil)
@@ -46,10 +50,16 @@ func TestPaneEchoThenExit(t *testing.T) {
 		t.Fatal("onExit was never called")
 	}
 	mu.Lock()
-	gotID := exitedID
+	gotID, gotCode, gotRuntime := exitedID, exitedCode, exitedRuntime
 	mu.Unlock()
 	if gotID != 1 {
 		t.Fatalf("onExit localID = %d, want 1", gotID)
+	}
+	if gotCode != 0 {
+		t.Fatalf("onExit exitCode = %d, want 0 (echo succeeds)", gotCode)
+	}
+	if gotRuntime < 0 {
+		t.Fatalf("onExit runtimeMilliseconds = %d, want >= 0", gotRuntime)
 	}
 	if !bytes.Contains(p.Replay(), []byte("hello-pane")) {
 		t.Fatalf("Replay = %q, want to contain hello-pane", p.Replay())

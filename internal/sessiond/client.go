@@ -49,8 +49,10 @@ type Handlers struct {
 	// carrying the frozen PaneInfo for the new pane.
 	OnPaneAdded func(pane PaneInfo)
 	// OnPaneClosed fires when the pane identified by the workspace-local paneID
-	// is removed.
-	OnPaneClosed func(paneID int)
+	// is removed. processExitCode is non-nil only for a real process-exit-driven
+	// close (nil for an explicit client-requested close); runtimeMs is the real
+	// shell process wall-clock runtime, valid only when processExitCode is non-nil.
+	OnPaneClosed func(paneID int, processExitCode *int, runtimeMs int64)
 	// OnWorkspaceClosed fires when the workspace identified by workspaceID is
 	// closed.
 	OnWorkspaceClosed func(workspaceID string)
@@ -499,7 +501,7 @@ func (c *Client) dispatchEvent(msg *Message) {
 		}
 	case TypePaneClosed:
 		if h.OnPaneClosed != nil {
-			h.OnPaneClosed(msg.PaneID)
+			h.OnPaneClosed(msg.PaneID, msg.ProcessExitCode, msg.RuntimeMs)
 		}
 	case TypeWorkspaceClosed:
 		if h.OnWorkspaceClosed != nil {

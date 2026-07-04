@@ -487,8 +487,11 @@ func (h *Hub) attachClient(c *Client) error {
 				ReferencePaneID: pane.ReferencePaneID,
 			})
 		},
-		OnPaneClosed: func(paneID int) {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneClosed, PaneID: paneID})
+		OnPaneClosed: func(paneID int, processExitCode *int, runtimeMs int64) {
+			c.sendMessage(&sessiond.Message{
+				Type: sessiond.TypePaneClosed, PaneID: paneID,
+				ProcessExitCode: processExitCode, RuntimeMs: runtimeMs,
+			})
 		},
 		OnWorkspaceClosed: func(workspaceID string) {
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceClosed, WorkspaceID: workspaceID})

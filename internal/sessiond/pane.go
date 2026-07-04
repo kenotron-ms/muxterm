@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/creack/pty"
 )
@@ -28,12 +29,13 @@ type Pane struct {
 	cols int
 	rows int
 
-	cmd  *exec.Cmd
-	ptmx *os.File
-	buf  PaneBuffer
+	cmd       *exec.Cmd
+	ptmx      *os.File
+	buf       PaneBuffer
+	startTime time.Time
 
 	onData      func(localID int, data []byte)
-	onExit      func(localID int)
+	onExit      func(localID int, exitCode int, runtimeMilliseconds int64)
 	onPromptPtr atomic.Pointer[func(int, *Message)] // written once (createPane), read by readLoop
 
 	closeOnce sync.Once
@@ -74,7 +76,7 @@ func NewPane(
 	cols, rows int,
 	buf PaneBuffer,
 	onData func(localID int, data []byte),
-	onExit func(localID int),
+	onExit func(localID int, exitCode int, runtimeMilliseconds int64),
 	onPrompt func(localID int, msg *Message),
 ) (*Pane, error) {
 	if buf == nil {
@@ -101,14 +103,15 @@ func NewPane(
 	}
 
 	p := &Pane{
-		LocalID: localID,
-		cols:    cols,
-		rows:    rows,
-		cmd:     c,
-		ptmx:    ptmx,
-		buf:     buf,
-		onData:  onData,
-		onExit:  onExit,
+		LocalID:   localID,
+		cols:      cols,
+		rows:      rows,
+		cmd:       c,
+		ptmx:      ptmx,
+		buf:       buf,
+		startTime: time.Now(),
+		onData:    onData,
+		onExit:    onExit,
 	}
 	if onPrompt != nil {
 		p.onPromptPtr.Store(&onPrompt)
@@ -209,9 +212,16 @@ func (p *Pane) readLoop() {
 			break
 		}
 	}
-	_ = p.cmd.Wait()
+	err2 := p.cmd.Wait()
+	exitCode := 0
+	if p.cmd.ProcessState != nil {
+		exitCode = p.cmd.ProcessState.ExitCode()
+	} else if err2 != nil {
+		exitCode = -1
+	}
+	runtimeMs := time.Since(p.startTime).Milliseconds()
 	if p.onExit != nil {
-		p.onExit(p.LocalID)
+		p.onExit(p.LocalID, exitCode, runtimeMs)
 	}
 }
 

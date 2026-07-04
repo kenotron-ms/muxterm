@@ -184,6 +184,13 @@ type Message struct {
 	Cursor     *CursorPos `json:"cursor,omitempty"`   // cursor {row,col} for screen snapshot
 	ASCII      string     `json:"ascii,omitempty"`    // ASCII layout diagram, get-layout result
 
+	// Real process exit fields (pane-closed only, process-exit-driven close).
+	// ProcessExitCode is a pointer so 0 (a normal successful exit) is
+	// distinguishable from "field absent" (e.g. a client-requested close,
+	// which has no real process exit code).
+	ProcessExitCode *int  `json:"processExitCode,omitempty"` // real shell process exit code, set on pane-closed only
+	RuntimeMs       int64 `json:"runtimeMs,omitempty"`       // real shell process wall-clock runtime, set on pane-closed only
+
 	// Params carries the browser-command parameters as raw JSON for passthrough
 	// relay (TypeBrowserCommand). Schema (see docs/muxterm-client-protocol.md):
 	//   { "action": "navigate|click|scroll|evaluate|back|forward|reload",
