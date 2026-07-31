@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 )
 
@@ -32,6 +33,42 @@ type VTBuffer struct {
 	mu    sync.RWMutex
 	emu   *vt.SafeEmulator
 	total uint64 // total bytes ever written
+
+	// savedCursor shadow-tracks charmbracelet/x/vt's private DECSC/SCOSC
+	// saved-cursor register, since x/vt exposes no public accessor for it.
+	// It exists solely to inform replay (serializeGrid) — the live emulator
+	// handles its own internal DECRC/SCORC restore correctly regardless of
+	// this tracker.
+	savedCursor      struct{ row, col int }
+	savedCursorValid bool
+
+	// scanParser is a single ansi.Parser reused across every Write call to
+	// shadow-scan for DECSC/SCOSC (and, later, alt-screen-entry) sequences —
+	// mirroring TrackedBuffer's pattern of constructing the parser once and
+	// calling Reset() before each Parse(), rather than allocating a fresh
+	// ansi.NewParser() (32-int params slice + 64KB data buffer) on every
+	// 32KB PTY read. scanFound is the handler's output for the call in
+	// progress; both fields are safe to reuse without locking because Write
+	// holds b.mu.Lock() for its entire body, so no two scans ever overlap.
+	scanParser *ansi.Parser
+	scanFound  bool
+}
+
+// scanSavedCursor reports whether p contains a DECSC (ESC 7) or SCOSC (CSI s)
+// save-cursor sequence. DECRC (ESC 8) and SCORC (CSI u) are intentionally not
+// tracked here — x/vt's own internal restore is correct for the live session;
+// this shadow tracker exists solely to inform replay's synthetic preamble
+// (see serializeGrid), not to implement save/restore semantics itself.
+//
+// It resets and reuses b.scanParser (constructed once in NewVTBuffer) rather
+// than allocating a new *ansi.Parser per call. Callers must hold b.mu for the
+// duration of the call — the shared scanFound flag is not otherwise
+// synchronized.
+func (b *VTBuffer) scanSavedCursor(p []byte) bool {
+	b.scanFound = false
+	b.scanParser.Reset()
+	b.scanParser.Parse(p)
+	return b.scanFound
 }
 
 // NewVTBuffer returns a VTBuffer backed by a w×h SafeEmulator with a 2000-line
@@ -40,7 +77,22 @@ type VTBuffer struct {
 func NewVTBuffer(w, h int) *VTBuffer {
 	emu := vt.NewSafeEmulator(w, h)
 	emu.SetScrollbackSize(2000)
-	return &VTBuffer{emu: emu}
+	b := &VTBuffer{emu: emu}
+	b.scanParser = ansi.NewParser()
+	b.scanParser.SetHandler(ansi.Handler{
+		HandleEsc: func(cmd ansi.Cmd) {
+			if cmd.Final() == '7' { // DECSC
+				b.scanFound = true
+			}
+		},
+		HandleCsi: func(cmd ansi.Cmd, params ansi.Params) {
+			// SCOSC: CSI s, no private prefix, no parameters.
+			if cmd.Final() == 's' && cmd.Prefix() == 0 {
+				b.scanFound = true
+			}
+		},
+	})
+	return b
 }
 
 // Read drains the emulator's internal reply pipe. When the emulator parses
@@ -68,7 +120,20 @@ func (b *VTBuffer) Write(p []byte) (int, error) {
 	// Access the underlying Emulator directly: b.mu already excludes
 	// concurrent reads, so the SafeEmulator's own per-method lock is not
 	// needed here and calling the raw method avoids nested locking.
-	return b.emu.Emulator.Write(p)
+	n, err := b.emu.Emulator.Write(p)
+	if b.scanSavedCursor(p) {
+		// Read position directly from the underlying Emulator (not via the
+		// locking CursorPos() method) — we already hold b.mu, and Write has
+		// just applied p, so this reflects state as of the end of this
+		// chunk. A save sequence followed by further cursor movement within
+		// the SAME chunk is a rare edge case this shadow tracker does not
+		// attempt to resolve exactly; per the design, an imperfect or
+		// uncaught case is a no-regression, opportunistic-only gap.
+		pos := b.emu.Emulator.CursorPosition()
+		b.savedCursor.row, b.savedCursor.col = pos.Y, pos.X
+		b.savedCursorValid = true
+	}
+	return n, err
 }
 
 // Resize updates the emulator grid to the new dimensions.  Non-positive values
@@ -87,9 +152,13 @@ func (b *VTBuffer) Resize(cols, rows int) {
 func (b *VTBuffer) Replay() []byte {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	var saved *struct{ row, col int }
+	if b.savedCursorValid {
+		saved = &b.savedCursor
+	}
 	// Pass the underlying *vt.Emulator: we hold b.mu.RLock(), so all state is
 	// stable for the duration of the call.
-	return serializeGrid(b.emu.Emulator)
+	return serializeGrid(b.emu.Emulator, saved)
 }
 
 // ReplayFrom ignores since and returns (b.Replay(), 0): VTBuffer serializes the
@@ -146,13 +215,17 @@ func (b *VTBuffer) Seq() uint64 {
 //     scrollback as new visible content arrives.
 //  3. Visible grid: emu.Render() with bare LF promoted to CRLF so the fresh
 //     emulator doesn't stair-step each row.
-//  4. Cursor restored to its live position via an absolute CUP sequence.
+//  4. If savedCursor is non-nil, re-establish the client's fresh saved-cursor
+//     register (DECSC) at that position so a subsequent DECRC restores
+//     correctly — this is the shadow-tracker's whole purpose (x/vt's own
+//     saved-cursor register is private and cannot otherwise be replayed).
+//  5. Cursor restored to its live position via an absolute CUP sequence.
 //
 // NOTE: uv.Line.Render() emits fully ANSI-styled output.  If a scrollback line
 // carries no SGR attributes (typical for plain-text shells) the output is the
 // same as the plain-text form.  Styled scrollback (coloured prompts, vim
 // status lines that scrolled away) is preserved with full colour fidelity.
-func serializeGrid(emu *vt.Emulator) []byte {
+func serializeGrid(emu *vt.Emulator, savedCursor *struct{ row, col int }) []byte {
 	var out []byte
 
 	if emu.IsAltScreen() {
@@ -162,6 +235,10 @@ func serializeGrid(emu *vt.Emulator) []byte {
 		out = append(out, esc+"[2J"...)
 		out = append(out, esc+"[H"...)
 		out = append(out, strings.ReplaceAll(emu.Render(), "\n", "\r\n")...)
+		if savedCursor != nil {
+			out = append(out, fmt.Sprintf(esc+"[%d;%dH", savedCursor.row+1, savedCursor.col+1)...)
+			out = append(out, esc+"7"...)
+		}
 		pos := emu.CursorPosition()
 		out = append(out, fmt.Sprintf(esc+"[%d;%dH", pos.Y+1, pos.X+1)...)
 		return out
@@ -185,6 +262,11 @@ func serializeGrid(emu *vt.Emulator) []byte {
 	// unlike String() which is plain text. Rows are separated by bare LF;
 	// promote each to CR+LF so a fresh emulator doesn't stair-step.
 	out = append(out, strings.ReplaceAll(emu.Render(), "\n", "\r\n")...)
+
+	if savedCursor != nil {
+		out = append(out, fmt.Sprintf(esc+"[%d;%dH", savedCursor.row+1, savedCursor.col+1)...)
+		out = append(out, esc+"7"...)
+	}
 
 	// Restore the cursor to its live position. uv.Position (image.Point) X/Y
 	// are 0-based; terminal CUP rows/cols are 1-based.
