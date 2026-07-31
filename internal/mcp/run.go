@@ -98,7 +98,7 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 			}
 			attachOnce.Do(func() {
 				ws := c.Workspace()
-				comp, attachErr := c.conn.Attach(ws, "wide")
+				comp, attachErr := c.conn.Attach(ws, "wide", "agent")
 				if attachErr != nil {
 					return
 				}
