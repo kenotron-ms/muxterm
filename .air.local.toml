@@ -3,9 +3,9 @@
 # one MUST NOT be assumed to apply to the other.
 #
 # Isolation: XDG_RUNTIME_DIR must be set (by `make dev-local`) before invoking
-# air, so the sessiond this spawns uses tmp/muxterm-dev-runtime/ instead of
-# the default $TMPDIR/muxterm-<uid>/ where the native companion app's
-# production sessiond lives. Never run this without that env var set.
+# air, so the sessiond this spawns uses ${TMPDIR:-/tmp}/muxterm-dev-local/
+# instead of the default $TMPDIR/muxterm-<uid>/ where the native companion
+# app's production sessiond lives. Never run this without that env var set.
 #
 # Port 8313 -- distinct from both production (8311) and the remote-VM dev
 # config's 8312.
