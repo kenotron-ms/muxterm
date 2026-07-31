@@ -68,6 +68,7 @@ Key points:
 - First run auto-creates `tmp/muxterm-dev-runtime/` (already covered by the repo's existing `tmp/` gitignore entry -- no new ignore rules needed). `bin/` is also already gitignored.
 - Reuses `$(AIR)` (existing tool-location fallback variable) but does NOT reference `$(CADDY)` at all.
 - Must NOT modify the existing `dev`, `demo`, `demo-install`, `install-stable`, `build`, `web`, `test`, `test-web`, `clean` targets in any way.
+- The `.PHONY` line at the top of the Makefile must be updated to include `dev-local` alongside the existing targets.
 
 ### `.air.local.toml` (new file, forked from `.air.toml`)
 
@@ -116,6 +117,8 @@ tmp_dir = "tmp"
 
 Notably unchanged from `.air.toml`: the `include_dir`/`include_ext`/`exclude_*` watch rules, the "stamp" trigger convention (Vite's `build.stamp` plugin in `web/vite.config.ts` already fires one rebuild per full Vite output flush, no changes needed there), `delay`, and colors. Only `bin`, `args_bin`, and `cmd` differ.
 
+`.air.local.toml` should be git-tracked (committed to the repo), the same as the existing `.air.toml` -- not gitignored -- since it's a reusable dev config, not a runtime artifact.
+
 ## Data Flow
 
 Typical iteration cycle:
@@ -142,6 +145,8 @@ Throughout this entire cycle, production's PIDs 58493/58494, its port 8311, and 
 ## Verification / Testing Strategy
 
 Per `AGENTS.md`'s muxterm-verify convention -- no unit tests, real observed behavior only:
+
+Steps 1 and 6 (the production pre-flight and the isolation re-check) are manual, human-observed checks -- there is no automated guard rail enforcing production isolation in the code itself; isolation is structural (separate binary/port/socket-dir), not runtime-enforced by a safety check.
 
 1. **Pre-flight sanity check** -- confirm production is currently healthy before touching anything: `lsof -i :8311` shows PID 58493, `ls $TMPDIR/muxterm-501/` shows the existing socket/log untouched, and (if reachable) production's own UI still responds.
 2. **Build** -- `make dev-local` (first run compiles `bin/muxterm-dev` via air, builds `web/dist` via Vite).
