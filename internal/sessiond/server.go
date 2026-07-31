@@ -328,6 +328,22 @@ func (c *conn) handle(msg Message) {
 			// disconnect, no pty.Setsize call — matches the design's "Non-
 			// authoritative resizes... never call pty.Setsize".
 		}
+	case TypePaneFocus:
+		// Agents (MCP/automation) never claim focus authority; silently
+		// ignore rather than erroring the connection, since a well-behaved
+		// agent should never send this but a defensive no-op is safer.
+		if c.attached == "" || c.kind != "interactive" {
+			return
+		}
+		if p, ok := c.srv.reg.Pane(c.attached, msg.PaneID); ok {
+			// Unlike TypeResize, pane-focus is inherently an authority-
+			// claiming action, so apply the resize unconditionally after
+			// claiming rather than gating on IsAuthoritative first.
+			p.ClaimAuthority(c, time.Now())
+			_ = p.Resize(msg.Cols, msg.Rows)
+			info := p.Info()
+			c.broadcastPaneResizedExcept(info.Cols, info.Rows, msg.PaneID)
+		}
 	case TypeRenamePane:
 		if c.attached != "" && c.srv.reg.RenamePane(c.attached, msg.PaneID, msg.Name) {
 			c.reply(&Message{Type: TypeOK, CID: msg.CID})
