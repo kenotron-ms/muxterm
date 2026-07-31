@@ -38,12 +38,22 @@ Reconnect/reopen automatically sends the visibility+focus signal and becomes aut
 
 Each `Pane` (`internal/sessiond/pane.go`) gains a new small piece of state: an "authoritative viewer" record, `{connID, lastActiveAt}`. This lives on the `Pane` itself (guarded by the existing `p.mu`), not on `conn`, because authority is a per-pane concept — a client can be authoritative for pane A while a different client is authoritative for pane B (e.g. two panes tiled across two different windows).
 
+**Clarification (from spec review):** `connID` here is Go pointer identity (`*conn`), matching how `s.conns`/`s.subs` already key by `*conn` elsewhere in `server.go` — not a new identifier type.
+
 **What updates it** — two distinct client→server signals bump `lastActiveAt` for `(pane, connID)`:
 
 1. A new `pane-focus` message, sent when a pane becomes visible *and* the browser tab/window has OS focus (visibility API + `document.hasFocus()`), including on initial attach/reconnect.
 2. Existing input (keystroke) messages — already flow through input handling into `Pane.Write`; interactive-session connections are flagged (see below) so their input traffic also bumps `lastActiveAt`.
 
-**Excluding MCP/automation:** `conn` (`internal/sessiond/server.go`) gains a `kind` field — `"interactive"` vs `"agent"` — set once at attach time, based on which attach path was used. The MCP/agent attach path already exists as a separate code path (createPane/browser-action machinery) distinct from normal browser `TypeAttach`. Only `interactive` conns' input bumps authority; `agent` conns' input never does, regardless of recency.
+**Excluding MCP/automation:** both the MCP/agent attach path (`internal/mcp/client.go`'s `Client.AttachWorkspace()`) and the browser-facing attach path (`internal/server/ws.go`) call the same `sessiond.Client.Attach()` (`internal/sessiond/client.go`), which sends the same `TypeAttach` message, handled by the same single `case TypeAttach:` code path (`c.attach(msg)`) on the daemon side (`internal/sessiond/server.go`). There is no existing signal — in the `Message` struct or otherwise — that distinguishes an MCP-originated connection from a browser-originated one, so a new wire field is required rather than inferring it from the attach path:
+
+- The `Message` struct (`internal/sessiond/protocol.go`) used for `TypeAttach` gains a new field, `ClientKind string` (JSON key `clientKind`), with two recognized values: `"interactive"` and `"agent"`.
+- `Client.Attach(workspaceID, breakpoint string)` (`internal/sessiond/client.go:297`) gains a third parameter, `clientKind string`, threaded into the `Message{ClientKind: clientKind, ...}` sent for `TypeAttach`.
+- `internal/mcp/client.go`'s `Client.AttachWorkspace()` calls `c.conn.Attach(workspaceID, "wide", "agent")` — MCP connections always identify as `"agent"`.
+- `internal/server/ws.go`'s browser-facing attach call passes `"interactive"` for every human browser tab.
+- Server-side, `conn.attach()` / `attachConn()` (`internal/sessiond/server.go`) stores the received `ClientKind` on the `conn` struct as `conn.kind` (defaulting to `"interactive"` if empty/unset, for backward compatibility with any caller that hasn't been updated — though in practice both call sites will always be updated as part of this same change, so the default is a safety net, not an expected runtime path).
+
+Only `interactive` conns' input bumps authority; `agent` conns' input never does, regardless of recency.
 
 **Resize gating:** `TypeResize` is only applied to the PTY (`Pane.Resize`) if the sending conn is the current authoritative conn for that pane (`connID == pane.authority.connID`). Non-authoritative resizes are recorded (for later comparison/logging) but never call `pty.Setsize`/`buf.Resize`.
 
@@ -57,7 +67,7 @@ Two new message types, plus one internal (non-wire) field addition:
 
 2. **`pane-resized`** (server → client, broadcast): `{ type: "pane-resized", paneId: <int>, cols: <int>, rows: <int> }`. Sent to every attached conn *except* the one that just became authoritative, whenever the canonical PTY size changes. Non-authoritative clients use this to resize their local xterm.js instance to match — without triggering their own `ResizeObserver`-driven resize message back (reentrancy guard).
 
-3. **`conn.kind`** (server-internal, not wire protocol): set once when a connection completes its attach handshake — `"interactive"` for normal browser `TypeAttach`, `"agent"` for the existing MCP/automation attach path. Derived from which attach RPC was used; no new wire field needed.
+3. **`ClientKind`** (new wire field on the existing `TypeAttach` message): the `Message` struct (`internal/sessiond/protocol.go`) gains `ClientKind string` (JSON key `clientKind`), with recognized values `"interactive"` and `"agent"`. `Client.Attach()` (`internal/sessiond/client.go`) gains a third parameter, `clientKind string`, to populate it — `internal/mcp/client.go`'s `Client.AttachWorkspace()` passes `"agent"`; `internal/server/ws.go`'s browser-facing attach passes `"interactive"`. Server-side, `attachConn()` stores the received value on the `conn` struct as `conn.kind` (defaulting to `"interactive"` if unset, as a backward-compatibility safety net rather than an expected runtime path).
 
 **Existing `resize` message:** wire format unchanged, but now gated server-side by authority rather than applied unconditionally.
 
