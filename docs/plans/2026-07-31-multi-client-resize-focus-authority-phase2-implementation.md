@@ -777,9 +777,9 @@ Expected: a SECOND plausible `{"cols":<N2>,"rows":<M2>}` with `N2 < N1` — reco
 playwright-cli -s=sizecheck resize 480 320     # ~60 cols
 sleep 1
 playwright-cli -s=sizecheck --raw eval "JSON.stringify((function(){ const s = window.__muxterm.snapshot(1); return { cols: s.cols, rows: s.rows }; })())"
-playwright-cli -s=sizecheck --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rows.map(r => r.replace(/\\s+$/,'')))"
+playwright-cli -s=sizecheck --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rowText.map(r => r.replace(/\\s+$/,'')))"
 ```
-Expected: a THIRD plausible `{"cols":<N3>,"rows":<M3>}` with `N3 < N2 < N1`, and the rows array contains no garbled fragments left over from the previous two sizes (no stray `$$$$`/`~~~~`/replacement-char runs per this repo's existing `isClean()` convention from the `muxterm-verify` skill).
+Expected: a THIRD plausible `{"cols":<N3>,"rows":<M3>}` with `N3 < N2 < N1`, and the rowText array contains no garbled fragments left over from the previous two sizes (no stray `$$$$`/`~~~~`/replacement-char runs per this repo's existing `isClean()` convention from the `muxterm-verify` skill).
 
 ```bash
 playwright-cli -s=sizecheck close
@@ -837,7 +837,7 @@ Expected:
 - Client A and client B's `snapshot(1).cols`/`.rows` are now EQUAL (both reflect client A's canonical size — B received `pane-resized` and letterboxed to match).
 - `clientA` → `isAuthoritative(1)` → `true`.
 - `clientB` → `isAuthoritative(1)` → `false`.
-- Neither client's content is garbled (re-run the `rows.map(...)` clean-text check from Task 6 on both).
+- Neither client's content is garbled (re-run the `rowText.map(...)` clean-text check from Task 6 on both).
 
 Now switch: focus client B by typing into it:
 ```bash
@@ -903,12 +903,12 @@ playwright-cli -s=connC resize 480 320
 sleep 1
 playwright-cli -s=connC --raw eval "JSON.stringify(window.__muxterm.snapshot(1))"
 playwright-cli -s=connC --raw eval "window.__muxterm.isAuthoritative(1)"
-playwright-cli -s=connC --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rows.map(r => r.replace(/\\s+$/,'')))"
+playwright-cli -s=connC --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rowText.map(r => r.replace(/\\s+$/,'')))"
 ```
 Expected:
 - `snapshot(1).cols`/`.rows` for client C reflect client C's OWN third viewport size — NOT client B's leftover size.
 - `isAuthoritative(1)` → `true` for client C (its initial-attach `pane-focus`, sent via the new `onSettled` hook, claimed authority immediately).
-- The rows array shows `second-client-line` present (correct buffer content) with no garbled cursor-position artifacts, and the cursor sits at the correct spot for client C's own viewport (not mid-screen or wrong-looking, per the original bug this design fixes).
+- The rowText array shows `second-client-line` present (correct buffer content) with no garbled cursor-position artifacts, and the cursor sits at the correct spot for client C's own viewport (not mid-screen or wrong-looking, per the original bug this design fixes).
 
 ```bash
 playwright-cli -s=connB --raw eval "JSON.stringify(window.__muxterm.snapshot(1))"
@@ -1009,18 +1009,18 @@ playwright-cli -s=mainscreen click "body"
 playwright-cli -s=mainscreen type "printf 'main-screen-marker-before-vim\\n'"
 playwright-cli -s=mainscreen press Enter
 sleep 1
-playwright-cli -s=mainscreen --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rows.map(r => r.replace(/\\\\s+$/,'')))"
+playwright-cli -s=mainscreen --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rowText.map(r => r.replace(/\\\\s+$/,'')))"
 ```
-Expected: the rows array contains the literal line `main-screen-marker-before-vim` (record that this line is present \u2014 this is the content that must reappear, unblemished, after the alt-screen round-trip below).
+Expected: the rowText array contains the literal line `main-screen-marker-before-vim` (record that this line is present \u2014 this is the content that must reappear, unblemished, after the alt-screen round-trip below).
 
 Enter alt-screen mode by running a real full-screen program (`vim`, with no file argument, is enough \u2014 it enters the alternate screen buffer on start):
 ```bash
 playwright-cli -s=mainscreen type "vim"
 playwright-cli -s=mainscreen press Enter
 sleep 2
-playwright-cli -s=mainscreen --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rows.map(r => r.replace(/\\\\s+$/,'')))"
+playwright-cli -s=mainscreen --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rowText.map(r => r.replace(/\\\\s+$/,'')))"
 ```
-Expected: the rows array now shows vim's alt-screen UI (empty-line `~` fill characters down the left column, and/or vim's bottom status line) \u2014 confirming the client is now rendering the alternate screen, and `main-screen-marker-before-vim` is no longer visible on screen (it's behind the alt-screen buffer).
+Expected: the rowText array now shows vim's alt-screen UI (empty-line `~` fill characters down the left column, and/or vim's bottom status line) \u2014 confirming the client is now rendering the alternate screen, and `main-screen-marker-before-vim` is no longer visible on screen (it's behind the alt-screen buffer).
 
 Disconnect the client while still inside vim \u2014 alt-screen is still active at the moment of disconnect:
 ```bash
@@ -1031,7 +1031,7 @@ Reconnect and confirm the alt-screen content itself still renders correctly. **T
 ```bash
 playwright-cli -s=mainscreen open http://127.0.0.1:8313
 sleep 1
-playwright-cli -s=mainscreen --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rows.map(r => r.replace(/\\\\s+$/,'')))"
+playwright-cli -s=mainscreen --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rowText.map(r => r.replace(/\\\\s+$/,'')))"
 ```
 Expected: vim's alt-screen UI (the same `~` fill / status line pattern observed above) is still correctly rendered immediately after reconnect.
 
@@ -1041,10 +1041,10 @@ playwright-cli -s=mainscreen click "body"
 playwright-cli -s=mainscreen type ":q"
 playwright-cli -s=mainscreen press Enter
 sleep 1
-playwright-cli -s=mainscreen --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rows.map(r => r.replace(/\\\\s+$/,'')))"
+playwright-cli -s=mainscreen --raw eval "JSON.stringify(window.__muxterm.snapshot(1).rowText.map(r => r.replace(/\\\\s+$/,'')))"
 ```
 Expected \u2014 this is the specific behavior Phase 1's Task 12 (main-screen preservation shadow tracker) fixes:
-- The rows array contains `main-screen-marker-before-vim` again, correctly restored \u2014 NOT blank, NOT stale, NOT garbled.
+- The rowText array contains `main-screen-marker-before-vim` again, correctly restored \u2014 NOT blank, NOT stale, NOT garbled.
 - No leftover vim `~` fill characters or status-line fragments remain from the alt-screen buffer.
 - Before this fix, this step would show a blank or incorrect local xterm.js main-screen buffer, because the reconnect replay never populated it \u2014 main-screen content only ever arrived via ordinary live output, never via the replay preamble.
 
