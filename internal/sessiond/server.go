@@ -324,7 +324,11 @@ func (c *conn) handle(msg Message) {
 	case TypeClosePane:
 		c.closePane(msg)
 	case TypeResize:
-		if c.attached == "" {
+		// Agents (MCP/automation) never claim or hold PTY-sizing authority —
+		// mirrors the same guard on TypePaneFocus. Silently ignored rather
+		// than erroring the connection, consistent with how non-
+		// authoritative resizes are already silently skipped below.
+		if c.attached == "" || c.kind != "interactive" {
 			return
 		}
 		if p, ok := c.srv.reg.Pane(c.attached, msg.PaneID); ok {
