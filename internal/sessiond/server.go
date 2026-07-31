@@ -111,6 +111,15 @@ func (s *Server) unsubscribeLocked(c *conn) {
 			if len(set) == 0 {
 				delete(s.subs, wsID)
 			}
+			// Clear this conn's authority from every pane in the workspace it
+			// was subscribed to, so a dead conn never blocks a future
+			// legitimate claim (design's "Authoritative client disconnects"
+			// error-handling case).
+			for _, paneID := range s.reg.PaneIDs(wsID) {
+				if p, ok := s.reg.Pane(wsID, paneID); ok {
+					p.ClearAuthorityIfOwner(c)
+				}
+			}
 		}
 	}
 	c.attached = ""
