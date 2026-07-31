@@ -1,0 +1,40 @@
+# air config for muxterm LOCAL dev mode (this Mac only).
+# Fully decoupled from .air.toml (ampbox.io remote-VM dev config) -- edits to
+# one MUST NOT be assumed to apply to the other.
+#
+# Isolation: XDG_RUNTIME_DIR must be set (by `make dev-local`) before invoking
+# air, so the sessiond this spawns uses tmp/muxterm-dev-runtime/ instead of
+# the default $TMPDIR/muxterm-<uid>/ where the native companion app's
+# production sessiond lives. Never run this without that env var set.
+#
+# Port 8313 -- distinct from both production (8311) and the remote-VM dev
+# config's 8312.
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  bin = "./bin/muxterm-dev"
+  args_bin = ["serve", "--addr", "127.0.0.1:8313", "--no-auth"]
+  cmd = "go build -o ./bin/muxterm-dev ./cmd/muxterm"
+  delay = 200
+  stop_on_error = false
+
+  include_dir = ["cmd", "internal", "web/dist"]
+  include_ext = ["go", "stamp"]
+  exclude_dir = ["tmp", "vendor", "testdata", "web/src", "web/node_modules"]
+  exclude_regex = ["_test\\.go$"]
+
+[color]
+  build = "yellow"
+  runner = "green"
+  watcher = "cyan"
+  main = "magenta"
+  app = ""
+
+[log]
+  time = false
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll = true
