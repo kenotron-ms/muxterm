@@ -31,6 +31,7 @@ export const SessiondType = {
   CreatePane: 'create-pane',
   ClosePane: 'close-pane',
   Resize: 'resize',
+  PaneFocus: 'pane-focus',
   RenamePane: 'rename-pane',
   SaveLayout: 'save-layout',
   PaneUpdate: 'pane-update',
@@ -46,6 +47,7 @@ export const SessiondType = {
   WorkspaceClosed: 'workspace-closed',
   WorkspaceRenamed: 'workspace-renamed',
   PaneRenamed: 'pane-renamed',
+  PaneResized: 'pane-resized',
   // Error
   Error: 'error',
   // Browser-action relay (server → client → iframe → client → server)
