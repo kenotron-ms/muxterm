@@ -43,32 +43,72 @@ type VTBuffer struct {
 	savedCursorValid bool
 
 	// scanParser is a single ansi.Parser reused across every Write call to
-	// shadow-scan for DECSC/SCOSC (and, later, alt-screen-entry) sequences —
-	// mirroring TrackedBuffer's pattern of constructing the parser once and
-	// calling Reset() before each Parse(), rather than allocating a fresh
+	// shadow-scan for DECSC/SCOSC and alt-screen-entry sequences — mirroring
+	// TrackedBuffer's pattern of constructing the parser once and calling
+	// Reset() before each Parse(), rather than allocating a fresh
 	// ansi.NewParser() (32-int params slice + 64KB data buffer) on every
-	// 32KB PTY read. scanFound is the handler's output for the call in
-	// progress; both fields are safe to reuse without locking because Write
-	// holds b.mu.Lock() for its entire body, so no two scans ever overlap.
-	scanParser *ansi.Parser
-	scanFound  bool
+	// 32KB PTY read. scanFound/scanEnteredAltScreen are the handler's output
+	// for the call in progress; all of these fields are safe to reuse
+	// without locking because Write holds b.mu.Lock() for its entire body,
+	// so no two scans ever overlap.
+	scanParser           *ansi.Parser
+	scanFound            bool
+	scanEnteredAltScreen bool
+
+	// mainScreenSnapshot holds the rendered main-screen (scrollback + visible
+	// grid, same form serializeGrid's primary-screen branch already emits)
+	// captured at the moment this pane's byte stream was observed entering
+	// alt-screen mode. x/vt's public Emulator API exposes no accessor for the
+	// inactive/saved screen once alt-screen is active, so this must be
+	// captured proactively, in Write, before the switch is applied. Nil until
+	// the first alt-screen entry is observed; serializeGrid falls back to
+	// today's behavior (no pre-emission) when nil.
+	mainScreenSnapshot []byte
 }
 
-// scanSavedCursor reports whether p contains a DECSC (ESC 7) or SCOSC (CSI s)
-// save-cursor sequence. DECRC (ESC 8) and SCORC (CSI u) are intentionally not
-// tracked here — x/vt's own internal restore is correct for the live session;
-// this shadow tracker exists solely to inform replay's synthetic preamble
-// (see serializeGrid), not to implement save/restore semantics itself.
+// scanWriteEvents reports two independent conditions found in p during a
+// single ansi-parser pass, using the persistent b.scanParser set up once in
+// NewVTBuffer:
+//
+//   - savedCursor: p contains a DECSC (ESC 7) or SCOSC (CSI s) save-cursor
+//     sequence. DECRC (ESC 8) and SCORC (CSI u) are intentionally not
+//     tracked here — x/vt's own internal restore is correct for the live
+//     session; this exists solely to inform replay's synthetic preamble
+//     (see serializeGrid), not to implement save/restore semantics itself.
+//
+//   - enteredAltScreen: p contains a DECSET private-mode set (CSI ?h) for
+//     mode 1049, 1047, or 47 — the sequences that enter alternate-screen
+//     mode. Matches the same mode set tracked.go's onCSI already treats as
+//     alt-screen entry/exit.
 //
 // It resets and reuses b.scanParser (constructed once in NewVTBuffer) rather
 // than allocating a new *ansi.Parser per call. Callers must hold b.mu for the
-// duration of the call — the shared scanFound flag is not otherwise
+// duration of the call — the shared scan fields are not otherwise
 // synchronized.
-func (b *VTBuffer) scanSavedCursor(p []byte) bool {
+func (b *VTBuffer) scanWriteEvents(p []byte) (savedCursor, enteredAltScreen bool) {
 	b.scanFound = false
+	b.scanEnteredAltScreen = false
 	b.scanParser.Reset()
 	b.scanParser.Parse(p)
-	return b.scanFound
+	return b.scanFound, b.scanEnteredAltScreen
+}
+
+// captureMainScreenSnapshot renders the current main screen — scrollback
+// lines followed by the visible grid, in exactly the form serializeGrid's
+// primary-screen branch already emits them — and stores it as
+// mainScreenSnapshot. Callers must hold b.mu and must call this BEFORE
+// b.emu.Emulator.Write has processed the alt-screen-entering sequence for the
+// current chunk, so Scrollback()/Render() here still reflect main-screen
+// state, not the about-to-be-entered alt screen.
+func (b *VTBuffer) captureMainScreenSnapshot() {
+	var out []byte
+	sb := b.emu.Emulator.Scrollback()
+	for _, line := range sb.Lines() {
+		out = append(out, line.Render()...)
+		out = append(out, "\r\n"...)
+	}
+	out = append(out, strings.ReplaceAll(b.emu.Emulator.Render(), "\n", "\r\n")...)
+	b.mainScreenSnapshot = out
 }
 
 // NewVTBuffer returns a VTBuffer backed by a w×h SafeEmulator with a 2000-line
@@ -86,9 +126,21 @@ func NewVTBuffer(w, h int) *VTBuffer {
 			}
 		},
 		HandleCsi: func(cmd ansi.Cmd, params ansi.Params) {
-			// SCOSC: CSI s, no private prefix, no parameters.
-			if cmd.Final() == 's' && cmd.Prefix() == 0 {
-				b.scanFound = true
+			switch cmd.Final() {
+			case 's':
+				// SCOSC: CSI s, no private prefix, no parameters.
+				if cmd.Prefix() == 0 {
+					b.scanFound = true
+				}
+			case 'h':
+				if cmd.Prefix() != '?' {
+					return
+				}
+				mode, _, _ := params.Param(0, 0)
+				switch mode {
+				case 1049, 1047, 47:
+					b.scanEnteredAltScreen = true
+				}
 			}
 		},
 	})
@@ -117,11 +169,21 @@ func (b *VTBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.total += uint64(len(p))
+	savedCursor, enteredAltScreen := b.scanWriteEvents(p)
+	// Critical ordering: this check and the resulting snapshot capture MUST
+	// happen before b.emu.Emulator.Write below. Emulator.IsAltScreen() here
+	// still reflects the PRE-switch state for this chunk, since Write for
+	// this chunk hasn't run yet. If the emulator is already in alt-screen
+	// (a redundant/nested enter sequence, e.g. nested TUI calls), this is
+	// false and we correctly skip re-capturing.
+	if enteredAltScreen && !b.emu.Emulator.IsAltScreen() {
+		b.captureMainScreenSnapshot()
+	}
 	// Access the underlying Emulator directly: b.mu already excludes
 	// concurrent reads, so the SafeEmulator's own per-method lock is not
 	// needed here and calling the raw method avoids nested locking.
 	n, err := b.emu.Emulator.Write(p)
-	if b.scanSavedCursor(p) {
+	if savedCursor {
 		// Read position directly from the underlying Emulator (not via the
 		// locking CursorPos() method) — we already hold b.mu, and Write has
 		// just applied p, so this reflects state as of the end of this
@@ -158,7 +220,7 @@ func (b *VTBuffer) Replay() []byte {
 	}
 	// Pass the underlying *vt.Emulator: we hold b.mu.RLock(), so all state is
 	// stable for the duration of the call.
-	return serializeGrid(b.emu.Emulator, saved)
+	return serializeGrid(b.emu.Emulator, saved, b.mainScreenSnapshot)
 }
 
 // ReplayFrom ignores since and returns (b.Replay(), 0): VTBuffer serializes the
@@ -204,8 +266,20 @@ func (b *VTBuffer) Seq() uint64 {
 // serializeGrid emits a self-contained byte stream that reconstructs the
 // emulator's scrollback history and visible screen.
 //
-// Alt-screen path: switches into the alt screen, clears, renders, restores
-// cursor.  Scrollback is not applicable in alt-screen mode.
+// Alt-screen path: if mainScreenSnapshot is non-nil (this pane's main screen
+// was captured just before it entered alt-screen mode, since x/vt's public
+// Emulator API exposes no accessor for the inactive main screen once
+// alt-screen is active — see VTBuffer.mainScreenSnapshot), it is pre-emitted
+// on the primary screen first: clear + home + the saved scrollback/grid
+// render. This means a reconnecting client's own primary-screen scrollback
+// is preserved underneath the alt-screen switch that follows, so exiting the
+// alt-screen app (e.g. closing a pager) reveals the shell session rather than
+// a blank screen. If mainScreenSnapshot is nil (no alt-screen entry was ever
+// observed on this pane's byte stream — e.g. the pane started already in
+// alt-screen, or shadow-tracking missed it), this step is skipped and
+// behavior falls back to what it was before this pre-emission existed. After
+// that, the stream switches into the alt screen, clears, renders, restores
+// cursor.  Scrollback is not applicable in alt-screen mode itself.
 //
 // Primary-screen path:
 //  1. Clear + home.
@@ -225,10 +299,20 @@ func (b *VTBuffer) Seq() uint64 {
 // carries no SGR attributes (typical for plain-text shells) the output is the
 // same as the plain-text form.  Styled scrollback (coloured prompts, vim
 // status lines that scrolled away) is preserved with full colour fidelity.
-func serializeGrid(emu *vt.Emulator, savedCursor *struct{ row, col int }) []byte {
+func serializeGrid(emu *vt.Emulator, savedCursor *struct{ row, col int }, mainScreenSnapshot []byte) []byte {
 	var out []byte
 
 	if emu.IsAltScreen() {
+		// If we captured this pane's main screen just before it entered
+		// alt-screen mode, pre-emit it on the primary screen first so a
+		// reconnecting client's terminal has the shell's scrollback/grid
+		// underneath the alt-screen switch that follows (see
+		// VTBuffer.mainScreenSnapshot).
+		if len(mainScreenSnapshot) > 0 {
+			out = append(out, esc+"[2J"...)
+			out = append(out, esc+"[H"...)
+			out = append(out, mainScreenSnapshot...)
+		}
 		// Reconnecting into alt-screen mode: switch the fresh terminal into
 		// alt screen first, then paint the current grid.
 		out = append(out, esc+"[?1049h"...)
