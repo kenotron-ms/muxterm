@@ -267,6 +267,14 @@ func (c *conn) serve() {
 			}
 			if p, ok := c.srv.reg.Pane(c.attached, int(paneID)); ok {
 				_, _ = p.Write(data)
+				// Only interactive (human) connections' keystrokes reclaim
+				// authority — agent (MCP) input must never do so, per the
+				// design's MCP-exclusion requirement. No resize, no
+				// broadcast: this only updates the authority pointer so a
+				// SUBSEQUENT resize/pane-focus from this conn is honored.
+				if c.kind == "interactive" {
+					p.TouchAuthority(c, time.Now())
+				}
 			}
 		}
 	}
