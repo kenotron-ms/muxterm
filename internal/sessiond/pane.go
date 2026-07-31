@@ -25,9 +25,15 @@ type Pane struct {
 	// Set once at construction; immutable thereafter.
 	SurfaceKind string
 
-	mu   sync.Mutex // guards cols/rows
+	mu   sync.Mutex // guards cols/rows/authorityConn/authorityAt
 	cols int
 	rows int
+
+	// authorityConn is the conn currently authoritative for sizing this pane's
+	// PTY (see ClaimAuthority/TouchAuthority/IsAuthoritative/ClearAuthorityIfOwner
+	// below). nil means unclaimed — the first conn to claim wins.
+	authorityConn *conn
+	authorityAt   time.Time
 
 	cmd       *exec.Cmd
 	ptmx      *os.File
@@ -260,6 +266,50 @@ func (p *Pane) Resize(cols, rows int) error {
 		p.buf.Resize(cols, rows)
 	}
 	return err
+}
+
+// ClaimAuthority makes c the authoritative conn for this pane's PTY sizing if
+// authority is unclaimed (nil), stale (now is after the current authority's
+// timestamp), or c is already the authoritative conn. Ties go to the incoming
+// caller (>=). Returns true if this call changed which conn is authoritative
+// (including the nil -> c case), which tells the caller whether other conns
+// need a pane-resized broadcast.
+func (p *Pane) ClaimAuthority(c *conn, now time.Time) (promoted bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.authorityConn == nil || !now.Before(p.authorityAt) || c == p.authorityConn {
+		changed := p.authorityConn != c
+		p.authorityConn = c
+		p.authorityAt = now
+		return changed
+	}
+	return false
+}
+
+// TouchAuthority applies the same most-recent-wins claim logic as
+// ClaimAuthority, for callers (keystroke-triggered reclaim) that have no
+// cols/rows to apply and so don't act on the promoted return value the same
+// way a resize/pane-focus caller would.
+func (p *Pane) TouchAuthority(c *conn, now time.Time) {
+	p.ClaimAuthority(c, now)
+}
+
+// IsAuthoritative reports whether c is the current authoritative conn for this
+// pane's PTY sizing.
+func (p *Pane) IsAuthoritative(c *conn) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.authorityConn == c
+}
+
+// ClearAuthorityIfOwner clears the authoritative conn if it is currently c.
+// Called on disconnect so a dead conn never blocks a future legitimate claim.
+func (p *Pane) ClearAuthorityIfOwner(c *conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.authorityConn == c {
+		p.authorityConn = nil
+	}
 }
 
 // Replay returns a copy of the pane's scrollback buffer.
