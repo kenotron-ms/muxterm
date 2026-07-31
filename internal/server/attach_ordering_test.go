@@ -56,8 +56,8 @@ type racyDaemonConn struct {
 	*fakeDaemonConn
 }
 
-func (f *racyDaemonConn) Attach(workspaceID, breakpoint string) (sessiond.Composition, error) {
-	comp, err := f.fakeDaemonConn.Attach(workspaceID, breakpoint)
+func (f *racyDaemonConn) Attach(workspaceID, breakpoint, clientKind string) (sessiond.Composition, error) {
+	comp, err := f.fakeDaemonConn.Attach(workspaceID, breakpoint, clientKind)
 	go f.handlers.OnPaneOutput(1, []byte("replay"))
 	// Head start: give the background goroutine every opportunity to win the
 	// race and write to the wire before this call returns and
