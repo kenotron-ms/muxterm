@@ -235,6 +235,7 @@ type conn struct {
 	nc       net.Conn
 	sub      *subscriber
 	attached string
+	kind     string // "interactive" (browser/human) | "agent" (MCP); set once in attach()
 }
 
 // newConn wraps nc with a subscriber for serialized writes.
@@ -401,6 +402,13 @@ func (c *conn) attach(msg Message) {
 	if !c.srv.reg.Has(msg.WorkspaceID) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
 		return
+	}
+	c.kind = msg.ClientKind
+	if c.kind == "" {
+		// Backward-compat safety net: both real call sites (mcp/client.go,
+		// server/ws.go) are updated in this same change to always send an
+		// explicit ClientKind, so this default is not an expected runtime path.
+		c.kind = "interactive"
 	}
 	c.srv.attachConn(c, msg.WorkspaceID, msg.CID, msg.Breakpoint)
 }
