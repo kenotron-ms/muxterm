@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Server owns the daemon's Unix control socket, the workspace Registry, and the
@@ -310,7 +311,22 @@ func (c *conn) handle(msg Message) {
 			return
 		}
 		if p, ok := c.srv.reg.Pane(c.attached, msg.PaneID); ok {
-			_ = p.Resize(msg.Cols, msg.Rows)
+			// ClaimAuthority already promotes on nil authority, so a resize
+			// from any conn on a never-focused pane bootstraps that conn as
+			// authoritative — the solo-client/initial-creation degenerate
+			// case from the design's Error Handling section.
+			promoted := p.ClaimAuthority(c, time.Now())
+			if p.IsAuthoritative(c) {
+				before := p.Info()
+				_ = p.Resize(msg.Cols, msg.Rows)
+				after := p.Info()
+				if promoted || before.Cols != after.Cols || before.Rows != after.Rows {
+					c.broadcastPaneResizedExcept(after.Cols, after.Rows, msg.PaneID)
+				}
+			}
+			// Non-authoritative resizes are silently skipped: no error, no
+			// disconnect, no pty.Setsize call — matches the design's "Non-
+			// authoritative resizes... never call pty.Setsize".
 		}
 	case TypeRenamePane:
 		if c.attached != "" && c.srv.reg.RenamePane(c.attached, msg.PaneID, msg.Name) {
@@ -538,6 +554,20 @@ func (c *conn) reply(msg *Message) { c.sub.enqueueControl(msg) }
 // replyError enqueues a TypeError envelope echoing cid.
 func (c *conn) replyError(cid uint64, code, detail string) {
 	c.sub.enqueueControl(&Message{Type: TypeError, CID: cid, Code: code, Error: detail})
+}
+
+// broadcastPaneResizedExcept sends a TypePaneResized event carrying the new
+// canonical cols/rows for paneID to every OTHER conn attached to c's
+// workspace (excluding c itself, which already knows its own new size).
+func (c *conn) broadcastPaneResizedExcept(cols, rows, paneID int) {
+	c.srv.mu.Lock()
+	defer c.srv.mu.Unlock()
+	for other := range c.srv.subs[c.attached] {
+		if other == c {
+			continue
+		}
+		other.sub.enqueueControl(&Message{Type: TypePaneResized, PaneID: paneID, Cols: cols, Rows: rows})
+	}
 }
 
 // sizeOrDefault returns the given dimensions, substituting the 80x24 default for
