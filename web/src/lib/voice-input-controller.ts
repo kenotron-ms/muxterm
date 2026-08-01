@@ -312,7 +312,10 @@ if (typeof window !== 'undefined') {
     voiceInput: {
       /** Starts a session (same code path as a real button click) and
        *  returns its session token, so a test can capture it for later
-       *  staleness checks. Returns -1 if unsupported or already active. */
+       *  staleness checks. Returns -1 only when unsupported (no ctor).
+       *  If a session is already active, this is a no-op and the EXISTING
+       *  session's token is returned unchanged (not -1) — do not assert
+       *  === -1 to detect "was already listening". */
       start: (): number => {
         start();
         return _current?.token ?? -1;
