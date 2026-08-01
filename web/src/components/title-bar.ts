@@ -4,7 +4,7 @@ import type { PropertyValues } from 'lit';
 import './launcher-menu.js';
 import './mux-pane-picker.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis } from 'lucide';
+import { Ellipsis, Plus } from 'lucide';
 
 @customElement('mux-title-bar')
 export class MuxTitleBar extends LitElement {
@@ -15,7 +15,7 @@ export class MuxTitleBar extends LitElement {
       justify-content: space-between;
       background: var(--chrome-bar);
       border-bottom: 1px solid var(--chrome-border);
-      height: 32px;
+      height: var(--mux-dock-height, 44px);
       padding: 0 8px;
       flex-shrink: 0;
       user-select: none;
@@ -51,12 +51,14 @@ export class MuxTitleBar extends LitElement {
     .right {
       display: flex;
       align-items: center;
+      gap: 4px;
       position: relative;
     }
 
-    .launcher-btn {
-      width: 28px;
-      height: 24px;
+    .launcher-btn,
+    .pane-btn {
+      width: 44px;
+      height: 44px;
       background: transparent;
       border: none;
       border-radius: 4px;
@@ -69,13 +71,14 @@ export class MuxTitleBar extends LitElement {
       font-family: inherit;
     }
 
-    .launcher-btn:hover {
+    .launcher-btn:hover,
+    .pane-btn:hover {
       background: var(--chrome-hover);
     }
 
     .menu-anchor {
       position: absolute;
-      top: 28px;
+      top: 100%;
       right: 0;
       z-index: 1500;
     }
@@ -158,6 +161,15 @@ export class MuxTitleBar extends LitElement {
     );
   }
 
+  private _requestNewPane(): void {
+    this.dispatchEvent(
+      new CustomEvent('pane-create-request', {
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   render() {
     return html`
       <div class="brand">
@@ -168,6 +180,12 @@ export class MuxTitleBar extends LitElement {
       <mux-pane-picker @workspace-switch="${this._onWorkspaceSwitch}"></mux-pane-picker>
       <div class="right">
         <button
+          class="pane-btn"
+          title="New pane"
+          aria-label="New pane"
+          @click="${this._requestNewPane}"
+        >${icon(Plus, { size: 20 })}</button>
+        <button
           class="launcher-btn"
           title="Open menu"
           @click="${this._toggleMenu}"
@@ -175,6 +193,7 @@ export class MuxTitleBar extends LitElement {
         ${this._menuOpen
           ? html`<div class="menu-anchor">
               <mux-launcher-menu
+                .showCreateWorkspace="${true}"
                 @launcher-action="${this._onLauncherAction}"
               ></mux-launcher-menu>
             </div>`

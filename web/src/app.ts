@@ -693,6 +693,7 @@ export class MuxApp extends LitElement {
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
         @workspace-switch="${this._onWorkspaceSelected}"
+        @pane-create-request="${this._createPaneOptimistic}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
         ${isWide ? html`
@@ -1107,6 +1108,9 @@ export class MuxApp extends LitElement {
         break;
       case 'reconnect':
         window.location.reload();
+        break;
+      case 'new-workspace':
+        this._onOpenCreateModal();
         break;
     }
   };
