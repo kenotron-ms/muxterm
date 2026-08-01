@@ -55,6 +55,10 @@ Split.js instance lives in `app.ts`, NOT `mux-sidebar.ts` — Split.js needs bot
 
 `_initSplit()` therefore does not pass an `elementStyle` option to `Split(...)` at all, letting it use its default percentage-based `calc()` renderer for both panes (index 0 and 1) — Split's own proven, tested, internally-consistent math. This remains correct and sufficient for accurate `minSize`/`maxSize` pixel clamping: Split's clamp math always compares real pixel offsets from `getBoundingClientRect`, regardless of whether `sizes`/rendering uses percentages — the 2px discrepancy in the prior revision existed only because the custom override broke the library's own internal cancellation, not because percentage-based sizing is imprecise.
 
+**Gutter-offset percentage conversion (review cycle 3 fix)**: Dropping the custom `elementStyle` in favor of Split's default renderer removed the prior bug, but exposed a second, narrower one: `_initSplit()`'s initial `sizes` computation and the `ResizeObserver`'s `setSizes()` recalculation both converted a target pixel width to a percentage with no adjustment (`pct = targetWidthPx / containerWidth * 100`). Split's default `calc(size% - gutSize px)` renderer always subtracts a half-gutter share (`gutterSize / 2` = 2px, for `gutterSize: 4` and default center alignment) from whatever percentage-derived width it computes, on the assumption the caller's percentage already accounts for it. An unadjusted `pct` therefore renders `targetWidthPx - 2`, not `targetWidthPx` — concretely, a restored default of 220px renders as 218px, and a persisted max-bound 360px renders as 358px. The fix adds the half-gutter share back before conversion — `pct = ((targetWidthPx + gutterSize / 2) / containerWidth) * 100` — via the `widthPxToSplitPercent()` helper (see Components), used identically in both `_initSplit()` and the `ResizeObserver` callback so the rendered width equals the true target in both places. `onDragEnd`'s persistence path is unaffected by this bug: it reads `sidebarEl.getBoundingClientRect().width` directly — the actual rendered pixel value, not a percentage conversion — so it was already correct.
+
+This exact class of bug — misreading Split's internal gutter-offset conventions when converting between pixels and percentages — has been the dominant source of correction across this design's three review cycles; whoever touches this code later should re-verify any pixel/percentage conversion against Split's actual source math rather than assume the two units are gutter-neutral.
+
 **Consequence handled — sidebar must stay pixel-fixed across container resize**: using default percentage sizing makes the sidebar proportionally responsive to `.content-area` width changes (Split.js has no internal `ResizeObserver` of its own — sizes are only recalculated at the start of an explicit drag, but percentages still scale visually whenever the flex container's own width changes). This is not today's behavior, where the sidebar stays a hard fixed pixel width until the next drag. To reproduce that exactly, `app.ts` adds its own `ResizeObserver` on `.content-area` that recomputes the sidebar's fixed pixel width as a percentage and calls `this._split.setSizes([pct, 100 - pct])` whenever the container resizes (skipped while a drag is active, via `this._dragging`). The percentage is derived from `this._sidebarWidthPx`, a stored field updated only in `onDragEnd` and initialized from `restoreSidebarWidth()`. This achieves the fixed-pixel-width guarantee using Split's own supported public `setSizes()` API, rather than fighting its internal unit conventions with a custom renderer.
 
 **Acknowledged trade-off — gutter is a real layout sibling**: Split.js's gutter model inserts a real DOM element between the two panes, occupying its own ~4px of flex-row space, unlike today's absolutely-positioned overlay `.resize-handle` (which consumed zero extra layout width, living inside the sidebar's own box). Adopting Split.js therefore makes `.main-pane`'s available width ~4px narrower than before. This is an inherent, minor, acknowledged, non-blocking consequence of the chosen library's mechanism — not a defect requiring a workaround — in the same honest-callout spirit as the "no rAF throttling" note under Approach B above.
@@ -76,6 +80,27 @@ import {
   SIDEBAR_MAX_WIDTH,
 } from './lib/sidebar-width.js';
 
+/** Split.js gutter size (px), used both as the `gutterSize` option passed to
+ *  `Split(...)` below and as the half-gutter compensation in
+ *  `widthPxToSplitPercent()` -- defined once so the two can never drift out
+ *  of sync if the gutter size is ever changed. */
+const SIDEBAR_GUTTER_SIZE = 4;
+
+/** Converts a target sidebar pixel width into the percentage Split.js needs,
+ *  compensating for its default renderer's half-gutter subtraction so the
+ *  actual rendered width equals `targetPx`. Split's default `calc(size% -
+ *  gutSize px)` renderer always subtracts a half-gutter share (`gutterSize /
+ *  2`) from whatever percentage-derived width it computes; without this
+ *  compensation an unadjusted percentage renders `targetPx - gutterSize / 2`,
+ *  not `targetPx` (e.g. a 220px target rendering as 218px). Used by both
+ *  `_initSplit()`'s initial `sizes` computation and the `ResizeObserver`
+ *  callback's `setSizes()` recalculation below -- NOT by `onDragEnd`, which
+ *  reads the actual rendered `getBoundingClientRect().width` directly and
+ *  needs no conversion. */
+function widthPxToSplitPercent(targetPx: number, containerWidth: number, gutterSize: number): number {
+  return ((targetPx + gutterSize / 2) / containerWidth) * 100;
+}
+
 private _split: SplitInstance | null = null;
 private _resizeObserver: ResizeObserver | null = null;
 private _sidebarWidthPx = SIDEBAR_DEFAULT_WIDTH;
@@ -88,7 +113,7 @@ private _initSplit(): void {
   if (!sidebarEl || !mainPaneEl || !contentAreaEl || this._split) return;
 
   this._sidebarWidthPx = restoreSidebarWidth();
-  const pct = (this._sidebarWidthPx / contentAreaEl.clientWidth) * 100;
+  const pct = widthPxToSplitPercent(this._sidebarWidthPx, contentAreaEl.clientWidth, SIDEBAR_GUTTER_SIZE);
 
   this._split = Split([sidebarEl, mainPaneEl], {
     // Percentage sizes, Split's own default calc() renderer -- no custom
@@ -97,7 +122,7 @@ private _initSplit(): void {
     sizes: [pct, 100 - pct],
     minSize: [SIDEBAR_MIN_WIDTH, 0],       // main-pane keeps today's "no enforced minimum"
     maxSize: [SIDEBAR_MAX_WIDTH, Infinity],
-    gutterSize: 4,                          // matches existing .resize-handle width
+    gutterSize: SIDEBAR_GUTTER_SIZE,        // matches existing .resize-handle width
     gutter: () => {
       const g = document.createElement('div');
       g.className = 'sidebar-gutter'; // styled in app.ts CSS to visually match old .resize-handle (hover highlight, col-resize cursor)
@@ -120,7 +145,7 @@ private _initSplit(): void {
   // doesn't fight the user's in-progress gesture.
   this._resizeObserver = new ResizeObserver(() => {
     if (!this._split || this._dragging) return;
-    const newPct = (this._sidebarWidthPx / contentAreaEl.clientWidth) * 100;
+    const newPct = widthPxToSplitPercent(this._sidebarWidthPx, contentAreaEl.clientWidth, SIDEBAR_GUTTER_SIZE);
     this._split.setSizes([newPct, 100 - newPct]);
   });
   this._resizeObserver.observe(contentAreaEl);
@@ -188,7 +213,7 @@ Wired via three Lit lifecycle hooks: `_layoutMode` changing to `'narrow'` → `_
 
 **Drag**: `mousedown`/`touchstart` on gutter → Split's `startDragging` sets user-select:none + pointer-events:none on both panes, cursor lock on gutter/parent/`document.body`, snapshots sizes, and fires `onDragStart` → our handler sets `this._dragging = true` (consulted by both the teardown path and the `ResizeObserver` callback below). Every native `mousemove`: Split's `drag()` computes new percentage split, clamps against `minSize`/`maxSize` (pixel-based, via real `getBoundingClientRect` offsets regardless of percentage rendering), writes inline styles on both panes — no localStorage touched (matches write-once-on-drag-end decision). `mouseup`/`touchend`/`touchcancel`: Split's `stopDragging` resets user-select/cursor/pointer-events, fires `onDragEnd(sizes)` → our handler sets `this._dragging = false`, reads actual `getBoundingClientRect().width` into `this._sidebarWidthPx`, calls `persistSidebarWidth(this._sidebarWidthPx)` — single write.
 
-**Container resize (new — `ResizeObserver` recalculation)**: whenever `.content-area`'s own width changes (e.g. the browser window is resized, or a sibling layout change alters the flex container), the `ResizeObserver` installed on it in `_initSplit()` fires. If a drag is currently active (`this._dragging`), the callback no-ops, deferring to the drag's own math. Otherwise it recomputes `pct = (this._sidebarWidthPx / contentAreaEl.clientWidth) * 100` and calls `this._split.setSizes([pct, 100 - pct])`. This is what keeps the sidebar's literal pixel width fixed across window resizes despite Split's default percentage rendering being otherwise proportionally responsive — see Architecture section.
+**Container resize (new — `ResizeObserver` recalculation)**: whenever `.content-area`'s own width changes (e.g. the browser window is resized, or a sibling layout change alters the flex container), the `ResizeObserver` installed on it in `_initSplit()` fires. If a drag is currently active (`this._dragging`), the callback no-ops, deferring to the drag's own math. Otherwise it recomputes `pct = widthPxToSplitPercent(this._sidebarWidthPx, contentAreaEl.clientWidth, SIDEBAR_GUTTER_SIZE)` (the same half-gutter-compensated conversion `_initSplit()` uses — see Components and Architecture) and calls `this._split.setSizes([pct, 100 - pct])`. This is what keeps the sidebar's literal pixel width fixed across window resizes despite Split's default percentage rendering being otherwise proportionally responsive — see Architecture section.
 
 **Breakpoint transition**: `breakpoint.ts`'s existing `layoutModeForWidth` fires, `app.ts`'s `_layoutMode` state updates, triggering both `willUpdate()` and `updated()` on the same update cycle. Wide→narrow: `_destroySplit()` runs in `willUpdate()`, before Lit removes `<mux-sidebar>` — if `this._dragging` is true at this point, it first force-dispatches a synthetic `window` `mouseup` to run Split's own `stopDragging` cleanup (global listeners, cursor, user-select), then disconnects the `ResizeObserver` and calls `Split.destroy()` — explicit cleanup of gutter div + inline styles. Narrow→wide: `_initSplit()` runs in `updated()`, after Lit has placed the sidebar/main-pane elements back in the DOM, and re-reads localStorage to reconstruct fresh — no stale state carried across. Destroy happens pre-render (`willUpdate`) and init happens post-render (`updated`), matching the corrected lifecycle hooks described in Architecture & Ownership Boundary above.
 
@@ -224,7 +249,13 @@ Per `AGENTS.md` — NO unit tests (banned in this repo). All verification via `p
 
 **Drag-cancelled-by-teardown (new, mandatory)**: Start a drag on the gutter (mouse down, move partway) and, before releasing the mouse button, trigger a wide→narrow breakpoint transition (resize the browser below 768px) mid-drag. Confirm: (a) the cursor and text-selection state are correctly restored afterward — not stuck in `col-resize`/no-select; (b) no stale/leaked global listeners cause errors or unexpected behavior on subsequent clicks/moves elsewhere on the page; (c) resizing back to wide re-initializes cleanly (fresh gutter, draggable, correct width). This directly tests the forced-`mouseup`-before-`destroy()` fix for drag-in-progress-safe teardown.
 
-**Fixed-pixel-width-under-window-resize (new, mandatory)**: At wide viewport, drag the sidebar to a non-default width (verify it persists), then resize the browser window itself (wider and narrower). Confirm the sidebar's pixel width visually stays fixed — it does not proportionally shrink/grow with the window — verified via computed geometry (e.g. reading the sidebar element's `getBoundingClientRect().width` before and after the window resize, not just a visual screenshot comparison). This directly tests the new `ResizeObserver`/`setSizes` fix that compensates for Split's default percentage-based rendering.
+**Fixed-pixel-width-under-window-resize (new, mandatory)**: At wide viewport, verify *exact* rendered pixel width — via `sidebarEl.getBoundingClientRect().width`, not a visual/screenshot comparison — against three known target values, each measured both immediately after restore/drag AND again after resizing the browser window (wider and narrower):
+
+1. **Default (220px)**: fresh restore with no persisted value — confirm the rendered width reads exactly 220 (not 218), then resize the window and confirm it still reads 220.
+2. **A dragged arbitrary value**: drag the gutter to some width strictly between 160 and 360 — confirm the rendered width matches exactly what `onDragEnd` recorded/persisted, then resize the window and confirm it is unchanged.
+3. **Max bound (360px)**: drag past the max clamp (or persist 360 via localStorage) — confirm the rendered width reads exactly 360 (not 358), then resize the window and confirm it still reads 360.
+
+This exact-pixel-value requirement — rather than "looks visually fixed" — directly guards against the off-by-gutter-offset class of bug found across all three review cycles: an unadjusted percentage conversion silently renders `targetPx - 2`, which is visually indistinguishable from correct but numerically wrong. This scenario exercises both `_initSplit()`'s initial `sizes` computation and the `ResizeObserver`/`setSizes()` recalculation, since both now share the same `widthPxToSplitPercent()` helper.
 
 Each scenario requires a distinct playwright-cli pass with an explicit snapshot/observation step (not click-and-hope), with exact commands and observed results reported as evidence.
 
