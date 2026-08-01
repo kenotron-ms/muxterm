@@ -77,11 +77,14 @@ function _resolveCtor(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
-// Captured ONCE at module load — isSupported() never re-checks. A stub
-// applied after this module has already executed has no effect. This is
-// deliberate (see the design's Verification Approach section) and is what
-// Task 7's unsupported-browser test relies on.
-const _ctor: SpeechRecognitionCtor | null = _resolveCtor();
+/**
+ * Feature availability is captured ONCE at module load, so a stub applied
+ * afterward has no effect; Task 7's unsupported-browser check relies on it.
+ * Android is deliberately excluded because native keyboard dictation makes
+ * the custom button redundant; this is a product decision, not a workaround.
+ */
+const _isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+const _ctor: SpeechRecognitionCtor | null = _isAndroid ? null : _resolveCtor();
 
 // ---------------------------------------------------------------------------
 // Public types
