@@ -40,13 +40,16 @@ User explicitly chose write-once-on-drag-end (not throttled continuous writes du
 
 Split.js instance lives in `app.ts`, NOT `mux-sidebar.ts` — Split.js needs both sibling DOM elements (`<mux-sidebar>`, `.main-pane`) at once to pair them; only `app.ts`'s render root has both. `mux-sidebar.ts` becomes a pure content component: no `.resize-handle` div, no `_onResizeStart`, no width-restore logic in `connectedCallback` — sizing is imposed on it from outside, same as `.main-pane` already is.
 
-**Lifecycle, tied to the existing `isWide` breakpoint boundary** (same place `<mux-sidebar>` already mounts/unmounts):
+**Lifecycle, tied to the existing `isWide` breakpoint boundary** (same place `<mux-sidebar>` already mounts/unmounts), split across two Lit lifecycle hooks so destroy and init each run on the correct side of Lit's render:
 
-- narrow → wide: after Lit's render places both elements in the DOM (`await this.updateComplete`), call `Split([sidebarEl, mainPaneEl], {...})` in `updated()`.
-- wide → narrow: call `splitInstance.destroy()` BEFORE Lit's next render removes `<mux-sidebar>` — explicit cleanup of the gutter div and inline styles, not reliance on garbage collection.
+- wide → narrow: handled in `willUpdate(changedProps)`, which fires BEFORE Lit applies the DOM change. If `_layoutMode` is changing to `'narrow'` and `this._split` exists, call `_destroySplit()` here — this guarantees the gutter div and inline styles are cleaned up by our own code before Lit's render removes `<mux-sidebar>` from the DOM. (This replaces an earlier, incorrect plan to destroy from `updated()`, which fires after render and left the destroy-before-remove guarantee unenforced.)
+- narrow → wide: handled in `updated(changedProps)`, which fires AFTER Lit applies the DOM change. If `_layoutMode` is now `'wide'` and `this._split` is null, call `_initSplit()` here, since the sidebar/main-pane elements only exist in the DOM once this hook runs.
 - A single `_split: ReturnType<typeof Split> | null` instance field on `app.ts` holds the current instance.
+- Defensively, `app.ts`'s `disconnectedCallback()` should also call `_destroySplit()`, in case the app element itself is removed from the DOM while a Split instance is active (e.g., mid-drag) — cleanup should not rely solely on the `willUpdate` breakpoint-transition path.
 
 **Constants relocate** from `mux-sidebar.ts` to a new shared module `web/src/lib/sidebar-width.ts`: `SIDEBAR_WIDTH_KEY`, `SIDEBAR_DEFAULT_WIDTH`, `SIDEBAR_MIN_WIDTH`, `SIDEBAR_MAX_WIDTH`, plus two pure helper functions `restoreSidebarWidth(): number` and `persistSidebarWidth(px: number): void` (same validation/clamp/try-catch logic as today's `connectedCallback` block, just relocated and made independently testable/callable). `mux-sidebar.ts`'s CSS keeps `min-width`/`max-width` as a defensive floor/ceiling backstop but drops the hardcoded `width: 220px` default — initial size now comes from Split's `sizes` init option.
+
+**Pixel-fixed sizing, not percentage-based `sizes`**: `_initSplit()` seeds Split's `sizes` option with raw pixel values (not a percentage pair) summing to `.content-area`'s actual pixel width, and supplies a custom `elementStyle` function that writes a literal `px` width to the sidebar element — bypassing Split's default `calc(size% - gutterSize/2px)` percentage/calc styling entirely — while returning `{}` for the main-pane element, leaving its existing `.main-pane { flex: 1 }` CSS rule fully in control. This exactly reproduces today's relationship: sidebar has an explicit width, main-pane fills whatever remains. Split's internal `adjust()`/`drag()` math computes ratios from real `getBoundingClientRect()` pixel offsets, so it is unit-agnostic as long as `sizes` is seeded consistently — seeding in raw pixels keeps the entire drag/clamp/resize model in real-pixel space throughout. This is also what makes the sidebar correctly stay fixed across window resizes (Split.js has no internal `ResizeObserver` — sizes are only recalculated at the start of an explicit drag), avoiding a real behavior change from today's fixed-until-next-drag semantics that a percentage-based `sizes` approach would otherwise introduce silently (percentage seeding also triggers Split's default `calc()` element styling, which renders/persists a width 2px off from the true value on every cycle).
 
 **Resolved risk — Lit-diffing vs. Split.js's externally-inserted gutter div**: Split.js inserts its own `.gutter` div directly via `parent.insertBefore()`, outside Lit's template tracking. Because `app.ts`'s `isWide` conditional is the ONLY expression-level change point for `.content-area`'s children, and Split.js is destroyed/recreated exactly at that same boundary, there's no window where the externally-inserted gutter div coexists with a Lit re-render that could touch `.content-area`'s top-level child list. This resolves the risk by construction (architectural boundary alignment), not by runtime luck — but per user's explicit instruction, it MUST still be empirically verified with a dedicated stress test (see Testing Strategy) rather than accepted on reasoning alone.
 
@@ -62,19 +65,32 @@ import { restoreSidebarWidth, persistSidebarWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MA
 private _split: SplitInstance | null = null;
 
 private _initSplit(): void {
-  const sidebarEl = this.renderRoot.querySelector('mux-sidebar');
-  const mainPaneEl = this.renderRoot.querySelector('.main-pane');
-  if (!sidebarEl || !mainPaneEl || this._split) return; // guards: elements present, no double-init
+  const sidebarEl = this.renderRoot.querySelector<HTMLElement>('mux-sidebar');
+  const mainPaneEl = this.renderRoot.querySelector<HTMLElement>('.main-pane');
+  const contentAreaEl = this.renderRoot.querySelector<HTMLElement>('.content-area');
+  if (!sidebarEl || !mainPaneEl || !contentAreaEl || this._split) return;
 
   const initialWidth = restoreSidebarWidth();
-  const contentAreaWidth = /* .content-area clientWidth */;
-  const sidebarPercent = (initialWidth / contentAreaWidth) * 100;
+
+  // Sidebar stays pixel-fixed (not responsive to container resize) -- matches
+  // today's exact behavior, where width only changes on an explicit drag.
+  // main-pane's own `.main-pane { flex: 1 }` CSS rule fills the remainder
+  // untouched -- elementStyle returns {} for it, preserving today's relationship.
+  const pxElementStyle = (dim: string, size: number, _gutSize: number, i: number) => {
+    if (i === 0) {
+      return { [dim]: `${size}px`, flexGrow: '0', flexShrink: '0' };
+    }
+    return {};
+  };
 
   this._split = Split([sidebarEl, mainPaneEl], {
-    sizes: [sidebarPercent, 100 - sidebarPercent],
+    // Raw pixel values, not percentages -- keeps Split's internal drag/adjust
+    // math in real-pixel space throughout (see Architecture section).
+    sizes: [initialWidth, contentAreaEl.clientWidth - initialWidth],
     minSize: [SIDEBAR_MIN_WIDTH, 0],       // main-pane keeps today's "no enforced minimum"
     maxSize: [SIDEBAR_MAX_WIDTH, Infinity],
     gutterSize: 4,                          // matches existing .resize-handle width
+    elementStyle: pxElementStyle,
     gutter: () => {
       const g = document.createElement('div');
       g.className = 'sidebar-gutter'; // styled in app.ts CSS to visually match old .resize-handle (hover highlight, col-resize cursor)
@@ -91,9 +107,23 @@ private _destroySplit(): void {
   this._split?.destroy();
   this._split = null;
 }
+
+override willUpdate(changedProps: PropertyValues): void {
+  super.willUpdate(changedProps);
+  if (changedProps.has('_layoutMode') && this._layoutMode === 'narrow' && this._split) {
+    this._destroySplit();
+  }
+}
+
+override updated(changedProps: PropertyValues): void {
+  super.updated(changedProps);
+  if (changedProps.has('_layoutMode') && this._layoutMode === 'wide' && !this._split) {
+    this._initSplit();
+  }
+}
 ```
 
-Called from `updated(changedProps)`: `_layoutMode` changing to `'wide'` → `_initSplit()` after `updateComplete`; changing to `'narrow'` → `_destroySplit()`.
+Wired via the two Lit lifecycle hooks described above: `_layoutMode` changing to `'narrow'` → `_destroySplit()` in `willUpdate` (before Lit removes `<mux-sidebar>`); `_layoutMode` changing to `'wide'` → `_initSplit()` in `updated` (after Lit has placed the sidebar/main-pane elements in the DOM). `disconnectedCallback()` also calls `_destroySplit()` defensively.
 
 **`web/src/lib/sidebar-width.ts` (new):** `SIDEBAR_WIDTH_KEY`, `SIDEBAR_DEFAULT_WIDTH`, `SIDEBAR_MIN_WIDTH`, `SIDEBAR_MAX_WIDTH` constants; `restoreSidebarWidth(): number` (reads/validates/clamps localStorage, try/catch, falls back to default on any failure — identical logic to today's `connectedCallback` block); `persistSidebarWidth(px: number): void` (try/catch `localStorage.setItem`, silent no-op on failure).
 
@@ -103,11 +133,11 @@ Called from `updated(changedProps)`: `_layoutMode` changing to `'wide'` → `_in
 
 ## Data Flow
 
-**Init/restore** (page load or narrow→wide transition): `restoreSidebarWidth()` reads localStorage, validates range `[160,360]`, falls back to `220` on missing/invalid/error — identical validation to today. `_initSplit()` converts to a percentage pair based on `.content-area`'s current `clientWidth`, passed as Split's `sizes` init option. Split applies initial styles synchronously on construction — no flash of default-then-jump.
+**Init/restore** (page load or narrow→wide transition): `restoreSidebarWidth()` reads localStorage, validates range `[160,360]`, falls back to `220` on missing/invalid/error — identical validation to today. `_initSplit()` computes the sidebar's raw pixel width and the remaining pixel width for main-pane (`contentAreaEl.clientWidth - initialWidth`), passed as Split's `sizes` init option in raw pixels (not percentages) — see Architecture section for why. Split applies initial styles synchronously on construction — no flash of default-then-jump.
 
 **Drag**: `mousedown`/`touchstart` on gutter → Split's `startDragging` sets user-select:none + pointer-events:none on both panes, cursor lock on gutter/parent/`document.body`, snapshots sizes. Every native `mousemove`: Split's `drag()` computes new percentage split, clamps against `minSize`/`maxSize` (pixel-based), writes inline styles on both panes — no localStorage touched (matches write-once-on-drag-end decision). `mouseup`/`touchend`/`touchcancel`: Split's `stopDragging` resets user-select/cursor/pointer-events, fires `onDragEnd(sizes)` → our handler reads actual `getBoundingClientRect().width`, calls `persistSidebarWidth(px)` — single write.
 
-**Breakpoint transition**: `breakpoint.ts`'s existing `layoutModeForWidth` fires, `app.ts`'s `_layoutMode` state updates, triggers `updated()`. Wide→narrow: `_destroySplit()` runs before Lit removes `<mux-sidebar>` — explicit cleanup of gutter div + inline styles. Narrow→wide: after `updateComplete`, `_initSplit()` re-reads localStorage and reconstructs fresh — no stale state carried across.
+**Breakpoint transition**: `breakpoint.ts`'s existing `layoutModeForWidth` fires, `app.ts`'s `_layoutMode` state updates, triggering both `willUpdate()` and `updated()` on the same update cycle. Wide→narrow: `_destroySplit()` runs in `willUpdate()`, before Lit removes `<mux-sidebar>` — explicit cleanup of gutter div + inline styles. Narrow→wide: `_initSplit()` runs in `updated()`, after Lit has placed the sidebar/main-pane elements back in the DOM, and re-reads localStorage to reconstruct fresh — no stale state carried across. Destroy happens pre-render (`willUpdate`) and init happens post-render (`updated`), matching the corrected lifecycle hooks described in Architecture & Ownership Boundary above.
 
 **No other consumers**: confirmed via grep that nothing outside `mux-sidebar.ts` reads these constants/width today — this data flow is fully self-contained within `app.ts` + `lib/sidebar-width.ts`.
 
