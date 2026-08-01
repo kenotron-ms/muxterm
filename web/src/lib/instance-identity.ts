@@ -18,6 +18,53 @@
 
 const TITLEBAR_COLOR_KEY = 'mux-titlebar-color';
 
+/** A single preset swatch: a friendly name + its hex value. */
+export interface TitlebarCrayon {
+  name: string;
+  hex: string;
+}
+
+// ---------------------------------------------------------------------------
+// Curated preset palettes ("crayons" — same idea as macOS's classic Crayons
+// color picker tab: a small set of named, hand-picked colors instead of a
+// fully free-form picker). Split by theme brightness because the header's
+// text color does NOT change with the custom background (it stays
+// --chrome-text-bright), so each set is tuned for contrast against that:
+//   - Dark themes: --chrome-text-bright is near-white (#c0caf5) → crayons
+//     need to stay on the darker/more saturated side.
+//   - Light themes: --chrome-text-bright is near-black (#1c1c1e) → crayons
+//     need to stay on the lighter/pastel side.
+// Every entry here is verified (see settings-surface.ts test coverage note
+// in the PR) to meet at least a 4.5:1 contrast ratio against its intended
+// text color.
+// ---------------------------------------------------------------------------
+
+export const DARK_TITLEBAR_CRAYONS: TitlebarCrayon[] = [
+  { name: 'Cayenne',   hex: '#923737' },
+  { name: 'Mocha',     hex: '#754e30' },
+  { name: 'Marigold',  hex: '#744e0b' },
+  { name: 'Clover',    hex: '#296144' },
+  { name: 'Teal',      hex: '#18605c' },
+  { name: 'Ocean',     hex: '#2b5889' },
+  { name: 'Indigo',    hex: '#4a4a96' },
+  { name: 'Grape',     hex: '#6b4290' },
+  { name: 'Berry',     hex: '#8b3964' },
+  { name: 'Slate',     hex: '#4d5666' },
+];
+
+export const LIGHT_TITLEBAR_CRAYONS: TitlebarCrayon[] = [
+  { name: 'Salmon',     hex: '#f4b3ab' },
+  { name: 'Cantaloupe', hex: '#f6cd8b' },
+  { name: 'Banana',     hex: '#f2e392' },
+  { name: 'Honeydew',   hex: '#c9e4a8' },
+  { name: 'Spindrift',  hex: '#a9e2cd' },
+  { name: 'Sky',        hex: '#aed9f2' },
+  { name: 'Orchid',     hex: '#ddbbea' },
+  { name: 'Carnation',  hex: '#f4b8d3' },
+  { name: 'Sand',       hex: '#e5d7ba' },
+  { name: 'Fog',        hex: '#dbe1e8' },
+];
+
 /** Hostnames that are "this machine" rather than a distinct named instance. */
 const GENERIC_HOSTS = new Set(['localhost', '127.0.0.1', '']);
 

@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { PALETTES } from '../lib/theme.js';
+import { PALETTES, isLightTheme } from '../lib/theme.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
 import {
@@ -8,6 +8,9 @@ import {
   restoreTitlebarColor,
   persistTitlebarColor,
   applyTitlebarColor,
+  DARK_TITLEBAR_CRAYONS,
+  LIGHT_TITLEBAR_CRAYONS,
+  type TitlebarCrayon,
 } from '../lib/instance-identity.js';
 
 // ── Theme card display metadata ──────────────────────────────────────────────
@@ -401,6 +404,43 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     /* ── Title bar color picker ── */
+
+    /* Crayon grid — curated presets, same idea as macOS's classic Crayons
+       color-picker tab. */
+    .crayon-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .crayon {
+      position: relative;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      padding: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: transform 0.08s;
+    }
+    .crayon:hover {
+      transform: scale(1.12);
+    }
+    .crayon.active {
+      box-shadow: 0 0 0 2px var(--chrome-body), 0 0 0 4px var(--chrome-accent);
+    }
+    .crayon-check {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    }
+
     .titlebar-row {
       display: flex;
       align-items: center;
@@ -408,15 +448,15 @@ export class MuxSettingsSurface extends LitElement {
     }
 
     .titlebar-swatch {
-      width: 36px;
-      height: 36px;
-      border-radius: 8px;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
       border: 1px solid var(--chrome-border);
       padding: 0;
       cursor: pointer;
       flex-shrink: 0;
       /* Native color input chrome varies a lot by browser — strip it down
-         to just the swatch so it matches the rest of the UI. */
+         to just the swatch so it matches the crayon grid above it. */
       -webkit-appearance: none;
       appearance: none;
       background: none;
@@ -426,7 +466,12 @@ export class MuxSettingsSurface extends LitElement {
     }
     .titlebar-swatch::-webkit-color-swatch {
       border: none;
-      border-radius: 7px;
+      border-radius: 50%;
+    }
+
+    .titlebar-custom-label {
+      font-size: 12px;
+      color: var(--chrome-text-dim);
     }
 
     .titlebar-reset-btn {
@@ -438,6 +483,7 @@ export class MuxSettingsSurface extends LitElement {
       font-size: 12px;
       cursor: pointer;
       transition: border-color 0.1s, color 0.1s;
+      margin-left: auto;
     }
     .titlebar-reset-btn:hover {
       border-color: var(--chrome-accent);
@@ -768,17 +814,38 @@ export class MuxSettingsSurface extends LitElement {
     return /^#[0-9a-fA-F]{6}$/.test(v) ? v : '#16161e';
   }
 
+  /** Crayon set is chosen by the CURRENT theme's brightness, not a fixed
+   *  default — the header's text color (--chrome-text-bright) stays fixed
+   *  regardless of the custom background, so light themes need pastel
+   *  crayons (dark text on top) and dark themes need deep crayons (near-
+   *  white text on top). See instance-identity.ts for the contrast rationale. */
+  private get _crayons(): TitlebarCrayon[] {
+    const palette = this.config?.theme.palette ?? 'tokyo-night';
+    return isLightTheme(palette) ? LIGHT_TITLEBAR_CRAYONS : DARK_TITLEBAR_CRAYONS;
+  }
+
   private _renderTitlebarColorPicker() {
-    const color = this._titlebarColor;
+    const color = this._titlebarColor?.toLowerCase() ?? null;
     return html`
+      <div class="crayon-grid">
+        ${this._crayons.map(crayon => html`
+          <button
+            class="crayon ${color === crayon.hex ? 'active' : ''}"
+            style="background:${crayon.hex}"
+            title="${crayon.name}"
+            @click="${() => this._setTitlebarColor(crayon.hex)}"
+          >${color === crayon.hex ? html`<span class="crayon-check">✓</span>` : ''}</button>
+        `)}
+      </div>
       <div class="titlebar-row">
         <input
           class="titlebar-swatch"
           type="color"
-          title="Pick a title bar color"
+          title="Pick a custom title bar color"
           .value="${color ?? this._currentChromeBarHex}"
           @input="${(e: Event) => this._setTitlebarColor((e.target as HTMLInputElement).value)}"
         />
+        <span class="titlebar-custom-label">Custom…</span>
         <button class="titlebar-reset-btn" @click="${() => this._resetTitlebarColor()}">
           Use theme default
         </button>
