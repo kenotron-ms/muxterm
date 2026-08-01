@@ -15,7 +15,7 @@ export class MuxTitleBar extends LitElement {
       justify-content: space-between;
       background: var(--chrome-bar);
       border-bottom: 1px solid var(--chrome-border);
-      height: 32px;
+      height: var(--mux-dock-height, 44px);
       padding: 0 8px;
       flex-shrink: 0;
       user-select: none;
@@ -55,8 +55,8 @@ export class MuxTitleBar extends LitElement {
     }
 
     .launcher-btn {
-      width: 28px;
-      height: 24px;
+      width: 44px;
+      height: 44px;
       background: transparent;
       border: none;
       border-radius: 4px;
@@ -75,7 +75,7 @@ export class MuxTitleBar extends LitElement {
 
     .menu-anchor {
       position: absolute;
-      top: 28px;
+      top: 100%;
       right: 0;
       z-index: 1500;
     }
