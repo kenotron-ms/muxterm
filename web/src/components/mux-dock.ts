@@ -162,13 +162,6 @@ const SPLIT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="1
   <rect x="9" y="2" width="6" height="12" rx="1" stroke="currentColor" stroke-width="1.3"/>
 </svg>`;
 
-// Globe icon for the browser pane button.
-const BROWSER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="none">
-  <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/>
-  <path d="M8 1.5C6.5 3.5 5.5 5.6 5.5 8s1 4.5 2.5 6.5M8 1.5C9.5 3.5 10.5 5.6 10.5 8s-1 4.5-2.5 6.5M1.5 8h13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-  <path d="M2.5 5.5h11M2.5 10.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-</svg>`;
-
 class HeaderButton {
   readonly element: HTMLElement;
 
@@ -286,17 +279,6 @@ export class MuxDock extends LitElement {
       group?.activePanel?.id ?? this._dv?.activePanel?.id ?? null;
     this._splitReferenceId = placement === 'split' ? this._placementReferenceId : null;
     this.dispatchEvent(new CustomEvent('pane-create', { bubbles: true, composed: true }));
-  }
-
-  /**
-   * Open or focus the browser-cdp pane.
-   * If one already exists, activate its panel; otherwise fire a create event.
-   */
-  private _onBrowserButtonClick(): void {
-    // Web can only display a placeholder for browser panes (native apps own the
-    // engine). Focus an existing browser pane if present; otherwise do nothing.
-    const existing = store.panes.find((p) => p.surfaceKind === 'browser');
-    if (existing) this.activatePane(existing.paneId);
   }
 
   /**
@@ -597,31 +579,12 @@ export class MuxDock extends LitElement {
       // "+" / split on an INACTIVE group still targets THAT group.
       createLeftHeaderActionComponent: (group) =>
         new HeaderButton(ADD_ICON, 'New pane', () => this._requestPane('tab', group)),
-      // Narrow (phone) is a tab view only — no split or browser button.
+      // Narrow (phone) is a tab view only — no split button.
       createRightHeaderActionComponent: (group) => {
         if (this.narrow) {
           return new HeaderButton('', '', () => {});
         }
-        // Wide: [🌐 browser] + [⊠ split] in a flex row.
-        const container = document.createElement('div');
-        container.style.cssText = 'display:flex;flex-direction:row;align-items:center;';
-        const browserBtn = new HeaderButton(BROWSER_ICON, 'Open browser pane', () =>
-          this._onBrowserButtonClick(),
-        );
-        const splitBtn = new HeaderButton(SPLIT_ICON, 'Split pane', () =>
-          this._requestPane('split', group),
-        );
-        container.appendChild(browserBtn.element);
-        container.appendChild(splitBtn.element);
-        return {
-          element: container,
-          init(): void {},
-          dispose(): void {
-            browserBtn.dispose();
-            splitBtn.dispose();
-            container.remove();
-          },
-        };
+        return new HeaderButton(SPLIT_ICON, 'Split pane', () => this._requestPane('split', group));
       },
     });
     this._dv.onDidLayoutChange(() => this._scheduleLayoutSave());
@@ -1074,15 +1037,6 @@ export class MuxDock extends LitElement {
     });
     this._panels.set(paneId, panel);
     panel.api.setActive();
-  }
-
-  /**
-   * Programmatically activate a pane by its numeric ID.
-   * No-op if the panel does not exist or is already active.
-   */
-  public activatePane(paneId: number): void {
-    const panel = this._panels.get(paneId);
-    if (panel && !panel.api.isActive) panel.api.setActive();
   }
 
   /**
