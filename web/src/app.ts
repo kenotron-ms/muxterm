@@ -693,6 +693,7 @@ export class MuxApp extends LitElement {
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
         @workspace-switch="${this._onWorkspaceSelected}"
+        @pane-create-request="${this._createPaneOptimistic}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
         ${isWide ? html`

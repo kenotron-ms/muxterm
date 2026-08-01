@@ -4,7 +4,7 @@ import type { PropertyValues } from 'lit';
 import './launcher-menu.js';
 import './mux-pane-picker.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis } from 'lucide';
+import { Ellipsis, Plus } from 'lucide';
 
 @customElement('mux-title-bar')
 export class MuxTitleBar extends LitElement {
@@ -51,10 +51,12 @@ export class MuxTitleBar extends LitElement {
     .right {
       display: flex;
       align-items: center;
+      gap: 4px;
       position: relative;
     }
 
-    .launcher-btn {
+    .launcher-btn,
+    .pane-btn {
       width: 44px;
       height: 44px;
       background: transparent;
@@ -69,7 +71,8 @@ export class MuxTitleBar extends LitElement {
       font-family: inherit;
     }
 
-    .launcher-btn:hover {
+    .launcher-btn:hover,
+    .pane-btn:hover {
       background: var(--chrome-hover);
     }
 
@@ -158,6 +161,15 @@ export class MuxTitleBar extends LitElement {
     );
   }
 
+  private _requestNewPane(): void {
+    this.dispatchEvent(
+      new CustomEvent('pane-create-request', {
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   render() {
     return html`
       <div class="brand">
@@ -167,6 +179,12 @@ export class MuxTitleBar extends LitElement {
       </div>
       <mux-pane-picker @workspace-switch="${this._onWorkspaceSwitch}"></mux-pane-picker>
       <div class="right">
+        <button
+          class="pane-btn"
+          title="New pane"
+          aria-label="New pane"
+          @click="${this._requestNewPane}"
+        >${icon(Plus, { size: 20 })}</button>
         <button
           class="launcher-btn"
           title="Open menu"
