@@ -14,6 +14,7 @@ import { WorkspaceMru } from './workspace-mru.js';
 import { chooseRecoveryTarget } from './workspace-recovery.js';
 import { currentLayoutMode } from './breakpoint.js';
 import { terminalRegistry } from './terminal-registry.js';
+import { voiceInputController } from './voice-input-controller.js';
 
 const LAST_WS_KEY = 'muxterm.lastWorkspaceId';
 
@@ -52,6 +53,7 @@ export class WorkspaceController {
     const stored = localStorage.getItem(LAST_WS_KEY);
     if (stored !== null) {
       this._attachInFlight = true;
+      voiceInputController.invalidateIfActive();
       this.socket.attachWithBreakpoint(stored, currentLayoutMode());
       return;
     }
@@ -105,6 +107,7 @@ export class WorkspaceController {
           );
           this._recoveringFrom = null;
           if (target.action === 'attach') {
+            voiceInputController.invalidateIfActive();
             this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode());
           } else {
             this.socket.createWorkspace();
@@ -119,6 +122,7 @@ export class WorkspaceController {
           // _activePaneId = panes[0], overriding the layout-restored active pane.
           const target = chooseRecoveryTarget(msg.workspaces ?? [], '', this._mru.order());
           if (target.action === 'attach') {
+            voiceInputController.invalidateIfActive();
             this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode());
           }
         }
@@ -127,6 +131,7 @@ export class WorkspaceController {
 
       // no-survivor recovery path: attach the freshly-created workspace.
       case SessiondType.WorkspaceCreated: {
+        voiceInputController.invalidateIfActive();
         this.socket.attachWithBreakpoint(msg.workspaceId ?? '', currentLayoutMode());
         break;
       }

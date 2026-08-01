@@ -3,6 +3,7 @@ import { customElement, state } from 'lit/decorators.js';
 import type { PropertyValues } from 'lit';
 import './launcher-menu.js';
 import './mux-pane-picker.js';
+import './mic-button.js';
 import { icon } from '../lib/icons.js';
 import { Ellipsis, Plus } from 'lucide';
 
@@ -179,6 +180,7 @@ export class MuxTitleBar extends LitElement {
       </div>
       <mux-pane-picker @workspace-switch="${this._onWorkspaceSwitch}"></mux-pane-picker>
       <div class="right">
+        <mux-mic-button></mux-mic-button>
         <button
           class="pane-btn"
           title="New pane"

@@ -10,6 +10,7 @@ import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig }
 import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
 import { injectTerminalFont } from './lib/fonts.js';
+import { voiceInputController } from './lib/voice-input-controller.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
@@ -694,6 +695,7 @@ export class MuxApp extends LitElement {
         @pane-select="${this._onActivePane}"
         @workspace-switch="${this._onWorkspaceSelected}"
         @pane-create-request="${this._createPaneOptimistic}"
+        @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
         ${isWide ? html`
@@ -843,12 +845,32 @@ export class MuxApp extends LitElement {
 
   /** Client-local active-pane selection (sessiond has no select-pane message). */
   private _onActivePane = (e: CustomEvent<{ paneId: number }>): void => {
+    // Auto-stop-and-invalidate: voice input should always target "the pane
+    // I'm looking at right now" — see docs/designs/2026-07-31-voice-input-design.md.
+    voiceInputController.invalidateIfActive({ workspaceId: store.attached ?? '', paneId: e.detail.paneId });
     // ackPane is the component's responsibility (mux-pane-picker._selectPane or
     // mux-dock onDidActivePanelChange). Do not ack here — the component already did.
     store.setActivePane(e.detail.paneId);
     // This pane just became the visible tab in this client's layout, so it
     // should claim PTY-sizing authority (active-view-wins).
     this._paneFocusCoordinator?.claimPane(e.detail.paneId);
+  };
+
+  /**
+   * Deliver a dictated transcript to the terminal it was captured for.
+   * Defense-in-depth only — by the time this fires, the primary invalidation
+   * (pane/workspace-switch calling invalidateIfActive above) should already
+   * have stopped any session whose target no longer matches. See
+   * docs/designs/2026-07-31-voice-input-design.md's Data Flow section.
+   */
+  private _onVoiceTranscript = (e: CustomEvent<{ text: string; workspaceId: string; paneId: number }>): void => {
+    const { text, workspaceId, paneId } = e.detail;
+    if (workspaceId !== (store.attached ?? '') || paneId !== store.activePaneId) return;
+    this._socket?.sendPaneInput(paneId, new TextEncoder().encode(text));
+    // Tapping the mic button (a toolbar UI element) can take DOM focus away
+    // from xterm's hidden textarea. Without this, the user's next physical
+    // keystroke (Enter) might not reach the PTY at all.
+    terminalRegistry.focus(paneId);
   };
 
   /** Empty-state button: create a connection-scoped pane in the workspace. */
@@ -992,6 +1014,11 @@ export class MuxApp extends LitElement {
    */
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     if (e.detail.workspaceId === store.attached) return;
+    // Workspace switches are asynchronous (new pane list/active pane arrive
+    // only after a round-trip), so there is no new-workspace pane identity to
+    // compare against yet — invalidate unconditionally. See
+    // docs/designs/2026-07-31-voice-input-design.md.
+    voiceInputController.invalidateIfActive();
     // _pendingCloses: grace period only — closePane was never sent, PTY survives on server.
     for (const handle of this._pendingCloses.values()) clearTimeout(handle);
     this._pendingCloses.clear();
