@@ -101,7 +101,7 @@ func (c *Client) SetOutputNotifier(fn func(paneID int)) {
 // Any previously accumulated output or armed prompts from a prior workspace are
 // discarded.
 func (c *Client) AttachWorkspace(workspaceID string) error {
-	if _, err := c.conn.Attach(workspaceID, "wide"); err != nil {
+	if _, err := c.conn.Attach(workspaceID, "wide", "agent"); err != nil {
 		return err
 	}
 	c.mu.Lock()

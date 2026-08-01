@@ -33,7 +33,7 @@ func (f *fakeDaemonConn) CloseWorkspace(workspaceID string) error {
 	return nil
 }
 
-func (f *fakeDaemonConn) Attach(workspaceID, breakpoint string) (sessiond.Composition, error) {
+func (f *fakeDaemonConn) Attach(workspaceID, breakpoint, clientKind string) (sessiond.Composition, error) {
 	f.attached = workspaceID
 	return sessiond.Composition{
 		WorkspaceID: workspaceID,
@@ -62,6 +62,11 @@ func (f *fakeDaemonConn) Input(paneID uint32, data []byte) error {
 
 func (f *fakeDaemonConn) Resize(paneID, cols, rows int) error {
 	f.resizes = append(f.resizes, [3]int{paneID, cols, rows})
+	return nil
+}
+
+func (f *fakeDaemonConn) PaneFocus(paneID uint32, cols, rows int) error {
+	f.resizes = append(f.resizes, [3]int{int(paneID), cols, rows})
 	return nil
 }
 

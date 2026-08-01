@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Server owns the daemon's Unix control socket, the workspace Registry, and the
@@ -109,6 +110,15 @@ func (s *Server) unsubscribeLocked(c *conn) {
 			delete(set, c)
 			if len(set) == 0 {
 				delete(s.subs, wsID)
+			}
+			// Clear this conn's authority from every pane in the workspace it
+			// was subscribed to, so a dead conn never blocks a future
+			// legitimate claim (design's "Authoritative client disconnects"
+			// error-handling case).
+			for _, paneID := range s.reg.PaneIDs(wsID) {
+				if p, ok := s.reg.Pane(wsID, paneID); ok {
+					p.ClearAuthorityIfOwner(c)
+				}
 			}
 		}
 	}
@@ -235,6 +245,7 @@ type conn struct {
 	nc       net.Conn
 	sub      *subscriber
 	attached string
+	kind     string // "interactive" (browser/human) | "agent" (MCP); set once in attach()
 }
 
 // newConn wraps nc with a subscriber for serialized writes.
@@ -265,6 +276,14 @@ func (c *conn) serve() {
 			}
 			if p, ok := c.srv.reg.Pane(c.attached, int(paneID)); ok {
 				_, _ = p.Write(data)
+				// Only interactive (human) connections' keystrokes reclaim
+				// authority — agent (MCP) input must never do so, per the
+				// design's MCP-exclusion requirement. No resize, no
+				// broadcast: this only updates the authority pointer so a
+				// SUBSEQUENT resize/pane-focus from this conn is honored.
+				if c.kind == "interactive" {
+					p.TouchAuthority(c, time.Now())
+				}
 			}
 		}
 	}
@@ -305,11 +324,46 @@ func (c *conn) handle(msg Message) {
 	case TypeClosePane:
 		c.closePane(msg)
 	case TypeResize:
-		if c.attached == "" {
+		// Agents (MCP/automation) never claim or hold PTY-sizing authority —
+		// mirrors the same guard on TypePaneFocus. Silently ignored rather
+		// than erroring the connection, consistent with how non-
+		// authoritative resizes are already silently skipped below.
+		if c.attached == "" || c.kind != "interactive" {
 			return
 		}
 		if p, ok := c.srv.reg.Pane(c.attached, msg.PaneID); ok {
+			// ClaimAuthority already promotes on nil authority, so a resize
+			// from any conn on a never-focused pane bootstraps that conn as
+			// authoritative — the solo-client/initial-creation degenerate
+			// case from the design's Error Handling section.
+			promoted := p.ClaimAuthority(c, time.Now())
+			if p.IsAuthoritative(c) {
+				before := p.Info()
+				_ = p.Resize(msg.Cols, msg.Rows)
+				after := p.Info()
+				if promoted || before.Cols != after.Cols || before.Rows != after.Rows {
+					c.broadcastPaneResizedExcept(after.Cols, after.Rows, msg.PaneID)
+				}
+			}
+			// Non-authoritative resizes are silently skipped: no error, no
+			// disconnect, no pty.Setsize call — matches the design's "Non-
+			// authoritative resizes... never call pty.Setsize".
+		}
+	case TypePaneFocus:
+		// Agents (MCP/automation) never claim focus authority; silently
+		// ignore rather than erroring the connection, since a well-behaved
+		// agent should never send this but a defensive no-op is safer.
+		if c.attached == "" || c.kind != "interactive" {
+			return
+		}
+		if p, ok := c.srv.reg.Pane(c.attached, msg.PaneID); ok {
+			// Unlike TypeResize, pane-focus is inherently an authority-
+			// claiming action, so apply the resize unconditionally after
+			// claiming rather than gating on IsAuthoritative first.
+			p.ClaimAuthority(c, time.Now())
 			_ = p.Resize(msg.Cols, msg.Rows)
+			info := p.Info()
+			c.broadcastPaneResizedExcept(info.Cols, info.Rows, msg.PaneID)
 		}
 	case TypeRenamePane:
 		if c.attached != "" && c.srv.reg.RenamePane(c.attached, msg.PaneID, msg.Name) {
@@ -401,6 +455,13 @@ func (c *conn) attach(msg Message) {
 	if !c.srv.reg.Has(msg.WorkspaceID) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
 		return
+	}
+	c.kind = msg.ClientKind
+	if c.kind == "" {
+		// Backward-compat safety net: both real call sites (mcp/client.go,
+		// server/ws.go) are updated in this same change to always send an
+		// explicit ClientKind, so this default is not an expected runtime path.
+		c.kind = "interactive"
 	}
 	c.srv.attachConn(c, msg.WorkspaceID, msg.CID, msg.Breakpoint)
 }
@@ -530,6 +591,20 @@ func (c *conn) reply(msg *Message) { c.sub.enqueueControl(msg) }
 // replyError enqueues a TypeError envelope echoing cid.
 func (c *conn) replyError(cid uint64, code, detail string) {
 	c.sub.enqueueControl(&Message{Type: TypeError, CID: cid, Code: code, Error: detail})
+}
+
+// broadcastPaneResizedExcept sends a TypePaneResized event carrying the new
+// canonical cols/rows for paneID to every OTHER conn attached to c's
+// workspace (excluding c itself, which already knows its own new size).
+func (c *conn) broadcastPaneResizedExcept(cols, rows, paneID int) {
+	c.srv.mu.Lock()
+	defer c.srv.mu.Unlock()
+	for other := range c.srv.subs[c.attached] {
+		if other == c {
+			continue
+		}
+		other.sub.enqueueControl(&Message{Type: TypePaneResized, PaneID: paneID, Cols: cols, Rows: rows})
+	}
 }
 
 // sizeOrDefault returns the given dimensions, substituting the 80x24 default for

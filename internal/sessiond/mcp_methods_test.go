@@ -87,7 +87,7 @@ func TestClientScreenSnapshotAndGetLayout(t *testing.T) {
 	defer c.Close()
 	go c.Run()
 
-	if _, err := c.Attach("ws1", ""); err != nil {
+	if _, err := c.Attach("ws1", "", "interactive"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	if _, err := c.CreatePane([]string{"bash"}, "", 0); err != nil {
@@ -147,7 +147,7 @@ func TestClientOnShellPromptFires(t *testing.T) {
 	}
 	wsID := wss[0].WorkspaceID
 
-	if _, err := c.Attach(wsID, ""); err != nil {
+	if _, err := c.Attach(wsID, "", "interactive"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 

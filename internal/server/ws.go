@@ -173,7 +173,7 @@ func (c *Client) handleTextInput(data []byte) {
 		// composition reply that announces its pane, preserving the frozen
 		// "composition FIRST" wire ordering across the goroutine boundary.
 		c.attachSeq.Lock()
-		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint)
+		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint, "interactive")
 		if err != nil {
 			c.attachSeq.Unlock()
 			c.sendError(msg.CID, msg.WorkspaceID, err)
@@ -249,6 +249,12 @@ func (c *Client) handleTextInput(data []byte) {
 		// Fire-and-forget: the daemon sends no reply.
 		if err := c.daemon.Resize(msg.PaneID, msg.Cols, msg.Rows); err != nil {
 			log.Printf("handleTextInput: resize error: %v", err)
+		}
+
+	case sessiond.TypePaneFocus:
+		// Fire-and-forget: the daemon sends no reply.
+		if err := c.daemon.PaneFocus(uint32(msg.PaneID), msg.Cols, msg.Rows); err != nil {
+			log.Printf("handleTextInput: pane-focus error: %v", err)
 		}
 
 	case sessiond.TypeRenamePane:
@@ -504,6 +510,9 @@ func (h *Hub) attachClient(c *Client) error {
 		},
 		OnPaneRenamed: func(paneID int, name string) {
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneRenamed, PaneID: paneID, Name: name})
+		},
+		OnPaneResized: func(paneID uint32, cols, rows int) {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneResized, PaneID: int(paneID), Cols: cols, Rows: rows})
 		},
 		OnBrowserCommand: func(msg *sessiond.Message) {
 			c.sendMessage(&sessiond.Message{

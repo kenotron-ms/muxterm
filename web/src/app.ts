@@ -29,6 +29,7 @@ import type { MuxSidebar } from './components/mux-sidebar.js';
 
 
 import { WorkspaceController } from './lib/workspace-controller.js';
+import { PaneFocusCoordinator } from './lib/pane-focus-coordinator.js';
 import { mintClientRef } from './lib/client-ref.js';
 import { SessiondType, type LayoutCommand } from './types.js';
 import { currentLayoutMode } from './lib/breakpoint.js';
@@ -425,6 +426,8 @@ export class MuxApp extends LitElement {
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
   private _controller: WorkspaceController | null = null;
+  private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
+  private _disposePaneFocusListeners: (() => void) | null = null;
 
   /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
    *  selectors like document.querySelector('[data-launcher-open]') work. */
@@ -479,6 +482,18 @@ export class MuxApp extends LitElement {
     // sessiond message to BOTH the store (wire-state truth) and the controller
     // (next-action decisions: bootstrap, MRU, recovery).
     this._controller = new WorkspaceController(store, this._socket);
+    this._paneFocusCoordinator = new PaneFocusCoordinator(this._socket);
+    // Non-authoritative clients: apply the daemon's canonical size directly,
+    // without re-fitting to this client's own container (letterbox/scroll —
+    // see terminal-registry.ts's applyServerResize).
+    this._socket.onPaneResized = (paneId, cols, rows) => {
+      terminalRegistry.applyServerResize(paneId, cols, rows);
+    };
+    // visibilitychange + window 'focus': this browser tab/window regaining
+    // OS focus re-claims every currently-visible pane. Mirrors the existing
+    // window.addEventListener('resize', ...) registration/cleanup pattern
+    // just below.
+    this._disposePaneFocusListeners = this._paneFocusCoordinator.installWindowListeners();
     this._socket.onSessiondMessage = (msg) => {
       // For pane-added events carrying an explicit placement token (e.g. from
       // an MCP create_pane call), pre-wire the dock's placement intent BEFORE
@@ -523,6 +538,7 @@ export class MuxApp extends LitElement {
           terminalRegistry.ensure(paneId, {
             onInput: (data) => this._socket?.sendPaneInput(paneId, data),
             onResize: (cols, rows) => this._controller?.reportResize(paneId, cols, rows),
+            onSettled: () => this._paneFocusCoordinator?.claimPane(paneId),
           });
           terminalRegistry.setExpectedReplayBytes(paneId, pane.totalSeq ?? 0);
         }
@@ -585,6 +601,9 @@ export class MuxApp extends LitElement {
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
+    this._disposePaneFocusListeners?.();
+    this._disposePaneFocusListeners = null;
+    this._paneFocusCoordinator = null;
     disposeAppShortcuts?.();
     disposeAppShortcuts = undefined;
     if (this._unsubscribe) {
@@ -650,6 +669,7 @@ export class MuxApp extends LitElement {
         // Active-view-wins: only rendered/visible panes own a live
         // ResizeObserver, so tabbed-away panes never report a resize.
         onResize: (cols, rows) => this._controller?.reportResize(paneId, cols, rows),
+        onSettled: () => this._paneFocusCoordinator?.claimPane(paneId),
       });
       liveIds.add(paneId);
     }
@@ -825,6 +845,9 @@ export class MuxApp extends LitElement {
     // ackPane is the component's responsibility (mux-pane-picker._selectPane or
     // mux-dock onDidActivePanelChange). Do not ack here — the component already did.
     store.setActivePane(e.detail.paneId);
+    // This pane just became the visible tab in this client's layout, so it
+    // should claim PTY-sizing authority (active-view-wins).
+    this._paneFocusCoordinator?.claimPane(e.detail.paneId);
   };
 
   /** Empty-state button: create a connection-scoped pane in the workspace. */

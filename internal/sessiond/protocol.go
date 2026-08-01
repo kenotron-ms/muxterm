@@ -30,6 +30,7 @@ const (
 	TypeCreatePane      = "create-pane"
 	TypeClosePane       = "close-pane"
 	TypeResize          = "resize"
+	TypePaneFocus       = "pane-focus"
 	TypeRenamePane      = "rename-pane"
 	TypeSaveLayout      = "save-layout"
 	TypeScreenSnapshot  = "screen-snapshot" // request: MCP → daemon, VT grid for a pane
@@ -54,6 +55,7 @@ const (
 	TypeBrowserActionResult = "browser-action-result" // relay browser DOM command result back to MCP client
 	TypeLayoutCommand       = "layout-command"        // relay layout mutation to browser clients
 	TypeShellPrompt         = "shell-prompt"          // OSC 133 prompt/command lifecycle
+	TypePaneResized         = "pane-resized"          // broadcast: canonical PTY size changed
 
 	// Error envelope.
 	TypeError = "error"
@@ -159,6 +161,7 @@ type Message struct {
 	Cmd         []string        `json:"cmd,omitempty"`         // argv, empty => default $SHELL
 	Title       string          `json:"title,omitempty"`       //
 	Breakpoint  string          `json:"breakpoint,omitempty"`  // responsive layout key (opaque to daemon)
+	ClientKind  string          `json:"clientKind,omitempty"`  // "interactive" (browser/human) | "agent" (MCP/automation)
 	Layout      string          `json:"layout,omitempty"`      // opaque dockview layout JSON blob
 	Workspaces  []WorkspaceInfo `json:"workspaces,omitempty"`  //
 	Panes       []PaneInfo      `json:"panes,omitempty"`       //

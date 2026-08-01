@@ -82,6 +82,12 @@ type Handlers struct {
 	// paneID is the workspace-local pane id; exitCode is the value carried in the
 	// OSC 133 ;D;N sequence (0 when absent).
 	OnShellPrompt func(paneID int, exitCode int)
+	// OnPaneResized fires when the daemon broadcasts a TypePaneResized event:
+	// the canonical PTY size for paneID changed because some other conn
+	// became (or already was) authoritative. Non-authoritative clients use
+	// this to resize their local terminal view to match without re-emitting
+	// their own resize message.
+	OnPaneResized func(paneID uint32, cols, rows int)
 	// OnBrowserActionResult fires when the daemon broadcasts a
 	// TypeBrowserActionResult event (CID == 0). msg carries PaneID plus the
 	// result fields (OK, Snapshot, Result, Error).
@@ -289,16 +295,20 @@ type Composition struct {
 
 // Attach binds this connection to the workspace identified by workspaceID and
 // returns its single composition reply. breakpoint is the active CSS breakpoint
-// token (e.g. "desktop"); pass "" when unknown. Always replays the full retained
+// token (e.g. "desktop"); pass "" when unknown. clientKind identifies this
+// connection as "interactive" (real browser/human) or "agent" (MCP/automation);
+// it is threaded onto the wire as Message.ClientKind so the daemon can exclude
+// agent input from pane focus-authority. Always replays the full retained
 // buffer — no delta tracking. Empty Panes is valid (an empty workspace), not
 // silence. After this reply, per-pane replay bytes arrive as pane-data frames
 // (routed to Handlers), followed by live output. An unknown or stale workspace
 // id surfaces as a *DaemonError with Code == CodeUnknownWorkspace.
-func (c *Client) Attach(workspaceID, breakpoint string) (Composition, error) {
+func (c *Client) Attach(workspaceID, breakpoint, clientKind string) (Composition, error) {
 	reply, err := c.request(&Message{
 		Type:        TypeAttach,
 		WorkspaceID: workspaceID,
 		Breakpoint:  breakpoint,
+		ClientKind:  clientKind,
 	})
 	if err != nil {
 		return Composition{}, err
@@ -403,6 +413,19 @@ func (c *Client) Resize(paneID, cols, rows int) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	return WriteControl(c.conn, &Message{Type: TypeResize, PaneID: paneID, Cols: cols, Rows: rows})
+}
+
+// PaneFocus tells the daemon that this connection's pane identified by the
+// workspace-local paneID has become the visible+OS-focused view, carrying the
+// client's current measured size so the daemon can claim focus authority and
+// resize the PTY in the same round-trip. It is a connection-scoped control
+// message carrying no workspaceId and is fire-and-forget: the daemon sends no
+// reply. Only meaningful for interactive (non-agent) connections — the daemon
+// silently ignores it from an agent-kind conn.
+func (c *Client) PaneFocus(paneID uint32, cols, rows int) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return WriteControl(c.conn, &Message{Type: TypePaneFocus, PaneID: int(paneID), Cols: cols, Rows: rows})
 }
 
 // BrowserActionResult forwards a browser-action-result envelope from the
@@ -534,6 +557,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeShellPrompt:
 		if h.OnShellPrompt != nil {
 			h.OnShellPrompt(msg.PaneID, msg.ExitCode)
+		}
+	case TypePaneResized:
+		if h.OnPaneResized != nil {
+			h.OnPaneResized(uint32(msg.PaneID), msg.Cols, msg.Rows)
 		}
 	case TypeBrowserCommand:
 		if h.OnBrowserCommand != nil {
