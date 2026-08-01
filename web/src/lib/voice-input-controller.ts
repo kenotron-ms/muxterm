@@ -294,3 +294,59 @@ export const voiceInputController = {
     return () => _errorListeners.delete(cb);
   },
 };
+
+// ---------------------------------------------------------------------------
+// DEV verification accessor — extends the SAME window.__muxterm object
+// terminal-registry.ts already installs (see terminal-registry.ts:1051-1056),
+// using the IDENTICAL spread pattern so neither module clobbers the other's
+// keys regardless of module evaluation order. Deliberately NOT gated behind
+// import.meta.env.DEV: this repo's `make dev-local` builds with plain
+// `vite build --watch` (no --mode development), so import.meta.env.DEV is
+// false there and a DEV-gated block would never run against it. This mirrors
+// terminal-registry.ts's own accessor, which is likewise ungated.
+// ---------------------------------------------------------------------------
+
+if (typeof window !== 'undefined') {
+  (window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm = {
+    ...(window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm,
+    voiceInput: {
+      /** Starts a session (same code path as a real button click) and
+       *  returns its session token, so a test can capture it for later
+       *  staleness checks. Returns -1 if unsupported or already active. */
+      start: (): number => {
+        start();
+        return _current?.token ?? -1;
+      },
+      /** Unconditionally invalidates the in-flight session, exactly as a
+       *  workspace-switch/unmount would (no target argument). */
+      invalidate: (): void => {
+        invalidateIfActive();
+      },
+      /**
+       * Injects a synthetic terminal event tagged with an EXPLICIT `token`
+       * (which may be stale/previously-captured), routed through the exact
+       * same token-gated handlers real recognition events use.
+       *   - kind 'result': `payload` is the raw transcript text.
+       *   - kind 'error':  `payload` is the raw SpeechRecognition error CODE
+       *     (e.g. 'not-allowed', 'no-speech') — mapped via the same
+       *     _messageForError() real errors use, not a pre-formatted message.
+       *   - kind 'end': `payload` is ignored (plain quiet-end case).
+       */
+      inject: (kind: 'result' | 'error' | 'end', token: number, payload?: string): void => {
+        if (kind === 'result') _handleResult(token, payload ?? '');
+        else if (kind === 'error') _handleError(token, _messageForError(payload ?? ''));
+        else _handleEnd(token, false);
+      },
+      /** Current state, the in-flight session's target identity (or null),
+       *  and its token (or null) — the token is what makes it possible to
+       *  test a REAL button-click-initiated session (not just accessor
+       *  .start()-initiated ones), since a real click never returns a token
+       *  any other way. */
+      state: (): { state: VoiceState; target: VoiceTarget | null; token: number | null } => ({
+        state: _state,
+        target: _current?.target ?? null,
+        token: _current?.token ?? null,
+      }),
+    },
+  };
+}
