@@ -1109,6 +1109,9 @@ export class MuxApp extends LitElement {
       case 'reconnect':
         window.location.reload();
         break;
+      case 'new-workspace':
+        this._onOpenCreateModal();
+        break;
     }
   };
 

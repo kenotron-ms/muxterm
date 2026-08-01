@@ -193,6 +193,7 @@ export class MuxTitleBar extends LitElement {
         ${this._menuOpen
           ? html`<div class="menu-anchor">
               <mux-launcher-menu
+                .showCreateWorkspace="${true}"
                 @launcher-action="${this._onLauncherAction}"
               ></mux-launcher-menu>
             </div>`

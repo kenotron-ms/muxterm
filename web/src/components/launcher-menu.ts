@@ -1,9 +1,14 @@
 import { LitElement, html, css } from 'lit';
-import { customElement } from 'lit/decorators.js';
+import { customElement, property } from 'lit/decorators.js';
 import { icon } from '../lib/icons.js';
-import { Info, Keyboard, RefreshCw, Settings } from 'lucide';
+import { Info, Keyboard, Plus, RefreshCw, Settings } from 'lucide';
 
-export type LauncherAction = 'settings' | 'shortcuts' | 'reconnect' | 'about';
+export type LauncherAction =
+  | 'settings'
+  | 'shortcuts'
+  | 'reconnect'
+  | 'about'
+  | 'new-workspace';
 
 @customElement('mux-launcher-menu')
 export class MuxLauncherMenu extends LitElement {
@@ -56,6 +61,16 @@ export class MuxLauncherMenu extends LitElement {
     }
   `;
 
+  /**
+   * Gated by the caller: <mux-title-bar> (narrow mode) sets this to `true` so
+   * mobile users have a reachable "New workspace" action. <mux-sidebar>
+   * (wide mode) leaves it at the default `false` — it already has its own
+   * always-visible "+ New workspace" button, so surfacing it here too would
+   * be a duplicate leaking into desktop.
+   */
+  @property({ type: Boolean })
+  showCreateWorkspace = false;
+
   private _dispatch(action: LauncherAction): void {
     this.dispatchEvent(
       new CustomEvent('launcher-action', {
@@ -68,6 +83,17 @@ export class MuxLauncherMenu extends LitElement {
 
   render() {
     return html`
+      ${this.showCreateWorkspace
+        ? html`
+            <button
+              data-action="new-workspace"
+              @click="${() => this._dispatch('new-workspace')}"
+            >
+              ${icon(Plus, { size: 14 })} New workspace
+            </button>
+            <div class="divider"></div>
+          `
+        : ''}
       <button data-action="settings" @click="${() => this._dispatch('settings')}">
         ${icon(Settings, { size: 14 })} Settings
       </button>
