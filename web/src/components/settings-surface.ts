@@ -3,6 +3,12 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES } from '../lib/theme.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
+import {
+  instanceLabel,
+  restoreTitlebarColor,
+  persistTitlebarColor,
+  applyTitlebarColor,
+} from '../lib/instance-identity.js';
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -394,6 +400,56 @@ export class MuxSettingsSurface extends LitElement {
       margin: 22px 0;
     }
 
+    /* ── Title bar color picker ── */
+    .titlebar-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .titlebar-swatch {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      border: 1px solid var(--chrome-border);
+      padding: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+      /* Native color input chrome varies a lot by browser — strip it down
+         to just the swatch so it matches the rest of the UI. */
+      -webkit-appearance: none;
+      appearance: none;
+      background: none;
+    }
+    .titlebar-swatch::-webkit-color-swatch-wrapper {
+      padding: 0;
+    }
+    .titlebar-swatch::-webkit-color-swatch {
+      border: none;
+      border-radius: 7px;
+    }
+
+    .titlebar-reset-btn {
+      background: transparent;
+      border: 1px solid var(--chrome-border);
+      color: var(--chrome-text-dim);
+      border-radius: 6px;
+      padding: 7px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: border-color 0.1s, color 0.1s;
+    }
+    .titlebar-reset-btn:hover {
+      border-color: var(--chrome-accent);
+      color: var(--chrome-text-bright);
+    }
+
+    .titlebar-hint {
+      font-size: 12px;
+      color: var(--chrome-text-dim);
+      margin: 0;
+    }
+
     /* ── Bell radios ── */
     .bell-radios {
       display: flex;
@@ -445,6 +501,9 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _section: 'appearance' | 'notifications' = 'appearance';
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
+  // Per-browser (localStorage), not server config — distinguishes this
+  // machine's window/PWA from other muxterm instances. See instance-identity.ts.
+  @state() private _titlebarColor: string | null = restoreTitlebarColor();
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -490,6 +549,20 @@ export class MuxSettingsSurface extends LitElement {
   private _setBell(bell: ResolvedConfig['terminal']['bell']): void {
     if (!this.config) return;
     this._emit({ terminal: { ...this.config.terminal, bell } });
+  }
+
+  /** Applies + persists a new title-bar accent color immediately (no server round trip). */
+  private _setTitlebarColor(color: string): void {
+    this._titlebarColor = color;
+    persistTitlebarColor(color);
+    applyTitlebarColor(color);
+  }
+
+  /** Clears the custom title-bar color, reverting to the current theme's default. */
+  private _resetTitlebarColor(): void {
+    this._titlebarColor = null;
+    persistTitlebarColor(null);
+    applyTitlebarColor(null);
   }
 
   private _sendTestNotification(): void {
@@ -678,6 +751,42 @@ export class MuxSettingsSurface extends LitElement {
         <p class="section-title">Font</p>
         ${this._renderFontPicker()}
       </div>
+
+      <div class="section-gap">
+        <p class="section-title">Title Bar Color</p>
+        ${this._renderTitlebarColorPicker()}
+      </div>
+    `;
+  }
+
+  /** Live --chrome-bar value (theme's current default), as a fallback swatch
+   *  seed when no custom title-bar color has been picked yet. Native
+   *  <input type="color"> requires an exact 6-digit hex, which is what every
+   *  built-in theme's `bar` token already is (see theme.ts CHROME_DARK/LIGHT). */
+  private get _currentChromeBarHex(): string {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--chrome-bar').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(v) ? v : '#16161e';
+  }
+
+  private _renderTitlebarColorPicker() {
+    const color = this._titlebarColor;
+    return html`
+      <div class="titlebar-row">
+        <input
+          class="titlebar-swatch"
+          type="color"
+          title="Pick a title bar color"
+          .value="${color ?? this._currentChromeBarHex}"
+          @input="${(e: Event) => this._setTitlebarColor((e.target as HTMLInputElement).value)}"
+        />
+        <button class="titlebar-reset-btn" @click="${() => this._resetTitlebarColor()}">
+          Use theme default
+        </button>
+      </div>
+      <p class="titlebar-hint" style="margin-top:8px">
+        Only affects this browser on <strong>${instanceLabel()}</strong> — handy for
+        telling multiple muxterm instances apart at a glance.
+      </p>
     `;
   }
 

@@ -9,6 +9,7 @@ import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
+import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
 import { injectTerminalFont } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
 
@@ -522,6 +523,12 @@ export class MuxApp extends LitElement {
     // Apply default theme tokens immediately so --mux-* and --chrome-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     applyChromeTokens(store.config.theme.palette);
+    // Reflect which machine this instance is running on — document title
+    // (PWA window title / browser tab / Alt-Tab preview) and, if the user
+    // picked one in Settings, a distinguishing title-bar accent color.
+    // Per-browser (localStorage), not server config — see instance-identity.ts.
+    applyDocumentTitle();
+    applyTitlebarColor(restoreTitlebarColor());
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
     disposeKeys = installKeybindings(uiActions);
     // Install fixed app-level shortcuts (Cmd+W close, Cmd+T new pane). These
