@@ -22,7 +22,8 @@
     "@xterm/xterm": "^6.0.0",
     "dockview-core": "^6.6.1",
     "lit": "^3.2.0",
-    "lucide": "^1.17.0"
+    "lucide": "^1.17.0",
+    "split.js": "^1.6.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
