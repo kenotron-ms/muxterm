@@ -35,6 +35,41 @@ import { mintClientRef } from './lib/client-ref.js';
 import { SessiondType, type LayoutCommand } from './types.js';
 import { currentLayoutMode } from './lib/breakpoint.js';
 import { muxLog, muxLogReset } from './lib/mux-log.js';
+import Split from 'split.js';
+import type { Instance as SplitInstance } from 'split.js';
+import {
+  restoreSidebarWidth,
+  persistSidebarWidth,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+} from './lib/sidebar-width.js';
+
+/** Split.js gutter size (px), used both as the `gutterSize` option passed to
+ *  `Split(...)` in `_initSplit()` below and as the half-gutter compensation
+ *  in `widthPxToSplitPercent()` — defined once so the two can never drift
+ *  out of sync if the gutter size is ever changed. */
+const SIDEBAR_GUTTER_SIZE = 4;
+/** Small positive bias (px) that makes Split's percentage renderer round to
+ *  the requested whole pixel instead of occasionally landing 1/64px short. */
+const SIDEBAR_SUBPIXEL_ROUNDING_BIAS = 0.001;
+
+/** Converts a target sidebar pixel width into the percentage Split.js needs,
+ *  compensating for its default renderer's half-gutter subtraction so the
+ *  actual rendered width equals `targetPx`. Split's default
+ *  `calc(size% - gutSize px)` renderer always subtracts a half-gutter share
+ *  (`gutterSize / 2`) from whatever percentage-derived width it computes;
+ *  without this compensation an unadjusted percentage renders
+ *  `targetPx - gutterSize / 2`, not `targetPx` (e.g. a 220px target
+ *  rendering as 218px). Used by both `_initSplit()`'s initial `sizes`
+ *  computation and the `ResizeObserver` callback's `setSizes()`
+ *  recalculation. `onDragEnd` first reads the actual rendered
+ *  `getBoundingClientRect().width`, then uses this conversion once to snap it
+ *  back to a whole pixel. The small positive bias keeps CSS subpixel
+ *  quantization from resolving an otherwise exact target 1/64px short. */
+function widthPxToSplitPercent(targetPx: number, containerWidth: number, gutterSize: number): number {
+  return ((targetPx + gutterSize / 2 + SIDEBAR_SUBPIXEL_ROUNDING_BIAS) / containerWidth) * 100;
+}
 
 // Optimistic panes use a strictly-negative temp paneId so they never collide
 // with the daemon's positive workspace-local ids (which start at 1); the real
@@ -379,6 +414,22 @@ export class MuxApp extends LitElement {
       overflow: hidden;
       min-width: 0;
     }
+
+    /* Split.js gutter — styled to visually match the removed
+       mux-sidebar.ts .resize-handle (4px, transparent, col-resize cursor,
+       hover highlight). Unlike the old absolutely-positioned overlay, this
+       is a real flex-row sibling occupying its own layout width. */
+    .sidebar-gutter {
+      width: 4px;
+      cursor: col-resize;
+      background: transparent;
+      transition: background 0.15s;
+    }
+
+    .sidebar-gutter:hover {
+      background: var(--chrome-accent);
+      opacity: 0.4;
+    }
   `;
 
   /** Bumped whenever the store notifies; drives Lit re-render off wire state. */
@@ -429,6 +480,22 @@ export class MuxApp extends LitElement {
   private _controller: WorkspaceController | null = null;
   private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
   private _disposePaneFocusListeners: (() => void) | null = null;
+
+  /** Split.js instance managing the sidebar/main-pane resize boundary,
+   *  owned here (not mux-sidebar.ts) since Split.js needs both sibling DOM
+   *  elements at once — see
+   *  docs/designs/2026-08-01-sidebar-resize-splitjs-design.md. */
+  private _split: SplitInstance | null = null;
+  /** Observes .content-area so the sidebar can be kept pixel-fixed across
+   *  window resizes despite Split's percentage-based rendering. */
+  private _resizeObserver: ResizeObserver | null = null;
+  /** The fixed pixel width the sidebar should render at; updated only in
+   *  onDragEnd, otherwise held constant across container resizes. */
+  private _sidebarWidthPx = SIDEBAR_DEFAULT_WIDTH;
+  /** True while a Split.js drag gesture is in progress; consulted by the
+   *  ResizeObserver callback (skip recompute mid-drag) and by
+   *  _destroySplit() (force a synthetic mouseup before teardown). */
+  private _dragging = false;
 
   /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
    *  selectors like document.querySelector('[data-launcher-open]') work. */
@@ -595,6 +662,15 @@ export class MuxApp extends LitElement {
     this._socket.connect();
     this._connectionStatus = 'reconnecting';
     this._pollConnectionStatus();
+
+    // Reconnect-while-already-wide: if <mux-app> disconnects and reconnects
+    // while _layoutMode was already 'wide' throughout, no _layoutMode change
+    // fires to trigger the updated() init path below, but
+    // disconnectedCallback() has already nulled _split. Re-init here covers
+    // that gap.
+    if (this._layoutMode === 'wide' && !this._split) {
+      this._initSplit();
+    }
   }
 
   disconnectedCallback(): void {
@@ -622,6 +698,7 @@ export class MuxApp extends LitElement {
     this._closingPanes.clear();
     for (const entry of this._pendingWorkspaceCloses.values()) clearTimeout(entry.timer);
     this._pendingWorkspaceCloses.clear();
+    this._destroySplit();
   }
 
   /**
@@ -630,9 +707,15 @@ export class MuxApp extends LitElement {
    * attached workspace so background (tabbed-away) panes stay fed and keep
    * their scrollback. Panes no longer in the composition are prune()'d.
    */
-  override willUpdate(_changedProperties: Map<PropertyKey, unknown>): void {
-    super.willUpdate(_changedProperties);
+  override willUpdate(changedProperties: Map<PropertyKey, unknown>): void {
+    super.willUpdate(changedProperties);
     this._syncTerminals();
+    // Wide→narrow: destroy Split.js BEFORE Lit removes <mux-sidebar> from the
+    // DOM (willUpdate fires pre-render) — see
+    // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
+    if (changedProperties.has('_layoutMode') && this._layoutMode === 'narrow' && this._split) {
+      this._destroySplit();
+    }
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {
@@ -642,6 +725,12 @@ export class MuxApp extends LitElement {
       requestAnimationFrame(() => {
         this.shadowRoot?.querySelector<HTMLInputElement>('.ws-create-input')?.focus();
       });
+    }
+    // Narrow→wide: init Split.js AFTER Lit has placed the sidebar/main-pane
+    // elements back in the DOM (updated fires post-render) — see
+    // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
+    if (changed.has('_layoutMode') && this._layoutMode === 'wide' && !this._split) {
+      this._initSplit();
     }
   }
 
@@ -681,6 +770,82 @@ export class MuxApp extends LitElement {
       if (!store.panes.some((p) => p.paneId === id)) toDelete.add(id);
     }
     for (const id of toDelete) this._closingPanes.delete(id);
+  }
+
+  private _initSplit(): void {
+    const sidebarEl = this.renderRoot.querySelector<HTMLElement>('mux-sidebar');
+    const mainPaneEl = this.renderRoot.querySelector<HTMLElement>('.main-pane');
+    const contentAreaEl = this.renderRoot.querySelector<HTMLElement>('.content-area');
+    if (!sidebarEl || !mainPaneEl || !contentAreaEl || this._split) return;
+
+    this._sidebarWidthPx = restoreSidebarWidth();
+    const pct = widthPxToSplitPercent(this._sidebarWidthPx, contentAreaEl.clientWidth, SIDEBAR_GUTTER_SIZE);
+
+    this._split = Split([sidebarEl, mainPaneEl], {
+      // Percentage sizes, Split's own default calc() renderer — no custom
+      // elementStyle (see design doc's Architecture section for why the
+      // prior custom pixel-based renderer was removed).
+      sizes: [pct, 100 - pct],
+      minSize: [SIDEBAR_MIN_WIDTH, 0],       // main-pane keeps today's "no enforced minimum"
+      maxSize: [SIDEBAR_MAX_WIDTH, Infinity],
+      // Split defaults to a 30px snap zone around min/max. The removed
+      // hand-rolled handler clamped only at the exact boundaries, so disable
+      // snapping to retain smooth, pointer-tracking behavior until then.
+      snapOffset: 0,
+      gutterSize: SIDEBAR_GUTTER_SIZE,        // matches removed .resize-handle width
+      gutter: () => {
+        const g = document.createElement('div');
+        g.className = 'sidebar-gutter'; // styled above to match old .resize-handle
+        return g;
+      },
+      onDragStart: () => {
+        this._dragging = true;
+      },
+      onDragEnd: () => {
+        this._dragging = false;
+        // Split's default percentage renderer may land 1/64px below an
+        // integer pixel during a drag. Preserve the legacy integer-pixel
+        // persistence contract, then apply the compensated percentage once
+        // more so the rendered value matches the persisted integer exactly.
+        this._sidebarWidthPx = Math.round(sidebarEl.getBoundingClientRect().width);
+        const settledPct = widthPxToSplitPercent(
+          this._sidebarWidthPx,
+          contentAreaEl.clientWidth,
+          SIDEBAR_GUTTER_SIZE,
+        );
+        this._split?.setSizes([settledPct, 100 - settledPct]);
+        persistSidebarWidth(this._sidebarWidthPx);
+      },
+    });
+
+    // Keep the sidebar's literal pixel width fixed across container resizes
+    // — Split's percentage sizing is otherwise proportionally responsive to
+    // .content-area's width, which today's implementation is not. Matches
+    // today's exact fixed-until-next-drag behavior. Skipped mid-drag so it
+    // doesn't fight the user's in-progress gesture.
+    this._resizeObserver = new ResizeObserver(() => {
+      if (!this._split || this._dragging) return;
+      const newPct = widthPxToSplitPercent(this._sidebarWidthPx, contentAreaEl.clientWidth, SIDEBAR_GUTTER_SIZE);
+      this._split.setSizes([newPct, 100 - newPct]);
+    });
+    this._resizeObserver.observe(contentAreaEl);
+  }
+
+  private _destroySplit(): void {
+    if (this._dragging) {
+      // Split.destroy() is not a drag-cancellation API — it does not remove
+      // the global mousemove/mouseup/touchmove/touchend listeners
+      // startDragging attached to `window`, nor reset the
+      // user-select/pointer-events inline styles or document.body.style.cursor
+      // it set (those are separate from the width styles destroy() does
+      // reset). Force Split's own stopDragging cleanup to run first by
+      // dispatching a synthetic mouseup.
+      window.dispatchEvent(new MouseEvent('mouseup'));
+    }
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = null;
+    this._split?.destroy();
+    this._split = null;
   }
 
   render() {

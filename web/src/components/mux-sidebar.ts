@@ -5,15 +5,7 @@ import { workspaceLabel } from './workspace-picker.js';
 import './launcher-menu.js';
 import { icon } from '../lib/icons.js';
 import { Ellipsis } from 'lucide';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-export const SIDEBAR_WIDTH_KEY = 'mux-sidebar-width';
-export const SIDEBAR_DEFAULT_WIDTH = 220;
-export const SIDEBAR_MIN_WIDTH = 160;
-export const SIDEBAR_MAX_WIDTH = 360;
+import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 
 // ---------------------------------------------------------------------------
 // Component
@@ -27,7 +19,6 @@ export class MuxSidebar extends LitElement {
       flex-direction: column;
       background: var(--chrome-bar);
       border-right: 1px solid var(--chrome-border);
-      width: 220px;
       min-width: ${unsafeCSS(String(SIDEBAR_MIN_WIDTH))}px;
       max-width: ${unsafeCSS(String(SIDEBAR_MAX_WIDTH))}px;
       height: 100%;
@@ -216,25 +207,6 @@ export class MuxSidebar extends LitElement {
       border-color: var(--chrome-accent);
       background: var(--chrome-hover);
     }
-
-    /* ---- drag resize handle ---- */
-
-    .resize-handle {
-      position: absolute;
-      top: 0;
-      right: 0;
-      width: 4px;
-      height: 100%;
-      cursor: col-resize;
-      background: transparent;
-      z-index: 10;
-      transition: background 0.15s;
-    }
-
-    .resize-handle:hover {
-      background: var(--chrome-accent);
-      opacity: 0.4;
-    }
   `;
 
   // ---------------------------------------------------------------------------
@@ -277,24 +249,6 @@ export class MuxSidebar extends LitElement {
     this._unsub = store.subscribe(() => {
       this._version++;
     });
-
-    // Restore persisted sidebar width from localStorage (clamp to [min, max]).
-    try {
-      const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY);
-      if (stored !== null) {
-        const parsed = parseInt(stored, 10);
-        if (!Number.isNaN(parsed) && parsed >= SIDEBAR_MIN_WIDTH && parsed <= SIDEBAR_MAX_WIDTH) {
-          this.style.width = `${parsed}px`;
-        } else {
-          this.style.width = `${SIDEBAR_DEFAULT_WIDTH}px`;
-        }
-      } else {
-        this.style.width = `${SIDEBAR_DEFAULT_WIDTH}px`;
-      }
-    } catch {
-      this.style.width = `${SIDEBAR_DEFAULT_WIDTH}px`;
-    }
-
   }
 
   override disconnectedCallback(): void {
@@ -464,37 +418,6 @@ export class MuxSidebar extends LitElement {
   }
 
   // ---------------------------------------------------------------------------
-  // Drag-to-resize
-  // ---------------------------------------------------------------------------
-
-  private _onResizeStart(e: PointerEvent): void {
-    const startX = e.clientX;
-    const startW = this.offsetWidth;
-
-    const onMove = (me: PointerEvent): void => {
-      const delta = me.clientX - startX;
-      const newW = Math.max(
-        SIDEBAR_MIN_WIDTH,
-        Math.min(SIDEBAR_MAX_WIDTH, startW + delta),
-      );
-      this.style.width = `${newW}px`;
-      try {
-        localStorage.setItem(SIDEBAR_WIDTH_KEY, String(newW));
-      } catch {
-        // Ignore localStorage errors.
-      }
-    };
-
-    const onUp = (): void => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-    };
-
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-  }
-
-  // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
 
@@ -519,10 +442,6 @@ export class MuxSidebar extends LitElement {
       <div class="tab-content">
         ${this._renderWorkspaces()}
       </div>
-      <div
-        class="resize-handle"
-        @pointerdown="${(e: PointerEvent) => this._onResizeStart(e)}"
-      ></div>
     `;
   }
 }
