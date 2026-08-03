@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || 386)
+//go:build linux
 
 package loginbackend
 
