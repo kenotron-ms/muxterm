@@ -14,19 +14,22 @@ builds:
       - CGO_ENABLED=0
     # Windows is excluded: muxterm uses Unix PTYs and Unix domain sockets
     # (sessiond.SocketPath) which are not available on Windows.
+    # Linux arm64 is excluded: github.com/msteinert/pam/v2 (PAM bindings for Phase 1 auth)
+    # has build constraints that exclude Linux ARM targets during cross-compilation.
+    # Phase 4 and 5 may add platform backends that don't have this constraint.
     goos:
       - linux
+      - linux
+      - darwin
       - darwin
     goarch:
       - amd64
       - arm64
-    # Linux arm64 is excluded: github.com/msteinert/pam/v2 (PAM bindings for Phase 1 auth)
-    # has build constraints that exclude Linux ARM targets during cross-compilation.
-    # Phase 4 and 5 may add platform backends that don't have this constraint.
-    overrides:
+      - amd64
+      - arm64
+    ignore:
       - goos: linux
         goarch: arm64
-        skip: true
     ldflags:
       - -s -w
 
