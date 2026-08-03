@@ -39,9 +39,6 @@ type Config struct {
 	// non-loopback request is denied (fail closed), and /authorize,
 	// /token, /auth/login, /auth/callback are not mounted at all.
 	AuthServer *authserver.AuthServer
-	// WebRedirectURI is the exact-match redirect URI for the muxterm-web
-	// OAuth client (e.g. "http://127.0.0.1:8311/auth/callback").
-	WebRedirectURI string
 }
 
 // Server is the HTTP server for muxterm.
@@ -52,8 +49,7 @@ type Server struct {
 	hub     *Hub
 	tunnels *TunnelRegistry
 
-	authSrv        *authserver.AuthServer
-	webRedirectURI string
+	authSrv *authserver.AuthServer
 
 	// configPath is the file path for persisting PATCH /api/config writes.
 	// Empty string means writes are skipped (dev/test mode).
@@ -71,13 +67,12 @@ func New(cfg Config) *Server {
 	hub.tunnels = tunnels
 
 	s := &Server{
-		addr:           cfg.Addr,
-		noAuth:         cfg.NoAuth,
-		mux:            http.NewServeMux(),
-		hub:            hub,
-		tunnels:        tunnels,
-		authSrv:        cfg.AuthServer,
-		webRedirectURI: cfg.WebRedirectURI,
+		addr:    cfg.Addr,
+		noAuth:  cfg.NoAuth,
+		mux:     http.NewServeMux(),
+		hub:     hub,
+		tunnels: tunnels,
+		authSrv: cfg.AuthServer,
 	}
 
 	s.configPath = cfg.ConfigPath

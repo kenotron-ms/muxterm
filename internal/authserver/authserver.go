@@ -33,11 +33,6 @@ const AuthorizeCodeTTL = 10 * time.Minute
 
 // Config configures a new AuthServer.
 type Config struct {
-	// WebRedirectURI is the exact-match redirect URI for the muxterm-web
-	// client (e.g. "http://127.0.0.1:8311/auth/callback" in Phase 1's
-	// direct/local-dev mode). Phase 3 will derive this from public_origin
-	// when behind_reverse_proxy is set.
-	WebRedirectURI string
 	// LoginBackend performs the actual resource-owner credential check.
 	// Required.
 	LoginBackend loginbackend.LoginBackend
@@ -61,8 +56,9 @@ type AuthServer struct {
 
 // New wires a Manager (PKCE S256-only, authorization-code-grant-only, no
 // refresh tokens, 30-day access-token TTL) with the hardcoded ClientStore,
-// the file-backed TokenStore, and the loopback-port-wildcard redirect URI
-// exception bounded to muxterm-mcp.
+// the file-backed TokenStore, per-request muxterm-web redirect URI
+// validation, and the loopback-port-wildcard redirect URI exception bounded
+// to muxterm-mcp.
 func New(cfg Config) (*AuthServer, error) {
 	if cfg.LoginBackend == nil {
 		return nil, errors.New("authserver: LoginBackend is required")
@@ -84,7 +80,7 @@ func New(cfg Config) (*AuthServer, error) {
 		return nil, fmt.Errorf("authserver: token store: %w", err)
 	}
 	manager.MapTokenStorage(tokenStore)
-	manager.MapClientStorage(NewClientStore(cfg.WebRedirectURI))
+	manager.MapClientStorage(NewClientStore())
 
 	srvCfg := &oaserver.Config{
 		TokenType:                   "Bearer",
@@ -121,8 +117,36 @@ func (a *AuthServer) RevokeAccessToken(ctx context.Context, token string) error 
 	return a.manager.RemoveAccessToken(ctx, token)
 }
 
+// validateWebClientRedirectURI is the authoritative redirect_uri check for the
+// muxterm-web client. Unlike muxterm-mcp's bounded loopback-port exception
+// (validateRedirectURI's mcpDomainSentinel branch, which the go-oauth2/oauth2
+// library invokes via ValidateURIHandler), the web client's valid redirect_uri
+// is inherently per-request: it must match whatever host:port the browser
+// used to reach THIS server right now, which the library's
+// ValidateURIHandler callback cannot see (it receives only two strings, no
+// *http.Request). So this check runs here, using the real incoming request,
+// before we ever delegate to the library -- this is the actual security
+// boundary for muxterm-web, not the library's own ClientStore-based check.
+func validateWebClientRedirectURI(r *http.Request, redirectURI string) error {
+	expected := "http://" + r.Host + "/auth/callback"
+	if redirectURI != expected {
+		return fmt.Errorf("authserver: redirect_uri %q does not match this request's host (expected %q)", redirectURI, expected)
+	}
+	return nil
+}
+
 // ServeAuthorize handles GET/POST /authorize.
 func (a *AuthServer) ServeAuthorize(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if r.FormValue("client_id") == ClientWeb {
+		if err := validateWebClientRedirectURI(r, r.FormValue("redirect_uri")); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if err := a.srv.HandleAuthorizeRequest(w, r); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	}

@@ -186,28 +186,15 @@ func newSessiondDialer() server.DialFunc {
 	}
 }
 
-// webRedirectURIFor returns the exact-match redirect URI for the
-// muxterm-web OAuth client, derived from addr (the server's listen
-// address). A "0.0.0.0" or unparseable host is normalized to 127.0.0.1,
-// since the browser always reaches muxterm via loopback in Phase 1 (no
-// public reachability until Phase 3's Caddy/public_origin wiring).
-func webRedirectURIFor(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil || host == "" || host == "0.0.0.0" {
-		host = "127.0.0.1"
-	}
-	return "http://" + net.JoinHostPort(host, port) + "/auth/callback"
-}
-
 // newAuthServer wires the platform login backend (PAM on Linux; a
 // fail-closed stub on other platforms until Phases 4-5) into a new
-// AuthServer for addr. A non-nil error means the login backend is
+// AuthServer. A non-nil error means the login backend is
 // unavailable; callers MUST still start the HTTP server (loopback access
 // is unaffected) but MUST pass the resulting nil *authserver.AuthServer
 // through to server.Config so the auth middleware fails closed for any
 // non-loopback caller — see design doc Error Handling, "Login backend
 // unavailable."
-func newAuthServer(addr string) (*authserver.AuthServer, error) {
+func newAuthServer() (*authserver.AuthServer, error) {
 	backend, err := loginbackend.New()
 	if err != nil {
 		return nil, err
@@ -216,10 +203,9 @@ func newAuthServer(addr string) (*authserver.AuthServer, error) {
 	tokenDir := filepath.Join(filepath.Dir(config.DefaultPath()), "auth")
 
 	return authserver.New(authserver.Config{
-		WebRedirectURI: webRedirectURIFor(addr),
-		LoginBackend:   backend,
-		TokenStoreDir:  tokenDir,
-		RateLimiter:    authserver.NewRateLimiter(5, 15*time.Minute),
+		LoginBackend:  backend,
+		TokenStoreDir: tokenDir,
+		RateLimiter:   authserver.NewRateLimiter(5, 15*time.Minute),
 	})
 }
 
@@ -229,18 +215,17 @@ func newAuthServer(addr string) (*authserver.AuthServer, error) {
 func runLocal(cfg Config) error {
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
 
-	authSrv, err := newAuthServer(cfg.Addr)
+	authSrv, err := newAuthServer()
 	if err != nil {
 		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
 	}
 
 	srv := server.New(server.Config{
-		Addr:           cfg.Addr,
-		StaticFS:       mustSubFS(webstatic.Dist, "dist"),
-		ConfigPath:     config.DefaultPath(),
-		InitialConfig:  resolved,
-		AuthServer:     authSrv,
-		WebRedirectURI: webRedirectURIFor(cfg.Addr),
+		Addr:          cfg.Addr,
+		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
+		ConfigPath:    config.DefaultPath(),
+		InitialConfig: resolved,
+		AuthServer:    authSrv,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
@@ -269,19 +254,18 @@ func runLocal(cfg Config) error {
 func runServe(cfg Config) error {
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
 
-	authSrv, err := newAuthServer(cfg.Addr)
+	authSrv, err := newAuthServer()
 	if err != nil {
 		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
 	}
 
 	srv := server.New(server.Config{
-		Addr:           cfg.Addr,
-		StaticFS:       mustSubFS(webstatic.Dist, "dist"),
-		NoAuth:         cfg.NoAuth,
-		ConfigPath:     config.DefaultPath(),
-		InitialConfig:  resolved,
-		AuthServer:     authSrv,
-		WebRedirectURI: webRedirectURIFor(cfg.Addr),
+		Addr:          cfg.Addr,
+		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
+		NoAuth:        cfg.NoAuth,
+		ConfigPath:    config.DefaultPath(),
+		InitialConfig: resolved,
+		AuthServer:    authSrv,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())

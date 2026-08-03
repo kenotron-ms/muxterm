@@ -49,3 +49,7 @@ These are NOT tests. They are type and lint checks:
 ### Existing test files
 
 There are existing `*_test.go` and `*.test.ts` files in the repo. Do not delete them (too disruptive), but do not add new ones. If a test file breaks because of your changes, fix the test to match the new behavior — do not write new tests to "cover" your change.
+
+## OAuth Redirect Security Invariant
+
+For direct-bind access, `muxterm-web` derives its OAuth `redirect_uri` from the current request's `Host` and validates that exact value in `AuthServer.ServeAuthorize` before invoking go-oauth2. The ClientStore's `webDomainSentinel` branch is deliberately permissive because it cannot see the request; it is not the security boundary. Token exchange remains bound to the exact redirect URI stored with the authorization code. Do not reintroduce a redirect URI computed from the listen address at startup. A future configured public origin may override the request-derived value at both call sites.

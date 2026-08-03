@@ -20,6 +20,12 @@ const (
 	// one, matching the design doc's intent.
 	ClientMCP = "muxterm-mcp"
 
+	// webDomainSentinel is the deliberately non-URL-shaped placeholder
+	// Domain for ClientWeb. The authoritative per-request check runs in
+	// AuthServer.ServeAuthorize, where the incoming request's Host is
+	// available.
+	webDomainSentinel = "muxterm-web:dynamic"
+
 	// mcpDomainSentinel is the fixed placeholder Domain value for
 	// ClientMCP. It is not itself a real redirect URI — it exists only so
 	// validateRedirectURI can recognize "this is the muxterm-mcp client"
@@ -33,17 +39,16 @@ type staticClientStore struct {
 
 // NewClientStore returns the fixed ClientStore containing muxterm-web and
 // muxterm-mcp. There is no dynamic client registration (see design doc
-// "Alternatives Considered"). webRedirectURI is the exact-match redirect
-// URI for the web client — in Phase 1 (no Caddy/public_origin wiring yet)
-// this is always the loopback callback URL; Phase 3 will derive it from
-// public_origin when behind_reverse_proxy is set.
-func NewClientStore(webRedirectURI string) oauth2.ClientStore {
+// "Alternatives Considered"). muxterm-web's redirect URI is validated
+// dynamically in AuthServer.ServeAuthorize because only that layer has the
+// incoming request needed to derive the browser's actual origin.
+func NewClientStore() oauth2.ClientStore {
 	return &staticClientStore{
 		clients: map[string]oauth2.ClientInfo{
 			ClientWeb: &models.Client{
 				ID:     ClientWeb,
 				Secret: "", // public client, no secret — PKCE only
-				Domain: webRedirectURI,
+				Domain: webDomainSentinel,
 				Public: true,
 			},
 			ClientMCP: &models.Client{
@@ -64,11 +69,12 @@ func (s *staticClientStore) GetByID(_ context.Context, id string) (oauth2.Client
 	return c, nil
 }
 
-// validateRedirectURI implements the ONE bounded exception described in the
-// design doc's "Client model": muxterm-web requires an exact string match
-// (handled by the clientDomain == redirectURI case, which covers any
-// client whose Domain isn't the muxterm-mcp sentinel). muxterm-mcp allows
-// any port on http://127.0.0.1 — scheme and host are still exact.
+// validateRedirectURI implements the library-level redirect URI checks.
+// muxterm-web's authoritative exact-match check runs in
+// AuthServer.ServeAuthorize because it requires the incoming request's Host.
+// muxterm-mcp keeps the ONE bounded exception described in the design doc's
+// "Client model": any port on http://127.0.0.1 is allowed, while scheme and
+// host are still exact.
 //
 // Path is intentionally NOT validated for muxterm-mcp here: the exact
 // callback path is a Phase 2 decision (MCP-over-HTTP's client contract
@@ -77,6 +83,16 @@ func (s *staticClientStore) GetByID(_ context.Context, id string) (oauth2.Client
 // a gap in this phase's own scope (ClientMCP is unused until Phase 2).
 func validateRedirectURI(clientDomain, redirectURI string) error {
 	if clientDomain == redirectURI {
+		return nil
+	}
+
+	if clientDomain == webDomainSentinel {
+		// For authorization requests, the authoritative muxterm-web check
+		// already happened in AuthServer.ServeAuthorize, which has real
+		// *http.Request access this callback's (domain, redirectURI string)
+		// signature does not. At token exchange, go-oauth2 binds the submitted
+		// URI to the exact URI stored with the authorization code. This branch
+		// is a documented, deliberate pass-through, not a missing check.
 		return nil
 	}
 

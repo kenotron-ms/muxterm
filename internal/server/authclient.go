@@ -24,6 +24,15 @@ type pkceState struct {
 	ReturnTo string `json:"return_to"`
 }
 
+// redirectURIForWebRequest returns the muxterm-web redirect_uri for r,
+// derived from the actual host the browser used to reach this server (not
+// a static startup value) -- see authserver.go's web-client validator,
+// which enforces that only THIS exact value is ever accepted for THIS
+// exact request.
+func redirectURIForWebRequest(r *http.Request) string {
+	return "http://" + r.Host + "/auth/callback"
+}
+
 // handleAuthLogin initiates the muxterm-web OAuth 2.1 + PKCE login flow: it
 // generates a fresh code_verifier/state pair, stashes them (plus the
 // original return_to path) in a short-lived HttpOnly cookie, and redirects
@@ -69,7 +78,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	q := url.Values{
 		"response_type":         {"code"},
 		"client_id":             {authserver.ClientWeb},
-		"redirect_uri":          {s.webRedirectURI},
+		"redirect_uri":          {redirectURIForWebRequest(r)},
 		"state":                 {state},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
@@ -114,7 +123,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, expiresIn, err := s.authSrv.ExchangeAuthorizationCode(authserver.ClientWeb, code, ps.Verifier, s.webRedirectURI)
+	accessToken, expiresIn, err := s.authSrv.ExchangeAuthorizationCode(authserver.ClientWeb, code, ps.Verifier, redirectURIForWebRequest(r))
 	if err != nil {
 		http.Error(w, "token exchange failed: "+err.Error(), http.StatusUnauthorized)
 		return
