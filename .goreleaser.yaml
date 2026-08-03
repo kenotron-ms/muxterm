@@ -11,7 +11,9 @@ builds:
     main: ./cmd/muxterm
     binary: muxterm
     env:
-      - CGO_ENABLED=0
+      # CGO_ENABLED=1 required for msteinert/pam/v2 (PAM Phase 1 auth backend)
+      # which is a C binding and cannot build with CGO disabled.
+      - CGO_ENABLED=1
     goos:
       - linux
     goarch:
@@ -25,6 +27,8 @@ builds:
     main: ./cmd/muxterm
     binary: muxterm
     env:
+      # CGO_ENABLED=0: Darwin build doesn't use C bindings (OpenDirectory PAM
+      # backend arrives in Phase 4). Pure Go build for maximum portability.
       - CGO_ENABLED=0
     goos:
       - darwin
