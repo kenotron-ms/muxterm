@@ -167,14 +167,15 @@ func (a *AuthServer) userAuthorizationHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	ip := clientIP(r)
-	if !a.limiter.Allow(ip) {
+	if !a.limiter.Reserve(ip) {
 		a.renderLoginPage(w, r, "Too many failed attempts. Try again later.")
 		return "", nil
 	}
 
 	password := r.FormValue("password")
 	if err := a.login.Authenticate(password); err != nil {
-		a.limiter.RecordFailure(ip)
+		// Reserve(ip) already recorded this attempt as a failure atomically
+		// before we called Authenticate — no separate RecordFailure call.
 		a.renderLoginPage(w, r, "Invalid credentials.")
 		return "", nil
 	}

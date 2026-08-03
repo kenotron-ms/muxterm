@@ -30,21 +30,30 @@ func NewRateLimiter(maxFailures int, window time.Duration) *RateLimiter {
 	}
 }
 
-// Allow reports whether ip is currently permitted to attempt a login (has
-// not exceeded maxFailures within the trailing window).
-func (r *RateLimiter) Allow(ip string) bool {
+// Reserve atomically checks whether ip has capacity within the trailing
+// window and, if so, immediately records a provisional failure entry
+// (reserving a slot) before returning true. This closes the gap between
+// checking capacity and recording a failure that existed with a separate
+// Allow()+RecordFailure() pair: without atomicity, concurrent callers
+// could all observe capacity before any of them recorded a failure,
+// letting more than maxFailures concurrent authentication attempts reach
+// a slow backend (e.g. real PAM) before the limiter actually engaged.
+//
+// Callers MUST treat a true return as "the attempt is both permitted AND
+// already recorded as a failure." If the attempt turns out to succeed,
+// call RecordSuccess(ip) to clear the reservation (and any prior
+// failures) for that ip. If it fails, the reservation already IS the
+// recorded failure — do not call anything else; there is no separate
+// RecordFailure anymore.
+func (r *RateLimiter) Reserve(ip string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.pruneLocked(ip)
-	return len(r.failures[ip]) < r.maxFailures
-}
-
-// RecordFailure records a failed login attempt from ip.
-func (r *RateLimiter) RecordFailure(ip string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.pruneLocked(ip)
+	if len(r.failures[ip]) >= r.maxFailures {
+		return false
+	}
 	r.failures[ip] = append(r.failures[ip], time.Now())
+	return true
 }
 
 // RecordSuccess clears ip's failure history on a successful login.
