@@ -101,6 +101,7 @@ func New(cfg Config) *Server {
 		s.mux.HandleFunc("POST /token", s.authSrv.ServeToken)
 		s.mux.HandleFunc("GET /auth/login", s.handleAuthLogin)
 		s.mux.HandleFunc("GET /auth/callback", s.handleAuthCallback)
+		s.mux.HandleFunc("POST /auth/logout", s.handleAuthLogout)
 	}
 
 	// Protected routes: loopback bypass, else a valid session (cookie or

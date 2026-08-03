@@ -132,6 +132,40 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, ps.ReturnTo, http.StatusFound)
 }
 
+// handleAuthLogout revokes the current session's access token (checked as
+// a bearer header first, then the session cookie) and, ONLY on successful
+// revocation, expires the muxterm_session cookie client-side. If deletion
+// fails, the cookie is left untouched and an error is returned — never
+// report a token as revoked when the deletion did not actually succeed
+// (see design doc Error Handling, "Logout failure"). If no token/cookie is
+// present at all, this is a no-op success (204) — logging out when you're
+// already logged out is not an error.
+func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	token, ok := bearerToken(r)
+	if !ok {
+		if cookie, err := r.Cookie(SessionCookieName); err == nil {
+			token = cookie.Value
+		}
+	}
+	if token == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := s.authSrv.RevokeAccessToken(r.Context(), token); err != nil {
+		http.Error(w, "logout failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func codeChallengeS256(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:])

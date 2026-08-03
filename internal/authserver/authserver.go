@@ -1,6 +1,7 @@
 package authserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -109,6 +110,16 @@ func New(cfg Config) (*AuthServer, error) {
 // Manager exposes the underlying oauth2 Manager so internal/server's auth
 // middleware can validate bearer tokens/cookies via LoadAccessToken.
 func (a *AuthServer) Manager() *manage.Manager { return a.manager }
+
+// RevokeAccessToken deletes token from the store, ending that session
+// immediately rather than waiting out its 30-day TTL. Returns a non-nil
+// error if the underlying store operation fails — callers MUST NOT treat
+// the token as revoked, and MUST NOT clear any client-side cookie, unless
+// this returns nil. See design doc Data Flow "Logout": revocation is
+// deletion, and a failed deletion must never be reported as success.
+func (a *AuthServer) RevokeAccessToken(ctx context.Context, token string) error {
+	return a.manager.RemoveAccessToken(ctx, token)
+}
 
 // ServeAuthorize handles GET/POST /authorize.
 func (a *AuthServer) ServeAuthorize(w http.ResponseWriter, r *http.Request) {
