@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -55,6 +56,17 @@ type Pane struct {
 // in Ghostty, iTerm2, tmux, and SSH interactive sessions. Without -l, PATH
 // additions from tools like brew, nvm, pyenv and rbenv are missing — especially
 // important when muxterm runs as a launchd service with a sparse environment.
+//
+// bash special-case: a bash login shell (bash -l) sources the profile chain
+// (~/.bash_profile, ~/.bash_login, or ~/.profile — whichever is found first)
+// but does NOT source ~/.bashrc — that's stock bash behavior, and most
+// distro-default profile files don't source .bashrc from a login shell
+// context either. Since PS1/aliases/functions typically live in .bashrc, a
+// plain "bash -l" silently drops them. To get both the login-shell PATH
+// correctness AND .bashrc, we run bash as "bash -l -c 'exec bash -i'": the
+// outer login shell sources the profile chain (fixing PATH), then execs an
+// inner *non-login* interactive shell, which reliably sources ~/.bashrc,
+// inheriting the corrected environment from the exec.
 func resolveArgv(argv []string) []string {
 	if len(argv) > 0 {
 		return argv
@@ -62,6 +74,9 @@ func resolveArgv(argv []string) []string {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/sh"
+	}
+	if filepath.Base(shell) == "bash" {
+		return []string{shell, "-l", "-c", fmt.Sprintf("exec %s -i", shell)}
 	}
 	return []string{shell, "-l"}
 }

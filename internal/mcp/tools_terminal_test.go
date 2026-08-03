@@ -96,6 +96,133 @@ func TestSendInputReturnsOK(t *testing.T) {
 	}
 }
 
+// TestSendInputKeysTranslatesNamedKeys verifies that sendInput translates a
+// keys entry (e.g. "Enter") into its literal byte sequence and sends it after
+// any text, matching the documented text-then-keys ordering.
+func TestSendInputKeysTranslatesNamedKeys(t *testing.T) {
+	socketPath, cancel := startMCPTestServer(t)
+	defer cancel()
+
+	c, err := DialSocket(socketPath)
+	if err != nil {
+		t.Fatalf("DialSocket: %v", err)
+	}
+	defer c.Close()
+
+	wss, err := c.conn.ListWorkspaces()
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+	if len(wss) == 0 {
+		t.Fatal("no workspaces")
+	}
+	if err := c.AttachWorkspace(wss[0].WorkspaceID); err != nil {
+		t.Fatalf("AttachWorkspace: %v", err)
+	}
+
+	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0)
+	if err != nil {
+		t.Fatalf("CreatePane: %v", err)
+	}
+
+	tt := newTerminalTools(c)
+
+	result, err := tt.sendInput(map[string]any{
+		"pane_id": float64(paneID),
+		"text":    "echo hi",
+		"keys":    []any{"Enter"},
+	})
+	if err != nil {
+		t.Fatalf("sendInput: %v", err)
+	}
+	if !strings.Contains(result, "true") {
+		t.Errorf("sendInput result does not contain 'true': %s", result)
+	}
+}
+
+// TestSendInputUnknownKeyErrors verifies that an unrecognized keys entry
+// produces an error instead of being silently dropped or sent as literal
+// text.
+func TestSendInputUnknownKeyErrors(t *testing.T) {
+	socketPath, cancel := startMCPTestServer(t)
+	defer cancel()
+
+	c, err := DialSocket(socketPath)
+	if err != nil {
+		t.Fatalf("DialSocket: %v", err)
+	}
+	defer c.Close()
+
+	wss, err := c.conn.ListWorkspaces()
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+	if len(wss) == 0 {
+		t.Fatal("no workspaces")
+	}
+	if err := c.AttachWorkspace(wss[0].WorkspaceID); err != nil {
+		t.Fatalf("AttachWorkspace: %v", err)
+	}
+
+	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0)
+	if err != nil {
+		t.Fatalf("CreatePane: %v", err)
+	}
+
+	tt := newTerminalTools(c)
+
+	if _, err := tt.sendInput(map[string]any{
+		"pane_id": float64(paneID),
+		"keys":    []any{"NotARealKey"},
+	}); err == nil {
+		t.Fatal("sendInput: expected error for unknown key name, got nil")
+	}
+}
+
+// TestSendInputMalformedTextErrorsEvenWithKeys guards against a regression
+// where a type-mismatched text argument was silently dropped (instead of
+// erroring) whenever keys was also present, because presence and error were
+// both signaled through the same "err == nil" channel. text must always be
+// validated regardless of what else was supplied.
+func TestSendInputMalformedTextErrorsEvenWithKeys(t *testing.T) {
+	socketPath, cancel := startMCPTestServer(t)
+	defer cancel()
+
+	c, err := DialSocket(socketPath)
+	if err != nil {
+		t.Fatalf("DialSocket: %v", err)
+	}
+	defer c.Close()
+
+	wss, err := c.conn.ListWorkspaces()
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+	if len(wss) == 0 {
+		t.Fatal("no workspaces")
+	}
+	if err := c.AttachWorkspace(wss[0].WorkspaceID); err != nil {
+		t.Fatalf("AttachWorkspace: %v", err)
+	}
+
+	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0)
+	if err != nil {
+		t.Fatalf("CreatePane: %v", err)
+	}
+
+	tt := newTerminalTools(c)
+
+	// text is a number, not a string; keys is non-empty. Before the fix this
+	// silently dropped the malformed text and only sent the key.
+	if _, err := tt.sendInput(map[string]any{
+		"pane_id": float64(paneID),
+		"text":    12345,
+		"keys":    []any{"Enter"},
+	}); err == nil {
+		t.Fatal("sendInput: expected error for malformed text, got nil")
+	}
+}
+
 // TestGetScreenReturnsText verifies that getScreen returns a JSON object
 // containing a "cursor" field.
 func TestGetScreenReturnsText(t *testing.T) {
