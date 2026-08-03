@@ -50,6 +50,24 @@ func argString(args map[string]any, key string) (string, error) {
 	return s, nil
 }
 
+// argStringOptional extracts an optional string argument from args[key].
+// Unlike argString, absence is not an error: present reports whether the key
+// was supplied at all, letting callers distinguish "not provided" from
+// "provided with the wrong type" instead of collapsing both into a single
+// error value. An error is returned only when the key is present but its
+// value is not a string.
+func argStringOptional(args map[string]any, key string) (value string, present bool, err error) {
+	v, ok := args[key]
+	if !ok {
+		return "", false, nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", true, fmt.Errorf("argument %s: expected string, got %T", key, v)
+	}
+	return s, true, nil
+}
+
 // jsonText marshals v to compact JSON and returns it as a string. The error
 // return from json.Marshal is intentionally dropped because marshalling a
 // map[string]any built from basic Go types never fails.
@@ -176,17 +194,20 @@ func (tt *terminalTools) sendInput(args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	text, textErr := argString(args, "text")
-	keys, keysErr := argStringSlice(args, "keys")
-	if keysErr != nil {
-		return "", keysErr
+	text, textPresent, err := argStringOptional(args, "text")
+	if err != nil {
+		return "", err
 	}
-	if textErr != nil && len(keys) == 0 {
+	keys, err := argStringSlice(args, "keys")
+	if err != nil {
+		return "", err
+	}
+	if !textPresent && len(keys) == 0 {
 		return "", fmt.Errorf("send_input: provide at least one of text or keys")
 	}
 
 	var payload []byte
-	if textErr == nil {
+	if textPresent {
 		payload = append(payload, text...)
 	}
 	for _, k := range keys {
