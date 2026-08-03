@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kenotron-ms/muxterm/internal/authserver"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
 )
 
@@ -29,19 +30,30 @@ type Config struct {
 	Addr          string
 	Secret        string
 	StaticFS      fs.FS
-	NoAuth        bool          // skip token/localhost auth check (dev only)
+	NoAuth        bool          // skip all auth checks, including loopback bypass (dev only)
 	ConfigPath    string        // path to write config.toml on PATCH /api/config (empty = skip writes)
 	InitialConfig muxcfg.Config // initial resolved configuration (zero value = package defaults)
+
+	// AuthServer is nil when the platform login backend is unavailable at
+	// startup (see cmd/muxterm's newAuthServer) — in that case every
+	// non-loopback request is denied (fail closed), and /authorize,
+	// /token, /auth/login, /auth/callback are not mounted at all.
+	AuthServer *authserver.AuthServer
+	// WebRedirectURI is the exact-match redirect URI for the muxterm-web
+	// OAuth client (e.g. "http://127.0.0.1:8311/auth/callback").
+	WebRedirectURI string
 }
 
 // Server is the HTTP server for muxterm.
 type Server struct {
 	addr    string
-	secret  string
 	noAuth  bool
 	mux     *http.ServeMux
 	hub     *Hub
 	tunnels *TunnelRegistry
+
+	authSrv        *authserver.AuthServer
+	webRedirectURI string
 
 	// configPath is the file path for persisting PATCH /api/config writes.
 	// Empty string means writes are skipped (dev/test mode).
@@ -59,12 +71,13 @@ func New(cfg Config) *Server {
 	hub.tunnels = tunnels
 
 	s := &Server{
-		addr:    cfg.Addr,
-		secret:  cfg.Secret,
-		noAuth:  cfg.NoAuth,
-		mux:     http.NewServeMux(),
-		hub:     hub,
-		tunnels: tunnels,
+		addr:           cfg.Addr,
+		noAuth:         cfg.NoAuth,
+		mux:            http.NewServeMux(),
+		hub:            hub,
+		tunnels:        tunnels,
+		authSrv:        cfg.AuthServer,
+		webRedirectURI: cfg.WebRedirectURI,
 	}
 
 	s.configPath = cfg.ConfigPath
@@ -75,18 +88,33 @@ func New(cfg Config) *Server {
 		s.cfg = muxcfg.Defaults()
 	}
 
+	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth)
+	protect := func(h http.Handler) http.Handler {
+		return authMW.Wrap(h)
+	}
+
+	// Public, unauthenticated routes.
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
-	s.mux.HandleFunc("GET /api/token", s.handleToken)
-	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
-	s.mux.HandleFunc("PATCH /api/config", s.handlePatchConfig)
-	s.mux.HandleFunc("GET /api/tunnels", s.handleTunnelList)
-	s.mux.HandleFunc("POST /api/tunnels", s.handleTunnelCreate)
-	s.mux.HandleFunc("DELETE /api/tunnels/{id}", s.handleTunnelClose)
-	s.mux.HandleFunc("/t/", s.handleTunnelProxy)
-	s.mux.HandleFunc("GET /ws", s.handleWS)
+	if s.authSrv != nil {
+		s.mux.HandleFunc("GET /authorize", s.authSrv.ServeAuthorize)
+		s.mux.HandleFunc("POST /authorize", s.authSrv.ServeAuthorize)
+		s.mux.HandleFunc("POST /token", s.authSrv.ServeToken)
+		s.mux.HandleFunc("GET /auth/login", s.handleAuthLogin)
+		s.mux.HandleFunc("GET /auth/callback", s.handleAuthCallback)
+	}
+
+	// Protected routes: loopback bypass, else a valid session (cookie or
+	// bearer token) is required — see internal/server/authmiddleware.go.
+	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
+	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
+	s.mux.Handle("GET /api/tunnels", protect(http.HandlerFunc(s.handleTunnelList)))
+	s.mux.Handle("POST /api/tunnels", protect(http.HandlerFunc(s.handleTunnelCreate)))
+	s.mux.Handle("DELETE /api/tunnels/{id}", protect(http.HandlerFunc(s.handleTunnelClose)))
+	s.mux.Handle("/t/", protect(http.HandlerFunc(s.handleTunnelProxy)))
+	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
 
 	if cfg.StaticFS != nil {
-		s.mux.Handle("/", http.FileServer(http.FS(cfg.StaticFS)))
+		s.mux.Handle("/", protect(http.FileServer(http.FS(cfg.StaticFS))))
 	}
 
 	return s
@@ -134,28 +162,9 @@ func (s *Server) Hub() *Hub {
 	return s.hub
 }
 
-// Secret returns the server's secret.
-func (s *Server) Secret() string {
-	return s.secret
-}
-
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
-	if !IsLocalhost(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	token, err := GenerateToken(s.secret)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"token": token})
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -163,12 +172,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTunnelList returns a JSON array of all active tunnels (id, port).
-// Restricted to localhost callers; the primary consumer is the MCP server.
+// AuthMiddleware protects this route at mux registration.
 func (s *Server) handleTunnelList(w http.ResponseWriter, r *http.Request) {
-	if !IsLocalhost(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	entries := s.tunnels.List()
 	items := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
@@ -182,12 +187,9 @@ func (s *Server) handleTunnelList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTunnelCreate registers a new port-forward tunnel and returns the
-// assigned id. Body must be JSON {"port": <int>}. Restricted to localhost.
+// assigned id. Body must be JSON {"port": <int>}. AuthMiddleware protects
+// this route at mux registration.
 func (s *Server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
-	if !IsLocalhost(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	var body struct {
 		Port int `json:"port"`
 	}
@@ -208,12 +210,9 @@ func (s *Server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTunnelClose deregisters the tunnel identified by the {id} path
-// segment. Returns 404 when the id is unknown. Restricted to localhost.
+// segment. Returns 404 when the id is unknown. AuthMiddleware protects this
+// route at mux registration.
 func (s *Server) handleTunnelClose(w http.ResponseWriter, r *http.Request) {
-	if !IsLocalhost(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	id := r.PathValue("id")
 	if !s.tunnels.Close(id) {
 		http.Error(w, "tunnel not found", http.StatusNotFound)
@@ -260,8 +259,16 @@ func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clone the request and rewrite the URL path to strip the /t/{id} prefix
-	// before forwarding to the upstream.
+	// before forwarding to the upstream. Cookie/Authorization are stripped
+	// so the tunneled (potentially untrusted, arbitrary local dev server)
+	// target never receives muxterm's own session credentials — see
+	// design doc "Tunnel credential stripping." This closes the
+	// credential-forwarding vector only; same-origin JS access from the
+	// tunneled page is a separate, unresolved limitation (design doc "Out
+	// of Scope").
 	cloned := r.Clone(r.Context())
+	cloned.Header.Del("Cookie")
+	cloned.Header.Del("Authorization")
 	cloned.URL = &url.URL{
 		Scheme:   target.Scheme,
 		Host:     target.Host,

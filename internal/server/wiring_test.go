@@ -100,4 +100,3 @@ func TestHandleTextInput_TypeCloseBrowserPane(t *testing.T) {
 		t.Errorf("reply.CID = %d, want 55", reply.CID)
 	}
 }
-

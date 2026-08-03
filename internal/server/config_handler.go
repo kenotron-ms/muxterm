@@ -9,13 +9,8 @@ import (
 )
 
 // handleGetConfig returns the current resolved configuration as JSON.
-// Restricted to localhost callers; the primary consumer is the MCP server's
-// get_config tool.
+// AuthMiddleware protects this route at mux registration.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	if !IsLocalhost(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	s.cfgMu.RLock()
 	cfg := s.cfg
 	s.cfgMu.RUnlock()
@@ -27,14 +22,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // current config, writes it to disk (if configPath is set), updates the hub's
 // stored config, and broadcasts the update to all connected WebSocket clients.
 //
-// Restricted to localhost callers so only the local MCP server and browser
-// clients running on the same machine can trigger config writes.
+// AuthMiddleware protects this route at mux registration.
 func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
-	if !IsLocalhost(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	var partial muxcfg.Config
 	if err := json.NewDecoder(r.Body).Decode(&partial); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
