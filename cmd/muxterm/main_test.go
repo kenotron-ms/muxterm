@@ -139,8 +139,11 @@ func TestRunInstall_NoAutoSecretPrintedWhenProvided(t *testing.T) {
 	runUninstall()
 }
 
-func TestRunInstall_AutoGeneratesSecretAndPrints(t *testing.T) {
-	// When cfg.Secret is empty, runInstall should auto-generate and print it.
+func TestRunInstall_EmptySecretDoesNotAutoGenerate(t *testing.T) {
+	// Auto-generation was removed along with the HMAC scheme (see
+	// docs/plans/2026-08-02-self-sufficient-auth-phase1-implementation.md).
+	// An empty --secret now simply stays empty; runInstall neither
+	// generates one nor prints anything about it.
 	cfg := Config{Mode: "install", Addr: "localhost:8311", Secret: ""}
 	out := captureStdout(t, func() {
 		err := runInstall(cfg)
@@ -148,8 +151,8 @@ func TestRunInstall_AutoGeneratesSecretAndPrints(t *testing.T) {
 			t.Skipf("service.Install not available in this environment: %v", err)
 		}
 	})
-	if !strings.Contains(out, "auto-generated secret:") {
-		t.Errorf("expected auto-generated secret in output, got %q", out)
+	if strings.Contains(out, "auto-generated secret") {
+		t.Errorf("should never print auto-generated secret (feature removed), got %q", out)
 	}
 	if !strings.Contains(out, "http://localhost:8311") {
 		t.Errorf("expected addr in output, got %q", out)

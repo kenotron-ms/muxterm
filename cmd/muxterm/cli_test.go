@@ -12,8 +12,8 @@ func TestParseArgs_NoArgs_LocalMode(t *testing.T) {
 	if cfg.Mode != "local" {
 		t.Errorf("Mode = %q, want %q", cfg.Mode, "local")
 	}
-	if cfg.Addr != "0.0.0.0:8311" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "0.0.0.0:8311")
+	if cfg.Addr != "127.0.0.1:8311" {
+		t.Errorf("Addr = %q, want %q", cfg.Addr, "127.0.0.1:8311")
 	}
 }
 
@@ -25,8 +25,8 @@ func TestParseArgs_ServeDefaults(t *testing.T) {
 	if cfg.Mode != "serve" {
 		t.Errorf("Mode = %q, want %q", cfg.Mode, "serve")
 	}
-	if cfg.Addr != "0.0.0.0:8311" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "0.0.0.0:8311")
+	if cfg.Addr != "127.0.0.1:8311" {
+		t.Errorf("Addr = %q, want %q", cfg.Addr, "127.0.0.1:8311")
 	}
 	if cfg.Secret != "" {
 		t.Errorf("Secret = %q, want empty string", cfg.Secret)
@@ -118,8 +118,8 @@ func TestParseArgs_Install_DefaultFlags(t *testing.T) {
 	if cfg.Mode != "install" {
 		t.Errorf("Mode = %q, want %q", cfg.Mode, "install")
 	}
-	if cfg.Addr != "0.0.0.0:8311" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "0.0.0.0:8311")
+	if cfg.Addr != "127.0.0.1:8311" {
+		t.Errorf("Addr = %q, want %q", cfg.Addr, "127.0.0.1:8311")
 	}
 	if cfg.Secret != "" {
 		t.Errorf("Secret = %q, want empty (auto-generated at install time)", cfg.Secret)

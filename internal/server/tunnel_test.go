@@ -90,7 +90,7 @@ func TestTunnelRegistry_List(t *testing.T) {
 // ---- /t/{id}/ proxy route tests ----
 
 func TestTunnelProxy_NotFound(t *testing.T) {
-	srv := New(Config{Secret: "test-secret"})
+	srv := New(Config{NoAuth: true})
 
 	req := httptest.NewRequest(http.MethodGet, "/t/notfound/", nil)
 	w := httptest.NewRecorder()
@@ -103,7 +103,7 @@ func TestTunnelProxy_NotFound(t *testing.T) {
 }
 
 func TestTunnelProxy_NoID(t *testing.T) {
-	srv := New(Config{Secret: "test-secret"})
+	srv := New(Config{NoAuth: true})
 
 	// Path without an ID segment should return 400.
 	req := httptest.NewRequest(http.MethodGet, "/t/", nil)
@@ -117,7 +117,7 @@ func TestTunnelProxy_NoID(t *testing.T) {
 }
 
 func TestTunnelProxy_Found(t *testing.T) {
-	srv := New(Config{Secret: "test-secret"})
+	srv := New(Config{NoAuth: true})
 
 	// Register a tunnel with an unused port.
 	id, err := srv.tunnels.Create(19998)

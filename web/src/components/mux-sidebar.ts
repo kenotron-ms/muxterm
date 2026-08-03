@@ -6,6 +6,7 @@ import './launcher-menu.js';
 import { icon } from '../lib/icons.js';
 import { Ellipsis } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
+import { instanceLabel } from '../lib/instance-identity.js';
 
 // ---------------------------------------------------------------------------
 // Component
@@ -36,10 +37,21 @@ export class MuxSidebar extends LitElement {
       color: var(--chrome-text-bright);
       letter-spacing: 0.06em;
       border-bottom: 1px solid var(--chrome-border);
+      /* Falls back to transparent (i.e. the sidebar's own --chrome-bar shows
+         through) unless the user picked a custom title-bar color in Settings. */
+      background: var(--mux-titlebar-bg, transparent);
       flex-shrink: 0;
       display: flex;
       align-items: center;
       justify-content: space-between;
+    }
+
+    .header > span {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .launcher-btn {
@@ -425,7 +437,7 @@ export class MuxSidebar extends LitElement {
     void this._version; // suppress unused-variable lint; triggers re-render on store change
     return html`
       <div class="header">
-        <span>muxterm</span>
+        <span title="${window.location.hostname}">${instanceLabel()}</span>
         <button
           class="launcher-btn"
           title="Open menu"

@@ -6,6 +6,7 @@ import './mux-pane-picker.js';
 import './mic-button.js';
 import { icon } from '../lib/icons.js';
 import { Ellipsis, Plus } from 'lucide';
+import { instanceLabel } from '../lib/instance-identity.js';
 
 @customElement('mux-title-bar')
 export class MuxTitleBar extends LitElement {
@@ -14,7 +15,7 @@ export class MuxTitleBar extends LitElement {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      background: var(--chrome-bar);
+      background: var(--mux-titlebar-bg, var(--chrome-bar));
       border-bottom: 1px solid var(--chrome-border);
       height: var(--mux-dock-height, 44px);
       padding: 0 8px;
@@ -175,7 +176,7 @@ export class MuxTitleBar extends LitElement {
     return html`
       <div class="brand">
         <span class="brand-dot"></span>
-        <span>muxterm</span>
+        <span title="${window.location.hostname}">${instanceLabel()}</span>
         <span class="brand-sha">${__GIT_SHA__}</span>
       </div>
       <mux-pane-picker @workspace-switch="${this._onWorkspaceSwitch}"></mux-pane-picker>

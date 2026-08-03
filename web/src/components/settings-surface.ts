@@ -1,8 +1,17 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { PALETTES } from '../lib/theme.js';
+import { PALETTES, isLightTheme } from '../lib/theme.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
+import {
+  instanceLabel,
+  restoreTitlebarColor,
+  persistTitlebarColor,
+  applyTitlebarColor,
+  DARK_TITLEBAR_CRAYONS,
+  LIGHT_TITLEBAR_CRAYONS,
+  type TitlebarCrayon,
+} from '../lib/instance-identity.js';
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -394,6 +403,99 @@ export class MuxSettingsSurface extends LitElement {
       margin: 22px 0;
     }
 
+    /* ── Title bar color picker ── */
+
+    /* Crayon grid — curated presets, same idea as macOS's classic Crayons
+       color-picker tab. */
+    .crayon-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .crayon {
+      position: relative;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      padding: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: transform 0.08s;
+    }
+    .crayon:hover {
+      transform: scale(1.12);
+    }
+    .crayon.active {
+      box-shadow: 0 0 0 2px var(--chrome-body), 0 0 0 4px var(--chrome-accent);
+    }
+    .crayon-check {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    }
+
+    .titlebar-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .titlebar-swatch {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 1px solid var(--chrome-border);
+      padding: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+      /* Native color input chrome varies a lot by browser — strip it down
+         to just the swatch so it matches the crayon grid above it. */
+      -webkit-appearance: none;
+      appearance: none;
+      background: none;
+    }
+    .titlebar-swatch::-webkit-color-swatch-wrapper {
+      padding: 0;
+    }
+    .titlebar-swatch::-webkit-color-swatch {
+      border: none;
+      border-radius: 50%;
+    }
+
+    .titlebar-custom-label {
+      font-size: 12px;
+      color: var(--chrome-text-dim);
+    }
+
+    .titlebar-reset-btn {
+      background: transparent;
+      border: 1px solid var(--chrome-border);
+      color: var(--chrome-text-dim);
+      border-radius: 6px;
+      padding: 7px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: border-color 0.1s, color 0.1s;
+      margin-left: auto;
+    }
+    .titlebar-reset-btn:hover {
+      border-color: var(--chrome-accent);
+      color: var(--chrome-text-bright);
+    }
+
+    .titlebar-hint {
+      font-size: 12px;
+      color: var(--chrome-text-dim);
+      margin: 0;
+    }
+
     /* ── Bell radios ── */
     .bell-radios {
       display: flex;
@@ -445,6 +547,9 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _section: 'appearance' | 'notifications' = 'appearance';
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
+  // Per-browser (localStorage), not server config — distinguishes this
+  // machine's window/PWA from other muxterm instances. See instance-identity.ts.
+  @state() private _titlebarColor: string | null = restoreTitlebarColor();
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -490,6 +595,20 @@ export class MuxSettingsSurface extends LitElement {
   private _setBell(bell: ResolvedConfig['terminal']['bell']): void {
     if (!this.config) return;
     this._emit({ terminal: { ...this.config.terminal, bell } });
+  }
+
+  /** Applies + persists a new title-bar accent color immediately (no server round trip). */
+  private _setTitlebarColor(color: string): void {
+    this._titlebarColor = color;
+    persistTitlebarColor(color);
+    applyTitlebarColor(color);
+  }
+
+  /** Clears the custom title-bar color, reverting to the current theme's default. */
+  private _resetTitlebarColor(): void {
+    this._titlebarColor = null;
+    persistTitlebarColor(null);
+    applyTitlebarColor(null);
   }
 
   private _sendTestNotification(): void {
@@ -678,6 +797,63 @@ export class MuxSettingsSurface extends LitElement {
         <p class="section-title">Font</p>
         ${this._renderFontPicker()}
       </div>
+
+      <div class="section-gap">
+        <p class="section-title">Title Bar Color</p>
+        ${this._renderTitlebarColorPicker()}
+      </div>
+    `;
+  }
+
+  /** Live --chrome-bar value (theme's current default), as a fallback swatch
+   *  seed when no custom title-bar color has been picked yet. Native
+   *  <input type="color"> requires an exact 6-digit hex, which is what every
+   *  built-in theme's `bar` token already is (see theme.ts CHROME_DARK/LIGHT). */
+  private get _currentChromeBarHex(): string {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--chrome-bar').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(v) ? v : '#16161e';
+  }
+
+  /** Crayon set is chosen by the CURRENT theme's brightness, not a fixed
+   *  default — the header's text color (--chrome-text-bright) stays fixed
+   *  regardless of the custom background, so light themes need pastel
+   *  crayons (dark text on top) and dark themes need deep crayons (near-
+   *  white text on top). See instance-identity.ts for the contrast rationale. */
+  private get _crayons(): TitlebarCrayon[] {
+    const palette = this.config?.theme.palette ?? 'tokyo-night';
+    return isLightTheme(palette) ? LIGHT_TITLEBAR_CRAYONS : DARK_TITLEBAR_CRAYONS;
+  }
+
+  private _renderTitlebarColorPicker() {
+    const color = this._titlebarColor?.toLowerCase() ?? null;
+    return html`
+      <div class="crayon-grid">
+        ${this._crayons.map(crayon => html`
+          <button
+            class="crayon ${color === crayon.hex ? 'active' : ''}"
+            style="background:${crayon.hex}"
+            title="${crayon.name}"
+            @click="${() => this._setTitlebarColor(crayon.hex)}"
+          >${color === crayon.hex ? html`<span class="crayon-check">✓</span>` : ''}</button>
+        `)}
+      </div>
+      <div class="titlebar-row">
+        <input
+          class="titlebar-swatch"
+          type="color"
+          title="Pick a custom title bar color"
+          .value="${color ?? this._currentChromeBarHex}"
+          @input="${(e: Event) => this._setTitlebarColor((e.target as HTMLInputElement).value)}"
+        />
+        <span class="titlebar-custom-label">Custom…</span>
+        <button class="titlebar-reset-btn" @click="${() => this._resetTitlebarColor()}">
+          Use theme default
+        </button>
+      </div>
+      <p class="titlebar-hint" style="margin-top:8px">
+        Only affects this browser on <strong>${instanceLabel()}</strong> — handy for
+        telling multiple muxterm instances apart at a glance.
+      </p>
     `;
   }
 

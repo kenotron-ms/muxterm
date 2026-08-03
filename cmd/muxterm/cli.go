@@ -24,7 +24,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "muxterm — browser-based terminal multiplexer")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  muxterm                     Open in browser (0.0.0.0:8311, default)")
+	fmt.Fprintln(w, "  muxterm                     Open in browser (127.0.0.1:8311, default)")
 	fmt.Fprintln(w, "  muxterm serve [flags]       Start server for remote access")
 	fmt.Fprintln(w, "  muxterm install [flags]     Install as a system service")
 	fmt.Fprintln(w, "  muxterm uninstall           Remove system service")
@@ -43,7 +43,7 @@ func ParseArgs(args []string) (Config, error) {
 	if len(args) == 0 {
 		return Config{
 			Mode: "local",
-			Addr: "0.0.0.0:8311",
+			Addr: "127.0.0.1:8311",
 		}, nil
 	}
 
@@ -117,7 +117,7 @@ func parseMCP(args []string) (Config, error) {
 func parseServe(args []string) (Config, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
-	addr := fs.String("addr", "0.0.0.0:8311", "listen address")
+	addr := fs.String("addr", "127.0.0.1:8311", "listen address")
 	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
 	noAuth := fs.Bool("no-auth", false, "skip WebSocket auth check (dev only — never use in production)")
 	fs.Usage = func() {
@@ -165,7 +165,7 @@ func parseDeploy(args []string) (Config, error) {
 func parseInstall(args []string) (Config, error) {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
-	addr := fs.String("addr", "0.0.0.0:8311", "listen address for the service")
+	addr := fs.String("addr", "127.0.0.1:8311", "listen address for the service")
 	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
 	force := fs.Bool("force", false, "stop and overwrite an existing installation")
 	fs.Usage = func() {
@@ -187,5 +187,3 @@ func parseInstall(args []string) (Config, error) {
 		Force:  *force,
 	}, nil
 }
-
-

@@ -617,15 +617,9 @@ func (h *Hub) ClientCount() int {
 
 // handleWSImpl handles the WebSocket upgrade and client lifecycle.
 func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
-	// Auth: allow localhost OR valid token (skipped when --no-auth is set)
-	if !s.noAuth && !IsLocalhost(r) {
-		token := r.URL.Query().Get("token")
-		if !ValidateToken(token, s.secret, 30*time.Second) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-	}
-
+	// Auth is now handled uniformly by AuthMiddleware at the mux level
+	// (GET /ws is wrapped in server.go's New()) — no inline check needed
+	// here anymore.
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
