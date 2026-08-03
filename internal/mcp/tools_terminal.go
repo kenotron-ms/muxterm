@@ -104,19 +104,100 @@ func (tt *terminalTools) runCommand(args map[string]any) (string, error) {
 	}), nil
 }
 
-// sendInput sends raw bytes to the pane identified by pane_id without waiting
-// for any response. Suitable for interactive programs and control sequences.
+// namedKeys maps case-sensitive key names to the literal bytes a real
+// terminal/keyboard would produce for them. Modeled on tmux's send-keys
+// vocabulary (Enter, Tab, C-c, arrows, etc).
+//
+// namedKeys is consulted ONLY via the separate keys argument to sendInput,
+// never by pattern-matching the contents of text. An earlier version of this
+// code translated text itself when it exactly equaled a key name (e.g.
+// text == "Enter"), which meant a caller who genuinely needed to send the
+// 5-character literal string "Enter" as data — not a keypress — had no way
+// to express that unambiguously; the string's content alone decided its
+// meaning. Splitting the two into separate parameters removes the ambiguity
+// by construction: text is always literal bytes, keys are always key-name
+// lookups, and there is no string that can be misinterpreted as the other.
+var namedKeys = map[string]string{
+	"Enter":     "\r",
+	"Tab":       "\t",
+	"Escape":    "\x1b",
+	"Backspace": "\x7f",
+	"Up":        "\x1b[A",
+	"Down":      "\x1b[B",
+	"Right":     "\x1b[C",
+	"Left":      "\x1b[D",
+	"C-c":       "\x03",
+	"C-d":       "\x04",
+	"C-z":       "\x1a",
+}
+
+// argStringSlice extracts an optional string-array argument from args[key].
+// Returns (nil, nil) when the key is absent, so callers can distinguish
+// "not provided" from "provided empty" if needed. Returns an error if the
+// value is present but not an array of strings.
+func argStringSlice(args map[string]any, key string) ([]string, error) {
+	v, ok := args[key]
+	if !ok {
+		return nil, nil
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("argument %s: expected array, got %T", key, v)
+	}
+	out := make([]string, 0, len(arr))
+	for i, item := range arr {
+		s, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("argument %s[%d]: expected string, got %T", key, i, item)
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// sendInput sends bytes to the pane identified by pane_id without waiting for
+// any response. Suitable for interactive programs and control sequences.
+//
+// text (optional) is always sent as literal bytes, unchanged — no key-name
+// lookup is ever performed on it, so it is safe for arbitrary payloads,
+// including ones that happen to match a key name like "Enter".
+//
+// keys (optional) is a list of key names looked up in namedKeys (e.g.
+// "Enter", "C-c", "Tab"); each is translated to its byte sequence. An unknown
+// name is an error rather than being silently sent as literal text, since a
+// typo'd key name silently degrading to literal junk bytes in the pane would
+// be a confusing failure mode.
+//
+// If both are given, text is sent first, then keys, matching tmux's
+// sequential-argument send-keys behavior (e.g. send-keys "ls -la" Enter).
+// At least one of text/keys must be provided.
 func (tt *terminalTools) sendInput(args map[string]any) (string, error) {
 	paneID, err := argInt(args, "pane_id")
 	if err != nil {
 		return "", err
 	}
-	text, err := argString(args, "text")
-	if err != nil {
-		return "", err
+	text, textErr := argString(args, "text")
+	keys, keysErr := argStringSlice(args, "keys")
+	if keysErr != nil {
+		return "", keysErr
+	}
+	if textErr != nil && len(keys) == 0 {
+		return "", fmt.Errorf("send_input: provide at least one of text or keys")
 	}
 
-	if err := tt.c.conn.Input(uint32(paneID), []byte(text)); err != nil {
+	var payload []byte
+	if textErr == nil {
+		payload = append(payload, text...)
+	}
+	for _, k := range keys {
+		b, ok := namedKeys[k]
+		if !ok {
+			return "", fmt.Errorf("send_input: unknown key name %q", k)
+		}
+		payload = append(payload, b...)
+	}
+
+	if err := tt.c.conn.Input(uint32(paneID), payload); err != nil {
 		return "", fmt.Errorf("sending input to pane %d: %w", paneID, err)
 	}
 
