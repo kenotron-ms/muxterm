@@ -11,9 +11,13 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 
+	"github.com/kenotron-ms/muxterm/internal/authserver"
+	"github.com/kenotron-ms/muxterm/internal/authserver/loginbackend"
 	"github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/deploy"
 	"github.com/kenotron-ms/muxterm/internal/mcp"
@@ -182,16 +186,61 @@ func newSessiondDialer() server.DialFunc {
 	}
 }
 
+// webRedirectURIFor returns the exact-match redirect URI for the
+// muxterm-web OAuth client, derived from addr (the server's listen
+// address). A "0.0.0.0" or unparseable host is normalized to 127.0.0.1,
+// since the browser always reaches muxterm via loopback in Phase 1 (no
+// public reachability until Phase 3's Caddy/public_origin wiring).
+func webRedirectURIFor(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/auth/callback"
+}
+
+// newAuthServer wires the platform login backend (PAM on Linux; a
+// fail-closed stub on other platforms until Phases 4-5) into a new
+// AuthServer for addr. A non-nil error means the login backend is
+// unavailable; callers MUST still start the HTTP server (loopback access
+// is unaffected) but MUST pass the resulting nil *authserver.AuthServer
+// through to server.Config so the auth middleware fails closed for any
+// non-loopback caller — see design doc Error Handling, "Login backend
+// unavailable."
+func newAuthServer(addr string) (*authserver.AuthServer, error) {
+	backend, err := loginbackend.New()
+	if err != nil {
+		return nil, err
+	}
+
+	tokenDir := filepath.Join(filepath.Dir(config.DefaultPath()), "auth")
+
+	return authserver.New(authserver.Config{
+		WebRedirectURI: webRedirectURIFor(addr),
+		LoginBackend:   backend,
+		TokenStoreDir:  tokenDir,
+		RateLimiter:    authserver.NewRateLimiter(5, 15*time.Minute),
+	})
+}
+
 // runLocal starts muxterm in local mode: starts the HTTP server on localhost,
 // wires the per-browser sessiond dialer, opens a browser, and blocks until
 // shutdown.
 func runLocal(cfg Config) error {
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
+
+	authSrv, err := newAuthServer(cfg.Addr)
+	if err != nil {
+		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
+	}
+
 	srv := server.New(server.Config{
-		Addr:          cfg.Addr,
-		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
-		ConfigPath:    config.DefaultPath(),
-		InitialConfig: resolved,
+		Addr:           cfg.Addr,
+		StaticFS:       mustSubFS(webstatic.Dist, "dist"),
+		ConfigPath:     config.DefaultPath(),
+		InitialConfig:  resolved,
+		AuthServer:     authSrv,
+		WebRedirectURI: webRedirectURIFor(cfg.Addr),
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
@@ -214,29 +263,25 @@ func runLocal(cfg Config) error {
 	return srv.ListenAndServe(ctx)
 }
 
-// runServe starts muxterm in serve mode: starts the HTTP server with token auth
-// on the configured address, wires the per-browser sessiond dialer, and blocks
-// until shutdown. The daemon is ensured lazily by the dialer (per browser),
-// which is a no-op under systemd where the daemon is its own unit.
+// runServe starts muxterm in serve mode, wires the per-browser sessiond dialer,
+// and blocks until shutdown. The daemon is ensured lazily by the dialer (per
+// browser), which is a no-op under systemd where the daemon is its own unit.
 func runServe(cfg Config) error {
-	// Auto-generate secret if not provided
-	secret := cfg.Secret
-	if secret == "" {
-		s, err := server.GenerateSecret()
-		if err != nil {
-			return fmt.Errorf("generate secret: %w", err)
-		}
-		secret = s
+	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
+
+	authSrv, err := newAuthServer(cfg.Addr)
+	if err != nil {
+		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
 	}
 
-	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
 	srv := server.New(server.Config{
-		Addr:          cfg.Addr,
-		Secret:        secret,
-		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
-		NoAuth:        cfg.NoAuth,
-		ConfigPath:    config.DefaultPath(),
-		InitialConfig: resolved,
+		Addr:           cfg.Addr,
+		StaticFS:       mustSubFS(webstatic.Dist, "dist"),
+		NoAuth:         cfg.NoAuth,
+		ConfigPath:     config.DefaultPath(),
+		InitialConfig:  resolved,
+		AuthServer:     authSrv,
+		WebRedirectURI: webRedirectURIFor(cfg.Addr),
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
@@ -249,14 +294,7 @@ func runServe(cfg Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Generate and print access token
-	token, err := server.GenerateToken(secret)
-	if err != nil {
-		return fmt.Errorf("generate token: %w", err)
-	}
 	log.Printf("muxterm listening on %s", cfg.Addr)
-	log.Printf("access token: %s", token)
-
 	return srv.ListenAndServe(ctx)
 }
 
@@ -269,29 +307,17 @@ func runDeploy(cfg Config) error {
 	return d.Deploy(cfg.Target)
 }
 
-// runInstall installs muxterm as a system service. If no secret is provided,
-// one is auto-generated and printed to the user.
+// runInstall installs muxterm as a system service.
 func runInstall(cfg Config) error {
-	secret := cfg.Secret
-	if secret == "" {
-		s, err := server.GenerateSecret()
-		if err != nil {
-			return fmt.Errorf("generate secret: %w", err)
-		}
-		secret = s
-	}
 	svcCfg := service.ServiceConfig{
 		Addr:   cfg.Addr,
-		Secret: secret,
+		Secret: cfg.Secret,
 		Force:  cfg.Force,
 	}
 	if err := service.Install(svcCfg); err != nil {
 		return err
 	}
 	fmt.Printf("muxterm installed and running at http://%s\n", cfg.Addr)
-	if cfg.Secret == "" {
-		fmt.Printf("auto-generated secret: %s\n", secret)
-	}
 	return nil
 }
 
