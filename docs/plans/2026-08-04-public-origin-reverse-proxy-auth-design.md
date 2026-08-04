@@ -55,17 +55,28 @@ In `internal/server/authmiddleware.go`, the existing `IsLocalhost()` bypass is g
 - `behind_reverse_proxy == false` (default): bypass behaves exactly as it does today — unchanged.
 - `behind_reverse_proxy == true`: the bypass is **disabled entirely**, unconditionally. All traffic — including Caddy's own loopback hop to muxterm — must authenticate through the real OAuth flow (session cookie or bearer token). This is a static, config-gated switch — not auto-detected, not based on any forwarded header. Per the parent doc's rationale: Caddy's loopback connection to muxterm is indistinguishable from a genuinely local caller at the `RemoteAddr` level, so leaving the bypass on when fronted by a reverse proxy would silently grant unauthenticated access to what may be genuinely remote traffic — defeating the entire point of Phase 3.
 
-### 4. Bind-address invariant extended to `serve` mode
+### 4. Bind-address invariant extended to `serve` mode — corrected for real production topology
 
-The parent doc's invariant (section 5): **muxterm's own HTTP listener binds `127.0.0.1`-only in both direct mode and Caddy-fronted mode.** Direct/local-dev mode already satisfies this. `serve` mode (the systemd-managed path) currently does not — several places default to `0.0.0.0`:
+**Amendment (2026-08-04, post-incident):** the parent doc's stated invariant — muxterm binds `127.0.0.1`-only, Caddy always reaches it over genuine loopback — was checked against the actual, currently-live `muxterm.ampbox.io` production topology and does **not** hold there. This was discovered by direct incident response (see below), not derived on paper, so it is recorded here as verified fact, not assumption.
 
-- `internal/service/service.go` — `Addr: "0.0.0.0:8311"` default.
-- `internal/deploy/ssh.go` — `systemdUnit(secret, "0.0.0.0:8080")` and related default construction.
-- `cmd/muxterm/main.go` / CLI arg parsing — default `--addr` value used when installing/serving.
+**Actual production topology** (`/mnt/services/muxterm.caddy`, outside this repo, current content as of this writing):
 
-This design changes those defaults so `serve` mode also binds `127.0.0.1` by default, consistent with Caddy now being the intended public-facing front door in both modes. This is a **deliberate default/behavior change**, not a new decision this doc is free to reconsider — the parent doc already states the invariant as non-negotiable; this closes the one place it wasn't yet applied.
+```
+muxterm.ampbox.io {
+	reverse_proxy http://10.66.204.209:8311
+}
+```
 
-**Compatibility consideration:** existing systemd units, deploy scripts, or `install.sh` invocations that currently rely on the `0.0.0.0` default to bind a genuinely public address (i.e., without Caddy in front) will stop being externally reachable once this ships, until the operator either (a) puts Caddy in front with `behind_reverse_proxy`/`public_origin` set (the supported path), or (b) explicitly passes an `--addr` overriding the new default back to `0.0.0.0` (unsupported/discouraged, since it reopens the exact loopback-bypass-vs-remote-traffic gap this design closes if `behind_reverse_proxy` isn't also set correctly). This must be called out in release notes for whatever version ships this change.
+The file's own header comment states: *"the main Caddy is in a different netns — reach same-host services via the bridge IP 10.66.204.209, NOT 127.0.0.1... muxterm listens on 0.0.0.0:8311."* This is a fundamentally different topology from the checked-in dev `Caddyfile` (`reverse_proxy 127.0.0.1:9091`, same network namespace, genuine loopback). In production, Caddy runs in a **separate network namespace** from muxterm and can only reach this host via a bridge IP — `127.0.0.1` is not reachable from Caddy's netns at all.
+
+**Incident that surfaced this:** during this session, the `muxterm.service` systemd unit was found bound to `localhost:8311` (a leftover from unrelated debugging), making `muxterm.ampbox.io` completely unreachable — not merely subject to the redirect_uri bug this design fixes, but a hard connection failure, since Caddy's `10.66.204.209:8311` dial target had nothing listening on that interface. Rebinding to `0.0.0.0:8311` immediately restored reachability (verified: direct request to `http://10.66.204.209:8311/` and `https://muxterm.ampbox.io/` both returned `401`, the correct auth-required response, not a connection error).
+
+**Consequence for this design:** a blanket "bind `127.0.0.1`-only, always" invariant is **wrong** for this production host and would have re-broken it. The corrected invariant is topology-aware:
+
+- The *principle* from the parent doc still holds: muxterm's listener should be reachable only by its fronting reverse proxy, never directly by arbitrary remote traffic.
+- The *specific bind address* that satisfies this principle depends on how the proxy actually reaches the host: genuine loopback (`127.0.0.1`) when proxy and muxterm share a network namespace (the dev `Caddyfile` case), or a specific non-loopback interface/bridge IP when they don't (this production case). `0.0.0.0` is an acceptable, deliberate choice here — not a synonym for "insecure" — precisely because `behind_reverse_proxy: true` (see point 3) already removes the loopback-bypass shortcut that would otherwise make a wide bind dangerous; with that bypass disabled, every request, from any interface, must pass through the real OAuth flow regardless of which address it arrived on.
+- **This design does NOT change `serve` mode's default bind address.** It remains `0.0.0.0` as it is today, in `internal/service/service.go` and `internal/deploy/ssh.go` — those files are **out of scope** for this design (reverting the prior draft's plan to narrow them to `127.0.0.1`). The security property this design actually needs — no unauthenticated access to non-loopback traffic — is fully provided by point 3's `behind_reverse_proxy`-gated bypass removal, independent of bind address. Making the bypass-disable the load-bearing control (rather than the bind address) is what makes the design correct across both topologies without needing per-deployment bind-address tuning.
+- Operators in a genuine same-netns topology (like the dev Caddyfile) remain free to bind `127.0.0.1` if they want defense-in-depth at the network layer too — this design doesn't prevent that — but it is no longer a default this design changes or requires.
 
 ### 5. Fail-closed validation
 
