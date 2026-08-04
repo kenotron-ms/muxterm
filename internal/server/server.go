@@ -42,6 +42,10 @@ type Config struct {
 	// WebRedirectURI is the exact-match redirect URI for the muxterm-web
 	// OAuth client (e.g. "http://127.0.0.1:8311/auth/callback").
 	WebRedirectURI string
+	// BehindReverseProxy mirrors config.ServerConfig.BehindReverseProxy.
+	// When true the IsLocalhost() auth bypass is disabled entirely — see
+	// internal/server/authmiddleware.go.
+	BehindReverseProxy bool
 }
 
 // Server is the HTTP server for muxterm.
@@ -88,7 +92,7 @@ func New(cfg Config) *Server {
 		s.cfg = muxcfg.Defaults()
 	}
 
-	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth)
+	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy)
 	protect := func(h http.Handler) http.Handler {
 		return authMW.Wrap(h)
 	}

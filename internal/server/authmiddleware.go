@@ -13,14 +13,24 @@ import (
 // handler).
 const SessionCookieName = "muxterm_session"
 
-// AuthMiddleware gates access to protected routes. Loopback bypass is
-// unchanged from the pre-existing IsLocalhost()-based behavior; otherwise
-// a valid session cookie (browser) or Authorization: Bearer token (all
-// other callers) is required, validated against the AuthServer's token
+// AuthMiddleware gates access to protected routes. The loopback bypass
+// applies only in direct/local-dev mode; when muxterm runs behind a reverse
+// proxy the bypass is disabled entirely (see behindReverseProxy below).
+// Otherwise a valid session cookie (browser) or Authorization: Bearer token
+// (all other callers) is required, validated against the AuthServer's token
 // store.
 type AuthMiddleware struct {
 	authSrv *authserver.AuthServer // nil => login backend unavailable; fail closed for non-loopback callers
 	noAuth  bool
+	// behindReverseProxy disables the IsLocalhost() bypass unconditionally.
+	// A fronting proxy's own hop to muxterm is indistinguishable from a
+	// genuinely local caller at the RemoteAddr level — and in the real
+	// production topology it is not even loopback — so honoring the bypass
+	// here would silently grant unauthenticated access to genuinely remote
+	// traffic, defeating the entire point of running behind the proxy. This
+	// is a static, config-gated switch: never auto-detected, never derived
+	// from a forwarded header.
+	behindReverseProxy bool
 }
 
 // NewAuthMiddleware returns a middleware wired to authSrv, which may be
@@ -29,14 +39,22 @@ type AuthMiddleware struct {
 // is denied (fail closed), per the design doc's Error Handling section.
 // noAuth mirrors the existing --no-auth dev-only flag: when set, ALL
 // checks (including loopback and the fail-closed case) are skipped.
-func NewAuthMiddleware(authSrv *authserver.AuthServer, noAuth bool) *AuthMiddleware {
-	return &AuthMiddleware{authSrv: authSrv, noAuth: noAuth}
+// behindReverseProxy disables the loopback bypass entirely.
+func NewAuthMiddleware(authSrv *authserver.AuthServer, noAuth, behindReverseProxy bool) *AuthMiddleware {
+	return &AuthMiddleware{authSrv: authSrv, noAuth: noAuth, behindReverseProxy: behindReverseProxy}
 }
 
 // Wrap returns next wrapped with the auth check.
 func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if m.noAuth || IsLocalhost(r) {
+		if m.noAuth {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Loopback bypass — direct/local-dev mode only. Behind a reverse
+		// proxy every request must complete the real OAuth flow regardless
+		// of which interface it arrived on.
+		if !m.behindReverseProxy && IsLocalhost(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
