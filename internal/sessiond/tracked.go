@@ -30,6 +30,15 @@ type modeTracker struct {
 	altScreen bool
 	// title is the last OSC window/icon title observed (Task 6).
 	title string
+	// mouseTrackingMode is 0 (off) or the last of 1000/1002/1003 DECSET'd,
+	// mirroring VTBuffer's field of the same name/semantics (see vt.go for
+	// the full rationale: without replaying this on reconnect, a freshly
+	// created xterm.js client falls back to translating wheel-scroll into
+	// arrow-key escapes, which most TUIs interpret as history navigation
+	// rather than an actual scroll).
+	mouseTrackingMode int
+	// mouseSGR is whether DECSET 1006 (SGR extended mouse coords) is active.
+	mouseSGR bool
 }
 
 // snapshot returns a copy of the tracker with sgrParams deep-copied so callers
@@ -68,6 +77,15 @@ func (t modeTracker) preamble() []byte {
 	}
 	if t.altScreen {
 		out = append(out, "\x1b[?1049h"...)
+	}
+	switch t.mouseTrackingMode {
+	case 1000, 1002, 1003:
+		out = append(out, "\x1b[?"...)
+		out = append(out, itoa(t.mouseTrackingMode)...)
+		out = append(out, 'h')
+	}
+	if t.mouseSGR {
+		out = append(out, "\x1b[?1006h"...)
 	}
 	out = append(out, t.sgrPreamble()...)
 	if t.cursorRow > 0 && t.cursorCol > 0 {
@@ -146,17 +164,30 @@ func (b *TrackedBuffer) onCSI(cmd ansi.Cmd, params ansi.Params) {
 		b.tracker.cursorRow = row
 		b.tracker.cursorCol = col
 	case 'h', 'l':
-		// Private ('?') alt-screen modes: 1049 (save+alt), 1047 (alt), 47 (alt).
+		// Private ('?') alt-screen and mouse-tracking modes: 1049/1047/47
+		// (alt-screen), 1000/1002/1003 (mouse tracking), 1006 (SGR mouse
+		// coords). See modeTracker.mouseTrackingMode's doc comment for why
+		// mouse modes must be tracked and replayed the same way alt-screen
+		// already is.
 		if cmd.Prefix() != '?' {
 			return
 		}
+		set := cmd.Final() == 'h'
 		mode, _, _ := params.Param(0, 0)
 		switch mode {
 		case 1049, 1047, 47:
 			// On set ('h') enter alt screen; on reset ('l') exit. Either way the
 			// alt-screen frame is reset (fresh on entry, discarded on exit).
-			b.tracker.altScreen = cmd.Final() == 'h'
+			b.tracker.altScreen = set
 			b.altFrame = nil
+		case 1000, 1002, 1003:
+			if set {
+				b.tracker.mouseTrackingMode = mode
+			} else {
+				b.tracker.mouseTrackingMode = 0
+			}
+		case 1006:
+			b.tracker.mouseSGR = set
 		}
 	}
 }
