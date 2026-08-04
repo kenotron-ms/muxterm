@@ -97,6 +97,21 @@ func New(cfg Config) *Server {
 		return authMW.Wrap(h)
 	}
 
+	// NOTE for the Phase 2 (MCP-over-HTTP) surface: muxterm does not yet
+	// serve an RFC 8414 .well-known/oauth-authorization-server document, an
+	// RFC 9728 .well-known/oauth-protected-resource document, or a POST
+	// /mcp route — none of them exist anywhere in this codebase today.
+	// When they are added, every absolute URL inside them (issuer,
+	// authorization_endpoint, token_endpoint, resource, and the canonical
+	// /mcp resource URI) MUST be built from the same origin that produced
+	// cfg.WebRedirectURI — cmd/muxterm's publicBaseURL, which resolves to
+	// the operator-configured public_origin behind a reverse proxy and to
+	// the loopback derivation otherwise. They MUST NOT be derived from
+	// r.Host, X-Forwarded-Host, X-Forwarded-Proto, or any other request
+	// header: headers are spoofable, and the design rejects trusting them
+	// for any trust-relevant value. Deriving them anywhere else is how
+	// these documents silently drift from the registered redirect URI.
+
 	// Public, unauthenticated routes.
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	if s.authSrv != nil {
