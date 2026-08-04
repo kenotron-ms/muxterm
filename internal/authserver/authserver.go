@@ -34,9 +34,12 @@ const AuthorizeCodeTTL = 10 * time.Minute
 // Config configures a new AuthServer.
 type Config struct {
 	// WebRedirectURI is the exact-match redirect URI for the muxterm-web
-	// client (e.g. "http://127.0.0.1:8311/auth/callback" in Phase 1's
-	// direct/local-dev mode). Phase 3 will derive this from public_origin
-	// when behind_reverse_proxy is set.
+	// client. In direct/local-dev mode it is loopback-derived (e.g.
+	// "http://127.0.0.1:8311/auth/callback"); when the operator sets
+	// behind_reverse_proxy it is "<public_origin>/auth/callback". Both are
+	// produced by cmd/muxterm's webRedirectURIFor, which is the single
+	// derivation seam — this package never derives it, and never inspects
+	// a request header to guess it.
 	WebRedirectURI string
 	// LoginBackend performs the actual resource-owner credential check.
 	// Required.

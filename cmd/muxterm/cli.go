@@ -17,6 +17,17 @@ type Config struct {
 	Force     bool   // install: overwrite existing service installation
 	Transport string // mcp mode: transport type ("stdio"); SSE arrives in Phase 5
 	MCPPort   int    // mcp mode: SSE port (Phase 5, parsed but rejected for now)
+
+	// PublicOrigin is the serve-mode --public-origin override for the
+	// config file's [server].public_origin. Empty means "unset — use the
+	// config file value."
+	PublicOrigin string
+	// BehindReverseProxy is the serve-mode --behind-reverse-proxy override
+	// for the config file's [server].behind_reverse_proxy. false means
+	// "unset — use the config file value"; the flag can only turn the
+	// setting on, never off (same one-way bool limitation config.Merge
+	// documents).
+	BehindReverseProxy bool
 }
 
 // printUsage writes top-level help to w.
@@ -120,6 +131,8 @@ func parseServe(args []string) (Config, error) {
 	addr := fs.String("addr", "127.0.0.1:8311", "listen address")
 	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
 	noAuth := fs.Bool("no-auth", false, "skip WebSocket auth check (dev only — never use in production)")
+	publicOrigin := fs.String("public-origin", "", "canonical public origin when behind a reverse proxy (e.g. https://muxterm.example.com); required with --behind-reverse-proxy")
+	behindProxy := fs.Bool("behind-reverse-proxy", false, "run behind a reverse proxy: derive public URLs from --public-origin and disable the loopback auth bypass")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm serve [flags]")
 		fmt.Fprintln(os.Stdout, "")
@@ -132,10 +145,12 @@ func parseServe(args []string) (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		Mode:   "serve",
-		Addr:   *addr,
-		Secret: *secret,
-		NoAuth: *noAuth,
+		Mode:               "serve",
+		Addr:               *addr,
+		Secret:             *secret,
+		NoAuth:             *noAuth,
+		PublicOrigin:       *publicOrigin,
+		BehindReverseProxy: *behindProxy,
 	}, nil
 }
 

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -20,6 +22,71 @@ type Config struct {
 	Keys      KeysConfig      `toml:"keys"       json:"keys"`
 	Workspace WorkspaceConfig `toml:"workspace"  json:"workspace"`
 	Driver    DriverConfig    `toml:"driver"     json:"driver"`
+	Server    ServerConfig    `toml:"server"     json:"server"`
+}
+
+// ServerConfig holds deployment-topology settings that decide how muxterm
+// derives its own public-facing URLs and whether the loopback auth bypass
+// applies. Both fields are explicit and opt-in, and are NEVER derived from
+// request headers (X-Forwarded-Host, X-Forwarded-Proto, or anything else):
+// headers are spoofable, and the design rejects trusting them for any
+// trust-relevant value.
+//
+// These fields are deliberately absent from Merge(), which backs the
+// browser-facing PATCH /api/config route — a deployment-topology and
+// security setting must not be mutable from a web request.
+type ServerConfig struct {
+	// PublicOrigin is the canonical public origin at which muxterm is
+	// reachable through its fronting reverse proxy, e.g.
+	// "https://muxterm.ampbox.io". Scheme and host (with optional port)
+	// only — no path, no trailing slash. Empty by default. Ignored
+	// entirely when BehindReverseProxy is false.
+	PublicOrigin string `toml:"public_origin"        json:"public_origin"`
+	// BehindReverseProxy opts muxterm into reverse-proxy mode: every
+	// public-facing URL muxterm builds derives from PublicOrigin, and the
+	// IsLocalhost() auth bypass is disabled entirely. Opt-in, default
+	// false. The bypass must go, because the proxy's own hop to muxterm is
+	// indistinguishable from a genuinely local caller at the RemoteAddr
+	// level — honoring it would silently grant unauthenticated access to
+	// genuinely remote traffic.
+	BehindReverseProxy bool `toml:"behind_reverse_proxy" json:"behind_reverse_proxy"`
+}
+
+// Validate enforces the design's fail-closed startup rule:
+// behind_reverse_proxy without a usable public_origin is a hard
+// configuration error, never a silent fall back to a loopback-derived URL
+// — that fallback would reproduce the exact "browser redirected to
+// 127.0.0.1" bug this configuration exists to fix. Callers MUST refuse to
+// start the HTTP listener on a non-nil error.
+//
+// When BehindReverseProxy is false, PublicOrigin is inapplicable and is
+// ignored entirely — not an error.
+func (s ServerConfig) Validate() error {
+	if !s.BehindReverseProxy {
+		return nil
+	}
+	if s.PublicOrigin == "" {
+		return errors.New(`config: behind_reverse_proxy is set but public_origin is empty; set public_origin (e.g. "https://muxterm.example.com") or unset behind_reverse_proxy`)
+	}
+	u, err := url.Parse(s.PublicOrigin)
+	if err != nil {
+		return fmt.Errorf("config: public_origin %q is not a valid URL: %w", s.PublicOrigin, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("config: public_origin %q must use the http or https scheme", s.PublicOrigin)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("config: public_origin %q must include a host", s.PublicOrigin)
+	}
+	return nil
+}
+
+// BaseURL returns PublicOrigin ready to have an absolute path appended
+// (trailing slashes trimmed, so "https://x/" + "/auth/callback" cannot
+// produce a double slash that would break the exact-match redirect-URI
+// comparison). Only meaningful when BehindReverseProxy is true.
+func (s ServerConfig) BaseURL() string {
+	return strings.TrimRight(s.PublicOrigin, "/")
 }
 
 // ThemeConfig controls visual palette selection.
@@ -168,6 +235,13 @@ func Defaults() Config {
 			Autostart:          false,
 			SharedWindowPolicy: "follow",
 			Launch:             "muxterm-agent",
+		},
+		// Direct/local-dev topology by default: no reverse proxy, no
+		// public origin. Stated explicitly rather than left implicit so
+		// the shipped default posture is readable here.
+		Server: ServerConfig{
+			PublicOrigin:       "",
+			BehindReverseProxy: false,
 		},
 	}
 }
