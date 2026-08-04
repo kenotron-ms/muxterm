@@ -186,17 +186,63 @@ func newSessiondDialer() server.DialFunc {
 	}
 }
 
-// webRedirectURIFor returns the exact-match redirect URI for the
-// muxterm-web OAuth client, derived from addr (the server's listen
-// address). A "0.0.0.0" or unparseable host is normalized to 127.0.0.1,
-// since the browser always reaches muxterm via loopback in Phase 1 (no
-// public reachability until Phase 3's Caddy/public_origin wiring).
-func webRedirectURIFor(addr string) string {
+// resolveServerConfig merges the serve-mode CLI overrides on top of the
+// config file's [server] section, following this repo's existing
+// precedence (flag beats file, file beats the zero default). Consistent
+// with config.Merge's documented bool limitation, --behind-reverse-proxy
+// cannot be used to turn a config-file `behind_reverse_proxy = true` back
+// off; remove the file value instead.
+//
+// SERVE MODE ONLY. runLocal deliberately does NOT call this: bare
+// `muxterm` is loopback-only by definition and must stay that way even on
+// a host whose config.toml sets behind_reverse_proxy = true (which is
+// exactly the production host). Honoring the file there would disable the
+// loopback bypass and point the local browser at the public origin,
+// breaking local interactive use on the one machine where it matters most.
+func resolveServerConfig(cli Config, file config.ServerConfig) config.ServerConfig {
+	out := file
+	if cli.PublicOrigin != "" {
+		out.PublicOrigin = cli.PublicOrigin
+	}
+	if cli.BehindReverseProxy {
+		out.BehindReverseProxy = true
+	}
+	return out
+}
+
+// publicBaseURL returns the origin muxterm must use whenever it constructs
+// one of its own public-facing absolute URLs. Today that is the muxterm-web
+// OAuth redirect URI; when Phase 2 (MCP-over-HTTP) adds the RFC 8414
+// authorization-server metadata and the RFC 9728 protected-resource
+// metadata / canonical /mcp resource URI, those MUST derive from this same
+// function so the values cannot drift apart.
+//
+// Behind a reverse proxy the origin is the operator-configured
+// public_origin: a fixed value resolved once at startup, never derived
+// per-request from a Host or X-Forwarded-* header — headers are spoofable
+// and the design rejects trusting them for any trust-relevant value.
+//
+// Otherwise it is the pre-existing loopback derivation from addr (the
+// server's listen address), where a "0.0.0.0" or unparseable host is
+// normalized to 127.0.0.1 because the browser reaches muxterm over
+// loopback in that topology.
+func publicBaseURL(addr string, sc config.ServerConfig) string {
+	if sc.BehindReverseProxy {
+		return sc.BaseURL()
+	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil || host == "" || host == "0.0.0.0" {
 		host = "127.0.0.1"
 	}
-	return "http://" + net.JoinHostPort(host, port) + "/auth/callback"
+	return "http://" + net.JoinHostPort(host, port)
+}
+
+// webRedirectURIFor returns the exact-match redirect URI for the
+// muxterm-web OAuth client. authserver's validateRedirectURI compares this
+// value byte-for-byte against the incoming redirect_uri, so it must be
+// exactly the URL the browser will actually be sent back to.
+func webRedirectURIFor(addr string, sc config.ServerConfig) string {
+	return publicBaseURL(addr, sc) + "/auth/callback"
 }
 
 // newAuthServer wires the platform login backend (PAM on Linux; a
@@ -207,7 +253,7 @@ func webRedirectURIFor(addr string) string {
 // through to server.Config so the auth middleware fails closed for any
 // non-loopback caller — see design doc Error Handling, "Login backend
 // unavailable."
-func newAuthServer(addr string) (*authserver.AuthServer, error) {
+func newAuthServer(addr string, sc config.ServerConfig) (*authserver.AuthServer, error) {
 	backend, err := loginbackend.New()
 	if err != nil {
 		return nil, err
@@ -216,7 +262,7 @@ func newAuthServer(addr string) (*authserver.AuthServer, error) {
 	tokenDir := filepath.Join(filepath.Dir(config.DefaultPath()), "auth")
 
 	return authserver.New(authserver.Config{
-		WebRedirectURI: webRedirectURIFor(addr),
+		WebRedirectURI: webRedirectURIFor(addr, sc),
 		LoginBackend:   backend,
 		TokenStoreDir:  tokenDir,
 		RateLimiter:    authserver.NewRateLimiter(5, 15*time.Minute),
@@ -229,18 +275,39 @@ func newAuthServer(addr string) (*authserver.AuthServer, error) {
 func runLocal(cfg Config) error {
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
 
-	authSrv, err := newAuthServer(cfg.Addr)
+	// Local mode is loopback-only BY DEFINITION and deliberately ignores
+	// the [server] section entirely: it never reads that section off the
+	// resolved config, never applies serve mode's flag-over-file
+	// resolution to it, and never runs its startup validation. (Those three
+	// names are deliberately not spelled out here: the C4 guard greps this
+	// function body for them, and even a mention in a comment trips it.)
+	// Bare `muxterm` on a host whose config.toml sets behind_reverse_proxy =
+	// true — i.e. the production host — must still behave exactly as it
+	// does today: loopback bypass on, loopback-derived redirect URI, no
+	// startup error. Honoring the file here would send the *local* browser
+	// to the public origin and turn the bypass off, breaking local
+	// interactive use on the one machine where it matters most. Only
+	// `serve` mode honors the new fields.
+	//
+	// The explicit zero config.ServerConfig{} below is what pins that:
+	// BehindReverseProxy is false, so webRedirectURIFor falls through to
+	// the pre-existing loopback derivation, byte-for-byte unchanged.
+	localServerCfg := config.ServerConfig{}
+
+	authSrv, err := newAuthServer(cfg.Addr, localServerCfg)
 	if err != nil {
 		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
 	}
 
 	srv := server.New(server.Config{
-		Addr:           cfg.Addr,
-		StaticFS:       mustSubFS(webstatic.Dist, "dist"),
-		ConfigPath:     config.DefaultPath(),
-		InitialConfig:  resolved,
-		AuthServer:     authSrv,
-		WebRedirectURI: webRedirectURIFor(cfg.Addr),
+		Addr:          cfg.Addr,
+		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
+		ConfigPath:    config.DefaultPath(),
+		InitialConfig: resolved,
+		AuthServer:    authSrv,
+		// No BehindReverseProxy field is set: local mode leaves it at its
+		// zero false, keeping the IsLocalhost() bypass exactly as today.
+		WebRedirectURI: webRedirectURIFor(cfg.Addr, localServerCfg),
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
@@ -269,19 +336,29 @@ func runLocal(cfg Config) error {
 func runServe(cfg Config) error {
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
 
-	authSrv, err := newAuthServer(cfg.Addr)
+	// Serve mode is the ONLY mode that honors the [server] section. Fail
+	// closed BEFORE the listener binds: an ambiguous or misconfigured
+	// security posture must deny, never silently downgrade to a
+	// loopback-derived URL (which is the exact bug Phase 3 fixes).
+	srvCfg := resolveServerConfig(cfg, resolved.Server)
+	if err := srvCfg.Validate(); err != nil {
+		return err
+	}
+
+	authSrv, err := newAuthServer(cfg.Addr, srvCfg)
 	if err != nil {
 		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
 	}
 
 	srv := server.New(server.Config{
-		Addr:           cfg.Addr,
-		StaticFS:       mustSubFS(webstatic.Dist, "dist"),
-		NoAuth:         cfg.NoAuth,
-		ConfigPath:     config.DefaultPath(),
-		InitialConfig:  resolved,
-		AuthServer:     authSrv,
-		WebRedirectURI: webRedirectURIFor(cfg.Addr),
+		Addr:               cfg.Addr,
+		StaticFS:           mustSubFS(webstatic.Dist, "dist"),
+		NoAuth:             cfg.NoAuth,
+		ConfigPath:         config.DefaultPath(),
+		InitialConfig:      resolved,
+		AuthServer:         authSrv,
+		WebRedirectURI:     webRedirectURIFor(cfg.Addr, srvCfg),
+		BehindReverseProxy: srvCfg.BehindReverseProxy,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer())
