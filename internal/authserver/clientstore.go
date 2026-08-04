@@ -34,9 +34,13 @@ type staticClientStore struct {
 // NewClientStore returns the fixed ClientStore containing muxterm-web and
 // muxterm-mcp. There is no dynamic client registration (see design doc
 // "Alternatives Considered"). webRedirectURI is the exact-match redirect
-// URI for the web client — in Phase 1 (no Caddy/public_origin wiring yet)
-// this is always the loopback callback URL; Phase 3 will derive it from
-// public_origin when behind_reverse_proxy is set.
+// URI for the web client, supplied by cmd/muxterm's webRedirectURIFor: the
+// loopback callback URL in direct/local-dev mode, or
+// "<public_origin>/auth/callback" when the operator sets
+// behind_reverse_proxy. validateRedirectURI's plain string-equality check
+// below is the correct validation in BOTH topologies precisely because it
+// compares against whatever value it is handed — the topology changes the
+// value, never the comparison.
 func NewClientStore(webRedirectURI string) oauth2.ClientStore {
 	return &staticClientStore{
 		clients: map[string]oauth2.ClientInfo{
