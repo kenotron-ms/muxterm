@@ -55,6 +55,33 @@ type VTBuffer struct {
 	scanFound            bool
 	scanEnteredAltScreen bool
 
+	// mouseTrackingMode and mouseSGR shadow-track the PTY-side application's
+	// current mouse-tracking DECSET mode, since x/vt's Emulator exposes no
+	// public accessor for its private mode map (same reason savedCursor is
+	// shadow-tracked above). Unlike scanFound/scanEnteredAltScreen (reset on
+	// every Write call to answer "did THIS chunk contain X"), these are
+	// sticky across the pane's whole lifetime, updated in place whenever a
+	// matching DECSET/DECRST sequence is observed.
+	//
+	// Why this matters: on a full browser page refresh, xterm.js recreates
+	// its Terminal instance from scratch with mouse tracking disabled by
+	// default. The replay stream is the ONLY way the fresh client learns the
+	// PTY-side app (e.g. a modern TUI like OpenCode) already turned mouse
+	// tracking on. Without replaying the enabling DECSET sequence, xterm.js
+	// falls back to its legacy wheel-to-arrow-key emulation, which most TUIs
+	// interpret as scrollback/history navigation rather than mouse-wheel
+	// scroll — see serializeGrid.
+	//
+	//   - mouseTrackingMode: 0 (off) or the last of 1000 (X10)/1002 (button-
+	//     event)/1003 (any-event) DECSET'd. These are mutually exclusive by
+	//     convention (an app enables at most one at a time), so a single int
+	//     suffices; setting one implicitly does not clear another explicitly
+	//     enabled mode, matching how most TUIs actually toggle between them.
+	//   - mouseSGR: 1006 (SGR extended mouse coordinate encoding), tracked
+	//     independently since it can be toggled alongside any of the above.
+	mouseTrackingMode int
+	mouseSGR          bool
+
 	// mainScreenSnapshot holds the rendered main-screen (scrollback + visible
 	// grid, same form serializeGrid's primary-screen branch already emits)
 	// captured at the moment this pane's byte stream was observed entering
@@ -80,6 +107,11 @@ type VTBuffer struct {
 //     mode 1049, 1047, or 47 — the sequences that enter alternate-screen
 //     mode. Matches the same mode set tracked.go's onCSI already treats as
 //     alt-screen entry/exit.
+//
+// As a side effect (not returned — see mouseTrackingMode/mouseSGR's doc
+// comment for why these are sticky rather than per-call), the same parser
+// pass also updates b.mouseTrackingMode and b.mouseSGR directly whenever a
+// DECSET/DECRST for mode 1000/1002/1003/1006 is observed.
 //
 // It resets and reuses b.scanParser (constructed once in NewVTBuffer) rather
 // than allocating a new *ansi.Parser per call. Callers must hold b.mu for the
@@ -132,14 +164,30 @@ func NewVTBuffer(w, h int) *VTBuffer {
 				if cmd.Prefix() == 0 {
 					b.scanFound = true
 				}
-			case 'h':
+			case 'h', 'l':
 				if cmd.Prefix() != '?' {
 					return
 				}
+				set := cmd.Final() == 'h'
 				mode, _, _ := params.Param(0, 0)
 				switch mode {
 				case 1049, 1047, 47:
-					b.scanEnteredAltScreen = true
+					if set {
+						b.scanEnteredAltScreen = true
+					}
+				case 1000, 1002, 1003:
+					// Sticky across calls (unlike scanEnteredAltScreen):
+					// mutated directly here rather than staged through a
+					// return value, since Write already holds b.mu for
+					// scanWriteEvents' entire call. See
+					// mouseTrackingMode's doc comment.
+					if set {
+						b.mouseTrackingMode = mode
+					} else {
+						b.mouseTrackingMode = 0
+					}
+				case 1006:
+					b.mouseSGR = set
 				}
 			}
 		},
@@ -220,7 +268,7 @@ func (b *VTBuffer) Replay() []byte {
 	}
 	// Pass the underlying *vt.Emulator: we hold b.mu.RLock(), so all state is
 	// stable for the duration of the call.
-	return serializeGrid(b.emu.Emulator, saved, b.mainScreenSnapshot)
+	return serializeGrid(b.emu.Emulator, saved, b.mainScreenSnapshot, b.mouseTrackingMode, b.mouseSGR)
 }
 
 // ReplayFrom ignores since and returns (b.Replay(), 0): VTBuffer serializes the
@@ -299,8 +347,27 @@ func (b *VTBuffer) Seq() uint64 {
 // carries no SGR attributes (typical for plain-text shells) the output is the
 // same as the plain-text form.  Styled scrollback (coloured prompts, vim
 // status lines that scrolled away) is preserved with full colour fidelity.
-func serializeGrid(emu *vt.Emulator, savedCursor *struct{ row, col int }, mainScreenSnapshot []byte) []byte {
+//
+// mouseMode/mouseSGR: if mouseMode is non-zero (1000/1002/1003) and/or
+// mouseSGR is true, the corresponding DECSET sequence(s) are emitted first,
+// before either branch below, so a fresh client (e.g. xterm.js recreated by
+// a full browser page refresh, which always starts with mouse tracking
+// disabled) re-learns that the PTY-side application already turned mouse
+// tracking on. Without this, wheel-scroll input over the pane falls back to
+// xterm.js's legacy arrow-key emulation, which most TUIs interpret as
+// scrollback/history navigation instead of an actual mouse-wheel scroll.
+// Order relative to the alt-screen/primary-screen branches below does not
+// matter — DECSET mode changes produce no visible output of their own.
+func serializeGrid(emu *vt.Emulator, savedCursor *struct{ row, col int }, mainScreenSnapshot []byte, mouseMode int, mouseSGR bool) []byte {
 	var out []byte
+
+	switch mouseMode {
+	case 1000, 1002, 1003:
+		out = append(out, fmt.Sprintf(esc+"[?%dh", mouseMode)...)
+	}
+	if mouseSGR {
+		out = append(out, esc+"[?1006h"...)
+	}
 
 	if emu.IsAltScreen() {
 		// If we captured this pane's main screen just before it entered
