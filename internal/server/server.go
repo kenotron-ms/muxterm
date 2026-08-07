@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kenotron-ms/muxterm/internal/ai"
 	"github.com/kenotron-ms/muxterm/internal/authserver"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
 )
@@ -33,6 +34,12 @@ type Config struct {
 	NoAuth        bool          // skip all auth checks, including loopback bypass (dev only)
 	ConfigPath    string        // path to write config.toml on PATCH /api/config (empty = skip writes)
 	InitialConfig muxcfg.Config // initial resolved configuration (zero value = package defaults)
+
+	// AIKeyPath is the file path of the owner-only Anthropic API key. Empty
+	// means ai.DefaultKeyPath(). The key is deliberately NOT part of
+	// InitialConfig: anything in config.Config is published by GET /api/config,
+	// Hub.BroadcastConfig, and MCP get_config by construction.
+	AIKeyPath string
 
 	// AuthServer is nil when the platform login backend is unavailable at
 	// startup (see cmd/muxterm's newAuthServer) — in that case every
@@ -64,6 +71,10 @@ type Server struct {
 	configPath string
 	cfgMu      sync.RWMutex
 	cfg        muxcfg.Config
+
+	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
+	// lazily-constructed Anthropic client. Never reachable from cfg.
+	ai *ai.Manager
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -91,6 +102,12 @@ func New(cfg Config) *Server {
 	if s.cfg.Theme.Palette == "" {
 		s.cfg = muxcfg.Defaults()
 	}
+
+	aiKeyPath := cfg.AIKeyPath
+	if aiKeyPath == "" {
+		aiKeyPath = ai.DefaultKeyPath()
+	}
+	s.ai = ai.NewManager(aiKeyPath)
 
 	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy)
 	protect := func(h http.Handler) http.Handler {
@@ -127,6 +144,14 @@ func New(cfg Config) *Server {
 	// bearer token) is required — see internal/server/authmiddleware.go.
 	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
 	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
+
+	// Opt-in AI capability. Deliberately a separate route family from
+	// /api/config: the key goes in via PUT and only a derived Status comes out.
+	s.mux.Handle("GET /api/ai/status", protect(http.HandlerFunc(s.handleAIStatus)))
+	s.mux.Handle("PUT /api/ai/key", protect(http.HandlerFunc(s.handleAIPutKey)))
+	s.mux.Handle("DELETE /api/ai/key", protect(http.HandlerFunc(s.handleAIDeleteKey)))
+	s.mux.Handle("POST /api/ai/ping", protect(http.HandlerFunc(s.handleAIPing)))
+
 	s.mux.Handle("GET /api/tunnels", protect(http.HandlerFunc(s.handleTunnelList)))
 	s.mux.Handle("POST /api/tunnels", protect(http.HandlerFunc(s.handleTunnelCreate)))
 	s.mux.Handle("DELETE /api/tunnels/{id}", protect(http.HandlerFunc(s.handleTunnelClose)))
