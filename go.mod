@@ -6,6 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/anthropics/anthropic-sdk-go v1.62.0
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/vt v0.0.0-20260602025833-85a30b5e440a
 	github.com/coder/websocket v1.8.14
@@ -15,7 +16,6 @@ require (
 )
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.62.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/charmbracelet/colorprofile v0.4.2 // indirect
