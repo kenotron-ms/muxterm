@@ -1132,8 +1132,9 @@ export class MuxApp extends LitElement {
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
     }
-    // {"type":"aiStatus",...} envelope: a key was saved or cleared in this or
-    // another tab. Carries the derived status only -- never the key.
+    // {"aiStatus":...} envelope (no "type" field, by design -- see sendAIStatus
+    // in ws.go): a key was saved or cleared in this or another tab. Carries the
+    // derived status only -- never the key.
     if ('aiStatus' in msg) {
       store.setAIStatus(parseAIStatus(msg['aiStatus']));
     }

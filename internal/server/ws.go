@@ -420,9 +420,11 @@ func (h *Hub) BroadcastConfig(cfg any) {
 }
 
 // sendAIStatus writes the AI capability status as a text frame. Serve-local
-// envelope ({"type":"ai_status","aiStatus":status}), NOT a sessiond message.
+// envelope ({"aiStatus":status}), NOT a sessiond message. Deliberately has no
+// "type" field -- ws.ts routes flat sessiond messages by their top-level
+// "type" string and this frame must never match that path (see sendConfig).
 func (c *Client) sendAIStatus(status any) {
-	data, err := json.Marshal(map[string]any{"type": "ai_status", "aiStatus": status})
+	data, err := json.Marshal(map[string]any{"aiStatus": status})
 	if err != nil {
 		log.Printf("sendAIStatus: marshal error: %v", err)
 		return
@@ -432,7 +434,7 @@ func (c *Client) sendAIStatus(status any) {
 	}
 }
 
-// BroadcastAIStatus sends a {type:"ai_status"} frame to every connected client
+// BroadcastAIStatus sends an {"aiStatus":...} frame to every connected client
 // so a key saved in one browser tab flips the capability in all others.
 //
 // It carries the ai.Status struct only -- which contains no secret by

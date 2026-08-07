@@ -1023,13 +1023,18 @@ export class MuxSettingsSurface extends LitElement {
     if (this._aiBusy) return;
     this._aiBusy = true;
     this._aiMessage = 'Testing...';
-    const res = await pingAI();
-    this._aiMessage = res.ok
-      ? 'Connected to Anthropic.'
-      : res.error === 'ai_disabled'
-        ? 'AI is off -- save a key first.'
-        : 'Anthropic rejected the request. Check the key.';
-    this._aiBusy = false;
+    try {
+      const res = await pingAI();
+      this._aiMessage = res.ok
+        ? 'Connected to Anthropic.'
+        : res.error === 'ai_disabled'
+          ? 'AI is off -- save a key first.'
+          : 'Anthropic rejected the request. Check the key.';
+    } catch {
+      this._aiMessage = 'Test failed -- check your connection.';
+    } finally {
+      this._aiBusy = false;
+    }
   }
 
   private _renderAI() {
@@ -1061,9 +1066,10 @@ export class MuxSettingsSurface extends LitElement {
       </div>
       ${this._aiMessage ? html`<p class="ai-message">${this._aiMessage}</p>` : ''}
       <p class="ai-note">
-        The key is stored locally at <code>~/.config/muxterm/anthropic_key</code>
-        with owner-only permissions, is never returned by the server, and is sent
-        only to Anthropic.
+        The key is stored locally at <code>$XDG_CONFIG_HOME/muxterm/anthropic_key</code>
+        (defaults to <code>~/.config/muxterm/anthropic_key</code> when
+        <code>XDG_CONFIG_HOME</code> is unset) with owner-only permissions, is
+        never returned by the server, and is sent only to Anthropic.
       </p>
     `;
   }

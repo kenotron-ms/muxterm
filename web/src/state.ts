@@ -95,7 +95,7 @@ export class MuxStore {
 
   /**
    * The single frontend gate for all future AI UI. Updated from
-   * GET /api/ai/status on load and from the {"type":"ai_status"} WS frame when
+   * GET /api/ai/status on load and from the {"aiStatus":...} WS frame when
    * a key is saved or cleared in any tab.
    */
   setAIStatus(status: AIStatus): void {
