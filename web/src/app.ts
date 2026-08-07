@@ -12,6 +12,7 @@ import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme
 import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
 import { injectTerminalFont } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
+import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
@@ -513,6 +514,11 @@ export class MuxApp extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
 
+    // Opt-in AI capability: resolve the flag once on load. Fetched over HTTP
+    // rather than carried on the config frame, because the key that backs it
+    // deliberately never enters the config pipeline.
+    void fetchAIStatus().then((s) => store.setAIStatus(s));
+
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
     // Layout-command relay: window CustomEvent from ws.ts → mux-dock routing.
@@ -960,9 +966,11 @@ export class MuxApp extends LitElement {
               ${this._overlayPanel === 'settings' ? html`
                 <mux-settings-surface
                   .config="${store.config}"
+                  .aiStatus="${store.aiStatus}"
                   serverAddr="${window.location.host}"
                   @close="${this._closeOverlayPanel}"
                   @config-change="${this._onConfigChange}"
+                  @ai-status-change="${this._onAIStatusChange}"
                 ></mux-settings-surface>
               ` : this._overlayPanel === 'shortcuts' ? html`
                 <div class="info-panel">
@@ -1123,6 +1131,11 @@ export class MuxApp extends LitElement {
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
+    }
+    // {"type":"aiStatus",...} envelope: a key was saved or cleared in this or
+    // another tab. Carries the derived status only -- never the key.
+    if ('aiStatus' in msg) {
+      store.setAIStatus(parseAIStatus(msg['aiStatus']));
     }
   };
 
@@ -1337,6 +1350,15 @@ export class MuxApp extends LitElement {
     // Persist the change: debounced PATCH /api/config → server merges,
     // writes to disk, and broadcasts to all connected clients.
     patchConfig(configToGoJSON(cfg));
+  };
+
+  /** Mirrors _onConfigChange's style: settings surface emits the new AI
+   *  status after a save/clear round-trip; push it straight into the store
+   *  (no debounced persistence here — the settings surface already made the
+   *  HTTP call that changed server-side state). */
+  private _onAIStatusChange = (e: Event): void => {
+    const { status } = (e as CustomEvent<{ status: AIStatus }>).detail;
+    store.setAIStatus(status);
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {
