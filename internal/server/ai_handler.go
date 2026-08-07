@@ -107,6 +107,10 @@ func (s *Server) handleAIPing(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		writeAIError(w, http.StatusBadGateway, "provider_error")
+		// Not a ProviderError means the request never reached (or returned
+		// from) Anthropic -- context deadline, DNS failure, TLS reset, etc.
+		// Distinguish this from an actual key rejection so the UI doesn't
+		// tell a user with a valid key and a flaky network to "check the key."
+		writeAIError(w, http.StatusBadGateway, "provider_unreachable")
 	}
 }

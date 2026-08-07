@@ -1029,7 +1029,9 @@ export class MuxSettingsSurface extends LitElement {
         ? 'Connected to Anthropic.'
         : res.error === 'ai_disabled'
           ? 'AI is off -- save a key first.'
-          : 'Anthropic rejected the request. Check the key.';
+          : res.error === 'provider_unreachable'
+            ? 'Could not reach Anthropic. Check your connection.'
+            : 'Anthropic rejected the request. Check the key.';
     } catch {
       this._aiMessage = 'Test failed -- check your connection.';
     } finally {
