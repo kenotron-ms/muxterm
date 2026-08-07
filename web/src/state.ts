@@ -6,6 +6,7 @@ import type {
 import { SessiondType } from './types';
 import type { Composition } from './lib/arrangement-store.js';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from './lib/config.js';
+import { DEFAULT_AI_STATUS, type AIStatus } from './lib/ai.js';
 import { muxLog } from './lib/mux-log.js';
 
 // --- optimistic-mutation seam -----------------------------------------------
@@ -55,6 +56,9 @@ const DEFAULT_MUTATION_TIMEOUT_MS = 5000;
 export class MuxStore {
   private _listeners: Set<() => void> = new Set();
   private _config: ResolvedConfig = DEFAULT_RESOLVED_CONFIG;
+  // Opt-in AI capability. Deliberately NOT part of _config: the key that backs
+  // this flag never enters the config pipeline, and neither does the flag.
+  private _aiStatus: AIStatus = DEFAULT_AI_STATUS;
 
   // --- sessiond multiplexer path --------------------------------------------
   // Frozen wire state for the sessiond control protocol. A pure Composition is
@@ -82,6 +86,20 @@ export class MuxStore {
 
   setConfig(cfg: ResolvedConfig): void {
     this._config = cfg;
+    this._notify();
+  }
+
+  get aiStatus(): AIStatus {
+    return this._aiStatus;
+  }
+
+  /**
+   * The single frontend gate for all future AI UI. Updated from
+   * GET /api/ai/status on load and from the {"type":"ai_status"} WS frame when
+   * a key is saved or cleared in any tab.
+   */
+  setAIStatus(status: AIStatus): void {
+    this._aiStatus = status;
     this._notify();
   }
 
