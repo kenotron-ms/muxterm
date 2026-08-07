@@ -12,6 +12,13 @@ import {
   LIGHT_TITLEBAR_CRAYONS,
   type TitlebarCrayon,
 } from '../lib/instance-identity.js';
+import {
+  DEFAULT_AI_STATUS,
+  saveAIKey,
+  clearAIKey,
+  pingAI,
+  type AIStatus,
+} from '../lib/ai.js';
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -539,14 +546,71 @@ export class MuxSettingsSurface extends LitElement {
       font-size: 11px;
       color: var(--chrome-text-dim);
     }
+
+    /* ── AI section ── */
+    .ai-status {
+      margin: 0 0 12px;
+      color: var(--chrome-text-bright);
+    }
+
+    .ai-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 8px;
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--chrome-text-bright);
+      background: var(--chrome-body);
+      border: 1px solid var(--chrome-border, #444);
+      border-radius: 4px;
+    }
+
+    .ai-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .ai-actions button {
+      padding: 5px 12px;
+      font-family: inherit;
+      font-size: 12px;
+      color: var(--chrome-text-bright);
+      background: var(--chrome-body);
+      border: 1px solid var(--chrome-border, #444);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .ai-actions button[disabled] {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .ai-message {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--chrome-text-dim);
+    }
+
+    .ai-note {
+      margin-top: 16px;
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--chrome-text-dim);
+    }
   `;
 
   @property({ attribute: false }) config: ResolvedConfig | null = null;
   @property({ type: String }) serverAddr = '';
+  @property({ attribute: false }) aiStatus: AIStatus = DEFAULT_AI_STATUS;
 
-  @state() private _section: 'appearance' | 'notifications' = 'appearance';
+  @state() private _section: 'appearance' | 'notifications' | 'ai' = 'appearance';
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
+  @state() private _aiKeyInput = '';
+  @state() private _aiBusy = false;
+  @state() private _aiMessage = '';
   // Per-browser (localStorage), not server config — distinguishes this
   // machine's window/PWA from other muxterm instances. See instance-identity.ts.
   @state() private _titlebarColor: string | null = restoreTitlebarColor();
@@ -915,6 +979,101 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
+  private _emitAIStatus(status: AIStatus): void {
+    this.aiStatus = status;
+    this.dispatchEvent(new CustomEvent('ai-status-change', {
+      detail: { status },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private async _saveAIKey(): Promise<void> {
+    const key = this._aiKeyInput.trim();
+    if (!key || this._aiBusy) return;
+    this._aiBusy = true;
+    this._aiMessage = '';
+    try {
+      this._emitAIStatus(await saveAIKey(key));
+      this._aiKeyInput = '';
+      this._aiMessage = 'Key saved.';
+    } catch {
+      this._aiMessage = 'Could not save the key -- it was not stored.';
+    } finally {
+      this._aiBusy = false;
+    }
+  }
+
+  private async _removeAIKey(): Promise<void> {
+    if (this._aiBusy) return;
+    this._aiBusy = true;
+    this._aiMessage = '';
+    try {
+      this._emitAIStatus(await clearAIKey());
+      this._aiKeyInput = '';
+      this._aiMessage = 'Key removed.';
+    } catch {
+      this._aiMessage = 'Could not remove the key.';
+    } finally {
+      this._aiBusy = false;
+    }
+  }
+
+  private async _testAI(): Promise<void> {
+    if (this._aiBusy) return;
+    this._aiBusy = true;
+    this._aiMessage = 'Testing...';
+    try {
+      const res = await pingAI();
+      this._aiMessage = res.ok
+        ? 'Connected to Anthropic.'
+        : res.error === 'ai_disabled'
+          ? 'AI is off -- save a key first.'
+          : 'Anthropic rejected the request. Check the key.';
+    } catch {
+      this._aiMessage = 'Test failed -- check your connection.';
+    } finally {
+      this._aiBusy = false;
+    }
+  }
+
+  private _renderAI() {
+    const st = this.aiStatus;
+    return html`
+      <p class="section-title">Anthropic API Key</p>
+      <p class="ai-status">
+        ${st.enabled
+          ? `AI enabled -- key ending ${st.keyHint} (from ${st.source}).`
+          : 'AI features are off -- add an Anthropic API key to enable.'}
+      </p>
+      <input
+        class="ai-input"
+        type="password"
+        autocomplete="off"
+        placeholder="sk-ant-..."
+        .value="${this._aiKeyInput}"
+        @input="${(e: Event) => { this._aiKeyInput = (e.target as HTMLInputElement).value; }}"
+      />
+      <div class="ai-actions">
+        <button
+          ?disabled="${this._aiBusy || this._aiKeyInput.trim() === ''}"
+          @click="${this._saveAIKey}"
+        >Save</button>
+        ${st.source === 'settings'
+          ? html`<button ?disabled="${this._aiBusy}" @click="${this._removeAIKey}">Remove</button>`
+          : ''}
+        <button ?disabled="${this._aiBusy}" @click="${this._testAI}">Test connection</button>
+      </div>
+      ${this._aiMessage ? html`<p class="ai-message">${this._aiMessage}</p>` : ''}
+      <p class="ai-note">
+        The key is stored locally at <code>$XDG_CONFIG_HOME/muxterm/anthropic_key</code>
+        (defaults to <code>~/.config/muxterm/anthropic_key</code> when
+        <code>XDG_CONFIG_HOME</code> is unset) with owner-only permissions, is
+        never returned by the server, and is sent only to Anthropic.
+      </p>
+    `;
+  }
+
   override render() {
     if (!this.config) return html``;
 
@@ -933,11 +1092,17 @@ export class MuxSettingsSurface extends LitElement {
             class="sidebar-item ${this._section === 'notifications' ? 'active' : ''}"
             @click="${() => { this._section = 'notifications'; }}"
           >Notifications</button>
+          <button
+            class="sidebar-item ${this._section === 'ai' ? 'active' : ''}"
+            @click="${() => { this._section = 'ai'; }}"
+          >AI</button>
         </nav>
         <div class="content">
           ${this._section === 'appearance'
             ? this._renderAppearance()
-            : this._renderNotifications()}
+            : this._section === 'notifications'
+              ? this._renderNotifications()
+              : this._renderAI()}
         </div>
       </div>
     `;
