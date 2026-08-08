@@ -1,0 +1,11 @@
+# Marker file only.
+#
+# This file exists solely to work around an amplifier-foundation bug where
+# `amplifier bundle add git+...#subdirectory=bundle` validates the presence
+# of a bundle/module marker file (pyproject.toml/setup.py/bundle.md/amplifier.toml)
+# at the repo ROOT instead of inside the requested subdirectory. Our actual
+# bundle lives at bundle/bundle.md.
+#
+# Do not add real amplifier.toml config here — this repo is not itself an
+# amplifier module. Remove this file once the upstream bug is fixed
+# (amplifier-foundation: GitSourceHandler._verify_clone_integrity).
