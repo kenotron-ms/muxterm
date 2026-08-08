@@ -14,6 +14,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebFontsAddon } from '@xterm/addon-web-fonts';
+import { ClipboardAddon } from '@xterm/addon-clipboard';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { resolvePalette } from './theme.js';
 import { muxLog } from './mux-log.js';
@@ -435,6 +436,63 @@ export const terminalRegistry = {
           // browsers that don't support all options — ignore silently.
         }
       }
+    });
+
+    // OSC 52 clipboard support via the official @xterm/addon-clipboard.
+    // xterm.js does not act on OSC 52 natively — by design, clipboard access
+    // requires the browser's Clipboard API, which xterm.js deliberately
+    // leaves to the embedding application. The escape bytes reach the
+    // browser unmodified (the PTY/sessiond pipeline passes them through with
+    // no filtering) but nothing acts on them without this addon.
+    //
+    // SECURITY: the addon's default BrowserClipboardProvider implements BOTH
+    // read (OSC 52 query, Pt = "<selection>;?") and write. We deliberately
+    // supply our own write-only provider instead — iTerm2, Kitty, and
+    // Alacritty all disable OSC 52 read by default, since it lets any
+    // program running in the terminal (including a remote SSH session)
+    // silently exfiltrate the user's OS clipboard the instant read
+    // permission is granted, with no user gesture required. readText() below
+    // always resolves to '', so the addon's query path never reaches
+    // navigator.clipboard.readText() at all.
+    term.loadAddon(new ClipboardAddon(undefined, {
+      readText: (_selection: string) => {
+        // Deliberately inert — see security note above. Never call
+        // navigator.clipboard.readText().
+        return Promise.resolve('');
+      },
+      writeText: (_selection: string, text: string) => {
+        muxLog('registry osc52', `clipboard write pane=${paneId}`, { bytes: text.length });
+        // A terminal escape sequence must never be able to throw an
+        // uncaught error into the app — writeText() requires a secure
+        // context and can reject (insecure context, permission denied,
+        // document not focused); catch and ignore rather than letting it
+        // propagate.
+        return navigator.clipboard.writeText(text).catch(() => {});
+      },
+    }));
+
+    // Guard against the addon's own query round-trip. Even with readText()
+    // above always resolving to '', ClipboardAddon._readText() (see
+    // node_modules/@xterm/addon-clipboard) unconditionally reports back by
+    // calling terminal.input() with an OSC 52 response — e.g.
+    // "\x1b]52;c;\x07" for an empty result — which is itself unwanted
+    // injected terminal input (it gets forwarded to the PTY exactly like a
+    // keystroke). There is no provider hook to suppress that report, so we
+    // intercept the query variant one level up, before the addon's handler
+    // runs at all.
+    //
+    // xterm.js's OscParser (src/common/parser/OscParser.ts) keeps handlers
+    // for a given OSC number in registration order and, on dispatch, calls
+    // them from LAST-registered to FIRST, stopping at the first one that
+    // returns true. Registering this handler after loadAddon() above means
+    // it runs first: it swallows the query ("<selection>;?") by returning
+    // true (claimed, no-op — the addon's handler is never invoked for that
+    // event), and returns false for anything else so the addon's own
+    // handler still processes SET normally.
+    term.parser.registerOscHandler(52, (data: string) => {
+      const sep = data.indexOf(';');
+      const payload = sep === -1 ? data : data.slice(sep + 1);
+      return payload === '?';
     });
 
     // Touch scroll — xterm.js v6 regressed native touch-scroll support
