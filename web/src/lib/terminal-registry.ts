@@ -14,6 +14,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebFontsAddon } from '@xterm/addon-web-fonts';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { resolvePalette } from './theme.js';
 import { muxLog } from './mux-log.js';
@@ -335,8 +336,14 @@ export const terminalRegistry = {
     // WebFontsAddon: loadFonts() is called in attach() before term.open() per
     // the official xterm.js addon-web-fonts guidance.
     const webFontsAddon = new WebFontsAddon();
+    // WebLinksAddon: auto-linkifies http/https URLs in terminal output using
+    // the addon's own default click handler (window.open(uri, '_blank',
+    // 'noopener')). No stored reference needed \u2014 unlike fitAddon/webFontsAddon,
+    // nothing calls a method on it after load; term.dispose() disposes it.
+    const webLinksAddon = new WebLinksAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(webFontsAddon);
+    term.loadAddon(webLinksAddon);
 
     const entry: PaneEntry = {
       term,
