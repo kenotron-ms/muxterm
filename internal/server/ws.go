@@ -419,6 +419,41 @@ func (h *Hub) BroadcastConfig(cfg any) {
 	}
 }
 
+// sendAIStatus writes the AI capability status as a text frame. Serve-local
+// envelope ({"aiStatus":status}), NOT a sessiond message. Deliberately has no
+// "type" field -- ws.ts routes flat sessiond messages by their top-level
+// "type" string and this frame must never match that path (see sendConfig).
+func (c *Client) sendAIStatus(status any) {
+	data, err := json.Marshal(map[string]any{"aiStatus": status})
+	if err != nil {
+		log.Printf("sendAIStatus: marshal error: %v", err)
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("sendAIStatus: write error: %v", err)
+	}
+}
+
+// BroadcastAIStatus sends an {"aiStatus":...} frame to every connected client
+// so a key saved in one browser tab flips the capability in all others.
+//
+// It carries the ai.Status struct only -- which contains no secret by
+// construction -- and, unlike BroadcastConfig, caches nothing on the hub: the
+// status is cheap to recompute and the browser fetches it on load via
+// GET /api/ai/status.
+func (h *Hub) BroadcastAIStatus(status any) {
+	h.mu.Lock()
+	clients := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.Unlock()
+
+	for _, c := range clients {
+		c.sendAIStatus(status)
+	}
+}
+
 // NewHub creates a new Hub that dials a fresh daemon connection per browser via
 // dial. dial may be nil and supplied later via SetDialer. tunnels is nil until
 // set by the caller (server.New sets it via hub.tunnels = tunnels).

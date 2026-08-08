@@ -51,7 +51,17 @@ dev:
 #     resulting sessiond.sock path over macOS's 104-byte sockaddr_un limit,
 #     causing sessiond to fail to bind.
 #   - No Caddy, no demo backend/frontend -- this is a same-machine loop only.
-# Ctrl-C stops the Vite watcher and the air-owned bin/muxterm-dev process.
+# Ctrl-C stops the Vite watcher and air (which tears down its bin/muxterm-dev
+# child in turn). Previously the trap only killed the Vite watcher and relied
+# on the terminal delivering SIGINT to air directly; in practice air (and
+# therefore its supervised bin/muxterm-dev serve process) could survive that,
+# leaving an orphaned server bound to :8313 for the next `make dev-local` to
+# collide with. The trap now explicitly signals air's own PID too, so both
+# exit deterministically regardless of how the signal reaches this script.
+# The detached dev sessiond is intentionally NOT killed here -- see the
+# runtime dir note above; that persistence is by design (Setsid'd terminal
+# sessions must survive a `make dev-local` restart), not a bug. Clean it up
+# by deleting $${TMPDIR:-/tmp}/muxterm-dev-local/ if ever desired.
 # Requires: air (falls back to $(HOME)/go/bin/air if not on PATH).
 dev-local:
 	@mkdir -p tmp
@@ -60,13 +70,18 @@ dev-local:
 	export XDG_RUNTIME_DIR; \
 	mkdir -p "$$XDG_RUNTIME_DIR"; \
 	cd $(WEB_SRC) && npx vite build --watch > ../tmp/dev-local-vite.out 2>&1 & VITE_PID=$$!; \
-	trap 'kill $$VITE_PID 2>/dev/null || true' EXIT INT TERM; \
+	$(AIR) -c .air.local.toml & AIR_PID=$$!; \
+	kill_tree() { \
+		for child in $$(pgrep -P "$$1" 2>/dev/null); do kill_tree "$$child"; done; \
+		kill -TERM "$$1" 2>/dev/null; \
+	}; \
+	trap 'kill_tree $$VITE_PID; kill -INT $$AIR_PID 2>/dev/null; wait $$AIR_PID 2>/dev/null; exit 0' EXIT INT TERM; \
 	echo "dev-local stack:"; \
 	echo "  muxterm-dev   http://127.0.0.1:8313  (air hot-reload)"; \
 	echo "  vite watch    logging to tmp/dev-local-vite.out"; \
 	echo "  runtime dir   $$XDG_RUNTIME_DIR  (isolated sessiond socket/log)"; \
 	echo "  production    127.0.0.1:8311 -- untouched"; \
-	$(AIR) -c .air.local.toml
+	wait $$AIR_PID
 
 # Install demo npm dependencies (run once, or after package.json changes).
 demo-install:
