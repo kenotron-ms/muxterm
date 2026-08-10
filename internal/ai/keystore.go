@@ -69,6 +69,7 @@ func (k *keyStore) Save(key string) error {
 	}
 
 	tmp := k.path + ".tmp"
+	defer os.Remove(tmp) // no-op once Rename succeeds; cleans up tmp on any earlier failure path
 	if err := os.WriteFile(tmp, []byte(key), 0o600); err != nil {
 		return fmt.Errorf("ai: write %s: %w", tmp, err)
 	}
