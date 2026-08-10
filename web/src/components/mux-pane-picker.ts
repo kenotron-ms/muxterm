@@ -11,6 +11,7 @@ export class MuxPanePicker extends LitElement {
       display: flex;
       align-items: center;
       flex: 1;
+      min-width: 0;
       justify-content: flex-end;
     }
 
@@ -24,7 +25,7 @@ export class MuxPanePicker extends LitElement {
       display: flex;
       align-items: center;
       gap: 4px;
-      min-height: 32px;
+      min-height: 44px;
       background: transparent;
       border: none;
       color: inherit;

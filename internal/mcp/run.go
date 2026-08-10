@@ -98,7 +98,7 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 			}
 			attachOnce.Do(func() {
 				ws := c.Workspace()
-				comp, attachErr := c.conn.Attach(ws, "wide")
+				comp, attachErr := c.conn.Attach(ws, "wide", "agent")
 				if attachErr != nil {
 					return
 				}
@@ -180,14 +180,15 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 
 	srv.Register(
 		"send_input",
-		"send raw input without waiting, for interactive programs/control sequences",
+		"send input without waiting, for interactive programs/control sequences; text (optional) is always sent as literal bytes, unchanged, safe for any payload including strings that happen to match a key name; keys (optional) is an array of key names (Enter, Tab, Escape, Backspace, Up, Down, Left, Right, C-c, C-d, C-z) each translated to its byte sequence, e.g. keys: [\"Enter\"] to press Enter; if both are given, text is sent first, then keys, e.g. text: \"ls -la\", keys: [\"Enter\"]; at least one of text/keys is required",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"pane_id": map[string]any{"type": "integer"},
 				"text":    map[string]any{"type": "string"},
+				"keys":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			},
-			"required": []string{"pane_id", "text"},
+			"required": []string{"pane_id"},
 		},
 		wrap(func(c *Client, args map[string]any) (string, error) {
 			return newTerminalTools(c).sendInput(args)

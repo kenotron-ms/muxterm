@@ -28,6 +28,18 @@ playwright-cli close
 
 **You are not done until playwright-cli (or the muxterm-verify skill) confirms the feature works in a real browser.**
 
+### Verification hygiene: fresh fixtures every time, especially when debugging
+
+Lesson learned the hard way (multi-client resize/focus-authority fix, 2026-07-31): a long debugging session hammered a single reused workspace/pane with dozens of resize/attach/detach/reconnect cycles over several hours. The pane accumulated state that produced flaky, non-reproducible failures indistinguishable from real bugs — several hours were burned chasing a "regression" that was actually just test fixture rot, not the code under test.
+
+**Rules to avoid this:**
+
+- **Create a brand-new workspace (and therefore a brand-new pane) for every verification run**, especially every re-run while debugging something flaky. Never reuse a pane across multiple test iterations. A pane that's been resized/reattached dozens of times is not the same as a pane a real user just opened.
+- **Kill and fully restart `make dev-local` (wiped `XDG_RUNTIME_DIR`) before a "clean" verification pass**, not just fresh browser sessions. A fresh browser tab against a long-lived, heavily-poked sessiond process is not a clean test.
+- **Never edit source files while `air`'s dev-local watch loop is mid-test.** Concurrent edits trigger a rebuild that kills in-flight browser WebSocket connections, producing failures that look like application bugs but are actually the test harness pulling the rug out from under itself. Finish the test, *then* edit.
+- **Check for stale sessiond processes from a different worktree before trusting a result.** `make dev-local` uses a fixed, worktree-independent socket path (`${TMPDIR:-/tmp}/muxterm-dev-local`) so it survives long paths — but that means two worktrees running `make dev-local` at different times can leave a stale daemon squatting on the same socket. Run `ps aux | grep sessiond` and confirm the binary path matches the worktree you're actually testing before trusting what you see in the browser.
+- If a scenario is flaky (passes once, fails on the next identical-looking run), don't just re-run it more — that's the "3+ failures = question the pattern" signal. Rule out fixture/environment staleness with a fresh-everything run *before* concluding it's a real code defect.
+
 ### Fast static checks (required before commit)
 
 These are NOT tests. They are type and lint checks:

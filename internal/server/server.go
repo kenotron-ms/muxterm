@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kenotron-ms/muxterm/internal/ai"
+	"github.com/kenotron-ms/muxterm/internal/authserver"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
 )
 
@@ -29,25 +31,50 @@ type Config struct {
 	Addr          string
 	Secret        string
 	StaticFS      fs.FS
-	NoAuth        bool          // skip token/localhost auth check (dev only)
+	NoAuth        bool          // skip all auth checks, including loopback bypass (dev only)
 	ConfigPath    string        // path to write config.toml on PATCH /api/config (empty = skip writes)
 	InitialConfig muxcfg.Config // initial resolved configuration (zero value = package defaults)
+
+	// AIKeyPath is the file path of the owner-only Anthropic API key. Empty
+	// means ai.DefaultKeyPath(). The key is deliberately NOT part of
+	// InitialConfig: anything in config.Config is published by GET /api/config,
+	// Hub.BroadcastConfig, and MCP get_config by construction.
+	AIKeyPath string
+
+	// AuthServer is nil when the platform login backend is unavailable at
+	// startup (see cmd/muxterm's newAuthServer) — in that case every
+	// non-loopback request is denied (fail closed), and /authorize,
+	// /token, /auth/login, /auth/callback are not mounted at all.
+	AuthServer *authserver.AuthServer
+	// WebRedirectURI is the exact-match redirect URI for the muxterm-web
+	// OAuth client (e.g. "http://127.0.0.1:8311/auth/callback").
+	WebRedirectURI string
+	// BehindReverseProxy mirrors config.ServerConfig.BehindReverseProxy.
+	// When true the IsLocalhost() auth bypass is disabled entirely — see
+	// internal/server/authmiddleware.go.
+	BehindReverseProxy bool
 }
 
 // Server is the HTTP server for muxterm.
 type Server struct {
 	addr    string
-	secret  string
 	noAuth  bool
 	mux     *http.ServeMux
 	hub     *Hub
 	tunnels *TunnelRegistry
+
+	authSrv        *authserver.AuthServer
+	webRedirectURI string
 
 	// configPath is the file path for persisting PATCH /api/config writes.
 	// Empty string means writes are skipped (dev/test mode).
 	configPath string
 	cfgMu      sync.RWMutex
 	cfg        muxcfg.Config
+
+	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
+	// lazily-constructed Anthropic client. Never reachable from cfg.
+	ai *ai.Manager
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -59,12 +86,13 @@ func New(cfg Config) *Server {
 	hub.tunnels = tunnels
 
 	s := &Server{
-		addr:    cfg.Addr,
-		secret:  cfg.Secret,
-		noAuth:  cfg.NoAuth,
-		mux:     http.NewServeMux(),
-		hub:     hub,
-		tunnels: tunnels,
+		addr:           cfg.Addr,
+		noAuth:         cfg.NoAuth,
+		mux:            http.NewServeMux(),
+		hub:            hub,
+		tunnels:        tunnels,
+		authSrv:        cfg.AuthServer,
+		webRedirectURI: cfg.WebRedirectURI,
 	}
 
 	s.configPath = cfg.ConfigPath
@@ -75,19 +103,63 @@ func New(cfg Config) *Server {
 		s.cfg = muxcfg.Defaults()
 	}
 
+	aiKeyPath := cfg.AIKeyPath
+	if aiKeyPath == "" {
+		aiKeyPath = ai.DefaultKeyPath()
+	}
+	s.ai = ai.NewManager(aiKeyPath)
+
+	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy)
+	protect := func(h http.Handler) http.Handler {
+		return authMW.Wrap(h)
+	}
+
+	// NOTE for the Phase 2 (MCP-over-HTTP) surface: muxterm does not yet
+	// serve an RFC 8414 .well-known/oauth-authorization-server document, an
+	// RFC 9728 .well-known/oauth-protected-resource document, or a POST
+	// /mcp route — none of them exist anywhere in this codebase today.
+	// When they are added, every absolute URL inside them (issuer,
+	// authorization_endpoint, token_endpoint, resource, and the canonical
+	// /mcp resource URI) MUST be built from the same origin that produced
+	// cfg.WebRedirectURI — cmd/muxterm's publicBaseURL, which resolves to
+	// the operator-configured public_origin behind a reverse proxy and to
+	// the loopback derivation otherwise. They MUST NOT be derived from
+	// r.Host, X-Forwarded-Host, X-Forwarded-Proto, or any other request
+	// header: headers are spoofable, and the design rejects trusting them
+	// for any trust-relevant value. Deriving them anywhere else is how
+	// these documents silently drift from the registered redirect URI.
+
+	// Public, unauthenticated routes.
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
-	s.mux.HandleFunc("GET /api/token", s.handleToken)
-	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
-	s.mux.HandleFunc("PATCH /api/config", s.handlePatchConfig)
-	s.mux.HandleFunc("GET /api/tunnels", s.handleTunnelList)
-	s.mux.HandleFunc("POST /api/tunnels", s.handleTunnelCreate)
-	s.mux.HandleFunc("DELETE /api/tunnels/{id}", s.handleTunnelClose)
-	s.mux.HandleFunc("/t/", s.handleTunnelProxy)
-	s.mux.HandleFunc("GET /ws", s.handleWS)
-	s.mux.HandleFunc("GET /ws/browser", s.handleWSBrowser)
+	if s.authSrv != nil {
+		s.mux.HandleFunc("GET /authorize", s.authSrv.ServeAuthorize)
+		s.mux.HandleFunc("POST /authorize", s.authSrv.ServeAuthorize)
+		s.mux.HandleFunc("POST /token", s.authSrv.ServeToken)
+		s.mux.HandleFunc("GET /auth/login", s.handleAuthLogin)
+		s.mux.HandleFunc("GET /auth/callback", s.handleAuthCallback)
+		s.mux.HandleFunc("POST /auth/logout", s.handleAuthLogout)
+	}
+
+	// Protected routes: loopback bypass, else a valid session (cookie or
+	// bearer token) is required — see internal/server/authmiddleware.go.
+	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
+	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
+
+	// Opt-in AI capability. Deliberately a separate route family from
+	// /api/config: the key goes in via PUT and only a derived Status comes out.
+	s.mux.Handle("GET /api/ai/status", protect(http.HandlerFunc(s.handleAIStatus)))
+	s.mux.Handle("PUT /api/ai/key", protect(http.HandlerFunc(s.handleAIPutKey)))
+	s.mux.Handle("DELETE /api/ai/key", protect(http.HandlerFunc(s.handleAIDeleteKey)))
+	s.mux.Handle("POST /api/ai/ping", protect(http.HandlerFunc(s.handleAIPing)))
+
+	s.mux.Handle("GET /api/tunnels", protect(http.HandlerFunc(s.handleTunnelList)))
+	s.mux.Handle("POST /api/tunnels", protect(http.HandlerFunc(s.handleTunnelCreate)))
+	s.mux.Handle("DELETE /api/tunnels/{id}", protect(http.HandlerFunc(s.handleTunnelClose)))
+	s.mux.Handle("/t/", protect(http.HandlerFunc(s.handleTunnelProxy)))
+	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
 
 	if cfg.StaticFS != nil {
-		s.mux.Handle("/", http.FileServer(http.FS(cfg.StaticFS)))
+		s.mux.Handle("/", protect(http.FileServer(http.FS(cfg.StaticFS))))
 	}
 
 	return s
@@ -135,45 +207,18 @@ func (s *Server) Hub() *Hub {
 	return s.hub
 }
 
-// Secret returns the server's secret.
-func (s *Server) Secret() string {
-	return s.secret
-}
-
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
-	if !IsLocalhost(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	token, err := GenerateToken(s.secret)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"token": token})
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.handleWSImpl(w, r)
 }
 
-func (s *Server) handleWSBrowser(w http.ResponseWriter, r *http.Request) {
-	s.handleWSBrowserImpl(w, r)
-}
-
 // handleTunnelList returns a JSON array of all active tunnels (id, port).
-// Restricted to localhost callers; the primary consumer is the MCP server.
+// AuthMiddleware protects this route at mux registration.
 func (s *Server) handleTunnelList(w http.ResponseWriter, r *http.Request) {
-	if !IsLocalhost(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	entries := s.tunnels.List()
 	items := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
@@ -187,12 +232,9 @@ func (s *Server) handleTunnelList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTunnelCreate registers a new port-forward tunnel and returns the
-// assigned id. Body must be JSON {"port": <int>}. Restricted to localhost.
+// assigned id. Body must be JSON {"port": <int>}. AuthMiddleware protects
+// this route at mux registration.
 func (s *Server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
-	if !IsLocalhost(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	var body struct {
 		Port int `json:"port"`
 	}
@@ -213,12 +255,9 @@ func (s *Server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTunnelClose deregisters the tunnel identified by the {id} path
-// segment. Returns 404 when the id is unknown. Restricted to localhost.
+// segment. Returns 404 when the id is unknown. AuthMiddleware protects this
+// route at mux registration.
 func (s *Server) handleTunnelClose(w http.ResponseWriter, r *http.Request) {
-	if !IsLocalhost(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	id := r.PathValue("id")
 	if !s.tunnels.Close(id) {
 		http.Error(w, "tunnel not found", http.StatusNotFound)
@@ -265,8 +304,16 @@ func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clone the request and rewrite the URL path to strip the /t/{id} prefix
-	// before forwarding to the upstream.
+	// before forwarding to the upstream. Cookie/Authorization are stripped
+	// so the tunneled (potentially untrusted, arbitrary local dev server)
+	// target never receives muxterm's own session credentials — see
+	// design doc "Tunnel credential stripping." This closes the
+	// credential-forwarding vector only; same-origin JS access from the
+	// tunneled page is a separate, unresolved limitation (design doc "Out
+	// of Scope").
 	cloned := r.Clone(r.Context())
+	cloned.Header.Del("Cookie")
+	cloned.Header.Del("Authorization")
 	cloned.URL = &url.URL{
 		Scheme:   target.Scheme,
 		Host:     target.Host,

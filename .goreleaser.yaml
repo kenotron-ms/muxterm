@@ -7,15 +7,30 @@ before:
     - npm --prefix web run build
 
 builds:
-  - id: muxterm
+  - id: muxterm-linux
     main: ./cmd/muxterm
     binary: muxterm
     env:
-      - CGO_ENABLED=0
-    # Windows is excluded: muxterm uses Unix PTYs and Unix domain sockets
-    # (sessiond.SocketPath) which are not available on Windows.
+      # CGO_ENABLED=1 required for msteinert/pam/v2 (PAM Phase 1 auth backend)
+      # which is a C binding and cannot build with CGO disabled.
+      - CGO_ENABLED=1
     goos:
       - linux
+    goarch:
+      - amd64
+    # Linux arm64 excluded: github.com/msteinert/pam/v2 has build constraints
+    # that exclude Linux ARM targets during cross-compilation. Phase 4/5 may add
+    # platform backends without this constraint.
+    ldflags:
+      - -s -w
+  - id: muxterm-darwin
+    main: ./cmd/muxterm
+    binary: muxterm
+    env:
+      # CGO_ENABLED=0: Darwin build doesn't use C bindings (OpenDirectory PAM
+      # backend arrives in Phase 4). Pure Go build for maximum portability.
+      - CGO_ENABLED=0
+    goos:
       - darwin
     goarch:
       - amd64

@@ -3,15 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // TestHandleTextInput_TypeCreateBrowserPane verifies that a TypeCreateBrowserPane
-// message calls daemon.CreateBrowserCDPPane and sends TypePaneCreated back.
+// message calls daemon.CreateBrowserPane and sends TypePaneCreated back.
 func TestHandleTextInput_TypeCreateBrowserPane(t *testing.T) {
 	fake := &fakeDaemonConn{createdID: 42}
 
@@ -100,20 +98,5 @@ func TestHandleTextInput_TypeCloseBrowserPane(t *testing.T) {
 	}
 	if reply.CID != 55 {
 		t.Errorf("reply.CID = %d, want 55", reply.CID)
-	}
-}
-
-// TestWSBrowserRouteRegistered verifies that GET /ws/browser is registered in
-// the server's mux. We send a plain HTTP GET (not a WebSocket upgrade) and
-// expect the handler to be reached — the request will fail because it is not
-// a real WebSocket upgrade, but the 400 / 426 or similar non-404 response
-// confirms the route is present.
-func TestWSBrowserRouteRegistered(t *testing.T) {
-	srv := New(Config{NoAuth: true})
-	req := httptest.NewRequest(http.MethodGet, "/ws/browser", nil)
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	if rr.Code == http.StatusNotFound {
-		t.Fatalf("GET /ws/browser returned 404: route not registered")
 	}
 }

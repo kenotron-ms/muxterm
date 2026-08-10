@@ -40,6 +40,45 @@ type Client struct {
 	// capturing closures.
 	writeTextFn   func([]byte) error
 	writeBinaryFn func([]byte) error
+
+	// wsMu guards workspaceID, the workspace this client is currently attached
+	// to. It is set on a successful TypeAttach and read by daemon event relay
+	// handlers (e.g. OnPaneAdded) that need to stamp WorkspaceID onto events
+	// the daemon itself does not carry a workspace id on, since a client is
+	// only ever attached to a single workspace at a time.
+	wsMu        sync.Mutex
+	workspaceID string
+
+	// attachSeq enforces the frozen "composition FIRST" ordering guarantee
+	// across the goroutine boundary between the daemon connection's read loop
+	// (which delivers the composition reply via request/reply correlation on
+	// one goroutine, then immediately continues its loop and dispatches the
+	// following replay pane-data frames via OnPaneOutput on that SAME
+	// goroutine) and this Client's own handleTextInput goroutine (which
+	// receives the composition reply and must forward it to the browser/app
+	// WebSocket). Without this lock, OnPaneOutput's writeBinary calls for
+	// replay frames race ahead of handleTextInput's sendMessage(composition)
+	// call and reach the wire first, since a buffered-channel handoff to the
+	// pending request does not yield the daemon read-loop goroutine. Held by
+	// handleTextInput for the full Attach()+sendMessage(composition) sequence,
+	// and by OnPaneOutput around every binary relay, so pane-data can never be
+	// written to the WebSocket while a composition send is in flight.
+	attachSeq sync.Mutex
+}
+
+// setWorkspaceID records the workspace this client is currently attached to.
+func (c *Client) setWorkspaceID(id string) {
+	c.wsMu.Lock()
+	c.workspaceID = id
+	c.wsMu.Unlock()
+}
+
+// getWorkspaceID returns the workspace this client is currently attached to,
+// or "" if it has not attached yet.
+func (c *Client) getWorkspaceID() string {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	return c.workspaceID
 }
 
 // newClient creates a new Client with a cancellable context and real WebSocket
@@ -128,11 +167,19 @@ func (c *Client) handleTextInput(data []byte) {
 
 	switch msg.Type {
 	case sessiond.TypeAttach:
-		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint)
+		// attachSeq must be held for the entire Attach()+sendMessage sequence:
+		// it also gates OnPaneOutput's binary relay (see attachClient), so no
+		// replay pane-data frame can reach the WebSocket before the
+		// composition reply that announces its pane, preserving the frozen
+		// "composition FIRST" wire ordering across the goroutine boundary.
+		c.attachSeq.Lock()
+		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint, "interactive")
 		if err != nil {
+			c.attachSeq.Unlock()
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
 		}
+		c.setWorkspaceID(comp.WorkspaceID)
 		c.sendMessage(&sessiond.Message{
 			Type:        sessiond.TypeComposition,
 			CID:         msg.CID,
@@ -140,6 +187,7 @@ func (c *Client) handleTextInput(data []byte) {
 			Panes:       comp.Panes,
 			Layout:      comp.Layout,
 		})
+		c.attachSeq.Unlock()
 
 	case sessiond.TypeListWorkspaces:
 		workspaces, err := c.daemon.ListWorkspaces()
@@ -203,6 +251,12 @@ func (c *Client) handleTextInput(data []byte) {
 			log.Printf("handleTextInput: resize error: %v", err)
 		}
 
+	case sessiond.TypePaneFocus:
+		// Fire-and-forget: the daemon sends no reply.
+		if err := c.daemon.PaneFocus(uint32(msg.PaneID), msg.Cols, msg.Rows); err != nil {
+			log.Printf("handleTextInput: pane-focus error: %v", err)
+		}
+
 	case sessiond.TypeRenamePane:
 		if err := c.daemon.RenamePane(msg.PaneID, msg.Name); err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
@@ -226,48 +280,8 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
 
-	case sessiond.TypeCreateTunnel:
-		// Tunnel operations are handled entirely by the serve layer; they are
-		// never forwarded to the daemon. The daemon-nil guard above would have
-		// returned already, so c.daemon is guaranteed non-nil here, but the
-		// registry is on the hub rather than on the daemon.
-		id, err := c.hub.tunnels.Create(msg.TunnelPort)
-		if err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
-			return
-		}
-		c.sendMessage(&sessiond.Message{
-			Type:       sessiond.TypeTunnelCreated,
-			CID:        msg.CID,
-			TunnelID:   id,
-			TunnelPort: msg.TunnelPort,
-		})
-
-	case sessiond.TypeCloseTunnel:
-		if ok := c.hub.tunnels.Close(msg.TunnelID); !ok {
-			c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("tunnel %q not found", msg.TunnelID))
-			return
-		}
-		c.sendMessage(&sessiond.Message{
-			Type:     sessiond.TypeTunnelClosed,
-			CID:      msg.CID,
-			TunnelID: msg.TunnelID,
-		})
-
-	case sessiond.TypeListTunnels:
-		entries := c.hub.tunnels.List()
-		tunnels := make([]sessiond.TunnelInfo, len(entries))
-		for i, e := range entries {
-			tunnels[i] = sessiond.TunnelInfo{ID: e.id, Port: e.port}
-		}
-		c.sendMessage(&sessiond.Message{
-			Type:    sessiond.TypeTunnelList,
-			CID:     msg.CID,
-			Tunnels: tunnels,
-		})
-
 	case sessiond.TypeCreateBrowserPane:
-		paneID, err := c.daemon.CreateBrowserCDPPane(msg.Placement, msg.ReferencePaneID)
+		paneID, err := c.daemon.CreateBrowserPane(msg.Placement, msg.ReferencePaneID)
 		if err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
@@ -280,6 +294,35 @@ func (c *Client) handleTextInput(data []byte) {
 			return
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
+
+	case sessiond.TypeBrowserCommand:
+		// Client (or agent, once MCP is wired) relays a command; daemon broadcasts
+		// it to the workspace so the pane's owner executes it. Fire-and-forget.
+		if err := c.daemon.BrowserCommand(msg.PaneID, msg.CID, msg.Params); err != nil {
+			log.Printf("handleTextInput: BrowserCommand error: %v", err)
+		}
+
+	case sessiond.TypeBrowserResult:
+		// Executing client returns the result; daemon broadcasts it back to the
+		// workspace (echoing cid) so the waiting requester receives it.
+		if err := c.daemon.BrowserResult(msg.PaneID, msg.CID, msg.Result); err != nil {
+			log.Printf("handleTextInput: BrowserResult error: %v", err)
+		}
+
+	case sessiond.TypeBrowserURL:
+		// Client-to-server notification: URL navigation committed. Daemon
+		// broadcasts to workspace subscribers so MCP agents can observe
+		// navigation. Fire-and-forget.
+		if err := c.daemon.BrowserURL(msg.PaneID, msg.URL); err != nil {
+			log.Printf("handleTextInput: BrowserURL error: %v", err)
+		}
+
+	case sessiond.TypeBrowserLoad:
+		// Client-to-server notification: page load complete. Daemon broadcasts
+		// to workspace subscribers. Fire-and-forget.
+		if err := c.daemon.BrowserLoad(msg.PaneID, msg.URL); err != nil {
+			log.Printf("handleTextInput: BrowserLoad error: %v", err)
+		}
 
 	default:
 		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
@@ -376,6 +419,41 @@ func (h *Hub) BroadcastConfig(cfg any) {
 	}
 }
 
+// sendAIStatus writes the AI capability status as a text frame. Serve-local
+// envelope ({"aiStatus":status}), NOT a sessiond message. Deliberately has no
+// "type" field -- ws.ts routes flat sessiond messages by their top-level
+// "type" string and this frame must never match that path (see sendConfig).
+func (c *Client) sendAIStatus(status any) {
+	data, err := json.Marshal(map[string]any{"aiStatus": status})
+	if err != nil {
+		log.Printf("sendAIStatus: marshal error: %v", err)
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("sendAIStatus: write error: %v", err)
+	}
+}
+
+// BroadcastAIStatus sends an {"aiStatus":...} frame to every connected client
+// so a key saved in one browser tab flips the capability in all others.
+//
+// It carries the ai.Status struct only -- which contains no secret by
+// construction -- and, unlike BroadcastConfig, caches nothing on the hub: the
+// status is cheap to recompute and the browser fetches it on load via
+// GET /api/ai/status.
+func (h *Hub) BroadcastAIStatus(status any) {
+	h.mu.Lock()
+	clients := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.Unlock()
+
+	for _, c := range clients {
+		c.sendAIStatus(status)
+	}
+}
+
 // NewHub creates a new Hub that dials a fresh daemon connection per browser via
 // dial. dial may be nil and supplied later via SetDialer. tunnels is nil until
 // set by the caller (server.New sets it via hub.tunnels = tunnels).
@@ -426,13 +504,21 @@ func (h *Hub) attachClient(c *Client) error {
 
 	dc.SetHandlers(sessiond.Handlers{
 		OnPaneOutput: func(paneID uint32, data []byte) {
-			if err := c.writeBinary(EncodeBinaryFrame(paneID, data)); err != nil {
+			// Blocks while an Attach() reply is being forwarded to the
+			// browser/app WebSocket (see attachSeq), so replay frames for the
+			// pane just announced in that composition can never overtake it
+			// on the wire.
+			c.attachSeq.Lock()
+			err := c.writeBinary(EncodeBinaryFrame(paneID, data))
+			c.attachSeq.Unlock()
+			if err != nil {
 				log.Printf("attachClient: pane output write error: %v", err)
 			}
 		},
 		OnPaneAdded: func(pane sessiond.PaneInfo) {
 			c.sendMessage(&sessiond.Message{
 				Type:            sessiond.TypePaneAdded,
+				WorkspaceID:     c.getWorkspaceID(),
 				PaneID:          pane.PaneID,
 				Cols:            pane.Cols,
 				Rows:            pane.Rows,
@@ -442,8 +528,11 @@ func (h *Hub) attachClient(c *Client) error {
 				ReferencePaneID: pane.ReferencePaneID,
 			})
 		},
-		OnPaneClosed: func(paneID int) {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneClosed, PaneID: paneID})
+		OnPaneClosed: func(paneID int, processExitCode *int, runtimeMs int64) {
+			c.sendMessage(&sessiond.Message{
+				Type: sessiond.TypePaneClosed, PaneID: paneID,
+				ProcessExitCode: processExitCode, RuntimeMs: runtimeMs,
+			})
 		},
 		OnWorkspaceClosed: func(workspaceID string) {
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceClosed, WorkspaceID: workspaceID})
@@ -456,6 +545,42 @@ func (h *Hub) attachClient(c *Client) error {
 		},
 		OnPaneRenamed: func(paneID int, name string) {
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneRenamed, PaneID: paneID, Name: name})
+		},
+		OnPaneResized: func(paneID uint32, cols, rows int) {
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneResized, PaneID: int(paneID), Cols: cols, Rows: rows})
+		},
+		OnBrowserCommand: func(msg *sessiond.Message) {
+			c.sendMessage(&sessiond.Message{
+				Type:     sessiond.TypeBrowserCommand,
+				PaneID:   msg.PaneID,
+				CID:      msg.CID,
+				Action:   msg.Action,
+				Selector: msg.Selector,
+				Params:   msg.Params,
+			})
+		},
+		OnBrowserResult: func(msg *sessiond.Message) {
+			c.sendMessage(&sessiond.Message{
+				Type:   sessiond.TypeBrowserResult,
+				PaneID: msg.PaneID,
+				CID:    msg.CID,
+				Result: msg.Result,
+				Error:  msg.Error,
+			})
+		},
+		OnBrowserURL: func(msg *sessiond.Message) {
+			c.sendMessage(&sessiond.Message{
+				Type:   sessiond.TypeBrowserURL,
+				PaneID: msg.PaneID,
+				URL:    msg.URL,
+			})
+		},
+		OnBrowserLoad: func(msg *sessiond.Message) {
+			c.sendMessage(&sessiond.Message{
+				Type:   sessiond.TypeBrowserLoad,
+				PaneID: msg.PaneID,
+				URL:    msg.URL,
+			})
 		},
 	})
 
@@ -527,15 +652,9 @@ func (h *Hub) ClientCount() int {
 
 // handleWSImpl handles the WebSocket upgrade and client lifecycle.
 func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
-	// Auth: allow localhost OR valid token (skipped when --no-auth is set)
-	if !s.noAuth && !IsLocalhost(r) {
-		token := r.URL.Query().Get("token")
-		if !ValidateToken(token, s.secret, 30*time.Second) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-	}
-
+	// Auth is now handled uniformly by AuthMiddleware at the mux level
+	// (GET /ws is wrapped in server.go's New()) — no inline check needed
+	// here anymore.
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})

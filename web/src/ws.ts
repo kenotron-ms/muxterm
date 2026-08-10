@@ -21,6 +21,16 @@ export class MuxSocket {
   onDisconnect: (() => void) | null = null;
   onReconnect: (() => void) | null = null;
   onSessiondMessage: ((msg: SessiondMessage) => void) | null = null;
+  /**
+   * Fires when the daemon broadcasts pane-resized: the canonical PTY size for
+   * paneId changed because some other client became (or already was)
+   * authoritative for it. A direct callback property, like onDisconnect/
+   * onReconnect above — not the window CustomEvent relay pattern used below
+   * for browser-action/layout-command, since the only consumer
+   * (terminalRegistry) is a plain module app.ts already imports directly; no
+   * need for a window-event round-trip.
+   */
+  onPaneResized: ((paneId: number, cols: number, rows: number) => void) | null = null;
 
   constructor(store: MuxStore, url: string) {
     this._store = store;
@@ -134,21 +144,6 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.ClosePane, paneId });
   }
 
-  /** Request a new port-forward tunnel for the given port. */
-  createTunnel(port: number): void {
-    this.sendSessiond({ type: SessiondType.CreateTunnel, tunnelPort: port });
-  }
-
-  /** Close an existing tunnel by its server-assigned ID. */
-  closeTunnel(id: string): void {
-    this.sendSessiond({ type: SessiondType.CloseTunnel, tunnelId: id });
-  }
-
-  /** Request the list of active tunnels. */
-  listTunnels(): void {
-    this.sendSessiond({ type: SessiondType.ListTunnels });
-  }
-
   /** Open a browser CDP pane on the server side. */
   createBrowserPane(): void {
     this.sendSessiond({ type: SessiondType.CreateBrowserPane });
@@ -166,6 +161,18 @@ export class MuxSocket {
    */
   resize(paneId: number, cols: number, rows: number): void {
     this.sendSessiond({ type: SessiondType.Resize, paneId, cols, rows });
+  }
+
+  /**
+   * Claim PTY-sizing authority for a pane: sent when it becomes this client's
+   * visible+OS-focused view (dockview active-tab change, visibilitychange,
+   * window focus, or initial attach/reconnect). Carries this client's current
+   * measured size so the daemon can resize the PTY in the same round-trip
+   * rather than waiting for a separate resize message afterward. Mirrors
+   * resize()'s shape exactly — same three fields, different type.
+   */
+  paneFocus(paneId: number, cols: number, rows: number): void {
+    this.sendSessiond({ type: SessiondType.PaneFocus, paneId, cols, rows });
   }
 
   destroy(): void {
@@ -227,6 +234,8 @@ export class MuxSocket {
             window.dispatchEvent(new CustomEvent('browser-action', { detail: raw }));
           } else if (raw.type === SessiondType.LayoutCommand) {
             window.dispatchEvent(new CustomEvent('layout-command', { detail: raw }));
+          } else if (raw.type === SessiondType.PaneResized) {
+            this.onPaneResized?.(raw.paneId as number, raw.cols as number, raw.rows as number);
           }
         }
       }

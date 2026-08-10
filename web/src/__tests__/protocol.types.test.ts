@@ -49,13 +49,6 @@ describe('sessiond protocol types', () => {
       LayoutCommand: 'layout-command',
       ScreenSnapshot: 'screen-snapshot',
       GetLayout: 'get-layout',
-      // Tunnel management
-      CreateTunnel: 'create-tunnel',
-      CloseTunnel: 'close-tunnel',
-      ListTunnels: 'list-tunnels',
-      TunnelCreated: 'tunnel-created',
-      TunnelClosed: 'tunnel-closed',
-      TunnelList: 'tunnel-list',
     });
   });
 
@@ -129,16 +122,16 @@ describe('clientRef correlation field', () => {
   });
 });
 
-describe('browser CDP pane fields', () => {
-  it('SessiondPaneInfo accepts browser-cdp surfaceKind', () => {
-    const kind: SurfaceKind = 'browser-cdp';
+describe('browser pane fields', () => {
+  it('SessiondPaneInfo accepts browser surfaceKind', () => {
+    const kind: SurfaceKind = 'browser';
     const pane: SessiondPaneInfo = {
       paneId: 2,
       cols: 0,
       rows: 0,
       surfaceKind: kind,
     };
-    expect(pane.surfaceKind).toBe('browser-cdp');
+    expect(pane.surfaceKind).toBe('browser');
   });
 
   it('SessiondPaneInfo surfaceKind is optional', () => {
@@ -146,13 +139,13 @@ describe('browser CDP pane fields', () => {
     expect(pane.surfaceKind).toBeUndefined();
   });
 
-  it('SessiondMessage accepts browser-cdp surfaceKind', () => {
+  it('SessiondMessage accepts browser surfaceKind', () => {
     const msg: SessiondMessage = {
       type: SessiondType.CreatePane,
       paneId: 2,
-      surfaceKind: 'browser-cdp',
+      surfaceKind: 'browser',
     };
-    expect(msg.surfaceKind).toBe('browser-cdp');
+    expect(msg.surfaceKind).toBe('browser');
   });
 
   it('SessiondMessage surfaceKind is optional', () => {

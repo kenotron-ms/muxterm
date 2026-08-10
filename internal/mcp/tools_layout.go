@@ -49,7 +49,7 @@ func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 		paneID = id
 
 	case "browser":
-		id, err := lt.c.conn.CreateBrowserCDPPane(placement, referencePaneID)
+		id, err := lt.c.conn.CreateBrowserPane(placement, referencePaneID)
 		if err != nil {
 			return "", fmt.Errorf("creating browser pane: %w", err)
 		}
@@ -112,7 +112,7 @@ func (lt *layoutTools) listPanes(args map[string]any) (string, error) {
 		return "", fmt.Errorf("not attached to a workspace")
 	}
 
-	comp, err := lt.c.conn.Attach(ws, "wide")
+	comp, err := lt.c.conn.Attach(ws, "wide", "agent")
 	if err != nil {
 		return "", fmt.Errorf("attaching to workspace %q: %w", ws, err)
 	}

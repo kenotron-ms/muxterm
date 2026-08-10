@@ -1,8 +1,24 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { PALETTES } from '../lib/theme.js';
+import { PALETTES, isLightTheme } from '../lib/theme.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
 import type { ResolvedConfig } from '../lib/config.js';
+import {
+  instanceLabel,
+  restoreTitlebarColor,
+  persistTitlebarColor,
+  applyTitlebarColor,
+  DARK_TITLEBAR_CRAYONS,
+  LIGHT_TITLEBAR_CRAYONS,
+  type TitlebarCrayon,
+} from '../lib/instance-identity.js';
+import {
+  DEFAULT_AI_STATUS,
+  saveAIKey,
+  clearAIKey,
+  pingAI,
+  type AIStatus,
+} from '../lib/ai.js';
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -394,6 +410,99 @@ export class MuxSettingsSurface extends LitElement {
       margin: 22px 0;
     }
 
+    /* ── Title bar color picker ── */
+
+    /* Crayon grid — curated presets, same idea as macOS's classic Crayons
+       color-picker tab. */
+    .crayon-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .crayon {
+      position: relative;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      padding: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: transform 0.08s;
+    }
+    .crayon:hover {
+      transform: scale(1.12);
+    }
+    .crayon.active {
+      box-shadow: 0 0 0 2px var(--chrome-body), 0 0 0 4px var(--chrome-accent);
+    }
+    .crayon-check {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    }
+
+    .titlebar-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .titlebar-swatch {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 1px solid var(--chrome-border);
+      padding: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+      /* Native color input chrome varies a lot by browser — strip it down
+         to just the swatch so it matches the crayon grid above it. */
+      -webkit-appearance: none;
+      appearance: none;
+      background: none;
+    }
+    .titlebar-swatch::-webkit-color-swatch-wrapper {
+      padding: 0;
+    }
+    .titlebar-swatch::-webkit-color-swatch {
+      border: none;
+      border-radius: 50%;
+    }
+
+    .titlebar-custom-label {
+      font-size: 12px;
+      color: var(--chrome-text-dim);
+    }
+
+    .titlebar-reset-btn {
+      background: transparent;
+      border: 1px solid var(--chrome-border);
+      color: var(--chrome-text-dim);
+      border-radius: 6px;
+      padding: 7px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: border-color 0.1s, color 0.1s;
+      margin-left: auto;
+    }
+    .titlebar-reset-btn:hover {
+      border-color: var(--chrome-accent);
+      color: var(--chrome-text-bright);
+    }
+
+    .titlebar-hint {
+      font-size: 12px;
+      color: var(--chrome-text-dim);
+      margin: 0;
+    }
+
     /* ── Bell radios ── */
     .bell-radios {
       display: flex;
@@ -437,14 +546,74 @@ export class MuxSettingsSurface extends LitElement {
       font-size: 11px;
       color: var(--chrome-text-dim);
     }
+
+    /* ── AI section ── */
+    .ai-status {
+      margin: 0 0 12px;
+      color: var(--chrome-text-bright);
+    }
+
+    .ai-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 8px;
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--chrome-text-bright);
+      background: var(--chrome-body);
+      border: 1px solid var(--chrome-border, #444);
+      border-radius: 4px;
+    }
+
+    .ai-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .ai-actions button {
+      padding: 5px 12px;
+      font-family: inherit;
+      font-size: 12px;
+      color: var(--chrome-text-bright);
+      background: var(--chrome-body);
+      border: 1px solid var(--chrome-border, #444);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .ai-actions button[disabled] {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .ai-message {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--chrome-text-dim);
+    }
+
+    .ai-note {
+      margin-top: 16px;
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--chrome-text-dim);
+    }
   `;
 
   @property({ attribute: false }) config: ResolvedConfig | null = null;
   @property({ type: String }) serverAddr = '';
+  @property({ attribute: false }) aiStatus: AIStatus = DEFAULT_AI_STATUS;
 
-  @state() private _section: 'appearance' | 'notifications' = 'appearance';
+  @state() private _section: 'appearance' | 'notifications' | 'ai' = 'appearance';
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
+  @state() private _aiKeyInput = '';
+  @state() private _aiBusy = false;
+  @state() private _aiMessage = '';
+  // Per-browser (localStorage), not server config — distinguishes this
+  // machine's window/PWA from other muxterm instances. See instance-identity.ts.
+  @state() private _titlebarColor: string | null = restoreTitlebarColor();
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -490,6 +659,20 @@ export class MuxSettingsSurface extends LitElement {
   private _setBell(bell: ResolvedConfig['terminal']['bell']): void {
     if (!this.config) return;
     this._emit({ terminal: { ...this.config.terminal, bell } });
+  }
+
+  /** Applies + persists a new title-bar accent color immediately (no server round trip). */
+  private _setTitlebarColor(color: string): void {
+    this._titlebarColor = color;
+    persistTitlebarColor(color);
+    applyTitlebarColor(color);
+  }
+
+  /** Clears the custom title-bar color, reverting to the current theme's default. */
+  private _resetTitlebarColor(): void {
+    this._titlebarColor = null;
+    persistTitlebarColor(null);
+    applyTitlebarColor(null);
   }
 
   private _sendTestNotification(): void {
@@ -678,6 +861,63 @@ export class MuxSettingsSurface extends LitElement {
         <p class="section-title">Font</p>
         ${this._renderFontPicker()}
       </div>
+
+      <div class="section-gap">
+        <p class="section-title">Title Bar Color</p>
+        ${this._renderTitlebarColorPicker()}
+      </div>
+    `;
+  }
+
+  /** Live --chrome-bar value (theme's current default), as a fallback swatch
+   *  seed when no custom title-bar color has been picked yet. Native
+   *  <input type="color"> requires an exact 6-digit hex, which is what every
+   *  built-in theme's `bar` token already is (see theme.ts CHROME_DARK/LIGHT). */
+  private get _currentChromeBarHex(): string {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--chrome-bar').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(v) ? v : '#16161e';
+  }
+
+  /** Crayon set is chosen by the CURRENT theme's brightness, not a fixed
+   *  default — the header's text color (--chrome-text-bright) stays fixed
+   *  regardless of the custom background, so light themes need pastel
+   *  crayons (dark text on top) and dark themes need deep crayons (near-
+   *  white text on top). See instance-identity.ts for the contrast rationale. */
+  private get _crayons(): TitlebarCrayon[] {
+    const palette = this.config?.theme.palette ?? 'tokyo-night';
+    return isLightTheme(palette) ? LIGHT_TITLEBAR_CRAYONS : DARK_TITLEBAR_CRAYONS;
+  }
+
+  private _renderTitlebarColorPicker() {
+    const color = this._titlebarColor?.toLowerCase() ?? null;
+    return html`
+      <div class="crayon-grid">
+        ${this._crayons.map(crayon => html`
+          <button
+            class="crayon ${color === crayon.hex ? 'active' : ''}"
+            style="background:${crayon.hex}"
+            title="${crayon.name}"
+            @click="${() => this._setTitlebarColor(crayon.hex)}"
+          >${color === crayon.hex ? html`<span class="crayon-check">✓</span>` : ''}</button>
+        `)}
+      </div>
+      <div class="titlebar-row">
+        <input
+          class="titlebar-swatch"
+          type="color"
+          title="Pick a custom title bar color"
+          .value="${color ?? this._currentChromeBarHex}"
+          @input="${(e: Event) => this._setTitlebarColor((e.target as HTMLInputElement).value)}"
+        />
+        <span class="titlebar-custom-label">Custom…</span>
+        <button class="titlebar-reset-btn" @click="${() => this._resetTitlebarColor()}">
+          Use theme default
+        </button>
+      </div>
+      <p class="titlebar-hint" style="margin-top:8px">
+        Only affects this browser on <strong>${instanceLabel()}</strong> — handy for
+        telling multiple muxterm instances apart at a glance.
+      </p>
     `;
   }
 
@@ -739,6 +979,103 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
+  private _emitAIStatus(status: AIStatus): void {
+    this.aiStatus = status;
+    this.dispatchEvent(new CustomEvent('ai-status-change', {
+      detail: { status },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private async _saveAIKey(): Promise<void> {
+    const key = this._aiKeyInput.trim();
+    if (!key || this._aiBusy) return;
+    this._aiBusy = true;
+    this._aiMessage = '';
+    try {
+      this._emitAIStatus(await saveAIKey(key));
+      this._aiKeyInput = '';
+      this._aiMessage = 'Key saved.';
+    } catch {
+      this._aiMessage = 'Could not save the key -- it was not stored.';
+    } finally {
+      this._aiBusy = false;
+    }
+  }
+
+  private async _removeAIKey(): Promise<void> {
+    if (this._aiBusy) return;
+    this._aiBusy = true;
+    this._aiMessage = '';
+    try {
+      this._emitAIStatus(await clearAIKey());
+      this._aiKeyInput = '';
+      this._aiMessage = 'Key removed.';
+    } catch {
+      this._aiMessage = 'Could not remove the key.';
+    } finally {
+      this._aiBusy = false;
+    }
+  }
+
+  private async _testAI(): Promise<void> {
+    if (this._aiBusy) return;
+    this._aiBusy = true;
+    this._aiMessage = 'Testing...';
+    try {
+      const res = await pingAI();
+      this._aiMessage = res.ok
+        ? 'Connected to Anthropic.'
+        : res.error === 'ai_disabled'
+          ? 'AI is off -- save a key first.'
+          : res.error === 'provider_unreachable'
+            ? 'Could not reach Anthropic. Check your connection.'
+            : 'Anthropic rejected the request. Check the key.';
+    } catch {
+      this._aiMessage = 'Test failed -- check your connection.';
+    } finally {
+      this._aiBusy = false;
+    }
+  }
+
+  private _renderAI() {
+    const st = this.aiStatus;
+    return html`
+      <p class="section-title">Anthropic API Key</p>
+      <p class="ai-status">
+        ${st.enabled
+          ? `AI enabled -- key ending ${st.keyHint} (from ${st.source}).`
+          : 'AI features are off -- add an Anthropic API key to enable.'}
+      </p>
+      <input
+        class="ai-input"
+        type="password"
+        autocomplete="off"
+        placeholder="sk-ant-..."
+        .value="${this._aiKeyInput}"
+        @input="${(e: Event) => { this._aiKeyInput = (e.target as HTMLInputElement).value; }}"
+      />
+      <div class="ai-actions">
+        <button
+          ?disabled="${this._aiBusy || this._aiKeyInput.trim() === ''}"
+          @click="${this._saveAIKey}"
+        >Save</button>
+        ${st.source === 'settings'
+          ? html`<button ?disabled="${this._aiBusy}" @click="${this._removeAIKey}">Remove</button>`
+          : ''}
+        <button ?disabled="${this._aiBusy}" @click="${this._testAI}">Test connection</button>
+      </div>
+      ${this._aiMessage ? html`<p class="ai-message">${this._aiMessage}</p>` : ''}
+      <p class="ai-note">
+        The key is stored locally at <code>$XDG_CONFIG_HOME/muxterm/anthropic_key</code>
+        (defaults to <code>~/.config/muxterm/anthropic_key</code> when
+        <code>XDG_CONFIG_HOME</code> is unset) with owner-only permissions, is
+        never returned by the server, and is sent only to Anthropic.
+      </p>
+    `;
+  }
+
   override render() {
     if (!this.config) return html``;
 
@@ -757,11 +1094,17 @@ export class MuxSettingsSurface extends LitElement {
             class="sidebar-item ${this._section === 'notifications' ? 'active' : ''}"
             @click="${() => { this._section = 'notifications'; }}"
           >Notifications</button>
+          <button
+            class="sidebar-item ${this._section === 'ai' ? 'active' : ''}"
+            @click="${() => { this._section = 'ai'; }}"
+          >AI</button>
         </nav>
         <div class="content">
           ${this._section === 'appearance'
             ? this._renderAppearance()
-            : this._renderNotifications()}
+            : this._section === 'notifications'
+              ? this._renderNotifications()
+              : this._renderAI()}
         </div>
       </div>
     `;

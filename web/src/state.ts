@@ -2,11 +2,11 @@ import type {
   SessiondMessage,
   SessiondWorkspaceInfo,
   SessiondPaneInfo,
-  TunnelInfo,
 } from './types';
 import { SessiondType } from './types';
 import type { Composition } from './lib/arrangement-store.js';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from './lib/config.js';
+import { DEFAULT_AI_STATUS, type AIStatus } from './lib/ai.js';
 import { muxLog } from './lib/mux-log.js';
 
 // --- optimistic-mutation seam -----------------------------------------------
@@ -56,6 +56,9 @@ const DEFAULT_MUTATION_TIMEOUT_MS = 5000;
 export class MuxStore {
   private _listeners: Set<() => void> = new Set();
   private _config: ResolvedConfig = DEFAULT_RESOLVED_CONFIG;
+  // Opt-in AI capability. Deliberately NOT part of _config: the key that backs
+  // this flag never enters the config pipeline, and neither does the flag.
+  private _aiStatus: AIStatus = DEFAULT_AI_STATUS;
 
   // --- sessiond multiplexer path --------------------------------------------
   // Frozen wire state for the sessiond control protocol. A pure Composition is
@@ -71,8 +74,7 @@ export class MuxStore {
   private _bellWorkspaces: Set<string> = new Set();
   /** Pane IDs that have an unacknowledged activity bell. */
   private _bellPanes: Set<number> = new Set();
-  /** Active port-forward tunnels reported by the daemon. */
-  private _tunnels: TunnelInfo[] = [];
+
 
   get config(): ResolvedConfig {
     return this._config;
@@ -84,6 +86,20 @@ export class MuxStore {
 
   setConfig(cfg: ResolvedConfig): void {
     this._config = cfg;
+    this._notify();
+  }
+
+  get aiStatus(): AIStatus {
+    return this._aiStatus;
+  }
+
+  /**
+   * The single frontend gate for all future AI UI. Updated from
+   * GET /api/ai/status on load and from the {"aiStatus":...} WS frame when
+   * a key is saved or cleared in any tab.
+   */
+  setAIStatus(status: AIStatus): void {
+    this._aiStatus = status;
     this._notify();
   }
 
@@ -182,33 +198,6 @@ export class MuxStore {
    */
   ringWorkspace(workspaceId: string): void {
     this._bellWorkspaces.add(workspaceId);
-    this._notify();
-  }
-
-  // --- tunnel state --------------------------------------------------------
-
-  get tunnels(): readonly TunnelInfo[] {
-    return this._tunnels;
-  }
-
-  /** Add a tunnel idempotently (no-op if id already present). */
-  addTunnel(t: TunnelInfo): void {
-    if (this._tunnels.some((x) => x.id === t.id)) return;
-    this._tunnels = [...this._tunnels, t];
-    this._notify();
-  }
-
-  /** Remove a tunnel by id. No-op if not found. */
-  removeTunnel(id: string): void {
-    const next = this._tunnels.filter((x) => x.id !== id);
-    if (next.length === this._tunnels.length) return;
-    this._tunnels = next;
-    this._notify();
-  }
-
-  /** Replace the full tunnel list (e.g. on a tunnel-list reply). */
-  setTunnels(tunnels: TunnelInfo[]): void {
-    this._tunnels = [...tunnels];
     this._notify();
   }
 

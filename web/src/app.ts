@@ -9,9 +9,10 @@ import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
+import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
 import { injectTerminalFont } from './lib/fonts.js';
-import { browserRegistry } from './lib/browser-registry.js';
-import { wsBrowser } from './lib/ws-browser.js';
+import { voiceInputController } from './lib/voice-input-controller.js';
+import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
@@ -31,10 +32,46 @@ import type { MuxSidebar } from './components/mux-sidebar.js';
 
 
 import { WorkspaceController } from './lib/workspace-controller.js';
+import { PaneFocusCoordinator } from './lib/pane-focus-coordinator.js';
 import { mintClientRef } from './lib/client-ref.js';
 import { SessiondType, type LayoutCommand } from './types.js';
 import { currentLayoutMode } from './lib/breakpoint.js';
 import { muxLog, muxLogReset } from './lib/mux-log.js';
+import Split from 'split.js';
+import type { Instance as SplitInstance } from 'split.js';
+import {
+  restoreSidebarWidth,
+  persistSidebarWidth,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+} from './lib/sidebar-width.js';
+
+/** Split.js gutter size (px), used both as the `gutterSize` option passed to
+ *  `Split(...)` in `_initSplit()` below and as the half-gutter compensation
+ *  in `widthPxToSplitPercent()` — defined once so the two can never drift
+ *  out of sync if the gutter size is ever changed. */
+const SIDEBAR_GUTTER_SIZE = 4;
+/** Small positive bias (px) that makes Split's percentage renderer round to
+ *  the requested whole pixel instead of occasionally landing 1/64px short. */
+const SIDEBAR_SUBPIXEL_ROUNDING_BIAS = 0.001;
+
+/** Converts a target sidebar pixel width into the percentage Split.js needs,
+ *  compensating for its default renderer's half-gutter subtraction so the
+ *  actual rendered width equals `targetPx`. Split's default
+ *  `calc(size% - gutSize px)` renderer always subtracts a half-gutter share
+ *  (`gutterSize / 2`) from whatever percentage-derived width it computes;
+ *  without this compensation an unadjusted percentage renders
+ *  `targetPx - gutterSize / 2`, not `targetPx` (e.g. a 220px target
+ *  rendering as 218px). Used by both `_initSplit()`'s initial `sizes`
+ *  computation and the `ResizeObserver` callback's `setSizes()`
+ *  recalculation. `onDragEnd` first reads the actual rendered
+ *  `getBoundingClientRect().width`, then uses this conversion once to snap it
+ *  back to a whole pixel. The small positive bias keeps CSS subpixel
+ *  quantization from resolving an otherwise exact target 1/64px short. */
+function widthPxToSplitPercent(targetPx: number, containerWidth: number, gutterSize: number): number {
+  return ((targetPx + gutterSize / 2 + SIDEBAR_SUBPIXEL_ROUNDING_BIAS) / containerWidth) * 100;
+}
 
 // Optimistic panes use a strictly-negative temp paneId so they never collide
 // with the daemon's positive workspace-local ids (which start at 1); the real
@@ -379,6 +416,22 @@ export class MuxApp extends LitElement {
       overflow: hidden;
       min-width: 0;
     }
+
+    /* Split.js gutter — styled to visually match the removed
+       mux-sidebar.ts .resize-handle (4px, transparent, col-resize cursor,
+       hover highlight). Unlike the old absolutely-positioned overlay, this
+       is a real flex-row sibling occupying its own layout width. */
+    .sidebar-gutter {
+      width: 4px;
+      cursor: col-resize;
+      background: transparent;
+      transition: background 0.15s;
+    }
+
+    .sidebar-gutter:hover {
+      background: var(--chrome-accent);
+      opacity: 0.4;
+    }
   `;
 
   /** Bumped whenever the store notifies; drives Lit re-render off wire state. */
@@ -427,6 +480,24 @@ export class MuxApp extends LitElement {
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
   private _controller: WorkspaceController | null = null;
+  private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
+  private _disposePaneFocusListeners: (() => void) | null = null;
+
+  /** Split.js instance managing the sidebar/main-pane resize boundary,
+   *  owned here (not mux-sidebar.ts) since Split.js needs both sibling DOM
+   *  elements at once — see
+   *  docs/designs/2026-08-01-sidebar-resize-splitjs-design.md. */
+  private _split: SplitInstance | null = null;
+  /** Observes .content-area so the sidebar can be kept pixel-fixed across
+   *  window resizes despite Split's percentage-based rendering. */
+  private _resizeObserver: ResizeObserver | null = null;
+  /** The fixed pixel width the sidebar should render at; updated only in
+   *  onDragEnd, otherwise held constant across container resizes. */
+  private _sidebarWidthPx = SIDEBAR_DEFAULT_WIDTH;
+  /** True while a Split.js drag gesture is in progress; consulted by the
+   *  ResizeObserver callback (skip recompute mid-drag) and by
+   *  _destroySplit() (force a synthetic mouseup before teardown). */
+  private _dragging = false;
 
   /** Bound handler: sets data-launcher-open on the host (light DOM) so E2E
    *  selectors like document.querySelector('[data-launcher-open]') work. */
@@ -440,17 +511,13 @@ export class MuxApp extends LitElement {
     if (mode !== this._layoutMode) this._layoutMode = mode;
   };
 
-  private _onCreateBrowserPane = (): void => { this._socket?.createBrowserPane(); };
-  private _onBrowserPaneFocus = (e: Event): void => {
-    const paneId = (e as CustomEvent<{ paneId: number }>).detail?.paneId;
-    if (paneId !== undefined) {
-      store.setActivePane(paneId);
-      this._dock?.activatePane(paneId);
-    }
-  };
-
   connectedCallback(): void {
     super.connectedCallback();
+
+    // Opt-in AI capability: resolve the flag once on load. Fetched over HTTP
+    // rather than carried on the config frame, because the key that backs it
+    // deliberately never enters the config pipeline.
+    void fetchAIStatus().then((s) => store.setAIStatus(s));
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
@@ -462,6 +529,12 @@ export class MuxApp extends LitElement {
     // Apply default theme tokens immediately so --mux-* and --chrome-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     applyChromeTokens(store.config.theme.palette);
+    // Reflect which machine this instance is running on — document title
+    // (PWA window title / browser tab / Alt-Tab preview) and, if the user
+    // picked one in Settings, a distinguishing title-bar accent color.
+    // Per-browser (localStorage), not server config — see instance-identity.ts.
+    applyDocumentTitle();
+    applyTitlebarColor(restoreTitlebarColor());
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
     disposeKeys = installKeybindings(uiActions);
     // Install fixed app-level shortcuts (Cmd+W close, Cmd+T new pane). These
@@ -490,6 +563,18 @@ export class MuxApp extends LitElement {
     // sessiond message to BOTH the store (wire-state truth) and the controller
     // (next-action decisions: bootstrap, MRU, recovery).
     this._controller = new WorkspaceController(store, this._socket);
+    this._paneFocusCoordinator = new PaneFocusCoordinator(this._socket);
+    // Non-authoritative clients: apply the daemon's canonical size directly,
+    // without re-fitting to this client's own container (letterbox/scroll —
+    // see terminal-registry.ts's applyServerResize).
+    this._socket.onPaneResized = (paneId, cols, rows) => {
+      terminalRegistry.applyServerResize(paneId, cols, rows);
+    };
+    // visibilitychange + window 'focus': this browser tab/window regaining
+    // OS focus re-claims every currently-visible pane. Mirrors the existing
+    // window.addEventListener('resize', ...) registration/cleanup pattern
+    // just below.
+    this._disposePaneFocusListeners = this._paneFocusCoordinator.installWindowListeners();
     this._socket.onSessiondMessage = (msg) => {
       // For pane-added events carrying an explicit placement token (e.g. from
       // an MCP create_pane call), pre-wire the dock's placement intent BEFORE
@@ -521,7 +606,10 @@ export class MuxApp extends LitElement {
         for (const pane of (msg.panes ?? [])) {
           const paneId = pane.paneId;
           if (paneId < 0) continue;
-          if (pane.surfaceKind === 'browser-cdp') { browserRegistry.ensure(paneId); continue; }
+          // Browser panes are client-rendered (native apps). The web client
+          // renders a placeholder (see mux-dock PlaceholderRenderer) and does no
+          // terminal setup for them.
+          if (pane.surfaceKind === 'browser') { continue; }
           // On reconnect an entry already exists with ready=true from the prior
           // session. Reset it before replay frames arrive so the barrier gate
           // works correctly (RC-6).
@@ -531,6 +619,7 @@ export class MuxApp extends LitElement {
           terminalRegistry.ensure(paneId, {
             onInput: (data) => this._socket?.sendPaneInput(paneId, data),
             onResize: (cols, rows) => this._controller?.reportResize(paneId, cols, rows),
+            onSettled: () => this._paneFocusCoordinator?.claimPane(paneId),
           });
           terminalRegistry.setExpectedReplayBytes(paneId, pane.totalSeq ?? 0);
         }
@@ -546,16 +635,6 @@ export class MuxApp extends LitElement {
         this._creatingWorkspace = false;
         this._showCreateModal = false;
         this._createModalName = '';
-      }
-      // Tunnel state synchronization
-      if (msg.type === SessiondType.TunnelCreated && msg.tunnelId) {
-        store.addTunnel({ id: msg.tunnelId, port: msg.tunnelPort ?? 0 });
-      }
-      if (msg.type === SessiondType.TunnelClosed && msg.tunnelId) {
-        store.removeTunnel(msg.tunnelId);
-      }
-      if (msg.type === SessiondType.TunnelList) {
-        store.setTunnels(msg.tunnels ?? []);
       }
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
@@ -592,22 +671,19 @@ export class MuxApp extends LitElement {
       // On (re)connect: attach the last/known workspace, or list + attach the
       // first. This is where the initial composition sync is requested.
       this._controller?.bootstrap();
-      // Sync tunnel state on (re)connect so the UI stays consistent.
-      this._socket?.listTunnels();
     };
     this._socket.connect();
-    wsBrowser.onFrame = (paneId, jpegBytes) => browserRegistry.write(paneId, jpegBytes);
-    wsBrowser.onBrowserUrl = (paneId, url) => browserRegistry.dispatchUrl(paneId, url);
-    wsBrowser.onBrowserError = (paneId, error) => browserRegistry.dispatchError(paneId, error);
-    wsBrowser.onDownloadProgress = (paneId, percent) => browserRegistry.dispatchDownload(paneId, percent);
-    wsBrowser.onBrowserStatus = (paneId, text) => browserRegistry.dispatchStatus(paneId, text);
-    wsBrowser.onBrowserCursor = (paneId, cursor) => browserRegistry.dispatchCursor(paneId, cursor);
-    wsBrowser.onBrowserGranted = (paneId, clientId) => browserRegistry.dispatchGranted(paneId, clientId);
-    wsBrowser.connect();
-    window.addEventListener('create-browser-pane', this._onCreateBrowserPane);
-    window.addEventListener('browser-pane-focus', this._onBrowserPaneFocus);
     this._connectionStatus = 'reconnecting';
     this._pollConnectionStatus();
+
+    // Reconnect-while-already-wide: if <mux-app> disconnects and reconnects
+    // while _layoutMode was already 'wide' throughout, no _layoutMode change
+    // fires to trigger the updated() init path below, but
+    // disconnectedCallback() has already nulled _split. Re-init here covers
+    // that gap.
+    if (this._layoutMode === 'wide' && !this._split) {
+      this._initSplit();
+    }
   }
 
   disconnectedCallback(): void {
@@ -615,9 +691,9 @@ export class MuxApp extends LitElement {
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     window.removeEventListener('layout-command', this._onLayoutCommand);
     window.removeEventListener('resize', this._onViewportResize);
-    wsBrowser.disconnect();
-    window.removeEventListener('create-browser-pane', this._onCreateBrowserPane);
-    window.removeEventListener('browser-pane-focus', this._onBrowserPaneFocus);
+    this._disposePaneFocusListeners?.();
+    this._disposePaneFocusListeners = null;
+    this._paneFocusCoordinator = null;
     disposeAppShortcuts?.();
     disposeAppShortcuts = undefined;
     if (this._unsubscribe) {
@@ -635,6 +711,7 @@ export class MuxApp extends LitElement {
     this._closingPanes.clear();
     for (const entry of this._pendingWorkspaceCloses.values()) clearTimeout(entry.timer);
     this._pendingWorkspaceCloses.clear();
+    this._destroySplit();
   }
 
   /**
@@ -643,9 +720,15 @@ export class MuxApp extends LitElement {
    * attached workspace so background (tabbed-away) panes stay fed and keep
    * their scrollback. Panes no longer in the composition are prune()'d.
    */
-  override willUpdate(_changedProperties: Map<PropertyKey, unknown>): void {
-    super.willUpdate(_changedProperties);
+  override willUpdate(changedProperties: Map<PropertyKey, unknown>): void {
+    super.willUpdate(changedProperties);
     this._syncTerminals();
+    // Wide→narrow: destroy Split.js BEFORE Lit removes <mux-sidebar> from the
+    // DOM (willUpdate fires pre-render) — see
+    // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
+    if (changedProperties.has('_layoutMode') && this._layoutMode === 'narrow' && this._split) {
+      this._destroySplit();
+    }
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {
@@ -655,6 +738,12 @@ export class MuxApp extends LitElement {
       requestAnimationFrame(() => {
         this.shadowRoot?.querySelector<HTMLInputElement>('.ws-create-input')?.focus();
       });
+    }
+    // Narrow→wide: init Split.js AFTER Lit has placed the sidebar/main-pane
+    // elements back in the DOM (updated fires post-render) — see
+    // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
+    if (changed.has('_layoutMode') && this._layoutMode === 'wide' && !this._split) {
+      this._initSplit();
     }
   }
 
@@ -675,23 +764,101 @@ export class MuxApp extends LitElement {
       // them from store.panes yet — recreating the terminal here would produce
       // a phantom entry that conflicts with the in-flight close.
       if (this._closingPanes.has(paneId)) continue;
-      if (pane.surfaceKind === 'browser-cdp') { browserRegistry.ensure(paneId); liveIds.add(paneId); continue; }
+      // Browser panes: opaque placeholder slots. Keep them in the live set so
+      // the dock doesn't prune the panel, but do no terminal/registry work.
+      if (pane.surfaceKind === 'browser') { liveIds.add(paneId); continue; }
       terminalRegistry.ensure(paneId, {
         onInput: (data) => this._socket?.sendPaneInput(paneId, data),
         // Active-view-wins: only rendered/visible panes own a live
         // ResizeObserver, so tabbed-away panes never report a resize.
         onResize: (cols, rows) => this._controller?.reportResize(paneId, cols, rows),
+        onSettled: () => this._paneFocusCoordinator?.claimPane(paneId),
       });
       liveIds.add(paneId);
     }
     terminalRegistry.prune(liveIds);
-    browserRegistry.prune(liveIds);
     // Clean up _closingPanes entries the server has now removed from store.panes.
     const toDelete = new Set<number>();
     for (const id of this._closingPanes) {
       if (!store.panes.some((p) => p.paneId === id)) toDelete.add(id);
     }
     for (const id of toDelete) this._closingPanes.delete(id);
+  }
+
+  private _initSplit(): void {
+    const sidebarEl = this.renderRoot.querySelector<HTMLElement>('mux-sidebar');
+    const mainPaneEl = this.renderRoot.querySelector<HTMLElement>('.main-pane');
+    const contentAreaEl = this.renderRoot.querySelector<HTMLElement>('.content-area');
+    if (!sidebarEl || !mainPaneEl || !contentAreaEl || this._split) return;
+
+    this._sidebarWidthPx = restoreSidebarWidth();
+    const pct = widthPxToSplitPercent(this._sidebarWidthPx, contentAreaEl.clientWidth, SIDEBAR_GUTTER_SIZE);
+
+    this._split = Split([sidebarEl, mainPaneEl], {
+      // Percentage sizes, Split's own default calc() renderer — no custom
+      // elementStyle (see design doc's Architecture section for why the
+      // prior custom pixel-based renderer was removed).
+      sizes: [pct, 100 - pct],
+      minSize: [SIDEBAR_MIN_WIDTH, 0],       // main-pane keeps today's "no enforced minimum"
+      maxSize: [SIDEBAR_MAX_WIDTH, Infinity],
+      // Split defaults to a 30px snap zone around min/max. The removed
+      // hand-rolled handler clamped only at the exact boundaries, so disable
+      // snapping to retain smooth, pointer-tracking behavior until then.
+      snapOffset: 0,
+      gutterSize: SIDEBAR_GUTTER_SIZE,        // matches removed .resize-handle width
+      gutter: () => {
+        const g = document.createElement('div');
+        g.className = 'sidebar-gutter'; // styled above to match old .resize-handle
+        return g;
+      },
+      onDragStart: () => {
+        this._dragging = true;
+      },
+      onDragEnd: () => {
+        this._dragging = false;
+        // Split's default percentage renderer may land 1/64px below an
+        // integer pixel during a drag. Preserve the legacy integer-pixel
+        // persistence contract, then apply the compensated percentage once
+        // more so the rendered value matches the persisted integer exactly.
+        this._sidebarWidthPx = Math.round(sidebarEl.getBoundingClientRect().width);
+        const settledPct = widthPxToSplitPercent(
+          this._sidebarWidthPx,
+          contentAreaEl.clientWidth,
+          SIDEBAR_GUTTER_SIZE,
+        );
+        this._split?.setSizes([settledPct, 100 - settledPct]);
+        persistSidebarWidth(this._sidebarWidthPx);
+      },
+    });
+
+    // Keep the sidebar's literal pixel width fixed across container resizes
+    // — Split's percentage sizing is otherwise proportionally responsive to
+    // .content-area's width, which today's implementation is not. Matches
+    // today's exact fixed-until-next-drag behavior. Skipped mid-drag so it
+    // doesn't fight the user's in-progress gesture.
+    this._resizeObserver = new ResizeObserver(() => {
+      if (!this._split || this._dragging) return;
+      const newPct = widthPxToSplitPercent(this._sidebarWidthPx, contentAreaEl.clientWidth, SIDEBAR_GUTTER_SIZE);
+      this._split.setSizes([newPct, 100 - newPct]);
+    });
+    this._resizeObserver.observe(contentAreaEl);
+  }
+
+  private _destroySplit(): void {
+    if (this._dragging) {
+      // Split.destroy() is not a drag-cancellation API — it does not remove
+      // the global mousemove/mouseup/touchmove/touchend listeners
+      // startDragging attached to `window`, nor reset the
+      // user-select/pointer-events inline styles or document.body.style.cursor
+      // it set (those are separate from the width styles destroy() does
+      // reset). Force Split's own stopDragging cleanup to run first by
+      // dispatching a synthetic mouseup.
+      window.dispatchEvent(new MouseEvent('mouseup'));
+    }
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = null;
+    this._split?.destroy();
+    this._split = null;
   }
 
   render() {
@@ -705,6 +872,8 @@ export class MuxApp extends LitElement {
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
         @workspace-switch="${this._onWorkspaceSelected}"
+        @pane-create-request="${this._createPaneOptimistic}"
+        @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
         ${isWide ? html`
@@ -713,8 +882,6 @@ export class MuxApp extends LitElement {
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @workspace-close="${this._onSidebarWorkspaceClose}"
-            @tunnel-create="${this._onTunnelCreate}"
-            @tunnel-close="${this._onTunnelClose}"
             @launcher-action="${this._onLauncherAction}"
           ></mux-sidebar>
         ` : ''}
@@ -799,9 +966,11 @@ export class MuxApp extends LitElement {
               ${this._overlayPanel === 'settings' ? html`
                 <mux-settings-surface
                   .config="${store.config}"
+                  .aiStatus="${store.aiStatus}"
                   serverAddr="${window.location.host}"
                   @close="${this._closeOverlayPanel}"
                   @config-change="${this._onConfigChange}"
+                  @ai-status-change="${this._onAIStatusChange}"
                 ></mux-settings-surface>
               ` : this._overlayPanel === 'shortcuts' ? html`
                 <div class="info-panel">
@@ -856,9 +1025,32 @@ export class MuxApp extends LitElement {
 
   /** Client-local active-pane selection (sessiond has no select-pane message). */
   private _onActivePane = (e: CustomEvent<{ paneId: number }>): void => {
+    // Auto-stop-and-invalidate: voice input should always target "the pane
+    // I'm looking at right now" — see docs/designs/2026-07-31-voice-input-design.md.
+    voiceInputController.invalidateIfActive({ workspaceId: store.attached ?? '', paneId: e.detail.paneId });
     // ackPane is the component's responsibility (mux-pane-picker._selectPane or
     // mux-dock onDidActivePanelChange). Do not ack here — the component already did.
     store.setActivePane(e.detail.paneId);
+    // This pane just became the visible tab in this client's layout, so it
+    // should claim PTY-sizing authority (active-view-wins).
+    this._paneFocusCoordinator?.claimPane(e.detail.paneId);
+  };
+
+  /**
+   * Deliver a dictated transcript to the terminal it was captured for.
+   * Defense-in-depth only — by the time this fires, the primary invalidation
+   * (pane/workspace-switch calling invalidateIfActive above) should already
+   * have stopped any session whose target no longer matches. See
+   * docs/designs/2026-07-31-voice-input-design.md's Data Flow section.
+   */
+  private _onVoiceTranscript = (e: CustomEvent<{ text: string; workspaceId: string; paneId: number }>): void => {
+    const { text, workspaceId, paneId } = e.detail;
+    if (workspaceId !== (store.attached ?? '') || paneId !== store.activePaneId) return;
+    this._socket?.sendPaneInput(paneId, new TextEncoder().encode(text));
+    // Tapping the mic button (a toolbar UI element) can take DOM focus away
+    // from xterm's hidden textarea. Without this, the user's next physical
+    // keystroke (Enter) might not reach the PTY at all.
+    terminalRegistry.focus(paneId);
   };
 
   /** Empty-state button: create a connection-scoped pane in the workspace. */
@@ -940,6 +1132,12 @@ export class MuxApp extends LitElement {
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
     }
+    // {"aiStatus":...} envelope (no "type" field, by design -- see sendAIStatus
+    // in ws.go): a key was saved or cleared in this or another tab. Carries the
+    // derived status only -- never the key.
+    if ('aiStatus' in msg) {
+      store.setAIStatus(parseAIStatus(msg['aiStatus']));
+    }
   };
 
   // Phase 3: _onOpenWorkspacePicker will be re-introduced here for workspace management UI.
@@ -1002,6 +1200,11 @@ export class MuxApp extends LitElement {
    */
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
     if (e.detail.workspaceId === store.attached) return;
+    // Workspace switches are asynchronous (new pane list/active pane arrive
+    // only after a round-trip), so there is no new-workspace pane identity to
+    // compare against yet — invalidate unconditionally. See
+    // docs/designs/2026-07-31-voice-input-design.md.
+    voiceInputController.invalidateIfActive();
     // _pendingCloses: grace period only — closePane was never sent, PTY survives on server.
     for (const handle of this._pendingCloses.values()) clearTimeout(handle);
     this._pendingCloses.clear();
@@ -1026,14 +1229,6 @@ export class MuxApp extends LitElement {
   private get _sidebar(): MuxSidebar | null {
     return (this.renderRoot as ShadowRoot).querySelector('mux-sidebar');
   }
-
-  private _onTunnelCreate = (e: CustomEvent<{ port: number }>): void => {
-    this._socket?.createTunnel(e.detail.port);
-  };
-
-  private _onTunnelClose = (e: CustomEvent<{ id: string }>): void => {
-    this._socket?.closeTunnel(e.detail.id);
-  };
 
   /**
    * Handle a pane-close event from mux-dock. All closes (mouse, touch, pen)
@@ -1127,6 +1322,9 @@ export class MuxApp extends LitElement {
       case 'reconnect':
         window.location.reload();
         break;
+      case 'new-workspace':
+        this._onOpenCreateModal();
+        break;
     }
   };
 
@@ -1153,6 +1351,15 @@ export class MuxApp extends LitElement {
     // Persist the change: debounced PATCH /api/config → server merges,
     // writes to disk, and broadcasts to all connected clients.
     patchConfig(configToGoJSON(cfg));
+  };
+
+  /** Mirrors _onConfigChange's style: settings surface emits the new AI
+   *  status after a save/clear round-trip; push it straight into the store
+   *  (no debounced persistence here — the settings surface already made the
+   *  HTTP call that changed server-side state). */
+  private _onAIStatusChange = (e: Event): void => {
+    const { status } = (e as CustomEvent<{ status: AIStatus }>).detail;
+    store.setAIStatus(status);
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {

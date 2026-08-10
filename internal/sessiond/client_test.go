@@ -215,7 +215,7 @@ func TestAttachReturnsComposition(t *testing.T) {
 	defer c.Close()
 	go c.Run()
 
-	comp, err := c.Attach("w1", "")
+	comp, err := c.Attach("w1", "", "interactive")
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestAttachEmptyCompositionIsValid(t *testing.T) {
 	defer c.Close()
 	go c.Run()
 
-	comp, err := c.Attach("empty", "")
+	comp, err := c.Attach("empty", "", "interactive")
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestAttachUnknownWorkspace(t *testing.T) {
 	defer c.Close()
 	go c.Run()
 
-	_, err = c.Attach("nope", "")
+	_, err = c.Attach("nope", "", "interactive")
 	if err == nil {
 		t.Fatal("Attach: expected error, got nil")
 	}
@@ -500,7 +500,7 @@ func TestHandlersReceiveOutputAndEvents(t *testing.T) {
 		OnPaneAdded: func(pane PaneInfo) {
 			add("added:" + itoa(pane.PaneID) + ":" + pane.Title)
 		},
-		OnPaneClosed: func(paneID int) {
+		OnPaneClosed: func(paneID int, processExitCode *int, runtimeMs int64) {
 			add("closed:" + itoa(paneID))
 		},
 		OnWorkspaceRenamed: func(workspaceID, name string) {

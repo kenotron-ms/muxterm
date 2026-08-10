@@ -14,6 +14,8 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebFontsAddon } from '@xterm/addon-web-fonts';
+import { ClipboardAddon } from '@xterm/addon-clipboard';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { resolvePalette } from './theme.js';
 import { muxLog } from './mux-log.js';
@@ -106,6 +108,14 @@ export interface PaneHandlers {
   onInput: (data: Uint8Array) => void;
   /** Called (idempotently) when the terminal cols/rows change. */
   onResize: (cols: number, rows: number) => void;
+  /**
+   * Called once, the first time this pane transitions from not-ready to
+   * ready (visible + replay-drained + correctly sized) — on initial attach
+   * AND again on every reconnect (resetForReattach() clears ready so this
+   * fires again each time). Used to send this client's initial pane-focus
+   * claim without depending on ResizeObserver/fit timing.
+   */
+  onSettled?: () => void;
 }
 
 interface PaneEntry {
@@ -118,6 +128,23 @@ interface PaneEntry {
   /** Last dimensions reported to the server — gate for idempotent resize. */
   lastCols: number;
   lastRows: number;
+  /**
+   * True while this client is the pane's PTY-sizing authority (see the
+   * multi-client resize/focus-authority design). Starts true — a pane this
+   * client has never been told otherwise about is the solo-client default.
+   * Flipped false the moment a pane-resized broadcast arrives for it (some
+   * other client is now authoritative); flipped back true (optimistically)
+   * when this client sends its own pane-focus claim (see markAuthoritative).
+   */
+  isAuthoritative: boolean;
+  /**
+   * True for the duration of an applyServerResize() call. Consumed by the
+   * term.onResize handler below to suppress reporting the server-applied
+   * size back to the server as if it were a local resize — otherwise every
+   * pane-resized broadcast would immediately provoke this (non-authoritative)
+   * client's own conflicting resize message right back at the daemon.
+   */
+  applyingServerResize: boolean;
   /** True once term.open(hostEl) has been called (on first attach). */
   opened: boolean;
   /** True once the initial replay has been flushed at a settled layout size; gates direct writes. */
@@ -297,16 +324,27 @@ export const terminalRegistry = {
     const hostEl = document.createElement('div');
     // touch-action:none tells the browser we handle all touch gestures ourselves,
     // preventing it from firing default pan/zoom behaviors that would fight our
-    // manual touch-scroll handler below.
-    hostEl.style.cssText = 'width:100%;height:100%;touch-action:none;';
+    // manual touch-scroll handler below. overflow:auto lets a non-authoritative
+    // pane (letterbox/scroll mode — see applyServerResize below) show native
+    // scrollbars when the container is smaller than the canonical cols×rows
+    // grid, or sit anchored top-left with empty space when larger. This is a
+    // no-op visually for the normal (authoritative) case, where the terminal's
+    // natural size always matches the container exactly.
+    hostEl.style.cssText = 'width:100%;height:100%;touch-action:none;overflow:auto;';
 
     const term = new Terminal(TERMINAL_CONFIG);
     const fitAddon = new FitAddon();
     // WebFontsAddon: loadFonts() is called in attach() before term.open() per
     // the official xterm.js addon-web-fonts guidance.
     const webFontsAddon = new WebFontsAddon();
+    // WebLinksAddon: auto-linkifies http/https URLs in terminal output using
+    // the addon's own default click handler (window.open(uri, '_blank',
+    // 'noopener')). No stored reference needed \u2014 unlike fitAddon/webFontsAddon,
+    // nothing calls a method on it after load; term.dispose() disposes it.
+    const webLinksAddon = new WebLinksAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(webFontsAddon);
+    term.loadAddon(webLinksAddon);
 
     const entry: PaneEntry = {
       term,
@@ -316,6 +354,8 @@ export const terminalRegistry = {
       handlers,
       lastCols: -1,
       lastRows: -1,
+      isAuthoritative: true,
+      applyingServerResize: false,
       opened: false,
       ready: false,
       draining: false,
@@ -374,6 +414,10 @@ export const terminalRegistry = {
       if (cols === entry.lastCols && rows === entry.lastRows) return;
       entry.lastCols = cols;
       entry.lastRows = rows;
+      // Reentrancy guard: applyServerResize() below calls term.resize()
+      // directly, which fires this SAME onResize event. Suppress the report
+      // back to the server in that one case.
+      if (entry.applyingServerResize) return;
       entry.handlers.onResize(cols, rows);
     });
 
@@ -401,6 +445,63 @@ export const terminalRegistry = {
       }
     });
 
+    // OSC 52 clipboard support via the official @xterm/addon-clipboard.
+    // xterm.js does not act on OSC 52 natively — by design, clipboard access
+    // requires the browser's Clipboard API, which xterm.js deliberately
+    // leaves to the embedding application. The escape bytes reach the
+    // browser unmodified (the PTY/sessiond pipeline passes them through with
+    // no filtering) but nothing acts on them without this addon.
+    //
+    // SECURITY: the addon's default BrowserClipboardProvider implements BOTH
+    // read (OSC 52 query, Pt = "<selection>;?") and write. We deliberately
+    // supply our own write-only provider instead — iTerm2, Kitty, and
+    // Alacritty all disable OSC 52 read by default, since it lets any
+    // program running in the terminal (including a remote SSH session)
+    // silently exfiltrate the user's OS clipboard the instant read
+    // permission is granted, with no user gesture required. readText() below
+    // always resolves to '', so the addon's query path never reaches
+    // navigator.clipboard.readText() at all.
+    term.loadAddon(new ClipboardAddon(undefined, {
+      readText: (_selection: string) => {
+        // Deliberately inert — see security note above. Never call
+        // navigator.clipboard.readText().
+        return Promise.resolve('');
+      },
+      writeText: (_selection: string, text: string) => {
+        muxLog('registry osc52', `clipboard write pane=${paneId}`, { bytes: text.length });
+        // A terminal escape sequence must never be able to throw an
+        // uncaught error into the app — writeText() requires a secure
+        // context and can reject (insecure context, permission denied,
+        // document not focused); catch and ignore rather than letting it
+        // propagate.
+        return navigator.clipboard.writeText(text).catch(() => {});
+      },
+    }));
+
+    // Guard against the addon's own query round-trip. Even with readText()
+    // above always resolving to '', ClipboardAddon._readText() (see
+    // node_modules/@xterm/addon-clipboard) unconditionally reports back by
+    // calling terminal.input() with an OSC 52 response — e.g.
+    // "\x1b]52;c;\x07" for an empty result — which is itself unwanted
+    // injected terminal input (it gets forwarded to the PTY exactly like a
+    // keystroke). There is no provider hook to suppress that report, so we
+    // intercept the query variant one level up, before the addon's handler
+    // runs at all.
+    //
+    // xterm.js's OscParser (src/common/parser/OscParser.ts) keeps handlers
+    // for a given OSC number in registration order and, on dispatch, calls
+    // them from LAST-registered to FIRST, stopping at the first one that
+    // returns true. Registering this handler after loadAddon() above means
+    // it runs first: it swallows the query ("<selection>;?") by returning
+    // true (claimed, no-op — the addon's handler is never invoked for that
+    // event), and returns false for anything else so the addon's own
+    // handler still processes SET normally.
+    term.parser.registerOscHandler(52, (data: string) => {
+      const sep = data.indexOf(';');
+      const payload = sep === -1 ? data : data.slice(sep + 1);
+      return payload === '?';
+    });
+
     // Touch scroll — xterm.js v6 regressed native touch-scroll support
     // (upstream issue #5489). Wire it manually: track finger Y delta and
     // convert to term.scrollLines() calls. We accumulate sub-line fractions
@@ -421,14 +522,45 @@ export const terminalRegistry = {
       }, { passive: true });
       hostEl.addEventListener('touchmove', (e: TouchEvent) => {
         const y = e.touches[0].clientY;
-        // Positive delta = finger moved up = scroll down (content moves up).
-        _accumulated += _touchY - y;
+        // Finger up (y decreases) = scroll content down = wheel deltaY > 0.
+        const deltaY = _touchY - y;
         _touchY = y;
-        const cellH = term.options.fontSize ?? 13;
-        const lines = Math.trunc(_accumulated / cellH);
-        if (lines !== 0) {
-          term.scrollLines(lines);
-          _accumulated -= lines * cellH;
+        if (deltaY !== 0) {
+          // Two distinct paths, because xterm.js handles wheel differently per
+          // buffer (verified against the xterm v6 source + a live browser; see
+          // docs/plans/2026-06-26-touch-scroll-propagation-fix.md):
+          //
+          // - Alternate screen (opencode/claude/vim): no scrollback. xterm's own
+          //   wheel handler translates the event to arrow keys / SGR mouse reports
+          //   that reach the PTY. So we dispatch a synthetic WheelEvent into
+          //   .xterm-screen and let xterm do the (correct) translation.
+          //   term.scrollLines() is a no-op here — the original bug.
+          //
+          // - Normal screen: xterm's wheel handler does NOT emit anything; it
+          //   relies on the browser's NATIVE scroll of .xterm-viewport. A
+          //   synthetic dispatchEvent() does not trigger native default actions,
+          //   so a synthetic wheel would scroll nothing. We must call
+          //   term.scrollLines() directly (accumulating sub-line fractions for
+          //   smooth slow drags).
+          if (term.buffer.active.type === 'alternate') {
+            const screenEl = hostEl.querySelector('.xterm-screen') as HTMLElement | null;
+            if (screenEl) {
+              screenEl.dispatchEvent(new WheelEvent('wheel', {
+                deltaY,
+                deltaMode: 0, // pixels; xterm quantizes to lines itself
+                bubbles: true,
+                cancelable: true,
+              }));
+            }
+          } else {
+            _accumulated += deltaY;
+            const cellH = term.options.fontSize ?? 13;
+            const lines = Math.trunc(_accumulated / cellH);
+            if (lines !== 0) {
+              term.scrollLines(lines);
+              _accumulated -= lines * cellH;
+            }
+          }
         }
         e.preventDefault();
       }, { passive: false });
@@ -657,6 +789,7 @@ export const terminalRegistry = {
       muxLog('registry ready', `pane=${paneId} READY (no pending — fresh or pre-buffered)`,
         { seqBytes: entry.seqBytes });
       entry.ready = true;
+      entry.handlers.onSettled?.();
       return;
     }
 
@@ -673,6 +806,7 @@ export const terminalRegistry = {
       muxLog('registry ready', `pane=${paneId} READY (after drain)`,
         { seqBytes: entry.seqBytes });
       entry.ready = true;
+      entry.handlers.onSettled?.();
       entry.draining = false;
       // Drain any live PTY data that arrived during the drain window.
       const live = entry.pendingData.splice(0);
@@ -688,14 +822,93 @@ export const terminalRegistry = {
   },
 
   /**
-   * Fit the terminal to its container — only when the host element is visible.
+   * Fit the terminal to its container — only when the host element is
+   * visible AND this client is currently authoritative for the pane's PTY
+   * size. Letterbox/scroll mode (non-authoritative): never fit-to-container
+   * — that would fight the canonical size just applied by applyServerResize.
    * No-op if the terminal has never been opened or is not in the DOM.
    */
   fitIfVisible(paneId: number): void {
     const entry = _map.get(_key(paneId));
     if (!entry || !entry.opened) return;
+    if (!entry.isAuthoritative) return;
     if (!_isVisible(entry.hostEl)) return;
     _fitIfPlausible(entry);
+  },
+
+  /**
+   * Apply a server-broadcast canonical size (TypePaneResized) to a
+   * non-authoritative pane's xterm.js instance. Calls term.resize() directly
+   * (never fitAddon.fit()) to preserve the exact cols/rows the server decided
+   * on — the whole point of letterbox/scroll mode is that this client's
+   * container size does NOT drive the PTY size while another client is
+   * authoritative. The applyingServerResize guard (consumed by the
+   * term.onResize handler above) prevents this call from immediately
+   * reporting a conflicting resize back to the server.
+   */
+  applyServerResize(paneId: number, cols: number, rows: number): void {
+    const entry = _map.get(_key(paneId));
+    if (!entry || !entry.opened) return;
+    entry.isAuthoritative = false;
+    entry.applyingServerResize = true;
+    entry.term.resize(cols, rows);
+    entry.applyingServerResize = false;
+  },
+
+  /**
+   * Mark this client as (optimistically) authoritative for paneId. Called
+   * immediately after sending a pane-focus claim — pane-focus is
+   * fire-and-forget (the daemon sends no reply), so there is no explicit ack
+   * to await. If another client actually won the race server-side, a
+   * pane-resized broadcast will arrive shortly after and flip this back to
+   * false via applyServerResize.
+   */
+  markAuthoritative(paneId: number): void {
+    const entry = _map.get(_key(paneId));
+    if (entry) entry.isAuthoritative = true;
+  },
+
+  /**
+   * Whether this client currently believes it is the PTY-sizing authority
+   * for paneId. Defaults to true (solo-client case) for any pane not yet
+   * known to the registry.
+   */
+  isAuthoritative(paneId: number): boolean {
+    return _map.get(_key(paneId))?.isAuthoritative ?? true;
+  },
+
+  /**
+   * Return the paneIds (within the current workspace) whose host element is
+   * currently visible in the DOM — the active tab of its dockview group, or
+   * any pane visible in a side-by-side split. Used by the pane-focus
+   * coordinator to decide which panes to claim on visibilitychange/window
+   * focus (which don't identify a single pane the way onDidActivePanelChange
+   * does).
+   */
+  visiblePaneIds(): number[] {
+    const prefix = `${_currentWorkspaceId}:`;
+    const ids: number[] = [];
+    for (const [key, entry] of _map.entries()) {
+      if (!key.startsWith(prefix)) continue;
+      if (entry.opened && _isVisible(entry.hostEl)) {
+        ids.push(parseInt(key.slice(prefix.length), 10));
+      }
+    }
+    return ids;
+  },
+
+  /**
+   * Re-fit paneId to its container (idempotent — the term.onResize handler's
+   * own lastCols/lastRows gate suppresses a duplicate report if nothing
+   * changed) and return the resulting measured size. Used by the pane-focus
+   * coordinator to get an accurate cols/rows to send with pane-focus. Returns
+   * null if the pane isn't opened or isn't currently visible.
+   */
+  measureForFocus(paneId: number): { cols: number; rows: number } | null {
+    const entry = _map.get(_key(paneId));
+    if (!entry || !entry.opened || !_isVisible(entry.hostEl)) return null;
+    _fitIfPlausible(entry);
+    return { cols: entry.term.cols, rows: entry.term.rows };
   },
 
   /** Focus the terminal for keyboard input. */
@@ -904,5 +1117,6 @@ if (typeof window !== 'undefined') {
   (window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm = {
     ...(window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm,
     snapshot: (paneId: number) => terminalRegistry.snapshot(paneId),
+    isAuthoritative: (paneId: number) => terminalRegistry.isAuthoritative(paneId),
   };
 }

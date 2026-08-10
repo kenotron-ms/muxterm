@@ -33,7 +33,7 @@ func (f *fakeDaemonConn) CloseWorkspace(workspaceID string) error {
 	return nil
 }
 
-func (f *fakeDaemonConn) Attach(workspaceID, breakpoint string) (sessiond.Composition, error) {
+func (f *fakeDaemonConn) Attach(workspaceID, breakpoint, clientKind string) (sessiond.Composition, error) {
 	f.attached = workspaceID
 	return sessiond.Composition{
 		WorkspaceID: workspaceID,
@@ -51,7 +51,7 @@ func (f *fakeDaemonConn) CreatePane(cmd []string, placement string, referencePan
 	return f.createdID, nil
 }
 
-func (f *fakeDaemonConn) CreateBrowserCDPPane(placement string, referencePaneID int) (int, error) {
+func (f *fakeDaemonConn) CreateBrowserPane(placement string, referencePaneID int) (int, error) {
 	return f.createdID, nil
 }
 
@@ -65,19 +65,24 @@ func (f *fakeDaemonConn) Resize(paneID, cols, rows int) error {
 	return nil
 }
 
+func (f *fakeDaemonConn) PaneFocus(paneID uint32, cols, rows int) error {
+	f.resizes = append(f.resizes, [3]int{int(paneID), cols, rows})
+	return nil
+}
+
 func (f *fakeDaemonConn) BrowserActionResult(msg sessiond.Message) error { return nil }
 
-func (f *fakeDaemonConn) BrowserInput(paneID int, clientID string, event json.RawMessage) error {
+func (f *fakeDaemonConn) BrowserCommand(paneID int, cid uint64, payload json.RawMessage) error {
 	return nil
 }
 
-func (f *fakeDaemonConn) BrowserFocus(paneID int, clientID, deviceID string, renderWidth, renderHeight int, devicePixelRatio float64) error {
+func (f *fakeDaemonConn) BrowserResult(paneID int, cid uint64, payload json.RawMessage) error {
 	return nil
 }
 
-func (f *fakeDaemonConn) BrowserBlur(paneID int, clientID, deviceID string) error {
-	return nil
-}
+func (f *fakeDaemonConn) BrowserURL(paneID int, url string) error { return nil }
+
+func (f *fakeDaemonConn) BrowserLoad(paneID int, url string) error { return nil }
 
 func (f *fakeDaemonConn) SetHandlers(h sessiond.Handlers) {
 	f.handlers = h

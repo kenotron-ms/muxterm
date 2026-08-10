@@ -1,12 +1,9 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // ---- TunnelRegistry unit tests ----
@@ -93,7 +90,7 @@ func TestTunnelRegistry_List(t *testing.T) {
 // ---- /t/{id}/ proxy route tests ----
 
 func TestTunnelProxy_NotFound(t *testing.T) {
-	srv := New(Config{Secret: "test-secret"})
+	srv := New(Config{NoAuth: true})
 
 	req := httptest.NewRequest(http.MethodGet, "/t/notfound/", nil)
 	w := httptest.NewRecorder()
@@ -106,7 +103,7 @@ func TestTunnelProxy_NotFound(t *testing.T) {
 }
 
 func TestTunnelProxy_NoID(t *testing.T) {
-	srv := New(Config{Secret: "test-secret"})
+	srv := New(Config{NoAuth: true})
 
 	// Path without an ID segment should return 400.
 	req := httptest.NewRequest(http.MethodGet, "/t/", nil)
@@ -120,7 +117,7 @@ func TestTunnelProxy_NoID(t *testing.T) {
 }
 
 func TestTunnelProxy_Found(t *testing.T) {
-	srv := New(Config{Secret: "test-secret"})
+	srv := New(Config{NoAuth: true})
 
 	// Register a tunnel with an unused port.
 	id, err := srv.tunnels.Create(19998)
@@ -145,130 +142,3 @@ func TestTunnelProxy_Found(t *testing.T) {
 }
 
 // ---- WebSocket handler tests for tunnel messages ----
-
-func TestHandleTextInput_TypeCreateTunnel(t *testing.T) {
-	hub := NewHub(nil)
-	hub.tunnels = NewTunnelRegistry()
-
-	var sentMessages [][]byte
-	c := newTestClient(hub, func(data []byte) error {
-		cp := make([]byte, len(data))
-		copy(cp, data)
-		sentMessages = append(sentMessages, cp)
-		return nil
-	}, func([]byte) error { return nil })
-	// Wire a fake daemon so the daemon-nil guard doesn't fire.
-	c.daemon = &fakeDaemonConn{}
-
-	msg := sessiond.Message{
-		Type:       sessiond.TypeCreateTunnel,
-		CID:        42,
-		TunnelPort: 7070,
-	}
-	data, _ := json.Marshal(msg)
-	c.handleTextInput(data)
-
-	if len(sentMessages) == 0 {
-		t.Fatal("no message sent after TypeCreateTunnel")
-	}
-	var reply sessiond.Message
-	if err := json.Unmarshal(sentMessages[0], &reply); err != nil {
-		t.Fatalf("unmarshal reply: %v", err)
-	}
-	if reply.Type != sessiond.TypeTunnelCreated {
-		t.Errorf("reply Type = %q, want %q", reply.Type, sessiond.TypeTunnelCreated)
-	}
-	if reply.CID != 42 {
-		t.Errorf("reply CID = %d, want 42", reply.CID)
-	}
-	if reply.TunnelID == "" {
-		t.Error("reply TunnelID is empty")
-	}
-	if reply.TunnelPort != 7070 {
-		t.Errorf("reply TunnelPort = %d, want 7070", reply.TunnelPort)
-	}
-}
-
-func TestHandleTextInput_TypeCloseTunnel(t *testing.T) {
-	hub := NewHub(nil)
-	hub.tunnels = NewTunnelRegistry()
-
-	// Pre-create a tunnel so we have a known ID to close.
-	id, err := hub.tunnels.Create(8080)
-	if err != nil {
-		t.Fatalf("pre-create tunnel: %v", err)
-	}
-
-	var sentMessages [][]byte
-	c := newTestClient(hub, func(data []byte) error {
-		cp := make([]byte, len(data))
-		copy(cp, data)
-		sentMessages = append(sentMessages, cp)
-		return nil
-	}, func([]byte) error { return nil })
-	c.daemon = &fakeDaemonConn{}
-
-	msg := sessiond.Message{
-		Type:     sessiond.TypeCloseTunnel,
-		CID:      55,
-		TunnelID: id,
-	}
-	data, _ := json.Marshal(msg)
-	c.handleTextInput(data)
-
-	if len(sentMessages) == 0 {
-		t.Fatal("no message sent after TypeCloseTunnel")
-	}
-	var reply sessiond.Message
-	if err := json.Unmarshal(sentMessages[0], &reply); err != nil {
-		t.Fatalf("unmarshal reply: %v", err)
-	}
-	if reply.Type != sessiond.TypeTunnelClosed {
-		t.Errorf("reply Type = %q, want %q", reply.Type, sessiond.TypeTunnelClosed)
-	}
-	if reply.CID != 55 {
-		t.Errorf("reply CID = %d, want 55", reply.CID)
-	}
-}
-
-func TestHandleTextInput_TypeListTunnels(t *testing.T) {
-	hub := NewHub(nil)
-	hub.tunnels = NewTunnelRegistry()
-
-	// Pre-create a couple of tunnels.
-	_, _ = hub.tunnels.Create(1234)
-	_, _ = hub.tunnels.Create(5678)
-
-	var sentMessages [][]byte
-	c := newTestClient(hub, func(data []byte) error {
-		cp := make([]byte, len(data))
-		copy(cp, data)
-		sentMessages = append(sentMessages, cp)
-		return nil
-	}, func([]byte) error { return nil })
-	c.daemon = &fakeDaemonConn{}
-
-	msg := sessiond.Message{
-		Type: sessiond.TypeListTunnels,
-		CID:  77,
-	}
-	data, _ := json.Marshal(msg)
-	c.handleTextInput(data)
-
-	if len(sentMessages) == 0 {
-		t.Fatal("no message sent after TypeListTunnels")
-	}
-	var reply sessiond.Message
-	if err := json.Unmarshal(sentMessages[0], &reply); err != nil {
-		t.Fatalf("unmarshal reply: %v", err)
-	}
-	if reply.Type != sessiond.TypeTunnelList {
-		t.Errorf("reply Type = %q, want %q", reply.Type, sessiond.TypeTunnelList)
-	}
-	if reply.CID != 77 {
-		t.Errorf("reply CID = %d, want 77", reply.CID)
-	}
-	if len(reply.Tunnels) != 2 {
-		t.Errorf("reply Tunnels len = %d, want 2", len(reply.Tunnels))
-	}
-}
