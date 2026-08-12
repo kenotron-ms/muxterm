@@ -331,6 +331,39 @@ export const terminalRegistry = {
     hostEl.style.cssText = 'width:100%;height:100%;touch-action:none;overflow:auto;';
 
     const term = new Terminal(TERMINAL_CONFIG);
+
+    // Terminal-query response ownership (see AGENTS.md "Terminal query
+    // ownership" invariant): sessiond's VTBuffer is the ONLY component
+    // authorized to reply to terminal capability queries embedded in the PTY
+    // stream. xterm.js also parses the same PTY bytes it renders and has its
+    // own built-in auto-reply for these two exact query forms, so without
+    // this suppression BOTH sessiond and the browser answer the same query.
+    // The browser's reply lands ~3.7ms after sessiond's, by which point the
+    // querying program (e.g. `gh auth`) has already stopped reading and
+    // restored the shell's canonical/echo mode, so the late reply is echoed
+    // as literal escape bytes (the `gh auth`
+    // "^[]11;rgb:.../^[\^[[14;1R" leak).
+    //
+    // Only the two exact query forms are intercepted, and only the query
+    // form of each — everything else (including OSC 11 *setters*, which
+    // must still recolor this local xterm.js view) falls through unchanged
+    // to xterm.js's built-in handling by returning false.
+    //
+    // Registered immediately after construction, before any data is written,
+    // so no PTY bytes are ever processed by xterm.js's built-in handlers
+    // before suppression is in place.
+    term.parser.registerCsiHandler({ final: 'n' }, (params: (number | number[])[]) => {
+      // CSI 6 n -- cursor position report (CPR) request. Any other final-`n`
+      // sequence (e.g. DECRPM) is not this query and must fall through.
+      return params.length === 1 && params[0] === 6;
+    });
+    term.parser.registerOscHandler(11, (data: string) => {
+      // OSC 11 ; ? ST -- default background-color query. OSC 11 with any other
+      // payload is a background-color setter, not a query, and must fall
+      // through so xterm.js still applies it locally.
+      return data === '?';
+    });
+
     const fitAddon = new FitAddon();
     // WebFontsAddon: loadFonts() is called in attach() before term.open() per
     // the official xterm.js addon-web-fonts guidance.
@@ -373,6 +406,13 @@ export const terminalRegistry = {
     // visible output, the charmbracelet emulator renders them as literal
     // characters (DCS body after stripping ESC P, etc.), and the garble gets
     // baked into the VTBuffer replay — compounding on every subsequent reload.
+    //
+    // The parser handlers registered right after `new Terminal(...)` above
+    // already suppress xterm.js's built-in auto-reply for the two query
+    // forms that were duplicating sessiond's own reply (CSI 6n, OSC 11;?),
+    // so onData no longer sees those two specifically. This gate remains the
+    // general defense for every OTHER capability query (DA1/DA2, DECRQSS,
+    // OSC 10, …) that is not suppressed at the parser level.
     term.onData((data: string) => {
       if (!entry.ready) {
         // Escape sequences in data → log first 40 chars for diagnosis
