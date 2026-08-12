@@ -1,3 +1,17 @@
+## Architectural invariants
+
+### Terminal query ownership (CSI 6n, OSC 11;?)
+
+sessiond's `VTBuffer` is authoritative for replying to `CSI 6n` (cursor
+position) and `OSC 11;?` (background-color query); the browser must not also
+reply, or the duplicate answer leaks into the shell (the `gh auth`
+`^[]11;rgb:.../^[\^[[14;1R` bug). `web/src/lib/terminal-registry.ts`
+enforces this with xterm.js parser hooks (`registerCsiHandler`/
+`registerOscHandler`) registered right after `new Terminal(...)` that consume
+only those exact query forms; OSC 11 setters and unrelated sequences fall
+through to xterm.js normally. Do this at the parser level, not via
+timing/`onData` byte filtering.
+
 ## Testing Policy
 
 ### ⛔ DO NOT WRITE UNIT TESTS
