@@ -6,6 +6,12 @@
 //
 // Added vs original: onBinary / _onBinaryCbs / simulateBinaryInput
 // (needed by terminal-registry which calls term.onBinary(...)).
+//
+// Added: parser.registerCsiHandler / registerOscHandler (needed by
+// terminal-registry's terminal-query-ownership suppression — see AGENTS.md
+// "Terminal query ownership" — which calls these immediately after
+// `new Terminal(...)`). This mock only records the registered handlers; it
+// does not simulate xterm's real CSI/OSC dispatch.
 
 export async function init(): Promise<void> {
   // async noop
@@ -21,6 +27,18 @@ export class Terminal {
   _onResizeCbs: Array<(size: { cols: number; rows: number }) => void> = [];
   _onBellCbs: Array<() => void> = [];
   _writtenData: Uint8Array[] = [];
+
+  /** Minimal mock of xterm.js's public Terminal.parser surface. */
+  parser = {
+    registerCsiHandler: (
+      _id: unknown,
+      _callback: (params: (number | number[])[]) => boolean | Promise<boolean>,
+    ): { dispose(): void } => ({ dispose() {} }),
+    registerOscHandler: (
+      _ident: number,
+      _callback: (data: string) => boolean | Promise<boolean>,
+    ): { dispose(): void } => ({ dispose() {} }),
+  };
 
   open(container: HTMLElement): void {
     const canvas = document.createElement('canvas');
