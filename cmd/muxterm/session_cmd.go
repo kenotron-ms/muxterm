@@ -91,7 +91,7 @@ func runSessionAttach(args []string) error {
 		fmt.Fprintln(os.Stdout, "Flags:")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderFlagsFirst(fs, args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
