@@ -325,6 +325,35 @@ func (c *Client) ScreenSnapshot(paneID int) (*Message, error) {
 	return c.request(&Message{Type: TypeScreenSnapshot, PaneID: paneID})
 }
 
+// ScrollbackPage requests one page of server-side scrollback history for the
+// pane identified by the workspace-local paneID, paging BACKWARD from cursor.
+//
+// cursor is an exclusive upper bound expressed as an absolute line-sequence
+// number; nil means "the most recent page of history" (the lines immediately
+// preceding the current live viewport). limit is the maximum number of lines to
+// return; 0 lets the daemon apply its default (500) and any value above the
+// daemon's cap (5000) is capped server-side.
+//
+// It returns the page oldest-first, the absolute sequence of the first returned
+// line, and the cursor to pass on the next call to page further back. A nil
+// next means no more retained history in that direction and is the normal
+// termination condition for a paging loop — not an error. A pane that exists
+// but is not VT-backed (a browser pane) yields an empty page, also not an
+// error. A daemon-side failure (unknown workspace, unknown pane) surfaces as a
+// *DaemonError carrying the frozen error code.
+func (c *Client) ScrollbackPage(paneID int, cursor *uint64, limit int) (lines []string, start uint64, next *uint64, err error) {
+	reply, err := c.request(&Message{
+		Type:       TypeScrollbackPage,
+		PaneID:     paneID,
+		LineCursor: cursor,
+		Limit:      limit,
+	})
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	return reply.Lines, reply.StartLine, reply.NextCursor, nil
+}
+
 // GetLayout requests an ASCII layout diagram of the currently-attached
 // workspace. The daemon replies with TypeLayoutResult carrying the ASCII field.
 // Returns an empty string when no layout has been saved for the attached
