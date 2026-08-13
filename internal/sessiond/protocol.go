@@ -79,6 +79,17 @@ const (
 	CodePaneNotFound     = "pane-not-found"
 )
 
+// Scrollback pagination message types (ADDITIVE, post-v1). These extend the
+// frozen protocol above without altering any existing constant or field:
+// TypeScrollbackPage is a client -> daemon request for one page of a pane's
+// server-side scrollback history; TypeScrollbackPageResult is the daemon's
+// reply, echoing the request cid. See
+// docs/designs/2026-08-12-sessiond-cli-scrollback-design.md.
+const (
+	TypeScrollbackPage       = "scrollback-page"        // request:  client -> daemon
+	TypeScrollbackPageResult = "scrollback-page-result" // reply:    daemon -> client
+)
+
 // writeFrame writes a single framed message: a 5-byte header consisting of a
 // big-endian uint32 length (kind byte + payload) followed by the kind byte,
 // then the payload (if any).
@@ -214,6 +225,28 @@ type Message struct {
 	// URL carries the committed/loaded URL for TypeBrowserURL and TypeBrowserLoad
 	// client-to-server browser pane navigation notifications.
 	URL string `json:"url,omitempty"`
+
+	// Scrollback pagination fields (ADDITIVE, post-v1; see TypeScrollbackPage).
+	// LineCursor is deliberately NOT named "Cursor": Message.Cursor is the
+	// frozen *CursorPos screen-snapshot field above and cannot be reused.
+	//
+	//   Request  (TypeScrollbackPage):       PaneID, LineCursor, Limit
+	//   Reply    (TypeScrollbackPageResult): PaneID, Lines, NextCursor, StartLine
+	//
+	// LineCursor is an EXCLUSIVE upper bound expressed as an absolute
+	// line-sequence number: the page returned is the (up to) Limit lines
+	// immediately BEFORE it. Nil/omitted means "start just before the current
+	// live viewport", i.e. the most recent page of history. NextCursor is the
+	// value to send as the next request's LineCursor to page further back; nil
+	// means no more retained history in that direction (the normal termination
+	// condition for a paging loop). StartLine is the absolute sequence of the
+	// first returned line, which reveals when a request was clamped to the
+	// oldest retained line.
+	LineCursor *uint64  `json:"lineCursor,omitempty"`
+	Limit      int      `json:"limit,omitempty"`
+	Lines      []string `json:"lines,omitempty"`
+	NextCursor *uint64  `json:"nextCursor,omitempty"`
+	StartLine  uint64   `json:"startLine,omitempty"`
 }
 
 // CursorPos is a 0-indexed terminal cursor position carried by screen-snapshot-result.
