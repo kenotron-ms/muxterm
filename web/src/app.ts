@@ -722,17 +722,22 @@ export class MuxApp extends LitElement {
       this._showReconnectOverlay = true;
       this._reconnectMessage = 'Connection lost. Reconnecting...';
       this._creatingWorkspace = false;
+      const interruptedTargets = new Map<string, CloseTarget>();
+      for (const [key, request] of this._closeRequests) {
+        interruptedTargets.set(key, request.target);
+      }
       if (this._closeConfirmation) {
         const target = closeOutcomeTarget(this._closeConfirmation);
-        const key = closeTargetKey(target);
-        this._closeConfirmation = null;
-        this._confirmingCloseKey = null;
-        if (!this._closeRequests.has(key)) {
-          this._setCloseAlert(
-            target,
-            'The close outcome could not be confirmed because the connection was lost.',
-          );
-        }
+        interruptedTargets.set(closeTargetKey(target), target);
+      }
+      this._closeRequests.clear();
+      this._closeConfirmation = null;
+      this._confirmingCloseKey = null;
+      for (const target of interruptedTargets.values()) {
+        this._setCloseAlert(
+          target,
+          'The close outcome could not be confirmed because the connection was lost.',
+        );
       }
     };
     this._socket.onReconnect = () => {

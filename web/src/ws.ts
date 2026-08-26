@@ -474,11 +474,11 @@ export class MuxSocket {
       }
     };
 
-    ws.onclose = (ev: CloseEvent) => {
+    ws.onclose = () => {
       this._rejectPendingCloseRequests(
         new Error('The close outcome could not be confirmed because the connection was lost.'),
       );
-      if (ev.code === 1000 || this._intentionalClose) {
+      if (this._intentionalClose) {
         return;
       }
       this.onDisconnect?.();
