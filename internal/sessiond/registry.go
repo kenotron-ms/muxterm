@@ -15,21 +15,41 @@ type Workspace struct {
 	Panes      map[int]*Pane     // keyed by workspace-local pane id
 	Layouts    map[string]string // breakpoint label -> opaque dockview layout JSON
 	nextPaneID int
+
+	// generation identifies this workspace instance even if an id were ever
+	// reused. membershipGeneration advances on every pane-map mutation. Both are
+	// daemon-owned close-ticket bindings and never cross the wire.
+	generation           uint64
+	membershipGeneration uint64
 }
 
 // Registry is the single source of truth for workspaces and their panes. All
 // access is serialized by mu so concurrent control connections see a consistent
 // view.
 type Registry struct {
-	mu         sync.Mutex
-	workspaces map[string]*Workspace
-	nextWSID   int
+	mu                      sync.Mutex
+	workspaces              map[string]*Workspace
+	nextWSID                int
+	nextWorkspaceGeneration uint64
+	nextPaneGeneration      uint64
+
+	// Active and retired close tickets are protected by the same mutex as the
+	// registry so target assessment, ticket validation, and registry mutation
+	// form one serialized transaction. Each value binds even a large workspace
+	// through a fixed-size digest rather than retaining its complete pane snapshot.
+	// Retired tickets preserve reassessment-only bindings through a short,
+	// independently bounded grace period.
+	closeTickets        map[string]closeTicket
+	retiredCloseTickets map[string]retiredCloseTicket
+	closeTicketSequence uint64
 }
 
 // NewRegistry returns an empty Registry ready for use.
 func NewRegistry() *Registry {
 	return &Registry{
-		workspaces: make(map[string]*Workspace),
+		workspaces:          make(map[string]*Workspace),
+		closeTickets:        make(map[string]closeTicket),
+		retiredCloseTickets: make(map[string]retiredCloseTicket),
 	}
 }
 
@@ -38,13 +58,15 @@ func NewRegistry() *Registry {
 // the lifecycle helpers in workspace.go.
 func (r *Registry) addWorkspaceLocked(name, clientRef string) string {
 	r.nextWSID++
+	r.nextWorkspaceGeneration++
 	id := fmt.Sprintf("w%d", r.nextWSID)
 	r.workspaces[id] = &Workspace{
-		ID:        id,
-		Name:      name,
-		ClientRef: clientRef,
-		Panes:     make(map[int]*Pane),
-		Layouts:   make(map[string]string),
+		ID:         id,
+		Name:       name,
+		ClientRef:  clientRef,
+		Panes:      make(map[int]*Pane),
+		Layouts:    make(map[string]string),
+		generation: r.nextWorkspaceGeneration,
 	}
 	return id
 }
@@ -112,10 +134,13 @@ func (r *Registry) PutPane(wsID string, p *Pane) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	ws, ok := r.workspaces[wsID]
-	if !ok {
+	if !ok || p == nil {
 		return false
 	}
+	r.nextPaneGeneration++
+	p.targetGeneration = r.nextPaneGeneration
 	ws.Panes[p.LocalID] = p
+	ws.membershipGeneration++
 	return true
 }
 
@@ -222,6 +247,12 @@ func (r *Registry) RenamePane(wsID string, paneID int, name string) bool {
 func (r *Registry) RemovePane(wsID string, paneID int) (*Pane, int, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.removePaneLocked(wsID, paneID)
+}
+
+// removePaneLocked is RemovePane's serialized mutation for close transactions
+// that already hold r.mu.
+func (r *Registry) removePaneLocked(wsID string, paneID int) (*Pane, int, bool) {
 	ws, ok := r.workspaces[wsID]
 	if !ok {
 		return nil, 0, false
@@ -231,7 +262,6 @@ func (r *Registry) RemovePane(wsID string, paneID int) (*Pane, int, bool) {
 		return nil, len(ws.Panes), false
 	}
 	delete(ws.Panes, paneID)
+	ws.membershipGeneration++
 	return p, len(ws.Panes), true
 }
-
-

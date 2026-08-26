@@ -53,6 +53,10 @@ type Handlers struct {
 	// close (nil for an explicit client-requested close); runtimeMs is the real
 	// shell process wall-clock runtime, valid only when processExitCode is non-nil.
 	OnPaneClosed func(paneID int, processExitCode *int, runtimeMs int64)
+	// OnPaneClosedWithWorkspace carries the same lifecycle event with its
+	// explicit workspace identity. It is additive so existing consumers of
+	// OnPaneClosed retain their callback shape.
+	OnPaneClosedWithWorkspace func(workspaceID string, paneID int, processExitCode *int, runtimeMs int64)
 	// OnWorkspaceClosed fires when the workspace identified by workspaceID is
 	// closed.
 	OnWorkspaceClosed func(workspaceID string)
@@ -282,6 +286,33 @@ func (c *Client) RenameWorkspace(workspaceID, name string) error {
 func (c *Client) CloseWorkspace(workspaceID string) error {
 	_, err := c.request(&Message{Type: TypeCloseWorkspace, WorkspaceID: workspaceID})
 	return err
+}
+
+// CloseIntent asks the daemon to assess target and close it atomically when its
+// current activity evidence is proven idle. Busy and unknown targets return an
+// opaque confirmation ticket without mutation.
+func (c *Client) CloseIntent(target CloseTarget) (CloseOutcome, error) {
+	reply, err := c.request(&Message{
+		Type:        TypeCloseIntent,
+		TargetKind:  string(target.Kind),
+		WorkspaceID: target.WorkspaceID,
+		PaneID:      target.PaneID,
+	})
+	if err != nil {
+		return CloseOutcome{}, err
+	}
+	return ParseCloseOutcomeMessage(reply)
+}
+
+// CloseConfirm forwards only the opaque ticket issued by a prior CloseIntent.
+// The daemon revalidates its bound target and activity snapshot; callers never
+// restate target identity or safety evidence.
+func (c *Client) CloseConfirm(ticket string) (CloseOutcome, error) {
+	reply, err := c.request(&Message{Type: TypeCloseConfirm, Ticket: ticket})
+	if err != nil {
+		return CloseOutcome{}, err
+	}
+	return ParseCloseOutcomeMessage(reply)
 }
 
 // Composition is the device-independent set of panes that make up a workspace,
@@ -554,6 +585,9 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypePaneClosed:
 		if h.OnPaneClosed != nil {
 			h.OnPaneClosed(msg.PaneID, msg.ProcessExitCode, msg.RuntimeMs)
+		}
+		if h.OnPaneClosedWithWorkspace != nil {
+			h.OnPaneClosedWithWorkspace(msg.WorkspaceID, msg.PaneID, msg.ProcessExitCode, msg.RuntimeMs)
 		}
 	case TypeWorkspaceClosed:
 		if h.OnWorkspaceClosed != nil {
