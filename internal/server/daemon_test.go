@@ -33,6 +33,14 @@ func (f *fakeDaemonConn) CloseWorkspace(workspaceID string) error {
 	return nil
 }
 
+func (f *fakeDaemonConn) CloseIntent(target sessiond.CloseTarget) (sessiond.CloseOutcome, error) {
+	return sessiond.CloseOutcome{}, nil
+}
+
+func (f *fakeDaemonConn) CloseConfirm(ticket string) (sessiond.CloseOutcome, error) {
+	return sessiond.CloseOutcome{}, nil
+}
+
 func (f *fakeDaemonConn) Attach(workspaceID, breakpoint, clientKind string) (sessiond.Composition, error) {
 	f.attached = workspaceID
 	return sessiond.Composition{
