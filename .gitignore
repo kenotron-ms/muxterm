@@ -40,3 +40,8 @@ tmp/
 
 # Git worktrees
 .worktrees/
+
+# goal-batch runtime artifacts
+DONE.json
+.amplifier/goals/manifest.tsv
+.amplifier/goals/*.log
