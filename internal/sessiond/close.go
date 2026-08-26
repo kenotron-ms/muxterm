@@ -50,6 +50,7 @@ const (
 const (
 	CloseFailureInvalidTarget     = "invalid-close-target"
 	CloseFailureInvalidTicket     = "invalid-close-ticket"
+	CloseFailureStaleTicket       = "stale-close-ticket"
 	CloseFailureTicketUnavailable = "close-ticket-unavailable"
 )
 
@@ -70,24 +71,27 @@ type CloseRisk struct {
 
 // CloseOutcome is the daemon-internal result B3 maps to close-outcome.
 //
-// ClosedNow is internal lifecycle metadata, not part of the fixed wire shape.
-// It tells server dispatch whether this transaction actually mutated the
-// registry and therefore owes authoritative closure broadcasts. In particular,
-// absent targets and invalidated tickets can reconcile as closed without a new
-// registry mutation.
+// ClosedNow and the absence-reconciliation fields are internal lifecycle
+// metadata, not part of the fixed wire shape. ClosedNow tells server dispatch
+// whether this transaction actually mutated the registry. ReconcileAbsent
+// preserves the structural authority missing from an idempotent closed outcome:
+// it emits either pane-closed or workspace-closed plus workspace-list even when
+// no registry mutation was needed.
 type CloseOutcome struct {
-	Status           CloseStatus
-	TargetKind       CloseTargetKind
-	WorkspaceID      string
-	PaneID           int
-	Ticket           string
-	BusyCount        int
-	UnknownCount     int
-	Risks            []CloseRisk
-	OmittedRiskCount int
-	FailureCode      string
-	Error            string
-	ClosedNow        bool
+	Status             CloseStatus
+	TargetKind         CloseTargetKind
+	WorkspaceID        string
+	PaneID             int
+	Ticket             string
+	BusyCount          int
+	UnknownCount       int
+	Risks              []CloseRisk
+	OmittedRiskCount   int
+	FailureCode        string
+	Error              string
+	ClosedNow          bool
+	ReconcileAbsent    bool
+	ReconcileWorkspace bool
 }
 
 type closeActivityAssessment struct {
@@ -153,7 +157,9 @@ func (r *Registry) CloseIntent(target CloseTarget) CloseOutcome {
 // ConfirmClose consumes an opaque ticket before validation or mutation.
 // Unchanged, unexpired snapshots close exactly their warned registry members.
 // Expired or changed snapshots are reassessed without mutation: risky targets
-// receive a fresh ticket, while idle or absent targets reconcile as closed.
+// receive a fresh ticket, absent targets reconcile as closed with structural
+// authority, and a changed-now-idle target fails so the browser can reissue an
+// intent instead of treating an unperformed close as complete.
 func (r *Registry) ConfirmClose(ticket string) CloseOutcome {
 	if !validCloseTicketText(ticket) {
 		return failedCloseOutcome(CloseTarget{}, CloseFailureInvalidTicket, "close confirmation is no longer valid; try closing again")
@@ -211,7 +217,7 @@ func (t CloseTarget) valid() bool {
 func (r *Registry) resolveCloseIntentLocked(target CloseTarget, now time.Time) (CloseOutcome, []*Pane) {
 	assessment := r.captureStableCloseAssessmentLocked(target)
 	if !assessment.exists {
-		return closedCloseOutcome(target, false), nil
+		return absentCloseOutcome(assessment), nil
 	}
 	if assessment.hasRisks() {
 		return r.confirmationRequiredLocked(assessment, now), nil
@@ -222,7 +228,7 @@ func (r *Registry) resolveCloseIntentLocked(target CloseTarget, now time.Time) (
 		// Reassess once more, but do not force a stale idle result through.
 		assessment = r.captureStableCloseAssessmentLocked(target)
 		if !assessment.exists {
-			return closedCloseOutcome(target, false), nil
+			return absentCloseOutcome(assessment), nil
 		}
 		if assessment.hasRisks() {
 			return r.confirmationRequiredLocked(assessment, now), nil
@@ -237,12 +243,20 @@ func (r *Registry) resolveCloseIntentLocked(target CloseTarget, now time.Time) (
 }
 
 // reassessInvalidatedCloseLocked never mutates. This is the design's stale
-// confirmation rule: changed membership or activity refreshes the warning, and
-// a now-idle/absent warned snapshot dismisses as closed while authoritative
-// broadcasts remain the only source of structural removal.
+// confirmation rule: changed membership or activity refreshes the warning, an
+// absent warned snapshot reconciles as closed with authoritative absence, and a
+// now-idle changed snapshot returns a retryable failure. A confirmation never
+// grants authority to destroy a target the user did not review.
 func (r *Registry) reassessInvalidatedCloseLocked(assessment closeAssessment, now time.Time) CloseOutcome {
-	if !assessment.exists || !assessment.hasRisks() {
-		return closedCloseOutcome(assessment.target, false)
+	if !assessment.exists {
+		return absentCloseOutcome(assessment)
+	}
+	if !assessment.hasRisks() {
+		return failedCloseOutcome(
+			assessment.target,
+			CloseFailureStaleTicket,
+			"close target changed; review it and try closing again",
+		)
 	}
 	return r.confirmationRequiredLocked(assessment, now)
 }
@@ -675,6 +689,16 @@ func closedCloseOutcome(target CloseTarget, closedNow bool) CloseOutcome {
 	outcome := baseCloseOutcome(target)
 	outcome.Status = CloseStatusClosed
 	outcome.ClosedNow = closedNow
+	return outcome
+}
+
+func absentCloseOutcome(assessment closeAssessment) CloseOutcome {
+	outcome := closedCloseOutcome(assessment.target, false)
+	outcome.ReconcileAbsent = true
+	// A missing workspace must be reconciled with workspace-closed and the
+	// authoritative replacement list; a missing pane in a live workspace only
+	// needs its pane identity broadcast.
+	outcome.ReconcileWorkspace = assessment.workspace == nil
 	return outcome
 }
 

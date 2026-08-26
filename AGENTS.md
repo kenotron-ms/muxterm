@@ -21,6 +21,10 @@ authority. Only default interactive bash/zsh panes with current prompt evidence
 may be idle; custom commands, browser panes, unsupported environments, and
 inspection ambiguity remain unknown.
 
+sessiond alone also authorizes destructive pane and workspace closure. Browser
+controls emit close intents, keep targets live until daemon authority responds,
+and wait for authoritative pane/workspace broadcasts before removing structure.
+
 ## Testing Policy
 
 ### ⛔ DO NOT WRITE UNIT TESTS

@@ -252,7 +252,7 @@ func (s *Server) handlePaneExit(wsID string, paneID int, exitCode int, runtimeMs
 	})
 	if remaining == 0 {
 		if removed, _ := s.reg.ReapIfEmpty(wsID); removed {
-			s.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: s.reg.List()})
+			s.broadcastWorkspaceList()
 		}
 	}
 }
@@ -325,13 +325,13 @@ func (c *conn) handle(msg Message) {
 	case TypeCreateWorkspace:
 		id := c.srv.reg.AddWorkspace(msg.Name, msg.ClientRef)
 		c.reply(&Message{Type: TypeWorkspaceCreated, CID: msg.CID, WorkspaceID: id, Name: msg.Name, ClientRef: msg.ClientRef})
-		c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
+		c.srv.broadcastWorkspaceList()
 	case TypeListWorkspaces:
-		c.reply(&Message{Type: TypeWorkspaceList, CID: msg.CID, Workspaces: c.srv.reg.List()})
+		c.srv.replyWorkspaceList(c, msg.CID)
 	case TypeRenameWorkspace:
 		if c.srv.reg.RenameWorkspace(msg.WorkspaceID, msg.Name) {
 			c.reply(&Message{Type: TypeOK, CID: msg.CID})
-			c.srv.broadcastAll(&Message{Type: TypeWorkspaceList, Workspaces: c.srv.reg.List()})
+			c.srv.broadcastWorkspaceList()
 		} else {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
 		}
@@ -643,11 +643,16 @@ func (c *conn) closeConfirm(msg Message) {
 	c.srv.broadcastCloseMutation(outcome)
 }
 
-// broadcastCloseMutation emits structural authority only for transactions that
-// actually removed the unchanged target. Absent targets and invalidated tickets
-// reconcile through their close-outcome without manufacturing lifecycle events.
+// broadcastCloseMutation emits structural authority for transactions that
+// removed an unchanged target and for idempotent absent targets. A close-outcome
+// reports only request status; clients remove structure only from these
+// broadcasts.
 func (s *Server) broadcastCloseMutation(outcome CloseOutcome) {
-	if !outcome.ClosedNow {
+	if !outcome.ClosedNow && !outcome.ReconcileAbsent {
+		return
+	}
+	if outcome.ReconcileAbsent && outcome.ReconcileWorkspace {
+		s.broadcastWorkspaceClosed(outcome.WorkspaceID)
 		return
 	}
 	switch outcome.TargetKind {
@@ -662,17 +667,49 @@ func (s *Server) broadcastCloseMutation(outcome CloseOutcome) {
 	}
 }
 
-// broadcastWorkspaceClosed enqueues the lifecycle event and its authoritative
-// replacement list together under Server.mu, preserving their required order
-// relative to other broadcasts for every live connection.
-func (s *Server) broadcastWorkspaceClosed(workspaceID string) {
+// broadcastWorkspaceList serializes snapshot capture and publication under
+// Server.mu. Every workspace-list broadcaster takes this path so an older
+// Registry snapshot cannot enqueue after a newer workspace mutation.
+func (s *Server) broadcastWorkspaceList() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.broadcastWorkspaceListLocked()
+}
+
+// replyWorkspaceList captures and queues a correlated workspace-list under the
+// same publication lock as broadcasts. A list request therefore cannot enqueue
+// an older snapshot after a close broadcast that already announced newer state.
+func (s *Server) replyWorkspaceList(c *conn, cid uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c.sub.enqueueControl(&Message{
+		Type:       TypeWorkspaceList,
+		CID:        cid,
+		Workspaces: s.reg.List(),
+	})
+}
+
+// broadcastWorkspaceListLocked captures the Registry snapshot while Server.mu
+// is held and then publishes it to every live connection. The established
+// Server -> Registry lock order matches attach and unsubscribe paths.
+func (s *Server) broadcastWorkspaceListLocked() {
 	workspaces := s.reg.List()
+	for c := range s.conns {
+		c.sub.enqueueControl(&Message{Type: TypeWorkspaceList, Workspaces: workspaces})
+	}
+}
+
+// broadcastWorkspaceClosed enqueues the lifecycle event and its authoritative
+// replacement list under one Server.mu critical section. Capturing the list
+// after acquiring Server.mu keeps this publication ordered against every other
+// workspace snapshot.
+func (s *Server) broadcastWorkspaceClosed(workspaceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for c := range s.conns {
 		c.sub.enqueueControl(&Message{Type: TypeWorkspaceClosed, WorkspaceID: workspaceID})
-		c.sub.enqueueControl(&Message{Type: TypeWorkspaceList, Workspaces: workspaces})
 	}
+	s.broadcastWorkspaceListLocked()
 }
 
 // createBrowserPane allocates a client-rendered browser pane handle in the

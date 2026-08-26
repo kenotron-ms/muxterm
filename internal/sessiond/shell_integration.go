@@ -99,6 +99,7 @@ if [[ -z "$(builtin trap -p DEBUG)" ]] &&
 	__muxterm_prompt_active_{{TOKEN}}=0
 	__muxterm_prompt_guard_{{TOKEN}}=0
 	__muxterm_status_{{TOKEN}}=0
+		__muxterm_prompt_marker_{{TOKEN}}=$'\\[\033]133;A;{{TOKEN}}\007\\]'
 
 	__muxterm_capture_status_{{TOKEN}}() {
 		__muxterm_status_{{TOKEN}}=$?
@@ -107,9 +108,16 @@ if [[ -z "$(builtin trap -p DEBUG)" ]] &&
 	}
 
 	__muxterm_prompt_ready_{{TOKEN}}() {
-		builtin printf '\033]133;D;%d\007' "${__muxterm_status_{{TOKEN}}}"
+			# Prompt construction can run command substitutions while the root
+			# shell remains foreground. Mark that interval non-idle before the
+			# shell begins expanding PS1; the trusted A marker is embedded at the
+			# very end of PS1 below.
+			builtin printf '\033]133;B;{{TOKEN}}\007\033]133;D;%d\007' "${__muxterm_status_{{TOKEN}}}"
+			if [[ ${PS1-} == *"${__muxterm_prompt_marker_{{TOKEN}}}" ]]; then
+				PS1="${PS1%"${__muxterm_prompt_marker_{{TOKEN}}}"}"
+			fi
 		if [[ ${__muxterm_prompt_guard_{{TOKEN}}:-0} -eq 1 ]]; then
-			builtin printf '\033]133;A;{{TOKEN}}\007'
+				PS1="${PS1}${__muxterm_prompt_marker_{{TOKEN}}}"
 			__muxterm_prompt_active_{{TOKEN}}=1
 		else
 			# The command-start hook is no longer ours. Authenticate a malformed
@@ -290,20 +298,28 @@ fi
 
 func zshIntegrationScript(token string) string {
 	const script = `
+__muxterm_prompt_marker_{{TOKEN}}=$'%{\033]133;A;{{TOKEN}}\007%}'
+
 __muxterm_capture_status_{{TOKEN}}() {
 	builtin typeset -g __muxterm_status_{{TOKEN}}=$?
 	builtin return "${__muxterm_status_{{TOKEN}}}"
 }
 
 __muxterm_prompt_ready_{{TOKEN}}() {
-	builtin printf '\033]133;D;%d\007' "${__muxterm_status_{{TOKEN}}:-0}"
+	# Prompt construction can run command substitutions while the root shell
+	# remains foreground. Mark that interval non-idle before PROMPT expansion;
+	# the trusted A marker is embedded at the very end of PROMPT below.
+	builtin printf '\033]133;B;{{TOKEN}}\007\033]133;D;%d\007' "${__muxterm_status_{{TOKEN}}:-0}"
+	if [[ ${PROMPT-} == *"${__muxterm_prompt_marker_{{TOKEN}}}" ]]; then
+		PROMPT="${PROMPT%"${__muxterm_prompt_marker_{{TOKEN}}}"}"
+	fi
 	# zsh invokes a scalar preexec function before preexec_functions. If one
 	# exists, work can begin before our command marker, so prompt evidence must
 	# remain fail-closed instead of briefly classifying that work as idle.
 	if (( ! ${+functions[preexec]} )) &&
 		(( ${preexec_functions[(Ie)__muxterm_preexec_{{TOKEN}}]} )) &&
 		(( ${+functions[__muxterm_preexec_{{TOKEN}}]} )); then
-		builtin printf '\033]133;A;{{TOKEN}}\007'
+		PROMPT="${PROMPT}${__muxterm_prompt_marker_{{TOKEN}}}"
 	else
 		builtin printf '\033]133;X;{{TOKEN}}\007'
 	fi

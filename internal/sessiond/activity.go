@@ -56,6 +56,11 @@ type lifecyclePhase uint8
 
 const (
 	lifecycleMissing lifecyclePhase = iota
+	// lifecyclePromptConstructing is trusted evidence that the shell has begun
+	// building a prompt but has not yet emitted its prompt-end marker. It is
+	// deliberately not idle: prompt substitutions and hooks can still be
+	// running while the root shell owns the foreground process group.
+	lifecyclePromptConstructing
 	lifecyclePromptActive
 	lifecycleCommandActive
 	lifecycleConflicting
@@ -70,7 +75,10 @@ type lifecycleEvidence struct {
 type lifecycleMarker uint8
 
 const (
-	lifecycleMarkerPrompt lifecycleMarker = iota + 1
+	// The prompt-construction marker is emitted before PS1/PROMPT expansion;
+	// the prompt marker is embedded at the end of the expanded prompt.
+	lifecycleMarkerPromptConstructing lifecycleMarker = iota + 1
+	lifecycleMarkerPrompt
 	lifecycleMarkerCommand
 	lifecycleMarkerConflict
 )
@@ -198,9 +206,15 @@ func oscTerminator(data []byte) (at, length int) {
 }
 
 func (p *shellLifecycleParser) marker(payload []byte) lifecycleMarker {
+	promptConstructingPrefix := []byte("133;B;")
 	promptPrefix := []byte("133;A;")
 	commandPrefix := []byte("133;C;")
 	switch {
+	case bytes.HasPrefix(payload, promptConstructingPrefix):
+		value := payload[len(promptConstructingPrefix):]
+		if bytes.Equal(value, p.token) {
+			return lifecycleMarkerPromptConstructing
+		}
 	case bytes.HasPrefix(payload, promptPrefix):
 		value := payload[len(promptPrefix):]
 		if bytes.Equal(value, p.token) {
@@ -248,6 +262,8 @@ func (p *Pane) observeLifecycleData(generation uint64, data []byte, observedAt t
 	for _, marker := range p.lifecycleParser.feed(data) {
 		phase := lifecycleConflicting
 		switch marker {
+		case lifecycleMarkerPromptConstructing:
+			phase = lifecyclePromptConstructing
 		case lifecycleMarkerPrompt:
 			phase = lifecyclePromptActive
 		case lifecycleMarkerCommand:
@@ -457,6 +473,12 @@ func classifyRootForeground(snapshot activitySnapshot) ActivityAssessment {
 			Classification: ActivityIdle,
 			Generation:     snapshot.generation,
 		}
+	case lifecyclePromptConstructing:
+		// The shell owns the foreground process group while rendering a prompt,
+		// including synchronous prompt substitutions. Only the marker embedded
+		// after expansion can establish idle authority.
+		assessment.Reason = ActivityReasonConflictingEvidence
+		return assessment
 	case lifecycleConflicting:
 		assessment.Reason = ActivityReasonConflictingEvidence
 		return assessment
