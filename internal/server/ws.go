@@ -35,6 +35,11 @@ type Client struct {
 	// hub attaches the client.
 	daemon DaemonConn
 
+	// closeTickets retains browser-local target identity for opaque confirmation
+	// tickets. It is touched only by this Client's readPump; the ticket remains
+	// the sole daemon authorization input.
+	closeTickets map[string]sessiond.CloseTarget
+
 	// writeTextFn/writeBinaryFn perform the actual frame writes. Production
 	// wires them to the real WebSocket writers in newClient; tests inject
 	// capturing closures.
@@ -66,6 +71,11 @@ type Client struct {
 	attachSeq sync.Mutex
 }
 
+const (
+	closeRelayFailureCode    = "close-relay-failed"
+	closeRelayFailureMessage = "Close request could not be completed; try again."
+)
+
 // setWorkspaceID records the workspace this client is currently attached to.
 func (c *Client) setWorkspaceID(id string) {
 	c.wsMu.Lock()
@@ -81,15 +91,83 @@ func (c *Client) getWorkspaceID() string {
 	return c.workspaceID
 }
 
+func validCloseTarget(target sessiond.CloseTarget) bool {
+	if target.WorkspaceID == "" {
+		return false
+	}
+	switch target.Kind {
+	case sessiond.CloseTargetPane:
+		return target.PaneID > 0
+	case sessiond.CloseTargetWorkspace:
+		return target.PaneID == 0
+	default:
+		return false
+	}
+}
+
+func (c *Client) rememberCloseTicket(outcome sessiond.CloseOutcome) {
+	target := sessiond.CloseTarget{
+		Kind:        outcome.TargetKind,
+		WorkspaceID: outcome.WorkspaceID,
+		PaneID:      outcome.PaneID,
+	}
+	if outcome.Status != sessiond.CloseStatusConfirmationRequired ||
+		outcome.Ticket == "" || !validCloseTarget(target) {
+		return
+	}
+
+	if c.closeTickets == nil {
+		c.closeTickets = make(map[string]sessiond.CloseTarget)
+	}
+	if _, exists := c.closeTickets[outcome.Ticket]; !exists &&
+		len(c.closeTickets) >= sessiond.CloseTicketCapacity {
+		for ticket := range c.closeTickets {
+			delete(c.closeTickets, ticket)
+			break
+		}
+	}
+	c.closeTickets[outcome.Ticket] = target
+}
+
+func (c *Client) closeTargetForTicket(ticket string) (sessiond.CloseTarget, bool) {
+	target, ok := c.closeTickets[ticket]
+	return target, ok
+}
+
+func (c *Client) forgetCloseTicket(ticket string) {
+	delete(c.closeTickets, ticket)
+}
+
+func closeOutcomeWithFallbackTarget(outcome sessiond.CloseOutcome, fallback sessiond.CloseTarget) sessiond.CloseOutcome {
+	if outcome.TargetKind == "" && validCloseTarget(fallback) {
+		outcome.TargetKind = fallback.Kind
+		outcome.WorkspaceID = fallback.WorkspaceID
+		outcome.PaneID = fallback.PaneID
+	}
+	return outcome
+}
+
+func closeRelayFailure(target sessiond.CloseTarget) sessiond.CloseOutcome {
+	return sessiond.CloseOutcome{
+		Status:      sessiond.CloseStatusFailed,
+		TargetKind:  target.Kind,
+		WorkspaceID: target.WorkspaceID,
+		PaneID:      target.PaneID,
+		FailureCode: closeRelayFailureCode,
+		Error:       closeRelayFailureMessage,
+	}
+}
+
 // newClient creates a new Client with a cancellable context and real WebSocket
 // writers.
 func newClient(hub *Hub, conn *websocket.Conn) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		hub:    hub,
-		conn:   conn,
-		ctx:    ctx,
-		cancel: cancel,
+		hub:          hub,
+		conn:         conn,
+		ctx:          ctx,
+		cancel:       cancel,
+		closeTickets: make(map[string]sessiond.CloseTarget),
 	}
 	c.writeTextFn = func(data []byte) error {
 		c.writeMu.Lock()
@@ -232,6 +310,34 @@ func (c *Client) handleTextInput(data []byte) {
 		if wsList, err := c.daemon.ListWorkspaces(); err == nil {
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: wsList})
 		}
+
+	case sessiond.TypeCloseIntent:
+		target := sessiond.CloseTarget{
+			Kind:        sessiond.CloseTargetKind(msg.TargetKind),
+			WorkspaceID: msg.WorkspaceID,
+			PaneID:      msg.PaneID,
+		}
+		outcome, err := c.daemon.CloseIntent(target)
+		if err != nil {
+			c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, closeRelayFailure(target)))
+			return
+		}
+		c.rememberCloseTicket(outcome)
+		c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, outcome))
+
+	case sessiond.TypeCloseConfirm:
+		target, knownTarget := c.closeTargetForTicket(msg.Ticket)
+		outcome, err := c.daemon.CloseConfirm(msg.Ticket)
+		if err != nil {
+			c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, closeRelayFailure(target)))
+			return
+		}
+		c.forgetCloseTicket(msg.Ticket)
+		if knownTarget {
+			outcome = closeOutcomeWithFallbackTarget(outcome, target)
+		}
+		c.rememberCloseTicket(outcome)
+		c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, outcome))
 
 	case sessiond.TypeCreatePane:
 		paneID, err := c.daemon.CreatePane(msg.Cmd, msg.Placement, msg.ReferencePaneID)
@@ -528,9 +634,9 @@ func (h *Hub) attachClient(c *Client) error {
 				ReferencePaneID: pane.ReferencePaneID,
 			})
 		},
-		OnPaneClosed: func(paneID int, processExitCode *int, runtimeMs int64) {
+		OnPaneClosedWithWorkspace: func(workspaceID string, paneID int, processExitCode *int, runtimeMs int64) {
 			c.sendMessage(&sessiond.Message{
-				Type: sessiond.TypePaneClosed, PaneID: paneID,
+				Type: sessiond.TypePaneClosed, WorkspaceID: workspaceID, PaneID: paneID,
 				ProcessExitCode: processExitCode, RuntimeMs: runtimeMs,
 			})
 		},

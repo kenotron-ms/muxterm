@@ -16,6 +16,8 @@ type DaemonConn interface {
 	CreateWorkspace(name string) (string, error)
 	RenameWorkspace(workspaceID, name string) error
 	CloseWorkspace(workspaceID string) error
+	CloseIntent(target sessiond.CloseTarget) (sessiond.CloseOutcome, error)
+	CloseConfirm(ticket string) (sessiond.CloseOutcome, error)
 	Attach(workspaceID, breakpoint, clientKind string) (sessiond.Composition, error)
 	RenamePane(paneID int, name string) error
 	SaveLayout(workspaceID, breakpoint, layout string) error

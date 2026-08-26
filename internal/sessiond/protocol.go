@@ -90,6 +90,25 @@ const (
 	TypeScrollbackPageResult = "scrollback-page-result" // reply:    daemon -> client
 )
 
+// Activity-aware close message types are additive. They preserve the legacy
+// force-close messages while routing browser close intents through daemon-owned
+// activity and ticket authority.
+const (
+	TypeCloseIntent  = "close-intent"  // request: browser relay -> daemon
+	TypeCloseConfirm = "close-confirm" // request: browser relay -> daemon
+	TypeCloseOutcome = "close-outcome" // reply: daemon -> browser relay
+)
+
+// CloseRiskInfo is one user-safe activity warning in a close-outcome. It is
+// deliberately a wire type rather than the daemon's internal CloseRisk so its
+// JSON field names are fixed independently of internal transaction state.
+type CloseRiskInfo struct {
+	PaneID         int    `json:"paneId"`
+	Title          string `json:"title"`
+	Classification string `json:"classification"`
+	Reason         string `json:"reason"`
+}
+
 // writeFrame writes a single framed message: a 5-byte header consisting of a
 // big-endian uint32 length (kind byte + payload) followed by the kind byte,
 // then the payload (if any).
@@ -179,6 +198,18 @@ type Message struct {
 	Code        string          `json:"code,omitempty"`        // error code
 	Error       string          `json:"error,omitempty"`       // human-readable error text
 
+	// Activity-aware close fields (ADDITIVE). The pointer counts and risks
+	// preserve required zero and empty values on confirmation-required outcomes
+	// without adding these fields to unrelated messages.
+	TargetKind       string           `json:"targetKind,omitempty"`       // "pane" | "workspace"
+	CloseStatus      string           `json:"closeStatus,omitempty"`      // "closed" | "confirmation-required" | "failed"
+	Ticket           string           `json:"ticket,omitempty"`           // opaque daemon-issued confirmation ticket
+	BusyCount        *int             `json:"busyCount,omitempty"`        // present for confirmation-required, including zero
+	UnknownCount     *int             `json:"unknownCount,omitempty"`     // present for confirmation-required, including zero
+	Risks            *[]CloseRiskInfo `json:"risks,omitempty"`            // present for confirmation-required, including []
+	OmittedRiskCount *int             `json:"omittedRiskCount,omitempty"` // present for confirmation-required, including zero
+	FailureCode      string           `json:"failureCode,omitempty"`      // stable close failure category
+
 	// Browser pane fields (used in create-pane and pane-added for browser surface kinds)
 	SurfaceKind string `json:"surfaceKind,omitempty"`
 
@@ -247,6 +278,110 @@ type Message struct {
 	Lines      []string `json:"lines,omitempty"`
 	NextCursor *uint64  `json:"nextCursor,omitempty"`
 	StartLine  uint64   `json:"startLine,omitempty"`
+}
+
+// CloseOutcomeMessage maps a daemon close transaction result onto the additive
+// wire envelope. cid belongs to the caller's current transport domain: the
+// daemon server uses its socket cid, while the browser relay supplies the
+// initiating browser cid after its independent daemon request completes.
+func CloseOutcomeMessage(cid uint64, outcome CloseOutcome) *Message {
+	msg := &Message{
+		Type:        TypeCloseOutcome,
+		CID:         cid,
+		TargetKind:  string(outcome.TargetKind),
+		WorkspaceID: outcome.WorkspaceID,
+		PaneID:      outcome.PaneID,
+		CloseStatus: string(outcome.Status),
+	}
+
+	switch outcome.Status {
+	case CloseStatusConfirmationRequired:
+		busyCount := outcome.BusyCount
+		unknownCount := outcome.UnknownCount
+		omittedRiskCount := outcome.OmittedRiskCount
+		risks := make([]CloseRiskInfo, len(outcome.Risks))
+		for i, risk := range outcome.Risks {
+			risks[i] = CloseRiskInfo{
+				PaneID:         risk.PaneID,
+				Title:          risk.Title,
+				Classification: string(risk.Classification),
+				Reason:         string(risk.Reason),
+			}
+		}
+		msg.Ticket = outcome.Ticket
+		msg.BusyCount = &busyCount
+		msg.UnknownCount = &unknownCount
+		msg.Risks = &risks
+		msg.OmittedRiskCount = &omittedRiskCount
+	case CloseStatusFailed:
+		msg.FailureCode = outcome.FailureCode
+		msg.Error = outcome.Error
+	}
+
+	return msg
+}
+
+// ParseCloseOutcomeMessage decodes the additive close-outcome envelope into the
+// daemon transaction shape. It rejects malformed outcomes so a relay never
+// grants destructive authority based on an incomplete daemon reply.
+func ParseCloseOutcomeMessage(msg *Message) (CloseOutcome, error) {
+	if msg == nil || msg.Type != TypeCloseOutcome {
+		return CloseOutcome{}, fmt.Errorf("sessiond: expected %q reply", TypeCloseOutcome)
+	}
+
+	target := CloseTarget{
+		Kind:        CloseTargetKind(msg.TargetKind),
+		WorkspaceID: msg.WorkspaceID,
+		PaneID:      msg.PaneID,
+	}
+	outcome := CloseOutcome{
+		Status:      CloseStatus(msg.CloseStatus),
+		TargetKind:  target.Kind,
+		WorkspaceID: target.WorkspaceID,
+		PaneID:      target.PaneID,
+		Ticket:      msg.Ticket,
+		FailureCode: msg.FailureCode,
+		Error:       msg.Error,
+	}
+
+	switch outcome.Status {
+	case CloseStatusClosed:
+		if !target.valid() {
+			return CloseOutcome{}, fmt.Errorf("sessiond: closed close outcome has invalid target")
+		}
+	case CloseStatusConfirmationRequired:
+		if !target.valid() || outcome.Ticket == "" ||
+			msg.BusyCount == nil || msg.UnknownCount == nil ||
+			msg.Risks == nil || msg.OmittedRiskCount == nil {
+			return CloseOutcome{}, fmt.Errorf("sessiond: confirmation-required close outcome is incomplete")
+		}
+		outcome.BusyCount = *msg.BusyCount
+		outcome.UnknownCount = *msg.UnknownCount
+		outcome.OmittedRiskCount = *msg.OmittedRiskCount
+		outcome.Risks = make([]CloseRisk, len(*msg.Risks))
+		for i, risk := range *msg.Risks {
+			classification := ActivityClassification(risk.Classification)
+			reason := ActivityReason(risk.Reason)
+			if (classification != ActivityBusy && classification != ActivityUnknown) ||
+				!validCloseActivityReason(reason) {
+				return CloseOutcome{}, fmt.Errorf("sessiond: close outcome contains invalid risk")
+			}
+			outcome.Risks[i] = CloseRisk{
+				PaneID:         risk.PaneID,
+				Title:          risk.Title,
+				Classification: classification,
+				Reason:         reason,
+			}
+		}
+	case CloseStatusFailed:
+		// A malformed or expired opaque ticket has no recoverable target identity
+		// at daemon scope. The browser relay overlays its locally-correlated
+		// target before forwarding such a failure to the browser.
+	default:
+		return CloseOutcome{}, fmt.Errorf("sessiond: invalid close outcome status %q", msg.CloseStatus)
+	}
+
+	return outcome, nil
 }
 
 // CursorPos is a 0-indexed terminal cursor position carried by screen-snapshot-result.
