@@ -1,4 +1,15 @@
-import { SessiondType, encodePaneFrame, decodePaneFrame, type SessiondMessage } from './types';
+import {
+  SessiondType,
+  encodePaneFrame,
+  decodePaneFrame,
+  type CloseConfirmRequest,
+  type CloseIntentRequest,
+  type CloseOutcome,
+  type CloseRisk,
+  type CloseRiskReason,
+  type CloseTarget,
+  type SessiondMessage,
+} from './types';
 import type { MuxStore } from './state';
 
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
@@ -7,6 +18,92 @@ export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
 const BACKOFF_BASE = 1000;
 const BACKOFF_CAP = 30000;
 const JITTER_MAX = 500;
+const CLOSE_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_CLOSE_CID = Number.MAX_SAFE_INTEGER;
+const CLOSE_RISK_REASONS = new Set<CloseRiskReason>([
+  'command-active',
+  'foreground-process',
+  'custom-command',
+  'browser-pane',
+  'unsupported-shell',
+  'unsupported-platform',
+  'missing-lifecycle',
+  'stale-lifecycle',
+  'process-inspection-failed',
+  'pty-inspection-failed',
+  'conflicting-evidence',
+]);
+
+interface PendingCloseRequest {
+  target: CloseTarget;
+  resolve: (outcome: CloseOutcome) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function hasValidCloseTarget(message: Record<string, unknown>): boolean {
+  if (typeof message.workspaceId !== 'string' || message.workspaceId.length === 0) return false;
+  if (message.targetKind === 'pane') return isNonNegativeSafeInteger(message.paneId);
+  return message.targetKind === 'workspace' && message.paneId === undefined;
+}
+
+function isCloseRisk(value: unknown): value is CloseRisk {
+  if (typeof value !== 'object' || value === null) return false;
+  const risk = value as Record<string, unknown>;
+  return (
+    isNonNegativeSafeInteger(risk.paneId) &&
+    typeof risk.title === 'string' &&
+    (risk.classification === 'busy' || risk.classification === 'unknown') &&
+    typeof risk.reason === 'string' &&
+    CLOSE_RISK_REASONS.has(risk.reason as CloseRiskReason)
+  );
+}
+
+function sameCloseTarget(left: CloseTarget, right: CloseTarget): boolean {
+  return (
+    left.targetKind === right.targetKind &&
+    left.workspaceId === right.workspaceId &&
+    (left.targetKind === 'workspace' ||
+      (right.targetKind === 'pane' && left.paneId === right.paneId))
+  );
+}
+
+function isCloseOutcome(value: unknown): value is CloseOutcome {
+  if (typeof value !== 'object' || value === null) return false;
+  const message = value as Record<string, unknown>;
+  if (message.type !== SessiondType.CloseOutcome || !isPositiveSafeInteger(message.cid)) return false;
+  if (!hasValidCloseTarget(message)) return false;
+
+  switch (message.closeStatus) {
+    case 'closed':
+      return true;
+    case 'failed':
+      return (
+        (message.failureCode === undefined || typeof message.failureCode === 'string') &&
+        (message.error === undefined || typeof message.error === 'string')
+      );
+    case 'confirmation-required':
+      return (
+        typeof message.ticket === 'string' &&
+        message.ticket.length > 0 &&
+        isNonNegativeSafeInteger(message.busyCount) &&
+        isNonNegativeSafeInteger(message.unknownCount) &&
+        Array.isArray(message.risks) &&
+        message.risks.every(isCloseRisk) &&
+        isNonNegativeSafeInteger(message.omittedRiskCount)
+      );
+    default:
+      return false;
+  }
+}
 
 export class MuxSocket {
   private _store: MuxStore;
@@ -17,6 +114,8 @@ export class MuxSocket {
   private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private _reconnectAttempts = 0;
   private _intentionalClose = false;
+  private _nextCloseCid = 1;
+  private _pendingCloseRequests = new Map<number, PendingCloseRequest>();
 
   onDisconnect: (() => void) | null = null;
   onReconnect: (() => void) | null = null;
@@ -53,6 +152,9 @@ export class MuxSocket {
 
   disconnect(): void {
     this._intentionalClose = true;
+    this._rejectPendingCloseRequests(
+      new Error('The close outcome could not be confirmed because the connection closed.'),
+    );
     if (this._reconnectTimer !== undefined) {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = undefined;
@@ -126,6 +228,50 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.CloseWorkspace, workspaceId });
   }
 
+  /** Assess and, when safe, close a pane or workspace in one correlated request. */
+  closeIntent(target: CloseTarget): Promise<CloseOutcome> {
+    return this._sendCloseRequest(target, (cid) => {
+      if (target.targetKind === 'pane') {
+        return {
+          type: SessiondType.CloseIntent,
+          cid,
+          targetKind: 'pane',
+          workspaceId: target.workspaceId,
+          paneId: target.paneId,
+        };
+      }
+      return {
+        type: SessiondType.CloseIntent,
+        cid,
+        targetKind: 'workspace',
+        workspaceId: target.workspaceId,
+      };
+    });
+  }
+
+  /** Confirm exactly the opaque assessment ticket returned by sessiond. */
+  closeConfirm(ticket: string, target: CloseTarget): Promise<CloseOutcome> {
+    return this._sendCloseRequest(target, (cid) => ({
+      type: SessiondType.CloseConfirm,
+      cid,
+      ticket,
+    }));
+  }
+
+  /** A structural broadcast supersedes any still-pending reply for this target. */
+  settleCloseTarget(target: CloseTarget): void {
+    for (const [cid, pending] of this._pendingCloseRequests) {
+      if (sameCloseTarget(pending.target, target)) this._resolvePendingAsClosed(cid, pending);
+    }
+  }
+
+  /** Workspace removal also settles pane-close requests scoped to that workspace. */
+  settleCloseWorkspace(workspaceId: string): void {
+    for (const [cid, pending] of this._pendingCloseRequests) {
+      if (pending.target.workspaceId === workspaceId) this._resolvePendingAsClosed(cid, pending);
+    }
+  }
+
   /**
    * Create a connection-scoped pane (NO workspaceId). cmd is included only
    * when it carries at least one argument. clientRef is included only when
@@ -177,6 +323,9 @@ export class MuxSocket {
 
   destroy(): void {
     this._intentionalClose = true;
+    this._rejectPendingCloseRequests(
+      new Error('The close outcome could not be confirmed because the connection was destroyed.'),
+    );
     if (this._reconnectTimer !== undefined) {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = undefined;
@@ -196,6 +345,89 @@ export class MuxSocket {
     const jitter = Math.random() * JITTER_MAX;
     this._reconnectAttempts++;
     this._reconnectTimer = setTimeout(() => this._open(), delay + jitter);
+  }
+
+  private _allocateCloseCid(): number {
+    const start = this._nextCloseCid;
+    do {
+      const cid = this._nextCloseCid;
+      this._nextCloseCid = cid >= MAX_CLOSE_CID ? 1 : cid + 1;
+      if (!this._pendingCloseRequests.has(cid)) return cid;
+    } while (this._nextCloseCid !== start);
+    throw new Error('No close request correlation IDs are available.');
+  }
+
+  private _sendCloseRequest(
+    target: CloseTarget,
+    buildMessage: (cid: number) => CloseIntentRequest | CloseConfirmRequest,
+  ): Promise<CloseOutcome> {
+    const ws = this._ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('Cannot request close while disconnected.'));
+    }
+
+    let cid: number;
+    try {
+      cid = this._allocateCloseCid();
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+
+    return new Promise<CloseOutcome>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const pending = this._pendingCloseRequests.get(cid);
+        if (!pending) return;
+        this._pendingCloseRequests.delete(cid);
+        pending.reject(new Error('The close outcome could not be confirmed before the request timed out.'));
+      }, CLOSE_REQUEST_TIMEOUT_MS);
+
+      this._pendingCloseRequests.set(cid, { target, resolve, reject, timer });
+      try {
+        ws.send(JSON.stringify(buildMessage(cid)));
+      } catch (error) {
+        const pending = this._pendingCloseRequests.get(cid);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        this._pendingCloseRequests.delete(cid);
+        pending.reject(
+          error instanceof Error
+            ? error
+            : new Error('The close request could not be sent.'),
+        );
+      }
+    });
+  }
+
+  private _resolveCloseOutcome(raw: Record<string, unknown>): void {
+    if (raw.type !== SessiondType.CloseOutcome || !isPositiveSafeInteger(raw.cid)) return;
+    const pending = this._pendingCloseRequests.get(raw.cid);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this._pendingCloseRequests.delete(raw.cid);
+    if (isCloseOutcome(raw)) {
+      pending.resolve(raw);
+    } else {
+      pending.reject(new Error('The close service returned an invalid outcome.'));
+    }
+  }
+
+  private _resolvePendingAsClosed(cid: number, pending: PendingCloseRequest): void {
+    clearTimeout(pending.timer);
+    this._pendingCloseRequests.delete(cid);
+    pending.resolve({
+      type: SessiondType.CloseOutcome,
+      cid,
+      ...pending.target,
+      closeStatus: 'closed',
+    });
+  }
+
+  private _rejectPendingCloseRequests(error: Error): void {
+    for (const pending of this._pendingCloseRequests.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this._pendingCloseRequests.clear();
   }
 
   private _open(): void {
@@ -220,6 +452,7 @@ export class MuxSocket {
       // Text frame — JSON control message
       if (typeof ev.data === 'string') {
         const raw = JSON.parse(ev.data) as Record<string, unknown>;
+        this._resolveCloseOutcome(raw);
         // Pass the raw message to control handlers (e.g. for detached/session-picker).
         // Non-typed envelopes (e.g. serve config) still flow through here.
         this._controlMessageCb?.(raw);
@@ -242,6 +475,9 @@ export class MuxSocket {
     };
 
     ws.onclose = (ev: CloseEvent) => {
+      this._rejectPendingCloseRequests(
+        new Error('The close outcome could not be confirmed because the connection was lost.'),
+      );
       if (ev.code === 1000 || this._intentionalClose) {
         return;
       }
