@@ -297,7 +297,11 @@ __muxterm_capture_status_{{TOKEN}}() {
 
 __muxterm_prompt_ready_{{TOKEN}}() {
 	builtin printf '\033]133;D;%d\007' "${__muxterm_status_{{TOKEN}}:-0}"
-	if (( ${preexec_functions[(Ie)__muxterm_preexec_{{TOKEN}}]} )) &&
+	# zsh invokes a scalar preexec function before preexec_functions. If one
+	# exists, work can begin before our command marker, so prompt evidence must
+	# remain fail-closed instead of briefly classifying that work as idle.
+	if (( ! ${+functions[preexec]} )) &&
+		(( ${preexec_functions[(Ie)__muxterm_preexec_{{TOKEN}}]} )) &&
 		(( ${+functions[__muxterm_preexec_{{TOKEN}}]} )); then
 		builtin printf '\033]133;A;{{TOKEN}}\007'
 	else
