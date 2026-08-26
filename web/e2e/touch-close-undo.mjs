@@ -35,6 +35,10 @@ for (let i = 0; i < argv.length; i++) {
 }
 
 function pcli(...args) {
+  if (args[0] === 'eval' && typeof args[1] === 'string') {
+    // playwright-cli evaluates a single expression, not a statement list.
+    args[1] = `(() => { ${args[1]} })()`;
+  }
   return execFileSync('playwright-cli', args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'inherit'],
@@ -51,6 +55,15 @@ const HELPERS = `
   }
   function _dock() {
     return _app()?.shadowRoot?.querySelector('mux-dock') ?? null;
+  }
+  function _store() {
+    return _dock()?.__store ?? null;
+  }
+  function _terminalPresent(paneId) {
+    // getTerminalContent() is the dock's supported Playwright seam and returns
+    // an empty string once the terminal registry no longer has this pane.
+    const content = _dock()?.getTerminalContent(paneId);
+    return typeof content === 'string' && content !== '';
   }
   function _modal() {
     return _app()?.shadowRoot?.querySelector('close-confirmation-modal') ?? null;
@@ -72,7 +85,7 @@ const HELPERS = `
 function evalJson(expression) {
   const raw = execFileSync(
     'playwright-cli',
-    ['--raw', 'eval', `${HELPERS}; JSON.stringify(${expression})`],
+    ['--raw', 'eval', `(() => { ${HELPERS}; return JSON.stringify(${expression}); })()`],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] },
   ).trim();
   let parsed = JSON.parse(raw);
@@ -113,8 +126,8 @@ function shellOctalText(text) {
 }
 
 function startBusyCommand(marker) {
-  const paneId = evalJson('window.__muxStore.activePaneId');
-  pcli('eval', `${HELPERS}; window.__muxRegistry.peek(${paneId}).focus()`);
+  const paneId = evalJson('_store().activePaneId');
+  pcli('click', "getByRole('textbox', { name: 'Terminal input' })");
   // The terminal's local echo contains only octal escapes, never the marker.
   // Seeing the literal marker therefore proves printf started executing.
   pcli('type', `printf '${shellOctalText(marker)}\\n'; sleep 90`);
@@ -268,13 +281,13 @@ let exitCode = 0;
 try {
   pcli('open', url);
   waitFor(
-    `_app() && window.__muxStore && _dock() && window.__muxStore.panes.some((p) => p.paneId >= 0)`,
+    `_app() && _store() && _dock() && _store().panes.some((p) => p.paneId >= 0)`,
     'initial composition',
     15_000,
   );
 
   const initialCount = evalJson(
-    'window.__muxStore.panes.filter((pane) => pane.paneId >= 0).length',
+    '_store().panes.filter((pane) => pane.paneId >= 0).length',
   );
   if (initialCount < 2) {
     pcli(
@@ -282,7 +295,7 @@ try {
       `${HELPERS}; _dock().dispatchEvent(new CustomEvent('pane-create', { bubbles: true, composed: true }))`,
     );
     waitFor(
-      `window.__muxStore.panes.filter((pane) => pane.paneId >= 0).length >= 2`,
+      `_store().panes.filter((pane) => pane.paneId >= 0).length >= 2`,
       'second pane',
     );
   }
@@ -295,7 +308,7 @@ try {
       content: dock.getTerminalContent(${paneId}),
       layout: JSON.stringify(dock._dv.toJSON()),
       panelCount: dock._panels.size,
-      terminalPresent: window.__muxRegistry.peek(${paneId}) !== null,
+      terminalPresent: _terminalPresent(${paneId}),
     };
   })()`);
 
@@ -313,9 +326,9 @@ try {
     const dock = _dock();
     return {
       modalCount: _app().shadowRoot.querySelectorAll('close-confirmation-modal').length,
-      paneInStore: window.__muxStore.panes.some((pane) => pane.paneId === ${paneId}),
+      paneInStore: _store().panes.some((pane) => pane.paneId === ${paneId}),
       panelPresent: dock._panels.has(${paneId}),
-      terminalPresent: window.__muxRegistry.peek(${paneId}) !== null,
+      terminalPresent: _terminalPresent(${paneId}),
       content: dock.getTerminalContent(${paneId}),
       layout: JSON.stringify(dock._dv.toJSON()),
       undoPresent: _app().shadowRoot.querySelector('mux-undo-toast') !== null,
@@ -332,7 +345,7 @@ try {
   pcli(
     'eval',
     `${HELPERS}; _dock().dispatchEvent(new CustomEvent('pane-close', {
-      detail: { workspaceId: window.__muxStore.attached, paneId: ${paneId} },
+      detail: { workspaceId: _store().attached, paneId: ${paneId} },
       bubbles: true,
       composed: true
     }))`,
@@ -349,9 +362,9 @@ try {
   const cancelled = evalJson(`(() => {
     const dock = _dock();
     return {
-      paneInStore: window.__muxStore.panes.some((pane) => pane.paneId === ${paneId}),
+      paneInStore: _store().panes.some((pane) => pane.paneId === ${paneId}),
       panelPresent: dock._panels.has(${paneId}),
-      terminalPresent: window.__muxRegistry.peek(${paneId}) !== null,
+      terminalPresent: _terminalPresent(${paneId}),
       content: dock.getTerminalContent(${paneId}),
       layout: JSON.stringify(dock._dv.toJSON()),
     };
@@ -373,9 +386,9 @@ try {
   const invalidTicket = evalJson(`(() => ({
     modalPresent: _modal() !== null,
     alert: _app().shadowRoot.querySelector('.close-alert')?.textContent ?? '',
-    paneInStore: window.__muxStore.panes.some((pane) => pane.paneId === ${paneId}),
+    paneInStore: _store().panes.some((pane) => pane.paneId === ${paneId}),
     panelPresent: _dock()._panels.has(${paneId}),
-    terminalPresent: window.__muxRegistry.peek(${paneId}) !== null,
+    terminalPresent: _terminalPresent(${paneId}),
   }))()`);
   const invalidTicketCalls = restoreInvalidCloseConfirmation();
   check(
@@ -397,14 +410,14 @@ try {
   console.log('Scenario 3: close-outcome cannot remove without pane-closed');
   pcli('eval', `${HELPERS}; _activeCloseButton().click()`);
   waitFor(`_dialog()?.open`, 'second pane confirmation modal');
-  const paneWorkspaceId = evalJson('window.__muxStore.attached');
+  const paneWorkspaceId = evalJson('_store().attached');
   holdPaneClosedBroadcast(paneWorkspaceId, paneId);
   const immediatelyAfterConfirm = evalJson(`(() => {
     _modal().shadowRoot.querySelector('.destructive').click();
     return {
-      paneInStore: window.__muxStore.panes.some((pane) => pane.paneId === ${paneId}),
+      paneInStore: _store().panes.some((pane) => pane.paneId === ${paneId}),
       panelPresent: _dock()._panels.has(${paneId}),
-      terminalPresent: window.__muxRegistry.peek(${paneId}) !== null,
+      terminalPresent: _terminalPresent(${paneId}),
     };
   })()`);
   check(
@@ -422,9 +435,9 @@ try {
     15_000,
   );
   const replyOnly = evalJson(`({
-    paneInStore: window.__muxStore.panes.some((pane) => pane.paneId === ${paneId}),
+    paneInStore: _store().panes.some((pane) => pane.paneId === ${paneId}),
     panelPresent: _dock()._panels.has(${paneId}),
-    terminalPresent: window.__muxRegistry.peek(${paneId}) !== null,
+    terminalPresent: _terminalPresent(${paneId}),
     heldPaneClosed: window.__muxCloseE2EPaneHold?.held.length ?? 0,
     closeOutcomeSeen: window.__muxCloseE2EPaneHold?.closeOutcomeSeen === true,
   })`);
@@ -439,9 +452,9 @@ try {
   );
   releasePaneClosedBroadcast();
   waitFor(
-    `!window.__muxStore.panes.some((pane) => pane.paneId === ${paneId})
+    `!_store().panes.some((pane) => pane.paneId === ${paneId})
       && !_dock()._panels.has(${paneId})
-      && window.__muxRegistry.peek(${paneId}) === null`,
+      && !_terminalPresent(${paneId})`,
     'pane-closed broadcast reconciliation',
     15_000,
   );
@@ -504,7 +517,7 @@ try {
     'mobile pane confirmation',
   );
   const mobilePaneWarned = evalJson(`({
-    paneInStore: window.__muxStore.panes.some((pane) => pane.paneId === ${mobilePaneId}),
+    paneInStore: _store().panes.some((pane) => pane.paneId === ${mobilePaneId}),
     panelPresent: _dock()._panels.has(${mobilePaneId})
   })`);
   check(
@@ -515,25 +528,25 @@ try {
   pcli('eval', `${HELPERS}; _modal().shadowRoot.querySelector('.cancel').click()`);
   waitFor(`!_modal()`, 'mobile pane modal dismissal');
 
-  const closingWorkspaceId = evalJson('window.__muxStore.attached');
+  const closingWorkspaceId = evalJson('_store().attached');
   const survivorName = `Close E2E survivor ${Date.now()}`;
   pcli(
     'eval',
     `${HELPERS}; _app()._socket.createWorkspace(${JSON.stringify(survivorName)})`,
   );
   waitFor(
-    `window.__muxStore.workspaces.some(
+    `_store().workspaces.some(
       (workspace) => workspace.name === ${JSON.stringify(survivorName)}
     )`,
     'survivor workspace creation',
   );
   const survivorId = evalJson(
-    `window.__muxStore.workspaces.find(
+    `_store().workspaces.find(
       (workspace) => workspace.name === ${JSON.stringify(survivorName)}
     ).workspaceId`,
   );
   waitFor(
-    `window.__muxStore.attached === ${JSON.stringify(survivorId)}`,
+    `_store().attached === ${JSON.stringify(survivorId)}`,
     'new survivor workspace attachment',
   );
   // Workspace creation intentionally attaches its new workspace. Return to the
@@ -546,8 +559,8 @@ try {
     )`,
   );
   waitFor(
-    `window.__muxStore.attached === ${JSON.stringify(closingWorkspaceId)}
-      && window.__muxStore.panes.some((pane) => pane.paneId === ${mobilePaneId})`,
+    `_store().attached === ${JSON.stringify(closingWorkspaceId)}
+      && _store().panes.some((pane) => pane.paneId === ${mobilePaneId})`,
     'busy workspace reattachment',
   );
 
@@ -564,10 +577,10 @@ try {
     'mobile workspace confirmation',
   );
   const workspaceWarned = evalJson(`({
-    workspacePresent: window.__muxStore.workspaces.some(
+    workspacePresent: _store().workspaces.some(
       (workspace) => workspace.workspaceId === ${JSON.stringify(closingWorkspaceId)}
     ),
-    panePresent: window.__muxStore.panes.some((pane) => pane.paneId === ${mobilePaneId}),
+    panePresent: _store().panes.some((pane) => pane.paneId === ${mobilePaneId}),
     modalCount: _app().shadowRoot.querySelectorAll('close-confirmation-modal').length
   })`);
   check(
@@ -583,8 +596,8 @@ try {
   countRecoveryAttaches(survivorId);
   pcli('eval', `${HELPERS}; _modal().shadowRoot.querySelector('.destructive').click()`);
   waitFor(
-    `window.__muxStore.attached === ${JSON.stringify(survivorId)}
-      && !window.__muxStore.workspaces.some(
+    `_store().attached === ${JSON.stringify(survivorId)}
+      && !_store().workspaces.some(
         (workspace) => workspace.workspaceId === ${JSON.stringify(closingWorkspaceId)}
       )
       && window.__muxCloseE2ERecovery?.attachCount >= 1`,
@@ -593,11 +606,11 @@ try {
   );
   pause(750);
   const workspaceRecovery = evalJson(`({
-    attached: window.__muxStore.attached,
-    closedWorkspacePresent: window.__muxStore.workspaces.some(
+    attached: _store().attached,
+    closedWorkspacePresent: _store().workspaces.some(
       (workspace) => workspace.workspaceId === ${JSON.stringify(closingWorkspaceId)}
     ),
-    survivorPresent: window.__muxStore.workspaces.some(
+    survivorPresent: _store().workspaces.some(
       (workspace) => workspace.workspaceId === ${JSON.stringify(survivorId)}
     ),
     attachCount: window.__muxCloseE2ERecovery?.attachCount ?? -1,
