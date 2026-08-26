@@ -22,6 +22,11 @@ type Pane struct {
 	LocalID int
 	Title   string // settable; OSC 0/2 title capture is a later phase
 
+	// targetGeneration is assigned by Registry.PutPane and changes whenever a
+	// pane registry identity is replaced. It is read only while Registry.mu is
+	// held and binds close tickets independently of the root-process generation.
+	targetGeneration uint64
+
 	// SurfaceKind is "browser" for browser panes; empty string means "terminal".
 	// Set once at construction; immutable thereafter.
 	SurfaceKind string

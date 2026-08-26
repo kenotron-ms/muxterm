@@ -55,6 +55,13 @@ func (r *Registry) ReapIfEmpty(wsID string) (bool, *Workspace) {
 func (r *Registry) CloseWorkspace(id string) (panes []*Pane, recreatedDefault *Workspace, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.closeWorkspaceLocked(id)
+}
+
+// closeWorkspaceLocked is CloseWorkspace's serialized mutation for close
+// transactions that already hold r.mu. It only detaches registry state; callers
+// close the returned panes after releasing r.mu.
+func (r *Registry) closeWorkspaceLocked(id string) (panes []*Pane, recreatedDefault *Workspace, ok bool) {
 	ws, exists := r.workspaces[id]
 	if !exists {
 		return nil, nil, false
