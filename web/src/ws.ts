@@ -225,11 +225,6 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.RenameWorkspace, workspaceId, name });
   }
 
-  /** Close a workspace. */
-  closeWorkspace(workspaceId: string): void {
-    this.sendSessiond({ type: SessiondType.CloseWorkspace, workspaceId });
-  }
-
   /** Assess and, when safe, close a pane or workspace in one correlated request. */
   closeIntent(target: CloseTarget): Promise<CloseOutcome> {
     return this._sendCloseRequest(target, 'intent', (cid) => {
@@ -284,12 +279,6 @@ export class MuxSocket {
     if (cmd && cmd.length > 0) msg.cmd = cmd;
     if (clientRef) msg.clientRef = clientRef;
     this.sendSessiond(msg);
-  }
-
-  /** Kill the pane's PTY on the server side. The server broadcasts pane-closed
-   *  to all subscribers; the client prunes the terminal on receipt. */
-  closePane(paneId: number): void {
-    this.sendSessiond({ type: SessiondType.ClosePane, paneId });
   }
 
   /** Open a browser CDP pane on the server side. */
