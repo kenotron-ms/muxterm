@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Client is the serve-side handle to a single sessiond Unix-socket connection.
@@ -34,6 +35,12 @@ type Client struct {
 type pending struct {
 	ch chan *Message
 }
+
+// closeRequestReplyTimeout bounds only the additive activity-aware close
+// requests. An older still-live daemon ignores an unknown control type, so a
+// newly hot-reloaded relay must turn that mismatch into its normal recoverable
+// close failure instead of waiting forever.
+const closeRequestReplyTimeout = 2 * time.Second
 
 // Handlers holds callbacks for unsolicited events (Messages with CID == 0)
 // pushed by the daemon. It is guarded by Client.hmu. Every callback runs on the
@@ -227,6 +234,14 @@ func (c *Client) failAllPending(err error) {
 // registers a pending entry, writes the frame under writeMu, and waits on the
 // pending channel. A TypeError reply is converted to a *DaemonError.
 func (c *Client) request(msg *Message) (*Message, error) {
+	return c.requestWithin(msg, 0)
+}
+
+// requestWithin behaves like request, but returns a timeout error after timeout
+// when it is positive. Timing out removes only this request's pending entry;
+// a late reply is then treated as an unsolicited message rather than being
+// delivered to a future request.
+func (c *Client) requestWithin(msg *Message, timeout time.Duration) (*Message, error) {
 	cid := c.nextCID.Add(1)
 	msg.CID = cid
 
@@ -245,7 +260,25 @@ func (c *Client) request(msg *Message) (*Message, error) {
 		return nil, err
 	}
 
-	reply, ok := <-p.ch
+	var reply *Message
+	var ok bool
+	if timeout <= 0 {
+		reply, ok = <-p.ch
+	} else {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		select {
+		case reply, ok = <-p.ch:
+		case <-timer.C:
+			c.pendMu.Lock()
+			if c.pend[cid] == p {
+				delete(c.pend, cid)
+			}
+			c.pendMu.Unlock()
+			return nil, fmt.Errorf("sessiond: timed out waiting for %q reply", msg.Type)
+		}
+	}
 	if !ok {
 		return nil, fmt.Errorf("sessiond: connection closed before reply")
 	}
@@ -292,12 +325,12 @@ func (c *Client) CloseWorkspace(workspaceID string) error {
 // current activity evidence is proven idle. Busy and unknown targets return an
 // opaque confirmation ticket without mutation.
 func (c *Client) CloseIntent(target CloseTarget) (CloseOutcome, error) {
-	reply, err := c.request(&Message{
+	reply, err := c.requestWithin(&Message{
 		Type:        TypeCloseIntent,
 		TargetKind:  string(target.Kind),
 		WorkspaceID: target.WorkspaceID,
 		PaneID:      target.PaneID,
-	})
+	}, closeRequestReplyTimeout)
 	if err != nil {
 		return CloseOutcome{}, err
 	}
@@ -308,7 +341,10 @@ func (c *Client) CloseIntent(target CloseTarget) (CloseOutcome, error) {
 // The daemon revalidates its bound target and activity snapshot; callers never
 // restate target identity or safety evidence.
 func (c *Client) CloseConfirm(ticket string) (CloseOutcome, error) {
-	reply, err := c.request(&Message{Type: TypeCloseConfirm, Ticket: ticket})
+	reply, err := c.requestWithin(
+		&Message{Type: TypeCloseConfirm, Ticket: ticket},
+		closeRequestReplyTimeout,
+	)
 	if err != nil {
 		return CloseOutcome{}, err
 	}
