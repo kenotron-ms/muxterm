@@ -28,6 +28,13 @@ type Config struct {
 	// setting on, never off (same one-way bool limitation config.Merge
 	// documents).
 	BehindReverseProxy bool
+
+	// Args holds the un-parsed remainder for the socket-client subcommand
+	// trees (read-screen / session / pane / layout). Those commands parse
+	// their own flags inside their run* functions because they are subcommand
+	// trees ("session list", "pane resize --cols N") that do not flatten into
+	// this struct's flat fields.
+	Args []string
 }
 
 // printUsage writes top-level help to w.
@@ -41,6 +48,10 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm uninstall           Remove system service")
 	fmt.Fprintln(w, "  muxterm deploy <host>       Deploy to a remote host via SSH")
 	fmt.Fprintln(w, "  muxterm doctor              Check daemon and service status")
+	fmt.Fprintln(w, "  muxterm read-screen <pane>  Print a pane's screen (or --scrollback history)")
+	fmt.Fprintln(w, "  muxterm session <cmd>       list | attach <workspace-id>")
+	fmt.Fprintln(w, "  muxterm pane <cmd>          create | close <pane> | resize <pane>")
+	fmt.Fprintln(w, "  muxterm layout get          Print the workspace layout diagram")
 	fmt.Fprintln(w, "  muxterm mcp [flags]         Start MCP server (stdio transport)")
 	fmt.Fprintln(w, "  muxterm amplifier install   Install muxterm bundle into Amplifier")
 	fmt.Fprintln(w, "  muxterm version             Print version")
@@ -79,6 +90,14 @@ func ParseArgs(args []string) (Config, error) {
 		return parseMCP(args[1:])
 	case "amplifier":
 		return parseAmplifier(args[1:])
+	case "read-screen":
+		return Config{Mode: "read-screen", Args: args[1:]}, nil
+	case "session":
+		return Config{Mode: "session", Args: args[1:]}, nil
+	case "pane":
+		return Config{Mode: "pane", Args: args[1:]}, nil
+	case "layout":
+		return Config{Mode: "layout", Args: args[1:]}, nil
 	default:
 		return Config{}, fmt.Errorf("unknown command %q\n\nRun 'muxterm --help' for usage.", args[0])
 	}

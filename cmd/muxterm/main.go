@@ -77,6 +77,26 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "read-screen":
+		if err := runReadScreen(cfg.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	case "session":
+		if err := runSession(cfg.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	case "pane":
+		if err := runPane(cfg.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	case "layout":
+		if err := runLayout(cfg.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "mcp":
 		if err := runMCPCommand(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)

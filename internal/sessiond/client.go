@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Client is the serve-side handle to a single sessiond Unix-socket connection.
@@ -35,6 +36,12 @@ type pending struct {
 	ch chan *Message
 }
 
+// closeRequestReplyTimeout bounds only the additive activity-aware close
+// requests. An older still-live daemon ignores an unknown control type, so a
+// newly hot-reloaded relay must turn that mismatch into its normal recoverable
+// close failure instead of waiting forever.
+const closeRequestReplyTimeout = 2 * time.Second
+
 // Handlers holds callbacks for unsolicited events (Messages with CID == 0)
 // pushed by the daemon. It is guarded by Client.hmu. Every callback runs on the
 // client's single read-loop goroutine and must not block for long; offload slow
@@ -53,6 +60,10 @@ type Handlers struct {
 	// close (nil for an explicit client-requested close); runtimeMs is the real
 	// shell process wall-clock runtime, valid only when processExitCode is non-nil.
 	OnPaneClosed func(paneID int, processExitCode *int, runtimeMs int64)
+	// OnPaneClosedWithWorkspace carries the same lifecycle event with its
+	// explicit workspace identity. It is additive so existing consumers of
+	// OnPaneClosed retain their callback shape.
+	OnPaneClosedWithWorkspace func(workspaceID string, paneID int, processExitCode *int, runtimeMs int64)
 	// OnWorkspaceClosed fires when the workspace identified by workspaceID is
 	// closed.
 	OnWorkspaceClosed func(workspaceID string)
@@ -223,6 +234,14 @@ func (c *Client) failAllPending(err error) {
 // registers a pending entry, writes the frame under writeMu, and waits on the
 // pending channel. A TypeError reply is converted to a *DaemonError.
 func (c *Client) request(msg *Message) (*Message, error) {
+	return c.requestWithin(msg, 0)
+}
+
+// requestWithin behaves like request, but returns a timeout error after timeout
+// when it is positive. Timing out removes only this request's pending entry;
+// a late reply is then treated as an unsolicited message rather than being
+// delivered to a future request.
+func (c *Client) requestWithin(msg *Message, timeout time.Duration) (*Message, error) {
 	cid := c.nextCID.Add(1)
 	msg.CID = cid
 
@@ -241,7 +260,25 @@ func (c *Client) request(msg *Message) (*Message, error) {
 		return nil, err
 	}
 
-	reply, ok := <-p.ch
+	var reply *Message
+	var ok bool
+	if timeout <= 0 {
+		reply, ok = <-p.ch
+	} else {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		select {
+		case reply, ok = <-p.ch:
+		case <-timer.C:
+			c.pendMu.Lock()
+			if c.pend[cid] == p {
+				delete(c.pend, cid)
+			}
+			c.pendMu.Unlock()
+			return nil, fmt.Errorf("sessiond: timed out waiting for %q reply", msg.Type)
+		}
+	}
 	if !ok {
 		return nil, fmt.Errorf("sessiond: connection closed before reply")
 	}
@@ -284,6 +321,36 @@ func (c *Client) CloseWorkspace(workspaceID string) error {
 	return err
 }
 
+// CloseIntent asks the daemon to assess target and close it atomically when its
+// current activity evidence is proven idle. Busy and unknown targets return an
+// opaque confirmation ticket without mutation.
+func (c *Client) CloseIntent(target CloseTarget) (CloseOutcome, error) {
+	reply, err := c.requestWithin(&Message{
+		Type:        TypeCloseIntent,
+		TargetKind:  string(target.Kind),
+		WorkspaceID: target.WorkspaceID,
+		PaneID:      target.PaneID,
+	}, closeRequestReplyTimeout)
+	if err != nil {
+		return CloseOutcome{}, err
+	}
+	return ParseCloseOutcomeMessage(reply)
+}
+
+// CloseConfirm forwards only the opaque ticket issued by a prior CloseIntent.
+// The daemon revalidates its bound target and activity snapshot; callers never
+// restate target identity or safety evidence.
+func (c *Client) CloseConfirm(ticket string) (CloseOutcome, error) {
+	reply, err := c.requestWithin(
+		&Message{Type: TypeCloseConfirm, Ticket: ticket},
+		closeRequestReplyTimeout,
+	)
+	if err != nil {
+		return CloseOutcome{}, err
+	}
+	return ParseCloseOutcomeMessage(reply)
+}
+
 // Composition is the device-independent set of panes that make up a workspace,
 // as returned by Attach. It carries the frozen PaneInfo values for each pane;
 // empty Panes is valid (a workspace with no panes), not an error.
@@ -323,6 +390,35 @@ func (c *Client) Attach(workspaceID, breakpoint, clientKind string) (Composition
 // nil Cursor; the *Message itself is always non-nil on success.
 func (c *Client) ScreenSnapshot(paneID int) (*Message, error) {
 	return c.request(&Message{Type: TypeScreenSnapshot, PaneID: paneID})
+}
+
+// ScrollbackPage requests one page of server-side scrollback history for the
+// pane identified by the workspace-local paneID, paging BACKWARD from cursor.
+//
+// cursor is an exclusive upper bound expressed as an absolute line-sequence
+// number; nil means "the most recent page of history" (the lines immediately
+// preceding the current live viewport). limit is the maximum number of lines to
+// return; 0 lets the daemon apply its default (500) and any value above the
+// daemon's cap (5000) is capped server-side.
+//
+// It returns the page oldest-first, the absolute sequence of the first returned
+// line, and the cursor to pass on the next call to page further back. A nil
+// next means no more retained history in that direction and is the normal
+// termination condition for a paging loop — not an error. A pane that exists
+// but is not VT-backed (a browser pane) yields an empty page, also not an
+// error. A daemon-side failure (unknown workspace, unknown pane) surfaces as a
+// *DaemonError carrying the frozen error code.
+func (c *Client) ScrollbackPage(paneID int, cursor *uint64, limit int) (lines []string, start uint64, next *uint64, err error) {
+	reply, err := c.request(&Message{
+		Type:       TypeScrollbackPage,
+		PaneID:     paneID,
+		LineCursor: cursor,
+		Limit:      limit,
+	})
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	return reply.Lines, reply.StartLine, reply.NextCursor, nil
 }
 
 // GetLayout requests an ASCII layout diagram of the currently-attached
@@ -525,6 +621,9 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypePaneClosed:
 		if h.OnPaneClosed != nil {
 			h.OnPaneClosed(msg.PaneID, msg.ProcessExitCode, msg.RuntimeMs)
+		}
+		if h.OnPaneClosedWithWorkspace != nil {
+			h.OnPaneClosedWithWorkspace(msg.WorkspaceID, msg.PaneID, msg.ProcessExitCode, msg.RuntimeMs)
 		}
 	case TypeWorkspaceClosed:
 		if h.OnWorkspaceClosed != nil {

@@ -22,6 +22,11 @@ type Pane struct {
 	LocalID int
 	Title   string // settable; OSC 0/2 title capture is a later phase
 
+	// targetGeneration is assigned by Registry.PutPane and changes whenever a
+	// pane registry identity is replaced. It is read only while Registry.mu is
+	// held and binds close tickets independently of the root-process generation.
+	targetGeneration uint64
+
 	// SurfaceKind is "browser" for browser panes; empty string means "terminal".
 	// Set once at construction; immutable thereafter.
 	SurfaceKind string
@@ -41,11 +46,27 @@ type Pane struct {
 	buf       PaneBuffer
 	startTime time.Time
 
+	// activityMu guards the current root-process generation and its streaming
+	// shell-lifecycle parser/evidence. Lifecycle output is written by readLoop
+	// while close transactions may classify concurrently.
+	activityMu       sync.Mutex
+	rootPID          int
+	rootGeneration   uint64
+	rootStartedAt    time.Time
+	rootExited       bool
+	lifecycleSource  shellLifecycleSource
+	lifecycleParser  shellLifecycleParser
+	lifecycle        lifecycleEvidence
+	lifecycleParsing bool
+	activityRevision uint64
+
 	onData      func(localID int, data []byte)
 	onExit      func(localID int, exitCode int, runtimeMilliseconds int64)
 	onPromptPtr atomic.Pointer[func(int, *Message)] // written once (createPane), read by readLoop
 
-	closeOnce sync.Once
+	closeOnce              sync.Once
+	integrationCleanupOnce sync.Once
+	integrationCleanup     func()
 }
 
 // resolveArgv returns argv unchanged, or a login-shell invocation when argv is
@@ -110,30 +131,40 @@ func NewPane(
 		// docs/plans/2026-06-01-session-persistence-design.md.
 		buf = NewVTBuffer(cols, rows)
 	}
-	argv = resolveArgv(argv)
+	launch, err := preparePaneLaunch(argv)
+	if err != nil {
+		return nil, err
+	}
 
-	c := exec.Command(argv[0], argv[1:]...)
+	c := exec.Command(launch.argv[0], launch.argv[1:]...)
 	c.Env = append(os.Environ(), "TERM=xterm-256color")
+	c.Env = append(c.Env, launch.env...)
 	if home := os.Getenv("HOME"); home != "" {
 		c.Dir = home
 	}
 
 	ptmx, err := pty.StartWithSize(c, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	if err != nil {
+		if launch.cleanup != nil {
+			launch.cleanup()
+		}
 		return nil, fmt.Errorf("sessiond: start pane pty: %w", err)
 	}
+	startedAt := time.Now()
 
 	p := &Pane{
-		LocalID:   localID,
-		cols:      cols,
-		rows:      rows,
-		cmd:       c,
-		ptmx:      ptmx,
-		buf:       buf,
-		startTime: time.Now(),
-		onData:    onData,
-		onExit:    onExit,
+		LocalID:            localID,
+		cols:               cols,
+		rows:               rows,
+		cmd:                c,
+		ptmx:               ptmx,
+		buf:                buf,
+		startTime:          startedAt,
+		onData:             onData,
+		onExit:             onExit,
+		integrationCleanup: launch.cleanup,
 	}
+	generation := p.bindRootProcess(c.Process.Pid, launch.source, launch.token, startedAt)
 	if onPrompt != nil {
 		p.onPromptPtr.Store(&onPrompt)
 	}
@@ -154,7 +185,7 @@ func NewPane(
 	if vtb, ok := buf.(*VTBuffer); ok {
 		go func() { _, _ = io.Copy(ptmx, vtb) }()
 	}
-	go p.readLoop()
+	go p.readLoop(generation)
 	return p, nil
 }
 
@@ -211,12 +242,13 @@ func scanOSC133(data []byte) (exitCode int, found bool) {
 
 // readLoop pumps PTY output into the buffer and onData callback until the PTY
 // closes, then reaps the child and fires onExit exactly once.
-func (p *Pane) readLoop() {
+func (p *Pane) readLoop(generation uint64) {
 	chunk := make([]byte, 32*1024)
 	for {
 		n, err := p.ptmx.Read(chunk)
 		if n > 0 {
 			data := chunk[:n]
+			p.observeLifecycleData(generation, data, time.Now())
 			if code, prompted := scanOSC133(data); prompted {
 				if fn := p.onPromptPtr.Load(); fn != nil {
 					(*fn)(p.LocalID, &Message{Type: TypeShellPrompt, ExitCode: code})
@@ -234,6 +266,8 @@ func (p *Pane) readLoop() {
 		}
 	}
 	err2 := p.cmd.Wait()
+	p.markRootExited(generation)
+	p.cleanupIntegration()
 	exitCode := 0
 	if p.cmd.ProcessState != nil {
 		exitCode = p.cmd.ProcessState.ExitCode()
@@ -388,6 +422,15 @@ func (p *Pane) Close() {
 		}
 		if p.ptmx != nil {
 			_ = p.ptmx.Close()
+		}
+		p.cleanupIntegration()
+	})
+}
+
+func (p *Pane) cleanupIntegration() {
+	p.integrationCleanupOnce.Do(func() {
+		if p.integrationCleanup != nil {
+			p.integrationCleanup()
 		}
 	})
 }

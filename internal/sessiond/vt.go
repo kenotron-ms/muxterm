@@ -9,6 +9,38 @@ import (
 	"github.com/charmbracelet/x/vt"
 )
 
+const (
+	// vtHistoryMax is the target retention of the per-pane scrolled-off line
+	// ring, matching the browser's xterm.js 10,000-line retention so
+	// CLI-visible history and browser-visible history agree.
+	vtHistoryMax = 10000
+	// vtHistoryCompactAt is the length at which the ring is compacted back
+	// down to vtHistoryMax. Compaction is amortized (one O(vtHistoryMax) copy
+	// per vtHistoryMax appended lines) rather than per-append, so retention
+	// oscillates between 10,000 and 20,000 lines. Both ends are bounded, which
+	// is what the design's "~10,000 lines" cap requires.
+	vtHistoryCompactAt = 2 * vtHistoryMax
+
+	// vtEmuScrollbackKeep is how many lines the underlying x/vt emulator's own
+	// main-screen scrollback retains whenever b.mu is not held. It is exactly
+	// the value NewVTBuffer used before this change, which is what keeps
+	// Replay()/serializeGrid() output unchanged.
+	vtEmuScrollbackKeep = 2000
+	// vtEmuScrollbackHeadroom is the emulator scrollback's configured maxLines.
+	// It is far above vtEmuScrollbackKeep so the emulator never evicts a line
+	// on its own between two of our observations (see
+	// captureScrolledOffLocked for why that matters). A single PTY read is at
+	// most 32 KiB (pane.go's chunk size), so it can push at most ~32,768 lines
+	// in one Write; 40,000 leaves headroom above that plus the 2,000 resident.
+	vtEmuScrollbackHeadroom = 40000
+
+	// defaultScrollbackPageLimit is the page size used when a caller omits
+	// Limit; maxScrollbackPageLimit is the hard server-side cap so a single
+	// control frame cannot balloon unbounded.
+	defaultScrollbackPageLimit = 500
+	maxScrollbackPageLimit     = 5000
+)
+
 // VTBuffer feeds bytes to a concurrency-safe headless cell-grid emulator
 // (charmbracelet/x/vt SafeEmulator) and serializes the live grid plus
 // scrollback history on Replay.
@@ -91,6 +123,23 @@ type VTBuffer struct {
 	// the first alt-screen entry is observed; serializeGrid falls back to
 	// today's behavior (no pre-emission) when nil.
 	mainScreenSnapshot []byte
+
+	// history is this pane's bounded ring of finalized, plain-text lines that
+	// have scrolled off the top of the live grid, oldest first. A line enters
+	// here exactly once, at the moment it leaves the viewport and becomes
+	// immutable — never while it is still on-screen and still being rewritten
+	// (progress bars, TUI redraws). Guarded by b.mu.
+	history []string
+	// historySeq is the absolute sequence number that will be assigned to the
+	// NEXT appended line, i.e. the count of lines ever appended to history. It
+	// never resets and never reuses a value, even after the ring evicts the
+	// line it named. The absolute sequence of history[i] is
+	// historySeq - len(history) + i — the same relation RawBuffer's
+	// total/len(buf) pair already uses for bytes.
+	historySeq uint64
+	// sbSeen is how many lines of the emulator's own main-screen scrollback
+	// have already been mirrored into history. See captureScrolledOffLocked.
+	sbSeen int
 }
 
 // scanWriteEvents reports two independent conditions found in p during a
@@ -148,7 +197,12 @@ func (b *VTBuffer) captureMainScreenSnapshot() {
 // byte ring.
 func NewVTBuffer(w, h int) *VTBuffer {
 	emu := vt.NewSafeEmulator(w, h)
-	emu.SetScrollbackSize(2000)
+	// Headroom, not retention: captureScrolledOffLocked trims this back to
+	// vtEmuScrollbackKeep (== the 2000 lines this line used to set) at the end
+	// of every Write, so external readers still see exactly 2000. The large
+	// configured maximum only guarantees the emulator never silently evicts a
+	// line before we have mirrored it.
+	emu.SetScrollbackSize(vtEmuScrollbackHeadroom)
 	b := &VTBuffer{emu: emu}
 	b.scanParser = ansi.NewParser()
 	b.scanParser.SetHandler(ansi.Handler{
@@ -231,6 +285,9 @@ func (b *VTBuffer) Write(p []byte) (int, error) {
 	// concurrent reads, so the SafeEmulator's own per-method lock is not
 	// needed here and calling the raw method avoids nested locking.
 	n, err := b.emu.Emulator.Write(p)
+	// Mirror anything this chunk scrolled off the top of the live grid into
+	// the pane's own history ring. Must run while b.mu is still held.
+	b.captureScrolledOffLocked()
 	if savedCursor {
 		// Read position directly from the underlying Emulator (not via the
 		// locking CursorPos() method) — we already hold b.mu, and Write has
@@ -309,6 +366,135 @@ func (b *VTBuffer) Seq() uint64 {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.total
+}
+
+// captureScrolledOffLocked mirrors every line the VT engine has pushed onto the
+// emulator's main-screen scrollback since the last call into this buffer's own
+// history ring, then trims the emulator's scrollback back to
+// vtEmuScrollbackKeep lines. Callers must hold b.mu (write lock).
+//
+// Why this IS the scroll-off hook: charmbracelet/x/vt pushes a line onto the
+// main screen's Scrollback exactly when that line scrolls off the top of the
+// live grid — LF at the bottom margin goes Emulator.index -> Screen.ScrollUp ->
+// Screen.DeleteLine -> Scrollback.PushN, and ED 2 goes through
+// Screen.ClearWithScrollback. It never pushes a line that is still on-screen.
+// That is precisely the design's "append only on scroll-off" rule, obtained by
+// observing the engine rather than by re-deriving it. Alt-screen output does
+// NOT land here: Emulator.Scrollback() is the MAIN screen's scrollback, so a
+// full-screen TUI's redraws never pollute history.
+//
+// Why the explicit trim: Scrollback evicts its own oldest line once it is full
+// and exposes no eviction count, so a self-evicting scrollback makes "how many
+// lines were pushed since I last looked?" unanswerable. NewVTBuffer therefore
+// configures a large maxLines (vtEmuScrollbackHeadroom) so the emulator does
+// not self-evict, and this function performs the eviction itself, by an exact
+// amount: SetMaxLines(keep) trims to the newest keep lines (and never grows),
+// then SetMaxLines(headroom) restores the headroom without touching content.
+// Net effect for every other reader (Replay/serializeGrid/
+// captureMainScreenSnapshot): whenever b.mu is released, the emulator
+// scrollback holds at most vtEmuScrollbackKeep == the pre-existing 2000 lines,
+// so replay output is unchanged.
+//
+// Known, accepted edge cases:
+//   - ED 3 (ESC[3J) clears the emulator's scrollback. sbSeen resynchronises
+//     downward, and lines already mirrored stay in history: the daemon's own
+//     record of what scrolled past is not erased by an application repainting.
+//   - A single 32 KiB chunk that pushes more lines than the headroom would let
+//     the emulator drop lines we never saw. Those lines are, by definition,
+//     older than the newest 10,000 the ring keeps anyway; historySeq stays
+//     monotonic and pagination stays internally consistent.
+func (b *VTBuffer) captureScrolledOffLocked() {
+	sb := b.emu.Emulator.Scrollback()
+	if sb == nil {
+		return
+	}
+	n := sb.Len()
+	if n > b.sbSeen {
+		// uv.Line.String() is the plain-text (ANSI-stripped) form and already
+		// drops trailing spaces; Scrollback.Push already trimmed trailing
+		// empty cells before storing.
+		for _, line := range sb.Lines()[b.sbSeen:n] {
+			b.history = append(b.history, line.String())
+			b.historySeq++
+		}
+	}
+	b.sbSeen = n
+
+	if n > vtEmuScrollbackKeep {
+		sb.SetMaxLines(vtEmuScrollbackKeep)
+		sb.SetMaxLines(vtEmuScrollbackHeadroom)
+		b.sbSeen = sb.Len()
+	}
+
+	if len(b.history) > vtHistoryCompactAt {
+		// copy-down in place; copy handles the overlapping ranges correctly.
+		b.history = append(b.history[:0], b.history[len(b.history)-vtHistoryMax:]...)
+	}
+}
+
+// ScrollbackPage returns one page of this pane's scrolled-off history, paging
+// BACKWARD from cursor.
+//
+// cursor is an EXCLUSIVE upper bound expressed as an absolute line-sequence
+// number: the returned page is the (up to) limit lines immediately BEFORE
+// cursor. A nil cursor means "start just before the current live viewport",
+// i.e. the most recent page of history. start is the absolute sequence of the
+// first returned line. next is the cursor to pass on the following call to page
+// further back, and is nil when the page already begins at the oldest retained
+// line — the normal termination condition for a paging loop. Consecutive pages
+// never overlap: a page covering [start, end) is followed by one ending exactly
+// at start.
+//
+// Clamping mirrors RawBuffer.ReplayFrom, generalized from bytes to lines: a
+// request whose range reaches below the oldest retained line is clamped to the
+// oldest retained line rather than erroring, and the returned start reveals the
+// clamp. A cursor at or beyond the end of available history (at or below the
+// oldest retained sequence, or any cursor against an empty history) returns an
+// empty page with a nil next — not an error.
+//
+// limit is normalised here as well as in the server handler, so a direct caller
+// can never request an unbounded page.
+func (b *VTBuffer) ScrollbackPage(cursor *uint64, limit int) (lines []string, start uint64, next *uint64) {
+	if limit <= 0 {
+		limit = defaultScrollbackPageLimit
+	}
+	if limit > maxScrollbackPageLimit {
+		limit = maxScrollbackPageLimit
+	}
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	oldest := b.historySeq - uint64(len(b.history)) // absolute seq of history[0]
+	end := b.historySeq
+	if cursor != nil {
+		end = *cursor
+	}
+	if end > b.historySeq {
+		end = b.historySeq
+	}
+	if end <= oldest {
+		return nil, oldest, nil
+	}
+
+	start = oldest
+	if uint64(limit) < end-oldest { // end > oldest here, so end-oldest > 0
+		start = end - uint64(limit)
+	}
+
+	idx0 := int(start - oldest)
+	idx1 := int(end - oldest)
+	// Copy rather than aliasing b.history: the returned slice outlives the
+	// read lock, and captureScrolledOffLocked's compaction copies lines DOWN
+	// over exactly this index range, so an aliased page would be mutated (and
+	// raced on) by a later Write.
+	lines = append([]string(nil), b.history[idx0:idx1]...)
+
+	if start > oldest {
+		s := start
+		next = &s
+	}
+	return lines, start, next
 }
 
 // serializeGrid emits a self-contained byte stream that reconstructs the

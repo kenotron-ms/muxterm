@@ -153,13 +153,6 @@ describe('MuxSocket sessiond senders', () => {
     });
   });
 
-  it('closeWorkspace() emits {type,workspaceId}', () => {
-    const { mux, ws } = openSocket();
-    mux.closeWorkspace('ws-3');
-
-    expect(lastJson(ws)).toEqual({ type: SessiondType.CloseWorkspace, workspaceId: 'ws-3' });
-  });
-
   it('createPane() carries no workspaceId; includes cmd only when non-empty', () => {
     const { mux, ws } = openSocket();
 
@@ -229,7 +222,6 @@ describe('MuxSocket sessiond senders', () => {
       mux.listWorkspaces();
       mux.createWorkspace('x');
       mux.renameWorkspace('ws-1', 'y');
-      mux.closeWorkspace('ws-1');
       mux.createPane(['bash']);
       mux.resize(1, 80, 24);
       mux.sendPaneInput(1, new Uint8Array([1, 2, 3]));

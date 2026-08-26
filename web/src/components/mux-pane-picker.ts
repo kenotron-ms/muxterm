@@ -12,6 +12,7 @@ export class MuxPanePicker extends LitElement {
       align-items: center;
       flex: 1;
       min-width: 0;
+      min-height: 44px;
       justify-content: flex-end;
     }
 
@@ -86,11 +87,20 @@ export class MuxPanePicker extends LitElement {
       margin: 4px 4px;
     }
 
+    .picker-row {
+      display: flex;
+      align-items: stretch;
+      gap: 2px;
+      width: 100%;
+    }
+
     .ws-item {
       display: flex;
       align-items: center;
       gap: 6px;
-      width: 100%;
+      flex: 1;
+      min-width: 0;
+      min-height: 44px;
       padding: 6px 8px;
       background: transparent;
       border: none;
@@ -115,7 +125,9 @@ export class MuxPanePicker extends LitElement {
       display: flex;
       align-items: center;
       gap: 6px;
-      width: 100%;
+      flex: 1;
+      min-width: 0;
+      min-height: 44px;
       padding: 6px 8px;
       background: transparent;
       border: none;
@@ -135,6 +147,28 @@ export class MuxPanePicker extends LitElement {
       color: var(--mux-accent, #7aa2f7);
     }
 
+    .row-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 44px;
+      min-width: 44px;
+      min-height: 44px;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--chrome-text-dim);
+      font: inherit;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .row-close:hover {
+      background: rgba(247, 118, 142, 0.14);
+      color: var(--chrome-danger);
+    }
+
     .pane-label {
       flex: 1;
       overflow: hidden;
@@ -150,6 +184,19 @@ export class MuxPanePicker extends LitElement {
     .pane-item.active .check,
     .ws-item.active .check {
       opacity: 1;
+    }
+
+    @media (pointer: coarse) {
+      .ws-item,
+      .pane-item,
+      .row-close {
+        min-height: 44px;
+      }
+
+      .row-close {
+        flex-basis: 44px;
+        min-width: 44px;
+      }
     }
   `;
 
@@ -207,6 +254,31 @@ export class MuxPanePicker extends LitElement {
     );
   }
 
+  private _closePane(e: Event, workspaceId: string | null, paneId: number): void {
+    e.stopPropagation();
+    if (!workspaceId) return;
+    this._open = false;
+    this.dispatchEvent(
+      new CustomEvent('pane-close', {
+        detail: { workspaceId, paneId },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  private _closeWorkspace(e: Event, workspaceId: string): void {
+    e.stopPropagation();
+    this._open = false;
+    this.dispatchEvent(
+      new CustomEvent('workspace-close', {
+        detail: { workspaceId },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   override render() {
     // Suppress unused-variable lint — _version is read to create a reactive
     // dependency so store subscription bumps trigger re-renders.
@@ -236,42 +308,63 @@ export class MuxPanePicker extends LitElement {
       ${this._open
         ? html`
             <div class="dropdown">
-              ${workspaces.length > 1 ? html`
+              ${workspaces.length > 0 ? html`
                 <div class="section-label">Workspaces</div>
                 ${workspaces.map((w) => {
                   const isActive = w.workspaceId === attached;
                   const hasBell = !isActive && store.workspaceBellActive(w.workspaceId);
+                  const label = workspaceLabel(w);
                   return html`
-                    <button
-                      class="ws-item ${isActive ? 'active' : ''}"
-                      @click="${() => this._selectWorkspace(w.workspaceId)}"
-                    >
-                      ${hasBell
-                        ? html`<span class="bell-dot">●</span>`
-                        : html`<span class="bell-spacer"></span>`}
-                      <span class="pane-label">${workspaceLabel(w)}</span>
-                      <span class="check">✓</span>
-                    </button>
+                    <div class="picker-row">
+                      <button
+                        type="button"
+                        class="ws-item ${isActive ? 'active' : ''}"
+                        @click="${() => this._selectWorkspace(w.workspaceId)}"
+                      >
+                        ${hasBell
+                          ? html`<span class="bell-dot">●</span>`
+                          : html`<span class="bell-spacer"></span>`}
+                        <span class="pane-label">${label}</span>
+                        <span class="check">✓</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="row-close workspace-close"
+                        aria-label="Close workspace ${label}"
+                        title="Close workspace"
+                        @click="${(e: Event) => this._closeWorkspace(e, w.workspaceId)}"
+                      >×</button>
+                    </div>
                   `;
                 })}
                 <div class="section-divider"></div>
-                <div class="section-label">Panes</div>
               ` : ''}
+              <div class="section-label">Panes</div>
               ${validPanes.map((p) => {
                 const isActive = p.paneId === activePaneId;
                 const hasBell = store.paneBellActive(p.paneId);
                 const label = p.title ?? `Pane ${p.paneId}`;
                 return html`
-                  <button
-                    class="pane-item ${isActive ? 'active' : ''}"
-                    @click="${() => this._selectPane(p.paneId)}"
-                  >
-                    ${hasBell
-                      ? html`<span class="bell-dot">●</span>`
-                      : html`<span class="bell-spacer"></span>`}
-                    <span class="pane-label">${label}</span>
-                    <span class="check">✓</span>
-                  </button>
+                  <div class="picker-row">
+                    <button
+                      type="button"
+                      class="pane-item ${isActive ? 'active' : ''}"
+                      @click="${() => this._selectPane(p.paneId)}"
+                    >
+                      ${hasBell
+                        ? html`<span class="bell-dot">●</span>`
+                        : html`<span class="bell-spacer"></span>`}
+                      <span class="pane-label">${label}</span>
+                      <span class="check">✓</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="row-close pane-close"
+                      aria-label="Close pane ${label}"
+                      title="Close pane"
+                      @click="${(e: Event) => this._closePane(e, attached, p.paneId)}"
+                    >×</button>
+                  </div>
                 `;
               })}
             </div>

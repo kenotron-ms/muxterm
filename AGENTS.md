@@ -12,6 +12,19 @@ only those exact query forms; OSC 11 setters and unrelated sequences fall
 through to xterm.js normally. Do this at the parser level, not via
 timing/`onData` byte filtering.
 
+### Pane activity ownership
+
+sessiond alone classifies pane activity from the current root-process
+generation, authenticated streaming shell lifecycle, and foreground PTY process
+group. Browser state, terminal text, titles, and input timing are never activity
+authority. Only default interactive bash/zsh panes with current prompt evidence
+may be idle; custom commands, browser panes, unsupported environments, and
+inspection ambiguity remain unknown.
+
+sessiond alone also authorizes destructive pane and workspace closure. Browser
+controls emit close intents, keep targets live until daemon authority responds,
+and wait for authoritative pane/workspace broadcasts before removing structure.
+
 ## Testing Policy
 
 ### ⛔ DO NOT WRITE UNIT TESTS
