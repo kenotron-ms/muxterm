@@ -10,11 +10,14 @@
  * Coverage:
  *   1. A busy pane opens one Cancel-default modal without removing its panel,
  *      terminal, or layout. Cancel preserves the live pane and content.
- *   2. Confirm keeps the pane locally present synchronously, then waits for the
- *      authoritative pane-closed broadcast to remove it.
+ *   2. Confirm keeps the pane locally present until a deliberately delayed
+ *      authoritative pane-closed broadcast is released; close-outcome alone
+ *      cannot remove the pane.
  *   3. Narrow/mobile pane and workspace rows expose sibling close controls with
  *      44x44 touch targets and route both targets through the shared modal.
- *   4. The removed mux-undo-toast never appears.
+ *   4. Confirming the attached workspace recovers exactly once to a surviving
+ *      workspace after workspace-closed plus workspace-list.
+ *   5. The removed mux-undo-toast never appears.
  *
  * Usage: node web/e2e/touch-close-undo.mjs [--url http://localhost:9090]
  * Exit codes: 0 = passed, 1 = assertion failure, 2 = setup/integration error.
@@ -100,16 +103,110 @@ function check(name, condition, detail) {
   }
 }
 
+function shellOctalText(text) {
+  return Array.from(
+    text,
+    (character) => `\\${character.codePointAt(0).toString(8).padStart(3, '0')}`,
+  ).join('');
+}
+
 function startBusyCommand(marker) {
   const paneId = evalJson('window.__muxStore.activePaneId');
   pcli('eval', `${HELPERS}; window.__muxRegistry.peek(${paneId}).focus()`);
-  pcli('type', `printf '${marker}\\n'; sleep 30`);
+  // The terminal's local echo contains only octal escapes, never the marker.
+  // Seeing the literal marker therefore proves printf started executing.
+  pcli('type', `printf '${shellOctalText(marker)}\\n'; sleep 90`);
   pcli('press', 'Enter');
   waitFor(
     `_dock().getTerminalContent(${paneId}).includes('${marker}')`,
     `busy command marker ${marker}`,
   );
   return paneId;
+}
+
+function holdPaneClosedBroadcast(workspaceId, paneId) {
+  pcli(
+    'eval',
+    `${HELPERS}; (() => {
+      const socket = _app()?._socket;
+      if (!socket || typeof socket.onSessiondMessage !== 'function') {
+        throw new Error('mux socket sessiond callback is unavailable');
+      }
+      const state = {
+        socket,
+        originalOnSessiondMessage: socket.onSessiondMessage,
+        held: [],
+        closeOutcomeSeen: false,
+      };
+      window.__muxCloseE2EPaneHold = state;
+      socket.onSessiondMessage = (message) => {
+        if (
+          message.type === 'pane-closed' &&
+          message.workspaceId === ${JSON.stringify(workspaceId)} &&
+          message.paneId === ${paneId}
+        ) {
+          state.held.push(message);
+          return;
+        }
+        if (
+          message.type === 'close-outcome' &&
+          message.targetKind === 'pane' &&
+          message.workspaceId === ${JSON.stringify(workspaceId)} &&
+          message.paneId === ${paneId} &&
+          message.closeStatus === 'closed'
+        ) {
+          state.closeOutcomeSeen = true;
+        }
+        state.originalOnSessiondMessage(message);
+      };
+    })()`,
+  );
+}
+
+function releasePaneClosedBroadcast() {
+  pcli(
+    'eval',
+    `${HELPERS}; (() => {
+      const state = window.__muxCloseE2EPaneHold;
+      if (!state) throw new Error('pane-closed broadcast hold is unavailable');
+      state.socket.onSessiondMessage = state.originalOnSessiondMessage;
+      const held = state.held.splice(0);
+      delete window.__muxCloseE2EPaneHold;
+      for (const message of held) state.originalOnSessiondMessage(message);
+    })()`,
+  );
+}
+
+function countRecoveryAttaches(workspaceId) {
+  pcli(
+    'eval',
+    `${HELPERS}; (() => {
+      const socket = _app()?._socket;
+      if (!socket || typeof socket.attachWithBreakpoint !== 'function') {
+        throw new Error('mux socket workspace attach is unavailable');
+      }
+      const state = {
+        socket,
+        originalAttachWithBreakpoint: socket.attachWithBreakpoint,
+        attachCount: 0,
+      };
+      window.__muxCloseE2ERecovery = state;
+      socket.attachWithBreakpoint = (targetWorkspaceId, breakpoint) => {
+        if (targetWorkspaceId === ${JSON.stringify(workspaceId)}) state.attachCount++;
+        return state.originalAttachWithBreakpoint.call(socket, targetWorkspaceId, breakpoint);
+      };
+    })()`,
+  );
+}
+
+function restoreRecoveryAttaches() {
+  return evalJson(`(() => {
+    const state = window.__muxCloseE2ERecovery;
+    if (!state) throw new Error('workspace recovery attach counter is unavailable');
+    state.socket.attachWithBreakpoint = state.originalAttachWithBreakpoint;
+    delete window.__muxCloseE2ERecovery;
+    return state.attachCount;
+  })()`);
 }
 
 let exitCode = 0;
@@ -209,9 +306,11 @@ try {
   check('Cancel preserves terminal content', cancelled.content === before.content);
   check('Cancel preserves layout', cancelled.layout === before.layout);
 
-  console.log('Scenario 2: confirm waits for authoritative removal');
+  console.log('Scenario 2: close-outcome cannot remove without pane-closed');
   pcli('eval', `${HELPERS}; _activeCloseButton().click()`);
   waitFor(`_dialog()?.open`, 'second pane confirmation modal');
+  const paneWorkspaceId = evalJson('window.__muxStore.attached');
+  holdPaneClosedBroadcast(paneWorkspaceId, paneId);
   const immediatelyAfterConfirm = evalJson(`(() => {
     _modal().shadowRoot.querySelector('.destructive').click();
     return {
@@ -227,6 +326,30 @@ try {
       immediatelyAfterConfirm.terminalPresent,
     immediatelyAfterConfirm,
   );
+  waitFor(
+    `window.__muxCloseE2EPaneHold?.closeOutcomeSeen === true
+      && window.__muxCloseE2EPaneHold?.held.length === 1
+      && !_modal()`,
+    'successful close-outcome with held pane-closed broadcast',
+    15_000,
+  );
+  const replyOnly = evalJson(`({
+    paneInStore: window.__muxStore.panes.some((pane) => pane.paneId === ${paneId}),
+    panelPresent: _dock()._panels.has(${paneId}),
+    terminalPresent: window.__muxRegistry.peek(${paneId}) !== null,
+    heldPaneClosed: window.__muxCloseE2EPaneHold?.held.length ?? 0,
+    closeOutcomeSeen: window.__muxCloseE2EPaneHold?.closeOutcomeSeen === true,
+  })`);
+  check(
+    'successful close-outcome alone does not remove pane structure',
+    replyOnly.closeOutcomeSeen &&
+      replyOnly.heldPaneClosed === 1 &&
+      replyOnly.paneInStore &&
+      replyOnly.panelPresent &&
+      replyOnly.terminalPresent,
+    replyOnly,
+  );
+  releasePaneClosedBroadcast();
   waitFor(
     `!window.__muxStore.panes.some((pane) => pane.paneId === ${paneId})
       && !_dock()._panels.has(${paneId})
@@ -304,9 +427,44 @@ try {
   pcli('eval', `${HELPERS}; _modal().shadowRoot.querySelector('.cancel').click()`);
   waitFor(`!_modal()`, 'mobile pane modal dismissal');
 
+  const closingWorkspaceId = evalJson('window.__muxStore.attached');
+  const survivorName = `Close E2E survivor ${Date.now()}`;
+  pcli(
+    'eval',
+    `${HELPERS}; _app()._socket.createWorkspace(${JSON.stringify(survivorName)})`,
+  );
+  waitFor(
+    `window.__muxStore.workspaces.some(
+      (workspace) => workspace.name === ${JSON.stringify(survivorName)}
+    )`,
+    'survivor workspace creation',
+  );
+  const survivorId = evalJson(
+    `window.__muxStore.workspaces.find(
+      (workspace) => workspace.name === ${JSON.stringify(survivorName)}
+    ).workspaceId`,
+  );
+  waitFor(
+    `window.__muxStore.attached === ${JSON.stringify(survivorId)}`,
+    'new survivor workspace attachment',
+  );
+  // Workspace creation intentionally attaches its new workspace. Return to the
+  // busy original before exercising the attached-workspace close path.
+  pcli(
+    'eval',
+    `${HELPERS}; _app()._socket.attachWithBreakpoint(
+      ${JSON.stringify(closingWorkspaceId)},
+      window.innerWidth < 768 ? 'narrow' : 'wide'
+    )`,
+  );
+  waitFor(
+    `window.__muxStore.attached === ${JSON.stringify(closingWorkspaceId)}
+      && window.__muxStore.panes.some((pane) => pane.paneId === ${mobilePaneId})`,
+    'busy workspace reattachment',
+  );
+
   pcli('eval', `${HELPERS}; _mobilePicker().shadowRoot.querySelector('.breadcrumb').click()`);
   waitFor(`_mobilePicker().shadowRoot.querySelector('.dropdown')`, 'reopened mobile picker');
-  const workspaceId = evalJson('window.__muxStore.attached');
   pcli('eval', `${HELPERS}; (() => {
     const root = _mobilePicker().shadowRoot;
     const row = [...root.querySelectorAll('.picker-row')]
@@ -319,7 +477,7 @@ try {
   );
   const workspaceWarned = evalJson(`({
     workspacePresent: window.__muxStore.workspaces.some(
-      (workspace) => workspace.workspaceId === ${JSON.stringify(workspaceId)}
+      (workspace) => workspace.workspaceId === ${JSON.stringify(closingWorkspaceId)}
     ),
     panePresent: window.__muxStore.panes.some((pane) => pane.paneId === ${mobilePaneId}),
     modalCount: _app().shadowRoot.querySelectorAll('close-confirmation-modal').length
@@ -334,17 +492,46 @@ try {
     workspaceWarned.workspacePresent && workspaceWarned.panePresent,
     workspaceWarned,
   );
-  pcli('eval', `${HELPERS}; _modal().shadowRoot.querySelector('.cancel').click()`);
-  waitFor(`!_modal()`, 'mobile workspace modal dismissal');
+  countRecoveryAttaches(survivorId);
+  pcli('eval', `${HELPERS}; _modal().shadowRoot.querySelector('.destructive').click()`);
+  waitFor(
+    `window.__muxStore.attached === ${JSON.stringify(survivorId)}
+      && !window.__muxStore.workspaces.some(
+        (workspace) => workspace.workspaceId === ${JSON.stringify(closingWorkspaceId)}
+      )
+      && window.__muxCloseE2ERecovery?.attachCount >= 1`,
+    'authoritative survivor workspace recovery',
+    15_000,
+  );
+  pause(750);
+  const workspaceRecovery = evalJson(`({
+    attached: window.__muxStore.attached,
+    closedWorkspacePresent: window.__muxStore.workspaces.some(
+      (workspace) => workspace.workspaceId === ${JSON.stringify(closingWorkspaceId)}
+    ),
+    survivorPresent: window.__muxStore.workspaces.some(
+      (workspace) => workspace.workspaceId === ${JSON.stringify(survivorId)}
+    ),
+    attachCount: window.__muxCloseE2ERecovery?.attachCount ?? -1,
+  })`);
+  const recoveryAttachCount = restoreRecoveryAttaches();
+  check(
+    'workspace close recovers to the intended survivor',
+    workspaceRecovery.attached === survivorId &&
+      !workspaceRecovery.closedWorkspacePresent &&
+      workspaceRecovery.survivorPresent,
+    workspaceRecovery,
+  );
+  check(
+    'workspace close performs exactly one survivor attach',
+    recoveryAttachCount === 1,
+    workspaceRecovery,
+  );
 
   const noUndo = evalJson(
     `_app().shadowRoot.querySelector('mux-undo-toast') === null`,
   );
   check('Undo UI remains absent across all close surfaces', noUndo);
-
-  // Restore the surviving busy fixture to a prompt before closing the browser.
-  pcli('eval', `${HELPERS}; window.__muxRegistry.peek(${mobilePaneId})?.focus()`);
-  pcli('press', 'Control+C');
 
   if (failures > 0) {
     console.error(`${failures} check(s) FAILED`);

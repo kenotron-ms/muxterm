@@ -20,6 +20,7 @@ const BACKOFF_CAP = 30000;
 const JITTER_MAX = 500;
 const CLOSE_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CLOSE_CID = Number.MAX_SAFE_INTEGER;
+const INVALID_CLOSE_TICKET_FAILURE = 'invalid-close-ticket';
 const CLOSE_RISK_REASONS = new Set<CloseRiskReason>([
   'command-active',
   'foreground-process',
@@ -36,6 +37,7 @@ const CLOSE_RISK_REASONS = new Set<CloseRiskReason>([
 
 interface PendingCloseRequest {
   target: CloseTarget;
+  kind: 'intent' | 'confirm';
   resolve: (outcome: CloseOutcome) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -230,7 +232,7 @@ export class MuxSocket {
 
   /** Assess and, when safe, close a pane or workspace in one correlated request. */
   closeIntent(target: CloseTarget): Promise<CloseOutcome> {
-    return this._sendCloseRequest(target, (cid) => {
+    return this._sendCloseRequest(target, 'intent', (cid) => {
       if (target.targetKind === 'pane') {
         return {
           type: SessiondType.CloseIntent,
@@ -251,7 +253,7 @@ export class MuxSocket {
 
   /** Confirm exactly the opaque assessment ticket returned by sessiond. */
   closeConfirm(ticket: string, target: CloseTarget): Promise<CloseOutcome> {
-    return this._sendCloseRequest(target, (cid) => ({
+    return this._sendCloseRequest(target, 'confirm', (cid) => ({
       type: SessiondType.CloseConfirm,
       cid,
       ticket,
@@ -359,6 +361,7 @@ export class MuxSocket {
 
   private _sendCloseRequest(
     target: CloseTarget,
+    kind: PendingCloseRequest['kind'],
     buildMessage: (cid: number) => CloseIntentRequest | CloseConfirmRequest,
   ): Promise<CloseOutcome> {
     const ws = this._ws;
@@ -381,7 +384,7 @@ export class MuxSocket {
         pending.reject(new Error('The close outcome could not be confirmed before the request timed out.'));
       }, CLOSE_REQUEST_TIMEOUT_MS);
 
-      this._pendingCloseRequests.set(cid, { target, resolve, reject, timer });
+      this._pendingCloseRequests.set(cid, { target, kind, resolve, reject, timer });
       try {
         ws.send(JSON.stringify(buildMessage(cid)));
       } catch (error) {
@@ -404,11 +407,33 @@ export class MuxSocket {
     if (!pending) return;
     clearTimeout(pending.timer);
     this._pendingCloseRequests.delete(raw.cid);
-    if (isCloseOutcome(raw)) {
-      pending.resolve(raw);
+    const outcome = this._normalizeCloseOutcome(raw, pending);
+    if (isCloseOutcome(outcome)) {
+      pending.resolve(outcome);
     } else {
       pending.reject(new Error('The close service returned an invalid outcome.'));
     }
+  }
+
+  /**
+   * A relay may have evicted its own opaque-ticket lookup before sessiond
+   * rejects that ticket. The browser still has the correlated pending target,
+   * so restore it only for the stable invalid-ticket confirmation failure.
+   */
+  private _normalizeCloseOutcome(
+    raw: Record<string, unknown>,
+    pending: PendingCloseRequest,
+  ): Record<string, unknown> {
+    if (
+      pending.kind === 'confirm' &&
+      raw.type === SessiondType.CloseOutcome &&
+      raw.closeStatus === 'failed' &&
+      raw.failureCode === INVALID_CLOSE_TICKET_FAILURE &&
+      !hasValidCloseTarget(raw)
+    ) {
+      return { ...raw, ...pending.target };
+    }
+    return raw;
   }
 
   private _resolvePendingAsClosed(cid: number, pending: PendingCloseRequest): void {
