@@ -300,8 +300,8 @@ export class MuxDock extends LitElement {
   private _dv: DockviewComponent | null = null;
   private _panels = new Map<number, IDockviewPanel>();
   private _settingActive = false;
-  /** User-defined pane names — persists across workspace switches for the session. */
-  private _customTitles = new Map<number, string>();
+  /** User-defined pane names, isolated by workspace-local pane identity. */
+  private _customTitles = new Map<string, string>();
   /**
    * Bound document pointerup handler — deactivates browser-pane drag shields
    * after a dockview drag gesture ends. Registered in capture phase so it fires
@@ -333,6 +333,10 @@ export class MuxDock extends LitElement {
    * group adds the tab there (and activates it) — not in the active group.
    */
   private _placementReferenceId: string | null = null;
+
+  private _customTitleKey(paneId: number): string {
+    return `${this.workspaceKey}:${paneId}`;
+  }
 
   private _emitPaneCloseTarget(target: PaneCloseTarget): void {
     if (!this._panels.has(target.paneId) || !target.workspaceId) return;
@@ -423,7 +427,7 @@ export class MuxDock extends LitElement {
   private _refreshBellTitles(): void {
     for (const [paneId, panel] of this._panels) {
       const rawTitle =
-        this._customTitles.get(paneId) ??
+        this._customTitles.get(this._customTitleKey(paneId)) ??
         this.panes.find((p) => p.paneId === paneId)?.title ??
         `Pane ${paneId}`;
       const tabEl = (panel as unknown as { view?: { tab?: { element?: HTMLElement } } })
@@ -798,7 +802,7 @@ export class MuxDock extends LitElement {
       }
       tabContent.appendChild(document.createTextNode(next));
       if (save && next !== currentTitle) {
-        this._customTitles.set(paneId, next);
+        this._customTitles.set(this._customTitleKey(paneId), next);
         this.dispatchEvent(new CustomEvent('pane-rename', { detail: { paneId, name: next }, bubbles: true, composed: true }));
       }
     };
@@ -833,7 +837,7 @@ export class MuxDock extends LitElement {
 
         // Seed _customTitles from server-stored titles (arrive in composition panes).
         for (const pane of this.panes) {
-          if (pane.title) this._customTitles.set(pane.paneId, pane.title);
+          if (pane.title) this._customTitles.set(this._customTitleKey(pane.paneId), pane.title);
         }
 
         // Try to restore the saved dockview layout (wide mode only). Narrow
@@ -865,7 +869,7 @@ export class MuxDock extends LitElement {
                 const panel = this._dv.addPanel({
                   id: String(pane.paneId),
                   component: pane.surfaceKind ?? 'terminal',
-                  title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
+                  title: this._customTitles.get(this._customTitleKey(pane.paneId)) ?? pane.title ?? `Pane ${pane.paneId}`,
                 });
                 this._panels.set(pane.paneId, panel);
               }
@@ -889,7 +893,7 @@ export class MuxDock extends LitElement {
             const panel = this._dv.addPanel({
               id: String(pane.paneId),
               component: pane.surfaceKind ?? 'terminal',
-              title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
+              title: this._customTitles.get(this._customTitleKey(pane.paneId)) ?? pane.title ?? `Pane ${pane.paneId}`,
             });
             this._panels.set(pane.paneId, panel);
           }
@@ -969,7 +973,7 @@ export class MuxDock extends LitElement {
           const opts: Parameters<NonNullable<typeof this._dv>['addPanel']>[0] = {
             id: String(pane.paneId),
             component: pane.surfaceKind ?? 'terminal',
-            title: this._customTitles.get(pane.paneId) ?? pane.title ?? `Pane ${pane.paneId}`,
+            title: this._customTitles.get(this._customTitleKey(pane.paneId)) ?? pane.title ?? `Pane ${pane.paneId}`,
           };
           // Honor a pending placement request, positioned relative to the group
           // whose header button was clicked (so "+" / split on an INACTIVE
@@ -1136,7 +1140,7 @@ export class MuxDock extends LitElement {
       }
       case 'rename-pane': {
         if (msg.paneId === undefined) return;
-        this._customTitles.set(msg.paneId, msg.name ?? '');
+        this._customTitles.set(this._customTitleKey(msg.paneId), msg.name ?? '');
         const panel = this._panels.get(msg.paneId);
         if (panel) {
           const tabContent = (panel as unknown as { view?: { tab?: { element?: HTMLElement } } })
