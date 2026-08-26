@@ -33,19 +33,23 @@ type Registry struct {
 	nextWorkspaceGeneration uint64
 	nextPaneGeneration      uint64
 
-	// closeTickets is protected by the same mutex as the registry so target
-	// assessment, ticket validation, and registry mutation form one serialized
-	// transaction. Each value binds even a large workspace through a fixed-size
-	// digest rather than retaining its complete pane snapshot.
+	// Active and retired close tickets are protected by the same mutex as the
+	// registry so target assessment, ticket validation, and registry mutation
+	// form one serialized transaction. Each value binds even a large workspace
+	// through a fixed-size digest rather than retaining its complete pane snapshot.
+	// Retired tickets preserve reassessment-only bindings through a short,
+	// independently bounded grace period.
 	closeTickets        map[string]closeTicket
+	retiredCloseTickets map[string]retiredCloseTicket
 	closeTicketSequence uint64
 }
 
 // NewRegistry returns an empty Registry ready for use.
 func NewRegistry() *Registry {
 	return &Registry{
-		workspaces:   make(map[string]*Workspace),
-		closeTickets: make(map[string]closeTicket),
+		workspaces:          make(map[string]*Workspace),
+		closeTickets:        make(map[string]closeTicket),
+		retiredCloseTickets: make(map[string]retiredCloseTicket),
 	}
 }
 

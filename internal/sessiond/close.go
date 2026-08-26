@@ -13,13 +13,15 @@ import (
 )
 
 // Close-ticket policy is deliberately small and daemon-local: two minutes is
-// long enough to act on a modal without granting long-lived authority, 256
-// entries put a hard ceiling on abandoned confirmations, and eight risks are
+// long enough to act on a modal without granting long-lived authority, each
+// active and retired store has a hard 256-entry ceiling, and eight risks are
 // one modal-worth of detail. Counts still cover the complete assessment.
 const (
-	CloseTicketTTL      = 2 * time.Minute
-	CloseTicketCapacity = 256
-	CloseRiskLimit      = 8
+	CloseTicketTTL             = 2 * time.Minute
+	CloseTicketCapacity        = 256
+	CloseRetiredTicketTTL      = 2 * time.Minute
+	CloseRetiredTicketCapacity = 256
+	CloseRiskLimit             = 8
 
 	closeTicketBytes              = 32
 	closeTicketTextLength         = 43 // base64.RawURLEncoding of 32 bytes
@@ -134,6 +136,15 @@ type closeTicket struct {
 	sequence  uint64
 }
 
+// retiredCloseTicket retains only the fixed-size target binding after an active
+// ticket expires or is evicted for capacity. Its short grace period enables a
+// safe non-destructive reassessment, never continued close authority.
+type retiredCloseTicket struct {
+	binding   closeTicketBinding
+	expiresAt time.Time
+	sequence  uint64
+}
+
 // CloseIntent performs the sole assess-and-close transaction for a pane or
 // workspace. Registry identity and membership remain serialized from assessment
 // through an idle-path removal. Pane teardown occurs only after r.mu is
@@ -155,11 +166,12 @@ func (r *Registry) CloseIntent(target CloseTarget) CloseOutcome {
 }
 
 // ConfirmClose consumes an opaque ticket before validation or mutation.
-// Unchanged, unexpired snapshots close exactly their warned registry members.
-// Expired or changed snapshots are reassessed without mutation: risky targets
-// receive a fresh ticket, absent targets reconcile as closed with structural
-// authority, and a changed-now-idle target fails so the browser can reissue an
-// intent instead of treating an unperformed close as complete.
+// Unchanged active snapshots close exactly their warned registry members.
+// Retired, expired, or changed snapshots are reassessed without mutation:
+// risky targets receive a fresh ticket, absent targets reconcile as closed with
+// structural authority, and a changed-now-idle target fails so the browser can
+// require a fresh user close gesture instead of treating an unperformed close
+// as complete.
 func (r *Registry) ConfirmClose(ticket string) CloseOutcome {
 	if !validCloseTicketText(ticket) {
 		return failedCloseOutcome(CloseTarget{}, CloseFailureInvalidTicket, "close confirmation is no longer valid; try closing again")
@@ -167,36 +179,43 @@ func (r *Registry) ConfirmClose(ticket string) CloseOutcome {
 
 	r.mu.Lock()
 	now := time.Now()
-	entry, ok := r.closeTickets[ticket]
-	if ok {
+	r.purgeExpiredCloseTicketsLocked(now)
+	if entry, ok := r.closeTickets[ticket]; ok {
 		// Single-use is enforced before any classification or destructive action.
 		delete(r.closeTickets, ticket)
+
+		current := r.captureStableCloseAssessmentLocked(entry.binding.target)
+		if !current.exists || current.binding() != entry.binding {
+			outcome := r.reassessInvalidatedCloseLocked(current, now)
+			r.mu.Unlock()
+			return outcome
+		}
+
+		panes, ok := r.detachCloseAssessmentLocked(current)
+		if !ok {
+			// The registry is serialized, so this is defensive fail-closed handling
+			// for activity that changed after validation, not a membership race.
+			outcome := r.reassessInvalidatedCloseLocked(r.captureStableCloseAssessmentLocked(entry.binding.target), now)
+			r.mu.Unlock()
+			return outcome
+		}
+		outcome := closedCloseOutcome(entry.binding.target, true)
+		r.mu.Unlock()
+
+		closeDetachedPanes(panes)
+		return outcome
 	}
-	r.purgeExpiredCloseTicketsLocked(now)
+
+	retired, ok := r.retiredCloseTickets[ticket]
 	if !ok {
 		r.mu.Unlock()
 		return failedCloseOutcome(CloseTarget{}, CloseFailureInvalidTicket, "close confirmation is no longer valid; try closing again")
 	}
-
-	current := r.captureStableCloseAssessmentLocked(entry.binding.target)
-	if !now.Before(entry.expiresAt) || !current.exists || current.binding() != entry.binding {
-		outcome := r.reassessInvalidatedCloseLocked(current, now)
-		r.mu.Unlock()
-		return outcome
-	}
-
-	panes, ok := r.detachCloseAssessmentLocked(current)
-	if !ok {
-		// The registry is serialized, so this is defensive fail-closed handling
-		// for activity that changed after validation, not a membership race.
-		outcome := r.reassessInvalidatedCloseLocked(r.captureStableCloseAssessmentLocked(entry.binding.target), now)
-		r.mu.Unlock()
-		return outcome
-	}
-	outcome := closedCloseOutcome(entry.binding.target, true)
+	// A retired token is also single-use. It authenticates a target for
+	// reassessment only; it can never resume the original destructive authority.
+	delete(r.retiredCloseTickets, ticket)
+	outcome := r.reassessRetiredCloseLocked(r.captureStableCloseAssessmentLocked(retired.binding.target), now)
 	r.mu.Unlock()
-
-	closeDetachedPanes(panes)
 	return outcome
 }
 
@@ -256,6 +275,24 @@ func (r *Registry) reassessInvalidatedCloseLocked(assessment closeAssessment, no
 			assessment.target,
 			CloseFailureStaleTicket,
 			"close target changed; review it and try closing again",
+		)
+	}
+	return r.confirmationRequiredLocked(assessment, now)
+}
+
+// reassessRetiredCloseLocked has the same non-destructive outcomes as a changed
+// snapshot. Retirement itself invalidates the original authority even when the
+// current target happens to match, so an all-idle result deliberately returns
+// stale-close-ticket instead of closing.
+func (r *Registry) reassessRetiredCloseLocked(assessment closeAssessment, now time.Time) CloseOutcome {
+	if !assessment.exists {
+		return absentCloseOutcome(assessment)
+	}
+	if !assessment.hasRisks() {
+		return failedCloseOutcome(
+			assessment.target,
+			CloseFailureStaleTicket,
+			"close confirmation is stale; review it and try closing again",
 		)
 	}
 	return r.confirmationRequiredLocked(assessment, now)
@@ -507,7 +544,7 @@ func (r *Registry) confirmationRequiredLocked(assessment closeAssessment, now ti
 		return failedCloseOutcome(assessment.target, CloseFailureTicketUnavailable, "close confirmation is temporarily unavailable; try again")
 	}
 	if len(r.closeTickets) >= CloseTicketCapacity {
-		r.evictOldestCloseTicketLocked()
+		r.evictOldestCloseTicketLocked(now)
 	}
 	r.closeTicketSequence++
 	r.closeTickets[ticket] = closeTicket{
@@ -541,7 +578,9 @@ func (r *Registry) newCloseTicketLocked() (string, error) {
 		}
 		ticket := base64.RawURLEncoding.EncodeToString(raw[:])
 		if _, exists := r.closeTickets[ticket]; !exists {
-			return ticket, nil
+			if _, retired := r.retiredCloseTickets[ticket]; !retired {
+				return ticket, nil
+			}
 		}
 	}
 	return "", errCloseTicketCollision{}
@@ -562,14 +601,55 @@ func validCloseTicketText(ticket string) bool {
 }
 
 func (r *Registry) purgeExpiredCloseTicketsLocked(now time.Time) {
+	r.purgeExpiredRetiredCloseTicketsLocked(now)
+	var expired []string
 	for ticket, entry := range r.closeTickets {
 		if !now.Before(entry.expiresAt) {
-			delete(r.closeTickets, ticket)
+			expired = append(expired, ticket)
+		}
+	}
+	sort.Slice(expired, func(i, j int) bool {
+		left := r.closeTickets[expired[i]]
+		right := r.closeTickets[expired[j]]
+		if left.sequence != right.sequence {
+			return left.sequence < right.sequence
+		}
+		return expired[i] < expired[j]
+	})
+	for _, ticket := range expired {
+		entry, ok := r.closeTickets[ticket]
+		if !ok {
+			continue
+		}
+		delete(r.closeTickets, ticket)
+		r.retireCloseTicketLocked(ticket, entry.binding, now)
+	}
+}
+
+func (r *Registry) purgeExpiredRetiredCloseTicketsLocked(now time.Time) {
+	for ticket, entry := range r.retiredCloseTickets {
+		if !now.Before(entry.expiresAt) {
+			delete(r.retiredCloseTickets, ticket)
 		}
 	}
 }
 
-func (r *Registry) evictOldestCloseTicketLocked() {
+// retireCloseTicketLocked transfers only authenticated, fixed-size binding data
+// into a separately bounded grace store. It never retains close authority.
+func (r *Registry) retireCloseTicketLocked(ticket string, binding closeTicketBinding, now time.Time) {
+	r.purgeExpiredRetiredCloseTicketsLocked(now)
+	if len(r.retiredCloseTickets) >= CloseRetiredTicketCapacity {
+		r.evictOldestRetiredCloseTicketLocked()
+	}
+	r.closeTicketSequence++
+	r.retiredCloseTickets[ticket] = retiredCloseTicket{
+		binding:   binding,
+		expiresAt: now.Add(CloseRetiredTicketTTL),
+		sequence:  r.closeTicketSequence,
+	}
+}
+
+func (r *Registry) evictOldestCloseTicketLocked(now time.Time) {
 	var oldestTicket string
 	var oldestSequence uint64
 	for ticket, entry := range r.closeTickets {
@@ -581,7 +661,25 @@ func (r *Registry) evictOldestCloseTicketLocked() {
 		}
 	}
 	if oldestTicket != "" {
+		entry := r.closeTickets[oldestTicket]
 		delete(r.closeTickets, oldestTicket)
+		r.retireCloseTicketLocked(oldestTicket, entry.binding, now)
+	}
+}
+
+func (r *Registry) evictOldestRetiredCloseTicketLocked() {
+	var oldestTicket string
+	var oldestSequence uint64
+	for ticket, entry := range r.retiredCloseTickets {
+		if oldestTicket == "" ||
+			entry.sequence < oldestSequence ||
+			(entry.sequence == oldestSequence && ticket < oldestTicket) {
+			oldestTicket = ticket
+			oldestSequence = entry.sequence
+		}
+	}
+	if oldestTicket != "" {
+		delete(r.retiredCloseTickets, oldestTicket)
 	}
 }
 
