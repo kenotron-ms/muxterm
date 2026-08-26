@@ -401,8 +401,13 @@ func (a closeAssessment) bindingsCurrent() bool {
 			closeRiskPaneTitle(pane.pane.Info()) != pane.title {
 			return false
 		}
-		current := pane.pane.activitySnapshot()
-		if current.generation != pane.activity.assessment.Generation ||
+
+		// A lifecycle revision cannot represent a foreground-process-group change:
+		// that is external PTY state, not a streaming shell marker. Reclassify at
+		// the validation point so both the idle fast path and a confirmation ticket
+		// remain bound to the same hybrid activity evidence they will authorize.
+		current := pane.pane.closeActivityAssessment()
+		if current.assessment != pane.activity.assessment ||
 			current.revision != pane.activity.revision {
 			return false
 		}
