@@ -10,14 +10,16 @@
  * Coverage:
  *   1. A busy pane opens one Cancel-default modal without removing its panel,
  *      terminal, or layout. Cancel preserves the live pane and content.
- *   2. Confirm keeps the pane locally present until a deliberately delayed
+ *   2. An invalid confirmation dismisses its stale modal, leaves the pane
+ *      live, and cannot issue a fresh close intent.
+ *   3. Confirm keeps the pane locally present until a deliberately delayed
  *      authoritative pane-closed broadcast is released; close-outcome alone
  *      cannot remove the pane.
- *   3. Narrow/mobile pane and workspace rows expose sibling close controls with
+ *   4. Narrow/mobile pane and workspace rows expose sibling close controls with
  *      44x44 touch targets and route both targets through the shared modal.
- *   4. Confirming the attached workspace recovers exactly once to a surviving
+ *   5. Confirming the attached workspace recovers exactly once to a surviving
  *      workspace after workspace-closed plus workspace-list.
- *   5. The removed mux-undo-toast never appears.
+ *   6. The removed mux-undo-toast never appears.
  *
  * Usage: node web/e2e/touch-close-undo.mjs [--url http://localhost:9090]
  * Exit codes: 0 = passed, 1 = assertion failure, 2 = setup/integration error.
@@ -177,6 +179,59 @@ function releasePaneClosedBroadcast() {
   );
 }
 
+function interceptInvalidCloseConfirmation() {
+  pcli(
+    'eval',
+    `${HELPERS}; (() => {
+      const socket = _app()?._socket;
+      if (
+        !socket ||
+        typeof socket.closeIntent !== 'function' ||
+        typeof socket.closeConfirm !== 'function'
+      ) {
+        throw new Error('mux close request methods are unavailable');
+      }
+      const state = {
+        socket,
+        originalCloseIntent: socket.closeIntent,
+        originalCloseConfirm: socket.closeConfirm,
+        closeIntentCount: 0,
+        closeConfirmCount: 0,
+      };
+      window.__muxCloseE2EInvalidTicket = state;
+      socket.closeIntent = (...args) => {
+        state.closeIntentCount++;
+        return state.originalCloseIntent.apply(socket, args);
+      };
+      socket.closeConfirm = (_ticket, target) => {
+        state.closeConfirmCount++;
+        return Promise.resolve({
+          type: 'close-outcome',
+          cid: 1,
+          ...target,
+          closeStatus: 'failed',
+          failureCode: 'invalid-close-ticket',
+          error: 'The close confirmation is no longer valid.',
+        });
+      };
+    })()`,
+  );
+}
+
+function restoreInvalidCloseConfirmation() {
+  return evalJson(`(() => {
+    const state = window.__muxCloseE2EInvalidTicket;
+    if (!state) throw new Error('invalid close-ticket interceptor is unavailable');
+    state.socket.closeIntent = state.originalCloseIntent;
+    state.socket.closeConfirm = state.originalCloseConfirm;
+    delete window.__muxCloseE2EInvalidTicket;
+    return {
+      closeIntentCount: state.closeIntentCount,
+      closeConfirmCount: state.closeConfirmCount,
+    };
+  })()`);
+}
+
 function countRecoveryAttaches(workspaceId) {
   pcli(
     'eval',
@@ -306,7 +361,40 @@ try {
   check('Cancel preserves terminal content', cancelled.content === before.content);
   check('Cancel preserves layout', cancelled.layout === before.layout);
 
-  console.log('Scenario 2: close-outcome cannot remove without pane-closed');
+  console.log('Scenario 2: invalid confirmation is non-destructive');
+  pcli('eval', `${HELPERS}; _activeCloseButton().click()`);
+  waitFor(`_dialog()?.open`, 'invalid pane confirmation modal');
+  interceptInvalidCloseConfirmation();
+  pcli('eval', `${HELPERS}; _modal().shadowRoot.querySelector('.destructive').click()`);
+  waitFor(
+    `!_modal() && _app().shadowRoot.querySelector('.close-alert')?.textContent.includes('target is still open')`,
+    'invalid confirmation recovery alert',
+  );
+  const invalidTicket = evalJson(`(() => ({
+    modalPresent: _modal() !== null,
+    alert: _app().shadowRoot.querySelector('.close-alert')?.textContent ?? '',
+    paneInStore: window.__muxStore.panes.some((pane) => pane.paneId === ${paneId}),
+    panelPresent: _dock()._panels.has(${paneId}),
+    terminalPresent: window.__muxRegistry.peek(${paneId}) !== null,
+  }))()`);
+  const invalidTicketCalls = restoreInvalidCloseConfirmation();
+  check(
+    'invalid confirmation does not issue a fresh close intent',
+    invalidTicketCalls.closeIntentCount === 0 && invalidTicketCalls.closeConfirmCount === 1,
+    invalidTicketCalls,
+  );
+  check(
+    'invalid confirmation keeps the pane structurally live',
+    invalidTicket.paneInStore && invalidTicket.panelPresent && invalidTicket.terminalPresent,
+    invalidTicket,
+  );
+  check(
+    'invalid confirmation expires the modal and asks for a new close gesture',
+    !invalidTicket.modalPresent && invalidTicket.alert.includes('target is still open'),
+    invalidTicket,
+  );
+
+  console.log('Scenario 3: close-outcome cannot remove without pane-closed');
   pcli('eval', `${HELPERS}; _activeCloseButton().click()`);
   waitFor(`_dialog()?.open`, 'second pane confirmation modal');
   const paneWorkspaceId = evalJson('window.__muxStore.attached');
@@ -359,7 +447,7 @@ try {
   );
   check('confirmed pane is removed after broadcast', true);
 
-  console.log('Scenario 3: narrow/mobile pane and workspace close controls');
+  console.log('Scenario 4: narrow/mobile pane and workspace close controls');
   pcli('resize', '390', '844');
   waitFor(`_mobilePicker()`, 'mobile pane picker');
 

@@ -61,13 +61,9 @@ const SIDEBAR_GUTTER_SIZE = 4;
 /** Small positive bias (px) that makes Split's percentage renderer round to
  *  the requested whole pixel instead of occasionally landing 1/64px short. */
 const SIDEBAR_SUBPIXEL_ROUNDING_BIAS = 0.001;
-const INVALID_CLOSE_TICKET_FAILURE = 'invalid-close-ticket';
-const MAX_STALE_CLOSE_TICKET_REASSESSMENTS = 1;
-
 interface CloseRequestState {
   target: CloseTarget;
   token: symbol;
-  staleTicketReassessments: number;
 }
 
 interface CloseAlert {
@@ -1287,7 +1283,7 @@ export class MuxApp extends LitElement {
     }
 
     const token = Symbol(key);
-    this._closeRequests.set(key, { target, token, staleTicketReassessments: 0 });
+    this._closeRequests.set(key, { target, token });
     void socket.closeIntent(target).then(
       (outcome) => this._handleCloseOutcome(target, key, token, outcome),
       (error: unknown) => this._handleCloseError(target, key, token, error),
@@ -1323,18 +1319,15 @@ export class MuxApp extends LitElement {
         this._clearMatchingConfirmation(key);
         break;
       case 'failed':
-        if (
-          wasConfirming &&
-          outcome.failureCode === INVALID_CLOSE_TICKET_FAILURE &&
-          this._renewInvalidCloseTicket(key, request)
-        ) {
-          return;
-        }
         this._closeRequests.delete(key);
         this._clearMatchingConfirmation(key);
         this._setCloseAlert(
           requestedTarget,
-          outcome.error ?? 'The close request failed.',
+          wasConfirming &&
+          (outcome.failureCode === 'invalid-close-ticket' ||
+            outcome.failureCode === 'stale-close-ticket')
+            ? 'This close confirmation is no longer valid. The target is still open. Select Close again to reassess it.'
+            : outcome.error ?? 'The close request failed.',
         );
         break;
       case 'confirmation-required': {
@@ -1349,6 +1342,8 @@ export class MuxApp extends LitElement {
           );
           return;
         }
+        // A still-authenticated retired ticket can receive a fresh assessment.
+        // Replace the modal in place; only a new user confirmation may close.
         this._closeConfirmation = outcome;
         this._focusCloseCancel();
         break;
@@ -1364,14 +1359,17 @@ export class MuxApp extends LitElement {
   ): void {
     const request = this._closeRequests.get(key);
     if (!request || request.token !== token) return;
+    const wasConfirming = this._confirmingCloseKey === key;
     this._closeRequests.delete(key);
     this._clearMatchingConfirmation(key);
     if (this._confirmingCloseKey === key) this._confirmingCloseKey = null;
     this._setCloseAlert(
       target,
-      error instanceof Error
-        ? error.message
-        : 'The close outcome could not be confirmed.',
+      wasConfirming
+        ? 'The close confirmation could not be completed. The target is still open. Select Close again to reassess it.'
+        : error instanceof Error
+          ? error.message
+          : 'The close outcome could not be confirmed.',
     );
   }
 
@@ -1394,57 +1392,13 @@ export class MuxApp extends LitElement {
     }
 
     const token = Symbol(key);
-    this._closeRequests.set(key, { target, token, staleTicketReassessments: 0 });
+    this._closeRequests.set(key, { target, token });
     this._confirmingCloseKey = key;
     void socket.closeConfirm(confirmation.ticket, target).then(
       (outcome) => this._handleCloseOutcome(target, key, token, outcome),
       (error: unknown) => this._handleCloseError(target, key, token, error),
     );
   };
-
-  /**
-   * A ticket can expire, be evicted, or be invalidated after the modal opens.
-   * Reassess once from the original known target rather than closing on a stale
-   * answer. The refreshed outcome either replaces the modal, waits for
-   * authoritative removal, or surfaces its own failure.
-   */
-  private _renewInvalidCloseTicket(key: string, request: CloseRequestState): boolean {
-    const { target } = request;
-    if (
-      request.staleTicketReassessments >= MAX_STALE_CLOSE_TICKET_REASSESSMENTS ||
-      !this._isCloseTargetKnown(target)
-    ) {
-      return false;
-    }
-
-    const socket = this._socket;
-    if (!socket) return false;
-
-    this._closeRequests.delete(key);
-    this._clearMatchingConfirmation(key);
-
-    const token = Symbol(key);
-    this._closeRequests.set(key, {
-      target,
-      token,
-      staleTicketReassessments: request.staleTicketReassessments + 1,
-    });
-    void socket.closeIntent(target).then(
-      (outcome) => this._handleCloseOutcome(target, key, token, outcome),
-      (error: unknown) => this._handleCloseError(target, key, token, error),
-    );
-    return true;
-  }
-
-  private _isCloseTargetKnown(target: CloseTarget): boolean {
-    if (target.targetKind === 'workspace') {
-      return store.workspaces.some((workspace) => workspace.workspaceId === target.workspaceId);
-    }
-    return (
-      store.attached === target.workspaceId &&
-      store.panes.some((pane) => pane.paneId === target.paneId)
-    );
-  }
 
   private _onCloseConfirmationCancel = (): void => {
     if (this._isCurrentCloseConfirming()) return;
