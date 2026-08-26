@@ -1,13 +1,22 @@
 import { LitElement } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import type { IDockviewPanel, IContentRenderer, SerializedDockview, DockviewGroupPanel } from 'dockview-core';
+import type {
+  DockviewGroupPanel,
+  IContentRenderer,
+  IDockviewPanel,
+  ITabRenderer,
+  SerializedDockview,
+  TabPartInitParameters,
+} from 'dockview-core';
 import { DockviewComponent } from 'dockview-core';
 import dockviewCss from 'dockview-core/dist/styles/dockview.css?inline';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { terminalRegistry } from '../lib/terminal-registry.js';
 import { muxLog } from '../lib/mux-log.js';
-import type { SessiondPaneInfo, LayoutCommand } from '../types.js';
+import type { CloseTarget, SessiondPaneInfo, LayoutCommand } from '../types.js';
 import { store } from '../state.js';
+
+type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TerminalRenderer
@@ -127,6 +136,85 @@ class PlaceholderRenderer implements IContentRenderer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// IntentTabRenderer
+// Preserves dockview's default tab DOM classes, but its close button emits a
+// pre-removal intent instead of invoking DockviewPanelApi.close().
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CLOSE_ICON = `<svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none">
+  <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+</svg>`;
+
+class IntentTabRenderer implements ITabRenderer {
+  readonly element: HTMLElement;
+  private readonly _content: HTMLDivElement;
+  private readonly _action: HTMLButtonElement;
+  private _title = '';
+  private _titleDisposable: { dispose(): void } | null = null;
+
+  constructor(
+    private readonly _target: PaneCloseTarget,
+    private readonly _requestClose: (target: PaneCloseTarget) => void,
+  ) {
+    this.element = document.createElement('div');
+    this.element.className = 'dv-default-tab';
+
+    this._content = document.createElement('div');
+    this._content.className = 'dv-default-tab-content';
+
+    this._action = document.createElement('button');
+    this._action.className = 'dv-default-tab-action';
+    this._action.type = 'button';
+    this._action.title = 'Close pane';
+    this._action.innerHTML = CLOSE_ICON;
+    this._action.addEventListener('pointerdown', this._onPointerDown);
+    this._action.addEventListener('click', this._onClick);
+    this.element.addEventListener('mousedown', this._onMouseDown);
+
+    this.element.append(this._content, this._action);
+  }
+
+  init(params: TabPartInitParameters): void {
+    this._title = params.title;
+    this._render();
+    this._titleDisposable = params.api.onDidTitleChange(({ title }) => {
+      this._title = title;
+      this._render();
+    });
+  }
+
+  dispose(): void {
+    this._titleDisposable?.dispose();
+    this._titleDisposable = null;
+    this._action.removeEventListener('pointerdown', this._onPointerDown);
+    this._action.removeEventListener('click', this._onClick);
+    this.element.removeEventListener('mousedown', this._onMouseDown);
+  }
+
+  private _onPointerDown = (e: PointerEvent): void => {
+    e.preventDefault();
+  };
+
+  private _onClick = (e: MouseEvent): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    this._requestClose(this._target);
+  };
+
+  private _onMouseDown = (e: MouseEvent): void => {
+    if (e.button !== 1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this._requestClose(this._target);
+  };
+
+  private _render(): void {
+    this._content.textContent = this._title;
+    this._action.setAttribute('aria-label', `Close pane ${this._title || this._target.paneId}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Placement helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -215,24 +303,6 @@ export class MuxDock extends LitElement {
   /** User-defined pane names — persists across workspace switches for the session. */
   private _customTitles = new Map<number, string>();
   /**
-   * Pane IDs closed by the user via the dockview tab X button.
-   * These are excluded from reconciler re-adds (Case 2) until the
-   * workspace changes (Case 1 clears this set).
-   */
-  private _locallyClosedPanes = new Set<number>();
-  /** Pointer type that initiated the most recent interaction ('mouse' | 'touch' | 'pen').
-   *  Read in onDidRemovePanel to decide whether a close should be deferred.
-   *  NOTE: best-effort — if two tabs are closed within a single animation frame,
-   *  the second pointerdown overwrites this before the first onDidRemovePanel fires.
-   *  Currently harmless (all close types share the same grace duration). Revisit
-   *  with a per-tab WeakMap if per-input-type durations are ever added.
-   */
-  private _lastPointerType: string = 'mouse';
-  /** Bound capture-phase handler so we can remove it in disconnectedCallback. */
-  private _onPointerDownCapture = (e: PointerEvent): void => {
-    this._lastPointerType = e.pointerType || 'mouse';
-  };
-  /**
    * Bound document pointerup handler — deactivates browser-pane drag shields
    * after a dockview drag gesture ends. Registered in capture phase so it fires
    * even if the pointer is released over an iframe.
@@ -240,8 +310,6 @@ export class MuxDock extends LitElement {
   private _onDragPointerUp = (): void => {
     this._setDragShields(false);
   };
-  /** True while we're programmatically removing panels to suppress pane-close events. */
-  private _removingPanels = false;
   /** Debounce timer for layout-save events. */
   private _layoutSaveTimer: number | undefined;
   /** True while restoring a layout via fromJSON — suppresses layout-save echoes. */
@@ -265,6 +333,25 @@ export class MuxDock extends LitElement {
    * group adds the tab there (and activates it) — not in the active group.
    */
   private _placementReferenceId: string | null = null;
+
+  private _emitPaneCloseTarget(target: PaneCloseTarget): void {
+    if (!this._panels.has(target.paneId) || !target.workspaceId) return;
+    this.dispatchEvent(
+      new CustomEvent('pane-close', {
+        detail: target,
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  private _emitPaneClose(paneId: number): void {
+    this._emitPaneCloseTarget({
+      targetKind: 'pane',
+      workspaceId: this.workspaceKey,
+      paneId,
+    });
+  }
 
   /**
    * Record the desired placement and ask the app to create a backing pane.
@@ -479,12 +566,43 @@ export class MuxDock extends LitElement {
           opacity: 0;
           transition: opacity 0.15s;
         }
+        mux-dock button.dv-default-tab-action {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          align-self: center;
+          width: 24px;
+          height: 24px;
+          padding: 0;
+          border: none;
+          border-radius: 4px;
+          background: transparent;
+          color: var(--mux-fg);
+          cursor: pointer;
+        }
+        mux-dock button.dv-default-tab-action:hover {
+          background: color-mix(in srgb, var(--chrome-accent) 15%, transparent);
+        }
+        mux-dock button.dv-default-tab-action:focus-visible {
+          outline: 2px solid var(--chrome-accent);
+          outline-offset: -2px;
+          opacity: 1;
+        }
         mux-dock .dv-tab .dv-default-tab-action svg {
           fill: var(--mux-fg);
         }
         mux-dock .dv-tab:hover .dv-default-tab-action,
         mux-dock .dv-tab.dv-active-tab .dv-default-tab-action {
           opacity: 1;
+        }
+        @media (pointer: coarse) {
+          mux-dock .dv-tab .dv-default-tab-action {
+            opacity: 1;
+          }
+          mux-dock button.dv-default-tab-action {
+            width: 44px;
+            height: 44px;
+          }
         }
 
         /* Header action icon buttons ("+" after the tabs, split far right) */
@@ -556,10 +674,6 @@ export class MuxDock extends LitElement {
       target.appendChild(style);
     }
 
-    // Record the pointer type that starts each interaction. The capture phase
-    // guarantees we see it before dockview processes the click and fires
-    // onDidRemovePanel, so the close branch knows whether it was a touch/pen.
-    this.addEventListener('pointerdown', this._onPointerDownCapture, { capture: true });
     // Capture-phase pointerup on the document deactivates browser-pane drag
     // shields after any dockview drag gesture ends (including releases over iframes).
     document.addEventListener('pointerup', this._onDragPointerUp, { capture: true });
@@ -569,6 +683,14 @@ export class MuxDock extends LitElement {
       createComponent: (opts) => {
         if (opts.name === 'browser') return new PlaceholderRenderer(opts.id);
         return new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId);
+      },
+      defaultTabComponent: 'mux-intent-tab',
+      createTabComponent: (opts) => {
+        const paneId = parseInt(opts.id, 10);
+        return new IntentTabRenderer(
+          { targetKind: 'pane', workspaceId: this.workspaceKey, paneId },
+          (target) => this._emitPaneCloseTarget(target),
+        );
       },
       // dockview header DOM order is: [tabs] [left-actions] [void] [right-actions].
       // The "left" slot therefore renders immediately after the tabs (before
@@ -623,27 +745,7 @@ export class MuxDock extends LitElement {
       // activeView and the wrong pane is selected after a refresh.
       this._scheduleLayoutSave();
     });
-    this._dv.onDidRemovePanel((panel) => {
-      if (this._removingPanels) return;
-      const paneId = parseInt(panel.id, 10);
-      if (this._panels.has(paneId)) {
-        // Capture the tab title BEFORE deleting the panel record — the toast
-        // labels itself "<title> closed". Falls back to "Pane N".
-        const title = panel.title ?? `Pane ${paneId}`;
-        // touch is retained in the event detail for observability and future use
-        // (e.g. per-input-type grace period durations), even though _onClosePane
-        // no longer branches on it.
-        const touch = this._lastPointerType === 'touch' || this._lastPointerType === 'pen';
-        this._panels.delete(paneId);
-        this._locallyClosedPanes.add(paneId);
-        this.dispatchEvent(
-          new CustomEvent('pane-close', {
-            detail: { paneId, touch, title },
-            bubbles: true,
-            composed: true,
-          }),
-        );
-      }
+    this._dv.onDidRemovePanel(() => {
       requestAnimationFrame(() => {
         if (this._dv) {
           this._dv.layout(this.offsetWidth, this.offsetHeight, true);
@@ -651,38 +753,11 @@ export class MuxDock extends LitElement {
       });
     });
 
-    // Middle-click on a dockview tab closes that pane.
-    // Uses the same onDidRemovePanel → pane-close flow as the tab X button,
-    // giving the user the same 10-second undo toast on accidental middle-clicks.
-    this.addEventListener('mousedown', (e: MouseEvent) => {
-      if (e.button !== 1) return; // only middle click
-      e.preventDefault(); // prevent the browser autoscroll cursor
-
-      // Walk the event path (composed — works across shadow boundaries) to find
-      // the dockview tab element. The class is confirmed by the CSS above.
-      const path = e.composedPath() as Element[];
-      const tabEl = path.find(
-        (el) => el instanceof Element && el.classList?.contains('dv-tab'),
-      ) as Element | undefined;
-      if (!tabEl) return;
-
-      // Match the found .dv-tab element to a panel.
-      // panel.view.tab.element is the inner .dv-default-tab child, NOT the .dv-tab
-      // container itself, so compare by containment: tabEl.contains(panelTabEl).
-      for (const [, panel] of this._panels) {
-        const panelTabEl = (panel as unknown as { view?: { tab?: { element?: HTMLElement } } })
-          .view?.tab?.element;
-        if (panelTabEl && tabEl.contains(panelTabEl)) {
-          if (this._dv) this._dv.removePanel(panel);
-          return;
-        }
-      }
-    });
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.removeEventListener('pointerdown', this._onPointerDownCapture, { capture: true });
+    this.removeEventListener('dblclick', this._onTabDblClick);
     document.removeEventListener('pointerup', this._onDragPointerUp, { capture: true });
     this._dv?.dispose();
     this._dv = null;
@@ -749,10 +824,7 @@ export class MuxDock extends LitElement {
         { workspaceKey: this.workspaceKey, panes: this.panes.map(p => p.paneId),
           activePaneId: this.activePaneId, hasLayout: !!this.layout });
       this._settingActive = true;
-      this._removingPanels = true;
       try {
-        // Clear locally-closed set: new workspace starts fresh.
-        this._locallyClosedPanes.clear();
         // Close all existing panels
         for (const [, panel] of this._panels) {
           this._dv.removePanel(panel);
@@ -780,7 +852,6 @@ export class MuxDock extends LitElement {
               this._panels.set(parseInt(panel.id, 10), panel);
             }
             // Prune panels whose pane died while we were away.
-            // (_removingPanels is already true from outer guard — no inner reset needed.)
             // Snapshot entries before iterating since we mutate _panels in the loop.
             for (const [paneId, panel] of Array.from(this._panels)) {
               if (!alive.has(paneId)) {
@@ -874,7 +945,6 @@ export class MuxDock extends LitElement {
         }
       } finally {
         this._settingActive = false;
-        this._removingPanels = false;
       }
       this._refreshBellTitles();
       return;
@@ -884,23 +954,18 @@ export class MuxDock extends LitElement {
     if (changed.has('panes')) {
       const currentPaneIds = new Set(this.panes.filter((p) => p.paneId >= 0).map((p) => p.paneId));
 
-      // Remove panels for panes that were removed server-side.
-      // Guard with _removingPanels so onDidRemovePanel doesn't re-fire pane-close.
-      this._removingPanels = true;
-      try {
-        for (const [paneId, panel] of this._panels) {
-          if (!currentPaneIds.has(paneId)) {
-            this._dv.removePanel(panel);
-            this._panels.delete(paneId);
-          }
+      // Remove panels only after the authoritative pane set drops them.
+      for (const [paneId, panel] of this._panels) {
+        if (!currentPaneIds.has(paneId)) {
+          this._dv.removePanel(panel);
+          this._panels.delete(paneId);
         }
-      } finally {
-        this._removingPanels = false;
       }
 
-      // Add panels for new panes, skipping panes the user closed locally.
+      // Add panels for new panes. User close intents never remove a panel;
+      // absence from this list is therefore always authoritative.
       for (const pane of this.panes.filter((p) => p.paneId >= 0)) {
-        if (!this._panels.has(pane.paneId) && !this._locallyClosedPanes.has(pane.paneId)) {
+        if (!this._panels.has(pane.paneId)) {
           const opts: Parameters<NonNullable<typeof this._dv>['addPanel']>[0] = {
             id: String(pane.paneId),
             component: pane.surfaceKind ?? 'terminal',
@@ -1005,49 +1070,12 @@ export class MuxDock extends LitElement {
     sameGroup[next]?.api.setActive();
   }
 
-  /**
-   * Close the currently active dockview panel programmatically, triggering the
-   * same pane-close event flow as the tab X-button (deferred close + undo toast).
-   * No-op if there is no active panel.
-   */
+  /** Emit a close intent for the active panel without removing it. */
   closeActivePanel(): void {
     if (!this._dv) return;
     const active = this._dv.activePanel;
     if (!active) return;
-    this._dv.removePanel(active);
-  }
-
-  /**
-   * Undo a local close: re-enable the reconciler for this pane and re-add its
-   * dockview panel immediately. The server never heard about the close during
-   * the grace period, so store.panes still has the entry, the PTY is alive, and
-   * terminalRegistry still holds the xterm instance — the panel comes back with
-   * full scrollback. Position is NOT preserved (re-adds at the default slot).
-   */
-  reopenPane(paneId: number): void {
-    this._locallyClosedPanes.delete(paneId);
-    if (!this._dv) return;
-    if (this._panels.has(paneId)) return; // already on screen, nothing to do
-    const pane = this.panes.find((p) => p.paneId === paneId);
-    if (!pane) return; // pane no longer exists (e.g. process exited during grace)
-    const panel = this._dv.addPanel({
-      id: String(paneId),
-      component: pane.surfaceKind ?? 'terminal',
-      title: this._customTitles.get(paneId) ?? pane.title ?? `Pane ${paneId}`,
-    });
-    this._panels.set(paneId, panel);
-    panel.api.setActive();
-  }
-
-  /**
-   * Re-enable reconciliation for a set of pane IDs that were locally closed
-   * but whose server-side PTY survived (e.g. grace-period cancel on disconnect).
-   * The reconciler will re-add their tabs on the next render cycle.
-   */
-  allowReconcile(paneIds: Iterable<number>): void {
-    for (const id of paneIds) {
-      this._locallyClosedPanes.delete(id);
-    }
+    this._emitPaneClose(parseInt(active.id, 10));
   }
 
   /**
@@ -1126,10 +1154,7 @@ export class MuxDock extends LitElement {
       }
       case 'close-pane': {
         if (msg.paneId === undefined) return;
-        const panel = this._panels.get(msg.paneId);
-        if (panel && this._dv) {
-          this._dv.removePanel(panel);
-        }
+        this._emitPaneClose(msg.paneId);
         break;
       }
       case 'switch-workspace': {

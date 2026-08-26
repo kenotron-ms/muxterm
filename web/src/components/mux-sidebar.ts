@@ -101,7 +101,7 @@ export class MuxSidebar extends LitElement {
       border-radius: 5px;
       cursor: pointer;
       border: 1px solid transparent;
-      transition: background 0.12s, border-color 0.12s, opacity 0.2s;
+      transition: background 0.12s, border-color 0.12s;
     }
 
     .ws-card:hover {
@@ -111,11 +111,6 @@ export class MuxSidebar extends LitElement {
     .ws-card.active {
       background: var(--chrome-hover);
       border-color: var(--chrome-accent);
-    }
-
-    .ws-card.pending-close {
-      opacity: 0.35;
-      pointer-events: none;
     }
 
     .ws-header {
@@ -181,12 +176,30 @@ export class MuxSidebar extends LitElement {
     }
 
     .ws-card:hover .ws-remove-btn,
-    .ws-card.active .ws-remove-btn {
+    .ws-card.active .ws-remove-btn,
+    .ws-remove-btn:focus-visible {
       opacity: 1;
     }
 
     .ws-remove-btn:hover {
       color: var(--chrome-danger);
+    }
+
+    .ws-remove-btn:focus-visible {
+      outline: 2px solid var(--chrome-accent);
+      outline-offset: 2px;
+    }
+
+    @media (pointer: coarse) {
+      .ws-remove-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        opacity: 1;
+      }
     }
 
     .ws-hint {
@@ -227,7 +240,6 @@ export class MuxSidebar extends LitElement {
 
   @state() private _version = 0;
   @state() private _renaming: string | null = null;
-  @state() private _pendingClose = new Set<string>();
   @state() private _menuOpen = false;
 
   private _unsub: (() => void) | null = null;
@@ -271,17 +283,6 @@ export class MuxSidebar extends LitElement {
   }
 
   // ---------------------------------------------------------------------------
-  // Public API
-  // ---------------------------------------------------------------------------
-
-  /** Remove a workspace from the pending-close set (called by the parent to restore). */
-  restoreWorkspace(wsId: string): void {
-    const next = new Set(this._pendingClose);
-    next.delete(wsId);
-    this._pendingClose = next;
-  }
-
-  // ---------------------------------------------------------------------------
   // Workspace helpers
   // ---------------------------------------------------------------------------
 
@@ -307,9 +308,6 @@ export class MuxSidebar extends LitElement {
 
   private _onWsRemove(e: Event, wsId: string, name: string): void {
     e.stopPropagation();
-    const next = new Set(this._pendingClose);
-    next.add(wsId);
-    this._pendingClose = next;
     this.dispatchEvent(
       new CustomEvent('workspace-close', {
         detail: { workspaceId: wsId, name },
@@ -376,7 +374,6 @@ export class MuxSidebar extends LitElement {
     return html`
       ${store.workspaces.map((ws) => {
         const isActive = ws.workspaceId === activeWsId;
-        const isPendingClose = this._pendingClose.has(ws.workspaceId);
         const label = workspaceLabel(ws);
 
         // Hint row: active pane title + extra pane count (only for the attached workspace).
@@ -391,7 +388,7 @@ export class MuxSidebar extends LitElement {
 
         return html`
           <div
-            class="ws-card ${isActive ? 'active' : ''} ${isPendingClose ? 'pending-close' : ''}"
+            class="ws-card ${isActive ? 'active' : ''}"
             @click="${() => this._onWsClick(ws.workspaceId)}"
           >
             <div class="ws-header">
@@ -412,8 +409,10 @@ export class MuxSidebar extends LitElement {
                     >${label}</span
                   >`}
               <button
+                type="button"
                 class="ws-remove-btn"
-                title="Remove workspace"
+                title="Close workspace"
+                aria-label="Close workspace ${label}"
                 @click="${(e: Event) => this._onWsRemove(e, ws.workspaceId, label)}"
               >×</button>
             </div>

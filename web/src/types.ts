@@ -13,6 +13,39 @@ export function isTerminalSurface(kind: SurfaceKind): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Activity-aware close contract
+// ---------------------------------------------------------------------------
+
+export type CloseTargetKind = 'pane' | 'workspace';
+
+/** A workspace target cannot accidentally carry a pane identity. */
+export type CloseTarget =
+  | { targetKind: 'pane'; workspaceId: string; paneId: number }
+  | { targetKind: 'workspace'; workspaceId: string };
+
+export type CloseStatus = 'closed' | 'confirmation-required' | 'failed';
+export type CloseRiskClassification = 'busy' | 'unknown';
+export type CloseRiskReason =
+  | 'command-active'
+  | 'foreground-process'
+  | 'custom-command'
+  | 'browser-pane'
+  | 'unsupported-shell'
+  | 'unsupported-platform'
+  | 'missing-lifecycle'
+  | 'stale-lifecycle'
+  | 'process-inspection-failed'
+  | 'pty-inspection-failed'
+  | 'conflicting-evidence';
+
+export interface CloseRisk {
+  paneId: number;
+  title: string;
+  classification: CloseRiskClassification;
+  reason: CloseRiskReason;
+}
+
+// ---------------------------------------------------------------------------
 // sessiond v1 control protocol
 //
 // Mirrors the frozen Go Message/WorkspaceInfo/PaneInfo shapes and the
@@ -27,6 +60,8 @@ export const SessiondType = {
   ListWorkspaces: 'list-workspaces',
   RenameWorkspace: 'rename-workspace',
   CloseWorkspace: 'close-workspace',
+  CloseIntent: 'close-intent',
+  CloseConfirm: 'close-confirm',
   Attach: 'attach',
   CreatePane: 'create-pane',
   ClosePane: 'close-pane',
@@ -40,6 +75,7 @@ export const SessiondType = {
   WorkspaceList: 'workspace-list',
   Composition: 'composition',
   PaneCreated: 'pane-created',
+  CloseOutcome: 'close-outcome',
   Ok: 'ok',
   // Events (server -> all clients)
   PaneAdded: 'pane-added',
@@ -65,6 +101,49 @@ export const SessiondType = {
 } as const;
 
 export type SessiondMessageType = (typeof SessiondType)[keyof typeof SessiondType];
+
+export type CloseIntentRequest = {
+  type: typeof SessiondType.CloseIntent;
+  cid: number;
+} & CloseTarget;
+
+export interface CloseConfirmRequest {
+  type: typeof SessiondType.CloseConfirm;
+  cid: number;
+  ticket: string;
+}
+
+interface CloseOutcomeBase {
+  type: typeof SessiondType.CloseOutcome;
+  cid: number;
+}
+
+export type CloseClosedOutcome = CloseOutcomeBase &
+  CloseTarget & {
+    closeStatus: 'closed';
+  };
+
+export type CloseConfirmationRequiredOutcome = CloseOutcomeBase &
+  CloseTarget & {
+    closeStatus: 'confirmation-required';
+    ticket: string;
+    busyCount: number;
+    unknownCount: number;
+    risks: CloseRisk[];
+    omittedRiskCount: number;
+  };
+
+export type CloseFailedOutcome = CloseOutcomeBase &
+  CloseTarget & {
+    closeStatus: 'failed';
+    failureCode?: string;
+    error?: string;
+  };
+
+export type CloseOutcome =
+  | CloseClosedOutcome
+  | CloseConfirmationRequiredOutcome
+  | CloseFailedOutcome;
 
 /** Frozen sessiond error-code vocabulary (mirrors Go's ErrCode constants). */
 export const SessiondErrorCode = {
@@ -115,6 +194,14 @@ export interface SessiondMessage {
   panes?: SessiondPaneInfo[];
   code?: SessiondErrorCodeValue;
   error?: string;
+  targetKind?: CloseTargetKind;
+  closeStatus?: CloseStatus;
+  ticket?: string;
+  busyCount?: number;
+  unknownCount?: number;
+  risks?: CloseRisk[];
+  omittedRiskCount?: number;
+  failureCode?: string;
   breakpoint?: string;
   layout?: string;
   // Present when type === 'create-pane' or 'pane-added' for browser-cdp panes

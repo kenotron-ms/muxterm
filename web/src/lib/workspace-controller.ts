@@ -36,8 +36,8 @@ export class WorkspaceController {
   private _recoveringFrom: string | null = null;
   // True while we've sent an attach that hasn't yet been confirmed by a
   // composition reply. Prevents the server-pushed workspace-list (sent by
-  // attachClient on every new WS connection) from triggering a spurious
-  // second attach when bootstrap() already sent one directly. Without this
+  // attachClient on every new WS connection or immediately after
+  // workspace-closed) from triggering a spurious second attach. Without this
   // guard, two compositions arrive: the first correctly restores the saved
   // active pane, but the second resets _activePaneId = panes[0], causing
   // Case 3 in mux-dock to switch away from the restored pane.
@@ -77,10 +77,15 @@ export class WorkspaceController {
         const id = msg.workspaceId ?? '';
         this._mru.forget(id);
         // Only recover when WE lost our active workspace (store already detached
-        // to null) or the closed one is still our attachment.
-        if (this.store.attached === id || this.store.attached === null) {
+        // to null) or the closed one is still our attachment. The daemon
+        // guarantees an authoritative workspace-list immediately after this
+        // lifecycle event; asking for another list races that reply and can
+        // cause a duplicate survivor attach.
+        if (
+          this._recoveringFrom === null &&
+          (this.store.attached === id || this.store.attached === null)
+        ) {
           this._recoveringFrom = id;
-          this.socket.listWorkspaces();
         }
         break;
       }
@@ -107,6 +112,7 @@ export class WorkspaceController {
           );
           this._recoveringFrom = null;
           if (target.action === 'attach') {
+            this._attachInFlight = true;
             voiceInputController.invalidateIfActive();
             this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode());
           } else {
@@ -122,6 +128,7 @@ export class WorkspaceController {
           // _activePaneId = panes[0], overriding the layout-restored active pane.
           const target = chooseRecoveryTarget(msg.workspaces ?? [], '', this._mru.order());
           if (target.action === 'attach') {
+            this._attachInFlight = true;
             voiceInputController.invalidateIfActive();
             this.socket.attachWithBreakpoint(target.workspaceId, currentLayoutMode());
           }
@@ -131,6 +138,7 @@ export class WorkspaceController {
 
       // no-survivor recovery path: attach the freshly-created workspace.
       case SessiondType.WorkspaceCreated: {
+        this._attachInFlight = true;
         voiceInputController.invalidateIfActive();
         this.socket.attachWithBreakpoint(msg.workspaceId ?? '', currentLayoutMode());
         break;
