@@ -145,11 +145,10 @@ const (
 	RecoveryProtocolCapabilityActivePanePersistence RecoveryProtocolCapability = "active-pane-persistence"
 )
 
-// RecoveryProtocolCapabilities uses fixed storage and a count to bound
-// capability negotiation. Count may not exceed RecoveryMaxProtocolCapabilities.
+// RecoveryProtocolCapabilities emits only populated values. len(Values) is
+// authoritative and may not exceed RecoveryMaxProtocolCapabilities.
 type RecoveryProtocolCapabilities struct {
-	Count  uint8                                                       `json:"count"`
-	Values [RecoveryMaxProtocolCapabilities]RecoveryProtocolCapability `json:"values"`
+	Values []RecoveryProtocolCapability `json:"values"`
 }
 
 // ProtocolHelloRequest and ProtocolHelloResult negotiate only browser-safe

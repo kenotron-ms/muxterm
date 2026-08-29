@@ -117,11 +117,11 @@ export type SessiondRecoveryCapability =
   | 'recovery-retry'
   | 'active-pane-persistence';
 
-/** Mirrors sessiond's fixed protocol-capability storage limit. */
+/** Maximum length of SessiondRecoveryCapabilities.values. */
 export const SessiondRecoveryMaxCapabilities = 8;
 
 export interface SessiondRecoveryCapabilities {
-  count: number;
+  /** Length is authoritative and must not exceed SessiondRecoveryMaxCapabilities. */
   values: readonly SessiondRecoveryCapability[];
 }
 
