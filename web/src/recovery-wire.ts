@@ -120,9 +120,9 @@ const RECOVERY_RELATED_FIELDS = new Set<string>([
 ]);
 
 /**
- * Owner-local names are rejected before an ordinary message reaches any
- * callback. The browser must never receive enough information to reconstruct
- * recovery authority, even in an ignored field.
+ * Owner-local names are rejected only inside a dedicated recovery envelope or
+ * an explicitly located recovery payload. Ordinary protocols are free to use
+ * names such as "launch" without being mistaken for recovery authority.
  */
 const PRIVILEGED_RECOVERY_FIELDS = new Set<string>([
   'privilegedRecovery',
@@ -687,6 +687,29 @@ function containsNamedField(
   return false;
 }
 
+function containsPrivilegedRecoveryField(value: UnknownRecord): boolean {
+  if (isRecoverySensitiveType(value.type)) {
+    return containsNamedField(value, PRIVILEGED_RECOVERY_FIELDS);
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      RECOVERY_RELATED_FIELDS.has(key) &&
+      containsNamedField(child, PRIVILEGED_RECOVERY_FIELDS)
+    ) {
+      return true;
+    }
+  }
+
+  if (value.type !== SessiondType.Composition || !Array.isArray(value.panes)) return false;
+  return value.panes.some(
+    (pane) =>
+      isPlainObject(pane) &&
+      hasOwn(pane, 'recovery') &&
+      containsNamedField(pane.recovery, PRIVILEGED_RECOVERY_FIELDS),
+  );
+}
+
 const INVALID_ORDINARY_VALUE = Symbol('invalid-ordinary-value');
 
 function stripRecoveryFields(
@@ -774,7 +797,6 @@ function sanitizeOrdinaryMessage(value: UnknownRecord): Record<string, unknown> 
     if (recovery !== null) sanitized.recovery = recovery;
   }
 
-  if (containsNamedField(sanitized, PRIVILEGED_RECOVERY_FIELDS)) return null;
   return sanitized;
 }
 
@@ -789,10 +811,9 @@ export function classifyRecoveryInbound(
 ): RecoveryInboundClassification {
   if (!isPlainObject(value)) return REJECTED;
 
-  // An owner-local value is never benign merely because an otherwise ordinary
-  // envelope happens to contain it. Reject before stripping fields so neither
-  // generic callbacks nor application state can observe it.
-  if (containsNamedField(value, PRIVILEGED_RECOVERY_FIELDS)) return REJECTED;
+  // Reject owner-local names before stripping an explicitly located recovery
+  // payload, while leaving unrelated ordinary protocol fields untouched.
+  if (containsPrivilegedRecoveryField(value)) return REJECTED;
 
   const recoverySensitive =
     isRecoverySensitiveType(value.type) ||

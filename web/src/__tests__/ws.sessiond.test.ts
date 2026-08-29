@@ -75,6 +75,21 @@ function openSocket(): { mux: MuxSocket; ws: MockWebSocket } {
   mux.connect();
   const ws = MockWebSocket.instances[0];
   ws.simulateOpen();
+  expect(ws.sent).toHaveLength(1);
+  expect(JSON.parse(ws.sent[0] as string)).toEqual({
+    type: 'protocol-hello',
+    protocolHello: {
+      recoverySchemaVersion: 1,
+      capabilities: {
+        values: [
+          'pane-recovery-projection',
+          'recovery-retry',
+          'recovery-select',
+          'active-pane-persistence',
+        ],
+      },
+    },
+  });
   return { mux, ws };
 }
 
@@ -90,7 +105,7 @@ describe('MuxSocket sessiond senders', () => {
     const { mux, ws } = openSocket();
     mux.attach('ws-1');
 
-    expect(ws.sent).toHaveLength(1);
+    expect(ws.sent).toHaveLength(2);
     expect(lastJson(ws)).toEqual({ type: SessiondType.Attach, workspaceId: 'ws-1' });
   });
 
@@ -98,7 +113,7 @@ describe('MuxSocket sessiond senders', () => {
     const { mux, ws } = openSocket();
     mux.listWorkspaces();
 
-    expect(ws.sent).toHaveLength(1);
+    expect(ws.sent).toHaveLength(2);
     expect(lastJson(ws)).toEqual({ type: SessiondType.ListWorkspaces });
   });
 
@@ -187,8 +202,8 @@ describe('MuxSocket sessiond senders', () => {
     const input = new Uint8Array([104, 105]); // "hi"
     mux.sendPaneInput(7, input);
 
-    expect(ws.sent).toHaveLength(1);
-    const buf = ws.sent[0] as ArrayBuffer;
+    expect(ws.sent).toHaveLength(2);
+    const buf = ws.sent[1] as ArrayBuffer;
     expect(buf).toBeInstanceOf(ArrayBuffer);
 
     const { paneId, data } = decodePaneFrame(buf);
@@ -200,7 +215,7 @@ describe('MuxSocket sessiond senders', () => {
     const { mux, ws } = openSocket();
     mux.createBrowserPane();
 
-    expect(ws.sent).toHaveLength(1);
+    expect(ws.sent).toHaveLength(2);
     expect(lastJson(ws)).toEqual({ type: SessiondType.CreateBrowserPane });
   });
 
@@ -208,7 +223,7 @@ describe('MuxSocket sessiond senders', () => {
     const { mux, ws } = openSocket();
     mux.closeBrowserPane();
 
-    expect(ws.sent).toHaveLength(1);
+    expect(ws.sent).toHaveLength(2);
     expect(lastJson(ws)).toEqual({ type: SessiondType.CloseBrowserPane });
   });
 

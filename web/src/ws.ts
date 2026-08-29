@@ -361,7 +361,12 @@ export class MuxSocket {
   }
 
   supportsRecoveryCapability(capability: SessiondRecoveryCapability): boolean {
-    return this._recoveryCompatible && this._recoveryCapabilities.has(capability);
+    return (
+      this._ws?.readyState === WebSocket.OPEN &&
+      this._helloSent &&
+      this._recoveryCompatible &&
+      this._recoveryCapabilities.has(capability)
+    );
   }
 
   retryRecovery(pane: SessiondRecoveryPaneRef): boolean {

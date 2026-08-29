@@ -366,7 +366,7 @@ export class MuxStore {
       case SessiondType.PaneRenamed: {
         if (
           this._attached === null ||
-          msg.workspaceId !== this._attached ||
+          (msg.workspaceId !== undefined && msg.workspaceId !== this._attached) ||
           !isAttachedPaneID(msg.paneId)
         ) {
           break;

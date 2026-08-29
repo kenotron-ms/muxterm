@@ -14,14 +14,16 @@ const composition = (
 ): SessiondMessage => ({ type: SessiondType.Composition, workspaceId, panes });
 
 const paneAdded = (
+  workspaceId: string,
   paneId: number,
   cols: number,
   rows: number,
   title?: string,
-): SessiondMessage => ({ type: SessiondType.PaneAdded, paneId, cols, rows, title });
+): SessiondMessage => ({ type: SessiondType.PaneAdded, workspaceId, paneId, cols, rows, title });
 
-const paneClosed = (paneId: number): SessiondMessage => ({
+const paneClosed = (workspaceId: string, paneId: number): SessiondMessage => ({
   type: SessiondType.PaneClosed,
+  workspaceId,
   paneId,
 });
 
@@ -74,7 +76,7 @@ describe('MuxStore sessiond multiplexer path', () => {
   it('appends a pane on pane-added with size and title', () => {
     const store = new MuxStore();
     store.applySessiond(composition('ws-1', [{ paneId: 5, cols: 80, rows: 24 }]));
-    store.applySessiond(paneAdded(9, 100, 30, 'logs'));
+    store.applySessiond(paneAdded('ws-1', 9, 100, 30, 'logs'));
     expect(store.panes.map((p) => p.paneId)).toEqual([5, 9]);
     const added = store.panes[1];
     expect(added.cols).toBe(100);
@@ -85,8 +87,8 @@ describe('MuxStore sessiond multiplexer path', () => {
   it('is idempotent: a duplicate pane-added does not double the pane', () => {
     const store = new MuxStore();
     store.applySessiond(composition('ws-1', [{ paneId: 5, cols: 80, rows: 24 }]));
-    store.applySessiond(paneAdded(9, 100, 30));
-    store.applySessiond(paneAdded(9, 100, 30)); // actor + broadcast echo
+    store.applySessiond(paneAdded('ws-1', 9, 100, 30));
+    store.applySessiond(paneAdded('ws-1', 9, 100, 30)); // actor + broadcast echo
     expect(store.panes.map((p) => p.paneId)).toEqual([5, 9]);
   });
 
@@ -98,7 +100,7 @@ describe('MuxStore sessiond multiplexer path', () => {
         { paneId: 9, cols: 80, rows: 24 },
       ]),
     );
-    store.applySessiond(paneClosed(9));
+    store.applySessiond(paneClosed('ws-1', 9));
     expect(store.panes.map((p) => p.paneId)).toEqual([5]);
   });
 
@@ -111,22 +113,21 @@ describe('MuxStore sessiond multiplexer path', () => {
       ]),
     );
     // active is 5 (first pane); closing it re-points to a survivor.
-    store.applySessiond(paneClosed(5));
+    store.applySessiond(paneClosed('ws-1', 5));
     expect(store.panes.map((p) => p.paneId)).toEqual([9]);
     expect(store.composition.activePaneId).toBe(9);
   });
 
-  it('workspace-closed is a no-op (server now sends workspace-list snapshots instead)', () => {
+  it('workspace-closed clears the attached workspace immediately', () => {
     const store = new MuxStore();
     store.applySessiond(
       workspaceList([{ workspaceId: 'ws-1', name: 'dev', paneCount: 1 }]),
     );
     store.applySessiond(composition('ws-1', [{ paneId: 5, cols: 80, rows: 24 }]));
     store.applySessiond(workspaceClosed('ws-1'));
-    // Dead handler: hits default: return — state is unchanged.
-    expect(store.attached).toBe('ws-1');
-    expect(store.panes.map((p) => p.paneId)).toEqual([5]);
-    expect(store.workspaces.map((w) => w.workspaceId)).toEqual(['ws-1']);
+    expect(store.attached).toBeNull();
+    expect(store.panes).toEqual([]);
+    expect(store.workspaces).toEqual([]);
   });
 
   it('workspace-renamed is a no-op (server now sends workspace-list snapshots with updated names)', () => {
@@ -296,6 +297,7 @@ describe('clientRef threading through base', () => {
     });
     store.applySessiond({
       type: SessiondType.PaneAdded,
+      workspaceId: 'w1',
       paneId: 5,
       cols: 80,
       rows: 24,
