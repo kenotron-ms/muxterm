@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"time"
+	"unicode/utf8"
 )
 
 // Frame kinds tag each daemon socket frame. A frame is
@@ -149,8 +150,9 @@ const (
 	RecoveryProtocolCapabilityActivePanePersistence RecoveryProtocolCapability = "active-pane-persistence"
 )
 
-// RecoveryProtocolCapabilities emits only populated values. len(Values) is
-// authoritative and may not exceed RecoveryMaxProtocolCapabilities.
+// RecoveryProtocolCapabilities carries a browser offer or a server-recognized
+// intersection. An offer may name a bounded future capability; a server result
+// may contain only the closed recognized vocabulary.
 type RecoveryProtocolCapabilities struct {
 	Values []RecoveryProtocolCapability `json:"values"`
 }
@@ -167,14 +169,23 @@ func validRecoveryProtocolCapability(value RecoveryProtocolCapability) bool {
 	}
 }
 
-func (capabilities RecoveryProtocolCapabilities) validateRecoveryContract() error {
+func validateRecoveryProtocolCapabilityOffer(value RecoveryProtocolCapability) error {
+	return validateBoundedText(
+		string(value),
+		RecoveryMaxProtocolCapabilityBytes,
+		"protocol capability",
+		false,
+	)
+}
+
+func (capabilities RecoveryProtocolCapabilities) validateOffer() error {
 	if len(capabilities.Values) > RecoveryMaxProtocolCapabilities {
 		return fmt.Errorf("recovery: protocol capability count exceeds capacity")
 	}
 	seen := make(map[RecoveryProtocolCapability]struct{}, len(capabilities.Values))
 	for _, capability := range capabilities.Values {
-		if !validRecoveryProtocolCapability(capability) {
-			return fmt.Errorf("recovery: unknown protocol capability %q", capability)
+		if err := validateRecoveryProtocolCapabilityOffer(capability); err != nil {
+			return err
 		}
 		if _, duplicate := seen[capability]; duplicate {
 			return fmt.Errorf("recovery: duplicate protocol capability %q", capability)
@@ -184,10 +195,28 @@ func (capabilities RecoveryProtocolCapabilities) validateRecoveryContract() erro
 	return nil
 }
 
+// validateRecoveryContract validates a server-produced capability intersection.
+// Unlike a browser offer, it must contain only capability names known to this
+// daemon version.
+func (capabilities RecoveryProtocolCapabilities) validateRecoveryContract() error {
+	if err := capabilities.validateOffer(); err != nil {
+		return err
+	}
+	for _, capability := range capabilities.Values {
+		if !validRecoveryProtocolCapability(capability) {
+			return fmt.Errorf("recovery: unknown protocol capability %q", capability)
+		}
+	}
+	return nil
+}
+
 // UnmarshalJSON bounds the only browser-safe recovery slice before it becomes
-// a typed allocation. A count above the fixed storage limit is rejected before
-// publishing any value to the receiver.
+// a typed allocation. It validates the syntactic offer, rather than requiring
+// every name to be recognized before protocol negotiation can run.
 func (capabilities *RecoveryProtocolCapabilities) UnmarshalJSON(data []byte) error {
+	if capabilities == nil {
+		return fmt.Errorf("recovery: nil protocol capabilities destination")
+	}
 	if len(data) == 0 || len(data) > RecoveryMaxBrowserRecoveryMessageBytes {
 		return fmt.Errorf("recovery: protocol capabilities exceed input limit")
 	}
@@ -200,27 +229,31 @@ func (capabilities *RecoveryProtocolCapabilities) UnmarshalJSON(data []byte) err
 	if len(raw.Values) == 0 || len(raw.Values) > RecoveryMaxBrowserRecoveryMessageBytes {
 		return fmt.Errorf("recovery: protocol capabilities omit or exceed values")
 	}
-	if bytes.Equal(bytes.TrimSpace(raw.Values), []byte("null")) {
-		return fmt.Errorf("recovery: protocol capability values must be an array")
+
+	var values [RecoveryMaxProtocolCapabilities]RecoveryProtocolCapability
+	count, err := decodeRecoveryJSONArray(
+		raw.Values,
+		len(values),
+		"protocol capability",
+		func(encoded json.RawMessage, index int) error {
+			var value RecoveryProtocolCapability
+			if err := decodeRecoveryJSON(encoded, &value); err != nil {
+				return fmt.Errorf("recovery: decode protocol capability: %w", err)
+			}
+			if err := validateRecoveryProtocolCapabilityOffer(value); err != nil {
+				return err
+			}
+			values[index] = value
+			return nil
+		},
+	)
+	if err != nil {
+		return err
 	}
-	var encodedValues []json.RawMessage
-	if err := json.Unmarshal(raw.Values, &encodedValues); err != nil {
-		return fmt.Errorf("recovery: decode protocol capability values: %w", err)
+	decoded := RecoveryProtocolCapabilities{
+		Values: append([]RecoveryProtocolCapability(nil), values[:count]...),
 	}
-	if len(encodedValues) > RecoveryMaxProtocolCapabilities {
-		return fmt.Errorf("recovery: protocol capability count exceeds capacity")
-	}
-	values := make([]RecoveryProtocolCapability, len(encodedValues))
-	for index, encodedValue := range encodedValues {
-		if len(encodedValue) > RecoveryMaxDetailCodeBytes {
-			return fmt.Errorf("recovery: protocol capability exceeds input limit")
-		}
-		if err := json.Unmarshal(encodedValue, &values[index]); err != nil {
-			return fmt.Errorf("recovery: decode protocol capability: %w", err)
-		}
-	}
-	decoded := RecoveryProtocolCapabilities{Values: values}
-	if err := decoded.validateRecoveryContract(); err != nil {
+	if err := decoded.validateOffer(); err != nil {
 		return err
 	}
 	*capabilities = decoded
@@ -228,7 +261,7 @@ func (capabilities *RecoveryProtocolCapabilities) UnmarshalJSON(data []byte) err
 }
 
 func (capabilities RecoveryProtocolCapabilities) MarshalJSON() ([]byte, error) {
-	if err := capabilities.validateRecoveryContract(); err != nil {
+	if err := capabilities.validateOffer(); err != nil {
 		return nil, err
 	}
 	type wire RecoveryProtocolCapabilities
@@ -242,11 +275,46 @@ type ProtocolHelloRequest struct {
 	Capabilities          RecoveryProtocolCapabilities `json:"capabilities"`
 }
 
-func (request ProtocolHelloRequest) validateRecoveryContract() error {
-	if request.RecoverySchemaVersion != RecoveryCaptureSchemaVersion {
-		return fmt.Errorf("recovery: unsupported protocol schema version %d", request.RecoverySchemaVersion)
+// validateOffer accepts every syntactically valid, bounded, nonzero schema
+// version and capability offer. Compatibility is a daemon decision, not a
+// pre-dispatch decoding decision.
+func (request ProtocolHelloRequest) validateOffer() error {
+	if request.RecoverySchemaVersion == 0 {
+		return fmt.Errorf("recovery: protocol schema version is zero")
 	}
-	return request.Capabilities.validateRecoveryContract()
+	return request.Capabilities.validateOffer()
+}
+
+func (request ProtocolHelloRequest) validateRecoveryContract() error {
+	return request.validateOffer()
+}
+
+func (request *ProtocolHelloRequest) UnmarshalJSON(data []byte) error {
+	if request == nil {
+		return fmt.Errorf("recovery: nil protocol hello request destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxBrowserRecoveryMessageBytes {
+		return fmt.Errorf("recovery: protocol hello request exceeds input limit")
+	}
+	type wire ProtocolHelloRequest
+	var decoded wire
+	if err := decodeRecoveryJSON(data, &decoded); err != nil {
+		return err
+	}
+	result := ProtocolHelloRequest(decoded)
+	if err := result.validateOffer(); err != nil {
+		return err
+	}
+	*request = result
+	return nil
+}
+
+func (request ProtocolHelloRequest) MarshalJSON() ([]byte, error) {
+	if err := request.validateOffer(); err != nil {
+		return nil, err
+	}
+	type wire ProtocolHelloRequest
+	return json.Marshal(wire(request))
 }
 
 type ProtocolHelloResult struct {
@@ -273,6 +341,63 @@ func (result ProtocolHelloResult) validateRecoveryContract() error {
 		return fmt.Errorf("recovery: incompatible protocol result has invalid detail")
 	}
 	return nil
+}
+
+func (result *ProtocolHelloResult) UnmarshalJSON(data []byte) error {
+	if result == nil {
+		return fmt.Errorf("recovery: nil protocol hello result destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxBrowserRecoveryMessageBytes {
+		return fmt.Errorf("recovery: protocol hello result exceeds input limit")
+	}
+	type wire ProtocolHelloResult
+	var decoded wire
+	if err := decodeRecoveryJSON(data, &decoded); err != nil {
+		return err
+	}
+	validated := ProtocolHelloResult(decoded)
+	if err := validated.validateRecoveryContract(); err != nil {
+		return err
+	}
+	*result = validated
+	return nil
+}
+
+func (result ProtocolHelloResult) MarshalJSON() ([]byte, error) {
+	if err := result.validateRecoveryContract(); err != nil {
+		return nil, err
+	}
+	type wire ProtocolHelloResult
+	return json.Marshal(wire(result))
+}
+
+// NegotiateProtocolHello is the daemon-side compatibility decision for a
+// syntactically accepted hello. It retains only names recognized by this
+// daemon, and reports a schema mismatch through the redacted result instead of
+// rejecting the offer before dispatch.
+func NegotiateProtocolHello(request ProtocolHelloRequest) (ProtocolHelloResult, error) {
+	if err := request.validateOffer(); err != nil {
+		return ProtocolHelloResult{}, err
+	}
+	recognized := make([]RecoveryProtocolCapability, 0, len(request.Capabilities.Values))
+	for _, capability := range request.Capabilities.Values {
+		if validRecoveryProtocolCapability(capability) {
+			recognized = append(recognized, capability)
+		}
+	}
+	result := ProtocolHelloResult{
+		RecoverySchemaVersion: RecoveryCaptureSchemaVersion,
+		Capabilities:          RecoveryProtocolCapabilities{Values: recognized},
+		Compatible:            request.RecoverySchemaVersion == RecoveryCaptureSchemaVersion,
+		DetailCode:            RecoveryDetailNone,
+	}
+	if !result.Compatible {
+		result.DetailCode = RecoveryDetailSchemaIncompatible
+	}
+	if err := result.validateRecoveryContract(); err != nil {
+		return ProtocolHelloResult{}, err
+	}
+	return result, nil
 }
 
 // PaneRecoveryInfo is the complete browser-safe recovery projection. Exact
@@ -347,33 +472,62 @@ func (info PaneRecoveryInfo) validateRecoveryContract() error {
 // UnmarshalJSON bounds candidate bytes and count before assigning a
 // browser-provided or browser-received projection.
 func (info *PaneRecoveryInfo) UnmarshalJSON(data []byte) error {
+	if info == nil {
+		return fmt.Errorf("recovery: nil pane recovery projection destination")
+	}
 	if len(data) == 0 || len(data) > RecoveryMaxBrowserRecoveryMessageBytes {
 		return fmt.Errorf("recovery: pane recovery projection exceeds input limit")
 	}
 	var raw struct {
-		SelectionCandidates json.RawMessage `json:"selectionCandidates"`
+		Status              RecoveryStatus        `json:"status"`
+		StrategyLabel       RecoveryStrategyLabel `json:"strategyLabel,omitempty"`
+		DetailCode          RecoveryDetailCode    `json:"detailCode"`
+		HistoryBoundary     bool                  `json:"historyBoundary"`
+		CanRetry            bool                  `json:"canRetry"`
+		CanSelect           bool                  `json:"canSelect"`
+		SelectionCandidates json.RawMessage       `json:"selectionCandidates"`
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("recovery: decode pane recovery projection: %w", err)
+	if err := decodeRecoveryJSON(data, &raw); err != nil {
+		return err
 	}
 	if len(raw.SelectionCandidates) > RecoveryMaxBrowserRecoveryMessageBytes {
 		return fmt.Errorf("recovery: selection candidates exceed input limit")
 	}
+	var candidates [RecoveryMaxBrowserSelectionCandidates]RecoverySelectionCandidate
+	count := 0
 	if len(raw.SelectionCandidates) != 0 {
-		var candidates []json.RawMessage
-		if err := json.Unmarshal(raw.SelectionCandidates, &candidates); err != nil {
-			return fmt.Errorf("recovery: decode selection candidates: %w", err)
-		}
-		if len(candidates) > RecoveryMaxBrowserSelectionCandidates {
-			return fmt.Errorf("recovery: selection candidate count exceeds capacity")
+		var err error
+		count, err = decodeRecoveryJSONArray(
+			raw.SelectionCandidates,
+			len(candidates),
+			"selection candidate",
+			func(encoded json.RawMessage, index int) error {
+				var candidate RecoverySelectionCandidate
+				if err := decodeRecoveryJSON(encoded, &candidate); err != nil {
+					return fmt.Errorf("recovery: decode selection candidate: %w", err)
+				}
+				candidates[index] = candidate
+				return nil
+			},
+		)
+		if err != nil {
+			return err
 		}
 	}
-	type wire PaneRecoveryInfo
-	var decoded wire
-	if err := decodeRecoveryJSON(data, &decoded); err != nil {
-		return err
+	result := PaneRecoveryInfo{
+		Status:          raw.Status,
+		StrategyLabel:   raw.StrategyLabel,
+		DetailCode:      raw.DetailCode,
+		HistoryBoundary: raw.HistoryBoundary,
+		CanRetry:        raw.CanRetry,
+		CanSelect:       raw.CanSelect,
 	}
-	result := PaneRecoveryInfo(decoded)
+	if len(raw.SelectionCandidates) != 0 {
+		result.SelectionCandidates = append(
+			[]RecoverySelectionCandidate(nil),
+			candidates[:count]...,
+		)
+	}
 	if err := result.validateRecoveryContract(); err != nil {
 		return err
 	}
@@ -1012,6 +1166,9 @@ type Message struct {
 // behavior, but its recovery fields are always decoded through these bounded,
 // validated subcontracts.
 func decodeRecoveryJSON(data []byte, destination any) error {
+	if !utf8.Valid(data) {
+		return fmt.Errorf("recovery: protocol contract is not valid UTF-8")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {

@@ -30,6 +30,7 @@ const (
 	RecoveryMaxReplacementPanes            = 256
 	RecoveryMaxReplacementPlanIDBytes      = 64
 	RecoveryMaxProtocolCapabilities        = 8
+	RecoveryMaxProtocolCapabilityBytes     = 64
 	RecoveryMaxLifecycleNamespaceBytes     = 64
 	RecoveryMaxLifecycleIntegrationIDBytes = 128
 	RecoveryMaxFailureCodeBytes            = 64
@@ -97,6 +98,9 @@ func DecodeRecoveryContract(data []byte, destination any) error {
 	if len(data) == 0 || len(data) > RecoveryMaxContractBytes {
 		return fmt.Errorf("recovery: contract input must be 1..%d bytes", RecoveryMaxContractBytes)
 	}
+	if !utf8.Valid(data) {
+		return fmt.Errorf("recovery: contract input is not valid UTF-8")
+	}
 	rv := reflect.ValueOf(destination)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("recovery: decode destination must be a non-nil pointer")
@@ -127,6 +131,61 @@ func DecodeRecoveryContract(data []byte, destination any) error {
 	}
 	rv.Elem().Set(decoded.Elem())
 	return nil
+}
+
+// decodeRecoveryJSONArray decodes no more than maximum elements into caller
+// supplied bounded temporary storage. It stops before decoding an element past
+// that limit, so fixed recovery arrays cannot silently truncate JSON input.
+func decodeRecoveryJSONArray(
+	data []byte,
+	maximum int,
+	field string,
+	decodeElement func(json.RawMessage, int) error,
+) (int, error) {
+	if !utf8.Valid(data) {
+		return 0, fmt.Errorf("recovery: %s is not valid UTF-8", field)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return 0, fmt.Errorf("recovery: decode %s: %w", field, err)
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok || delimiter != '[' {
+		return 0, fmt.Errorf("recovery: %s must be an array", field)
+	}
+
+	count := 0
+	for decoder.More() {
+		if count == maximum {
+			return 0, fmt.Errorf("recovery: %s count exceeds capacity", field)
+		}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return 0, fmt.Errorf("recovery: decode %s entry: %w", field, err)
+		}
+		if err := decodeElement(raw, count); err != nil {
+			return 0, err
+		}
+		count++
+	}
+
+	token, err = decoder.Token()
+	if err != nil {
+		return 0, fmt.Errorf("recovery: decode %s terminator: %w", field, err)
+	}
+	delimiter, ok = token.(json.Delim)
+	if !ok || delimiter != ']' {
+		return 0, fmt.Errorf("recovery: %s is not an array", field)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return 0, fmt.Errorf("recovery: %s has trailing JSON value", field)
+		}
+		return 0, fmt.Errorf("recovery: decode trailing %s value: %w", field, err)
+	}
+	return count, nil
 }
 
 func validateBoundedText(value string, maximum int, field string, allowEmpty bool) error {
@@ -900,6 +959,65 @@ func (argv RecoveryArgv) validateRecoveryContract() error {
 	return nil
 }
 
+// UnmarshalJSON decodes argv through bounded temporary storage before copying
+// it into fixed slots. encoding/json otherwise accepts and discards values
+// past the fixed array capacity.
+func (argv *RecoveryArgv) UnmarshalJSON(data []byte) error {
+	if argv == nil {
+		return fmt.Errorf("recovery: nil argv destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxContractBytes {
+		return fmt.Errorf("recovery: argv exceeds input limit")
+	}
+	var raw struct {
+		Count  *uint8          `json:"count"`
+		Values json.RawMessage `json:"values"`
+	}
+	if err := decodeRecoveryJSON(data, &raw); err != nil {
+		return err
+	}
+	if raw.Count == nil || len(raw.Values) == 0 {
+		return fmt.Errorf("recovery: argv requires count and values")
+	}
+
+	var values [RecoveryMaxLaunchArguments]RecoveryArgument
+	length, err := decodeRecoveryJSONArray(
+		raw.Values,
+		len(values),
+		"argument",
+		func(encoded json.RawMessage, index int) error {
+			var argument RecoveryArgument
+			if err := decodeRecoveryJSON(encoded, &argument); err != nil {
+				return fmt.Errorf("recovery: decode argument: %w", err)
+			}
+			values[index] = argument
+			return nil
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if length != len(values) {
+		return fmt.Errorf("recovery: argument array does not match fixed capacity")
+	}
+
+	decoded := RecoveryArgv{Count: *raw.Count}
+	copy(decoded.Values[:], values[:])
+	if err := decoded.validateRecoveryContract(); err != nil {
+		return err
+	}
+	*argv = decoded
+	return nil
+}
+
+func (argv RecoveryArgv) MarshalJSON() ([]byte, error) {
+	if err := argv.validateRecoveryContract(); err != nil {
+		return nil, err
+	}
+	type wire RecoveryArgv
+	return json.Marshal(wire(argv))
+}
+
 // NewRecoveryArgv constructs the fixed argv representation only after bounding
 // cardinality; it never allocates or copies an unbounded caller slice.
 func NewRecoveryArgv(arguments []RecoveryArgument) (RecoveryArgv, error) {
@@ -989,6 +1107,64 @@ func (delta RecoveryEnvironmentDelta) validateRecoveryContract() error {
 		seen[entry.Name] = struct{}{}
 	}
 	return nil
+}
+
+// UnmarshalJSON decodes environment entries through bounded temporary storage
+// before copying them into fixed slots.
+func (delta *RecoveryEnvironmentDelta) UnmarshalJSON(data []byte) error {
+	if delta == nil {
+		return fmt.Errorf("recovery: nil environment destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxContractBytes {
+		return fmt.Errorf("recovery: environment delta exceeds input limit")
+	}
+	var raw struct {
+		Count   *uint8          `json:"count"`
+		Entries json.RawMessage `json:"entries"`
+	}
+	if err := decodeRecoveryJSON(data, &raw); err != nil {
+		return err
+	}
+	if raw.Count == nil || len(raw.Entries) == 0 {
+		return fmt.Errorf("recovery: environment delta requires count and entries")
+	}
+
+	var entries [RecoveryMaxEnvironmentEntries]RecoveryEnvironmentEntry
+	length, err := decodeRecoveryJSONArray(
+		raw.Entries,
+		len(entries),
+		"environment entry",
+		func(encoded json.RawMessage, index int) error {
+			var entry RecoveryEnvironmentEntry
+			if err := decodeRecoveryJSON(encoded, &entry); err != nil {
+				return fmt.Errorf("recovery: decode environment entry: %w", err)
+			}
+			entries[index] = entry
+			return nil
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if length != len(entries) {
+		return fmt.Errorf("recovery: environment entry array does not match fixed capacity")
+	}
+
+	decoded := RecoveryEnvironmentDelta{Count: *raw.Count}
+	copy(decoded.Entries[:], entries[:])
+	if err := decoded.validateRecoveryContract(); err != nil {
+		return err
+	}
+	*delta = decoded
+	return nil
+}
+
+func (delta RecoveryEnvironmentDelta) MarshalJSON() ([]byte, error) {
+	if err := delta.validateRecoveryContract(); err != nil {
+		return nil, err
+	}
+	type wire RecoveryEnvironmentDelta
+	return json.Marshal(wire(delta))
 }
 
 // NewRecoveryEnvironmentDelta constructs fixed environment storage after
@@ -1184,6 +1360,97 @@ func (*RecoveryCandidateResolution) UnmarshalJSON([]byte) error {
 	return fmt.Errorf("recovery: candidate resolution is daemon-local")
 }
 
+type recoveryCandidateResolutionDisposition uint8
+
+const (
+	recoveryCandidateResolutionResolved recoveryCandidateResolutionDisposition = iota + 1
+	recoveryCandidateResolutionRejected
+)
+
+// RecoveryCandidateResolutionResult is the validated discriminated result of
+// resolving one browser handle. Its authority-bearing resolution is inaccessible
+// unless it was accepted; failures expose only candidate-invalid.
+type RecoveryCandidateResolutionResult struct {
+	disposition recoveryCandidateResolutionDisposition
+	resolution  *RecoveryCandidateResolution
+	detailCode  RecoveryDetailCode
+}
+
+func (result RecoveryCandidateResolutionResult) validateRecoveryContract() error {
+	switch result.disposition {
+	case recoveryCandidateResolutionResolved:
+		if result.resolution == nil || result.detailCode != RecoveryDetailNone {
+			return fmt.Errorf("recovery: resolved candidate result has rejection or no resolution")
+		}
+		return result.resolution.validateRecoveryContract()
+	case recoveryCandidateResolutionRejected:
+		if result.resolution != nil || result.detailCode != RecoveryDetailCandidateInvalid {
+			return fmt.Errorf("recovery: rejected candidate result exposes resolution or invalid detail")
+		}
+		return nil
+	default:
+		return fmt.Errorf("recovery: candidate result has no disposition")
+	}
+}
+
+// NewResolvedRecoveryCandidateResolution validates and seals exactly one
+// daemon-local resolution into a successful result.
+func NewResolvedRecoveryCandidateResolution(
+	resolution RecoveryCandidateResolution,
+) (RecoveryCandidateResolutionResult, error) {
+	result := RecoveryCandidateResolutionResult{
+		disposition: recoveryCandidateResolutionResolved,
+		resolution:  &resolution,
+		detailCode:  RecoveryDetailNone,
+	}
+	if err := result.validateRecoveryContract(); err != nil {
+		return RecoveryCandidateResolutionResult{}, err
+	}
+	return result, nil
+}
+
+// NewRejectedRecoveryCandidateResolution creates the sole redacted candidate
+// failure form. It intentionally does not accept an authority-bearing value.
+func NewRejectedRecoveryCandidateResolution() RecoveryCandidateResolutionResult {
+	return RecoveryCandidateResolutionResult{
+		disposition: recoveryCandidateResolutionRejected,
+		detailCode:  RecoveryDetailCandidateInvalid,
+	}
+}
+
+// Resolved reports whether this result carries a validated resolution.
+func (result RecoveryCandidateResolutionResult) Resolved() bool {
+	return result.validateRecoveryContract() == nil &&
+		result.disposition == recoveryCandidateResolutionResolved
+}
+
+// Resolution returns a copy of the exact daemon-local identity only for a
+// validated successful result. Rejected and malformed results cannot expose it.
+func (result RecoveryCandidateResolutionResult) Resolution() (RecoveryCandidateResolution, bool) {
+	if !result.Resolved() {
+		return RecoveryCandidateResolution{}, false
+	}
+	return *result.resolution, true
+}
+
+// RejectionDetail returns the single redacted failure detail, if this is a
+// validated rejected result.
+func (result RecoveryCandidateResolutionResult) RejectionDetail() (RecoveryDetailCode, bool) {
+	if result.validateRecoveryContract() != nil ||
+		result.disposition != recoveryCandidateResolutionRejected {
+		return "", false
+	}
+	return result.detailCode, true
+}
+
+func (RecoveryCandidateResolutionResult) MarshalJSON() ([]byte, error) {
+	return nil, fmt.Errorf("recovery: candidate resolution result is daemon-local")
+}
+
+func (*RecoveryCandidateResolutionResult) UnmarshalJSON([]byte) error {
+	return fmt.Errorf("recovery: candidate resolution result is daemon-local")
+}
+
 // RecoveryCandidateLeaseResolver is the daemon-held candidate registry
 // boundary. It must atomically resolve the handle, validate the daemon-held
 // exact session identity, verify that its workspace-qualified pane, recovery
@@ -1191,7 +1458,7 @@ func (*RecoveryCandidateResolution) UnmarshalJSON([]byte) error {
 // expired or consumed state, and consume the single-use lease before returning
 // a successful resolution.
 type RecoveryCandidateLeaseResolver interface {
-	ResolveAndConsumeRecoveryCandidate(RecoverySelectRequest) (RecoveryCandidateResolution, RecoveryDetailCode)
+	ResolveAndConsumeRecoveryCandidate(RecoverySelectRequest) RecoveryCandidateResolutionResult
 }
 
 // RecoveryReplacementPlanID is an opaque daemon-local 256-bit plan handle
@@ -1235,6 +1502,65 @@ func (set RecoveryReplacementPaneSet) validateRecoveryContract() error {
 		seen[pane] = struct{}{}
 	}
 	return nil
+}
+
+// UnmarshalJSON decodes a replacement census into bounded temporary storage
+// before copying it into fixed slots. This rejects surplus panes instead of
+// accepting the prefix that fits in the fixed array.
+func (set *RecoveryReplacementPaneSet) UnmarshalJSON(data []byte) error {
+	if set == nil {
+		return fmt.Errorf("recovery: nil replacement pane set destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxContractBytes {
+		return fmt.Errorf("recovery: replacement pane set exceeds input limit")
+	}
+	var raw struct {
+		Count *uint16         `json:"count"`
+		Panes json.RawMessage `json:"panes"`
+	}
+	if err := decodeRecoveryJSON(data, &raw); err != nil {
+		return err
+	}
+	if raw.Count == nil || len(raw.Panes) == 0 {
+		return fmt.Errorf("recovery: replacement pane set requires count and panes")
+	}
+
+	var panes [RecoveryMaxReplacementPanes]RecoveryPaneRef
+	length, err := decodeRecoveryJSONArray(
+		raw.Panes,
+		len(panes),
+		"replacement pane",
+		func(encoded json.RawMessage, index int) error {
+			var pane RecoveryPaneRef
+			if err := decodeRecoveryJSON(encoded, &pane); err != nil {
+				return fmt.Errorf("recovery: decode replacement pane: %w", err)
+			}
+			panes[index] = pane
+			return nil
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if length != len(panes) {
+		return fmt.Errorf("recovery: replacement pane array does not match fixed capacity")
+	}
+
+	decoded := RecoveryReplacementPaneSet{Count: *raw.Count}
+	copy(decoded.Panes[:], panes[:])
+	if err := decoded.validateRecoveryContract(); err != nil {
+		return err
+	}
+	*set = decoded
+	return nil
+}
+
+func (set RecoveryReplacementPaneSet) MarshalJSON() ([]byte, error) {
+	if err := set.validateRecoveryContract(); err != nil {
+		return nil, err
+	}
+	type wire RecoveryReplacementPaneSet
+	return json.Marshal(wire(set))
 }
 
 // NewRecoveryReplacementPaneSet bounds a registry-derived pane census before

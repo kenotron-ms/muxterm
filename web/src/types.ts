@@ -180,7 +180,20 @@ export type SessiondRecoveryCapability =
 
 /** Maximum length of SessiondRecoveryCapabilities.values. */
 export const SessiondRecoveryMaxCapabilities = 8;
+/** Maximum UTF-8 byte length of one syntactically valid capability offer. */
+export const SessiondRecoveryMaxCapabilityBytes = 64;
 
+/**
+ * A hello offer can name a bounded future capability. Sessiond validates its
+ * syntax and returns only the recognized intersection in a hello result.
+ */
+export type SessiondRecoveryCapabilityOffer = string;
+
+export interface SessiondRecoveryCapabilityOffers {
+  values: readonly SessiondRecoveryCapabilityOffer[];
+}
+
+/** Server-produced capability intersections contain recognized names only. */
 export interface SessiondRecoveryCapabilities {
   /** Length is authoritative and must not exceed SessiondRecoveryMaxCapabilities. */
   values: readonly SessiondRecoveryCapability[];
@@ -188,15 +201,20 @@ export interface SessiondRecoveryCapabilities {
 
 export interface SessiondProtocolHello {
   recoverySchemaVersion: number;
-  capabilities: SessiondRecoveryCapabilities;
+  capabilities: SessiondRecoveryCapabilityOffers;
 }
 
+type SessiondProtocolHelloResultBase = {
+  recoverySchemaVersion: number;
+  capabilities: SessiondRecoveryCapabilities;
+};
+
 export type SessiondProtocolHelloResult =
-  | (SessiondProtocolHello & {
+  | (SessiondProtocolHelloResultBase & {
       compatible: true;
       detailCode: 'none';
     })
-  | (SessiondProtocolHello & {
+  | (SessiondProtocolHelloResultBase & {
       compatible: false;
       detailCode: 'schema-incompatible';
     });

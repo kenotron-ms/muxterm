@@ -1,6 +1,7 @@
 package sessiond
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -22,6 +23,53 @@ func (capability RecoveryLifecycleCapability) validateRecoveryContract() error {
 		return fmt.Errorf("recovery: lifecycle capability is zero")
 	}
 	return nil
+}
+
+// UnmarshalJSON rejects arrays whose length differs from the capability's
+// exact byte width before copying into fixed storage. encoding/json otherwise
+// discards a surplus array suffix.
+func (capability *RecoveryLifecycleCapability) UnmarshalJSON(data []byte) error {
+	if capability == nil {
+		return fmt.Errorf("recovery: nil lifecycle capability destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxContractBytes {
+		return fmt.Errorf("recovery: lifecycle capability exceeds input limit")
+	}
+	var bytes [RecoveryLifecycleCapabilityBytes]byte
+	count, err := decodeRecoveryJSONArray(
+		data,
+		len(bytes),
+		"lifecycle capability",
+		func(encoded json.RawMessage, index int) error {
+			var value uint8
+			if err := decodeRecoveryJSON(encoded, &value); err != nil {
+				return fmt.Errorf("recovery: decode lifecycle capability byte: %w", err)
+			}
+			bytes[index] = value
+			return nil
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if count != len(bytes) {
+		return fmt.Errorf("recovery: lifecycle capability must contain exactly %d bytes", len(bytes))
+	}
+
+	decoded := RecoveryLifecycleCapability(bytes)
+	if err := decoded.validateRecoveryContract(); err != nil {
+		return err
+	}
+	*capability = decoded
+	return nil
+}
+
+func (capability RecoveryLifecycleCapability) MarshalJSON() ([]byte, error) {
+	if err := capability.validateRecoveryContract(); err != nil {
+		return nil, err
+	}
+	type wire RecoveryLifecycleCapability
+	return json.Marshal(wire(capability))
 }
 
 // RecoveryIntegrationNamespace is bounded by
@@ -331,6 +379,118 @@ func (outcome RecoveryLifecycleCaptureOutcome) validateRecoveryContract() error 
 	return nil
 }
 
+// RecoveryLifecycleResolutionResult is the validated discriminated result of
+// resolving one lifecycle callback. A successful result contains exactly one
+// daemon-local resolved capture. A rejected result contains no capture and
+// exposes only its compatible redacted rejection/detail pair.
+type RecoveryLifecycleResolutionResult struct {
+	outcome    RecoveryLifecycleCaptureOutcome
+	resolution *RecoveryLifecycleResolvedCapture
+}
+
+func (result RecoveryLifecycleResolutionResult) validateRecoveryContract() error {
+	if err := result.outcome.validateRecoveryContract(); err != nil {
+		return err
+	}
+	switch result.outcome.Disposition {
+	case RecoveryLifecycleCaptureAccepted:
+		if result.resolution == nil {
+			return fmt.Errorf("recovery: accepted lifecycle result has no resolution")
+		}
+		return result.resolution.validateRecoveryContract()
+	case RecoveryLifecycleCaptureRejected:
+		if result.resolution != nil {
+			return fmt.Errorf("recovery: rejected lifecycle result exposes resolution")
+		}
+		return nil
+	default:
+		return fmt.Errorf("recovery: lifecycle result has no disposition")
+	}
+}
+
+// NewAcceptedRecoveryLifecycleResolution validates and seals exactly one
+// daemon-local resolved capture into a successful result.
+func NewAcceptedRecoveryLifecycleResolution(
+	resolution RecoveryLifecycleResolvedCapture,
+) (RecoveryLifecycleResolutionResult, error) {
+	result := RecoveryLifecycleResolutionResult{
+		outcome: RecoveryLifecycleCaptureOutcome{
+			Disposition:   RecoveryLifecycleCaptureAccepted,
+			RejectionCode: RecoveryLifecycleRejectionNone,
+			DetailCode:    RecoveryDetailNone,
+		},
+		resolution: &resolution,
+	}
+	if err := result.validateRecoveryContract(); err != nil {
+		return RecoveryLifecycleResolutionResult{}, err
+	}
+	return result, nil
+}
+
+// NewRejectedRecoveryLifecycleResolution creates a redacted rejected result
+// from a closed lifecycle rejection code. It accepts no resolved capture.
+func NewRejectedRecoveryLifecycleResolution(
+	rejectionCode RecoveryLifecycleRejectionCode,
+) (RecoveryLifecycleResolutionResult, error) {
+	detailCode, ok := lifecycleDetailCodeForRejection(rejectionCode)
+	if !ok || rejectionCode == RecoveryLifecycleRejectionNone {
+		return RecoveryLifecycleResolutionResult{}, fmt.Errorf("recovery: invalid lifecycle rejection code %q", rejectionCode)
+	}
+	result := RecoveryLifecycleResolutionResult{
+		outcome: RecoveryLifecycleCaptureOutcome{
+			Disposition:   RecoveryLifecycleCaptureRejected,
+			RejectionCode: rejectionCode,
+			DetailCode:    detailCode,
+		},
+	}
+	if err := result.validateRecoveryContract(); err != nil {
+		return RecoveryLifecycleResolutionResult{}, err
+	}
+	return result, nil
+}
+
+// Accepted reports whether this result carries a validated resolved capture.
+func (result RecoveryLifecycleResolutionResult) Accepted() bool {
+	return result.validateRecoveryContract() == nil &&
+		result.outcome.Disposition == RecoveryLifecycleCaptureAccepted
+}
+
+// Resolution returns a copy of the daemon-local capture only for a validated
+// accepted result. Rejected and malformed results cannot expose authority.
+func (result RecoveryLifecycleResolutionResult) Resolution() (RecoveryLifecycleResolvedCapture, bool) {
+	if !result.Accepted() {
+		return RecoveryLifecycleResolvedCapture{}, false
+	}
+	return *result.resolution, true
+}
+
+// Rejection returns the only redacted rejection/detail pair for a validated
+// rejected result.
+func (result RecoveryLifecycleResolutionResult) Rejection() (RecoveryLifecycleRejectionCode, RecoveryDetailCode, bool) {
+	if result.validateRecoveryContract() != nil ||
+		result.outcome.Disposition != RecoveryLifecycleCaptureRejected {
+		return "", "", false
+	}
+	return result.outcome.RejectionCode, result.outcome.DetailCode, true
+}
+
+// Outcome returns the redacted lifecycle disposition for a validated result.
+// An unconstructed result has no observable disposition.
+func (result RecoveryLifecycleResolutionResult) Outcome() (RecoveryLifecycleCaptureOutcome, bool) {
+	if result.validateRecoveryContract() != nil {
+		return RecoveryLifecycleCaptureOutcome{}, false
+	}
+	return result.outcome, true
+}
+
+func (RecoveryLifecycleResolutionResult) MarshalJSON() ([]byte, error) {
+	return nil, fmt.Errorf("recovery: lifecycle resolution result is daemon-local")
+}
+
+func (*RecoveryLifecycleResolutionResult) UnmarshalJSON([]byte) error {
+	return fmt.Errorf("recovery: lifecycle resolution result is daemon-local")
+}
+
 // RecoveryLifecycleLeaseIssuer is the daemon-only issuance boundary. The
 // implementation derives current authoritative bindings, chooses daemon time
 // and expiry, draws a high-entropy capability, retains the resulting lease,
@@ -355,7 +515,7 @@ type RecoveryLifecycleLeaseIssuer interface {
 type RecoveryLifecycleLeaseResolver interface {
 	ResolveAndConsumeLifecycleCapture(
 		RecoveryLifecycleCapture,
-	) (RecoveryLifecycleResolvedCapture, RecoveryLifecycleCaptureOutcome)
+	) RecoveryLifecycleResolutionResult
 }
 
 // RecoveryIntegrationHealth is the observed state of a namespaced recovery
