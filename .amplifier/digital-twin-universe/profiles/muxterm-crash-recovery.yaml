@@ -1,0 +1,488 @@
+# Recovery-specific muxterm acceptance environment.
+#
+# Required typed launch file:
+#   /tmp/crash-recovery-wave1/recovery-dtu/MUXTERM_REF
+#     -- exactly 40 lowercase hexadecimal bytes with no newline, prevalidated by the host
+#        handoff and pushed by provision.files as inert data (never shell source)
+#
+# Infrastructure preflight requires no API key. Tool scenarios must be rejected
+# with credentials-unavailable until shell-safe-non-disk-dtu-api-proxy is
+# available; readiness metadata declares that unavailable capability explicitly.
+#
+# Host handoff before launch (do not substitute the value into this profile):
+#   MUXTERM_REF="$(git rev-parse HEAD)"
+#   [[ "$MUXTERM_REF" =~ ^[0-9a-f]{40}$ ]]
+#   REMOTE_REF="$(git ls-remote --exit-code --refs origin refs/heads/gb/crash-recovery/recovery-dtu | awk 'NR == 1 {print $1}')"
+#   test "$REMOTE_REF" = "$MUXTERM_REF"
+#   mkdir -p /tmp/crash-recovery-wave1/recovery-dtu
+#   install -m 0600 /dev/null /tmp/crash-recovery-wave1/recovery-dtu/MUXTERM_REF
+#   printf '%s' "$MUXTERM_REF" > /tmp/crash-recovery-wave1/recovery-dtu/MUXTERM_REF
+#   amplifier-digital-twin launch \
+#     .amplifier/digital-twin-universe/profiles/muxterm-crash-recovery.yaml \
+#     --name muxterm-crash-recovery
+name: muxterm-crash-recovery
+description: >
+  Exact-ref Ubuntu 24.04 muxterm build with real PTYs, pinned recovery-strategy
+  CLIs, pinned Playwright Chromium, isolated state, and machine-readable readiness.
+
+base:
+  image: ubuntu:24.04
+  config:
+    security.nesting: "false"
+    limits.cpu: "4"
+    limits.memory: 8GiB
+
+access:
+  ports:
+    - host: 38311
+      container: 38311
+      label: muxterm crash-recovery acceptance
+      path: /
+      verify: true
+      verify_timeout: 60
+      verify_interval: 2
+
+provision:
+  files:
+    - src: /tmp/crash-recovery-wave1/recovery-dtu/MUXTERM_REF
+      dest: /run/muxterm-crash-recovery/unvalidated-muxterm-ref
+      mode: "0400"
+
+  setup_cmds:
+    # Read the typed provision-file payload as inert data and validate it before
+    # creating any child. MUXTERM_REF never enters DTU's generated shell source.
+    - |
+      install -d -o root -g root -m 0700 /run/muxterm-crash-recovery
+      ref_path=/run/muxterm-crash-recovery/unvalidated-muxterm-ref
+      ref_size="$(LC_ALL=C wc -c < "$ref_path")"
+      if [ "$ref_size" -ne 40 ] \
+        || ! LC_ALL=C grep -Eq '^[0-9a-f]{40}$' "$ref_path"; then
+        echo 'MUXTERM_REF must be an exact lowercase 40-character commit SHA' >&2
+        exit 24
+      fi
+      MUXTERM_REF="$(LC_ALL=C cat "$ref_path")"
+      if ! [[ "$MUXTERM_REF" =~ ^[0-9a-f]{40}$ ]]; then
+        echo 'MUXTERM_REF readback failed exact lowercase 40-character validation' >&2
+        exit 24
+      fi
+      unset ref_path ref_size
+      printf '%s\n' "$MUXTERM_REF" > /run/muxterm-crash-recovery/validated-muxterm-ref
+      chmod 0400 /run/muxterm-crash-recovery/validated-muxterm-ref
+      rm -f /run/muxterm-crash-recovery/unvalidated-muxterm-ref
+
+    - >-
+      apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
+      --no-install-recommends build-essential ca-certificates curl git jq
+      libpam0g-dev nginx procps python3 python3-pip python3-venv ripgrep
+      util-linux xz-utils zsh
+      && rm -rf /var/lib/apt/lists/*
+
+    # Install the exact Go toolchain declared by this muxterm tree, with
+    # architecture-specific upstream checksums verified before extraction.
+    - |
+      case "$(uname -m)" in
+        x86_64)
+          GO_ARCH=amd64
+          GO_SHA256=77e5da33bb72aeaef1ba4418b6fe511bc4d041873cbf82e5aa6318740df98717
+          ;;
+        aarch64|arm64)
+          GO_ARCH=arm64
+          GO_SHA256=d5501ee5aca0f258d5fe9bfaed401958445014495dc115f202d43d5210b45241
+          ;;
+        *)
+          echo "unsupported architecture for Go: $(uname -m)" >&2
+          exit 20
+          ;;
+      esac
+      curl -fsSLo /tmp/go1.24.4.tar.gz "https://go.dev/dl/go1.24.4.linux-$GO_ARCH.tar.gz"
+      printf '%s  %s\n' "$GO_SHA256" /tmp/go1.24.4.tar.gz | sha256sum -c -
+      rm -rf /usr/local/go
+      tar -C /usr/local -xzf /tmp/go1.24.4.tar.gz
+      rm -f /tmp/go1.24.4.tar.gz
+      ln -sf /usr/local/go/bin/go /usr/local/bin/go
+      test "$(go version | awk '{print $3}')" = go1.24.4
+
+    # Node 22.18.0 satisfies Claude Code's Node >=22 contract. The official
+    # tarball is pinned and checksum-verified for both supported DTU arches.
+    - |
+      case "$(uname -m)" in
+        x86_64)
+          NODE_ARCH=x64
+          NODE_SHA256=c1bfeecf1d7404fa74728f9db72e697decbd8119ccc6f5a294d795756dfcfca7
+          ;;
+        aarch64|arm64)
+          NODE_ARCH=arm64
+          NODE_SHA256=04fca1b9afecf375f26b41d65d52aa1703a621abea5a8948c7d1e351e85edade
+          ;;
+        *)
+          echo "unsupported architecture for Node: $(uname -m)" >&2
+          exit 21
+          ;;
+      esac
+      curl -fsSLo /tmp/node-v22.18.0.tar.xz "https://nodejs.org/dist/v22.18.0/node-v22.18.0-linux-$NODE_ARCH.tar.xz"
+      printf '%s  %s\n' "$NODE_SHA256" /tmp/node-v22.18.0.tar.xz | sha256sum -c -
+      tar -C /usr/local --strip-components=1 -xJf /tmp/node-v22.18.0.tar.xz
+      rm -f /tmp/node-v22.18.0.tar.xz
+      test "$(node --version)" = v22.18.0
+
+    # Install an exact uv release in its own venv, then install the native
+    # Amplifier app CLI from its signed v0.1.1 commit rather than a branch.
+    - |
+      python3 -m venv /opt/uv
+      /opt/uv/bin/pip install --disable-pip-version-check --no-cache-dir uv==0.12.5
+      ln -sf /opt/uv/bin/uv /usr/local/bin/uv
+      test "$(uv --version)" = "uv 0.12.5"
+      uv tool install --python /usr/bin/python3 "git+https://github.com/microsoft/amplifier-app-cli@ab0ab36e3b16c416d298012a734fa205b486c6d8"
+      command -v amplifier >/dev/null
+      amplifier --version
+
+    # Official native distributions. Exact npm versions also pin each
+    # platform-specific binary package selected for this Linux architecture.
+    - >-
+      npm install --global --omit=dev --no-audit --no-fund
+      @anthropic-ai/claude-code@2.1.236
+      opencode-ai@1.18.21
+      @openai/codex@0.149.0
+      @playwright/cli@0.1.18
+    - |
+      test "$(node -p "require('/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json').version")" = 2.1.236
+      test "$(node -p "require('/usr/local/lib/node_modules/opencode-ai/package.json').version")" = 1.18.21
+      test "$(node -p "require('/usr/local/lib/node_modules/@openai/codex/package.json').version")" = 0.149.0
+      test "$(node -p "require('/usr/local/lib/node_modules/@playwright/cli/package.json').version")" = 0.1.18
+      claude --version
+      opencode --version
+      codex --version
+      command -v playwright-cli >/dev/null
+
+    # @playwright/cli 0.1.18 pins Playwright and Chromium metadata. Install
+    # that package's browser and Linux dependencies, then prove a real browser
+    # process can launch before the DTU can become ready.
+    - |
+      export PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+      /usr/local/lib/node_modules/@playwright/cli/node_modules/.bin/playwright install --with-deps chromium
+      node <<'NODE'
+      const { chromium } = require('/usr/local/lib/node_modules/@playwright/cli/node_modules/playwright');
+      (async () => {
+        const browser = await chromium.launch({ headless: true });
+        const page = await browser.newPage();
+        await page.setContent('<title>muxterm-dtu-browser-ok</title>');
+        if (await page.title() !== 'muxterm-dtu-browser-ok') process.exitCode = 22;
+        await browser.close();
+      })().catch(error => { console.error(error); process.exit(23); });
+      NODE
+
+    # Durable XDG state/config/data and ephemeral XDG runtime are deliberately
+    # separate. Every persisted tool-state root is owner-only.
+    - |
+      install -d -o root -g root -m 0700 \
+        /var/lib/muxterm-crash-recovery \
+        /var/lib/muxterm-crash-recovery/config \
+        /var/lib/muxterm-crash-recovery/data \
+        /var/lib/muxterm-crash-recovery/state \
+        /var/lib/muxterm-crash-recovery/workspaces \
+        /var/cache/muxterm-crash-recovery \
+        /run/muxterm-crash-recovery \
+        /root/.amplifier /root/.claude /root/.codex /root/.config/opencode
+      cat > /etc/profile.d/muxterm-crash-recovery.sh <<'EOF'
+      export XDG_CONFIG_HOME=/var/lib/muxterm-crash-recovery/config
+      export XDG_DATA_HOME=/var/lib/muxterm-crash-recovery/data
+      export XDG_STATE_HOME=/var/lib/muxterm-crash-recovery/state
+      export XDG_CACHE_HOME=/var/cache/muxterm-crash-recovery
+      export XDG_RUNTIME_DIR=/run/muxterm-crash-recovery
+      export PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+      export MUXTERM_RECOVERY_WORKSPACES=/var/lib/muxterm-crash-recovery/workspaces
+      EOF
+      chmod 0644 /etc/profile.d/muxterm-crash-recovery.sh
+      . /etc/profile.d/muxterm-crash-recovery.sh
+      test "$(stat -c '%U:%G:%a' /var/lib/muxterm-crash-recovery)" = root:root:700
+      test "$(stat -c '%U:%G:%a' /run/muxterm-crash-recovery)" = root:root:700
+      script -qefc 'test -t 0 && test -t 1 && printf real-pty-ok' /dev/null | grep -q real-pty-ok
+
+    # Re-read the already validated runtime value from an owner-only runtime
+    # file. No launch variable is interpolated into shell source. Fetch only
+    # that object and verify detached checkout identity before building.
+    - |
+      REF="$(cat /run/muxterm-crash-recovery/validated-muxterm-ref)"
+      printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$' || {
+        echo 'MUXTERM_REF must be an exact lowercase 40-character commit SHA' >&2
+        exit 24
+      }
+      rm -rf /opt/muxterm-src
+      mkdir -p /opt/muxterm-src
+      git -C /opt/muxterm-src init
+      git -C /opt/muxterm-src remote add origin https://github.com/kenotron-ms/muxterm.git
+      git -C /opt/muxterm-src fetch --depth 1 origin "$REF"
+      git -C /opt/muxterm-src checkout --detach FETCH_HEAD
+      test "$(git -C /opt/muxterm-src rev-parse HEAD)" = "$REF"
+      make -C /opt/muxterm-src build
+      install -m 0755 /opt/muxterm-src/bin/muxterm /usr/local/bin/muxterm
+      git -C /opt/muxterm-src rev-parse HEAD > /opt/muxterm-ref
+      test "$(cat /opt/muxterm-ref)" = "$REF"
+      chmod 0444 /opt/muxterm-ref
+      muxterm version
+
+    # Start restartable transient services with only non-secret execution and
+    # XDG paths. Health polling proves both services are live before evidence.
+    - |
+      cat > /etc/nginx/nginx.conf <<'EOF'
+      worker_processes 1;
+      pid /run/nginx.pid;
+      events { worker_connections 1024; }
+      http {
+        access_log off;
+        error_log /var/log/nginx/error.log warn;
+        server {
+          listen 0.0.0.0:38311;
+          location = /__dtu/readiness.json {
+            alias /opt/dtu-readiness.json;
+            default_type application/json;
+            add_header Cache-Control "no-store";
+          }
+          location / {
+            proxy_pass http://127.0.0.1:8311;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_read_timeout 3600s;
+            proxy_buffering off;
+          }
+        }
+      }
+      EOF
+      . /etc/profile.d/muxterm-crash-recovery.sh
+      systemd-run --unit=muxterm-sessiond.service --collect \
+        --property=Restart=on-failure \
+        --property=RestartSec=1s \
+        --setenv=HOME=/root \
+        --setenv=SHELL=/bin/bash \
+        --setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin \
+        --setenv=XDG_CONFIG_HOME=/var/lib/muxterm-crash-recovery/config \
+        --setenv=XDG_DATA_HOME=/var/lib/muxterm-crash-recovery/data \
+        --setenv=XDG_STATE_HOME=/var/lib/muxterm-crash-recovery/state \
+        --setenv=XDG_CACHE_HOME=/var/cache/muxterm-crash-recovery \
+        --setenv=XDG_RUNTIME_DIR=/run/muxterm-crash-recovery \
+        /usr/local/bin/muxterm sessiond
+      for attempt in $(seq 1 30); do
+        systemctl is-active --quiet muxterm-sessiond.service && break
+        sleep 1
+      done
+      systemctl is-active --quiet muxterm-sessiond.service
+      systemd-run --unit=muxterm.service --collect \
+        --property=Restart=on-failure \
+        --property=RestartSec=1s \
+        --property=Requires=muxterm-sessiond.service \
+        --property=After=muxterm-sessiond.service \
+        --property=WorkingDirectory=/var/lib/muxterm-crash-recovery/workspaces \
+        --setenv=HOME=/root \
+        --setenv=SHELL=/bin/bash \
+        --setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin \
+        --setenv=XDG_CONFIG_HOME=/var/lib/muxterm-crash-recovery/config \
+        --setenv=XDG_DATA_HOME=/var/lib/muxterm-crash-recovery/data \
+        --setenv=XDG_STATE_HOME=/var/lib/muxterm-crash-recovery/state \
+        --setenv=XDG_CACHE_HOME=/var/cache/muxterm-crash-recovery \
+        --setenv=XDG_RUNTIME_DIR=/run/muxterm-crash-recovery \
+        /usr/local/bin/muxterm serve --addr 127.0.0.1:8311 --no-auth
+      for attempt in $(seq 1 30); do
+        systemctl is-active --quiet muxterm.service && break
+        sleep 1
+      done
+      systemctl is-active --quiet muxterm.service
+      for attempt in $(seq 1 30); do
+        curl -fsS http://127.0.0.1:8311/api/health >/tmp/muxterm-health.json && break
+        sleep 1
+      done
+      jq -e '.status == "ok"' /tmp/muxterm-health.json >/dev/null
+
+    # Emit exact, non-secret machine-readable evidence. The later acceptance
+    # driver consumes this through /__dtu/readiness.json and independently
+    # probes /api/health in real Chromium.
+    - |
+      . /etc/profile.d/muxterm-crash-recovery.sh
+      python3 <<'PY'
+      import hashlib
+      import json
+      import os
+      import pathlib
+      import pwd
+      import grp
+      import shutil
+      import stat
+      import subprocess
+
+      def run(*argv):
+          return subprocess.run(argv, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+
+      def npm_version(package):
+          root = pathlib.Path('/usr/local/lib/node_modules') / package / 'package.json'
+          return json.loads(root.read_text())['version']
+
+      def dir_evidence(path):
+          value = pathlib.Path(path)
+          info = value.stat()
+          return {
+              'path': path,
+              'owner': pwd.getpwuid(info.st_uid).pw_name,
+              'group': grp.getgrgid(info.st_gid).gr_name,
+              'mode': format(stat.S_IMODE(info.st_mode), '04o'),
+              'owner_only': stat.S_IMODE(info.st_mode) == 0o700,
+          }
+
+      muxterm_ref = pathlib.Path('/opt/muxterm-ref').read_text().strip()
+      muxterm_binary = pathlib.Path('/usr/local/bin/muxterm')
+      chromium_path = run(
+          'node', '-e',
+          "const {chromium}=require('/usr/local/lib/node_modules/@playwright/cli/node_modules/playwright');process.stdout.write(chromium.executablePath())",
+      )
+      amplifier_executable = pathlib.Path(shutil.which('amplifier')).resolve()
+      cli_actual = {
+          'amplifier': run('amplifier', '--version'),
+          'claude': run('claude', '--version'),
+          'opencode': run('opencode', '--version'),
+          'codex': run('codex', '--version'),
+          'playwright_cli': npm_version('@playwright/cli'),
+      }
+      cli_packages = {
+          'amplifier': run(
+              str(amplifier_executable.parent / 'python'),
+              '-c', 'import importlib.metadata; print(importlib.metadata.version("amplifier-app-cli"))',
+          ),
+          'claude': npm_version('@anthropic-ai/claude-code'),
+          'opencode': npm_version('opencode-ai'),
+          'codex': npm_version('@openai/codex'),
+          'playwright_cli': npm_version('@playwright/cli'),
+      }
+      expected = {
+          'amplifier': '0.1.1',
+          'claude': '2.1.236',
+          'opencode': '1.18.21',
+          'codex': '0.149.0',
+          'playwright_cli': '0.1.18',
+      }
+      directories = [
+          dir_evidence('/var/lib/muxterm-crash-recovery'),
+          dir_evidence('/var/lib/muxterm-crash-recovery/config'),
+          dir_evidence('/var/lib/muxterm-crash-recovery/data'),
+          dir_evidence('/var/lib/muxterm-crash-recovery/state'),
+          dir_evidence('/var/lib/muxterm-crash-recovery/workspaces'),
+          dir_evidence('/var/cache/muxterm-crash-recovery'),
+          dir_evidence('/run/muxterm-crash-recovery'),
+          dir_evidence('/root/.amplifier'),
+          dir_evidence('/root/.claude'),
+          dir_evidence('/root/.codex'),
+          dir_evidence('/root/.config/opencode'),
+      ]
+      with open('/tmp/muxterm-health.json', encoding='utf-8') as stream:
+          muxterm_health = json.load(stream)
+      pty_probe = run('script', '-qefc', 'test -t 0 && test -t 1 && printf real-pty-ok', '/dev/null')
+      binary_paths = {name: shutil.which(name) for name in ('muxterm', 'amplifier', 'claude', 'opencode', 'codex', 'playwright-cli')}
+      checks = {
+          'exact_muxterm_ref': len(muxterm_ref) == 40 and all(c in '0123456789abcdef' for c in muxterm_ref),
+          'muxterm_binary': muxterm_binary.is_file() and os.access(muxterm_binary, os.X_OK),
+          'strategy_binaries': all(binary_paths.values()),
+          'strategy_versions': cli_packages == expected,
+          'owner_only_directories': all(item['owner_only'] and item['owner'] == 'root' and item['group'] == 'root' for item in directories),
+          'real_pty': 'real-pty-ok' in pty_probe,
+          'chromium_binary': pathlib.Path(chromium_path).is_file() and os.access(chromium_path, os.X_OK),
+          'muxterm_http': muxterm_health == {'status': 'ok'},
+      }
+      capabilities = {
+          'safe_credential_delivery': {
+              'available': False,
+              'code': 'credentials-unavailable',
+              'required_capability': 'shell-safe-non-disk-dtu-api-proxy',
+          },
+          'tool_scenarios': {
+              'available': False,
+              'code': 'credentials-unavailable',
+              'required_capability': 'shell-safe-non-disk-dtu-api-proxy',
+          },
+      }
+      operational_ready = all(checks.values())
+      evidence = {
+          'schema': 'muxterm-crash-recovery-dtu/v1',
+          'operational_ready': operational_ready,
+          'ready': operational_ready,
+          'os': {'id': 'ubuntu', 'version': '24.04', 'architecture': run('uname', '-m')},
+          'muxterm': {
+              'source': 'https://github.com/kenotron-ms/muxterm.git',
+              'ref': muxterm_ref,
+              'binary': str(muxterm_binary),
+              'sha256': hashlib.sha256(muxterm_binary.read_bytes()).hexdigest(),
+              'version_output': run('muxterm', 'version'),
+              'http_health': muxterm_health,
+          },
+          'toolchain': {'go': run('go', 'version'), 'node': run('node', '--version'), 'uv': run('uv', '--version')},
+          'strategy_cli_expected_versions': expected,
+          'strategy_cli_package_versions': cli_packages,
+          'strategy_cli_version_output': cli_actual,
+          'binary_paths': binary_paths,
+          'playwright': {
+              'cli_version': cli_packages['playwright_cli'],
+              'engine_version': npm_version('@playwright/cli/node_modules/playwright'),
+              'chromium_executable': chromium_path,
+              'chromium_version': run(chromium_path, '--version'),
+          },
+          'directories': directories,
+          'checks': checks,
+          'capabilities': capabilities,
+      }
+      if not operational_ready:
+          raise SystemExit('recovery DTU readiness evidence contains a failed infrastructure check')
+      pathlib.Path('/opt/dtu-readiness.json').write_text(json.dumps(evidence, sort_keys=True, indent=2) + '\n')
+      os.chmod('/opt/dtu-readiness.json', 0o444)
+      PY
+      rm -f /tmp/muxterm-health.json
+      nginx
+      for attempt in $(seq 1 30); do
+        curl -fsS http://127.0.0.1:38311/__dtu/readiness.json >/dev/null && break
+        sleep 1
+      done
+      curl -fsS http://127.0.0.1:38311/__dtu/readiness.json \
+        | jq -e '.operational_ready == true
+          and .ready == true
+          and .capabilities.safe_credential_delivery.available == false
+          and .capabilities.safe_credential_delivery.code == "credentials-unavailable"
+          and .capabilities.safe_credential_delivery.required_capability == "shell-safe-non-disk-dtu-api-proxy"
+          and .capabilities.tool_scenarios.available == false
+          and .capabilities.tool_scenarios.code == "credentials-unavailable"
+          and .capabilities.tool_scenarios.required_capability == "shell-safe-non-disk-dtu-api-proxy"' >/dev/null
+      curl -fsS http://127.0.0.1:38311/api/health | jq -e '.status == "ok"' >/dev/null
+
+readiness:
+  - name: recovery-dtu-evidence
+    http:
+      url: http://localhost:38311/__dtu/readiness.json
+      expect_json:
+        schema: muxterm-crash-recovery-dtu/v1
+        operational_ready: true
+        ready: true
+  - name: muxterm-http
+    http:
+      url: http://localhost:38311/api/health
+      expect_json:
+        status: ok
+  - name: exact-pinned-versions
+    command: >-
+      jq -e '.strategy_cli_package_versions == .strategy_cli_expected_versions
+      and .checks.strategy_binaries == true
+      and .checks.chromium_binary == true'
+      /opt/dtu-readiness.json
+  - name: owner-only-state-and-runtime
+    command: >-
+      test "$(stat -c '%U:%G:%a' /var/lib/muxterm-crash-recovery)" = root:root:700
+      && test "$(stat -c '%U:%G:%a' /var/cache/muxterm-crash-recovery)" = root:root:700
+      && test "$(stat -c '%U:%G:%a' /run/muxterm-crash-recovery)" = root:root:700
+  - name: unavailable-tool-scenarios
+    command: >-
+      jq -e '.capabilities.safe_credential_delivery.available == false
+      and .capabilities.safe_credential_delivery.code == "credentials-unavailable"
+      and .capabilities.safe_credential_delivery.required_capability == "shell-safe-non-disk-dtu-api-proxy"
+      and .capabilities.tool_scenarios.available == false
+      and .capabilities.tool_scenarios.code == "credentials-unavailable"
+      and .capabilities.tool_scenarios.required_capability == "shell-safe-non-disk-dtu-api-proxy"'
+      /opt/dtu-readiness.json
+  - name: real-pty
+    command: >-
+      script -qefc 'test -t 0 && test -t 1 && printf real-pty-ok'
+      /dev/null | grep -q real-pty-ok
