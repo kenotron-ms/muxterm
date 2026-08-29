@@ -9,17 +9,33 @@ import {
   type CloseRiskReason,
   type CloseTarget,
   type SessiondMessage,
+  type SessiondRecoveryCapability,
+  type SessiondRecoveryPaneRef,
 } from './types';
 import type { MuxStore } from './state';
+import {
+  buildActivePanePersistence,
+  buildProtocolHello,
+  buildRecoveryRetry,
+  buildRecoverySelect,
+  classifyRecoveryInbound,
+  utf8ByteLength,
+  type RecoveryWireEvent,
+} from './recovery-wire';
 
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
 export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
+export type RecoveryEventCallback = (event: RecoveryWireEvent) => void;
+export type RecoveryNegotiationCallback = (
+  compatible: boolean,
+  capabilities: ReadonlySet<SessiondRecoveryCapability>,
+) => void;
 
 const BACKOFF_BASE = 1000;
 const BACKOFF_CAP = 30000;
 const JITTER_MAX = 500;
 const CLOSE_REQUEST_TIMEOUT_MS = 10_000;
-const MAX_CLOSE_CID = Number.MAX_SAFE_INTEGER;
+const MAX_CID = Number.MAX_SAFE_INTEGER;
 const INVALID_CLOSE_TICKET_FAILURE = 'invalid-close-ticket';
 const CLOSE_RISK_REASONS = new Set<CloseRiskReason>([
   'command-active',
@@ -116,12 +132,17 @@ export class MuxSocket {
   private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private _reconnectAttempts = 0;
   private _intentionalClose = false;
-  private _nextCloseCid = 1;
+  private _nextCid = 1;
   private _pendingCloseRequests = new Map<number, PendingCloseRequest>();
+  private _recoveryCompatible = false;
+  private _recoveryCapabilities = new Set<SessiondRecoveryCapability>();
+  private _helloSent = false;
 
   onDisconnect: (() => void) | null = null;
   onReconnect: (() => void) | null = null;
   onSessiondMessage: ((msg: SessiondMessage) => void) | null = null;
+  onRecoveryEvent: RecoveryEventCallback | null = null;
+  onRecoveryNegotiationChange: RecoveryNegotiationCallback | null = null;
   /**
    * Fires when the daemon broadcasts pane-resized: the canonical PTY size for
    * paneId changed because some other client became (or already was)
@@ -154,6 +175,8 @@ export class MuxSocket {
 
   disconnect(): void {
     this._intentionalClose = true;
+    this._helloSent = false;
+    this._resetRecoveryNegotiation();
     this._rejectPendingCloseRequests(
       new Error('The close outcome could not be confirmed because the connection closed.'),
     );
@@ -168,7 +191,7 @@ export class MuxSocket {
   }
 
   sendPaneInput(paneId: number, data: Uint8Array): void {
-    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+    if (this._ws && this._ws.readyState === WebSocket.OPEN && this._helloSent) {
       this._ws.send(encodePaneFrame(paneId, data));
     }
   }
@@ -180,7 +203,7 @@ export class MuxSocket {
 
   /** Send one flat sessiond control message if the socket is open. */
   private sendSessiond(msg: SessiondMessage): void {
-    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+    if (this._ws && this._ws.readyState === WebSocket.OPEN && this._helloSent) {
       this._ws.send(JSON.stringify(msg));
     }
   }
@@ -314,6 +337,8 @@ export class MuxSocket {
 
   destroy(): void {
     this._intentionalClose = true;
+    this._helloSent = false;
+    this._resetRecoveryNegotiation();
     this._rejectPendingCloseRequests(
       new Error('The close outcome could not be confirmed because the connection was destroyed.'),
     );
@@ -331,6 +356,30 @@ export class MuxSocket {
     return this._ws?.readyState === WebSocket.OPEN;
   }
 
+  get recoveryCompatible(): boolean {
+    return this._recoveryCompatible;
+  }
+
+  supportsRecoveryCapability(capability: SessiondRecoveryCapability): boolean {
+    return this._recoveryCompatible && this._recoveryCapabilities.has(capability);
+  }
+
+  retryRecovery(pane: SessiondRecoveryPaneRef): boolean {
+    return this._sendRecoveryIntent('recovery-retry', (cid) => buildRecoveryRetry(pane, cid));
+  }
+
+  selectRecovery(candidateHandle: string): boolean {
+    return this._sendRecoveryIntent('recovery-select', (cid) =>
+      buildRecoverySelect(candidateHandle, cid),
+    );
+  }
+
+  persistActivePane(pane: SessiondRecoveryPaneRef): boolean {
+    return this._sendRecoveryIntent('active-pane-persistence', (cid) =>
+      buildActivePanePersistence(pane, cid),
+    );
+  }
+
   private _scheduleReconnect(): void {
     const delay = Math.min(BACKOFF_BASE * 2 ** this._reconnectAttempts, BACKOFF_CAP);
     const jitter = Math.random() * JITTER_MAX;
@@ -338,14 +387,20 @@ export class MuxSocket {
     this._reconnectTimer = setTimeout(() => this._open(), delay + jitter);
   }
 
-  private _allocateCloseCid(): number {
-    const start = this._nextCloseCid;
+  /**
+   * All browser-originated correlated requests use one socket-wide sequence.
+   * Pending close requests reserve their IDs until their authoritative outcome
+   * arrives, so wraparound cannot accidentally resolve a close with another
+   * request's CID.
+   */
+  private _allocateCid(): number {
+    const start = this._nextCid;
     do {
-      const cid = this._nextCloseCid;
-      this._nextCloseCid = cid >= MAX_CLOSE_CID ? 1 : cid + 1;
+      const cid = this._nextCid;
+      this._nextCid = cid >= MAX_CID ? 1 : cid + 1;
       if (!this._pendingCloseRequests.has(cid)) return cid;
-    } while (this._nextCloseCid !== start);
-    throw new Error('No close request correlation IDs are available.');
+    } while (this._nextCid !== start);
+    throw new Error('No request correlation IDs are available.');
   }
 
   private _sendCloseRequest(
@@ -354,13 +409,13 @@ export class MuxSocket {
     buildMessage: (cid: number) => CloseIntentRequest | CloseConfirmRequest,
   ): Promise<CloseOutcome> {
     const ws = this._ws;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !this._helloSent) {
       return Promise.reject(new Error('Cannot request close while disconnected.'));
     }
 
     let cid: number;
     try {
-      cid = this._allocateCloseCid();
+      cid = this._allocateCid();
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
@@ -444,17 +499,73 @@ export class MuxSocket {
     this._pendingCloseRequests.clear();
   }
 
+  private _sendRecoveryIntent(
+    capability: SessiondRecoveryCapability,
+    build: (cid: number) => Record<string, unknown> | null,
+  ): boolean {
+    const ws = this._ws;
+    if (
+      !ws ||
+      ws.readyState !== WebSocket.OPEN ||
+      !this._helloSent ||
+      !this._recoveryCompatible ||
+      !this._recoveryCapabilities.has(capability)
+    ) {
+      return false;
+    }
+
+    try {
+      const message = build(this._allocateCid());
+      if (message === null) return false;
+      ws.send(JSON.stringify(message));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private _setRecoveryNegotiation(
+    compatible: boolean,
+    capabilities: readonly SessiondRecoveryCapability[],
+  ): void {
+    const nextCapabilities = new Set(capabilities);
+    const changed =
+      this._recoveryCompatible !== compatible ||
+      this._recoveryCapabilities.size !== nextCapabilities.size ||
+      [...this._recoveryCapabilities].some((capability) => !nextCapabilities.has(capability));
+    if (!changed) return;
+
+    this._recoveryCompatible = compatible;
+    this._recoveryCapabilities = nextCapabilities;
+    this.onRecoveryNegotiationChange?.(compatible, new Set(nextCapabilities));
+  }
+
+  private _resetRecoveryNegotiation(): void {
+    this._setRecoveryNegotiation(false, []);
+  }
+
   private _open(): void {
+    this._helloSent = false;
+    this._resetRecoveryNegotiation();
     const ws = new WebSocket(this._url);
     ws.binaryType = 'arraybuffer';
     this._ws = ws;
 
     ws.onopen = () => {
+      if (this._ws !== ws) return;
       this._reconnectAttempts = 0;
+      try {
+        ws.send(JSON.stringify(buildProtocolHello()));
+        this._helloSent = true;
+      } catch {
+        ws.close();
+        return;
+      }
       this.onReconnect?.();
     };
 
     ws.onmessage = (ev: MessageEvent) => {
+      if (this._ws !== ws) return;
       // Binary pane-data frame: [4-byte LE paneId][raw bytes].
       if (ev.data instanceof ArrayBuffer) {
         if (ev.data.byteLength >= 4) {
@@ -465,10 +576,32 @@ export class MuxSocket {
       }
       // Text frame — JSON control message
       if (typeof ev.data === 'string') {
-        const raw = JSON.parse(ev.data) as Record<string, unknown>;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(ev.data);
+        } catch {
+          return;
+        }
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
+
+        const classified = classifyRecoveryInbound(parsed, utf8ByteLength(ev.data));
+        if (classified.kind === 'reject') return;
+        if (classified.kind === 'recovery') {
+          if (classified.event.type === 'protocol-hello-result') {
+            this._setRecoveryNegotiation(
+              classified.event.protocolHelloResult.compatible,
+              classified.event.protocolHelloResult.capabilities.values,
+            );
+          }
+          this.onRecoveryEvent?.(classified.event);
+          return;
+        }
+
+        const raw = classified.message;
         this._resolveCloseOutcome(raw);
         // Pass the raw message to control handlers (e.g. for detached/session-picker).
-        // Non-typed envelopes (e.g. serve config) still flow through here.
+        // Non-typed envelopes (e.g. serve config) still flow through here after
+        // recovery payloads have been stripped.
         this._controlMessageCb?.(raw);
         // Flat sessiond messages carry a top-level "type" string; route them to
         // the sessiond hook. (Legacy single-key envelopes have no "type" field,
@@ -489,6 +622,9 @@ export class MuxSocket {
     };
 
     ws.onclose = () => {
+      if (this._ws !== ws) return;
+      this._helloSent = false;
+      this._resetRecoveryNegotiation();
       this._rejectPendingCloseRequests(
         new Error('The close outcome could not be confirmed because the connection was lost.'),
       );
