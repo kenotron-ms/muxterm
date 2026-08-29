@@ -25,7 +25,8 @@ const (
 	amplifierCorrelationMaxTranscriptFileBytes    = 16 * 1024 * 1024
 	amplifierCorrelationMaxTranscriptAttemptBytes = 64 * 1024 * 1024
 	amplifierCorrelationMaxTranscriptRecordBytes  = 4 * 1024 * 1024
-	amplifierCorrelationMaxTranscriptRecords      = 100_000
+	amplifierCorrelationMaxTranscriptFileLines    = 100_000
+	amplifierCorrelationMaxTranscriptAttemptLines = 150_000
 	amplifierCorrelationTranscriptReadBufferBytes = 64 * 1024
 	amplifierCorrelationDirectoryReadBatch        = 64
 	amplifierCorrelationSkew                      = 2 * time.Second
@@ -312,7 +313,8 @@ func (strategy *AmplifierRecoveryStrategy) Correlate(
 	windowStart := request.PaneLaunchedAt.Add(-amplifierCorrelationSkew)
 	windowEnd := request.ObservedAt.Add(amplifierCorrelationSkew)
 	transcriptBudget := amplifierTranscriptBudget{
-		remaining: amplifierCorrelationMaxTranscriptAttemptBytes,
+		remainingBytes: amplifierCorrelationMaxTranscriptAttemptBytes,
+		remainingLines: amplifierCorrelationMaxTranscriptAttemptLines,
 	}
 	candidates, enumerationState := collectAmplifierCandidates(
 		sessions,
@@ -1183,14 +1185,23 @@ const (
 )
 
 type amplifierTranscriptBudget struct {
-	remaining int64
+	remainingBytes int64
+	remainingLines int
 }
 
-func (budget *amplifierTranscriptBudget) reserve(size int64) bool {
-	if budget == nil || size < 0 || size > budget.remaining {
+func (budget *amplifierTranscriptBudget) reserveBytes(size int64) bool {
+	if budget == nil || size < 0 || size > budget.remainingBytes {
 		return false
 	}
-	budget.remaining -= size
+	budget.remainingBytes -= size
+	return true
+}
+
+func (budget *amplifierTranscriptBudget) reserveLine() bool {
+	if budget == nil || budget.remainingLines <= 0 {
+		return false
+	}
+	budget.remainingLines--
 	return true
 }
 
@@ -1284,13 +1295,13 @@ func inspectAmplifierTranscriptFile(
 	size := file.initial.Size()
 	if size < 0 ||
 		size > amplifierCorrelationMaxTranscriptFileBytes ||
-		!budget.reserve(size) {
+		!budget.reserveBytes(size) {
 		if file.finish() != amplifierPathStable {
 			return amplifierTranscriptFileUnstable, times
 		}
 		return amplifierTranscriptFileLimitExceeded, times
 	}
-	parseState := parseAmplifierTranscript(io.LimitReader(file.file, size))
+	parseState := parseAmplifierTranscript(io.LimitReader(file.file, size), budget)
 	if file.finish() != amplifierPathStable {
 		return amplifierTranscriptFileUnstable, times
 	}
@@ -1312,20 +1323,30 @@ const (
 	amplifierTranscriptParseLimitExceeded
 )
 
-func parseAmplifierTranscript(input io.Reader) amplifierTranscriptParseState {
+func parseAmplifierTranscript(
+	input io.Reader,
+	budget *amplifierTranscriptBudget,
+) amplifierTranscriptParseState {
 	reader := bufio.NewReaderSize(input, amplifierCorrelationTranscriptReadBufferBytes)
 	objects := 0
+	physicalLines := 0
 	for {
 		line, err, exceeded := readAmplifierTranscriptRecord(reader)
+		if len(line) > 0 || exceeded {
+			if !budget.reserveLine() {
+				return amplifierTranscriptParseLimitExceeded
+			}
+			physicalLines++
+			if physicalLines > amplifierCorrelationMaxTranscriptFileLines {
+				return amplifierTranscriptParseLimitExceeded
+			}
+		}
 		if exceeded {
 			return amplifierTranscriptParseLimitExceeded
 		}
 		if len(line) > 0 {
 			trimmed := bytes.TrimSpace(line)
 			if len(trimmed) > 0 {
-				if objects >= amplifierCorrelationMaxTranscriptRecords {
-					return amplifierTranscriptParseLimitExceeded
-				}
 				if !validAmplifierTranscriptObject(trimmed) {
 					return amplifierTranscriptParseMalformed
 				}
@@ -1356,7 +1377,14 @@ func readAmplifierTranscriptRecord(
 		if len(fragment) > 0 {
 			required := len(record) + len(fragment)
 			if cap(record) < required {
-				grown := make([]byte, len(record), required)
+				nextCapacity := cap(record) * 2
+				if nextCapacity < required {
+					nextCapacity = required
+				}
+				if nextCapacity > amplifierCorrelationMaxTranscriptRecordBytes {
+					nextCapacity = amplifierCorrelationMaxTranscriptRecordBytes
+				}
+				grown := make([]byte, len(record), nextCapacity)
 				copy(grown, record)
 				record = grown
 			}
