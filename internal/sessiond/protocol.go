@@ -2,10 +2,13 @@
 package sessiond
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
+	"unicode/utf8"
 )
 
 // Frame kinds tag each daemon socket frame. A frame is
@@ -99,6 +102,33 @@ const (
 	TypeCloseOutcome = "close-outcome" // reply: daemon -> browser relay
 )
 
+// Recovery message types are additive. Privileged envelopes travel only over
+// the owner-local daemon boundary; browser-safe messages carry redacted
+// projection types defined below.
+const (
+	TypeProtocolHello       = "protocol-hello"
+	TypeProtocolHelloResult = "protocol-hello-result"
+
+	TypePaneRecoveryChanged = "pane-recovery-changed"
+	TypeRecoveryRetry       = "recovery-retry"
+	TypeRecoveryRetryResult = "recovery-retry-result"
+
+	TypeRecoverySelect       = "recovery-select"        // browser-safe opaque candidate selection
+	TypeRecoverySelectResult = "recovery-select-result" // browser-safe selection result
+
+	TypeLifecycleLeaseDelivery  = "lifecycle-lease-delivery"  // owner-local only
+	TypeLifecycleCapture        = "lifecycle-capture"         // privileged request
+	TypeLifecycleCaptureOutcome = "lifecycle-capture-outcome" // privileged result
+
+	TypeReplacementPlan       = "replacement-plan"        // privileged request
+	TypeReplacementPlanResult = "replacement-plan-result" // privileged result
+	TypeReplacementCommit     = "replacement-commit"      // privileged request
+	TypeReplacementOutcome    = "replacement-outcome"     // redacted event/result
+
+	TypeSetActivePane       = "set-active-pane"
+	TypeSetActivePaneResult = "set-active-pane-result"
+)
+
 // CloseRiskInfo is one user-safe activity warning in a close-outcome. It is
 // deliberately a wire type rather than the daemon's internal CloseRisk so its
 // JSON field names are fixed independently of internal transaction state.
@@ -107,6 +137,811 @@ type CloseRiskInfo struct {
 	Title          string `json:"title"`
 	Classification string `json:"classification"`
 	Reason         string `json:"reason"`
+}
+
+// RecoveryProtocolCapability is a browser-safe capability advertised through
+// protocol hello. Privileged recovery operations are intentionally absent.
+type RecoveryProtocolCapability string
+
+const (
+	RecoveryProtocolCapabilityPaneProjection        RecoveryProtocolCapability = "pane-recovery-projection"
+	RecoveryProtocolCapabilityRetry                 RecoveryProtocolCapability = "recovery-retry"
+	RecoveryProtocolCapabilitySelection             RecoveryProtocolCapability = "recovery-select"
+	RecoveryProtocolCapabilityActivePanePersistence RecoveryProtocolCapability = "active-pane-persistence"
+)
+
+// RecoveryProtocolCapabilities carries a browser offer or a server-recognized
+// intersection. An offer may name a bounded future capability; a server result
+// may contain only the closed recognized vocabulary.
+type RecoveryProtocolCapabilities struct {
+	Values []RecoveryProtocolCapability `json:"values"`
+}
+
+func validRecoveryProtocolCapability(value RecoveryProtocolCapability) bool {
+	switch value {
+	case RecoveryProtocolCapabilityPaneProjection,
+		RecoveryProtocolCapabilityRetry,
+		RecoveryProtocolCapabilitySelection,
+		RecoveryProtocolCapabilityActivePanePersistence:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateRecoveryProtocolCapabilityOffer(value RecoveryProtocolCapability) error {
+	return validateBoundedText(
+		string(value),
+		RecoveryMaxProtocolCapabilityBytes,
+		"protocol capability",
+		false,
+	)
+}
+
+func (capabilities RecoveryProtocolCapabilities) validateOffer() error {
+	if len(capabilities.Values) > RecoveryMaxProtocolCapabilities {
+		return fmt.Errorf("recovery: protocol capability count exceeds capacity")
+	}
+	seen := make(map[RecoveryProtocolCapability]struct{}, len(capabilities.Values))
+	for _, capability := range capabilities.Values {
+		if err := validateRecoveryProtocolCapabilityOffer(capability); err != nil {
+			return err
+		}
+		if _, duplicate := seen[capability]; duplicate {
+			return fmt.Errorf("recovery: duplicate protocol capability %q", capability)
+		}
+		seen[capability] = struct{}{}
+	}
+	return nil
+}
+
+// validateRecoveryContract validates a server-produced capability intersection.
+// Unlike a browser offer, it must contain only capability names known to this
+// daemon version.
+func (capabilities RecoveryProtocolCapabilities) validateRecoveryContract() error {
+	if err := capabilities.validateOffer(); err != nil {
+		return err
+	}
+	for _, capability := range capabilities.Values {
+		if !validRecoveryProtocolCapability(capability) {
+			return fmt.Errorf("recovery: unknown protocol capability %q", capability)
+		}
+	}
+	return nil
+}
+
+// UnmarshalJSON bounds the only browser-safe recovery slice before it becomes
+// a typed allocation. It validates the syntactic offer, rather than requiring
+// every name to be recognized before protocol negotiation can run.
+func (capabilities *RecoveryProtocolCapabilities) UnmarshalJSON(data []byte) error {
+	if capabilities == nil {
+		return fmt.Errorf("recovery: nil protocol capabilities destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxBrowserRecoveryMessageBytes {
+		return fmt.Errorf("recovery: protocol capabilities exceed input limit")
+	}
+	var raw struct {
+		Values json.RawMessage `json:"values"`
+	}
+	if err := decodeRecoveryJSON(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.Values) == 0 || len(raw.Values) > RecoveryMaxBrowserRecoveryMessageBytes {
+		return fmt.Errorf("recovery: protocol capabilities omit or exceed values")
+	}
+
+	var values [RecoveryMaxProtocolCapabilities]RecoveryProtocolCapability
+	count, err := decodeRecoveryJSONArray(
+		raw.Values,
+		len(values),
+		"protocol capability",
+		func(encoded json.RawMessage, index int) error {
+			var value RecoveryProtocolCapability
+			if err := decodeRecoveryJSON(encoded, &value); err != nil {
+				return fmt.Errorf("recovery: decode protocol capability: %w", err)
+			}
+			if err := validateRecoveryProtocolCapabilityOffer(value); err != nil {
+				return err
+			}
+			values[index] = value
+			return nil
+		},
+	)
+	if err != nil {
+		return err
+	}
+	decoded := RecoveryProtocolCapabilities{
+		Values: append([]RecoveryProtocolCapability(nil), values[:count]...),
+	}
+	if err := decoded.validateOffer(); err != nil {
+		return err
+	}
+	*capabilities = decoded
+	return nil
+}
+
+func (capabilities RecoveryProtocolCapabilities) MarshalJSON() ([]byte, error) {
+	if err := capabilities.validateOffer(); err != nil {
+		return nil, err
+	}
+	type wire RecoveryProtocolCapabilities
+	return json.Marshal(wire(capabilities))
+}
+
+// ProtocolHelloRequest and ProtocolHelloResult negotiate only browser-safe
+// schema/capability support. They cannot grant launch or strategy authority.
+type ProtocolHelloRequest struct {
+	RecoverySchemaVersion uint16                       `json:"recoverySchemaVersion"`
+	Capabilities          RecoveryProtocolCapabilities `json:"capabilities"`
+}
+
+// validateOffer accepts every syntactically valid, bounded, nonzero schema
+// version and capability offer. Compatibility is a daemon decision, not a
+// pre-dispatch decoding decision.
+func (request ProtocolHelloRequest) validateOffer() error {
+	if request.RecoverySchemaVersion == 0 {
+		return fmt.Errorf("recovery: protocol schema version is zero")
+	}
+	return request.Capabilities.validateOffer()
+}
+
+func (request ProtocolHelloRequest) validateRecoveryContract() error {
+	return request.validateOffer()
+}
+
+func (request *ProtocolHelloRequest) UnmarshalJSON(data []byte) error {
+	if request == nil {
+		return fmt.Errorf("recovery: nil protocol hello request destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxBrowserRecoveryMessageBytes {
+		return fmt.Errorf("recovery: protocol hello request exceeds input limit")
+	}
+	type wire ProtocolHelloRequest
+	var decoded wire
+	if err := decodeRecoveryJSON(data, &decoded); err != nil {
+		return err
+	}
+	result := ProtocolHelloRequest(decoded)
+	if err := result.validateOffer(); err != nil {
+		return err
+	}
+	*request = result
+	return nil
+}
+
+func (request ProtocolHelloRequest) MarshalJSON() ([]byte, error) {
+	if err := request.validateOffer(); err != nil {
+		return nil, err
+	}
+	type wire ProtocolHelloRequest
+	return json.Marshal(wire(request))
+}
+
+type ProtocolHelloResult struct {
+	RecoverySchemaVersion uint16                       `json:"recoverySchemaVersion"`
+	Capabilities          RecoveryProtocolCapabilities `json:"capabilities"`
+	Compatible            bool                         `json:"compatible"`
+	DetailCode            RecoveryDetailCode           `json:"detailCode"`
+}
+
+func (result ProtocolHelloResult) validateRecoveryContract() error {
+	if result.RecoverySchemaVersion != RecoveryCaptureSchemaVersion {
+		return fmt.Errorf("recovery: unsupported protocol schema version %d", result.RecoverySchemaVersion)
+	}
+	if err := result.Capabilities.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if err := result.DetailCode.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if result.Compatible && result.DetailCode != RecoveryDetailNone {
+		return fmt.Errorf("recovery: invalid protocol compatibility/detail pairing")
+	}
+	if !result.Compatible && result.DetailCode != RecoveryDetailSchemaIncompatible {
+		return fmt.Errorf("recovery: incompatible protocol result has invalid detail")
+	}
+	return nil
+}
+
+func (result *ProtocolHelloResult) UnmarshalJSON(data []byte) error {
+	if result == nil {
+		return fmt.Errorf("recovery: nil protocol hello result destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxBrowserRecoveryMessageBytes {
+		return fmt.Errorf("recovery: protocol hello result exceeds input limit")
+	}
+	type wire ProtocolHelloResult
+	var decoded wire
+	if err := decodeRecoveryJSON(data, &decoded); err != nil {
+		return err
+	}
+	validated := ProtocolHelloResult(decoded)
+	if err := validated.validateRecoveryContract(); err != nil {
+		return err
+	}
+	*result = validated
+	return nil
+}
+
+func (result ProtocolHelloResult) MarshalJSON() ([]byte, error) {
+	if err := result.validateRecoveryContract(); err != nil {
+		return nil, err
+	}
+	type wire ProtocolHelloResult
+	return json.Marshal(wire(result))
+}
+
+// NegotiateProtocolHello is the daemon-side compatibility decision for a
+// syntactically accepted hello. It retains only names recognized by this
+// daemon, and reports a schema mismatch through the redacted result instead of
+// rejecting the offer before dispatch.
+func NegotiateProtocolHello(request ProtocolHelloRequest) (ProtocolHelloResult, error) {
+	if err := request.validateOffer(); err != nil {
+		return ProtocolHelloResult{}, err
+	}
+	recognized := make([]RecoveryProtocolCapability, 0, len(request.Capabilities.Values))
+	for _, capability := range request.Capabilities.Values {
+		if validRecoveryProtocolCapability(capability) {
+			recognized = append(recognized, capability)
+		}
+	}
+	result := ProtocolHelloResult{
+		RecoverySchemaVersion: RecoveryCaptureSchemaVersion,
+		Capabilities:          RecoveryProtocolCapabilities{Values: recognized},
+		Compatible:            request.RecoverySchemaVersion == RecoveryCaptureSchemaVersion,
+		DetailCode:            RecoveryDetailNone,
+	}
+	if !result.Compatible {
+		result.DetailCode = RecoveryDetailSchemaIncompatible
+	}
+	if err := result.validateRecoveryContract(); err != nil {
+		return ProtocolHelloResult{}, err
+	}
+	return result, nil
+}
+
+// PaneRecoveryInfo is the complete browser-safe recovery projection. Exact
+// session identities, paths, launch data, capabilities, generations, internal
+// strategy IDs, and raw tool errors must never be added here. A selection-needed
+// projection may contain only daemon-issued opaque candidate handles paired
+// with fixed human-safe strategy labels.
+type PaneRecoveryInfo struct {
+	Status              RecoveryStatus               `json:"status"`
+	StrategyLabel       RecoveryStrategyLabel        `json:"strategyLabel,omitempty"`
+	DetailCode          RecoveryDetailCode           `json:"detailCode"`
+	HistoryBoundary     bool                         `json:"historyBoundary"`
+	CanRetry            bool                         `json:"canRetry"`
+	CanSelect           bool                         `json:"canSelect"`
+	SelectionCandidates []RecoverySelectionCandidate `json:"selectionCandidates,omitempty"`
+}
+
+func (info PaneRecoveryInfo) validateRecoveryContract() error {
+	if err := info.Status.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if err := info.DetailCode.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if len(info.SelectionCandidates) > RecoveryMaxBrowserSelectionCandidates {
+		return fmt.Errorf("recovery: selection candidate count exceeds capacity")
+	}
+	seen := make(map[RecoveryCandidateHandle]struct{}, len(info.SelectionCandidates))
+	for _, candidate := range info.SelectionCandidates {
+		if err := candidate.validateRecoveryContract(); err != nil {
+			return err
+		}
+		if _, duplicate := seen[candidate.CandidateHandle]; duplicate {
+			return fmt.Errorf("recovery: duplicate selection candidate")
+		}
+		seen[candidate.CandidateHandle] = struct{}{}
+	}
+
+	switch info.Status {
+	case RecoveryStatusRestoring, RecoveryStatusRecovered:
+		if info.StrategyLabel == "" || info.DetailCode != RecoveryDetailNone ||
+			info.CanRetry || info.CanSelect || len(info.SelectionCandidates) != 0 {
+			return fmt.Errorf("recovery: invalid restoring/recovered projection")
+		}
+	case RecoveryStatusShellRestored:
+		if info.StrategyLabel != "" || info.DetailCode != RecoveryDetailNone ||
+			info.CanRetry || info.CanSelect || len(info.SelectionCandidates) != 0 {
+			return fmt.Errorf("recovery: invalid shell-restored projection")
+		}
+	case RecoveryStatusSelectionNeeded:
+		if info.StrategyLabel != "" || info.DetailCode == RecoveryDetailNone ||
+			info.CanRetry || !info.CanSelect || len(info.SelectionCandidates) == 0 {
+			return fmt.Errorf("recovery: invalid selection-needed projection")
+		}
+	case RecoveryStatusProvisional:
+		if info.StrategyLabel == "" || info.DetailCode == RecoveryDetailNone ||
+			info.CanRetry || info.CanSelect || len(info.SelectionCandidates) != 0 {
+			return fmt.Errorf("recovery: invalid provisional projection")
+		}
+	case RecoveryStatusStrategyFailed:
+		if info.StrategyLabel == "" || info.DetailCode == RecoveryDetailNone ||
+			!info.CanRetry || info.CanSelect || len(info.SelectionCandidates) != 0 {
+			return fmt.Errorf("recovery: invalid strategy-failed projection")
+		}
+	}
+	if info.StrategyLabel != "" {
+		return info.StrategyLabel.validateRecoveryContract()
+	}
+	return nil
+}
+
+// UnmarshalJSON bounds candidate bytes and count before assigning a
+// browser-provided or browser-received projection.
+func (info *PaneRecoveryInfo) UnmarshalJSON(data []byte) error {
+	if info == nil {
+		return fmt.Errorf("recovery: nil pane recovery projection destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxBrowserRecoveryMessageBytes {
+		return fmt.Errorf("recovery: pane recovery projection exceeds input limit")
+	}
+	var raw struct {
+		Status              RecoveryStatus        `json:"status"`
+		StrategyLabel       RecoveryStrategyLabel `json:"strategyLabel,omitempty"`
+		DetailCode          RecoveryDetailCode    `json:"detailCode"`
+		HistoryBoundary     bool                  `json:"historyBoundary"`
+		CanRetry            bool                  `json:"canRetry"`
+		CanSelect           bool                  `json:"canSelect"`
+		SelectionCandidates json.RawMessage       `json:"selectionCandidates"`
+	}
+	if err := decodeRecoveryJSON(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.SelectionCandidates) > RecoveryMaxBrowserRecoveryMessageBytes {
+		return fmt.Errorf("recovery: selection candidates exceed input limit")
+	}
+	var candidates [RecoveryMaxBrowserSelectionCandidates]RecoverySelectionCandidate
+	count := 0
+	if len(raw.SelectionCandidates) != 0 {
+		var err error
+		count, err = decodeRecoveryJSONArray(
+			raw.SelectionCandidates,
+			len(candidates),
+			"selection candidate",
+			func(encoded json.RawMessage, index int) error {
+				var candidate RecoverySelectionCandidate
+				if err := decodeRecoveryJSON(encoded, &candidate); err != nil {
+					return fmt.Errorf("recovery: decode selection candidate: %w", err)
+				}
+				candidates[index] = candidate
+				return nil
+			},
+		)
+		if err != nil {
+			return err
+		}
+	}
+	result := PaneRecoveryInfo{
+		Status:          raw.Status,
+		StrategyLabel:   raw.StrategyLabel,
+		DetailCode:      raw.DetailCode,
+		HistoryBoundary: raw.HistoryBoundary,
+		CanRetry:        raw.CanRetry,
+		CanSelect:       raw.CanSelect,
+	}
+	if len(raw.SelectionCandidates) != 0 {
+		result.SelectionCandidates = append(
+			[]RecoverySelectionCandidate(nil),
+			candidates[:count]...,
+		)
+	}
+	if err := result.validateRecoveryContract(); err != nil {
+		return err
+	}
+	*info = result
+	return nil
+}
+
+func (info PaneRecoveryInfo) MarshalJSON() ([]byte, error) {
+	if err := info.validateRecoveryContract(); err != nil {
+		return nil, err
+	}
+	type wire PaneRecoveryInfo
+	return json.Marshal(wire(info))
+}
+
+// PaneRecoveryTransition is the browser-safe live state update for one
+// workspace-qualified pane.
+type PaneRecoveryTransition struct {
+	Pane     RecoveryPaneRef  `json:"pane"`
+	Recovery PaneRecoveryInfo `json:"recovery"`
+}
+
+func (transition PaneRecoveryTransition) validateRecoveryContract() error {
+	if err := transition.Pane.validateRecoveryContract(); err != nil {
+		return err
+	}
+	return transition.Recovery.validateRecoveryContract()
+}
+
+// RecoveryRetryRequest identifies only the workspace-qualified pane. Sessiond
+// resolves its current failed generation and capture fence internally.
+type RecoveryRetryRequest struct {
+	Pane RecoveryPaneRef `json:"pane"`
+}
+
+func (request RecoveryRetryRequest) validateRecoveryContract() error {
+	return request.Pane.validateRecoveryContract()
+}
+
+type RecoveryRetryResult struct {
+	Pane     RecoveryPaneRef  `json:"pane"`
+	Recovery PaneRecoveryInfo `json:"recovery"`
+}
+
+func (result RecoveryRetryResult) validateRecoveryContract() error {
+	if err := result.Pane.validateRecoveryContract(); err != nil {
+		return err
+	}
+	return result.Recovery.validateRecoveryContract()
+}
+
+// RecoverySelectRequest is browser-safe: a caller returns only a daemon-issued
+// opaque candidate handle. Sessiond resolves and revalidates its
+// workspace-qualified pane binding against the candidate lease registry.
+type RecoverySelectRequest struct {
+	CandidateHandle RecoveryCandidateHandle `json:"candidateHandle"`
+}
+
+func (request RecoverySelectRequest) validateRecoveryContract() error {
+	return request.CandidateHandle.validateRecoveryContract()
+}
+
+// RecoverySelectResult is a redacted post-resolution browser result. It does
+// not reveal the selected external session identity or recovery fence.
+type RecoverySelectResult struct {
+	Pane     RecoveryPaneRef  `json:"pane"`
+	Recovery PaneRecoveryInfo `json:"recovery"`
+}
+
+func (result RecoverySelectResult) validateRecoveryContract() error {
+	if err := result.Pane.validateRecoveryContract(); err != nil {
+		return err
+	}
+	return result.Recovery.validateRecoveryContract()
+}
+
+// PrivilegedLifecycleCaptureRequest and
+// PrivilegedLifecycleCaptureOutcome are owner-local only. They keep callback
+// capability and exact session values outside browser projection types.
+type PrivilegedLifecycleCaptureRequest struct {
+	Callback RecoveryLifecycleCapture `json:"callback"`
+}
+
+type PrivilegedLifecycleCaptureOutcome struct {
+	Outcome RecoveryLifecycleCaptureOutcome `json:"outcome"`
+}
+
+// RecoveryReplacementPlanState is a closed coordination result for controlled
+// daemon replacement.
+type RecoveryReplacementPlanState string
+
+const (
+	RecoveryReplacementPlanReady    RecoveryReplacementPlanState = "ready"
+	RecoveryReplacementPlanDeferred RecoveryReplacementPlanState = "deferred"
+)
+
+func validRecoveryReplacementPlanState(value RecoveryReplacementPlanState) bool {
+	return value == RecoveryReplacementPlanReady || value == RecoveryReplacementPlanDeferred
+}
+
+// RecoveryReplacementPlanIntent is all a plan requester may send. Sessiond
+// derives the current recovery generation and complete active-pane census from
+// its authoritative registry rather than accepting them from any caller.
+type RecoveryReplacementPlanIntent string
+
+const RecoveryReplacementPlanIntentRequest RecoveryReplacementPlanIntent = "request"
+
+type PrivilegedReplacementPlanRequest struct {
+	Intent RecoveryReplacementPlanIntent `json:"intent"`
+}
+
+func (request PrivilegedReplacementPlanRequest) validateRecoveryContract() error {
+	if request.Intent != RecoveryReplacementPlanIntentRequest {
+		return fmt.Errorf("recovery: unknown replacement plan intent %q", request.Intent)
+	}
+	return nil
+}
+
+type PrivilegedReplacementPlanResult struct {
+	PlanID     RecoveryReplacementPlanID    `json:"planId,omitempty"`
+	State      RecoveryReplacementPlanState `json:"state"`
+	DetailCode RecoveryDetailCode           `json:"detailCode"`
+	ExpiresAt  *time.Time                   `json:"expiresAt,omitempty"`
+}
+
+func (result PrivilegedReplacementPlanResult) validateRecoveryContract() error {
+	if !validRecoveryReplacementPlanState(result.State) {
+		return fmt.Errorf("recovery: unknown replacement plan state %q", result.State)
+	}
+	if err := result.DetailCode.validateRecoveryContract(); err != nil {
+		return err
+	}
+	switch result.State {
+	case RecoveryReplacementPlanReady:
+		if err := result.PlanID.validateRecoveryContract(); err != nil {
+			return err
+		}
+		if result.ExpiresAt == nil || result.ExpiresAt.IsZero() || result.DetailCode != RecoveryDetailNone {
+			return fmt.Errorf("recovery: ready replacement plan lacks a valid lease result")
+		}
+	case RecoveryReplacementPlanDeferred:
+		if result.PlanID != "" || result.ExpiresAt != nil ||
+			(result.DetailCode != RecoveryDetailReplacementDeferred &&
+				result.DetailCode != RecoveryDetailReplacementPlanInvalid) {
+			return fmt.Errorf("recovery: invalid deferred replacement plan result")
+		}
+	}
+	return nil
+}
+
+// RecoveryReplacementPlanLease is the daemon-held, short-lived single-use
+// binding for a replacement commit. The registry generation and complete
+// census are derived only by sessiond. This value never crosses a JSON boundary.
+type RecoveryReplacementPlanLease struct {
+	PlanID     RecoveryReplacementPlanID  `json:"-"`
+	Generation RecoveryGeneration         `json:"-"`
+	Census     RecoveryReplacementPaneSet `json:"-"`
+	IssuedAt   time.Time                  `json:"-"`
+	ExpiresAt  time.Time                  `json:"-"`
+	Consumed   bool                       `json:"-"`
+}
+
+const RecoveryReplacementPlanMaxTTL = 30 * time.Second
+
+func (lease RecoveryReplacementPlanLease) validateRecoveryContract() error {
+	if err := lease.PlanID.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if lease.Generation == 0 {
+		return fmt.Errorf("recovery: replacement plan lease has zero generation")
+	}
+	if err := lease.Census.validateRecoveryContract(); err != nil {
+		return err
+	}
+	return validateTimeRange(lease.IssuedAt, lease.ExpiresAt, RecoveryReplacementPlanMaxTTL, "replacement plan")
+}
+
+func (RecoveryReplacementPlanLease) MarshalJSON() ([]byte, error) {
+	return nil, fmt.Errorf("recovery: replacement plan lease must not be serialized")
+}
+
+func (*RecoveryReplacementPlanLease) UnmarshalJSON([]byte) error {
+	return fmt.Errorf("recovery: replacement plan lease must be minted by sessiond")
+}
+
+// NewRecoveryReplacementPlanLease constructs the daemon-held plan lease after
+// sessiond has captured the authoritative registry generation and full census.
+func NewRecoveryReplacementPlanLease(
+	planID RecoveryReplacementPlanID,
+	generation RecoveryGeneration,
+	census RecoveryReplacementPaneSet,
+	issuedAt, expiresAt time.Time,
+) (RecoveryReplacementPlanLease, error) {
+	lease := RecoveryReplacementPlanLease{
+		PlanID:     planID,
+		Generation: generation,
+		Census:     census,
+		IssuedAt:   issuedAt,
+		ExpiresAt:  expiresAt,
+	}
+	if err := lease.validateRecoveryContract(); err != nil {
+		return RecoveryReplacementPlanLease{}, err
+	}
+	return lease, nil
+}
+
+// RecoveryReplacementShellOnlyAcceptance accepts only the shell-only fallback
+// already identified by a particular daemon-issued plan. Its sole field binds
+// the acceptance to that plan; it cannot submit a generation or a pane census.
+type RecoveryReplacementShellOnlyAcceptance struct {
+	PlanID RecoveryReplacementPlanID `json:"planId"`
+}
+
+func (acceptance RecoveryReplacementShellOnlyAcceptance) validateRecoveryContract() error {
+	return acceptance.PlanID.validateRecoveryContract()
+}
+
+type PrivilegedReplacementCommitRequest struct {
+	PlanID              RecoveryReplacementPlanID               `json:"planId"`
+	ShellOnlyAcceptance *RecoveryReplacementShellOnlyAcceptance `json:"shellOnlyAcceptance,omitempty"`
+}
+
+func (request PrivilegedReplacementCommitRequest) validateRecoveryContract() error {
+	if err := request.PlanID.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if request.ShellOnlyAcceptance != nil {
+		if err := request.ShellOnlyAcceptance.validateRecoveryContract(); err != nil {
+			return err
+		}
+		if request.ShellOnlyAcceptance.PlanID != request.PlanID {
+			return fmt.Errorf("recovery: shell-only acceptance is not bound to replacement plan")
+		}
+	}
+	return nil
+}
+
+// RecoveryReplacementPlanResolver is the daemon-owned plan registry boundary.
+// It must atomically mint a lease after deriving the authoritative generation
+// and complete census, and atomically resolve/consume a commit only while the
+// plan remains unexpired, unused, and equal to current registry structure and
+// generation. Any structure or generation change invalidates the plan.
+type RecoveryReplacementPlanResolver interface {
+	CreateReplacementPlan(PrivilegedReplacementPlanRequest) PrivilegedReplacementPlanResult
+	ResolveAndConsumeReplacementPlan(PrivilegedReplacementCommitRequest) RecoveryReplacementOutcome
+}
+
+// RecoveryReplacementOutcomeState is the redacted terminal disposition of a
+// controlled replacement after a commit is attempted.
+type RecoveryReplacementOutcomeState string
+
+const (
+	RecoveryReplacementOutcomeCommitted RecoveryReplacementOutcomeState = "committed"
+	RecoveryReplacementOutcomeDeferred  RecoveryReplacementOutcomeState = "deferred"
+	RecoveryReplacementOutcomeFailed    RecoveryReplacementOutcomeState = "failed"
+)
+
+// RecoveryReplacementOutcome is safe for browser projection: it deliberately
+// excludes the plan handle, pane list, generation, and raw failure detail.
+type RecoveryReplacementOutcome struct {
+	State      RecoveryReplacementOutcomeState `json:"state"`
+	DetailCode RecoveryDetailCode              `json:"detailCode"`
+}
+
+func (outcome RecoveryReplacementOutcome) validateRecoveryContract() error {
+	if err := outcome.DetailCode.validateRecoveryContract(); err != nil {
+		return err
+	}
+	switch outcome.State {
+	case RecoveryReplacementOutcomeCommitted:
+		if outcome.DetailCode != RecoveryDetailNone {
+			return fmt.Errorf("recovery: committed replacement has failure detail")
+		}
+	case RecoveryReplacementOutcomeDeferred:
+		if outcome.DetailCode != RecoveryDetailReplacementDeferred {
+			return fmt.Errorf("recovery: deferred replacement has invalid detail")
+		}
+	case RecoveryReplacementOutcomeFailed:
+		if outcome.DetailCode != RecoveryDetailReplacementFailed &&
+			outcome.DetailCode != RecoveryDetailReplacementPlanInvalid {
+			return fmt.Errorf("recovery: failed replacement has invalid detail")
+		}
+	default:
+		return fmt.Errorf("recovery: unknown replacement outcome state %q", outcome.State)
+	}
+	return nil
+}
+
+// ActivePanePersistenceRequest is distinct from connection-scoped pane-focus:
+// sessiond validates and persists the workspace-qualified active selection.
+type ActivePanePersistenceRequest struct {
+	Pane RecoveryPaneRef `json:"pane"`
+}
+
+func (request ActivePanePersistenceRequest) validateRecoveryContract() error {
+	return request.Pane.validateRecoveryContract()
+}
+
+type ActivePanePersistenceResult struct {
+	Pane       RecoveryPaneRef    `json:"pane"`
+	DetailCode RecoveryDetailCode `json:"detailCode"`
+}
+
+func (result ActivePanePersistenceResult) validateRecoveryContract() error {
+	if err := result.Pane.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if err := result.DetailCode.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if result.DetailCode != RecoveryDetailNone && result.DetailCode != RecoveryDetailActivePaneInvalid {
+		return fmt.Errorf("recovery: invalid active-pane persistence detail")
+	}
+	return nil
+}
+
+func (request PrivilegedLifecycleCaptureRequest) validateRecoveryContract() error {
+	return request.Callback.validateRecoveryContract()
+}
+
+func (outcome PrivilegedLifecycleCaptureOutcome) validateRecoveryContract() error {
+	return outcome.Outcome.validateRecoveryContract()
+}
+
+// OwnerLocalRecoveryMessage is structurally separate from Message. It is the
+// only privileged recovery envelope and its decoder is intended exclusively for
+// the authenticated Unix daemon transport, never the browser /ws relay.
+type OwnerLocalRecoveryMessage struct {
+	Type                   string                              `json:"type"`
+	CID                    uint64                              `json:"cid,omitempty"`
+	LifecycleLeaseDelivery *RecoveryLifecycleLeaseDelivery     `json:"lifecycleLeaseDelivery,omitempty"`
+	LifecycleCapture       *PrivilegedLifecycleCaptureRequest  `json:"lifecycleCapture,omitempty"`
+	LifecycleOutcome       *PrivilegedLifecycleCaptureOutcome  `json:"lifecycleOutcome,omitempty"`
+	ReplacementPlan        *PrivilegedReplacementPlanRequest   `json:"replacementPlan,omitempty"`
+	ReplacementResult      *PrivilegedReplacementPlanResult    `json:"replacementResult,omitempty"`
+	ReplacementCommit      *PrivilegedReplacementCommitRequest `json:"replacementCommit,omitempty"`
+}
+
+func (message OwnerLocalRecoveryMessage) validateRecoveryContract() error {
+	payloads := 0
+	for _, present := range []bool{
+		message.LifecycleLeaseDelivery != nil,
+		message.LifecycleCapture != nil,
+		message.LifecycleOutcome != nil,
+		message.ReplacementPlan != nil,
+		message.ReplacementResult != nil,
+		message.ReplacementCommit != nil,
+	} {
+		if present {
+			payloads++
+		}
+	}
+	if payloads != 1 {
+		return fmt.Errorf("recovery: owner-local envelope must contain exactly one payload")
+	}
+	switch message.Type {
+	case TypeLifecycleLeaseDelivery:
+		if message.LifecycleLeaseDelivery == nil {
+			return fmt.Errorf("recovery: lifecycle lease delivery payload is missing")
+		}
+		return message.LifecycleLeaseDelivery.validateRecoveryContract()
+	case TypeLifecycleCapture:
+		if message.LifecycleCapture == nil {
+			return fmt.Errorf("recovery: lifecycle capture payload is missing")
+		}
+		return message.LifecycleCapture.validateRecoveryContract()
+	case TypeLifecycleCaptureOutcome:
+		if message.LifecycleOutcome == nil {
+			return fmt.Errorf("recovery: lifecycle outcome payload is missing")
+		}
+		return message.LifecycleOutcome.validateRecoveryContract()
+	case TypeReplacementPlan:
+		if message.ReplacementPlan == nil {
+			return fmt.Errorf("recovery: replacement plan payload is missing")
+		}
+		return message.ReplacementPlan.validateRecoveryContract()
+	case TypeReplacementPlanResult:
+		if message.ReplacementResult == nil {
+			return fmt.Errorf("recovery: replacement plan result payload is missing")
+		}
+		return message.ReplacementResult.validateRecoveryContract()
+	case TypeReplacementCommit:
+		if message.ReplacementCommit == nil {
+			return fmt.Errorf("recovery: replacement commit payload is missing")
+		}
+		return message.ReplacementCommit.validateRecoveryContract()
+	default:
+		return fmt.Errorf("recovery: unknown owner-local message type %q", message.Type)
+	}
+}
+
+func (message OwnerLocalRecoveryMessage) MarshalJSON() ([]byte, error) {
+	if err := message.validateRecoveryContract(); err != nil {
+		return nil, err
+	}
+	type wire OwnerLocalRecoveryMessage
+	return json.Marshal(wire(message))
+}
+
+func (message *OwnerLocalRecoveryMessage) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || len(data) > RecoveryMaxContractBytes {
+		return fmt.Errorf("recovery: owner-local recovery message exceeds input limit")
+	}
+	type wire OwnerLocalRecoveryMessage
+	var decoded wire
+	if err := decodeRecoveryJSON(data, &decoded); err != nil {
+		return err
+	}
+	result := OwnerLocalRecoveryMessage(decoded)
+	if err := result.validateRecoveryContract(); err != nil {
+		return err
+	}
+	*message = result
+	return nil
 }
 
 // writeFrame writes a single framed message: a 5-byte header consisting of a
@@ -134,6 +969,30 @@ func WriteControl(w io.Writer, msg *Message) error {
 		return err
 	}
 	return writeFrame(w, FrameControl, payload)
+}
+
+// WriteOwnerLocalRecoveryControl writes a privileged recovery envelope only to
+// the authenticated Unix daemon transport. It deliberately accepts a distinct
+// type from Message, so browser /ws code cannot accidentally serialize this
+// payload through its generic control path.
+func WriteOwnerLocalRecoveryControl(w io.Writer, msg *OwnerLocalRecoveryMessage) error {
+	payload, err := MarshalRecoveryContract(msg)
+	if err != nil {
+		return err
+	}
+	return writeFrame(w, FrameControl, payload)
+}
+
+// DecodeOwnerLocalRecoveryControl decodes an owner-local recovery envelope.
+// Callers must use it only after authenticating the Unix daemon transport; the
+// browser relay MUST call DecodeBrowserRecoveryMessage for recovery traffic and
+// reject owner-local kinds and fields before forwarding anything over /ws.
+func DecodeOwnerLocalRecoveryControl(payload []byte) (*OwnerLocalRecoveryMessage, error) {
+	var message OwnerLocalRecoveryMessage
+	if err := DecodeRecoveryContract(payload, &message); err != nil {
+		return nil, err
+	}
+	return &message, nil
 }
 
 // WritePaneData writes a FramePaneData frame whose payload is
@@ -175,9 +1034,13 @@ func ReadFrame(r io.Reader) (kind byte, payload []byte, err error) {
 	return buf[0], buf[1:], nil
 }
 
-// Message is the single control envelope. Every request, reply, event, and
-// error is this struct with a different Type. The JSON tags are FROZEN per the
-// v1 wire protocol contract (see
+// Message is the generic browser-capable control envelope. Every v1 request,
+// reply, event, and error is this struct with a different Type. Privileged
+// recovery traffic is structurally excluded and uses OwnerLocalRecoveryMessage.
+// Generic JSON decoding intentionally retains the frozen additive behavior.
+// The later /ws relay lane MUST use DecodeBrowserRecoveryMessage for recovery
+// traffic before forwarding it across the browser boundary.
+// The JSON tags are FROZEN per the v1 wire protocol contract (see
 // docs/plans/2026-06-01-session-persistence-design.md) and must never change.
 type Message struct {
 	Type        string          `json:"type"`
@@ -278,6 +1141,257 @@ type Message struct {
 	Lines      []string `json:"lines,omitempty"`
 	NextCursor *uint64  `json:"nextCursor,omitempty"`
 	StartLine  uint64   `json:"startLine,omitempty"`
+
+	// Recovery browser-safe projection (ADDITIVE). Recovery is present only
+	// when the pane has daemon-authoritative recovery state.
+	Recovery             *PaneRecoveryInfo           `json:"recovery,omitempty"`
+	RecoveryTransition   *PaneRecoveryTransition     `json:"recoveryTransition,omitempty"`
+	RecoveryRetry        *RecoveryRetryRequest       `json:"recoveryRetry,omitempty"`
+	RecoveryRetryResult  *RecoveryRetryResult        `json:"recoveryRetryResult,omitempty"`
+	RecoverySelect       *RecoverySelectRequest      `json:"recoverySelect,omitempty"`
+	RecoverySelectResult *RecoverySelectResult       `json:"recoverySelectResult,omitempty"`
+	ProtocolHello        *ProtocolHelloRequest       `json:"protocolHello,omitempty"`
+	ProtocolHelloResult  *ProtocolHelloResult        `json:"protocolHelloResult,omitempty"`
+	ReplacementOutcome   *RecoveryReplacementOutcome `json:"replacementOutcome,omitempty"`
+
+	// Active-pane persistence has only a workspace-qualified pane reference
+	// and a stable result code. It remains distinct from connection-scoped
+	// pane-focus authority.
+	ActivePanePersistence       *ActivePanePersistenceRequest `json:"activePanePersistence,omitempty"`
+	ActivePanePersistenceResult *ActivePanePersistenceResult  `json:"activePanePersistenceResult,omitempty"`
+}
+
+// decodeRecoveryJSON applies strict object-field and trailing-value validation
+// for recovery-only protocol shapes. Generic Message keeps its frozen additive
+// behavior, but its recovery fields are always decoded through these bounded,
+// validated subcontracts.
+func decodeRecoveryJSON(data []byte, destination any) error {
+	if !utf8.Valid(data) {
+		return fmt.Errorf("recovery: protocol contract is not valid UTF-8")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return fmt.Errorf("recovery: decode protocol contract: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("recovery: protocol contract has trailing JSON value")
+		}
+		return fmt.Errorf("recovery: decode trailing protocol value: %w", err)
+	}
+	return nil
+}
+
+func isOwnerLocalRecoveryType(messageType string) bool {
+	switch messageType {
+	case TypeLifecycleLeaseDelivery,
+		TypeLifecycleCapture,
+		TypeLifecycleCaptureOutcome,
+		TypeReplacementPlan,
+		TypeReplacementPlanResult,
+		TypeReplacementCommit:
+		return true
+	default:
+		return false
+	}
+}
+
+type browserPrivilegeProbe struct {
+	Type                   string          `json:"type"`
+	PrivilegedRecovery     json.RawMessage `json:"privilegedRecovery"`
+	LifecycleLeaseDelivery json.RawMessage `json:"lifecycleLeaseDelivery"`
+	LifecycleCapture       json.RawMessage `json:"lifecycleCapture"`
+	LifecycleOutcome       json.RawMessage `json:"lifecycleOutcome"`
+	ReplacementPlan        json.RawMessage `json:"replacementPlan"`
+	ReplacementResult      json.RawMessage `json:"replacementResult"`
+	ReplacementCommit      json.RawMessage `json:"replacementCommit"`
+	Binding                json.RawMessage `json:"binding"`
+}
+
+func (probe browserPrivilegeProbe) hasOwnerLocalPayload() bool {
+	return probe.PrivilegedRecovery != nil ||
+		probe.LifecycleLeaseDelivery != nil ||
+		probe.LifecycleCapture != nil ||
+		probe.LifecycleOutcome != nil ||
+		probe.ReplacementPlan != nil ||
+		probe.ReplacementResult != nil ||
+		probe.ReplacementCommit != nil ||
+		probe.Binding != nil
+}
+
+func browserRecoveryPayloadField(messageType string) (string, bool) {
+	switch messageType {
+	case TypeProtocolHello:
+		return "protocolHello", true
+	case TypeProtocolHelloResult:
+		return "protocolHelloResult", true
+	case TypePaneRecoveryChanged:
+		return "recoveryTransition", true
+	case TypeRecoveryRetry:
+		return "recoveryRetry", true
+	case TypeRecoveryRetryResult:
+		return "recoveryRetryResult", true
+	case TypeRecoverySelect:
+		return "recoverySelect", true
+	case TypeRecoverySelectResult:
+		return "recoverySelectResult", true
+	case TypeReplacementOutcome:
+		return "replacementOutcome", true
+	case TypeSetActivePane:
+		return "activePanePersistence", true
+	case TypeSetActivePaneResult:
+		return "activePanePersistenceResult", true
+	default:
+		return "", false
+	}
+}
+
+func validateBrowserRecoveryFieldAllowlist(data []byte, messageType string) error {
+	payloadField, recoveryType := browserRecoveryPayloadField(messageType)
+	if !recoveryType {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("recovery: decode browser field allowlist: %w", err)
+	}
+	for field := range fields {
+		if field != "type" && field != "cid" && field != payloadField {
+			return fmt.Errorf("recovery: field %q is forbidden for browser recovery type %q", field, messageType)
+		}
+	}
+	return nil
+}
+
+// ValidateBrowserRecoveryMessage allowlists recovery type/payload pairings in a
+// decoded generic envelope. The later /ws relay MUST pair this validation with
+// DecodeBrowserRecoveryMessage so raw owner-local or unknown fields are rejected
+// before generic decoding can discard them.
+func ValidateBrowserRecoveryMessage(message *Message) error {
+	if message == nil {
+		return fmt.Errorf("recovery: nil browser message")
+	}
+	if isOwnerLocalRecoveryType(message.Type) {
+		return fmt.Errorf("recovery: owner-local message type %q is forbidden on browser transport", message.Type)
+	}
+
+	payloads := 0
+	for _, present := range []bool{
+		message.Recovery != nil,
+		message.RecoveryTransition != nil,
+		message.RecoveryRetry != nil,
+		message.RecoveryRetryResult != nil,
+		message.RecoverySelect != nil,
+		message.RecoverySelectResult != nil,
+		message.ProtocolHello != nil,
+		message.ProtocolHelloResult != nil,
+		message.ReplacementOutcome != nil,
+		message.ActivePanePersistence != nil,
+		message.ActivePanePersistenceResult != nil,
+	} {
+		if present {
+			payloads++
+		}
+	}
+
+	switch message.Type {
+	case TypeProtocolHello:
+		if payloads != 1 || message.ProtocolHello == nil {
+			return fmt.Errorf("recovery: protocol hello has invalid payload")
+		}
+		return message.ProtocolHello.validateRecoveryContract()
+	case TypeProtocolHelloResult:
+		if payloads != 1 || message.ProtocolHelloResult == nil {
+			return fmt.Errorf("recovery: protocol hello result has invalid payload")
+		}
+		return message.ProtocolHelloResult.validateRecoveryContract()
+	case TypePaneRecoveryChanged:
+		if payloads != 1 || message.RecoveryTransition == nil {
+			return fmt.Errorf("recovery: recovery transition has invalid payload")
+		}
+		return message.RecoveryTransition.validateRecoveryContract()
+	case TypeRecoveryRetry:
+		if payloads != 1 || message.RecoveryRetry == nil {
+			return fmt.Errorf("recovery: recovery retry has invalid payload")
+		}
+		return message.RecoveryRetry.validateRecoveryContract()
+	case TypeRecoveryRetryResult:
+		if payloads != 1 || message.RecoveryRetryResult == nil {
+			return fmt.Errorf("recovery: recovery retry result has invalid payload")
+		}
+		return message.RecoveryRetryResult.validateRecoveryContract()
+	case TypeRecoverySelect:
+		if payloads != 1 || message.RecoverySelect == nil {
+			return fmt.Errorf("recovery: recovery selection has invalid payload")
+		}
+		return message.RecoverySelect.validateRecoveryContract()
+	case TypeRecoverySelectResult:
+		if payloads != 1 || message.RecoverySelectResult == nil {
+			return fmt.Errorf("recovery: recovery selection result has invalid payload")
+		}
+		return message.RecoverySelectResult.validateRecoveryContract()
+	case TypeReplacementOutcome:
+		if payloads != 1 || message.ReplacementOutcome == nil {
+			return fmt.Errorf("recovery: replacement outcome has invalid payload")
+		}
+		return message.ReplacementOutcome.validateRecoveryContract()
+	case TypeSetActivePane:
+		if payloads != 1 || message.ActivePanePersistence == nil {
+			return fmt.Errorf("recovery: active-pane persistence request has invalid payload")
+		}
+		return message.ActivePanePersistence.validateRecoveryContract()
+	case TypeSetActivePaneResult:
+		if payloads != 1 || message.ActivePanePersistenceResult == nil {
+			return fmt.Errorf("recovery: active-pane persistence result has invalid payload")
+		}
+		return message.ActivePanePersistenceResult.validateRecoveryContract()
+	case TypePaneAdded, TypePaneCreated, TypeComposition:
+		if payloads == 0 {
+			return nil
+		}
+		if payloads == 1 && message.Recovery != nil {
+			return message.Recovery.validateRecoveryContract()
+		}
+		return fmt.Errorf("recovery: pane projection has invalid recovery payload")
+	default:
+		if payloads != 0 {
+			return fmt.Errorf("recovery: non-recovery message has a recovery payload")
+		}
+		return nil
+	}
+}
+
+// DecodeBrowserRecoveryMessage is the explicit browser /ws recovery decoder and
+// allowlist. The later relay lane MUST call it for recovery traffic. It bounds
+// recovery-specific input, rejects owner-local type names and payload field
+// names before generic Message decoding, and validates the resulting
+// browser-safe recovery shape.
+func DecodeBrowserRecoveryMessage(data []byte) (*Message, error) {
+	if len(data) == 0 || len(data) > RecoveryMaxBrowserRecoveryMessageBytes {
+		return nil, fmt.Errorf("recovery: browser control message exceeds input limit")
+	}
+	var probe browserPrivilegeProbe
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return nil, fmt.Errorf("recovery: decode browser control message: %w", err)
+	}
+	if isOwnerLocalRecoveryType(probe.Type) || probe.hasOwnerLocalPayload() {
+		return nil, fmt.Errorf("recovery: owner-local recovery payload is forbidden on browser transport")
+	}
+	if err := validateBrowserRecoveryFieldAllowlist(data, probe.Type); err != nil {
+		return nil, err
+	}
+	type wire Message
+	var decoded wire
+	if err := decodeRecoveryJSON(data, &decoded); err != nil {
+		return nil, err
+	}
+	message := Message(decoded)
+	if err := ValidateBrowserRecoveryMessage(&message); err != nil {
+		return nil, err
+	}
+	return &message, nil
 }
 
 // CloseOutcomeMessage maps a daemon close transaction result onto the additive
@@ -411,4 +1525,8 @@ type PaneInfo struct {
 	// that carried an explicit placement token; absent means default/tab placement).
 	Placement       string `json:"placement,omitempty"`       // tab|split-right|split-left|split-above|split-below
 	ReferencePaneID int    `json:"referencePaneId,omitempty"` // pane to split relative to; 0 = active pane
+
+	// Recovery is an optional browser-safe projection. It intentionally omits
+	// every daemon-local capture, launch, capability, and generation field.
+	Recovery *PaneRecoveryInfo `json:"recovery,omitempty"`
 }
