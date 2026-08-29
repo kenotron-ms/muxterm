@@ -99,6 +99,32 @@ const (
 	TypeCloseOutcome = "close-outcome" // reply: daemon -> browser relay
 )
 
+// Recovery message types are additive. Privileged envelopes travel only over
+// the owner-local daemon boundary; browser-safe messages carry redacted
+// projection types defined below.
+const (
+	TypeProtocolHello       = "protocol-hello"
+	TypeProtocolHelloResult = "protocol-hello-result"
+
+	TypePaneRecoveryChanged = "pane-recovery-changed"
+	TypeRecoveryRetry       = "recovery-retry"
+	TypeRecoveryRetryResult = "recovery-retry-result"
+
+	TypeRecoverySelect       = "recovery-select"        // privileged request
+	TypeRecoverySelectResult = "recovery-select-result" // privileged result
+
+	TypeLifecycleCapture        = "lifecycle-capture"         // privileged request
+	TypeLifecycleCaptureOutcome = "lifecycle-capture-outcome" // privileged result
+
+	TypeReplacementPlan       = "replacement-plan"        // privileged request
+	TypeReplacementPlanResult = "replacement-plan-result" // privileged result
+	TypeReplacementCommit     = "replacement-commit"      // privileged request
+	TypeReplacementOutcome    = "replacement-outcome"     // redacted event/result
+
+	TypeSetActivePane       = "set-active-pane"
+	TypeSetActivePaneResult = "set-active-pane-result"
+)
+
 // CloseRiskInfo is one user-safe activity warning in a close-outcome. It is
 // deliberately a wire type rather than the daemon's internal CloseRisk so its
 // JSON field names are fixed independently of internal transaction state.
@@ -107,6 +133,156 @@ type CloseRiskInfo struct {
 	Title          string `json:"title"`
 	Classification string `json:"classification"`
 	Reason         string `json:"reason"`
+}
+
+// RecoveryProtocolCapability is a browser-safe capability advertised through
+// protocol hello. Privileged recovery operations are intentionally absent.
+type RecoveryProtocolCapability string
+
+const (
+	RecoveryProtocolCapabilityPaneProjection        RecoveryProtocolCapability = "pane-recovery-projection"
+	RecoveryProtocolCapabilityRetry                 RecoveryProtocolCapability = "recovery-retry"
+	RecoveryProtocolCapabilityActivePanePersistence RecoveryProtocolCapability = "active-pane-persistence"
+)
+
+// RecoveryProtocolCapabilities uses fixed storage and a count to bound
+// capability negotiation. Count may not exceed RecoveryMaxProtocolCapabilities.
+type RecoveryProtocolCapabilities struct {
+	Count  uint8                                                       `json:"count"`
+	Values [RecoveryMaxProtocolCapabilities]RecoveryProtocolCapability `json:"values"`
+}
+
+// ProtocolHelloRequest and ProtocolHelloResult negotiate only browser-safe
+// schema/capability support. They cannot grant launch or strategy authority.
+type ProtocolHelloRequest struct {
+	RecoverySchemaVersion uint16                       `json:"recoverySchemaVersion"`
+	Capabilities          RecoveryProtocolCapabilities `json:"capabilities"`
+}
+
+type ProtocolHelloResult struct {
+	RecoverySchemaVersion uint16                       `json:"recoverySchemaVersion"`
+	Capabilities          RecoveryProtocolCapabilities `json:"capabilities"`
+	Compatible            bool                         `json:"compatible"`
+	DetailCode            RecoveryDetailCode           `json:"detailCode"`
+}
+
+// PaneRecoveryInfo is the complete browser-safe recovery projection. Exact
+// session identities, paths, launch data, capabilities, generations, and raw
+// tool errors must never be added here.
+type PaneRecoveryInfo struct {
+	Status          RecoveryStatus        `json:"status"`
+	StrategyID      RecoveryStrategyID    `json:"strategyId,omitempty"`
+	StrategyLabel   RecoveryStrategyLabel `json:"strategyLabel,omitempty"`
+	DetailCode      RecoveryDetailCode    `json:"detailCode"`
+	HistoryBoundary bool                  `json:"historyBoundary"`
+	CanRetry        bool                  `json:"canRetry"`
+	CanSelect       bool                  `json:"canSelect"`
+}
+
+// PaneRecoveryTransition is the browser-safe live state update for one
+// workspace-qualified pane.
+type PaneRecoveryTransition struct {
+	Pane     RecoveryPaneRef  `json:"pane"`
+	Recovery PaneRecoveryInfo `json:"recovery"`
+}
+
+// RecoveryRetryRequest identifies only the workspace-qualified pane. Sessiond
+// resolves its current failed generation and capture fence internally.
+type RecoveryRetryRequest struct {
+	Pane RecoveryPaneRef `json:"pane"`
+}
+
+type RecoveryRetryResult struct {
+	Pane     RecoveryPaneRef  `json:"pane"`
+	Recovery PaneRecoveryInfo `json:"recovery"`
+}
+
+// PrivilegedRecoverySelectionRequest accepts exactly one bounded opaque
+// candidate at the owner-local daemon boundary. It has no browser-safe mirror.
+type PrivilegedRecoverySelectionRequest struct {
+	Pane      RecoveryPaneRef                `json:"pane"`
+	Candidate RecoveryOpaqueSessionCandidate `json:"candidate"`
+}
+
+type PrivilegedRecoverySelectionResult struct {
+	Fence   RecoveryFence   `json:"fence"`
+	Outcome RecoveryOutcome `json:"outcome"`
+}
+
+// PrivilegedLifecycleCaptureRequest and
+// PrivilegedLifecycleCaptureOutcome are owner-local only. They keep callback
+// capability and exact session values outside browser projection types.
+type PrivilegedLifecycleCaptureRequest struct {
+	Capture RecoveryLifecycleCapture `json:"capture"`
+}
+
+type PrivilegedLifecycleCaptureOutcome struct {
+	Outcome RecoveryLifecycleCaptureOutcome `json:"outcome"`
+}
+
+// PrivilegedRecoveryEnvelope contains every owner-local recovery payload that
+// could carry exact capture, capability, generation, or replacement-plan data.
+// Browser-safe Message fields remain outside this envelope.
+type PrivilegedRecoveryEnvelope struct {
+	Selection         *PrivilegedRecoverySelectionRequest `json:"selection,omitempty"`
+	SelectionResult   *PrivilegedRecoverySelectionResult  `json:"selectionResult,omitempty"`
+	LifecycleCapture  *PrivilegedLifecycleCaptureRequest  `json:"lifecycleCapture,omitempty"`
+	LifecycleOutcome  *PrivilegedLifecycleCaptureOutcome  `json:"lifecycleOutcome,omitempty"`
+	ReplacementPlan   *PrivilegedReplacementPlanRequest   `json:"replacementPlan,omitempty"`
+	ReplacementResult *PrivilegedReplacementPlanResult    `json:"replacementResult,omitempty"`
+	ReplacementCommit *PrivilegedReplacementCommitRequest `json:"replacementCommit,omitempty"`
+}
+
+// RecoveryReplacementPlanState is a closed coordination result for controlled
+// daemon replacement.
+type RecoveryReplacementPlanState string
+
+const (
+	RecoveryReplacementPlanReady    RecoveryReplacementPlanState = "ready"
+	RecoveryReplacementPlanDeferred RecoveryReplacementPlanState = "deferred"
+)
+
+type PrivilegedReplacementPlanRequest struct {
+	Generation  RecoveryGeneration         `json:"generation"`
+	ActivePanes RecoveryReplacementPaneSet `json:"activePanes"`
+}
+
+type PrivilegedReplacementPlanResult struct {
+	PlanID     RecoveryReplacementPlanID    `json:"planId"`
+	State      RecoveryReplacementPlanState `json:"state"`
+	DetailCode RecoveryDetailCode           `json:"detailCode"`
+}
+
+type PrivilegedReplacementCommitRequest struct {
+	PlanID RecoveryReplacementPlanID `json:"planId"`
+}
+
+// RecoveryReplacementOutcomeState is the redacted terminal disposition of a
+// controlled replacement after a commit is attempted.
+type RecoveryReplacementOutcomeState string
+
+const (
+	RecoveryReplacementOutcomeCommitted RecoveryReplacementOutcomeState = "committed"
+	RecoveryReplacementOutcomeDeferred  RecoveryReplacementOutcomeState = "deferred"
+	RecoveryReplacementOutcomeFailed    RecoveryReplacementOutcomeState = "failed"
+)
+
+// RecoveryReplacementOutcome is safe for browser projection: it deliberately
+// excludes the plan handle, pane list, generation, and raw failure detail.
+type RecoveryReplacementOutcome struct {
+	State      RecoveryReplacementOutcomeState `json:"state"`
+	DetailCode RecoveryDetailCode              `json:"detailCode"`
+}
+
+// ActivePanePersistenceRequest is distinct from connection-scoped pane-focus:
+// sessiond validates and persists the workspace-qualified active selection.
+type ActivePanePersistenceRequest struct {
+	Pane RecoveryPaneRef `json:"pane"`
+}
+
+type ActivePanePersistenceResult struct {
+	Pane       RecoveryPaneRef    `json:"pane"`
+	DetailCode RecoveryDetailCode `json:"detailCode"`
 }
 
 // writeFrame writes a single framed message: a 5-byte header consisting of a
@@ -278,6 +454,30 @@ type Message struct {
 	Lines      []string `json:"lines,omitempty"`
 	NextCursor *uint64  `json:"nextCursor,omitempty"`
 	StartLine  uint64   `json:"startLine,omitempty"`
+
+	// Recovery browser-safe projection (ADDITIVE). Recovery is present only
+	// when the pane has daemon-authoritative recovery state.
+	Recovery            *PaneRecoveryInfo           `json:"recovery,omitempty"`
+	RecoveryTransition  *PaneRecoveryTransition     `json:"recoveryTransition,omitempty"`
+	RecoveryRetry       *RecoveryRetryRequest       `json:"recoveryRetry,omitempty"`
+	RecoveryRetryResult *RecoveryRetryResult        `json:"recoveryRetryResult,omitempty"`
+	ProtocolHello       *ProtocolHelloRequest       `json:"protocolHello,omitempty"`
+	ProtocolHelloResult *ProtocolHelloResult        `json:"protocolHelloResult,omitempty"`
+	ReplacementOutcome  *RecoveryReplacementOutcome `json:"replacementOutcome,omitempty"`
+
+	// ActivePaneID is a browser-safe projection/intent field. It is distinct
+	// from TypePaneFocus, whose sizing authority remains connection-scoped.
+	ActivePaneID RecoveryPaneID `json:"activePaneId,omitempty"`
+
+	// PrivilegedRecovery is for the owner-local daemon boundary only. No
+	// browser mirror may expose this envelope or its message types.
+	PrivilegedRecovery *PrivilegedRecoveryEnvelope `json:"privilegedRecovery,omitempty"`
+
+	// Active-pane persistence has only a workspace-qualified pane reference
+	// and a stable result code. It remains distinct from connection-scoped
+	// pane-focus authority.
+	ActivePanePersistence       *ActivePanePersistenceRequest `json:"activePanePersistence,omitempty"`
+	ActivePanePersistenceResult *ActivePanePersistenceResult  `json:"activePanePersistenceResult,omitempty"`
 }
 
 // CloseOutcomeMessage maps a daemon close transaction result onto the additive
@@ -411,4 +611,8 @@ type PaneInfo struct {
 	// that carried an explicit placement token; absent means default/tab placement).
 	Placement       string `json:"placement,omitempty"`       // tab|split-right|split-left|split-above|split-below
 	ReferencePaneID int    `json:"referencePaneId,omitempty"` // pane to split relative to; 0 = active pane
+
+	// Recovery is an optional browser-safe projection. It intentionally omits
+	// every daemon-local capture, launch, capability, and generation field.
+	Recovery *PaneRecoveryInfo `json:"recovery,omitempty"`
 }

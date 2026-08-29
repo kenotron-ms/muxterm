@@ -46,6 +46,122 @@ export interface CloseRisk {
 }
 
 // ---------------------------------------------------------------------------
+// Browser-safe crash-recovery projection
+//
+// This vocabulary intentionally excludes opaque external session identities,
+// working directories, executable/argv/environment data, callback
+// capabilities, generation claims, lifecycle captures, replacement plans, and
+// explicit strategy-selection authority. Those remain daemon-local.
+// ---------------------------------------------------------------------------
+
+export type SessiondRecoveryStrategy =
+  | 'amplifier-app-cli'
+  | 'claude-code'
+  | 'opencode'
+  | 'codex';
+
+export type SessiondRecoveryStrategyLabel =
+  | 'Amplifier'
+  | 'Claude Code'
+  | 'OpenCode'
+  | 'Codex';
+
+export type SessiondRecoveryStatus =
+  | 'restoring'
+  | 'recovered'
+  | 'shell-restored'
+  | 'selection-needed'
+  | 'provisional'
+  | 'strategy-failed';
+
+/** Stable redacted categories only; never surface paths, IDs, or tool errors. */
+export type SessiondRecoveryDetailCode =
+  | 'none'
+  | 'capture-missing'
+  | 'capture-invalid'
+  | 'capture-stale'
+  | 'capture-conflicting'
+  | 'capture-ambiguous'
+  | 'working-directory-invalid'
+  | 'strategy-unsupported'
+  | 'schema-incompatible'
+  | 'lifecycle-unavailable'
+  | 'lifecycle-expired'
+  | 'lifecycle-malformed'
+  | 'launch-rejected'
+  | 'launch-failed'
+  | 'observed-identity-mismatch'
+  | 'readiness-timeout'
+  | 'replacement-deferred'
+  | 'replacement-failed'
+  | 'active-pane-invalid';
+
+type SessiondRecoveryStrategyInfo =
+  | { strategyId: 'amplifier-app-cli'; strategyLabel: 'Amplifier' }
+  | { strategyId: 'claude-code'; strategyLabel: 'Claude Code' }
+  | { strategyId: 'opencode'; strategyLabel: 'OpenCode' }
+  | { strategyId: 'codex'; strategyLabel: 'Codex' }
+  | { strategyId?: undefined; strategyLabel?: undefined };
+
+/** Complete browser-safe recovery information for one pane. */
+export type SessiondPaneRecoveryInfo = SessiondRecoveryStrategyInfo & {
+  status: SessiondRecoveryStatus;
+  detailCode: SessiondRecoveryDetailCode;
+  historyBoundary: boolean;
+  canRetry: boolean;
+  canSelect: boolean;
+};
+
+export type SessiondRecoveryCapability =
+  | 'pane-recovery-projection'
+  | 'recovery-retry'
+  | 'active-pane-persistence';
+
+/** Mirrors sessiond's fixed protocol-capability storage limit. */
+export const SessiondRecoveryMaxCapabilities = 8;
+
+export interface SessiondRecoveryCapabilities {
+  count: number;
+  values: readonly SessiondRecoveryCapability[];
+}
+
+export interface SessiondProtocolHello {
+  recoverySchemaVersion: number;
+  capabilities: SessiondRecoveryCapabilities;
+}
+
+export interface SessiondProtocolHelloResult extends SessiondProtocolHello {
+  compatible: boolean;
+  detailCode: SessiondRecoveryDetailCode;
+}
+
+export interface SessiondRecoveryPaneRef {
+  workspaceId: string;
+  paneId: number;
+}
+
+export interface SessiondPaneRecoveryTransition {
+  pane: SessiondRecoveryPaneRef;
+  recovery: SessiondPaneRecoveryInfo;
+}
+
+/** A browser may retry only by naming a workspace-qualified pane. */
+export interface SessiondRecoveryRetryRequest {
+  pane: SessiondRecoveryPaneRef;
+}
+
+export interface SessiondRecoveryRetryResult {
+  pane: SessiondRecoveryPaneRef;
+  recovery: SessiondPaneRecoveryInfo;
+}
+
+/** Redacted controlled-replacement result; plan handles remain daemon-local. */
+export interface SessiondRecoveryReplacementOutcome {
+  state: 'committed' | 'deferred' | 'failed';
+  detailCode: SessiondRecoveryDetailCode;
+}
+
+// ---------------------------------------------------------------------------
 // sessiond v1 control protocol
 //
 // Mirrors the frozen Go Message/WorkspaceInfo/PaneInfo shapes and the
@@ -100,7 +216,27 @@ export const SessiondType = {
   GetLayout: 'get-layout',
 } as const;
 
-export type SessiondMessageType = (typeof SessiondType)[keyof typeof SessiondType];
+/**
+ * Additive browser-safe recovery message types. Keep this separate from
+ * SessiondType because existing protocol mirrors assert its exact frozen map.
+ */
+export const SessiondRecoveryType = {
+  ProtocolHello: 'protocol-hello',
+  ProtocolHelloResult: 'protocol-hello-result',
+  PaneRecoveryChanged: 'pane-recovery-changed',
+  RecoveryRetry: 'recovery-retry',
+  RecoveryRetryResult: 'recovery-retry-result',
+  ReplacementOutcome: 'replacement-outcome',
+  SetActivePane: 'set-active-pane',
+  SetActivePaneResult: 'set-active-pane-result',
+} as const;
+
+export type SessiondRecoveryMessageType =
+  (typeof SessiondRecoveryType)[keyof typeof SessiondRecoveryType];
+
+export type SessiondMessageType =
+  | (typeof SessiondType)[keyof typeof SessiondType]
+  | SessiondRecoveryMessageType;
 
 export type CloseIntentRequest = {
   type: typeof SessiondType.CloseIntent;
@@ -175,6 +311,8 @@ export interface SessiondPaneInfo {
    *  (RC-1) to defer ready=true until all replay data has arrived. */
   totalSeq?: number;
   surfaceKind?: SurfaceKind;
+  /** Daemon-authoritative, redacted recovery projection when available. */
+  recovery?: SessiondPaneRecoveryInfo;
 }
 
 export interface SessiondMessage {
@@ -214,6 +352,26 @@ export interface SessiondMessage {
   placement?: string;
   /** Reference pane id for split placement (0 = active pane). */
   referencePaneId?: number;
+  /** Optional browser-safe recovery projection for a pane message. */
+  recovery?: SessiondPaneRecoveryInfo;
+  /** Optional browser-safe live transition for a workspace-qualified pane. */
+  recoveryTransition?: SessiondPaneRecoveryTransition;
+  /** Browser-safe protocol negotiation envelope. */
+  protocolHello?: SessiondProtocolHello;
+  /** Browser-safe protocol negotiation result envelope. */
+  protocolHelloResult?: SessiondProtocolHelloResult;
+  /** Exact retry intent; sessiond resolves the current recovery fence. */
+  recoveryRetry?: SessiondRecoveryRetryRequest;
+  /** Redacted retry result. */
+  recoveryRetryResult?: SessiondRecoveryRetryResult;
+  /** Redacted controlled-replacement status. */
+  replacementOutcome?: SessiondRecoveryReplacementOutcome;
+  /**
+   * Active pane selection is a daemon-validated persistence intent/result,
+   * distinct from connection-scoped pane focus. It grants no persistence
+   * authority to the browser.
+   */
+  activePaneId?: number;
 }
 
 // ---------------------------------------------------------------------------
