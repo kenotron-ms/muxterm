@@ -4,44 +4,123 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
 
-// startTestServer creates a Server bound to a Unix socket under a fresh temp
-// directory and runs ListenAndServe on a cancellable context in a goroutine.
-// It returns the server, the socket path, a channel delivering the eventual
-// ListenAndServe error, and the cancel func. It blocks until the socket exists.
+// startTestServer creates a Server bound to a Unix socket under a fresh short
+// temp directory and runs ListenAndServe on a cancellable context in a
+// goroutine. It returns the server, the socket path, a channel delivering the
+// eventual ListenAndServe error, and the cancel func. It blocks until sessiond
+// serves a non-empty workspace list.
 func startTestServer(t *testing.T) (srv *Server, socketPath string, errCh <-chan error, cancel context.CancelFunc) {
 	t.Helper()
+	// testing.T.TempDir includes the test name, which can exceed Darwin's Unix
+	// socket path limit. MkdirTemp keeps the owner-unique fixture root short.
+	root, err := os.MkdirTemp("", "mxt-")
+	if err != nil {
+		t.Fatalf("create server temp root: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove server temp root: %v", err)
+		}
+	})
+
 	// Nest the socket inside a subdir so MkdirAll/Chmod 0700 is exercised and
 	// the permissions test can observe the parent directory mode.
-	socketPath = filepath.Join(t.TempDir(), "run", "sessiond.sock")
-	srv, err := NewServer(socketPath)
+	socketPath = filepath.Join(root, "run", "sessiond.sock")
+	srv, err = NewServer(socketPath)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	ec := make(chan error, 1)
 	go func() { ec <- srv.ListenAndServe(ctx) }()
 	waitForSocket(t, socketPath)
 	return srv, socketPath, ec, cancel
 }
 
-// waitForSocket polls until the socket path exists or the deadline elapses.
+var errReadinessEmptyWorkspaceList = errors.New("matching workspace-list was empty")
+
+// waitForSocket is shared by test fixtures and waits until sessiond accepts
+// and serves a non-empty workspace list or the existing startup deadline
+// elapses.
 func waitForSocket(t *testing.T, socketPath string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
+	lastErr := errors.New("no readiness probe attempted")
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(socketPath); err == nil {
+		err := probeServerReady(socketPath, deadline)
+		if err == nil {
 			return
 		}
+		if !isTransientReadinessError(err) {
+			t.Fatalf("sessiond readiness probe failed: %v", err)
+		}
+		lastErr = err
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("socket %s did not appear in time", socketPath)
+	t.Fatalf("sessiond readiness timed out after 5s waiting for a non-empty workspace-list from %s (last failure: %v)", socketPath, lastErr)
+}
+
+// probeServerReady opens a short-lived client connection and verifies that the
+// server responds to a correlated workspace-list request.
+func probeServerReady(socketPath string, deadline time.Time) error {
+	const readinessProbeCID uint64 = 1
+
+	conn, err := net.DialTimeout("unix", socketPath, time.Until(deadline))
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer conn.Close()
+
+	if err := conn.SetDeadline(deadline); err != nil {
+		return fmt.Errorf("set deadline: %w", err)
+	}
+	if err := WriteControl(conn, &Message{Type: TypeListWorkspaces, CID: readinessProbeCID}); err != nil {
+		return fmt.Errorf("write list-workspaces: %w", err)
+	}
+	for {
+		kind, payload, err := ReadFrame(conn)
+		if err != nil {
+			return fmt.Errorf("read frame: %w", err)
+		}
+		if kind != FrameControl {
+			continue
+		}
+		var msg Message
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return fmt.Errorf("decode control frame: %w", err)
+		}
+		if msg.Type != TypeWorkspaceList || msg.CID != readinessProbeCID {
+			continue
+		}
+		if len(msg.Workspaces) == 0 {
+			return errReadinessEmptyWorkspaceList
+		}
+		return nil
+	}
+}
+
+// isTransientReadinessError identifies failures that can occur before
+// ListenAndServe has begun accepting or serving client requests.
+func isTransientReadinessError(err error) bool {
+	return errors.Is(err, errReadinessEmptyWorkspaceList) ||
+		errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, os.ErrDeadlineExceeded) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE)
 }
 
 // dialMust dials the Unix socket and registers a cleanup that closes it.
