@@ -464,13 +464,13 @@ func recoveryPlannerClaims(
 	captures map[RecoveryCaptureKey]struct{},
 ) (
 	[]recoveryClaimPlan,
-	map[RecoveryFence]struct{},
+	map[RecoveryFence]RecoveryClaimState,
 	map[recoveryPlannerRunKey]RecoveryFence,
 	RecoveryGeneration,
 	error,
 ) {
 	plans := make([]recoveryClaimPlan, len(claims))
-	claimsByFence := make(map[RecoveryFence]struct{}, len(claims))
+	claimsByFence := make(map[RecoveryFence]RecoveryClaimState, len(claims))
 	runFences := make(map[recoveryPlannerRunKey]RecoveryFence)
 	var highWater RecoveryGeneration
 	for index, source := range claims {
@@ -486,7 +486,7 @@ func recoveryPlannerClaims(
 		if _, duplicate := claimsByFence[claim.Fence]; duplicate {
 			return nil, nil, nil, 0, fmt.Errorf("%w: duplicate claim", ErrRecoveryStoreInvalid)
 		}
-		claimsByFence[claim.Fence] = struct{}{}
+		claimsByFence[claim.Fence] = claim.State
 		plans[index] = recoveryClaimPlan{
 			fence:     recoveryPlannerFence(claim.Fence),
 			state:     claim.State,
@@ -499,7 +499,7 @@ func recoveryPlannerClaims(
 func recoveryPlannerAttempts(
 	attempts []RecoveryAttempt,
 	captures map[RecoveryCaptureKey]struct{},
-	claims map[RecoveryFence]struct{},
+	claims map[RecoveryFence]RecoveryClaimState,
 	runFences map[recoveryPlannerRunKey]RecoveryFence,
 	highWater RecoveryGeneration,
 ) ([]recoveryAttemptPlan, RecoveryGeneration, error) {
@@ -516,8 +516,16 @@ func recoveryPlannerAttempts(
 		if err != nil {
 			return nil, 0, err
 		}
-		if _, claimed := claims[attempt.Fence]; !claimed {
+		claimState, claimed := claims[attempt.Fence]
+		if !claimed {
 			return nil, 0, fmt.Errorf("%w: attempt references a missing claim", ErrRecoveryStoreInvalid)
+		}
+		if attempt.State != RecoveryAttemptStateFinished && claimState != RecoveryClaimStateClaimed {
+			return nil, 0, fmt.Errorf(
+				"%w: non-finished attempt is not authorized by claim state %q",
+				ErrRecoveryStoreInvalid,
+				claimState,
+			)
 		}
 		key := RecoveryAttemptKey{Fence: attempt.Fence, Ordinal: attempt.Ordinal}
 		if _, duplicate := keys[key]; duplicate {
@@ -543,7 +551,7 @@ func recoveryPlannerAttempts(
 func recoveryPlannerOutcomes(
 	outcomes []RecoveryOutcome,
 	captures map[RecoveryCaptureKey]struct{},
-	claims map[RecoveryFence]struct{},
+	claims map[RecoveryFence]RecoveryClaimState,
 	runFences map[recoveryPlannerRunKey]RecoveryFence,
 	highWater RecoveryGeneration,
 ) ([]recoveryOutcomePlan, RecoveryGeneration, error) {
