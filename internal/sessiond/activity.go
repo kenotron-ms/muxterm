@@ -3,7 +3,6 @@ package sessiond
 import (
 	"bytes"
 	"os"
-	"sync/atomic"
 	"time"
 )
 
@@ -84,8 +83,6 @@ const (
 )
 
 const maxLifecycleSequence = 512
-
-var nextProcessGeneration atomic.Uint64
 
 // shellLifecycleParser recognizes authenticated OSC 133 lifecycle markers while
 // retaining an incomplete OSC across PTY reads. pending is strictly bounded so
@@ -236,30 +233,14 @@ func (p *shellLifecycleParser) marker(payload []byte) lifecycleMarker {
 	return 0
 }
 
-func (p *Pane) bindRootProcess(pid int, source shellLifecycleSource, token string, startedAt time.Time) uint64 {
-	generation := nextProcessGeneration.Add(1)
-	p.activityMu.Lock()
-	p.rootPID = pid
-	p.rootGeneration = generation
-	p.rootStartedAt = startedAt
-	p.rootExited = false
-	p.lifecycleSource = source
-	p.lifecycleParser = newShellLifecycleParser(token)
-	p.lifecycle = lifecycleEvidence{}
-	p.lifecycleParsing = false
-	p.activityRevision++
-	p.activityMu.Unlock()
-	return generation
-}
-
-func (p *Pane) observeLifecycleData(generation uint64, data []byte, observedAt time.Time) {
-	p.activityMu.Lock()
-	defer p.activityMu.Unlock()
-	if generation != p.rootGeneration || p.rootExited {
+func (p *Pane) observeLifecycleData(root *paneRoot, data []byte, observedAt time.Time) {
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	if root.retired || root.exited {
 		return
 	}
-	wasParsing := p.lifecycleParsing
-	for _, marker := range p.lifecycleParser.feed(data) {
+	wasParsing := root.lifecycleParsing
+	for _, marker := range root.lifecycleParser.feed(data) {
 		phase := lifecycleConflicting
 		switch marker {
 		case lifecycleMarkerPromptConstructing:
@@ -271,29 +252,22 @@ func (p *Pane) observeLifecycleData(generation uint64, data []byte, observedAt t
 		case lifecycleMarkerConflict:
 			phase = lifecycleConflicting
 		}
-		p.lifecycle = lifecycleEvidence{
-			generation: generation,
+		root.lifecycle = lifecycleEvidence{
+			generation: root.identity.Generation,
 			phase:      phase,
 			observedAt: observedAt,
 		}
-		p.activityRevision++
+		root.lifecycleRevision++
 	}
-	p.lifecycleParsing = len(p.lifecycleParser.pending) != 0
-	if p.lifecycleParsing != wasParsing {
-		p.activityRevision++
+	root.lifecycleParsing = len(root.lifecycleParser.pending) != 0
+	if root.lifecycleParsing != wasParsing {
+		root.lifecycleRevision++
 	}
-}
-
-func (p *Pane) markRootExited(generation uint64) {
-	p.activityMu.Lock()
-	if generation == p.rootGeneration {
-		p.rootExited = true
-		p.activityRevision++
-	}
-	p.activityMu.Unlock()
 }
 
 type activitySnapshot struct {
+	root       *paneRoot
+	identity   PaneRootIdentity
 	source     shellLifecycleSource
 	pid        int
 	generation uint64
@@ -306,28 +280,27 @@ type activitySnapshot struct {
 }
 
 func (p *Pane) activitySnapshot() activitySnapshot {
-	p.activityMu.Lock()
-	defer p.activityMu.Unlock()
-	return activitySnapshot{
-		source:     p.lifecycleSource,
-		pid:        p.rootPID,
-		generation: p.rootGeneration,
-		startedAt:  p.rootStartedAt,
-		exited:     p.rootExited,
-		ptmx:       p.ptmx,
-		lifecycle:  p.lifecycle,
-		parsing:    p.lifecycleParsing,
-		revision:   p.activityRevision,
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	root := p.root
+	if root == nil {
+		return activitySnapshot{}
 	}
-}
-
-// ProcessGeneration returns the stable generation of the pane's current root
-// process. A replacement root process receives a new value and starts with no
-// retained lifecycle evidence.
-func (p *Pane) ProcessGeneration() uint64 {
-	p.activityMu.Lock()
-	defer p.activityMu.Unlock()
-	return p.rootGeneration
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	return activitySnapshot{
+		root:       root,
+		identity:   root.identity,
+		source:     root.lifecycleSource,
+		pid:        root.identity.PID,
+		generation: root.identity.Generation,
+		startedAt:  root.identity.StartedAt,
+		exited:     root.exited,
+		ptmx:       root.ptmx,
+		lifecycle:  root.lifecycle,
+		parsing:    root.lifecycleParsing,
+		revision:   root.lifecycleRevision,
+	}
 }
 
 // ClassifyActivity authoritatively combines root-process identity, foreground
@@ -489,12 +462,19 @@ func classifyRootForeground(snapshot activitySnapshot) ActivityAssessment {
 }
 
 func (p *Pane) activityUnchanged(snapshot activitySnapshot) bool {
-	p.activityMu.Lock()
-	defer p.activityMu.Unlock()
-	return p.rootPID == snapshot.pid &&
-		p.rootGeneration == snapshot.generation &&
-		p.rootExited == snapshot.exited &&
-		p.lifecycleSource == snapshot.source &&
-		p.ptmx == snapshot.ptmx &&
-		p.activityRevision == snapshot.revision
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	root := p.root
+	if root == nil || root != snapshot.root || root.identity != snapshot.identity {
+		return false
+	}
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	return root.identity.PID == snapshot.pid &&
+		root.identity.Generation == snapshot.generation &&
+		root.identity.StartedAt == snapshot.startedAt &&
+		root.exited == snapshot.exited &&
+		root.lifecycleSource == snapshot.source &&
+		root.ptmx == snapshot.ptmx &&
+		root.lifecycleRevision == snapshot.revision
 }
