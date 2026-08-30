@@ -81,6 +81,7 @@ func newRecoveryHistorySegment(
 	// absent; no rune or tab expansion is split at a byte boundary.
 	reversed := make([]string, 0, minimumInt(len(lines), options.MaxHistoryLinesPerSegment))
 	bytesUsed := 0
+	hasVisibleText := false
 	for index := len(lines) - 1; index >= 0 && len(reversed) < options.MaxHistoryLinesPerSegment; index-- {
 		line := sanitizeRecoveryHistoryLine(lines[index], options.MaxHistoryLineBytes)
 		if len(line)+bytesUsed > options.MaxHistorySegmentBytes {
@@ -88,6 +89,7 @@ func newRecoveryHistorySegment(
 		}
 		reversed = append(reversed, line)
 		bytesUsed += len(line)
+		hasVisibleText = hasVisibleText || line != ""
 	}
 	out := RecoveryHistorySegment{
 		Pane:  pane,
@@ -96,15 +98,25 @@ func newRecoveryHistorySegment(
 	for index := range reversed {
 		out.Lines[len(reversed)-1-index] = reversed[index]
 	}
+	if !hasVisibleText {
+		out.Lines = make([]string, 0)
+	}
 	if err := validateRecoveryHistorySegment(out, options); err != nil {
 		return RecoveryHistorySegment{}, err
 	}
 	return out, nil
 }
 
+// validateRecoveryHistorySegment validates caller-owned literal content only.
+// Its deliberate omission of ID permits construction of a zero-ID candidate;
+// the file store is the sole issuer and must use
+// validateAssignedRecoveryHistorySegment after assignment.
 func validateRecoveryHistorySegment(segment RecoveryHistorySegment, options RecoveryStoreOptions) error {
 	if err := segment.Pane.validateRecoveryContract(); err != nil {
 		return invalidRecoveryStoreValue("history pane", err)
+	}
+	if segment.Lines == nil {
+		return fmt.Errorf("%w: history segment lines must be an array", ErrRecoveryStoreInvalid)
 	}
 	if len(segment.Lines) > options.MaxHistoryLinesPerSegment {
 		return fmt.Errorf("%w: history segment has too many lines", ErrRecoveryStoreInvalid)
@@ -125,14 +137,25 @@ func validateRecoveryHistorySegment(segment RecoveryHistorySegment, options Reco
 	return nil
 }
 
+func validateAssignedRecoveryHistorySegment(segment RecoveryHistorySegment, options RecoveryStoreOptions) error {
+	if err := validateRecoveryHistorySegment(segment, options); err != nil {
+		return err
+	}
+	if err := validateRecoveryHistorySegmentID(segment.ID); err != nil {
+		return err
+	}
+	return nil
+}
+
 func cloneRecoveryHistorySegment(segment RecoveryHistorySegment) RecoveryHistorySegment {
 	out := segment
-	out.Lines = append([]string(nil), segment.Lines...)
+	if segment.Lines != nil {
+		out.Lines = append(make([]string, 0, len(segment.Lines)), segment.Lines...)
+	}
 	return out
 }
 
 type recoveryStoredHistorySegment struct {
-	sequence   uint64
 	segment    RecoveryHistorySegment
 	frameBytes int64
 }

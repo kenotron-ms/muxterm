@@ -87,7 +87,7 @@ function openSocket(): { mux: MuxSocket; ws: MockWebSocket } {
           'recovery-retry',
           'recovery-select',
           'active-pane-persistence',
-          'recovered-history-literal',
+          'recovered-history-segment-v2',
         ],
       },
     },

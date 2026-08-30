@@ -59,12 +59,13 @@ type fileRecoveryStore struct {
 	lockFD    int
 	journalFD int
 
-	snapshot       RecoverySnapshot
-	journalBase    RecoverySnapshot
-	journalRecords int
-	journalBytes   int64
-	history        []recoveryStoredHistorySegment
-	nextHistorySeq uint64
+	snapshot         RecoverySnapshot
+	journalBase      RecoverySnapshot
+	journalRecords   int
+	journalBytes     int64
+	history          []recoveryStoredHistorySegment
+	nextHistorySeq   uint64
+	historyExhausted bool
 
 	closed   bool
 	poisoned bool
@@ -79,9 +80,30 @@ type recoveryJournalMutation struct {
 	Mutation   RecoveryMutation        `json:"mutation"`
 }
 
-type recoveryHistoryWire struct {
-	Sequence uint64                 `json:"sequence"`
-	Segment  RecoveryHistorySegment `json:"segment"`
+// recoveryHistoryV1Segment exists only to decode and canonically re-encode
+// pre-identity frames during migration. Its shape must never gain ID.
+type recoveryHistoryV1Segment struct {
+	Pane  RecoveryPaneRef `json:"pane"`
+	Lines []string        `json:"lines"`
+}
+
+// recoveryHistoryV1Wire is accepted only as an exact legacy payload while the
+// store is opened under its exclusive writer lock.
+type recoveryHistoryV1Wire struct {
+	Sequence uint64                   `json:"sequence"`
+	Segment  recoveryHistoryV1Segment `json:"segment"`
+}
+
+// recoveryHistoryV2Wire is the sole current durable history payload. The
+// outer durable-frame schema remains RecoveryStoreSchemaVersion == 1.
+type recoveryHistoryV2Wire struct {
+	Version uint16                 `json:"version"`
+	Segment RecoveryHistorySegment `json:"segment"`
+}
+
+type recoveryDecodedHistorySegment struct {
+	segment RecoveryHistorySegment
+	legacy  bool
 }
 
 type recoveryFrame struct {
@@ -271,19 +293,26 @@ func (store *fileRecoveryStore) FlushHistory(
 	if !recoverySnapshotHasPane(store.snapshot, pane) {
 		return RecoveryHistorySegment{}, fmt.Errorf("%w: history pane is not in the snapshot", ErrRecoveryStoreInvalid)
 	}
+	if store.snapshot.Generation == 0 {
+		return RecoveryHistorySegment{}, fmt.Errorf("%w: history requires a nonzero snapshot generation", ErrRecoveryStoreInvalid)
+	}
 	if len(segment.Lines) == 0 {
 		return cloneRecoveryHistorySegment(segment), nil
 	}
-	if store.nextHistorySeq == math.MaxUint64 {
+	if store.historyExhausted || store.nextHistorySeq == 0 {
 		return RecoveryHistorySegment{}, fmt.Errorf("%w: history sequence overflow", ErrRecoveryStoreInvalid)
 	}
 	sequence := store.nextHistorySeq
-	segment, frame, err := fitRecoveryHistoryFrame(sequence, segment, store.options)
+	segment.ID = RecoveryHistorySegmentID{
+		Generation: store.snapshot.Generation,
+		Sequence:   sequence,
+	}
+	segment, frame, err := fitRecoveryHistoryFrame(segment, store.options)
 	if err != nil {
 		return RecoveryHistorySegment{}, err
 	}
 	if len(segment.Lines) == 0 {
-		return cloneRecoveryHistorySegment(segment), nil
+		return RecoveryHistorySegment{}, nil
 	}
 	filename := recoveryHistoryFilename(sequence)
 	if exists, err := recoveryExpectedFileExists(store.historyFD, filename); err != nil {
@@ -306,7 +335,6 @@ func (store *fileRecoveryStore) FlushHistory(
 		return RecoveryHistorySegment{}, store.poison(err)
 	}
 	store.history = append(store.history, recoveryStoredHistorySegment{
-		sequence:   sequence,
 		segment:    cloneRecoveryHistorySegment(segment),
 		frameBytes: int64(len(frame)),
 	})
@@ -318,6 +346,11 @@ func (store *fileRecoveryStore) FlushHistory(
 	}
 	if err := unix.Fsync(store.historyFD); err != nil {
 		return RecoveryHistorySegment{}, store.poison(err)
+	}
+	if sequence == math.MaxUint64 {
+		store.historyExhausted = true
+	} else {
+		store.nextHistorySeq = sequence + 1
 	}
 	return cloneRecoveryHistorySegment(segment), nil
 }
@@ -886,82 +919,197 @@ func recoveryJournalHeaderFrame(generation RecoveryStoreGeneration) ([]byte, err
 	return encodeRecoveryFrame(recoveryFrameJournalHeader, payload)
 }
 
-func encodeRecoveryHistoryFrame(
+func recoveryHistoryV1Payload(
 	sequence uint64,
-	segment RecoveryHistorySegment,
+	segment recoveryHistoryV1Segment,
 	options RecoveryStoreOptions,
 ) ([]byte, error) {
 	if sequence == 0 {
 		return nil, fmt.Errorf("%w: history sequence is zero", ErrRecoveryStoreInvalid)
 	}
-	if err := validateRecoveryHistorySegment(segment, options); err != nil {
+	if err := validateRecoveryHistorySegment(RecoveryHistorySegment{
+		Pane:  segment.Pane,
+		Lines: segment.Lines,
+	}, options); err != nil {
 		return nil, err
 	}
-	payload, err := json.Marshal(recoveryHistoryWire{
+	payload, err := json.Marshal(recoveryHistoryV1Wire{
 		Sequence: sequence,
-		Segment:  cloneRecoveryHistorySegment(segment),
+		Segment: recoveryHistoryV1Segment{
+			Pane:  segment.Pane,
+			Lines: append([]string(nil), segment.Lines...),
+		},
 	})
 	if err != nil || len(payload) > RecoveryStoreMaxHistorySegmentBytes {
 		return nil, fmt.Errorf("%w: history segment cannot be encoded within its bound", ErrRecoveryStoreInvalid)
+	}
+	return payload, nil
+}
+
+func recoveryHistoryV2Payload(
+	segment RecoveryHistorySegment,
+	options RecoveryStoreOptions,
+) ([]byte, error) {
+	if err := validateAssignedRecoveryHistorySegment(segment, options); err != nil {
+		return nil, err
+	}
+	if len(segment.Lines) == 0 {
+		return nil, fmt.Errorf("%w: empty history segments are not durable", ErrRecoveryStoreInvalid)
+	}
+	payload, err := json.Marshal(recoveryHistoryV2Wire{
+		Version: 2,
+		Segment: cloneRecoveryHistorySegment(segment),
+	})
+	if err != nil || len(payload) > RecoveryStoreMaxHistorySegmentBytes {
+		return nil, fmt.Errorf("%w: history segment cannot be encoded within its bound", ErrRecoveryStoreInvalid)
+	}
+	return payload, nil
+}
+
+func encodeRecoveryHistoryFrame(
+	segment RecoveryHistorySegment,
+	options RecoveryStoreOptions,
+) ([]byte, error) {
+	payload, err := recoveryHistoryV2Payload(segment, options)
+	if err != nil {
+		return nil, err
 	}
 	return encodeRecoveryFrame(recoveryFrameHistory, payload)
 }
 
 func fitRecoveryHistoryFrame(
-	sequence uint64,
 	segment RecoveryHistorySegment,
 	options RecoveryStoreOptions,
 ) (RecoveryHistorySegment, []byte, error) {
 	candidate := cloneRecoveryHistorySegment(segment)
-	for {
-		frame, err := encodeRecoveryHistoryFrame(sequence, candidate, options)
-		if err != nil {
-			return RecoveryHistorySegment{}, nil, err
-		}
-		if len(frame)-recoveryFrameHeaderBytes <= options.MaxHistorySegmentBytes {
-			return candidate, frame, nil
-		}
-		if len(candidate.Lines) == 0 {
-			return candidate, nil, nil
-		}
-		candidate.Lines = append([]string(nil), candidate.Lines[1:]...)
+	if err := validateAssignedRecoveryHistorySegment(candidate, options); err != nil {
+		return RecoveryHistorySegment{}, nil, err
 	}
+	if len(candidate.Lines) == 0 {
+		return RecoveryHistorySegment{}, nil, nil
+	}
+	frame, err := encodeRecoveryHistoryFrame(candidate, options)
+	if err == nil && len(frame)-recoveryFrameHeaderBytes <= options.MaxHistorySegmentBytes {
+		return candidate, frame, nil
+	}
+
+	// Removing leading lines can only shrink the canonical JSON/frame encoding.
+	// Find the oldest fitting suffix without repeatedly copying and encoding up
+	// to every retained line.
+	lines := candidate.Lines
+	first, last := 1, len(lines)-1
+	for first < last {
+		middle := first + (last-first)/2
+		candidate.Lines = lines[middle:]
+		frame, err = encodeRecoveryHistoryFrame(candidate, options)
+		if err == nil && len(frame)-recoveryFrameHeaderBytes <= options.MaxHistorySegmentBytes {
+			last = middle
+		} else {
+			first = middle + 1
+		}
+	}
+	candidate.Lines = append([]string(nil), lines[first:]...)
+	frame, err = encodeRecoveryHistoryFrame(candidate, options)
+	if err != nil || len(frame)-recoveryFrameHeaderBytes > options.MaxHistorySegmentBytes {
+		return RecoveryHistorySegment{}, nil, nil
+	}
+	return candidate, frame, nil
+}
+
+func recoveryHistoryPayloadHasExactKeys(
+	fields map[string]json.RawMessage,
+	keys ...string,
+) bool {
+	if len(fields) != len(keys) {
+		return false
+	}
+	for _, key := range keys {
+		if _, exists := fields[key]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeRecoveryHistoryFrame(
 	data []byte,
-	sequence uint64,
+	filenameSequence uint64,
+	snapshotGeneration RecoveryStoreGeneration,
 	options RecoveryStoreOptions,
-) (RecoveryHistorySegment, error) {
+) (recoveryDecodedHistorySegment, error) {
 	frames, _, torn, err := decodeRecoveryFrames(data, false)
 	if err != nil || torn || len(frames) != 1 || frames[0].kind != recoveryFrameHistory {
-		return RecoveryHistorySegment{}, fmt.Errorf("%w: invalid history segment frame", ErrRecoveryStoreCorrupt)
+		return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: invalid history segment frame", ErrRecoveryStoreCorrupt)
 	}
-	var wire recoveryHistoryWire
-	if err := decodeRecoveryJSON(frames[0].payload, &wire); err != nil || wire.Sequence != sequence {
-		return RecoveryHistorySegment{}, fmt.Errorf("%w: invalid history segment payload", ErrRecoveryStoreCorrupt)
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(frames[0].payload, &fields); err != nil || fields == nil {
+		return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: invalid history segment payload", ErrRecoveryStoreCorrupt)
 	}
-	if err := validateRecoveryHistorySegment(wire.Segment, options); err != nil {
-		return RecoveryHistorySegment{}, fmt.Errorf("%w: invalid history segment", ErrRecoveryStoreCorrupt)
+
+	if _, hasVersion := fields["version"]; hasVersion {
+		if !recoveryHistoryPayloadHasExactKeys(fields, "version", "segment") {
+			return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: invalid v2 history payload shape", ErrRecoveryStoreCorrupt)
+		}
+		var wire recoveryHistoryV2Wire
+		if err := decodeRecoveryJSON(frames[0].payload, &wire); err != nil || wire.Version != 2 {
+			return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: invalid v2 history segment payload", ErrRecoveryStoreCorrupt)
+		}
+		if wire.Segment.ID.Sequence != filenameSequence ||
+			wire.Segment.ID.Generation > snapshotGeneration {
+			return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: invalid v2 history segment identity", ErrRecoveryStoreCorrupt)
+		}
+		if err := validateAssignedRecoveryHistorySegment(wire.Segment, options); err != nil {
+			return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: invalid v2 history segment", ErrRecoveryStoreCorrupt)
+		}
+		canonicalPayload, err := recoveryHistoryV2Payload(wire.Segment, options)
+		if err != nil || !bytes.Equal(canonicalPayload, frames[0].payload) {
+			return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: noncanonical v2 history segment", ErrRecoveryStoreCorrupt)
+		}
+		return recoveryDecodedHistorySegment{
+			segment: cloneRecoveryHistorySegment(wire.Segment),
+		}, nil
 	}
-	canonical, err := encodeRecoveryHistoryFrame(sequence, wire.Segment, options)
-	if err != nil || !bytes.Equal(canonical, data) {
-		return RecoveryHistorySegment{}, fmt.Errorf("%w: noncanonical history segment", ErrRecoveryStoreCorrupt)
+
+	if !recoveryHistoryPayloadHasExactKeys(fields, "sequence", "segment") ||
+		snapshotGeneration == 0 {
+		return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: invalid v1 history segment payload", ErrRecoveryStoreCorrupt)
 	}
-	return cloneRecoveryHistorySegment(wire.Segment), nil
+	var wire recoveryHistoryV1Wire
+	if err := decodeRecoveryJSON(frames[0].payload, &wire); err != nil ||
+		wire.Sequence != filenameSequence {
+		return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: invalid v1 history segment payload", ErrRecoveryStoreCorrupt)
+	}
+	segment := RecoveryHistorySegment{
+		ID: RecoveryHistorySegmentID{
+			Generation: snapshotGeneration,
+			Sequence:   wire.Sequence,
+		},
+		Pane:  wire.Segment.Pane,
+		Lines: append([]string(nil), wire.Segment.Lines...),
+	}
+	if err := validateAssignedRecoveryHistorySegment(segment, options); err != nil {
+		return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: invalid v1 history segment", ErrRecoveryStoreCorrupt)
+	}
+	canonicalPayload, err := recoveryHistoryV1Payload(wire.Sequence, wire.Segment, options)
+	if err != nil || !bytes.Equal(canonicalPayload, frames[0].payload) {
+		return recoveryDecodedHistorySegment{}, fmt.Errorf("%w: noncanonical v1 history segment", ErrRecoveryStoreCorrupt)
+	}
+	return recoveryDecodedHistorySegment{
+		segment: segment,
+		legacy:  true,
+	}, nil
 }
 
 func (store *fileRecoveryStore) loadHistoryLocked() error {
-	if err := discardRecoveryPendingFile(store.historyFD, recoveryHistoryPendingName); err != nil {
-		return err
-	}
 	names, err := readRecoveryDirectoryNames(store.historyFD, RecoveryStoreMaxHistorySegments)
 	if err != nil {
 		return err
 	}
-	segments := make([]recoveryStoredHistorySegment, 0)
+	segments := make([]recoveryStoredHistorySegment, 0, len(names))
+	legacy := make([]bool, 0, len(names))
 	for _, name := range names {
-		sequence, ok := parseRecoveryHistoryFilename(name)
+		filenameSequence, ok := parseRecoveryHistoryFilename(name)
 		if !ok {
 			continue
 		}
@@ -980,34 +1128,107 @@ func (store *fileRecoveryStore) loadHistoryLocked() error {
 		if readErr != nil {
 			return fmt.Errorf("%w: read history segment", ErrRecoveryStoreCorrupt)
 		}
-		segment, err := decodeRecoveryHistoryFrame(data, sequence, store.options)
+		decoded, err := decodeRecoveryHistoryFrame(
+			data,
+			filenameSequence,
+			store.snapshot.Generation,
+			store.options,
+		)
 		if err != nil {
 			return err
 		}
 		segments = append(segments, recoveryStoredHistorySegment{
-			sequence:   sequence,
-			segment:    segment,
+			segment:    decoded.segment,
 			frameBytes: int64(len(data)),
 		})
+		legacy = append(legacy, decoded.legacy)
 	}
-	sort.Slice(segments, func(left, right int) bool {
-		return segments[left].sequence < segments[right].sequence
-	})
+
+	// readRecoveryDirectoryNames sorts exact fixed-width filenames, making this
+	// the global filename/sequence order without a second mutable authority.
 	for index := 1; index < len(segments); index++ {
-		if segments[index-1].sequence == segments[index].sequence {
-			return fmt.Errorf("%w: duplicate history sequence", ErrRecoveryStoreCorrupt)
+		if segments[index-1].segment.ID.Sequence >= segments[index].segment.ID.Sequence {
+			return fmt.Errorf("%w: history sequences are not strictly increasing", ErrRecoveryStoreCorrupt)
 		}
 	}
+
+	ids := make(map[RecoveryHistorySegmentID]RecoveryPaneRef, len(segments))
+	var previousGeneration RecoveryStoreGeneration
+	for index, stored := range segments {
+		segment := stored.segment
+		if previousGeneration > segment.ID.Generation {
+			return fmt.Errorf("%w: history generations are not nondecreasing", ErrRecoveryStoreCorrupt)
+		}
+		previousGeneration = segment.ID.Generation
+		if priorPane, duplicate := ids[segment.ID]; duplicate {
+			if priorPane != segment.Pane {
+				return fmt.Errorf("%w: history ID is bound to multiple panes", ErrRecoveryStoreCorrupt)
+			}
+			return fmt.Errorf("%w: duplicate history ID", ErrRecoveryStoreCorrupt)
+		}
+		ids[segment.ID] = segment.Pane
+		if legacy[index] && !recoverySnapshotHasPane(store.snapshot, segment.Pane) {
+			return fmt.Errorf("%w: legacy history references a missing pane", ErrRecoveryStoreCorrupt)
+		}
+	}
+
+	type migration struct {
+		index int
+		frame []byte
+	}
+	migrations := make([]migration, 0)
+	for index, stored := range segments {
+		if !legacy[index] {
+			continue
+		}
+		frame, err := encodeRecoveryHistoryFrame(stored.segment, store.options)
+		if err != nil || len(frame)-recoveryFrameHeaderBytes > store.options.MaxHistorySegmentBytes {
+			return fmt.Errorf("%w: v2 history migration cannot fit durable bounds", ErrRecoveryStoreCorrupt)
+		}
+		migrations = append(migrations, migration{index: index, frame: frame})
+	}
+
+	// A stale implementation-owned pending name cannot carry history authority.
+	// Drop it only after every recognized frame and every target v2 frame has
+	// passed validation, so corrupt input is never accompanied by pruning or
+	// rewriting side effects.
+	if err := discardRecoveryPendingFile(store.historyFD, recoveryHistoryPendingName); err != nil {
+		return err
+	}
+	for _, migration := range migrations {
+		sequence := segments[migration.index].segment.ID.Sequence
+		if err := writeRecoveryPendingFile(store.historyFD, recoveryHistoryPendingName, migration.frame); err != nil {
+			return err
+		}
+		if err := unix.Renameat(
+			store.historyFD,
+			recoveryHistoryPendingName,
+			store.historyFD,
+			recoveryHistoryFilename(sequence),
+		); err != nil {
+			return err
+		}
+		if err := unix.Fsync(store.historyFD); err != nil {
+			return err
+		}
+		segments[migration.index].frameBytes = int64(len(migration.frame))
+	}
+
 	store.history = segments
+	if err := store.pruneHistoryLocked(); err != nil {
+		return err
+	}
 	store.nextHistorySeq = 1
-	if len(segments) > 0 {
-		if segments[len(segments)-1].sequence == math.MaxUint64 {
-			store.nextHistorySeq = math.MaxUint64
+	store.historyExhausted = false
+	if len(store.history) > 0 {
+		maximum := store.history[len(store.history)-1].segment.ID.Sequence
+		if maximum == math.MaxUint64 {
+			store.historyExhausted = true
 		} else {
-			store.nextHistorySeq = segments[len(segments)-1].sequence + 1
+			store.nextHistorySeq = maximum + 1
 		}
 	}
-	return store.pruneHistoryLocked()
+	return nil
 }
 
 func (store *fileRecoveryStore) pruneHistoryLocked() error {
@@ -1017,7 +1238,7 @@ func (store *fileRecoveryStore) pruneHistoryLocked() error {
 		if recoverySnapshotHasPane(store.snapshot, stored.segment.Pane) {
 			kept = append(kept, stored)
 		} else {
-			removed = append(removed, stored.sequence)
+			removed = append(removed, stored.segment.ID.Sequence)
 		}
 	}
 	var bytesUsed int64
@@ -1026,7 +1247,7 @@ func (store *fileRecoveryStore) pruneHistoryLocked() error {
 	}
 	for len(kept) > store.options.MaxHistorySegments ||
 		bytesUsed > int64(store.options.MaxHistoryTotalBytes) {
-		removed = append(removed, kept[0].sequence)
+		removed = append(removed, kept[0].segment.ID.Sequence)
 		bytesUsed -= kept[0].frameBytes
 		kept = kept[1:]
 	}
@@ -1041,13 +1262,6 @@ func (store *fileRecoveryStore) pruneHistoryLocked() error {
 		}
 	}
 	store.history = kept
-	if len(store.history) > 0 && store.nextHistorySeq <= store.history[len(store.history)-1].sequence {
-		if store.history[len(store.history)-1].sequence == math.MaxUint64 {
-			store.nextHistorySeq = math.MaxUint64
-		} else {
-			store.nextHistorySeq = store.history[len(store.history)-1].sequence + 1
-		}
-	}
 	return nil
 }
 

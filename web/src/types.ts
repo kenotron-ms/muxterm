@@ -105,8 +105,17 @@ export interface SessiondRecoveryPaneRef {
   paneId: number;
 }
 
-/** Inert, sanitized recovered terminal history for one workspace-qualified pane. */
+/** Immutable daemon-issued identity for one recovered-history segment. */
+export interface SessiondRecoveredHistorySegmentID {
+  generation: string;
+  sequence: string;
+}
+
+/** One inert, sanitized recovered terminal-history fragment for a qualified pane. */
 export interface SessiondRecoveredHistoryLiteral {
+  segmentId: SessiondRecoveredHistorySegmentID;
+  part: number;
+  final: boolean;
   pane: SessiondRecoveryPaneRef;
   text: string;
   truncated: boolean;
@@ -115,6 +124,8 @@ export interface SessiondRecoveredHistoryLiteral {
 /** Bounds for the literal-history display contract. */
 export const SessiondRecoveredHistoryMaxBytes = 4096;
 export const SessiondRecoveredHistoryMaxLines = 256;
+/** A complete segment uses fewer than this many zero-based fragments. */
+export const SessiondRecoveredHistoryMaxParts = 512;
 
 /**
  * Opaque daemon-issued candidate handle. It is bound by sessiond to the
@@ -188,7 +199,7 @@ export type SessiondRecoveryCapability =
   | 'recovery-retry'
   | 'recovery-select'
   | 'active-pane-persistence'
-  | 'recovered-history-literal';
+  | 'recovered-history-segment-v2';
 
 /** Maximum length of SessiondRecoveryCapabilities.values. */
 export const SessiondRecoveryMaxCapabilities = 8;

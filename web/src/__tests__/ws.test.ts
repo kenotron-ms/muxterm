@@ -143,7 +143,7 @@ describe('MuxSocket', () => {
             'recovery-retry',
             'recovery-select',
             'active-pane-persistence',
-            'recovered-history-literal',
+            'recovered-history-segment-v2',
           ],
         },
       },

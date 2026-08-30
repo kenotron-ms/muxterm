@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -155,7 +156,11 @@ const (
 	RecoveryProtocolCapabilityRetry                 RecoveryProtocolCapability = "recovery-retry"
 	RecoveryProtocolCapabilitySelection             RecoveryProtocolCapability = "recovery-select"
 	RecoveryProtocolCapabilityActivePanePersistence RecoveryProtocolCapability = "active-pane-persistence"
-	RecoveryProtocolCapabilityRecoveredHistory      RecoveryProtocolCapability = "recovered-history-literal"
+	// RecoveryProtocolCapabilityLegacyRecoveredHistory remains a source
+	// constant only. It is intentionally absent from the recognized
+	// capability vocabulary and therefore cannot be negotiated.
+	RecoveryProtocolCapabilityLegacyRecoveredHistory RecoveryProtocolCapability = "recovered-history-literal"
+	RecoveryProtocolCapabilityRecoveredHistory       RecoveryProtocolCapability = "recovered-history-segment-v2"
 )
 
 // RecoveryProtocolCapabilities carries a browser offer or a server-recognized
@@ -568,10 +573,14 @@ func (transition PaneRecoveryTransition) validateRecoveryContract() error {
 
 const (
 	// RecoveryMaxRecoveredHistoryBytes bounds one browser-deliverable literal
-	// history segment after JSON decoding.
+	// history fragment after JSON decoding.
 	RecoveryMaxRecoveredHistoryBytes = 4096
 	// RecoveryMaxRecoveredHistoryLines bounds LF-delimited display lines.
 	RecoveryMaxRecoveredHistoryLines = 256
+	// RecoveryMaxRecoveredHistoryParts is the exclusive upper bound on the
+	// complete fragment count. Valid part indexes are 0..510, and index 510
+	// is legal only as the final fragment.
+	RecoveryMaxRecoveredHistoryParts = 511
 )
 
 // RecoveredHistoryLiteral is inert browser-safe terminal history. It is never
@@ -579,12 +588,25 @@ const (
 // character, so terminal control sequences cannot cross this display-only
 // boundary.
 type RecoveredHistoryLiteral struct {
-	Pane      RecoveryPaneRef `json:"pane"`
-	Text      string          `json:"text"`
-	Truncated bool            `json:"truncated"`
+	SegmentID RecoveryHistorySegmentID `json:"segmentId"`
+	Part      uint16                   `json:"part"`
+	Final     bool                     `json:"final"`
+	Pane      RecoveryPaneRef          `json:"pane"`
+	Text      string                   `json:"text"`
+	Truncated bool                     `json:"truncated"`
 }
 
 func (history RecoveredHistoryLiteral) validateRecoveryContract() error {
+	if err := validateRecoveryHistorySegmentID(history.SegmentID); err != nil {
+		return fmt.Errorf("recovery: recovered history has an invalid segment ID")
+	}
+	if history.Part >= RecoveryMaxRecoveredHistoryParts ||
+		(history.Part == RecoveryMaxRecoveredHistoryParts-1 && !history.Final) {
+		return fmt.Errorf("recovery: recovered history fragment count exceeds capacity")
+	}
+	if history.Part != 0 && history.Truncated {
+		return fmt.Errorf("recovery: only recovered history fragment zero may be truncated")
+	}
 	if err := history.Pane.validateRecoveryContract(); err != nil {
 		return err
 	}
@@ -622,6 +644,25 @@ func (history RecoveredHistoryLiteral) validateRecoveryContract() error {
 	return nil
 }
 
+func canonicalRecoveredHistoryLiteralJSON(history RecoveredHistoryLiteral) ([]byte, error) {
+	type wire struct {
+		SegmentID RecoveryHistorySegmentID `json:"segmentId"`
+		Part      uint16                   `json:"part"`
+		Final     bool                     `json:"final"`
+		Pane      RecoveryPaneRef          `json:"pane"`
+		Text      string                   `json:"text"`
+		Truncated bool                     `json:"truncated"`
+	}
+	return json.Marshal(wire{
+		SegmentID: history.SegmentID,
+		Part:      history.Part,
+		Final:     history.Final,
+		Pane:      history.Pane,
+		Text:      history.Text,
+		Truncated: history.Truncated,
+	})
+}
+
 func (history *RecoveredHistoryLiteral) UnmarshalJSON(data []byte) error {
 	if history == nil {
 		return fmt.Errorf("recovery: nil recovered history destination")
@@ -630,23 +671,34 @@ func (history *RecoveredHistoryLiteral) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("recovery: recovered history exceeds input limit")
 	}
 	var raw struct {
-		Pane      RecoveryPaneRef `json:"pane"`
-		Text      string          `json:"text"`
-		Truncated *bool           `json:"truncated"`
+		SegmentID *RecoveryHistorySegmentID `json:"segmentId"`
+		Part      *uint16                   `json:"part"`
+		Final     *bool                     `json:"final"`
+		Pane      *RecoveryPaneRef          `json:"pane"`
+		Text      *string                   `json:"text"`
+		Truncated *bool                     `json:"truncated"`
 	}
 	if err := decodeRecoveryJSON(data, &raw); err != nil {
 		return err
 	}
-	if raw.Truncated == nil {
-		return fmt.Errorf("recovery: recovered history omits truncation state")
+	if raw.SegmentID == nil || raw.Part == nil || raw.Final == nil ||
+		raw.Pane == nil || raw.Text == nil || raw.Truncated == nil {
+		return fmt.Errorf("recovery: recovered history omits a required field")
 	}
 	result := RecoveredHistoryLiteral{
-		Pane:      raw.Pane,
-		Text:      raw.Text,
+		SegmentID: *raw.SegmentID,
+		Part:      *raw.Part,
+		Final:     *raw.Final,
+		Pane:      *raw.Pane,
+		Text:      *raw.Text,
 		Truncated: *raw.Truncated,
 	}
 	if err := result.validateRecoveryContract(); err != nil {
 		return err
+	}
+	canonical, err := canonicalRecoveredHistoryLiteralJSON(result)
+	if err != nil || !bytes.Equal(data, canonical) {
+		return fmt.Errorf("recovery: recovered history is not canonical")
 	}
 	*history = result
 	return nil
@@ -656,8 +708,92 @@ func (history RecoveredHistoryLiteral) MarshalJSON() ([]byte, error) {
 	if err := history.validateRecoveryContract(); err != nil {
 		return nil, err
 	}
-	type wire RecoveredHistoryLiteral
-	return json.Marshal(wire(history))
+	return canonicalRecoveredHistoryLiteralJSON(history)
+}
+
+// ProjectRecoveredHistorySegment turns one complete durable segment into the
+// bounded v2 event fragments. It is intentionally projection-only: it neither
+// writes durable state nor creates recovery/terminal authority.
+func ProjectRecoveredHistorySegment(
+	segment RecoveryHistorySegment,
+	truncated bool,
+) ([]RecoveredHistoryLiteral, error) {
+	options := RecoveryStoreOptions{
+		MaxHistoryLineBytes:       RecoveryStoreMaxHistoryLineBytes,
+		MaxHistoryLinesPerSegment: RecoveryStoreMaxHistoryLinesPerSegment,
+		MaxHistorySegmentBytes:    RecoveryStoreMaxHistorySegmentBytes,
+	}
+	if err := validateAssignedRecoveryHistorySegment(segment, options); err != nil {
+		return nil, err
+	}
+	text := strings.Join(segment.Lines, "\n")
+	if text == "" {
+		return nil, nil
+	}
+
+	parts := make([]RecoveredHistoryLiteral, 0, 1)
+	for len(text) > 0 {
+		if len(parts) >= RecoveryMaxRecoveredHistoryParts {
+			return nil, fmt.Errorf("recovery: recovered history projection exceeds fragment capacity")
+		}
+		end := recoveredHistoryFragmentEnd(text)
+		if end == 0 {
+			return nil, fmt.Errorf("recovery: recovered history projection cannot fit a UTF-8 rune")
+		}
+		parts = append(parts, RecoveredHistoryLiteral{
+			SegmentID: segment.ID,
+			Part:      uint16(len(parts)),
+			Pane:      segment.Pane,
+			Text:      text[:end],
+			Truncated: truncated && len(parts) == 0,
+		})
+		text = text[end:]
+	}
+	parts[len(parts)-1].Final = true
+
+	var reassembled strings.Builder
+	for index := range parts {
+		if err := parts[index].validateRecoveryContract(); err != nil {
+			return nil, err
+		}
+		reassembled.WriteString(parts[index].Text)
+	}
+	if reassembled.String() != strings.Join(segment.Lines, "\n") {
+		return nil, fmt.Errorf("recovery: recovered history projection changed text")
+	}
+	return parts, nil
+}
+
+func recoveredHistoryFragmentEnd(text string) int {
+	end := 0
+	newlines := 0
+	lastLineBoundary := 0
+	for end < len(text) {
+		runeValue, width := utf8.DecodeRuneInString(text[end:])
+		if width == 0 || end+width > RecoveryMaxRecoveredHistoryBytes {
+			break
+		}
+		nextNewlines := newlines
+		if runeValue == '\n' {
+			nextNewlines++
+		}
+		nextLines := nextNewlines
+		if runeValue != '\n' {
+			nextLines++
+		}
+		if nextLines > RecoveryMaxRecoveredHistoryLines {
+			break
+		}
+		end += width
+		newlines = nextNewlines
+		if runeValue == '\n' {
+			lastLineBoundary = end
+		}
+	}
+	if end == len(text) || lastLineBoundary == 0 {
+		return end
+	}
+	return lastLineBoundary
 }
 
 // RecoveryRetryRequest identifies only the workspace-qualified pane. Sessiond

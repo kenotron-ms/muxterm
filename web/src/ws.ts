@@ -15,6 +15,7 @@ import {
 } from './types';
 import type { MuxStore } from './state';
 import {
+  RECOVERED_HISTORY_SEGMENT_V2_CAPABILITY,
   buildActivePanePersistence,
   buildProtocolHello,
   buildRecoveryRetry,
@@ -230,6 +231,7 @@ export class MuxSocket {
     this._helloSent = false;
     this._resetRecoveryNegotiation();
     this._clearPendingRecoveryRequests();
+    this._store.clearRecoveryOnTransportLoss();
     this._rejectPendingCloseRequests(
       new Error('The close outcome could not be confirmed because the connection closed.'),
     );
@@ -393,6 +395,7 @@ export class MuxSocket {
     this._helloSent = false;
     this._resetRecoveryNegotiation();
     this._clearPendingRecoveryRequests();
+    this._store.clearRecoveryOnTransportLoss();
     this._rejectPendingCloseRequests(
       new Error('The close outcome could not be confirmed because the connection was destroyed.'),
     );
@@ -682,6 +685,13 @@ export class MuxSocket {
             true,
             event.protocolHelloResult.capabilities.values,
           );
+          if (
+            event.protocolHelloResult.capabilities.values.includes(
+              RECOVERED_HISTORY_SEGMENT_V2_CAPABILITY,
+            )
+          ) {
+            this._store.clearRecoveryOnTransportLoss();
+          }
         } else {
           this._resetRecoveryNegotiation();
         }
@@ -706,7 +716,7 @@ export class MuxSocket {
         this.onRecoveryEvent?.(event);
         return;
       case SessiondRecoveryType.RecoveredHistory:
-        if (!this._recoveryCapabilities.has('recovered-history-literal')) return;
+        if (!this._recoveryCapabilities.has(RECOVERED_HISTORY_SEGMENT_V2_CAPABILITY)) return;
         this.onRecoveryEvent?.(event);
         return;
       default:
@@ -740,6 +750,7 @@ export class MuxSocket {
     this._helloSent = false;
     this._resetRecoveryNegotiation();
     this._clearPendingRecoveryRequests();
+    this._store.clearRecoveryOnTransportLoss();
     this._rejectPendingCloseRequests(
       new Error('The close outcome could not be confirmed because the connection was replaced.'),
     );
@@ -818,6 +829,7 @@ export class MuxSocket {
       this._helloSent = false;
       this._resetRecoveryNegotiation();
       this._clearPendingRecoveryRequests();
+      this._store.clearRecoveryOnTransportLoss();
       this._rejectPendingCloseRequests(
         new Error('The close outcome could not be confirmed because the connection was lost.'),
       );

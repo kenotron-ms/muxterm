@@ -1,11 +1,13 @@
 package sessiond
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"unicode"
 	"unicode/utf8"
 )
@@ -14,6 +16,93 @@ import (
 // recovery state. It is intentionally distinct from RecoveryGeneration, which
 // identifies a reconstruction run in the recovery strategy contract.
 type RecoveryStoreGeneration uint64
+
+// RecoveryHistorySegmentID is the immutable store-issued identity of one
+// durable recovered-history segment. Generation identifies the structural
+// snapshot that authorized the flush; Sequence is the global filename/frame
+// sequence. Both values are encoded as canonical decimal strings so browser
+// peers never need to round-trip uint64 values through a JavaScript number.
+type RecoveryHistorySegmentID struct {
+	Generation RecoveryStoreGeneration `json:"generation"`
+	Sequence   uint64                  `json:"sequence"`
+}
+
+func validateRecoveryHistorySegmentID(id RecoveryHistorySegmentID) error {
+	if id.Generation == 0 || id.Sequence == 0 {
+		return fmt.Errorf("%w: history segment ID has a zero field", ErrRecoveryStoreInvalid)
+	}
+	return nil
+}
+
+func parseCanonicalRecoveryHistoryIDUint64(value string) (uint64, error) {
+	if len(value) == 0 || len(value) > 20 || value[0] == '0' {
+		return 0, fmt.Errorf("%w: history segment ID is not a canonical nonzero decimal", ErrRecoveryStoreInvalid)
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return 0, fmt.Errorf("%w: history segment ID is not a canonical nonzero decimal", ErrRecoveryStoreInvalid)
+		}
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || parsed == 0 {
+		return 0, fmt.Errorf("%w: history segment ID is not a canonical nonzero uint64", ErrRecoveryStoreInvalid)
+	}
+	return parsed, nil
+}
+
+// MarshalJSON emits the sole identity wire representation. It deliberately
+// does not delegate to a struct encoder: byte order and decimal-string form are
+// part of the recovery replay contract.
+func (id RecoveryHistorySegmentID) MarshalJSON() ([]byte, error) {
+	if err := validateRecoveryHistorySegmentID(id); err != nil {
+		return nil, err
+	}
+	return []byte(
+		`{"generation":"` + strconv.FormatUint(uint64(id.Generation), 10) +
+			`","sequence":"` + strconv.FormatUint(id.Sequence, 10) + `"}`,
+	), nil
+}
+
+// UnmarshalJSON accepts only the byte-for-byte canonical identity encoding.
+// The exact re-encode comparison rejects duplicate/unknown/reordered keys,
+// whitespace, numbers, leading zeros, and trailing JSON values together.
+func (id *RecoveryHistorySegmentID) UnmarshalJSON(data []byte) error {
+	if id == nil {
+		return fmt.Errorf("%w: nil history segment ID destination", ErrRecoveryStoreInvalid)
+	}
+	var wire struct {
+		Generation string `json:"generation"`
+		Sequence   string `json:"sequence"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return fmt.Errorf("%w: decode history segment ID", ErrRecoveryStoreInvalid)
+	}
+	generation, err := parseCanonicalRecoveryHistoryIDUint64(wire.Generation)
+	if err != nil {
+		return err
+	}
+	sequence, err := parseCanonicalRecoveryHistoryIDUint64(wire.Sequence)
+	if err != nil {
+		return err
+	}
+	decoded := RecoveryHistorySegmentID{
+		Generation: RecoveryStoreGeneration(generation),
+		Sequence:   sequence,
+	}
+	canonical, err := decoded.MarshalJSON()
+	if err != nil || !bytes.Equal(data, canonical) {
+		return fmt.Errorf("%w: noncanonical history segment ID", ErrRecoveryStoreInvalid)
+	}
+	*id = decoded
+	return nil
+}
+
+func recoveryHistorySegmentIDLess(left, right RecoveryHistorySegmentID) bool {
+	if left.Generation != right.Generation {
+		return left.Generation < right.Generation
+	}
+	return left.Sequence < right.Sequence
+}
 
 const (
 	// RecoveryStoreSchemaVersion versions the private durable store framing.
@@ -257,16 +346,18 @@ type RecoveryMutation struct {
 	Outcome *RecoveryOutcome `json:"outcome,omitempty"`
 }
 
-// RecoveryHistorySegment carries literal display lines for a pane. It has no
-// public sequence or replay representation: callers render Lines as text and
-// must never send them to an ANSI or VT parser.
+// RecoveryHistorySegment carries literal display lines for a pane. ID is zero
+// until the file store accepts a nonempty caller candidate and issues one.
+// Callers render Lines as text and must never send them to an ANSI or VT
+// parser.
 type RecoveryHistorySegment struct {
-	Pane  RecoveryPaneRef `json:"pane"`
-	Lines []string        `json:"lines"`
+	ID    RecoveryHistorySegmentID `json:"id"`
+	Pane  RecoveryPaneRef          `json:"pane"`
+	Lines []string                 `json:"lines"`
 }
 
 // RecoveryLoadResult is a deep-copied view of the durable structural state and
-// inert history ordered by their private global history sequence.
+// inert history ordered by immutable store-issued segment sequence.
 type RecoveryLoadResult struct {
 	Snapshot RecoverySnapshot         `json:"snapshot"`
 	History  []RecoveryHistorySegment `json:"history"`

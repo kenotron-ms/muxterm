@@ -3,6 +3,7 @@ package sessiond
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -139,6 +140,7 @@ type recoveryOutcomePlan struct {
 }
 
 type recoveryHistoryPlan struct {
+	id    RecoveryHistorySegmentID
 	pane  RecoveryPaneRef
 	lines []string
 }
@@ -315,7 +317,7 @@ func planRecoveryRegistry(loaded RecoveryLoadResult) (recoveryRegistryPlan, erro
 	if err != nil {
 		return recoveryRegistryPlan{}, err
 	}
-	history, err := recoveryPlannerHistory(loaded.History, paneByRef)
+	history, err := recoveryPlannerHistory(loaded.History, paneByRef, snapshot.Generation)
 	if err != nil {
 		return recoveryRegistryPlan{}, err
 	}
@@ -633,6 +635,7 @@ func recoveryPlannerFence(fence RecoveryFence) recoveryFencePlan {
 func recoveryPlannerHistory(
 	history []RecoveryHistorySegment,
 	panes map[RecoveryPaneRef]RecoveryPane,
+	storeGeneration RecoveryStoreGeneration,
 ) ([]recoveryHistoryPlan, error) {
 	if len(history) > RecoveryStoreMaxHistorySegments {
 		return nil, fmt.Errorf("%w: history exceeds its segment bound", ErrRecoveryStoreInvalid)
@@ -649,13 +652,37 @@ func recoveryPlannerHistory(
 		return nil, err
 	}
 
-	plans := make([]recoveryHistoryPlan, len(history))
+	ordered := append([]RecoveryHistorySegment(nil), history...)
+	sort.Slice(ordered, func(left, right int) bool {
+		return ordered[left].ID.Sequence < ordered[right].ID.Sequence
+	})
+	for index := 1; index < len(ordered); index++ {
+		if ordered[index-1].ID.Sequence >= ordered[index].ID.Sequence {
+			return nil, fmt.Errorf("%w: history sequences are not strictly increasing", ErrRecoveryStoreInvalid)
+		}
+		if ordered[index-1].ID.Generation > ordered[index].ID.Generation {
+			return nil, fmt.Errorf("%w: history generations are not nondecreasing", ErrRecoveryStoreInvalid)
+		}
+	}
+
+	plans := make([]recoveryHistoryPlan, len(ordered))
+	ids := make(map[RecoveryHistorySegmentID]RecoveryPaneRef, len(ordered))
 	totalBytes := 0
 	totalLines := 0
-	for index, segment := range history {
-		if err := validateRecoveryHistorySegment(segment, options); err != nil {
+	for index, segment := range ordered {
+		if err := validateAssignedRecoveryHistorySegment(segment, options); err != nil {
 			return nil, err
 		}
+		if segment.ID.Generation > storeGeneration {
+			return nil, fmt.Errorf("%w: history identity is newer than snapshot", ErrRecoveryStoreInvalid)
+		}
+		if boundPane, exists := ids[segment.ID]; exists {
+			if boundPane != segment.Pane {
+				return nil, fmt.Errorf("%w: history ID is bound to multiple panes", ErrRecoveryStoreInvalid)
+			}
+			return nil, fmt.Errorf("%w: duplicate history ID", ErrRecoveryStoreInvalid)
+		}
+		ids[segment.ID] = segment.Pane
 		pane, known := panes[segment.Pane]
 		if !known {
 			return nil, fmt.Errorf("%w: history references a missing pane", ErrRecoveryStoreInvalid)
@@ -675,8 +702,17 @@ func recoveryPlannerHistory(
 		totalBytes += segmentBytes
 		totalLines += len(segment.Lines)
 		plans[index] = recoveryHistoryPlan{
+			id:    segment.ID,
 			pane:  segment.Pane,
 			lines: append([]string(nil), segment.Lines...),
+		}
+	}
+	sort.Slice(plans, func(left, right int) bool {
+		return recoveryHistorySegmentIDLess(plans[left].id, plans[right].id)
+	})
+	for index := 1; index < len(plans); index++ {
+		if !recoveryHistorySegmentIDLess(plans[index-1].id, plans[index].id) {
+			return nil, fmt.Errorf("%w: history IDs are not strictly increasing", ErrRecoveryStoreInvalid)
 		}
 	}
 	return plans, nil

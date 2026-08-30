@@ -4,6 +4,7 @@ import {
   SessiondRecoveryMaxSelectionCandidates,
   SessiondRecoveredHistoryMaxBytes,
   SessiondRecoveredHistoryMaxLines,
+  SessiondRecoveredHistoryMaxParts,
   SessiondRecoveryType,
   SessiondType,
   type SessiondActivePanePersistenceRequest,
@@ -19,6 +20,7 @@ import {
   type SessiondRecoveryPaneRef,
   type SessiondRecoverySelectionCandidate,
   type SessiondRecoveryStrategyLabel,
+  type SessiondRecoveredHistorySegmentID,
   type SessiondRecoveredHistoryLiteral,
   type SessiondRecoverySelectRequest,
   type SessiondRecoverySelectResult,
@@ -34,8 +36,8 @@ import {
  */
 export const RECOVERY_SCHEMA_VERSION = 1;
 
-export const RECOVERED_HISTORY_LITERAL_CAPABILITY =
-  'recovered-history-literal' as const satisfies SessiondRecoveryCapability;
+export const RECOVERED_HISTORY_SEGMENT_V2_CAPABILITY =
+  'recovered-history-segment-v2' as const satisfies SessiondRecoveryCapability;
 
 /** The complete, fixed browser offer for this recovery schema version. */
 export const RECOVERY_CAPABILITIES = Object.freeze([
@@ -43,7 +45,7 @@ export const RECOVERY_CAPABILITIES = Object.freeze([
   'recovery-retry',
   'recovery-select',
   'active-pane-persistence',
-  RECOVERED_HISTORY_LITERAL_CAPABILITY,
+  RECOVERED_HISTORY_SEGMENT_V2_CAPABILITY,
 ] as const satisfies readonly SessiondRecoveryCapability[]);
 
 const MAX_RECOVERY_TEXT_BYTES = 32_768;
@@ -51,6 +53,8 @@ const MAX_WORKSPACE_ID_BYTES = 128;
 const MAX_CANDIDATE_HANDLE_BYTES = 64;
 const CANDIDATE_HANDLE_DECODED_BYTES = 32;
 const MAX_ORDINARY_NESTING = 64;
+const MAX_UINT64 = 18_446_744_073_709_551_615n;
+const CANONICAL_UINT64 = /^[1-9][0-9]*$/u;
 
 const STRATEGY_LABELS = new Set<SessiondRecoveryStrategyLabel>([
   'Amplifier',
@@ -118,6 +122,10 @@ const RECOVERY_RELATED_FIELDS = new Set<string>([
   'protocolHelloResult',
   'replacementOutcome',
   'recoveredHistory',
+  'segmentId',
+  'part',
+  'final',
+  'truncated',
   'activePanePersistence',
   'activePanePersistenceResult',
   'candidateHandle',
@@ -172,6 +180,15 @@ const PRIVILEGED_RECOVERY_FIELDS = new Set<string>([
   'ownership',
   'userConfigPreservation',
 ]);
+
+const RECOVERED_HISTORY_FRAGMENT_TOP_LEVEL_FIELDS = new Set<string>([
+  'segmentId',
+  'part',
+  'final',
+  'truncated',
+]);
+
+const GENERATION_FIELD = new Set<string>(['generation']);
 
 /** Owner-local envelope fields cannot appear at browser-message top level. */
 const OWNER_LOCAL_TOP_LEVEL_FIELDS = new Set<string>([
@@ -422,6 +439,43 @@ function parsePaneRef(value: unknown): SessiondRecoveryPaneRef | null {
   const workspaceId = parseWorkspaceID(value.workspaceId);
   if (workspaceId === null || !isPaneID(value.paneId)) return null;
   return { workspaceId, paneId: value.paneId };
+}
+
+function parseCanonicalUint64(value: unknown): string | null {
+  if (
+    typeof value !== 'string' ||
+    value.length > 20 ||
+    !CANONICAL_UINT64.test(value)
+  ) {
+    return null;
+  }
+  try {
+    const parsed = BigInt(value);
+    if (parsed === 0n || parsed > MAX_UINT64 || parsed.toString() !== value) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function parseRecoveredHistorySegmentID(value: unknown): SessiondRecoveredHistorySegmentID | null {
+  if (!hasExactKeys(value, ['generation', 'sequence'])) return null;
+  const generation = parseCanonicalUint64(value.generation);
+  const sequence = parseCanonicalUint64(value.sequence);
+  return generation === null || sequence === null ? null : { generation, sequence };
+}
+
+function parseRecoveredHistoryPart(value: unknown, final: boolean): number | null {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value >= SessiondRecoveredHistoryMaxParts - 1 ||
+    (value === SessiondRecoveredHistoryMaxParts - 2 && !final)
+  ) {
+    return null;
+  }
+  return value;
 }
 
 function parseStrategyLabel(value: unknown): SessiondRecoveryStrategyLabel | null {
@@ -689,11 +743,29 @@ function parseTransition(value: unknown): SessiondPaneRecoveryTransition | null 
 }
 
 function parseRecoveredHistory(value: unknown): SessiondRecoveredHistoryLiteral | null {
-  if (!hasExactKeys(value, ['pane', 'text', 'truncated'])) return null;
+  if (!hasExactKeys(value, ['segmentId', 'part', 'final', 'pane', 'text', 'truncated'])) return null;
+  if (typeof value.final !== 'boolean' || typeof value.truncated !== 'boolean') return null;
+  const segmentId = parseRecoveredHistorySegmentID(value.segmentId);
+  const part = parseRecoveredHistoryPart(value.part, value.final);
   const pane = parsePaneRef(value.pane);
   const text = parseRecoveredHistoryText(value.text);
-  if (pane === null || text === null || typeof value.truncated !== 'boolean') return null;
-  return { pane, text, truncated: value.truncated };
+  if (
+    segmentId === null ||
+    part === null ||
+    pane === null ||
+    text === null ||
+    (value.truncated && part !== 0)
+  ) {
+    return null;
+  }
+  return {
+    segmentId,
+    part,
+    final: value.final,
+    pane,
+    text,
+    truncated: value.truncated,
+  };
 }
 
 function parseRetryResult(value: unknown): SessiondRecoveryRetryResult | null {
@@ -881,7 +953,21 @@ function containsNamedField(
   return false;
 }
 
+function isFullyStrictRecoveredHistoryEvent(value: UnknownRecord): boolean {
+  return parseRecoveryEvent(value)?.type === SessiondRecoveryType.RecoveredHistory;
+}
+
 function containsPrivilegedRecoveryField(value: UnknownRecord): boolean {
+  // generation remains privileged everywhere except this one fully reconstructed
+  // daemon event. A raw shape that merely resembles the event cannot claim the
+  // exception because parseRecoveryEvent enforces every exact nested key first.
+  if (isFullyStrictRecoveredHistoryEvent(value)) return false;
+
+  if (containsNamedField(value, GENERATION_FIELD)) return true;
+  for (const key of Object.keys(value)) {
+    if (RECOVERED_HISTORY_FRAGMENT_TOP_LEVEL_FIELDS.has(key)) return true;
+  }
+
   for (const key of Object.keys(value)) {
     if (OWNER_LOCAL_TOP_LEVEL_FIELDS.has(key)) return true;
   }
