@@ -31,6 +31,10 @@ type Server struct {
 	reg    *Registry
 	socket string
 
+	// recovery is nil for the memory-only fixture constructor. A production
+	// recovery server installs it before it binds the ordinary control socket.
+	recovery *recoveryMVP
+
 	mu    sync.Mutex
 	subs  map[string]map[*conn]bool // workspaceId -> set of attached connections
 	conns map[*conn]bool            // all live connections
@@ -42,12 +46,61 @@ func NewServer(socketPath string) (*Server, error) {
 	if socketPath == "" {
 		return nil, errors.New("sessiond: empty socket path")
 	}
-	s := &Server{
+	return newServer(socketPath), nil
+}
+
+func newServer(socketPath string) *Server {
+	return &Server{
 		reg:    NewRegistry(),
 		socket: socketPath,
 		subs:   make(map[string]map[*conn]bool),
 		conns:  make(map[*conn]bool),
 	}
+}
+
+// NewRecoveryServer opens and fully validates the owner-only recovery state
+// before it can bind socketPath. NewServer deliberately remains memory-only
+// for existing fixtures and non-production callers.
+func NewRecoveryServer(socketPath, stateRoot string) (*Server, error) {
+	if socketPath == "" || stateRoot == "" {
+		return nil, errRecoveryMVPStartup
+	}
+	store, err := OpenFileRecoveryStore(stateRoot, DefaultRecoveryStoreOptions())
+	if err != nil {
+		return nil, errRecoveryMVPStartup
+	}
+	keepStore := false
+	defer func() {
+		if !keepStore {
+			_ = store.Close()
+		}
+	}()
+
+	loaded, err := store.Load()
+	if err != nil {
+		return nil, errRecoveryMVPStartup
+	}
+	plan, err := planRecoveryRegistry(loaded)
+	if err != nil {
+		return nil, errRecoveryMVPStartup
+	}
+
+	s := newServer(socketPath)
+	recovery, err := newRecoveryMVP(store, loaded.Snapshot, plan.history)
+	if err != nil {
+		return nil, errRecoveryMVPStartup
+	}
+	s.recovery = recovery
+	if loaded.Snapshot.Generation == 0 ||
+		(recoveryPlannerSnapshotCollectionsEmpty(loaded.Snapshot) && len(loaded.History) == 0) {
+		err = recovery.bootstrapDefault(s)
+	} else {
+		err = recovery.restore(s, plan)
+	}
+	if err != nil {
+		return nil, errRecoveryMVPStartup
+	}
+	keepStore = true
 	return s, nil
 }
 
@@ -58,7 +111,14 @@ func (s *Server) Registry() *Registry { return s.reg }
 // cold-start default workspace, and serves control connections until ctx is
 // cancelled. It returns nil on a graceful (ctx-driven) shutdown and a non-nil
 // error only for an unexpected accept/listen failure.
-func (s *Server) ListenAndServe(ctx context.Context) error {
+func (s *Server) ListenAndServe(ctx context.Context) (result error) {
+	if s.recovery != nil {
+		defer func() {
+			if err := s.recovery.close(); err != nil && result == nil {
+				result = errRecoveryMVPMutation
+			}
+		}()
+	}
 	dir := filepath.Dir(s.socket)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -77,8 +137,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 
-	// Cold-start: ensure the first attach always lands somewhere.
-	s.reg.EnsureDefault()
+	// Memory-only fixtures retain their frozen default-workspace behavior.
+	// Production recovery startup already durably installed (or reconstructed)
+	// the registry before this ordinary socket was bound.
+	if s.recovery == nil {
+		s.reg.EnsureDefault()
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -188,7 +252,14 @@ func (s *Server) attachConn(c *conn, wsID string, cid uint64, breakpoint string)
 		Layout:      s.reg.Layout(wsID, breakpoint),
 	})
 
-	// (2) replay frames before going live.
+	// (2) recovered literal history belongs outside the VT/xterm stream. It is
+	// queued after composition and before fresh-shell replay/live data so the
+	// browser can render the recovery boundary separately.
+	if s.recovery != nil && c.kind != ClientKindCLI {
+		s.recovery.enqueueRecoveredHistory(c, wsID, paneIDs)
+	}
+
+	// (3) replay frames before going live.
 	for _, r := range replays {
 		c.sub.enqueuePaneData(r.paneID, r.data)
 	}
@@ -197,7 +268,7 @@ func (s *Server) attachConn(c *conn, wsID string, cid uint64, breakpoint string)
 	// keeps receiving a previously-attached workspace's output after switching.
 	s.unsubscribeLocked(c)
 
-	// (3) go live.
+	// (4) go live.
 	set, ok := s.subs[wsID]
 	if !ok {
 		set = make(map[*conn]bool)
@@ -322,8 +393,33 @@ func (c *conn) cleanup() {
 // handle dispatches one decoded control message.
 func (c *conn) handle(msg Message) {
 	switch msg.Type {
+	case TypeProtocolHello:
+		if msg.ProtocolHello == nil {
+			c.replyError(msg.CID, "", "protocol negotiation failed")
+			return
+		}
+		result, err := NegotiateProtocolHello(*msg.ProtocolHello)
+		if err != nil {
+			c.replyError(msg.CID, "", "protocol negotiation failed")
+			return
+		}
+		c.reply(&Message{
+			Type:                TypeProtocolHelloResult,
+			CID:                 msg.CID,
+			ProtocolHelloResult: &result,
+		})
 	case TypeCreateWorkspace:
-		id := c.srv.reg.AddWorkspace(msg.Name, msg.ClientRef)
+		var id string
+		if c.srv.recovery != nil {
+			var err error
+			id, err = c.srv.recovery.createWorkspace(c.srv, msg.Name, msg.ClientRef)
+			if err != nil {
+				c.replyError(msg.CID, "", "recovery persistence unavailable")
+				return
+			}
+		} else {
+			id = c.srv.reg.AddWorkspace(msg.Name, msg.ClientRef)
+		}
 		c.reply(&Message{Type: TypeWorkspaceCreated, CID: msg.CID, WorkspaceID: id, Name: msg.Name, ClientRef: msg.ClientRef})
 		c.srv.broadcastWorkspaceList()
 	case TypeListWorkspaces:
@@ -362,11 +458,28 @@ func (c *conn) handle(msg Message) {
 			// case from the design's Error Handling section.
 			promoted := p.ClaimAuthority(c, time.Now())
 			if p.IsAuthoritative(c) {
-				before := p.Info()
-				_ = p.Resize(msg.Cols, msg.Rows)
-				after := p.Info()
-				if promoted || before.Cols != after.Cols || before.Rows != after.Rows {
-					c.broadcastPaneResizedExcept(after.Cols, after.Rows, msg.PaneID)
+				if c.srv.recovery != nil && c.srv.recovery.hasPane(c.attached, msg.PaneID) {
+					after, changed, err := c.srv.recovery.resizePane(
+						c.srv,
+						c.attached,
+						msg.PaneID,
+						msg.Cols,
+						msg.Rows,
+					)
+					if err != nil {
+						c.replyError(msg.CID, "", "recovery persistence unavailable")
+						return
+					}
+					if promoted || changed {
+						c.broadcastPaneResizedExcept(after.Cols, after.Rows, msg.PaneID)
+					}
+				} else {
+					before := p.Info()
+					_ = p.Resize(msg.Cols, msg.Rows)
+					after := p.Info()
+					if promoted || before.Cols != after.Cols || before.Rows != after.Rows {
+						c.broadcastPaneResizedExcept(after.Cols, after.Rows, msg.PaneID)
+					}
 				}
 			}
 			// Non-authoritative resizes are silently skipped: no error, no
@@ -385,12 +498,37 @@ func (c *conn) handle(msg Message) {
 			// claiming action, so apply the resize unconditionally after
 			// claiming rather than gating on IsAuthoritative first.
 			p.ClaimAuthority(c, time.Now())
-			_ = p.Resize(msg.Cols, msg.Rows)
-			info := p.Info()
-			c.broadcastPaneResizedExcept(info.Cols, info.Rows, msg.PaneID)
+			if c.srv.recovery != nil && c.srv.recovery.hasPane(c.attached, msg.PaneID) {
+				info, changed, err := c.srv.recovery.resizePane(
+					c.srv,
+					c.attached,
+					msg.PaneID,
+					msg.Cols,
+					msg.Rows,
+				)
+				if err != nil {
+					c.replyError(msg.CID, "", "recovery persistence unavailable")
+					return
+				}
+				if changed {
+					c.broadcastPaneResizedExcept(info.Cols, info.Rows, msg.PaneID)
+				}
+			} else {
+				_ = p.Resize(msg.Cols, msg.Rows)
+				info := p.Info()
+				c.broadcastPaneResizedExcept(info.Cols, info.Rows, msg.PaneID)
+			}
 		}
 	case TypeRenamePane:
-		if c.attached != "" && c.srv.reg.RenamePane(c.attached, msg.PaneID, msg.Name) {
+		if c.attached != "" && c.srv.recovery != nil && c.srv.recovery.hasPane(c.attached, msg.PaneID) {
+			if err := c.srv.recovery.renamePane(c.srv, c.attached, msg.PaneID, msg.Name); err != nil {
+				c.replyError(msg.CID, "", "recovery persistence unavailable")
+				return
+			}
+			c.reply(&Message{Type: TypeOK, CID: msg.CID})
+			// Tell other attached clients so they update live.
+			c.srv.broadcast(c.attached, &Message{Type: TypePaneRenamed, PaneID: msg.PaneID, Name: msg.Name})
+		} else if c.attached != "" && c.srv.reg.RenamePane(c.attached, msg.PaneID, msg.Name) {
 			c.reply(&Message{Type: TypeOK, CID: msg.CID})
 			// Tell other attached clients so they update live.
 			c.srv.broadcast(c.attached, &Message{Type: TypePaneRenamed, PaneID: msg.PaneID, Name: msg.Name})
@@ -400,7 +538,13 @@ func (c *conn) handle(msg Message) {
 		if wsID == "" {
 			wsID = c.attached
 		}
-		if c.srv.reg.SaveLayout(wsID, msg.Breakpoint, msg.Layout) {
+		if c.srv.recovery != nil && msg.Breakpoint == "wide" {
+			if err := c.srv.recovery.saveWideLayout(c.srv, wsID, msg.Layout); err != nil {
+				c.replyError(msg.CID, "", "recovery persistence unavailable")
+				return
+			}
+			c.reply(&Message{Type: TypeOK, CID: msg.CID})
+		} else if c.srv.reg.SaveLayout(wsID, msg.Breakpoint, msg.Layout) {
 			c.reply(&Message{Type: TypeOK, CID: msg.CID})
 		} else {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "cannot save layout")
@@ -542,12 +686,34 @@ func (c *conn) createPane(msg Message) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
 		return
 	}
+	cols, rows := sizeOrDefault(msg.Cols, msg.Rows)
+	if c.srv.recovery != nil && len(msg.Cmd) == 0 {
+		localID, pane, err := c.srv.recovery.createDefaultPane(c.srv, wsID, cols, rows)
+		if err != nil {
+			c.replyError(msg.CID, CodePaneSpawnFailed, "unable to create durable terminal pane")
+			return
+		}
+		pane.startCurrentRoot()
+		info := pane.Info()
+		c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
+		c.srv.broadcast(wsID, &Message{
+			Type:            TypePaneAdded,
+			WorkspaceID:     wsID,
+			PaneID:          localID,
+			Cols:            cols,
+			Rows:            rows,
+			Title:           info.Title,
+			ClientRef:       msg.ClientRef,
+			Placement:       msg.Placement,
+			ReferencePaneID: msg.ReferencePaneID,
+		})
+		return
+	}
 	localID, ok := c.srv.reg.AllocPaneID(wsID)
 	if !ok {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
 		return
 	}
-	cols, rows := sizeOrDefault(msg.Cols, msg.Rows)
 	onPromptFn := func(id int, m *Message) {
 		m.WorkspaceID = wsID
 		m.PaneID = id

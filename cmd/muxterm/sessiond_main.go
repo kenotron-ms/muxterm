@@ -22,7 +22,11 @@ func runSessiond(_ Config) error {
 	if err != nil {
 		return fmt.Errorf("resolve sessiond socket path: %w", err)
 	}
-	return serveSessiond(ctx, socketPath)
+	stateRoot, err := sessiond.RecoveryStateRoot()
+	if err != nil {
+		return fmt.Errorf("resolve sessiond recovery state: %w", err)
+	}
+	return serveRecoverySessiond(ctx, socketPath, stateRoot)
 }
 
 // serveSessiond is the testable core of the daemon entrypoint. It ensures the
@@ -41,5 +45,23 @@ func serveSessiond(ctx context.Context, socketPath string) error {
 	}
 
 	log.Printf("muxterm sessiond listening on %s", socketPath)
+	return srv.ListenAndServe(ctx)
+}
+
+// serveRecoverySessiond is the production daemon path. NewRecoveryServer opens,
+// loads, validates, and reconstructs the durable state before ListenAndServe can
+// bind the ordinary socket; the memory-only helper above remains available to
+// existing fixtures.
+func serveRecoverySessiond(ctx context.Context, socketPath, stateRoot string) error {
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		return fmt.Errorf("create socket dir: %w", err)
+	}
+
+	srv, err := sessiond.NewRecoveryServer(socketPath, stateRoot)
+	if err != nil {
+		return fmt.Errorf("create recovery sessiond server: %w", err)
+	}
+
+	log.Printf("muxterm recovery sessiond listening on %s", socketPath)
 	return srv.ListenAndServe(ctx)
 }

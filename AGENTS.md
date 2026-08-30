@@ -25,6 +25,16 @@ sessiond alone also authorizes destructive pane and workspace closure. Browser
 controls emit close intents, keep targets live until daemon authority responds,
 and wait for authoritative pane/workspace broadcasts before removing structure.
 
+### Crash-recovery durability and literal-history authority
+
+For recovery-enabled mutations, sessiond commits authoritative state before
+publishing the registry mutation, replying with success, or broadcasting it to
+the browser. Recovered terminal history is bounded literal display data owned by
+sessiond's durable store: it is never replayed through `VTBuffer` or xterm and
+never becomes lifecycle, activity, or tool authority. A history durability
+failure must remain redacted and must never be reported as durable success, but
+it must not suppress the original bytes from the live terminal stream.
+
 ## Testing Policy
 
 ### ⛔ DO NOT WRITE UNIT TESTS
