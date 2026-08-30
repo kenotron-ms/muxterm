@@ -452,7 +452,8 @@ func (p *Pane) ReplaceRoot(expectedGeneration uint64, options PaneLaunchOptions)
 	incumbent := p.root
 	if incumbent == nil ||
 		!p.currentRootLocked(incumbent, incumbent.identity) ||
-		incumbent.identity.Generation != expectedGeneration {
+		incumbent.identity.Generation != expectedGeneration ||
+		!incumbent.replacementLive(false) {
 		p.mu.Unlock()
 		p.deliveryMu.Unlock()
 		return PaneRootIdentity{}, errPaneRootReplacementFailed
@@ -502,13 +503,13 @@ func (p *Pane) ReplaceRoot(expectedGeneration uint64, options PaneLaunchOptions)
 	p.mu.Lock()
 	if !p.currentRootLocked(incumbent, incumbentIdentity) ||
 		p.cols != latestCols ||
-		p.rows != latestRows {
+		p.rows != latestRows ||
+		!incumbent.replacementLive(true) {
 		p.mu.Unlock()
 		p.deliveryMu.Unlock()
 		candidate.stop()
 		return PaneRootIdentity{}, errPaneRootReplacementFailed
 	}
-	incumbent.retire()
 	p.root = candidate
 	p.mu.Unlock()
 

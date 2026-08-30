@@ -229,6 +229,24 @@ func (root *paneRoot) retire() {
 	root.mu.Unlock()
 }
 
+// replacementLive checks whether a root can still be replaced. When retire is
+// true, it also retires the live root before releasing root.mu, so final
+// publication cannot race an observed exit or another retirement.
+func (root *paneRoot) replacementLive(retire bool) bool {
+	if root == nil {
+		return false
+	}
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	if root.retired || root.exited {
+		return false
+	}
+	if retire {
+		root.retired = true
+	}
+	return true
+}
+
 func (root *paneRoot) markExited() {
 	if root == nil {
 		return
