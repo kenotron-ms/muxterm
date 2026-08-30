@@ -18,6 +18,12 @@ type DaemonConn interface {
 	CloseWorkspace(workspaceID string) error
 	CloseIntent(target sessiond.CloseTarget) (sessiond.CloseOutcome, error)
 	CloseConfirm(ticket string) (sessiond.CloseOutcome, error)
+	ProtocolHello(request sessiond.ProtocolHelloRequest) (sessiond.ProtocolHelloResult, error)
+	RecoveryRetry(request sessiond.RecoveryRetryRequest) (sessiond.RecoveryRetryResult, error)
+	RecoverySelect(request sessiond.RecoverySelectRequest) (sessiond.RecoverySelectResult, error)
+	SetActivePane(
+		request sessiond.ActivePanePersistenceRequest,
+	) (sessiond.ActivePanePersistenceResult, error)
 	Attach(workspaceID, breakpoint, clientKind string) (sessiond.Composition, error)
 	RenamePane(paneID int, name string) error
 	SaveLayout(workspaceID, breakpoint, layout string) error

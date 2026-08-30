@@ -42,6 +42,11 @@ type pending struct {
 // close failure instead of waiting forever.
 const closeRequestReplyTimeout = 2 * time.Second
 
+// recoveryRequestReplyTimeout bounds every browser-safe recovery request. An
+// older still-live daemon may ignore an additive recovery type, so callers must
+// fail closed rather than retain partial recovery authority indefinitely.
+const recoveryRequestReplyTimeout = 2 * time.Second
+
 // Handlers holds callbacks for unsolicited events (Messages with CID == 0)
 // pushed by the daemon. It is guarded by Client.hmu. Every callback runs on the
 // client's single read-loop goroutine and must not block for long; offload slow
@@ -99,6 +104,15 @@ type Handlers struct {
 	// this to resize their local terminal view to match without re-emitting
 	// their own resize message.
 	OnPaneResized func(paneID uint32, cols, rows int)
+	// OnPaneRecoveryChanged fires for a validated CID-zero browser-safe recovery
+	// projection transition. Invalid or authority-bearing events are dropped.
+	OnPaneRecoveryChanged func(transition PaneRecoveryTransition)
+	// OnRecoveredHistory fires for validated literal history only. The text has
+	// bounded UTF-8/LF-only display content and never grants recovery authority.
+	OnRecoveredHistory func(history RecoveredHistoryLiteral)
+	// OnReplacementOutcome fires for a validated CID-zero redacted replacement
+	// outcome. It contains no replacement plan or execution authority.
+	OnReplacementOutcome func(outcome RecoveryReplacementOutcome)
 	// OnBrowserActionResult fires when the daemon broadcasts a
 	// TypeBrowserActionResult event (CID == 0). msg carries PaneID plus the
 	// result fields (OK, Snapshot, Result, Error).
@@ -200,9 +214,27 @@ func (c *Client) Run() error {
 // never registered as a pending request since it is fire-and-forget) — is
 // dispatched to the event handlers.
 func (c *Client) dispatchControl(payload []byte) {
-	var msg Message
-	if err := json.Unmarshal(payload, &msg); err != nil {
+	var typeProbe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(payload, &typeProbe); err != nil {
 		return
+	}
+	if isOwnerLocalRecoveryType(typeProbe.Type) {
+		return
+	}
+
+	var msg Message
+	if isBrowserRecoveryMessageType(typeProbe.Type) {
+		decoded, err := DecodeBrowserRecoveryMessage(payload)
+		if err != nil {
+			return
+		}
+		msg = *decoded
+	} else {
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return
+		}
 	}
 	if msg.CID != 0 {
 		c.pendMu.Lock()
@@ -349,6 +381,117 @@ func (c *Client) CloseConfirm(ticket string) (CloseOutcome, error) {
 		return CloseOutcome{}, err
 	}
 	return ParseCloseOutcomeMessage(reply)
+}
+
+// recoveryRequest sends one browser-safe recovery request with a bounded
+// timeout and verifies that the correlated reply has the exact expected type.
+func (c *Client) recoveryRequest(msg *Message, expectedReplyType string) (*Message, error) {
+	reply, err := c.requestWithin(msg, recoveryRequestReplyTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if reply == nil || reply.CID != msg.CID || reply.Type != expectedReplyType {
+		return nil, fmt.Errorf(
+			"sessiond: expected correlated %q reply for %q request",
+			expectedReplyType,
+			msg.Type,
+		)
+	}
+	return reply, nil
+}
+
+// ProtocolHello negotiates browser-safe recovery protocol support. It validates
+// the offer before sending and returns only a complete, validated result.
+func (c *Client) ProtocolHello(request ProtocolHelloRequest) (ProtocolHelloResult, error) {
+	if err := ValidateRecoveryContract(request); err != nil {
+		return ProtocolHelloResult{}, err
+	}
+	reply, err := c.recoveryRequest(
+		&Message{Type: TypeProtocolHello, ProtocolHello: &request},
+		TypeProtocolHelloResult,
+	)
+	if err != nil {
+		return ProtocolHelloResult{}, err
+	}
+	if reply.ProtocolHelloResult == nil {
+		return ProtocolHelloResult{}, fmt.Errorf("sessiond: protocol hello reply has no payload")
+	}
+	result := *reply.ProtocolHelloResult
+	if err := ValidateRecoveryContract(result); err != nil {
+		return ProtocolHelloResult{}, err
+	}
+	return result, nil
+}
+
+// RecoveryRetry requests one explicit retry for a workspace-qualified pane. The
+// daemon resolves the current recovery authority internally.
+func (c *Client) RecoveryRetry(request RecoveryRetryRequest) (RecoveryRetryResult, error) {
+	if err := ValidateRecoveryContract(request); err != nil {
+		return RecoveryRetryResult{}, err
+	}
+	reply, err := c.recoveryRequest(
+		&Message{Type: TypeRecoveryRetry, RecoveryRetry: &request},
+		TypeRecoveryRetryResult,
+	)
+	if err != nil {
+		return RecoveryRetryResult{}, err
+	}
+	if reply.RecoveryRetryResult == nil {
+		return RecoveryRetryResult{}, fmt.Errorf("sessiond: recovery retry reply has no payload")
+	}
+	result := *reply.RecoveryRetryResult
+	if err := ValidateRecoveryContract(result); err != nil {
+		return RecoveryRetryResult{}, err
+	}
+	return result, nil
+}
+
+// RecoverySelect submits only a daemon-issued opaque candidate handle. It
+// validates the request and returns a complete redacted result or no authority.
+func (c *Client) RecoverySelect(request RecoverySelectRequest) (RecoverySelectResult, error) {
+	if err := ValidateRecoveryContract(request); err != nil {
+		return RecoverySelectResult{}, err
+	}
+	reply, err := c.recoveryRequest(
+		&Message{Type: TypeRecoverySelect, RecoverySelect: &request},
+		TypeRecoverySelectResult,
+	)
+	if err != nil {
+		return RecoverySelectResult{}, err
+	}
+	if reply.RecoverySelectResult == nil {
+		return RecoverySelectResult{}, fmt.Errorf("sessiond: recovery selection reply has no payload")
+	}
+	result := *reply.RecoverySelectResult
+	if err := ValidateRecoveryContract(result); err != nil {
+		return RecoverySelectResult{}, err
+	}
+	return result, nil
+}
+
+// SetActivePane persists one workspace-qualified active-pane intent. It returns
+// only a complete, validated daemon result.
+func (c *Client) SetActivePane(
+	request ActivePanePersistenceRequest,
+) (ActivePanePersistenceResult, error) {
+	if err := ValidateRecoveryContract(request); err != nil {
+		return ActivePanePersistenceResult{}, err
+	}
+	reply, err := c.recoveryRequest(
+		&Message{Type: TypeSetActivePane, ActivePanePersistence: &request},
+		TypeSetActivePaneResult,
+	)
+	if err != nil {
+		return ActivePanePersistenceResult{}, err
+	}
+	if reply.ActivePanePersistenceResult == nil {
+		return ActivePanePersistenceResult{}, fmt.Errorf("sessiond: active-pane reply has no payload")
+	}
+	result := *reply.ActivePanePersistenceResult
+	if err := ValidateRecoveryContract(result); err != nil {
+		return ActivePanePersistenceResult{}, err
+	}
+	return result, nil
 }
 
 // Composition is the device-independent set of panes that make up a workspace,
@@ -660,6 +803,27 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypePaneResized:
 		if h.OnPaneResized != nil {
 			h.OnPaneResized(uint32(msg.PaneID), msg.Cols, msg.Rows)
+		}
+	case TypePaneRecoveryChanged:
+		if msg.CID != 0 || ValidateBrowserRecoveryMessage(msg) != nil || msg.RecoveryTransition == nil {
+			return
+		}
+		if h.OnPaneRecoveryChanged != nil {
+			h.OnPaneRecoveryChanged(*msg.RecoveryTransition)
+		}
+	case TypeRecoveredHistory:
+		if msg.CID != 0 || ValidateBrowserRecoveryMessage(msg) != nil || msg.RecoveredHistory == nil {
+			return
+		}
+		if h.OnRecoveredHistory != nil {
+			h.OnRecoveredHistory(*msg.RecoveredHistory)
+		}
+	case TypeReplacementOutcome:
+		if msg.CID != 0 || ValidateBrowserRecoveryMessage(msg) != nil || msg.ReplacementOutcome == nil {
+			return
+		}
+		if h.OnReplacementOutcome != nil {
+			h.OnReplacementOutcome(*msg.ReplacementOutcome)
 		}
 	case TypeBrowserCommand:
 		if h.OnBrowserCommand != nil {

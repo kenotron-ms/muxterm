@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -116,9 +117,15 @@ const (
 	TypeRecoverySelect       = "recovery-select"        // browser-safe opaque candidate selection
 	TypeRecoverySelectResult = "recovery-select-result" // browser-safe selection result
 
-	TypeLifecycleLeaseDelivery  = "lifecycle-lease-delivery"  // owner-local only
-	TypeLifecycleCapture        = "lifecycle-capture"         // privileged request
-	TypeLifecycleCaptureOutcome = "lifecycle-capture-outcome" // privileged result
+	TypeRecoveredHistory = "recovered-history" // browser-safe literal history event
+
+	TypeLifecycleBootstrap       = "lifecycle-bootstrap"        // owner-local request
+	TypeLifecycleBootstrapResult = "lifecycle-bootstrap-result" // owner-local result
+	TypeLifecycleLeaseDelivery   = "lifecycle-lease-delivery"   // owner-local only
+	TypeLifecycleCapture         = "lifecycle-capture"          // privileged request
+	TypeLifecycleCaptureOutcome  = "lifecycle-capture-outcome"  // privileged result
+	TypeExplicitBind             = "explicit-bind"              // owner-local request
+	TypeExplicitBindResult       = "explicit-bind-result"       // owner-local result
 
 	TypeReplacementPlan       = "replacement-plan"        // privileged request
 	TypeReplacementPlanResult = "replacement-plan-result" // privileged result
@@ -148,6 +155,7 @@ const (
 	RecoveryProtocolCapabilityRetry                 RecoveryProtocolCapability = "recovery-retry"
 	RecoveryProtocolCapabilitySelection             RecoveryProtocolCapability = "recovery-select"
 	RecoveryProtocolCapabilityActivePanePersistence RecoveryProtocolCapability = "active-pane-persistence"
+	RecoveryProtocolCapabilityRecoveredHistory      RecoveryProtocolCapability = "recovered-history-literal"
 )
 
 // RecoveryProtocolCapabilities carries a browser offer or a server-recognized
@@ -162,7 +170,8 @@ func validRecoveryProtocolCapability(value RecoveryProtocolCapability) bool {
 	case RecoveryProtocolCapabilityPaneProjection,
 		RecoveryProtocolCapabilityRetry,
 		RecoveryProtocolCapabilitySelection,
-		RecoveryProtocolCapabilityActivePanePersistence:
+		RecoveryProtocolCapabilityActivePanePersistence,
+		RecoveryProtocolCapabilityRecoveredHistory:
 		return true
 	default:
 		return false
@@ -557,6 +566,100 @@ func (transition PaneRecoveryTransition) validateRecoveryContract() error {
 	return transition.Recovery.validateRecoveryContract()
 }
 
+const (
+	// RecoveryMaxRecoveredHistoryBytes bounds one browser-deliverable literal
+	// history segment after JSON decoding.
+	RecoveryMaxRecoveredHistoryBytes = 4096
+	// RecoveryMaxRecoveredHistoryLines bounds LF-delimited display lines.
+	RecoveryMaxRecoveredHistoryLines = 256
+)
+
+// RecoveredHistoryLiteral is inert browser-safe terminal history. It is never
+// parsed as lifecycle or tool evidence. Only LF is allowed as a control
+// character, so terminal control sequences cannot cross this display-only
+// boundary.
+type RecoveredHistoryLiteral struct {
+	Pane      RecoveryPaneRef `json:"pane"`
+	Text      string          `json:"text"`
+	Truncated bool            `json:"truncated"`
+}
+
+func (history RecoveredHistoryLiteral) validateRecoveryContract() error {
+	if err := history.Pane.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if len(history.Text) == 0 || len(history.Text) > RecoveryMaxRecoveredHistoryBytes {
+		return fmt.Errorf(
+			"recovery: recovered history text must be 1..%d bytes",
+			RecoveryMaxRecoveredHistoryBytes,
+		)
+	}
+	if !utf8.ValidString(history.Text) {
+		return fmt.Errorf("recovery: recovered history text is not valid UTF-8")
+	}
+
+	lines := 0
+	for _, r := range history.Text {
+		if r == '\n' {
+			lines++
+			continue
+		}
+		// unicode.IsControl covers CR, tab, ESC, DEL, and C1 sequence
+		// introducers. unicode.Cf rejects invisible format controls too.
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			return fmt.Errorf("recovery: recovered history text contains a forbidden control character")
+		}
+	}
+	if history.Text[len(history.Text)-1] != '\n' {
+		lines++
+	}
+	if lines > RecoveryMaxRecoveredHistoryLines {
+		return fmt.Errorf(
+			"recovery: recovered history text exceeds %d LF-delimited lines",
+			RecoveryMaxRecoveredHistoryLines,
+		)
+	}
+	return nil
+}
+
+func (history *RecoveredHistoryLiteral) UnmarshalJSON(data []byte) error {
+	if history == nil {
+		return fmt.Errorf("recovery: nil recovered history destination")
+	}
+	if len(data) == 0 || len(data) > RecoveryMaxBrowserRecoveryMessageBytes {
+		return fmt.Errorf("recovery: recovered history exceeds input limit")
+	}
+	var raw struct {
+		Pane      RecoveryPaneRef `json:"pane"`
+		Text      string          `json:"text"`
+		Truncated *bool           `json:"truncated"`
+	}
+	if err := decodeRecoveryJSON(data, &raw); err != nil {
+		return err
+	}
+	if raw.Truncated == nil {
+		return fmt.Errorf("recovery: recovered history omits truncation state")
+	}
+	result := RecoveredHistoryLiteral{
+		Pane:      raw.Pane,
+		Text:      raw.Text,
+		Truncated: *raw.Truncated,
+	}
+	if err := result.validateRecoveryContract(); err != nil {
+		return err
+	}
+	*history = result
+	return nil
+}
+
+func (history RecoveredHistoryLiteral) MarshalJSON() ([]byte, error) {
+	if err := history.validateRecoveryContract(); err != nil {
+		return nil, err
+	}
+	type wire RecoveredHistoryLiteral
+	return json.Marshal(wire(history))
+}
+
 // RecoveryRetryRequest identifies only the workspace-qualified pane. Sessiond
 // resolves its current failed generation and capture fence internally.
 type RecoveryRetryRequest struct {
@@ -856,22 +959,30 @@ func (outcome PrivilegedLifecycleCaptureOutcome) validateRecoveryContract() erro
 // only privileged recovery envelope and its decoder is intended exclusively for
 // the authenticated Unix daemon transport, never the browser /ws relay.
 type OwnerLocalRecoveryMessage struct {
-	Type                   string                              `json:"type"`
-	CID                    uint64                              `json:"cid,omitempty"`
-	LifecycleLeaseDelivery *RecoveryLifecycleLeaseDelivery     `json:"lifecycleLeaseDelivery,omitempty"`
-	LifecycleCapture       *PrivilegedLifecycleCaptureRequest  `json:"lifecycleCapture,omitempty"`
-	LifecycleOutcome       *PrivilegedLifecycleCaptureOutcome  `json:"lifecycleOutcome,omitempty"`
-	ReplacementPlan        *PrivilegedReplacementPlanRequest   `json:"replacementPlan,omitempty"`
-	ReplacementResult      *PrivilegedReplacementPlanResult    `json:"replacementResult,omitempty"`
-	ReplacementCommit      *PrivilegedReplacementCommitRequest `json:"replacementCommit,omitempty"`
+	Type                     string                              `json:"type"`
+	CID                      uint64                              `json:"cid,omitempty"`
+	LifecycleBootstrap       *RecoveryLifecycleBootstrapRequest  `json:"lifecycleBootstrap,omitempty"`
+	LifecycleBootstrapResult *RecoveryLifecycleBootstrapResult   `json:"lifecycleBootstrapResult,omitempty"`
+	LifecycleLeaseDelivery   *RecoveryLifecycleLeaseDelivery     `json:"lifecycleLeaseDelivery,omitempty"`
+	LifecycleCapture         *PrivilegedLifecycleCaptureRequest  `json:"lifecycleCapture,omitempty"`
+	LifecycleOutcome         *PrivilegedLifecycleCaptureOutcome  `json:"lifecycleOutcome,omitempty"`
+	ExplicitBind             *RecoveryExplicitBindRequest        `json:"explicitBind,omitempty"`
+	ExplicitBindResult       *RecoveryExplicitBindResult         `json:"explicitBindResult,omitempty"`
+	ReplacementPlan          *PrivilegedReplacementPlanRequest   `json:"replacementPlan,omitempty"`
+	ReplacementResult        *PrivilegedReplacementPlanResult    `json:"replacementResult,omitempty"`
+	ReplacementCommit        *PrivilegedReplacementCommitRequest `json:"replacementCommit,omitempty"`
 }
 
 func (message OwnerLocalRecoveryMessage) validateRecoveryContract() error {
 	payloads := 0
 	for _, present := range []bool{
+		message.LifecycleBootstrap != nil,
+		message.LifecycleBootstrapResult != nil,
 		message.LifecycleLeaseDelivery != nil,
 		message.LifecycleCapture != nil,
 		message.LifecycleOutcome != nil,
+		message.ExplicitBind != nil,
+		message.ExplicitBindResult != nil,
 		message.ReplacementPlan != nil,
 		message.ReplacementResult != nil,
 		message.ReplacementCommit != nil,
@@ -884,6 +995,16 @@ func (message OwnerLocalRecoveryMessage) validateRecoveryContract() error {
 		return fmt.Errorf("recovery: owner-local envelope must contain exactly one payload")
 	}
 	switch message.Type {
+	case TypeLifecycleBootstrap:
+		if message.LifecycleBootstrap == nil {
+			return fmt.Errorf("recovery: lifecycle bootstrap payload is missing")
+		}
+		return message.LifecycleBootstrap.validateRecoveryContract()
+	case TypeLifecycleBootstrapResult:
+		if message.LifecycleBootstrapResult == nil {
+			return fmt.Errorf("recovery: lifecycle bootstrap result payload is missing")
+		}
+		return message.LifecycleBootstrapResult.validateRecoveryContract()
 	case TypeLifecycleLeaseDelivery:
 		if message.LifecycleLeaseDelivery == nil {
 			return fmt.Errorf("recovery: lifecycle lease delivery payload is missing")
@@ -899,6 +1020,16 @@ func (message OwnerLocalRecoveryMessage) validateRecoveryContract() error {
 			return fmt.Errorf("recovery: lifecycle outcome payload is missing")
 		}
 		return message.LifecycleOutcome.validateRecoveryContract()
+	case TypeExplicitBind:
+		if message.ExplicitBind == nil {
+			return fmt.Errorf("recovery: explicit bind payload is missing")
+		}
+		return message.ExplicitBind.validateRecoveryContract()
+	case TypeExplicitBindResult:
+		if message.ExplicitBindResult == nil {
+			return fmt.Errorf("recovery: explicit bind result payload is missing")
+		}
+		return message.ExplicitBindResult.validateRecoveryContract()
 	case TypeReplacementPlan:
 		if message.ReplacementPlan == nil {
 			return fmt.Errorf("recovery: replacement plan payload is missing")
@@ -964,6 +1095,17 @@ func writeFrame(w io.Writer, kind byte, payload []byte) error {
 
 // WriteControl marshals msg to JSON and writes it as a FrameControl frame.
 func WriteControl(w io.Writer, msg *Message) error {
+	if msg == nil {
+		return fmt.Errorf("sessiond: nil control message")
+	}
+	if isOwnerLocalRecoveryType(msg.Type) {
+		return fmt.Errorf("recovery: owner-local message type %q cannot use generic control", msg.Type)
+	}
+	if messageHasBrowserRecoveryPayload(msg) || isBrowserRecoveryMessageType(msg.Type) {
+		if err := ValidateBrowserRecoveryMessage(msg); err != nil {
+			return err
+		}
+	}
 	payload, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -993,6 +1135,26 @@ func DecodeOwnerLocalRecoveryControl(payload []byte) (*OwnerLocalRecoveryMessage
 		return nil, err
 	}
 	return &message, nil
+}
+
+// DecodeRecoverySocketRequest decodes only requests accepted by the dedicated
+// owner-local recovery socket. It first applies the strict owner-local decoder,
+// then rejects zero correlation IDs and every result, replacement, generic, or
+// browser message type.
+func DecodeRecoverySocketRequest(payload []byte) (*OwnerLocalRecoveryMessage, error) {
+	message, err := DecodeOwnerLocalRecoveryControl(payload)
+	if err != nil {
+		return nil, err
+	}
+	if message.CID == 0 {
+		return nil, fmt.Errorf("recovery: owner-local recovery request has zero CID")
+	}
+	switch message.Type {
+	case TypeLifecycleBootstrap, TypeLifecycleCapture, TypeExplicitBind:
+		return message, nil
+	default:
+		return nil, fmt.Errorf("recovery: owner-local message type %q is not a socket request", message.Type)
+	}
 }
 
 // WritePaneData writes a FramePaneData frame whose payload is
@@ -1153,12 +1315,28 @@ type Message struct {
 	ProtocolHello        *ProtocolHelloRequest       `json:"protocolHello,omitempty"`
 	ProtocolHelloResult  *ProtocolHelloResult        `json:"protocolHelloResult,omitempty"`
 	ReplacementOutcome   *RecoveryReplacementOutcome `json:"replacementOutcome,omitempty"`
+	RecoveredHistory     *RecoveredHistoryLiteral    `json:"recoveredHistory,omitempty"`
 
 	// Active-pane persistence has only a workspace-qualified pane reference
 	// and a stable result code. It remains distinct from connection-scoped
 	// pane-focus authority.
 	ActivePanePersistence       *ActivePanePersistenceRequest `json:"activePanePersistence,omitempty"`
 	ActivePanePersistenceResult *ActivePanePersistenceResult  `json:"activePanePersistenceResult,omitempty"`
+}
+
+func messageHasBrowserRecoveryPayload(message *Message) bool {
+	return message != nil && (message.Recovery != nil ||
+		message.RecoveryTransition != nil ||
+		message.RecoveryRetry != nil ||
+		message.RecoveryRetryResult != nil ||
+		message.RecoverySelect != nil ||
+		message.RecoverySelectResult != nil ||
+		message.ProtocolHello != nil ||
+		message.ProtocolHelloResult != nil ||
+		message.ReplacementOutcome != nil ||
+		message.RecoveredHistory != nil ||
+		message.ActivePanePersistence != nil ||
+		message.ActivePanePersistenceResult != nil)
 }
 
 // decodeRecoveryJSON applies strict object-field and trailing-value validation
@@ -1186,9 +1364,13 @@ func decodeRecoveryJSON(data []byte, destination any) error {
 
 func isOwnerLocalRecoveryType(messageType string) bool {
 	switch messageType {
-	case TypeLifecycleLeaseDelivery,
+	case TypeLifecycleBootstrap,
+		TypeLifecycleBootstrapResult,
+		TypeLifecycleLeaseDelivery,
 		TypeLifecycleCapture,
 		TypeLifecycleCaptureOutcome,
+		TypeExplicitBind,
+		TypeExplicitBindResult,
 		TypeReplacementPlan,
 		TypeReplacementPlanResult,
 		TypeReplacementCommit:
@@ -1199,22 +1381,30 @@ func isOwnerLocalRecoveryType(messageType string) bool {
 }
 
 type browserPrivilegeProbe struct {
-	Type                   string          `json:"type"`
-	PrivilegedRecovery     json.RawMessage `json:"privilegedRecovery"`
-	LifecycleLeaseDelivery json.RawMessage `json:"lifecycleLeaseDelivery"`
-	LifecycleCapture       json.RawMessage `json:"lifecycleCapture"`
-	LifecycleOutcome       json.RawMessage `json:"lifecycleOutcome"`
-	ReplacementPlan        json.RawMessage `json:"replacementPlan"`
-	ReplacementResult      json.RawMessage `json:"replacementResult"`
-	ReplacementCommit      json.RawMessage `json:"replacementCommit"`
-	Binding                json.RawMessage `json:"binding"`
+	Type                     string          `json:"type"`
+	PrivilegedRecovery       json.RawMessage `json:"privilegedRecovery"`
+	LifecycleBootstrap       json.RawMessage `json:"lifecycleBootstrap"`
+	LifecycleBootstrapResult json.RawMessage `json:"lifecycleBootstrapResult"`
+	LifecycleLeaseDelivery   json.RawMessage `json:"lifecycleLeaseDelivery"`
+	LifecycleCapture         json.RawMessage `json:"lifecycleCapture"`
+	LifecycleOutcome         json.RawMessage `json:"lifecycleOutcome"`
+	ExplicitBind             json.RawMessage `json:"explicitBind"`
+	ExplicitBindResult       json.RawMessage `json:"explicitBindResult"`
+	ReplacementPlan          json.RawMessage `json:"replacementPlan"`
+	ReplacementResult        json.RawMessage `json:"replacementResult"`
+	ReplacementCommit        json.RawMessage `json:"replacementCommit"`
+	Binding                  json.RawMessage `json:"binding"`
 }
 
 func (probe browserPrivilegeProbe) hasOwnerLocalPayload() bool {
 	return probe.PrivilegedRecovery != nil ||
+		probe.LifecycleBootstrap != nil ||
+		probe.LifecycleBootstrapResult != nil ||
 		probe.LifecycleLeaseDelivery != nil ||
 		probe.LifecycleCapture != nil ||
 		probe.LifecycleOutcome != nil ||
+		probe.ExplicitBind != nil ||
+		probe.ExplicitBindResult != nil ||
 		probe.ReplacementPlan != nil ||
 		probe.ReplacementResult != nil ||
 		probe.ReplacementCommit != nil ||
@@ -1239,6 +1429,8 @@ func browserRecoveryPayloadField(messageType string) (string, bool) {
 		return "recoverySelectResult", true
 	case TypeReplacementOutcome:
 		return "replacementOutcome", true
+	case TypeRecoveredHistory:
+		return "recoveredHistory", true
 	case TypeSetActivePane:
 		return "activePanePersistence", true
 	case TypeSetActivePaneResult:
@@ -1246,6 +1438,11 @@ func browserRecoveryPayloadField(messageType string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func isBrowserRecoveryMessageType(messageType string) bool {
+	_, ok := browserRecoveryPayloadField(messageType)
+	return ok
 }
 
 func validateBrowserRecoveryFieldAllowlist(data []byte, messageType string) error {
@@ -1288,6 +1485,7 @@ func ValidateBrowserRecoveryMessage(message *Message) error {
 		message.ProtocolHello != nil,
 		message.ProtocolHelloResult != nil,
 		message.ReplacementOutcome != nil,
+		message.RecoveredHistory != nil,
 		message.ActivePanePersistence != nil,
 		message.ActivePanePersistenceResult != nil,
 	} {
@@ -1337,6 +1535,11 @@ func ValidateBrowserRecoveryMessage(message *Message) error {
 			return fmt.Errorf("recovery: replacement outcome has invalid payload")
 		}
 		return message.ReplacementOutcome.validateRecoveryContract()
+	case TypeRecoveredHistory:
+		if message.CID != 0 || payloads != 1 || message.RecoveredHistory == nil {
+			return fmt.Errorf("recovery: recovered history event has invalid CID or payload")
+		}
+		return message.RecoveredHistory.validateRecoveryContract()
 	case TypeSetActivePane:
 		if payloads != 1 || message.ActivePanePersistence == nil {
 			return fmt.Errorf("recovery: active-pane persistence request has invalid payload")
@@ -1392,6 +1595,26 @@ func DecodeBrowserRecoveryMessage(data []byte) (*Message, error) {
 		return nil, err
 	}
 	return &message, nil
+}
+
+// DecodeBrowserRecoveryRequest decodes only browser-originated recovery
+// requests. Browser clients must provide a nonzero correlation ID and may send
+// only negotiation, retry, opaque candidate selection, or active-pane
+// persistence intent; server events and results are rejected.
+func DecodeBrowserRecoveryRequest(data []byte) (*Message, error) {
+	message, err := DecodeBrowserRecoveryMessage(data)
+	if err != nil {
+		return nil, err
+	}
+	if message.CID == 0 {
+		return nil, fmt.Errorf("recovery: browser recovery request has zero CID")
+	}
+	switch message.Type {
+	case TypeProtocolHello, TypeRecoveryRetry, TypeRecoverySelect, TypeSetActivePane:
+		return message, nil
+	default:
+		return nil, fmt.Errorf("recovery: browser message type %q is not a recovery request", message.Type)
+	}
 }
 
 // CloseOutcomeMessage maps a daemon close transaction result onto the additive
