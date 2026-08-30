@@ -34,20 +34,17 @@ import {
  */
 export const RECOVERY_SCHEMA_VERSION = 1;
 
+export const RECOVERED_HISTORY_LITERAL_CAPABILITY =
+  'recovered-history-literal' as const satisfies SessiondRecoveryCapability;
+
+/** The complete, fixed browser offer for this recovery schema version. */
 export const RECOVERY_CAPABILITIES = Object.freeze([
   'pane-recovery-projection',
   'recovery-retry',
   'recovery-select',
   'active-pane-persistence',
+  RECOVERED_HISTORY_LITERAL_CAPABILITY,
 ] as const satisfies readonly SessiondRecoveryCapability[]);
-
-/**
- * Additive literal-history capability advertised by the default production
- * hello. Callers that must speak the legacy capability offer can explicitly
- * pass false to buildProtocolHello.
- */
-export const RECOVERED_HISTORY_LITERAL_CAPABILITY =
-  'recovered-history-literal' as const satisfies SessiondRecoveryCapability;
 
 const MAX_RECOVERY_TEXT_BYTES = 32_768;
 const MAX_WORKSPACE_ID_BYTES = 128;
@@ -93,10 +90,7 @@ const DETAIL_CODES = new Set<SessiondRecoveryDetailCode>([
   'candidate-invalid',
 ]);
 
-const KNOWN_CAPABILITIES = new Set<SessiondRecoveryCapability>([
-  ...RECOVERY_CAPABILITIES,
-  RECOVERED_HISTORY_LITERAL_CAPABILITY,
-]);
+const KNOWN_CAPABILITIES = new Set<SessiondRecoveryCapability>(RECOVERY_CAPABILITIES);
 
 const RECOVERY_SENSITIVE_TYPE_PREFIXES = [
   'recovery',
@@ -261,6 +255,111 @@ function isPaneID(value: unknown): value is number {
 
 export function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
+}
+
+/**
+ * JSON.parse deliberately accepts duplicate object names and keeps only the
+ * final value. Recovery envelopes need exact keys, so scan valid raw JSON as
+ * well and treat an invalid scan or any duplicate decoded key as unsafe. The
+ * caller invokes this only after classifying a recovery frame, leaving
+ * ordinary protocol envelopes (including serve config) on their existing path.
+ */
+export function hasDuplicateJsonObjectKeys(text: string): boolean {
+  let duplicate = false;
+
+  const skipWhitespace = (index: number): number => {
+    while (
+      index < text.length &&
+      (text[index] === ' ' || text[index] === '\n' || text[index] === '\r' || text[index] === '\t')
+    ) {
+      index++;
+    }
+    return index;
+  };
+
+  const scanString = (index: number): number => {
+    if (text[index] !== '"') throw new SyntaxError('expected JSON string');
+    index++;
+    while (index < text.length) {
+      const character = text[index];
+      if (character === '"') return index + 1;
+      if (character === '\\') {
+        index++;
+        if (index >= text.length) throw new SyntaxError('unterminated JSON escape');
+        index += text[index] === 'u' ? 5 : 1;
+        continue;
+      }
+      index++;
+    }
+    throw new SyntaxError('unterminated JSON string');
+  };
+
+  const scanPrimitive = (index: number): number => {
+    const start = index;
+    while (index < text.length && !' \n\r\t,]}'.includes(text[index])) index++;
+    if (index === start) throw new SyntaxError('expected JSON value');
+    return index;
+  };
+
+  const scanValue = (index: number, depth: number): number => {
+    if (depth > MAX_ORDINARY_NESTING) throw new SyntaxError('JSON nesting exceeds limit');
+    index = skipWhitespace(index);
+    switch (text[index]) {
+      case '"':
+        return scanString(index);
+      case '{':
+        return scanObject(index, depth + 1);
+      case '[':
+        return scanArray(index, depth + 1);
+      default:
+        return scanPrimitive(index);
+    }
+  };
+
+  const scanObject = (index: number, depth: number): number => {
+    const keys = new Set<string>();
+    index = skipWhitespace(index + 1);
+    if (text[index] === '}') return index + 1;
+
+    while (index < text.length) {
+      const keyStart = index;
+      index = scanString(index);
+      const key = JSON.parse(text.slice(keyStart, index));
+      if (typeof key !== 'string') throw new SyntaxError('invalid JSON object key');
+      if (keys.has(key)) duplicate = true;
+      keys.add(key);
+
+      index = skipWhitespace(index);
+      if (text[index] !== ':') throw new SyntaxError('expected JSON colon');
+      index = scanValue(index + 1, depth);
+      index = skipWhitespace(index);
+      if (text[index] === '}') return index + 1;
+      if (text[index] !== ',') throw new SyntaxError('expected JSON object delimiter');
+      index = skipWhitespace(index + 1);
+    }
+    throw new SyntaxError('unterminated JSON object');
+  };
+
+  const scanArray = (index: number, depth: number): number => {
+    index = skipWhitespace(index + 1);
+    if (text[index] === ']') return index + 1;
+
+    while (index < text.length) {
+      index = scanValue(index, depth);
+      index = skipWhitespace(index);
+      if (text[index] === ']') return index + 1;
+      if (text[index] !== ',') throw new SyntaxError('expected JSON array delimiter');
+      index = skipWhitespace(index + 1);
+    }
+    throw new SyntaxError('unterminated JSON array');
+  };
+
+  try {
+    const end = scanValue(0, 0);
+    return duplicate || skipWhitespace(end) !== text.length;
+  } catch {
+    return true;
+  }
 }
 
 function isBoundedText(value: unknown, maximum: number, allowEmpty = false): value is string {
@@ -646,17 +745,13 @@ function parseActivePaneResult(value: unknown): SessiondActivePanePersistenceRes
 function parseRecoveryEvent(value: UnknownRecord): RecoveryWireEvent | null {
   if (typeof value.type !== 'string') return null;
 
-  const parseEnvelope = <T>(
+  const parseCorrelatedResult = <T>(
     payloadKey: string,
     parsePayload: (payload: unknown) => T | null,
-  ): { readonly cid?: number; readonly payload: T } | null => {
-    const hasCID = hasOwn(value, 'cid');
-    if (!hasExactKeys(value, hasCID ? ['type', 'cid', payloadKey] : ['type', payloadKey])) {
-      return null;
-    }
+  ): { readonly cid: number; readonly payload: T } | null => {
+    if (!hasExactKeys(value, ['type', 'cid', payloadKey])) return null;
     const payload = parsePayload(value[payloadKey]);
     if (payload === null) return null;
-    if (!hasCID) return { payload };
     const cid = value.cid;
     return isPositiveSafeInteger(cid) ? { cid, payload } : null;
   };
@@ -676,25 +771,23 @@ function parseRecoveryEvent(value: UnknownRecord): RecoveryWireEvent | null {
 
   switch (value.type) {
     case SessiondRecoveryType.ProtocolHelloResult: {
-      const envelope = parseEnvelope('protocolHelloResult', parseProtocolHelloResult);
+      const envelope = parseCorrelatedResult('protocolHelloResult', parseProtocolHelloResult);
       if (envelope === null) return null;
-      return envelope.cid === undefined
-        ? { type: SessiondRecoveryType.ProtocolHelloResult, protocolHelloResult: envelope.payload }
-        : {
-            type: SessiondRecoveryType.ProtocolHelloResult,
-            cid: envelope.cid,
-            protocolHelloResult: envelope.payload,
-          };
+      return {
+        type: SessiondRecoveryType.ProtocolHelloResult,
+        cid: envelope.cid,
+        protocolHelloResult: envelope.payload,
+      };
     }
 
     case SessiondRecoveryType.PaneRecoveryChanged: {
-      const envelope = parseEnvelope('recoveryTransition', parseTransition);
+      const envelope = parseZeroCIDEvent('recoveryTransition', parseTransition);
       if (envelope === null) return null;
       return envelope.cid === undefined
         ? { type: SessiondRecoveryType.PaneRecoveryChanged, recoveryTransition: envelope.payload }
         : {
             type: SessiondRecoveryType.PaneRecoveryChanged,
-            cid: envelope.cid,
+            cid: 0,
             recoveryTransition: envelope.payload,
           };
     }
@@ -712,54 +805,48 @@ function parseRecoveryEvent(value: UnknownRecord): RecoveryWireEvent | null {
     }
 
     case SessiondRecoveryType.RecoveryRetryResult: {
-      const envelope = parseEnvelope('recoveryRetryResult', parseRetryResult);
+      const envelope = parseCorrelatedResult('recoveryRetryResult', parseRetryResult);
       if (envelope === null) return null;
-      return envelope.cid === undefined
-        ? { type: SessiondRecoveryType.RecoveryRetryResult, recoveryRetryResult: envelope.payload }
-        : {
-            type: SessiondRecoveryType.RecoveryRetryResult,
-            cid: envelope.cid,
-            recoveryRetryResult: envelope.payload,
-          };
+      return {
+        type: SessiondRecoveryType.RecoveryRetryResult,
+        cid: envelope.cid,
+        recoveryRetryResult: envelope.payload,
+      };
     }
 
     case SessiondRecoveryType.RecoverySelectResult: {
-      const envelope = parseEnvelope('recoverySelectResult', parseSelectResult);
+      const envelope = parseCorrelatedResult('recoverySelectResult', parseSelectResult);
       if (envelope === null) return null;
-      return envelope.cid === undefined
-        ? { type: SessiondRecoveryType.RecoverySelectResult, recoverySelectResult: envelope.payload }
-        : {
-            type: SessiondRecoveryType.RecoverySelectResult,
-            cid: envelope.cid,
-            recoverySelectResult: envelope.payload,
-          };
+      return {
+        type: SessiondRecoveryType.RecoverySelectResult,
+        cid: envelope.cid,
+        recoverySelectResult: envelope.payload,
+      };
     }
 
     case SessiondRecoveryType.ReplacementOutcome: {
-      const envelope = parseEnvelope('replacementOutcome', parseReplacementOutcome);
+      const envelope = parseZeroCIDEvent('replacementOutcome', parseReplacementOutcome);
       if (envelope === null) return null;
       return envelope.cid === undefined
         ? { type: SessiondRecoveryType.ReplacementOutcome, replacementOutcome: envelope.payload }
         : {
             type: SessiondRecoveryType.ReplacementOutcome,
-            cid: envelope.cid,
+            cid: 0,
             replacementOutcome: envelope.payload,
           };
     }
 
     case SessiondRecoveryType.SetActivePaneResult: {
-      const envelope = parseEnvelope('activePanePersistenceResult', parseActivePaneResult);
+      const envelope = parseCorrelatedResult(
+        'activePanePersistenceResult',
+        parseActivePaneResult,
+      );
       if (envelope === null) return null;
-      return envelope.cid === undefined
-        ? {
-            type: SessiondRecoveryType.SetActivePaneResult,
-            activePanePersistenceResult: envelope.payload,
-          }
-        : {
-            type: SessiondRecoveryType.SetActivePaneResult,
-            cid: envelope.cid,
-            activePanePersistenceResult: envelope.payload,
-          };
+      return {
+        type: SessiondRecoveryType.SetActivePaneResult,
+        cid: envelope.cid,
+        activePanePersistenceResult: envelope.payload,
+      };
     }
 
     default:
@@ -947,13 +1034,11 @@ export function classifyRecoveryInbound(
   return message === null ? REJECTED : { kind: 'ordinary', message };
 }
 
-export function buildProtocolHello(includeRecoveredHistoryLiteral = true): SessiondBrowserRecoveryRequest {
+export function buildProtocolHello(): SessiondBrowserRecoveryRequest {
   const protocolHello: SessiondProtocolHello = {
     recoverySchemaVersion: RECOVERY_SCHEMA_VERSION,
     capabilities: {
-      values: includeRecoveredHistoryLiteral
-        ? [...RECOVERY_CAPABILITIES, RECOVERED_HISTORY_LITERAL_CAPABILITY]
-        : [...RECOVERY_CAPABILITIES],
+      values: [...RECOVERY_CAPABILITIES],
     },
   };
   return {
