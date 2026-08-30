@@ -3,7 +3,6 @@ package sessiond
 import (
 	"bytes"
 	"os"
-	"sync/atomic"
 	"time"
 )
 
@@ -84,8 +83,6 @@ const (
 )
 
 const maxLifecycleSequence = 512
-
-var nextProcessGeneration atomic.Uint64
 
 // shellLifecycleParser recognizes authenticated OSC 133 lifecycle markers while
 // retaining an incomplete OSC across PTY reads. pending is strictly bounded so
@@ -236,8 +233,7 @@ func (p *shellLifecycleParser) marker(payload []byte) lifecycleMarker {
 	return 0
 }
 
-func (p *Pane) bindRootProcess(pid int, source shellLifecycleSource, token string, startedAt time.Time) uint64 {
-	generation := nextProcessGeneration.Add(1)
+func (p *Pane) bindRootProcess(generation uint64, pid int, source shellLifecycleSource, token string, startedAt time.Time) {
 	p.activityMu.Lock()
 	p.rootPID = pid
 	p.rootGeneration = generation
@@ -249,7 +245,6 @@ func (p *Pane) bindRootProcess(pid int, source shellLifecycleSource, token strin
 	p.lifecycleParsing = false
 	p.activityRevision++
 	p.activityMu.Unlock()
-	return generation
 }
 
 func (p *Pane) observeLifecycleData(generation uint64, data []byte, observedAt time.Time) {

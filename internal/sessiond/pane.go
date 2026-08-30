@@ -121,6 +121,10 @@ func NewPane(
 	onExit func(localID int, exitCode int, runtimeMilliseconds int64),
 	onPrompt func(localID int, msg *Message),
 ) (*Pane, error) {
+	generation, err := nextPaneRootGeneration()
+	if err != nil {
+		return nil, err
+	}
 	if buf == nil {
 		// Production default: VTBuffer (screen-state replay). Raw byte replay
 		// (RawBuffer) garbles the terminal on reconnect when the client's
@@ -164,7 +168,7 @@ func NewPane(
 		onExit:             onExit,
 		integrationCleanup: launch.cleanup,
 	}
-	generation := p.bindRootProcess(c.Process.Pid, launch.source, launch.token, startedAt)
+	p.bindRootProcess(generation, c.Process.Pid, launch.source, launch.token, startedAt)
 	if onPrompt != nil {
 		p.onPromptPtr.Store(&onPrompt)
 	}
