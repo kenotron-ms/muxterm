@@ -29,6 +29,7 @@ import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
 import './components/recovery-status.js';
+import './components/recovered-history.js';
 import type { RecoverySelectionEventDetail } from './components/recovery-status.js';
 
 
@@ -36,6 +37,7 @@ import { WorkspaceController } from './lib/workspace-controller.js';
 import { PaneFocusCoordinator } from './lib/pane-focus-coordinator.js';
 import { mintClientRef } from './lib/client-ref.js';
 import {
+  isTerminalSurface,
   SessiondType,
   type CloseConfirmationRequiredOutcome,
   type CloseOutcome,
@@ -492,6 +494,7 @@ export class MuxApp extends LitElement {
       min-width: 0;
     }
 
+    mux-recovered-history,
     mux-recovery-status {
       flex: none;
     }
@@ -674,10 +677,7 @@ export class MuxApp extends LitElement {
       if (msg.type === SessiondType.PaneAdded && msg.placement) {
         this._dock?.preparePlacementForPaneAdded(msg.placement, msg.referencePaneId);
       }
-      const appliesToAttachedWorkspace =
-        msg.type !== SessiondType.PaneClosed ||
-        (typeof msg.workspaceId === 'string' && msg.workspaceId === store.attached);
-      if (appliesToAttachedWorkspace) store.applySessiond(msg);
+      store.applySessiond(msg);
       this._reconcileCloseAuthority(msg);
       this._controller?.onMessage(msg);
       // Replay setup: must run synchronously here, BEFORE binary replay frames
@@ -763,6 +763,7 @@ export class MuxApp extends LitElement {
       }
     };
     this._socket.onReconnect = () => {
+      store.clearRecoveryOnTransportLoss();
       this._showReconnectOverlay = false;
       muxLogReset();
       muxLog('app reconnect', 'WS connected, bootstrapping');
@@ -785,6 +786,7 @@ export class MuxApp extends LitElement {
   }
 
   disconnectedCallback(): void {
+    store.clearRecoveryOnTransportLoss();
     super.disconnectedCallback();
     window.removeEventListener('open-launcher', this._onOpenLauncherAttr);
     window.removeEventListener('layout-command', this._onLayoutCommand);
@@ -801,7 +803,6 @@ export class MuxApp extends LitElement {
       this._unsubscribe = null;
     }
     if (this._socket) {
-      store.clearRecoveryOnTransportLoss();
       this._socket.disconnect();
       this._socket = null;
     }
@@ -958,6 +959,10 @@ export class MuxApp extends LitElement {
       store.attached === null
         ? undefined
         : panes.find((pane) => pane.paneId === store.activePaneId);
+    const activeHistoryPane =
+      activePane && isTerminalSurface(activePane.surfaceKind ?? 'terminal')
+        ? activePane
+        : undefined;
     const activeRecovery = activePane?.recovery;
     const retryEnabled =
       activeRecovery?.status === 'strategy-failed' &&
@@ -986,6 +991,21 @@ export class MuxApp extends LitElement {
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
+          ${activeRecovery
+            ? html`
+                <mux-recovery-status
+                  .recovery="${activeRecovery}"
+                  .retryEnabled="${retryEnabled}"
+                  .selectionEnabled="${selectionEnabled}"
+                  @recovery-retry="${this._onRecoveryRetry}"
+                  @recovery-select="${this._onRecoverySelect}"
+                ></mux-recovery-status>
+              `
+            : ''}
+          <mux-recovered-history
+            .workspaceId="${activeHistoryPane ? store.attached : null}"
+            .paneId="${activeHistoryPane?.paneId ?? null}"
+          ></mux-recovered-history>
           ${panes.length === 0
             ? html`
                 <div class="empty-workspace">
@@ -998,17 +1018,6 @@ export class MuxApp extends LitElement {
                 </div>
               `
             : html`
-                ${activeRecovery
-                  ? html`
-                      <mux-recovery-status
-                        .recovery="${activeRecovery}"
-                        .retryEnabled="${retryEnabled}"
-                        .selectionEnabled="${selectionEnabled}"
-                        @recovery-retry="${this._onRecoveryRetry}"
-                        @recovery-select="${this._onRecoverySelect}"
-                      ></mux-recovery-status>
-                    `
-                  : ''}
                 <mux-dock
                   .panes="${panes}"
                   .activePaneId="${store.activePaneId}"
