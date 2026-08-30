@@ -685,6 +685,7 @@ export class MuxSocket {
         } else {
           this._resetRecoveryNegotiation();
         }
+        if (this._ws !== ws) return;
       }
       this.onRecoveryEvent?.(event);
       return;
