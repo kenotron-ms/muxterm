@@ -340,6 +340,15 @@ func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 			"Origin-Agent-Cluster",
 			"Cross-Origin-Opener-Policy",
 			"Cross-Origin-Embedder-Policy",
+			"Strict-Transport-Security",
+			"Alt-Svc",
+			"Accept-CH",
+			"Accept-CH-Lifetime",
+			"Critical-CH",
+			"Delegate-CH",
+			"Expect-CT",
+			"Public-Key-Pins",
+			"Public-Key-Pins-Report-Only",
 			"Refresh",
 		} {
 			resp.Header.Del(name)
@@ -373,6 +382,9 @@ func rewriteTunnelLocation(location, id string, target, requestURL *url.URL) (st
 	if err != nil || redirect.Opaque != "" || redirect.User != nil {
 		return "", errors.New("invalid redirect")
 	}
+	if err := validateTunnelRedirectPath(redirect); err != nil {
+		return "", err
+	}
 	if redirect.Host != "" {
 		if redirect.Scheme != "http" || redirect.Host != target.Host {
 			return "", errors.New("off-upstream redirect")
@@ -384,6 +396,9 @@ func rewriteTunnelLocation(location, id string, target, requestURL *url.URL) (st
 	resolved := requestURL.ResolveReference(redirect)
 	if resolved.Scheme != "http" || resolved.Host != target.Host || resolved.User != nil {
 		return "", errors.New("off-upstream redirect")
+	}
+	if err := validateTunnelRedirectPath(resolved); err != nil {
+		return "", err
 	}
 
 	path := resolved.Path
@@ -397,8 +412,15 @@ func rewriteTunnelLocation(location, id string, target, requestURL *url.URL) (st
 		Fragment:    resolved.Fragment,
 		RawFragment: resolved.RawFragment,
 	}
-	if resolved.RawPath != "" {
-		rewritten.RawPath = "/t/" + url.PathEscape(id) + resolved.RawPath
-	}
 	return rewritten.String(), nil
+}
+
+func validateTunnelRedirectPath(target *url.URL) error {
+	for _, escapedSegment := range strings.Split(target.EscapedPath(), "/") {
+		segment, err := url.PathUnescape(escapedSegment)
+		if err != nil || segment == "." || segment == ".." || strings.ContainsAny(segment, `/\`) {
+			return errors.New("unsafe redirect path")
+		}
+	}
+	return nil
 }
