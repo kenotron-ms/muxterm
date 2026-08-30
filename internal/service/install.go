@@ -175,7 +175,7 @@ func installLinuxWithContext(
 	}
 
 	if _, err := cmd.Run(ctx, "loginctl", "enable-linger"); err != nil {
-		return ReplacementFailed, fmt.Errorf("loginctl enable-linger: %w", err)
+		fmt.Printf("Warning: could not enable lingering for user service. muxterm may not survive reboots: %v\n", err)
 	}
 
 	return disposition, nil
