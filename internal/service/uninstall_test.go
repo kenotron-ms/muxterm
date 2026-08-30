@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,9 @@ func TestUninstall_Linux_StopsService(t *testing.T) {
 	unitPath := filepath.Join(tmp, "muxterm.service")
 	sessiondPath := filepath.Join(tmp, "muxterm-sessiond.service")
 	if err := os.WriteFile(unitPath, []byte("unit"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sessiondPath, []byte("sessiond unit"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	cmd := &mockCommander{}
@@ -72,39 +76,49 @@ func TestUninstall_Linux_NoFileIsNotError(t *testing.T) {
 func TestUninstall_Darwin_RunsLaunchctlUnload(t *testing.T) {
 	tmp := t.TempDir()
 	plistPath := filepath.Join(tmp, "com.muxterm.plist")
+	sessiondPlistPath := filepath.Join(tmp, "com.muxterm.sessiond.plist")
 	if err := os.WriteFile(plistPath, []byte("plist"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sessiondPlistPath, []byte("sessiond plist"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	cmd := &mockCommander{}
 
-	err := uninstallDarwin(plistPath, cmd)
+	err := uninstallDarwin(plistPath, sessiondPlistPath, cmd)
 	if err != nil {
 		t.Fatalf("uninstallDarwin() error: %v", err)
 	}
 
-	if len(cmd.commands) < 1 {
-		t.Fatal("expected at least 1 command")
+	if len(cmd.commands) != 2 {
+		t.Fatalf("expected 2 commands, got %d", len(cmd.commands))
 	}
 
 	unload := cmd.commands[0]
 	if unload.Name != "launchctl" {
 		t.Errorf("command = %q, want launchctl", unload.Name)
 	}
-	wantArgs := []string{"unload", plistPath}
+	wantArgs := []string{"bootout", fmt.Sprintf("gui/%d/com.muxterm", os.Getuid())}
 	if !sliceEqual(unload.Args, wantArgs) {
 		t.Errorf("args = %v, want %v", unload.Args, wantArgs)
+	}
+	unloadSessiond := cmd.commands[1]
+	wantSessiondArgs := []string{"bootout", fmt.Sprintf("gui/%d/com.muxterm.sessiond", os.Getuid())}
+	if unloadSessiond.Name != "launchctl" || !sliceEqual(unloadSessiond.Args, wantSessiondArgs) {
+		t.Errorf("sessiond command = %q %v, want launchctl %v", unloadSessiond.Name, unloadSessiond.Args, wantSessiondArgs)
 	}
 }
 
 func TestUninstall_Darwin_RemovesPlistFile(t *testing.T) {
 	tmp := t.TempDir()
 	plistPath := filepath.Join(tmp, "com.muxterm.plist")
+	sessiondPlistPath := filepath.Join(tmp, "com.muxterm.sessiond.plist")
 	if err := os.WriteFile(plistPath, []byte("plist"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	cmd := &mockCommander{}
 
-	err := uninstallDarwin(plistPath, cmd)
+	err := uninstallDarwin(plistPath, sessiondPlistPath, cmd)
 	if err != nil {
 		t.Fatalf("uninstallDarwin() error: %v", err)
 	}
