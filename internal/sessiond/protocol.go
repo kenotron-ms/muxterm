@@ -1139,8 +1139,8 @@ func DecodeOwnerLocalRecoveryControl(payload []byte) (*OwnerLocalRecoveryMessage
 
 // DecodeRecoverySocketRequest decodes only requests accepted by the dedicated
 // owner-local recovery socket. It first applies the strict owner-local decoder,
-// then rejects zero correlation IDs and every result, replacement, generic, or
-// browser message type.
+// then rejects zero correlation IDs and every result, event, generic, or browser
+// message type.
 func DecodeRecoverySocketRequest(payload []byte) (*OwnerLocalRecoveryMessage, error) {
 	message, err := DecodeOwnerLocalRecoveryControl(payload)
 	if err != nil {
@@ -1150,7 +1150,11 @@ func DecodeRecoverySocketRequest(payload []byte) (*OwnerLocalRecoveryMessage, er
 		return nil, fmt.Errorf("recovery: owner-local recovery request has zero CID")
 	}
 	switch message.Type {
-	case TypeLifecycleBootstrap, TypeLifecycleCapture, TypeExplicitBind:
+	case TypeLifecycleBootstrap,
+		TypeLifecycleCapture,
+		TypeExplicitBind,
+		TypeReplacementPlan,
+		TypeReplacementCommit:
 		return message, nil
 	default:
 		return nil, fmt.Errorf("recovery: owner-local message type %q is not a socket request", message.Type)
