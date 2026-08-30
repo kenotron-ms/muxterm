@@ -9,9 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
+
+var ensureDaemonMu sync.Mutex
 
 // socketDir resolves the directory that holds the daemon's Unix socket and
 // log file. It follows the XDG Base Directory spec for the runtime dir:
@@ -99,15 +102,22 @@ func EnsureDaemon(socketPath, logPath string) error {
 	if os.Getenv("INVOCATION_ID") != "" {
 		return nil
 	}
+	ensureDaemonMu.Lock()
+	defer ensureDaemonMu.Unlock()
+
 	if IsAlive(socketPath) {
 		return nil
 	}
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove stale socket: %w", err)
 	}
-	if _, err := Spawn(logPath); err != nil {
+	proc, err := Spawn(logPath)
+	if err != nil {
 		return fmt.Errorf("spawn sessiond: %w", err)
 	}
+	go func() {
+		_, _ = proc.Wait()
+	}()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if IsAlive(socketPath) {
