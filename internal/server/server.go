@@ -276,6 +276,7 @@ func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 	// Strip the leading "/t/" prefix, then extract the id (up to the next '/').
 	rest := strings.TrimPrefix(r.URL.Path, "/t/")
 	if rest == "" {
+		applyTunnelSecurityHeaders(w.Header())
 		http.Error(w, "tunnel id required", http.StatusBadRequest)
 		return
 	}
@@ -289,18 +290,21 @@ func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if id == "" {
+		applyTunnelSecurityHeaders(w.Header())
 		http.Error(w, "tunnel id required", http.StatusBadRequest)
 		return
 	}
 
 	port, ok := s.tunnels.Port(id)
 	if !ok {
+		applyTunnelSecurityHeaders(w.Header())
 		http.Error(w, "tunnel not found", http.StatusNotFound)
 		return
 	}
 
 	target, err := url.Parse(fmt.Sprintf("http://localhost:%d", port))
 	if err != nil {
+		applyTunnelSecurityHeaders(w.Header())
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -325,39 +329,7 @@ func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		for _, name := range []string{
-			"Set-Cookie",
-			"Set-Cookie2",
-			"Clear-Site-Data",
-			"WWW-Authenticate",
-			"Proxy-Authenticate",
-			"Authentication-Info",
-			"Proxy-Authentication-Info",
-			"Content-Security-Policy-Report-Only",
-			"Report-To",
-			"Reporting-Endpoints",
-			"NEL",
-			"Origin-Agent-Cluster",
-			"Cross-Origin-Opener-Policy",
-			"Cross-Origin-Embedder-Policy",
-			"Strict-Transport-Security",
-			"Alt-Svc",
-			"Accept-CH",
-			"Accept-CH-Lifetime",
-			"Critical-CH",
-			"Delegate-CH",
-			"Expect-CT",
-			"Public-Key-Pins",
-			"Public-Key-Pins-Report-Only",
-			"Refresh",
-		} {
-			resp.Header.Del(name)
-		}
-
-		resp.Header.Set("Content-Security-Policy", "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads")
-		resp.Header.Set("Referrer-Policy", "no-referrer")
-		resp.Header.Set("X-Content-Type-Options", "nosniff")
-		resp.Header.Set("Permissions-Policy", "camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), publickey-credentials-get=(), serial=(), usb=()")
+		applyTunnelSecurityHeaders(resp.Header)
 
 		if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
 			location := resp.Header.Get("Location")
@@ -372,9 +344,45 @@ func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+		applyTunnelSecurityHeaders(w.Header())
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 	}
 	proxy.ServeHTTP(w, cloned)
+}
+
+func applyTunnelSecurityHeaders(header http.Header) {
+	for _, name := range []string{
+		"Set-Cookie",
+		"Set-Cookie2",
+		"Clear-Site-Data",
+		"WWW-Authenticate",
+		"Proxy-Authenticate",
+		"Authentication-Info",
+		"Proxy-Authentication-Info",
+		"Content-Security-Policy-Report-Only",
+		"Report-To",
+		"Reporting-Endpoints",
+		"NEL",
+		"Origin-Agent-Cluster",
+		"Cross-Origin-Opener-Policy",
+		"Cross-Origin-Embedder-Policy",
+		"Strict-Transport-Security",
+		"Alt-Svc",
+		"Accept-CH",
+		"Accept-CH-Lifetime",
+		"Critical-CH",
+		"Delegate-CH",
+		"Expect-CT",
+		"Public-Key-Pins",
+		"Public-Key-Pins-Report-Only",
+		"Refresh",
+	} {
+		header.Del(name)
+	}
+	header.Set("Content-Security-Policy", "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads")
+	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Permissions-Policy", "camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), publickey-credentials-get=(), serial=(), usb=()")
 }
 
 func rewriteTunnelLocation(location, id string, target, requestURL *url.URL) (string, error) {
@@ -418,7 +426,8 @@ func rewriteTunnelLocation(location, id string, target, requestURL *url.URL) (st
 func validateTunnelRedirectPath(target *url.URL) error {
 	for _, escapedSegment := range strings.Split(target.EscapedPath(), "/") {
 		segment, err := url.PathUnescape(escapedSegment)
-		if err != nil || segment == "." || segment == ".." || strings.ContainsAny(segment, `/\`) {
+		encodedDotSegment := (segment == "." || segment == "..") && escapedSegment != segment
+		if err != nil || encodedDotSegment || strings.ContainsAny(segment, `/\`) {
 			return errors.New("unsafe redirect path")
 		}
 	}
