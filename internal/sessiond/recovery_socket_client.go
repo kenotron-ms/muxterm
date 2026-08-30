@@ -28,17 +28,6 @@ const (
 // never wrap this error.
 var ErrRecoveryUnavailable = errors.New("recovery socket unavailable")
 
-// RecoverySocketPath returns the dedicated recovery socket beside the ordinary
-// sessiond socket. It derives only the containing directory; the ordinary
-// socket is never inspected or used as a fallback.
-func RecoverySocketPath() (string, error) {
-	sessionSocket, err := SocketPath()
-	if err != nil {
-		return "", errors.New("recovery socket path resolution failed")
-	}
-	return filepath.Join(filepath.Dir(sessionSocket), "recovery.sock"), nil
-}
-
 // RecoverySocketClient is a sequential, connection-scoped client for privileged
 // owner-local recovery requests. A protocol or I/O fault permanently poisons
 // and closes the connection.
@@ -51,9 +40,13 @@ type RecoverySocketClient struct {
 
 // DialRecoverySocket opens only the dedicated owner-local recovery endpoint.
 func DialRecoverySocket() (*RecoverySocketClient, error) {
-	path, err := RecoverySocketPath()
+	sessionSocket, err := SocketPath()
 	if err != nil {
-		return nil, err
+		return nil, errors.New("recovery socket path resolution failed")
+	}
+	path, err := RecoverySocketPath(sessionSocket)
+	if err != nil {
+		return nil, errors.New("recovery socket path resolution failed")
 	}
 	return dialRecoverySocket(path)
 }
