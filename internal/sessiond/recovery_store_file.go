@@ -285,50 +285,38 @@ func (store *fileRecoveryStore) FlushHistory(
 	if len(segment.Lines) == 0 {
 		return cloneRecoveryHistorySegment(segment), nil
 	}
-	if err := discardRecoveryPendingFile(store.historyFD, recoveryHistoryPendingName); err != nil {
-		return RecoveryHistorySegment{}, err
-	}
-	pendingFD, err := createRecoveryFile(store.historyFD, recoveryHistoryPendingName, unix.O_WRONLY)
-	if err != nil {
-		return RecoveryHistorySegment{}, err
-	}
-	pendingOpen := true
-	defer func() {
-		if pendingOpen {
-			_ = unix.Close(pendingFD)
-		}
-	}()
-	if err := writeRecoveryAll(pendingFD, frame); err != nil {
-		return RecoveryHistorySegment{}, store.poison(err)
-	}
-	if err := unix.Fsync(pendingFD); err != nil {
-		return RecoveryHistorySegment{}, store.poison(err)
-	}
-	if err := unix.Close(pendingFD); err != nil {
-		return RecoveryHistorySegment{}, store.poison(err)
-	}
-	pendingOpen = false
-
 	filename := recoveryHistoryFilename(sequence)
 	if exists, err := recoveryExpectedFileExists(store.historyFD, filename); err != nil {
 		return RecoveryHistorySegment{}, err
 	} else if exists {
 		return RecoveryHistorySegment{}, store.poison(fmt.Errorf("history sequence file already exists"))
 	}
-	if err := unix.Renameat(store.historyFD, recoveryHistoryPendingName, store.historyFD, filename); err != nil {
-		return RecoveryHistorySegment{}, store.poison(err)
-	}
-	if err := unix.Fsync(store.historyFD); err != nil {
-		return RecoveryHistorySegment{}, store.poison(err)
-	}
 
+	// The recognized segment ceiling is an on-disk crash invariant, not merely
+	// an in-memory retention preference. First materialize a complete segment
+	// under the sole unrecognized implementation-owned pending name. Then prune
+	// and sync every old recognized name that must leave before publishing the
+	// pending file with its recognized sequence name. A crash before publication
+	// can lose the staged newest segment (and already-pruned oldest segment),
+	// but it can never leave more than the hard segment ceiling for recovery to
+	// scan. Between rename and its directory sync, recovery can see either
+	// pruned-old or published-new state; only the final sync makes the name
+	// durable, and both states remain within the ceiling.
+	if err := writeRecoveryPendingFile(store.historyFD, recoveryHistoryPendingName, frame); err != nil {
+		return RecoveryHistorySegment{}, store.poison(err)
+	}
 	store.history = append(store.history, recoveryStoredHistorySegment{
 		sequence:   sequence,
 		segment:    cloneRecoveryHistorySegment(segment),
 		frameBytes: int64(len(frame)),
 	})
-	store.nextHistorySeq++
 	if err := store.pruneHistoryLocked(); err != nil {
+		return RecoveryHistorySegment{}, store.poison(err)
+	}
+	if err := unix.Renameat(store.historyFD, recoveryHistoryPendingName, store.historyFD, filename); err != nil {
+		return RecoveryHistorySegment{}, store.poison(err)
+	}
+	if err := unix.Fsync(store.historyFD); err != nil {
 		return RecoveryHistorySegment{}, store.poison(err)
 	}
 	return cloneRecoveryHistorySegment(segment), nil
@@ -1515,14 +1503,19 @@ func readRecoveryDirectoryNames(dirFD int, maximumRecognized int) ([]string, err
 	for {
 		entries, readErr := directory.ReadDir(128)
 		for _, entry := range entries {
-			if _, ok := parseRecoveryHistoryFilename(entry.Name()); !ok {
+			name := entry.Name()
+			if _, ok := parseRecoveryHistoryFilename(name); !ok {
+				if strings.HasPrefix(name, "segment-") {
+					_ = directory.Close()
+					return nil, fmt.Errorf("%w: malformed recognized history filename", ErrRecoveryStoreCorrupt)
+				}
 				continue
 			}
 			if len(names) >= maximumRecognized {
 				_ = directory.Close()
 				return nil, fmt.Errorf("%w: history segment count exceeds hard limit", ErrRecoveryStoreCorrupt)
 			}
-			names = append(names, entry.Name())
+			names = append(names, name)
 		}
 		if errors.Is(readErr, io.EOF) {
 			break

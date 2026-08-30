@@ -425,8 +425,11 @@ func normalizedRecoveryStoreOptions(options RecoveryStoreOptions) (RecoveryStore
 		options.MaxHistoryTotalBytes < 1 || options.MaxHistoryTotalBytes > RecoveryStoreMaxHistoryTotalBytes {
 		return RecoveryStoreOptions{}, fmt.Errorf("%w: option exceeds a bounded store limit", ErrRecoveryStoreInvalid)
 	}
+	// Retention accounts for complete on-disk frames, not just history JSON
+	// payloads. Requiring room for one frame prevents a valid staged segment
+	// from being selected for pruning before it can be published.
 	if options.MaxHistorySegmentBytes < options.MaxHistoryLineBytes ||
-		options.MaxHistoryTotalBytes < options.MaxHistorySegmentBytes {
+		options.MaxHistoryTotalBytes < options.MaxHistorySegmentBytes+recoveryFrameHeaderBytes {
 		return RecoveryStoreOptions{}, fmt.Errorf("%w: history byte limits are inconsistent", ErrRecoveryStoreInvalid)
 	}
 	return options, nil
