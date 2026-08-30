@@ -2,6 +2,8 @@ import {
   SessiondRecoveryMaxCapabilities,
   SessiondRecoveryMaxCapabilityBytes,
   SessiondRecoveryMaxSelectionCandidates,
+  SessiondRecoveredHistoryMaxBytes,
+  SessiondRecoveredHistoryMaxLines,
   SessiondRecoveryType,
   SessiondType,
   type SessiondActivePanePersistenceRequest,
@@ -17,6 +19,7 @@ import {
   type SessiondRecoveryPaneRef,
   type SessiondRecoverySelectionCandidate,
   type SessiondRecoveryStrategyLabel,
+  type SessiondRecoveredHistoryLiteral,
   type SessiondRecoverySelectRequest,
   type SessiondRecoverySelectResult,
   type SessiondRecoveryRetryRequest,
@@ -37,6 +40,14 @@ export const RECOVERY_CAPABILITIES = Object.freeze([
   'recovery-select',
   'active-pane-persistence',
 ] as const satisfies readonly SessiondRecoveryCapability[]);
+
+/**
+ * Opt-in offer for the additive literal-history contract. The default hello
+ * preserves legacy capability traffic; a relay that handles recovered-history
+ * events explicitly opts in through buildProtocolHello(true).
+ */
+export const RECOVERED_HISTORY_LITERAL_CAPABILITY =
+  'recovered-history-literal' as const satisfies SessiondRecoveryCapability;
 
 const MAX_RECOVERY_TEXT_BYTES = 32_768;
 const MAX_WORKSPACE_ID_BYTES = 128;
@@ -82,13 +93,17 @@ const DETAIL_CODES = new Set<SessiondRecoveryDetailCode>([
   'candidate-invalid',
 ]);
 
-const KNOWN_CAPABILITIES = new Set<SessiondRecoveryCapability>(RECOVERY_CAPABILITIES);
+const KNOWN_CAPABILITIES = new Set<SessiondRecoveryCapability>([
+  ...RECOVERY_CAPABILITIES,
+  RECOVERED_HISTORY_LITERAL_CAPABILITY,
+]);
 
 const RECOVERY_SENSITIVE_TYPE_PREFIXES = [
   'recovery',
   'pane-recovery',
   'protocol-hello',
   'set-active-pane',
+  'recovered-history',
   'lifecycle',
   'replacement',
 ] as const;
@@ -108,6 +123,7 @@ const RECOVERY_RELATED_FIELDS = new Set<string>([
   'protocolHello',
   'protocolHelloResult',
   'replacementOutcome',
+  'recoveredHistory',
   'activePanePersistence',
   'activePanePersistenceResult',
   'candidateHandle',
@@ -126,9 +142,13 @@ const RECOVERY_RELATED_FIELDS = new Set<string>([
  */
 const PRIVILEGED_RECOVERY_FIELDS = new Set<string>([
   'privilegedRecovery',
+  'lifecycleBootstrap',
+  'lifecycleBootstrapResult',
   'lifecycleLeaseDelivery',
   'lifecycleCapture',
   'lifecycleOutcome',
+  'explicitBind',
+  'explicitBindResult',
   'replacementPlan',
   'replacementResult',
   'replacementCommit',
@@ -157,6 +177,22 @@ const PRIVILEGED_RECOVERY_FIELDS = new Set<string>([
   'namespace',
   'ownership',
   'userConfigPreservation',
+]);
+
+/** Owner-local envelope fields cannot appear at browser-message top level. */
+const OWNER_LOCAL_TOP_LEVEL_FIELDS = new Set<string>([
+  'privilegedRecovery',
+  'lifecycleBootstrap',
+  'lifecycleBootstrapResult',
+  'lifecycleLeaseDelivery',
+  'lifecycleCapture',
+  'lifecycleOutcome',
+  'explicitBind',
+  'explicitBindResult',
+  'replacementPlan',
+  'replacementResult',
+  'replacementCommit',
+  'binding',
 ]);
 
 type UnknownRecord = Record<string, unknown>;
@@ -234,6 +270,44 @@ function isBoundedText(value: unknown, maximum: number, allowEmpty = false): val
     utf8ByteLength(value) <= maximum &&
     !/[\p{Cc}]/u.test(value)
   );
+}
+
+function hasOnlyUnicodeScalarValues(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index++;
+      continue;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) return false;
+  }
+  return true;
+}
+
+function parseRecoveredHistoryText(value: unknown): string | null {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    !hasOnlyUnicodeScalarValues(value) ||
+    utf8ByteLength(value) > SessiondRecoveredHistoryMaxBytes
+  ) {
+    return null;
+  }
+
+  let lines = 0;
+  for (const character of value) {
+    if (character === '\n') {
+      lines++;
+      continue;
+    }
+    // Cc includes CR, tab, ESC, DEL, and all C1 OSC/CSI/DCS introducers;
+    // Cf rejects invisible format controls. LF is the sole exception.
+    if (/[\p{Cc}\p{Cf}]/u.test(character)) return null;
+  }
+  if (!value.endsWith('\n')) lines++;
+  return lines <= SessiondRecoveredHistoryMaxLines ? value : null;
 }
 
 function parseWorkspaceID(value: unknown): string | null {
@@ -515,6 +589,14 @@ function parseTransition(value: unknown): SessiondPaneRecoveryTransition | null 
   return pane === null || recovery === null ? null : { pane, recovery };
 }
 
+function parseRecoveredHistory(value: unknown): SessiondRecoveredHistoryLiteral | null {
+  if (!hasExactKeys(value, ['pane', 'text', 'truncated'])) return null;
+  const pane = parsePaneRef(value.pane);
+  const text = parseRecoveredHistoryText(value.text);
+  if (pane === null || text === null || typeof value.truncated !== 'boolean') return null;
+  return { pane, text, truncated: value.truncated };
+}
+
 function parseRetryResult(value: unknown): SessiondRecoveryRetryResult | null {
   if (!hasExactKeys(value, ['pane', 'recovery'])) return null;
   const pane = parsePaneRef(value.pane);
@@ -579,6 +661,19 @@ function parseRecoveryEvent(value: UnknownRecord): RecoveryWireEvent | null {
     return isPositiveSafeInteger(cid) ? { cid, payload } : null;
   };
 
+  const parseZeroCIDEvent = <T>(
+    payloadKey: string,
+    parsePayload: (payload: unknown) => T | null,
+  ): { readonly cid?: 0; readonly payload: T } | null => {
+    const hasCID = hasOwn(value, 'cid');
+    if (!hasExactKeys(value, hasCID ? ['type', 'cid', payloadKey] : ['type', payloadKey])) {
+      return null;
+    }
+    const payload = parsePayload(value[payloadKey]);
+    if (payload === null || (hasCID && value.cid !== 0)) return null;
+    return hasCID ? { cid: 0, payload } : { payload };
+  };
+
   switch (value.type) {
     case SessiondRecoveryType.ProtocolHelloResult: {
       const envelope = parseEnvelope('protocolHelloResult', parseProtocolHelloResult);
@@ -601,6 +696,18 @@ function parseRecoveryEvent(value: UnknownRecord): RecoveryWireEvent | null {
             type: SessiondRecoveryType.PaneRecoveryChanged,
             cid: envelope.cid,
             recoveryTransition: envelope.payload,
+          };
+    }
+
+    case SessiondRecoveryType.RecoveredHistory: {
+      const envelope = parseZeroCIDEvent('recoveredHistory', parseRecoveredHistory);
+      if (envelope === null) return null;
+      return envelope.cid === undefined
+        ? { type: SessiondRecoveryType.RecoveredHistory, recoveredHistory: envelope.payload }
+        : {
+            type: SessiondRecoveryType.RecoveredHistory,
+            cid: 0,
+            recoveredHistory: envelope.payload,
           };
     }
 
@@ -688,6 +795,10 @@ function containsNamedField(
 }
 
 function containsPrivilegedRecoveryField(value: UnknownRecord): boolean {
+  for (const key of Object.keys(value)) {
+    if (OWNER_LOCAL_TOP_LEVEL_FIELDS.has(key)) return true;
+  }
+
   if (isRecoverySensitiveType(value.type)) {
     return containsNamedField(value, PRIVILEGED_RECOVERY_FIELDS);
   }
@@ -836,10 +947,14 @@ export function classifyRecoveryInbound(
   return message === null ? REJECTED : { kind: 'ordinary', message };
 }
 
-export function buildProtocolHello(): SessiondBrowserRecoveryRequest {
+export function buildProtocolHello(includeRecoveredHistoryLiteral = false): SessiondBrowserRecoveryRequest {
   const protocolHello: SessiondProtocolHello = {
     recoverySchemaVersion: RECOVERY_SCHEMA_VERSION,
-    capabilities: { values: [...RECOVERY_CAPABILITIES] },
+    capabilities: {
+      values: includeRecoveredHistoryLiteral
+        ? [...RECOVERY_CAPABILITIES, RECOVERED_HISTORY_LITERAL_CAPABILITY]
+        : [...RECOVERY_CAPABILITIES],
+    },
   };
   return {
     type: SessiondRecoveryType.ProtocolHello,

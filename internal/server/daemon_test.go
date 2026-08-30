@@ -41,6 +41,30 @@ func (f *fakeDaemonConn) CloseConfirm(ticket string) (sessiond.CloseOutcome, err
 	return sessiond.CloseOutcome{}, nil
 }
 
+func (f *fakeDaemonConn) ProtocolHello(
+	request sessiond.ProtocolHelloRequest,
+) (sessiond.ProtocolHelloResult, error) {
+	return sessiond.ProtocolHelloResult{}, nil
+}
+
+func (f *fakeDaemonConn) RecoveryRetry(
+	request sessiond.RecoveryRetryRequest,
+) (sessiond.RecoveryRetryResult, error) {
+	return sessiond.RecoveryRetryResult{}, nil
+}
+
+func (f *fakeDaemonConn) RecoverySelect(
+	request sessiond.RecoverySelectRequest,
+) (sessiond.RecoverySelectResult, error) {
+	return sessiond.RecoverySelectResult{}, nil
+}
+
+func (f *fakeDaemonConn) SetActivePane(
+	request sessiond.ActivePanePersistenceRequest,
+) (sessiond.ActivePanePersistenceResult, error) {
+	return sessiond.ActivePanePersistenceResult{}, nil
+}
+
 func (f *fakeDaemonConn) Attach(workspaceID, breakpoint, clientKind string) (sessiond.Composition, error) {
 	f.attached = workspaceID
 	return sessiond.Composition{

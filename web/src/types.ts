@@ -105,6 +105,17 @@ export interface SessiondRecoveryPaneRef {
   paneId: number;
 }
 
+/** Inert, sanitized recovered terminal history for one workspace-qualified pane. */
+export interface SessiondRecoveredHistoryLiteral {
+  pane: SessiondRecoveryPaneRef;
+  text: string;
+  truncated: boolean;
+}
+
+/** Bounds for the literal-history display contract. */
+export const SessiondRecoveredHistoryMaxBytes = 4096;
+export const SessiondRecoveredHistoryMaxLines = 256;
+
 /**
  * Opaque daemon-issued candidate handle. It is bound by sessiond to the
  * workspace-qualified pane, current recovery fence, fixed strategy, and
@@ -176,7 +187,8 @@ export type SessiondRecoveryCapability =
   | 'pane-recovery-projection'
   | 'recovery-retry'
   | 'recovery-select'
-  | 'active-pane-persistence';
+  | 'active-pane-persistence'
+  | 'recovered-history-literal';
 
 /** Maximum length of SessiondRecoveryCapabilities.values. */
 export const SessiondRecoveryMaxCapabilities = 8;
@@ -341,6 +353,7 @@ export const SessiondRecoveryType = {
   RecoverySelect: 'recovery-select',
   RecoverySelectResult: 'recovery-select-result',
   ReplacementOutcome: 'replacement-outcome',
+  RecoveredHistory: 'recovered-history',
   SetActivePane: 'set-active-pane',
   SetActivePaneResult: 'set-active-pane-result',
 } as const;
@@ -396,6 +409,12 @@ export type SessiondBrowserRecoveryEvent =
   | {
       type: typeof SessiondRecoveryType.ReplacementOutcome;
       replacementOutcome: SessiondRecoveryReplacementOutcome;
+    }
+  | {
+      /** Server event only: a literal-history event is never correlated. */
+      type: typeof SessiondRecoveryType.RecoveredHistory;
+      cid?: 0;
+      recoveredHistory: SessiondRecoveredHistoryLiteral;
     }
   | {
       type: typeof SessiondRecoveryType.SetActivePaneResult;
@@ -534,6 +553,8 @@ export interface SessiondMessage {
   recoverySelectResult?: SessiondRecoverySelectResult;
   /** Redacted controlled-replacement status. */
   replacementOutcome?: SessiondRecoveryReplacementOutcome;
+  /** Inert literal recovered history; bounded and sanitized by sessiond. */
+  recoveredHistory?: SessiondRecoveredHistoryLiteral;
   /** Workspace-qualified active-pane persistence intent. */
   activePanePersistence?: SessiondActivePanePersistenceRequest;
   /** Workspace-qualified active-pane persistence result. */

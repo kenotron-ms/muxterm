@@ -227,6 +227,264 @@ func (delivery RecoveryLifecycleLeaseDelivery) validateRecoveryContract() error 
 	return delivery.Capability.validateRecoveryContract()
 }
 
+// RecoveryLifecycleEvent is the closed lifecycle callback event vocabulary. A
+// callback can report only the point at which a tool session starts; it cannot
+// assert a later process, pane, or recovery state.
+type RecoveryLifecycleEvent string
+
+const RecoveryLifecycleEventSessionStart RecoveryLifecycleEvent = "session-start"
+
+func (event RecoveryLifecycleEvent) validateRecoveryContract() error {
+	if event != RecoveryLifecycleEventSessionStart {
+		return fmt.Errorf("recovery: unknown lifecycle event %q", event)
+	}
+	return nil
+}
+
+// RecoveryLifecycleSource is the closed source vocabulary accompanying a
+// session-start callback. It is observed tool lifecycle context, never a
+// request to launch or resume a session.
+type RecoveryLifecycleSource string
+
+const (
+	RecoveryLifecycleSourceStartup RecoveryLifecycleSource = "startup"
+	RecoveryLifecycleSourceResume  RecoveryLifecycleSource = "resume"
+	RecoveryLifecycleSourceFork    RecoveryLifecycleSource = "fork"
+	RecoveryLifecycleSourceClear   RecoveryLifecycleSource = "clear"
+	RecoveryLifecycleSourceCompact RecoveryLifecycleSource = "compact"
+)
+
+func (source RecoveryLifecycleSource) validateRecoveryContract() error {
+	switch source {
+	case RecoveryLifecycleSourceStartup, RecoveryLifecycleSourceResume,
+		RecoveryLifecycleSourceFork, RecoveryLifecycleSourceClear,
+		RecoveryLifecycleSourceCompact:
+		return nil
+	default:
+		return fmt.Errorf("recovery: unknown lifecycle source %q", source)
+	}
+}
+
+// RecoveryLifecycleBootstrapRequest is the owner-local request used to obtain
+// one existing daemon-issued lifecycle lease. Pane identity, process identity,
+// fencing, generations, timestamps, integration state, capabilities, session
+// identity, and working directory are all deliberately absent: sessiond derives
+// them from the authenticated peer and its authoritative runtime state.
+type RecoveryLifecycleBootstrapRequest struct {
+	SchemaVersion uint16                  `json:"schemaVersion"`
+	StrategyID    RecoveryStrategyID      `json:"strategyId"`
+	Event         RecoveryLifecycleEvent  `json:"event"`
+	Source        RecoveryLifecycleSource `json:"source"`
+}
+
+func (request RecoveryLifecycleBootstrapRequest) validateRecoveryContract() error {
+	if request.SchemaVersion != RecoveryCaptureSchemaVersion {
+		return fmt.Errorf("recovery: unsupported lifecycle bootstrap schema version %d", request.SchemaVersion)
+	}
+	if err := request.StrategyID.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if err := request.Event.validateRecoveryContract(); err != nil {
+		return err
+	}
+	return request.Source.validateRecoveryContract()
+}
+
+// RecoveryLifecycleBootstrapDisposition distinguishes a lease delivery from a
+// fail-closed redacted rejection.
+type RecoveryLifecycleBootstrapDisposition string
+
+const (
+	RecoveryLifecycleBootstrapAccepted RecoveryLifecycleBootstrapDisposition = "accepted"
+	RecoveryLifecycleBootstrapRejected RecoveryLifecycleBootstrapDisposition = "rejected"
+)
+
+func validRecoveryLifecycleBootstrapDisposition(value RecoveryLifecycleBootstrapDisposition) bool {
+	return value == RecoveryLifecycleBootstrapAccepted || value == RecoveryLifecycleBootstrapRejected
+}
+
+func validRecoveryLifecycleBootstrapRejectedDetail(value RecoveryDetailCode) bool {
+	switch value {
+	case RecoveryDetailSchemaIncompatible, RecoveryDetailStrategyUnsupported,
+		RecoveryDetailLifecycleUnavailable, RecoveryDetailLifecycleExpired,
+		RecoveryDetailLifecycleMalformed, RecoveryDetailLifecycleStale,
+		RecoveryDetailLifecycleConflicting:
+		return true
+	default:
+		return false
+	}
+}
+
+// RecoveryLifecycleBootstrapResult is a discriminated owner-local result. An
+// accepted result delivers exactly one pre-issued lease delivery and no detail;
+// a rejected result delivers no lease and one compatible redacted detail.
+type RecoveryLifecycleBootstrapResult struct {
+	Disposition   RecoveryLifecycleBootstrapDisposition `json:"disposition"`
+	DetailCode    RecoveryDetailCode                    `json:"detailCode"`
+	LeaseDelivery *RecoveryLifecycleLeaseDelivery       `json:"leaseDelivery,omitempty"`
+}
+
+func (result RecoveryLifecycleBootstrapResult) validateRecoveryContract() error {
+	if !validRecoveryLifecycleBootstrapDisposition(result.Disposition) {
+		return fmt.Errorf("recovery: unknown lifecycle bootstrap disposition %q", result.Disposition)
+	}
+	if err := result.DetailCode.validateRecoveryContract(); err != nil {
+		return err
+	}
+	switch result.Disposition {
+	case RecoveryLifecycleBootstrapAccepted:
+		if result.DetailCode != RecoveryDetailNone || result.LeaseDelivery == nil {
+			return fmt.Errorf("recovery: accepted lifecycle bootstrap lacks exactly one lease delivery")
+		}
+		return result.LeaseDelivery.validateRecoveryContract()
+	case RecoveryLifecycleBootstrapRejected:
+		if result.LeaseDelivery != nil || !validRecoveryLifecycleBootstrapRejectedDetail(result.DetailCode) {
+			return fmt.Errorf("recovery: rejected lifecycle bootstrap has an invalid lease or detail")
+		}
+		return nil
+	default:
+		return fmt.Errorf("recovery: lifecycle bootstrap result has no disposition")
+	}
+}
+
+// NewAcceptedRecoveryLifecycleBootstrap seals one already-issued lease delivery
+// into an accepted owner-local bootstrap result.
+func NewAcceptedRecoveryLifecycleBootstrap(
+	delivery RecoveryLifecycleLeaseDelivery,
+) (RecoveryLifecycleBootstrapResult, error) {
+	result := RecoveryLifecycleBootstrapResult{
+		Disposition:   RecoveryLifecycleBootstrapAccepted,
+		DetailCode:    RecoveryDetailNone,
+		LeaseDelivery: &delivery,
+	}
+	if err := result.validateRecoveryContract(); err != nil {
+		return RecoveryLifecycleBootstrapResult{}, err
+	}
+	return result, nil
+}
+
+// NewRejectedRecoveryLifecycleBootstrap creates the sole rejected bootstrap
+// form. It accepts only a compatible redacted detail and never a lease.
+func NewRejectedRecoveryLifecycleBootstrap(
+	detailCode RecoveryDetailCode,
+) (RecoveryLifecycleBootstrapResult, error) {
+	result := RecoveryLifecycleBootstrapResult{
+		Disposition: RecoveryLifecycleBootstrapRejected,
+		DetailCode:  detailCode,
+	}
+	if err := result.validateRecoveryContract(); err != nil {
+		return RecoveryLifecycleBootstrapResult{}, err
+	}
+	return result, nil
+}
+
+// RecoveryExplicitBindRequest is an owner-local exact-session capture request.
+// The caller names only a workspace-qualified pane, a built-in strategy, the
+// exact opaque session identity, and a validated directory. Sessiond derives
+// fences, process generations, capture epochs, timestamps, and integration
+// state before atomically committing any capture.
+type RecoveryExplicitBindRequest struct {
+	Pane       RecoveryPaneRef          `json:"pane"`
+	StrategyID RecoveryStrategyID       `json:"strategyId"`
+	SessionID  RecoveryOpaqueSessionID  `json:"sessionId"`
+	CWD        RecoveryWorkingDirectory `json:"cwd"`
+}
+
+func (request RecoveryExplicitBindRequest) validateRecoveryContract() error {
+	if err := request.Pane.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if err := request.StrategyID.validateRecoveryContract(); err != nil {
+		return err
+	}
+	if err := request.SessionID.validateRecoveryContract(); err != nil {
+		return err
+	}
+	return request.CWD.validateRecoveryContract()
+}
+
+// RecoveryExplicitBindDisposition is the closed result state for an
+// owner-local exact-session bind.
+type RecoveryExplicitBindDisposition string
+
+const (
+	RecoveryExplicitBindAccepted RecoveryExplicitBindDisposition = "accepted"
+	RecoveryExplicitBindRejected RecoveryExplicitBindDisposition = "rejected"
+)
+
+func validRecoveryExplicitBindDisposition(value RecoveryExplicitBindDisposition) bool {
+	return value == RecoveryExplicitBindAccepted || value == RecoveryExplicitBindRejected
+}
+
+func validRecoveryExplicitBindRejectedDetail(value RecoveryDetailCode) bool {
+	switch value {
+	case RecoveryDetailCaptureMissing, RecoveryDetailCaptureInvalid,
+		RecoveryDetailCaptureStale, RecoveryDetailCaptureConflicting,
+		RecoveryDetailCaptureAmbiguous, RecoveryDetailWorkingDirectoryInvalid,
+		RecoveryDetailStrategyUnsupported, RecoveryDetailLifecycleUnavailable,
+		RecoveryDetailLifecycleMalformed, RecoveryDetailLifecycleStale,
+		RecoveryDetailLifecycleConflicting, RecoveryDetailObservedIdentityMismatch:
+		return true
+	default:
+		return false
+	}
+}
+
+// RecoveryExplicitBindResult is a discriminated, redacted owner-local result.
+// It intentionally has no pane, strategy, session, directory, capability,
+// fence, generation, integration, or timestamp echo.
+type RecoveryExplicitBindResult struct {
+	Disposition RecoveryExplicitBindDisposition `json:"disposition"`
+	DetailCode  RecoveryDetailCode              `json:"detailCode"`
+}
+
+func (result RecoveryExplicitBindResult) validateRecoveryContract() error {
+	if !validRecoveryExplicitBindDisposition(result.Disposition) {
+		return fmt.Errorf("recovery: unknown explicit bind disposition %q", result.Disposition)
+	}
+	if err := result.DetailCode.validateRecoveryContract(); err != nil {
+		return err
+	}
+	switch result.Disposition {
+	case RecoveryExplicitBindAccepted:
+		if result.DetailCode != RecoveryDetailNone {
+			return fmt.Errorf("recovery: accepted explicit bind has a detail")
+		}
+		return nil
+	case RecoveryExplicitBindRejected:
+		if !validRecoveryExplicitBindRejectedDetail(result.DetailCode) {
+			return fmt.Errorf("recovery: rejected explicit bind has an invalid detail")
+		}
+		return nil
+	default:
+		return fmt.Errorf("recovery: explicit bind result has no disposition")
+	}
+}
+
+// NewAcceptedRecoveryExplicitBind creates the sole successful bind result,
+// which intentionally carries no sensitive echo.
+func NewAcceptedRecoveryExplicitBind() RecoveryExplicitBindResult {
+	return RecoveryExplicitBindResult{
+		Disposition: RecoveryExplicitBindAccepted,
+		DetailCode:  RecoveryDetailNone,
+	}
+}
+
+// NewRejectedRecoveryExplicitBind creates the sole rejected bind form from a
+// compatible redacted detail.
+func NewRejectedRecoveryExplicitBind(
+	detailCode RecoveryDetailCode,
+) (RecoveryExplicitBindResult, error) {
+	result := RecoveryExplicitBindResult{
+		Disposition: RecoveryExplicitBindRejected,
+		DetailCode:  detailCode,
+	}
+	if err := result.validateRecoveryContract(); err != nil {
+		return RecoveryExplicitBindResult{}, err
+	}
+	return result, nil
+}
+
 // RecoveryObservedToolEvidence is the complete bounded callback evidence.
 // Timestamps, integration identity, pane identity, generation, strategy, and
 // directory validation are daemon authority and do not appear here.
@@ -516,6 +774,26 @@ type RecoveryLifecycleLeaseResolver interface {
 	ResolveAndConsumeLifecycleCapture(
 		RecoveryLifecycleCapture,
 	) RecoveryLifecycleResolutionResult
+}
+
+// RecoverySocketAuthority is the owner-local runtime boundary for lifecycle
+// bootstrap, capture, and explicit exact-session binding. peerPID is obtained
+// from the authenticated kernel socket peer, never decoded from JSON. Each
+// implementation must derive authoritative pane/fence/generation/epoch/time
+// state and commit accepted captures before returning a result.
+type RecoverySocketAuthority interface {
+	BootstrapRecoveryLifecycle(
+		peerPID int,
+		request RecoveryLifecycleBootstrapRequest,
+	) RecoveryLifecycleBootstrapResult
+	CaptureRecoveryLifecycle(
+		peerPID int,
+		request PrivilegedLifecycleCaptureRequest,
+	) PrivilegedLifecycleCaptureOutcome
+	BindRecoverySession(
+		peerPID int,
+		request RecoveryExplicitBindRequest,
+	) RecoveryExplicitBindResult
 }
 
 // RecoveryIntegrationHealth is the observed state of a namespaced recovery
