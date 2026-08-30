@@ -31,6 +31,13 @@ type PaneRootIdentity struct {
 }
 
 // PaneCallbacks receives effects emitted by a terminal root process.
+//
+// NON-REENTRANT DELIVERY CONTRACT: every callback runs synchronously while the
+// owning Pane holds its generation delivery boundary. A callback MUST NOT
+// synchronously call Write, Resize, Close, ReplaceRoot, or otherwise reenter
+// lifecycle or I/O on that same Pane; doing so would wait on the boundary that
+// is invoking it. Callbacks that need same-pane work must enqueue or otherwise
+// defer that work until after the callback returns.
 type PaneCallbacks struct {
 	OnData   func(localID int, data []byte)
 	OnExit   func(localID int, root PaneRootIdentity, exitCode int, runtimeMilliseconds int64)

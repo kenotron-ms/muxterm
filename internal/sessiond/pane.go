@@ -134,7 +134,11 @@ func NewPaneWithOptions(
 }
 
 // NewPane preserves the legacy default-shell and custom-command launch
-// behavior. callbacks are captured before any read loop can publish effects.
+// behavior. onData, onExit, and onPrompt are captured before any read loop can
+// publish effects. They execute synchronously at the generation delivery
+// boundary and MUST NOT synchronously call Write, Resize, Close, ReplaceRoot, or
+// otherwise reenter lifecycle or I/O on this same Pane; same-pane work must be
+// deferred until the callback returns.
 func NewPane(
 	localID int,
 	argv []string,
