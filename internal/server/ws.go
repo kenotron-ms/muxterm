@@ -854,7 +854,7 @@ func validateDirectRequestHost(configuredAddr, requestHost, scheme string) (stri
 	if err != nil {
 		return "", err
 	}
-	requestName, requestIP, requestPort, err := parseHostPort(requestHost, false)
+	requestName, requestIP, requestPort, err := parseRequestHostPort(requestHost, configuredPort, scheme)
 	if err != nil {
 		return "", err
 	}
@@ -905,6 +905,35 @@ func parseHostPort(authority string, configured bool) (string, net.IP, int, erro
 		return "", nil, 0, errors.New("invalid websocket authority")
 	}
 	return parseAuthorityHostPort(host, portText, configured)
+}
+
+// parseRequestHostPort permits a missing Host port only when the configured
+// listener port is the default for the request's TLS-derived scheme.
+func parseRequestHostPort(authority string, configuredPort int, scheme string) (string, net.IP, int, error) {
+	host, portText, err := net.SplitHostPort(authority)
+	if err == nil {
+		return parseAuthorityHostPort(host, portText, false)
+	}
+	if configuredPort != defaultPortForScheme(scheme) {
+		return "", nil, 0, errors.New("invalid websocket authority")
+	}
+	return parsePortlessRequestAuthority(authority, configuredPort)
+}
+
+func parsePortlessRequestAuthority(authority string, port int) (string, net.IP, int, error) {
+	host := authority
+	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
+		if len(host) < 3 || !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
+			return "", nil, 0, errors.New("invalid websocket authority")
+		}
+		host = host[1 : len(host)-1]
+		if !strings.Contains(host, ":") || net.ParseIP(host) == nil {
+			return "", nil, 0, errors.New("invalid websocket authority")
+		}
+	} else if strings.ContainsAny(host, "[]:") {
+		return "", nil, 0, errors.New("invalid websocket authority")
+	}
+	return parseAuthorityHostPort(host, strconv.Itoa(port), false)
 }
 
 func parseAuthorityHostPort(host, portText string, configured bool) (string, net.IP, int, error) {
