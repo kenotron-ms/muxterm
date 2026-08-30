@@ -134,6 +134,7 @@ describe('MuxSocket', () => {
     expect(ws.sent).toHaveLength(2);
     expect(JSON.parse(ws.sent[0] as string)).toEqual({
       type: 'protocol-hello',
+      cid: 1,
       protocolHello: {
         recoverySchemaVersion: 1,
         capabilities: {
@@ -142,6 +143,7 @@ describe('MuxSocket', () => {
             'recovery-retry',
             'recovery-select',
             'active-pane-persistence',
+            'recovered-history-literal',
           ],
         },
       },

@@ -1,5 +1,6 @@
 import {
   SessiondType,
+  SessiondRecoveryType,
   encodePaneFrame,
   decodePaneFrame,
   type CloseConfirmRequest,
@@ -19,6 +20,7 @@ import {
   buildRecoveryRetry,
   buildRecoverySelect,
   classifyRecoveryInbound,
+  hasDuplicateJsonObjectKeys,
   utf8ByteLength,
   type RecoveryWireEvent,
 } from './recovery-wire';
@@ -35,6 +37,8 @@ const BACKOFF_BASE = 1000;
 const BACKOFF_CAP = 30000;
 const JITTER_MAX = 500;
 const CLOSE_REQUEST_TIMEOUT_MS = 10_000;
+const RECOVERY_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_PENDING_RECOVERY_REQUESTS = 32;
 const MAX_CID = Number.MAX_SAFE_INTEGER;
 const INVALID_CLOSE_TICKET_FAILURE = 'invalid-close-ticket';
 const CLOSE_RISK_REASONS = new Set<CloseRiskReason>([
@@ -52,12 +56,39 @@ const CLOSE_RISK_REASONS = new Set<CloseRiskReason>([
 ]);
 
 interface PendingCloseRequest {
+  connection: WebSocket;
   target: CloseTarget;
   kind: 'intent' | 'confirm';
   resolve: (outcome: CloseOutcome) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
+
+type RecoveryRequestType =
+  | typeof SessiondRecoveryType.ProtocolHello
+  | typeof SessiondRecoveryType.RecoveryRetry
+  | typeof SessiondRecoveryType.RecoverySelect
+  | typeof SessiondRecoveryType.SetActivePane;
+
+type RecoveryResultType =
+  | typeof SessiondRecoveryType.ProtocolHelloResult
+  | typeof SessiondRecoveryType.RecoveryRetryResult
+  | typeof SessiondRecoveryType.RecoverySelectResult
+  | typeof SessiondRecoveryType.SetActivePaneResult;
+
+interface PendingRecoveryRequest {
+  connection: WebSocket;
+  requestType: RecoveryRequestType;
+  expectedResultType: RecoveryResultType;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const RECOVERY_RESULT_TYPES: Readonly<Record<RecoveryRequestType, RecoveryResultType>> = {
+  [SessiondRecoveryType.ProtocolHello]: SessiondRecoveryType.ProtocolHelloResult,
+  [SessiondRecoveryType.RecoveryRetry]: SessiondRecoveryType.RecoveryRetryResult,
+  [SessiondRecoveryType.RecoverySelect]: SessiondRecoveryType.RecoverySelectResult,
+  [SessiondRecoveryType.SetActivePane]: SessiondRecoveryType.SetActivePaneResult,
+};
 
 function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
@@ -123,6 +154,22 @@ function isCloseOutcome(value: unknown): value is CloseOutcome {
   }
 }
 
+function isCorrelatedRecoveryResult(
+  event: RecoveryWireEvent,
+): event is RecoveryWireEvent & { readonly type: RecoveryResultType; readonly cid: number } {
+  return (
+    isPositiveSafeInteger(event.cid) &&
+    (event.type === SessiondRecoveryType.ProtocolHelloResult ||
+      event.type === SessiondRecoveryType.RecoveryRetryResult ||
+      event.type === SessiondRecoveryType.RecoverySelectResult ||
+      event.type === SessiondRecoveryType.SetActivePaneResult)
+  );
+}
+
+function hasSemanticZeroCID(event: RecoveryWireEvent): boolean {
+  return event.cid === undefined || event.cid === 0;
+}
+
 export class MuxSocket {
   private _store: MuxStore;
   private _url: string;
@@ -134,6 +181,7 @@ export class MuxSocket {
   private _intentionalClose = false;
   private _nextCid = 1;
   private _pendingCloseRequests = new Map<number, PendingCloseRequest>();
+  private _pendingRecoveryRequests = new Map<number, PendingRecoveryRequest>();
   private _recoveryCompatible = false;
   private _recoveryCapabilities = new Set<SessiondRecoveryCapability>();
   private _helloSent = false;
@@ -170,6 +218,10 @@ export class MuxSocket {
   connect(): void {
     this._intentionalClose = false;
     this._reconnectAttempts = 0;
+    if (this._reconnectTimer !== undefined) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = undefined;
+    }
     this._open();
   }
 
@@ -177,6 +229,7 @@ export class MuxSocket {
     this._intentionalClose = true;
     this._helloSent = false;
     this._resetRecoveryNegotiation();
+    this._clearPendingRecoveryRequests();
     this._rejectPendingCloseRequests(
       new Error('The close outcome could not be confirmed because the connection closed.'),
     );
@@ -339,6 +392,7 @@ export class MuxSocket {
     this._intentionalClose = true;
     this._helloSent = false;
     this._resetRecoveryNegotiation();
+    this._clearPendingRecoveryRequests();
     this._rejectPendingCloseRequests(
       new Error('The close outcome could not be confirmed because the connection was destroyed.'),
     );
@@ -370,18 +424,26 @@ export class MuxSocket {
   }
 
   retryRecovery(pane: SessiondRecoveryPaneRef): boolean {
-    return this._sendRecoveryIntent('recovery-retry', (cid) => buildRecoveryRetry(pane, cid));
+    return this._sendRecoveryIntent(
+      'recovery-retry',
+      SessiondRecoveryType.RecoveryRetry,
+      (cid) => buildRecoveryRetry(pane, cid),
+    );
   }
 
   selectRecovery(candidateHandle: string): boolean {
-    return this._sendRecoveryIntent('recovery-select', (cid) =>
-      buildRecoverySelect(candidateHandle, cid),
+    return this._sendRecoveryIntent(
+      'recovery-select',
+      SessiondRecoveryType.RecoverySelect,
+      (cid) => buildRecoverySelect(candidateHandle, cid),
     );
   }
 
   persistActivePane(pane: SessiondRecoveryPaneRef): boolean {
-    return this._sendRecoveryIntent('active-pane-persistence', (cid) =>
-      buildActivePanePersistence(pane, cid),
+    return this._sendRecoveryIntent(
+      'active-pane-persistence',
+      SessiondRecoveryType.SetActivePane,
+      (cid) => buildActivePanePersistence(pane, cid),
     );
   }
 
@@ -394,18 +456,22 @@ export class MuxSocket {
 
   /**
    * All browser-originated correlated requests use one socket-wide sequence.
-   * Pending close requests reserve their IDs until their authoritative outcome
-   * arrives, so wraparound cannot accidentally resolve a close with another
-   * request's CID.
+   * Pending close and recovery requests reserve their IDs until terminal
+   * cleanup, so wraparound cannot accidentally resolve one request with a
+   * different operation's CID.
    */
   private _allocateCid(): number {
     const start = this._nextCid;
     do {
       const cid = this._nextCid;
       this._nextCid = cid >= MAX_CID ? 1 : cid + 1;
-      if (!this._pendingCloseRequests.has(cid)) return cid;
+      if (!this._isCidReserved(cid)) return cid;
     } while (this._nextCid !== start);
     throw new Error('No request correlation IDs are available.');
+  }
+
+  private _isCidReserved(cid: number): boolean {
+    return this._pendingCloseRequests.has(cid) || this._pendingRecoveryRequests.has(cid);
   }
 
   private _sendCloseRequest(
@@ -428,17 +494,17 @@ export class MuxSocket {
     return new Promise<CloseOutcome>((resolve, reject) => {
       const timer = setTimeout(() => {
         const pending = this._pendingCloseRequests.get(cid);
-        if (!pending) return;
+        if (!pending || pending.connection !== ws) return;
         this._pendingCloseRequests.delete(cid);
         pending.reject(new Error('The close outcome could not be confirmed before the request timed out.'));
       }, CLOSE_REQUEST_TIMEOUT_MS);
 
-      this._pendingCloseRequests.set(cid, { target, kind, resolve, reject, timer });
+      this._pendingCloseRequests.set(cid, { connection: ws, target, kind, resolve, reject, timer });
       try {
         ws.send(JSON.stringify(buildMessage(cid)));
       } catch (error) {
         const pending = this._pendingCloseRequests.get(cid);
-        if (!pending) return;
+        if (!pending || pending.connection !== ws) return;
         clearTimeout(pending.timer);
         this._pendingCloseRequests.delete(cid);
         pending.reject(
@@ -450,10 +516,10 @@ export class MuxSocket {
     });
   }
 
-  private _resolveCloseOutcome(raw: Record<string, unknown>): void {
+  private _resolveCloseOutcome(raw: Record<string, unknown>, ws: WebSocket): void {
     if (raw.type !== SessiondType.CloseOutcome || !isPositiveSafeInteger(raw.cid)) return;
     const pending = this._pendingCloseRequests.get(raw.cid);
-    if (!pending) return;
+    if (!pending || pending.connection !== ws) return;
     clearTimeout(pending.timer);
     this._pendingCloseRequests.delete(raw.cid);
     const outcome = this._normalizeCloseOutcome(raw, pending);
@@ -506,6 +572,7 @@ export class MuxSocket {
 
   private _sendRecoveryIntent(
     capability: SessiondRecoveryCapability,
+    requestType: Exclude<RecoveryRequestType, typeof SessiondRecoveryType.ProtocolHello>,
     build: (cid: number) => Record<string, unknown> | null,
   ): boolean {
     const ws = this._ws;
@@ -519,13 +586,130 @@ export class MuxSocket {
       return false;
     }
 
+    return this._sendRecoveryRequest(ws, requestType, build);
+  }
+
+  private _sendProtocolHello(ws: WebSocket): boolean {
+    return this._sendRecoveryRequest(ws, SessiondRecoveryType.ProtocolHello, (cid) => ({
+      ...buildProtocolHello(),
+      cid,
+    }));
+  }
+
+  private _sendRecoveryRequest(
+    ws: WebSocket,
+    requestType: RecoveryRequestType,
+    build: (cid: number) => Record<string, unknown> | null,
+  ): boolean {
+    let cid: number | undefined;
     try {
-      const message = build(this._allocateCid());
+      cid = this._allocateCid();
+      const message = build(cid);
       if (message === null) return false;
+      if (!this._reserveRecoveryRequest(ws, cid, requestType)) return false;
       ws.send(JSON.stringify(message));
       return true;
     } catch {
+      if (cid !== undefined) this._releaseRecoveryRequest(ws, cid);
       return false;
+    }
+  }
+
+  private _reserveRecoveryRequest(
+    ws: WebSocket,
+    cid: number,
+    requestType: RecoveryRequestType,
+  ): boolean {
+    if (
+      this._pendingRecoveryRequests.size >= MAX_PENDING_RECOVERY_REQUESTS ||
+      this._isCidReserved(cid)
+    ) {
+      return false;
+    }
+
+    const timer = setTimeout(() => {
+      const pending = this._pendingRecoveryRequests.get(cid);
+      if (!pending || pending.connection !== ws) return;
+      this._pendingRecoveryRequests.delete(cid);
+    }, RECOVERY_REQUEST_TIMEOUT_MS);
+    this._pendingRecoveryRequests.set(cid, {
+      connection: ws,
+      requestType,
+      expectedResultType: RECOVERY_RESULT_TYPES[requestType],
+      timer,
+    });
+    return true;
+  }
+
+  private _releaseRecoveryRequest(ws: WebSocket, cid: number): void {
+    const pending = this._pendingRecoveryRequests.get(cid);
+    if (!pending || pending.connection !== ws) return;
+    clearTimeout(pending.timer);
+    this._pendingRecoveryRequests.delete(cid);
+  }
+
+  private _clearPendingRecoveryRequests(): void {
+    for (const pending of this._pendingRecoveryRequests.values()) {
+      clearTimeout(pending.timer);
+    }
+    this._pendingRecoveryRequests.clear();
+  }
+
+  private _consumeRecoveryResult(
+    ws: WebSocket,
+    cid: number,
+    resultType: RecoveryResultType,
+  ): boolean {
+    const pending = this._pendingRecoveryRequests.get(cid);
+    if (
+      !pending ||
+      pending.connection !== ws ||
+      pending.expectedResultType !== resultType
+    ) {
+      return false;
+    }
+    clearTimeout(pending.timer);
+    this._pendingRecoveryRequests.delete(cid);
+    return true;
+  }
+
+  private _handleRecoveryInbound(ws: WebSocket, event: RecoveryWireEvent): void {
+    if (isCorrelatedRecoveryResult(event)) {
+      if (!this._consumeRecoveryResult(ws, event.cid, event.type)) return;
+      if (event.type === SessiondRecoveryType.ProtocolHelloResult) {
+        if (event.protocolHelloResult.compatible) {
+          this._setRecoveryNegotiation(
+            true,
+            event.protocolHelloResult.capabilities.values,
+          );
+        } else {
+          this._resetRecoveryNegotiation();
+        }
+      }
+      this.onRecoveryEvent?.(event);
+      return;
+    }
+
+    if (
+      !hasSemanticZeroCID(event) ||
+      this._ws !== ws ||
+      !this._recoveryCompatible
+    ) {
+      return;
+    }
+
+    switch (event.type) {
+      case SessiondRecoveryType.PaneRecoveryChanged:
+      case SessiondRecoveryType.ReplacementOutcome:
+        if (!this._recoveryCapabilities.has('pane-recovery-projection')) return;
+        this.onRecoveryEvent?.(event);
+        return;
+      case SessiondRecoveryType.RecoveredHistory:
+        if (!this._recoveryCapabilities.has('recovered-history-literal')) return;
+        this.onRecoveryEvent?.(event);
+        return;
+      default:
+        return;
     }
   }
 
@@ -550,8 +734,17 @@ export class MuxSocket {
   }
 
   private _open(): void {
+    const previous = this._ws;
+    this._ws = null;
     this._helloSent = false;
     this._resetRecoveryNegotiation();
+    this._clearPendingRecoveryRequests();
+    this._rejectPendingCloseRequests(
+      new Error('The close outcome could not be confirmed because the connection was replaced.'),
+    );
+    this._nextCid = 1;
+    previous?.close();
+
     const ws = new WebSocket(this._url);
     ws.binaryType = 'arraybuffer';
     this._ws = ws;
@@ -559,13 +752,11 @@ export class MuxSocket {
     ws.onopen = () => {
       if (this._ws !== ws) return;
       this._reconnectAttempts = 0;
-      try {
-        ws.send(JSON.stringify(buildProtocolHello()));
-        this._helloSent = true;
-      } catch {
+      if (!this._sendProtocolHello(ws)) {
         ws.close();
         return;
       }
+      this._helloSent = true;
       this.onReconnect?.();
     };
 
@@ -592,18 +783,13 @@ export class MuxSocket {
         const classified = classifyRecoveryInbound(parsed, utf8ByteLength(ev.data));
         if (classified.kind === 'reject') return;
         if (classified.kind === 'recovery') {
-          if (classified.event.type === 'protocol-hello-result') {
-            this._setRecoveryNegotiation(
-              classified.event.protocolHelloResult.compatible,
-              classified.event.protocolHelloResult.capabilities.values,
-            );
-          }
-          this.onRecoveryEvent?.(classified.event);
+          if (hasDuplicateJsonObjectKeys(ev.data)) return;
+          this._handleRecoveryInbound(ws, classified.event);
           return;
         }
 
         const raw = classified.message;
-        this._resolveCloseOutcome(raw);
+        this._resolveCloseOutcome(raw, ws);
         // Pass the raw message to control handlers (e.g. for detached/session-picker).
         // Non-typed envelopes (e.g. serve config) still flow through here after
         // recovery payloads have been stripped.
@@ -630,6 +816,7 @@ export class MuxSocket {
       if (this._ws !== ws) return;
       this._helloSent = false;
       this._resetRecoveryNegotiation();
+      this._clearPendingRecoveryRequests();
       this._rejectPendingCloseRequests(
         new Error('The close outcome could not be confirmed because the connection was lost.'),
       );
