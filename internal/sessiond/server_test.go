@@ -15,21 +15,34 @@ import (
 	"time"
 )
 
-// startTestServer creates a Server bound to a Unix socket under a fresh temp
-// directory and runs ListenAndServe on a cancellable context in a goroutine.
-// It returns the server, the socket path, a channel delivering the eventual
-// ListenAndServe error, and the cancel func. It blocks until sessiond serves a
-// non-empty workspace list.
+// startTestServer creates a Server bound to a Unix socket under a fresh short
+// temp directory and runs ListenAndServe on a cancellable context in a
+// goroutine. It returns the server, the socket path, a channel delivering the
+// eventual ListenAndServe error, and the cancel func. It blocks until sessiond
+// serves a non-empty workspace list.
 func startTestServer(t *testing.T) (srv *Server, socketPath string, errCh <-chan error, cancel context.CancelFunc) {
 	t.Helper()
+	// testing.T.TempDir includes the test name, which can exceed Darwin's Unix
+	// socket path limit. MkdirTemp keeps the owner-unique fixture root short.
+	root, err := os.MkdirTemp("", "mxt-")
+	if err != nil {
+		t.Fatalf("create server temp root: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove server temp root: %v", err)
+		}
+	})
+
 	// Nest the socket inside a subdir so MkdirAll/Chmod 0700 is exercised and
 	// the permissions test can observe the parent directory mode.
-	socketPath = filepath.Join(t.TempDir(), "run", "sessiond.sock")
-	srv, err := NewServer(socketPath)
+	socketPath = filepath.Join(root, "run", "sessiond.sock")
+	srv, err = NewServer(socketPath)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	ec := make(chan error, 1)
 	go func() { ec <- srv.ListenAndServe(ctx) }()
 	waitForSocket(t, socketPath)
