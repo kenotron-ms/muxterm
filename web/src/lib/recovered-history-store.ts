@@ -200,7 +200,6 @@ export class RecoveredHistoryStore {
         existing.value.byteLength,
         existing.value.lineCount,
       );
-      this.#records.delete(key);
       this.#records.set(key, {
         value: nextValue,
         lastSegmentText: existing.lastSegmentText,
