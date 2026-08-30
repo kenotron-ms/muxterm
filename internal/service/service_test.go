@@ -97,8 +97,8 @@ func TestDetectPlatform_ReturnsCurrentOS(t *testing.T) {
 
 func TestServiceConfig_Defaults(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Addr != "localhost:8080" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "localhost:8080")
+	if cfg.Addr != "0.0.0.0:8311" {
+		t.Errorf("Addr = %q, want %q", cfg.Addr, "0.0.0.0:8311")
 	}
 	if cfg.BinaryPath != "" {
 		t.Errorf("BinaryPath = %q, want empty (resolved at install time)", cfg.BinaryPath)
