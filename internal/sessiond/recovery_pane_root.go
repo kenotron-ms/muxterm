@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 // PaneLaunchOptions is the exact structured command, working directory, and
@@ -51,6 +53,8 @@ func (identity PaneForegroundProcessIdentity) Close() error {
 var (
 	errInvalidPaneLaunchOptions    = errors.New("sessiond: invalid pane launch options")
 	errPaneRootGenerationExhausted = errors.New("sessiond: pane root generation exhausted")
+	errPaneRootStartFailed         = errors.New("sessiond: pane root start failed")
+	errPaneRootReplacementFailed   = errors.New("sessiond: pane root replacement failed")
 )
 
 // validatedPaneLaunchOptions is an immutable, copied launch request retained by
@@ -144,9 +148,148 @@ type paneRoot struct {
 	lastCWD           RecoveryWorkingDirectory
 	cwdObserved       bool
 	cwdConflicting    bool
+	retired           bool
+	exited            bool
+	readStarted       bool
 
 	cleanupOnce sync.Once
 	readOnce    sync.Once
+}
+
+func clonePaneLaunchStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]string, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
+func startPaneRoot(
+	generation uint64,
+	launch validatedPaneLaunchOptions,
+	source shellLifecycleSource,
+	token string,
+	cleanup func(),
+	cols, rows int,
+) (*paneRoot, error) {
+	frozenLaunch := validatedPaneLaunchOptions{
+		argv: clonePaneLaunchStrings(launch.argv),
+		cwd:  launch.cwd,
+		env:  clonePaneLaunchStrings(launch.env),
+	}
+	cmd := exec.Command(frozenLaunch.argv[0], frozenLaunch.argv[1:]...)
+	cmd.Dir = frozenLaunch.cwd
+	cmd.Env = clonePaneLaunchStrings(frozenLaunch.env)
+
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return nil, err
+	}
+	startedAt := time.Now()
+	processBoundary, _ := inspectRecoveryProcessBoundary(cmd.Process.Pid)
+
+	return &paneRoot{
+		identity: PaneRootIdentity{
+			Generation: generation,
+			PID:        cmd.Process.Pid,
+			StartedAt:  startedAt,
+		},
+		launch:            frozenLaunch,
+		cmd:               cmd,
+		ptmx:              ptmx,
+		processBoundary:   processBoundary,
+		lifecycleSource:   source,
+		lifecycleToken:    token,
+		cleanup:           cleanup,
+		lifecycleParser:   newShellLifecycleParser(token),
+		lifecycleRevision: 1,
+		cwdFilter: shellPrivateFilter{
+			token: []byte(token),
+		},
+	}, nil
+}
+
+func (root *paneRoot) retire() {
+	if root == nil {
+		return
+	}
+	root.mu.Lock()
+	root.retired = true
+	root.mu.Unlock()
+}
+
+func (root *paneRoot) markExited() {
+	if root == nil {
+		return
+	}
+	root.mu.Lock()
+	if !root.exited {
+		root.exited = true
+		root.lifecycleRevision++
+	}
+	root.mu.Unlock()
+}
+
+func (root *paneRoot) cleanupRoot() {
+	if root == nil {
+		return
+	}
+	root.cleanupOnce.Do(func() {
+		if root.cleanup != nil {
+			root.cleanup()
+		}
+	})
+}
+
+// stop terminates a retired root. A root whose read loop started is reaped only
+// by that loop; an unpublished or deliberately unstarted root is reaped here.
+func (root *paneRoot) stop() {
+	if root == nil {
+		return
+	}
+	root.retire()
+	root.readOnce.Do(func() {})
+
+	root.mu.Lock()
+	readStarted := root.readStarted
+	root.mu.Unlock()
+
+	if root.cmd != nil && root.cmd.Process != nil {
+		_ = root.cmd.Process.Kill()
+	}
+	if root.ptmx != nil {
+		_ = root.ptmx.Close()
+	}
+	if !readStarted && root.cmd != nil {
+		_ = root.cmd.Wait()
+		root.markExited()
+	}
+	root.cleanupRoot()
+}
+
+// writeReply writes one VT-emulator response only while this root remains
+// unretired. Holding root.mu through the small PTY write makes retirement and
+// PTY closure wait for an in-flight response without acquiring Pane.deliveryMu.
+func (root *paneRoot) writeReply(data []byte) {
+	if root == nil || len(data) == 0 {
+		return
+	}
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	if root.retired || root.ptmx == nil {
+		return
+	}
+	for len(data) != 0 {
+		written, err := root.ptmx.Write(data)
+		if err != nil || written <= 0 {
+			return
+		}
+		data = data[written:]
+	}
 }
 
 var paneRootGeneration atomic.Uint64
