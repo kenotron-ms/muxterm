@@ -131,8 +131,22 @@ describe('MuxSocket', () => {
     const inputData = new Uint8Array([104, 105]); // "hi"
     mux.sendPaneInput(7, inputData);
 
-    expect(ws.sent).toHaveLength(1);
-    const sentBuf = ws.sent[0] as ArrayBuffer;
+    expect(ws.sent).toHaveLength(2);
+    expect(JSON.parse(ws.sent[0] as string)).toEqual({
+      type: 'protocol-hello',
+      protocolHello: {
+        recoverySchemaVersion: 1,
+        capabilities: {
+          values: [
+            'pane-recovery-projection',
+            'recovery-retry',
+            'recovery-select',
+            'active-pane-persistence',
+          ],
+        },
+      },
+    });
+    const sentBuf = ws.sent[1] as ArrayBuffer;
     expect(sentBuf).toBeInstanceOf(ArrayBuffer);
     expect(sentBuf.byteLength).toBe(6); // 4 + 2
 

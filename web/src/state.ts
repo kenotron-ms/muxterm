@@ -1,13 +1,15 @@
 import type {
   SessiondMessage,
+  SessiondPaneRecoveryInfo,
   SessiondWorkspaceInfo,
   SessiondPaneInfo,
 } from './types';
-import { SessiondType } from './types';
+import { SessiondRecoveryType, SessiondType } from './types';
 import type { Composition } from './lib/arrangement-store.js';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from './lib/config.js';
 import { DEFAULT_AI_STATUS, type AIStatus } from './lib/ai.js';
 import { muxLog } from './lib/mux-log.js';
+import { validateRecoveryProjection, type RecoveryWireEvent } from './recovery-wire.js';
 
 // --- optimistic-mutation seam -----------------------------------------------
 // A pending mutation overlays an optimistic patch over a COPY of the
@@ -52,6 +54,49 @@ export interface PendingRecord extends MutationSpec {
 }
 
 const DEFAULT_MUTATION_TIMEOUT_MS = 5000;
+
+function isAttachedPaneID(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 0xffff_ffff;
+}
+
+function sameRecovery(
+  left: SessiondPaneRecoveryInfo | undefined,
+  right: SessiondPaneRecoveryInfo,
+): boolean {
+  if (!left) return false;
+  if (
+    left.status !== right.status ||
+    left.detailCode !== right.detailCode ||
+    left.historyBoundary !== right.historyBoundary ||
+    left.canRetry !== right.canRetry ||
+    left.canSelect !== right.canSelect ||
+    left.strategyLabel !== right.strategyLabel
+  ) {
+    return false;
+  }
+  const leftCandidates = left.status === 'selection-needed' ? left.selectionCandidates : [];
+  const rightCandidates = right.status === 'selection-needed' ? right.selectionCandidates : [];
+  return (
+    leftCandidates.length === rightCandidates.length &&
+    leftCandidates.every(
+      (candidate, index) =>
+        candidate.candidateHandle === rightCandidates[index]?.candidateHandle &&
+        candidate.strategyLabel === rightCandidates[index]?.strategyLabel,
+    )
+  );
+}
+
+function copyPaneWithValidatedRecovery(pane: SessiondPaneInfo): SessiondPaneInfo {
+  const copy: SessiondPaneInfo = { ...pane };
+  const recovery =
+    isAttachedPaneID(pane.paneId) ? validateRecoveryProjection(pane.recovery) : null;
+  if (recovery === null) {
+    delete copy.recovery;
+  } else {
+    copy.recovery = recovery;
+  }
+  return copy;
+}
 
 export class MuxStore {
   private _listeners: Set<() => void> = new Set();
@@ -202,6 +247,13 @@ export class MuxStore {
   }
 
   setActivePane(paneId: number): void {
+    if (
+      this._attached === null ||
+      !isAttachedPaneID(paneId) ||
+      !this._panes.some((pane) => pane.paneId === paneId)
+    ) {
+      return;
+    }
     if (this._activePaneId === paneId) return;
     muxLog('state active', `setActivePane ${this._activePaneId} → ${paneId}`);
     this._activePaneId = paneId;
@@ -223,16 +275,18 @@ export class MuxStore {
         }
         // If the currently attached workspace was removed, clear attachment state.
         if (this._attached !== null && !this._workspaces.some(w => w.workspaceId === this._attached)) {
-          this._attached = null;
-          this._panes = [];
-          this._activePaneId = 0;
+          this._clearAttachmentState();
         }
         break;
 
       // composition reply: binds us to a workspace and replaces panes wholesale.
       case SessiondType.Composition: {
-        this._attached = msg.workspaceId ?? null;
-        this._panes = [...(msg.panes ?? [])];
+        if (typeof msg.workspaceId !== 'string' || msg.workspaceId.length === 0) {
+          this._clearAttachmentState();
+          break;
+        }
+        this._attached = msg.workspaceId;
+        this._panes = (Array.isArray(msg.panes) ? msg.panes : []).map(copyPaneWithValidatedRecovery);
         const newActivePaneId = this._panes[0]?.paneId ?? 0;
         muxLog('state composition', `activePaneId set to panes[0]=${newActivePaneId}`,
           { paneIds: this._panes.map(p => p.paneId), prevActive: this._activePaneId });
@@ -242,25 +296,40 @@ export class MuxStore {
       }
 
       case SessiondType.PaneAdded: {
-        if (this._attached === null) break;
-        const paneId = msg.paneId ?? 0;
+        if (
+          this._attached === null ||
+          msg.workspaceId !== this._attached ||
+          !isAttachedPaneID(msg.paneId)
+        ) {
+          break;
+        }
+        const paneId = msg.paneId;
         // Idempotent: actor and broadcast both deliver this event.
         if (this._panes.some((p) => p.paneId === paneId)) break;
-        this._panes.push({
+        const recovery = validateRecoveryProjection(msg.recovery);
+        const pane: SessiondPaneInfo = {
           paneId,
           cols: msg.cols ?? 0,
           rows: msg.rows ?? 0,
           title: msg.title,
           clientRef: msg.clientRef,
           surfaceKind: msg.surfaceKind,
-        });
+        };
+        if (recovery !== null) pane.recovery = recovery;
+        this._panes.push(pane);
         break;
       }
 
       case SessiondType.PaneClosed: {
         // Ignore trailing pane-closed after we've detached (workspace-closed).
-        if (this._attached === null) break;
-        const paneId = msg.paneId ?? 0;
+        if (
+          this._attached === null ||
+          msg.workspaceId !== this._attached ||
+          !isAttachedPaneID(msg.paneId)
+        ) {
+          break;
+        }
+        const paneId = msg.paneId;
         this._panes = this._panes.filter((p) => p.paneId !== paneId);
         this._bellPanes.delete(paneId);
         if (this._activePaneId === paneId) {
@@ -269,14 +338,23 @@ export class MuxStore {
         break;
       }
 
+      case SessiondType.WorkspaceClosed: {
+        if (typeof msg.workspaceId !== 'string' || msg.workspaceId.length === 0) break;
+        this._workspaces = this._workspaces.filter((workspace) => workspace.workspaceId !== msg.workspaceId);
+        this._bellWorkspaces.delete(msg.workspaceId);
+        if (this._attached === msg.workspaceId) this._clearAttachmentState();
+        break;
+      }
+
       case SessiondType.WorkspaceCreated: {
         // Idempotent: actor + broadcast echoes of the same event converge to one
         // entry.  Mirror the PaneAdded guard style.
+        if (typeof msg.workspaceId !== 'string' || msg.workspaceId.length === 0) break;
         if (this._workspaces.some((w) => w.workspaceId === msg.workspaceId)) break;
         this._workspaces = [
           ...this._workspaces,
           {
-            workspaceId: msg.workspaceId ?? '',
+            workspaceId: msg.workspaceId,
             name: msg.name ? msg.name : undefined,
             clientRef: msg.clientRef,
             paneCount: 0,
@@ -286,7 +364,14 @@ export class MuxStore {
       }
 
       case SessiondType.PaneRenamed: {
-        const paneId = msg.paneId ?? 0;
+        if (
+          this._attached === null ||
+          (msg.workspaceId !== undefined && msg.workspaceId !== this._attached) ||
+          !isAttachedPaneID(msg.paneId)
+        ) {
+          break;
+        }
+        const paneId = msg.paneId;
         const p = this._panes.find((x) => x.paneId === paneId);
         if (p) p.title = msg.name;
         break;
@@ -299,12 +384,69 @@ export class MuxStore {
     this._notify();
   }
 
+  /**
+   * Recovery events already passed the recovery-wire trust boundary. Results
+   * may update only a pane in the currently attached workspace, never a bare
+   * pane ID that might name a pane in another workspace.
+   */
+  applyRecovery(event: RecoveryWireEvent): void {
+    let changed = false;
+    switch (event.type) {
+      case SessiondRecoveryType.PaneRecoveryChanged:
+        changed = this._replaceRecovery(event.recoveryTransition.pane, event.recoveryTransition.recovery);
+        break;
+      case SessiondRecoveryType.RecoveryRetryResult:
+        changed = this._replaceRecovery(event.recoveryRetryResult.pane, event.recoveryRetryResult.recovery);
+        break;
+      case SessiondRecoveryType.RecoverySelectResult:
+        changed = this._replaceRecovery(event.recoverySelectResult.pane, event.recoverySelectResult.recovery);
+        break;
+      case SessiondRecoveryType.SetActivePaneResult: {
+        const result = event.activePanePersistenceResult;
+        if (
+          result.detailCode === 'none' &&
+          this._attached === result.pane.workspaceId &&
+          this._panes.some((pane) => pane.paneId === result.pane.paneId) &&
+          this._activePaneId !== result.pane.paneId
+        ) {
+          this._activePaneId = result.pane.paneId;
+          changed = true;
+        }
+        break;
+      }
+      case SessiondRecoveryType.ProtocolHelloResult:
+      case SessiondRecoveryType.ReplacementOutcome:
+        break;
+    }
+    if (changed) this._notify();
+  }
+
+  /** Remove only recovery projections when the transport becomes untrusted. */
+  clearRecoveryOnTransportLoss(): void {
+    let changed = false;
+    const panes = this._panes.map((pane) => {
+      if (pane.recovery === undefined) return pane;
+      changed = true;
+      const { recovery: _recovery, ...withoutRecovery } = pane;
+      return withoutRecovery;
+    });
+    if (!changed) return;
+    this._panes = panes;
+    this._notify();
+  }
+
+  /** Clear every attachment-scoped value after a detached control message. */
+  detach(): void {
+    if (!this._clearAttachmentState()) return;
+    this._notify();
+  }
+
   // Fold the pending optimistic overlay over a fresh COPY of the authoritative
   // base. The base is never mutated; this is recomputed on every read.
   private _foldedView(): MutationDraft {
     const draft: MutationDraft = {
       workspaces: this._workspaces.map((w) => ({ ...w })),
-      panes: this._panes.map((p) => ({ ...p })),
+      panes: this._panes.map(copyPaneWithValidatedRecovery),
     };
     for (const record of this._pending.values()) {
       if (record.errored) continue;
@@ -389,6 +531,43 @@ export class MuxStore {
     for (const cb of this._listeners) {
       cb();
     }
+  }
+
+  private _replaceRecovery(
+    pane: { workspaceId: string; paneId: number },
+    recoveryValue: unknown,
+  ): boolean {
+    if (this._attached !== pane.workspaceId || !isAttachedPaneID(pane.paneId)) return false;
+    const recovery = validateRecoveryProjection(recoveryValue);
+    if (recovery === null) return false;
+    const index = this._panes.findIndex((entry) => entry.paneId === pane.paneId);
+    if (index < 0 || sameRecovery(this._panes[index]?.recovery, recovery)) return false;
+    const panes = [...this._panes];
+    panes[index] = { ...panes[index], recovery };
+    this._panes = panes;
+    return true;
+  }
+
+  private _clearAttachmentState(): boolean {
+    const changed =
+      this._attached !== null ||
+      this._panes.length !== 0 ||
+      this._activePaneId !== 0 ||
+      this._layout !== '' ||
+      this._bellPanes.size !== 0 ||
+      this._pending.size !== 0;
+    if (!changed) return false;
+
+    this._attached = null;
+    this._panes = [];
+    this._activePaneId = 0;
+    this._layout = '';
+    this._bellPanes.clear();
+    for (const record of this._pending.values()) {
+      if (record.timer !== undefined) clearTimeout(record.timer);
+    }
+    this._pending.clear();
+    return true;
   }
 }
 

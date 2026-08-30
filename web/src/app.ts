@@ -28,6 +28,8 @@ import type { CloseConfirmationModal } from './components/close-confirmation-mod
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
+import './components/recovery-status.js';
+import type { RecoverySelectionEventDetail } from './components/recovery-status.js';
 
 
 import { WorkspaceController } from './lib/workspace-controller.js';
@@ -88,6 +90,10 @@ function closeOutcomeTarget(outcome: CloseOutcome): CloseTarget {
         targetKind: 'workspace',
         workspaceId: outcome.workspaceId,
       };
+}
+
+function isAttachedRecoveryPaneID(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 0xffff_ffff;
 }
 
 /** Converts a target sidebar pixel width into the percentage Split.js needs,
@@ -486,6 +492,16 @@ export class MuxApp extends LitElement {
       min-width: 0;
     }
 
+    mux-recovery-status {
+      flex: none;
+    }
+
+    .main-pane > mux-dock {
+      flex: 1 1 auto;
+      min-height: 0;
+      height: auto;
+    }
+
     /* Split.js gutter — styled to visually match the removed
        mux-sidebar.ts .resize-handle (4px, transparent, col-resize cursor,
        hover highlight). Unlike the old absolutely-positioned overlay, this
@@ -637,6 +653,12 @@ export class MuxApp extends LitElement {
     this._socket.onPaneResized = (paneId, cols, rows) => {
       terminalRegistry.applyServerResize(paneId, cols, rows);
     };
+    this._socket.onRecoveryEvent = (event) => {
+      store.applyRecovery(event);
+    };
+    this._socket.onRecoveryNegotiationChange = () => {
+      this._version++;
+    };
     // visibilitychange + window 'focus': this browser tab/window regaining
     // OS focus re-claims every currently-visible pane. Mirrors the existing
     // window.addEventListener('resize', ...) registration/cleanup pattern
@@ -718,6 +740,7 @@ export class MuxApp extends LitElement {
       this._handleControlMessage(msg);
     });
     this._socket.onDisconnect = () => {
+      store.clearRecoveryOnTransportLoss();
       this._showReconnectOverlay = true;
       this._reconnectMessage = 'Connection lost. Reconnecting...';
       this._creatingWorkspace = false;
@@ -778,6 +801,7 @@ export class MuxApp extends LitElement {
       this._unsubscribe = null;
     }
     if (this._socket) {
+      store.clearRecoveryOnTransportLoss();
       this._socket.disconnect();
       this._socket = null;
     }
@@ -930,6 +954,19 @@ export class MuxApp extends LitElement {
     // They have no terminal and should not render as blank tiles.
     const panes = store.panes.filter((p) => p.paneId >= 0);
     const isWide = this._layoutMode === 'wide';
+    const activePane =
+      store.attached === null
+        ? undefined
+        : panes.find((pane) => pane.paneId === store.activePaneId);
+    const activeRecovery = activePane?.recovery;
+    const retryEnabled =
+      activeRecovery?.status === 'strategy-failed' &&
+      activeRecovery.canRetry &&
+      this._socket?.supportsRecoveryCapability('recovery-retry') === true;
+    const selectionEnabled =
+      activeRecovery?.status === 'selection-needed' &&
+      activeRecovery.canSelect &&
+      this._socket?.supportsRecoveryCapability('recovery-select') === true;
 
     return html`
       ${!isWide ? html`<mux-title-bar
@@ -961,6 +998,17 @@ export class MuxApp extends LitElement {
                 </div>
               `
             : html`
+                ${activeRecovery
+                  ? html`
+                      <mux-recovery-status
+                        .recovery="${activeRecovery}"
+                        .retryEnabled="${retryEnabled}"
+                        .selectionEnabled="${selectionEnabled}"
+                        @recovery-retry="${this._onRecoveryRetry}"
+                        @recovery-select="${this._onRecoverySelect}"
+                      ></mux-recovery-status>
+                    `
+                  : ''}
                 <mux-dock
                   .panes="${panes}"
                   .activePaneId="${store.activePaneId}"
@@ -1098,15 +1146,75 @@ export class MuxApp extends LitElement {
 
   /** Client-local active-pane selection (sessiond has no select-pane message). */
   private _onActivePane = (e: CustomEvent<{ paneId: number }>): void => {
+    const workspaceId = store.attached;
+    const paneId = e.detail?.paneId;
+    if (
+      workspaceId === null ||
+      !isAttachedRecoveryPaneID(paneId) ||
+      !store.panes.some((pane) => pane.paneId === paneId)
+    ) {
+      return;
+    }
     // Auto-stop-and-invalidate: voice input should always target "the pane
     // I'm looking at right now" — see docs/designs/2026-07-31-voice-input-design.md.
-    voiceInputController.invalidateIfActive({ workspaceId: store.attached ?? '', paneId: e.detail.paneId });
+    voiceInputController.invalidateIfActive({ workspaceId, paneId });
     // ackPane is the component's responsibility (mux-pane-picker._selectPane or
     // mux-dock onDidActivePanelChange). Do not ack here — the component already did.
-    store.setActivePane(e.detail.paneId);
+    store.setActivePane(paneId);
     // This pane just became the visible tab in this client's layout, so it
     // should claim PTY-sizing authority (active-view-wins).
-    this._paneFocusCoordinator?.claimPane(e.detail.paneId);
+    this._paneFocusCoordinator?.claimPane(paneId);
+    // This persistence intent is distinct from connection-scoped focus
+    // authority. A failed/unsupported recovery negotiation must not affect
+    // immediate local selection or terminal focus.
+    this._socket?.persistActivePane({ workspaceId, paneId });
+  };
+
+  private _onRecoveryRetry = (_event: Event): void => {
+    const workspaceId = store.attached;
+    const paneId = store.activePaneId;
+    if (
+      workspaceId === null ||
+      !isAttachedRecoveryPaneID(paneId)
+    ) {
+      return;
+    }
+    const pane = store.panes.find((candidate) => candidate.paneId === paneId);
+    const recovery = pane?.recovery;
+    if (
+      !pane ||
+      recovery?.status !== 'strategy-failed' ||
+      !recovery.canRetry
+    ) {
+      return;
+    }
+    this._socket?.retryRecovery({ workspaceId, paneId });
+  };
+
+  private _onRecoverySelect = (event: Event): void => {
+    const candidateHandle = (event as CustomEvent<RecoverySelectionEventDetail>).detail?.candidateHandle;
+    const workspaceId = store.attached;
+    const paneId = store.activePaneId;
+    if (
+      typeof candidateHandle !== 'string' ||
+      workspaceId === null ||
+      !isAttachedRecoveryPaneID(paneId)
+    ) {
+      return;
+    }
+    const pane = store.panes.find((candidate) => candidate.paneId === paneId);
+    const recovery = pane?.recovery;
+    if (
+      !pane ||
+      recovery?.status !== 'selection-needed' ||
+      !recovery.canSelect ||
+      !recovery.selectionCandidates.some(
+        (candidate) => candidate.candidateHandle === candidateHandle,
+      )
+    ) {
+      return;
+    }
+    this._socket?.selectRecovery(candidateHandle);
   };
 
   /**
@@ -1190,9 +1298,9 @@ export class MuxApp extends LitElement {
 
   private _handleControlMessage = (msg: Record<string, unknown>): void => {
     if ('detached' in msg && msg.detached && typeof msg.detached === 'object') {
-      const detached = msg.detached as { reason?: string };
+      store.detach();
       this._showReconnectOverlay = true;
-      this._reconnectMessage = detached.reason ?? 'Disconnected';
+      this._reconnectMessage = 'Disconnected';
     }
     // {"type":"config",...} envelope (Phase 3 carry-forward): re-resolve theme,
     // terminal options, and keybindings from the daemon-provided config.
