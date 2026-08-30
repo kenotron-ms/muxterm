@@ -40,8 +40,8 @@ type Client struct {
 	// hub attaches the client.
 	daemon DaemonConn
 
-	// recoveryMu protects recovery negotiation and the one bounded asynchronous
-	// recovery request that can be in flight for this connection.
+	// recoveryMu protects recovery negotiation and the one bounded recovery
+	// request that can be in flight for this connection.
 	// Daemon event handlers run on the daemon read loop, so they must not race a
 	// successful hello updating the negotiated capability intersection.
 	recoveryMu           sync.Mutex
@@ -253,9 +253,9 @@ func (c *Client) writeBinary(data []byte) error { return c.writeBinaryFn(data) }
 // writeText writes a text frame via the client's text writer.
 func (c *Client) writeText(data []byte) error { return c.writeTextFn(data) }
 
-// beginProtocolHello accepts exactly one hello attempt per connection. A
-// pending silent legacy daemon therefore cannot accumulate recovery goroutines
-// or block ordinary traffic on readPump.
+// beginProtocolHello accepts exactly one hello attempt per connection. The
+// daemon request is bounded, so relayProtocolHello can gate initial attach
+// ordering without permitting an unbounded readPump stall.
 func (c *Client) beginProtocolHello(cid uint64) bool {
 	c.recoveryMu.Lock()
 	defer c.recoveryMu.Unlock()
@@ -1061,6 +1061,9 @@ func (c *Client) handleRecoveryInput(data []byte, classifiedCID uint64) {
 	}
 }
 
+// relayProtocolHello completes on the browser readPump before it can process a
+// subsequently queued attach. That keeps recovered-history ahead of attach
+// replay/live pane data without waiting from the daemon's single read loop.
 func (c *Client) relayProtocolHello(message *sessiond.Message) {
 	if message.ProtocolHello == nil ||
 		!c.beginProtocolHello(message.CID) {
@@ -1071,25 +1074,23 @@ func (c *Client) relayProtocolHello(message *sessiond.Message) {
 	browserCID := message.CID
 	request := *message.ProtocolHello
 	daemon := c.daemon
-	go func() {
-		result, err := daemon.ProtocolHello(request)
-		if !c.recoveryRequestCurrent(browserCID, recoveryRequestProtocolHello) {
-			return
-		}
-		if err != nil ||
-			sessiond.ValidateRecoveryContract(result) != nil ||
-			!protocolHelloResultMatchesOffer(request, result) {
-			c.failProtocolHello()
-			c.finishRecoveryRequest(browserCID, recoveryRequestProtocolHello)
-			c.sendRecoveryRelayFailure(browserCID)
-			return
-		}
+	result, err := daemon.ProtocolHello(request)
+	if !c.recoveryRequestCurrent(browserCID, recoveryRequestProtocolHello) {
+		return
+	}
+	if err != nil ||
+		sessiond.ValidateRecoveryContract(result) != nil ||
+		!protocolHelloResultMatchesOffer(request, result) {
+		c.failProtocolHello()
+		c.finishRecoveryRequest(browserCID, recoveryRequestProtocolHello)
+		c.sendRecoveryRelayFailure(browserCID)
+		return
+	}
 
-		if !c.sendProtocolHelloResult(browserCID, result) {
-			c.finishRecoveryRequest(browserCID, recoveryRequestProtocolHello)
-			c.sendRecoveryRelayFailure(browserCID)
-		}
-	}()
+	if !c.sendProtocolHelloResult(browserCID, result) {
+		c.finishRecoveryRequest(browserCID, recoveryRequestProtocolHello)
+		c.sendRecoveryRelayFailure(browserCID)
+	}
 }
 
 func (c *Client) relayRecoveryRetry(message *sessiond.Message) {

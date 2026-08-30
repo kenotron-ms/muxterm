@@ -255,8 +255,8 @@ func (m *recoveryMVP) callbacks(s *Server, workspaceID string) PaneCallbacks {
 		OnData: func(localID int, data []byte) {
 			m.handleTerminalData(s, workspaceID, localID, data)
 		},
-		OnExit: func(localID int, _ PaneRootIdentity, exitCode int, runtimeMilliseconds int64) {
-			s.handlePaneExit(workspaceID, localID, exitCode, runtimeMilliseconds)
+		OnExit: func(localID int, root PaneRootIdentity, exitCode int, runtimeMilliseconds int64) {
+			m.handlePaneRootExit(s, workspaceID, localID, root, exitCode, runtimeMilliseconds)
 		},
 		OnPrompt: func(localID int, msg *Message) {
 			msg.WorkspaceID = workspaceID
@@ -264,6 +264,77 @@ func (m *recoveryMVP) callbacks(s *Server, workspaceID string) PaneCallbacks {
 			s.broadcast(workspaceID, msg)
 		},
 	}
+}
+
+// handlePaneRootExit durably removes only the registry pane whose exact current
+// root emitted the callback. The callback already holds pane.deliveryMu, so this
+// method must not reenter pane lifecycle or I/O. Publication occurs only after
+// the recovery and registry locks are released.
+func (m *recoveryMVP) handlePaneRootExit(
+	s *Server,
+	workspaceID string,
+	paneID int,
+	root PaneRootIdentity,
+	exitCode int,
+	runtimeMilliseconds int64,
+) {
+	m.mu.Lock()
+	registry := s.reg
+	registry.mu.Lock()
+	workspace := registry.workspaces[workspaceID]
+	if workspace == nil {
+		registry.mu.Unlock()
+		m.mu.Unlock()
+		return
+	}
+	pane := workspace.Panes[paneID]
+	if pane == nil {
+		registry.mu.Unlock()
+		m.mu.Unlock()
+		return
+	}
+	currentRoot, current := pane.CurrentRootIdentity()
+	if !current || currentRoot != root {
+		registry.mu.Unlock()
+		m.mu.Unlock()
+		return
+	}
+
+	ref := RecoveryPaneRef{
+		WorkspaceID: RecoveryWorkspaceID(workspaceID),
+		PaneID:      RecoveryPaneID(paneID),
+	}
+	layoutBreakpoints := make([]string, 0, len(m.snapshot.Layouts))
+	for _, layout := range m.snapshot.Layouts {
+		if recoveryLayoutNodeReferencesPane(layout.Root, ref) {
+			layoutBreakpoints = append(layoutBreakpoints, layout.Breakpoint)
+		}
+	}
+	if err := m.commitLocked(RecoveryMutation{
+		Kind:    RecoveryMutationDeletePane,
+		PaneRef: &ref,
+	}); err != nil {
+		registry.mu.Unlock()
+		m.mu.Unlock()
+		log.Printf("sessiond recovery: pane exit persistence failed")
+		return
+	}
+
+	for _, breakpoint := range layoutBreakpoints {
+		delete(workspace.Layouts, breakpoint)
+	}
+	registry.removePaneLocked(workspaceID, paneID)
+	registry.mu.Unlock()
+	m.mu.Unlock()
+
+	code := exitCode
+	s.broadcast(workspaceID, &Message{
+		Type:            TypePaneClosed,
+		WorkspaceID:     workspaceID,
+		PaneID:          paneID,
+		ProcessExitCode: &code,
+		RuntimeMs:       runtimeMilliseconds,
+	})
 }
 
 // createWorkspace commits the planned identity before it becomes a registry

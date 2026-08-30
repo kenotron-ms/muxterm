@@ -1359,6 +1359,7 @@ func deletePane(snapshot *RecoverySnapshot, pane RecoveryPaneRef) {
 		}
 	}
 	snapshot.Panes = panes
+	snapshot.Layouts = removeLayoutsForPane(snapshot.Layouts, pane)
 	for index := range snapshot.Workspaces {
 		if snapshot.Workspaces[index].ActivePane != nil && *snapshot.Workspaces[index].ActivePane == pane {
 			snapshot.Workspaces[index].ActivePane = nil
@@ -1375,6 +1376,33 @@ func removeLayoutsForWorkspace(values []RecoveryLayout, workspaceID RecoveryWork
 		}
 	}
 	return out
+}
+
+func removeLayoutsForPane(values []RecoveryLayout, pane RecoveryPaneRef) []RecoveryLayout {
+	out := values[:0]
+	for _, value := range values {
+		if !recoveryLayoutNodeReferencesPane(value.Root, pane) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func recoveryLayoutNodeReferencesPane(node RecoveryLayoutNode, pane RecoveryPaneRef) bool {
+	if node.ActiveView != nil && *node.ActiveView == pane {
+		return true
+	}
+	for _, view := range node.Views {
+		if view == pane {
+			return true
+		}
+	}
+	for _, child := range node.Children {
+		if recoveryLayoutNodeReferencesPane(child, pane) {
+			return true
+		}
+	}
+	return false
 }
 
 func assignActivePane(snapshot *RecoverySnapshot, active RecoveryActivePane) {
