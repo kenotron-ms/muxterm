@@ -42,9 +42,9 @@ export const RECOVERY_CAPABILITIES = Object.freeze([
 ] as const satisfies readonly SessiondRecoveryCapability[]);
 
 /**
- * Opt-in offer for the additive literal-history contract. The default hello
- * preserves legacy capability traffic; a relay that handles recovered-history
- * events explicitly opts in through buildProtocolHello(true).
+ * Additive literal-history capability advertised by the default production
+ * hello. Callers that must speak the legacy capability offer can explicitly
+ * pass false to buildProtocolHello.
  */
 export const RECOVERED_HISTORY_LITERAL_CAPABILITY =
   'recovered-history-literal' as const satisfies SessiondRecoveryCapability;
@@ -947,7 +947,7 @@ export function classifyRecoveryInbound(
   return message === null ? REJECTED : { kind: 'ordinary', message };
 }
 
-export function buildProtocolHello(includeRecoveredHistoryLiteral = false): SessiondBrowserRecoveryRequest {
+export function buildProtocolHello(includeRecoveredHistoryLiteral = true): SessiondBrowserRecoveryRequest {
   const protocolHello: SessiondProtocolHello = {
     recoverySchemaVersion: RECOVERY_SCHEMA_VERSION,
     capabilities: {
