@@ -1,4 +1,4 @@
-//go:build linux
+//go:build darwin
 
 package sessiond
 
@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // recoveryPeerCredentials are kernel-authenticated facts about a Unix-domain
@@ -23,9 +25,9 @@ func privilegedRecoverySupported() bool {
 	return recoveryProcessIdentitySupported
 }
 
-// peerCredentials returns same-effective-UID Unix peer credentials from
-// Linux's SO_PEERCRED socket option. Both UID and PID are required because
-// recovery fences bind to one live process, not merely to its directory access.
+// peerCredentials obtains Darwin's UID and PID facts in one descriptor-control
+// section. LOCAL_PEERCRED alone is insufficient for recovery: a peer PID is
+// required to bind a lease to a process lifetime.
 func peerCredentials(nc net.Conn) (recoveryPeerCredentials, error) {
 	uc, ok := nc.(*net.UnixConn)
 	if !ok {
@@ -35,26 +37,42 @@ func peerCredentials(nc net.Conn) (recoveryPeerCredentials, error) {
 	if err != nil {
 		return recoveryPeerCredentials{}, fmt.Errorf("recovery: access peer socket descriptor: %w", err)
 	}
-	var cred *syscall.Ucred
-	var credErr error
+
+	var (
+		credentials   *unix.Xucred
+		pid           int
+		credentialErr error
+	)
 	if err := raw.Control(func(fd uintptr) {
-		cred, credErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+		credentials, credentialErr = unix.GetsockoptXucred(
+			int(fd),
+			unix.SOL_LOCAL,
+			unix.LOCAL_PEERCRED,
+		)
+		if credentialErr != nil {
+			return
+		}
+		pid, credentialErr = syscall.GetsockoptInt(
+			int(fd),
+			unix.SOL_LOCAL,
+			unix.LOCAL_PEERPID,
+		)
 	}); err != nil {
 		return recoveryPeerCredentials{}, fmt.Errorf("recovery: inspect peer credentials: %w", err)
 	}
-	if credErr != nil || cred == nil {
-		if credErr != nil {
-			return recoveryPeerCredentials{}, fmt.Errorf("recovery: read peer credentials: %w", credErr)
+	if credentialErr != nil || credentials == nil {
+		if credentialErr != nil {
+			return recoveryPeerCredentials{}, fmt.Errorf("recovery: read peer credentials: %w", credentialErr)
 		}
 		return recoveryPeerCredentials{}, fmt.Errorf("recovery: peer credentials unavailable")
 	}
-	if cred.Pid <= 0 {
+	if pid <= 0 {
 		return recoveryPeerCredentials{}, fmt.Errorf("recovery: peer has no valid PID")
 	}
-	if cred.Uid != uint32(os.Geteuid()) {
+	if credentials.Uid != uint32(os.Geteuid()) {
 		return recoveryPeerCredentials{}, fmt.Errorf("recovery: peer UID does not match daemon owner")
 	}
-	return recoveryPeerCredentials{UID: cred.Uid, PID: int(cred.Pid)}, nil
+	return recoveryPeerCredentials{UID: credentials.Uid, PID: pid}, nil
 }
 
 // peerAllowed is the compatibility wrapper used by the existing main control
