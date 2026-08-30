@@ -1,14 +1,19 @@
 import type {
   SessiondMessage,
   SessiondPaneRecoveryInfo,
+  SessiondRecoveredHistoryLiteral,
   SessiondWorkspaceInfo,
   SessiondPaneInfo,
 } from './types';
-import { SessiondRecoveryType, SessiondType } from './types';
+import { isTerminalSurface, SessiondRecoveryType, SessiondType } from './types';
 import type { Composition } from './lib/arrangement-store.js';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from './lib/config.js';
 import { DEFAULT_AI_STATUS, type AIStatus } from './lib/ai.js';
 import { muxLog } from './lib/mux-log.js';
+import {
+  RecoveredHistoryStore,
+  recoveredHistoryStore,
+} from './lib/recovered-history-store.js';
 import { validateRecoveryProjection, type RecoveryWireEvent } from './recovery-wire.js';
 
 // --- optimistic-mutation seam -----------------------------------------------
@@ -57,6 +62,10 @@ const DEFAULT_MUTATION_TIMEOUT_MS = 5000;
 
 function isAttachedPaneID(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 0xffff_ffff;
+}
+
+function isRecoveredHistoryWorkspaceID(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && !value.includes(':');
 }
 
 function sameRecovery(
@@ -120,6 +129,11 @@ export class MuxStore {
   /** Pane IDs that have an unacknowledged activity bell. */
   private _bellPanes: Set<number> = new Set();
 
+  readonly #recoveredHistory: RecoveredHistoryStore;
+
+  constructor(recoveredHistory = new RecoveredHistoryStore()) {
+    this.#recoveredHistory = recoveredHistory;
+  }
 
   get config(): ResolvedConfig {
     return this._config;
@@ -267,6 +281,13 @@ export class MuxStore {
     switch (msg.type) {
       case SessiondType.WorkspaceList:
         this._workspaces = msg.workspaces ?? [];
+        this.#recoveredHistory.retainWorkspaces(
+          new Set(
+            this._workspaces
+              .map((workspace) => workspace.workspaceId)
+              .filter(isRecoveredHistoryWorkspaceID),
+          ),
+        );
         // Prune stale workspace bell entries for workspaces that no longer exist.
         for (const wsId of this._bellWorkspaces) {
           if (!this._workspaces.some((w) => w.workspaceId === wsId)) {
@@ -281,12 +302,18 @@ export class MuxStore {
 
       // composition reply: binds us to a workspace and replaces panes wholesale.
       case SessiondType.Composition: {
-        if (typeof msg.workspaceId !== 'string' || msg.workspaceId.length === 0) {
+        if (!isRecoveredHistoryWorkspaceID(msg.workspaceId)) {
+          this.#recoveredHistory.clearAll();
           this._clearAttachmentState();
           break;
         }
+        this.#recoveredHistory.clearWorkspace(msg.workspaceId);
         this._attached = msg.workspaceId;
         this._panes = (Array.isArray(msg.panes) ? msg.panes : []).map(copyPaneWithValidatedRecovery);
+        this.#recoveredHistory.reconcileWorkspacePanes(
+          msg.workspaceId,
+          new Set(this._panes.filter((pane) => isAttachedPaneID(pane.paneId)).map((pane) => pane.paneId)),
+        );
         const newActivePaneId = this._panes[0]?.paneId ?? 0;
         muxLog('state composition', `activePaneId set to panes[0]=${newActivePaneId}`,
           { paneIds: this._panes.map(p => p.paneId), prevActive: this._activePaneId });
@@ -321,13 +348,16 @@ export class MuxStore {
       }
 
       case SessiondType.PaneClosed: {
+        if (typeof msg.workspaceId === 'string' && isAttachedPaneID(msg.paneId)) {
+          this.#recoveredHistory.delete(msg.workspaceId, msg.paneId);
+        }
         // Ignore trailing pane-closed after we've detached (workspace-closed).
         if (
           this._attached === null ||
           msg.workspaceId !== this._attached ||
           !isAttachedPaneID(msg.paneId)
         ) {
-          break;
+          return;
         }
         const paneId = msg.paneId;
         this._panes = this._panes.filter((p) => p.paneId !== paneId);
@@ -340,6 +370,7 @@ export class MuxStore {
 
       case SessiondType.WorkspaceClosed: {
         if (typeof msg.workspaceId !== 'string' || msg.workspaceId.length === 0) break;
+        this.#recoveredHistory.clearWorkspace(msg.workspaceId);
         this._workspaces = this._workspaces.filter((workspace) => workspace.workspaceId !== msg.workspaceId);
         this._bellWorkspaces.delete(msg.workspaceId);
         if (this._attached === msg.workspaceId) this._clearAttachmentState();
@@ -414,6 +445,9 @@ export class MuxStore {
         }
         break;
       }
+      case SessiondRecoveryType.RecoveredHistory:
+        this._appendRecoveredHistory(event.recoveredHistory);
+        break;
       case SessiondRecoveryType.ProtocolHelloResult:
       case SessiondRecoveryType.ReplacementOutcome:
         break;
@@ -421,8 +455,9 @@ export class MuxStore {
     if (changed) this._notify();
   }
 
-  /** Remove only recovery projections when the transport becomes untrusted. */
+  /** Remove recovery projections and all literal history when transport trust is lost. */
   clearRecoveryOnTransportLoss(): void {
+    this.#recoveredHistory.clearAll();
     let changed = false;
     const panes = this._panes.map((pane) => {
       if (pane.recovery === undefined) return pane;
@@ -437,6 +472,7 @@ export class MuxStore {
 
   /** Clear every attachment-scoped value after a detached control message. */
   detach(): void {
+    this.#recoveredHistory.clearAll();
     if (!this._clearAttachmentState()) return;
     this._notify();
   }
@@ -548,6 +584,21 @@ export class MuxStore {
     return true;
   }
 
+  private _appendRecoveredHistory(history: SessiondRecoveredHistoryLiteral): void {
+    const workspaceId = history?.pane?.workspaceId;
+    const paneId = history?.pane?.paneId;
+    if (
+      !isRecoveredHistoryWorkspaceID(workspaceId) ||
+      !isAttachedPaneID(paneId) ||
+      this._attached !== workspaceId
+    ) {
+      return;
+    }
+    const pane = this._panes.find((entry) => entry.paneId === paneId);
+    if (!pane || !isTerminalSurface(pane.surfaceKind ?? 'terminal')) return;
+    this.#recoveredHistory.append(history);
+  }
+
   private _clearAttachmentState(): boolean {
     const changed =
       this._attached !== null ||
@@ -571,4 +622,4 @@ export class MuxStore {
   }
 }
 
-export const store = new MuxStore();
+export const store = new MuxStore(recoveredHistoryStore);
