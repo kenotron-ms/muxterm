@@ -76,12 +76,7 @@ func dialRecoverySocket(path string) (*RecoverySocketClient, error) {
 func recoveryEndpointUnavailable(err error) bool {
 	return errors.Is(err, syscall.ENOENT) ||
 		errors.Is(err, syscall.ECONNREFUSED) ||
-		errors.Is(err, syscall.ENOTSOCK) ||
-		errors.Is(err, syscall.EAFNOSUPPORT) ||
-		errors.Is(err, syscall.EPROTONOSUPPORT) ||
-		errors.Is(err, syscall.EPROTOTYPE) ||
-		errors.Is(err, syscall.EOPNOTSUPP) ||
-		errors.Is(err, syscall.ENOSYS)
+		errors.Is(err, syscall.ENOTSOCK)
 }
 
 // Close closes the dedicated connection. It is safe to call more than once.
