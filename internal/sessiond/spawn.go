@@ -105,9 +105,13 @@ func EnsureDaemon(socketPath, logPath string) error {
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove stale socket: %w", err)
 	}
-	if _, err := Spawn(logPath); err != nil {
+	proc, err := Spawn(logPath)
+	if err != nil {
 		return fmt.Errorf("spawn sessiond: %w", err)
 	}
+	go func() {
+		_, _ = proc.Wait()
+	}()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if IsAlive(socketPath) {

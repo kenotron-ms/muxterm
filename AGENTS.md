@@ -35,6 +35,12 @@ never becomes lifecycle, activity, or tool authority. A history durability
 failure must remain redacted and must never be reported as durable success, but
 it must not suppress the original bytes from the live terminal stream.
 
+### Auto-spawned sessiond process ownership
+
+The long-lived serve process reaps each sessiond child it auto-spawns. Generic
+spawn callers retain explicit ownership of calling `Wait`; `SpawnCommand()` must
+not install an automatic waiter.
+
 ## Testing Policy
 
 ### ⛔ DO NOT WRITE UNIT TESTS
