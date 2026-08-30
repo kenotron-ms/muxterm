@@ -57,11 +57,12 @@ type Config struct {
 
 // Server is the HTTP server for muxterm.
 type Server struct {
-	addr    string
-	noAuth  bool
-	mux     *http.ServeMux
-	hub     *Hub
-	tunnels *TunnelRegistry
+	addr               string
+	noAuth             bool
+	behindReverseProxy bool
+	mux                *http.ServeMux
+	hub                *Hub
+	tunnels            *TunnelRegistry
 
 	authSrv        *authserver.AuthServer
 	webRedirectURI string
@@ -86,13 +87,14 @@ func New(cfg Config) *Server {
 	hub.tunnels = tunnels
 
 	s := &Server{
-		addr:           cfg.Addr,
-		noAuth:         cfg.NoAuth,
-		mux:            http.NewServeMux(),
-		hub:            hub,
-		tunnels:        tunnels,
-		authSrv:        cfg.AuthServer,
-		webRedirectURI: cfg.WebRedirectURI,
+		addr:               cfg.Addr,
+		noAuth:             cfg.NoAuth,
+		behindReverseProxy: cfg.BehindReverseProxy,
+		mux:                http.NewServeMux(),
+		hub:                hub,
+		tunnels:            tunnels,
+		authSrv:            cfg.AuthServer,
+		webRedirectURI:     cfg.WebRedirectURI,
 	}
 
 	s.configPath = cfg.ConfigPath
@@ -304,16 +306,15 @@ func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clone the request and rewrite the URL path to strip the /t/{id} prefix
-	// before forwarding to the upstream. Cookie/Authorization are stripped
+	// before forwarding to the upstream. Browser credentials are stripped
 	// so the tunneled (potentially untrusted, arbitrary local dev server)
-	// target never receives muxterm's own session credentials — see
-	// design doc "Tunnel credential stripping." This closes the
-	// credential-forwarding vector only; same-origin JS access from the
-	// tunneled page is a separate, unresolved limitation (design doc "Out
-	// of Scope").
+	// target never receives muxterm's own session credentials. The response
+	// policy below also forces every tunneled document into an opaque sandboxed
+	// origin so it cannot inherit muxterm's browser authority.
 	cloned := r.Clone(r.Context())
 	cloned.Header.Del("Cookie")
 	cloned.Header.Del("Authorization")
+	cloned.Header.Del("Proxy-Authorization")
 	cloned.URL = &url.URL{
 		Scheme:   target.Scheme,
 		Host:     target.Host,
@@ -323,5 +324,81 @@ func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 	cloned.Host = target.Host
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		for _, name := range []string{
+			"Set-Cookie",
+			"Set-Cookie2",
+			"Clear-Site-Data",
+			"WWW-Authenticate",
+			"Proxy-Authenticate",
+			"Authentication-Info",
+			"Proxy-Authentication-Info",
+			"Content-Security-Policy-Report-Only",
+			"Report-To",
+			"Reporting-Endpoints",
+			"NEL",
+			"Origin-Agent-Cluster",
+			"Cross-Origin-Opener-Policy",
+			"Cross-Origin-Embedder-Policy",
+			"Refresh",
+		} {
+			resp.Header.Del(name)
+		}
+
+		resp.Header.Set("Content-Security-Policy", "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads")
+		resp.Header.Set("Referrer-Policy", "no-referrer")
+		resp.Header.Set("X-Content-Type-Options", "nosniff")
+		resp.Header.Set("Permissions-Policy", "camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), publickey-credentials-get=(), serial=(), usb=()")
+
+		if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+			location := resp.Header.Get("Location")
+			if location != "" {
+				rewritten, err := rewriteTunnelLocation(location, id, target, resp.Request.URL)
+				if err != nil {
+					return errors.New("unsafe tunnel redirect")
+				}
+				resp.Header.Set("Location", rewritten)
+			}
+		}
+		return nil
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+	}
 	proxy.ServeHTTP(w, cloned)
+}
+
+func rewriteTunnelLocation(location, id string, target, requestURL *url.URL) (string, error) {
+	redirect, err := url.Parse(location)
+	if err != nil || redirect.Opaque != "" || redirect.User != nil {
+		return "", errors.New("invalid redirect")
+	}
+	if redirect.Host != "" {
+		if redirect.Scheme != "http" || redirect.Host != target.Host {
+			return "", errors.New("off-upstream redirect")
+		}
+	} else if redirect.Scheme != "" {
+		return "", errors.New("invalid redirect scheme")
+	}
+
+	resolved := requestURL.ResolveReference(redirect)
+	if resolved.Scheme != "http" || resolved.Host != target.Host || resolved.User != nil {
+		return "", errors.New("off-upstream redirect")
+	}
+
+	path := resolved.Path
+	if path == "" {
+		path = "/"
+	}
+	rewritten := &url.URL{
+		Path:        "/t/" + id + path,
+		RawQuery:    resolved.RawQuery,
+		ForceQuery:  resolved.ForceQuery,
+		Fragment:    resolved.Fragment,
+		RawFragment: resolved.RawFragment,
+	}
+	if resolved.RawPath != "" {
+		rewritten.RawPath = "/t/" + url.PathEscape(id) + resolved.RawPath
+	}
+	return rewritten.String(), nil
 }

@@ -9,6 +9,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -758,11 +761,14 @@ func (h *Hub) ClientCount() int {
 
 // handleWSImpl handles the WebSocket upgrade and client lifecycle.
 func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
-	// Auth is now handled uniformly by AuthMiddleware at the mux level
-	// (GET /ws is wrapped in server.go's New()) — no inline check needed
-	// here anymore.
+	originPattern, err := s.validateWebSocketOrigin(r)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return
+	}
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
+		OriginPatterns: []string{originPattern},
 	})
 	if err != nil {
 		return
@@ -773,6 +779,227 @@ func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
 	client := newClient(s.hub, conn)
 	s.hub.Add(client)
 	go client.readPump()
+}
+
+func (s *Server) validateWebSocketOrigin(r *http.Request) (string, error) {
+	values := r.Header.Values("Origin")
+	if len(values) != 1 || values[0] == "" || strings.TrimSpace(values[0]) != values[0] ||
+		strings.Contains(values[0], ",") {
+		return "", errors.New("invalid websocket origin")
+	}
+
+	rawOrigin := values[0]
+	parsed, err := url.Parse(rawOrigin)
+	if err != nil || parsed.Opaque != "" || parsed.User != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" || parsed.Path != "" || parsed.RawPath != "" ||
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" {
+		return "", errors.New("invalid websocket origin")
+	}
+	originHost, err := canonicalURLAuthority(parsed)
+	if err != nil {
+		return "", errors.New("invalid websocket origin")
+	}
+	origin := parsed.Scheme + "://" + originHost
+	if rawOrigin != origin {
+		return "", errors.New("invalid websocket origin")
+	}
+
+	if s.behindReverseProxy {
+		expectedOrigin, expectedHost, err := configuredWebSocketOrigin(s.webRedirectURI)
+		if err != nil || origin != expectedOrigin {
+			return "", errors.New("invalid websocket origin")
+		}
+		return webSocketOriginPattern(expectedHost), nil
+	}
+
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	expectedHost, err := validateDirectRequestHost(s.addr, r.Host, scheme)
+	if err != nil {
+		return "", errors.New("invalid websocket host")
+	}
+	if origin != scheme+"://"+expectedHost {
+		return "", errors.New("invalid websocket origin")
+	}
+	return webSocketOriginPattern(expectedHost), nil
+}
+
+func configuredWebSocketOrigin(callback string) (string, string, error) {
+	if callback == "" || strings.TrimSpace(callback) != callback {
+		return "", "", errors.New("invalid websocket callback")
+	}
+	parsed, err := url.Parse(callback)
+	if err != nil || parsed.Opaque != "" || parsed.User != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" || parsed.Path != "/auth/callback" || parsed.RawPath != "" ||
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" {
+		return "", "", errors.New("invalid websocket callback")
+	}
+	host, err := canonicalURLAuthority(parsed)
+	if err != nil {
+		return "", "", errors.New("invalid websocket callback")
+	}
+	origin := parsed.Scheme + "://" + host
+	if callback != origin+"/auth/callback" {
+		return "", "", errors.New("invalid websocket callback")
+	}
+	return origin, host, nil
+}
+
+func validateDirectRequestHost(configuredAddr, requestHost, scheme string) (string, error) {
+	configuredName, configuredIP, configuredPort, err := parseHostPort(configuredAddr, true)
+	if err != nil {
+		return "", err
+	}
+	requestName, requestIP, requestPort, err := parseHostPort(requestHost, false)
+	if err != nil {
+		return "", err
+	}
+	if configuredPort != 0 && requestPort != configuredPort {
+		return "", errors.New("websocket port mismatch")
+	}
+
+	configuredWildcard := configuredName == "" ||
+		(configuredIP != nil && (configuredIP.IsUnspecified()))
+	configuredLoopback := strings.EqualFold(configuredName, "localhost") ||
+		(configuredIP != nil && configuredIP.IsLoopback())
+
+	switch {
+	case configuredWildcard:
+		if requestIP == nil && !strings.EqualFold(requestName, "localhost") {
+			return "", errors.New("websocket host mismatch")
+		}
+	case configuredLoopback:
+		if requestIP == nil {
+			if !strings.EqualFold(requestName, "localhost") {
+				return "", errors.New("websocket host mismatch")
+			}
+		} else if !requestIP.IsLoopback() {
+			return "", errors.New("websocket host mismatch")
+		}
+	case configuredIP != nil:
+		if requestIP == nil || !configuredIP.Equal(requestIP) {
+			return "", errors.New("websocket host mismatch")
+		}
+	default:
+		if requestIP != nil || !strings.EqualFold(configuredName, requestName) {
+			return "", errors.New("websocket host mismatch")
+		}
+	}
+
+	host := requestName
+	if requestIP != nil {
+		host = requestIP.String()
+	} else {
+		host = strings.ToLower(host)
+	}
+	return canonicalAuthority(host, strconv.Itoa(requestPort), scheme)
+}
+
+func parseHostPort(authority string, configured bool) (string, net.IP, int, error) {
+	host, portText, err := net.SplitHostPort(authority)
+	if err != nil {
+		return "", nil, 0, errors.New("invalid websocket authority")
+	}
+	return parseAuthorityHostPort(host, portText, configured)
+}
+
+func parseAuthorityHostPort(host, portText string, configured bool) (string, net.IP, int, error) {
+	if (!configured && host == "") || strings.ContainsAny(host, "%@/\\?#") {
+		return "", nil, 0, errors.New("invalid websocket authority")
+	}
+	port64, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || (!configured && port64 == 0) {
+		return "", nil, 0, errors.New("invalid websocket port")
+	}
+
+	if host == "" {
+		return "", nil, int(port64), nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String(), ip, int(port64), nil
+	}
+	if !validDNSHostname(host) {
+		return "", nil, 0, errors.New("invalid websocket hostname")
+	}
+	return strings.ToLower(host), nil, int(port64), nil
+}
+
+func canonicalURLAuthority(parsed *url.URL) (string, error) {
+	host := parsed.Hostname()
+	if host == "" || strings.ContainsAny(host, "%@/\\?#") || strings.HasSuffix(parsed.Host, ":") {
+		return "", errors.New("invalid URL authority")
+	}
+
+	canonicalHost := ""
+	if ip := net.ParseIP(host); ip != nil {
+		canonicalHost = ip.String()
+	} else {
+		if !validDNSHostname(host) {
+			return "", errors.New("invalid URL hostname")
+		}
+		canonicalHost = strings.ToLower(host)
+	}
+
+	return canonicalAuthority(canonicalHost, parsed.Port(), parsed.Scheme)
+}
+
+func canonicalAuthority(host, portText, scheme string) (string, error) {
+	if portText != "" {
+		port64, err := strconv.ParseUint(portText, 10, 16)
+		if err != nil || port64 == 0 {
+			return "", errors.New("invalid URL port")
+		}
+		if int(port64) == defaultPortForScheme(scheme) {
+			portText = ""
+		} else {
+			portText = strconv.FormatUint(port64, 10)
+		}
+	}
+
+	if portText != "" {
+		return net.JoinHostPort(host, portText), nil
+	}
+	if strings.Contains(host, ":") {
+		return "[" + host + "]", nil
+	}
+	return host, nil
+}
+
+func defaultPortForScheme(scheme string) int {
+	if scheme == "https" {
+		return 443
+	}
+	return 80
+}
+
+func webSocketOriginPattern(host string) string {
+	// coder/websocket matches OriginPatterns with path.Match. IPv6 literals
+	// contain brackets, so escape the opening bracket rather than treating it
+	// as a character-class pattern.
+	return strings.ReplaceAll(host, "[", "[[]")
+}
+
+func validDNSHostname(host string) bool {
+	if len(host) == 0 || len(host) > 253 || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, char := range label {
+			if (char < 'a' || char > 'z') &&
+				(char < 'A' || char > 'Z') &&
+				(char < '0' || char > '9') && char != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // NewServerMsg marshals a single-key JSON object: {msgType: payload}.

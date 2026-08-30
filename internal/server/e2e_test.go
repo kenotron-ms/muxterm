@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -94,7 +95,9 @@ func TestE2EBrowserToDaemonRoundTrip(t *testing.T) {
 	defer cancel()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws"
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": []string{ts.URL}},
+	})
 	if err != nil {
 		t.Fatalf("websocket.Dial: %v", err)
 	}
