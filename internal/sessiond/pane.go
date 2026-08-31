@@ -3,7 +3,6 @@ package sessiond
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 // Pane wraps exactly one PTY-backed child process. It streams output to a
@@ -168,25 +168,92 @@ func NewPane(
 	if onPrompt != nil {
 		p.onPromptPtr.Store(&onPrompt)
 	}
-	// If the buffer is a VTBuffer, drain its internal emulator reply pipe back
-	// to the PTY. The vt emulator writes terminal query responses (DA1, DA2,
-	// DSR, cursor-position, OSC color queries, in-band resize, etc.) into a
-	// synchronous io.Pipe. Without a reader on the other end, the first such
-	// response causes emu.Write → io.Pipe.Write to block forever, permanently
-	// hanging the readLoop goroutine.
+	// If the buffer is a VTBuffer, drain its internal emulator reply pipe and
+	// forward replies to the PTY -- but ONLY when the slave's live termios
+	// shows the child is actually in raw/noecho mode right now, i.e. it
+	// deliberately went raw to read exactly this kind of reply itself (the
+	// standard termenv/lipgloss/real-TUI idiom: MakeRaw, write query, read,
+	// restore).
 	//
-	// Forwarding the responses back to ptmx means the application (e.g. a
-	// Bubbletea TUI) actually receives the terminal's answers to its queries.
+	// Why gate at all: the vt emulator writes terminal query responses (DA1,
+	// DA2, DSR, cursor-position, OSC color queries, in-band resize, etc.)
+	// into a synchronous io.Pipe; something must continuously drain it or
+	// the first such response blocks emu.Write forever, permanently hanging
+	// readLoop. But writing that reply to ptmx is indistinguishable, to the
+	// kernel, from a keystroke: if the slave is in the default cooked mode
+	// (ICANON+ECHO -- true for any process that hasn't explicitly gone raw),
+	// the line discipline echoes it straight back into the same stream
+	// readLoop is recording into VTBuffer, producing visible garbage (e.g.
+	// "^[]11;rgb:.../^[\^[[6n"-shaped bytes leaking in front of a prompt
+	// after something like `gh auth switch`). Cooked mode can never deliver
+	// an un-terminated reply to a line-buffered read() anyway (no trailing
+	// newline), so dropping it there costs nothing real -- it was never
+	// going to reach the child as usable input either way, and left
+	// in place it can sit as stray un-terminated bytes ahead of whatever
+	// real input line comes next.
 	//
-	// Lifecycle note: this goroutine exits when ptmx.Write fails (ptmx closed
-	// on pane exit). It may briefly outlive Close() if blocked on emu.Read()
-	// waiting for a response that never arrives — acceptable given the small
-	// number of panes and that the emulator produces responses only on demand.
+	// Lifecycle note: this goroutine exits when vtb.Read returns an error
+	// (pane torn down). It may briefly outlive Close() if blocked on
+	// emu.Read() waiting for a response that never arrives -- acceptable
+	// given the small number of panes and that the emulator produces
+	// responses only on demand.
 	if vtb, ok := buf.(*VTBuffer); ok {
-		go func() { _, _ = io.Copy(ptmx, vtb) }()
+		go forwardQueryReplies(ptmx, vtb)
 	}
 	go p.readLoop(generation)
 	return p, nil
+}
+
+// forwardQueryReplies drains buf's internal emulator query-reply pipe and
+// forwards each reply to the PTY master, but only when the slave's current
+// termios shows the child is in raw/noecho mode -- see the doc comment at
+// this goroutine's call site in NewPane for the full rationale.
+func forwardQueryReplies(ptmx *os.File, buf *VTBuffer) {
+	chunk := make([]byte, 4096)
+	for {
+		n, err := buf.Read(chunk)
+		if n > 0 && slaveIsRawNoEcho(ptmx) {
+			_, _ = ptmx.Write(chunk[:n])
+		}
+		// else: silently dropped -- see NewPane's doc comment.
+		if err != nil {
+			return
+		}
+	}
+}
+
+// slaveIsRawNoEcho reports whether the PTY slave's current termios has ECHO
+// disabled, i.e. the child process has deliberately gone raw (the standard
+// idiom for a program about to read a terminal-capability query reply
+// itself). Fails closed: if termios can't be read, treat as cooked mode so
+// a reply is dropped rather than risking an echo leak.
+//
+// Uses ptmx.SyscallConn()/raw.Control() rather than ptmx.Fd() -- see
+// inspectForegroundPGRP in foreground_pgrp_supported.go for the identical
+// pattern and why: os.File.Fd() forces the underlying fd into blocking mode
+// as a side effect and detaches it from the runtime's netpoller, which is
+// unsafe here since this same ptmx is simultaneously used for concurrent
+// async Read (readLoop) and Write (Pane.Write, and this goroutine's own
+// forwarding write) from other goroutines. SyscallConn()'s Control callback
+// gets a valid fd for the ioctl's duration without that side effect.
+func slaveIsRawNoEcho(ptmx *os.File) bool {
+	raw, err := ptmx.SyscallConn()
+	if err != nil {
+		return false
+	}
+	var (
+		t        *unix.Termios
+		ioctlErr error
+	)
+	if err := raw.Control(func(fd uintptr) {
+		t, ioctlErr = unix.IoctlGetTermios(int(fd), unix.TCGETS)
+	}); err != nil {
+		return false
+	}
+	if ioctlErr != nil || t == nil {
+		return false
+	}
+	return t.Lflag&unix.ECHO == 0
 }
 
 // scanOSC133 searches data for an OSC 133;D sequence (command-done marker) and
