@@ -246,7 +246,7 @@ func slaveIsRawNoEcho(ptmx *os.File) bool {
 		ioctlErr error
 	)
 	if err := raw.Control(func(fd uintptr) {
-		t, ioctlErr = unix.IoctlGetTermios(int(fd), unix.TCGETS)
+		t, ioctlErr = unix.IoctlGetTermios(int(fd), tcgetsRequest)
 	}); err != nil {
 		return false
 	}
