@@ -10,9 +10,15 @@ STABLE_BIN := $(HOME)/.local/bin/muxterm
 AIR   := $(shell command -v air   2>/dev/null || echo $(HOME)/go/bin/air)
 CADDY := $(shell command -v caddy 2>/dev/null || echo $(HOME)/go/bin/caddy)
 
+# Version stamped into cmd/muxterm's `version` var (see .goreleaser.yaml for
+# the tagged-release equivalent). git describe with --always/--dirty so a
+# build from a non-tag commit (the common dev case) still identifies itself
+# instead of silently falling back to main.go's "dev" default.
+DEV_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.
 build: web
-	go build -o bin/muxterm ./cmd/muxterm
+	go build -ldflags "-X main.version=$(DEV_VERSION)" -o bin/muxterm ./cmd/muxterm
 
 # Dev mode: demo backend + demo frontend + Vite watch (muxterm UI) + Caddy + air (Go hot-reload).
 #   - demo/backend  node server.mjs on :9002  (log: tmp/demo-backend.out)
