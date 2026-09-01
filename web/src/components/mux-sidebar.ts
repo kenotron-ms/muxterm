@@ -4,9 +4,27 @@ import { store } from '../state.js';
 import { workspaceLabel } from './workspace-picker.js';
 import './launcher-menu.js';
 import { icon } from '../lib/icons.js';
-import { Ellipsis } from 'lucide';
+import { Download, Ellipsis } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
+import {
+  fetchUpdateStatus,
+  applyUpdate,
+  UpdateEndpointMissingError,
+  type UpdateStatus,
+} from '../lib/update.js';
+
+// ---------------------------------------------------------------------------
+// Self-update footer
+// ---------------------------------------------------------------------------
+
+/** UI phase of the footer's update control. */
+type UpdatePhase = 'idle' | 'checking' | 'updating' | 'failed';
+
+/** Poll cadence while waiting for the restarted server to report a new version. */
+const UPDATE_POLL_INTERVAL_MS = 1000;
+/** Give up after this many polls (~60s) and surface a failure. */
+const UPDATE_POLL_MAX_ATTEMPTS = 60;
 
 // ---------------------------------------------------------------------------
 // Component
@@ -232,6 +250,68 @@ export class MuxSidebar extends LitElement {
       border-color: var(--chrome-accent);
       background: var(--chrome-hover);
     }
+
+    /* ---- update footer (pinned; never scrolls with .tab-content) ---- */
+
+    .footer {
+      flex-shrink: 0;
+      padding: 8px 12px 10px;
+      border-top: 1px solid var(--chrome-border);
+    }
+
+    .footer-line {
+      font-size: 12px;
+      color: var(--chrome-text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .footer-note {
+      font-size: 11px;
+      color: var(--chrome-text-dim);
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+    }
+
+    .update-btn {
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      margin-top: 6px;
+      padding: 6px 10px;
+      background: transparent;
+      border: 1px solid var(--chrome-accent);
+      border-radius: 5px;
+      color: var(--chrome-accent);
+      font: inherit;
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+
+    .update-btn:hover {
+      background: var(--chrome-hover);
+    }
+
+    .update-btn:focus-visible {
+      outline: 2px solid var(--chrome-accent);
+      outline-offset: 2px;
+    }
+
+    .update-btn:disabled {
+      cursor: default;
+      opacity: 0.55;
+      border-color: var(--chrome-border);
+      color: var(--chrome-text-dim);
+    }
+
+    .update-btn:disabled:hover {
+      background: transparent;
+    }
   `;
 
   // ---------------------------------------------------------------------------
@@ -242,7 +322,14 @@ export class MuxSidebar extends LitElement {
   @state() private _renaming: string | null = null;
   @state() private _menuOpen = false;
 
+  /** Server-reported update status; null until the first check resolves. */
+  @state() private _updateStatus: UpdateStatus | null = null;
+  @state() private _updatePhase: UpdatePhase = 'idle';
+  @state() private _updateError = '';
+
   private _unsub: (() => void) | null = null;
+  private _updatePollTimer: number | null = null;
+  private _updatePollAttempts = 0;
 
   private _onOutsideClick = (e: MouseEvent): void => {
     if (this._menuOpen && !e.composedPath().includes(this)) {
@@ -280,6 +367,92 @@ export class MuxSidebar extends LitElement {
     super.disconnectedCallback();
     this._unsub?.();
     this._unsub = null;
+    this._clearUpdatePoll();
+  }
+
+  /** One status check, after first paint — the footer never blocks rendering. */
+  override firstUpdated(): void {
+    this._updatePhase = 'checking';
+    void fetchUpdateStatus()
+      .then((status) => {
+        this._updateStatus = status;
+      })
+      .catch(() => {
+        // Status unknown (offline, old server): the footer stays empty.
+      })
+      .finally(() => {
+        if (this._updatePhase === 'checking') this._updatePhase = 'idle';
+      });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Self-update
+  // ---------------------------------------------------------------------------
+
+  /** Starts (or retries) the update. Safe to call from both button states. */
+  private _onUpdateClick(): void {
+    if (this._updatePhase === 'updating') return;
+    const previousVersion = this._updateStatus?.currentVersion ?? '';
+    this._updatePhase = 'updating';
+    this._updateError = '';
+    this._updatePollAttempts = 0;
+    void applyUpdate()
+      .then(() => {
+        // Binary replaced; the server restarts ~500ms later.
+        this._scheduleUpdatePoll(previousVersion);
+      })
+      .catch((e: unknown) => {
+        this._updatePhase = 'failed';
+        this._updateError = e instanceof Error ? e.message : String(e);
+      });
+  }
+
+  private _clearUpdatePoll(): void {
+    if (this._updatePollTimer !== null) {
+      window.clearTimeout(this._updatePollTimer);
+      this._updatePollTimer = null;
+    }
+  }
+
+  private _scheduleUpdatePoll(previousVersion: string): void {
+    this._clearUpdatePoll();
+    this._updatePollTimer = window.setTimeout(() => {
+      this._updatePollTimer = null;
+      void this._pollForRestart(previousVersion);
+    }, UPDATE_POLL_INTERVAL_MS);
+  }
+
+  /**
+   * Waits for the restarted server to report a different currentVersion, then
+   * reloads. Poll failures are EXPECTED while the server is down and are
+   * swallowed — only the attempt budget running out counts as a failure.
+   */
+  private async _pollForRestart(previousVersion: string): Promise<void> {
+    if (!this.isConnected || this._updatePhase !== 'updating') return;
+    this._updatePollAttempts++;
+    try {
+      const status = await fetchUpdateStatus();
+      if (status.currentVersion !== '' && status.currentVersion !== previousVersion) {
+        window.location.reload();
+        return;
+      }
+    } catch (e: unknown) {
+      // A 404 means an HTTP server is back up but has no update endpoint —
+      // the restart landed on a build predating this feature, so the update
+      // worked. Reload rather than time out and cry failure.
+      if (e instanceof UpdateEndpointMissingError) {
+        window.location.reload();
+        return;
+      }
+      // Otherwise the server is still restarting; connection errors are normal.
+    }
+    if (!this.isConnected || this._updatePhase !== 'updating') return;
+    if (this._updatePollAttempts >= UPDATE_POLL_MAX_ATTEMPTS) {
+      this._updatePhase = 'failed';
+      this._updateError = 'Update did not complete in time';
+      return;
+    }
+    this._scheduleUpdatePoll(previousVersion);
   }
 
   // ---------------------------------------------------------------------------
@@ -429,6 +602,91 @@ export class MuxSidebar extends LitElement {
   }
 
   // ---------------------------------------------------------------------------
+  // Footer render
+  // ---------------------------------------------------------------------------
+
+  private _renderFooter() {
+    // Failure survives a stale/unknown status, so it is checked first.
+    if (this._updatePhase === 'failed') {
+      return html`
+        <div class="footer">
+          <div class="footer-line">Update failed</div>
+          <div class="footer-note">${this._updateError}</div>
+          <button class="update-btn" @click="${() => this._onUpdateClick()}">
+            ${icon(Download, { size: 14 })}Retry
+          </button>
+        </div>
+      `;
+    }
+
+    const status = this._updateStatus;
+    if (!status) return ''; // check still in flight (or it failed): show nothing
+
+    const versionLine = status.currentVersion
+      ? `muxterm ${status.currentVersion}`
+      : 'muxterm';
+
+    if (this._updatePhase === 'updating') {
+      return html`
+        <div class="footer">
+          <div class="footer-line">${versionLine}</div>
+          <button class="update-btn" disabled>
+            ${icon(Download, { size: 14 })}Updating…
+          </button>
+          <div class="footer-note">downloading and restarting…</div>
+        </div>
+      `;
+    }
+
+    // Dev build: nothing actionable, by design.
+    if (status.devBuild) {
+      return html`
+        <div class="footer">
+          <div class="footer-line">${versionLine}</div>
+          <div class="footer-note">${status.reason || 'dev build — updates disabled'}</div>
+        </div>
+      `;
+    }
+
+    if (status.canUpdate) {
+      const label = status.latestVersion ? `Update to ${status.latestVersion}` : 'Update';
+      return html`
+        <div class="footer">
+          <div class="footer-line">${versionLine}</div>
+          <button class="update-btn" @click="${() => this._onUpdateClick()}">
+            ${icon(Download, { size: 14 })}${label}
+          </button>
+        </div>
+      `;
+    }
+
+    // Newer release exists but this install cannot self-update (Homebrew,
+    // unsupported platform): the server's reason, muted and non-actionable.
+    if (status.updateAvailable) {
+      return html`
+        <div class="footer">
+          <div class="footer-line">${versionLine}</div>
+          <div class="footer-note">
+            ${status.reason || 'update available — updates not supported here'}
+          </div>
+        </div>
+      `;
+    }
+
+    // A failed release check is NOT "up to date" — we never learned what the
+    // latest version is. Saying otherwise would be a lie the user can't see
+    // through.
+    return html`
+      <div class="footer">
+        <div class="footer-line">${versionLine}</div>
+        <div class="footer-note">
+          ${status.error ? 'update check unavailable' : 'up to date'}
+        </div>
+      </div>
+    `;
+  }
+
+  // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
 
@@ -453,6 +711,7 @@ export class MuxSidebar extends LitElement {
       <div class="tab-content">
         ${this._renderWorkspaces()}
       </div>
+      ${this._renderFooter()}
     `;
   }
 }

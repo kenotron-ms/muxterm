@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/ai"
@@ -53,6 +54,10 @@ type Config struct {
 	// When true the IsLocalhost() auth bypass is disabled entirely — see
 	// internal/server/authmiddleware.go.
 	BehindReverseProxy bool
+
+	// Version is the running binary's version string (main.version). Empty or
+	// "dev" marks a development build, for which self-update is not offered.
+	Version string
 }
 
 // Server is the HTTP server for muxterm.
@@ -75,6 +80,12 @@ type Server struct {
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
 	ai *ai.Manager
+
+	// version is the running binary's version string, used by the
+	// /api/update/* routes. updating serializes apply requests so two
+	// concurrent clients cannot both rewrite the binary.
+	version  string
+	updating atomic.Bool
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
@@ -93,6 +104,7 @@ func New(cfg Config) *Server {
 		tunnels:        tunnels,
 		authSrv:        cfg.AuthServer,
 		webRedirectURI: cfg.WebRedirectURI,
+		version:        cfg.Version,
 	}
 
 	s.configPath = cfg.ConfigPath
@@ -151,6 +163,11 @@ func New(cfg Config) *Server {
 	s.mux.Handle("PUT /api/ai/key", protect(http.HandlerFunc(s.handleAIPutKey)))
 	s.mux.Handle("DELETE /api/ai/key", protect(http.HandlerFunc(s.handleAIDeleteKey)))
 	s.mux.Handle("POST /api/ai/ping", protect(http.HandlerFunc(s.handleAIPing)))
+
+	// Self-update. Protected like every other owner surface: applying an
+	// update rewrites the binary this process is running from.
+	s.mux.Handle("GET /api/update/status", protect(http.HandlerFunc(s.handleUpdateStatus)))
+	s.mux.Handle("POST /api/update/apply", protect(http.HandlerFunc(s.handleUpdateApply)))
 
 	s.mux.Handle("GET /api/tunnels", protect(http.HandlerFunc(s.handleTunnelList)))
 	s.mux.Handle("POST /api/tunnels", protect(http.HandlerFunc(s.handleTunnelCreate)))
