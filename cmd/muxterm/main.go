@@ -453,12 +453,32 @@ func openBrowser(url string) {
 	}
 }
 
-// runAmplifierBundleInstall adds the muxterm Amplifier bundle as an app bundle
-// by running: amplifier bundle add --app git+https://github.com/kenotron-ms/muxterm@main#subdirectory=bundle
-// The --app flag makes the bundle active on every Amplifier session, not just
-// when explicitly selected.
+// runAmplifierBundleInstall adds muxterm's Amplifier BEHAVIOR (behaviors/
+// muxterm.yaml) as an app bundle -- deliberately not the top-level bundle.md.
+// bundle.md is a full, standalone app bundle that includes all of
+// amplifier-foundation as a base dependency; installing THAT as an --app
+// bundle would silently force amplifier-foundation's entire agent/skill/tool
+// surface onto every session for every user, regardless of what bundle they
+// already run. behaviors/muxterm.yaml carries only what muxterm itself
+// needs (the hooks-muxterm-session hook, the tool-mcp wiring, the
+// muxterm-expert agent, muxterm's own context) with no foundation
+// dependency baked in -- exactly what an --app "always compose this in"
+// install should add.
+//
+// The URI's #subdirectory fragment points directly at the .yaml file, not
+// its containing directory: `amplifier bundle add` requires a subdirectory
+// to contain a file literally named bundle.md or bundle.yaml, and
+// behaviors/muxterm.yaml matches neither name -- confirmed by testing both
+// forms directly (`#subdirectory=behaviors` fails with "missing bundle.md
+// or bundle.yaml"; `#subdirectory=behaviors/muxterm.yaml` succeeds).
+// Precedented elsewhere in the ecosystem: amplifier-bundle-digital-twin-
+// universe's own app-bundle install uses the identical
+// #subdirectory=behaviors/<name>.yaml shape.
+//
+// The --app flag makes the behavior active on every Amplifier session, not
+// just when explicitly selected.
 func runAmplifierBundleInstall() error {
-	const bundleURI = "git+https://github.com/kenotron-ms/muxterm@main#subdirectory=bundle"
+	const bundleURI = "git+https://github.com/kenotron-ms/muxterm@main#subdirectory=behaviors/muxterm.yaml"
 
 	cmd := exec.Command("amplifier", "bundle", "add", "--app", bundleURI)
 	cmd.Stdout = os.Stdout
