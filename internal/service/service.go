@@ -50,6 +50,15 @@ Environment=PATH={{.SafePATH}}
 # fd on process exit SIGHUPs them, same as always, just strictly AFTER the
 # shutdown snapshot has already read them, not concurrently with it.
 KillMode=mixed
+# TimeoutStopSec=20s (not systemd's inherited 90s default): the browser's
+# self-update flow polls for the server to come back for 60s
+# (UPDATE_POLL_INTERVAL_MS x UPDATE_POLL_MAX_ATTEMPTS in mux-sidebar.ts) and
+# then reports failure. A daemon that took the full 90s to stop would blow
+# past that budget and read to the user as a failed update even though it
+# eventually succeeded. 20s still leaves ample room for the shutdown snapshot
+# (every pane's scrollback is serialized before exit) before the KillMode=mixed
+# SIGKILL sweep lands.
+TimeoutStopSec=20s
 
 [Install]
 WantedBy=default.target
