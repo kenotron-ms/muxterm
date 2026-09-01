@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
 )
@@ -87,6 +88,14 @@ func TestDefaults(t *testing.T) {
 	}
 	if cfg.Driver.Launch != "muxterm-agent" {
 		t.Errorf("Driver.Launch: got %q, want %q", cfg.Driver.Launch, "muxterm-agent")
+	}
+
+	// Restore
+	if !cfg.Restore.Enabled {
+		t.Errorf("Restore.Enabled: got false, want true")
+	}
+	if cfg.Restore.SnapshotInterval != 30*time.Second {
+		t.Errorf("Restore.SnapshotInterval: got %v, want %v", cfg.Restore.SnapshotInterval, 30*time.Second)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -23,6 +24,7 @@ type Config struct {
 	Workspace WorkspaceConfig `toml:"workspace"  json:"workspace"`
 	Driver    DriverConfig    `toml:"driver"     json:"driver"`
 	Server    ServerConfig    `toml:"server"     json:"server"`
+	Restore   RestoreConfig   `toml:"restore"    json:"restore"`
 }
 
 // ServerConfig holds deployment-topology settings that decide how muxterm
@@ -135,6 +137,26 @@ type DriverConfig struct {
 	Launch             string `toml:"launch"              json:"launch"`
 }
 
+// RestoreConfig controls session-restore snapshotting: periodic capture of
+// each pane's cwd, argv, agent identity, and recent output to disk, plus
+// boot-time restore from the most recent snapshot — matching what
+// tmux-resurrect + tmux-continuum do together for a real tmux session.
+//
+// Config-file-only, like DriverConfig/ServerConfig above: deliberately absent
+// from Merge() (see its doc comment) since a browser PATCH must never toggle
+// disk-persistence behavior.
+type RestoreConfig struct {
+	// Enabled turns periodic snapshotting and boot-time restore on or off.
+	// When false, sessiond behaves exactly as it does today: a cold-start
+	// blank default workspace on every start, nothing ever written to disk.
+	Enabled bool `toml:"enabled" json:"enabled"`
+	// SnapshotInterval is how often the daemon captures a fresh snapshot of
+	// every live workspace/pane while running. Authored in TOML as a
+	// duration string (e.g. "30s"); BurntSushi/toml decodes that directly
+	// into a time.Duration.
+	SnapshotInterval time.Duration `toml:"snapshot_interval" json:"snapshot_interval"`
+}
+
 // Load reads a TOML config file from path and returns a Config.
 // Resolution rules:
 //   - Missing file → Defaults(), no error (config is optional)
@@ -242,6 +264,10 @@ func Defaults() Config {
 		Server: ServerConfig{
 			PublicOrigin:       "",
 			BehindReverseProxy: false,
+		},
+		Restore: RestoreConfig{
+			Enabled:          true,
+			SnapshotInterval: 30 * time.Second,
 		},
 	}
 }

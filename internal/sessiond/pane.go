@@ -112,6 +112,12 @@ func resolveArgv(argv []string) []string {
 // first prompt can fire while onPromptPtr is still nil and TypeShellPrompt
 // is silently dropped — causing clients that wait on TypeShellPrompt (e.g.
 // amplifier-app-cli) to hang indefinitely.
+//
+// cwd overrides the child's working directory. Empty string preserves
+// today's behavior for every existing caller: unconditionally forced to
+// $HOME (see below). A non-empty value is used verbatim instead — the only
+// caller that passes one is the session-restore applier (snapshot.go),
+// restarting a pane in the directory it was last seen in.
 func NewPane(
 	localID int,
 	argv []string,
@@ -120,6 +126,7 @@ func NewPane(
 	onData func(localID int, data []byte),
 	onExit func(localID int, exitCode int, runtimeMilliseconds int64),
 	onPrompt func(localID int, msg *Message),
+	cwd string,
 ) (*Pane, error) {
 	if buf == nil {
 		// Production default: VTBuffer (screen-state replay). Raw byte replay
@@ -139,7 +146,11 @@ func NewPane(
 	c := exec.Command(launch.argv[0], launch.argv[1:]...)
 	c.Env = append(os.Environ(), "TERM=xterm-256color")
 	c.Env = append(c.Env, launch.env...)
-	if home := os.Getenv("HOME"); home != "" {
+	if cwd != "" {
+		// Restore path: reopen the pane in the directory it was last seen
+		// in, rather than forcing $HOME.
+		c.Dir = cwd
+	} else if home := os.Getenv("HOME"); home != "" {
 		c.Dir = home
 	}
 
