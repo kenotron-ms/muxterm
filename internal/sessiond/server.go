@@ -563,6 +563,7 @@ func (c *conn) createPane(msg Message) {
 		func(id int, data []byte) { c.srv.broadcastPaneData(wsID, id, data) },
 		func(id int, exitCode int, runtimeMs int64) { c.srv.handlePaneExit(wsID, id, exitCode, runtimeMs) },
 		onPromptFn, // stored before readLoop starts — eliminates OSC 133 race
+		"",         // cwd: no override for a live-created pane — today's forced-$HOME behavior
 	)
 	if err != nil {
 		c.replyError(msg.CID, CodePaneSpawnFailed, err.Error())

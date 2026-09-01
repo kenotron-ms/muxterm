@@ -265,3 +265,56 @@ func (r *Registry) removePaneLocked(wsID string, paneID int) (*Pane, int, bool) 
 	ws.membershipGeneration++
 	return p, len(ws.Panes), true
 }
+
+// workspaceLiveView is a point-in-time, read-only view of one workspace's
+// identity, layout, and live panes, captured under Registry's lock. Pane
+// values are the live *Pane pointers (not copies): Pane's own methods
+// (Replay, Info, etc.) are independently synchronized, so callers may safely
+// invoke them after the registry lock is released. Used only by the
+// session-restore snapshot writer (see snapshot.go).
+type workspaceLiveView struct {
+	ID     string
+	Name   string
+	Layout map[string]string
+	Panes  []*Pane
+}
+
+// snapshotView returns a deterministic, point-in-time view of every
+// workspace and its live panes, sorted by workspace id then pane id. It
+// takes only a brief hold of r.mu; the (potentially slow) per-pane
+// inspection work callers perform afterward (Replay(), /proc reads, etc.)
+// happens outside this lock, so it never blocks live registry mutations for
+// the duration of a full snapshot walk.
+func (r *Registry) snapshotView() []workspaceLiveView {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	ids := make([]string, 0, len(r.workspaces))
+	for id := range r.workspaces {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	out := make([]workspaceLiveView, 0, len(ids))
+	for _, id := range ids {
+		ws := r.workspaces[id]
+
+		paneIDs := make([]int, 0, len(ws.Panes))
+		for pid := range ws.Panes {
+			paneIDs = append(paneIDs, pid)
+		}
+		sort.Ints(paneIDs)
+		panes := make([]*Pane, 0, len(paneIDs))
+		for _, pid := range paneIDs {
+			panes = append(panes, ws.Panes[pid])
+		}
+
+		layout := make(map[string]string, len(ws.Layouts))
+		for k, v := range ws.Layouts {
+			layout[k] = v
+		}
+
+		out = append(out, workspaceLiveView{ID: id, Name: ws.Name, Layout: layout, Panes: panes})
+	}
+	return out
+}

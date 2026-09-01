@@ -1,7 +1,20 @@
 bundle:
   name: muxterm-behavior
   version: 1.0.0
-  description: Wires the muxterm MCP server as a tool source and registers the muxterm-expert agent
+  description: Wires the muxterm MCP server as a tool source, registers the muxterm-expert agent, and stamps the session id into the process title for crash-recovery discovery
+
+hooks:
+  # On session:start, stamp "amplifier resume <session-id>" into this
+  # process's own title via setproctitle. muxterm's sessiond already reads
+  # /proc/<pid>/cmdline for every pane (to capture argv for crash-recovery
+  # snapshots); this hook makes that existing read also carry the session
+  # id, so a restored pane can resume the exact conversation instead of
+  # starting a fresh one. Skipped for sub-agent sessions (parent_id set) so
+  # a delegate()/Task-spawned session never clobbers the visible root
+  # session's stamp. See modules/hooks-muxterm-session for the full
+  # rationale (why setproctitle, not a file or an env var).
+  - module: hooks-muxterm-session
+    source: git+https://github.com/kenotron-ms/muxterm@main#subdirectory=modules/hooks-muxterm-session
 
 tools:
   - module: tool-mcp

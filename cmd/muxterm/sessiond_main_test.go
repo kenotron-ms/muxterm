@@ -14,6 +14,14 @@ import (
 // context is cancelled, and returns nil on graceful shutdown (the nil-on-cancel
 // guarantee is load-bearing per the frozen Phase-1 contract).
 func TestServeSessiond_ListensThenShutsDown(t *testing.T) {
+	// serveSessiond now also loads config.toml and reads/writes a
+	// session-restore snapshot, both resolved via XDG env vars. Isolate both
+	// to a fresh temp dir so this test never touches (or is affected by) a
+	// real user's config or a real prior snapshot from an actual muxterm run
+	// on the machine running this test.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
 	socketPath := filepath.Join(t.TempDir(), "sub", "sessiond.sock")
 
 	ctx, cancel := context.WithCancel(context.Background())
