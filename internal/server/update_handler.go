@@ -32,7 +32,8 @@ func writeUpdateError(w http.ResponseWriter, code int, reason string) {
 //
 // AuthMiddleware protects this route at mux registration.
 func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
-	writeUpdateJSON(w, http.StatusOK, update.Check(r.Context(), s.version))
+	st, _ := update.Check(r.Context(), s.version)
+	writeUpdateJSON(w, http.StatusOK, st)
 }
 
 // handleUpdateApply downloads, verifies, and installs the latest release, then
@@ -60,7 +61,9 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	st := update.Check(r.Context(), s.version)
+	// Check hands back the release it resolved, so the install below reuses
+	// that exact release instead of fetching it again.
+	st, rel := update.Check(r.Context(), s.version)
 	if !st.CanUpdate {
 		reason := st.Reason
 		if reason == "" {
@@ -72,13 +75,15 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		writeUpdateError(w, http.StatusConflict, reason)
 		return
 	}
-
-	rel, err := update.LatestRelease(r.Context())
-	if err != nil {
-		log.Printf("update_handler: resolve latest release: %v", err)
-		writeUpdateError(w, http.StatusInternalServerError, err.Error())
+	if rel == nil {
+		// Unreachable while Check keeps its contract (CanUpdate implies a
+		// resolved release). Guarded anyway: a nil deref here would take the
+		// whole server down rather than fail one request.
+		log.Printf("update_handler: CanUpdate with no resolved release")
+		writeUpdateError(w, http.StatusInternalServerError, "could not resolve the latest release")
 		return
 	}
+
 	if err := update.Apply(r.Context(), rel); err != nil {
 		// The wrapped message (asset name, checksum digests, paths) is safe to
 		// return here: this surface is owner-only and auth-protected, and the

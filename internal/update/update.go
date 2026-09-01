@@ -120,7 +120,7 @@ func LatestRelease(ctx context.Context) (*Release, error) {
 // GET /api/update/status.
 type Status struct {
 	CurrentVersion  string `json:"currentVersion"`
-	LatestVersion   string `json:"latestVersion"`   // leading "v" stripped; "" when unknown
+	LatestVersion   string `json:"latestVersion"` // leading "v" stripped; "" when unknown
 	UpdateAvailable bool   `json:"updateAvailable"`
 	CanUpdate       bool   `json:"canUpdate"`
 	DevBuild        bool   `json:"devBuild"`
@@ -133,7 +133,15 @@ type Status struct {
 // returns an error: a failed release lookup populates Error and leaves
 // CanUpdate false, because a status endpoint that 500s on a flaky network is
 // worse than one that reports "could not check".
-func Check(ctx context.Context, current string) Status {
+//
+// The resolved release is returned alongside the status so a caller that goes
+// on to install it does not have to fetch it a second time. Two fetches would
+// double GitHub API consumption and, if a release were published between them,
+// would decide CanUpdate against one release and install a different one.
+//
+// The release is nil whenever no lookup happened or the lookup failed — a dev
+// build or a populated Error. It is always non-nil when CanUpdate is true.
+func Check(ctx context.Context, current string) (Status, *Release) {
 	method, reason := Platform()
 	st := Status{CurrentVersion: current, Method: method}
 
@@ -142,13 +150,13 @@ func Check(ctx context.Context, current string) Status {
 		// compare against and must never be replaced by a release binary.
 		st.DevBuild = true
 		st.Reason = "Development build — updates are managed by your build, not by releases."
-		return st
+		return st, nil
 	}
 
 	rel, err := LatestRelease(ctx)
 	if err != nil {
 		st.Error = err.Error()
-		return st
+		return st, nil
 	}
 
 	st.LatestVersion = strings.TrimPrefix(rel.Tag, "v")
@@ -157,5 +165,5 @@ func Check(ctx context.Context, current string) Status {
 	if st.UpdateAvailable && method != MethodBinary {
 		st.Reason = reason
 	}
-	return st
+	return st, rel
 }
