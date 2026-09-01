@@ -33,6 +33,23 @@ ExecStart={{.BinaryPath}} sessiond
 Restart=on-failure
 RestartSec=5s
 Environment=PATH={{.SafePATH}}
+# KillMode=mixed (not the systemd default, control-group): on stop/restart,
+# send the stop signal to sessiond's own PID ONLY first, not to every child
+# pty process in the cgroup simultaneously. sessiond's own shutdown path
+# (BuildSnapshot(..., "shutdown") + WriteSnapshot, in cmd/muxterm) runs
+# INSIDE this process, before it exits -- with the default control-group
+# KillMode, systemd signals sessiond and every pane's foreground process
+# (e.g. an interactive amplifier session) at the same instant, so that
+# shutdown snapshot can race against its own children dying mid-capture:
+# /proc/<pid>/cwd and /proc/<pid>/cmdline reads both fail if the pid is
+# already gone, silently degrading a restore to a bare shell with no known
+# cwd. mixed still signals the whole remaining cgroup with SIGKILL if the
+# service hasn't stopped within TimeoutStopSec, so nothing is left orphaned
+# forever -- it only removes the PREMATURE signal that raced the snapshot.
+# Child pty processes still die exactly as before: closing the pty master
+# fd on process exit SIGHUPs them, same as always, just strictly AFTER the
+# shutdown snapshot has already read them, not concurrently with it.
+KillMode=mixed
 
 [Install]
 WantedBy=default.target
