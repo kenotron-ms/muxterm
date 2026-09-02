@@ -126,11 +126,16 @@ func downloadAndHash(ctx context.Context, url string, dst io.Writer) (string, er
 	}
 
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(dst, h), io.LimitReader(resp.Body, maxAssetBytes))
+	// Read one byte PAST the cap. A LimitReader stops exactly at its limit, so
+	// reading only maxAssetBytes cannot distinguish an asset of exactly that
+	// size from one that was truncated -- the check would have to reject both
+	// or accept both. The extra byte makes "over the cap" observable, so an
+	// asset of exactly maxAssetBytes is accepted and a larger one is refused.
+	n, err := io.Copy(io.MultiWriter(dst, h), io.LimitReader(resp.Body, maxAssetBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("copy body: %w", err)
 	}
-	if n >= maxAssetBytes {
+	if n > maxAssetBytes {
 		return "", fmt.Errorf("asset exceeds %d bytes", int64(maxAssetBytes))
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -201,7 +206,10 @@ func extractBinary(tarPath, destDir string) (string, error) {
 			return "", fmt.Errorf("create temp file in %s: %w", destDir, err)
 		}
 		outPath := out.Name()
-		n, copyErr := io.Copy(out, io.LimitReader(tr, maxBinaryBytes))
+		// +1 for the same reason as downloadAndHash: a LimitReader stops at
+		// its limit, so the extra byte is what makes "over the cap"
+		// distinguishable from "exactly at the cap".
+		n, copyErr := io.Copy(out, io.LimitReader(tr, maxBinaryBytes+1))
 		closeErr := out.Close()
 		switch {
 		case copyErr != nil:
@@ -210,7 +218,7 @@ func extractBinary(tarPath, destDir string) (string, error) {
 		case closeErr != nil:
 			_ = os.Remove(outPath)
 			return "", fmt.Errorf("write %s: %w", binaryName, closeErr)
-		case n >= maxBinaryBytes:
+		case n > maxBinaryBytes:
 			_ = os.Remove(outPath)
 			return "", fmt.Errorf("extract %s: exceeds %d bytes", binaryName, int64(maxBinaryBytes))
 		}
