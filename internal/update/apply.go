@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 const (
@@ -123,11 +126,16 @@ func downloadAndHash(ctx context.Context, url string, dst io.Writer) (string, er
 	}
 
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(dst, h), io.LimitReader(resp.Body, maxAssetBytes))
+	// Read one byte PAST the cap. A LimitReader stops exactly at its limit, so
+	// reading only maxAssetBytes cannot distinguish an asset of exactly that
+	// size from one that was truncated -- the check would have to reject both
+	// or accept both. The extra byte makes "over the cap" observable, so an
+	// asset of exactly maxAssetBytes is accepted and a larger one is refused.
+	n, err := io.Copy(io.MultiWriter(dst, h), io.LimitReader(resp.Body, maxAssetBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("copy body: %w", err)
 	}
-	if n >= maxAssetBytes {
+	if n > maxAssetBytes {
 		return "", fmt.Errorf("asset exceeds %d bytes", int64(maxAssetBytes))
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -198,7 +206,10 @@ func extractBinary(tarPath, destDir string) (string, error) {
 			return "", fmt.Errorf("create temp file in %s: %w", destDir, err)
 		}
 		outPath := out.Name()
-		n, copyErr := io.Copy(out, io.LimitReader(tr, maxBinaryBytes))
+		// +1 for the same reason as downloadAndHash: a LimitReader stops at
+		// its limit, so the extra byte is what makes "over the cap"
+		// distinguishable from "exactly at the cap".
+		n, copyErr := io.Copy(out, io.LimitReader(tr, maxBinaryBytes+1))
 		closeErr := out.Close()
 		switch {
 		case copyErr != nil:
@@ -207,7 +218,7 @@ func extractBinary(tarPath, destDir string) (string, error) {
 		case closeErr != nil:
 			_ = os.Remove(outPath)
 			return "", fmt.Errorf("write %s: %w", binaryName, closeErr)
-		case n >= maxBinaryBytes:
+		case n > maxBinaryBytes:
 			_ = os.Remove(outPath)
 			return "", fmt.Errorf("extract %s: exceeds %d bytes", binaryName, int64(maxBinaryBytes))
 		}
@@ -236,21 +247,37 @@ func unsafeTarPath(name string) bool {
 }
 
 // Restart replaces or restarts the running process so the new binary takes
-// effect.
+// effect, and -- when restore says the running daemon will restore its panes --
+// restarts sessiond alongside it so the user is not left on a new web binary
+// talking to an old daemon.
 //
 // A clean os.Exit(0) is NOT a viable restart: the systemd user unit
 // muxterm.service is Restart=on-failure, so a zero exit status stops the
 // service rather than bringing it back on the new binary.
-func Restart() error {
+//
+// restore comes from CheckRestoreCapability. A !restore.OK daemon is left strictly
+// alone: restarting one that cannot restore destroys every pane with nothing
+// to bring back, which is far worse than a version-skewed daemon.
+func Restart(restore RestoreCapability) error {
 	if os.Getenv("INVOCATION_ID") != "" {
 		// Running under systemd (INVOCATION_ID is set for every unit it
 		// starts -- the same detection sessiond uses). `systemctl --user
 		// restart muxterm` is the verb install.sh already relies on for
 		// upgrades. Start it detached and do not Wait: the restart kills this
 		// process, so Wait would never return.
-		cmd := exec.Command("systemctl", "--user", "restart", "muxterm")
+		args := []string{"--user", "restart", "muxterm"}
+		if restore.OK {
+			// One invocation for both units, not two: muxterm.service
+			// declares After=muxterm-sessiond.service, so systemd orders the
+			// daemon ahead of the web unit itself. Two separate commands
+			// could not guarantee that -- this process dies partway through.
+			args = []string{"--user", "restart", "muxterm-sessiond.service", "muxterm.service"}
+		} else {
+			log.Printf("update: leaving sessiond running: %s", restore.Reason)
+		}
+		cmd := exec.Command("systemctl", args...)
 		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("systemctl --user restart muxterm: %w", err)
+			return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
 		}
 		return nil
 	}
@@ -261,8 +288,40 @@ func Restart() error {
 	if err != nil {
 		return fmt.Errorf("locate running binary: %w", err)
 	}
+
+	// The daemon is restarted BEFORE the exec because syscall.Exec replaces
+	// this process image: there is no "after" for code to run in. A failure
+	// is logged and deliberately does not abort the re-exec -- stranding the
+	// user on the old web binary is worse than leaving the old daemon up.
+	if restore.OK {
+		if err := restartSessiond(); err != nil {
+			log.Printf("update: restart sessiond: %v", err)
+		}
+	} else {
+		log.Printf("update: leaving sessiond running: %s", restore.Reason)
+	}
+
 	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
 		return fmt.Errorf("re-exec %s: %w", exe, err)
 	}
 	return nil
+}
+
+// restartSessiond resolves the daemon's socket and log paths and hands off to
+// sessiond.RestartDaemon.
+//
+// The 20s budget covers a slow shutdown snapshot (every pane's scrollback is
+// serialized before the daemon exits) while staying well inside the browser's
+// 60s update poll, so a stuck daemon still leaves time for the web process to
+// come back up on the new binary.
+func restartSessiond() error {
+	sock, err := sessiond.SocketPath()
+	if err != nil {
+		return fmt.Errorf("resolve sessiond socket path: %w", err)
+	}
+	logPath, err := sessiond.DefaultLogPath()
+	if err != nil {
+		return fmt.Errorf("resolve sessiond log path: %w", err)
+	}
+	return sessiond.RestartDaemon(sock, logPath, 20*time.Second)
 }

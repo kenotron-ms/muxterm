@@ -94,9 +94,19 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	applied = true
+
+	// Probe the daemon HERE, not inside Restart: the 200 below is written and
+	// flushed before the restart is even scheduled, so this is the only moment
+	// at which the client can be told what is about to happen to sessiond (and
+	// therefore to its panes). The same value is handed to Restart so the
+	// browser's answer and the actual behavior cannot diverge.
+	restore := update.CheckRestoreCapability()
+
 	writeUpdateJSON(w, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"version": strings.TrimPrefix(rel.Tag, "v"),
+		"status":          "ok",
+		"version":         strings.TrimPrefix(rel.Tag, "v"),
+		"sessiondRestart": restore.OK,
+		"sessiondReason":  restore.Reason,
 	})
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
@@ -106,7 +116,7 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	// actually reaches the browser before this process goes away.
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		if err := update.Restart(); err != nil {
+		if err := update.Restart(restore); err != nil {
 			log.Printf("update_handler: restart after update: %v", err)
 		}
 	}()
