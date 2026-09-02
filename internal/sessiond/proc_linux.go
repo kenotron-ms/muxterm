@@ -41,9 +41,12 @@ func processLive(pid int) bool {
 		return syscall.Kill(pid, 0) == nil
 	}
 	// Z: zombie, awaiting reap. X/x: dead. Everything else (R, S, D, T, t, I)
-	// is a process that still exists.
+	// is a process that still exists. Both cases of X matter: "x" (TASK_DEAD)
+	// is reported by some kernel configurations, and treating it as live would
+	// make waitForExit spin until its timeout on a process that is already
+	// gone.
 	switch fields[0] {
-	case "Z", "X":
+	case "Z", "X", "x":
 		return false
 	}
 	return true

@@ -1,11 +1,25 @@
 package service
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 )
+
+// generateSecret returns a 16-byte random hex-encoded secret. Mirrors the
+// helper in internal/deploy, which generates the same shape for the remote
+// install path -- kept local rather than shared to avoid a service -> deploy
+// dependency for nine lines.
+func generateSecret() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
 
 type execCommander struct{}
 
@@ -23,6 +37,27 @@ func Install(cfg ServiceConfig) error {
 	}
 	if cfg.SafePATH == "" {
 		cfg.SafePATH = os.Getenv("PATH")
+	}
+	// An empty secret is not a valid installation. Both unit templates
+	// interpolate it straight into the ExecStart, so it has to become a real
+	// value here or it becomes a broken service:
+	//
+	//   systemd  ExecStart=... serve --addr ADDR --secret     <- flag with no
+	//            argument, so serve exits 2 on startup and Restart=on-failure
+	//            crash-loops it every 5s.
+	//   launchd  <string></string>                            <- an explicit
+	//            empty argument, so serve starts with no secret at all.
+	//
+	// `muxterm install` with no --secret is the FIRST-INSTALL path (install.sh
+	// runs exactly that), so this is the default experience, not an edge case.
+	// The flag help has always advertised "auto-generated if empty" -- this is
+	// where that promise is finally kept.
+	if cfg.Secret == "" {
+		secret, err := generateSecret()
+		if err != nil {
+			return fmt.Errorf("generate service secret: %w", err)
+		}
+		cfg.Secret = secret
 	}
 	cmd := &execCommander{}
 	switch DetectPlatform() {
