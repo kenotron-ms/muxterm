@@ -34,6 +34,17 @@ type RestoreCapability struct {
 //
 // An unreadable config reads as "do not restart": the daemon's own restore path
 // keys off the same setting, and guessing wrong costs the user every open pane.
+//
+// KNOWN LIMITATION -- this reads the config FILE, while what actually decides
+// whether a snapshot gets written is the value the RUNNING daemon read at its
+// own boot (cmd/muxterm/sessiond_main.go). Those diverge if restore is enabled
+// in the file after a daemon started without it: this reports OK, the daemon
+// writes no shutdown snapshot, and the restart loses every pane. Restarting
+// sessiond after changing restore.enabled closes the gap. It is not fixed here
+// because every fix is worse than the bug at this size -- asking the daemon
+// directly means a wire-protocol change, and inferring it from snapshot-file
+// mtime is the fail-closed probe removed in b076587, whose false negatives
+// silently leave the daemon on the old binary.
 func CheckRestoreCapability() RestoreCapability {
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
