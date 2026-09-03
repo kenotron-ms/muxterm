@@ -173,25 +173,3 @@ func TestRunUninstall_PrintsConfirmation(t *testing.T) {
 		t.Errorf("expected confirmation message, got %q", out)
 	}
 }
-
-// --- runOpenBrowser tests ---
-
-func TestRunOpenBrowser_Signature(t *testing.T) {
-	t.Skip("open-browser mode removed: browser panes now use CDP (see TypeCreateBrowserPane)")
-}
-
-func TestRunOpenBrowser_ConnectionFailure(t *testing.T) {
-	t.Skip("open-browser mode removed: browser panes now use CDP (see TypeCreateBrowserPane)")
-}
-
-func TestRunOpenBrowser_503Response(t *testing.T) {
-	t.Skip("open-browser mode removed: browser panes now use CDP (see TypeCreateBrowserPane)")
-}
-
-func TestRunOpenBrowser_NonOKResponse(t *testing.T) {
-	t.Skip("open-browser mode removed: browser panes now use CDP (see TypeCreateBrowserPane)")
-}
-
-func TestRunOpenBrowser_Success(t *testing.T) {
-	t.Skip("open-browser mode removed: browser panes now use CDP (see TypeCreateBrowserPane)")
-}

@@ -422,7 +422,6 @@ func validCloseActivityReason(reason ActivityReason) bool {
 	case ActivityReasonCommandActive,
 		ActivityReasonForegroundProcess,
 		ActivityReasonCustomCommand,
-		ActivityReasonBrowserPane,
 		ActivityReasonUnsupportedShell,
 		ActivityReasonUnsupportedPlatform,
 		ActivityReasonMissingLifecycle,
@@ -776,9 +775,6 @@ func boundedCloseRiskTitle(title string) string {
 func closeRiskPaneTitle(info PaneInfo) string {
 	if info.Title != "" {
 		return info.Title
-	}
-	if info.SurfaceKind == "browser" {
-		return "Browser"
 	}
 	return fmt.Sprintf("Pane %d", info.PaneID)
 }

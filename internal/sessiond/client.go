@@ -84,11 +84,6 @@ type Handlers struct {
 	// OnPaneRenamed fires when the pane identified by paneID is relabeled to
 	// name.
 	OnPaneRenamed func(paneID int, name string)
-	// OnBrowserAction fires when a browser-action command is broadcast to the
-	// workspace (CID == 0). paneID identifies the target browser pane; action
-	// is the DOM verb (click/fill/press/eval/…); ref, value, key, and expr
-	// carry the verb's operands.
-	OnBrowserAction func(paneID int, action, ref, value, key, expr string)
 	// OnLayoutCommand fires when a layout-command is broadcast to the workspace
 	// (CID == 0). command is the verb (e.g. create-pane/rename-pane/close-pane/
 	// switch-workspace); paneID identifies the target pane; placement carries
@@ -107,27 +102,6 @@ type Handlers struct {
 	// this to resize their local terminal view to match without re-emitting
 	// their own resize message.
 	OnPaneResized func(paneID uint32, cols, rows int)
-	// OnBrowserActionResult fires when the daemon broadcasts a
-	// TypeBrowserActionResult event (CID == 0). msg carries PaneID plus the
-	// result fields (OK, Snapshot, Result, Error).
-	OnBrowserActionResult func(msg *Message)
-	// OnBrowserCommand fires when the daemon broadcasts a browser-command to the
-	// workspace (CID carried for correlation). The client owning/focused on the
-	// pane executes it against its live webview. msg carries PaneID, CID,
-	// Action, Selector, and Params.
-	OnBrowserCommand func(msg *Message)
-	// OnBrowserResult fires when the daemon broadcasts a browser-result back to
-	// the workspace (echoing the command CID). msg carries PaneID, CID, Result
-	// (or Error).
-	OnBrowserResult func(msg *Message)
-	// OnBrowserURL fires when the daemon broadcasts a browser-url event: the
-	// client owning a browser pane committed a navigation. msg carries PaneID
-	// and URL.
-	OnBrowserURL func(msg *Message)
-	// OnBrowserLoad fires when the daemon broadcasts a browser-load event: the
-	// client owning a browser pane finished loading a page. msg carries PaneID
-	// and URL.
-	OnBrowserLoad func(msg *Message)
 	// OnWorkspacePreview fires when the daemon pushes a sidebar preview tile
 	// for a workspace this connection opted into via PreviewSubscribe. msg
 	// carries WorkspaceID, PaneID, Title, the canonical Cols/Rows tile
@@ -210,10 +184,9 @@ func (c *Client) Run() error {
 // reply to one of THIS connection's own pending requests (CID matches an
 // entry in c.pend) is delivered to the waiting requester. Everything else —
 // including events with CID == 0, and broadcasts that merely carry a
-// correlation id with no matching pending request (e.g. the browser-command /
-// browser-result relay, which preserves the caller's cid end-to-end but is
-// never registered as a pending request since it is fire-and-forget) — is
-// dispatched to the event handlers.
+// correlation id with no matching pending request (a fire-and-forget relay
+// preserves the caller's cid end-to-end but is never registered as a pending
+// request) — is dispatched to the event handlers.
 func (c *Client) dispatchControl(payload []byte) {
 	var msg Message
 	if err := json.Unmarshal(payload, &msg); err != nil {
@@ -401,8 +374,8 @@ func (c *Client) Attach(workspaceID, breakpoint, clientKind string) (Composition
 // ScreenSnapshot requests a VT-grid snapshot of the pane identified by the
 // workspace-local paneID. The daemon replies with TypeScreenSnapshotResult
 // carrying Text (visible cell content), Cursor (0-indexed row/col), and PaneID.
-// For non-VT panes (browser pane or RawBuffer), the reply has empty Text and a
-// nil Cursor; the *Message itself is always non-nil on success.
+// For non-VT panes (e.g. a RawBuffer pane), the reply has empty Text and a nil
+// Cursor; the *Message itself is always non-nil on success.
 func (c *Client) ScreenSnapshot(paneID int) (*Message, error) {
 	return c.request(&Message{Type: TypeScreenSnapshot, PaneID: paneID})
 }
@@ -420,8 +393,8 @@ func (c *Client) ScreenSnapshot(paneID int) (*Message, error) {
 // line, and the cursor to pass on the next call to page further back. A nil
 // next means no more retained history in that direction and is the normal
 // termination condition for a paging loop — not an error. A pane that exists
-// but is not VT-backed (a browser pane) yields an empty page, also not an
-// error. A daemon-side failure (unknown workspace, unknown pane) surfaces as a
+// but is not VT-backed (e.g. a RawBuffer pane) yields an empty page, also not
+// an error. A daemon-side failure (unknown workspace, unknown pane) surfaces as a
 // *DaemonError carrying the frozen error code.
 func (c *Client) ScrollbackPage(paneID int, cursor *uint64, limit int) (lines []string, start uint64, next *uint64, err error) {
 	reply, err := c.request(&Message{
@@ -504,22 +477,6 @@ func (c *Client) CreatePane(cmd []string, placement string, referencePaneID int)
 	return reply.PaneID, nil
 }
 
-// CreateBrowserPane creates a client-rendered browser surface pane in the
-// attached workspace and returns the server-assigned workspace-local pane ID.
-// The daemon allocates only a pane handle (surfaceKind "browser"); the browser
-// engine lives entirely on the client.
-func (c *Client) CreateBrowserPane(placement string, referencePaneID int) (int, error) {
-	reply, err := c.request(&Message{
-		Type:            TypeCreateBrowserPane,
-		Placement:       placement,
-		ReferencePaneID: referencePaneID,
-	})
-	if err != nil {
-		return 0, err
-	}
-	return reply.PaneID, nil
-}
-
 // ClosePane asks the daemon to kill the pane identified by paneID and remove it
 // from the attached workspace. The daemon broadcasts a pane-closed event to all
 // subscribers on success.
@@ -560,69 +517,6 @@ func (c *Client) PaneFocus(paneID uint32, cols, rows int) error {
 	return WriteControl(c.conn, &Message{Type: TypePaneFocus, PaneID: int(paneID), Cols: cols, Rows: rows})
 }
 
-// BrowserActionResult forwards a browser-action-result envelope from the
-// browser shim to the daemon, which broadcasts it to all workspace subscribers
-// (including the MCP client waiting for the result). It is fire-and-forget:
-// the daemon sends no reply.
-func (c *Client) BrowserActionResult(msg Message) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	msg.Type = TypeBrowserActionResult
-	return WriteControl(c.conn, &msg)
-}
-
-// SendBrowserAction sends a browser-action envelope to the daemon, which
-// broadcasts it to all workspace subscribers (including the browser shim
-// listening for DOM commands). It is fire-and-forget: the daemon sends no
-// reply. The caller must separately wait for a TypeBrowserActionResult event
-// (e.g., via Handlers.OnBrowserActionResult) to obtain the result.
-func (c *Client) SendBrowserAction(msg Message) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	msg.Type = TypeBrowserAction
-	return WriteControl(c.conn, &msg)
-}
-
-// BrowserCommand relays a browser-command to the daemon, which broadcasts it to
-// all subscribers of the attached workspace. payload is the pre-marshalled
-// command JSON ({action, params, ...}) stored in Params for passthrough.
-// Fire-and-forget: the daemon sends no direct reply; the executing client
-// returns a browser-result event.
-func (c *Client) BrowserCommand(paneID int, cid uint64, payload json.RawMessage) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return WriteControl(c.conn, &Message{Type: TypeBrowserCommand, PaneID: paneID, CID: cid, Params: payload})
-}
-
-// BrowserResult relays a browser-result back to the daemon, which broadcasts it
-// to all subscribers of the attached workspace (echoing the command CID).
-// Fire-and-forget.
-func (c *Client) BrowserResult(paneID int, cid uint64, payload json.RawMessage) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return WriteControl(c.conn, &Message{Type: TypeBrowserResult, PaneID: paneID, CID: cid, Result: payload})
-}
-
-// BrowserURL relays a browser-url notification to the daemon (URL navigation
-// committed in a client-rendered browser pane), which broadcasts it to all
-// subscribers of the attached workspace. Fire-and-forget: the daemon sends no
-// reply.
-func (c *Client) BrowserURL(paneID int, url string) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return WriteControl(c.conn, &Message{Type: TypeBrowserURL, PaneID: paneID, URL: url})
-}
-
-// BrowserLoad relays a browser-load notification to the daemon (page load
-// complete in a client-rendered browser pane), which broadcasts it to all
-// subscribers of the attached workspace. Fire-and-forget: the daemon sends no
-// reply.
-func (c *Client) BrowserLoad(paneID int, url string) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return WriteControl(c.conn, &Message{Type: TypeBrowserLoad, PaneID: paneID, URL: url})
-}
-
 // dispatchPaneData routes a decoded pane-data frame to OnPaneOutput if set. It
 // runs on the read-loop goroutine, so the handler must not block for long.
 func (c *Client) dispatchPaneData(paneID uint32, data []byte) {
@@ -649,7 +543,6 @@ func (c *Client) dispatchEvent(msg *Message) {
 				Cols:            msg.Cols,
 				Rows:            msg.Rows,
 				Title:           msg.Title,
-				SurfaceKind:     msg.SurfaceKind,
 				Placement:       msg.Placement,
 				ReferencePaneID: msg.ReferencePaneID,
 			})
@@ -677,14 +570,6 @@ func (c *Client) dispatchEvent(msg *Message) {
 		if h.OnPaneRenamed != nil {
 			h.OnPaneRenamed(msg.PaneID, msg.Name)
 		}
-	case TypeBrowserAction:
-		if h.OnBrowserAction != nil {
-			h.OnBrowserAction(msg.PaneID, msg.Action, msg.Ref, msg.Value, msg.Key, msg.Expression)
-		}
-	case TypeBrowserActionResult:
-		if h.OnBrowserActionResult != nil {
-			h.OnBrowserActionResult(msg)
-		}
 	case TypeLayoutCommand:
 		if h.OnLayoutCommand != nil {
 			h.OnLayoutCommand(msg.Action, msg.PaneID, msg.Selector, msg.Cols)
@@ -696,22 +581,6 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypePaneResized:
 		if h.OnPaneResized != nil {
 			h.OnPaneResized(uint32(msg.PaneID), msg.Cols, msg.Rows)
-		}
-	case TypeBrowserCommand:
-		if h.OnBrowserCommand != nil {
-			h.OnBrowserCommand(msg)
-		}
-	case TypeBrowserResult:
-		if h.OnBrowserResult != nil {
-			h.OnBrowserResult(msg)
-		}
-	case TypeBrowserURL:
-		if h.OnBrowserURL != nil {
-			h.OnBrowserURL(msg)
-		}
-	case TypeBrowserLoad:
-		if h.OnBrowserLoad != nil {
-			h.OnBrowserLoad(msg)
 		}
 	case TypeWorkspacePreview:
 		if h.OnWorkspacePreview != nil {

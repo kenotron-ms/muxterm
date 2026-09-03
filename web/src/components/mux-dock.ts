@@ -107,35 +107,6 @@ class TerminalRenderer implements IContentRenderer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PlaceholderRenderer
-// Renders a non-interactive placeholder for client-rendered `browser` panes.
-// The web client cannot host a cross-origin webview, so browser panes created by
-// the native apps appear here as an opaque, render-only slot. It never errors and
-// never disturbs the surrounding dockview layout.
-// ─────────────────────────────────────────────────────────────────────────────
-
-class PlaceholderRenderer implements IContentRenderer {
-  readonly element: HTMLElement;
-
-  constructor(_id: string) {
-    const el = document.createElement('div');
-    el.style.cssText =
-      'width:100%;height:100%;display:flex;align-items:center;justify-content:center;' +
-      'text-align:center;padding:24px;box-sizing:border-box;' +
-      'color:var(--chrome-text-dim);background:var(--chrome-body);user-select:none;font-size:13px;';
-    el.innerHTML =
-      '<div><div style="font-size:15px;color:var(--mux-fg);font-weight:600;margin-bottom:8px;">' +
-      'Browser pane</div><div>Browser panes are available in the native apps.</div></div>';
-    this.element = el;
-  }
-
-  init(): void {}
-  layout(): void {}
-  focus(): void {}
-  dispose(): void {}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // IntentTabRenderer
 // Preserves dockview's default tab DOM classes, but its close button emits a
 // pre-removal intent instead of invoking DockviewPanelApi.close().
@@ -302,14 +273,6 @@ export class MuxDock extends LitElement {
   private _settingActive = false;
   /** User-defined pane names, isolated by workspace-local pane identity. */
   private _customTitles = new Map<string, string>();
-  /**
-   * Bound document pointerup handler — deactivates browser-pane drag shields
-   * after a dockview drag gesture ends. Registered in capture phase so it fires
-   * even if the pointer is released over an iframe.
-   */
-  private _onDragPointerUp = (): void => {
-    this._setDragShields(false);
-  };
   /** Debounce timer for layout-save events. */
   private _layoutSaveTimer: number | undefined;
   /** True while restoring a layout via fromJSON — suppresses layout-save echoes. */
@@ -400,16 +363,6 @@ export class MuxDock extends LitElement {
       return found;
     } catch {
       return undefined;
-    }
-  }
-
-  /**
-   * Show or hide drag shields on all browser panes in this dock.
-   * Called with `true` when dockview reports a drag start, `false` on pointerup.
-   */
-  private _setDragShields(active: boolean): void {
-    for (const el of this.querySelectorAll<HTMLElement>('.mux-drag-shield')) {
-      el.style.display = active ? 'block' : 'none';
     }
   }
 
@@ -678,16 +631,16 @@ export class MuxDock extends LitElement {
       target.appendChild(style);
     }
 
-    // Capture-phase pointerup on the document deactivates browser-pane drag
-    // shields after any dockview drag gesture ends (including releases over iframes).
-    document.addEventListener('pointerup', this._onDragPointerUp, { capture: true });
     this.classList.add('dockview-theme-abyss');
     this.addEventListener('dblclick', this._onTabDblClick);
     this._dv = new DockviewComponent(this, {
-      createComponent: (opts) => {
-        if (opts.name === 'browser') return new PlaceholderRenderer(opts.id);
-        return new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId);
-      },
+      // Total by construction: EVERY component name resolves to a
+      // TerminalRenderer, `opts.name` is never inspected. dockview calls this
+      // factory unconditionally (no name registry, no fallback of its own), so
+      // an unrecognised name must not throw — and a layout blob persisted by an
+      // older build can still replay a stale `contentComponent` value.
+      createComponent: (opts) =>
+        new TerminalRenderer(opts.id, (paneId) => paneId === this.activePaneId),
       defaultTabComponent: 'mux-intent-tab',
       createTabComponent: (opts) => {
         const paneId = parseInt(opts.id, 10);
@@ -714,10 +667,6 @@ export class MuxDock extends LitElement {
       },
     });
     this._dv.onDidLayoutChange(() => this._scheduleLayoutSave());
-    // Activate drag shields on all browser panes when a dockview drag starts so
-    // the iframe doesn't swallow pointermove/pointerup during the gesture.
-    this._dv.onWillDragPanel(() => this._setDragShields(true));
-    this._dv.onWillDragGroup(() => this._setDragShields(true));
     this._dv.onDidActivePanelChange((panel) => {
       if (this._settingActive) return;
       if (!panel) return;
@@ -729,21 +678,6 @@ export class MuxDock extends LitElement {
       // focus for the clicked tab element, so the browser steals it back. An rAF
       // defers until after the click event is fully processed.
       requestAnimationFrame(() => terminalRegistry.focus(paneId));
-      // For browser-cdp panes: dispatch a window event so mux-browser-pane
-      // can send browser-focus and resume the Chromium screencast.
-      // Deferred with rAF for the same reason terminal focus is deferred above:
-      // dispatching synchronously fires canvas.focus() while dockview still
-      // holds its own focus lock, so the browser steals it back immediately.
-      const paneInfo = this.panes.find((p) => p.paneId === paneId);
-      if (paneInfo?.surfaceKind === 'browser') {
-        // Placeholder pane: nothing to focus, no screencast to resume.
-      } else {
-        // Signal to browser panes that they are no longer the active panel.
-        // Browser panes use this to stop capturing window-level keyboard events.
-        requestAnimationFrame(() => {
-          window.dispatchEvent(new CustomEvent('non-browser-pane-activated'));
-        });
-      }
       // Persist the new active selection: onDidLayoutChange does NOT fire on a
       // pure active-tab switch, so without this the saved layout keeps a stale
       // activeView and the wrong pane is selected after a refresh.
@@ -762,7 +696,6 @@ export class MuxDock extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.removeEventListener('dblclick', this._onTabDblClick);
-    document.removeEventListener('pointerup', this._onDragPointerUp, { capture: true });
     this._dv?.dispose();
     this._dv = null;
   }
@@ -868,7 +801,7 @@ export class MuxDock extends LitElement {
               if (!this._panels.has(pane.paneId)) {
                 const panel = this._dv.addPanel({
                   id: String(pane.paneId),
-                  component: pane.surfaceKind ?? 'terminal',
+                  component: 'terminal',
                   title: this._customTitles.get(this._customTitleKey(pane.paneId)) ?? pane.title ?? `Pane ${pane.paneId}`,
                 });
                 this._panels.set(pane.paneId, panel);
@@ -892,7 +825,7 @@ export class MuxDock extends LitElement {
           for (const pane of this.panes.filter((p) => p.paneId >= 0)) {
             const panel = this._dv.addPanel({
               id: String(pane.paneId),
-              component: pane.surfaceKind ?? 'terminal',
+              component: 'terminal',
               title: this._customTitles.get(this._customTitleKey(pane.paneId)) ?? pane.title ?? `Pane ${pane.paneId}`,
             });
             this._panels.set(pane.paneId, panel);
@@ -972,7 +905,7 @@ export class MuxDock extends LitElement {
         if (!this._panels.has(pane.paneId)) {
           const opts: Parameters<NonNullable<typeof this._dv>['addPanel']>[0] = {
             id: String(pane.paneId),
-            component: pane.surfaceKind ?? 'terminal',
+            component: 'terminal',
             title: this._customTitles.get(this._customTitleKey(pane.paneId)) ?? pane.title ?? `Pane ${pane.paneId}`,
           };
           // Honor a pending placement request, positioned relative to the group
@@ -1133,7 +1066,7 @@ export class MuxDock extends LitElement {
           new CustomEvent('pane-create', {
             bubbles: true,
             composed: true,
-            detail: { kind: msg.kind, url: msg.url },
+            detail: { kind: msg.kind },
           }),
         );
         break;

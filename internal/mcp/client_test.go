@@ -121,8 +121,9 @@ func TestOutputBufferAccumulates(t *testing.T) {
 }
 
 // TestSendBrowserActionResolves and TestSendBrowserActionTimeout were removed
-// when browser pane support was dropped from muxterm. SendBrowserAction no
-// longer exists on Client. See git history for the original test bodies.
+// when browser pane support was dropped from muxterm. Neither SendBrowserAction
+// nor the browser-action relay it rode on exists any more. See git history for
+// the original test bodies.
 
 // TestWaitForPromptResolves verifies that WaitForPrompt returns exit code 0
 // within 3 seconds after a pane emits an OSC 133 ;D;0 sequence.

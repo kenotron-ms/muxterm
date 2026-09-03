@@ -91,8 +91,8 @@ func TestVTBufferScrollbackRoundTrip(t *testing.T) {
 	// Use an 80x24 emulator. Writing 30 lines pushes the first ~7 lines into
 	// scrollback (scroll occurs once the terminal is full at row 23).
 	const (
-		cols      = 80
-		rows      = 24
+		cols       = 80
+		rows       = 24
 		totalLines = 30
 	)
 	b := NewVTBuffer(cols, rows)

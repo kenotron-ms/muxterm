@@ -25,7 +25,6 @@ const CLOSE_RISK_REASONS = new Set<CloseRiskReason>([
   'command-active',
   'foreground-process',
   'custom-command',
-  'browser-pane',
   'unsupported-shell',
   'unsupported-platform',
   'missing-lifecycle',
@@ -127,7 +126,7 @@ export class MuxSocket {
    * paneId changed because some other client became (or already was)
    * authoritative for it. A direct callback property, like onDisconnect/
    * onReconnect above — not the window CustomEvent relay pattern used below
-   * for browser-action/layout-command, since the only consumer
+   * for layout-command, since the only consumer
    * (terminalRegistry) is a plain module app.ts already imports directly; no
    * need for a window-event round-trip.
    */
@@ -301,16 +300,6 @@ export class MuxSocket {
     if (cmd && cmd.length > 0) msg.cmd = cmd;
     if (clientRef) msg.clientRef = clientRef;
     this.sendSessiond(msg);
-  }
-
-  /** Open a browser CDP pane on the server side. */
-  createBrowserPane(): void {
-    this.sendSessiond({ type: SessiondType.CreateBrowserPane });
-  }
-
-  /** Close the active browser CDP pane on the server side. */
-  closeBrowserPane(): void {
-    this.sendSessiond({ type: SessiondType.CloseBrowserPane });
   }
 
   /**
@@ -499,9 +488,7 @@ export class MuxSocket {
           this.onSessiondMessage?.(raw as unknown as SessiondMessage);
           // Relay-only types: dispatch as window CustomEvents so app.ts and
           // mux-dock can handle them without coupling to the socket directly.
-          if (raw.type === SessiondType.BrowserAction) {
-            window.dispatchEvent(new CustomEvent('browser-action', { detail: raw }));
-          } else if (raw.type === SessiondType.LayoutCommand) {
+          if (raw.type === SessiondType.LayoutCommand) {
             window.dispatchEvent(new CustomEvent('layout-command', { detail: raw }));
           } else if (raw.type === SessiondType.PaneResized) {
             this.onPaneResized?.(raw.paneId as number, raw.cols as number, raw.rows as number);

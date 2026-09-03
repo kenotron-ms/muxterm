@@ -4,7 +4,7 @@ import { store } from '../state.js';
 import { workspaceLabel } from './workspace-picker.js';
 import './launcher-menu.js';
 import { icon } from '../lib/icons.js';
-import { Download, Ellipsis, Globe, SquareTerminal } from 'lucide';
+import { Download, Ellipsis, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
 import { previewStore, type PreviewEntry, type PreviewMode } from '../lib/preview-store.js';
@@ -80,7 +80,7 @@ function probePreviewFont(): Promise<boolean> {
 }
 
 /** Which body a preview card shows. */
-type CardVisual = 'tile' | 'pending' | 'browser' | 'empty';
+type CardVisual = 'tile' | 'pending' | 'empty';
 
 /** Everything `_renderWorkspaces()` needs about one workspace, computed once. */
 interface CardState {
@@ -102,8 +102,8 @@ interface CardState {
 /**
  * True when every cell of the tile is a space.
  *
- * A non-VT pane (a browser surface) yields a well-formed EMPTY tile rather than
- * an error, following the daemon's empty-not-error precedent, so "blank" is the
+ * A pane with nothing on screen yields a well-formed EMPTY tile rather than an
+ * error, following the daemon's empty-not-error precedent, so "blank" is the
  * signal to show an icon instead of a convincingly-terminal-looking void.
  */
 function tileIsBlank(tile: PreviewTile): boolean {
@@ -928,15 +928,10 @@ export class MuxSidebar extends LitElement {
       const active = id === activeWsId;
       const entry = previewOn ? previewStore.get(id, cols, rows) : null;
 
-      // surfaceKind is only knowable for the attached workspace; for the rest a
-      // blank tile is the daemon's honest answer for a non-VT pane.
       const paneId = entry ? entry.paneId : activePaneId;
-      const isBrowser =
-        active && panes.find((p) => p.paneId === paneId)?.surfaceKind === 'browser';
 
       let visual: CardVisual = 'pending';
-      if (isBrowser) visual = 'browser';
-      else if (entry) visual = tileIsBlank(entry.tile) ? 'empty' : 'tile';
+      if (entry) visual = tileIsBlank(entry.tile) ? 'empty' : 'tile';
 
       let title = entry?.title ?? '';
       if (title === '' && active) title = activePane?.title ?? '';
@@ -1116,10 +1111,10 @@ export class MuxSidebar extends LitElement {
     } else if (card.visual === 'pending') {
       body = html`<div class="ws-placeholder">···</div>`;
     } else {
-      // A browser surface has no VT buffer at all; an icon is honest and looks
-      // better than a convincingly-terminal-shaped void.
+      // Nothing on screen in this pane; an icon is honest and looks better
+      // than a convincingly-terminal-shaped void.
       body = html`<div class="ws-placeholder">
-        ${icon(card.visual === 'browser' ? Globe : SquareTerminal, { size: 24 })}
+        ${icon(SquareTerminal, { size: 24 })}
       </div>`;
     }
 

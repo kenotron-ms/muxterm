@@ -18,8 +18,8 @@ sessiond alone classifies pane activity from the current root-process
 generation, authenticated streaming shell lifecycle, and foreground PTY process
 group. Browser state, terminal text, titles, and input timing are never activity
 authority. Only default interactive bash/zsh panes with current prompt evidence
-may be idle; custom commands, browser panes, unsupported environments, and
-inspection ambiguity remain unknown.
+may be idle; custom commands, unsupported environments, and inspection ambiguity
+remain unknown.
 
 sessiond alone also authorizes destructive pane and workspace closure. Browser
 controls emit close intents, keep targets live until daemon authority responds,
@@ -31,7 +31,7 @@ and wait for authoritative pane/workspace broadcasts before removing structure.
 
 Unit tests are banned in this project. Do not write them. Do not ask if you should write them. Do not write them "just for the pure logic". Do not write vitest tests, Go table-driven tests for internal functions, or any test that runs without a real browser and a real sessiond process.
 
-**Why:** muxterm is an integration system — the browser, the sessiond PTY daemon, and real shell processes inside terminals. Nothing meaningful is testable in isolation. A unit test that checks `_normalizeUrl()` returns the right string tells you nothing about whether a user can open a browser pane. A Go test that checks `injectBase()` modifies a byte slice tells you nothing about whether X-Frame-Options is actually stripped in a real HTTP response. These tests have accumulated across the codebase and none of them have ever caught a real bug or prevented a regression.
+**Why:** muxterm is an integration system — the browser, the sessiond PTY daemon, and real shell processes inside terminals. Nothing meaningful is testable in isolation. A unit test that checks `serializeGrid()` returns the right cell array tells you nothing about whether a reconnecting client sees a clean vim screen instead of garbage. A Go test that checks a resize handler updates a struct field tells you nothing about whether the PTY actually reflowed and the inner TUI redrew at the new size. These tests have accumulated across the codebase and none of them have ever caught a real bug or prevented a regression.
 
 **What to do instead: VERIFICATION**
 

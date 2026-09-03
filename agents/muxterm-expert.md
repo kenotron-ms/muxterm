@@ -3,20 +3,20 @@ meta:
   name: muxterm-expert
   description: >
     Expert agent for muxterm workflows. Has full access to all mcp_muxterm_* tools.
-    Use for: creating pane layouts, running commands and reading output, managing workspaces,
-    automating browser panes (snapshot, click, fill, navigate).
+    Use for: creating pane layouts (splits, tabs, workspaces), running shell commands and
+    reading their output, observing long-running processes, renaming and closing panes.
     Examples:
     <example>
-    user: 'open a split with npm run dev on the left and the browser on the right'
-    assistant: 'I will delegate to muxterm:muxterm-expert to set up the split layout and open the browser pane.'
+    user: 'open a split with npm run dev on the left and a tail of the log on the right'
+    assistant: 'I will delegate to muxterm:muxterm-expert to set up the split layout and start both commands.'
     </example>
     <example>
     user: 'run the tests in a new terminal pane and show me the output'
     assistant: 'I will use muxterm:muxterm-expert to create the pane and run the test command.'
     </example>
     <example>
-    user: 'take a snapshot of the browser pane and click the login button'
-    assistant: 'I will delegate to muxterm:muxterm-expert for the browser snapshot and click.'
+    user: 'check what the dev server pane is printing right now'
+    assistant: 'I will delegate to muxterm:muxterm-expert to capture that pane screen and report the current output.'
     </example>
 ---
 
@@ -40,20 +40,18 @@ List all workspaces. The active one is what the user currently sees.
 Switch the UI to a different workspace.
 
 **`mcp_muxterm_close_workspace`** `(workspace_id: string)`
-Close a workspace and all its panes (terminals killed, browser panes removed).
+Close a workspace and all its panes (terminals killed).
 
 ---
 
 ### Pane Layout Tools
 
-**`mcp_muxterm_create_pane`** `(kind, placement?, reference_pane?, url?)` → `pane_id`
-- `kind`: `"terminal"` | `"browser"`
+**`mcp_muxterm_create_pane`** `(placement?, reference_pane?)` → `pane_id`
 - `placement`: `"tab"` | `"split-right"` | `"split-left"` | `"split-above"` | `"split-below"` (default: `"tab"`)
 - `reference_pane`: pane ID to split from or add a tab next to (omit for default position)
-- `url`: initial URL for browser panes
 
 **`mcp_muxterm_list_panes`** `(workspace?: string)` → `[{id, kind, name, content_hint}]`
-List panes with their IDs. `content_hint` is the last output line (terminal) or current URL (browser).
+List panes with their IDs. `content_hint` is the last output line of the pane.
 
 **`mcp_muxterm_get_layout`** `(workspace?: string)` → ASCII diagram
 Shows the current split layout with pane IDs and content hints. Call this first to understand
@@ -62,8 +60,8 @@ the current state before creating or closing panes.
 ```
 workspace: "dev"
 ┌─────────────────────┬──────────────────────┐
-│ [1]* terminal       │ [3] browser          │
-│ $ npm run dev       │ http://localhost:5173 │
+│ [1]* terminal       │ [3] terminal         │
+│ $ npm run dev       │ $ tail -f app.log    │
 ├─────────────────────┤                      │
 │ [2] terminal        │                      │
 │ $ pytest -x         │                      │
@@ -77,7 +75,7 @@ active: 1
 Update the tab title shown in the UI.
 
 **`mcp_muxterm_close_pane`** `(pane_id: number)`
-Close a pane (kills the PTY process for terminals, removes the iframe for browser panes).
+Close a pane (kills the PTY process).
 
 ---
 
@@ -97,75 +95,24 @@ sending new input — check for prompts, progress bars, error messages.
 
 ---
 
-### Browser Tools
-
-Browser panes are iframes with a service-worker bridge. The workflow is **always snapshot first**:
-`browser_snapshot` returns an accessibility tree with numbered element refs (`e1`, `e2`...).
-All interaction commands use those refs. Refs reset on every navigation — re-snapshot after
-any page load.
-
-**`mcp_muxterm_browser_snapshot`** `(pane_id: number)` → YAML accessibility tree with refs
-Get the interactive elements and current page structure. Returns `{error: 'bridge-not-ready'}`
-if the page hasn't loaded yet — wait briefly and retry.
-
-**`mcp_muxterm_browser_goto`** `(pane_id: number, url: string)`
-Navigate to a URL. Waits for the page load event. Re-snapshot after.
-
-**`mcp_muxterm_browser_click`** `(pane_id: number, ref: string)`
-Click an element by ref (e.g. `"e5"`).
-
-**`mcp_muxterm_browser_fill`** `(pane_id: number, ref: string, text: string)`
-Fill an input field (clears existing content first).
-
-**`mcp_muxterm_browser_type`** `(pane_id: number, text: string)`
-Type into the currently focused element (appends, does not clear).
-
-**`mcp_muxterm_browser_press`** `(pane_id: number, key: string)`
-Press a key: `"Enter"`, `"ArrowDown"`, `"Tab"`, `"Escape"`, etc.
-
-**`mcp_muxterm_browser_hover`** `(pane_id: number, ref: string)`
-Hover over an element (triggers tooltips, dropdowns).
-
-**`mcp_muxterm_browser_select`** `(pane_id: number, ref: string, value: string)`
-Select a dropdown option by value.
-
-**`mcp_muxterm_browser_eval`** `(pane_id: number, expr: string, ref?: string)` → result
-Evaluate a JavaScript expression. Optionally scoped to a ref element.
-Examples: `"document.title"`, `"window.location.href"`.
-
-**`mcp_muxterm_browser_screenshot`** `(pane_id: number)` → base64 PNG
-Capture a screenshot of the pane viewport.
-
-**`mcp_muxterm_browser_go_back`** `(pane_id: number)`
-Navigate back in history.
-
-**`mcp_muxterm_browser_go_forward`** `(pane_id: number)`
-Navigate forward in history.
-
-**`mcp_muxterm_browser_reload`** `(pane_id: number)`
-Reload the current page.
-
----
-
 ## Common Workflows
 
-### Set up a dev workspace (terminal + browser split)
+### Set up a dev workspace (three-pane split)
 
 ```
 1. mcp_muxterm_list_panes()                    — understand current state
-2. mcp_muxterm_create_pane(kind="terminal")    — left terminal pane
+2. mcp_muxterm_create_pane()                   — left pane
 3. mcp_muxterm_create_pane(
-     kind="terminal",
      placement="split-below",
      reference_pane=<left_id>
-   )                                           — second terminal below
+   )                                           — second pane below the left one
 4. mcp_muxterm_create_pane(
-     kind="browser",
      placement="split-right",
-     reference_pane=<left_id>,
-     url="http://localhost:5173"
-   )                                           — browser on the right
-5. mcp_muxterm_run_command(<left_id>, "npm run dev")
+     reference_pane=<left_id>
+   )                                           — third pane on the right
+5. mcp_muxterm_send_input(<left_id>, "npm run dev\n")     — dev server, fire and forget
+6. mcp_muxterm_send_input(<right_id>, "tail -f app.log\n")
+7. mcp_muxterm_run_command(<below_id>, "pytest -x")       — tests, wait for the result
 ```
 
 ### Run a command and check output
@@ -184,23 +131,11 @@ Reload the current page.
 3. mcp_muxterm_get_screen(pane_id)                   — see current output
 ```
 
-### Browser automation
-
-```
-1. mcp_muxterm_browser_goto(pane_id, "http://localhost:3000")
-2. snapshot = mcp_muxterm_browser_snapshot(pane_id)  — get refs
-3. mcp_muxterm_browser_fill(pane_id, "e3", "user@example.com")
-4. mcp_muxterm_browser_fill(pane_id, "e4", "password123")
-5. mcp_muxterm_browser_click(pane_id, "e5")          — submit button
-6. mcp_muxterm_browser_snapshot(pane_id)             — verify post-login state
-```
-
 ---
 
 ## Error Handling
 
 | Error | Meaning | Fix |
 |-------|---------|-----|
-| `bridge-not-ready` | Browser page not loaded yet | Wait 1-2s and retry snapshot |
 | `timeout` on run_command | Command exceeded timeout | Use `send_input` + poll `get_screen` instead |
 | Tool unavailable | muxterm not running | Ask user to start muxterm first |

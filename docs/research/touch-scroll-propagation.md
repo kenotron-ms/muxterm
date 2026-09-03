@@ -108,4 +108,7 @@ No unit tests. Verify in a real browser with `playwright-cli` / the
 - `web/src/lib/terminal-registry.ts:344-370` — onData/onBinary → PTY
 - `web/src/lib/terminal-registry.ts:404-435` — manual touch-scroll handler (**root cause**)
 - `web/src/lib/terminal-registry.ts:57-71` — terminal config (no mouse options)
-- `web/src/components/mux-browser-pane.ts:838-847` — CDP browser wheel handler (not the terminal; for contrast)
+- ~~`web/src/components/mux-browser-pane.ts:838-847` — browser-pane wheel handler
+  (cited for contrast)~~ — **removed code.** The browser-pane feature was deleted
+  from muxterm; this file no longer exists and there is no surviving equivalent.
+  `terminal-registry.ts` is now the only wheel/touch handler in the codebase.

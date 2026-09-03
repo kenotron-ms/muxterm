@@ -688,10 +688,6 @@ export class MuxApp extends LitElement {
         for (const pane of (msg.panes ?? [])) {
           const paneId = pane.paneId;
           if (paneId < 0) continue;
-          // Browser panes are client-rendered (native apps). The web client
-          // renders a placeholder (see mux-dock PlaceholderRenderer) and does no
-          // terminal setup for them.
-          if (pane.surfaceKind === 'browser') { continue; }
           // On reconnect an entry already exists with ready=true from the prior
           // session. Reset it before replay frames arrive so the barrier gate
           // works correctly (RC-6).
@@ -849,9 +845,6 @@ export class MuxApp extends LitElement {
       // Mounting a terminal on a provisional pane produces a phantom cursor
       // that flickers once the real positive-id pane settles.
       if (paneId < 0) continue;
-      // Browser panes: opaque placeholder slots. Keep them in the live set so
-      // the dock doesn't prune the panel, but do no terminal/registry work.
-      if (pane.surfaceKind === 'browser') { liveIds.add(paneId); continue; }
       terminalRegistry.ensure(paneId, {
         onInput: (data) => this._socket?.sendPaneInput(paneId, data),
         // Active-view-wins: only rendered/visible panes own a live

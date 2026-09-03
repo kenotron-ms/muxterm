@@ -386,50 +386,6 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
 
-	case sessiond.TypeCreateBrowserPane:
-		paneID, err := c.daemon.CreateBrowserPane(msg.Placement, msg.ReferencePaneID)
-		if err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
-			return
-		}
-		c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneCreated, CID: msg.CID, PaneID: paneID, ClientRef: msg.ClientRef})
-
-	case sessiond.TypeCloseBrowserPane:
-		if err := c.daemon.ClosePane(msg.PaneID); err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
-			return
-		}
-		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
-
-	case sessiond.TypeBrowserCommand:
-		// Client (or agent, once MCP is wired) relays a command; daemon broadcasts
-		// it to the workspace so the pane's owner executes it. Fire-and-forget.
-		if err := c.daemon.BrowserCommand(msg.PaneID, msg.CID, msg.Params); err != nil {
-			log.Printf("handleTextInput: BrowserCommand error: %v", err)
-		}
-
-	case sessiond.TypeBrowserResult:
-		// Executing client returns the result; daemon broadcasts it back to the
-		// workspace (echoing cid) so the waiting requester receives it.
-		if err := c.daemon.BrowserResult(msg.PaneID, msg.CID, msg.Result); err != nil {
-			log.Printf("handleTextInput: BrowserResult error: %v", err)
-		}
-
-	case sessiond.TypeBrowserURL:
-		// Client-to-server notification: URL navigation committed. Daemon
-		// broadcasts to workspace subscribers so MCP agents can observe
-		// navigation. Fire-and-forget.
-		if err := c.daemon.BrowserURL(msg.PaneID, msg.URL); err != nil {
-			log.Printf("handleTextInput: BrowserURL error: %v", err)
-		}
-
-	case sessiond.TypeBrowserLoad:
-		// Client-to-server notification: page load complete. Daemon broadcasts
-		// to workspace subscribers. Fire-and-forget.
-		if err := c.daemon.BrowserLoad(msg.PaneID, msg.URL); err != nil {
-			log.Printf("handleTextInput: BrowserLoad error: %v", err)
-		}
-
 	case sessiond.TypePreviewSubscribe:
 		// Per-connection opt-in for sidebar preview tiles. An error here means
 		// the daemon is older than this browser and does not know the message
@@ -644,7 +600,6 @@ func (h *Hub) attachClient(c *Client) error {
 				Cols:            pane.Cols,
 				Rows:            pane.Rows,
 				Title:           pane.Title,
-				SurfaceKind:     pane.SurfaceKind,
 				Placement:       pane.Placement,
 				ReferencePaneID: pane.ReferencePaneID,
 			})
@@ -669,39 +624,6 @@ func (h *Hub) attachClient(c *Client) error {
 		},
 		OnPaneResized: func(paneID uint32, cols, rows int) {
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneResized, PaneID: int(paneID), Cols: cols, Rows: rows})
-		},
-		OnBrowserCommand: func(msg *sessiond.Message) {
-			c.sendMessage(&sessiond.Message{
-				Type:     sessiond.TypeBrowserCommand,
-				PaneID:   msg.PaneID,
-				CID:      msg.CID,
-				Action:   msg.Action,
-				Selector: msg.Selector,
-				Params:   msg.Params,
-			})
-		},
-		OnBrowserResult: func(msg *sessiond.Message) {
-			c.sendMessage(&sessiond.Message{
-				Type:   sessiond.TypeBrowserResult,
-				PaneID: msg.PaneID,
-				CID:    msg.CID,
-				Result: msg.Result,
-				Error:  msg.Error,
-			})
-		},
-		OnBrowserURL: func(msg *sessiond.Message) {
-			c.sendMessage(&sessiond.Message{
-				Type:   sessiond.TypeBrowserURL,
-				PaneID: msg.PaneID,
-				URL:    msg.URL,
-			})
-		},
-		OnBrowserLoad: func(msg *sessiond.Message) {
-			c.sendMessage(&sessiond.Message{
-				Type:   sessiond.TypeBrowserLoad,
-				PaneID: msg.PaneID,
-				URL:    msg.URL,
-			})
 		},
 		OnWorkspacePreview: func(msg *sessiond.Message) {
 			// The tile names its own workspace (it is pushed for workspaces

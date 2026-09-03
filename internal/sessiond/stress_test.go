@@ -138,7 +138,10 @@ func TestStress_RapidReconnect(t *testing.T) {
 	for i := 0; i < cycles; i++ {
 		c := newTClient(t, socketPath)
 		// Drain any pane replay that arrives after attach.
-		go func() { for range c.data {} }()
+		go func() {
+			for range c.data {
+			}
+		}()
 
 		c.send(&Message{Type: TypeAttach, CID: 1, WorkspaceID: wsID})
 		c.waitCtrl(TypeComposition)

@@ -81,7 +81,6 @@ make build
 - **Workspaces** — named groups of panes, switch between them from a bar at the top
 - **Split panes** — real DOM layout via dockview; drag to resize, arbitrary nesting
 - **Clean reconnects** — server-side VT emulation replays a live cell-grid snapshot, not raw bytes; full-screen apps restore correctly at any window size
-- **Browser pane** — embed a running local web app (e.g. a dev server on port 3000) as a mux pane, proxied through the server
 - **PWA** — installable as a standalone desktop or mobile app; service worker for offline support
 - **Palette-derived chrome** — UI colors are derived from the active terminal palette automatically
 - **Session persistence** — the sessiond daemon detaches from the HTTP server; your shells survive server restarts, deploys, and reboots
@@ -89,13 +88,13 @@ make build
 - **Auth** — HMAC token-based auth with localhost bypass
 - **Service install** — `muxterm install` sets up systemd (Linux) or launchd (macOS)
 - **Push deploy** — `muxterm deploy user@host` copies the binary and installs remotely
-- **Agent integration (MCP)** — connect any MCP-compatible AI agent to drive workspaces, terminals, and browser panes
+- **Agent integration (MCP)** — connect any MCP-compatible AI agent to drive workspaces, panes, and terminals
 
 ## Agent integration (MCP)
 
-`muxterm mcp` exposes a [Model Context Protocol](https://modelcontextprotocol.io) server that lets any MCP-compatible AI agent drive workspaces, terminals, and browser panes. The server speaks JSON-RPC 2.0 over stdio and requires a running `muxterm` or `muxterm serve` instance to connect to.
+`muxterm mcp` exposes a [Model Context Protocol](https://modelcontextprotocol.io) server that lets any MCP-compatible AI agent drive workspaces, panes, and terminals. The server speaks JSON-RPC 2.0 over stdio and requires a running `muxterm` or `muxterm serve` instance to connect to.
 
-**25 tools** across 6 categories: workspace management, pane layout (with ASCII diagram for spatial awareness), terminal control (OSC 133 shell completion), browser navigation, browser interaction, and browser observation.
+**17 tools** across 5 categories: workspace management, pane layout (with ASCII diagram for spatial awareness), terminal control (OSC 133 shell completion), port tunnels, and server configuration.
 
 ### Amplifier
 
@@ -153,7 +152,7 @@ Add to `opencode.json` in your project root:
 |-----------|------|
 | `cmd/muxterm/` | CLI — serve, install, uninstall, deploy, sessiond, doctor |
 | `internal/sessiond/` | PTY daemon — workspace/pane registry, VT emulation, reconnect replay |
-| `internal/server/` | HTTP + WebSocket relay, auth, browser-pane proxy |
+| `internal/server/` | HTTP + WebSocket relay, auth, tunnel proxy, static asset serving |
 | `internal/service/` | Cross-platform service install (systemd/launchd) |
 | `internal/deploy/` | Push-to-remote via SSH |
 | `web/src/` | Lit web components, xterm.js terminal rendering, dockview split layout |

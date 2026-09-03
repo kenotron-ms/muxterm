@@ -128,11 +128,7 @@ func runSessionAttach(args []string) error {
 		fmt.Printf("workspace %s (%d panes, layout saved: %t)\n", comp.WorkspaceID, len(comp.Panes), comp.Layout != "")
 		fmt.Printf("%-8s %-10s %-8s %s\n", "PANE-ID", "SURFACE", "SIZE", "TITLE")
 		for _, p := range comp.Panes {
-			kind := p.SurfaceKind
-			if kind == "" {
-				kind = "terminal"
-			}
-			fmt.Printf("%-8d %-10s %-8s %s\n", p.PaneID, kind, fmt.Sprintf("%dx%d", p.Cols, p.Rows), p.Title)
+			fmt.Printf("%-8d %-10s %-8s %s\n", p.PaneID, "terminal", fmt.Sprintf("%dx%d", p.Cols, p.Rows), p.Title)
 		}
 		return nil
 	})

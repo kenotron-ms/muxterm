@@ -6,12 +6,12 @@ import (
 )
 
 // TestASCIILayout tests the ASCIILayout function with various inputs.
-// Pane fixture: {1 terminal terminal},{2 terminal terminal},{3 browser browser /}
+// Pane fixture: {1 terminal},{2 terminal},{3 editor}
 func TestASCIILayout(t *testing.T) {
 	panes := []PaneInfo{
-		{PaneID: 1, SurfaceKind: "terminal", Title: "terminal"},
-		{PaneID: 2, SurfaceKind: "terminal", Title: "terminal"},
-		{PaneID: 3, SurfaceKind: "browser-cdp", Title: "Browser"},
+		{PaneID: 1, Title: "terminal"},
+		{PaneID: 2, Title: "terminal"},
+		{PaneID: 3, Title: "editor"},
 	}
 
 	// Single leaf with one pane, views: ["1"]
@@ -53,7 +53,7 @@ func TestASCIILayout(t *testing.T) {
 		},
 		"panels": {
 			"1": {"id": "1", "title": "terminal", "contentComponent": "terminal"},
-			"3": {"id": "3", "title": "browser", "contentComponent": "browser"}
+			"3": {"id": "3", "title": "editor", "contentComponent": "terminal"}
 		},
 		"activeGroup": "g1"
 	}`
@@ -80,7 +80,7 @@ func TestASCIILayout(t *testing.T) {
 		layout   string
 		panes    []PaneInfo
 		active   int
-		wantTrim bool   // if true, TrimSpace(result) should == ""
+		wantTrim bool // if true, TrimSpace(result) should == ""
 		contains []string
 	}{
 		{
@@ -111,7 +111,7 @@ func TestASCIILayout(t *testing.T) {
 			panes:    panes,
 			active:   -1,
 			wantTrim: false,
-			contains: []string{"[1]", "[3]", "terminal", "Browser"},
+			contains: []string{"[1]", "[3]", "terminal", "editor"},
 		},
 		{
 			name:     "multi-tab group",

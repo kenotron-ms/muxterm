@@ -24,7 +24,6 @@ const (
 	ActivityReasonCommandActive           ActivityReason = "command-active"
 	ActivityReasonForegroundProcess       ActivityReason = "foreground-process"
 	ActivityReasonCustomCommand           ActivityReason = "custom-command"
-	ActivityReasonBrowserPane             ActivityReason = "browser-pane"
 	ActivityReasonUnsupportedShell        ActivityReason = "unsupported-shell"
 	ActivityReasonUnsupportedPlatform     ActivityReason = "unsupported-platform"
 	ActivityReasonMissingLifecycle        ActivityReason = "missing-lifecycle"
@@ -334,10 +333,6 @@ func (p *Pane) ProcessGeneration() uint64 {
 // PTY ownership, and authenticated lifecycle state. It never weakens incomplete
 // or failed inspection into idle.
 func (p *Pane) ClassifyActivity() ActivityAssessment {
-	if p.SurfaceKind == "browser" {
-		return ActivityAssessment{Classification: ActivityUnknown, Reason: ActivityReasonBrowserPane}
-	}
-
 	const maxStableInspectionAttempts = 3
 	for range maxStableInspectionAttempts {
 		snapshot := p.activitySnapshot()

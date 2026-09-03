@@ -1251,9 +1251,9 @@ export const terminalRegistry = {
    * Crop a bottom-left `cols` x `rows` tile out of a pane's LIVE xterm buffer,
    * in full colour, for the sidebar preview card.
    *
-   * Returns null when this pane has no live terminal here — not attached, a
-   * browser pane, or disposed — which is the caller's signal to fall back to
-   * the daemon's monochrome pushed tile.
+   * Returns null when this pane has no live terminal here — not attached, not
+   * yet opened, or disposed — which is the caller's signal to fall back to the
+   * daemon's monochrome pushed tile.
    *
    * Deliberately narrow: serializeSnapshot() walks the entire viewport (~10k
    * cells) and this runs at ~6 Hz, so it walks only the ~13 rows the card

@@ -166,33 +166,6 @@ func TestPaneTitleFieldIsSettable(t *testing.T) {
 	}
 }
 
-func TestNewBrowserPane_SurfaceKind(t *testing.T) {
-	p := NewBrowserPane(7)
-	if p.LocalID != 7 {
-		t.Fatalf("LocalID = %d, want 7", p.LocalID)
-	}
-	if p.SurfaceKind != "browser" {
-		t.Fatalf("SurfaceKind = %q, want \"browser\"", p.SurfaceKind)
-	}
-}
-
-func TestNewBrowserPane_NilBuf(t *testing.T) {
-	p := NewBrowserPane(1)
-	if got := p.Replay(); got != nil {
-		t.Fatalf("Replay() = %v, want nil (browser pane has no buffer)", got)
-	}
-}
-
-func TestNewBrowserPane_Info(t *testing.T) {
-	p := NewBrowserPane(3)
-	info := p.Info()
-	if info.PaneID != 3 {
-		t.Fatalf("Info().PaneID = %d, want 3", info.PaneID)
-	}
-	if info.SurfaceKind != "browser" {
-		t.Fatalf("Info().SurfaceKind = %q, want \"browser\"", info.SurfaceKind)
-	}
-	// Close twice must not panic
-	p.Close()
-	p.Close()
-}
+// TestNewBrowserPane_SurfaceKind, TestNewBrowserPane_NilBuf, and
+// TestNewBrowserPane_Info lived here. They were removed when muxterm dropped
+// browser pane support: NewBrowserPane and Pane.SurfaceKind no longer exist.

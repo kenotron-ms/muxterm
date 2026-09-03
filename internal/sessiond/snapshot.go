@@ -178,11 +178,6 @@ func BuildSnapshot(reg *Registry, reason string) Snapshot {
 	for _, view := range views {
 		wsSnap := WorkspaceSnapshot{Name: view.Name, Layout: view.Layout}
 		for _, p := range view.Panes {
-			if p.SurfaceKind == "browser" {
-				// No PTY, no cwd/argv/replay concept, no server-side engine
-				// to relaunch -- nothing here to restore.
-				continue
-			}
 			wsSnap.Panes = append(wsSnap.Panes, capturePaneSnapshot(p))
 		}
 		snap.Workspaces = append(snap.Workspaces, wsSnap)
@@ -362,9 +357,6 @@ func scrapeAmplifierSessionID(fullReplay []byte) (string, bool) {
 // shell's job control is exactly the process the shell put in the
 // foreground.
 func resolveForegroundPID(p *Pane) (int, bool) {
-	if p.SurfaceKind == "browser" {
-		return 0, false
-	}
 	if !foregroundPGRPSupported() {
 		return 0, false
 	}
