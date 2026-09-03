@@ -38,6 +38,54 @@ type dockGrid struct {
 	ActiveGroup string               `json:"activeGroup"`
 }
 
+// ActivePaneFromLayout returns the pane id the client will make active when it
+// restores this layout, and whether one was found.
+//
+// dockview persists the selection: activeGroup names the focused group and each
+// leaf's activeView names the focused tab within it. Since view ids are pane ids
+// (see renderGroup's strconv.Atoi), reading them back gives the daemon the one
+// thing it otherwise cannot know -- which pane a workspace is "on" -- without
+// inventing a second, drifting source of truth.
+//
+// Returns 0,false on empty or malformed input, or when activeView is not a pane
+// id. Callers must have a fallback.
+func ActivePaneFromLayout(layout string) (int, bool) {
+	if strings.TrimSpace(layout) == "" {
+		return 0, false
+	}
+	var g dockGrid
+	if err := json.Unmarshal([]byte(layout), &g); err != nil {
+		return 0, false
+	}
+	leaves := collectLeaves(&g.Grid.Root)
+	if len(leaves) == 0 {
+		return 0, false
+	}
+
+	// Prefer the focused group. A single-group layout often omits activeGroup,
+	// and a stale id can survive a group being closed, so fall back to the
+	// first leaf rather than giving up.
+	active := leaves[0]
+	if g.ActiveGroup != "" {
+		for _, leaf := range leaves {
+			if leaf.ID == g.ActiveGroup {
+				active = leaf
+				break
+			}
+		}
+	}
+
+	view := active.ActiveView
+	if view == "" && len(active.Views) > 0 {
+		view = active.Views[0]
+	}
+	id, err := strconv.Atoi(view)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
 // ASCIILayout parses a dockview layout JSON string and renders an ASCII box
 // diagram. panes provides PaneInfo for each known pane id; active is the
 // active pane id (-1 = none). Returns "" on empty or malformed input.

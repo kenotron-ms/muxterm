@@ -46,3 +46,6 @@ DONE.json
 .amplifier/goals/manifest.tsv
 .amplifier/goals/manifest-*.tsv
 .amplifier/goals/*.log
+
+# Local scratch space (font bake-off, experiments)
+.scratch/

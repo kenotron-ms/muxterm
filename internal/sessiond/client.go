@@ -42,6 +42,14 @@ type pending struct {
 // close failure instead of waiting forever.
 const closeRequestReplyTimeout = 2 * time.Second
 
+// previewSubscribeReplyTimeout bounds the additive preview-subscribe request
+// for the same reason closeRequestReplyTimeout bounds the close requests: an
+// older still-live daemon silently ignores an unknown control type, so a newly
+// hot-reloaded relay must surface that mismatch as a recoverable error instead
+// of blocking its caller forever. The browser then simply stays on its
+// non-preview cards.
+const previewSubscribeReplyTimeout = 2 * time.Second
+
 // Handlers holds callbacks for unsolicited events (Messages with CID == 0)
 // pushed by the daemon. It is guarded by Client.hmu. Every callback runs on the
 // client's single read-loop goroutine and must not block for long; offload slow
@@ -120,6 +128,13 @@ type Handlers struct {
 	// client owning a browser pane finished loading a page. msg carries PaneID
 	// and URL.
 	OnBrowserLoad func(msg *Message)
+	// OnWorkspacePreview fires when the daemon pushes a sidebar preview tile
+	// for a workspace this connection opted into via PreviewSubscribe. msg
+	// carries WorkspaceID, PaneID, Title, the canonical Cols/Rows tile
+	// geometry, and Lines (trailing-space-trimmed, bottom-anchored rows).
+	// Tiles are advisory and droppable: a slow consumer loses frames rather
+	// than the connection.
+	OnWorkspacePreview func(msg *Message)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -421,6 +436,27 @@ func (c *Client) ScrollbackPage(paneID int, cursor *uint64, limit int) (lines []
 	return reply.Lines, reply.StartLine, reply.NextCursor, nil
 }
 
+// PreviewSubscribe turns sidebar preview tiles on or off for THIS connection.
+// Opting in is per-connection and off by default, so a daemon never pushes
+// cosmetic frames at a CLI or agent client that did not ask for them.
+//
+// While subscribed, the daemon pushes TypeWorkspacePreview events (delivered to
+// Handlers.OnWorkspacePreview) for every workspace whose most-active pane
+// changed, at most twice a second per workspace. Subscribing also re-arms every
+// workspace, so a client that has just connected receives a full set of tiles
+// on the next tick rather than waiting for output.
+//
+// A daemon too old to know the message type never replies; that surfaces here
+// as a timeout error, which callers should treat as "previews unavailable"
+// rather than as a failure.
+func (c *Client) PreviewSubscribe(enabled bool) error {
+	_, err := c.requestWithin(
+		&Message{Type: TypePreviewSubscribe, OK: enabled},
+		previewSubscribeReplyTimeout,
+	)
+	return err
+}
+
 // GetLayout requests an ASCII layout diagram of the currently-attached
 // workspace. The daemon replies with TypeLayoutResult carrying the ASCII field.
 // Returns an empty string when no layout has been saved for the attached
@@ -676,6 +712,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeBrowserLoad:
 		if h.OnBrowserLoad != nil {
 			h.OnBrowserLoad(msg)
+		}
+	case TypeWorkspacePreview:
+		if h.OnWorkspacePreview != nil {
+			h.OnWorkspacePreview(msg)
 		}
 	}
 }

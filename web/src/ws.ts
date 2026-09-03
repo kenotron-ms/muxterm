@@ -132,6 +132,16 @@ export class MuxSocket {
    * need for a window-event round-trip.
    */
   onPaneResized: ((paneId: number, cols: number, rows: number) => void) | null = null;
+  /**
+   * Fires when the daemon pushes a sidebar preview tile for a workspace this
+   * connection is NOT attached to (the tile names its own workspace). Same
+   * direct-callback shape as onPaneResized above: the only consumer
+   * (previewStore) is a plain module app.ts already imports.
+   *
+   * Optional by construction — an old daemon never sends these, and a client
+   * that never calls previewSubscribe(true) never receives them.
+   */
+  onWorkspacePreview?: (msg: SessiondMessage) => void;
 
   constructor(store: MuxStore, url: string) {
     this._store = store;
@@ -202,6 +212,18 @@ export class MuxSocket {
 
   saveLayout(workspaceId: string, breakpoint: string, layout: string): void {
     this.sendSessiond({ type: SessiondType.SaveLayout, workspaceId, breakpoint, layout });
+  }
+
+  /**
+   * Turn sidebar preview tiles on or off for THIS connection.
+   *
+   * Opt-in by design: with it off the daemon renders nothing and puts zero
+   * bytes on the wire, so `preview = "off"` is genuinely free rather than just
+   * visually suppressed. Must be re-sent after a reconnect — the flag lives on
+   * the daemon connection, which a daemon restart replaces.
+   */
+  previewSubscribe(enabled: boolean): void {
+    this.sendSessiond({ type: SessiondType.PreviewSubscribe, ok: enabled });
   }
 
   /** Request the list of workspaces. */
@@ -483,6 +505,8 @@ export class MuxSocket {
             window.dispatchEvent(new CustomEvent('layout-command', { detail: raw }));
           } else if (raw.type === SessiondType.PaneResized) {
             this.onPaneResized?.(raw.paneId as number, raw.cols as number, raw.rows as number);
+          } else if (raw.type === SessiondType.WorkspacePreview) {
+            this.onWorkspacePreview?.(raw as unknown as SessiondMessage);
           }
         }
       }

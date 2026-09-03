@@ -1,12 +1,17 @@
-import { LitElement, html, css, unsafeCSS } from 'lit';
+import { LitElement, html, css, unsafeCSS, type TemplateResult } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { store } from '../state.js';
 import { workspaceLabel } from './workspace-picker.js';
 import './launcher-menu.js';
 import { icon } from '../lib/icons.js';
-import { Download, Ellipsis } from 'lucide';
+import { Download, Ellipsis, Globe, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
 import { instanceLabel } from '../lib/instance-identity.js';
+import { previewStore, type PreviewEntry, type PreviewMode } from '../lib/preview-store.js';
+import { renderTile, fontReady } from '../lib/preview-canvas.js';
+import { tileHash, type PreviewTile } from '../lib/preview-tile.js';
+import { PREVIEW_CELL } from '../lib/fonts.js';
+import { paletteAnsiArray, resolvePalette } from '../lib/theme.js';
 import {
   fetchUpdateStatus,
   applyUpdate,
@@ -25,6 +30,106 @@ type UpdatePhase = 'idle' | 'checking' | 'updating' | 'failed';
 const UPDATE_POLL_INTERVAL_MS = 1000;
 /** Give up after this many polls (~60s) and surface a failure. */
 const UPDATE_POLL_MAX_ATTEMPTS = 60;
+
+// ---------------------------------------------------------------------------
+// Live workspace previews
+// ---------------------------------------------------------------------------
+
+/** `.ws-card` horizontal margin per side. Mirrors the CSS below. */
+const CARD_MARGIN_X = 6;
+/** `.ws-card` border width per side. Mirrors the CSS below. */
+const CARD_BORDER = 1;
+
+/**
+ * Column clamp for a preview tile. Below 24 the crop stops being readable at
+ * all; above 80 there is nothing more to show, because the daemon's canonical
+ * push is 80 columns wide.
+ */
+const PREVIEW_MIN_COLS = 24;
+const PREVIEW_MAX_COLS = 80;
+
+/** ResizeObserver debounce: dragging the sidebar emits a resize every frame. */
+const RESIZE_DEBOUNCE_MS = 120;
+
+/**
+ * Minimum contrast against the terminal background for preview ink.
+ * At 8px with 1px strokes, dim colours are simply not there — a terminal at
+ * 14px puts roughly 3x the ink into a glyph and the tile has no such budget.
+ */
+const PREVIEW_CONTRAST_FLOOR = 4.5;
+
+/**
+ * Is the 5x8 bitmap preview font usable?
+ *
+ * Probed once per page (not per component instance) and remembered. `false`
+ * means every card must fall back to the text layout: a 5x8 grid drawn in
+ * fallback monospace at 8px is unreadable garbage, never "slightly worse".
+ *
+ * `null` (still probing) renders the preview LAYOUT optimistically but draws
+ * nothing, so the common success case never shows a layout jump.
+ */
+let previewFontOk: boolean | null = null;
+let previewFontProbe: Promise<boolean> | null = null;
+
+function probePreviewFont(): Promise<boolean> {
+  previewFontProbe ??= fontReady().then((ok) => {
+    previewFontOk = ok;
+    return ok;
+  });
+  return previewFontProbe;
+}
+
+/** Which body a preview card shows. */
+type CardVisual = 'tile' | 'pending' | 'browser' | 'empty';
+
+/** Everything `_renderWorkspaces()` needs about one workspace, computed once. */
+interface CardState {
+  id: string;
+  label: string;
+  active: boolean;
+  bell: boolean;
+  visual: CardVisual;
+  /** Non-null only when `visual === 'tile'`. */
+  entry: PreviewEntry | null;
+  /** Corner chip: active pane title. */
+  title: string;
+  /** Corner chip: panes beyond the previewed one. */
+  extra: number;
+  /** Text hint line, used only by the no-preview fallback card. */
+  hint: string;
+}
+
+/**
+ * True when every cell of the tile is a space.
+ *
+ * A non-VT pane (a browser surface) yields a well-formed EMPTY tile rather than
+ * an error, following the daemon's empty-not-error precedent, so "blank" is the
+ * signal to show an icon instead of a convincingly-terminal-looking void.
+ */
+function tileIsBlank(tile: PreviewTile): boolean {
+  for (const line of tile.lines) {
+    for (let i = 0; i < line.length; i++) {
+      if (line.charCodeAt(i) !== 32) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * A complete description of the DOM `_renderWorkspaces()` would produce.
+ *
+ * The preview tick compares this against the last rendered value and bumps the
+ * Lit render only when it differs. Tile CONTENT is deliberately absent: it
+ * changes at ~6 Hz and must never rebuild DOM — see `_onPreviewTick`.
+ */
+function cardsSignature(cards: CardState[], mode: PreviewMode, cols: number): string {
+  let sig = `${mode}/${cols}`;
+  for (const c of cards) {
+    sig += `\u0000${c.id}|${c.label}|${c.active ? 1 : 0}${c.bell ? 1 : 0}`;
+    sig += `|${c.visual}|${c.title}|${c.extra}|${c.hint}`;
+  }
+  return sig;
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -230,6 +335,168 @@ export class MuxSidebar extends LitElement {
       text-overflow: ellipsis;
     }
 
+    /* ---- workspace cards: live preview variant ----
+       Everything above stays exactly as it was: it is what renders when
+       previews are off or the bitmap font failed to load. */
+
+    .ws-card.preview {
+      position: relative;
+      /* Own stacking context: keeps the scrim/header/chip z-order below purely
+         local, so a card can never paint over its neighbours. */
+      z-index: 0;
+      padding: 0;
+      margin: 3px 6px;
+      border-radius: 6px;
+      overflow: hidden;
+      /* The card is a little SCREEN, not a list row. --mux-bg (the terminal
+         background) rather than --chrome-bar is the single detail that makes
+         it read that way, so the hover/active list-row fills are cancelled
+         below rather than inherited. */
+      background: var(--mux-bg);
+      /* A visible bezel is REQUIRED, not decorative. --mux-bg and --chrome-bar
+         are near-identical in dark palettes (tokyo-night measures 1.05:1 --
+         effectively the same luminance), so a transparent border leaves an
+         idle card with no edge at all and it dissolves into the sidebar.
+         Ghosting the canvas does not help: it dims the tile's CONTENT, not the
+         card's boundary. --chrome-border alone is only 1.34:1 here, so the
+         resting bezel is mixed toward --chrome-text-dim for ~1.8:1 in both
+         light and dark. */
+      border-color: color-mix(in srgb, var(--chrome-border) 60%, var(--chrome-text-dim));
+      /* Lifts the card off the panel so it reads as a screen sitting ON the
+         sidebar rather than a region cut out of it. */
+      box-shadow: 0 1px 3px -1px rgba(0, 0, 0, 0.5);
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+
+    .ws-card.preview:hover,
+    .ws-card.preview.active {
+      background: var(--mux-bg);
+    }
+
+    .ws-card.preview:not(.active):hover {
+      border-color: var(--chrome-text-dim);
+    }
+
+    .ws-card.preview.active {
+      border-color: var(--chrome-accent);
+      box-shadow: 0 2px 8px -2px color-mix(in srgb, var(--chrome-accent) 40%, transparent);
+    }
+
+    /* Scrim, over the TOP of the tile. Not arbitrary: after bottom-anchoring
+       the crop, the top rows hold the OLDEST content, so the chrome covers the
+       least valuable pixels on the card. */
+    .ws-card.preview.full::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 24px;
+      background: linear-gradient(
+        to bottom,
+        var(--chrome-bar),
+        color-mix(in srgb, var(--chrome-bar) 55%, transparent) 60%,
+        transparent
+      );
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .ws-card.preview .ws-header {
+      box-sizing: border-box;
+      padding: 0 6px;
+      min-height: 24px;
+      position: relative;
+      z-index: 2;
+    }
+
+    .ws-card.preview.full .ws-header {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      /* Does more work than the scrim for legibility over arbitrary tile
+         content; inherited by the dot and the close x. */
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    }
+
+    /* compact: 6 rows is 48px, and a 24px scrim over that is half the card, so
+       the header is stacked above the tile instead of overlaid. */
+    .ws-card.preview.compact .ws-header {
+      background: var(--chrome-bar);
+    }
+
+    .ws-card.preview .ws-name {
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .dot.bell {
+      color: var(--mux-bell);
+    }
+
+    .ws-screen {
+      position: relative;
+      overflow: hidden;
+      /* Height is set inline to rows * PREVIEW_CELL.h so the full tile box is
+         reserved from the first paint and nothing shifts when a tile lands. */
+    }
+
+    .ws-canvas {
+      display: block;
+    }
+
+    /* Ghosting the idle cards IS the hierarchy (the workspace you are in is
+       live and vivid, the others are monochrome pushes), and it also separates
+       --mux-bg from --chrome-bar in dark palettes where they sit close. */
+    .ws-card.preview:not(.active) .ws-canvas {
+      filter: saturate(0.25) opacity(0.55);
+      transition: filter 0.12s;
+    }
+
+    .ws-card.preview:not(.active):hover .ws-canvas {
+      filter: saturate(0.5) opacity(0.85);
+    }
+
+    .ws-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--chrome-text-dim);
+      font-size: 13px;
+      letter-spacing: 3px;
+      pointer-events: none;
+    }
+
+    /* Bottom-right: we crop the bottom-LEFT of the pane, so the right end of
+       the last row sits past a typical prompt line — statistically the
+       emptiest region of the tile. */
+    .ws-chip {
+      position: absolute;
+      bottom: 4px;
+      right: 4px;
+      max-width: 62%;
+      box-sizing: border-box;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 10px;
+      line-height: 1.4;
+      color: var(--chrome-text-dim);
+      background: color-mix(in srgb, var(--chrome-bar) 80%, transparent);
+      backdrop-filter: blur(2px);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    .ws-card.preview.active .ws-chip-extra {
+      color: var(--chrome-accent);
+    }
+
     .new-ws-btn {
       display: block;
       width: calc(100% - 12px);
@@ -322,6 +589,13 @@ export class MuxSidebar extends LitElement {
   @state() private _renaming: string | null = null;
   @state() private _menuOpen = false;
 
+  /**
+   * Tile width in columns, derived from the measured card. 0 = not measured
+   * yet. Reactive because the canvas element's CSS size comes out of the
+   * template — but it only ever changes on a debounced resize, never per tick.
+   */
+  @state() private _cols = 0;
+
   /** Server-reported update status; null until the first check resolves. */
   @state() private _updateStatus: UpdateStatus | null = null;
   @state() private _updatePhase: UpdatePhase = 'idle';
@@ -330,6 +604,26 @@ export class MuxSidebar extends LitElement {
   private _unsub: (() => void) | null = null;
   private _updatePollTimer: number | null = null;
   private _updatePollAttempts = 0;
+
+  // --- preview plumbing ------------------------------------------------------
+
+  private _unsubPreview: (() => void) | null = null;
+  private _resizeObserver: ResizeObserver | null = null;
+  private _resizeTimer: number | null = null;
+
+  /** Last cards handed to `render()`; `updated()` paints from exactly these. */
+  private _cards: CardState[] = [];
+  /** `cardsSignature()` of `_cards`, i.e. of the DOM currently on screen. */
+  private _cardSig = '';
+  /** Canvas per workspace, repopulated from the DOM in `updated()`. */
+  private _canvases = new Map<string, HTMLCanvasElement>();
+  /**
+   * Last-drawn key per canvas ELEMENT rather than per workspace id: Lit reuses
+   * card DOM by position, so a canvas can be handed to a different workspace
+   * when the list reorders and a workspace-keyed hash would then claim a stale
+   * bitmap was current.
+   */
+  private _drawn = new WeakMap<HTMLCanvasElement, string>();
 
   private _onOutsideClick = (e: MouseEvent): void => {
     if (this._menuOpen && !e.composedPath().includes(this)) {
@@ -360,6 +654,19 @@ export class MuxSidebar extends LitElement {
     this._unsub = store.subscribe(() => {
       this._version++;
     });
+
+    // Preview tiles arrive at ~6 Hz. This callback deliberately does NOT bump
+    // _version — see _onPreviewTick.
+    this._unsubPreview = previewStore.subscribe(this._onPreviewTick);
+
+    // One probe per page, remembered. Until it resolves we render the preview
+    // layout but draw nothing; if it resolves false every card falls back to
+    // the text layout permanently.
+    if (previewFontOk === null) {
+      void probePreviewFont().then(() => {
+        this._version++;
+      });
+    }
   }
 
   override disconnectedCallback(): void {
@@ -367,11 +674,23 @@ export class MuxSidebar extends LitElement {
     super.disconnectedCallback();
     this._unsub?.();
     this._unsub = null;
+    this._unsubPreview?.();
+    this._unsubPreview = null;
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = null;
+    if (this._resizeTimer !== null) {
+      window.clearTimeout(this._resizeTimer);
+      this._resizeTimer = null;
+    }
+    this._canvases.clear();
+    this._cards = [];
     this._clearUpdatePoll();
   }
 
   /** One status check, after first paint — the footer never blocks rendering. */
   override firstUpdated(): void {
+    this._observeCardWidth();
+
     this._updatePhase = 'checking';
     void fetchUpdateStatus()
       .then((status) => {
@@ -383,6 +702,16 @@ export class MuxSidebar extends LitElement {
       .finally(() => {
         if (this._updatePhase === 'checking') this._updatePhase = 'idle';
       });
+  }
+
+  /**
+   * Canvas refs are collected here, after Lit has committed the DOM, and the
+   * tiles are drawn imperatively. The preview tick then reuses these refs
+   * without going through Lit at all.
+   */
+  override updated(): void {
+    this._collectCanvases();
+    this._paintAll(this._cards);
   }
 
   // ---------------------------------------------------------------------------
@@ -453,6 +782,191 @@ export class MuxSidebar extends LitElement {
       return;
     }
     this._scheduleUpdatePoll(previousVersion);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Live preview plumbing
+  // ---------------------------------------------------------------------------
+
+  /** Tile height in rows, or 0 when previews are off or unrenderable. */
+  private get _previewRows(): number {
+    // A 5x8 grid in fallback monospace at 8px is unreadable garbage, so a
+    // failed font is exactly as good as previews being switched off.
+    if (previewFontOk === false) return 0;
+    return previewStore.rows;
+  }
+
+  private _observeCardWidth(): void {
+    const container = this.shadowRoot?.querySelector('.tab-content');
+    if (!container || typeof ResizeObserver === 'undefined') {
+      this._measureCardWidth();
+      return;
+    }
+    this._resizeObserver = new ResizeObserver(this._onCardResize);
+    this._resizeObserver.observe(container);
+  }
+
+  private _onCardResize = (): void => {
+    // The first measurement is applied immediately: it lands before paint, so
+    // the card is born at the right width instead of visibly re-flowing.
+    if (this._cols === 0) {
+      this._measureCardWidth();
+      return;
+    }
+    if (this._resizeTimer !== null) window.clearTimeout(this._resizeTimer);
+    this._resizeTimer = window.setTimeout(() => {
+      this._resizeTimer = null;
+      this._measureCardWidth();
+    }, RESIZE_DEBOUNCE_MS);
+  };
+
+  /**
+   * Columns from the REAL measured card width, never a constant: dragging the
+   * sidebar wider must reveal more columns, not more rows, which is the correct
+   * semantics for "a window onto the bottom-left of a pane".
+   */
+  private _measureCardWidth(): void {
+    const root = this.shadowRoot;
+    if (!root) return;
+
+    const screen = root.querySelector('.ws-screen');
+    let inner = screen ? screen.clientWidth : 0;
+    if (inner <= 0) {
+      // No card on screen yet (no workspaces, or previews off): derive from the
+      // scroll container minus the card's own margins and borders.
+      const container = root.querySelector('.tab-content');
+      if (!container) return;
+      inner = container.clientWidth - 2 * (CARD_MARGIN_X + CARD_BORDER);
+    }
+    if (inner <= 0) return;
+
+    const cols = Math.min(
+      PREVIEW_MAX_COLS,
+      Math.max(PREVIEW_MIN_COLS, Math.floor(inner / PREVIEW_CELL.w)),
+    );
+    if (cols !== this._cols) this._cols = cols;
+  }
+
+  /**
+   * previewStore fires at ~6 Hz. Bumping _version here would rebuild every
+   * card's DOM several times a second, which is the one thing this component
+   * must not do — so the tick compares the STRUCTURE of the cards against what
+   * is on screen and only re-renders when that actually changed (a workspace
+   * appeared, a card gained its first tile, the chip's pane title moved).
+   * Otherwise it draws straight to the existing canvases.
+   */
+  private _onPreviewTick = (): void => {
+    const cards = this._computeCards();
+    if (cardsSignature(cards, previewStore.mode, this._cols) !== this._cardSig) {
+      this._version++;
+      return;
+    }
+    this._paintAll(cards);
+  };
+
+  private _collectCanvases(): void {
+    this._canvases.clear();
+    const root = this.shadowRoot;
+    if (!root) return;
+    for (const el of root.querySelectorAll<HTMLCanvasElement>('canvas.ws-canvas')) {
+      const id = el.dataset['ws'];
+      if (id) this._canvases.set(id, el);
+    }
+  }
+
+  /** Draw every card that has a tile, skipping anything already on screen. */
+  private _paintAll(cards: CardState[]): void {
+    // Never draw before the bitmap font is confirmed usable.
+    if (previewFontOk !== true) return;
+
+    const paletteName = store.config.theme.palette;
+    const palette = resolvePalette(paletteName);
+    const ansi = paletteAnsiArray(palette);
+
+    for (const card of cards) {
+      const entry = card.entry;
+      if (card.visual !== 'tile' || !entry) continue;
+      const canvas = this._canvases.get(card.id);
+      if (!canvas) continue;
+
+      // Identical key means identical pixels, so the redraw can be skipped
+      // outright — subscribe() fires far faster than the content changes.
+      const key = [
+        tileHash(entry.tile),
+        `${entry.tile.cols}x${entry.tile.rows}`,
+        entry.live ? 'live' : 'mono',
+        paletteName,
+      ].join(':');
+      if (this._drawn.get(canvas) === key) continue;
+      this._drawn.set(canvas, key);
+
+      renderTile(canvas, entry.tile, {
+        palette: ansi,
+        fg: palette.foreground,
+        bg: palette.background,
+        // Detached workspaces render monochrome. The asymmetry IS the visual
+        // hierarchy — the workspace you are in is live and vivid, the others
+        // are ghosted — not a limitation of the push path.
+        mono: !entry.live,
+        contrastFloor: PREVIEW_CONTRAST_FLOOR,
+      });
+    }
+  }
+
+  /** Everything the workspace list needs, resolved once per render/tick. */
+  private _computeCards(): CardState[] {
+    const activeWsId = store.attached ?? '';
+    const panes = store.panes;
+    const activePaneId = store.activePaneId;
+    const rows = this._previewRows;
+    const cols = this._cols;
+    const previewOn = rows > 0 && cols > 0;
+    const activePane = panes.find((p) => p.paneId === activePaneId);
+
+    return store.workspaces.map((ws) => {
+      const id = ws.workspaceId;
+      const active = id === activeWsId;
+      const entry = previewOn ? previewStore.get(id, cols, rows) : null;
+
+      // surfaceKind is only knowable for the attached workspace; for the rest a
+      // blank tile is the daemon's honest answer for a non-VT pane.
+      const paneId = entry ? entry.paneId : activePaneId;
+      const isBrowser =
+        active && panes.find((p) => p.paneId === paneId)?.surfaceKind === 'browser';
+
+      let visual: CardVisual = 'pending';
+      if (isBrowser) visual = 'browser';
+      else if (entry) visual = tileIsBlank(entry.tile) ? 'empty' : 'tile';
+
+      let title = entry?.title ?? '';
+      if (title === '' && active) title = activePane?.title ?? '';
+      // sessiond does not capture OSC 0/2 titles yet (pane.go: "a later
+      // phase"), so Title is empty for essentially every pane. Without a
+      // fallback the chip would never appear and the card would lose the pane
+      // identity entirely. `Pane N` is the convention mux-dock and
+      // mux-pane-picker already use for an untitled pane.
+      if (title === '' && paneId >= 0) title = `Pane ${paneId}`;
+      const extra = Math.max(0, (active ? panes.length : ws.paneCount) - 1);
+
+      // Today's hint line, preserved verbatim for the no-preview fallback card.
+      let hint = '';
+      if (active && panes.length > 0) {
+        const t = (activePane ?? panes[0]).title ?? '';
+        hint = panes.length > 1 ? `${t}  +${panes.length - 1}` : t;
+      }
+
+      return {
+        id,
+        label: workspaceLabel(ws),
+        active,
+        bell: store.workspaceBellActive(id),
+        visual,
+        entry: visual === 'tile' ? entry : null,
+        title,
+        extra,
+        hint,
+      };
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -540,61 +1054,118 @@ export class MuxSidebar extends LitElement {
   // Workspace render
   // ---------------------------------------------------------------------------
 
-  private _renderWorkspaces() {
-    const activeWsId = store.attached ?? '';
-    const panes = store.panes;
+  /** Dot + name (or rename input) + close x. Shared by both card layouts. */
+  private _renderHeader(card: CardState) {
+    // The bell producer only ever fires for pushed preview frames, so this
+    // class is inert on the no-preview card and the header stays one renderer.
+    const dotClass = card.bell ? 'bell' : card.active ? 'active' : 'inactive';
+    return html`
+      <div class="ws-header">
+        <span class="dot ${dotClass}">●</span>
+        ${this._renaming === card.id
+          ? html`<input
+              class="ws-rename-input"
+              type="text"
+              .value="${card.label}"
+              @keydown="${(e: KeyboardEvent) => this._onRenameKeyDown(e, card.id)}"
+              @blur="${(e: Event) => this._finishRename(e, card.id)}"
+              @click="${(e: Event) => e.stopPropagation()}"
+            />`
+          : html`<span
+              class="ws-name"
+              @dblclick="${(e: Event) => this._startRename(e, card.id)}"
+              >${card.label}</span
+            >`}
+        <button
+          type="button"
+          class="ws-remove-btn"
+          title="Close workspace"
+          aria-label="Close workspace ${card.label}"
+          @click="${(e: Event) => this._onWsRemove(e, card.id, card.label)}"
+        >×</button>
+      </div>
+    `;
+  }
+
+  /** Previews off, or the bitmap font failed: today's exact card. */
+  private _renderTextCard(card: CardState) {
+    return html`
+      <div
+        class="ws-card ${card.active ? 'active' : ''}"
+        @click="${() => this._onWsClick(card.id)}"
+      >
+        ${this._renderHeader(card)}
+        ${card.hint ? html`<div class="ws-hint">${card.hint}</div>` : ''}
+      </div>
+    `;
+  }
+
+  private _renderPreviewCard(card: CardState, rows: number, cols: number, compact: boolean) {
+    const tileW = cols * PREVIEW_CELL.w;
+    const tileH = rows * PREVIEW_CELL.h;
+
+    let body: TemplateResult;
+    if (card.visual === 'tile') {
+      // Sized here as well as in renderTile() so the box is right on the very
+      // first frame, before any pixels exist.
+      body = html`<canvas
+        class="ws-canvas"
+        data-ws="${card.id}"
+        style="width:${tileW}px;height:${tileH}px"
+      ></canvas>`;
+    } else if (card.visual === 'pending') {
+      body = html`<div class="ws-placeholder">···</div>`;
+    } else {
+      // A browser surface has no VT buffer at all; an icon is honest and looks
+      // better than a convincingly-terminal-shaped void.
+      body = html`<div class="ws-placeholder">
+        ${icon(card.visual === 'browser' ? Globe : SquareTerminal, { size: 24 })}
+      </div>`;
+    }
+
+    // Written on one line: the chip is nowrap + ellipsis, so template
+    // indentation would show up as leading/trailing space inside it.
+    const extra =
+      card.extra > 0 ? html`<span class="ws-chip-extra"> +${card.extra}</span>` : '';
+    const chip =
+      card.title !== '' || card.extra > 0
+        ? html`<div class="ws-chip">${card.title}${extra}</div>`
+        : '';
 
     return html`
-      ${store.workspaces.map((ws) => {
-        const isActive = ws.workspaceId === activeWsId;
-        const label = workspaceLabel(ws);
+      <div
+        class="ws-card preview ${compact ? 'compact' : 'full'} ${card.active ? 'active' : ''}"
+        @click="${() => this._onWsClick(card.id)}"
+      >
+        ${this._renderHeader(card)}
+        <div class="ws-screen" style="height:${tileH}px">${body}</div>
+        ${chip}
+      </div>
+    `;
+  }
 
-        // Hint row: active pane title + extra pane count (only for the attached workspace).
-        let hintText = '';
-        if (isActive && panes.length > 0) {
-          const activePane =
-            panes.find((p) => p.paneId === store.activePaneId) ?? panes[0];
-          const title = activePane.title ?? '';
-          const extra = panes.length - 1;
-          hintText = extra > 0 ? `${title}  +${extra}` : title;
-        }
+  private _renderWorkspaces() {
+    const rows = this._previewRows;
+    const cols = this._cols;
+    // Recorded so the preview tick can tell a structural change from a mere
+    // content change without re-rendering to find out.
+    const cards = this._computeCards();
+    this._cards = cards;
+    this._cardSig = cardsSignature(cards, previewStore.mode, cols);
 
-        return html`
-          <div
-            class="ws-card ${isActive ? 'active' : ''}"
-            @click="${() => this._onWsClick(ws.workspaceId)}"
-          >
-            <div class="ws-header">
-              <span class="dot ${isActive ? 'active' : 'inactive'}">●</span>
-              ${this._renaming === ws.workspaceId
-                ? html`<input
-                    class="ws-rename-input"
-                    type="text"
-                    .value="${label}"
-                    @keydown="${(e: KeyboardEvent) =>
-                      this._onRenameKeyDown(e, ws.workspaceId)}"
-                    @blur="${(e: Event) => this._finishRename(e, ws.workspaceId)}"
-                    @click="${(e: Event) => e.stopPropagation()}"
-                  />`
-                : html`<span
-                    class="ws-name"
-                    @dblclick="${(e: Event) => this._startRename(e, ws.workspaceId)}"
-                    >${label}</span
-                  >`}
-              <button
-                type="button"
-                class="ws-remove-btn"
-                title="Close workspace"
-                aria-label="Close workspace ${label}"
-                @click="${(e: Event) => this._onWsRemove(e, ws.workspaceId, label)}"
-              >×</button>
-            </div>
-            ${hintText
-              ? html`<div class="ws-hint">${hintText}</div>`
-              : ''}
-          </div>
-        `;
-      })}
+    // Deliberately NOT gated on `cols`: the card box (and its reserved tile
+    // height) must exist from the very first paint, so an unmeasured card
+    // renders the placeholder at full height rather than the text layout and
+    // then visibly reflowing once the ResizeObserver reports.
+    const previewOn = rows > 0;
+    const compact = previewStore.mode === 'compact';
+
+    return html`
+      ${cards.map((card) =>
+        previewOn
+          ? this._renderPreviewCard(card, rows, cols, compact)
+          : this._renderTextCard(card),
+      )}
       <button class="new-ws-btn" @click="${() => this._onNewWs()}">
         + New workspace
       </button>

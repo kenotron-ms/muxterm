@@ -3,8 +3,8 @@
 /**
  * Converts a TypeScript camelCase ResolvedConfig back to the Go snake_case
  * format used by PATCH /api/config. Only includes user-settable fields
- * (theme, font, terminal) — keys, workspace, and driver are not changed through
- * the settings UI in Phase 5.
+ * (theme, font, terminal, sidebar) — keys, workspace, and driver are not
+ * changed through the settings UI in Phase 5.
  */
 export function configToGoJSON(cfg: ResolvedConfig): Record<string, unknown> {
   return {
@@ -20,6 +20,9 @@ export function configToGoJSON(cfg: ResolvedConfig): Record<string, unknown> {
       cursor_blink: cfg.terminal.cursorBlink,
       scrollback: cfg.terminal.scrollback,
       bell: cfg.terminal.bell,
+    },
+    sidebar: {
+      preview: cfg.sidebar.preview,
     },
   };
 }
@@ -69,6 +72,10 @@ export interface ResolvedConfig {
     scrollback: number;
     bell: 'visual' | 'audible' | 'off';
   };
+  sidebar: {
+    /** Live workspace preview density. 'off' also stops all preview traffic. */
+    preview: 'full' | 'compact' | 'off';
+  };
   keys: {
     nextSession: string;
     split: string;
@@ -104,6 +111,9 @@ export const DEFAULT_RESOLVED_CONFIG: ResolvedConfig = {
     cursorBlink: true,
     scrollback: 10000,
     bell: 'visual',
+  },
+  sidebar: {
+    preview: 'full',
   },
   keys: {
     nextSession: 'ctrl+shift+]',
@@ -150,6 +160,16 @@ function bool(v: unknown, def: boolean): boolean {
 }
 
 /**
+ * Sidebar preview density is a closed three-value vocabulary, unlike the other
+ * string fields here which are passed through and cast. It is validated because
+ * the preview pipeline switches on it directly — an unrecognised value must
+ * degrade to the default, never to a mode that does not exist.
+ */
+function previewMode(v: unknown, def: ResolvedConfig['sidebar']['preview']): ResolvedConfig['sidebar']['preview'] {
+  return v === 'full' || v === 'compact' || v === 'off' ? v : def;
+}
+
+/**
  * parseResolvedConfig reads a raw server response (snake_case) and maps it
  * to a ResolvedConfig (camelCase). Falls back to DEFAULT_RESOLVED_CONFIG for
  * any missing or invalid field.
@@ -166,6 +186,7 @@ export function parseResolvedConfig(raw: unknown): ResolvedConfig {
   const t = obj(r['theme']);
   const f = obj(r['font']);
   const term = obj(r['terminal']);
+  const sb = obj(r['sidebar']);
   const k = obj(r['keys']);
   const ws = obj(r['workspace']);
   const drv = obj(r['driver']);
@@ -187,6 +208,9 @@ export function parseResolvedConfig(raw: unknown): ResolvedConfig {
       cursorBlink: bool(term['cursor_blink'], d.terminal.cursorBlink),
       scrollback: num(term['scrollback'], d.terminal.scrollback),
       bell: str(term['bell'], d.terminal.bell) as ResolvedConfig['terminal']['bell'],
+    },
+    sidebar: {
+      preview: previewMode(sb['preview'], d.sidebar.preview),
     },
     keys: {
       nextSession: str(k['next_session'], d.keys.nextSession),

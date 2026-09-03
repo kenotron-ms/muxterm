@@ -60,6 +60,22 @@ type Pane struct {
 	lifecycleParsing bool
 	activityRevision uint64
 
+	// previewMu guards the sidebar-preview output signal, deliberately NOT
+	// activityMu: activityMu guards the close-safety activity classifier, which
+	// is authoritative state (see AGENTS.md "Pane activity ownership"). A
+	// cosmetic preview must not be able to contend with — or be mistaken for —
+	// that.
+	//
+	// lastWrite is the first output timestamp in sessiond: "activity" here has
+	// always been an idle/busy/unknown classifier, never an output tracker. The
+	// preview ticker uses it to pick each workspace's most-active pane.
+	// previewSeq bumps on every PTY read and is the cheap dirty signal that
+	// lets the ticker skip a workspace that has produced nothing since the last
+	// tile.
+	previewMu  sync.Mutex
+	lastWrite  time.Time
+	previewSeq uint64
+
 	onData      func(localID int, data []byte)
 	onExit      func(localID int, exitCode int, runtimeMilliseconds int64)
 	onPromptPtr atomic.Pointer[func(int, *Message)] // written once (createPane), read by readLoop
@@ -333,6 +349,7 @@ func (p *Pane) readLoop(generation uint64) {
 				}
 			}
 			_, _ = p.buf.Write(data)
+			p.noteWrite(time.Now())
 			if p.onData != nil {
 				cp := make([]byte, n)
 				copy(cp, data)
@@ -356,6 +373,27 @@ func (p *Pane) readLoop(generation uint64) {
 	if p.onExit != nil {
 		p.onExit(p.LocalID, exitCode, runtimeMs)
 	}
+}
+
+// noteWrite records that the PTY produced output at now. Called from readLoop,
+// the single place per-pane output is observed server-side, so every byte the
+// pane emits advances both fields exactly once.
+func (p *Pane) noteWrite(now time.Time) {
+	p.previewMu.Lock()
+	p.lastWrite = now
+	p.previewSeq++
+	p.previewMu.Unlock()
+}
+
+// PreviewActivity returns when this pane last produced PTY output and a
+// counter that changes on every such write. A zero time and seq mean the pane
+// has never written (a freshly spawned pane, or a browser pane, which has no
+// PTY at all). Callers compare seq against the value they last saw rather than
+// reading it as a byte count.
+func (p *Pane) PreviewActivity() (lastWrite time.Time, seq uint64) {
+	p.previewMu.Lock()
+	defer p.previewMu.Unlock()
+	return p.lastWrite, p.previewSeq
 }
 
 // Write sends input to the child's stdin (the PTY master).

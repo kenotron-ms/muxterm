@@ -430,6 +430,21 @@ func (c *Client) handleTextInput(data []byte) {
 			log.Printf("handleTextInput: BrowserLoad error: %v", err)
 		}
 
+	case sessiond.TypePreviewSubscribe:
+		// Per-connection opt-in for sidebar preview tiles. An error here means
+		// the daemon is older than this browser and does not know the message
+		// type; relaying it lets the browser fall back to its non-preview
+		// cards immediately instead of waiting for tiles that never arrive.
+		if err := c.daemon.PreviewSubscribe(msg.OK); err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{
+			Type: sessiond.TypePreviewSubscribeResult,
+			CID:  msg.CID,
+			OK:   true,
+		})
+
 	default:
 		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
 	}
@@ -686,6 +701,20 @@ func (h *Hub) attachClient(c *Client) error {
 				Type:   sessiond.TypeBrowserLoad,
 				PaneID: msg.PaneID,
 				URL:    msg.URL,
+			})
+		},
+		OnWorkspacePreview: func(msg *sessiond.Message) {
+			// The tile names its own workspace (it is pushed for workspaces
+			// this client is NOT attached to), so unlike OnPaneAdded there is
+			// no getWorkspaceID stamping here.
+			c.sendMessage(&sessiond.Message{
+				Type:        sessiond.TypeWorkspacePreview,
+				WorkspaceID: msg.WorkspaceID,
+				PaneID:      msg.PaneID,
+				Title:       msg.Title,
+				Cols:        msg.Cols,
+				Rows:        msg.Rows,
+				Lines:       msg.Lines,
 			})
 		},
 	})

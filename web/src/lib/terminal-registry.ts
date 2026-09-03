@@ -12,14 +12,18 @@
  */
 
 import { Terminal } from '@xterm/xterm';
+import type { IBufferCell } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebFontsAddon } from '@xterm/addon-web-fonts';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
-import { resolvePalette } from './theme.js';
+import { paletteAnsiArray, resolvePalette } from './theme.js';
 import { muxLog } from './mux-log.js';
 import { TERMINAL_FONT_FAMILY } from './fonts.js';
+import { ansiFromXterm256, nearestAnsi } from './ansi-approx.js';
+import { cropToTile } from './preview-tile.js';
+import type { PreviewTile, SourceCell, TileSource } from './preview-tile.js';
 
 /**
  * Ensure xterm.js's stylesheet is present in the root node that actually
@@ -75,6 +79,14 @@ export function buildTerminalConfig(cfg: ResolvedConfig) {
 let TERMINAL_CONFIG = buildTerminalConfig(DEFAULT_RESOLVED_CONFIG);
 
 /**
+ * The 16 ANSI colours previewRegion() approximates 256-colour and truecolour
+ * cells against. Cached (rather than resolved per cell) because it is read on
+ * a per-cell hot path at several Hz; refreshed in configureTerminals() so a
+ * palette change is picked up by the next tile.
+ */
+let PREVIEW_PALETTE = paletteAnsiArray(TERMINAL_CONFIG.theme);
+
+/**
  * Reconfigure all terminals from a ResolvedConfig.
  *
  * - Updates TERMINAL_CONFIG so newly-created terminals pick up the new values.
@@ -88,6 +100,10 @@ let TERMINAL_CONFIG = buildTerminalConfig(DEFAULT_RESOLVED_CONFIG);
 export function configureTerminals(cfg: ResolvedConfig): void {
   const newConfig = buildTerminalConfig(cfg);
   TERMINAL_CONFIG = newConfig;
+  // Sidebar preview tiles speak in ANSI indices, so the approximation basis
+  // has to follow the terminal palette or a re-themed tile would keep folding
+  // truecolour cells against the old 16.
+  PREVIEW_PALETTE = paletteAnsiArray(newConfig.theme);
 
   for (const entry of _map.values()) {
     if (!entry.opened) continue;
@@ -294,6 +310,95 @@ function _containsScrollbackPollutingRedraw(data: Uint8Array | string): boolean 
   }
 
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar preview source (see lib/preview-tile.ts, lib/preview-store.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fold one xterm colour attribute down to an ANSI index, or -1 for default.
+ *
+ * Three colour modes exist and they are NOT interchangeable: default carries no
+ * colour at all, palette carries 0..255, and RGB packs 0xRRGGBB into the same
+ * number. Reading getFgColor() without first asking which mode it is would
+ * silently interpret a truecolour value as a palette index.
+ */
+function _ansiIndex(
+  isDefault: boolean,
+  isPalette: boolean,
+  colour: number,
+  palette: string[],
+): number {
+  if (isDefault) return -1;
+  if (isPalette) {
+    // 0..15 ARE the palette; ansiFromXterm256 deliberately does not handle them.
+    if (colour >= 0 && colour < 16) return colour;
+    const rgb = ansiFromXterm256(colour);
+    return nearestAnsi(rgb.r, rgb.g, rgb.b, palette);
+  }
+  return nearestAnsi((colour >> 16) & 0xff, (colour >> 8) & 0xff, colour & 0xff, palette);
+}
+
+function _sourceCell(cell: IBufferCell, palette: string[]): SourceCell {
+  let fg = _ansiIndex(cell.isFgDefault(), cell.isFgPalette(), cell.getFgColor(), palette);
+  let bg = _ansiIndex(cell.isBgDefault(), cell.isBgPalette(), cell.getBgColor(), palette);
+  // Inverse is an attribute, not a colour: the emulator still reports the
+  // pre-swap fg/bg, so the preview has to do the swap itself or an inverted
+  // status line renders as invisible ink.
+  if (cell.isInverse() !== 0) {
+    const swap = fg;
+    fg = bg;
+    bg = swap;
+  }
+  return { chars: cell.getChars(), width: cell.getWidth(), fg, bg };
+}
+
+/**
+ * A TileSource over the LIVE viewport of an xterm.js terminal.
+ *
+ * The viewport is rows `baseY .. baseY + term.rows - 1`, NOT `0 .. buffer
+ * .length`: buffer.length counts scrollback, so a source that reported it as
+ * `height` would crop out of history the moment the user had scrolled.
+ * `height` is therefore term.rows and y is translated by baseY internally.
+ *
+ * `buf`, `baseY` and the reusable cell are captured once. cropToTile is
+ * synchronous and runs immediately, so a single consistent snapshot is both
+ * correct and cheaper than re-reading per row — and it means a scroll landing
+ * mid-crop cannot shear the tile.
+ */
+function _previewSource(term: Terminal, palette: string[]): TileSource {
+  const buf = term.buffer.active;
+  const baseY = buf.baseY;
+  // One IBufferCell reused for every getCell() call. The xterm API exists
+  // precisely to avoid minting an object per cell; _sourceCell copies the
+  // primitives straight out, so nothing ever retains this reference.
+  const reused = buf.getNullCell();
+  return {
+    height: term.rows,
+    cursorRow: buf.cursorY, // already viewport-relative
+    isRowBlank(y: number): boolean {
+      // translateToString(true) trims trailing whitespace — the cheapest
+      // blank test the API offers, and cropToTile calls this per row.
+      // A row off the end of the buffer counts as blank, not as ink; the
+      // `?.` alone would answer `undefined === ''` → false and anchor the
+      // crop on a row that does not exist.
+      const text = buf.getLine(baseY + y)?.translateToString(true);
+      return text === undefined || text.trim() === '';
+    },
+    rowCells(y: number, cols: number): SourceCell[] {
+      const line = buf.getLine(baseY + y);
+      if (!line) return [];
+      const out: SourceCell[] = [];
+      const limit = Math.min(cols, line.length);
+      for (let x = 0; x < limit; x++) {
+        const cell = line.getCell(x, reused);
+        if (!cell) break;
+        out.push(_sourceCell(cell, palette));
+      }
+      return out;
+    },
+  };
 }
 
 export const terminalRegistry = {
@@ -1140,6 +1245,26 @@ export const terminalRegistry = {
    */
   getTerminal(paneId: number): Terminal | null {
     return _map.get(_key(paneId))?.term ?? null;
+  },
+
+  /**
+   * Crop a bottom-left `cols` x `rows` tile out of a pane's LIVE xterm buffer,
+   * in full colour, for the sidebar preview card.
+   *
+   * Returns null when this pane has no live terminal here — not attached, a
+   * browser pane, or disposed — which is the caller's signal to fall back to
+   * the daemon's monochrome pushed tile.
+   *
+   * Deliberately narrow: serializeSnapshot() walks the entire viewport (~10k
+   * cells) and this runs at ~6 Hz, so it walks only the ~13 rows the card
+   * actually shows.
+   */
+  previewRegion(paneId: number, cols: number, rows: number): PreviewTile | null {
+    const entry = _map.get(_key(paneId));
+    // Before term.open() the buffer is empty and everything is still queued in
+    // pendingData; a blank tile would be a worse answer than the pushed one.
+    if (!entry || !entry.opened) return null;
+    return cropToTile(_previewSource(entry.term, PREVIEW_PALETTE), cols, rows);
   },
 
   /**

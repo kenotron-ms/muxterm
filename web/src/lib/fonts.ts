@@ -17,9 +17,36 @@
 // from https://github.com/ryanoasis/nerd-fonts/releases and placed in
 // web/public/fonts/. Missing files degrade gracefully: xterm falls back to the
 // configured fallback font and the preview line shows the system monospace.
+//
+// This module also injects the sidebar preview font (Spleen 5x8), which is NOT
+// a terminal font and deliberately not in FONT_FAMILIES — see below.
 
 /** Default CSS font-family for the terminal (the bundled JetBrains Mono NF). */
 export const TERMINAL_FONT_FAMILY = 'JetBrainsMonoNerdFont';
+
+// ---------------------------------------------------------------------------
+// Sidebar preview font
+// ---------------------------------------------------------------------------
+
+/**
+ * Bitmap font used to render the sidebar's live workspace previews.
+ *
+ * NOT user-selectable and NOT in FONT_FAMILIES: it exists solely to draw a
+ * terminal grid at a 5x8 pixel cell, which no normal monospace font can do.
+ * Built from the upstream BDF by tools/font/build.sh (Spleen, BSD-2-Clause).
+ */
+export const PREVIEW_FONT_FAMILY = 'Spleen5x8';
+
+/**
+ * Cell geometry, in CSS pixels, of PREVIEW_FONT_FAMILY.
+ *
+ * These are a contract, not a suggestion. The font is only crisp when rendered
+ * at exactly `font-size: PREVIEW_CELL.h px` — measured in Chrome, an integer
+ * font-size renders with 2 distinct colours (pure bitmap) while 8.5px renders
+ * with 58, nearly every ink pixel antialiased. Callers must also draw at an
+ * integer device scale; see tools/font/README.md for the full contract.
+ */
+export const PREVIEW_CELL = { w: 5, h: 8 } as const;
 
 /**
  * All font families available in the settings picker.
@@ -134,6 +161,16 @@ export function injectTerminalFonts(): void {
   font-weight: 700;
   font-display: swap;
   src: url('/fonts/IosevkaTermNerdFont-Bold.woff2') format('woff2');
+}
+/* ── Spleen 5x8 — sidebar preview only, never a terminal font ──
+   font-display: block because a 5x8 grid drawn in a fallback font at 8px is
+   unreadable garbage; better to show nothing until the real font lands. */
+@font-face {
+  font-family: 'Spleen5x8';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/fonts/Spleen5x8.woff2') format('woff2');
 }
 `.trim();
   document.head.appendChild(style);

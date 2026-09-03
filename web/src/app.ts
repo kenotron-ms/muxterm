@@ -5,6 +5,7 @@ import { icon } from './lib/icons.js';
 import { MonitorX } from 'lucide';
 import { MuxSocket, buildWsUrl } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
+import { previewStore } from './lib/preview-store.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
@@ -598,6 +599,10 @@ export class MuxApp extends LitElement {
     // Apply default theme tokens immediately so --mux-* and --chrome-* vars exist before any frame.
     applyThemeTokens(resolvePalette(store.config.theme.palette));
     applyChromeTokens(store.config.theme.palette);
+    // Sidebar preview density. Decided before the socket exists so the opt-in
+    // is already resolved when attach() first gets a chance to send it; the
+    // daemon's real config arrives on the WS config frame and re-applies this.
+    previewStore.setMode(store.config.sidebar.preview);
     // Reflect which machine this instance is running on — document title
     // (PWA window title / browser tab / Alt-Tab preview) and, if the user
     // picked one in Settings, a distinguishing title-bar accent color.
@@ -636,6 +641,12 @@ export class MuxApp extends LitElement {
     // see terminal-registry.ts's applyServerResize).
     this._socket.onPaneResized = (paneId, cols, rows) => {
       terminalRegistry.applyServerResize(paneId, cols, rows);
+    };
+    // Sidebar live previews: the store owns the opt-in and both data sources
+    // (local xterm buffer for the attached workspace, daemon push for the rest).
+    previewStore.attach(this._socket);
+    this._socket.onWorkspacePreview = (msg) => {
+      previewStore.handleWorkspacePreview(msg);
     };
     // visibilitychange + window 'focus': this browser tab/window regaining
     // OS focus re-claims every currently-visible pane. Mirrors the existing
@@ -746,6 +757,10 @@ export class MuxApp extends LitElement {
       // On (re)connect: attach the last/known workspace, or list + attach the
       // first. This is where the initial composition sync is requested.
       this._controller?.bootstrap();
+      // The preview opt-in is per daemon connection, so a reconnect (or a
+      // daemon restart underneath us) silently loses it and tiles would just
+      // stop arriving. Re-send it here, alongside the composition re-sync.
+      previewStore.resubscribe();
     };
     this._socket.connect();
     this._connectionStatus = 'reconnecting';
@@ -1202,6 +1217,7 @@ export class MuxApp extends LitElement {
       applyThemeTokens(resolvePalette(cfg.theme.palette));
       applyChromeTokens(cfg.theme.palette);
       configureTerminals(cfg); // future Terminals pick up font/cursor/scrollback/palette
+      previewStore.setMode(cfg.sidebar.preview);
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
     }
@@ -1608,6 +1624,7 @@ export class MuxApp extends LitElement {
     applyThemeTokens(resolvePalette(cfg.theme.palette));
     applyChromeTokens(cfg.theme.palette);
     configureTerminals(cfg);
+    previewStore.setMode(cfg.sidebar.preview);
     disposeKeys?.();
     disposeKeys = installKeybindings(uiActions);
     // Persist the change: debounced PATCH /api/config → server merges,

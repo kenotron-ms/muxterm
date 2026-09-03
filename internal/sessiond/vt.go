@@ -352,6 +352,135 @@ func (b *VTBuffer) ScreenText() string {
 	return strings.Join(lines, "\n")
 }
 
+// Size returns the emulator grid's current dimensions. Like CursorPos and
+// ScreenText it reads the underlying Emulator directly: b.mu.RLock() already
+// excludes Write (the only mutator), so SafeEmulator's own per-method lock
+// would be redundant nesting.
+func (b *VTBuffer) Size() (cols, rows int) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.emu.Emulator.Width(), b.emu.Emulator.Height()
+}
+
+// PreviewTile renders a monochrome, bottom-left crop of the visible screen for
+// the sidebar preview cards: at most rows lines of at most cols characters,
+// each trailing-space trimmed (the client re-pads and top-pads). See
+// docs/designs/2026-09-02-sidebar-live-preview-design.md, D3/D4.
+//
+// Why not ScreenText: ScreenText trims trailing blank ROWS, which destroys the
+// vertical alignment this crop exists to preserve. It also cannot express the
+// two rules below, both of which need per-cell access.
+//
+// The crop is anchored to CONTENT, not to the grid:
+//
+//	lastInk = greatest row index carrying any non-blank cell (0 if all blank)
+//	bottom  = min(H-1, max(lastInk, cursorRow))
+//	top     = max(0, bottom-rows+1)
+//
+// Anchoring on the last inked row (rather than the emulator's literal bottom)
+// is what keeps the card alive: a 50-row pane holding 8 rows of output would
+// otherwise render as a tile of nothing. Including cursorRow keeps a freshly
+// cleared screen — cursor parked below the last ink — from scrolling its own
+// prompt out of frame. Fewer than rows lines may be returned; the client pads
+// at the TOP so content sits on the floor, exactly like a fresh shell.
+//
+// A blank row INSIDE top..bottom is emitted as an empty string rather than
+// dropped — most often the cursor row sitting just below the last output. It is
+// a real screen row, and keeping it is what makes the card stable: dropping it
+// would shift every line down one row, and the tile would then jitter by a row
+// each time the cursor line toggles between blank and inked. Only rows below
+// bottom are omitted, which is what lets the slice be shorter than rows.
+//
+// Every cell is passed through sanitizeCell, which guarantees exactly
+// Cell.Width characters per cell so columns stay aligned (see preview.go).
+func (b *VTBuffer) PreviewTile(cols, rows int) []string {
+	if cols <= 0 || rows <= 0 {
+		return nil
+	}
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	emu := b.emu.Emulator
+
+	w, h := emu.Width(), emu.Height()
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+
+	lastInk := 0
+	for y := h - 1; y >= 0; y-- {
+		if rowHasInk(emu, y, w) {
+			lastInk = y
+			break
+		}
+	}
+
+	bottom := lastInk
+	if cursorRow := emu.CursorPosition().Y; cursorRow > bottom {
+		bottom = cursorRow
+	}
+	if bottom > h-1 {
+		bottom = h - 1
+	}
+	top := bottom - rows + 1
+	if top < 0 {
+		top = 0
+	}
+
+	out := make([]string, 0, bottom-top+1)
+	var line strings.Builder
+	for y := top; y <= bottom; y++ {
+		line.Reset()
+		for x := 0; x < cols; {
+			cell := emu.CellAt(x, y)
+			if cell == nil {
+				// Past the right edge of a pane narrower than cols. The
+				// remainder of the row is padding, and padding is trimmed.
+				break
+			}
+			if cell.Width <= 0 {
+				// Width 0 is a wide cell's continuation slot — but a wide cell
+				// advances x past its own continuations below, so landing here
+				// means an untouched zero cell instead. Emit one blank so the
+				// columns to its right stay where they belong.
+				line.WriteString(previewBlankCell)
+				x++
+				continue
+			}
+			// Clamp to two columns. A terminal cell is 0, 1 or 2 wide, but
+			// Width is advisory and TypeScript's sanitizeChar clamps the same
+			// way; emitting more characters here than the browser does for the
+			// same cell would shear the row on one path only. Advance by the
+			// clamped width so x and the emitted text stay in step.
+			w := cell.Width
+			if w > 2 {
+				w = 2
+			}
+			line.WriteString(sanitizeCell(cell.Content, w))
+			x += w
+		}
+		out = append(out, strings.TrimRight(line.String(), " "))
+	}
+	return out
+}
+
+// rowHasInk reports whether row y holds any cell that is not blank, scanning
+// the full emulator width (not the tile width) so a card never goes dark just
+// because the only content on screen sits to the right of the crop. Callers
+// must hold b.mu.
+func rowHasInk(emu *vt.Emulator, y, w int) bool {
+	for x := 0; x < w; x++ {
+		cell := emu.CellAt(x, y)
+		if cell == nil {
+			break
+		}
+		if cell.Content != "" && cell.Content != " " {
+			return true
+		}
+	}
+	return false
+}
+
 // CursorPos returns the cursor's 0-based (row, col) on the visible screen.
 // uv.Position is image.Point with X = column and Y = row.
 func (b *VTBuffer) CursorPos() (row, col int) {

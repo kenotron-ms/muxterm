@@ -98,6 +98,11 @@ export const SessiondType = {
   LayoutCommand: 'layout-command',
   ScreenSnapshot: 'screen-snapshot',
   GetLayout: 'get-layout',
+  // Sidebar live preview (ADDITIVE, post-v1) — mirrors Go's
+  // TypePreviewSubscribe / TypeWorkspacePreview. Deliberately NOT PaneUpdate
+  // above: that entry has no Go counterpart and is dead vocabulary.
+  PreviewSubscribe: 'preview-subscribe',
+  WorkspacePreview: 'workspace-preview',
 } as const;
 
 export type SessiondMessageType = (typeof SessiondType)[keyof typeof SessiondType];
@@ -214,6 +219,12 @@ export interface SessiondMessage {
   placement?: string;
   /** Reference pane id for split placement (0 = active pane). */
   referencePaneId?: number;
+  /** Boolean payload of preview-subscribe (enable/disable) and the ack flag on
+   *  preview-subscribe-result. Mirrors Go's `ok` json tag. */
+  ok?: boolean;
+  /** Tile payload of workspace-preview: at most `rows` entries of at most
+   *  `cols` characters, trailing-space trimmed on the wire. */
+  lines?: string[];
 }
 
 // ---------------------------------------------------------------------------
