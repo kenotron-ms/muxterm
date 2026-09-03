@@ -15,6 +15,7 @@ type fakeDaemonConn struct {
 	resizes   [][3]int
 	createdID int
 	handlers  sessiond.Handlers
+	previewOn bool
 }
 
 func (f *fakeDaemonConn) ListWorkspaces() ([]sessiond.WorkspaceInfo, error) {
@@ -91,6 +92,11 @@ func (f *fakeDaemonConn) BrowserResult(paneID int, cid uint64, payload json.RawM
 func (f *fakeDaemonConn) BrowserURL(paneID int, url string) error { return nil }
 
 func (f *fakeDaemonConn) BrowserLoad(paneID int, url string) error { return nil }
+
+func (f *fakeDaemonConn) PreviewSubscribe(enabled bool) error {
+	f.previewOn = enabled
+	return nil
+}
 
 func (f *fakeDaemonConn) SetHandlers(h sessiond.Handlers) {
 	f.handlers = h

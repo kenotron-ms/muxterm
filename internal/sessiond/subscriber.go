@@ -77,6 +77,23 @@ func (s *subscriber) enqueueControl(msg *Message) {
 	s.enqueue(outFrame{kind: FrameControl, msg: msg})
 }
 
+// enqueuePreview queues a cosmetic preview frame. Unlike enqueueControl, a full
+// queue DROPS the frame instead of disconnecting the client: previews are
+// advisory and must never be able to kill a session.
+//
+// A periodic broadcast plus a backgrounded browser tab is exactly the shape
+// that fills a 256-deep queue, so routing preview tiles through enqueueControl
+// would turn a sidebar decoration into a session-killer. This establishes a
+// droppable-frame class in a protocol where every other frame is mandatory;
+// any future advisory push belongs here too.
+func (s *subscriber) enqueuePreview(msg *Message) {
+	select {
+	case s.queue <- outFrame{kind: FrameControl, msg: msg}:
+	case <-s.done:
+	default: // drop
+	}
+}
+
 // enqueuePaneData queues a pane-data frame for this client. The data is COPIED
 // into a fresh slice so the caller may reuse its buffer. It never blocks.
 func (s *subscriber) enqueuePaneData(paneID uint32, data []byte) {

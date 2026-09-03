@@ -52,6 +52,9 @@ describe('sessiond protocol types', () => {
       LayoutCommand: 'layout-command',
       ScreenSnapshot: 'screen-snapshot',
       GetLayout: 'get-layout',
+      // Sidebar live preview
+      PreviewSubscribe: 'preview-subscribe',
+      WorkspacePreview: 'workspace-preview',
     });
   });
 

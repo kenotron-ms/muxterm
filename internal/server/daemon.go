@@ -47,6 +47,11 @@ type DaemonConn interface {
 	// to workspace subscribers): a client-rendered browser pane finished
 	// loading url.
 	BrowserLoad(paneID int, url string) error
+	// PreviewSubscribe turns sidebar preview tiles on or off for this daemon
+	// connection. It is per-connection and off by default; a daemon too old to
+	// know the message type returns an error, which the relay reports to the
+	// browser so it can fall back rather than wait.
+	PreviewSubscribe(enabled bool) error
 	SetHandlers(h sessiond.Handlers)
 	Run() error
 	Close() error

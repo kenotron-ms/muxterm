@@ -20,6 +20,7 @@ type Config struct {
 	Theme     ThemeConfig     `toml:"theme"      json:"theme"`
 	Font      FontConfig      `toml:"font"       json:"font"`
 	Terminal  TerminalConfig  `toml:"terminal"   json:"terminal"`
+	Sidebar   SidebarConfig   `toml:"sidebar"    json:"sidebar"`
 	Keys      KeysConfig      `toml:"keys"       json:"keys"`
 	Workspace WorkspaceConfig `toml:"workspace"  json:"workspace"`
 	Driver    DriverConfig    `toml:"driver"     json:"driver"`
@@ -109,6 +110,17 @@ type TerminalConfig struct {
 	CursorBlink bool   `toml:"cursor_blink"  json:"cursor_blink"`
 	Scrollback  int    `toml:"scrollback"    json:"scrollback"`
 	Bell        string `toml:"bell"          json:"bell"`
+}
+
+// SidebarConfig controls the workspace sidebar's live preview cards.
+// Preview accepts: "full" | "compact" | "off".
+//
+// "off" is not merely a visual suppression: the browser never sends
+// preview-subscribe, so the daemon renders no tiles and puts no preview bytes
+// on the wire at all. That is also the answer for the privacy case (previously
+// hidden workspace content becoming visible while screen-sharing).
+type SidebarConfig struct {
+	Preview string `toml:"preview" json:"preview"`
 }
 
 // KeysConfig defines muxterm's own UI keybindings.
@@ -201,6 +213,9 @@ func Merge(base, partial Config) Config {
 	if partial.Terminal.Bell != "" {
 		result.Terminal.Bell = partial.Terminal.Bell
 	}
+	if partial.Sidebar.Preview != "" {
+		result.Sidebar.Preview = partial.Sidebar.Preview
+	}
 	return result
 }
 
@@ -240,6 +255,9 @@ func Defaults() Config {
 			CursorBlink: true,
 			Scrollback:  10000,
 			Bell:        "visual",
+		},
+		Sidebar: SidebarConfig{
+			Preview: "full",
 		},
 		Keys: KeysConfig{
 			NextSession:    "ctrl+shift+]",

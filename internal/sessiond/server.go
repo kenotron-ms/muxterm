@@ -34,6 +34,11 @@ type Server struct {
 	mu    sync.Mutex
 	subs  map[string]map[*conn]bool // workspaceId -> set of attached connections
 	conns map[*conn]bool            // all live connections
+
+	// preview is the sidebar preview ticker's per-workspace change-gating
+	// state, keyed by workspace id. Guarded by mu, pruned each tick to the
+	// live workspace set. See the preview section at the end of this file.
+	preview map[string]*previewState
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -43,10 +48,11 @@ func NewServer(socketPath string) (*Server, error) {
 		return nil, errors.New("sessiond: empty socket path")
 	}
 	s := &Server{
-		reg:    NewRegistry(),
-		socket: socketPath,
-		subs:   make(map[string]map[*conn]bool),
-		conns:  make(map[*conn]bool),
+		reg:     NewRegistry(),
+		socket:  socketPath,
+		subs:    make(map[string]map[*conn]bool),
+		conns:   make(map[*conn]bool),
+		preview: make(map[string]*previewState),
 	}
 	return s, nil
 }
@@ -84,6 +90,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
+
+	// Sidebar preview tiles. Costs nothing until a connection opts in, and
+	// stops on the same ctx cancellation that closes the listener.
+	go s.previewLoop(ctx)
 
 	for {
 		nc, err := ln.Accept()
@@ -266,6 +276,11 @@ type conn struct {
 	sub      *subscriber
 	attached string
 	kind     string // ClientKindInteractive | ClientKindAgent | ClientKindCLI; set in attach()
+
+	// previewOn is this connection's sidebar-preview opt-in. Unlike attached
+	// it is guarded by Server.mu, because the preview ticker goroutine reads
+	// it while fanning tiles out. See setPreviewOn.
+	previewOn bool
 }
 
 // newConn wraps nc with a subscriber for serialized writes.
@@ -472,6 +487,14 @@ func (c *conn) handle(msg Message) {
 		})
 	case TypeScrollbackPage:
 		c.scrollbackPage(msg)
+	case TypePreviewSubscribe:
+		c.setPreviewOn(msg.OK)
+		// OK is unconditionally true: it acknowledges that THIS daemon
+		// understands preview-subscribe and applied it, which is precisely
+		// what a new browser needs in order to distinguish a daemon that
+		// supports previews from an older one that silently ignores an
+		// unknown control type.
+		c.reply(&Message{Type: TypePreviewSubscribeResult, CID: msg.CID, OK: true})
 	}
 }
 
@@ -778,4 +801,227 @@ func sizeOrDefault(cols, rows int) (int, int) {
 		rows = 24
 	}
 	return cols, rows
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar live preview (ADDITIVE). See
+// docs/designs/2026-09-02-sidebar-live-preview-design.md.
+//
+// The daemon pushes a small monochrome text tile of each workspace's most
+// active pane to connections that opted in, so a browser can show a live
+// thumbnail of the workspaces it is NOT attached to (a connection is attached
+// to exactly one workspace, so it has no other way to know). The attached
+// workspace is rendered client-side from its own xterm buffers and needs
+// nothing from here.
+// ---------------------------------------------------------------------------
+
+const (
+	// previewTick is how often the daemon LOOKS for changed workspaces. It is
+	// deliberately faster than previewMinInterval so a change is noticed
+	// promptly rather than landing at the start of a 500ms bucket.
+	previewTick = 250 * time.Millisecond
+	// previewMinInterval is the per-workspace floor between two rendered
+	// tiles, capping even a flat-out `yes` at 2 Hz.
+	previewMinInterval = 500 * time.Millisecond
+	// previewCols/previewRows are the CANONICAL tile geometry. One tile is
+	// rendered per workspace regardless of any client's sidebar width; each
+	// client crops it to its own size. A crop of a bottom-left crop is still a
+	// bottom-left crop, so per-client cropping is exact, not approximate.
+	previewCols = 80
+	previewRows = 24
+)
+
+// previewState is one workspace's change gate. All three fields exist to make
+// an idle machine cost zero: lastSeq skips a pane that has produced no output,
+// lastEmit bounds a busy one, and lastHash suppresses output that did not
+// change the visible crop (a scrolling progress bar redrawing the same text).
+// hasTile distinguishes "no tile yet" from "a tile whose hash happens to be 0".
+type previewState struct {
+	lastSeq  uint64
+	lastHash uint64
+	hasTile  bool
+	lastEmit time.Time
+}
+
+// setPreviewOn records this connection's sidebar-preview opt-in.
+//
+// Opt-in is mandatory, not a nicety: the fan-out walks s.conns, which includes
+// ClientKindCLI and ClientKindAgent, and a one-shot CLI invocation must never
+// receive preview tiles. It also makes an old client safe by construction — it
+// never subscribes, so it never receives anything.
+func (c *conn) setPreviewOn(on bool) {
+	c.srv.mu.Lock()
+	defer c.srv.mu.Unlock()
+	c.previewOn = on
+	if on {
+		// Reset every workspace's change gate so the next tick re-renders all
+		// of them for this newly-subscribed connection. Without this, a client
+		// attaching to an already-running daemon would see empty cards until
+		// each workspace happened to produce output on its own.
+		clear(c.srv.preview)
+	}
+}
+
+// previewLoop is the preview ticker goroutine, started by ListenAndServe and
+// stopped by the same ctx cancellation that closes the listener.
+func (s *Server) previewLoop(ctx context.Context) {
+	ticker := time.NewTicker(previewTick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			s.emitPreviews(now)
+		}
+	}
+}
+
+// emitPreviews renders and fans out one tick's worth of preview tiles.
+//
+// s.mu is never held while a tile renders: the gate check, the render, and the
+// fan-out are three separate steps, so a slow tile can never stall an attach, a
+// broadcast, or another connection's request. The gating state is advisory, so
+// racing with a concurrent subscribe costs at most one redundant tile.
+func (s *Server) emitPreviews(now time.Time) {
+	if !s.previewWanted() {
+		return // nobody subscribed: no snapshot, no render, no bytes
+	}
+
+	views := s.reg.snapshotView()
+	live := make(map[string]bool, len(views))
+	for _, ws := range views {
+		live[ws.ID] = true
+
+		p := pickPreviewPane(ws.Panes)
+		if p == nil {
+			continue
+		}
+		_, seq := p.PreviewActivity()
+		if !s.previewDue(ws.ID, seq, now) {
+			continue
+		}
+		// pickPreviewPane accepted only VT-backed panes, so this assertion
+		// cannot fail.
+		vb, ok := p.buf.(*VTBuffer)
+		if !ok {
+			continue
+		}
+		lines := vb.PreviewTile(previewCols, previewRows)
+		s.publishPreview(ws.ID, seq, previewTileHash(p.LocalID, lines), &Message{
+			Type:        TypeWorkspacePreview,
+			WorkspaceID: ws.ID,
+			PaneID:      p.LocalID,
+			Title:       p.Info().Title,
+			Cols:        previewCols,
+			Rows:        previewRows,
+			Lines:       lines,
+		})
+	}
+	s.prunePreviewState(live)
+}
+
+// previewWanted reports whether any live connection has opted in.
+func (s *Server) previewWanted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.conns {
+		if c.previewOn {
+			return true
+		}
+	}
+	return false
+}
+
+// previewDue reports whether wsID's preview pane is worth rendering this tick,
+// reserving the slot by advancing lastEmit. A pane that has produced no output
+// since the last tile is skipped, and a workspace that rendered within
+// previewMinInterval is skipped, so an idle machine does no work at all.
+func (s *Server) previewDue(wsID string, seq uint64, now time.Time) bool {
+	if seq == 0 {
+		return false // pane has never written; there is nothing to show yet
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.preview[wsID]
+	if !ok {
+		s.preview[wsID] = &previewState{lastEmit: now}
+		return true
+	}
+	if st.lastSeq == seq || now.Sub(st.lastEmit) < previewMinInterval {
+		return false
+	}
+	st.lastEmit = now
+	return true
+}
+
+// publishPreview commits the rendered tile's change gate and fans the frame out
+// to every opted-in connection. lastSeq advances whether or not the tile
+// changed, so an unchanged grid is not re-rendered on the next tick; the hash
+// gate is what makes a pane whose visible crop did not change cost zero bytes.
+//
+// Frames go out via enqueuePreview, which DROPS on a full queue rather than
+// disconnecting the client — see subscriber.go.
+func (s *Server) publishPreview(wsID string, seq, hash uint64, msg *Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.preview[wsID]
+	if !ok {
+		// Pruned, or reset by a subscribe, while this tile was rendering.
+		st = &previewState{}
+		s.preview[wsID] = st
+	}
+	st.lastSeq = seq
+	if st.hasTile && st.lastHash == hash {
+		return
+	}
+	st.lastHash = hash
+	st.hasTile = true
+	for c := range s.conns {
+		if c.previewOn {
+			c.sub.enqueuePreview(msg)
+		}
+	}
+}
+
+// prunePreviewState drops gating state for workspaces that no longer exist, so
+// a long-lived daemon's map tracks the live workspace set rather than every
+// workspace it has ever seen.
+func (s *Server) prunePreviewState(live map[string]bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for wsID := range s.preview {
+		if !live[wsID] {
+			delete(s.preview, wsID)
+		}
+	}
+}
+
+// pickPreviewPane returns the pane a workspace's card should show: the
+// VT-backed pane that wrote most recently, ties broken by the lowest pane id
+// (snapshotView returns panes sorted ascending and the comparison is strict, so
+// the first of an exact tie wins).
+//
+// sessiond has no notion of a focused pane — SaveLayout stores an opaque blob —
+// and for a workspace you are NOT looking at, "where is the action" beats "what
+// was focused when I left" anyway. Browser panes carry buf == nil and are
+// skipped rather than erroring, following the empty-not-error precedent of the
+// screen-snapshot handler above; a workspace holding only browser panes simply
+// produces no tile and the client draws its icon placeholder.
+func pickPreviewPane(panes []*Pane) *Pane {
+	var best *Pane
+	var bestAt time.Time
+	for _, p := range panes {
+		if p == nil {
+			continue
+		}
+		if _, ok := p.buf.(*VTBuffer); !ok {
+			continue
+		}
+		at, _ := p.PreviewActivity()
+		if best == nil || at.After(bestAt) {
+			best, bestAt = p, at
+		}
+	}
+	return best
 }

@@ -272,9 +272,26 @@ export function resolvePalette(name: string): Palette {
   return PALETTES[name] ?? THEME;
 }
 
+/**
+ * The 16 ANSI colours of a palette, in standard index order:
+ * 0-7 black red green yellow blue magenta cyan white,
+ * 8-15 the bright variants of the same.
+ *
+ * Exported so consumers that speak in terminal colours (the sidebar preview
+ * renderer) can take a Palette directly instead of reading --mux-ansi-* back
+ * out of the DOM.
+ */
+export function paletteAnsiArray(p: Palette): string[] {
+  return [
+    p.black, p.red, p.green, p.yellow, p.blue, p.magenta, p.cyan, p.white,
+    p.brightBlack, p.brightRed, p.brightGreen, p.brightYellow,
+    p.brightBlue, p.brightMagenta, p.brightCyan, p.brightWhite,
+  ];
+}
+
 /** Maps a Palette to canonical --mux-* CSS custom property names. */
 export function paletteToCSSVars(p: Palette): Record<string, string> {
-  return {
+  const vars: Record<string, string> = {
     '--mux-bg': p.background,
     '--mux-fg': p.foreground,
     '--mux-accent': p.blue,
@@ -290,6 +307,12 @@ export function paletteToCSSVars(p: Palette): Record<string, string> {
     '--mux-dock-font-size':     '0.85rem',          // workspace label font size
     '--mux-dock-active-weight': '600',              // active workspace label font weight
   };
+  // All 16 ANSI colours. Only 8 of 21 palette entries were exposed before,
+  // which is not enough to colour a terminal tile.
+  paletteAnsiArray(p).forEach((colour, i) => {
+    vars[`--mux-ansi-${i}`] = colour;
+  });
+  return vars;
 }
 
 /** Applies --mux-* CSS variables from a Palette to the given root element. */

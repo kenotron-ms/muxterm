@@ -90,6 +90,37 @@ const (
 	TypeScrollbackPageResult = "scrollback-page-result" // reply:    daemon -> client
 )
 
+// Sidebar live-preview message types (ADDITIVE, post-v1). These extend the
+// frozen protocol above without altering any existing constant or field. See
+// docs/designs/2026-09-02-sidebar-live-preview-design.md.
+//
+// TypePreviewSubscribe is a per-connection opt-in: Message.OK true enables
+// preview tiles for that connection, false disables them. The daemon
+// acknowledges with TypePreviewSubscribeResult (OK true = "this daemon
+// understands preview-subscribe and applied it"), which is how a new browser
+// against an older daemon discovers the feature is absent.
+//
+// TypeWorkspacePreview is the daemon -> subscriber event carrying one
+// monochrome text tile:
+//
+//	WorkspaceID, PaneID, Title, Cols, Rows, Lines
+//
+// Cols/Rows are the CANONICAL tile geometry (80x24), not the pane's real PTY
+// size: one tile is rendered per workspace and each client crops it to its own
+// sidebar width. Lines holds at most Rows entries of at most Cols characters
+// each, trailing-space trimmed, bottom-anchored on content; the client re-pads
+// and top-pads. It deliberately reuses the existing Lines field rather than
+// minting a second string-slice field.
+//
+// Deliberately NOT named "pane-update": that string is declared in
+// web/src/types.ts with no Go counterpart and is referenced by an existing test
+// file. Reusing it would resurrect dead vocabulary.
+const (
+	TypePreviewSubscribe       = "preview-subscribe"        // request: client -> daemon
+	TypePreviewSubscribeResult = "preview-subscribe-result" // reply:   daemon -> client
+	TypeWorkspacePreview       = "workspace-preview"        // event:   daemon -> opted-in subscribers
+)
+
 // Activity-aware close message types are additive. They preserve the legacy
 // force-close messages while routing browser close intents through daemon-owned
 // activity and ticket authority.
@@ -273,6 +304,10 @@ type Message struct {
 	// condition for a paging loop). StartLine is the absolute sequence of the
 	// first returned line, which reveals when a request was clamped to the
 	// oldest retained line.
+	//
+	// Lines is additionally the tile payload of TypeWorkspacePreview (one
+	// entry per rendered terminal row); the two uses never appear on the same
+	// message, so no second string-slice field is minted for it.
 	LineCursor *uint64  `json:"lineCursor,omitempty"`
 	Limit      int      `json:"limit,omitempty"`
 	Lines      []string `json:"lines,omitempty"`
