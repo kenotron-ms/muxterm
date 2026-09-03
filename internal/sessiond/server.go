@@ -983,10 +983,13 @@ func (s *Server) publishPreview(wsID string, seq, hash uint64, msg *Message) {
 		st = &previewState{}
 		s.preview[wsID] = st
 	}
-	changedPane := st.lastPane != msg.PaneID
 	st.lastPane = msg.PaneID
 	st.lastSeq = seq
-	if st.hasTile && st.lastHash == hash && !changedPane {
+	// No separate pane-change guard: previewTileHash mixes the pane id in, so
+	// switching panes necessarily changes the hash and opens this gate. A flag
+	// here would also always be false, since previewDue advanced lastPane
+	// before returning true.
+	if st.hasTile && st.lastHash == hash {
 		return
 	}
 	st.lastHash = hash
@@ -1026,7 +1029,7 @@ func (s *Server) prunePreviewState(live map[string]bool) {
 // Ties in the fallback go to the lowest pane id (snapshotView returns panes
 // sorted ascending and the comparison is strict, so the first of an exact tie
 // wins). Browser panes carry buf == nil and are skipped rather than erroring,
-// following the empty-not-error precedent of the
+// following the empty-not-error precedent of the TypeScreenSnapshot handler.
 func pickPreviewPane(panes []*Pane, layouts map[string]string) *Pane {
 	// "wide" is the desktop layout and the one the sidebar itself only exists
 	// in; "narrow" is checked so a mobile-only session still resolves.

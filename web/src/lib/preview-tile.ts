@@ -97,10 +97,16 @@ fold('↑⇑▲', '^');
 fold('↓⇓▼', 'v');
 fold('✓✔√', '+');
 fold('✗✘×⨯', 'x');
-fold('·•∙⋅', '•');
+fold('∙⋅', '•');
 fold('–—―', '-');
-fold("'\u2018\u2019", "'");
-fold('\u201C\u201D', '"');
+fold('\u2018\u2019\u201a\u201b', "'");
+fold('\u201C\u201D\u201e\u201f', '"');
+// Diagonals and stubs: Go carries these, so the two paths must agree.
+fold('╱', '/');
+fold('╲', '\\');
+fold('╳', 'X');
+fold('╴╶╸╺', '─');
+fold('╵╷╹╻', '│');
 
 /** Wide-cell placeholder: unrenderable at 5x8, but "dense content here" is
  *  more honest than a blank. */
@@ -135,10 +141,16 @@ export function sanitizeChar(chars: string, width: number): string {
   if (cp === undefined) return ' ';
   const first = String.fromCodePoint(cp);
 
-  if (isRenderable(cp)) return first;
-
+  // Folds are applied BEFORE the keep set, matching Go's sanitizeCell. Order
+  // is observable: U+00D7 is Latin-1 and therefore "renderable", but a
+  // multiplication sign in terminal output is almost always a failure mark, so
+  // it must fold to 'x'. Checking renderable first silently made every
+  // Latin-1 fold dead code -- and made the attached workspace disagree with
+  // every other one, since only this path was reordered.
   const folded = FOLD.get(first);
   if (folded !== undefined) return folded;
+
+  if (isRenderable(cp)) return first;
 
   return GHOST;
 }

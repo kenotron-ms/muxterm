@@ -40,6 +40,13 @@ const (
 // and every code point in U+2500..U+257F is either kept (the eleven light
 // glyphs) or folded (the other 117). Re-check both when adding an entry.
 var previewFold = map[rune]rune{
+	// ---- Symbols the browser-side table also folds (parity is load-bearing:
+	//      the attached workspace sanitizes in TypeScript, every other one
+	//      here, and a divergence shows as a character changing when you
+	//      switch workspaces) ----
+	'∙': '•', '⋅': '•',
+	'◻': '▒', '◼': '▒',
+	'⨯': 'x',
 	// ---- Box drawing: horizontals and verticals (heavy/dashed -> light) ----
 	'━': '─', '┃': '│',
 	'┄': '─', '┅': '─', '┆': '│', '┇': '│',
