@@ -353,12 +353,28 @@ export class MuxSidebar extends LitElement {
          it read that way, so the hover/active list-row fills are cancelled
          below rather than inherited. */
       background: var(--mux-bg);
+      /* A visible bezel is REQUIRED, not decorative. --mux-bg and --chrome-bar
+         are near-identical in dark palettes (tokyo-night measures 1.05:1 --
+         effectively the same luminance), so a transparent border leaves an
+         idle card with no edge at all and it dissolves into the sidebar.
+         Ghosting the canvas does not help: it dims the tile's CONTENT, not the
+         card's boundary. --chrome-border alone is only 1.34:1 here, so the
+         resting bezel is mixed toward --chrome-text-dim for ~1.8:1 in both
+         light and dark. */
+      border-color: color-mix(in srgb, var(--chrome-border) 60%, var(--chrome-text-dim));
+      /* Lifts the card off the panel so it reads as a screen sitting ON the
+         sidebar rather than a region cut out of it. */
+      box-shadow: 0 1px 3px -1px rgba(0, 0, 0, 0.5);
       transition: border-color 0.12s, box-shadow 0.12s;
     }
 
     .ws-card.preview:hover,
     .ws-card.preview.active {
       background: var(--mux-bg);
+    }
+
+    .ws-card.preview:not(.active):hover {
+      border-color: var(--chrome-text-dim);
     }
 
     .ws-card.preview.active {
