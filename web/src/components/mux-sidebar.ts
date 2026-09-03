@@ -924,6 +924,12 @@ export class MuxSidebar extends LitElement {
 
       let title = entry?.title ?? '';
       if (title === '' && active) title = activePane?.title ?? '';
+      // sessiond does not capture OSC 0/2 titles yet (pane.go: "a later
+      // phase"), so Title is empty for essentially every pane. Without a
+      // fallback the chip would never appear and the card would lose the pane
+      // identity entirely. `Pane N` is the convention mux-dock and
+      // mux-pane-picker already use for an untitled pane.
+      if (title === '' && paneId >= 0) title = `Pane ${paneId}`;
       const extra = Math.max(0, (active ? panes.length : ws.paneCount) - 1);
 
       // Today's hint line, preserved verbatim for the no-preview fallback card.
