@@ -447,8 +447,17 @@ func (b *VTBuffer) PreviewTile(cols, rows int) []string {
 				x++
 				continue
 			}
-			line.WriteString(sanitizeCell(cell.Content, cell.Width))
-			x += cell.Width
+			// Clamp to two columns. A terminal cell is 0, 1 or 2 wide, but
+			// Width is advisory and TypeScript's sanitizeChar clamps the same
+			// way; emitting more characters here than the browser does for the
+			// same cell would shear the row on one path only. Advance by the
+			// clamped width so x and the emitted text stay in step.
+			w := cell.Width
+			if w > 2 {
+				w = 2
+			}
+			line.WriteString(sanitizeCell(cell.Content, w))
+			x += w
 		}
 		out = append(out, strings.TrimRight(line.String(), " "))
 	}

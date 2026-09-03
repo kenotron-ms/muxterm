@@ -169,14 +169,20 @@ func sanitizeCell(content string, width int) string {
 	if width <= 0 {
 		return ""
 	}
+	// Blank BEFORE width: a vacated wide cell (a CJK glyph cleared or
+	// overwritten) carries width 2 with no content, and filling it with shade
+	// would paint phantom blocks where nothing is. TypeScript's sanitizeChar
+	// checks blank first for the same reason, and the two must agree -- the
+	// attached workspace sanitizes there, every other one here, so a
+	// divergence shows up as a cell changing when you switch workspaces.
+	if content == "" || strings.TrimSpace(content) == "" {
+		return strings.Repeat(previewBlankCell, max(width, 1))
+	}
 	if width >= 2 {
 		// CJK, emoji, and anything else the emulator measured as wide. No 5x8
 		// glyph can represent these, so fill every column they occupy with the
 		// medium-shade block: "dense content here" rather than a hole.
 		return strings.Repeat(previewWideFill, width)
-	}
-	if content == "" {
-		return previewBlankCell
 	}
 	r, _ := utf8.DecodeRuneInString(content)
 	if r == utf8.RuneError {
