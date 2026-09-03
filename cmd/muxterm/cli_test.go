@@ -161,12 +161,3 @@ func TestParseArgs_Uninstall(t *testing.T) {
 		t.Errorf("Mode = %q, want %q", cfg.Mode, "uninstall")
 	}
 }
-
-// TestParseArgs_OpenBrowser_NowUnknown verifies that "open-browser" is no longer
-// a recognized command (browser panes now use CDP via TypeCreateBrowserPane).
-func TestParseArgs_OpenBrowser_NowUnknown(t *testing.T) {
-	_, err := ParseArgs([]string{"open-browser", "5173"})
-	if err == nil {
-		t.Fatal("expected error for open-browser (removed command), got nil")
-	}
-}

@@ -110,11 +110,9 @@ func TestMCPInitializeOverStdio(t *testing.T) {
 // by tools/list, and verifies the second stdout line lists exactly 17 tools
 // in the expected order — all without a running sessiond daemon.
 //
-// Tool count history:
-//   - Phase 1 (browser-cdp): removed 13 proxy-based browser_* tools (browser_goto,
-//     browser_click, etc.) as part of replacing the HTTP proxy with the CDP pane.
-//     Added list_tunnels/create_tunnel/close_tunnel (3) and get_config/update_config (2).
-//     Net change: 25 → 17 tools.
+// Tool count history: the count fell from 25 to 17 when a 13-tool family was
+// retired alongside the HTTP proxy and list_tunnels/create_tunnel/close_tunnel
+// (3) and get_config/update_config (2) were added. It has been 17 since.
 func TestMCPToolsListReturns17Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 

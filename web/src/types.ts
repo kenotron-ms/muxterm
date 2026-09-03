@@ -1,17 +1,3 @@
-/**
- * Discriminates the four surface kinds.
- *
- * terminal / driver — cell-grid surfaces (cols×rows budget, xterm.js).
- * browser / settings — NON-terminal. `browser` panes are client-rendered by the
- *   native apps; the web client shows a non-interactive placeholder for them.
- */
-export type SurfaceKind = 'terminal' | 'driver' | 'browser' | 'settings';
-
-/** Returns true for cell-grid surfaces that use the xterm.js terminal grid. */
-export function isTerminalSurface(kind: SurfaceKind): boolean {
-  return kind === 'terminal' || kind === 'driver';
-}
-
 // ---------------------------------------------------------------------------
 // Activity-aware close contract
 // ---------------------------------------------------------------------------
@@ -29,7 +15,6 @@ export type CloseRiskReason =
   | 'command-active'
   | 'foreground-process'
   | 'custom-command'
-  | 'browser-pane'
   | 'unsupported-shell'
   | 'unsupported-platform'
   | 'missing-lifecycle'
@@ -86,14 +71,6 @@ export const SessiondType = {
   PaneResized: 'pane-resized',
   // Error
   Error: 'error',
-  // Browser-action relay (server → client → iframe → client → server)
-  BrowserAction: 'browser-action',
-  BrowserActionResult: 'browser-action-result',
-  // Client-driven browser panes (native apps own the engine; web shows placeholder)
-  CreateBrowserPane: 'create-browser-pane',
-  CloseBrowserPane: 'close-browser-pane',
-  BrowserCommand: 'browser-command',
-  BrowserResult: 'browser-result',
   // Layout / snapshot relay
   LayoutCommand: 'layout-command',
   ScreenSnapshot: 'screen-snapshot',
@@ -179,7 +156,6 @@ export interface SessiondPaneInfo {
    *  expectedReplayBytes = totalSeq - seq. Used by the client settle barrier
    *  (RC-1) to defer ready=true until all replay data has arrived. */
   totalSeq?: number;
-  surfaceKind?: SurfaceKind;
 }
 
 export interface SessiondMessage {
@@ -209,8 +185,6 @@ export interface SessiondMessage {
   failureCode?: string;
   breakpoint?: string;
   layout?: string;
-  // Present when type === 'create-pane' or 'pane-added' for browser-cdp panes
-  surfaceKind?: SurfaceKind;
   /** Per-pane absolute byte offsets sent by the client on (re)attach so the
    *  server can replay only the delta since the client's last known position. */
   offsets?: { paneId: number; seq: number }[];
@@ -263,9 +237,8 @@ export interface LayoutCommand {
   command: 'create-pane' | 'rename-pane' | 'close-pane' | 'switch-workspace';
   paneId?: number;
   name?: string;
-  kind?: 'terminal' | 'browser';
+  kind?: 'terminal';
   placement?: 'tab' | 'split-right' | 'split-left' | 'split-above' | 'split-below';
   referencePaneId?: number;
-  url?: string;
   workspaceId?: string;
 }

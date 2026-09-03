@@ -428,46 +428,9 @@ func TestInputAndResize(t *testing.T) {
 	}
 }
 
-// TestDispatchEvent_PaneAdded_PassesBrowserCDPSurfaceKind verifies that a TypePaneAdded message
-// from the daemon carries its SurfaceKind field all the way through dispatchEvent to the
-// OnPaneAdded handler (browser-cdp surface kind).
-func TestDispatchEvent_PaneAdded_PassesBrowserCDPSurfaceKind(t *testing.T) {
-	fd := newFakeDaemon(t, func(conn net.Conn) {
-		_ = WriteControl(conn, &Message{
-			Type:        TypePaneAdded,
-			PaneID:      9,
-			Cols:        100,
-			Rows:        30,
-			Title:       "Browser",
-			SurfaceKind: "browser-cdp",
-		})
-		time.Sleep(100 * time.Millisecond)
-	})
-
-	c, err := Dial(fd.sockPath)
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
-	defer c.Close()
-
-	ch := make(chan PaneInfo, 1)
-	c.SetHandlers(Handlers{
-		OnPaneAdded: func(pane PaneInfo) {
-			ch <- pane
-		},
-	})
-
-	go c.Run()
-
-	select {
-	case pane := <-ch:
-		if pane.SurfaceKind != "browser-cdp" {
-			t.Errorf("SurfaceKind = %q, want \"browser-cdp\"", pane.SurfaceKind)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for PaneAdded event")
-	}
-}
+// TestDispatchEvent_PaneAdded_PassesBrowserCDPSurfaceKind lived here. It was
+// removed when muxterm dropped browser pane support: Message.SurfaceKind and
+// PaneInfo.SurfaceKind no longer exist.
 
 func TestHandlersReceiveOutputAndEvents(t *testing.T) {
 	fd := newFakeDaemon(t, func(conn net.Conn) {

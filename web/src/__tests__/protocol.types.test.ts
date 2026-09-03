@@ -7,7 +7,6 @@ import {
   type SessiondMessage,
   type SessiondWorkspaceInfo,
   type SessiondPaneInfo,
-  type SurfaceKind,
 } from '../types';
 
 describe('sessiond protocol types', () => {
@@ -40,14 +39,6 @@ describe('sessiond protocol types', () => {
       PaneRenamed: 'pane-renamed',
       PaneResized: 'pane-resized',
       Error: 'error',
-      // Browser-action relay
-      BrowserAction: 'browser-action',
-      BrowserActionResult: 'browser-action-result',
-      // Browser CDP pane management
-      CreateBrowserPane: 'create-browser-pane',
-      CloseBrowserPane: 'close-browser-pane',
-      BrowserCommand: 'browser-command',
-      BrowserResult: 'browser-result',
       // Layout / snapshot relay
       LayoutCommand: 'layout-command',
       ScreenSnapshot: 'screen-snapshot',
@@ -125,37 +116,5 @@ describe('clientRef correlation field', () => {
   it('allows clientRef on a pane info', () => {
     const pane: SessiondPaneInfo = { paneId: 1, cols: 80, rows: 24, clientRef: 'tmp-1' };
     expect(pane.clientRef).toBe('tmp-1');
-  });
-});
-
-describe('browser pane fields', () => {
-  it('SessiondPaneInfo accepts browser surfaceKind', () => {
-    const kind: SurfaceKind = 'browser';
-    const pane: SessiondPaneInfo = {
-      paneId: 2,
-      cols: 0,
-      rows: 0,
-      surfaceKind: kind,
-    };
-    expect(pane.surfaceKind).toBe('browser');
-  });
-
-  it('SessiondPaneInfo surfaceKind is optional', () => {
-    const pane: SessiondPaneInfo = { paneId: 1, cols: 80, rows: 24 };
-    expect(pane.surfaceKind).toBeUndefined();
-  });
-
-  it('SessiondMessage accepts browser surfaceKind', () => {
-    const msg: SessiondMessage = {
-      type: SessiondType.CreatePane,
-      paneId: 2,
-      surfaceKind: 'browser',
-    };
-    expect(msg.surfaceKind).toBe('browser');
-  });
-
-  it('SessiondMessage surfaceKind is optional', () => {
-    const msg: SessiondMessage = { type: SessiondType.CreatePane, paneId: 1 };
-    expect(msg.surfaceKind).toBeUndefined();
   });
 });

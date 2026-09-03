@@ -9,7 +9,6 @@ const REASON_LABELS: Record<CloseRiskReason, string> = {
   'command-active': 'A command is active',
   'foreground-process': 'A foreground process is active',
   'custom-command': 'This pane uses a custom command',
-  'browser-pane': 'Browser pane activity is unavailable',
   'unsupported-shell': 'This shell is not supported for activity detection',
   'unsupported-platform': 'Activity detection is not supported on this platform',
   'missing-lifecycle': 'Shell activity information is unavailable',

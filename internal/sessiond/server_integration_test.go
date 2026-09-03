@@ -398,8 +398,6 @@ func TestIntegrationFullReplay(t *testing.T) {
 	}
 }
 
-
-
 // TestIntegrationReplayBeforeLiveOnAttach proves a freshly attaching client
 // receives the composition for pre-existing panes (NOT a pane-added) and that
 // scrollback replay is delivered BEFORE any subsequent live output.

@@ -436,30 +436,6 @@ func (c *conn) handle(msg Message) {
 		panes := c.srv.reg.PaneInfos(c.attached)
 		ascii := ASCIILayout(layout, panes, -1)
 		c.reply(&Message{Type: TypeLayoutResult, CID: msg.CID, ASCII: ascii})
-	case TypeCreateBrowserPane:
-		c.createBrowserPane(msg)
-	case TypeCloseBrowserPane:
-		// No server-side engine: just remove the pane handle and broadcast
-		// pane-closed. Reuse closePane (idempotent for unknown ids).
-		c.closePane(msg)
-	case TypeBrowserCommand, TypeBrowserResult:
-		// Relay to every subscriber of the attached workspace. The command flows
-		// to the client owning the pane; the result flows back to subscribers
-		// (e.g. the MCP agent). cid is preserved for correlation.
-		if c.attached == "" {
-			return
-		}
-		relay := msg
-		c.srv.broadcast(c.attached, &relay)
-	case TypeBrowserURL, TypeBrowserLoad:
-		// Client-to-server navigation notifications (URL committed / page load
-		// complete). Relay to every subscriber of the attached workspace so MCP
-		// agents can observe navigation without polling.
-		if c.attached == "" {
-			return
-		}
-		relay := msg
-		c.srv.broadcast(c.attached, &relay)
 	case TypeScreenSnapshot:
 		if c.attached == "" {
 			c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
@@ -472,7 +448,7 @@ func (c *conn) handle(msg Message) {
 		}
 		vb, ok := p.buf.(*VTBuffer)
 		if !ok {
-			// Non-VT pane (browser pane with nil buf, or RawBuffer): return
+			// Non-VT pane (a RawBuffer pane, or one with a nil buf): return
 			// empty text so the caller still gets a well-formed reply.
 			c.reply(&Message{Type: TypeScreenSnapshotResult, CID: msg.CID, PaneID: msg.PaneID})
 			return
@@ -503,7 +479,7 @@ func (c *conn) handle(msg Message) {
 // msg.LineCursor (nil = the most recent page). It mirrors TypeScreenSnapshot's
 // resolution and failure shape exactly: not attached -> CodeUnknownWorkspace,
 // unknown pane -> CodePaneNotFound, and a pane that exists but is not VT-backed
-// (a browser pane, or a RawBuffer pane) -> a well-formed near-empty result
+// (a RawBuffer pane, or one with a nil buf) -> a well-formed near-empty result
 // rather than an error. Limit is normalised here so an oversized request from
 // any client is capped server-side.
 func (c *conn) scrollbackPage(msg Message) {
@@ -734,39 +710,6 @@ func (s *Server) broadcastWorkspaceClosed(workspaceID string) {
 		c.sub.enqueueControl(&Message{Type: TypeWorkspaceClosed, WorkspaceID: workspaceID})
 	}
 	s.broadcastWorkspaceListLocked()
-}
-
-// createBrowserPane allocates a client-rendered browser pane handle in the
-// attached workspace. It replies with TypePaneCreated and broadcasts
-// TypePaneAdded with SurfaceKind "browser". There is NO server-side engine —
-// the webview lives on the client; the daemon only routes browser-command /
-// browser-result for this pane id.
-func (c *conn) createBrowserPane(msg Message) {
-	wsID := c.attached
-	if wsID == "" || !c.srv.reg.Has(wsID) {
-		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
-		return
-	}
-	localID, ok := c.srv.reg.AllocPaneID(wsID)
-	if !ok {
-		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
-		return
-	}
-	// A browser pane carries no PTY. NewBrowserPane installs a nil buffer so the
-	// registry tracks the handle without spawning a process.
-	c.srv.reg.PutPane(wsID, NewBrowserPane(localID))
-
-	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
-	c.srv.broadcast(wsID, &Message{
-		Type:            TypePaneAdded,
-		WorkspaceID:     wsID,
-		PaneID:          localID,
-		SurfaceKind:     "browser",
-		Title:           "Browser",
-		ClientRef:       msg.ClientRef,
-		Placement:       msg.Placement,
-		ReferencePaneID: msg.ReferencePaneID,
-	})
 }
 
 // reply enqueues a control reply to this connection.
@@ -1028,8 +971,8 @@ func (s *Server) prunePreviewState(live map[string]bool) {
 //
 // Ties in the fallback go to the lowest pane id (snapshotView returns panes
 // sorted ascending and the comparison is strict, so the first of an exact tie
-// wins). Browser panes carry buf == nil and are skipped rather than erroring,
-// following the empty-not-error precedent of the TypeScreenSnapshot handler.
+// wins). Non-VT panes are skipped rather than erroring, following the
+// empty-not-error precedent of the TypeScreenSnapshot handler.
 func pickPreviewPane(panes []*Pane, layouts map[string]string) *Pane {
 	// "wide" is the desktop layout and the one the sidebar itself only exists
 	// in; "narrow" is checked so a mobile-only session still resolves.

@@ -250,59 +250,8 @@ func TestRegistryRenamePaneFailureCases(t *testing.T) {
 	}
 }
 
-// TestRegistry_BrowserPane_PutAndGet verifies that a browser pane can
-// be put into the registry and retrieved with the correct SurfaceKind.
-func TestRegistry_BrowserPane_PutAndGet(t *testing.T) {
-	r := NewRegistry()
-	wsID := r.AddWorkspace("w", "")
-	localID, _ := r.AllocPaneID(wsID)
-	p := NewBrowserPane(localID)
-	r.PutPane(wsID, p)
-
-	got, ok := r.Pane(wsID, localID)
-	if !ok {
-		t.Fatalf("Pane(%q, %d) not found after PutPane", wsID, localID)
-	}
-	if got.SurfaceKind != "browser" {
-		t.Fatalf("SurfaceKind = %q, want \"browser\"", got.SurfaceKind)
-	}
-}
-
-// TestRegistry_BrowserPane_Replay verifies that a browser pane returns
-// nil replay data (no buffer).
-func TestRegistry_BrowserPane_Replay(t *testing.T) {
-	r := NewRegistry()
-	wsID := r.AddWorkspace("w", "")
-	localID, _ := r.AllocPaneID(wsID)
-	p := NewBrowserPane(localID)
-	r.PutPane(wsID, p)
-
-	got, ok := r.Pane(wsID, localID)
-	if !ok {
-		t.Fatalf("Pane not found")
-	}
-	if data := got.Replay(); data != nil {
-		t.Fatalf("Replay() = %v, want nil (browser pane has no buffer)", data)
-	}
-}
-
-// TestRegistry_BrowserPane_RemovePane verifies that a browser pane can
-// be removed from the registry.
-func TestRegistry_BrowserPane_RemovePane(t *testing.T) {
-	r := NewRegistry()
-	wsID := r.AddWorkspace("w", "")
-	localID, _ := r.AllocPaneID(wsID)
-	p := NewBrowserPane(localID)
-	r.PutPane(wsID, p)
-
-	removed, remaining, ok := r.RemovePane(wsID, localID)
-	if !ok {
-		t.Fatal("RemovePane returned ok=false, want true")
-	}
-	if removed != p {
-		t.Fatal("RemovePane returned wrong pane")
-	}
-	if remaining != 0 {
-		t.Fatalf("remaining = %d, want 0", remaining)
-	}
-}
+// TestRegistry_BrowserPane_PutAndGet, TestRegistry_BrowserPane_Replay, and
+// TestRegistry_BrowserPane_RemovePane lived here. They were removed when
+// muxterm dropped browser pane support: NewBrowserPane and Pane.SurfaceKind no
+// longer exist. Registry put/get/replay/remove are still exercised above by the
+// PTY-backed pane tests.

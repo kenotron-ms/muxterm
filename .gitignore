@@ -9,7 +9,6 @@ bin/
 # Frontend
 node_modules/
 web/dist/
-demo/frontend/dist/
 # web/package-lock.json — committed for reproducible CI builds
 
 # IDE/Editor

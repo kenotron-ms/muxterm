@@ -15,7 +15,6 @@ import { customElement, state } from 'lit/decorators.js';
 import { store } from '../state.js';
 import { icon } from '../lib/icons.js';
 import { Mic, MicOff } from 'lucide';
-import { isTerminalSurface } from '../types.js';
 import { voiceInputController, type VoiceState } from '../lib/voice-input-controller.js';
 
 @customElement('mux-mic-button')
@@ -173,8 +172,8 @@ export class MuxMicButton extends LitElement {
     if (!voiceInputController.isSupported()) return html``;
 
     const activePane = store.panes.find((p) => p.paneId === store.activePaneId);
-    const kind = activePane?.surfaceKind ?? 'terminal';
-    const hasValidTarget = !!activePane && isTerminalSurface(kind);
+    // Every pane is a terminal, so an active pane is always a valid target.
+    const hasValidTarget = !!activePane;
     const listening = this._voiceState === 'listening';
 
     const label = !hasValidTarget

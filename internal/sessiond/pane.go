@@ -27,10 +27,6 @@ type Pane struct {
 	// held and binds close tickets independently of the root-process generation.
 	targetGeneration uint64
 
-	// SurfaceKind is "browser" for browser panes; empty string means "terminal".
-	// Set once at construction; immutable thereafter.
-	SurfaceKind string
-
 	mu   sync.Mutex // guards cols/rows/authorityConn/authorityAt
 	cols int
 	rows int
@@ -387,9 +383,8 @@ func (p *Pane) noteWrite(now time.Time) {
 
 // PreviewActivity returns when this pane last produced PTY output and a
 // counter that changes on every such write. A zero time and seq mean the pane
-// has never written (a freshly spawned pane, or a browser pane, which has no
-// PTY at all). Callers compare seq against the value they last saw rather than
-// reading it as a byte count.
+// has never written (a freshly spawned pane). Callers compare seq against the
+// value they last saw rather than reading it as a byte count.
 func (p *Pane) PreviewActivity() (lastWrite time.Time, seq uint64) {
 	p.previewMu.Lock()
 	defer p.previewMu.Unlock()
@@ -397,10 +392,10 @@ func (p *Pane) PreviewActivity() (lastWrite time.Time, seq uint64) {
 }
 
 // Write sends input to the child's stdin (the PTY master).
-// For browser panes (ptmx == nil), input is silently discarded.
+// A pane with no PTY (ptmx == nil) silently discards input.
 func (p *Pane) Write(input []byte) (int, error) {
 	if p.ptmx == nil {
-		return 0, nil // browser pane: no PTY
+		return 0, nil // no PTY attached
 	}
 	return p.ptmx.Write(input)
 }
@@ -424,7 +419,7 @@ func (p *Pane) Resize(cols, rows int) error {
 	p.rows = rows
 	p.mu.Unlock()
 	if p.ptmx == nil {
-		return nil // browser pane: no PTY to resize
+		return nil // no PTY to resize
 	}
 	err := pty.Setsize(p.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	if p.buf != nil {
@@ -478,10 +473,10 @@ func (p *Pane) ClearAuthorityIfOwner(c *conn) {
 }
 
 // Replay returns a copy of the pane's scrollback buffer.
-// For browser panes (buf == nil), returns nil.
+// A pane with no buffer (buf == nil) returns nil.
 func (p *Pane) Replay() []byte {
 	if p.buf == nil {
-		return nil // browser pane: no buffer
+		return nil // no buffer attached
 	}
 	return p.buf.Replay()
 }
@@ -489,7 +484,7 @@ func (p *Pane) Replay() []byte {
 // ReplayFrom returns the retained bytes whose absolute sequence is >= since
 // and the absolute sequence of the first returned byte. It delegates directly
 // to the underlying PaneBuffer.
-// For browser panes (buf == nil), returns nil, 0.
+// A pane with no buffer (buf == nil) returns nil, 0.
 func (p *Pane) ReplayFrom(since uint64) (data []byte, start uint64) {
 	if p.buf == nil {
 		return nil, 0
@@ -499,7 +494,7 @@ func (p *Pane) ReplayFrom(since uint64) (data []byte, start uint64) {
 
 // Seq returns the total bytes ever written to this pane's buffer (including
 // bytes that have since been trimmed from the scrollback ring).
-// For browser panes (buf == nil), returns 0.
+// A pane with no buffer (buf == nil) returns 0.
 func (p *Pane) Seq() uint64 {
 	if p.buf == nil {
 		return 0
@@ -518,14 +513,12 @@ func (p *Pane) SetTitle(name string) {
 func (p *Pane) Info() PaneInfo {
 	p.mu.Lock()
 	cols, rows, title := p.cols, p.rows, p.Title
-	surfaceKind := p.SurfaceKind
 	p.mu.Unlock()
 	return PaneInfo{
-		PaneID:      p.LocalID,
-		Cols:        cols,
-		Rows:        rows,
-		Title:       title,
-		SurfaceKind: surfaceKind,
+		PaneID: p.LocalID,
+		Cols:   cols,
+		Rows:   rows,
+		Title:  title,
 	}
 }
 
@@ -549,16 +542,4 @@ func (p *Pane) cleanupIntegration() {
 			p.integrationCleanup()
 		}
 	})
-}
-
-// NewBrowserPane returns a client-rendered browser pane handle: a registry entry
-// with the given workspace-local id, surfaceKind "browser", and no PTY. It holds
-// no OS resources — the browser engine lives entirely on the client. Write,
-// Resize, Replay, ReplayFrom, Seq, and Close all follow the existing bufferless
-// (ptmx == nil, buf == nil) pattern already handled by this file's methods.
-func NewBrowserPane(localID int) *Pane {
-	return &Pane{
-		LocalID:     localID,
-		SurfaceKind: "browser",
-	}
 }

@@ -273,21 +273,19 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 
 	srv.Register(
 		"create_pane",
-		"create new pane, kind terminal|browser, placement tab|split-right|split-left|split-above|split-below advisory \u2014 split executed by browser; for browser provide url/browser_port; browser automation lands Phase 5 see playwright-cli",
+		"create new terminal pane, placement tab|split-right|split-left|split-above|split-below advisory \u2014 split executed by the web UI",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"kind": map[string]any{
 					"type": "string",
-					"enum": []string{"terminal", "browser"},
+					"enum": []string{"terminal"},
 				},
 				"placement": map[string]any{
 					"type": "string",
 					"enum": []string{"tab", "split-right", "split-left", "split-above", "split-below"},
 				},
 				"reference_pane": map[string]any{"type": "integer"},
-				"url":            map[string]any{"type": "string"},
-				"browser_port":   map[string]any{"type": "integer"},
 			},
 		},
 		wrap(func(c *Client, args map[string]any) (string, error) {

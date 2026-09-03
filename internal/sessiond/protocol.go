@@ -46,29 +46,17 @@ const (
 	TypeLayoutResult         = "layout-result"
 
 	// Events (daemon -> all subscribers, cid=0).
-	TypePaneAdded           = "pane-added"
-	TypePaneClosed          = "pane-closed"
-	TypeWorkspaceClosed     = "workspace-closed"
-	TypeWorkspaceRenamed    = "workspace-renamed"
-	TypePaneRenamed         = "pane-renamed"
-	TypeBrowserAction       = "browser-action"        // relay browser DOM command to/from SW bridge
-	TypeBrowserActionResult = "browser-action-result" // relay browser DOM command result back to MCP client
-	TypeLayoutCommand       = "layout-command"        // relay layout mutation to browser clients
-	TypeShellPrompt         = "shell-prompt"          // OSC 133 prompt/command lifecycle
-	TypePaneResized         = "pane-resized"          // broadcast: canonical PTY size changed
+	TypePaneAdded        = "pane-added"
+	TypePaneClosed       = "pane-closed"
+	TypeWorkspaceClosed  = "workspace-closed"
+	TypeWorkspaceRenamed = "workspace-renamed"
+	TypePaneRenamed      = "pane-renamed"
+	TypeLayoutCommand    = "layout-command" // relay layout mutation to browser clients
+	TypeShellPrompt      = "shell-prompt"   // OSC 133 prompt/command lifecycle
+	TypePaneResized      = "pane-resized"   // broadcast: canonical PTY size changed
 
 	// Error envelope.
 	TypeError = "error"
-
-	// Client-driven browser pane messages (ride /ws; no server-side engine).
-	// The daemon holds only a pane handle and RELAYS commands to the client that
-	// owns the pane. See docs/muxterm-client-protocol.md.
-	TypeCreateBrowserPane = "create-browser-pane" // client → daemon: allocate a browser pane handle
-	TypeCloseBrowserPane  = "close-browser-pane"  // client → daemon: close a browser pane
-	TypeBrowserCommand    = "browser-command"     // relayed to workspace subs: {paneId, cid, action, params}
-	TypeBrowserResult     = "browser-result"      // relayed to workspace subs: {paneId, cid, result | error}
-	TypeBrowserURL        = "browser-url"         // client -> server -> workspace subs: navigation committed
-	TypeBrowserLoad       = "browser-load"        // client -> server -> workspace subs: page load complete
 )
 
 // Error codes are the frozen Message.Code values carried by a TypeError
@@ -241,24 +229,17 @@ type Message struct {
 	OmittedRiskCount *int             `json:"omittedRiskCount,omitempty"` // present for confirmation-required, including zero
 	FailureCode      string           `json:"failureCode,omitempty"`      // stable close failure category
 
-	// Browser pane fields (used in create-pane and pane-added for browser surface kinds)
-	SurfaceKind string `json:"surfaceKind,omitempty"`
-
 	// Layout placement fields (create-pane request → pane-added broadcast → browser dockview)
 	Placement       string `json:"placement,omitempty"`       // tab|split-right|split-left|split-above|split-below
 	ReferencePaneID int    `json:"referencePaneId,omitempty"` // pane to split relative to; 0 = active pane
 
-	// MCP relay fields (browser-action, screen-snapshot-result, shell-prompt, get-layout).
-	Action     string     `json:"action,omitempty"`   // browser-action verb: click/fill/...
-	Ref        string     `json:"ref,omitempty"`      // element ref e1,e2 from snapshot
-	Selector   string     `json:"selector,omitempty"` // CSS selector
-	Value      string     `json:"value,omitempty"`    // input value for fill/type
-	Key        string     `json:"key,omitempty"`      // keyboard key for press
-	Expression string     `json:"expr,omitempty"`     // JS expression for eval
-	Text       string     `json:"text,omitempty"`     // plain-text result: screen snapshot, eval
-	ExitCode   int        `json:"exitCode,omitempty"` // OSC 133 command exit code
-	Cursor     *CursorPos `json:"cursor,omitempty"`   // cursor {row,col} for screen snapshot
-	ASCII      string     `json:"ascii,omitempty"`    // ASCII layout diagram, get-layout result
+	// Relay fields (layout-command, screen-snapshot-result, shell-prompt, get-layout).
+	Action   string     `json:"action,omitempty"`   // layout-command verb
+	Selector string     `json:"selector,omitempty"` // layout-command placement token
+	Text     string     `json:"text,omitempty"`     // plain-text result: screen snapshot
+	ExitCode int        `json:"exitCode,omitempty"` // OSC 133 command exit code
+	Cursor   *CursorPos `json:"cursor,omitempty"`   // cursor {row,col} for screen snapshot
+	ASCII    string     `json:"ascii,omitempty"`    // ASCII layout diagram, get-layout result
 
 	// Real process exit fields (pane-closed only, process-exit-driven close).
 	// ProcessExitCode is a pointer so 0 (a normal successful exit) is
@@ -267,26 +248,9 @@ type Message struct {
 	ProcessExitCode *int  `json:"processExitCode,omitempty"` // real shell process exit code, set on pane-closed only
 	RuntimeMs       int64 `json:"runtimeMs,omitempty"`       // real shell process wall-clock runtime, set on pane-closed only
 
-	// Params carries the browser-command parameters as raw JSON for passthrough
-	// relay (TypeBrowserCommand). Schema (see docs/muxterm-client-protocol.md):
-	//   { "action": "navigate|click|scroll|evaluate|back|forward|reload",
-	//     "selector"?: string,        // CSS selector — element targeting
-	//     "x"?: number, "y"?: number, // CSS px — coordinate targeting
-	//     "url"?: string,             // for navigate
-	//     "script"?: string,          // for evaluate
-	//     "timeoutMs"?: number }      // evaluate timeout; default 30000, bounded
-	// An action carries EXACTLY ONE of {selector} or {x,y}. evaluate is governed
-	// by a bounded timeout (default 30s) so an injected script cannot hang the pane.
-	Params json.RawMessage `json:"params,omitempty"`
-
-	// Browser action result fields (browser-action-result event, shim → MCP round-trip).
-	Snapshot string          `json:"snapshot,omitempty"` // accessibility tree YAML from browser_snapshot
-	Result   json.RawMessage `json:"result,omitempty"`   // JS eval result (any JSON value)
-	OK       bool            `json:"ok,omitempty"`       // true when action succeeded without error
-
-	// URL carries the committed/loaded URL for TypeBrowserURL and TypeBrowserLoad
-	// client-to-server browser pane navigation notifications.
-	URL string `json:"url,omitempty"`
+	// OK is a boolean flag carried by preview-subscribe (opt in/out) and its
+	// preview-subscribe-result acknowledgement.
+	OK bool `json:"ok,omitempty"`
 
 	// Scrollback pagination fields (ADDITIVE, post-v1; see TypeScrollbackPage).
 	// LineCursor is deliberately NOT named "Cursor": Message.Cursor is the
@@ -435,12 +399,11 @@ type WorkspaceInfo struct {
 
 // PaneInfo is one entry in a composition reply or pane-added event.
 type PaneInfo struct {
-	PaneID      int    `json:"paneId"`
-	SurfaceKind string `json:"surfaceKind,omitempty"` // "terminal" | "browser"; absent = "terminal"
-	Cols        int    `json:"cols,omitempty"`
-	Rows        int    `json:"rows,omitempty"`
-	Title       string `json:"title,omitempty"`
-	TotalSeq    uint64 `json:"totalSeq,omitempty"` // exact byte length of the replay data for this pane
+	PaneID   int    `json:"paneId"`
+	Cols     int    `json:"cols,omitempty"`
+	Rows     int    `json:"rows,omitempty"`
+	Title    string `json:"title,omitempty"`
+	TotalSeq uint64 `json:"totalSeq,omitempty"` // exact byte length of the replay data for this pane
 
 	// Layout placement (only present on pane-added events from create-pane requests
 	// that carried an explicit placement token; absent means default/tab placement).

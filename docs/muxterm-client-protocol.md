@@ -4,6 +4,32 @@
 > exactly this. Field names are the Go JSON tags, byte-for-byte. Additive changes
 > only; never repurpose a field or a message type.
 
+## 0. Removed in v1.1 (2026-09-03) — browser panes withdrawn
+
+The browser-pane feature was removed from muxterm. This is a **subtractive**
+change to an otherwise-frozen contract, recorded here because it breaks the
+additive-only rule. Clients MUST treat the following as gone: the daemon no
+longer sends them, and requests using them are not answered.
+
+**Withdrawn `Message` fields:** `surfaceKind`, `params`, `result`, `snapshot`.
+These names are **retired** — do not repurpose them for new meanings.
+
+**Withdrawn `PaneInfo` field:** `surfaceKind` (every pane is a terminal).
+
+**Withdrawn request types:** `create-browser-pane`, `close-browser-pane`.
+
+**Withdrawn event types:** `browser-command`, `browser-result`.
+
+**Withdrawn section:** the former §5 "Browser control (client-rendered,
+server-drivable)"; the old §6 "Binary helpers" is now §5.
+
+**Not withdrawn:** `action` and `selector` still exist on the wire, but their
+browser-command meanings ("browser-command verb", "CSS selector") are gone. The
+daemon now carries them only for non-browser purposes; a client MUST NOT treat
+them as browser fields.
+
+Everything else in this document is unchanged and still frozen.
+
 ## 1. Transport & framing
 
 The client connects to `GET /ws` (a loopback WebSocket after any SSH forward).
@@ -48,7 +74,7 @@ One struct; the `type` field discriminates. All fields `omitempty`.
 | field | json | notes |
 |-------|------|-------|
 | Type | `type` | message type (§4) |
-| CID | `cid` | request/reply + browser-command correlation; 0 = unsolicited event |
+| CID | `cid` | request/reply correlation; 0 = unsolicited event |
 | ClientRef | `clientRef` | optimistic-create correlation id |
 | WorkspaceID | `workspaceId` | |
 | Name | `name` | |
@@ -61,68 +87,29 @@ One struct; the `type` field discriminates. All fields `omitempty`.
 | Workspaces | `workspaces` | []WorkspaceInfo |
 | Panes | `panes` | []PaneInfo |
 | Code / Error | `code` / `error` | error envelope |
-| SurfaceKind | `surfaceKind` | `"terminal"` \| `"browser"`; absent = terminal |
 | Placement | `placement` | tab \| split-{right,left,above,below} |
 | ReferencePaneID | `referencePaneId` | split reference; 0 = active pane |
-| Action | `action` | browser-command verb |
-| Selector | `selector` | CSS selector (element targeting) |
-| Result | `result` | raw JSON result (browser-result, eval) |
-| Params | `params` | raw JSON browser-command params (§5) |
-| ASCII / Text / Snapshot | `ascii` / `text` / `snapshot` | MCP results |
+| ASCII / Text | `ascii` / `text` | MCP results |
 
 `WorkspaceInfo`: `{workspaceId, name?, clientRef?, paneCount}`.
-`PaneInfo`: `{paneId, surfaceKind?, cols?, rows?, title?, totalSeq?, placement?, referencePaneId?}`.
+`PaneInfo`: `{paneId, cols?, rows?, title?, totalSeq?, placement?, referencePaneId?}`.
 
 ## 4. Message types
 
 **Requests (client → daemon):** create-workspace, list-workspaces,
 rename-workspace, close-workspace, attach, create-pane, close-pane, resize,
-rename-pane, save-layout, screen-snapshot, get-layout, create-browser-pane,
-close-browser-pane.
+rename-pane, save-layout, screen-snapshot, get-layout.
 
 **Replies (daemon → requester, echo cid):** workspace-created, workspace-list,
 composition, pane-created, ok, screen-snapshot-result, layout-result.
 
 **Events (daemon → subscribers, cid = 0 unless noted):** pane-added, pane-closed,
-workspace-closed, workspace-renamed, pane-renamed, shell-prompt,
-browser-command (carries cid), browser-result (echoes cid).
+workspace-closed, workspace-renamed, pane-renamed, shell-prompt.
 
 **Errors:** `error` with `code` ∈ {unknown-workspace, pane-spawn-failed,
 pane-not-found}.
 
-## 5. Browser control (client-rendered, server-drivable)
-
-The daemon holds only a pane **handle**; the browser engine lives on the client.
-
-- `create-browser-pane` `{type, cid, placement?, referencePaneId?}` →
-  `pane-created` `{cid, paneId}` reply, plus a `pane-added`
-  `{paneId, surfaceKind:"browser", title:"Browser", …}` broadcast.
-- `browser-command` `{type, paneId, cid, params}` — relayed to all workspace
-  subscribers. The client owning/focused on the pane executes it.
-  `params` (raw JSON):
-  ```json
-  {
-    "action": "navigate | click | scroll | evaluate | back | forward | reload",
-    "selector": "css-selector",   // element targeting  (EXACTLY ONE of selector / x,y)
-    "x": 0, "y": 0,               // coordinate targeting (CSS px)
-    "url": "http://localhost:5173",
-    "script": "return document.title",
-    "timeoutMs": 30000             // evaluate timeout; default 30000, bounded
-  }
-  ```
-  Every manipulation compiles to a native nav call or an injected-JS `evaluate`.
-  An action carries EXACTLY ONE of `{selector}` or `{x,y}`.
-- `browser-result` `{type, paneId, cid, result | error}` — the executing client
-  returns this; the daemon broadcasts it back to workspace subscribers (echoing
-  the command cid).
-
-**Constraints:** a browser pane is drivable only while a client is attached and
-focused on it (last-focus-wins authority). There is no server-side headless
-fallback; a command to an unowned pane yields a typed `browser-result` error.
-The `evaluate` action is bounded by `timeoutMs` (default 30 s) so an injected
-script cannot hang the pane.
-
-## 6. Binary helpers (parity with Go)
+## 5. Binary helpers (parity with Go)
 
 - Encode pane input: `[4-byte LE paneId][bytes]` → WebSocket binary.
 - Decode pane output: first 4 bytes LE = paneId, remainder = raw VT bytes; feed

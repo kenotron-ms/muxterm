@@ -13,17 +13,14 @@ func newLayoutTools(c *Client) *layoutTools {
 	return &layoutTools{c: c}
 }
 
-// createPane creates a new pane in the attached workspace. The pane kind
-// defaults to "terminal"; pass kind="browser" with browser_port and url for a
-// browser pane. placement (tab|split-right|split-left|split-above|split-below)
+// createPane creates a new pane in the attached workspace. "terminal" is the
+// only pane kind; kind may be omitted and defaults to it.
+// placement (tab|split-right|split-left|split-above|split-below)
 // and reference_pane (integer pane ID) are forwarded to the browser-side
 // dockview layer via the pane-added broadcast; the actual split is executed
 // there, not by the MCP server.
 func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 	kind, _ := args["kind"].(string)
-	if kind == "" {
-		kind = "terminal"
-	}
 
 	placement, _ := args["placement"].(string)
 
@@ -40,18 +37,13 @@ func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 
 	var paneID int
 
+	// Single-arm switch retained as a validation guard: an explicit kind other
+	// than "terminal" is a caller error, not something to silently ignore.
 	switch kind {
-	case "terminal":
+	case "terminal", "":
 		id, err := lt.c.conn.CreatePane(nil, placement, referencePaneID)
 		if err != nil {
 			return "", fmt.Errorf("creating terminal pane: %w", err)
-		}
-		paneID = id
-
-	case "browser":
-		id, err := lt.c.conn.CreateBrowserPane(placement, referencePaneID)
-		if err != nil {
-			return "", fmt.Errorf("creating browser pane: %w", err)
 		}
 		paneID = id
 
@@ -101,8 +93,7 @@ func (lt *layoutTools) closePane(args map[string]any) (string, error) {
 
 // listPanes returns a JSON array of all panes in the workspace. The workspace
 // defaults to the one this session is attached to; pass workspace to override.
-// Each element has pane_id, kind, and name. Browser panes also carry a hint
-// field with the current browser path.
+// Each element has pane_id, kind, and name.
 func (lt *layoutTools) listPanes(args map[string]any) (string, error) {
 	ws := lt.c.Workspace()
 	if wsArg, ok := args["workspace"].(string); ok && wsArg != "" {
@@ -119,13 +110,9 @@ func (lt *layoutTools) listPanes(args map[string]any) (string, error) {
 
 	items := make([]map[string]any, 0, len(comp.Panes))
 	for _, p := range comp.Panes {
-		kind := p.SurfaceKind
-		if kind == "" {
-			kind = "terminal"
-		}
 		item := map[string]any{
 			"pane_id": p.PaneID,
-			"kind":    kind,
+			"kind":    "terminal",
 			"name":    p.Title,
 		}
 		items = append(items, item)

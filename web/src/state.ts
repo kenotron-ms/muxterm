@@ -252,7 +252,6 @@ export class MuxStore {
           rows: msg.rows ?? 0,
           title: msg.title,
           clientRef: msg.clientRef,
-          surfaceKind: msg.surfaceKind,
         });
         break;
       }

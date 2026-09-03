@@ -162,7 +162,9 @@ func renderGroup(leaf dockLeaf, paneByID map[int]PaneInfo, activePaneID int) str
 			if info.Title != "" {
 				kind = info.Title
 			} else {
-				kind = info.SurfaceKind
+				// Every pane is a terminal; an untitled pane still needs a
+				// non-empty label so the diagram never renders a blank kind.
+				kind = "terminal"
 			}
 		} else {
 			kind = viewStr

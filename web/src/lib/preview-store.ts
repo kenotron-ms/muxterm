@@ -195,7 +195,7 @@ class PreviewStore {
       if (tile) {
         return { paneId, title: this._paneTitle(paneId), live: true, tile };
       }
-      // No local terminal (browser pane, not yet opened) — fall through to the
+      // No local terminal (not yet opened, or disposed) — fall through to the
       // daemon's push, which covers the attached workspace too.
     }
 
