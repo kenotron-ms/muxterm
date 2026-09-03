@@ -837,6 +837,7 @@ const (
 // change the visible crop (a scrolling progress bar redrawing the same text).
 // hasTile distinguishes "no tile yet" from "a tile whose hash happens to be 0".
 type previewState struct {
+	lastPane int
 	lastSeq  uint64
 	lastHash uint64
 	hasTile  bool
@@ -893,12 +894,12 @@ func (s *Server) emitPreviews(now time.Time) {
 	for _, ws := range views {
 		live[ws.ID] = true
 
-		p := pickPreviewPane(ws.Panes)
+		p := pickPreviewPane(ws.Panes, ws.Layout)
 		if p == nil {
 			continue
 		}
 		_, seq := p.PreviewActivity()
-		if !s.previewDue(ws.ID, seq, now) {
+		if !s.previewDue(ws.ID, p.LocalID, seq, now) {
 			continue
 		}
 		// pickPreviewPane accepted only VT-backed panes, so this assertion
@@ -937,16 +938,27 @@ func (s *Server) previewWanted() bool {
 // reserving the slot by advancing lastEmit. A pane that has produced no output
 // since the last tile is skipped, and a workspace that rendered within
 // previewMinInterval is skipped, so an idle machine does no work at all.
-func (s *Server) previewDue(wsID string, seq uint64, now time.Time) bool {
-	if seq == 0 {
-		return false // pane has never written; there is nothing to show yet
-	}
+func (s *Server) previewDue(wsID string, paneID int, seq uint64, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, ok := s.preview[wsID]
 	if !ok {
-		s.preview[wsID] = &previewState{lastEmit: now}
+		s.preview[wsID] = &previewState{lastPane: paneID, lastEmit: now}
+		return seq != 0
+	}
+
+	// A changed pane always emits, even when the new pane is silent or its seq
+	// happens to match the old one's. Now that the card follows the FOCUSED
+	// pane rather than the busiest one, the pane it points at can change while
+	// nothing is being written, and a seq-only gate would leave the card
+	// showing the pane you just navigated away from.
+	if st.lastPane != paneID {
+		st.lastPane = paneID
+		st.lastEmit = now
 		return true
+	}
+	if seq == 0 {
+		return false // pane has never written; there is nothing to show yet
 	}
 	if st.lastSeq == seq || now.Sub(st.lastEmit) < previewMinInterval {
 		return false
@@ -971,8 +983,10 @@ func (s *Server) publishPreview(wsID string, seq, hash uint64, msg *Message) {
 		st = &previewState{}
 		s.preview[wsID] = st
 	}
+	changedPane := st.lastPane != msg.PaneID
+	st.lastPane = msg.PaneID
 	st.lastSeq = seq
-	if st.hasTile && st.lastHash == hash {
+	if st.hasTile && st.lastHash == hash && !changedPane {
 		return
 	}
 	st.lastHash = hash
@@ -997,18 +1011,45 @@ func (s *Server) prunePreviewState(live map[string]bool) {
 	}
 }
 
-// pickPreviewPane returns the pane a workspace's card should show: the
-// VT-backed pane that wrote most recently, ties broken by the lowest pane id
-// (snapshotView returns panes sorted ascending and the comparison is strict, so
-// the first of an exact tie wins).
+// pickPreviewPane returns the pane a workspace's card should show.
 //
-// sessiond has no notion of a focused pane — SaveLayout stores an opaque blob —
-// and for a workspace you are NOT looking at, "where is the action" beats "what
-// was focused when I left" anyway. Browser panes carry buf == nil and are
-// skipped rather than erroring, following the empty-not-error precedent of the
-// screen-snapshot handler above; a workspace holding only browser panes simply
-// produces no tile and the client draws its icon placeholder.
-func pickPreviewPane(panes []*Pane) *Pane {
+// The card is a promise: it must show the pane you actually get when you click
+// the workspace. That pane is the one dockview will restore, and dockview
+// persists it in the saved layout, so the layout is the authority here.
+//
+// Falling back to "most recently written" without consulting it was wrong in a
+// way that reads as random: a busy background pane hijacked the card while the
+// click still landed on the focused pane. Most-recent survives only as a
+// fallback for a workspace that has never saved a layout, or whose saved active
+// pane is gone or non-VT.
+//
+// Ties in the fallback go to the lowest pane id (snapshotView returns panes
+// sorted ascending and the comparison is strict, so the first of an exact tie
+// wins). Browser panes carry buf == nil and are skipped rather than erroring,
+// following the empty-not-error precedent of the
+func pickPreviewPane(panes []*Pane, layouts map[string]string) *Pane {
+	// "wide" is the desktop layout and the one the sidebar itself only exists
+	// in; "narrow" is checked so a mobile-only session still resolves.
+	for _, bp := range [...]string{"wide", "narrow"} {
+		id, ok := ActivePaneFromLayout(layouts[bp])
+		if !ok {
+			continue
+		}
+		for _, p := range panes {
+			if p == nil || p.LocalID != id {
+				continue
+			}
+			if _, vt := p.buf.(*VTBuffer); vt {
+				return p
+			}
+		}
+	}
+	return mostRecentlyWrittenPane(panes)
+}
+
+// mostRecentlyWrittenPane is the fallback when the saved layout cannot name a
+// usable pane. See pickPreviewPane.
+func mostRecentlyWrittenPane(panes []*Pane) *Pane {
 	var best *Pane
 	var bestAt time.Time
 	for _, p := range panes {
