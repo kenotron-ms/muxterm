@@ -254,27 +254,40 @@ func (s *subscriber) enqueuePreview(msg *Message) {
 
 Six lines that make the feature structurally incapable of causing a regression.
 
-### D6. Preview the pane that is moving, not the pane that was focused
+### D6. Preview the pane you will actually get
 
-sessiond does not know which pane is "active" in a workspace. There is no server-side focused
-pane, and `SaveLayout` stores an opaque blob (`registry.go:200-215`). The daemon *can* parse
-`dockLeaf.ActiveView` (`layout.go:19-23`) but that is debounced, breakpoint-keyed, and absent
-for never-laid-out workspaces.
+**Superseded. The original decision was wrong and shipped as a bug; this records both.**
 
-There is also no last-output timestamp anywhere in Go — sessiond's "activity" is a close-safety
-classifier (idle/busy/unknown), not an output tracker.
+*Original:* sessiond has no server-side focused pane and `SaveLayout` stores an opaque blob
+(`registry.go:200-215`), so rather than plumb focus down, pick the **most recently written**
+pane. `readLoop` (`pane.go:336`) is already the single place per-pane output is observed, so a
+`lastWrite` timestamp there was nearly free. The argument was that for a workspace you are
+*not* looking at, "where is the action" beats "what was focused when I left."
 
-Rather than plumb focus down, add the one field that is genuinely missing and pick the
-**most recently written pane**, tie-breaking to the lowest pane id. `readLoop` (`pane.go:336`)
-is already the single place per-pane output is observed; it sets `lastWrite` and a `previewDirty`
-bit in the same hook.
+*What actually happened:* a chatty background pane hijacks the card while clicking the
+workspace still lands on the focused pane. The preview contradicts the click, and it reads as
+random rather than informative. Reproduced with three panes, the idle Pane 2 selected while
+Pane 3 wrote once a second: the tile carried `paneId: 3`, the chip said "Pane 3 +2", the click
+landed on Pane 1's neighbour Pane 2.
 
-This is the better answer, not just the cheaper one. For a workspace you are *not* looking at,
-"where is the action" beats "what was focused when I left." The card's corner chip names the
-pane, so a card switching panes mid-build reads as informative rather than confusing.
+*The fix:* **the card is a promise about what the click will do**, and that outranks showing
+more activity. dockview already persists the selection — `activeGroup` plus each leaf's
+`activeView` — and view ids are pane ids. `layout.go` was decoding both fields for
+`ASCIILayout` and discarding them, and `snapshotView` already carried `Layout`. Reading them
+back makes the card use the same source of truth the restore path uses, so preview and click
+agree by construction rather than by coincidence.
 
-The attached card still follows *your* focus, since the client knows it. State the rule plainly:
-**attached mirrors your view; detached shows what is moving.**
+Most-recently-written survives only as a fallback: no saved layout, or a saved active pane that
+has closed or is a browser pane. The `wide` layout is preferred, then `narrow`.
+
+The change gate had to become pane-aware as a consequence. Following the focused pane means the
+card can move to a different pane while nothing is being written, and the original seq-only gate
+would have pinned the card to the pane you just navigated away from. A changed pane now always
+emits, and defeats the hash gate too.
+
+**The lesson worth keeping:** the "cheaper" option was rationalized as "the better answer, not
+just the cheaper one." That phrasing should have been a warning sign — the information needed
+was already decoded three files away.
 
 ### D7. Free rider — the workspace bell finally gets a producer
 
