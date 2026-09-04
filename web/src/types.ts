@@ -80,6 +80,13 @@ export const SessiondType = {
   // above: that entry has no Go counterpart and is dead vocabulary.
   PreviewSubscribe: 'preview-subscribe',
   WorkspacePreview: 'workspace-preview',
+  // Home view session state (ADDITIVE, post-v1) — mirrors Go's
+  // TypeSessionStateSubscribe / TypeSessionStateSubscribeResult /
+  // TypeSessionState. Same opt-in shape as the preview pair above: a client
+  // that never subscribes receives nothing and the daemon does zero work.
+  SessionStateSubscribe: 'session-state-subscribe',
+  SessionStateSubscribeResult: 'session-state-subscribe-result',
+  SessionState: 'session-state',
 } as const;
 
 export type SessiondMessageType = (typeof SessiondType)[keyof typeof SessiondType];

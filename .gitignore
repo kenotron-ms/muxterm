@@ -50,3 +50,6 @@ DONE.json
 
 # Local scratch space (font bake-off, experiments)
 .scratch/
+
+# Playwright CLI workspace config + session artifacts
+.playwright/
