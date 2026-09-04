@@ -30,7 +30,7 @@ func TestRunCommandReturnsOutput(t *testing.T) {
 	}
 
 	// Create a pane running sh interactively so runCommand can send input to it.
-	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0)
+	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0, "")
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestSendInputReturnsOK(t *testing.T) {
 		t.Fatalf("AttachWorkspace: %v", err)
 	}
 
-	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0)
+	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0, "")
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestSendInputKeysTranslatesNamedKeys(t *testing.T) {
 		t.Fatalf("AttachWorkspace: %v", err)
 	}
 
-	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0)
+	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0, "")
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestSendInputUnknownKeyErrors(t *testing.T) {
 		t.Fatalf("AttachWorkspace: %v", err)
 	}
 
-	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0)
+	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0, "")
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestSendInputMalformedTextErrorsEvenWithKeys(t *testing.T) {
 		t.Fatalf("AttachWorkspace: %v", err)
 	}
 
-	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0)
+	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0, "")
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestGetScreenReturnsText(t *testing.T) {
 		t.Fatalf("AttachWorkspace: %v", err)
 	}
 
-	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0)
+	paneID, err := c.conn.CreatePane([]string{"sh"}, "", 0, "")
 	if err != nil {
 		t.Fatalf("CreatePane: %v", err)
 	}

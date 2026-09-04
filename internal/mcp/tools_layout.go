@@ -41,7 +41,7 @@ func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 	// than "terminal" is a caller error, not something to silently ignore.
 	switch kind {
 	case "terminal", "":
-		id, err := lt.c.conn.CreatePane(nil, placement, referencePaneID)
+		id, err := lt.c.conn.CreatePane(nil, placement, referencePaneID, "")
 		if err != nil {
 			return "", fmt.Errorf("creating terminal pane: %w", err)
 		}

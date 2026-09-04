@@ -14,7 +14,7 @@ type trackingDaemonConn struct {
 	createPaneCalled bool
 }
 
-func (f *trackingDaemonConn) CreatePane(cmd []string, placement string, referencePaneID int) (int, error) {
+func (f *trackingDaemonConn) CreatePane(cmd []string, placement string, referencePaneID int, clientRef string) (int, error) {
 	f.createPaneCalled = true
 	return f.createdID, nil
 }

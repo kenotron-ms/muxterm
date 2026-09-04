@@ -492,12 +492,20 @@ func (c *Client) SaveLayout(workspaceID, breakpoint, layout string) error {
 // control how the browser-side dockview layer positions the new pane; pass ""
 // and 0 for the default behaviour (append to active pane). The browser spawns
 // its xterm.js instance on the resulting pane-added broadcast, NOT on this ack.
-func (c *Client) CreatePane(cmd []string, placement string, referencePaneID int) (int, error) {
+//
+// clientRef is the caller's optimistic-create correlation id, echoed back
+// verbatim on the pane-added broadcast. Pass "" when there is nothing to
+// correlate (the CLI and MCP callers). It has to be threaded through here
+// rather than matched on the pane-created ack, because the ack is point to
+// point and the broadcast is what every client -- including the one that
+// asked -- actually builds its pane from.
+func (c *Client) CreatePane(cmd []string, placement string, referencePaneID int, clientRef string) (int, error) {
 	reply, err := c.request(&Message{
 		Type:            TypeCreatePane,
 		Cmd:             cmd,
 		Placement:       placement,
 		ReferencePaneID: referencePaneID,
+		ClientRef:       clientRef,
 	})
 	if err != nil {
 		return 0, err
@@ -573,6 +581,7 @@ func (c *Client) dispatchEvent(msg *Message) {
 				Title:           msg.Title,
 				Placement:       msg.Placement,
 				ReferencePaneID: msg.ReferencePaneID,
+				ClientRef:       msg.ClientRef,
 			})
 		}
 	case TypePaneClosed:

@@ -58,7 +58,7 @@ func (f *fakeDaemonConn) ClosePane(paneID int) error { return nil }
 
 func (f *fakeDaemonConn) SaveLayout(workspaceID, breakpoint, layout string) error { return nil }
 
-func (f *fakeDaemonConn) CreatePane(cmd []string, placement string, referencePaneID int) (int, error) {
+func (f *fakeDaemonConn) CreatePane(cmd []string, placement string, referencePaneID int, clientRef string) (int, error) {
 	return f.createdID, nil
 }
 
