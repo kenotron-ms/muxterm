@@ -6,9 +6,14 @@
  * frontend can be built independently without either guessing the other's
  * shape. If you change a field here, change it there in the same commit.
  *
+ * This contract is HARNESS-AGNOSTIC. Nothing here names a specific
+ * coding-agent CLI: an Amplifier lane, a Claude Code session, and a shell
+ * script that shelled out to `muxterm session report` are all just rows. The
+ * producer contract lives in docs/session-state-protocol.md.
+ *
  * Vocabulary note: the six nouns in play are workspace, pane, terminal,
  * session, project, and artifact. A "task" is not an object -- it is the
- * session's first prompt:submit event. Do not introduce new nouns.
+ * session's first prompt. Do not introduce new nouns.
  */
 
 /**
@@ -26,39 +31,76 @@ export type WaitingFor =
   | 'dialog open';
 
 /**
- * Session run modes. This distinction is load-bearing for the whole feature.
+ * Session run modes. This distinction is load-bearing for the whole feature,
+ * and it answers exactly one question:
  *
- * - `plain`: the session ends its turn and waits for the user. That is its
- *   CONTRACT, not a fault. A quiet plain session must NEVER surface as needing
- *   input.
- * - `goal`: the session runs an autonomous /goal loop toward a stop condition.
- *   A quiet goal session means the loop BROKE, and that IS the alarm.
+ *     Does going quiet mean "broke" or "resting"?
  *
- * Mode is known at kickoff. Getting this wrong makes every idle session look
- * like an emergency, users learn to ignore the indicator, and the home view
- * becomes worthless.
+ * - `interactive`: the session ends its turn and waits for a human. That is its
+ *   CONTRACT, not a fault. A quiet interactive session must NEVER surface as an
+ *   alarm.
+ * - `autonomous`: the session runs a loop toward a stop condition of its own. A
+ *   quiet autonomous session means the loop BROKE, and that IS the alarm.
+ *
+ * These names are deliberately harness-neutral. They were once spelled
+ * `goal|plain`, after Amplifier's /goal command, which only names the
+ * distinction correctly if you already know what /goal is. Claude Code has
+ * background and foreground sessions; a job CLI has batch runs. The distinction
+ * is universal; the Amplifier spelling was not.
+ *
+ * Getting this wrong makes every idle session look like an emergency, users
+ * learn to ignore the indicator, and the home view becomes worthless.
  */
-export type SessionMode = 'plain' | 'goal';
+export type SessionMode = 'interactive' | 'autonomous';
 
 /**
- * One row of the home view: everything known about a single Amplifier session
+ * Coding-agent CLIs muxterm recognizes by name, mirroring the Harness*
+ * constants in internal/sessiond/sessionstate.go (which are in turn the agent
+ * catalog's names -- one vocabulary, not two).
+ */
+export const KNOWN_HARNESSES = ['amplifier', 'claude', 'codex', 'opencode'] as const;
+
+export type KnownHarness = (typeof KNOWN_HARNESSES)[number];
+
+/**
+ * Which agent CLI is running a session.
+ *
+ * Deliberately OPEN, not a closed union: any producer may declare any harness
+ * string (see docs/session-state-protocol.md). `KnownHarness | (string & {})`
+ * keeps editor autocomplete for the four muxterm knows about while still
+ * accepting a fifth nobody has written yet. A value not in KNOWN_HARNESSES gets
+ * a neutral badge and is NEVER dropped -- refusing to show a session because
+ * muxterm has not heard of its runner would make the fleet view lie about the
+ * fleet.
+ */
+export type Harness = KnownHarness | (string & {});
+
+/** Whether a declared harness is one muxterm has a name for. */
+export function isKnownHarness(h: string | undefined): h is KnownHarness {
+  return !!h && (KNOWN_HARNESSES as readonly string[]).includes(h);
+}
+
+/**
+ * One row of the home view: everything known about a single agent session
  * running in a muxterm pane.
  *
- * Every field is a projection of that session's own events.jsonl, forwarded by
- * the Amplifier hook in modules/hooks-muxterm-session. Nothing here is inferred
- * from PTY state -- the daemon's activity classifier cannot distinguish
- * "thinking" from "waiting for you", which is why this declared channel exists.
+ * Every field is DECLARED by that session's own producer. Nothing here is
+ * inferred from PTY state -- the daemon's activity classifier cannot
+ * distinguish "thinking" from "waiting for you", which is why this declared
+ * channel exists.
  */
 export interface SessionState {
-  /** Amplifier session id. */
+  /** The producer's own session id. */
   sessionId: string;
   /** muxterm pane holding this session's terminal. */
   paneId: number;
   /** muxterm workspace containing that pane. */
   workspaceId: string;
-  /** Working directory -- an Amplifier "project" is a folder. Absolute path. */
+  /** Which agent CLI is running this. Absent means nothing was declared. */
+  harness?: Harness;
+  /** Working directory. Absolute path. */
   project?: string;
-  /** Derived from the session's FIRST prompt:submit event, trimmed. */
+  /** Short title, conventionally the session's first prompt, trimmed. */
   name: string;
   mode: SessionMode;
   state: SessionRunState;
@@ -66,9 +108,9 @@ export interface SessionState {
   waitingFor?: WaitingFor;
   /** Short line describing current activity, refreshed cheaply. */
   doing?: string;
-  /** The /goal stop condition. Present only when mode === 'goal'. */
+  /** The session's declared stop condition. Normally only when autonomous. */
   doneMeans?: string;
-  /** Distinct artifact:read paths this session has consumed. */
+  /** Distinct artifact paths this session has read. */
   knows?: string[];
   /** Associated PR number; non-zero promotes into "Ready for review". */
   pr?: number;
@@ -110,9 +152,9 @@ export function groupFor(s: SessionState): HomeGroup {
 /**
  * Whether a session belongs in "Needs input".
  *
- * A plain session that has ended its turn is resting, which is its normal
- * condition -- it does not need input in the sense this view means. Only a
- * blocked session genuinely wants a human.
+ * An interactive session that has ended its turn is resting, which is its
+ * normal condition -- it does not need input in the sense this view means.
+ * Only a blocked session genuinely wants a human.
  */
 export function needsInput(s: SessionState): boolean {
   return s.state === 'blocked';
@@ -148,15 +190,22 @@ export function shortProject(project: string | undefined): string {
 /**
  * Development fixture. Lets the home view be built and viewed before the
  * daemon-side producer exists; delete the import once live data flows.
+ *
+ * Deliberately a MIXED FLEET: four harnesses, one of them a made-up name no
+ * version of muxterm will ever recognize. The home view is a fleet view for
+ * any coding-agent CLI, and a fixture that showed only Amplifier rows would let
+ * a harness-specific assumption creep back in unnoticed. The `ci-runner` row is
+ * the neutral-badge case, and it is here on purpose.
  */
 export const FIXTURE_SESSIONS: SessionState[] = [
   {
     sessionId: 'fx-extract-muxops',
     paneId: 1,
     workspaceId: 'parity',
+    harness: 'amplifier',
     project: '/home/ken/workspace/muxterm',
     name: 'extract-muxops',
-    mode: 'goal',
+    mode: 'autonomous',
     state: 'blocked',
     waitingFor: 'input needed',
     doing: 'loop stopped, awaiting a decision',
@@ -172,9 +221,10 @@ export const FIXTURE_SESSIONS: SessionState[] = [
     sessionId: 'fx-pr-412-rebase',
     paneId: 9,
     workspaceId: 'infra',
+    harness: 'claude',
     project: '/home/ken/workspace/muxterm',
     name: 'pr-412-rebase',
-    mode: 'goal',
+    mode: 'autonomous',
     state: 'blocked',
     waitingFor: 'permission prompt',
     doing: 'force-push rewrites 4 commits',
@@ -184,9 +234,10 @@ export const FIXTURE_SESSIONS: SessionState[] = [
     sessionId: 'fx-pane-send-cli',
     paneId: 2,
     workspaceId: 'parity',
+    harness: 'amplifier',
     project: '/home/ken/workspace/muxterm',
     name: 'pane-send-cli',
-    mode: 'goal',
+    mode: 'autonomous',
     state: 'working',
     doing: 'writing keys to bytes translation',
     updatedAt: 0,
@@ -195,21 +246,38 @@ export const FIXTURE_SESSIONS: SessionState[] = [
     sessionId: 'fx-scrollback-parity',
     paneId: 3,
     workspaceId: 'parity',
+    harness: 'codex',
     project: '/home/ken/workspace/muxterm',
     name: 'scrollback-parity',
-    mode: 'goal',
+    mode: 'autonomous',
     state: 'done',
     doing: 'MCP get_screen pages history now',
     pr: 51,
     updatedAt: 0,
   },
   {
+    sessionId: 'fx-nightly-smoke',
+    paneId: 4,
+    workspaceId: 'infra',
+    // Not a harness muxterm has ever heard of -- a shell script reporting via
+    // `muxterm session report --harness ci-runner`. Neutral badge, real row.
+    harness: 'ci-runner',
+    project: '/home/ken/workspace/muxterm',
+    name: 'nightly-smoke',
+    mode: 'autonomous',
+    state: 'working',
+    doing: 'stage 3 of 6 — reconnect matrix',
+    doneMeans: 'all six stages green',
+    updatedAt: 0,
+  },
+  {
     sessionId: 'fx-design-notes',
     paneId: 7,
     workspaceId: 'cos',
+    harness: 'claude',
     project: '/home/ken/workspace/muxterm',
     name: 'design-notes',
-    mode: 'plain',
+    mode: 'interactive',
     state: 'stopped',
     doing: 'turn ended, waiting for you -- normal, not an alarm',
     updatedAt: 0,

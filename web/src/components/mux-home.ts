@@ -26,6 +26,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import {
   HOME_GROUPS,
   groupFor,
+  isKnownHarness,
   shortProject,
   type HomeGroup,
   type SessionState,
@@ -368,15 +369,36 @@ export class MuxHome extends LitElement {
       font-weight: 600;
       letter-spacing: 0.04em;
     }
-    .mode.goal {
+    .mode.autonomous {
       background: color-mix(in srgb, var(--goalc) 18%, transparent);
       color: var(--goalc);
       border: 1px solid color-mix(in srgb, var(--goalc) 45%, transparent);
     }
-    .mode.plain {
+    .mode.interactive {
       background: var(--surface);
       color: var(--mute);
       border: 1px solid var(--chrome-border);
+    }
+
+    /* Which agent CLI is running this session. Metadata, not a headline: it
+       borrows the mode chip's geometry but carries no fill and no accent, so a
+       row still reads name-first. An unrecognized harness is dimmer still --
+       muxterm has no opinion about a runner it has never heard of, but it does
+       not hide the row either. */
+    .harness {
+      font-family: var(--mono);
+      font-size: 8px;
+      padding: 1px 5px;
+      border-radius: 2px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: transparent;
+      color: var(--mute-sm);
+      border: 1px solid var(--chrome-border);
+    }
+    .harness.unknown {
+      color: var(--mute);
+      border-style: dashed;
     }
 
     .btn {
@@ -791,6 +813,24 @@ export class MuxHome extends LitElement {
     return html`<span class="mode ${s.mode}">${s.mode}</span>`;
   }
 
+  /**
+   * The harness badge: which agent CLI is running this row.
+   *
+   * Nothing at all when the producer declared nothing -- an empty badge would
+   * add a column of noise to say "no comment". A harness muxterm does not
+   * recognize still renders, verbatim and dimmed, because the alternative is a
+   * fleet view that silently omits part of the fleet.
+   */
+  private _harnessChip(s: SessionState): TemplateResult | '' {
+    if (!s.harness) return '';
+    const known = isKnownHarness(s.harness);
+    return html`<span
+      class="harness ${known ? '' : 'unknown'}"
+      title="${known ? s.harness : `${s.harness} — harness not recognized by muxterm`}"
+      >${s.harness}</span
+    >`;
+  }
+
   private _loc(s: SessionState): string {
     const a = age(s.updatedAt, this._now);
     const base = `${s.workspaceId} · p${s.paneId}`;
@@ -830,7 +870,7 @@ export class MuxHome extends LitElement {
       >
         <div class="ih">
           <span class="iname">${s.name}</span>
-          ${this._modeChip(s)}
+          ${this._harnessChip(s)}${this._modeChip(s)}
           <span class="iloc">${this._loc(s)}</span>
         </div>
         <div class="iask">${askFor(s)}</div>
@@ -855,7 +895,7 @@ export class MuxHome extends LitElement {
       <div class="rowc ${focused ? 'sel' : ''}" @click="${() => this._onItemClick(s)}">
         <span class="mark ${markClass(s)}">${NEEDS_GLYPH}</span>
         <div>
-          <div class="rn">${s.name} ${this._modeChip(s)}</div>
+          <div class="rn">${s.name} ${this._harnessChip(s)}${this._modeChip(s)}</div>
           <div class="rd">${s.doing ?? ''}</div>
         </div>
         <div class="rr">

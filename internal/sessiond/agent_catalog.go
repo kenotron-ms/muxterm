@@ -24,12 +24,18 @@ type agentCatalogEntry struct {
 // restoring a pane never executes anything beyond "spawn this exact captured
 // argv again, verbatim" for one of these four names; anything else falls
 // back to a plain default shell.
+//
+// The names are the Harness* constants from sessionstate.go, not string
+// literals, because they are the SAME vocabulary: "which agent CLI is this"
+// has one answer in muxterm, whether it is being asked to restore a pane or to
+// badge a home-view row. Two independently-maintained lists of the same four
+// names would silently drift the first time a fifth was added to one of them.
 func defaultAgentCatalog() []agentCatalogEntry {
 	return []agentCatalogEntry{
-		{Name: "amplifier", Match: matchArgvBasename("amplifier")},
-		{Name: "claude", Match: matchArgvBasename("claude")},
-		{Name: "codex", Match: matchArgvBasename("codex")},
-		{Name: "opencode", Match: matchArgvBasename("opencode")},
+		{Name: HarnessAmplifier, Match: matchArgvBasename(HarnessAmplifier)},
+		{Name: HarnessClaude, Match: matchArgvBasename(HarnessClaude)},
+		{Name: HarnessCodex, Match: matchArgvBasename(HarnessCodex)},
+		{Name: HarnessOpenCode, Match: matchArgvBasename(HarnessOpenCode)},
 	}
 }
 
