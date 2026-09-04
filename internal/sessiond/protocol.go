@@ -463,4 +463,16 @@ type PaneInfo struct {
 	// that carried an explicit placement token; absent means default/tab placement).
 	Placement       string `json:"placement,omitempty"`       // tab|split-right|split-left|split-above|split-below
 	ReferencePaneID int    `json:"referencePaneId,omitempty"` // pane to split relative to; 0 = active pane
+
+	// ClientRef echoes the correlation id the requesting client minted for an
+	// optimistic create. Present only on pane-added, never in a composition --
+	// a composition is a fresh view of the world, not a reply to anyone's
+	// request, which is exactly why the browser must capture the ref on the
+	// event and not expect it to survive the next composition.
+	//
+	// It is load-bearing twice over: the browser settles its optimistic pane
+	// on it, and the home view's new-session composer uses it to know which
+	// pane the queued first prompt belongs to. Dropping it in the relay is
+	// silent -- the pane still appears, the prompt is simply never typed.
+	ClientRef string `json:"clientRef,omitempty"`
 }

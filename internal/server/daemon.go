@@ -19,7 +19,7 @@ type DaemonConn interface {
 	Attach(workspaceID, breakpoint, clientKind string) (sessiond.Composition, error)
 	RenamePane(paneID int, name string) error
 	SaveLayout(workspaceID, breakpoint, layout string) error
-	CreatePane(cmd []string, placement string, referencePaneID int) (int, error)
+	CreatePane(cmd []string, placement string, referencePaneID int, clientRef string) (int, error)
 	ClosePane(paneID int) error
 	Input(paneID uint32, data []byte) error
 	Resize(paneID, cols, rows int) error

@@ -246,7 +246,24 @@ export class MuxSocket {
    * rather than merely hidden. Must be re-sent after a reconnect — the flag
    * lives on the daemon connection, which a daemon restart replaces.
    */
+  /**
+   * The home view's desired session-state subscription, remembered so the
+   * socket can re-assert it itself.
+   *
+   * It has to live here rather than at the call site, because the call site
+   * cannot know when the socket is writable: the app opts in during startup,
+   * synchronously after constructing this socket, which is BEFORE the
+   * WebSocket has opened -- and sendSessiond silently drops anything sent
+   * before OPEN. That dropped frame is not a small bug. With no subscription
+   * the daemon never reads the spool, no session-state frame is ever pushed,
+   * and the home view sits on \"All clear\" forever while real sessions are
+   * running. Storing the intent and replaying it on open closes that hole and
+   * the reconnect one with a single mechanism.
+   */
+  private _sessionStateWanted = false;
+
   sessionStateSubscribe(enabled: boolean): void {
+    this._sessionStateWanted = enabled;
     this.sendSessiond({ type: SessiondType.SessionStateSubscribe, ok: enabled });
   }
 
@@ -487,6 +504,12 @@ export class MuxSocket {
 
     ws.onopen = () => {
       this._reconnectAttempts = 0;
+      // Re-assert the home view's opt-in. On a FIRST connection this is the
+      // only send that ever reaches the daemon: the app subscribes before the
+      // socket is open, and that frame is dropped.
+      if (this._sessionStateWanted) {
+        this.sendSessiond({ type: SessiondType.SessionStateSubscribe, ok: true });
+      }
       this.onReconnect?.();
     };
 

@@ -340,7 +340,7 @@ func (c *Client) handleTextInput(data []byte) {
 		c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, outcome))
 
 	case sessiond.TypeCreatePane:
-		paneID, err := c.daemon.CreatePane(msg.Cmd, msg.Placement, msg.ReferencePaneID)
+		paneID, err := c.daemon.CreatePane(msg.Cmd, msg.Placement, msg.ReferencePaneID, msg.ClientRef)
 		if err != nil {
 			c.sendError(msg.CID, msg.WorkspaceID, err)
 			return
@@ -617,6 +617,7 @@ func (h *Hub) attachClient(c *Client) error {
 				Title:           pane.Title,
 				Placement:       pane.Placement,
 				ReferencePaneID: pane.ReferencePaneID,
+				ClientRef:       pane.ClientRef,
 			})
 		},
 		OnPaneClosedWithWorkspace: func(workspaceID string, paneID int, processExitCode *int, runtimeMs int64) {

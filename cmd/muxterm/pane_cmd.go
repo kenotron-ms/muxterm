@@ -130,7 +130,7 @@ func runPaneCreate(args []string) error {
 		if err != nil {
 			return err
 		}
-		paneID, err := c.CreatePane(cmd, "", 0)
+		paneID, err := c.CreatePane(cmd, "", 0, "")
 		if err != nil {
 			return err
 		}
