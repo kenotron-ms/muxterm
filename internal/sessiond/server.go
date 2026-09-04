@@ -105,6 +105,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// connection opts in, stopped by the same ctx cancellation.
 	go s.sessionStateLoop(ctx)
 
+	// Claude Code sessions in the home view. OPT-IN: this is the only place the
+	// daemon executes another vendor's binary, so it happens because an
+	// operator asked for it, never because `claude` was on PATH. Not started at
+	// all when the switch is off, so the disabled cost is one getenv.
+	if claudeAdapterEnabled() {
+		go s.claudeAdapterLoop(ctx)
+	}
+
 	for {
 		nc, err := ln.Accept()
 		if err != nil {
