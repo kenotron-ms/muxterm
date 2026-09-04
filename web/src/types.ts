@@ -142,6 +142,15 @@ export interface SessiondWorkspaceInfo {
   paneCount: number;
 }
 
+/** Pane execution status classification. */
+export type PaneStatus = 'needs-input' | 'running' | 'completed';
+
+/** Extended pane metadata tracked by the client. */
+export interface PaneMetadata {
+  tracked: boolean;    // true if this pane was created/manipulated by MCP service (agent-driven)
+  status: PaneStatus;  // execution status: needs-input | running | completed
+}
+
 export interface SessiondPaneInfo {
   paneId: number;
   cols: number;
