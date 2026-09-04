@@ -96,15 +96,19 @@ export class MuxStartCard extends LitElement {
       color: var(--chrome-text-dim);
     }
 
+    /* The keycap hint is how the shortcut gets learned, so it has to be
+       readable. At 8.5px a backtick is a two-pixel tick and the chip reads as
+       an empty box -- caught in a screenshot review, not by any check. */
     .kb {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 8.5px;
+      font-size: 10.5px;
+      line-height: 1.3;
       letter-spacing: 0;
       text-transform: none;
       color: var(--chrome-text-dim);
       border: 1px solid var(--chrome-border);
       border-radius: 3px;
-      padding: 1px 5px;
+      padding: 0 5px;
       white-space: nowrap;
       flex-shrink: 0;
     }
