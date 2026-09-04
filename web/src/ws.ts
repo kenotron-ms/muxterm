@@ -141,6 +141,19 @@ export class MuxSocket {
    * that never calls previewSubscribe(true) never receives them.
    */
   onWorkspacePreview?: (msg: SessiondMessage) => void;
+  /**
+   * Fires when the daemon pushes the home view's session set — every Amplifier
+   * (or other harness) session it can see, across every workspace, not just the
+   * attached one. Same direct-callback shape as onWorkspacePreview above.
+   *
+   * ⚠ The frame carries `sessions` with `omitempty` on the Go side, because
+   * Message is one flat envelope shared by every message type. That means the
+   * most important transition — N sessions to zero — arrives as a bare
+   * `{"type":"session-state"}` with no field at all. Treat the ARRIVAL of the
+   * message as the signal and a missing field as the empty set, or the
+   * needs-input badge sticks forever at its last non-zero value.
+   */
+  onSessionState?: (msg: SessiondMessage) => void;
 
   constructor(store: MuxStore, url: string) {
     this._store = store;
@@ -223,6 +236,18 @@ export class MuxSocket {
    */
   previewSubscribe(enabled: boolean): void {
     this.sendSessiond({ type: SessiondType.PreviewSubscribe, ok: enabled });
+  }
+
+  /**
+   * Turn home-view session state on or off for THIS connection.
+   *
+   * Opt-in for the same reason preview is: with it off the daemon never reads
+   * the spool directory and never walks /proc, so the cost is genuinely zero
+   * rather than merely hidden. Must be re-sent after a reconnect — the flag
+   * lives on the daemon connection, which a daemon restart replaces.
+   */
+  sessionStateSubscribe(enabled: boolean): void {
+    this.sendSessiond({ type: SessiondType.SessionStateSubscribe, ok: enabled });
   }
 
   /** Request the list of workspaces. */
@@ -494,6 +519,8 @@ export class MuxSocket {
             this.onPaneResized?.(raw.paneId as number, raw.cols as number, raw.rows as number);
           } else if (raw.type === SessiondType.WorkspacePreview) {
             this.onWorkspacePreview?.(raw as unknown as SessiondMessage);
+          } else if (raw.type === SessiondType.SessionState) {
+            this.onSessionState?.(raw as unknown as SessiondMessage);
           }
         }
       }

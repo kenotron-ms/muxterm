@@ -31,6 +31,7 @@ import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
 import './components/mux-home.js';
 import { homeSessions } from './lib/home-sessions.js';
+import type { SessionState } from './lib/session-state.js';
 
 
 import { WorkspaceController } from './lib/workspace-controller.js';
@@ -644,12 +645,10 @@ export class MuxApp extends LitElement {
     disposeHomeToggle?.();
     disposeHomeToggle = installHomeToggle(store.config.keys.toggleHome, this._toggleHome);
 
-    // Seed the home view from the committed development fixture.
-    //
-    // ⚠ TEMPORARY. Delete this line — and homeSessions.seedFixture() itself —
-    // the moment the daemon's session-state frame is handled and calls
-    // homeSessions.set(rows, 'live'). Nothing else has to change.
-    homeSessions.seedFixture();
+    // The home view is fed live from the daemon (see _socket.onSessionState
+    // below). Until the first session-state frame arrives the set is simply
+    // empty, which renders as the zero state — that is honest, and better than
+    // showing fixture rows a reader could mistake for real sessions.
     this._unsubHomeSessions = homeSessions.subscribe(() => {
       this._version++;
     });
@@ -690,6 +689,19 @@ export class MuxApp extends LitElement {
     this._socket.onWorkspacePreview = (msg) => {
       previewStore.handleWorkspacePreview(msg);
     };
+    // Home view session state. Opt in once per connection; the daemon does no
+    // work at all until we ask.
+    //
+    // ⚠ `sessions` is omitempty on the wire, so the N-to-zero transition
+    // arrives as a bare {"type":"session-state"} with no field. The arrival of
+    // the frame is the signal; a missing field means the empty set. Coalescing
+    // those two cases here is what stops the needs-input badge sticking at its
+    // last non-zero value.
+    this._socket.onSessionState = (msg) => {
+      const rows = (msg as { sessions?: SessionState[] }).sessions ?? [];
+      homeSessions.set(rows, 'live');
+    };
+    this._socket.sessionStateSubscribe(true);
     // visibilitychange + window 'focus': this browser tab/window regaining
     // OS focus re-claims every currently-visible pane. Mirrors the existing
     // window.addEventListener('resize', ...) registration/cleanup pattern
