@@ -668,6 +668,8 @@ export class MuxApp extends LitElement {
     // Re-render whenever wire state (composition / workspaces / config) changes.
     this._unsubscribe = store.subscribe(() => {
       this._version++;
+      // A queued first prompt waits here for its pane to settle.
+      this._drainDispatch();
     });
 
     // Create WebSocket connection
@@ -1057,6 +1059,11 @@ export class MuxApp extends LitElement {
                   .sessions="${homeSessions.sessions}"
                   .palette="${store.config.theme.palette}"
                   .fixture="${homeSessions.source === 'fixture'}"
+                  .workspaces="${store.workspaces.map((w) => ({
+                    id: w.workspaceId,
+                    name: w.name ?? '',
+                  }))}"
+                  @home-dispatch="${this._onHomeDispatch}"
                   @home-open="${this._onHomeOpen}"
                   @home-action="${this._onHomeAction}"
                   @home-dismiss="${this._onHomeHide}"
@@ -1658,6 +1665,61 @@ export class MuxApp extends LitElement {
   };
 
   /** Enter / click on a home row: go to that session's pane. */
+  /**
+   * Start a new session from the home view's new-session bar.
+   *
+   * A "task" is not an object here -- it is a session's first prompt:submit.
+   * So this spawns a pane and types the prompt into it, which is exactly what
+   * `muxterm pane create` + `muxterm pane send` do from a shell. No new
+   * protocol: create-pane and raw pane input both already exist.
+   *
+   * The pane id is not known synchronously, so we hold the prompt until the
+   * store reports the pane, then write it once.
+   */
+  private _onHomeDispatch = (e: Event): void => {
+    const d = (e as CustomEvent).detail as {
+      prompt: string;
+      workspaceId: string | null;
+    };
+    if (!d?.prompt) return;
+    const ref = mintClientRef();
+    this._pendingDispatch.set(ref, d.prompt);
+    const tempId = _nextTempPaneId--;
+    store.mutate({
+      workspaceId: ref,
+      kind: 'create-pane',
+      optimistic: (draft) =>
+        draft.panes.push({ paneId: tempId, cols: 0, rows: 0, clientRef: ref }),
+      settled: (base) => base.panes.some((p) => p.clientRef === ref),
+    });
+    this._socket?.createPane(undefined, ref);
+    this._showHome = false;
+  };
+
+  /** Prompts waiting for their pane to appear, keyed by clientRef. */
+  private _pendingDispatch = new Map<string, string>();
+
+  /**
+   * Write any queued first prompt into its pane once the daemon has settled it.
+   *
+   * Matching is by clientRef, the same identity the optimistic create already
+   * uses, so a prompt can never land in the wrong pane.
+   */
+  private _drainDispatch(): void {
+    if (this._pendingDispatch.size === 0) return;
+    for (const p of store.panes) {
+      const ref = p.clientRef;
+      if (!ref) continue;
+      const prompt = this._pendingDispatch.get(ref);
+      if (prompt === undefined || p.paneId < 0) continue;
+      this._pendingDispatch.delete(ref);
+      this._socket?.sendPaneInput(
+        p.paneId,
+        new TextEncoder().encode(prompt + '\r'),
+      );
+    }
+  }
+
   private _onHomeOpen = (e: Event): void => {
     const d = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
     if (!d) return;

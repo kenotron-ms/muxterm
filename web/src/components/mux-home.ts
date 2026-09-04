@@ -172,6 +172,11 @@ export class MuxHome extends LitElement {
    */
   @property({ type: Boolean }) fixture = false;
 
+  /** Workspaces offered as targets in the new-session bar. */
+  @property({ attribute: false }) workspaces: readonly { id: string; name: string }[] = [];
+
+  @state() private _draft = '';
+  @state() private _target = '';
   @state() private _view: HomeView = loadView();
   @state() private _cursor = 0;
   @state() private _peek = false;
@@ -215,9 +220,101 @@ export class MuxHome extends LitElement {
     }
 
     .home {
-      padding: 16px 18px 40px;
+      /* bottom padding clears the sticky dispatch bar */
+      padding: 16px 18px 92px;
       max-width: 1180px;
+      /* Centred, not left-hugging. The content is capped rather than fluid, so
+         on a wide window a left-aligned column leaves a large dead margin on
+         the right and drags the eye away from the sidebar it sits beside. */
+      margin-inline: auto;
       outline: none;
+    }
+
+    /* ── new-session composer ──────────────────────────────── */
+    .dispatch {
+      position: sticky;
+      bottom: 0;
+      max-width: 780px;
+      margin-inline: auto;
+      padding: 0 18px 18px;
+      background: linear-gradient(
+        to bottom,
+        transparent,
+        var(--chrome-body) 22%
+      );
+    }
+    .composer {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 12px 12px 10px;
+      border-radius: 16px;
+      border: 1px solid var(--chrome-border);
+      background: color-mix(in srgb, var(--chrome-body) 55%, black);
+      transition: border-color 120ms ease;
+    }
+    .composer:focus-within {
+      border-color: color-mix(in srgb, var(--mux-accent, #73b8ff) 55%, transparent);
+    }
+    .dinput {
+      width: 100%;
+      resize: none;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--chrome-text-bright);
+      font-family: inherit;
+      font-size: 14.5px;
+      line-height: 1.55;
+      max-height: 200px;
+      overflow-y: auto;
+      padding: 2px 2px 0;
+    }
+    .dinput::placeholder {
+      color: var(--chrome-text-dim);
+      opacity: 0.75;
+    }
+    .crow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dsel {
+      font-size: 11.5px;
+      color: var(--chrome-text-dim);
+      background: transparent;
+      border: 1px solid var(--chrome-border);
+      border-radius: 999px;
+      padding: 4px 9px;
+      outline: none;
+      cursor: pointer;
+    }
+    .dsel:hover {
+      color: var(--chrome-text-bright);
+    }
+    .dhint {
+      font-size: 11px;
+      color: var(--chrome-text-dim);
+      opacity: 0.7;
+    }
+    .dgo {
+      margin-left: auto;
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      cursor: pointer;
+      border: none;
+      background: var(--chrome-text-bright);
+      color: var(--chrome-body);
+      font-size: 15px;
+      line-height: 1;
+      transition: opacity 120ms ease;
+    }
+    .dgo[disabled] {
+      opacity: 0.25;
+      cursor: default;
     }
 
     /* ── first section heading + view toggle ─────────────────────────── */
@@ -1057,8 +1154,97 @@ export class MuxHome extends LitElement {
           <span><kbd>esc</kbd> dismiss</span>
         </div>
       </div>
+
+      ${this._renderDispatch()}
     `;
   }
+
+  /**
+   * The new-session bar.
+   *
+   * A "task" is not an object in this system -- it is a session's FIRST
+   * prompt:submit. So creating one is literally typing that first prompt, and
+   * this box is the whole of it.
+   *
+   * Sticky at the bottom rather than the top for three reasons: it matches the
+   * terminal idiom the rest of muxterm lives in; it stays reachable when the
+   * list is long; and it keeps "what needs me" as the thing your eye lands on
+   * when home opens. The input is for after triage, not before.
+   */
+  private _renderDispatch() {
+    const targets = this.workspaces.length ? this.workspaces : [];
+    const ready = this._draft.trim().length > 0;
+    return html`
+      <div class="dispatch">
+        <div class="composer">
+          <textarea
+            class="dinput"
+            rows="2"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Start a session\u2026"
+            aria-label="First prompt for a new session"
+            .value="${this._draft}"
+            @input="${this._onDraft}"
+            @keydown="${this._onComposerKey}"
+          ></textarea>
+          <div class="crow">
+            <select
+              class="dsel"
+              aria-label="Workspace to start it in"
+              .value="${this._target}"
+              @change="${(e: Event) => {
+                this._target = (e.target as HTMLSelectElement).value;
+              }}"
+            >
+              <option value="">New workspace</option>
+              ${targets.map(
+                (w) => html`<option value="${w.id}">${w.name || w.id}</option>`,
+              )}
+            </select>
+            <span class="dhint">\u21B5 to start \u00b7 \u21E7\u21B5 for a new line</span>
+            <button
+              class="dgo"
+              type="button"
+              aria-label="Start session"
+              ?disabled="${!ready}"
+              @click="${this._submit}"
+            >\u2191</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private _onDraft = (e: Event): void => {
+    const el = e.target as HTMLTextAreaElement;
+    this._draft = el.value;
+    // Grow with the text, the way a chat composer does, up to the CSS max.
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+
+  private _onComposerKey = (e: KeyboardEvent): void => {
+    // Stop home's j/k/space/enter navigation from firing while typing.
+    e.stopPropagation();
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      this._submit();
+    }
+  };
+
+  private _submit = (): void => {
+    const prompt = this._draft.trim();
+    if (!prompt) return;
+    this.dispatchEvent(
+      new CustomEvent('home-dispatch', {
+        detail: { prompt, workspaceId: this._target || null },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    this._draft = '';
+  };
 }
 
 declare global {
