@@ -121,6 +121,20 @@ type sessionSnapshot struct {
 	// stat). That is treated as unverifiable rather than mismatched, degrading
 	// to pid-only behaviour rather than dropping every row.
 	PIDStart uint64 `json:"pidStart,omitempty"`
+	// SID is the writer's POSIX session id, which for anything started inside
+	// a muxterm pane is that pane's root shell pid -- the exact key the owners
+	// map is built on. See processSessionID.
+	//
+	// Recorded by the producer rather than derived by the reader because the
+	// reader may be looking at this file AFTER the writer has exited, and an
+	// ancestor walk needs /proc entries that no longer exist. One integer,
+	// captured while the process lived, is what lets a finished session's row
+	// still be placed on the terminal it ran in.
+	//
+	// Zero means the producer did not supply one (an older hook, a non-Linux
+	// writer). Such a snapshot falls back to the ancestor walk, which works
+	// while the process lives and not afterwards.
+	SID int `json:"sid,omitempty"`
 }
 
 // snapshotPIDMatches reports whether the process now holding snap.PID is the
@@ -195,9 +209,23 @@ func (s *sessionStore) changedLocked(rows []SessionState) bool {
 //
 // Snapshots that cannot be placed are dropped rather than guessed at: a row
 // with no pane is a row the home view cannot act on, and inventing a location
-// for it would be worse than omitting it. Snapshots whose process is gone are
-// deleted from disk here -- a session that is killed rather than exited never
-// gets to clean up after itself, so the reader has to be the one that does.
+// for it would be worse than omitting it.
+//
+// A session that ENDED outlives its process here. That is the whole point of
+// the view -- it answers "how did it end?", which a row that vanishes the
+// instant the agent exits cannot. Such a row is bounded to ONE per pane (the
+// most recent ending), and is reclaimed the moment that pane starts another
+// session or is closed. The pane's own
+// lifetime is the row's lifetime, so no timer is needed and the spool stays
+// bounded.
+//
+// Everything else whose process is gone is still deleted from disk here -- a
+// session that is KILLED rather than exited never gets to write an ending, and
+// nothing else will reclaim its file.
+//
+// None of that depends on having watched. An ending is placed from the `sid`
+// the producer recorded into its own file, so a session that starts AND
+// finishes with no browser open still has its row waiting when one opens.
 func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState, bool) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -220,6 +248,10 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 	// at all that would be a per-second cost for nothing.
 	var owners map[int]paneRef
 	rows := make([]SessionState, 0, len(entries))
+	// Snapshots that survived reading, held back until the per-pane decision
+	// below: whether a pane's ending is published depends on what ELSE that
+	// pane has, which is not known until every entry has been read.
+	pending := make([]pendingRow, 0, len(entries))
 	// Rebuilt fresh each tick rather than mutated in place, so a snapshot that
 	// is deleted and later replaced by a good one does not leave a permanent
 	// entry behind, and the map cannot grow without bound.
@@ -260,23 +292,107 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 			}
 			continue
 		}
-		if snap.PID <= 0 || !processLive(snap.PID) || !snapshotPIDMatches(snap) {
-			// The session is gone, or this pid has been recycled by an
-			// unrelated process. Reclaim the file; nothing else will.
+		if snap.PID <= 0 {
+			// Not attributable to any process, now or ever.
 			_ = os.Remove(path)
 			continue
 		}
 		if owners == nil {
 			owners = ownersFor()
 		}
-		pane, ok := resolvePaneForPID(snap.PID, owners)
-		if !ok {
+
+		if processLive(snap.PID) {
+			if !snapshotPIDMatches(snap) {
+				// The pid is live but it is somebody ELSE now: this snapshot
+				// outlived its session and the kernel handed the number on.
+				// Publishing it would pin a dead session's row to an unrelated
+				// terminal, indistinguishable from a real one.
+				_ = os.Remove(path)
+				continue
+			}
+			pane, ok := placeSnapshot(snap, owners)
+			if !ok {
+				// Running, but not inside any pane of ours. Left on disk
+				// rather than reclaimed: it is a live process's file, and it
+				// is not ours to delete.
+				continue
+			}
+			pending = append(pending, pendingRow{
+				row:  stampPane(snap.SessionState, pane),
+				path: path,
+				pane: pane,
+				live: true,
+			})
 			continue
 		}
-		row := snap.SessionState
-		row.PaneID = pane.paneID
-		row.WorkspaceID = pane.workspaceID
-		rows = append(rows, row)
+
+		// The process is gone. Whether the row goes with it depends on
+		// whether the session ENDED or was killed.
+		if !sessionStateIsTerminal(snap.State) {
+			_ = os.Remove(path)
+			continue
+		}
+		pane, ok := placeSnapshot(snap, owners)
+		if !ok {
+			// Its pane is gone -- or it never wrote a sid, in which case the
+			// walk has nothing left to walk now that /proc has forgotten the
+			// process. Either way there is no terminal to show this on, and
+			// closing a pane is the user saying they are done with it,
+			// endings included.
+			_ = os.Remove(path)
+			continue
+		}
+		pending = append(pending, pendingRow{
+			row:  stampPane(snap.SessionState, pane),
+			path: path,
+			pane: pane,
+		})
+	}
+
+	// Second phase: per pane, decide which of its snapshots to publish.
+	//
+	// A pane shows the sessions LIVE in it. Only when it has none does it show
+	// how its most recent one ended -- exactly one row, so a pane that has run
+	// twenty sessions today does not accumulate twenty tombstones. Everything
+	// a pane does not publish is reclaimed, which is what bounds the spool
+	// without a timer.
+	byPane := make(map[paneRef][]int, len(pending))
+	for i := range pending {
+		byPane[pending[i].pane] = append(byPane[pending[i].pane], i)
+	}
+	keep := make([]bool, len(pending))
+	for _, idxs := range byPane {
+		hasLive := false
+		for _, i := range idxs {
+			if pending[i].live {
+				hasLive = true
+				break
+			}
+		}
+		newest := -1
+		for _, i := range idxs {
+			if pending[i].live {
+				keep[i] = true
+				continue
+			}
+			if hasLive {
+				// Superseded by whatever is running there now.
+				continue
+			}
+			if newest < 0 || endingIsNewer(pending[i].row, pending[newest].row) {
+				newest = i
+			}
+		}
+		if newest >= 0 {
+			keep[newest] = true
+		}
+	}
+	for i := range pending {
+		if !keep[i] {
+			_ = os.Remove(pending[i].path)
+			continue
+		}
+		rows = append(rows, pending[i].row)
 	}
 
 	// Deterministic order, so an unchanged set hashes identically tick after
@@ -293,6 +409,71 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 		return rows[i].SessionID < rows[j].SessionID
 	})
 	return rows, true
+}
+
+// placeSnapshot resolves the pane a snapshot belongs to.
+//
+// sid first, when the producer wrote one: a pane's root shell leads its own
+// POSIX session, so that single integer is the whole join and -- because it
+// lives in the file rather than in /proc -- it still resolves after the writer
+// has exited. That is what lets a finished session keep its row.
+//
+// The ancestor walk stays for producers that write no sid. It is correct while
+// the process lives and impossible afterwards, which is exactly the old
+// behaviour, unchanged for them.
+func placeSnapshot(snap sessionSnapshot, owners map[int]paneRef) (paneRef, bool) {
+	if snap.SID > 0 {
+		if ref, ok := owners[snap.SID]; ok {
+			return ref, true
+		}
+	}
+	return resolvePaneForPID(snap.PID, owners)
+}
+
+// pendingRow is one snapshot that survived reading, waiting on collect's
+// per-pane decision. It carries its own path so an unpublished one can be
+// reclaimed without going back to the directory.
+type pendingRow struct {
+	row  SessionState
+	path string
+	pane paneRef
+	// live distinguishes "the process is running" from "this is how it ended".
+	live bool
+}
+
+// stampPane fills in the two fields a producer cannot know about itself.
+func stampPane(row SessionState, pane paneRef) SessionState {
+	row.PaneID = pane.paneID
+	row.WorkspaceID = pane.workspaceID
+	return row
+}
+
+// sessionStateIsTerminal reports whether a state is an ENDING rather than a
+// moment.
+//
+// Only these three outlive their process. A `working` or `blocked` snapshot
+// whose process is gone is a crash artifact -- the session was killed before
+// its producer could write an ending -- and leaving it up would assert that a
+// session is thinking, or waiting on a human, when it is neither. That is the
+// one direction this view must never fail in.
+func sessionStateIsTerminal(state string) bool {
+	switch state {
+	case SessionStateDone, SessionStateFailed, SessionStateStopped:
+		return true
+	}
+	return false
+}
+
+// endingIsNewer orders two endings in the same pane, most recent first.
+//
+// The session id breaks ties. UpdatedAt is whole seconds, so two sessions
+// ending in the same second is not exotic, and an unstable answer there would
+// flap the published set on every tick.
+func endingIsNewer(a, b SessionState) bool {
+	if a.UpdatedAt != b.UpdatedAt {
+		return a.UpdatedAt > b.UpdatedAt
+	}
+	return a.SessionID > b.SessionID
 }
 
 // paneRef is a pane's identity: everything the join needs to stamp onto a row.

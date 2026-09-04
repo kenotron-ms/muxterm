@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-module-hooks-muxterm-session"
-version = "0.3.0"
+version = "0.4.0"
 description = "Amplifier hook: stamp the session id into this process's title for muxterm crash recovery, and publish declared session state for muxterm's home view"
 requires-python = ">=3.11"
 # amplifier-core is a peer dependency provided by the runtime -- do not list it here

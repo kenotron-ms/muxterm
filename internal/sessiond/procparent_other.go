@@ -26,3 +26,11 @@ func parentPID(pid int) (int, bool) {
 func processStartTime(pid int) (uint64, bool) {
 	return 0, false
 }
+
+// processSessionID is unimplemented off Linux, for the same reason parentPID
+// is. ok=false means the snapshot carries no sid, and the reader falls back to
+// the ancestor walk -- which is also unimplemented here, so the home view stays
+// empty on this platform rather than behaving differently.
+func processSessionID(pid int) (int, bool) {
+	return 0, false
+}
