@@ -132,6 +132,14 @@ type KeysConfig struct {
 	PopOut         string `toml:"pop_out"          json:"pop_out"`
 	OpenLauncher   string `toml:"open_launcher"    json:"open_launcher"`
 	FocusDriver    string `toml:"focus_driver"     json:"focus_driver"`
+	// ToggleHome shows/hides the home view (the "needs input" surface).
+	//
+	// Backtick, not the usual ctrl+shift+<key>: ] \ m o p a are all taken, and
+	// backtick was bound to nothing. It is a PRINTABLE character, so the client
+	// must intercept the chord before xterm.js sees it while leaving a bare
+	// backtick to type a backtick — see web/src/lib/keybindings.ts.
+	// NOT ctrl+s: that is XOFF and freezes the terminal.
+	ToggleHome string `toml:"toggle_home"      json:"toggle_home"`
 }
 
 // WorkspaceConfig controls workspace layout and presentation.
@@ -266,6 +274,7 @@ func Defaults() Config {
 			PopOut:         "ctrl+shift+o",
 			OpenLauncher:   "ctrl+shift+p",
 			FocusDriver:    "ctrl+shift+a",
+			ToggleHome:     "ctrl+`",
 		},
 		Workspace: WorkspaceConfig{
 			DefaultPresentation: "docked",

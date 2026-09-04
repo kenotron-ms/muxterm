@@ -7,7 +7,7 @@ import { MuxSocket, buildWsUrl } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { previewStore } from './lib/preview-store.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
-import { makeKeyHandler, installAppShortcuts, type UIActions } from './lib/keybindings.js';
+import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
 import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
 import { injectTerminalFont } from './lib/fonts.js';
@@ -29,6 +29,8 @@ import type { CloseConfirmationModal } from './components/close-confirmation-mod
 import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
+import './components/mux-home.js';
+import { homeSessions } from './lib/home-sessions.js';
 
 
 import { WorkspaceController } from './lib/workspace-controller.js';
@@ -135,6 +137,11 @@ let disposeKeys: (() => void) | undefined;
 /** Disposer for fixed app-level shortcuts (Cmd+W, Cmd+T). Installed once per
  *  app connection and not re-set on config changes — these are not configurable. */
 let disposeAppShortcuts: (() => void) | undefined;
+
+/** Disposer for the CAPTURE-phase home toggle. Separate from disposeKeys
+ *  because the chord is printable and must beat xterm.js — see
+ *  installHomeToggle. Re-set alongside disposeKeys on every config frame. */
+let disposeHomeToggle: (() => void) | undefined;
 
 /**
  * Installs a global keydown handler wired to the given UIActions.
@@ -485,6 +492,9 @@ export class MuxApp extends LitElement {
       flex-direction: column;
       overflow: hidden;
       min-width: 0;
+      /* Containing block for <mux-home>, which covers the pane as an absolute
+         overlay rather than replacing the dock — see render(). */
+      position: relative;
     }
 
     /* Split.js gutter — styled to visually match the removed
@@ -532,6 +542,17 @@ export class MuxApp extends LitElement {
   @state()
   private _layoutMode: 'wide' | 'narrow' = currentLayoutMode();
 
+  /**
+   * True while the home view covers the main pane.
+   *
+   * Starts FALSE deliberately. The daemon-side session-state producer does not
+   * exist yet, so home currently renders the committed fixture — landing every
+   * user on a fixture-populated surface would be a lie. Flip this to `true`
+   * (one line) the moment homeSessions.set(..., 'live') has a caller.
+   */
+  @state()
+  private _showHome = false;
+
   @state()
   private _closeConfirmation: CloseConfirmationRequiredOutcome | null = null;
 
@@ -545,6 +566,7 @@ export class MuxApp extends LitElement {
 
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
+  private _unsubHomeSessions: (() => void) | null = null;
   private _controller: WorkspaceController | null = null;
   private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
   private _disposePaneFocusListeners: (() => void) | null = null;
@@ -611,6 +633,18 @@ export class MuxApp extends LitElement {
     applyTitlebarColor(restoreTitlebarColor());
     // Install keybindings with defaults immediately — mirrors applyThemeTokens.
     disposeKeys = installKeybindings(uiActions);
+    disposeHomeToggle?.();
+    disposeHomeToggle = installHomeToggle(store.config.keys.toggleHome, this._toggleHome);
+
+    // Seed the home view from the committed development fixture.
+    //
+    // ⚠ TEMPORARY. Delete this line — and homeSessions.seedFixture() itself —
+    // the moment the daemon's session-state frame is handled and calls
+    // homeSessions.set(rows, 'live'). Nothing else has to change.
+    homeSessions.seedFixture();
+    this._unsubHomeSessions = homeSessions.subscribe(() => {
+      this._version++;
+    });
     // Install fixed app-level shortcuts (Cmd+W close, Cmd+T new pane). These
     // override the browser's native tab-close / new-tab actions so muxterm
     // feels like a native app. Installed once — not re-set on config changes.
@@ -784,6 +818,10 @@ export class MuxApp extends LitElement {
     this._paneFocusCoordinator = null;
     disposeAppShortcuts?.();
     disposeAppShortcuts = undefined;
+    disposeHomeToggle?.();
+    disposeHomeToggle = undefined;
+    this._unsubHomeSessions?.();
+    this._unsubHomeSessions = null;
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -950,10 +988,13 @@ export class MuxApp extends LitElement {
       <div class="content-area">
         ${isWide ? html`
           <mux-sidebar
+            .homeActive="${this._showHome}"
+            .homeKey="${store.config.keys.toggleHome}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
+            @home-show="${this._onHomeShow}"
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
@@ -982,6 +1023,25 @@ export class MuxApp extends LitElement {
                   @layout-save="${this._onLayoutSave}"
                 ></mux-dock>
               `}
+          ${this._showHome
+            ? html`
+                <!-- Covers .main-pane as an opaque absolute overlay. The dock
+                     underneath is NEVER unmounted: unmounting would risk
+                     dockview's layout persistence and would silently downgrade
+                     the attached workspace's live-colour preview to the
+                     monochrome server tile, because previewRegion requires
+                     entry.opened (terminal-registry.ts). Keeping it mounted AND
+                     laid out also means returning from home needs no refit. -->
+                <mux-home
+                  .sessions="${homeSessions.sessions}"
+                  .palette="${store.config.theme.palette}"
+                  .fixture="${homeSessions.source === 'fixture'}"
+                  @home-open="${this._onHomeOpen}"
+                  @home-action="${this._onHomeAction}"
+                  @home-dismiss="${this._onHomeHide}"
+                ></mux-home>
+              `
+            : ''}
         </div>
 
       </div>
@@ -1213,6 +1273,8 @@ export class MuxApp extends LitElement {
       previewStore.setMode(cfg.sidebar.preview);
       disposeKeys?.();
       disposeKeys = installKeybindings(uiActions);
+      disposeHomeToggle?.();
+      disposeHomeToggle = installHomeToggle(cfg.keys.toggleHome, this._toggleHome);
     }
     // {"aiStatus":...} envelope (no "type" field, by design -- see sendAIStatus
     // in ws.go): a key was saved or cleared in this or another tab. Carries the
@@ -1548,7 +1610,68 @@ export class MuxApp extends LitElement {
    * new ID — isolating pane terminals via composite keys so scrollback from
    * the previous workspace survives for when we switch back.
    */
+  // -------------------------------------------------------------------------
+  // Home view
+  // -------------------------------------------------------------------------
+
+  /** Start card / ctrl+` — show home from anywhere. */
+  private _onHomeShow = (): void => {
+    this._showHome = true;
+  };
+
+  /** Esc, or picking a workspace — back to the dock, and give it the keyboard. */
+  private _onHomeHide = (): void => {
+    if (!this._showHome) return;
+    this._showHome = false;
+    void this.updateComplete.then(() => {
+      terminalRegistry.focus(store.activePaneId);
+    });
+  };
+
+  private _toggleHome = (): void => {
+    if (this._showHome) this._onHomeHide();
+    else this._onHomeShow();
+  };
+
+  /** Enter / click on a home row: go to that session's pane. */
+  private _onHomeOpen = (e: Event): void => {
+    const d = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
+    if (!d) return;
+    this._showHome = false;
+    if (d.workspaceId && d.workspaceId !== store.attached) {
+      this._socket?.attachWithBreakpoint(d.workspaceId, currentLayoutMode());
+      // Pane focus follows the attach round-trip; the daemon decides the active
+      // pane for the new workspace and the dock follows it.
+      return;
+    }
+    this._onActivePane(
+      new CustomEvent('pane-select', { detail: { paneId: d.paneId } }),
+    );
+  };
+
+  /**
+   * An ask button.
+   *
+   * ⚠ STUB — answering an ask means writing keys into the session's pane, which
+   * is `muxterm pane send` (Lane A / issue #47). Nothing is sent here; the
+   * intent is logged and the user is taken to the pane so they can answer it
+   * themselves. Replace the body, not the wiring, when send lands.
+   */
+  private _onHomeAction = (e: Event): void => {
+    const d = (e as CustomEvent<{ sessionId: string; paneId: number; action: string }>)
+      .detail;
+    if (!d) return;
+    muxLog(
+      'home action',
+      `STUB (needs \`muxterm pane send\`): ${d.action} for ${d.sessionId}`,
+      { paneId: d.paneId },
+    );
+    this._onHomeOpen(e);
+  };
+
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
+    // Picking a workspace is the "go work in there" gesture — home steps aside.
+    this._onHomeHide();
     if (e.detail.workspaceId === store.attached) return;
     // Workspace switches are asynchronous (new pane list/active pane arrive
     // only after a round-trip), so there is no new-workspace pane identity to
@@ -1620,6 +1743,8 @@ export class MuxApp extends LitElement {
     previewStore.setMode(cfg.sidebar.preview);
     disposeKeys?.();
     disposeKeys = installKeybindings(uiActions);
+    disposeHomeToggle?.();
+    disposeHomeToggle = installHomeToggle(cfg.keys.toggleHome, this._toggleHome);
     // Persist the change: debounced PATCH /api/config → server merges,
     // writes to disk, and broadcasts to all connected clients.
     patchConfig(configToGoJSON(cfg));
