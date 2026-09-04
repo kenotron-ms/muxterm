@@ -34,23 +34,59 @@ amplifier-app-cli's own main branch does or doesn't do. Without this hook
 installed, muxterm's restore path falls back to best-effort scraping the
 session id out of the pane's captured output instead (see snapshot.go) --
 strictly weaker, but the hook needs zero cooperation from anyone to exist.
+
+This module also publishes the session's DECLARED state -- what it is doing,
+and in particular whether it is working or waiting on a human -- to a spool
+directory the daemon reads. See state.py for why that channel has to exist:
+sessiond's PTY-based activity classifier cannot tell thinking from waiting,
+because both own the terminal.
 """
 
 import logging
 from typing import Any
 
 from amplifier_core import HookResult
-from amplifier_core.events import SESSION_START
+from amplifier_core.events import (
+    APPROVAL_DENIED,
+    APPROVAL_GRANTED,
+    APPROVAL_REQUIRED,
+    ARTIFACT_READ,
+    ORCHESTRATOR_COMPLETE,
+    PROMPT_COMPLETE,
+    PROMPT_SUBMIT,
+    PROVIDER_ERROR,
+    SESSION_END,
+    SESSION_FORK,
+    SESSION_START,
+    TOOL_ERROR,
+    TOOL_POST,
+    TOOL_PRE,
+    USER_NOTIFICATION,
+)
+
+from .state import SessionStateTracker, spool_dir
+
+# The /goal loop's own progress event. Not a kernel constant -- it is emitted by
+# the loop-streaming orchestrator, which is a module rather than the kernel, so
+# there is nothing in amplifier_core.events to import. Spelled out here with its
+# origin named so a future reader does not go looking for a constant that was
+# never there.
+ORCHESTRATOR_GOAL_PROGRESS = "orchestrator:goal_progress"
 
 logger = logging.getLogger(__name__)
 
 __amplifier_module_type__ = "hook"
 
+# Registered below the redaction hook (priority 10) so payloads reaching these
+# handlers have already been scrubbed -- this hook writes prompt text and file
+# paths to disk, so it should never see raw secrets in the first place.
+_STATE_HOOK_PRIORITY = 100
+
 
 async def mount(
     coordinator: Any, config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Register the session:start hook.
+    """Register the process-title stamp and the session-state publisher.
 
     Config keys:
       only_root_sessions (bool): Skip child/sub-agent sessions (default:
@@ -59,9 +95,14 @@ async def mount(
         user-visible root session's id that muxterm actually needs for
         recovery. This must stay true for correct behavior in the normal
         case -- it is exposed as a config knob only for advanced/test use.
+      publish_state (bool): Publish session-state snapshots for muxterm's
+        home view (default: true). Turning it off leaves the title stamp,
+        and therefore crash recovery, fully intact -- the two capabilities
+        share a module but not a dependency.
     """
     config = config or {}
     only_root = config.get("only_root_sessions", True)
+    publish_state = config.get("publish_state", True)
 
     try:
         import setproctitle as setproctitle_module
@@ -102,10 +143,100 @@ async def mount(
         priority=0,
         name="hooks-muxterm-session",
     )
-    logger.info("hooks-muxterm-session mounted (only_root=%s)", only_root)
+
+    published = _register_state_publisher(coordinator) if publish_state else False
+
+    logger.info(
+        "hooks-muxterm-session mounted (only_root=%s, publish_state=%s)",
+        only_root,
+        published,
+    )
 
     return {
         "name": "hooks-muxterm-session",
-        "version": "0.2.0",
-        "description": "Stamp session id into process title for muxterm crash recovery",
+        "version": "0.3.0",
+        "description": (
+            "Stamp session id into process title for muxterm crash recovery, "
+            "and publish declared session state for muxterm's home view"
+        ),
     }
+
+
+def _register_state_publisher(coordinator: Any) -> bool:
+    """Wire the session-state tracker onto the kernel event stream.
+
+    Returns whether publishing was armed. A failure here is logged and
+    swallowed: a session must start and run normally even if muxterm's home
+    view learns nothing about it.
+    """
+    try:
+        tracker = SessionStateTracker(coordinator, spool_dir())
+    except Exception as exc:
+        logger.warning(
+            "hooks-muxterm-session: session-state publishing disabled (%s)", exc
+        )
+        return False
+
+    def guarded(handler: Any, label: str) -> Any:
+        """Make a handler structurally incapable of harming the session.
+
+        The kernel already logs-and-skips a raising handler, so this is the
+        second of two independent guarantees rather than the only one. It is
+        worth having anyway: the cost of a bug in an advisory sidebar feed must
+        never be a broken user session, and `continue` is returned on every
+        path so nothing downstream is altered either.
+        """
+
+        async def wrapper(event: str, data: dict[str, Any]) -> HookResult:
+            try:
+                await handler(event, data)
+            except Exception as exc:
+                logger.debug(
+                    "hooks-muxterm-session: %s handler failed: %s", label, exc
+                )
+            return HookResult(action="continue")
+
+        return wrapper
+
+    # Event -> projection. Ordered as the session lives, not alphabetically.
+    #
+    # PROVIDER_ERROR shares TOOL_ERROR's handler deliberately: both mean "a call
+    # failed and the agent will probably recover", and neither is a reason to
+    # mark a session failed.
+    #
+    # USER_NOTIFICATION is registered even though nothing in the current kernel
+    # emits it -- it is named in the contract, and an empty subscription costs
+    # nothing. It is emphatically NOT how a resting plain session is detected;
+    # see on_orchestrator_complete for the rule that actually decides that.
+    handlers: list[tuple[str, Any]] = [
+        (SESSION_START, tracker.on_session_start),
+        (SESSION_FORK, tracker.on_session_fork),
+        (PROMPT_SUBMIT, tracker.on_prompt_submit),
+        (TOOL_PRE, tracker.on_tool_pre),
+        (TOOL_POST, tracker.on_tool_post),
+        (TOOL_ERROR, tracker.on_tool_error),
+        (PROVIDER_ERROR, tracker.on_tool_error),
+        (ARTIFACT_READ, tracker.on_artifact_read),
+        (APPROVAL_REQUIRED, tracker.on_approval_required),
+        (APPROVAL_GRANTED, tracker.on_approval_resolved),
+        (APPROVAL_DENIED, tracker.on_approval_resolved),
+        (USER_NOTIFICATION, tracker.on_user_notification),
+        (ORCHESTRATOR_GOAL_PROGRESS, tracker.on_goal_progress),
+        (ORCHESTRATOR_COMPLETE, tracker.on_orchestrator_complete),
+        (PROMPT_COMPLETE, tracker.on_prompt_complete),
+        (SESSION_END, tracker.on_session_end),
+    ]
+
+    for event, handler in handlers:
+        try:
+            coordinator.hooks.register(
+                event,
+                guarded(handler, event),
+                priority=_STATE_HOOK_PRIORITY,
+                name=f"hooks-muxterm-session-state:{event}",
+            )
+        except Exception as exc:
+            logger.debug(
+                "hooks-muxterm-session: could not register %s: %s", event, exc
+            )
+    return True
