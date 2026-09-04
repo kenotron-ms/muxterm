@@ -6,6 +6,7 @@ import { MonitorX } from 'lucide';
 import { MuxSocket, buildWsUrl } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { previewStore } from './lib/preview-store.js';
+import { harnessArgv, type HarnessName } from './lib/harness.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
@@ -668,8 +669,6 @@ export class MuxApp extends LitElement {
     // Re-render whenever wire state (composition / workspaces / config) changes.
     this._unsubscribe = store.subscribe(() => {
       this._version++;
-      // A queued first prompt waits here for its pane to settle.
-      this._drainDispatch();
     });
 
     // Create WebSocket connection
@@ -1676,14 +1675,27 @@ export class MuxApp extends LitElement {
    * The pane id is not known synchronously, so we hold the prompt until the
    * store reports the pane, then write it once.
    */
+  /**
+   * Start a SESSION from the home view's composer.
+   *
+   * The pane runs the harness directly, with the prompt as an argv element.
+   * It does NOT open a shell and type the prompt at it: a shell would try to
+   * execute "add resize_pane to the MCP server" as a command and fail, and
+   * anything typed before the program was ready to read would be lost.
+   *
+   * Passing the prompt as argv also removes the readiness race entirely --
+   * there is no window between spawn and first input, because there is no
+   * first input. sessiond takes argv on create-pane already (protocol.go
+   * "cmd", empty => default $SHELL), so this needs no new protocol.
+   */
   private _onHomeDispatch = (e: Event): void => {
     const d = (e as CustomEvent).detail as {
       prompt: string;
       workspaceId: string | null;
+      harness?: HarnessName;
     };
     if (!d?.prompt) return;
     const ref = mintClientRef();
-    this._pendingDispatch.set(ref, d.prompt);
     const tempId = _nextTempPaneId--;
     store.mutate({
       workspaceId: ref,
@@ -1692,33 +1704,9 @@ export class MuxApp extends LitElement {
         draft.panes.push({ paneId: tempId, cols: 0, rows: 0, clientRef: ref }),
       settled: (base) => base.panes.some((p) => p.clientRef === ref),
     });
-    this._socket?.createPane(undefined, ref);
+    this._socket?.createPane(harnessArgv(d.harness ?? 'amplifier', d.prompt), ref);
     this._showHome = false;
   };
-
-  /** Prompts waiting for their pane to appear, keyed by clientRef. */
-  private _pendingDispatch = new Map<string, string>();
-
-  /**
-   * Write any queued first prompt into its pane once the daemon has settled it.
-   *
-   * Matching is by clientRef, the same identity the optimistic create already
-   * uses, so a prompt can never land in the wrong pane.
-   */
-  private _drainDispatch(): void {
-    if (this._pendingDispatch.size === 0) return;
-    for (const p of store.panes) {
-      const ref = p.clientRef;
-      if (!ref) continue;
-      const prompt = this._pendingDispatch.get(ref);
-      if (prompt === undefined || p.paneId < 0) continue;
-      this._pendingDispatch.delete(ref);
-      this._socket?.sendPaneInput(
-        p.paneId,
-        new TextEncoder().encode(prompt + '\r'),
-      );
-    }
-  }
 
   private _onHomeOpen = (e: Event): void => {
     const d = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
