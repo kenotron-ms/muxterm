@@ -95,6 +95,15 @@ async def mount(
         user-visible root session's id that muxterm actually needs for
         recovery. This must stay true for correct behavior in the normal
         case -- it is exposed as a config knob only for advanced/test use.
+      classify_end_of_turn (bool): At end of turn, ask a cheap model whether
+        the assistant's closing message was actually a question for the human,
+        and if so surface the session as "needs input" with the ask summarised
+        (default: true). Turning it off leaves the structural verdict alone:
+        a finished turn simply reports `stopped`, which is what it did before
+        this existed. Every failure path already degrades to that, so this
+        knob is for cost control, not correctness.
+      classify_model (str): Model id for that classification. Defaults to
+        whatever the session's provider resolves on its own.
       publish_state (bool): Publish session-state snapshots for muxterm's
         home view (default: true). Turning it off leaves the title stamp,
         and therefore crash recovery, fully intact -- the two capabilities
@@ -103,6 +112,8 @@ async def mount(
     config = config or {}
     only_root = config.get("only_root_sessions", True)
     publish_state = config.get("publish_state", True)
+    classify_end_of_turn = config.get("classify_end_of_turn", True)
+    classify_model = config.get("classify_model") or None
 
     try:
         import setproctitle as setproctitle_module
@@ -144,7 +155,15 @@ async def mount(
         name="hooks-muxterm-session",
     )
 
-    published = _register_state_publisher(coordinator) if publish_state else False
+    published = (
+        _register_state_publisher(
+            coordinator,
+            classify_enabled=classify_end_of_turn,
+            classify_model=classify_model,
+        )
+        if publish_state
+        else False
+    )
 
     logger.info(
         "hooks-muxterm-session mounted (only_root=%s, publish_state=%s)",
@@ -162,7 +181,12 @@ async def mount(
     }
 
 
-def _register_state_publisher(coordinator: Any) -> bool:
+def _register_state_publisher(
+    coordinator: Any,
+    *,
+    classify_enabled: bool = True,
+    classify_model: str | None = None,
+) -> bool:
     """Wire the session-state tracker onto the kernel event stream.
 
     Returns whether publishing was armed. A failure here is logged and
@@ -170,7 +194,12 @@ def _register_state_publisher(coordinator: Any) -> bool:
     view learns nothing about it.
     """
     try:
-        tracker = SessionStateTracker(coordinator, spool_dir())
+        tracker = SessionStateTracker(
+            coordinator,
+            spool_dir(),
+            classify_enabled=classify_enabled,
+            classify_model=classify_model,
+        )
     except Exception as exc:
         logger.warning(
             "hooks-muxterm-session: session-state publishing disabled (%s)", exc
