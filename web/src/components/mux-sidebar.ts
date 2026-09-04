@@ -1,8 +1,12 @@
 import { LitElement, html, css, unsafeCSS, type TemplateResult } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 import { store } from '../state.js';
 import { workspaceLabel } from './workspace-picker.js';
 import './launcher-menu.js';
+import './mux-start-card.js';
+import { NEEDS_GLYPH } from './mux-start-card.js';
+import { homeSessions } from '../lib/home-sessions.js';
+import { needsInputByWorkspace, needsInputCount } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
 import { Download, Ellipsis, SquareTerminal } from 'lucide';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../lib/sidebar-width.js';
@@ -97,6 +101,16 @@ interface CardState {
   extra: number;
   /** Text hint line, used only by the no-preview fallback card. */
   hint: string;
+  /**
+   * This workspace's share of the Start card's Needs-input count.
+   *
+   * Comes from needsInputByWorkspace() over the SAME session set the Start
+   * card counts, so the total and the badges are arithmetically incapable of
+   * disagreeing. Never compute this any other way.
+   */
+  needs: number;
+  /** Panes in this workspace — shown instead of a badge when needs === 0. */
+  paneCount: number;
 }
 
 /**
@@ -126,7 +140,7 @@ function cardsSignature(cards: CardState[], mode: PreviewMode, cols: number): st
   let sig = `${mode}/${cols}`;
   for (const c of cards) {
     sig += `\u0000${c.id}|${c.label}|${c.active ? 1 : 0}${c.bell ? 1 : 0}`;
-    sig += `|${c.visual}|${c.title}|${c.extra}|${c.hint}`;
+    sig += `|${c.visual}|${c.title}|${c.extra}|${c.hint}|${c.needs}|${c.paneCount}`;
   }
   return sig;
 }
@@ -216,6 +230,15 @@ export class MuxSidebar extends LitElement {
       padding: 6px 0;
     }
 
+    .sb-heading {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+      color: var(--chrome-text-dim);
+      margin: 10px 0 6px 9px;
+    }
+
     /* ---- workspace cards ---- */
 
     .ws-card {
@@ -282,6 +305,31 @@ export class MuxSidebar extends LitElement {
 
     .ws-rename-input:focus {
       box-shadow: 0 0 0 2px var(--chrome-accent)33;
+    }
+
+    /* Needs-input badge. Its number is this workspace's share of the Start
+       card total — both come from needsInputByWorkspace(). */
+    .ws-needs {
+      flex-shrink: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
+      line-height: 1.5;
+      color: var(--mux-warn);
+      background: color-mix(in srgb, var(--mux-warn) 18%, transparent);
+      border: 1px solid color-mix(in srgb, var(--mux-warn) 45%, transparent);
+      padding: 0 5px;
+      border-radius: 8px;
+      white-space: nowrap;
+    }
+
+    /* Zero needs is not a zero badge: a plain pane count, and nothing warm. */
+    .ws-panes {
+      flex-shrink: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
+      line-height: 1.5;
+      color: var(--chrome-text-dim);
+      white-space: nowrap;
     }
 
     .ws-remove-btn {
@@ -585,6 +633,12 @@ export class MuxSidebar extends LitElement {
   // State
   // ---------------------------------------------------------------------------
 
+  /** True while the home view is the thing on screen. Drives the Start card. */
+  @property({ type: Boolean }) homeActive = false;
+
+  /** Key chord shown on the Start card, e.g. "ctrl+`". */
+  @property({ type: String }) homeKey = '';
+
   @state() private _version = 0;
   @state() private _renaming: string | null = null;
   @state() private _menuOpen = false;
@@ -608,6 +662,7 @@ export class MuxSidebar extends LitElement {
   // --- preview plumbing ------------------------------------------------------
 
   private _unsubPreview: (() => void) | null = null;
+  private _unsubSessions: (() => void) | null = null;
   private _resizeObserver: ResizeObserver | null = null;
   private _resizeTimer: number | null = null;
 
@@ -655,6 +710,12 @@ export class MuxSidebar extends LitElement {
       this._version++;
     });
 
+    // Session state (Start card total + per-workspace badges). Low rate — one
+    // frame per session state change — so a plain re-render is the right cost.
+    this._unsubSessions = homeSessions.subscribe(() => {
+      this._version++;
+    });
+
     // Preview tiles arrive at ~6 Hz. This callback deliberately does NOT bump
     // _version — see _onPreviewTick.
     this._unsubPreview = previewStore.subscribe(this._onPreviewTick);
@@ -676,6 +737,8 @@ export class MuxSidebar extends LitElement {
     this._unsub = null;
     this._unsubPreview?.();
     this._unsubPreview = null;
+    this._unsubSessions?.();
+    this._unsubSessions = null;
     this._resizeObserver?.disconnect();
     this._resizeObserver = null;
     if (this._resizeTimer !== null) {
@@ -918,6 +981,8 @@ export class MuxSidebar extends LitElement {
     const activeWsId = store.attached ?? '';
     const panes = store.panes;
     const activePaneId = store.activePaneId;
+    // ONE derivation, shared with the Start card total below. See CardState.needs.
+    const needsByWs = needsInputByWorkspace(homeSessions.sessions);
     const rows = this._previewRows;
     const cols = this._cols;
     const previewOn = rows > 0 && cols > 0;
@@ -960,6 +1025,8 @@ export class MuxSidebar extends LitElement {
         title,
         extra,
         hint,
+        needs: needsByWs.get(id) ?? 0,
+        paneCount: active ? panes.length : ws.paneCount,
       };
     });
   }
@@ -967,6 +1034,13 @@ export class MuxSidebar extends LitElement {
   // ---------------------------------------------------------------------------
   // Workspace helpers
   // ---------------------------------------------------------------------------
+
+  /** The Start card is the way back to home from anywhere. */
+  private _onStartClick(): void {
+    this.dispatchEvent(
+      new CustomEvent('home-show', { bubbles: true, composed: true }),
+    );
+  }
 
   private _onWsClick(wsId: string): void {
     store.ackWorkspace(wsId);
@@ -1070,6 +1144,15 @@ export class MuxSidebar extends LitElement {
               class="ws-name"
               @dblclick="${(e: Event) => this._startRename(e, card.id)}"
               >${card.label}</span
+            >`}
+        ${card.needs > 0
+          ? html`<span
+              class="ws-needs"
+              title="${card.needs} session${card.needs === 1 ? '' : 's'} need input"
+              >${NEEDS_GLYPH} ${card.needs}</span
+            >`
+          : html`<span class="ws-panes"
+              >${card.paneCount} pane${card.paneCount === 1 ? '' : 's'}</span
             >`}
         <button
           type="button"
@@ -1275,6 +1358,14 @@ export class MuxSidebar extends LitElement {
           : ''}
       </div>
       <div class="tab-content">
+        <mux-start-card
+          .count="${needsInputCount(homeSessions.sessions)}"
+          .spread="${needsInputByWorkspace(homeSessions.sessions).size}"
+          .active="${this.homeActive}"
+          .hint="${this.homeKey}"
+          @start-click="${() => this._onStartClick()}"
+        ></mux-start-card>
+        <div class="sb-heading">workspaces</div>
         ${this._renderWorkspaces()}
       </div>
       ${this._renderFooter()}

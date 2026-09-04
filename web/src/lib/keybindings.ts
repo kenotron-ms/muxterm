@@ -56,6 +56,37 @@ export function makeKeyHandler(
   };
 }
 
+/**
+ * Installs the home-view toggle chord in CAPTURE phase.
+ *
+ * Why this is not just another entry in makeKeyHandler's table:
+ *
+ * The chord is `ctrl+\`` and backtick is a PRINTABLE character. makeKeyHandler
+ * is installed on `window` in the BUBBLE phase, which runs after the event has
+ * already reached xterm.js's textarea — by then the byte is on its way to the
+ * PTY and preventDefault() is too late. Capture phase on `window` fires before
+ * any element handler, and stopPropagation() there means the terminal's own
+ * listener never runs at all.
+ *
+ * The other half of the contract: a BARE backtick must still type a backtick.
+ * It carries no modifiers, so chordOf() yields "`" which cannot equal
+ * "ctrl+`" — the event is not touched and reaches the terminal untouched.
+ * Same for ctrl+shift+` (which is "~" on a US layout) and for alt/meta
+ * variants. Only the exact chord is taken.
+ *
+ * Returns a cleanup function.
+ */
+export function installHomeToggle(chord: string, action: () => void): () => void {
+  const handler = (e: KeyboardEvent): void => {
+    if (!matchChord(chord, e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    action();
+  };
+  window.addEventListener('keydown', handler, { capture: true });
+  return () => window.removeEventListener('keydown', handler, { capture: true });
+}
+
 /** Returns true when muxterm is running as an installed PWA in standalone mode. */
 function isPwa(): boolean {
   return window.matchMedia('(display-mode: standalone)').matches;
