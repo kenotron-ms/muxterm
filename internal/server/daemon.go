@@ -31,6 +31,12 @@ type DaemonConn interface {
 	// know the message type returns an error, which the relay reports to the
 	// browser so it can fall back rather than wait.
 	PreviewSubscribe(enabled bool) error
+	// SessionStateSubscribe turns home-view session state on or off for this
+	// daemon connection. Per-connection and off by default, with the same
+	// old-daemon contract as PreviewSubscribe: an error means the daemon does
+	// not know the message type, and the browser should fall back rather than
+	// wait for rows that will never arrive.
+	SessionStateSubscribe(enabled bool) error
 	SetHandlers(h sessiond.Handlers)
 	Run() error
 	Close() error

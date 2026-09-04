@@ -401,6 +401,21 @@ func (c *Client) handleTextInput(data []byte) {
 			OK:   true,
 		})
 
+	case sessiond.TypeSessionStateSubscribe:
+		// Per-connection opt-in for home-view session state, with the same
+		// old-daemon contract as preview-subscribe above: an error means this
+		// daemon predates the feature, and relaying it lets the browser stop
+		// waiting for rows that are never coming.
+		if err := c.daemon.SessionStateSubscribe(msg.OK); err != nil {
+			c.sendError(msg.CID, msg.WorkspaceID, err)
+			return
+		}
+		c.sendMessage(&sessiond.Message{
+			Type: sessiond.TypeSessionStateSubscribeResult,
+			CID:  msg.CID,
+			OK:   true,
+		})
+
 	default:
 		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
 	}
@@ -637,6 +652,18 @@ func (h *Hub) attachClient(c *Client) error {
 				Cols:        msg.Cols,
 				Rows:        msg.Rows,
 				Lines:       msg.Lines,
+			})
+		},
+		OnSessionState: func(msg *sessiond.Message) {
+			// Every row names its own workspace and pane (the set spans
+			// workspaces this client is not attached to), so as with
+			// OnWorkspacePreview there is no getWorkspaceID stamping here.
+			// Copied field-by-field rather than forwarded wholesale, following
+			// the same whitelist discipline: nothing else on the envelope has
+			// any business reaching the browser.
+			c.sendMessage(&sessiond.Message{
+				Type:     sessiond.TypeSessionState,
+				Sessions: msg.Sessions,
 			})
 		},
 	})

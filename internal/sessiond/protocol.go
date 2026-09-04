@@ -109,6 +109,38 @@ const (
 	TypeWorkspacePreview       = "workspace-preview"        // event:   daemon -> opted-in subscribers
 )
 
+// Session-state message types (ADDITIVE, post-v1). Modelled directly on the
+// preview trio above, for the same reasons and with the same guarantees: a
+// per-connection opt-in, an explicit acknowledgement so a new browser can
+// detect an old daemon, and a droppable advisory push.
+//
+// TypeSessionStateSubscribe is the opt-in: Message.OK true enables session-state
+// pushes for that connection, false disables them. The daemon acknowledges with
+// TypeSessionStateSubscribeResult (OK true = "this daemon understands
+// session-state and applied it"). A daemon that predates this feature ignores
+// the unknown type and never replies, which the client's request timeout
+// surfaces as "session state unavailable" rather than a hang.
+//
+// TypeSessionState is the daemon -> subscriber event carrying the CURRENT FULL
+// SET of known sessions in Message.Sessions -- every workspace, not just the
+// one this connection is attached to. It is a whole-state document, not a
+// delta: the browser replaces its map wholesale, so a dropped frame is repaired
+// by the next one instead of leaving a permanently wrong view. That property is
+// what makes dropping frames safe, and dropping frames is mandatory here (see
+// enqueuePreview in subscriber.go) because this is advisory decoration that must
+// never be able to disconnect a live terminal.
+//
+// Why a batch rather than one message per session: the home view renders the
+// whole set at once and reconciles by replacement, an unchanged set then hashes
+// to a single value and costs zero bytes, and the existing full-snapshot
+// precedent (TypeWorkspaceList carrying Workspaces) already establishes the
+// shape.
+const (
+	TypeSessionStateSubscribe       = "session-state-subscribe"        // request: client -> daemon
+	TypeSessionStateSubscribeResult = "session-state-subscribe-result" // reply:   daemon -> client
+	TypeSessionState                = "session-state"                  // event:   daemon -> opted-in subscribers
+)
+
 // Activity-aware close message types are additive. They preserve the legacy
 // force-close messages while routing browser close intents through daemon-owned
 // activity and ticket authority.
@@ -248,9 +280,18 @@ type Message struct {
 	ProcessExitCode *int  `json:"processExitCode,omitempty"` // real shell process exit code, set on pane-closed only
 	RuntimeMs       int64 `json:"runtimeMs,omitempty"`       // real shell process wall-clock runtime, set on pane-closed only
 
-	// OK is a boolean flag carried by preview-subscribe (opt in/out) and its
-	// preview-subscribe-result acknowledgement.
+	// OK is a boolean flag carried by preview-subscribe and
+	// session-state-subscribe (opt in/out) and their -result acknowledgements.
 	OK bool `json:"ok,omitempty"`
+
+	// Sessions is the payload of TypeSessionState: the full set of Amplifier
+	// sessions the daemon currently knows about, across every workspace.
+	//
+	// A typed slice rather than an opaque blob, following the Workspaces /
+	// Panes / Risks precedent -- SessionState (sessionstate.go) is already a
+	// wire type with fixed JSON tags whose mirror is web/src/lib/session-state.ts,
+	// so there is nothing to translate.
+	Sessions []SessionState `json:"sessions,omitempty"`
 
 	// Scrollback pagination fields (ADDITIVE, post-v1; see TypeScrollbackPage).
 	// LineCursor is deliberately NOT named "Cursor": Message.Cursor is the
