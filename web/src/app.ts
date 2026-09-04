@@ -553,6 +553,14 @@ export class MuxApp extends LitElement {
   @state()
   private _showHome = false;
 
+  /**
+   * Pane the home view asked for, handed to mux-dock as an input to its
+   * workspace restore. -1 = no request, which is the default and leaves the
+   * dock's behaviour byte-identical to before this existed.
+   */
+  @state()
+  private _requestedPaneId = -1;
+
   @state()
   private _closeConfirmation: CloseConfirmationRequiredOutcome | null = null;
 
@@ -1014,6 +1022,7 @@ export class MuxApp extends LitElement {
                   .panes="${panes}"
                   .activePaneId="${store.activePaneId}"
                   .workspaceKey="${store.attached ?? ''}"
+                  .requestedPaneId="${this._requestedPaneId}"
                   .layout="${store.layout}"
                   .narrow="${!isWide}"
                   @pane-select="${this._onActivePane}"
@@ -1166,6 +1175,9 @@ export class MuxApp extends LitElement {
 
   /** Client-local active-pane selection (sessiond has no select-pane message). */
   private _onActivePane = (e: CustomEvent<{ paneId: number }>): void => {
+    // Any activation consumes an outstanding home request, so it can never
+    // leak into a later, unrelated workspace switch.
+    this._requestedPaneId = -1;
     // Auto-stop-and-invalidate: voice input should always target "the pane
     // I'm looking at right now" — see docs/designs/2026-07-31-voice-input-design.md.
     voiceInputController.invalidateIfActive({ workspaceId: store.attached ?? '', paneId: e.detail.paneId });
@@ -1639,27 +1651,13 @@ export class MuxApp extends LitElement {
     if (!d) return;
     this._showHome = false;
     if (d.workspaceId && d.workspaceId !== store.attached) {
+      // Hand the pane to the dock as an INPUT to its restore. Applying it from
+      // out here after the fact does not work: the restore re-asserts its own
+      // choice across two animation frames to beat the terminal-attach focus
+      // storm, so an outside setter always loses. Measured three times before
+      // the seam moved to where the decision is actually made.
+      this._requestedPaneId = d.paneId;
       this._socket?.attachWithBreakpoint(d.workspaceId, currentLayoutMode());
-      // We land on the workspace, NOT on the specific pane. Known gap; see
-      // residual R7. Three browser-verified attempts to close it here all
-      // failed the same way, and the diagnosis is why this is deliberately not
-      // fixed in app.ts:
-      //
-      // Attaching makes mux-dock rebuild its panels and restore that
-      // workspace's SAVED layout, and the restore activates the pane that
-      // layout remembers. The pane list and the layout arrive on separate
-      // frames, so there is no observable "attach settled" moment here to
-      // apply a focus after. Setting store.activePaneId immediately, after
-      // awaiting both update cycles, and on a bounded 150ms re-assert loop for
-      // three seconds all produced the same measured result: attached to the
-      // right workspace, sitting on the layout's pane.
-      //
-      // A re-assert loop that does not work is worse than this line: it is a
-      // timer, a retry cap and two constants for no behaviour. And winning that
-      // race from the browser would mean overriding the dock's own layout
-      // authority, which AGENTS.md places outside this file. The fix belongs
-      // where attach completion is actually observable -- mux-dock, as an
-      // "activate this pane after restore" input.
       return;
     }
     this._onActivePane(

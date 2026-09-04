@@ -282,6 +282,18 @@ export class MuxDock extends LitElement {
   @property({ attribute: false }) panes: SessiondPaneInfo[] = [];
   @property({ attribute: false }) activePaneId = -1;
   @property({ attribute: false }) workspaceKey = '';
+  /**
+   * "After you restore this workspace, activate THIS pane" -- the home view's
+   * Enter, crossing a workspace boundary. -1 means no request.
+   *
+   * It has to be an input to the restore rather than something applied
+   * afterwards from outside. The restore below deliberately re-asserts its
+   * chosen pane across two animation frames to beat the terminal-attach focus
+   * storm (see the comment there); anything setting the active pane from
+   * outside loses that race by construction, which was measured three times.
+   * Feeding the request in here means it wins by taking part, not by fighting.
+   */
+  @property({ attribute: false }) requestedPaneId = -1;
   @property({ attribute: false }) layout = '';
 
   /** Test hook: exposes the MuxStore instance for E2E verification scripts. */
@@ -923,9 +935,16 @@ export class MuxDock extends LitElement {
           // only if the saved layout can't tell us.
           const _fromLayout = this._activePaneIdFromSavedLayout();
           const _fromDv = this._dv.activePanel?.id;
+          // An explicit request outranks the saved layout: the user asked for
+          // this pane by name, which is newer information than what the layout
+          // happened to remember.
+          const _requested =
+            this.requestedPaneId >= 0 && this._panels.has(this.requestedPaneId)
+              ? String(this.requestedPaneId)
+              : undefined;
           muxLog('dock restore', 'active pane resolution',
-            { fromLayout: _fromLayout, fromDockview: _fromDv, storeActivePaneId: this.activePaneId });
-          const activePaneId = _fromLayout ?? _fromDv;
+            { requested: _requested, fromLayout: _fromLayout, fromDockview: _fromDv, storeActivePaneId: this.activePaneId });
+          const activePaneId = _requested ?? _fromLayout ?? _fromDv;
           if (activePaneId !== undefined) {
             const paneId = parseInt(String(activePaneId), 10);
             const panel = this._panels.get(paneId);
@@ -956,8 +975,11 @@ export class MuxDock extends LitElement {
             });
           }
         } else {
-          // Fresh tab build — honor the store's active pane.
-          const activePanel = this._panels.get(this.activePaneId);
+          // Fresh tab build — honor an explicit request, else the store's
+          // active pane.
+          const activePanel =
+            this._panels.get(this.requestedPaneId >= 0 ? this.requestedPaneId : this.activePaneId) ??
+            this._panels.get(this.activePaneId);
           if (activePanel) {
             activePanel.api.setActive();
           }
