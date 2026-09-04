@@ -1640,8 +1640,26 @@ export class MuxApp extends LitElement {
     this._showHome = false;
     if (d.workspaceId && d.workspaceId !== store.attached) {
       this._socket?.attachWithBreakpoint(d.workspaceId, currentLayoutMode());
-      // Pane focus follows the attach round-trip; the daemon decides the active
-      // pane for the new workspace and the dock follows it.
+      // We land on the workspace, NOT on the specific pane. Known gap; see
+      // residual R7. Three browser-verified attempts to close it here all
+      // failed the same way, and the diagnosis is why this is deliberately not
+      // fixed in app.ts:
+      //
+      // Attaching makes mux-dock rebuild its panels and restore that
+      // workspace's SAVED layout, and the restore activates the pane that
+      // layout remembers. The pane list and the layout arrive on separate
+      // frames, so there is no observable "attach settled" moment here to
+      // apply a focus after. Setting store.activePaneId immediately, after
+      // awaiting both update cycles, and on a bounded 150ms re-assert loop for
+      // three seconds all produced the same measured result: attached to the
+      // right workspace, sitting on the layout's pane.
+      //
+      // A re-assert loop that does not work is worse than this line: it is a
+      // timer, a retry cap and two constants for no behaviour. And winning that
+      // race from the browser would mean overriding the dock's own layout
+      // authority, which AGENTS.md places outside this file. The fix belongs
+      // where attach completion is actually observable -- mux-dock, as an
+      // "activate this pane after restore" input.
       return;
     }
     this._onActivePane(
