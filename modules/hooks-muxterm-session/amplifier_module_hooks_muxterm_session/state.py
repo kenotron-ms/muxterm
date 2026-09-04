@@ -516,9 +516,18 @@ class SessionStateTracker:
     condition -- the sole reliable answer to "is this session autonomous?".
     """
 
-    def __init__(self, coordinator: Any, spool: Path) -> None:
+    def __init__(
+        self,
+        coordinator: Any,
+        spool: Path,
+        *,
+        classify_enabled: bool = True,
+        classify_model: str | None = None,
+    ) -> None:
         self._coordinator = coordinator
         self._spool = spool
+        self._classify_enabled = classify_enabled
+        self._classify_model = classify_model
 
     # -- goal mode ----------------------------------------------------------
 
@@ -881,6 +890,12 @@ class SessionStateTracker:
         Emitted only by the app layer after session.execute() returns, so a
         sub-agent never reaches this. For a goal run it fires once, after the
         whole loop, which is why it does not need a goal_final guard of its own.
+
+        The structural verdict is published BEFORE any classification runs, and
+        the classifier only ever amends it. This event fires at the instant the
+        human gets their prompt back, so nothing may sit in front of it -- a
+        row that updates a second late is fine, a session that stalls waiting
+        on a model call is not.
         """
         if self._is_child(data):
             return
@@ -888,9 +903,53 @@ class SessionStateTracker:
         if record is None:
             return
         self._sync_mode(record)
+        already_blocked = record.state == STATE_BLOCKED
         if record.state in (STATE_WORKING, STATE_BLOCKED):
             record.state = STATE_STOPPED
             record.waiting_for = ""
+        record.flush()
+
+        if already_blocked:
+            # An explicit APPROVAL_REQUIRED or USER_NOTIFICATION already
+            # settled this turn. The kernel told us outright; paying a model to
+            # re-derive an answer we were handed would be pure cost.
+            return
+        await self._maybe_classify(record, data)
+
+    async def _maybe_classify(self, record: Any, data: dict[str, Any]) -> None:
+        """Amend a just-stopped turn to `blocked` if it was really a question.
+
+        `prompt:complete` proves the turn ended. It cannot distinguish "here is
+        your answer" from "which option do you want?" -- both end a turn the
+        same way. This reads the assistant's own closing text and asks a cheap
+        model which one it was.
+
+        Every failure path leaves the structural verdict untouched. That
+        direction is deliberate: a false alarm teaches people to ignore the
+        indicator, which costs more than a missed one.
+        """
+        if not self._classify_enabled:
+            return
+        response = data.get("response")
+        if not isinstance(response, str) or not response.strip():
+            return
+        try:
+            from .classify import classify_turn
+
+            verdict = await classify_turn(
+                self._coordinator, response, model=self._classify_model
+            )
+        except Exception:
+            # The hook must never take a session down with it.
+            return
+        if verdict is None:
+            return
+        needs_input, ask = verdict
+        if not needs_input:
+            return
+        record.set_blocked(WAITING_FOR_INPUT)
+        if ask:
+            record.doing = ask
         record.flush()
 
     async def on_session_end(self, event: str, data: dict[str, Any]) -> None:

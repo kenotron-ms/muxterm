@@ -13,8 +13,23 @@ hooks:
   # a delegate()/Task-spawned session never clobbers the visible root
   # session's stamp. See modules/hooks-muxterm-session for the full
   # rationale (why setproctitle, not a file or an env var).
+  #
+  # The same hook also publishes session state to muxterm's home view, and at
+  # end of turn asks a cheap model whether the assistant's closing message was
+  # actually a question for the human. `prompt:complete` proves a turn ENDED;
+  # it cannot tell "here is your answer" from "which option do you want?" --
+  # both end a turn identically. Without that read, a session that asked you
+  # something silently reports `stopped` and falls off the view.
+  #
+  # The structural verdict is always published first and the classification
+  # only ever amends it, so a slow or unreachable provider costs a late row
+  # update, never a stalled session. Every failure path keeps the structural
+  # verdict, because a false alarm teaches people to ignore the indicator.
   - module: hooks-muxterm-session
     source: git+https://github.com/kenotron-ms/muxterm@main#subdirectory=modules/hooks-muxterm-session
+    # config:
+    #   classify_end_of_turn: true   # set false to skip the model call entirely
+    #   classify_model: ""           # defaults to the session's own provider
 
 tools:
   - module: tool-mcp
