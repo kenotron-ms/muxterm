@@ -50,3 +50,37 @@ func parentPID(pid int) (int, bool) {
 	}
 	return ppid, true
 }
+
+// processStartTime returns pid's start time in clock ticks since boot.
+//
+// This is what makes a pid an identity instead of just a name. Pids are
+// recycled; (pid, start time) is not, because the kernel's boot-relative start
+// time cannot repeat for a reused pid. The session-state join compares both, so
+// a snapshot left behind by a dead session can never be mistaken for a live one
+// after its pid is reassigned.
+//
+// Field 22 of /proc/<pid>/stat, which is index 19 of the fields after the comm
+// field. Same LastIndex(')') rule as parentPID, for the same reason.
+func processStartTime(pid int) (uint64, bool) {
+	if pid <= 0 {
+		return 0, false
+	}
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0, false
+	}
+	line := string(data)
+	i := strings.LastIndex(line, ")")
+	if i < 0 {
+		return 0, false
+	}
+	fields := strings.Fields(line[i+1:])
+	if len(fields) < 20 {
+		return 0, false
+	}
+	start, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return start, true
+}

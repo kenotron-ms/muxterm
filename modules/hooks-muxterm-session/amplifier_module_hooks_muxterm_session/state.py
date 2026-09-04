@@ -78,6 +78,7 @@ NAME_MAX_CHARS = 80
 DOING_MAX_CHARS = 120
 DONE_MEANS_MAX_CHARS = 400
 KNOWS_MAX_ENTRIES = 50
+KNOWS_ENTRY_MAX_CHARS = 256
 
 
 def spool_dir() -> Path:
@@ -104,6 +105,38 @@ def spool_dir() -> Path:
     if runtime:
         return Path(runtime) / "muxterm" / "session-state"
     return Path(tempfile.gettempdir()) / f"muxterm-{os.getuid()}" / "session-state"
+
+
+def _pid_start_time(pid: int) -> int:
+    """Read a process's start time, so a pid can be identified rather than
+    merely named.
+
+    A pid alone is not an identity: it is recycled. A snapshot left behind by a
+    session that ended can outlive its process, and if the daemon later sees
+    that pid alive again -- now belonging to somebody's editor -- it would walk
+    up from it, find a real pane, and publish a stale session row glued to a
+    terminal that has nothing to do with it. Indistinguishable from a real row,
+    and it persists for as long as the recycling process does.
+
+    (pid, start_time) IS an identity: the kernel's boot-relative start time
+    cannot repeat for a recycled pid. The daemon compares both.
+
+    Field 22 of /proc/<pid>/stat, which is index 19 of the fields AFTER the
+    comm field. Split on the LAST ')' for the same reason every other reader of
+    this file does: comm is parenthesized and a process may rename itself to
+    something containing spaces and parens.
+
+    Returns 0 when unavailable (non-Linux, or an unreadable stat), which the
+    daemon treats as "unverifiable" rather than "mismatched" -- degrading to
+    today's pid-only behaviour rather than dropping the row.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8", errors="replace") as fh:
+            line = fh.read()
+        after = line[line.rindex(")") + 1 :].split()
+        return int(after[19])
+    except Exception:
+        return 0
 
 
 def _clip(text: Any, limit: int) -> str:
@@ -155,6 +188,7 @@ class SessionRecord:
     __slots__ = (
         "session_id",
         "pid",
+        "pid_start",
         "project",
         "name",
         "mode",
@@ -172,6 +206,7 @@ class SessionRecord:
     def __init__(self, session_id: str, spool: Path) -> None:
         self.session_id = session_id
         self.pid = os.getpid()
+        self.pid_start = _pid_start_time(self.pid)
         self.project = os.getcwd()
         self.name = ""
         self.mode = MODE_PLAIN
@@ -198,6 +233,10 @@ class SessionRecord:
         """
         if not isinstance(path, str) or not path:
             return
+        # Bound the ENTRY, not just the count: artifact:read carries whatever
+        # the emitting tool put in data.path, and 50 unbounded strings are read
+        # from disk, hashed, and fanned out to every browser on every change.
+        path = _clip(path, KNOWS_ENTRY_MAX_CHARS)
         if path in self._knows_seen:
             return
         if len(self.knows) >= KNOWS_MAX_ENTRIES:
@@ -225,6 +264,7 @@ class SessionRecord:
         """
         payload: dict[str, Any] = {
             "pid": self.pid,
+            "pidStart": self.pid_start,
             "sessionId": self.session_id,
             "name": self.name,
             "mode": self.mode,
@@ -262,7 +302,15 @@ class SessionRecord:
         compare = dict(payload)
         compare.pop("updatedAt", None)
         rendered = json.dumps(compare, sort_keys=True)
-        if rendered == self._last_payload:
+        # The content cache assumes the file it last wrote still exists. The
+        # daemon unilaterally removes snapshots it judges dead, and an operator
+        # may clear the spool, so a false negative there would erase a LIVE
+        # session from the home view permanently -- the hook would never re-emit,
+        # because its content is not changing. That is worst precisely for a
+        # session sitting blocked at a permission prompt, whose content is
+        # exactly what will not change. One stat is cheap next to the write it
+        # usually avoids.
+        if rendered == self._last_payload and self.path.exists():
             return
 
         body = json.dumps(payload, separators=(",", ":"))
@@ -299,6 +347,56 @@ class SessionRecord:
             self.path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def sweep_stale(spool: Path) -> None:
+    """Delete snapshots whose process is gone.
+
+    A snapshot deliberately outlives its session so the home view can show how
+    that session ended (see on_session_end). Something still has to reclaim
+    them, and the daemon only reaps while a browser is subscribed -- so on a
+    machine where nobody ever opens the home view, this sweep is the only one
+    that ever runs.
+
+    Identity, not just liveness: a file is removed when its process is gone OR
+    when the pid is now held by a different process, which pidStart detects. A
+    snapshot with no pidStart (written by an older hook, or off Linux) falls
+    back to a liveness check alone.
+
+    Entirely best-effort. Failing to sweep costs a stale file; raising here
+    would cost a session.
+    """
+    if not os.path.isdir("/proc"):
+        # Liveness here is a /proc existence test. Without /proc every pid would
+        # look dead and the sweep would delete every live session's snapshot.
+        # Do nothing rather than something destructive.
+        return
+    try:
+        entries = list(spool.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.suffix != ".json" or not entry.is_file():
+            continue
+        try:
+            with entry.open("r", encoding="utf-8") as fh:
+                snap = json.load(fh)
+            pid = snap.get("pid")
+            if not isinstance(pid, int) or pid <= 0:
+                continue
+            # Our own pid is NOT special-cased. Our own snapshot carries our
+            # own pidStart, so the identity check below keeps it; skipping it
+            # would instead have punched a hole exactly where a recycled pid
+            # needs catching.
+            alive = os.path.exists(f"/proc/{pid}")
+            if alive:
+                recorded = snap.get("pidStart")
+                if isinstance(recorded, int) and recorded > 0:
+                    alive = _pid_start_time(pid) == recorded
+            if not alive:
+                entry.unlink(missing_ok=True)
+        except Exception:
+            continue
 
 
 # Records are process-global rather than per-coordinator because a delegated
@@ -365,7 +463,7 @@ class SessionStateTracker:
         except Exception:
             return None
 
-    def _sync_mode(self, record: SessionRecord) -> None:
+    def _sync_mode(self, record: SessionRecord, fresh_turn: bool = False) -> None:
         """Re-derive mode from live goal state.
 
         Mode is evaluated per event rather than pinned at kickoff because in an
@@ -383,9 +481,36 @@ class SessionStateTracker:
             if isinstance(condition, str) and condition:
                 record.done_means = _clip(condition, DONE_MEANS_MAX_CHARS)
             return
+
+        if fresh_turn:
+            # A new prompt arrived with no goal active. Whatever this session
+            # used to be, this turn is ordinary chat -- so release the pin
+            # rather than re-arming it below, which would make a session that
+            # ran one /goal read as a goal lane forever.
+            record.goal_finished = False
+            record.mode = MODE_PLAIN
+            record.done_means = ""
+            return
+
+        # The goal state is gone but this record still believes it is a goal
+        # session: that transition IS the terminal moment, so pin it here.
+        #
+        # It must be pinned here rather than in on_goal_progress, because the
+        # orchestrator clears session_state["goal"] and emits
+        # orchestrator:complete BEFORE it emits the terminal goal_progress --
+        # the summary in between is a provider call that takes seconds. Pinning
+        # on the later event left a window in which a finished goal lane
+        # published itself as `mode=plain, state=stopped`: a quiet plain session
+        # resting at its prompt, which is exactly the reading that must never be
+        # confused with a goal outcome, in the direction that HIDES a failure.
+        if record.mode == MODE_GOAL:
+            record.goal_finished = True
+
         if record.goal_finished:
-            # Loop just ended: hold the goal identity through its terminal
-            # verdict so the row still reads as the lane it was.
+            # Hold the goal identity through the terminal verdict so the row
+            # still reads as the lane it was. Released by the next
+            # prompt:submit, so a session that returns to ordinary chat
+            # correctly degrades back to plain.
             return
         record.mode = MODE_PLAIN
         record.done_means = ""
@@ -434,6 +559,10 @@ class SessionStateTracker:
         record = self._record(data)
         if record is None:
             return
+        # Reclaim what previous sessions left behind. This is the only sweep
+        # that runs on a machine where nobody ever opens the home view, and it
+        # costs one directory listing per session start.
+        sweep_stale(self._spool)
         self._sync_mode(record)
         record.flush()
 
@@ -469,8 +598,7 @@ class SessionStateTracker:
             return
         # A new prompt is unambiguously the start of work: it clears any stale
         # blocked reason and releases the pinned terminal goal verdict.
-        record.goal_finished = False
-        self._sync_mode(record)
+        self._sync_mode(record, fresh_turn=True)
         if not record.name:
             record.name = _first_line(data.get("prompt"), NAME_MAX_CHARS)
         record.set_working("")
@@ -560,9 +688,24 @@ class SessionStateTracker:
         Handled because the contract names it, but note it is currently a dead
         channel: nothing in the installed kernel or any mounted module emits
         user:notification. End-of-turn notification runs off
-        orchestrator:complete instead, which is exactly why this handler must
-        NOT be reachable from a normal turn ending -- a plain session resting at
-        its prompt is not blocked.
+        orchestrator:complete instead (the notify bundle emits its own
+        notify:turn-complete), which is exactly why this handler must NOT be
+        reachable from a normal turn ending -- a plain session resting at its
+        prompt is not blocked.
+
+        Because the channel is dead, its future ordering relative to
+        end-of-turn is unknowable, and the two possibilities want opposite
+        handling. If it were ever to fire AFTER end-of-turn, and the block
+        survived the turn boundary, every idle plain session would surface as
+        needing input -- the failure that makes the whole home view worthless.
+        If it fires BEFORE, letting the turn boundary clear it under-reports a
+        real block.
+
+        The end-of-turn downgrade is therefore kept deliberately: under-alarming
+        costs a missed nudge, over-alarming trains the user to ignore the
+        indicator entirely, and only the second failure is unrecoverable. When
+        something starts emitting this event, revisit with its real ordering in
+        hand rather than guessing now.
         """
         record = self._record(data)
         if record is None:
@@ -669,7 +812,23 @@ class SessionStateTracker:
         record.flush()
 
     async def on_session_end(self, event: str, data: dict[str, Any]) -> None:
+        """The process is going away. Publish the ending and LEAVE the file.
+
+        Deleting the snapshot here was tried and is wrong: the daemon samples
+        the spool about once a second, so a write immediately followed by an
+        unlink means it never observes the terminal state at all -- the row just
+        vanishes from the home view. A lane that finished should say so. The
+        whole point of the view is to answer "how did it end?", which a
+        disappearing row cannot.
+
+        Leaving the file behind is only safe because the snapshot carries
+        pidStart as well as pid: a stale file cannot be misattributed to an
+        unrelated process that later inherits the pid. Reclamation happens at
+        the next session's start (see sweep_stale) and, when a browser is
+        watching, in the daemon's own dead-pid reaping.
+        """
         if self._is_child(data):
+            self._forget(data.get("session_id"))
             return
         record = self._record(data)
         if record is None:
@@ -678,6 +837,26 @@ class SessionStateTracker:
             record.state = STATE_DONE
             record.waiting_for = ""
         record.flush()
+
+    @staticmethod
+    def _forget(session_id: Any) -> None:
+        """Drop a finished session from the process-global maps.
+
+        These are shared by every session in the process (a delegated sub-agent
+        mounts this module again against its own coordinator), so without this
+        a long run with hundreds of delegations accumulates entries that are
+        never reachable again.
+        """
+        if not isinstance(session_id, str) or not session_id:
+            return
+        _RECORDS.pop(session_id, None)
+        _AGENTS.pop(session_id, None)
+        _PARENTS.pop(session_id, None)
+        # Any child still pointing at this root is unreachable too.
+        for child, parent in list(_PARENTS.items()):
+            if parent == session_id:
+                _PARENTS.pop(child, None)
+                _AGENTS.pop(child, None)
 
 
 def _describe_tool(tool: Any, tool_input: Any) -> str:

@@ -2,7 +2,9 @@ package sessiond
 
 import (
 	"encoding/json"
+	"errors"
 	"hash/fnv"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,6 +46,12 @@ const sessionStateDirName = "session-state"
 // be impossible, costs a bounded number of reads instead of a hung tick.
 const sessionStateAncestorHops = 32
 
+// maxSessionSnapshotBytes bounds one snapshot file. A snapshot is a handful of
+// short display strings and a capped path list -- a few kilobytes at the very
+// most. The cap exists so a file that is not what it claims to be cannot be
+// read into the daemon once a second.
+const maxSessionSnapshotBytes = 64 << 10
+
 // sessionStateDir returns the directory the hook writes snapshots into.
 func sessionStateDir() string {
 	return filepath.Join(socketDir(), sessionStateDirName)
@@ -59,6 +67,30 @@ func sessionStateDir() string {
 type sessionSnapshot struct {
 	SessionState
 	PID int `json:"pid"`
+	// PIDStart is the process's start time from /proc/<pid>/stat, which turns
+	// a pid into an identity. A pid alone is recycled: a snapshot outliving its
+	// session would otherwise be walked up from a reassigned pid, matched to a
+	// real pane, and published as a live row on a terminal it has nothing to do
+	// with -- indistinguishable from a genuine row, for as long as the
+	// recycling process lives.
+	//
+	// Zero means the writer could not determine it (non-Linux, or an unreadable
+	// stat). That is treated as unverifiable rather than mismatched, degrading
+	// to pid-only behaviour rather than dropping every row.
+	PIDStart uint64 `json:"pidStart,omitempty"`
+}
+
+// snapshotPIDMatches reports whether the process now holding snap.PID is the
+// same process that wrote the snapshot.
+func snapshotPIDMatches(snap sessionSnapshot) bool {
+	if snap.PIDStart == 0 {
+		return true // writer could not tell us; do not punish the row for it
+	}
+	start, ok := processStartTime(snap.PID)
+	if !ok {
+		return true // reader cannot tell either; same reasoning
+	}
+	return start == snap.PIDStart
 }
 
 // sessionStore holds the change gate for session-state pushes.
@@ -68,6 +100,11 @@ type sessionSnapshot struct {
 // handful of sub-kilobyte files from a tmpfs once a second is cheaper than the
 // staleness bugs a second copy would invite. What must persist between ticks is
 // only the answer to "did anything change?", which is one hash.
+// The -Locked suffix on rearmLocked/changedLocked carries the contract the way
+// this codebase does elsewhere: both mutate lastHash/hasSent and both MUST be
+// called with Server.mu held. collect deliberately carries no such suffix -- it
+// touches only dir (written once before the server is published) and does
+// filesystem and /proc work that must never run under the server mutex.
 type sessionStore struct {
 	dir      string
 	lastHash uint64
@@ -78,17 +115,17 @@ func newSessionStore() *sessionStore {
 	return &sessionStore{dir: sessionStateDir()}
 }
 
-// rearm forces the next collection to publish even if nothing changed, so a
+// rearmLocked forces the next collection to publish even if nothing changed, so a
 // connection that has just subscribed receives the current picture instead of
 // waiting for some session to happen to change state.
-func (s *sessionStore) rearm() {
+func (s *sessionStore) rearmLocked() {
 	s.hasSent = false
 	s.lastHash = 0
 }
 
-// changed reports whether rows differ from the last published set, recording
+// changedLocked reports whether rows differ from the last published set, recording
 // them as the new baseline. Callers publish only when it returns true.
-func (s *sessionStore) changed(rows []SessionState) bool {
+func (s *sessionStore) changedLocked(rows []SessionState) bool {
 	h := sessionStateHash(rows)
 	if s.hasSent && s.lastHash == h {
 		return false
@@ -111,20 +148,39 @@ func (s *sessionStore) changed(rows []SessionState) bool {
 // for it would be worse than omitting it. Snapshots whose process is gone are
 // deleted from disk here -- a session that is killed rather than exited never
 // gets to clean up after itself, so the reader has to be the one that does.
-func (s *sessionStore) collect(owners map[int]paneRef) []SessionState {
+func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState, bool) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		// No spool directory means no session has ever published here. That is
-		// the ordinary state of a machine with the hook uninstalled, not an
-		// error worth reporting on every tick.
-		return nil
+		if errors.Is(err, fs.ErrNotExist) {
+			// No spool directory means no session has ever published here --
+			// the ordinary state of a machine with the hook uninstalled. An
+			// authoritative empty set is the correct answer.
+			return nil, true
+		}
+		// Anything else (EMFILE under load, a remount, a permission change) is
+		// "I could not look", NOT "there is nothing there". Publishing nil here
+		// would assert an empty set as a whole-state document and blank the
+		// home view for a tick. Report failure and let the caller skip.
+		return nil, false
 	}
 
+	// The owners map is resolved lazily, and only once, because building it
+	// takes a full registry snapshot -- deep-copying every workspace's layout
+	// and touching every pane's activity lock. On a machine with no snapshots
+	// at all that would be a per-second cost for nothing.
+	var owners map[int]paneRef
 	rows := make([]SessionState, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			// Skip the hook's ".<session>.tmp" write-then-rename staging files;
-			// they are only ever visible mid-write and are not documents.
+		// Regular files only, and bounded. A symlink or a FIFO named "x.json"
+		// would otherwise be handed to os.ReadFile: a FIFO with no writer
+		// blocks FOREVER, and this runs synchronously on the ticker goroutine,
+		// which would then never observe ctx.Done() again. The name filter also
+		// skips the hook's ".<session>.tmp" staging files, which are only ever
+		// visible mid-write and are not documents.
+		if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		if info, err := entry.Info(); err != nil || info.Size() > maxSessionSnapshotBytes {
 			continue
 		}
 		path := filepath.Join(s.dir, entry.Name())
@@ -132,10 +188,14 @@ func (s *sessionStore) collect(owners map[int]paneRef) []SessionState {
 		if !ok {
 			continue
 		}
-		if snap.PID <= 0 || !processLive(snap.PID) {
-			// The session is gone. Reclaim the file; nothing else will.
+		if snap.PID <= 0 || !processLive(snap.PID) || !snapshotPIDMatches(snap) {
+			// The session is gone, or this pid has been recycled by an
+			// unrelated process. Reclaim the file; nothing else will.
 			_ = os.Remove(path)
 			continue
+		}
+		if owners == nil {
+			owners = ownersFor()
 		}
 		pane, ok := resolvePaneForPID(snap.PID, owners)
 		if !ok {
@@ -149,7 +209,9 @@ func (s *sessionStore) collect(owners map[int]paneRef) []SessionState {
 
 	// Deterministic order, so an unchanged set hashes identically tick after
 	// tick regardless of what order the filesystem handed the entries back.
-	sort.Slice(rows, func(i, j int) bool {
+	// Stable, so two files somehow declaring the same session id cannot flap
+	// the ordering (and therefore the hash) and republish on every tick.
+	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].WorkspaceID != rows[j].WorkspaceID {
 			return rows[i].WorkspaceID < rows[j].WorkspaceID
 		}
@@ -158,7 +220,7 @@ func (s *sessionStore) collect(owners map[int]paneRef) []SessionState {
 		}
 		return rows[i].SessionID < rows[j].SessionID
 	})
-	return rows
+	return rows, true
 }
 
 // paneRef is a pane's identity: everything the join needs to stamp onto a row.
@@ -249,11 +311,18 @@ func sessionStateHash(rows []SessionState) uint64 {
 		writeHashField(h, r.Doing)
 		writeHashField(h, r.DoneMeans)
 		writeHashField(h, strconv.Itoa(r.PR))
+		// The row's variable-length tail is framed by a LEADING COUNT, not by a
+		// trailing sentinel. A sentinel would itself be just another
+		// length-delimited field, and Knows entries are unvalidated strings
+		// straight out of artifact:read -- an entry equal to the sentinel would
+		// close its row early and let the following entries be consumed as the
+		// next row's fixed fields, so two genuinely different sets could hash
+		// identically and a real change would be silently suppressed. A leading
+		// count makes the boundary structural, so no value can forge one.
+		writeHashField(h, strconv.Itoa(len(r.Knows)))
 		for _, k := range r.Knows {
 			writeHashField(h, k)
 		}
-		// Row terminator, so ["a","b"] and ["ab"] cannot collide.
-		writeHashField(h, "\x00row")
 	}
 	return h.Sum64()
 }

@@ -291,6 +291,17 @@ type Message struct {
 	// Panes / Risks precedent -- SessionState (sessionstate.go) is already a
 	// wire type with fixed JSON tags whose mirror is web/src/lib/session-state.ts,
 	// so there is nothing to translate.
+	//
+	// ABSENT MEANS EMPTY. omitempty is kept for consistency with every other
+	// field on this shared envelope (a non-omitempty slice would emit
+	// "sessions":null on every control message of every type), which makes the
+	// most important transition -- N sessions to zero -- arrive as a bare
+	// {"type":"session-state"}. A consumer must therefore treat the ARRIVAL of
+	// the message as the signal and a missing field as the empty set, i.e.
+	// `replace(msg.sessions ?? [])`, never `if (msg.sessions) replace(...)`.
+	// Getting this wrong freezes the home view showing sessions that have
+	// ended. Feature availability is detected from the subscribe ack, never
+	// from the presence of this field.
 	Sessions []SessionState `json:"sessions,omitempty"`
 
 	// Scrollback pagination fields (ADDITIVE, post-v1; see TypeScrollbackPage).

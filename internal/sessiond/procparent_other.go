@@ -18,3 +18,11 @@ package sessiond
 func parentPID(pid int) (int, bool) {
 	return 0, false
 }
+
+// processStartTime is unimplemented off Linux, for the same reason parentPID
+// is. ok=false means "cannot verify", which snapshotPIDMatches treats as
+// permissive rather than as a mismatch -- consistent with the pane join already
+// returning nothing on this platform.
+func processStartTime(pid int) (uint64, bool) {
+	return 0, false
+}

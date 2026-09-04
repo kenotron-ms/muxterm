@@ -1075,7 +1075,7 @@ func (c *conn) setSessionStateOn(on bool) {
 		// for this newly-subscribed connection. Without this, a client
 		// attaching to an already-running daemon would see nothing until some
 		// session happened to change state on its own.
-		c.srv.sessions.rearm()
+		c.srv.sessions.rearmLocked()
 	}
 }
 
@@ -1117,7 +1117,18 @@ func (s *Server) emitSessionState() {
 	if !s.sessionStateWanted() {
 		return // nobody subscribed: no directory read, no /proc walk, no bytes
 	}
-	rows := s.sessions.collect(paneOwners(s.reg.snapshotView()))
+	// The owners map is resolved lazily by collect: on a machine with no
+	// snapshots at all, taking a full registry snapshot every second would be a
+	// cost paid for nothing.
+	rows, ok := s.sessions.collect(func() map[int]paneRef {
+		return paneOwners(s.reg.snapshotView())
+	})
+	if !ok {
+		// The spool could not be read this tick. Skip rather than publish an
+		// empty set: every frame is a whole-state document, so asserting
+		// emptiness here would blank the home view over a transient stat error.
+		return
+	}
 	s.publishSessionState(rows)
 }
 
@@ -1133,7 +1144,7 @@ func (s *Server) emitSessionState() {
 func (s *Server) publishSessionState(rows []SessionState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.sessions.changed(rows) {
+	if !s.sessions.changedLocked(rows) {
 		return
 	}
 	for c := range s.conns {
