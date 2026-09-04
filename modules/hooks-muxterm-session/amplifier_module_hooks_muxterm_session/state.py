@@ -916,7 +916,21 @@ class SessionStateTracker:
         record = self._record(data)
         if record is None:
             return
-        if record.state in (STATE_WORKING, STATE_BLOCKED, STATE_STOPPED):
+        # A session that simply exits has, in fact, finished -- so working and
+        # blocked are promoted to done on the way out.
+        #
+        # `stopped` is promoted too, EXCEPT on a goal lane that already has a
+        # verdict. There, `stopped` came from on_goal_progress and means
+        # cap_hit or cancelled: the loop stopped SHORT of the condition the
+        # user gave it. `amplifier run '/goal ...'` exits the moment the loop
+        # ends, so promoting here would rewrite every capped-out lane as `done`
+        # on its way out the door -- claiming it finished what it was asked to
+        # do, erasing the only signal that it did not, and hiding a failure.
+        # That is the one direction this view must never fail in.
+        promote_from = (STATE_WORKING, STATE_BLOCKED, STATE_STOPPED)
+        if record.mode == MODE_AUTONOMOUS and record.goal_finished:
+            promote_from = (STATE_WORKING, STATE_BLOCKED)
+        if record.state in promote_from:
             record.state = STATE_DONE
             record.waiting_for = ""
         record.flush()
