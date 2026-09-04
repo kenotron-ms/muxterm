@@ -23,6 +23,7 @@ func runSession(args []string) error {
 		fmt.Fprintln(os.Stdout, "Commands:")
 		fmt.Fprintln(os.Stdout, "  list                    Alias for 'muxterm workspace list'")
 		fmt.Fprintln(os.Stdout, "  attach <workspace-id>   Print a workspace's composition (panes + layout)")
+		fmt.Fprintln(os.Stdout, "  report [flags]          Publish a session-state snapshot to the home view")
 		return nil
 	}
 	switch args[0] {
@@ -34,6 +35,10 @@ func runSession(args []string) error {
 		return runWorkspaceList(args[1:], "muxterm session list")
 	case "attach":
 		return runSessionAttach(args[1:])
+	case "report":
+		// The universal producer; see session_report_cmd.go. Unlike list and
+		// attach it never dials the daemon -- it writes a file.
+		return runSessionReport(args[1:])
 	default:
 		return fmt.Errorf("unknown session command %q\n\nRun 'muxterm session --help' for usage.", args[0])
 	}
