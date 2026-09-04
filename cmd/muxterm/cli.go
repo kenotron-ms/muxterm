@@ -49,8 +49,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm deploy <host>       Deploy to a remote host via SSH")
 	fmt.Fprintln(w, "  muxterm doctor              Check daemon and service status")
 	fmt.Fprintln(w, "  muxterm read-screen <pane>  Print a pane's screen (or --scrollback history)")
-	fmt.Fprintln(w, "  muxterm session <cmd>       list | attach <workspace-id>")
-	fmt.Fprintln(w, "  muxterm pane <cmd>          create | close <pane> | resize <pane>")
+	fmt.Fprintln(w, "  muxterm workspace <cmd>     list | create <name> | close <workspace-id>")
+	fmt.Fprintln(w, "  muxterm session attach <id> Print a workspace's panes and layout")
+	fmt.Fprintln(w, "  muxterm pane <cmd>          create | send | rename | close | resize")
 	fmt.Fprintln(w, "  muxterm layout get          Print the workspace layout diagram")
 	fmt.Fprintln(w, "  muxterm mcp [flags]         Start MCP server (stdio transport)")
 	fmt.Fprintln(w, "  muxterm amplifier install   Install muxterm bundle into Amplifier")
@@ -94,6 +95,8 @@ func ParseArgs(args []string) (Config, error) {
 		return Config{Mode: "read-screen", Args: args[1:]}, nil
 	case "session":
 		return Config{Mode: "session", Args: args[1:]}, nil
+	case "workspace":
+		return Config{Mode: "workspace", Args: args[1:]}, nil
 	case "pane":
 		return Config{Mode: "pane", Args: args[1:]}, nil
 	case "layout":
