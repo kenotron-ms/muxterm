@@ -336,19 +336,6 @@ class SessionRecord:
             except OSError:
                 pass
 
-    def remove(self) -> None:
-        """Best-effort removal of the snapshot file.
-
-        The daemon prunes snapshots whose pid is dead, so a session that is
-        killed rather than exited is cleaned up regardless. This is the tidy
-        path, not the load-bearing one.
-        """
-        try:
-            self.path.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-
 def sweep_stale(spool: Path) -> None:
     """Delete snapshots whose process is gone.
 
