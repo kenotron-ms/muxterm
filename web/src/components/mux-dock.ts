@@ -287,6 +287,16 @@ export class MuxDock extends LitElement {
   /** Test hook: exposes the MuxStore instance for E2E verification scripts. */
   readonly __store = store;
   /**
+   * Test hook: the session-state store behind the pane tab marks.
+   *
+   * Same purpose and same precedent as __store above. Until a producer exists,
+   * this is the only way to drive the tab marks against a REAL workspace and
+   * REAL pane ids from a browser -- the committed fixture's ids are invented
+   * and will never match a live pane. Delete when the producer lands and the
+   * marks can be observed by just running a session.
+   */
+  readonly __sessions = homeSessions;
+  /**
    * Narrow (phone) mode: a tab view only. No split button, no saved/restored
    * layout — all panes collapse into a single dockview group as tabs. Wide
    * (tablet + PC) gets the full split layout with save/restore.
