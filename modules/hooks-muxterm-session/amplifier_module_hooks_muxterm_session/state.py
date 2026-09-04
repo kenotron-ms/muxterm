@@ -68,8 +68,23 @@ STATE_STOPPED = "stopped"
 WAITING_FOR_PERMISSION = "permission prompt"
 WAITING_FOR_INPUT = "input needed"
 
-MODE_PLAIN = "plain"
-MODE_GOAL = "goal"
+# Run mode. These names are harness-neutral on purpose: they answer "does going
+# quiet mean broke or resting?", which is a universal distinction, whereas the
+# old goal|plain spelling only named it correctly if you already knew what
+# Amplifier's /goal command was. See internal/sessiond/sessionstate.go.
+MODE_INTERACTIVE = "interactive"
+MODE_AUTONOMOUS = "autonomous"
+
+# Which coding-agent CLI this producer speaks for. Amplifier's hook only ever
+# writes one value; the field exists because the home view is a fleet view for
+# any harness, and a row that does not say what is running it cannot be badged.
+HARNESS = "amplifier"
+
+# Snapshot schema version. Bump ONLY for a breaking change to the on-disk
+# shape; a reader that does not understand the version skips the file with a
+# logged reason rather than guessing. Additive optional fields do not need a
+# bump -- that is what makes them additive. See docs/session-state-protocol.md.
+SCHEMA_VERSION = 1
 
 # Display bounds. A goal lane's first prompt is an entire inlined goal file and
 # an artifact list is unbounded; neither belongs on a sidebar row, and neither
@@ -209,7 +224,7 @@ class SessionRecord:
         self.pid_start = _pid_start_time(self.pid)
         self.project = os.getcwd()
         self.name = ""
-        self.mode = MODE_PLAIN
+        self.mode = MODE_INTERACTIVE
         self.state = STATE_WORKING
         self.waiting_for = ""
         self.doing = ""
@@ -257,15 +272,20 @@ class SessionRecord:
     def to_payload(self) -> dict[str, Any]:
         """Render the snapshot.
 
-        Field names are the JSON tags of sessiond.SessionState. `pid` is the one
-        addition -- the daemon consumes it to find the owning pane and does not
-        forward it -- and paneId/workspaceId are deliberately absent because the
-        daemon fills them during that join.
+        Field names are the JSON tags of sessiond.SessionState. `v`, `pid` and
+        `pidStart` are the on-disk additions -- the daemon consumes them and
+        forwards none of them -- and paneId/workspaceId are deliberately absent
+        because the daemon fills them during the pane join.
+
+        The full contract, including what a non-Amplifier producer must write,
+        is docs/session-state-protocol.md.
         """
         payload: dict[str, Any] = {
+            "v": SCHEMA_VERSION,
             "pid": self.pid,
             "pidStart": self.pid_start,
             "sessionId": self.session_id,
+            "harness": HARNESS,
             "name": self.name,
             "mode": self.mode,
             "state": self.state,
@@ -438,7 +458,7 @@ class SessionStateTracker:
         it is live -- the orchestrator clears it the instant the loop ends.
 
         session_state is absent from the published type stub, so it is accessed
-        defensively; a kernel that drops it degrades this to plain-mode, which
+        defensively; a kernel that drops it degrades this to interactive mode, which
         is the safe direction.
         """
         try:
@@ -462,7 +482,7 @@ class SessionStateTracker:
         """
         goal = self._goal()
         if goal is not None:
-            record.mode = MODE_GOAL
+            record.mode = MODE_AUTONOMOUS
             record.goal_finished = False
             condition = goal.get("condition")
             if isinstance(condition, str) and condition:
@@ -475,7 +495,7 @@ class SessionStateTracker:
             # rather than re-arming it below, which would make a session that
             # ran one /goal read as a goal lane forever.
             record.goal_finished = False
-            record.mode = MODE_PLAIN
+            record.mode = MODE_INTERACTIVE
             record.done_means = ""
             return
 
@@ -487,19 +507,20 @@ class SessionStateTracker:
         # orchestrator:complete BEFORE it emits the terminal goal_progress --
         # the summary in between is a provider call that takes seconds. Pinning
         # on the later event left a window in which a finished goal lane
-        # published itself as `mode=plain, state=stopped`: a quiet plain session
-        # resting at its prompt, which is exactly the reading that must never be
-        # confused with a goal outcome, in the direction that HIDES a failure.
-        if record.mode == MODE_GOAL:
+        # published itself as `mode=interactive, state=stopped`: a quiet
+        # interactive session resting at its prompt, which is exactly the
+        # reading that must never be confused with a goal outcome, in the
+        # direction that HIDES a failure.
+        if record.mode == MODE_AUTONOMOUS:
             record.goal_finished = True
 
         if record.goal_finished:
             # Hold the goal identity through the terminal verdict so the row
             # still reads as the lane it was. Released by the next
             # prompt:submit, so a session that returns to ordinary chat
-            # correctly degrades back to plain.
+            # correctly degrades back to interactive.
             return
-        record.mode = MODE_PLAIN
+        record.mode = MODE_INTERACTIVE
         record.done_means = ""
 
     # -- record lookup ------------------------------------------------------
@@ -677,13 +698,13 @@ class SessionStateTracker:
         user:notification. End-of-turn notification runs off
         orchestrator:complete instead (the notify bundle emits its own
         notify:turn-complete), which is exactly why this handler must NOT be
-        reachable from a normal turn ending -- a plain session resting at its
+        reachable from a normal turn ending -- an interactive session resting at its
         prompt is not blocked.
 
         Because the channel is dead, its future ordering relative to
         end-of-turn is unknowable, and the two possibilities want opposite
         handling. If it were ever to fire AFTER end-of-turn, and the block
-        survived the turn boundary, every idle plain session would surface as
+        survived the turn boundary, every idle interactive session would surface as
         needing input -- the failure that makes the whole home view worthless.
         If it fires BEFORE, letting the turn boundary clear it under-reports a
         real block.
@@ -713,7 +734,7 @@ class SessionStateTracker:
         record = self._record(data)
         if record is None:
             return
-        record.mode = MODE_GOAL
+        record.mode = MODE_AUTONOMOUS
         condition = data.get("condition")
         if isinstance(condition, str) and condition:
             record.done_means = _clip(condition, DONE_MEANS_MAX_CHARS)
@@ -750,7 +771,7 @@ class SessionStateTracker:
     async def on_orchestrator_complete(self, event: str, data: dict[str, Any]) -> None:
         """End of turn -- the load-bearing rule lives here.
 
-        A plain session ending its turn and waiting for the user is its CONTRACT,
+        An interactive session ending its turn and waiting for the user is its CONTRACT,
         not a fault: it rests at `stopped` and must never be surfaced as needing
         input. A goal session mid-loop has not ended anything -- goal_final is
         False on every continuation -- and stays `working`. Without that guard a

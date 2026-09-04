@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hash/fnv"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,33 +16,34 @@ import (
 // Session-state collection: read what sessions declare about themselves, and
 // join it to the panes they are running in.
 //
-// The producer is the Amplifier hook in modules/hooks-muxterm-session, which
-// writes one atomically-replaced JSON snapshot per session into a spool
-// directory. See sessionstate.go for the contract and why a declared channel
-// has to exist at all (short version: TIOCGPGRP cannot tell an agent that is
-// thinking from an agent that is waiting for a human, and that distinction is
-// the whole feature).
+// This file knows NOTHING about which coding-agent CLI wrote a snapshot. A
+// producer writes one atomically-replaced JSON snapshot per session into a
+// spool directory; this reads that directory. The shipped producers are the
+// Amplifier hook (modules/hooks-muxterm-session), the `muxterm session report`
+// verb, and the opt-in Claude Code adapter (claude_adapter.go), but the
+// contract in docs/session-state-protocol.md is open to anything that can
+// write a file. See sessionstate.go for why a declared channel has to exist at
+// all (short version: TIOCGPGRP cannot tell an agent that is thinking from an
+// agent that is waiting for a human, and that distinction is the whole
+// feature).
 //
 // Division of labour, and why it falls this way:
 //
-//   - The hook knows its own pid and nothing about muxterm. Teaching it about
-//     panes would duplicate knowledge the registry already owns.
+//   - A producer knows its own pid and nothing about muxterm. Teaching it about
+//     panes would duplicate knowledge the registry already owns, in every
+//     language anybody ever writes a producer in.
 //   - The daemon knows which pane owns which process. It performs the join.
 //
 // So a snapshot on disk carries `pid` and omits paneId/workspaceId, and this
 // file fills those in.
 
 // sessionStateDirName is the spool subdirectory, resolved beneath the same
-// socketDir() the control socket lives in. Deriving it from socketDir rather
-// than hardcoding a path is what makes `make dev-local` isolation automatic:
-// that target overrides XDG_RUNTIME_DIR, sessiond inherits it, panes inherit it
-// from sessiond, and the hook -- running inside a pane -- computes the very
-// same directory. A dev daemon can never read production's spool, and neither
-// side needs to be told which world it is in.
+// socketDir() the control socket lives in. See SessionStateDir for the full
+// resolution order and why it is derived rather than hardcoded.
 const sessionStateDirName = "session-state"
 
 // sessionStateAncestorHops bounds the walk from a session's pid up to a pane's
-// root shell. Real depth is two or three (pane shell -> amplifier, sometimes
+// root shell. Real depth is two or three (pane shell -> agent CLI, sometimes
 // with a wrapper); the cap exists so a /proc that lies, or a cycle that should
 // be impossible, costs a bounded number of reads instead of a hung tick.
 const sessionStateAncestorHops = 32
@@ -52,9 +54,43 @@ const sessionStateAncestorHops = 32
 // read into the daemon once a second.
 const maxSessionSnapshotBytes = 64 << 10
 
-// sessionStateDir returns the directory the hook writes snapshots into.
-func sessionStateDir() string {
+// sessionSnapshotVersion is the schema version this daemon writes and the
+// highest it understands. A snapshot declaring a HIGHER version was written by
+// a producer from the future and is skipped with a logged reason, because
+// guessing at fields that did not exist when this code was written is how a
+// forward-compatible format stops being one.
+//
+// Version 0 -- an absent `v` -- is the pre-versioning shape, which is
+// field-identical to v1. It is accepted, so upgrading the daemon ahead of the
+// producers does not blank the home view.
+const sessionSnapshotVersion = 1
+
+// SessionStateDir returns the directory session-state snapshots are spooled in.
+//
+// Exported because it is a PUBLIC INTEGRATION CONTRACT, not an implementation
+// detail: `muxterm session report` writes here, third-party producers write
+// here, and docs/session-state-protocol.md documents it. Resolution order:
+//
+//   - $MUXTERM_SESSION_STATE_DIR       (explicit override, tests and odd deploys)
+//   - $XDG_RUNTIME_DIR/muxterm/session-state
+//   - <tmp>/muxterm-<uid>/session-state
+//
+// The XDG-derived default is what makes `make dev-local` isolation automatic:
+// that target overrides XDG_RUNTIME_DIR, sessiond inherits it, panes inherit it
+// from sessiond, and a producer running inside a pane computes the very same
+// directory. A dev daemon can never read production's spool, and neither side
+// needs to be told which world it is in.
+func SessionStateDir() string {
+	if override := os.Getenv("MUXTERM_SESSION_STATE_DIR"); override != "" {
+		return override
+	}
 	return filepath.Join(socketDir(), sessionStateDirName)
+}
+
+// sessionStateDir is the internal spelling, kept so call sites inside the
+// package read the way the rest of this file does.
+func sessionStateDir() string {
+	return SessionStateDir()
 }
 
 // sessionSnapshot is one file on disk: the session's own declaration, plus the
@@ -66,6 +102,13 @@ func sessionStateDir() string {
 // use for a pid, and publishing one would invite somebody to act on it.
 type sessionSnapshot struct {
 	SessionState
+	// V is the snapshot schema version. It is on the ON-DISK type and not on
+	// SessionState because it describes the producer contract, not the row: a
+	// browser has no use for the version of a file it never sees, and putting
+	// it on the wire type would invite the frontend to branch on it.
+	//
+	// Absent (0) means a pre-versioning producer; see sessionSnapshotVersion.
+	V   int `json:"v,omitempty"`
 	PID int `json:"pid"`
 	// PIDStart is the process's start time from /proc/<pid>/stat, which turns
 	// a pid into an identity. A pid alone is recycled: a snapshot outliving its
@@ -109,10 +152,17 @@ type sessionStore struct {
 	dir      string
 	lastHash uint64
 	hasSent  bool
+
+	// warnedVersions remembers which (file, version) pairs have already been
+	// logged as unreadable, so a snapshot from a future producer costs ONE log
+	// line rather than one per tick forever. Touched only by collect, which
+	// runs solely on the session-state ticker goroutine -- it is deliberately
+	// NOT guarded by Server.mu, and must not be read from anywhere else.
+	warnedVersions map[string]int
 }
 
 func newSessionStore() *sessionStore {
-	return &sessionStore{dir: sessionStateDir()}
+	return &sessionStore{dir: sessionStateDir(), warnedVersions: map[string]int{}}
 }
 
 // rearmLocked forces the next collection to publish even if nothing changed, so a
@@ -170,6 +220,11 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 	// at all that would be a per-second cost for nothing.
 	var owners map[int]paneRef
 	rows := make([]SessionState, 0, len(entries))
+	// Rebuilt fresh each tick rather than mutated in place, so a snapshot that
+	// is deleted and later replaced by a good one does not leave a permanent
+	// entry behind, and the map cannot grow without bound.
+	warned := make(map[string]int, len(s.warnedVersions))
+	defer func() { s.warnedVersions = warned }()
 	for _, entry := range entries {
 		// Regular files only, and bounded. A symlink or a FIFO named "x.json"
 		// would otherwise be handed to os.ReadFile: a FIFO with no writer
@@ -186,6 +241,23 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 		path := filepath.Join(s.dir, entry.Name())
 		snap, ok := readSessionSnapshot(path)
 		if !ok {
+			continue
+		}
+		if snap.V > sessionSnapshotVersion {
+			// Written by a producer newer than this daemon. Skip it rather
+			// than render half of it: the whole point of shipping a version is
+			// that the reader gets to decline, loudly, instead of silently
+			// mis-displaying a shape it does not know. The file is left ALONE
+			// (not deleted) -- a newer daemon may be about to read it, and
+			// destroying another component's data over a version skew would be
+			// the worst possible response.
+			//
+			// Logged once per (file, version), not once per tick: this runs
+			// every second, and a stuck snapshot would otherwise fill the log.
+			warned[path] = snap.V
+			if s.warnedVersions[path] != snap.V {
+				log.Printf("sessiond: ignoring session snapshot %s: schema v%d, this daemon understands up to v%d", entry.Name(), snap.V, sessionSnapshotVersion)
+			}
 			continue
 		}
 		if snap.PID <= 0 || !processLive(snap.PID) || !snapshotPIDMatches(snap) {
@@ -232,8 +304,8 @@ type paneRef struct {
 // paneOwners maps each live pane's root process id to that pane's identity.
 //
 // rootPID is the shell sessiond spawned for the pane. Every process the user
-// starts in that terminal -- including `amplifier` -- descends from it, which
-// is what makes an ancestor walk a correct and complete join.
+// starts in that terminal -- whichever agent CLI it happens to be -- descends
+// from it, which is what makes an ancestor walk a correct and complete join.
 func paneOwners(views []workspaceLiveView) map[int]paneRef {
 	owners := make(map[int]paneRef)
 	for _, ws := range views {
@@ -252,7 +324,7 @@ func paneOwners(views []workspaceLiveView) map[int]paneRef {
 // root process, bounded by sessionStateAncestorHops.
 //
 // The pid itself is checked first, so a pane whose root process IS the agent
-// (a pane spawned directly with an `amplifier` command rather than a shell)
+// (a pane spawned directly with an agent command rather than a shell)
 // resolves without any walk at all.
 func resolvePaneForPID(pid int, owners map[int]paneRef) (paneRef, bool) {
 	current := pid
@@ -303,6 +375,7 @@ func sessionStateHash(rows []SessionState) uint64 {
 		writeHashField(h, r.SessionID)
 		writeHashField(h, r.WorkspaceID)
 		writeHashField(h, strconv.Itoa(r.PaneID))
+		writeHashField(h, r.Harness)
 		writeHashField(h, r.Project)
 		writeHashField(h, r.Name)
 		writeHashField(h, r.Mode)
