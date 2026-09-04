@@ -109,6 +109,13 @@ type Handlers struct {
 	// Tiles are advisory and droppable: a slow consumer loses frames rather
 	// than the connection.
 	OnWorkspacePreview func(msg *Message)
+	// OnSessionState fires when the daemon pushes the home view's session set
+	// to a connection that opted in via SessionStateSubscribe. msg.Sessions is
+	// the CURRENT FULL SET across every workspace, not a delta, so consumers
+	// replace rather than merge. Like preview tiles these frames are advisory
+	// and droppable: a slow consumer loses frames rather than the connection,
+	// and because each frame is complete, the next one repairs the view.
+	OnSessionState func(msg *Message)
 }
 
 // SetHandlers installs the unsolicited-event callbacks. It is hmu-guarded and
@@ -430,6 +437,27 @@ func (c *Client) PreviewSubscribe(enabled bool) error {
 	return err
 }
 
+// SessionStateSubscribe turns home-view session state on or off for THIS
+// connection. Like PreviewSubscribe it is per-connection and off by default, so
+// a CLI or agent client is never sent rows it did not ask for.
+//
+// While subscribed, the daemon pushes TypeSessionState events (delivered to
+// Handlers.OnSessionState) about once a second whenever the set changes,
+// carrying every known session across every workspace. Subscribing also re-arms
+// the change gate, so a client that has just connected receives the current set
+// on the next tick rather than waiting for some session to change.
+//
+// A daemon too old to know the message type never replies; that surfaces here
+// as a timeout error, which callers should treat as "session state
+// unavailable" rather than as a failure.
+func (c *Client) SessionStateSubscribe(enabled bool) error {
+	_, err := c.requestWithin(
+		&Message{Type: TypeSessionStateSubscribe, OK: enabled},
+		previewSubscribeReplyTimeout,
+	)
+	return err
+}
+
 // GetLayout requests an ASCII layout diagram of the currently-attached
 // workspace. The daemon replies with TypeLayoutResult carrying the ASCII field.
 // Returns an empty string when no layout has been saved for the attached
@@ -585,6 +613,10 @@ func (c *Client) dispatchEvent(msg *Message) {
 	case TypeWorkspacePreview:
 		if h.OnWorkspacePreview != nil {
 			h.OnWorkspacePreview(msg)
+		}
+	case TypeSessionState:
+		if h.OnSessionState != nil {
+			h.OnSessionState(msg)
 		}
 	}
 }

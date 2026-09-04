@@ -15,6 +15,9 @@ type fakeDaemonConn struct {
 	createdID int
 	handlers  sessiond.Handlers
 	previewOn bool
+	// sessionStateOn records the home-view opt-in, mirroring previewOn: both
+	// are per-connection subscriptions the serve layer forwards verbatim.
+	sessionStateOn bool
 }
 
 func (f *fakeDaemonConn) ListWorkspaces() ([]sessiond.WorkspaceInfo, error) {
@@ -76,6 +79,11 @@ func (f *fakeDaemonConn) PaneFocus(paneID uint32, cols, rows int) error {
 
 func (f *fakeDaemonConn) PreviewSubscribe(enabled bool) error {
 	f.previewOn = enabled
+	return nil
+}
+
+func (f *fakeDaemonConn) SessionStateSubscribe(enabled bool) error {
+	f.sessionStateOn = enabled
 	return nil
 }
 

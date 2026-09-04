@@ -39,6 +39,11 @@ type Server struct {
 	// state, keyed by workspace id. Guarded by mu, pruned each tick to the
 	// live workspace set. See the preview section at the end of this file.
 	preview map[string]*previewState
+
+	// sessions is the home view's session-state change gate. Guarded by mu
+	// (its only mutators, rearm and changed, are both called under it). See
+	// the session-state section at the end of this file.
+	sessions *sessionStore
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -48,11 +53,12 @@ func NewServer(socketPath string) (*Server, error) {
 		return nil, errors.New("sessiond: empty socket path")
 	}
 	s := &Server{
-		reg:     NewRegistry(),
-		socket:  socketPath,
-		subs:    make(map[string]map[*conn]bool),
-		conns:   make(map[*conn]bool),
-		preview: make(map[string]*previewState),
+		reg:      NewRegistry(),
+		socket:   socketPath,
+		subs:     make(map[string]map[*conn]bool),
+		conns:    make(map[*conn]bool),
+		preview:  make(map[string]*previewState),
+		sessions: newSessionStore(),
 	}
 	return s, nil
 }
@@ -94,6 +100,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// Sidebar preview tiles. Costs nothing until a connection opts in, and
 	// stops on the same ctx cancellation that closes the listener.
 	go s.previewLoop(ctx)
+
+	// Home-view session state. Same shape, same guarantees: zero cost until a
+	// connection opts in, stopped by the same ctx cancellation.
+	go s.sessionStateLoop(ctx)
 
 	for {
 		nc, err := ln.Accept()
@@ -281,6 +291,11 @@ type conn struct {
 	// it is guarded by Server.mu, because the preview ticker goroutine reads
 	// it while fanning tiles out. See setPreviewOn.
 	previewOn bool
+
+	// sessionStateOn is this connection's home-view session-state opt-in.
+	// Guarded by Server.mu for the same reason as previewOn: its own ticker
+	// goroutine reads it while fanning rows out. See setSessionStateOn.
+	sessionStateOn bool
 }
 
 // newConn wraps nc with a subscriber for serialized writes.
@@ -471,6 +486,14 @@ func (c *conn) handle(msg Message) {
 		// supports previews from an older one that silently ignores an
 		// unknown control type.
 		c.reply(&Message{Type: TypePreviewSubscribeResult, CID: msg.CID, OK: true})
+	case TypeSessionStateSubscribe:
+		c.setSessionStateOn(msg.OK)
+		// Unconditionally true, exactly as for preview-subscribe: the ack
+		// asserts that THIS daemon understands session-state-subscribe and
+		// applied it, which is what lets a new browser tell a daemon that
+		// supports the home view from an older one that silently drops an
+		// unknown control type.
+		c.reply(&Message{Type: TypeSessionStateSubscribeResult, CID: msg.CID, OK: true})
 	}
 }
 
@@ -1011,4 +1034,122 @@ func mostRecentlyWrittenPane(panes []*Pane) *Pane {
 		}
 	}
 	return best
+}
+
+// --- Session state --------------------------------------------------------
+//
+// The home view's data path, modelled on the preview pipeline immediately
+// above and sharing its guarantees: opt-in per connection, cross-workspace
+// fan-out, change-gated, and droppable.
+//
+// It differs from preview in exactly one way, and the difference is the point.
+// A preview tile is PULLED from state the daemon already owns (a pane's VT
+// buffer). Session state cannot be pulled from anything the daemon can see:
+// TIOCGPGRP reports the same foreground process group whether an agent is
+// thinking or waiting at a permission prompt. So it is PUSHED by the sessions
+// themselves, into a spool directory, and this loop's job is to read what they
+// declared and say which pane each declaration belongs to.
+
+// sessionStateTick is how often the daemon re-reads the spool directory.
+//
+// Four times slower than previewTick on purpose. A preview tile is animation
+// and wants to feel live; session state changes at human pace -- a tool starts,
+// an approval is requested, a turn ends -- and a second of latency on that is
+// imperceptible. Reading a handful of small files once a second costs nothing,
+// and costs literally nothing when no connection has opted in.
+const sessionStateTick = 1 * time.Second
+
+// setSessionStateOn records this connection's session-state opt-in.
+//
+// Opt-in is mandatory for the same reason it is for preview: the fan-out walks
+// s.conns, which includes ClientKindCLI and ClientKindAgent, and a one-shot CLI
+// invocation must never be sent home-view rows it did not ask for. It also
+// makes an old client safe by construction -- it never subscribes, so it never
+// receives anything.
+func (c *conn) setSessionStateOn(on bool) {
+	c.srv.mu.Lock()
+	defer c.srv.mu.Unlock()
+	c.sessionStateOn = on
+	if on {
+		// Re-arm the change gate so the next tick republishes the current set
+		// for this newly-subscribed connection. Without this, a client
+		// attaching to an already-running daemon would see nothing until some
+		// session happened to change state on its own.
+		c.srv.sessions.rearmLocked()
+	}
+}
+
+// sessionStateWanted reports whether any live connection has opted in.
+func (s *Server) sessionStateWanted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.conns {
+		if c.sessionStateOn {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionStateLoop is the session-state ticker goroutine, started by
+// ListenAndServe and stopped by the same ctx cancellation that closes the
+// listener.
+func (s *Server) sessionStateLoop(ctx context.Context) {
+	ticker := time.NewTicker(sessionStateTick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.emitSessionState()
+		}
+	}
+}
+
+// emitSessionState reads, joins, and fans out one tick's worth of session state.
+//
+// s.mu is never held across the slow part, following emitPreviews exactly: the
+// want-check, the collection (filesystem reads and /proc ancestor walks), and
+// the fan-out are three separate steps, so a slow disk can never stall an
+// attach, a broadcast, or another connection's request.
+func (s *Server) emitSessionState() {
+	if !s.sessionStateWanted() {
+		return // nobody subscribed: no directory read, no /proc walk, no bytes
+	}
+	// The owners map is resolved lazily by collect: on a machine with no
+	// snapshots at all, taking a full registry snapshot every second would be a
+	// cost paid for nothing.
+	rows, ok := s.sessions.collect(func() map[int]paneRef {
+		return paneOwners(s.reg.snapshotView())
+	})
+	if !ok {
+		// The spool could not be read this tick. Skip rather than publish an
+		// empty set: every frame is a whole-state document, so asserting
+		// emptiness here would blank the home view over a transient stat error.
+		return
+	}
+	s.publishSessionState(rows)
+}
+
+// publishSessionState commits the change gate and fans the set out to every
+// opted-in connection.
+//
+// Frames go out via enqueuePreview, which DROPS on a full queue rather than
+// disconnecting the client. That method's contract explicitly covers "any
+// future advisory push" (subscriber.go), and this is one: a backgrounded
+// browser tab must lose home-view rows, never its terminal session. Losing a
+// frame is harmless because each frame is the whole current set, so the next
+// tick repairs the view completely.
+func (s *Server) publishSessionState(rows []SessionState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.sessions.changedLocked(rows) {
+		return
+	}
+	for c := range s.conns {
+		if c.sessionStateOn {
+			c.sub.enqueuePreview(&Message{Type: TypeSessionState, Sessions: rows})
+		}
+	}
 }
