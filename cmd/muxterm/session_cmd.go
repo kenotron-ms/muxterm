@@ -21,62 +21,22 @@ func runSession(args []string) error {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm session <command>")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Commands:")
-		fmt.Fprintln(os.Stdout, "  list                    List workspaces known to the daemon")
+		fmt.Fprintln(os.Stdout, "  list                    Alias for 'muxterm workspace list'")
 		fmt.Fprintln(os.Stdout, "  attach <workspace-id>   Print a workspace's composition (panes + layout)")
 		return nil
 	}
 	switch args[0] {
 	case "list":
-		return runSessionList(args[1:])
+		// One implementation, two spellings: see runWorkspace's NAMING note.
+		// The pointer goes to stderr so that "muxterm session list --json"
+		// still pipes clean JSON into jq.
+		fmt.Fprintln(os.Stderr, "note: 'muxterm session list' is now spelled 'muxterm workspace list'; both work.")
+		return runWorkspaceList(args[1:], "muxterm session list")
 	case "attach":
 		return runSessionAttach(args[1:])
 	default:
 		return fmt.Errorf("unknown session command %q\n\nRun 'muxterm session --help' for usage.", args[0])
 	}
-}
-
-func runSessionList(args []string) error {
-	fs := flag.NewFlagSet("session list", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
-	asJSON := fs.Bool("json", false, "print machine-readable JSON")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stdout, "Usage: muxterm session list [--json]")
-		fmt.Fprintln(os.Stdout, "")
-		fmt.Fprintln(os.Stdout, "List the workspaces the muxterm daemon currently holds.")
-		fmt.Fprintln(os.Stdout, "")
-		fmt.Fprintln(os.Stdout, "Flags:")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(reorderFlagsFirst(fs, args)); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-
-	return withDeadline(func() error {
-		c, err := dialDaemon()
-		if err != nil {
-			return err
-		}
-		defer func() { _ = c.Close() }()
-
-		wss, err := c.ListWorkspaces()
-		if err != nil {
-			return err
-		}
-		if *asJSON {
-			if wss == nil {
-				wss = []sessiond.WorkspaceInfo{}
-			}
-			return printJSON(wss)
-		}
-		fmt.Printf("%-24s %-24s %s\n", "WORKSPACE-ID", "NAME", "PANES")
-		for _, ws := range wss {
-			fmt.Printf("%-24s %-24s %d\n", ws.WorkspaceID, ws.Name, ws.PaneCount)
-		}
-		return nil
-	})
 }
 
 func runSessionAttach(args []string) error {

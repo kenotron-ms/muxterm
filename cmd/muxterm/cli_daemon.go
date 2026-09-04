@@ -169,3 +169,25 @@ func (s *stringSliceFlag) Set(v string) error {
 	*s = append(*s, v)
 	return nil
 }
+
+// keyListFlag implements flag.Value for `pane send --keys`: a comma-separated
+// list of key names that also accumulates across repeated occurrences, so
+// "--keys Enter,C-c" and "--keys Enter --keys C-c" are the same request. No key
+// name contains a comma, so splitting on one is unambiguous. Surrounding spaces
+// are trimmed ("--keys 'Enter, C-c'" is a natural thing to type); an empty
+// element is rejected rather than silently dropped, so a stray comma surfaces
+// as an error instead of a missing keystroke.
+type keyListFlag []string
+
+func (k *keyListFlag) String() string { return strings.Join(*k, ",") }
+
+func (k *keyListFlag) Set(v string) error {
+	for _, part := range strings.Split(v, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return fmt.Errorf("empty key name in %q", v)
+		}
+		*k = append(*k, name)
+	}
+	return nil
+}
