@@ -17,9 +17,10 @@
  *
  * Deliberately NOT folded into state.ts's MuxStore: that store is the frozen
  * projection of the sessiond control protocol, and session state arrives on a
- * different channel (the Amplifier hook in modules/hooks-muxterm-session) with
- * a different lifetime. Keeping them apart is what lets the standalone demo
- * render the real components with no socket at all.
+ * different channel -- a spool of files written by any producer that follows
+ * docs/session-state-protocol.md -- with a different lifetime. Keeping them
+ * apart is what lets the standalone demo render the real components with no
+ * socket at all.
  */
 
 import { FIXTURE_SESSIONS, type SessionState } from './session-state.js';
@@ -43,9 +44,31 @@ class HomeSessionStore {
     return this._source;
   }
 
-  /** Replace the whole set. The producer is authoritative; there is no merge. */
-  set(sessions: readonly SessionState[], source: HomeSource = 'live'): void {
-    this._sessions = sessions;
+  /**
+   * Replace the whole set. The producer is authoritative; there is no merge.
+   *
+   * `sessions` accepts null/undefined and normalizes to the EMPTY SET, and
+   * that signature is the entire point of this method rather than an oversight.
+   *
+   * The wire type carries `Sessions []SessionState` with `omitempty`, because
+   * Message is one flat envelope shared by every message type and the
+   * alternative is `"sessions":null` on every control frame of every kind. The
+   * consequence is that the most important transition in the whole feature --
+   * N sessions going to ZERO -- arrives as a bare `{"type":"session-state"}`
+   * with no field at all. Confirmed empirically against a live daemon: a
+   * subscriber with nothing to show receives a frame whose `sessions` is
+   * absent, not `[]`.
+   *
+   * So the ARRIVAL of the message is the signal and a missing field means
+   * "none", never "no news". A caller writing `if (msg.sessions) set(...)`
+   * would freeze the view on its last non-zero set: the Start card badge would
+   * stick forever at a count of sessions that have all finished, which is worse
+   * than showing no badge because it is confidently wrong. Normalizing here
+   * rather than trusting each call site to remember `?? []` makes that bug
+   * unwritable.
+   */
+  set(sessions: readonly SessionState[] | null | undefined, source: HomeSource = 'live'): void {
+    this._sessions = sessions ?? [];
     this._source = source;
     this._notify();
   }

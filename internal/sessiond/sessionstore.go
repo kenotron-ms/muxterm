@@ -304,8 +304,8 @@ type paneRef struct {
 // paneOwners maps each live pane's root process id to that pane's identity.
 //
 // rootPID is the shell sessiond spawned for the pane. Every process the user
-// starts in that terminal -- including `amplifier` -- descends from it, which
-// is what makes an ancestor walk a correct and complete join.
+// starts in that terminal -- whichever agent CLI it happens to be -- descends
+// from it, which is what makes an ancestor walk a correct and complete join.
 func paneOwners(views []workspaceLiveView) map[int]paneRef {
 	owners := make(map[int]paneRef)
 	for _, ws := range views {
@@ -324,7 +324,7 @@ func paneOwners(views []workspaceLiveView) map[int]paneRef {
 // root process, bounded by sessionStateAncestorHops.
 //
 // The pid itself is checked first, so a pane whose root process IS the agent
-// (a pane spawned directly with an `amplifier` command rather than a shell)
+// (a pane spawned directly with an agent command rather than a shell)
 // resolves without any walk at all.
 func resolvePaneForPID(pid int, owners map[int]paneRef) (paneRef, bool) {
 	current := pid
