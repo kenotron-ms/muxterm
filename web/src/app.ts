@@ -22,6 +22,7 @@ injectTerminalFont();
 import './components/title-bar.js';
 import './components/mux-dock.js';
 import './components/settings-surface.js';
+import './components/monitoring-surface.js';
 import type { MuxDock } from './components/mux-dock.js';
 import type { LauncherAction } from './components/launcher-menu.js';
 import './components/close-confirmation-modal.js';
@@ -527,7 +528,7 @@ export class MuxApp extends LitElement {
   private _createModalName = '';
 
   @state()
-  private _overlayPanel: 'settings' | 'shortcuts' | 'about' | null = null;
+  private _overlayPanel: 'settings' | 'shortcuts' | 'about' | 'monitoring' | null = null;
 
   @state()
   private _layoutMode: 'wide' | 'narrow' = currentLayoutMode();
@@ -1053,6 +1054,10 @@ export class MuxApp extends LitElement {
                   @config-change="${this._onConfigChange}"
                   @ai-status-change="${this._onAIStatusChange}"
                 ></mux-settings-surface>
+              ` : this._overlayPanel === 'monitoring' ? html`
+                <mux-monitoring-surface
+                  @close="${this._closeOverlayPanel}"
+                ></mux-monitoring-surface>
               ` : this._overlayPanel === 'shortcuts' ? html`
                 <div class="info-panel">
                   <h2>Keyboard Shortcuts
@@ -1588,6 +1593,7 @@ export class MuxApp extends LitElement {
       case 'settings':
       case 'shortcuts':
       case 'about':
+      case 'monitoring':
         this._overlayPanel = action;
         break;
       case 'reconnect':

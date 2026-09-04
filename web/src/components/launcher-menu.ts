@@ -1,14 +1,15 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { icon } from '../lib/icons.js';
-import { Info, Keyboard, Plus, RefreshCw, Settings } from 'lucide';
+import { Info, Keyboard, Plus, RefreshCw, Settings, MonitorDot } from 'lucide';
 
 export type LauncherAction =
   | 'settings'
   | 'shortcuts'
   | 'reconnect'
   | 'about'
-  | 'new-workspace';
+  | 'new-workspace'
+  | 'monitoring';
 
 @customElement('mux-launcher-menu')
 export class MuxLauncherMenu extends LitElement {
@@ -94,6 +95,9 @@ export class MuxLauncherMenu extends LitElement {
             <div class="divider"></div>
           `
         : ''}
+      <button data-action="monitoring" @click="${() => this._dispatch('monitoring')}">
+        ${icon(MonitorDot, { size: 14 })} Monitoring
+      </button>
       <button data-action="settings" @click="${() => this._dispatch('settings')}">
         ${icon(Settings, { size: 14 })} Settings
       </button>
