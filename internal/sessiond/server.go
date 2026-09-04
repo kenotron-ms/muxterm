@@ -1117,7 +1117,7 @@ func (s *Server) emitSessionState() {
 	if !s.sessionStateWanted() {
 		return // nobody subscribed: no directory read, no /proc walk, no bytes
 	}
-	rows := s.sessions.collect(s.reg.snapshotView())
+	rows := s.sessions.collect(paneOwners(s.reg.snapshotView()))
 	s.publishSessionState(rows)
 }
 

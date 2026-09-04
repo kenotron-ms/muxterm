@@ -101,12 +101,17 @@ func (s *sessionStore) changed(rows []SessionState) bool {
 // collect reads the spool directory, joins each snapshot to the pane running
 // it, and returns the rows in a deterministic order.
 //
+// It takes the owners map rather than the registry view so the read-and-join is
+// separable from the registry snapshot: the caller decides when to look at the
+// registry (and pays for it under no lock), and this half can be exercised
+// against any process tree.
+//
 // Snapshots that cannot be placed are dropped rather than guessed at: a row
 // with no pane is a row the home view cannot act on, and inventing a location
 // for it would be worse than omitting it. Snapshots whose process is gone are
 // deleted from disk here -- a session that is killed rather than exited never
 // gets to clean up after itself, so the reader has to be the one that does.
-func (s *sessionStore) collect(views []workspaceLiveView) []SessionState {
+func (s *sessionStore) collect(owners map[int]paneRef) []SessionState {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		// No spool directory means no session has ever published here. That is
@@ -115,7 +120,6 @@ func (s *sessionStore) collect(views []workspaceLiveView) []SessionState {
 		return nil
 	}
 
-	owners := paneOwners(views)
 	rows := make([]SessionState, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
