@@ -13,11 +13,17 @@ const previewFontOnly = (): Plugin => ({
   name: 'demo-preview-font',
   apply: 'build',
   closeBundle() {
-    const out = resolve(__dirname, 'dist-demo/fonts');
-    mkdirSync(out, { recursive: true });
+    const dist = resolve(__dirname, 'dist-demo');
+    mkdirSync(resolve(dist, 'fonts'), { recursive: true });
     copyFileSync(
       resolve(__dirname, 'public/fonts/Spleen5x8.woff2'),
-      resolve(out, 'Spleen5x8.woff2'),
+      resolve(dist, 'fonts/Spleen5x8.woff2'),
+    );
+    // Without this the browser probes /favicon.ico on its own and logs a 404
+    // in the console of the page someone was asked to go and look at.
+    copyFileSync(
+      resolve(__dirname, 'public/favicon.svg'),
+      resolve(dist, 'favicon.svg'),
     );
   },
 });

@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>muxterm · home view (fixture preview)</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <style>
       /* The 5x8 bitmap preview font, declared HERE rather than injected from
          TypeScript, and with a RELATIVE url.
@@ -283,5 +284,58 @@
 
     <div id="flash"></div>
     <script type="module" src="../src/demo/home-demo.ts"></script>
+
+    <!-- Deliberately a CLASSIC script, not a module: its whole job is to run in
+         the case where the module above could NOT run.
+
+         Opening this file straight off disk (a file:// URL) makes the browser
+         refuse the module bundle — "blocked by CORS policy: Cross origin
+         requests are only supported for protocol schemes: ... http, https".
+         That is a browser rule about file://, not something a build can fix,
+         and the page would otherwise just sit there blank with the reason
+         buried in devtools. Say it out loud instead, with the fix. -->
+    <script>
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          if (window.customElements && customElements.get('mux-home')) return;
+
+          var wrap = document.createElement('div');
+          wrap.style.cssText =
+            'position:fixed;inset:0;display:flex;align-items:center;' +
+            'justify-content:center;background:#1a1b26;color:#c0caf5;' +
+            'font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;' +
+            'font-size:13px;line-height:1.7;padding:32px;z-index:9999';
+
+          var box = document.createElement('div');
+          box.style.cssText = 'max-width:640px';
+
+          var h = document.createElement('div');
+          h.style.cssText = 'color:#e0af68;margin-bottom:12px;font-size:15px';
+          h.textContent = 'This page has to be SERVED, not opened from disk.';
+
+          var p = document.createElement('div');
+          p.style.cssText = 'color:#565f89;margin-bottom:14px';
+          p.textContent =
+            location.protocol === 'file:'
+              ? 'Browsers block JavaScript modules on file:// URLs. Nothing is broken — serve the directory over HTTP and it will load.'
+              : 'The application bundle did not load. Check that assets/ sits next to this file.';
+
+          var pre = document.createElement('pre');
+          pre.style.cssText =
+            'background:#16161e;border:1px solid #292e42;border-radius:6px;' +
+            'padding:12px 14px;color:#9ece6a;overflow:auto;margin:0';
+          pre.textContent =
+            'cd ' + '"' + 'the folder holding this index.html' + '"' + '\n' +
+            'python3 -m http.server 8791 --bind 127.0.0.1\n' +
+            '# then open http://127.0.0.1:8791/';
+
+          box.appendChild(h);
+          box.appendChild(p);
+          box.appendChild(pre);
+          wrap.appendChild(box);
+          document.body.appendChild(wrap);
+        }, 500);
+      });
+    </script>
   </body>
 </html>
