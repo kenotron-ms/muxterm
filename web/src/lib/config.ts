@@ -83,6 +83,8 @@ export interface ResolvedConfig {
     popOut: string;
     openLauncher: string;
     focusDriver: string;
+    /** Show/hide the home view. Printable chord — see keybindings.ts. */
+    toggleHome: string;
   };
   workspace: {
     defaultPresentation: 'docked' | 'single';
@@ -122,6 +124,7 @@ export const DEFAULT_RESOLVED_CONFIG: ResolvedConfig = {
     popOut: 'ctrl+shift+o',
     openLauncher: 'ctrl+shift+p',
     focusDriver: 'ctrl+shift+a',
+    toggleHome: 'ctrl+`',
   },
   workspace: {
     defaultPresentation: 'docked',
@@ -219,6 +222,7 @@ export function parseResolvedConfig(raw: unknown): ResolvedConfig {
       popOut: str(k['pop_out'], d.keys.popOut),
       openLauncher: str(k['open_launcher'], d.keys.openLauncher),
       focusDriver: str(k['focus_driver'], d.keys.focusDriver),
+      toggleHome: str(k['toggle_home'], d.keys.toggleHome),
     },
     workspace: {
       defaultPresentation: str(

@@ -9,6 +9,8 @@ bin/
 # Frontend
 node_modules/
 web/dist/
+# Standalone home-view preview build (vite.demo.config.ts)
+web/dist-demo/
 # web/package-lock.json — committed for reproducible CI builds
 
 # IDE/Editor
