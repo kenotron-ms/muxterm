@@ -284,8 +284,10 @@ type Message struct {
 	// session-state-subscribe (opt in/out) and their -result acknowledgements.
 	OK bool `json:"ok,omitempty"`
 
-	// Sessions is the payload of TypeSessionState: the full set of Amplifier
-	// sessions the daemon currently knows about, across every workspace.
+	// Sessions is the payload of TypeSessionState: the full set of agent
+	// sessions the daemon currently knows about, across every workspace and
+	// every harness. Nothing on this envelope knows which coding-agent CLI
+	// produced a row -- see docs/session-state-protocol.md.
 	//
 	// A typed slice rather than an opaque blob, following the Workspaces /
 	// Panes / Risks precedent -- SessionState (sessionstate.go) is already a

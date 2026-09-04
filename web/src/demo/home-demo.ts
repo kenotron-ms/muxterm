@@ -63,33 +63,33 @@ const CROWD: SessionState[] = [
   ...FIXTURE_SESSIONS,
   {
     sessionId: 'fx-flaky-bisect', paneId: 11, workspaceId: 'flaky',
-    project: '/home/ken/workspace/muxterm', name: 'flaky-bisect', mode: 'goal',
+    project: '/home/ken/workspace/muxterm', name: 'flaky-bisect', harness: 'claude', mode: 'autonomous',
     state: 'blocked', waitingFor: 'worker request',
     doing: 'provider throttled 3x, no forward progress', updatedAt: 0,
   },
   {
     sessionId: 'fx-fleet-subscription', paneId: 5, workspaceId: 'cos',
-    project: '/home/ken/workspace/muxterm', name: 'fleet-subscription', mode: 'goal',
+    project: '/home/ken/workspace/muxterm', name: 'fleet-subscription', harness: 'amplifier', mode: 'autonomous',
     state: 'working', doing: 'drafting the additive protocol message', updatedAt: 0,
   },
   {
     sessionId: 'fx-hook-events', paneId: 6, workspaceId: 'cos',
-    project: '/home/ken/amplifier', name: 'hook-events', mode: 'goal',
+    project: '/home/ken/amplifier', name: 'hook-events', harness: 'amplifier', mode: 'autonomous',
     state: 'working', doing: 'wiring session:start in __init__.py', updatedAt: 0,
   },
   {
     sessionId: 'fx-resize-parity', paneId: 13, workspaceId: 'parity',
-    project: '/home/ken/workspace/muxterm', name: 'resize-parity', mode: 'goal',
+    project: '/home/ken/workspace/muxterm', name: 'resize-parity', harness: 'opencode', mode: 'autonomous',
     state: 'working', doing: 'go test ./... — 4 of 9 packages', updatedAt: 0,
   },
   {
     sessionId: 'fx-preview-per-pane', paneId: 12, workspaceId: 'flaky',
-    project: '/home/ken/workspace/muxterm', name: 'preview-per-pane', mode: 'goal',
+    project: '/home/ken/workspace/muxterm', name: 'preview-per-pane', harness: 'codex', mode: 'autonomous',
     state: 'failed', doing: 'the 250ms gate assumption was wrong', updatedAt: 0,
   },
   {
     sessionId: 'fx-docs-sweep', paneId: 8, workspaceId: 'infra',
-    project: '/home/ken/workspace/muxterm', name: 'docs-sweep', mode: 'plain',
+    project: '/home/ken/workspace/muxterm', name: 'docs-sweep', harness: 'claude', mode: 'interactive',
     state: 'done', doing: '8 files, +214 -67', pr: 49, updatedAt: 0,
   },
 ];

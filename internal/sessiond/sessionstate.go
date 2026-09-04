@@ -10,9 +10,16 @@ package sessiond
 // The mirror of this file is web/src/lib/session-state.ts. If you change a
 // field here, change it there in the same commit.
 //
+// This contract is HARNESS-AGNOSTIC. It began life shaped around Amplifier,
+// but nothing below names a specific coding-agent CLI: any producer that can
+// write a JSON file can appear in the home view. The on-disk producer contract
+// is documented in docs/session-state-protocol.md, and the shipped producers
+// are the Amplifier hook (modules/hooks-muxterm-session), the `muxterm session
+// report` verb, and the opt-in Claude Code adapter.
+//
 // Vocabulary note: the six nouns in play are workspace, pane, terminal,
 // session, project, and artifact. A "task" is not an object -- it is the
-// session's first prompt:submit event. Do not introduce new nouns.
+// session's first prompt. Do not introduce new nouns.
 
 // Session lifecycle states. These are adopted verbatim from Claude Code's
 // agent view so the vocabulary matches what users already know.
@@ -34,48 +41,111 @@ const (
 	WaitingForDialog     = "dialog open"
 )
 
-// Session run modes. This distinction is load-bearing for the whole feature:
+// Session run modes. This distinction is load-bearing for the whole feature,
+// and it answers exactly one question:
 //
-//   - ModePlain: the session ends its turn and waits for the user. That is its
-//     CONTRACT, not a fault. A quiet plain session must NEVER be surfaced as
-//     needing input.
-//   - ModeGoal: the session runs an autonomous /goal loop toward a stop
-//     condition. A quiet goal session means the loop BROKE, and that IS the
-//     alarm worth showing.
+//		Does going quiet mean "broke" or "resting"?
 //
-// Mode is known at kickoff. Getting this wrong makes every idle session look
-// like an emergency, users learn to ignore the indicator, and the home view
-// becomes worthless.
+//	  - ModeInteractive: the session ends its turn and waits for a human. That is
+//	    its CONTRACT, not a fault. A quiet interactive session must NEVER be
+//	    surfaced as an alarm.
+//	  - ModeAutonomous: the session runs a loop toward a stop condition of its
+//	    own. A quiet autonomous session means the loop BROKE, and that IS the
+//	    alarm worth showing.
+//
+// These names are deliberately harness-neutral. They were once spelled
+// goal|plain, after Amplifier's /goal command, which only names the
+// distinction correctly if you already know what /goal is. Claude Code has
+// background and foreground sessions; a job CLI has batch runs and attended
+// runs. The distinction is universal; the Amplifier spelling was not.
+//
+// Getting this wrong makes every idle session look like an emergency, users
+// learn to ignore the indicator, and the home view becomes worthless.
 const (
-	ModePlain = "plain"
-	ModeGoal  = "goal"
+	ModeInteractive = "interactive"
+	ModeAutonomous  = "autonomous"
 )
 
-// SessionState is one row of the home view: everything known about a single
-// Amplifier session running in a muxterm pane.
+// Harness identifiers: which coding-agent CLI is running this session.
 //
-// Every field is a projection of that session's own events.jsonl, produced by
-// the Amplifier hook in modules/hooks-muxterm-session and forwarded to the
-// daemon. Nothing here is inferred from PTY state -- the daemon's existing
-// activity classifier cannot distinguish "thinking" from "waiting for you",
-// which is precisely why this declared channel exists.
+// These are the SAME strings as the agent catalog's names (agent_catalog.go),
+// which is deliberate -- muxterm has one vocabulary for "which agent CLI is
+// this", not two that can drift apart. agent_catalog.go is defined in terms of
+// these constants so the compiler enforces it.
+//
+// The field is OPEN, not an enum: any producer may declare any harness string
+// (see docs/session-state-protocol.md). A value not listed here is rendered
+// with a neutral badge, never dropped -- refusing to display a session because
+// muxterm has not heard of its runner would make the fleet view a liar about
+// the fleet.
+const (
+	HarnessAmplifier = "amplifier"
+	HarnessClaude    = "claude"
+	HarnessCodex     = "codex"
+	HarnessOpenCode  = "opencode"
+)
+
+// ValidState reports whether s is one of the five lifecycle states.
+func ValidState(s string) bool {
+	switch s {
+	case SessionStateWorking, SessionStateBlocked, SessionStateDone,
+		SessionStateFailed, SessionStateStopped:
+		return true
+	}
+	return false
+}
+
+// ValidMode reports whether m is one of the two run modes.
+func ValidMode(m string) bool {
+	return m == ModeInteractive || m == ModeAutonomous
+}
+
+// ValidWaitingFor reports whether w is one of the blocked reasons. The empty
+// string is valid: it means "not blocked", which is most sessions most of the
+// time.
+func ValidWaitingFor(w string) bool {
+	switch w {
+	case "", WaitingForPermission, WaitingForInput, WaitingForSandbox,
+		WaitingForWorker, WaitingForDialog:
+		return true
+	}
+	return false
+}
+
+// SessionState is one row of the home view: everything known about a single
+// agent session running in a muxterm pane.
+//
+// Every field is DECLARED by the session's own producer -- nothing here is
+// inferred from PTY state, because the daemon's existing activity classifier
+// cannot distinguish "thinking" from "waiting for you", which is precisely why
+// this declared channel exists.
 type SessionState struct {
-	// Identity. SessionID is the Amplifier session id; PaneID and WorkspaceID
-	// locate its terminal in muxterm.
+	// Identity. SessionID is the producer's own session id; PaneID and
+	// WorkspaceID locate its terminal in muxterm.
 	SessionID   string `json:"sessionId"`
 	PaneID      int    `json:"paneId"`
 	WorkspaceID string `json:"workspaceId"`
 
-	// Project is the session's working directory -- an Amplifier "project" is
-	// a folder. Absolute path; the browser shortens it for display.
+	// Harness names the coding-agent CLI running this session -- one of the
+	// Harness* constants, or any other string a producer chooses to declare.
+	// Empty means the producer declared nothing, which is allowed: the row
+	// still renders, just without a badge.
+	//
+	// This is what turns the home view from an Amplifier feature into a fleet
+	// view: an Amplifier lane and a Claude Code session sit in the same list,
+	// each labelled with what is actually running it.
+	Harness string `json:"harness,omitempty"`
+
+	// Project is the session's working directory. Absolute path; the browser
+	// shortens it for display.
 	Project string `json:"project,omitempty"`
 
-	// Name is derived from the session's FIRST prompt:submit event
-	// (data.prompt), trimmed for display. This is the closest thing to a task
-	// title that exists, and it costs nothing because the user typed it.
+	// Name is a short human-readable title, conventionally derived from the
+	// session's first prompt. This is the closest thing to a task title that
+	// exists, and it costs nothing because a human typed it.
 	Name string `json:"name"`
 
-	// Mode is ModePlain or ModeGoal. See the mode constants above.
+	// Mode is ModeInteractive or ModeAutonomous. See the mode constants above.
 	Mode string `json:"mode"`
 
 	// State is one of the SessionState* constants.
@@ -88,13 +158,14 @@ type SessionState struct {
 	// "editing cmd/muxterm/pane_cmd.go". Refreshed cheaply from recent events.
 	Doing string `json:"doing,omitempty"`
 
-	// DoneMeans is the /goal stop condition -- the session's own declared
-	// definition of finished. Only present when Mode == ModeGoal.
+	// DoneMeans is the session's own declared definition of finished -- the
+	// stop condition an autonomous loop is running toward. Normally present
+	// only when Mode == ModeAutonomous.
 	DoneMeans string `json:"doneMeans,omitempty"`
 
-	// Knows lists distinct artifact:read paths this session has consumed.
-	// A session that has read very little and then failed was starved, not
-	// merely unlucky, and that distinction is invisible without this.
+	// Knows lists distinct artifact paths this session has read. A session
+	// that has read very little and then failed was starved, not merely
+	// unlucky, and that distinction is invisible without this.
 	Knows []string `json:"knows,omitempty"`
 
 	// PR is a pull request number associated with this session, if any.
@@ -108,9 +179,9 @@ type SessionState struct {
 // NeedsInput reports whether this session belongs in the home view's
 // "Needs input" group.
 //
-// A plain session that has simply ended its turn does NOT need input in the
-// sense this view means -- it is resting, which is its normal condition. Only a
-// blocked session genuinely wants a human.
+// An interactive session that has simply ended its turn does NOT need input in
+// the sense this view means -- it is resting, which is its normal condition.
+// Only a blocked session genuinely wants a human.
 func (s SessionState) NeedsInput() bool {
 	return s.State == SessionStateBlocked
 }

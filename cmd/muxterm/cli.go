@@ -51,6 +51,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm read-screen <pane>  Print a pane's screen (or --scrollback history)")
 	fmt.Fprintln(w, "  muxterm workspace <cmd>     list | create <name> | close <workspace-id>")
 	fmt.Fprintln(w, "  muxterm session attach <id> Print a workspace's panes and layout")
+	fmt.Fprintln(w, "  muxterm session report      Publish session state to the home view (any tool)")
 	fmt.Fprintln(w, "  muxterm pane <cmd>          create | send | rename | close | resize")
 	fmt.Fprintln(w, "  muxterm layout get          Print the workspace layout diagram")
 	fmt.Fprintln(w, "  muxterm mcp [flags]         Start MCP server (stdio transport)")
