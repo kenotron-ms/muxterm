@@ -87,6 +87,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "workspace":
+		if err := runWorkspace(cfg.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "pane":
 		if err := runPane(cfg.Args); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
