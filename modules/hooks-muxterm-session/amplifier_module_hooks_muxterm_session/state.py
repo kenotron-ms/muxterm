@@ -75,6 +75,21 @@ WAITING_FOR_INPUT = "input needed"
 MODE_INTERACTIVE = "interactive"
 MODE_AUTONOMOUS = "autonomous"
 
+# The three states that are an ENDING rather than a moment. A snapshot in one
+# of these outlives the process that wrote it -- the home view exists to answer
+# "how did it end?", and a row that vanishes the instant the agent exits cannot.
+TERMINAL_STATES = frozenset({STATE_DONE, STATE_FAILED, STATE_STOPPED})
+
+# How long an ending is kept once its process is gone, when this sweep is the
+# only thing reclaiming it.
+#
+# The daemon has a far better bound -- it reclaims an ending the moment that
+# PANE runs something else or is closed, so the row lives exactly as long as the
+# terminal it describes. This sweep has no pane knowledge, so it falls back to
+# time. A day is chosen to be longer than any plausible "I came back to see what
+# happened" and short enough that an unwatched machine does not accumulate.
+ENDING_TTL_SECONDS = 24 * 60 * 60
+
 # Which coding-agent CLI this producer speaks for. Amplifier's hook only ever
 # writes one value; the field exists because the home view is a fleet view for
 # any harness, and a row that does not say what is running it cannot be badged.
@@ -120,6 +135,36 @@ def spool_dir() -> Path:
     if runtime:
         return Path(runtime) / "muxterm" / "session-state"
     return Path(tempfile.gettempdir()) / f"muxterm-{os.getuid()}" / "session-state"
+
+
+def _pid_session_id(pid: int) -> int:
+    """Read a process's POSIX session id -- the join, reduced to one integer.
+
+    sessiond gives every pane its own pty and makes the pane's root shell the
+    leader of a new session, so every process started in that terminal carries
+    that shell's pid as its session id. The daemon builds a map keyed on
+    exactly those pids, which makes this a single lookup instead of a walk.
+
+    It is recorded here, by the writer, rather than derived by the reader,
+    because the reader may be looking at this file after this process has
+    exited -- and an ancestor walk needs /proc entries that are gone by then.
+    Capturing it while we are alive is what lets our FINAL row still be shown
+    on the terminal we ran in, which is the whole question the home view
+    exists to answer.
+
+    Field 6 of /proc/<pid>/stat, index 3 of the fields AFTER comm. Split on the
+    LAST ')' for the reason every other reader of this file does.
+
+    Returns 0 when unavailable (non-Linux, or an unreadable stat), which the
+    daemon treats as "no anchor" and falls back to its ancestor walk.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8", errors="replace") as fh:
+            line = fh.read()
+        after = line[line.rindex(")") + 1 :].split()
+        return int(after[3])
+    except Exception:
+        return 0
 
 
 def _pid_start_time(pid: int) -> int:
@@ -204,6 +249,7 @@ class SessionRecord:
         "session_id",
         "pid",
         "pid_start",
+        "sid",
         "project",
         "name",
         "mode",
@@ -222,6 +268,7 @@ class SessionRecord:
         self.session_id = session_id
         self.pid = os.getpid()
         self.pid_start = _pid_start_time(self.pid)
+        self.sid = _pid_session_id(self.pid)
         self.project = os.getcwd()
         self.name = ""
         self.mode = MODE_INTERACTIVE
@@ -272,10 +319,10 @@ class SessionRecord:
     def to_payload(self) -> dict[str, Any]:
         """Render the snapshot.
 
-        Field names are the JSON tags of sessiond.SessionState. `v`, `pid` and
-        `pidStart` are the on-disk additions -- the daemon consumes them and
-        forwards none of them -- and paneId/workspaceId are deliberately absent
-        because the daemon fills them during the pane join.
+        Field names are the JSON tags of sessiond.SessionState. `v`, `pid`,
+        `pidStart` and `sid` are the on-disk additions -- the daemon consumes
+        them and forwards none of them -- and paneId/workspaceId are
+        deliberately absent because the daemon fills them during the pane join.
 
         The full contract, including what a non-Amplifier producer must write,
         is docs/session-state-protocol.md.
@@ -291,6 +338,11 @@ class SessionRecord:
             "state": self.state,
             "updatedAt": int(time.time()),
         }
+        if self.sid:
+            # Omitted when /proc could not answer. The daemon then falls back
+            # to walking our ancestry, which works while we are alive and not
+            # after -- see _pid_session_id.
+            payload["sid"] = self.sid
         if self.project:
             payload["project"] = self.project
         if self.waiting_for:
@@ -357,7 +409,7 @@ class SessionRecord:
                 pass
 
 def sweep_stale(spool: Path) -> None:
-    """Delete snapshots whose process is gone.
+    """Reclaim snapshots that no longer describe anything.
 
     A snapshot deliberately outlives its session so the home view can show how
     that session ended (see on_session_end). Something still has to reclaim
@@ -365,10 +417,19 @@ def sweep_stale(spool: Path) -> None:
     machine where nobody ever opens the home view, this sweep is the only one
     that ever runs.
 
-    Identity, not just liveness: a file is removed when its process is gone OR
-    when the pid is now held by a different process, which pidStart detects. A
-    snapshot with no pidStart (written by an older hook, or off Linux) falls
-    back to a liveness check alone.
+    Which makes WHAT it deletes load-bearing. This runs at session START, and
+    an earlier version deleted every snapshot whose process was gone: opening a
+    second pane and starting a session in it silently wiped the FIRST pane's
+    ending, from across the machine, for no reason connected to that pane at
+    all. Endings are therefore kept until ENDING_TTL_SECONDS, and only three
+    things are reclaimed here:
+
+      - a session whose process is gone and whose last state was not an ending
+        (killed mid-flight -- it never got to say how it went, and leaving it
+        up would assert that it is still thinking or still waiting on a human)
+      - an ending older than the TTL
+      - a snapshot whose pid is now held by a DIFFERENT process, which pidStart
+        detects; that identity is definitively dead
 
     Entirely best-effort. Failing to sweep costs a stale file; raising here
     would cost a session.
@@ -395,13 +456,26 @@ def sweep_stale(spool: Path) -> None:
             # own pidStart, so the identity check below keeps it; skipping it
             # would instead have punched a hole exactly where a recycled pid
             # needs catching.
-            alive = os.path.exists(f"/proc/{pid}")
-            if alive:
+            running = os.path.exists(f"/proc/{pid}")
+            if running:
                 recorded = snap.get("pidStart")
-                if isinstance(recorded, int) and recorded > 0:
-                    alive = _pid_start_time(pid) == recorded
-            if not alive:
-                entry.unlink(missing_ok=True)
+                if isinstance(recorded, int) and recorded > 0 and _pid_start_time(pid) != recorded:
+                    # The pid is live but it is somebody else now. This file
+                    # describes a session that is definitively gone, and the
+                    # identity it points at is a stranger's.
+                    entry.unlink(missing_ok=True)
+                continue
+            if snap.get("state") in TERMINAL_STATES:
+                # An ending. Keep it -- this is the row that answers
+                # "how did it end?" -- until it is old enough that nobody
+                # is coming back for it.
+                try:
+                    age = time.time() - entry.stat().st_mtime
+                except OSError:
+                    continue
+                if age < ENDING_TTL_SECONDS:
+                    continue
+            entry.unlink(missing_ok=True)
         except Exception:
             continue
 
@@ -831,9 +905,10 @@ class SessionStateTracker:
 
         Leaving the file behind is only safe because the snapshot carries
         pidStart as well as pid: a stale file cannot be misattributed to an
-        unrelated process that later inherits the pid. Reclamation happens at
-        the next session's start (see sweep_stale) and, when a browser is
-        watching, in the daemon's own dead-pid reaping.
+        unrelated process that later inherits the pid. Reclamation is
+        bounded twice over: the daemon drops this row the moment its PANE runs
+        something else or is closed, and sweep_stale expires it by age on a
+        machine where nobody ever watches.
         """
         if self._is_child(data):
             self._forget(data.get("session_id"))

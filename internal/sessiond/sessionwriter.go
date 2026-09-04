@@ -99,7 +99,11 @@ func WriteSessionSnapshot(row SessionState, pid int) (string, error) {
 	row.WorkspaceID = ""
 
 	start, _ := processStartTime(pid)
-	snap := sessionSnapshot{SessionState: row, V: sessionSnapshotVersion, PID: pid, PIDStart: start}
+	// Captured now, while pid is alive, because it is the only thing that can
+	// place this row once the process is gone -- which is exactly when an
+	// ending most needs placing.
+	sid, _ := processSessionID(pid)
+	snap := sessionSnapshot{SessionState: row, V: sessionSnapshotVersion, PID: pid, PIDStart: start, SID: sid}
 	body, err := json.Marshal(snap)
 	if err != nil {
 		return "", fmt.Errorf("encode snapshot: %w", err)

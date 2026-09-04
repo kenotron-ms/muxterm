@@ -84,3 +84,42 @@ func processStartTime(pid int) (uint64, bool) {
 	}
 	return start, true
 }
+
+// processSessionID returns pid's POSIX session id.
+//
+// This is the session-state join, reduced to one integer. sessiond gives every
+// pane its own pty and makes the root shell the leader of a new session, so
+// every process the user starts in that terminal -- the agent CLI, its
+// wrappers, anything they spawn -- carries the root shell's pid as its session
+// id. Looking that up in the pane-owners map IS the join, with no walk.
+//
+// It matters most for a process that has already exited. An ancestor walk
+// needs /proc entries that are gone by then; a session id recorded into the
+// snapshot while the process lived still places its row afterwards, which is
+// what lets the home view say how a session ended.
+//
+// Field 6 of /proc/<pid>/stat, index 3 of the fields after comm. Same
+// LastIndex(')') rule as parentPID, for the same reason.
+func processSessionID(pid int) (int, bool) {
+	if pid <= 0 {
+		return 0, false
+	}
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0, false
+	}
+	line := string(data)
+	i := strings.LastIndex(line, ")")
+	if i < 0 {
+		return 0, false
+	}
+	fields := strings.Fields(line[i+1:])
+	if len(fields) < 4 {
+		return 0, false
+	}
+	sid, err := strconv.Atoi(fields[3])
+	if err != nil || sid <= 0 {
+		return 0, false
+	}
+	return sid, true
+}

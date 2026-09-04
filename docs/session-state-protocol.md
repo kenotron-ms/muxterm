@@ -115,14 +115,63 @@ protocol forgiving:
 - You never have to "catch up" after an outage. Just write the current truth.
 
 There is no heartbeat requirement and no timeout. A session that stops writing
-keeps its last declared state until its process exits, at which point the daemon
-reclaims the file.
+keeps its last declared state for as long as that state still describes
+something (see below).
+
+### What happens when your process exits
+
+This is the one rule worth knowing, because it decides whether your session's
+outcome is ever seen.
+
+**If your last written state was `done`, `failed`, or `stopped`, the row
+survives your process.** That is the point of the view: it answers "how did it
+end?", and a row that vanishes the instant your process exits cannot. So write
+your ending *before* you exit, and then just exit — do not delete the file.
+
+The ending is reclaimed when it stops being useful, not on a timer you have to
+think about:
+
+- the moment that **pane runs another session** — the new one supersedes it, so
+  a pane shows at most one ending, never a pile
+- the moment that **pane is closed** — closing a terminal is the user saying
+  they are done with it, endings included
+- after 24 hours, by the producer-side sweep, on a machine where nobody ever
+  opens the home view and neither of the above ever happens
+
+**If your last written state was `working` or `blocked`, the row is reclaimed
+as soon as your process is gone.** A session killed mid-flight never got to say
+how it went, and leaving it up would assert that it is still thinking, or still
+waiting on a human, when it is neither.
+
+A snapshot whose `pid` has been recycled by an unrelated process is always
+reclaimed, whatever it says (see `pidStart`).
+
+None of this depends on anyone watching. The row is placed from the `sid` you
+recorded in the file, not from your `/proc` entry, so a session that starts and
+finishes with no browser open still has its ending waiting when one opens.
+
+### `sid` — how a finished session is still found
+
+`sid` is your POSIX session id, and it is what makes the two rules above
+possible. sessiond gives every pane its own pty and makes the pane's root shell
+the leader of a new session, so **every process started in that terminal
+carries that shell's pid as its session id** — which is the exact key the
+daemon's pane map is built on. One integer, one lookup, no walk.
+
+Write it, and write it *while you are alive*:
+
+```sh
+sid=$(awk '{ n = index($0, ")"); split(substr($0, n + 2), f, " "); print f[4] }' /proc/self/stat)
+```
+
+Omit it and the daemon falls back to walking your process ancestry, which works
+while you are running and is impossible afterwards — so your ending would be
+reclaimed unseen. `muxterm session report` fills this in for you.
 
 ### Cleaning up
 
-You do not have to. The daemon deletes any snapshot whose `pid` is dead or has
-been recycled. Delete the file yourself only if you want a row to disappear
-*while its process keeps running*.
+You do not have to. Delete the file yourself only if you want a row to
+disappear *while its process keeps running*.
 
 ---
 
