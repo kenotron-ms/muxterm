@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>muxterm · home view (fixture preview)</title>
+    <style>
+      /* The 5x8 bitmap preview font, declared HERE rather than injected from
+         TypeScript, and with a RELATIVE url.
+
+         Here, because the rule has to exist before <mux-home> upgrades: the
+         component probes document.fonts on connect, and a rule that lands a
+         tick later makes the probe report "unusable" and silently drops every
+         tile to the text fallback. The app has no such race — app.ts injects
+         at module top level, before its own element is defined.
+
+         Relative, because the demo is served as plain files from wherever it
+         is put, possibly under a tunnel path prefix, where an absolute
+         /fonts/... would 404.
+
+         Family name must match PREVIEW_FONT_FAMILY in src/lib/fonts.ts. If it
+         ever stops matching, tiles degrade to readable text rather than
+         breaking. */
+      @font-face {
+        font-family: 'Spleen5x8';
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+        src: url('./fonts/Spleen5x8.woff2') format('woff2');
+      }
+
+      *,
+      *::before,
+      *::after {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        background: var(--chrome-body, #1a1b26);
+        color: var(--mux-fg, #a9b1d6);
+        font-family: system-ui, -apple-system, sans-serif;
+        overflow: hidden;
+      }
+      .shell {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+
+      /* ── demo-only control strip. Not part of the shipped UI. ── */
+      .demobar {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+        padding: 7px 12px;
+        background: var(--chrome-bar, #16161e);
+        border-bottom: 1px solid var(--chrome-border, #292e42);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 10.5px;
+        color: var(--chrome-text-dim, #565f89);
+        flex-shrink: 0;
+      }
+      .demobar .tag {
+        color: var(--mux-warn, #e0af68);
+        border: 1px solid var(--mux-warn, #e0af68);
+        border-radius: 3px;
+        padding: 0 5px;
+      }
+      .demobar button {
+        font: inherit;
+        background: transparent;
+        border: 1px solid var(--chrome-border, #292e42);
+        border-radius: 4px;
+        color: var(--chrome-text-dim, #565f89);
+        padding: 3px 9px;
+        cursor: pointer;
+      }
+      .demobar button.on {
+        color: var(--chrome-accent, #7aa2f7);
+        border-color: var(--chrome-accent, #7aa2f7);
+      }
+      .demobar input {
+        font: inherit;
+        background: var(--chrome-body, #1a1b26);
+        color: var(--chrome-text-bright, #c0caf5);
+        border: 1px solid var(--chrome-border, #292e42);
+        border-radius: 4px;
+        padding: 3px 6px;
+      }
+      .demobar select {
+        font: inherit;
+        background: var(--chrome-body, #1a1b26);
+        color: var(--chrome-text-dim, #565f89);
+        border: 1px solid var(--chrome-border, #292e42);
+        border-radius: 4px;
+        padding: 3px 6px;
+      }
+      .demobar .grow {
+        margin-left: auto;
+      }
+      #invariant {
+        color: var(--mux-ok, #9ece6a);
+      }
+
+      /* ── app shell mock ── */
+      .content {
+        flex: 1;
+        display: flex;
+        flex-direction: row;
+        min-height: 0;
+      }
+      .sidebar {
+        width: 224px;
+        flex-shrink: 0;
+        background: var(--chrome-bar, #16161e);
+        border-right: 1px solid var(--chrome-border, #292e42);
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+      }
+      .sb-title {
+        padding: 10px 12px 8px;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--chrome-text-bright, #c0caf5);
+        letter-spacing: 0.06em;
+        border-bottom: 1px solid var(--chrome-border, #292e42);
+        font-family: system-ui, sans-serif;
+      }
+      .sb-heading {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 9px;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        color: var(--chrome-text-dim, #565f89);
+        margin: 10px 0 6px 9px;
+      }
+      .ws-card {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 7px 10px;
+        margin: 2px 6px;
+        border-radius: 5px;
+        cursor: pointer;
+        border: 1px solid transparent;
+      }
+      .ws-card:hover {
+        background: var(--chrome-hover, #1f2335);
+      }
+      .ws-card.active {
+        background: var(--chrome-hover, #1f2335);
+        border-color: var(--chrome-accent, #7aa2f7);
+      }
+      .ws-card .dot {
+        font-size: 7px;
+        line-height: 1;
+        color: var(--chrome-text-dim, #565f89);
+      }
+      .ws-card .dot.on {
+        color: var(--chrome-accent, #7aa2f7);
+      }
+      .ws-name {
+        flex: 1;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--chrome-text-bright, #c0caf5);
+        font-family: system-ui, sans-serif;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .ws-needs {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 9px;
+        line-height: 1.5;
+        color: var(--mux-warn, #e0af68);
+        background: color-mix(in srgb, var(--mux-warn, #e0af68) 18%, transparent);
+        border: 1px solid color-mix(in srgb, var(--mux-warn, #e0af68) 45%, transparent);
+        padding: 0 5px;
+        border-radius: 8px;
+      }
+      .ws-panes {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 9px;
+        line-height: 1.5;
+        color: var(--chrome-text-dim, #565f89);
+      }
+
+      #main {
+        flex: 1;
+        position: relative;
+        min-width: 0;
+        overflow: hidden;
+      }
+      #dock-stand-in {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 8px;
+        color: var(--chrome-text-dim, #565f89);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        text-align: center;
+        padding: 24px;
+      }
+      #dock-stand-in b {
+        color: var(--chrome-text-bright, #c0caf5);
+      }
+
+      #flash {
+        position: fixed;
+        left: 50%;
+        bottom: 18px;
+        transform: translateX(-50%) translateY(8px);
+        background: var(--chrome-bar, #16161e);
+        border: 1px solid var(--chrome-accent, #7aa2f7);
+        color: var(--chrome-text-bright, #c0caf5);
+        border-radius: 6px;
+        padding: 8px 14px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.18s, transform 0.18s;
+        z-index: 50;
+        max-width: min(680px, 92vw);
+      }
+      #flash.on {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="demobar">
+        <span class="tag">FIXTURE PREVIEW — no daemon, no websocket</span>
+        <span>scenario:</span>
+        <button data-scenario="busy" class="on">busy</button>
+        <button data-scenario="crowd">crowd</button>
+        <button data-scenario="clear">all clear</button>
+        <button data-scenario="empty">empty</button>
+        <span>palette:</span>
+        <select id="palette"></select>
+        <span>backtick probe:</span>
+        <input
+          id="typeprobe"
+          type="text"
+          size="18"
+          placeholder="` types, ctrl+` toggles"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <span class="grow" id="invariant"></span>
+      </div>
+
+      <div class="content">
+        <div class="sidebar">
+          <div class="sb-title">muxterm</div>
+          <mux-start-card></mux-start-card>
+          <div class="sb-heading">workspaces</div>
+          <div id="ws-list"></div>
+        </div>
+
+        <div id="main">
+          <mux-home></mux-home>
+          <div id="dock-stand-in" style="display: none">
+            <div>workspace <b id="stand-in-ws"></b> selected</div>
+            <div>the dock takes the right side here in the app</div>
+            <div>click the Start card, or press ctrl+` , to come back</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="flash"></div>
+    <script type="module" src="../src/demo/home-demo.ts"></script>
+  </body>
+</html>

@@ -206,6 +206,10 @@ export class MuxHome extends LitElement {
       --goalc: var(--chrome-driver-accent);
       --surface: var(--chrome-bar);
       --mute: var(--chrome-text-dim);
+      /* Same family as --mute, lifted toward the foreground. --chrome-text-dim
+         sits around 3:1 on the body background, which is fine at 13px and thin
+         at the 8.5-10px monospace sizes this view uses a lot of. */
+      --mute-sm: color-mix(in srgb, var(--chrome-text-dim) 62%, var(--chrome-text-bright));
       --dim: var(--mux-fg);
     }
 
@@ -234,7 +238,7 @@ export class MuxHome extends LitElement {
     .sect .ss {
       font-family: var(--mono);
       font-size: 10.5px;
-      color: var(--mute);
+      color: var(--mute-sm);
       margin-top: 2px;
     }
     .sect .sp {
@@ -317,9 +321,11 @@ export class MuxHome extends LitElement {
       padding: 11px 13px;
       cursor: pointer;
     }
-    .item.on,
-    .rowc.on,
-    .tl.on {
+    /* Keyboard focus ring. Named "sel", not "on": "on" is already the
+       segmented control's selected state, in this same shadow root. */
+    .item.sel,
+    .rowc.sel,
+    .tl.sel {
       outline: 1px solid var(--chrome-accent);
       outline-offset: 1px;
     }
@@ -339,7 +345,7 @@ export class MuxHome extends LitElement {
       margin-left: auto;
       font-family: var(--mono);
       font-size: 9.5px;
-      color: var(--mute);
+      color: var(--mute-sm);
     }
     .iask {
       font-size: 12.5px;
@@ -427,7 +433,7 @@ export class MuxHome extends LitElement {
       text-align: right;
       font-family: var(--mono);
       font-size: 9.5px;
-      color: var(--mute);
+      color: var(--mute-sm);
       white-space: nowrap;
     }
 
@@ -463,10 +469,17 @@ export class MuxHome extends LitElement {
     }
 
     /* ── TILES ───────────────────────────────────────────────────────── */
+    /* Four fixed 220px columns, left-aligned — the mockup's geometry.
+       Fixed rather than 1fr so a section holding one session shows one
+       thumbnail at the same size as every other, instead of a lone tile
+       stretched across the row. auto-fill (not auto-fit) keeps the column
+       structure when a section is short. */
     .tiles {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fill, ${TILE_W + 20}px);
+      justify-content: start;
       gap: 9px;
+      max-width: ${4 * (TILE_W + 20) + 3 * 9}px;
     }
     .tl {
       border: 1px solid var(--chrome-border);
@@ -527,7 +540,7 @@ export class MuxHome extends LitElement {
       border-top: 1px solid var(--chrome-border);
       font-family: var(--mono);
       font-size: 8.5px;
-      color: var(--mute);
+      color: var(--mute-sm);
       display: flex;
       justify-content: space-between;
       gap: 6px;
@@ -683,7 +696,7 @@ export class MuxHome extends LitElement {
     this._cursor = Math.min(n - 1, Math.max(0, this._cursor + delta));
     void this.updateComplete.then(() => {
       this.renderRoot
-        .querySelector<HTMLElement>('.on')
+        .querySelector<HTMLElement>('.sel')
         ?.scrollIntoView({ block: 'nearest' });
     });
   }
@@ -812,7 +825,7 @@ export class MuxHome extends LitElement {
   private _askCard(s: SessionState, focused: boolean): TemplateResult {
     return html`
       <div
-        class="item ${focused ? 'on' : ''}"
+        class="item ${focused ? 'sel' : ''}"
         @click="${() => this._onItemClick(s)}"
       >
         <div class="ih">
@@ -839,7 +852,7 @@ export class MuxHome extends LitElement {
   private _row(s: SessionState, focused: boolean): TemplateResult {
     const a = age(s.updatedAt, this._now);
     return html`
-      <div class="rowc ${focused ? 'on' : ''}" @click="${() => this._onItemClick(s)}">
+      <div class="rowc ${focused ? 'sel' : ''}" @click="${() => this._onItemClick(s)}">
         <span class="mark ${markClass(s)}">${NEEDS_GLYPH}</span>
         <div>
           <div class="rn">${s.name} ${this._modeChip(s)}</div>
@@ -861,7 +874,7 @@ export class MuxHome extends LitElement {
     const g = groupFor(s);
     const needs = g === 'Needs input';
     const cls = `tl ${needs ? 'need' : ''} ${s.state === 'failed' ? 'fail' : ''} ${
-      focused ? 'on' : ''
+      focused ? 'sel' : ''
     }`;
 
     let body: TemplateResult;

@@ -15,8 +15,33 @@ import { terminalRegistry } from '../lib/terminal-registry.js';
 import { muxLog } from '../lib/mux-log.js';
 import type { CloseTarget, SessiondPaneInfo, LayoutCommand } from '../types.js';
 import { store } from '../state.js';
+import { homeSessions } from '../lib/home-sessions.js';
+import { groupFor, type SessionState } from '../lib/session-state.js';
 
 type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
+
+/**
+ * The state mark a pane tab carries for the session running in it.
+ *
+ * Same vocabulary and same placement rule as the home view: groupFor() decides,
+ * never a re-derivation from `state` — an open PR wins over a terminal state in
+ * exactly one place. This is why the home view needs no list for the workspace
+ * you are already looking at.
+ */
+function sessionMarkClass(s: SessionState): string {
+  const g = groupFor(s);
+  if (g === 'Needs input') return 'need';
+  if (g === 'Working') return 'work';
+  if (g === 'Ready for review') return 'done';
+  return s.state === 'failed' ? 'fail' : 'idle';
+}
+
+function sessionMarkTitle(s: SessionState): string {
+  const g = groupFor(s);
+  if (g === 'Needs input') return `${s.name}: ${s.waitingFor ?? 'needs input'}`;
+  if (g === 'Ready for review') return `${s.name}: PR #${s.pr ?? 0}`;
+  return `${s.name}: ${s.state}`;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TerminalRenderer
@@ -377,28 +402,65 @@ export class MuxDock extends LitElement {
     }, 400);
   }
 
+  private _unsubSessions: (() => void) | null = null;
+
+  /** A pane's display title, independent of whatever decoration the tab DOM
+   *  currently carries. Reading it back out of textContent would fold the bell
+   *  dot and the session mark into the name on the next rename. */
+  private _paneTitle(paneId: number): string {
+    return (
+      this._customTitles.get(this._customTitleKey(paneId)) ??
+      this.panes.find((p) => p.paneId === paneId)?.title ??
+      `Pane ${paneId}`
+    );
+  }
+
+  /** The session running in this pane, if the home producer knows of one. */
+  private _sessionForPane(paneId: number): SessionState | undefined {
+    // Matched on workspace too: paneIds are only unique within a workspace.
+    return homeSessions.sessions.find(
+      (s) => s.paneId === paneId && s.workspaceId === this.workspaceKey,
+    );
+  }
+
+  /** Repaint one tab: [bell dot] title [session state mark]. */
+  private _paintTab(tabEl: HTMLElement, paneId: number, title: string): void {
+    tabEl.textContent = '';
+    if (store.paneBellActive(paneId)) {
+      const bell = document.createElement('span');
+      bell.className = 'mux-bell-prefix';
+      bell.textContent = '● ';
+      tabEl.appendChild(bell);
+    }
+    tabEl.appendChild(document.createTextNode(title));
+    // Bell and session mark are different questions -- "something happened here
+    // while you were away" versus "this session is blocked" -- so both show.
+    const session = this._sessionForPane(paneId);
+    if (session) {
+      const mark = document.createElement('span');
+      mark.className = `mux-session-mark ${sessionMarkClass(session)}`;
+      mark.textContent = ' ✽';
+      mark.title = sessionMarkTitle(session);
+      tabEl.appendChild(mark);
+    }
+  }
+
   private _refreshBellTitles(): void {
     for (const [paneId, panel] of this._panels) {
-      const rawTitle =
-        this._customTitles.get(this._customTitleKey(paneId)) ??
-        this.panes.find((p) => p.paneId === paneId)?.title ??
-        `Pane ${paneId}`;
       const tabEl = (panel as unknown as { view?: { tab?: { element?: HTMLElement } } })
         .view?.tab?.element?.querySelector<HTMLElement>('.dv-default-tab-content');
       if (!tabEl) continue;
-      tabEl.textContent = '';
-      if (store.paneBellActive(paneId)) {
-        const bell = document.createElement('span');
-        bell.className = 'mux-bell-prefix';
-        bell.textContent = '● ';
-        tabEl.appendChild(bell);
-      }
-      tabEl.appendChild(document.createTextNode(rawTitle));
+      this._paintTab(tabEl, paneId, this._paneTitle(paneId));
     }
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
+
+    // Session state changes repaint the tab marks. Low rate (one frame per
+    // session state change), and it touches text nodes only — no Lit render,
+    // so dockview's DOM is never rebuilt underneath it.
+    this._unsubSessions = homeSessions.subscribe(() => this._refreshBellTitles());
 
     // mux-dock is a light-DOM element but lives inside mux-app's ShadowRoot.
     // All styles must be injected into that ShadowRoot — document.head styles
@@ -620,6 +682,18 @@ export class MuxDock extends LitElement {
           font-style: normal;
         }
 
+        /* Per-session state mark on pane tabs. Same vocabulary as the home
+           view; see sessionMarkClass(). */
+        mux-dock .mux-session-mark {
+          font-style: normal;
+          margin-left: 4px;
+        }
+        mux-dock .mux-session-mark.need { color: var(--mux-warn, #e0af68); }
+        mux-dock .mux-session-mark.work { color: var(--mux-ansi-6, #7dcfff); }
+        mux-dock .mux-session-mark.done { color: var(--mux-ok, #9ece6a); }
+        mux-dock .mux-session-mark.fail { color: var(--mux-error, #f7768e); }
+        mux-dock .mux-session-mark.idle { color: var(--chrome-text-dim, #565f89); }
+
         /* Mobile: hide tab bar on narrow viewports */
         @media (max-width: 768px) {
           mux-dock .dv-tabs-and-actions-container {
@@ -696,6 +770,8 @@ export class MuxDock extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.removeEventListener('dblclick', this._onTabDblClick);
+    this._unsubSessions?.();
+    this._unsubSessions = null;
     this._dv?.dispose();
     this._dv = null;
   }
@@ -711,7 +787,10 @@ export class MuxDock extends LitElement {
     if (!activePanel) return;
 
     const paneId = parseInt(activePanel.id, 10);
-    const currentTitle = (tabContent.textContent ?? '').replace(/^● /, '');
+    // From the model, not from the tab DOM: the tab now also carries a session
+    // state mark, and scraping textContent would rename the pane to
+    // "my-pane ✽".
+    const currentTitle = this._paneTitle(paneId);
 
     // Hide the tab text and insert an input in its place.
     tabContent.style.display = 'none';
@@ -726,14 +805,7 @@ export class MuxDock extends LitElement {
       const next = save ? (input.value.trim() || currentTitle) : currentTitle;
       input.remove();
       tabContent.style.display = '';
-      tabContent.textContent = '';
-      if (store.paneBellActive(paneId)) {
-        const bell = document.createElement('span');
-        bell.className = 'mux-bell-prefix';
-        bell.textContent = '● ';
-        tabContent.appendChild(bell);
-      }
-      tabContent.appendChild(document.createTextNode(next));
+      this._paintTab(tabContent, paneId, next);
       if (save && next !== currentTitle) {
         this._customTitles.set(this._customTitleKey(paneId), next);
         this.dispatchEvent(new CustomEvent('pane-rename', { detail: { paneId, name: next }, bubbles: true, composed: true }));
