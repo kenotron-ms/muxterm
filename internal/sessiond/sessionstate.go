@@ -179,9 +179,26 @@ type SessionState struct {
 // NeedsInput reports whether this session belongs in the home view's
 // "Needs input" group.
 //
-// An interactive session that has simply ended its turn does NOT need input in
-// the sense this view means -- it is resting, which is its normal condition.
-// Only a blocked session genuinely wants a human.
+// Two ways in, and the second is the entire reason Mode exists on the wire:
+//
+//  1. Blocked -- sitting at a permission prompt, or having asked something.
+//  2. An AUTONOMOUS session that is Stopped. Going quiet means "resting" for
+//     an interactive session and "the loop broke" for an autonomous one. An
+//     interactive session ending its turn rests at Stopped and must NEVER
+//     surface here; an autonomous one reaching Stopped did not reach its own
+//     stop condition and is waiting for somebody to decide what happens next.
+//
+// Failed is deliberately absent: it is a VERDICT, and a verdict can be read at
+// leisure in "Completed". Stopped is the ABSENCE of one, which is what wants a
+// human.
+//
+// This is the Go mirror of needsInput() in web/src/lib/session-state.ts, which
+// is where the rule is actually CONSUMED -- grouping happens in the browser.
+// Nothing in this package calls this today; it exists so the pinned contract
+// states the rule in both languages. If you change one, change the other.
 func (s SessionState) NeedsInput() bool {
-	return s.State == SessionStateBlocked
+	if s.State == SessionStateBlocked {
+		return true
+	}
+	return s.Mode == ModeAutonomous && s.State == SessionStateStopped
 }

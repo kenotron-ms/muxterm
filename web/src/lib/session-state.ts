@@ -139,11 +139,16 @@ export type HomeGroup = (typeof HOME_GROUPS)[number];
 /**
  * Place a session into its home-view group.
  *
- * Note the ordering: an open PR wins over a terminal state, because once
- * something is reviewable that is the action it wants from you.
+ * Note the ordering: needs-input wins over everything, then an open PR wins
+ * over a terminal state, because once something is reviewable that is the
+ * action it wants from you.
+ *
+ * The rule for the first group lives in needsInput() and is called from here
+ * rather than repeated, so the group a row lands in and the number on the
+ * Start card can never disagree about what "needs input" means.
  */
 export function groupFor(s: SessionState): HomeGroup {
-  if (s.state === 'blocked') return 'Needs input';
+  if (needsInput(s)) return 'Needs input';
   if (s.pr && s.pr > 0) return 'Ready for review';
   if (s.state === 'working') return 'Working';
   return 'Completed';
@@ -152,12 +157,38 @@ export function groupFor(s: SessionState): HomeGroup {
 /**
  * Whether a session belongs in "Needs input".
  *
- * An interactive session that has ended its turn is resting, which is its
- * normal condition -- it does not need input in the sense this view means.
- * Only a blocked session genuinely wants a human.
+ * Two ways in, and the second is the entire reason `mode` exists on the wire.
+ *
+ * 1. `blocked` -- it is sitting at a permission prompt or has asked something.
+ *    Explicit, any mode.
+ *
+ * 2. An AUTONOMOUS session that is `stopped`. This is the load-bearing half of
+ *    the mode contract: going quiet means "resting" for an interactive session
+ *    and "the loop broke" for an autonomous one. An interactive session ending
+ *    its turn rests at `stopped` and must NEVER surface here -- that is its
+ *    contract, not a fault. An autonomous session reaching `stopped` did not
+ *    reach its own stop condition: it hit a turn cap or was cancelled, and it
+ *    is standing there with no verdict, waiting for somebody to decide whether
+ *    to resume it, re-scope it, or let it go. Same state word, opposite
+ *    meaning, and `mode` is the only thing that can tell them apart.
+ *
+ * `failed` is deliberately NOT here, even though an autonomous lane can only
+ * reach it from its own goal evaluator. `failed` is a VERDICT -- the lane
+ * finished and the answer was no. `stopped` is the ABSENCE of one. The row
+ * that wants a human decision is the one nobody has decided yet; a verdict can
+ * be read at leisure in "Completed", which is where the triage grouping
+ * deliberately merges every ending.
+ *
+ * Known transient: a goal lane that is about to report `achieved` passes
+ * through `autonomous` + `stopped` for the seconds its summary call takes, so
+ * it can flash here before settling into "Completed". That is the direction
+ * chosen on purpose -- the alternative is a lane that broke reading as a quiet
+ * resting session, which HIDES a failure, and hiding is the one direction this
+ * view must never fail in.
  */
 export function needsInput(s: SessionState): boolean {
-  return s.state === 'blocked';
+  if (s.state === 'blocked') return true;
+  return s.mode === 'autonomous' && s.state === 'stopped';
 }
 
 /** Count of sessions needing input, for the sidebar Start card. */

@@ -117,10 +117,19 @@ function choicesFor(s: SessionState): Choice[] {
   }
 }
 
-/** The ask, written out. */
+/**
+ * The ask, written out.
+ *
+ * An autonomous lane can reach this group without a `waitingFor` at all: it is
+ * here because its loop stopped SHORT of its own condition, not because it
+ * asked a question. Falling through to "input needed" there would misdescribe
+ * why it wants you -- nobody typed a prompt for you to answer, the run simply
+ * ran out of turns. Said plainly instead, so the row explains itself.
+ */
 function askFor(s: SessionState): string {
   const doing = s.doing?.trim() ?? '';
-  const reason = s.waitingFor ?? 'input needed';
+  const stoppedShort = s.mode === 'autonomous' && s.state === 'stopped';
+  const reason = s.waitingFor ?? (stoppedShort ? 'loop stopped short of its goal' : 'input needed');
   if (doing === '') return `${reason[0]?.toUpperCase()}${reason.slice(1)}.`;
   return `${reason[0]?.toUpperCase()}${reason.slice(1)} — ${doing}`;
 }
