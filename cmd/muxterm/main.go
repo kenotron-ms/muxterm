@@ -486,12 +486,40 @@ func openBrowser(url string) {
 // just when explicitly selected.
 func runAmplifierBundleInstall() error {
 	const bundleURI = "git+https://github.com/kenotron-ms/muxterm@main#subdirectory=behaviors/muxterm.yaml"
+	const bundleName = "muxterm"
 
 	cmd := exec.Command("amplifier", "bundle", "add", "--app", bundleURI)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("amplifier bundle add failed: %w\n\nMake sure 'amplifier' is installed and on your PATH.", err)
+	}
+
+	// `bundle add` is registration, not a fetch. On a machine that already ran
+	// this command it prints "Bundle already registered as app bundle" and
+	// stops -- leaving the CACHED module source untouched at whatever revision
+	// it was first pulled at.
+	//
+	// That is the silent-failure shape: upgrading muxterm, re-running
+	// `muxterm amplifier install`, and getting a hook from weeks ago with no
+	// error to explain why the home view reports nothing. Observed in the
+	// wild -- a cache holding only __init__.py, with state.py and classify.py
+	// missing entirely because they postdated the first install.
+	//
+	// So always follow the add with an explicit refresh. --yes because this is
+	// a non-interactive subprocess and the prompt would otherwise abort it.
+	upd := exec.Command("amplifier", "bundle", "update", bundleName, "--yes")
+	upd.Stdout = os.Stdout
+	upd.Stderr = os.Stderr
+	if err := upd.Run(); err != nil {
+		// Non-fatal on purpose: registration succeeded, so the bundle IS
+		// installed and a first-time install is already correct. Only the
+		// refresh half failed, and naming the manual command is more useful
+		// than failing the whole install over it.
+		fmt.Fprintf(os.Stderr,
+			"\nwarning: could not refresh the muxterm bundle sources: %v\n"+
+				"If muxterm's Amplifier features look stale, run:\n"+
+				"  amplifier bundle update %s --yes\n", err, bundleName)
 	}
 	return nil
 }
