@@ -1,5 +1,25 @@
 # Goal: SSH remote sessiond, LAN + Tailscale, validated on DTU
 
+## Result (2026-09-05)
+
+A PASS · B PASS · C PASS · D PASS · E PASS · **F DESCOPED** · G PASS · H PASS.
+
+F (Tailscale) was withdrawn by the user mid-run: Tailscale is a layer users manage
+themselves, and SSH working is the whole requirement. Cross-machine tailnet routing was
+confirmed working before descoping (`ip route get` → `dev tailscale0`, ssh reached a Darwin
+host, `Probe` correctly found `/opt/homebrew/bin/muxterm` there); the full pane round-trip
+was not attempted because that host runs a released muxterm without `sessiond-connect`.
+Nothing in the transport is tailnet-specific — C's address-agnostic requirement covers it.
+
+E was validated against an Incus container (`muxterm-remote-dtu`, Debian 13.6) over real
+SSH on port 2222, then destroyed.
+
+**Defect found in the repo's dev workflow, unrelated to this work:** `make dev-local`
+isolates `XDG_RUNTIME_DIR` but not `XDG_DATA_HOME`. The restore snapshot resolves via
+`snapshotDir()` → `$XDG_DATA_HOME/muxterm/restore-snapshot.json`, so any dev daemon reads
+the user's live snapshot on start and overwrites it on shutdown. Reproduced and recovered
+from during this run. Not fixed here — it belongs in its own change.
+
 ## Outcome
 
 A muxterm CLI on this machine drives panes on a separate DTU host over real SSH —
