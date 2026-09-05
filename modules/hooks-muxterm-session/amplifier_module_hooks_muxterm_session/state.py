@@ -48,10 +48,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +108,12 @@ SCHEMA_VERSION = 1
 # should be allowed to grow a snapshot file without limit.
 NAME_MAX_CHARS = 80
 DOING_MAX_CHARS = 120
+# The one variable part of a mid-turn `doing` phrase -- a filename, a search
+# pattern, an agent name. It shares the line with the phrase around it and, for
+# a sub-agent, with an "[explorer] " prefix, so it is bounded well below
+# DOING_MAX_CHARS: one long filename must not squeeze out the English half of
+# the row, which is the half that says what is happening.
+SUBJECT_MAX_CHARS = 60
 DONE_MEANS_MAX_CHARS = 400
 KNOWS_MAX_ENTRIES = 50
 KNOWS_ENTRY_MAX_CHARS = 256
@@ -772,7 +780,16 @@ class SessionStateTracker:
         if record is None:
             return
         tool = data.get("tool_name")
-        doing = _describe_tool(tool, data.get("tool_input"))
+        # A tool call that cannot be named specifically -- a shell command
+        # whose verb this hook does not recognise -- falls back to what the
+        # session is FOR rather than to a generic verb. The record already
+        # carries both candidates: the label derived once from the first prompt
+        # (label.py) and, failing that, that prompt's first line. A row reading
+        # "auth redirect loop" tells you which session you are looking at; one
+        # reading "Running a shell command" is true of every row on the page.
+        doing = _describe_tool(
+            tool, data.get("tool_input"), fallback=record.label or record.name
+        )
         if self._is_child(data):
             record.doing = _clip(self._agent_prefix(data) + doing, DOING_MAX_CHARS)
         else:
@@ -1099,19 +1116,389 @@ class SessionStateTracker:
                 _AGENTS.pop(child, None)
 
 
-def _describe_tool(tool: Any, tool_input: Any) -> str:
-    """One short human line for a tool call.
+# --- mid-turn narration ----------------------------------------------------
+#
+# What the row says WHILE a turn is running. At the END of a turn a model
+# writes that line (classify.py); mid-turn there is deliberately no model,
+# because this code runs on every single tool invocation and a provider
+# round-trip per tool call would cost far more than the row is worth. So
+# mid-turn narration is templating: a fixed English phrase per tool, plus at
+# most one short subject lifted out of the arguments.
+#
+# The rule that shapes all of it is that tool ARGUMENTS are never rendered.
+# They are unbounded by nature -- a prompt, a file body, a shell pipeline --
+# and this line is one row in a list somebody scans, so a truncated fragment of
+# a command teaches nothing about what the session is doing. That is not a
+# hypothetical worry: this used to end in `return f"{name}: {value}"` with
+# "command" among its keys, and live rows read
+#
+#     bash: cd /run/user/1000/muxterm/session-state && ls -la && echo "=== CO…
+#
+# A subject is lifted only when it is short AND is the thing the row is about:
+# a file's basename, a search pattern, an agent name, a hostname. Where no such
+# subject exists the phrase gets vaguer, never more literal -- a vague true
+# phrase costs a little information, whereas a leaked argument costs the whole
+# line and tells you nothing anyway.
 
-    Deliberately shallow: it names the tool and, where a single obvious subject
-    exists, that subject. It never renders arbitrary tool arguments, because a
-    prompt or a file body would blow the line budget and leak content into a
-    file whose whole point is being cheap to read.
+
+def _arg(args: dict[str, Any], *keys: str) -> str:
+    """First non-empty string argument among `keys`."""
+    for key in keys:
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _phrase(verb: str, subject: str, when_unknown: str) -> str:
+    """`Reading state.py`, or `Reading a file` when no subject survived."""
+    return f"{verb} {subject or when_unknown}"
+
+
+def _basename(path: Any) -> str:
+    """The last component of a path -- the part that identifies it.
+
+    Every session in the home view is running somewhere deep inside a worktree,
+    so the leading directories are simultaneously identical across rows and
+    long enough to eat the entire line budget on their own. `state.py` is the
+    information; the sixty characters in front of it are not.
     """
-    name = tool if isinstance(tool, str) and tool else "tool"
-    if not isinstance(tool_input, dict):
-        return name
-    for key in ("file_path", "path", "pattern", "command", "url", "agent", "skill_name"):
-        value = tool_input.get(key)
-        if isinstance(value, str) and value:
-            return f"{name}: {value}"
-    return name
+    if not isinstance(path, str):
+        return ""
+    text = path.strip()
+    if not text:
+        return ""
+    # An @mention ("@bundle:docs/README.md") names a file inside a bundle; the
+    # half after the colon is an ordinary path.
+    if text.startswith("@") and ":" in text:
+        text = text.split(":", 1)[1]
+    tail = text.rstrip("/").rsplit("/", 1)[-1]
+    return _clip(tail or text, SUBJECT_MAX_CHARS)
+
+
+# What a host may look like: letters, digits, dots, dashes, and the colons and
+# brackets of an IPv6 literal. Anything else is not a host, whatever urlsplit
+# says about it.
+_HOSTNAME = re.compile(r"^[A-Za-z0-9._~\[\]:-]{1,253}$")
+
+
+def _hostname(url: Any) -> str:
+    """The host a URL points at, and nothing else.
+
+    A URL is unbounded and routinely carries a query string, an access token or
+    a session id. The host answers the only question the row is asking -- what
+    is this session talking to -- and cannot leak a credential on the way.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return ""
+    text = url.strip()
+    try:
+        # urlsplit needs an authority marker; "example.com/x" has none.
+        host = urlsplit(text if "//" in text else "//" + text).hostname
+    except ValueError:
+        return ""
+    # urlsplit is not a validator: handed "not a url at all" it hands back the
+    # whole string as the host. Without this shape check the one argument this
+    # function exists to keep off the row would go straight onto it.
+    if not host or not _HOSTNAME.match(host):
+        return ""
+    return _clip(host, SUBJECT_MAX_CHARS)
+
+
+# Shell command lines are scanned, never shown, so the scan is bounded twice:
+# by how much of the string is read and by how many segments are considered. A
+# command can legitimately be kilobytes long (a heredoc carrying a whole
+# script), and the verb that names it is always in the first line or two.
+_BASH_MAX_SCAN_CHARS = 1024
+_BASH_MAX_SEGMENTS = 8
+
+# Control operators. Splitting on these is what lets the scan walk PAST a
+# preamble -- `cd /tmp && node -e "..."` is a node invocation, and taking
+# argv[0] is exactly how `cd /run/user/...` ended up on a row.
+_BASH_SPLIT = re.compile(r"&&|\|\||;|\||&|\n")
+
+# An environment assignment in front of a command (`GOFLAGS=-mod=mod go test`).
+_BASH_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# Tokenisation. A quoted run counts as one word, so `cat 'my file.txt'` yields
+# a filename rather than the word "my" -- a fragment of an argument is exactly
+# the kind of half-truth this whole function exists to keep off the row.
+_BASH_TOKEN = re.compile(r"'[^']*'|\"[^\"]*\"|\S+")
+
+# A subcommand: lowercase, short, no path separator. The shape test is what
+# keeps `git -C /some/worktree status` from reporting the worktree as the
+# subcommand.
+_BASH_SUBCOMMAND = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
+
+# Words that sit in FRONT of the command that matters: wrappers that delegate
+# to their argument, and the shell keywords that open a branch or a loop body.
+# Dropping them is not cosmetic -- `timeout 30 make build` is a build.
+_BASH_SKIP_WORDS = frozenset(
+    {
+        "sudo", "env", "time", "nohup", "exec", "command", "builtin",
+        "nice", "stdbuf", "timeout", "xargs", "watch",
+        "then", "do", "else", "elif",
+    }
+)
+
+# Verb -> phrase. Small on purpose: a verb belongs here only when its phrase
+# beats the standing fallback, which is what this session is FOR. "Listing
+# files" earns its place; a phrase like "Managing files" for `mv` does not, and
+# such verbs are better left to fall through to the session's own label.
+_BASH_VERBS = {
+    "ls": "Listing files",
+    "find": "Listing files",
+    "fd": "Listing files",
+    "tree": "Listing files",
+    "grep": "Searching",
+    "rg": "Searching",
+    "ag": "Searching",
+    "pytest": "Running tests",
+    "vitest": "Running tests",
+    "jest": "Running tests",
+    "tsc": "Building",
+    "cmake": "Building",
+    "python": "Running a script",
+    "python3": "Running a script",
+    "node": "Running a script",
+    "curl": "Fetching a web page",
+    "wget": "Fetching a web page",
+    "ps": "Checking processes",
+    "pgrep": "Checking processes",
+    "lsof": "Checking processes",
+    "kill": "Stopping a process",
+    "pkill": "Stopping a process",
+    "killall": "Stopping a process",
+    # A lane parked in `sleep 120` is polling something, and saying so is the
+    # difference between a row that looks stuck and one that looks patient.
+    "sleep": "Waiting",
+}
+
+# Verbs whose subject is a file worth naming.
+_BASH_READ_VERBS = frozenset({"cat", "head", "tail", "bat", "less", "more"})
+
+# Toolchain drivers: the first word says which ecosystem, the SUBCOMMAND says
+# what is actually happening. `go build` and `go test` are different rows.
+_BASH_DRIVERS = frozenset(
+    {"go", "make", "npm", "pnpm", "yarn", "cargo", "uv", "just", "gradle", "mvn", "dotnet"}
+)
+_BASH_DRIVER_SUBS = {
+    "test": "Running tests",
+    "build": "Building",
+    "compile": "Building",
+    "install": "Installing dependencies",
+    "ci": "Installing dependencies",
+    "sync": "Installing dependencies",
+    "add": "Installing dependencies",
+    "run": "Running a script",
+    "exec": "Running a script",
+    "vet": "Checking the code",
+    "lint": "Checking the code",
+    "check": "Checking the code",
+    "fmt": "Formatting code",
+    "format": "Formatting code",
+}
+# What a driver means with no recognised subcommand. `make dev-local` is still
+# a make invocation; `go mod tidy` is honestly just "go".
+_BASH_DRIVER_DEFAULTS = {
+    "make": "Building",
+    "cargo": "Building",
+    "gradle": "Building",
+    "mvn": "Building",
+    "dotnet": "Building",
+}
+
+
+def _bash_segments(command: str) -> list[list[str]]:
+    """Split a command line into candidate commands, preamble already stripped.
+
+    Each segment is returned as bare tokens with the leading noise removed:
+    environment assignments, wrapper commands, stray flags, and the shell
+    grouping punctuation that makes `(cd foo && make)` two words instead of a
+    parenthesis. Segments are returned in order so the caller can walk forward
+    until one of them is a command it recognises.
+    """
+    segments: list[list[str]] = []
+    for raw in _BASH_SPLIT.split(command[:_BASH_MAX_SCAN_CHARS])[:_BASH_MAX_SEGMENTS]:
+        tokens = [word.strip("()`'\"") for word in _BASH_TOKEN.findall(raw)]
+        index = 0
+        while index < len(tokens):
+            word = tokens[index]
+            if (
+                not word
+                or word in _BASH_SKIP_WORDS
+                or _BASH_ASSIGNMENT.match(word)
+                or word.startswith("-")
+                or word.isdigit()
+            ):
+                index += 1
+                continue
+            break
+        if index < len(tokens):
+            segments.append(tokens[index:])
+    return segments
+
+
+def _bash_subcommand(rest: list[str]) -> str:
+    """The subcommand word of a `git`/`go`/`npm` style invocation.
+
+    Skips flags, and skips the argument of a short flag, because a short flag
+    usually takes one (`git -C <dir> status`, `go -C <dir> build`). A long flag
+    is left alone: `--no-pager` takes nothing, and swallowing the next word
+    would eat the subcommand itself.
+    """
+    skip_next = False
+    for token in rest:
+        if skip_next:
+            skip_next = False
+            continue
+        if token.startswith("--"):
+            continue
+        if token.startswith("-"):
+            skip_next = len(token) == 2
+            continue
+        if _BASH_SUBCOMMAND.match(token):
+            return token
+        return ""
+    return ""
+
+
+def _bash_file_arg(rest: list[str]) -> str:
+    """The file a `cat`/`head`/`tail` is aimed at, as a basename."""
+    skip_next = False
+    for token in rest:
+        if skip_next:
+            skip_next = False
+            continue
+        # A redirection and its target are plumbing, not the subject.
+        if token.startswith((">", "<")):
+            skip_next = True
+            continue
+        if token.startswith("-") or token.isdigit():
+            continue
+        # `cat $f` inside a loop names a file this hook cannot know. Printing
+        # the variable instead would be a row that is confidently wrong, which
+        # is worse than the vaguer phrase the caller falls back to.
+        if "$" in token or "`" in token:
+            return ""
+        return _basename(token)
+    return ""
+
+
+def _bash_redirect_target(rest: list[str]) -> str:
+    """The file a segment writes to, if it redirects into one.
+
+    `cat > notes.md <<'EOF'` is a WRITE wearing a read verb's clothes, and it
+    is how a shell writes a file. Without this the row would say "Reading",
+    which is not vague -- it is false, and this line has no way to say sorry.
+    """
+    take_next = False
+    for token in rest:
+        if take_next:
+            return _basename(token)
+        if token.startswith(">"):
+            tail = token.lstrip(">")
+            if tail:
+                return _basename(tail)
+            take_next = True
+    return ""
+
+
+def _describe_bash(command: Any) -> str:
+    """Name what a shell command is doing, without echoing any of it.
+
+    Returns "" when nothing in the command line is recognisable, which is the
+    signal for the caller to fall back to something better than a verb. The one
+    thing this must never do is return the command itself.
+
+    The scan walks segments until it finds a verb it knows rather than trusting
+    the first word, because the first word is so often preamble -- `cd`, an
+    environment assignment, a `mkdir` before the real work. An unrecognised
+    verb is not an answer either, so a pipeline whose head means nothing here
+    can still be named by something further along it.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return ""
+    for tokens in _bash_segments(command):
+        # `./scripts/build.sh` and `/usr/bin/make` are named by their last
+        # component, exactly as a bare `make` is.
+        verb = tokens[0].rsplit("/", 1)[-1]
+        if verb == "git":
+            # The one place a subcommand is echoed verbatim. `git status`,
+            # `git rebase` and `git push` are different enough to matter and
+            # short enough to fit, and the word is drawn from git's own
+            # vocabulary rather than from anything a user typed.
+            sub = _bash_subcommand(tokens[1:])
+            return f"git {sub}" if sub else "Running git"
+        if verb in _BASH_DRIVERS:
+            sub = _bash_subcommand(tokens[1:])
+            phrase = _BASH_DRIVER_SUBS.get(sub)
+            if phrase:
+                return phrase
+            return _BASH_DRIVER_DEFAULTS.get(verb, f"Running {verb}")
+        if verb in _BASH_READ_VERBS:
+            written = _bash_redirect_target(tokens[1:])
+            if written:
+                return f"Editing {written}"
+            return _phrase("Reading", _bash_file_arg(tokens[1:]), "a file")
+        phrase = _BASH_VERBS.get(verb)
+        if phrase:
+            return phrase
+        # An executable script (`./scripts/deploy.sh`) is named by what it is
+        # rather than by what it does, which is all this can honestly say.
+        if verb.endswith((".sh", ".py")):
+            return "Running a script"
+    return ""
+
+
+def _describe_tool(tool: Any, tool_input: Any, fallback: str = "") -> str:
+    """One short English phrase for a tool call in flight.
+
+    Deliberately shallow: it names the action and, where a single obvious
+    subject exists, that subject. It never renders arbitrary tool arguments,
+    because a prompt or a file body would blow the line budget and leak content
+    into a file whose whole point is being cheap to read.
+
+    `fallback` is what the row should say when there is nothing specific to say
+    -- a shell command this cannot name. Pass what the session is FOR, and the
+    row degrades to that instead of to a verb that is true of every session on
+    the page.
+    """
+    name = tool if isinstance(tool, str) and tool else ""
+    args = tool_input if isinstance(tool_input, dict) else {}
+
+    if name == "bash":
+        described = _describe_bash(args.get("command"))
+        if described:
+            return described
+        return _clip(fallback, SUBJECT_MAX_CHARS) or "Running a shell command"
+
+    if name == "read_file":
+        return _phrase("Reading", _basename(_arg(args, "file_path", "path")), "a file")
+    if name in ("write_file", "edit_file", "apply_patch"):
+        return _phrase("Editing", _basename(_arg(args, "file_path", "path")), "a file")
+    if name in ("grep", "glob"):
+        # A pattern is short by construction and is precisely what the search
+        # is about, so it is one of the few arguments worth showing.
+        pattern = _clip(_arg(args, "pattern"), SUBJECT_MAX_CHARS)
+        return f"Searching for {pattern}" if pattern else "Searching"
+    if name == "delegate":
+        return _phrase("Delegating to", _clip(_arg(args, "agent"), SUBJECT_MAX_CHARS), "a sub-agent")
+    if name == "load_skill":
+        skill = _clip(_arg(args, "skill_name", "info"), SUBJECT_MAX_CHARS)
+        return f"Loading the {skill} skill" if skill else "Loading a skill"
+    if name == "web_search":
+        query = _clip(_arg(args, "query"), SUBJECT_MAX_CHARS)
+        return f"Searching the web for {query}" if query else "Searching the web"
+    if name == "web_fetch":
+        return _phrase("Fetching", _hostname(_arg(args, "url")), "a web page")
+    if name == "todo":
+        return "Updating the task list"
+
+    # An unknown tool -- a recipe runner, an MCP server's verb -- still has one
+    # thing worth saying about it, and it is the only part of the call that is
+    # bounded and safe: its name. An event that arrives without even that has
+    # nothing specific left, so it takes the standing fallback.
+    if name:
+        return f"Running {_clip(name, SUBJECT_MAX_CHARS)}"
+    return _clip(fallback, SUBJECT_MAX_CHARS) or "Running a tool"
