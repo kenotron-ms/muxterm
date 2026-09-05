@@ -169,7 +169,11 @@ type SessionState struct {
 	Knows []string `json:"knows,omitempty"`
 
 	// PR is a pull request number associated with this session, if any.
-	// A non-zero PR promotes the session into the "Ready for review" group.
+	//
+	// It is a PROPERTY of the row, not a group. "Ready for review" used to be
+	// a group of its own promoted by this field; it was removed because having
+	// a PR says nothing about whether the session wants you, which is the only
+	// question the groups answer.
 	PR int `json:"pr,omitempty"`
 
 	// UpdatedAt is a Unix timestamp (seconds) of the last state change.

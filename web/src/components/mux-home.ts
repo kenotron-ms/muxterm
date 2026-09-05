@@ -6,11 +6,12 @@
  * already says where you are, so content starts at the top edge.
  *
  * Four sections, in this order, with these exact words:
- *   Needs input · Working · Ready for review · Completed
- * They are Claude Code's agent-view group names, inherited deliberately —
- * including the non-1:1 mapping onto session state (an open PR wins; Completed
- * merges done + failed + stopped). `groupFor()` in session-state.ts owns that
- * placement; this file never re-derives it.
+ *   Needs input · Running · Completed
+ * A lifecycle, not a taxonomy: anything launched enters Running and leaves it
+ * in exactly one of two directions — it wants you, or it is over. Completed
+ * merges done + failed + stopped, because "how did it end?" is a property of
+ * the row, not a reason to sit in a different group. `groupFor()` in
+ * session-state.ts owns that placement; this file never re-derives it.
  *
  * PRESENTATIONAL. It is handed `sessions` and reports intent through events.
  * It imports no socket, no store, no daemon — which is exactly why the
@@ -161,9 +162,10 @@ function age(updatedAt: number, nowSec: number): string {
 function markClass(s: SessionState): string {
   const g = groupFor(s);
   if (g === 'Needs input') return 'm-need';
-  if (g === 'Working') return 'm-work';
-  if (g === 'Ready for review') return 'm-done';
-  return s.state === 'failed' ? 'm-fail' : 'm-none';
+  if (g === 'Running') return 'm-work';
+  if (s.state === 'failed') return 'm-fail';
+  if (s.state === 'done') return 'm-done';
+  return 'm-none';
 }
 
 // ---------------------------------------------------------------------------
@@ -1028,12 +1030,12 @@ export class MuxHome extends LitElement {
       const ink =
         g === 'Needs input'
           ? palette.yellow
-          : g === 'Working'
+          : g === 'Running'
             ? palette.cyan
-            : g === 'Ready for review'
-              ? palette.green
-              : s.state === 'failed'
-                ? palette.red
+            : s.state === 'failed'
+              ? palette.red
+              : s.state === 'done'
+                ? palette.green
                 : palette.white;
       // mono: the stand-in tile has no per-cell colour to honour, and the ink
       // carries the state instead. Swapping in a real per-pane tile means

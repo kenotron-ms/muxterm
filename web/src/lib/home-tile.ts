@@ -93,8 +93,8 @@ export function tileLinesFor(s: SessionState): string[] {
       out.push(`${IND}> waiting for you...`);
       break;
 
-    case 'Working':
-      out.push('* working');
+    case 'Running':
+      out.push('* running');
       out.push('');
       out.push(...wrap(s.doing ?? '', TILE_COLS, IND));
       if (s.doneMeans) {
@@ -103,17 +103,14 @@ export function tileLinesFor(s: SessionState): string[] {
       }
       break;
 
-    case 'Ready for review':
-      out.push(`+ PR #${s.pr ?? 0}`);
-      out.push('');
-      out.push(...wrap(s.doing ?? 'ready for review', TILE_COLS, IND));
-      break;
-
-    case 'Completed':
-      out.push(s.state === 'failed' ? 'x failed' : `. ${s.state}`);
+    case 'Completed': {
+      const head = s.state === 'failed' ? 'x failed' : `. ${s.state}`;
+      // A PR is a property of a finished session, not a group of its own.
+      out.push(s.pr && s.pr > 0 ? `${head} - PR #${s.pr}` : head);
       out.push('');
       out.push(...wrap(s.doing ?? '', TILE_COLS, IND));
       break;
+    }
   }
 
   const trimmed = out.slice(0, TILE_ROWS);

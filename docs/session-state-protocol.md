@@ -226,7 +226,7 @@ silently never read, which is the most confusing possible outcome.
 | `doing` | string | One short line of current activity. |
 | `doneMeans` | string | This session's own definition of finished. |
 | `knows` | string[] | Distinct paths this session has read. |
-| `pr` | int | Pull-request number. Non-zero promotes the row to "Ready for review". |
+| `pr` | int | Pull-request number. Shown on the row; does not change its group. |
 
 `waitingFor` is one of: `permission prompt`, `input needed`, `sandbox request`,
 `worker request`, `dialog open`.

@@ -112,36 +112,46 @@ export interface SessionState {
   doneMeans?: string;
   /** Distinct artifact paths this session has read. */
   knows?: string[];
-  /** Associated PR number; non-zero promotes into "Ready for review". */
+  /**
+   * Associated PR number. Shown on the row; it does NOT change the row's
+   * group. Having a PR says nothing about whether the session wants you,
+   * which is the only question the groups answer.
+   */
   pr?: number;
   /** Unix timestamp (seconds) of the last state change. */
   updatedAt: number;
 }
 
 /**
- * Home view groups, in display order. Names and ordering are taken from Claude
- * Code's agent view.
+ * Home view groups, in display order.
  *
- * These deliberately do NOT map 1:1 onto states: "Ready for review" is derived
- * (the session has an open PR) and "Completed" merges done, failed, and
- * stopped. Those merges serve triage over taxonomy, and that editorial choice
- * is inherited on purpose along with the words.
+ * A lifecycle, not a taxonomy. Anything you launch enters `Running`, and
+ * leaves it in exactly one of two directions: it wants you (`Needs input`) or
+ * it is over (`Completed`). There is no third exit and no state that sits
+ * outside the story, which is what makes the set readable at a glance.
+ *
+ * `Completed` merges done, failed and stopped on purpose. How a session ended
+ * is a property of the row -- and the row's summary line says which -- not a
+ * reason to sit somewhere else. Splitting them would mean scanning three
+ * groups to answer "is anything still going?".
  */
-export const HOME_GROUPS = [
-  'Needs input',
-  'Working',
-  'Ready for review',
-  'Completed',
-] as const;
+export const HOME_GROUPS = ['Needs input', 'Running', 'Completed'] as const;
 
 export type HomeGroup = (typeof HOME_GROUPS)[number];
 
 /**
  * Place a session into its home-view group.
  *
- * Note the ordering: needs-input wins over everything, then an open PR wins
- * over a terminal state, because once something is reviewable that is the
- * action it wants from you.
+ * Three groups, and the shape is a lifecycle rather than a taxonomy: anything
+ * you launch enters `Running`, and leaves it in exactly one of two directions
+ * -- it wants you (`Needs input`) or it is over (`Completed`). There is no
+ * fourth place to land and no state that sits outside the story.
+ *
+ * `Ready for review` used to be a group of its own, promoted by an open PR.
+ * It is gone: having a PR is a PROPERTY of a finished session, not a stage in
+ * its life, and giving it a group meant one finished session outranked another
+ * for a reason that had nothing to do with whether it needed you. The PR still
+ * shows on the row, where a property belongs.
  *
  * The rule for the first group lives in needsInput() and is called from here
  * rather than repeated, so the group a row lands in and the number on the
@@ -149,8 +159,7 @@ export type HomeGroup = (typeof HOME_GROUPS)[number];
  */
 export function groupFor(s: SessionState): HomeGroup {
   if (needsInput(s)) return 'Needs input';
-  if (s.pr && s.pr > 0) return 'Ready for review';
-  if (s.state === 'working') return 'Working';
+  if (s.state === 'working') return 'Running';
   return 'Completed';
 }
 

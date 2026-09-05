@@ -917,12 +917,22 @@ class SessionStateTracker:
         await self._maybe_classify(record, data)
 
     async def _maybe_classify(self, record: Any, data: dict[str, Any]) -> None:
-        """Amend a just-stopped turn to `blocked` if it was really a question.
+        """Read a finished turn and write the one line the row needs.
 
         `prompt:complete` proves the turn ended. It cannot distinguish "here is
         your answer" from "which option do you want?" -- both end a turn the
         same way. This reads the assistant's own closing text and asks a cheap
         model which one it was.
+
+        The summary is written on BOTH branches, because a row in the home
+        view's three-group lifecycle needs a line either way:
+
+          - it wants you   -> the line says what to supply
+          - it is over     -> the line says what it accomplished
+
+        A finished session whose row reads only "stopped" has told you nothing
+        you could not have guessed from the group it sits in. That is the whole
+        reason the model is being asked at all.
 
         Every failure path leaves the structural verdict untouched. That
         direction is deliberate: a false alarm teaches people to ignore the
@@ -944,12 +954,14 @@ class SessionStateTracker:
             return
         if verdict is None:
             return
-        needs_input, ask = verdict
-        if not needs_input:
+        needs_input, summary = verdict
+        if needs_input:
+            record.set_blocked(WAITING_FOR_INPUT)
+        elif not summary:
+            # Nothing to add to a row that already carries the right state.
             return
-        record.set_blocked(WAITING_FOR_INPUT)
-        if ask:
-            record.doing = ask
+        if summary:
+            record.doing = summary
         record.flush()
 
     async def on_session_end(self, event: str, data: dict[str, Any]) -> None:
