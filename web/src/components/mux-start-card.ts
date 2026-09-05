@@ -89,8 +89,13 @@ export class MuxStartCard extends LitElement {
 
     /* At zero the card's own border is --chrome-border, which barely separates
        it from the panel, so the ring would float off an invisible edge. The
-       accent picks the edge up. Stated for :hover too so a future reorder of
-       the .start.zero:hover rule (same specificity) cannot silently win. */
+       accent picks the edge up.
+
+       The second selector is not redundant. Alone, .start.zero.here is (0,3,0)
+       and ties .start.zero:hover above, so it wins on source order only --
+       hovering the card you are already on could silently take the accent
+       back. .start.zero.here:hover is (0,4,0) and settles it on specificity
+       instead, where a reorder cannot reach it. */
     .start.zero.here,
     .start.zero.here:hover {
       border-color: var(--chrome-accent);
