@@ -17,8 +17,10 @@ type Workspace struct {
 	nextPaneID int
 
 	// nameOrigin says whether Name was chosen by a person or derived by the
-	// daemon. Guarded by Registry.mu like every other field here, and read
-	// only through the setters in workspace.go. See autoname.go.
+	// daemon. Guarded by Registry.mu like every other field here, written only
+	// through the setters in workspace.go, and read only to persist it into a
+	// snapshot -- a workspace's derived name is written at most once, and that
+	// decision is made from Name being empty, not from this. See autoname.go.
 	nameOrigin nameOrigin
 
 	// generation identifies this workspace instance even if an id were ever

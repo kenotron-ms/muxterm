@@ -23,8 +23,9 @@ package sessiond
 // The zero value is deliberately neither constant, and everything that can
 // produce a name without stating a provenance lands on it: a struct literal
 // written before this field existed, a snapshot from a daemon that never wrote
-// one. acceptsDerivedName treats anything that is not literally originDerived
-// as a person's choice, so all of those cases fail in the same safe direction.
+// one. acceptsRefinedDerivedName treats anything that is not literally
+// originDerived as a person's choice, so all of those cases fail in the same
+// safe direction.
 //
 // That direction is the whole point. Declining to re-derive a name that really
 // was derived leaves a slightly stale but perfectly usable tab, and the user
@@ -46,9 +47,15 @@ const (
 	originExplicit nameOrigin = "explicit"
 )
 
-// acceptsDerivedName decides one deriver write against the name already in
-// place. It is the single rule behind both the pane title and the workspace
-// name, and it answers two questions at once:
+// acceptsRefinedDerivedName decides one deriver write against the name already
+// in place, for a surface where one derived name may legitimately be replaced
+// by a better derived one. That surface is the pane title, and only the pane
+// title: a pane is named from its launch argv the moment it spawns (tier 0,
+// autolabel.go) and the session's own declared label refines that guess a
+// second or two later (tier 1), so a rule that refused the second write would
+// freeze every tab on the argv guess forever.
+//
+// It answers two questions at once:
 //
 //   - May the deriver touch this at all? Only an empty name (nobody has
 //     claimed it) or a name the deriver itself wrote last time.
@@ -56,7 +63,10 @@ const (
 //     what the deriver was going to write, this is a no-op, and saying so is
 //     what keeps a once-a-second pass silent. Every caller broadcasts if and
 //     only if this returned true, so a steady state costs zero messages.
-func acceptsDerivedName(current string, origin nameOrigin, next string) bool {
+//
+// Workspaces have no tier 0 name and so have nothing to refine; they take the
+// stricter acceptsFirstDerivedName below.
+func acceptsRefinedDerivedName(current string, origin nameOrigin, next string) bool {
 	if next == "" || next == current {
 		// Nothing to say, or already said. An empty derived name never
 		// clears an existing one: absence means "I have nothing better",
@@ -64,6 +74,27 @@ func acceptsDerivedName(current string, origin nameOrigin, next string) bool {
 		return false
 	}
 	return current == "" || origin == originDerived
+}
+
+// acceptsFirstDerivedName is the same decision for a surface whose derived name
+// is written at most once and is never replaced by another derived name. That
+// surface is the workspace name, and the one clause that differs is that the
+// current name must be EMPTY: not empty-or-derived, just empty.
+//
+// It takes no provenance because it has no use for one. "Empty" is strictly
+// stronger than "empty or derived" -- a name a person typed and a name this
+// daemon already wrote are both non-empty, and both are declined, for reasons
+// applyDerivedNames spells out. Provenance is still recorded on the write,
+// because it is what tells a restored snapshot who chose the name that is
+// there; it just no longer decides anything for a workspace.
+//
+// An empty offer still never clears an existing name: absence means "I have
+// nothing better", not "make it blank". And because the only name this accepts
+// into is an empty one, the second tick carrying the same label finds a
+// non-empty name and declines, which is what keeps the once-a-second pass
+// silent here too.
+func acceptsFirstDerivedName(current, next string) bool {
+	return next != "" && current == ""
 }
 
 // nameOriginFromSnapshot reads a provenance marker back off disk.
@@ -99,9 +130,10 @@ func nameOriginFromSnapshot(recorded string) nameOrigin {
 //  1. Both setters are compare-and-set under the lock that owns the field and
 //     report whether they actually changed it; a broadcast happens only on a
 //     true return.
-//  2. The comparison is against the exact value about to be written, so the
-//     second tick carrying a label that has already been applied changes
-//     nothing and says nothing.
+//  2. A second offer of a label that has already been applied changes nothing
+//     and says nothing. A pane compares against the exact value about to be
+//     written, so re-writing it is a no-op; a workspace writes only into an
+//     empty name, so by the next tick there is nothing to write into at all.
 //  3. The row that names a pane is chosen deterministically. Rows arrive in a
 //     stable order (collect sorts by workspace, pane, session id), and only the
 //     first labelled row per pane is allowed to write -- so in the odd case of
@@ -127,13 +159,40 @@ func (s *Server) applyDerivedNames(rows []SessionState) {
 		}
 	}
 
-	// Workspace names, and only for a workspace that holds exactly one
-	// session. A workspace usually IS one task, so naming it after that task
-	// is right; the moment it holds a second, there is no honest answer to
-	// "which one is this workspace about" and the correct move is to stop
-	// touching it permanently. It keeps the name it started with, which still
-	// reads as the topic it began as. No voting, no re-derivation, and no
-	// workspace renaming itself out from under somebody who is using it.
+	// Workspace names. A workspace usually IS one task, so naming it after
+	// that task is right -- but it is right exactly once. A workspace's
+	// derived name is written when the workspace has no name at all and is
+	// never replaced by another derived name; renameWorkspaceDerived enforces
+	// that, under the lock that owns the field, by accepting only an empty
+	// name (acceptsFirstDerivedName).
+	//
+	// Write-once rather than re-derive, because the label's whole job is to be
+	// a stable thing to aim at. Somebody who remembers a workspace as "auth
+	// redirect" and comes back to find it renamed after itself cannot find it;
+	// the rename is silent, and the thing they are searching for no longer
+	// exists. A slightly stale name costs far less: it still reads as the
+	// topic the workspace began as, and one double-click replaces it. Unlike a
+	// pane there is nothing lost either way, because a workspace has no
+	// spawn-time guess to refine -- the only derived name it can ever have is
+	// a session's label, which is itself derived once and never recomputed.
+	//
+	// The one-session condition below is a condition on the write, not a
+	// permanent freeze: while a workspace holds two sessions there is no
+	// honest answer to "which one is this workspace about", so nothing is
+	// written; but a workspace that was never named while it held two is still
+	// nameless when one of them leaves, and naming it then is its FIRST name,
+	// not a re-derivation. Naming a nameless workspace destroys nothing, so it
+	// stays allowed.
+	//
+	// What is counted here is sessions that published state, not labelled
+	// ones. rows comes straight from the session-state spool (collect in
+	// sessionstore.go), so a pane running a bare shell publishes nothing and
+	// never appears here at all; but a session whose Label is empty -- because
+	// labelling is turned off, the label call failed, or its first prompt has
+	// not finished yet -- does appear, and counting it is deliberate rather
+	// than an oversight. It is a second piece of work in the workspace
+	// whatever it ends up being called, and the workspace is genuinely
+	// ambiguous because of it.
 	sessions := make(map[string]int, len(rows))
 	for _, r := range rows {
 		sessions[r.WorkspaceID]++

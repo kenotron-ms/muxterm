@@ -527,7 +527,7 @@ func (p *Pane) SetTitle(name string) {
 func (p *Pane) setTitleDerived(name string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !acceptsDerivedName(p.Title, p.titleOrigin, name) {
+	if !acceptsRefinedDerivedName(p.Title, p.titleOrigin, name) {
 		return false
 	}
 	p.Title = name

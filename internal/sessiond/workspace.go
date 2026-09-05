@@ -39,9 +39,18 @@ func (r *Registry) RenameWorkspace(id, name string) bool {
 }
 
 // renameWorkspaceDerived offers a daemon-derived name to a workspace and
-// reports whether the name actually CHANGED -- false for an unknown id, for a
-// workspace a person has already named, and for a name that is already exactly
-// this.
+// reports whether the name actually CHANGED -- false for an unknown id, for an
+// empty offer, and for a workspace that already has a name, whoever chose it.
+//
+// That last clause is the write-once invariant: a workspace's derived name is
+// written into an empty name or not at all, and never replaced by another
+// derived name (see applyDerivedNames for why re-deriving would be worse than
+// carrying a stale name). It is enforced here rather than at the call site
+// because this is the only place a derived workspace name is ever written, and
+// here the test and the write happen together under the one lock that owns the
+// field. A caller-side check would be two things worse: the next caller added
+// would silently not have it, and even this caller would be racing -- a
+// person's rename could land between reading the name and writing over it.
 //
 // Only the true return may trigger a broadcast, and that matters more here than
 // anywhere else: a workspace rename re-broadcasts the entire workspace list to
@@ -54,7 +63,7 @@ func (r *Registry) renameWorkspaceDerived(id, name string) bool {
 	if !ok {
 		return false
 	}
-	if !acceptsDerivedName(ws.Name, ws.nameOrigin, name) {
+	if !acceptsFirstDerivedName(ws.Name, name) {
 		return false
 	}
 	ws.Name = name
