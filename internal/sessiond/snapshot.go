@@ -213,12 +213,17 @@ func capturePaneSnapshot(p *Pane) PaneSnapshot {
 	// of a session -- exactly what capReplay's trailing-bytes-only cap
 	// would discard first in any sufficiently long conversation.
 	fullReplay := p.Replay()
+	// Title and provenance come from one locked read, deliberately NOT from
+	// info.Title above -- info was captured before the replay copy, and a
+	// rename landing in between would pair that stale title with the fresh
+	// "explicit" tag, freezing a name nobody chose. See
+	// titleAndOriginSnapshot. Provenance is read here rather than carried on
+	// PaneInfo because it is daemon-internal bookkeeping with no business on
+	// the wire type the browser and MCP both read.
+	title, titleOrigin := p.titleAndOriginSnapshot()
 	out := PaneSnapshot{
-		Title: info.Title,
-		// Captured through the pane's own lock rather than off PaneInfo: the
-		// provenance is daemon-internal bookkeeping and has no business on the
-		// wire type the browser and MCP both read.
-		TitleOrigin: string(p.titleOriginSnapshot()),
+		Title:       title,
+		TitleOrigin: string(titleOrigin),
 		Cols:        info.Cols,
 		Rows:        info.Rows,
 		Replay:      capReplay(fullReplay),

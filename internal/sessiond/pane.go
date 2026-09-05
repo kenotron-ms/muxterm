@@ -544,13 +544,30 @@ func (p *Pane) setTitle(name string, origin nameOrigin) {
 	p.mu.Unlock()
 }
 
-// titleOriginSnapshot returns the provenance of the current title. Read under
-// the same lock as the title, for the snapshot writer -- which must persist the
-// two together or a restart silently downgrades a person's rename to a guess.
-func (p *Pane) titleOriginSnapshot() nameOrigin {
+// titleAndOriginSnapshot returns the current title together with who chose it,
+// read in ONE acquisition of the lock that owns both.
+//
+// The pairing is the whole point, and reading them separately is a real bug
+// rather than a tidiness question. setTitle writes the two fields as one
+// transaction, so a rename landing between two separate reads yields the title
+// from before it and the provenance from after: a derived name tagged
+// "explicit". restorePane then writes that pair back faithfully, and from then
+// on acceptsRefinedDerivedName declines forever -- the deriver is locked out of
+// a name no person ever chose, permanently, with nothing on screen to say why.
+//
+// Note this got worse when provenance arrived. Before, a torn read cost a stale
+// title that the next labelling tick simply overwrote; the pane self-corrected
+// within a second. Now the same tear is preserved across restarts and disables
+// the mechanism that used to repair it. The window is not as narrow as it
+// looks, either -- capturePaneSnapshot copies a full replay buffer between the
+// two reads.
+//
+// The workspace side already gets this right: snapshotView copies Name and
+// NameOrigin together under the registry lock. This is the pane equivalent.
+func (p *Pane) titleAndOriginSnapshot() (string, nameOrigin) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.titleOrigin
+	return p.Title, p.titleOrigin
 }
 
 // Info returns a frozen snapshot of this pane's identity and dimensions.
