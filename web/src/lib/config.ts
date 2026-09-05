@@ -1,3 +1,5 @@
+import { apiPath } from './base-path.js';
+
 // ── Persistence helpers ──────────────────────────────────────────────────────
 
 /**
@@ -50,7 +52,7 @@ export function patchConfig(partial: Record<string, unknown>): void {
   }
   _patchTimer = setTimeout(() => {
     _patchTimer = null;
-    fetch('/api/config', {
+    fetch(apiPath('/api/config'), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(partial),

@@ -14,10 +14,15 @@ import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './
 import { injectTerminalFont } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
+import { registerServiceWorker } from './lib/sw.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
 // the CSS rules are in place before WebFontsAddon.loadFonts() is called.
 injectTerminalFont();
+
+// PWA service worker. No-op unless the app is served at the origin root —
+// see lib/sw.ts. Was an index.html snippet injected by vite-plugin-pwa.
+registerServiceWorker();
 
 // Side-effect imports — register child custom elements
 import './components/title-bar.js';

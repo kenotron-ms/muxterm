@@ -286,7 +286,8 @@ func (s *Server) handleTunnelClose(w http.ResponseWriter, r *http.Request) {
 
 // handleTunnelProxy reverse-proxies requests arriving at /t/{id}/... to the
 // local port registered under id. It returns 400 when no id segment is
-// present and 404 when the id is unknown.
+// present, 404 when the id is unknown, and 302 to the trailing-slash form
+// when the path is exactly /t/{id}.
 func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 	// Strip the leading "/t/" prefix, then extract the id (up to the next '/').
 	rest := strings.TrimPrefix(r.URL.Path, "/t/")
@@ -311,6 +312,28 @@ func (s *Server) handleTunnelProxy(w http.ResponseWriter, r *http.Request) {
 	port, ok := s.tunnels.Port(id)
 	if !ok {
 		http.Error(w, "tunnel not found", http.StatusNotFound)
+		return
+	}
+
+	// A tunnel serves a whole site rooted at /t/{id}/, so "/t/{id}" without
+	// the trailing slash must redirect to the directory form. The upstream
+	// answers both with its index page, but the browser resolves that page's
+	// relative URLs against the document URL: from "/t/{id}" a "./assets/x.js"
+	// resolves to "/t/assets/x.js" — one level too high, 404, and no app.
+	//
+	// The Location is deliberately a relative reference (RFC 7231 §7.1.2)
+	// rather than a rooted path: if muxterm is itself mounted under a prefix
+	// by a fronting proxy that strips it, r.URL.Path is missing that prefix
+	// and a rooted Location would send the browser outside it. Written
+	// directly instead of via http.Redirect, which rewrites a relative
+	// location into a rooted one using r.URL.Path.
+	if suffix == "" {
+		loc := id + "/"
+		if r.URL.RawQuery != "" {
+			loc += "?" + r.URL.RawQuery
+		}
+		w.Header().Set("Location", loc)
+		w.WriteHeader(http.StatusFound)
 		return
 	}
 

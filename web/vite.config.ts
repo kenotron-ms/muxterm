@@ -30,14 +30,28 @@ const gitSha = (() => {
 })();
 
 export default defineConfig({
+  // Relative base: every build-time URL Vite emits (the module bundle, the
+  // manifest link, public assets referenced from index.html) is written
+  // document-relative instead of origin-absolute, so the app also loads when
+  // it is served under a path prefix — muxterm's own /t/<id>/ tunnel route, or
+  // any reverse proxy that strips a prefix before forwarding. At the origin
+  // root './assets/x.js' resolves to exactly the same '/assets/x.js' request
+  // the absolute form produced.
+  base: './',
   plugins: [
     rebuildSignal(),
     VitePWA({
       // Auto-update: a new SW activates and reloads clients on next visit.
       registerType: 'autoUpdate',
-      // Inject the registration snippet straight into index.html so we don't
-      // need a source-level import (keeps the app code and the test build clean).
-      injectRegister: 'auto',
+      // Registration is NOT injected into index.html. With `base: './'` the
+      // injected snippet would register './sw.js' at scope './', i.e. a
+      // brand-new service worker for every path prefix the app is served
+      // under — one per ephemeral /t/<id>/ tunnel id, each precaching the
+      // icon set into a scope that dies with the tunnel and is never cleaned
+      // up. registerServiceWorker() in src/lib/sw.ts registers exactly the
+      // same '/sw.js' at scope '/' as this snippet did, but only when the app
+      // is mounted at the origin root. See web/src/lib/sw.ts.
+      injectRegister: null,
       includeAssets: [
         'favicon.svg',
         'favicon-32.png',
