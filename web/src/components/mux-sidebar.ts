@@ -1,7 +1,7 @@
 import { LitElement, html, css, unsafeCSS, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { store } from '../state.js';
-import { workspaceLabel } from './workspace-picker.js';
+import { workspaceLabel } from '../lib/workspace-label.js';
 import './launcher-menu.js';
 import './mux-start-card.js';
 import { NEEDS_GLYPH } from './mux-start-card.js';
@@ -639,6 +639,38 @@ export class MuxSidebar extends LitElement {
   /** Key chord shown on the Start card, e.g. "ctrl+`". */
   @property({ type: String }) homeKey = '';
 
+  /**
+   * Render as the narrow-mode DRAWER rather than as the desktop column.
+   *
+   * Presentation only — the content is identical, which is the whole claim of
+   * Surface 1: the drawer IS this component, in a different container. Two
+   * things change, both because of what is around it rather than what is in
+   * it:
+   *
+   *   - the header goes. The nav bar directly above already carries the
+   *     instance label and the launcher, and the header's 26x22 launcher
+   *     button is half a touch target.
+   *   - "+ New workspace" pins OUTSIDE the scroller. In a 340px drawer with
+   *     four workspaces it is otherwise below the fold, which is the one
+   *     thing a muscle-memory target cannot be.
+   */
+  @property({ type: Boolean, reflect: true }) drawer = false;
+
+  /**
+   * False when these cards are not on screen — i.e. a closed drawer (D6).
+   *
+   * `preview-store` already refuses to run the 6 Hz live tick in a hidden
+   * TAB, but a closed drawer is the same condition with the tab visible, so
+   * that gate never fires and a phone would repaint canvases nobody can see,
+   * on a battery. The store's ticker is also gated on having at least one
+   * subscriber, so the cheapest correct implementation of "gate on visible &&
+   * (isWide || drawerOpen)" is for this component to stop being a subscriber
+   * — which needs no change to preview-store at all.
+   *
+   * Defaults to true: the desktop column is always on screen.
+   */
+  @property({ type: Boolean }) previewsVisible = true;
+
   @state() private _version = 0;
   @state() private _renaming: string | null = null;
   @state() private _menuOpen = false;
@@ -717,8 +749,8 @@ export class MuxSidebar extends LitElement {
     });
 
     // Preview tiles arrive at ~6 Hz. This callback deliberately does NOT bump
-    // _version — see _onPreviewTick.
-    this._unsubPreview = previewStore.subscribe(this._onPreviewTick);
+    // _version — see _onPreviewTick. Gated on `previewsVisible` (D6).
+    this._syncPreviewSubscription();
 
     // One probe per page, remembered. Until it resolves we render the preview
     // layout but draw nothing; if it resolves false every card falls back to
@@ -772,9 +804,34 @@ export class MuxSidebar extends LitElement {
    * tiles are drawn imperatively. The preview tick then reuses these refs
    * without going through Lit at all.
    */
-  override updated(): void {
+  override updated(changed: Map<PropertyKey, unknown>): void {
+    if (changed.has('previewsVisible')) this._syncPreviewSubscription();
     this._collectCanvases();
     this._paintAll(this._cards);
+  }
+
+  /**
+   * D6's gate, expressed as "am I a preview subscriber?".
+   *
+   * preview-store.ts's `_syncTicker()` already runs the 6 Hz rAF loop only
+   * while `_subscribers.size > 0`, and `subscribe()`/its disposer both call
+   * it — so dropping the subscription while the drawer is shut stops the tick
+   * outright rather than merely ignoring it. The daemon's PUSHED tiles are
+   * unaffected: they are event-driven and keep landing in the store, so the
+   * cards are current the moment the drawer opens again.
+   */
+  private _syncPreviewSubscription(): void {
+    const want = this.previewsVisible;
+    if (want === (this._unsubPreview !== null)) return;
+    if (want) {
+      this._unsubPreview = previewStore.subscribe(this._onPreviewTick);
+      // Tiles moved on while we were not listening, and the cards were
+      // display:none so nothing measured. Re-render once on the way back in.
+      this._version++;
+    } else {
+      this._unsubPreview?.();
+      this._unsubPreview = null;
+    }
   }
 
   // ---------------------------------------------------------------------------

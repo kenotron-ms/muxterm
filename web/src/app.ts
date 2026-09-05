@@ -27,7 +27,6 @@ import type { MuxDock } from './components/mux-dock.js';
 import type { LauncherAction } from './components/launcher-menu.js';
 import './components/close-confirmation-modal.js';
 import type { CloseConfirmationModal } from './components/close-confirmation-modal.js';
-import './components/workspace-picker.js';
 import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
 import './components/mux-home.js';
@@ -514,6 +513,84 @@ export class MuxApp extends LitElement {
       background: var(--chrome-accent);
       opacity: 0.4;
     }
+
+    /* ── Surface 1: the workspace drawer ─────────────────────────────────
+       The drawer IS <mux-sidebar>. Not a new component, not a mobile port —
+       the same element, in a different container. Wide gets a Split.js
+       column; narrow gets this.
+
+       popover="auto" (D1) buys the top layer, light dismiss, Escape, focus
+       management and one-at-a-time for free — five behaviours app.ts would
+       otherwise hand-roll, and two more numbers on a z-index ladder that
+       already runs 1000/1500/2000/2500/3000.
+
+       NON-MODAL by design, which is why it is a popover and not a modal
+       <dialog>: the terminal behind it must stay visibly alive, because the
+       live previews inside are the whole argument for the drawer.
+       ─────────────────────────────────────────────────────────────────── */
+    .drawer {
+      --scrim: color-mix(in srgb, var(--chrome-body) 62%, transparent);
+      --drawer-dur: 120ms;
+
+      position: fixed;
+      inset: 0 auto 0 0;
+      width: min(86vw, 340px);
+      height: 100%;
+      max-width: none;
+      max-height: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--chrome-bar);
+      color: var(--chrome-text-bright);
+      border: 0;
+      border-right: 1px solid var(--chrome-border);
+      box-shadow: 8px 0 24px rgba(0, 0, 0, 0.4);
+      translate: -100% 0;
+      transition:
+        translate var(--drawer-dur) ease,
+        display var(--drawer-dur) allow-discrete,
+        overlay var(--drawer-dur) allow-discrete;
+    }
+
+    .drawer:popover-open {
+      translate: 0 0;
+    }
+
+    @starting-style {
+      .drawer:popover-open {
+        translate: -100% 0;
+      }
+    }
+
+    .drawer::backdrop {
+      background: var(--scrim);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .drawer {
+        --drawer-dur: 0ms;
+        transition: none;
+      }
+    }
+
+    /* D9. In landscape on a notched phone the drawer starts under the notch,
+       which is the case a missing safe-area inset actually shows. The insets
+       go on the drawer BOX, so its own scroller and its pinned
+       "+ New workspace" both stay clear. */
+    .drawer > mux-sidebar {
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+      min-width: 0;
+      max-width: none;
+      border-right: 0;
+      padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
+      padding-left: env(safe-area-inset-left, 0px);
+      box-sizing: border-box;
+    }
   `;
 
   /** Bumped whenever the store notifies; drives Lit re-render off wire state. */
@@ -543,6 +620,18 @@ export class MuxApp extends LitElement {
 
   @state()
   private _layoutMode: 'wide' | 'narrow' = currentLayoutMode();
+
+  /**
+   * True while the narrow-mode workspace drawer is open.
+   *
+   * Mirrored from the popover's own `toggle` event rather than set by the
+   * code that opens it, so light dismiss and Escape — which no handler of
+   * ours ever sees — cannot leave this out of step with what is on screen.
+   *
+   * Two consumers: the hamburger's `aria-expanded`, and D6's preview gate.
+   */
+  @state()
+  private _drawerOpen = false;
 
   /**
    * True while the home view covers the main pane.
@@ -608,6 +697,48 @@ export class MuxApp extends LitElement {
     const mode = currentLayoutMode();
     if (mode !== this._layoutMode) this._layoutMode = mode;
   };
+
+  // ── Surface 1: the workspace drawer ───────────────────────────────────────
+
+  private get _drawerEl(): HTMLElement | null {
+    return this.renderRoot.querySelector<HTMLElement>('.drawer');
+  }
+
+  /**
+   * The hamburger lives in <mux-title-bar>'s shadow root and the drawer lives
+   * in ours, so `popovertarget` cannot bind them — it resolves ids within the
+   * INVOKER's root. The button reports the intent; we call togglePopover().
+   * Everything the Popover API provides is unaffected by which side calls it.
+   */
+  private _onDrawerToggle = (): void => {
+    try {
+      this._drawerEl?.togglePopover();
+    } catch {
+      /* not connected yet, or no Popover API — nothing to toggle */
+    }
+  };
+
+  /** Single source of truth for `_drawerOpen`; see the field's comment. */
+  private _onDrawerPopoverToggle = (e: Event): void => {
+    this._drawerOpen = (e as ToggleEvent).newState === 'open';
+  };
+
+  /**
+   * Dismiss the drawer after an action that changes what is on screen.
+   *
+   * Approved default: switching workspace closes it, because the point of
+   * switching is to see the terminal. Going home and opening the create
+   * dialog are the same case — leaving a drawer parked over the surface the
+   * user just asked for would be the one thing a non-modal drawer must not
+   * do.
+   */
+  private _closeDrawer(): void {
+    try {
+      this._drawerEl?.hidePopover();
+    } catch {
+      /* already closed */
+    }
+  }
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -867,9 +998,18 @@ export class MuxApp extends LitElement {
   override willUpdate(changedProperties: Map<PropertyKey, unknown>): void {
     super.willUpdate(changedProperties);
     this._syncTerminals();
-    // Wide→narrow: destroy Split.js BEFORE Lit removes <mux-sidebar> from the
-    // DOM (willUpdate fires pre-render) — see
+    // Wide→narrow: destroy Split.js BEFORE Lit removes the column
+    // <mux-sidebar> from the DOM (willUpdate fires pre-render) — see
     // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
+    //
+    // Still required now that a sidebar exists in BOTH modes, and for exactly
+    // the same reason. The two are separate elements in separate template
+    // parts — the column one inside `.content-area`, the drawer one inside
+    // `.drawer` — so a mode flip destroys one and creates the other rather
+    // than moving anything. Split holds a reference to the element it was
+    // given and writes inline widths onto it; releasing it here is what stops
+    // those widths, and Split's global drag listeners, from following the
+    // sidebar into a drawer that has no gutter and no second pane.
     if (changedProperties.has('_layoutMode') && this._layoutMode === 'narrow' && this._split) {
       this._destroySplit();
     }
@@ -917,7 +1057,14 @@ export class MuxApp extends LitElement {
   }
 
   private _initSplit(): void {
-    const sidebarEl = this.renderRoot.querySelector<HTMLElement>('mux-sidebar');
+    // `.content-area > mux-sidebar`, never a bare `mux-sidebar`: since the
+    // drawer landed there are two of them in this shadow root, and the one
+    // inside `.drawer` is a popover with no gutter and no sibling pane.
+    // Handing Split that element would write inline percentage widths onto
+    // the drawer's sidebar and attach a drag gutter into a surface that has
+    // nothing to resize. The child combinator makes that structurally
+    // impossible rather than merely unlikely.
+    const sidebarEl = this.renderRoot.querySelector<HTMLElement>('.content-area > mux-sidebar');
     const mainPaneEl = this.renderRoot.querySelector<HTMLElement>('.main-pane');
     const contentAreaEl = this.renderRoot.querySelector<HTMLElement>('.content-area');
     if (!sidebarEl || !mainPaneEl || !contentAreaEl || this._split) return;
@@ -1000,10 +1147,11 @@ export class MuxApp extends LitElement {
 
     return html`
       ${!isWide ? html`<mux-title-bar
+        .drawerOpen="${this._drawerOpen}"
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
-        @workspace-switch="${this._onWorkspaceSelected}"
         @pane-create-request="${this._createPaneOptimistic}"
+        @drawer-toggle="${this._onDrawerToggle}"
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
@@ -1072,6 +1220,39 @@ export class MuxApp extends LitElement {
         </div>
 
       </div>
+
+      ${!isWide
+        ? html`
+            <!-- Surface 1. The SAME <mux-sidebar> the wide layout puts in a
+                 Split.js column, in a popover drawer instead: Start card
+                 (the home button, and until now a phone had no door to home
+                 at all), the WORKSPACES heading, the live preview cards, and
+                 "+ New workspace" pinned at the bottom.
+
+                 Deliberately OUTSIDE .content-area. A popover is promoted to
+                 the top layer, so its position in the tree does not decide
+                 where it paints — but it must not be a flex child of the
+                 layout row either, and Split.js must never be able to reach
+                 it (see _initSplit's .content-area > mux-sidebar selector). -->
+            <div
+              class="drawer"
+              popover="auto"
+              aria-label="Workspaces"
+              @toggle="${this._onDrawerPopoverToggle}"
+            >
+              <mux-sidebar
+                .homeActive="${this._showHome}"
+                .homeKey="${''}"
+                .previewsVisible="${this._drawerOpen}"
+                @workspace-switch="${this._onWorkspaceSelected}"
+                @workspace-create="${this._onOpenCreateModal}"
+                @workspace-rename="${this._onWorkspaceRename}"
+                @launcher-action="${this._onLauncherAction}"
+                @home-show="${this._onHomeShow}"
+              ></mux-sidebar>
+            </div>
+          `
+        : ''}
 
       <div class="close-alert-stack" aria-live="polite">
         ${[...this._closeAlerts.entries()].map(
@@ -1187,7 +1368,6 @@ export class MuxApp extends LitElement {
             message="${this._reconnectMessage}"
           ></mux-reconnect-overlay>`
         : ''}
-      <!-- Phase 3: mux-workspace-picker (rename, close, retry/dismiss) will be re-introduced here -->
     `;
   }
 
@@ -1238,6 +1418,9 @@ export class MuxApp extends LitElement {
   private _onOpenCreateModal = (): void => {
     this._showCreateModal = true;
     this._createModalName = '';
+    // The dialog is centred over the whole viewport; a drawer left open
+    // behind it would sit on top of its own backdrop.
+    this._closeDrawer();
   };
 
   private _onCreateModalKeyDown = (e: KeyboardEvent): void => {
@@ -1647,6 +1830,9 @@ export class MuxApp extends LitElement {
   /** Start card / ctrl+` — show home from anywhere. */
   private _onHomeShow = (): void => {
     this._showHome = true;
+    // On a phone the Start card IS the drawer's top row, so home would open
+    // underneath the drawer that asked for it.
+    this._closeDrawer();
   };
 
   /** Esc, or picking a workspace — back to the dock, and give it the keyboard. */
@@ -1748,8 +1934,10 @@ export class MuxApp extends LitElement {
   };
 
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
-    // Picking a workspace is the "go work in there" gesture — home steps aside.
+    // Picking a workspace is the "go work in there" gesture — home steps aside
+    // and so does the drawer that was covering the terminal.
     this._onHomeHide();
+    this._closeDrawer();
     if (e.detail.workspaceId === store.attached) return;
     // Workspace switches are asynchronous (new pane list/active pane arrive
     // only after a round-trip), so there is no new-workspace pane identity to

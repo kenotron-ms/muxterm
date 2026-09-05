@@ -2,7 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- viewport-fit=cover: the app paints to the edges, and the surfaces that
+         sit against one pay for it with env(safe-area-inset-*) (D9).
+         interactive-widget=resizes-content: when the on-screen keyboard opens,
+         shrink the LAYOUT viewport instead of leaving it full height and
+         scrolling the visual one. Without it the home composer -- sticky at
+         bottom: 0 -- stays pinned to a viewport bottom that is now behind the
+         keyboard, i.e. the one control you are typing into is the one the
+         keyboard hides. The alternative is a visualViewport resize listener
+         and a manual translate; this is one attribute. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>muxterm</title>
     <meta name="description" content="A terminal multiplexer in your browser." />
 

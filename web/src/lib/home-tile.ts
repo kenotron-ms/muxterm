@@ -24,9 +24,17 @@ import { tileFromLines, type PreviewTile } from './preview-tile.js';
 import { groupFor, type SessionState } from './session-state.js';
 
 /**
- * Tile geometry, in cells. 40x9 at PREVIEW_CELL (5x8 CSS px) is 200x72 px,
- * which fits four across at the width the mockup uses and matches its 76px
- * body block.
+ * DEFAULT tile geometry, in cells. Both functions below take the real
+ * geometry as parameters; these are what they fall back to.
+ *
+ * TILE_COLS is a default, not the width. Under D7 the caller measures its own
+ * track and passes the columns that track can carry at PREVIEW_CELL.w, so a
+ * wider tile shows MORE CHARACTERS rather than bigger pixels. 40 remains the
+ * value for a caller that has not measured anything yet: 40x9 at PREVIEW_CELL
+ * (5x8 CSS px) is 200x72 px, the geometry every tile had before D7.
+ *
+ * TILE_ROWS is genuinely fixed at 9 — it is what the fields below actually
+ * produce, and D7 keeps rows content-derived rather than aspect-locked.
  */
 export const TILE_COLS = 40;
 export const TILE_ROWS = 9;
@@ -73,14 +81,23 @@ function wrap(text: string, width: number, indent: string): string[] {
 }
 
 /**
- * The lines a session's thumbnail shows, exactly TILE_ROWS of them.
+ * The lines a session's thumbnail shows, exactly `rows` of them, wrapped to
+ * `cols`.
+ *
+ * Both are parameters because the tile's width is measured from its own track
+ * (D7) and a wrap width that disagreed with the canvas would either truncate
+ * text the tile had room for or overrun the cells it has.
  *
  * Padded at the BOTTOM (not the top, which is what tileFromLines would do on
  * its own) so content reads from the top edge, matching the mockup. A real
  * per-pane tile will bottom-anchor instead, like a shell — that difference is
  * the tell that this is still the stand-in.
  */
-export function tileLinesFor(s: SessionState): string[] {
+export function tileLinesFor(
+  s: SessionState,
+  cols: number = TILE_COLS,
+  rows: number = TILE_ROWS,
+): string[] {
   const out: string[] = [];
   const group = groupFor(s);
 
@@ -88,7 +105,7 @@ export function tileLinesFor(s: SessionState): string[] {
     case 'Needs input':
       out.push(`? ${s.waitingFor ?? 'input needed'}`);
       out.push('');
-      out.push(...wrap(s.doing ?? 'waiting for a decision', TILE_COLS, IND));
+      out.push(...wrap(s.doing ?? 'waiting for a decision', cols, IND));
       out.push('');
       out.push(`${IND}> waiting for you...`);
       break;
@@ -96,10 +113,10 @@ export function tileLinesFor(s: SessionState): string[] {
     case 'Running':
       out.push('* running');
       out.push('');
-      out.push(...wrap(s.doing ?? '', TILE_COLS, IND));
+      out.push(...wrap(s.doing ?? '', cols, IND));
       if (s.doneMeans) {
         out.push('');
-        out.push(...wrap(`done means: ${s.doneMeans}`, TILE_COLS, IND));
+        out.push(...wrap(`done means: ${s.doneMeans}`, cols, IND));
       }
       break;
 
@@ -108,17 +125,24 @@ export function tileLinesFor(s: SessionState): string[] {
       // A PR is a property of a finished session, not a group of its own.
       out.push(s.pr && s.pr > 0 ? `${head} - PR #${s.pr}` : head);
       out.push('');
-      out.push(...wrap(s.doing ?? '', TILE_COLS, IND));
+      out.push(...wrap(s.doing ?? '', cols, IND));
       break;
     }
   }
 
-  const trimmed = out.slice(0, TILE_ROWS);
-  while (trimmed.length < TILE_ROWS) trimmed.push('');
+  const trimmed = out.slice(0, rows);
+  while (trimmed.length < rows) trimmed.push('');
   return trimmed;
 }
 
-/** A session's thumbnail, ready for preview-canvas.renderTile(). */
-export function tileForSession(s: SessionState): PreviewTile {
-  return tileFromLines(tileLinesFor(s), TILE_COLS, TILE_ROWS);
+/**
+ * A session's thumbnail at `cols` x `rows`, ready for
+ * preview-canvas.renderTile().
+ */
+export function tileForSession(
+  s: SessionState,
+  cols: number = TILE_COLS,
+  rows: number = TILE_ROWS,
+): PreviewTile {
+  return tileFromLines(tileLinesFor(s, cols, rows), cols, rows);
 }
