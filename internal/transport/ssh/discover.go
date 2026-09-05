@@ -11,10 +11,6 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/transport"
 )
 
-// maxIncludeDepth matches OpenSSH's own limit on nested Include directives and
-// is what stops a cycle of files including each other.
-const maxIncludeDepth = 16
-
 // Discover enumerates the Host blocks in ~/.ssh/config, following Include
 // directives.
 //
@@ -62,8 +58,8 @@ func parseHostAliases(ctx context.Context, path, sshDir, home string, depth int,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if depth > maxIncludeDepth {
-		return nil, fmt.Errorf("ssh config %s: Include nested deeper than %d levels", path, maxIncludeDepth)
+	if depth > sshconfig.MaxIncludeDepth {
+		return nil, fmt.Errorf("ssh config %s: Include nested deeper than %d levels", path, sshconfig.MaxIncludeDepth)
 	}
 	data, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {

@@ -26,9 +26,9 @@ const (
 	endSuffix   = " <<<"
 )
 
-// maxIncludeDepth matches OpenSSH's own limit on nested Include directives and
+// MaxIncludeDepth matches OpenSSH's own limit on nested Include directives and
 // is the backstop that stops a cycle of files including each other.
-const maxIncludeDepth = 16
+const MaxIncludeDepth = 16
 
 // span is a half-open byte range [start, end) inside a file's contents.
 type span struct{ start, end int }
@@ -176,8 +176,8 @@ func unmanagedHosts(path string) ([]hostDecl, error) {
 }
 
 func scanHosts(path, baseDir string, depth int, seenFiles map[string]bool) ([]hostDecl, error) {
-	if depth > maxIncludeDepth {
-		return nil, fmt.Errorf("ssh config %s: Include nested deeper than %d levels", path, maxIncludeDepth)
+	if depth > MaxIncludeDepth {
+		return nil, fmt.Errorf("ssh config %s: Include nested deeper than %d levels", path, MaxIncludeDepth)
 	}
 	if seenFiles[path] {
 		return nil, nil // already visited: an Include cycle contributes nothing

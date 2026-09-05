@@ -247,7 +247,20 @@ func (m *Manager) Remove(name string) (Action, error) {
 	updated := content
 	for i := len(matches) - 1; i >= 0; i-- {
 		b := matches[i]
-		updated = updated[:b.start] + updated[b.end:]
+		start := b.start
+		// Undo Add's separator. When the file had no terminator on its last
+		// line, Add wrote "\n" + block-without-trailing-newline so the marker
+		// could not land mid-line and the file's "no newline at end" state
+		// survived. b.start sits after that newline, so splicing from it would
+		// leave the separator behind and the file would gain one byte on every
+		// add/remove cycle. Both halves of Add's invariant have to hold before
+		// reclaiming it: the block ends the file, and it has no trailing
+		// newline of its own.
+		if b.end == len(updated) && start > 0 && updated[start-1] == '\n' &&
+			!strings.HasSuffix(updated[start:b.end], "\n") {
+			start--
+		}
+		updated = updated[:start] + updated[b.end:]
 	}
 
 	if err := m.write(content, updated, existed); err != nil {
