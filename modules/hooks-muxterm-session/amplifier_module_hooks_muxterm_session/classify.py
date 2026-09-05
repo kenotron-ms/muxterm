@@ -40,6 +40,12 @@ in ``muxterm session report``'s own help text: a false alarm teaches people to
 ignore the indicator, which costs more than a missed one. An unreachable
 provider, a timeout, a malformed answer, an unparseable payload -- all of them
 leave the session exactly as ``prompt:complete`` found it.
+
+The one failure that is *not* simply absorbed is a rejected ``classify_model``
+override, because that one is permanent rather than transient: a model id the
+user's provider does not accept would turn this whole path off forever, for
+them alone, without a word. See ``_complete_with_model_fallback`` -- it is
+spent once more without the override, and only then returns ``None``.
 """
 
 from __future__ import annotations
@@ -227,6 +233,105 @@ def _pick_provider(coordinator: Any) -> Any | None:
     return mounted or None
 
 
+async def _complete_with_model_fallback(
+    provider: Any,
+    request_cls: Any,
+    request_kwargs: dict[str, Any],
+    *,
+    model: str | None,
+    timeout_s: float,
+    what: str,
+) -> Any | None:
+    """Run one provider call, dropping a rejected model override and retrying.
+
+    Shared by this module and ``label.py``, for the reason those two already
+    share ``_pick_provider`` and ``_response_text``: two copies of a retry rule
+    become two different retry rules, and the divergence shows up as one of the
+    two calls quietly behaving differently from the other.
+
+    Why the retry exists
+    --------------------
+
+    ``classify_model`` / ``label_model`` let these calls be pointed at a cheap
+    model instead of the session's own. The id is a plain string against
+    whatever provider the user happens to have mounted, so it can simply be
+    wrong -- an Anthropic id on an OpenAI provider, a model retired last month,
+    a typo. The provider rejects it, and without this retry every failure path
+    already leads to ``None``, so the feature would be *permanently* and
+    *silently* off for exactly the users whose provider disagreed with a
+    default written by somebody else. That is the failure shape this module's
+    own docstring rejects: invisible, and only on other people's machines.
+
+    So a rejected override is spent once more without the override, which lands
+    on the provider's own default model. The feature degrades to costing more
+    than intended, never to doing nothing.
+
+    Why a timeout does NOT trigger the fallback
+    -------------------------------------------
+
+    A timeout is not evidence the model id was wrong. A provider that does not
+    recognise a model id says so promptly; a timeout means the call was
+    accepted and is simply slow, which is transient and says nothing about the
+    override. Retrying it would buy no new information and spend a second full
+    ``timeout_s`` budget at the worst possible moment -- the classifier runs as
+    the human gets their prompt back, the labeller runs in front of the turn
+    starting -- and it would do that for every user who ever times out, not
+    just for the misconfigured ones. Timeouts therefore keep today's behaviour
+    exactly: one attempt, then ``None``.
+
+    Returns the provider's response, or ``None``. Both attempts are bounded
+    individually by ``timeout_s``; ``model`` of ``None`` means no override was
+    in play, and then there is nothing to fall back from, so a failure is a
+    single attempt exactly as before.
+    """
+
+    async def attempt(use_model: str | None) -> Any:
+        # The override is applied here rather than by the caller so the retry
+        # is structurally incapable of carrying it: `request_kwargs` never
+        # holds a "model" key, so the second call cannot inherit the first
+        # call's mistake.
+        kwargs = dict(request_kwargs)
+        if use_model:
+            kwargs["model"] = use_model
+        return await asyncio.wait_for(
+            provider.complete(request_cls(**kwargs)), timeout=timeout_s
+        )
+
+    try:
+        return await attempt(model)
+    except asyncio.TimeoutError:
+        logger.debug("muxterm %s: timed out after %.0fs", what, timeout_s)
+        return None
+    except Exception as exc:
+        if not model:
+            logger.debug("muxterm %s: provider call failed: %s", what, exc)
+            return None
+        # WARNING, not debug, and deliberately every time it happens: a wrong
+        # model id is a standing misconfiguration rather than a transient
+        # blip, and the entire point of this path is that it should be
+        # findable in a log instead of showing up as a feature that never
+        # fires. Silencing this after the first occurrence would restore most
+        # of the invisibility the retry exists to remove.
+        logger.warning(
+            "muxterm %s: provider rejected model %r (%s); retrying once with "
+            "the provider's own default model",
+            what,
+            model,
+            exc,
+        )
+
+    try:
+        return await attempt(None)
+    except asyncio.TimeoutError:
+        logger.debug(
+            "muxterm %s: default-model retry timed out after %.0fs", what, timeout_s
+        )
+        return None
+    except Exception as exc:
+        logger.debug("muxterm %s: default-model retry failed: %s", what, exc)
+        return None
+
+
 async def classify_turn(
     coordinator: Any,
     response_text: str,
@@ -263,19 +368,16 @@ async def classify_turn(
         "temperature": 0.0,
         "max_output_tokens": 200,
     }
-    if model:
-        request_kwargs["model"] = model
 
-    try:
-        response = await asyncio.wait_for(
-            provider.complete(ChatRequest(**request_kwargs)),
-            timeout=CLASSIFY_TIMEOUT_S,
-        )
-    except asyncio.TimeoutError:
-        logger.debug("muxterm classify: timed out after %.0fs", CLASSIFY_TIMEOUT_S)
-        return None
-    except Exception as exc:
-        logger.debug("muxterm classify: provider call failed: %s", exc)
+    response = await _complete_with_model_fallback(
+        provider,
+        ChatRequest,
+        request_kwargs,
+        model=model,
+        timeout_s=CLASSIFY_TIMEOUT_S,
+        what="classify",
+    )
+    if response is None:
         return None
 
     raw = _response_text(response).strip()

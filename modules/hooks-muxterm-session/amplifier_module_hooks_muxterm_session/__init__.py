@@ -103,7 +103,10 @@ async def mount(
         this existed. Every failure path already degrades to that, so this
         knob is for cost control, not correctness.
       classify_model (str): Model id for that classification. Defaults to
-        whatever the session's provider resolves on its own.
+        whatever the session's provider resolves on its own. An id the
+        provider rejects is not fatal: the call is retried once without the
+        override, so a wrong model costs the session's own model rates rather
+        than silently disabling classification.
       label_first_prompt (bool): At the FIRST prompt of a session, ask a cheap
         model for a 1-3 word label naming what the session is about, for
         muxterm's pane tab (default: true). One call per session, not per
@@ -112,7 +115,8 @@ async def mount(
         is also where every failure path already lands -- so this knob is for
         cost control, not correctness.
       label_model (str): Model id for that labelling. Defaults to whatever the
-        session's provider resolves on its own.
+        session's provider resolves on its own, and falls back to it the same
+        way classify_model does when the id is rejected.
       publish_state (bool): Publish session-state snapshots for muxterm's
         home view (default: true). Turning it off leaves the title stamp,
         and therefore crash recovery, fully intact -- the two capabilities

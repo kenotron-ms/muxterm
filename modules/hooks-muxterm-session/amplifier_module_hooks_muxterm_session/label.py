@@ -60,19 +60,25 @@ malformed answer, a model that replied with a sentence instead of a label.
 ``None`` means "keep the label you had", which is the deterministic one. A
 session whose provider is down keeps a tab that reads ``auth redirect``, and
 nothing regresses to ``Pane 7``.
+
+The exception is the same one ``classify.py`` makes, via the same shared
+helper: a ``label_model`` the user's provider rejects is a permanent fault,
+not a transient one, so it is retried once without the override before the
+call gives up. Otherwise a model id chosen by somebody else would leave this
+whole tier switched off, invisibly, for everyone on a different provider.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from typing import Any
 
-# Reused rather than re-implemented: two copies of "find the mounted provider"
-# and "get the text out of a ChatResponse" would drift, and the second copy
-# would be the one that stops working on a provider nobody tested it against.
-from .classify import _pick_provider, _response_text
+# Reused rather than re-implemented: two copies of "find the mounted provider",
+# "get the text out of a ChatResponse", or "drop a rejected model override and
+# try again" would drift, and the second copy would be the one that stops
+# working on a provider nobody tested it against.
+from .classify import _complete_with_model_fallback, _pick_provider, _response_text
 
 logger = logging.getLogger(__name__)
 
@@ -249,19 +255,16 @@ async def label_session(
         "temperature": 0.0,
         "max_output_tokens": 32,
     }
-    if model:
-        request_kwargs["model"] = model
 
-    try:
-        response = await asyncio.wait_for(
-            provider.complete(ChatRequest(**request_kwargs)),
-            timeout=LABEL_TIMEOUT_S,
-        )
-    except asyncio.TimeoutError:
-        logger.debug("muxterm label: timed out after %.0fs", LABEL_TIMEOUT_S)
-        return None
-    except Exception as exc:
-        logger.debug("muxterm label: provider call failed: %s", exc)
+    response = await _complete_with_model_fallback(
+        provider,
+        ChatRequest,
+        request_kwargs,
+        model=model,
+        timeout_s=LABEL_TIMEOUT_S,
+        what="label",
+    )
+    if response is None:
         return None
 
     raw = _response_text(response).strip()
