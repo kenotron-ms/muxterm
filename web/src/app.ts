@@ -41,6 +41,7 @@ import { PaneFocusCoordinator } from './lib/pane-focus-coordinator.js';
 import { mintClientRef } from './lib/client-ref.js';
 import {
   SessiondType,
+  SessiondErrorCode,
   type CloseConfirmationRequiredOutcome,
   type CloseOutcome,
   type CloseTarget,
@@ -557,6 +558,22 @@ export class MuxApp extends LitElement {
   private _showHome = false;
 
   /**
+   * argv for a composer dispatch that is waiting on an attach. null = none.
+   *
+   * "Start it in workspace X" is necessarily two round-trips on this wire.
+   * One browser connection is attached to exactly one workspace at a time
+   * (internal/server/ws.go), and create-pane is CONNECTION-scoped: the daemon
+   * resolves the target as `c.attached` and ignores any workspaceId on the
+   * message (internal/sessiond/server.go createPane). So a dispatch aimed
+   * anywhere other than the current attachment cannot be sent yet -- it is
+   * parked here until that workspace's composition lands, then spawned.
+   *
+   * Deliberately NOT @state: it never reaches the template, and a re-render
+   * per dispatch would be noise.
+   */
+  private _pendingDispatch: string[] | null = null;
+
+  /**
    * Pane the home view asked for, handed to mux-dock as an input to its
    * workspace restore. -1 = no request, which is the default and leaves the
    * dock's behaviour byte-identical to before this existed.
@@ -758,11 +775,35 @@ export class MuxApp extends LitElement {
           terminalRegistry.setExpectedReplayBytes(paneId, pane.totalSeq ?? 0);
         }
       }
+      // The composition IS the "you are now in that workspace" signal, so it is
+      // where a parked composer dispatch (_pendingDispatch) finally spawns.
+      //
+      // It also STANDS IN for the one-terminal-per-workspace auto-spawn below,
+      // rather than running alongside it: a freshly created workspace has zero
+      // panes, so both would fire and the user would get a bare $SHELL next to
+      // the harness they actually asked for -- two panes, the wanted one buried.
+      //
       // One-terminal-per-workspace: when a composition is applied and the folded
       // store has zero panes, auto-spawn exactly one. Guarding on the FOLDED
       // getter means an already-overlaid optimistic pane suppresses a double-spawn.
-      if (msg.type === SessiondType.Composition && store.panes.length === 0) {
-        this._createPaneOptimistic();
+      if (msg.type === SessiondType.Composition) {
+        const pending = this._pendingDispatch;
+        if (pending) {
+          this._pendingDispatch = null;
+          this._spawnPane(pending);
+        } else if (store.panes.length === 0) {
+          this._createPaneOptimistic();
+        }
+      }
+      // A parked dispatch is aimed at ONE workspace. When the attach for it
+      // fails, WorkspaceController recovers by attaching somewhere else -- and
+      // a still-parked argv would ride that recovery composition and start the
+      // prompt in a workspace the user never picked. Drop it instead.
+      if (
+        msg.type === SessiondType.Error &&
+        msg.code === SessiondErrorCode.UnknownWorkspace
+      ) {
+        this._pendingDispatch = null;
       }
       // Server confirmed the workspace — clear loading state and close modal.
       if (msg.type === SessiondType.WorkspaceCreated && this._creatingWorkspace) {
@@ -784,6 +825,10 @@ export class MuxApp extends LitElement {
       this._showReconnectOverlay = true;
       this._reconnectMessage = 'Connection lost. Reconnecting...';
       this._creatingWorkspace = false;
+      // The attach this dispatch was waiting on is gone. Reconnect replays its
+      // own bootstrap attach; letting the argv survive would spawn the prompt
+      // into whatever that lands on, minutes later and unasked.
+      this._pendingDispatch = null;
       const interruptedTargets = new Map<string, CloseTarget>();
       for (const [key, request] of this._closeRequests) {
         interruptedTargets.set(key, request.target);
@@ -1282,6 +1327,20 @@ export class MuxApp extends LitElement {
    * by exact identity (clientRef match) and replaces the temp with the real id.
    */
   private _createPaneOptimistic = (): void => {
+    // Wrapped, not aliased: this is bound as a DOM event handler
+    // (@pane-create), which would otherwise pass the Event in as `cmd`.
+    this._spawnPane();
+  };
+
+  /**
+   * The body of the above, with the pane's argv as a parameter.
+   *
+   * `cmd` undefined => the daemon's default $SHELL (protocol.go "cmd"). A
+   * composer dispatch passes harnessArgv() instead, so the pane RUNS the agent
+   * with the prompt as an argv element rather than opening a shell and typing
+   * at it.
+   */
+  private _spawnPane(cmd?: string[]): void {
     const ref = mintClientRef();
     const tempId = _nextTempPaneId--;
     store.mutate({
@@ -1290,8 +1349,8 @@ export class MuxApp extends LitElement {
       optimistic: (draft) => draft.panes.push({ paneId: tempId, cols: 0, rows: 0, clientRef: ref }),
       settled: (base) => base.panes.some((p) => p.clientRef === ref),
     });
-    this._socket?.createPane(undefined, ref);
-  };
+    this._socket?.createPane(cmd, ref);
+  }
 
   /** Forward a layout-command from the server (via window CustomEvent) to the dock. */
   private _onLayoutCommand = (e: Event): void => {
@@ -1708,17 +1767,36 @@ export class MuxApp extends LitElement {
       harness?: HarnessName;
     };
     if (!d?.prompt) return;
-    const ref = mintClientRef();
-    const tempId = _nextTempPaneId--;
-    store.mutate({
-      workspaceId: ref,
-      kind: 'create-pane',
-      optimistic: (draft) =>
-        draft.panes.push({ paneId: tempId, cols: 0, rows: 0, clientRef: ref }),
-      settled: (base) => base.panes.some((p) => p.clientRef === ref),
-    });
-    this._socket?.createPane(harnessArgv(d.harness ?? 'amplifier', d.prompt), ref);
+    const cmd = harnessArgv(d.harness ?? 'amplifier', d.prompt);
     this._showHome = false;
+
+    // The composer's `workspaceId` is a DESTINATION, and create-pane cannot
+    // carry one -- the daemon spawns into whatever this connection is attached
+    // to. Sending create-pane straight out therefore ignores the dropdown
+    // entirely: "New workspace" silently became "another pane in whatever
+    // workspace happened to be open". Each destination gets its own route.
+
+    // "New workspace" (the composer's default, value ""). WorkspaceController
+    // attaches on workspace-created, so the argv only has to survive until
+    // that workspace's composition arrives.
+    if (d.workspaceId === null) {
+      this._pendingDispatch = cmd;
+      this._socket?.createWorkspace();
+      return;
+    }
+
+    // Already attached to the requested workspace -- no round-trip to wait on.
+    if (d.workspaceId === store.attached) {
+      this._spawnPane(cmd);
+      return;
+    }
+
+    // A different existing workspace: go there first, spawn on arrival.
+    // Switching attachment invalidates any live dictation target, same as
+    // _onWorkspaceSelected.
+    this._pendingDispatch = cmd;
+    voiceInputController.invalidateIfActive();
+    this._socket?.attachWithBreakpoint(d.workspaceId, currentLayoutMode());
   };
 
   private _onHomeOpen = (e: Event): void => {
