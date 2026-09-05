@@ -57,6 +57,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "sessiond-connect":
+		if err := runSessiondConnect(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "deploy":
 		if err := runDeploy(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -94,6 +99,11 @@ func main() {
 		}
 	case "pane":
 		if err := runPane(cfg.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	case "remote":
+		if err := runRemote(cfg.Args); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

@@ -126,6 +126,23 @@ func (c *Client) SetHandlers(h Handlers) {
 	c.hmu.Unlock()
 }
 
+// DialConn wraps an already-established connection to a sessiond daemon in a
+// connection-scoped Client. The frozen protocol's framing is self-describing
+// and carries no socket assumptions, so conn may be anything that provides a
+// bidirectional, binary-clean byte stream to the daemon — a Unix socket, or a
+// remote transport's stream.
+//
+// DialConn takes ownership of conn: the returned Client closes it on Close, and
+// the caller must not use conn directly afterwards. Like Dial, it does NOT start
+// the background read loop; the caller must still run Client.Run in its own
+// goroutine before issuing requests.
+func DialConn(conn net.Conn) *Client {
+	return &Client{
+		conn: conn,
+		pend: make(map[uint64]*pending),
+	}
+}
+
 // Dial opens a Unix-socket connection to the sessiond daemon at socketPath and
 // returns a connection-scoped Client.
 func Dial(socketPath string) (*Client, error) {
@@ -133,10 +150,7 @@ func Dial(socketPath string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{
-		conn: conn,
-		pend: make(map[uint64]*pending),
-	}, nil
+	return DialConn(conn), nil
 }
 
 // Close closes the underlying connection. It is idempotent: repeated calls are
