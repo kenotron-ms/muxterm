@@ -57,6 +57,21 @@ logger = logging.getLogger(__name__)
 # overrunning costs a late row update, never a stalled session.
 CLASSIFY_TIMEOUT_S = 12.0
 
+# Every finished turn is classified -- there is no cheap pre-filter any more.
+#
+# There used to be one: a turn with no question mark and no interrogative
+# phrase short-circuited to "not blocked" without spending a call. That was
+# sound while the only question was "is this waiting on a human?". It stopped
+# being sound the moment a finished row also needed a summary, because the
+# turns it skipped were exactly the finished ones -- so completed rows silently
+# kept whatever `doing` line the last tool call happened to leave behind, and
+# the summary never ran at all. Observed as a row reading
+# "bash: find ... -name '*.go' | wc -l" instead of the answer that session
+# produced.
+#
+# The call is cheap and bounded. Set `classify_end_of_turn: false` to opt out
+# entirely; there is no half-measure that keeps summaries and skips the call.
+
 # The assistant text is clipped before it is sent. A turn's final message is
 # usually short; the pathological case is a multi-thousand-line dump, and the
 # question -- if there is one -- is almost always at the end. So keep the TAIL,
@@ -140,33 +155,6 @@ The key must be spelled "summary". A model given an earlier version of this
 task returned {"needs_input": true, "confidence": "high", "reason": "..."}
 instead, which answers the question correctly and drops the line the row
 needs."""
-
-
-def _looks_like_a_question(text: str) -> bool:
-    """Cheap pre-filter, run before spending a model call.
-
-    A turn with no question mark and no first-person request is very unlikely
-    to be a blocked ask. This is a cost gate, not a classifier -- it is
-    deliberately loose, because a false positive here only costs one cheap
-    call, while a false negative silently drops a real question.
-    """
-    if "?" in text:
-        return True
-    lowered = text.lower()
-    return any(
-        phrase in lowered
-        for phrase in (
-            "let me know",
-            "which would you",
-            "confirm",
-            "please provide",
-            "i need you to",
-            "waiting for",
-            "tell me",
-            "your call",
-            "up to you",
-        )
-    )
 
 
 def _ask_from_text(text: str) -> str:
@@ -254,10 +242,6 @@ async def classify_turn(
     text = (response_text or "").strip()
     if not text:
         return None
-    if not _looks_like_a_question(text):
-        # Confidently unremarkable. Skip the call entirely.
-        return (False, "")
-
     if len(text) > MAX_RESPONSE_CHARS:
         text = text[-MAX_RESPONSE_CHARS:]
 
