@@ -31,15 +31,18 @@ type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
 function sessionMarkClass(s: SessionState): string {
   const g = groupFor(s);
   if (g === 'Needs input') return 'need';
-  if (g === 'Working') return 'work';
-  if (g === 'Ready for review') return 'done';
-  return s.state === 'failed' ? 'fail' : 'idle';
+  if (g === 'Running') return 'work';
+  if (s.state === 'failed') return 'fail';
+  if (s.state === 'done') return 'done';
+  return 'idle';
 }
 
 function sessionMarkTitle(s: SessionState): string {
   const g = groupFor(s);
   if (g === 'Needs input') return `${s.name}: ${s.waitingFor ?? 'needs input'}`;
-  if (g === 'Ready for review') return `${s.name}: PR #${s.pr ?? 0}`;
+  // A PR is a property of a finished session, not a group of its own, so it
+  // rides along with the state instead of replacing it.
+  if (s.pr && s.pr > 0) return `${s.name}: ${s.state} \u00b7 PR #${s.pr}`;
   return `${s.name}: ${s.state}`;
 }
 

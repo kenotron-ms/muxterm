@@ -57,6 +57,21 @@ logger = logging.getLogger(__name__)
 # overrunning costs a late row update, never a stalled session.
 CLASSIFY_TIMEOUT_S = 12.0
 
+# Every finished turn is classified -- there is no cheap pre-filter any more.
+#
+# There used to be one: a turn with no question mark and no interrogative
+# phrase short-circuited to "not blocked" without spending a call. That was
+# sound while the only question was "is this waiting on a human?". It stopped
+# being sound the moment a finished row also needed a summary, because the
+# turns it skipped were exactly the finished ones -- so completed rows silently
+# kept whatever `doing` line the last tool call happened to leave behind, and
+# the summary never ran at all. Observed as a row reading
+# "bash: find ... -name '*.go' | wc -l" instead of the answer that session
+# produced.
+#
+# The call is cheap and bounded. Set `classify_end_of_turn: false` to opt out
+# entirely; there is no half-measure that keeps summaries and skips the call.
+
 # The assistant text is clipped before it is sent. A turn's final message is
 # usually short; the pathological case is a multi-thousand-line dump, and the
 # question -- if there is one -- is almost always at the end. So keep the TAIL,
@@ -78,15 +93,15 @@ _SCHEMA: dict[str, Any] = {
                     "something it cannot decide or discover by itself"
                 ),
             },
-            "ask": {
+            "summary": {
                 "type": "string",
                 "description": (
-                    "if needs_input, the request in one short line, phrased as "
-                    "the thing the human must supply. Empty otherwise."
+                    "one short line. If needs_input, the thing the human must "
+                    "supply. Otherwise, what the session actually accomplished."
                 ),
             },
         },
-        "required": ["needs_input", "ask"],
+        "required": ["needs_input", "summary"],
         "additionalProperties": False,
     },
     "strict": True,
@@ -116,40 +131,30 @@ work genuinely cannot proceed until the human supplies something.
 
 If it is ambiguous, answer false.
 
+ALWAYS write a summary, on both branches. It is the single line a human reads
+on a dashboard row instead of opening the session, so it has to carry the
+substance:
+
+  - needs_input true  -> what the human must supply.
+      good: "pick wrap vs replace for sessiond.Client"
+      bad:  "waiting for input"        (says nothing they did not know)
+
+  - needs_input false -> what the session actually accomplished or how it
+    ended. Name the thing, not the activity.
+      good: "added pane send + workspace verbs, go build clean"
+      good: "failed: the 250ms preview gate assumption was wrong"
+      bad:  "task completed"           (true of every finished row)
+
+No trailing period. Aim for under 90 characters.
+
 Reply with ONLY this JSON object -- no other keys, no prose, no code fence:
 
-  {"needs_input": true, "ask": "one short line naming what the human must supply"}
+  {"needs_input": true, "summary": "one short line"}
 
-The key must be spelled "ask". A model given this task returned
-{"needs_input": true, "confidence": "high", "reason": "..."} instead, which
-answers the question correctly and drops the summary the row needs."""
-
-
-def _looks_like_a_question(text: str) -> bool:
-    """Cheap pre-filter, run before spending a model call.
-
-    A turn with no question mark and no first-person request is very unlikely
-    to be a blocked ask. This is a cost gate, not a classifier -- it is
-    deliberately loose, because a false positive here only costs one cheap
-    call, while a false negative silently drops a real question.
-    """
-    if "?" in text:
-        return True
-    lowered = text.lower()
-    return any(
-        phrase in lowered
-        for phrase in (
-            "let me know",
-            "which would you",
-            "confirm",
-            "please provide",
-            "i need you to",
-            "waiting for",
-            "tell me",
-            "your call",
-            "up to you",
-        )
-    )
+The key must be spelled "summary". A model given an earlier version of this
+task returned {"needs_input": true, "confidence": "high", "reason": "..."}
+instead, which answers the question correctly and drops the line the row
+needs."""
 
 
 def _ask_from_text(text: str) -> str:
@@ -237,10 +242,6 @@ async def classify_turn(
     text = (response_text or "").strip()
     if not text:
         return None
-    if not _looks_like_a_question(text):
-        # Confidently unremarkable. Skip the call entirely.
-        return (False, "")
-
     if len(text) > MAX_RESPONSE_CHARS:
         text = text[-MAX_RESPONSE_CHARS:]
 
@@ -291,12 +292,15 @@ async def classify_turn(
     needs = parsed.get("needs_input")
     if not isinstance(needs, bool):
         return None
-    ask = parsed.get("ask")
-    if not isinstance(ask, str):
-        ask = ""
-    if needs and not ask.strip():
-        ask = _ask_from_text(text)
-    ask = " ".join(ask.split())
-    if len(ask) > MAX_ASK_CHARS:
-        ask = ask[: MAX_ASK_CHARS - 1].rstrip() + "\u2026"
-    return (needs, ask)
+    summary = parsed.get("summary")
+    if not isinstance(summary, str):
+        # "ask" was this field's name before it covered both branches. Accept
+        # it so a cached or older prompt still yields a usable line.
+        legacy = parsed.get("ask")
+        summary = legacy if isinstance(legacy, str) else ""
+    if needs and not summary.strip():
+        summary = _ask_from_text(text)
+    summary = " ".join(summary.split())
+    if len(summary) > MAX_ASK_CHARS:
+        summary = summary[: MAX_ASK_CHARS - 1].rstrip() + "\u2026"
+    return (needs, summary)
