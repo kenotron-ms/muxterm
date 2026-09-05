@@ -308,9 +308,12 @@ export class MuxSocket {
 
   /**
    * Create a new workspace; name and clientRef are each included only when
-   * truthy.
+   * truthy. Returns whether the request actually went out; see sendSessiond.
+   *
+   * clientRef is what makes the reply attributable: the relay echoes it on
+   * workspace-created, so a caller holding state for its own request can tell
+   * that reply from one caused by another tab or another surface in this one.
    */
-  /** Returns whether the request actually went out; see sendSessiond. */
   createWorkspace(name?: string, clientRef?: string): boolean {
     const msg: SessiondMessage = { type: SessiondType.CreateWorkspace };
     if (name) msg.name = name;
@@ -585,6 +588,10 @@ export class MuxSocket {
     };
 
     ws.onclose = () => {
+      // Intent does not survive the connection that carried it. Leaving the
+      // last attach target set would let a reader during the reconnect window
+      // believe the connection is still headed somewhere it can no longer go.
+      this._lastAttachTarget = null;
       this._rejectPendingCloseRequests(
         new Error('The close outcome could not be confirmed because the connection was lost.'),
       );

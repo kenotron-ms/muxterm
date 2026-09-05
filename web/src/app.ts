@@ -591,7 +591,10 @@ export class MuxApp extends LitElement {
    *
    * `workspaceId: null` means "the workspace I am about to create"; it is
    * filled in from the workspace-created reply before that workspace's
-   * composition can arrive.
+   * composition can arrive. `clientRef` is what makes that reply
+   * attributable -- the create-workspace modal, another tab, and a recovery
+   * all produce workspace-created frames too, and adopting the first one to
+   * arrive would aim this dispatch at a workspace it did not ask for.
    *
    * `prompt` is kept verbatim so a drop can hand the words back to the user
    * rather than making them reconstruct the sentence from an argv array.
@@ -600,7 +603,7 @@ export class MuxApp extends LitElement {
    * per dispatch would be noise.
    */
   private _pendingDispatch:
-    | { workspaceId: string | null; cmd: string[]; prompt: string }
+    | { workspaceId: string | null; cmd: string[]; prompt: string; clientRef: string }
     | null = null;
 
   /**
@@ -821,10 +824,16 @@ export class MuxApp extends LitElement {
       // to our own create-workspace is the only place that id exists before its
       // composition arrives, so the parked dispatch adopts it now -- otherwise
       // the identity check below could never match for the new-workspace route.
+      //
+      // Correlated by clientRef, not by arrival order: the create-workspace
+      // modal, a second tab, and a recovery all produce workspace-created
+      // frames on this same connection, and adopting whichever landed first
+      // would aim the dispatch at a workspace the user never asked for.
       if (
         msg.type === SessiondType.WorkspaceCreated &&
         this._pendingDispatch &&
         this._pendingDispatch.workspaceId === null &&
+        msg.clientRef === this._pendingDispatch.clientRef &&
         typeof msg.workspaceId === 'string'
       ) {
         this._pendingDispatch.workspaceId = msg.workspaceId;
@@ -896,12 +905,20 @@ export class MuxApp extends LitElement {
       // The one state where correlation is impossible: still waiting on a
       // workspace to be created, so there is no id yet to match an error
       // against -- a rejected create-workspace cannot name the workspace it
-      // failed to make. `null === undefined` is false, so the correlated arm
-      // above can never fire for it, and the dispatch would wait for a
-      // composition that is never coming. Any error while in that state is
-      // therefore taken as this one's. It cannot over-drop: once the id has
-      // been adopted from workspace-created, the dispatch is no longer in the
-      // null state and this arm stops applying to it.
+      // failed to make, and the relay's sendError does not echo clientRef the
+      // way workspace-created does. `null === undefined` is false, so the
+      // correlated arm above can never fire for it.
+      //
+      // So this arm is deliberately broad, and the trade is deliberate too.
+      // Being too eager costs a false drop: an unrelated error inside the same
+      // round-trip ends a dispatch that would have worked, and the user is
+      // told, with their prompt handed back. Being too narrow costs a dispatch
+      // that waits forever for a composition that is never coming, silently.
+      // A recoverable wrong answer beats an unrecoverable silent one.
+      //
+      // It cannot over-drop beyond that window: once the id has been adopted
+      // from workspace-created, the dispatch has left the null state and this
+      // arm stops applying to it.
       if (
         this._pendingDispatch !== null &&
         this._pendingDispatch.workspaceId === null &&
@@ -1919,11 +1936,12 @@ export class MuxApp extends LitElement {
     // attaches on workspace-created, so the argv only has to survive until
     // that workspace's composition arrives.
     if (d.workspaceId === null) {
-      this._pendingDispatch = { workspaceId: null, cmd, prompt: d.prompt };
+      const ref = mintClientRef();
+      this._pendingDispatch = { workspaceId: null, cmd, prompt: d.prompt, clientRef: ref };
       // The connected check above is a moment earlier than this send, and the
       // socket can close in between. Park on the send actually happening, not
       // on it having been possible a moment ago.
-      if (!this._socket.createWorkspace()) {
+      if (!this._socket.createWorkspace(undefined, ref)) {
         this._dropPendingDispatch('the connection was lost before the request went out');
       }
       return;
@@ -1950,7 +1968,12 @@ export class MuxApp extends LitElement {
     // makes "here" true again.
     // Switching attachment invalidates any live dictation target, same as
     // _onWorkspaceSelected.
-    this._pendingDispatch = { workspaceId: d.workspaceId, cmd, prompt: d.prompt };
+    this._pendingDispatch = {
+      workspaceId: d.workspaceId,
+      cmd,
+      prompt: d.prompt,
+      clientRef: mintClientRef(),
+    };
     voiceInputController.invalidateIfActive();
     this._socket.attachWithBreakpoint(d.workspaceId, currentLayoutMode());
   };
