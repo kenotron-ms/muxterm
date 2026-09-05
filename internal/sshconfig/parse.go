@@ -280,23 +280,37 @@ func parseEntry(name, text string) Entry {
 // SplitKeyword separates a config line's keyword from its arguments, returning
 // ok=false for blank and comment lines.
 //
-// ssh accepts either whitespace or '=' between a keyword and its arguments, so
-// both are separators here — but only for the keyword, so an '=' inside an
-// argument (a path, an option value) survives intact.
+// ssh accepts whitespace, '=', or both between a keyword and its arguments, in
+// either order, so all five of these declare the same host:
+//
+//	Host boxb
+//	Host=boxb
+//	Host =boxb
+//	Host= boxb
+//	Host = boxb
+//
+// The whole separator run is consumed, not one character. Consuming only one
+// left "=boxb" as the alias for the third form, which made collidingHost fail
+// to match a hand-written "Host =boxb" and let Add write a shadowing block over
+// it -- the exact invariant this package exists to hold.
+//
+// Only ONE '=' is eaten, so an argument that itself contains '=' (a path, an
+// option value, a SetEnv pair) survives intact.
 func SplitKeyword(line string) (keyword, rest string, ok bool) {
 	line = strings.TrimSpace(line)
 	if line == "" || strings.HasPrefix(line, "#") {
 		return "", "", false
 	}
-	if i := strings.IndexAny(line, " \t="); i >= 0 {
-		keyword = line[:i]
-		rest = line[i+1:]
-	} else {
-		keyword = line
+	i := strings.IndexAny(line, " \t=")
+	if i < 0 {
+		return line, "", true
 	}
+	keyword = line[:i]
 	if keyword == "" {
 		return "", "", false
 	}
+	rest = strings.TrimLeft(line[i:], " \t")
+	rest = strings.TrimLeft(strings.TrimPrefix(rest, "="), " \t")
 	return keyword, rest, true
 }
 

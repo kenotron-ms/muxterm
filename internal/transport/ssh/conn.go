@@ -59,6 +59,17 @@ func (c *sshConn) Read(p []byte) (int, error) {
 		return n, net.ErrClosed
 	}
 	if errors.Is(err, io.EOF) {
+		// reap blocks in cmd.Wait, which waits on os/exec's stderr-copying
+		// goroutine as well as the process. A grandchild on the far side that
+		// inherited ssh's stderr and outlives sessiond-connect keeps that pipe
+		// open, so this can park indefinitely.
+		//
+		// Close is the escape valve, and it works by killing the child rather
+		// than by bypassing reap: reap is waitOnce-guarded, so Close cannot
+		// overtake a Read already inside it. Close runs reap on its own
+		// goroutine, gives up after closeGrace, and kills the process -- which
+		// closes stderr, releases the copier, and unblocks the parked Read.
+		// A caller that never calls Close has no other way out.
 		if werr := c.reap(); werr != nil {
 			return n, werr
 		}
