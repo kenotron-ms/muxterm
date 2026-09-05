@@ -145,6 +145,17 @@ type SessionState struct {
 	// exists, and it costs nothing because a human typed it.
 	Name string `json:"name"`
 
+	// Label is a 1-3 word name for the work, short enough to fit a pane tab
+	// whole -- "auth redirect", not the whole first line Name carries. The
+	// producer derives it once, from its first prompt, and then never changes
+	// it: a tab whose name moves is a tab you cannot find twice.
+	//
+	// Optional, and its absence is meaningful. Empty means this producer
+	// offered nothing better than the label the daemon already derived from
+	// the pane's launch argv at spawn (autolabel.go), so consumers keep what
+	// they have rather than clearing it.
+	Label string `json:"label,omitempty"`
+
 	// Mode is ModeInteractive or ModeAutonomous. See the mode constants above.
 	Mode string `json:"mode"`
 

@@ -16,6 +16,11 @@ type Workspace struct {
 	Layouts    map[string]string // breakpoint label -> opaque dockview layout JSON
 	nextPaneID int
 
+	// nameOrigin says whether Name was chosen by a person or derived by the
+	// daemon. Guarded by Registry.mu like every other field here, and read
+	// only through the setters in workspace.go. See autoname.go.
+	nameOrigin nameOrigin
+
 	// generation identifies this workspace instance even if an id were ever
 	// reused. membershipGeneration advances on every pane-map mutation. Both are
 	// daemon-owned close-ticket bindings and never cross the wire.
@@ -56,6 +61,11 @@ func NewRegistry() *Registry {
 // addWorkspaceLocked allocates a new workspace id, inserts the workspace, and
 // returns its id. The caller must hold r.mu. It is shared by AddWorkspace and
 // the lifecycle helpers in workspace.go.
+//
+// A name supplied at creation is explicit: the only caller that passes a
+// non-empty one is a client acting on somebody's create-workspace request, and
+// the cold-start/reap defaults pass "" -- which the deriver may fill in later
+// precisely because it is empty, whatever its provenance says.
 func (r *Registry) addWorkspaceLocked(name, clientRef string) string {
 	r.nextWSID++
 	r.nextWorkspaceGeneration++
@@ -63,6 +73,7 @@ func (r *Registry) addWorkspaceLocked(name, clientRef string) string {
 	r.workspaces[id] = &Workspace{
 		ID:         id,
 		Name:       name,
+		nameOrigin: originExplicit,
 		ClientRef:  clientRef,
 		Panes:      make(map[int]*Pane),
 		Layouts:    make(map[string]string),
@@ -227,6 +238,11 @@ func (r *Registry) Layout(wsID, breakpoint string) string {
 
 // RenamePane sets the title of a pane. Returns false for an unknown workspace
 // or pane.
+//
+// This is the public rename verb: whoever reaches it (browser dblclick, CLI,
+// MCP) is stating a title deliberately, so the title becomes explicit and the
+// deriver leaves it alone from here on. Names the daemon works out for itself
+// take renamePaneDerived instead.
 func (r *Registry) RenamePane(wsID string, paneID int, name string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -240,6 +256,30 @@ func (r *Registry) RenamePane(wsID string, paneID int, name string) bool {
 	}
 	p.SetTitle(name)
 	return true
+}
+
+// renamePaneDerived offers a daemon-derived title to a pane and reports
+// whether the pane's title actually CHANGED -- false for an unknown workspace
+// or pane, for a pane a person has already named, and for a title that is
+// already exactly this.
+//
+// The return value is the whole contract: callers broadcast only on true, so
+// re-offering the same label every second costs nothing. Pane.setTitleDerived
+// takes the pane's own mu while r.mu is held, which is the same order
+// PaneInfos already uses and is safe for the same reason -- Pane never calls
+// back into Registry.
+func (r *Registry) renamePaneDerived(wsID string, paneID int, name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok {
+		return false
+	}
+	p, ok := ws.Panes[paneID]
+	if !ok {
+		return false
+	}
+	return p.setTitleDerived(name)
 }
 
 // RemovePane deletes paneID from wsID and returns the removed pane, the number
@@ -273,10 +313,15 @@ func (r *Registry) removePaneLocked(wsID string, paneID int) (*Pane, int, bool) 
 // invoke them after the registry lock is released. Used only by the
 // session-restore snapshot writer (see snapshot.go).
 type workspaceLiveView struct {
-	ID     string
-	Name   string
-	Layout map[string]string
-	Panes  []*Pane
+	ID   string
+	Name string
+	// NameOrigin travels with Name because the snapshot writer persists both:
+	// a name restored without its provenance is a name the deriver is free to
+	// overwrite on the next tick, which is how a crash-recovery restart would
+	// otherwise eat a rename somebody typed before the crash.
+	NameOrigin nameOrigin
+	Layout     map[string]string
+	Panes      []*Pane
 }
 
 // snapshotView returns a deterministic, point-in-time view of every
@@ -314,7 +359,7 @@ func (r *Registry) snapshotView() []workspaceLiveView {
 			layout[k] = v
 		}
 
-		out = append(out, workspaceLiveView{ID: id, Name: ws.Name, Layout: layout, Panes: panes})
+		out = append(out, workspaceLiveView{ID: id, Name: ws.Name, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes})
 	}
 	return out
 }

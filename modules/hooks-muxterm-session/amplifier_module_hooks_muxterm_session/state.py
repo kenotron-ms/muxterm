@@ -252,6 +252,7 @@ class SessionRecord:
         "sid",
         "project",
         "name",
+        "label",
         "mode",
         "state",
         "waiting_for",
@@ -271,6 +272,10 @@ class SessionRecord:
         self.sid = _pid_session_id(self.pid)
         self.project = os.getcwd()
         self.name = ""
+        # A 1-3 word tab label, derived once from the first prompt (label.py).
+        # Empty means "nothing better than what the daemon already derived at
+        # spawn from argv" -- see internal/sessiond/autolabel.go.
+        self.label = ""
         self.mode = MODE_INTERACTIVE
         self.state = STATE_WORKING
         self.waiting_for = ""
@@ -345,6 +350,11 @@ class SessionRecord:
             payload["sid"] = self.sid
         if self.project:
             payload["project"] = self.project
+        if self.label:
+            # Omitted until the model has produced one. Absent means "keep
+            # whatever the daemon derived at spawn"; an empty string here would
+            # instead read as "this session declares it has no label".
+            payload["label"] = self.label
         if self.waiting_for:
             payload["waitingFor"] = self.waiting_for
         if self.doing:
@@ -523,11 +533,15 @@ class SessionStateTracker:
         *,
         classify_enabled: bool = True,
         classify_model: str | None = None,
+        label_enabled: bool = True,
+        label_model: str | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._spool = spool
         self._classify_enabled = classify_enabled
         self._classify_model = classify_model
+        self._label_enabled = label_enabled
+        self._label_model = label_model
 
     # -- goal mode ----------------------------------------------------------
 
@@ -682,6 +696,14 @@ class SessionStateTracker:
         record.flush()
 
     async def on_prompt_submit(self, event: str, data: dict[str, Any]) -> None:
+        """A prompt was sent. Publish that immediately, then name the session.
+
+        The structural state is flushed BEFORE the labelling call, exactly as
+        on_prompt_complete flushes before classifying and for the same reason:
+        this handler sits in front of the turn actually starting, so a slow or
+        unreachable provider must cost a late label and never a delayed
+        session.
+        """
         record = self._record(data)
         if record is None:
             return
@@ -693,6 +715,56 @@ class SessionStateTracker:
         if not record.name:
             record.name = _first_line(data.get("prompt"), NAME_MAX_CHARS)
         record.set_working("")
+        record.flush()
+
+        await self._maybe_label(record, data)
+
+    async def _maybe_label(self, record: Any, data: dict[str, Any]) -> None:
+        """Derive this session's tab label from its FIRST prompt, once.
+
+        A record that already carries a label never recomputes one, and that
+        rule is load-bearing rather than an optimisation. A tab that renames
+        itself mid-session is worse than one named `Pane 7`: the label exists
+        so you can find this session again, and a name that moves is a name you
+        cannot aim at twice. The `doing` line is the field that tracks what is
+        happening now; this one holds still.
+
+        Deriving it here, from the prompt, rather than from the assistant's
+        closing text at end of turn, is deliberate -- see label.py's module
+        docstring for why the label describes what was ASKED rather than what
+        was concluded, and why a wrong label that persists for a whole turn is
+        the failure being avoided.
+
+        `None` from the labeller leaves the record untouched, which means the
+        pane keeps the deterministic label the daemon derived from argv at
+        spawn. Nothing here can make a tab worse than it already was.
+
+        The gate is "already HAS a label", not "has already tried": a session
+        whose first attempt returned None -- no provider mounted yet, one
+        timeout -- may be named by a later prompt. That is not churn, because
+        the value it is replacing is the empty string; the rule this protects
+        is that a label never changes into a DIFFERENT label, and one settled
+        here is settled for the life of the session.
+        """
+        if not self._label_enabled:
+            return
+        if record.label:
+            return
+        prompt = data.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            return
+        try:
+            from .label import label_session
+
+            label = await label_session(
+                self._coordinator, prompt, model=self._label_model
+            )
+        except Exception:
+            # The hook must never take a session down with it.
+            return
+        if not label:
+            return
+        record.label = label
         record.flush()
 
     async def on_tool_pre(self, event: str, data: dict[str, Any]) -> None:

@@ -102,6 +102,15 @@ export interface SessionState {
   project?: string;
   /** Short title, conventionally the session's first prompt, trimmed. */
   name: string;
+  /**
+   * A 1-3 word name for the work, short enough to fit a pane tab whole --
+   * "auth redirect", not the whole first line `name` carries. Derived once
+   * from the session's first prompt and never changed afterwards.
+   *
+   * Absent means the producer offered nothing better than the label the
+   * daemon already derived from the pane's launch argv, so keep that one.
+   */
+  label?: string;
   mode: SessionMode;
   state: SessionRunState;
   /** Present only when state === 'blocked'. */

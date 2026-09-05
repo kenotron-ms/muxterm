@@ -104,6 +104,15 @@ async def mount(
         knob is for cost control, not correctness.
       classify_model (str): Model id for that classification. Defaults to
         whatever the session's provider resolves on its own.
+      label_first_prompt (bool): At the FIRST prompt of a session, ask a cheap
+        model for a 1-3 word label naming what the session is about, for
+        muxterm's pane tab (default: true). One call per session, not per
+        turn. Turning it off leaves the deterministic label the daemon derives
+        from the launch argv at spawn (internal/sessiond/autolabel.go), which
+        is also where every failure path already lands -- so this knob is for
+        cost control, not correctness.
+      label_model (str): Model id for that labelling. Defaults to whatever the
+        session's provider resolves on its own.
       publish_state (bool): Publish session-state snapshots for muxterm's
         home view (default: true). Turning it off leaves the title stamp,
         and therefore crash recovery, fully intact -- the two capabilities
@@ -114,6 +123,8 @@ async def mount(
     publish_state = config.get("publish_state", True)
     classify_end_of_turn = config.get("classify_end_of_turn", True)
     classify_model = config.get("classify_model") or None
+    label_first_prompt = config.get("label_first_prompt", True)
+    label_model = config.get("label_model") or None
 
     try:
         import setproctitle as setproctitle_module
@@ -160,6 +171,8 @@ async def mount(
             coordinator,
             classify_enabled=classify_end_of_turn,
             classify_model=classify_model,
+            label_enabled=label_first_prompt,
+            label_model=label_model,
         )
         if publish_state
         else False
@@ -186,6 +199,8 @@ def _register_state_publisher(
     *,
     classify_enabled: bool = True,
     classify_model: str | None = None,
+    label_enabled: bool = True,
+    label_model: str | None = None,
 ) -> bool:
     """Wire the session-state tracker onto the kernel event stream.
 
@@ -199,6 +214,8 @@ def _register_state_publisher(
             spool_dir(),
             classify_enabled=classify_enabled,
             classify_model=classify_model,
+            label_enabled=label_enabled,
+            label_model=label_model,
         )
     except Exception as exc:
         logger.warning(

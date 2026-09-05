@@ -559,6 +559,7 @@ func sessionStateHash(rows []SessionState) uint64 {
 		writeHashField(h, r.Harness)
 		writeHashField(h, r.Project)
 		writeHashField(h, r.Name)
+		writeHashField(h, r.Label)
 		writeHashField(h, r.Mode)
 		writeHashField(h, r.State)
 		writeHashField(h, r.WaitingFor)

@@ -22,6 +22,12 @@ type Pane struct {
 	LocalID int
 	Title   string // settable; OSC 0/2 title capture is a later phase
 
+	// titleOrigin says whether Title was chosen by a person or derived by the
+	// daemon, and is guarded by mu exactly like Title itself -- the two are
+	// one fact and must never be read apart. See autoname.go for why a name
+	// without provenance cannot be safely re-derived.
+	titleOrigin nameOrigin
+
 	// targetGeneration is assigned by Registry.PutPane and changes whenever a
 	// pane registry identity is replaced. It is read only while Registry.mu is
 	// held and binds close tickets independently of the root-process generation.
@@ -502,11 +508,49 @@ func (p *Pane) Seq() uint64 {
 	return p.buf.Seq()
 }
 
-// SetTitle sets the pane's display title under lock.
+// SetTitle sets the pane's display title under lock and records it as a
+// deliberate choice, which makes it permanent as far as the deriver is
+// concerned. This is the setter behind the public rename verb (rename-pane,
+// reached from the browser, the CLI, and MCP) and it is the ONLY way a title
+// becomes explicit -- anything the daemon works out for itself goes through
+// setTitleDerived instead, so the two intents cannot be confused at a call
+// site.
 func (p *Pane) SetTitle(name string) {
+	p.setTitle(name, originExplicit)
+}
+
+// setTitleDerived offers a title the daemon derived, and reports whether the
+// pane took it. It declines -- silently, and returning false -- when a person
+// has already named this pane, and when the title already reads exactly this.
+// Callers broadcast if and only if it returns true; see applyDerivedNames for
+// why that is what keeps a once-a-second pass quiet.
+func (p *Pane) setTitleDerived(name string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !acceptsDerivedName(p.Title, p.titleOrigin, name) {
+		return false
+	}
+	p.Title = name
+	p.titleOrigin = originDerived
+	return true
+}
+
+// setTitle is the one place Title and its provenance are written, so they can
+// never drift apart.
+func (p *Pane) setTitle(name string, origin nameOrigin) {
 	p.mu.Lock()
 	p.Title = name
+	p.titleOrigin = origin
 	p.mu.Unlock()
+}
+
+// titleOriginSnapshot returns the provenance of the current title. Read under
+// the same lock as the title, for the snapshot writer -- which must persist the
+// two together or a restart silently downgrades a person's rename to a guess.
+func (p *Pane) titleOriginSnapshot() nameOrigin {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.titleOrigin
 }
 
 // Info returns a frozen snapshot of this pane's identity and dimensions.

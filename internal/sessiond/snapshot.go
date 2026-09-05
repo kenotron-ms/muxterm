@@ -46,7 +46,15 @@ type Snapshot struct {
 
 // WorkspaceSnapshot is one workspace's captured name, layout, and panes.
 type WorkspaceSnapshot struct {
-	Name   string            `json:"name"`
+	Name string `json:"name"`
+
+	// NameOrigin is "derived" or "explicit" -- who chose Name (autoname.go).
+	// Stored as a plain string, like SessionIDSource below, so the file stays
+	// self-describing to anyone reading it. Absent in snapshots written before
+	// provenance existed, and restored as explicit; see
+	// nameOriginFromSnapshot for why that is the safe direction.
+	NameOrigin string `json:"name_origin,omitempty"`
+
 	Layout map[string]string `json:"layout,omitempty"` // verbatim copy of Registry's per-workspace Layouts map
 	Panes  []PaneSnapshot    `json:"panes"`
 }
@@ -57,7 +65,14 @@ type WorkspaceSnapshot struct {
 // restored pane gets a fresh id via the normal allocation path exactly like
 // any live-created pane.
 type PaneSnapshot struct {
-	Title string   `json:"title"`
+	Title string `json:"title"`
+
+	// TitleOrigin is "derived" or "explicit" -- who chose Title (autoname.go).
+	// It has to be persisted next to the title itself: without it, a rename
+	// somebody typed comes back after a crash-recovery restart looking like a
+	// guess, and the deriver overwrites it on the very next tick.
+	TitleOrigin string `json:"title_origin,omitempty"`
+
 	Cwd   string   `json:"cwd,omitempty"`
 	Argv  []string `json:"argv,omitempty"`
 	Agent string   `json:"agent,omitempty"` // catalog Name if matched, else ""
@@ -176,7 +191,7 @@ func BuildSnapshot(reg *Registry, reason string) Snapshot {
 		Reason:    reason,
 	}
 	for _, view := range views {
-		wsSnap := WorkspaceSnapshot{Name: view.Name, Layout: view.Layout}
+		wsSnap := WorkspaceSnapshot{Name: view.Name, NameOrigin: string(view.NameOrigin), Layout: view.Layout}
 		for _, p := range view.Panes {
 			wsSnap.Panes = append(wsSnap.Panes, capturePaneSnapshot(p))
 		}
@@ -199,11 +214,15 @@ func capturePaneSnapshot(p *Pane) PaneSnapshot {
 	// would discard first in any sufficiently long conversation.
 	fullReplay := p.Replay()
 	out := PaneSnapshot{
-		Title:      info.Title,
-		Cols:       info.Cols,
-		Rows:       info.Rows,
-		Replay:     capReplay(fullReplay),
-		CapturedAt: time.Now(),
+		Title: info.Title,
+		// Captured through the pane's own lock rather than off PaneInfo: the
+		// provenance is daemon-internal bookkeeping and has no business on the
+		// wire type the browser and MCP both read.
+		TitleOrigin: string(p.titleOriginSnapshot()),
+		Cols:        info.Cols,
+		Rows:        info.Rows,
+		Replay:      capReplay(fullReplay),
+		CapturedAt:  time.Now(),
 	}
 
 	pid, ok := resolveForegroundPID(p)
@@ -483,6 +502,11 @@ func (s *Server) RestoreFromSnapshot(enabled bool, path string) int {
 	restored := 0
 	for _, wsSnap := range snap.Workspaces {
 		wsID := s.reg.AddWorkspace(wsSnap.Name, "")
+		// AddWorkspace records every creation as explicit, which is right for
+		// every live caller and wrong for exactly this one: a name this daemon
+		// derived last run must come back derived, or it freezes at whatever
+		// the first session happened to be called and can never be refined.
+		s.reg.restoreWorkspaceNameOrigin(wsID, nameOriginFromSnapshot(wsSnap.NameOrigin))
 		for bp, layout := range wsSnap.Layout {
 			s.reg.SaveLayout(wsID, bp, layout)
 		}
@@ -577,7 +601,12 @@ func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) error {
 		return err
 	}
 	if paneSnap.Title != "" {
-		p.SetTitle(paneSnap.Title)
+		// Restored with the provenance it was captured with, NOT through the
+		// public rename verb: a title this daemon derived must stay derivable
+		// so a later label can still refine it, and a title somebody typed
+		// must stay untouchable. A snapshot too old to say restores as
+		// explicit -- see nameOriginFromSnapshot.
+		p.setTitle(paneSnap.Title, nameOriginFromSnapshot(paneSnap.TitleOrigin))
 	}
 	s.reg.PutPane(wsID, p)
 	return nil
