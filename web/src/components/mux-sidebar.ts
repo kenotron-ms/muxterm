@@ -430,6 +430,23 @@ export class MuxSidebar extends LitElement {
       box-shadow: 0 2px 8px -2px color-mix(in srgb, var(--chrome-accent) 40%, transparent);
     }
 
+    /* Home is the view on screen. The attached workspace is still attached --
+       its dot stays accent, and picking it puts you straight back -- but it is
+       not WHERE YOU ARE, so it gives up the accent edge to the Start card.
+       Exactly one thing in the sidebar may read as "you are here", otherwise
+       the ring on the Start card is just a second highlight competing with a
+       brighter one and the user reads the workspace as still selected. */
+    :host([home-active]) .ws-card.active {
+      background: var(--chrome-bar);
+      border-color: transparent;
+    }
+
+    :host([home-active]) .ws-card.preview.active {
+      background: var(--mux-bg);
+      border-color: color-mix(in srgb, var(--chrome-border) 60%, var(--chrome-text-dim));
+      box-shadow: 0 1px 3px -1px rgba(0, 0, 0, 0.5);
+    }
+
     /* Scrim, over the TOP of the tile. Not arbitrary: after bottom-anchoring
        the crop, the top rows hold the OLDEST content, so the chrome covers the
        least valuable pixels on the card. */
@@ -633,8 +650,16 @@ export class MuxSidebar extends LitElement {
   // State
   // ---------------------------------------------------------------------------
 
-  /** True while the home view is the thing on screen. Drives the Start card. */
-  @property({ type: Boolean }) homeActive = false;
+  /**
+   * True while the home view is the thing on screen. Drives the Start card.
+   *
+   * Reflected: the attached workspace card has to stop reading as "you are
+   * here" while home is up (see :host([home-active]) above), and that decision
+   * belongs in CSS next to the .active rules it cancels, not threaded through
+   * every card's class list.
+   */
+  @property({ type: Boolean, reflect: true, attribute: 'home-active' })
+  homeActive = false;
 
   /** Key chord shown on the Start card, e.g. "ctrl+`". */
   @property({ type: String }) homeKey = '';

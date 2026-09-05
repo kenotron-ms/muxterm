@@ -60,9 +60,20 @@ export class MuxStartCard extends LitElement {
       background: color-mix(in srgb, var(--mux-warn) 16%, var(--chrome-bar));
     }
 
-    /* Home is on screen: a quiet ring, so the card reads as "you are here". */
+    /* Home is on screen: "you are here".
+       This is LOCATION, not alarm, so it is drawn in --chrome-accent -- the
+       same token .ws-card.active uses for the workspace you are in -- and
+       OUTSIDE the border, which keeps meaning what it meant (grey = calm,
+       warn = needs input). The ring used to be tinted from the card's own
+       border/warn colour, and in the zero state that resolved to exactly
+       --chrome-border, i.e. the colour already on the card's edge: measured
+       rgb(41,46,66) ring on a rgb(31,35,53) fill, ~1.1:1. The selected state
+       rendered as nothing at all, while the workspace card below kept the
+       bright accent -- so the sidebar said you were in the workspace while
+       home was on screen. mux-sidebar demotes that card via
+       :host([home-active]) so exactly one thing claims "you are here". */
     .start.here {
-      box-shadow: 0 0 0 1px color-mix(in srgb, var(--mux-warn) 35%, transparent);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--chrome-accent) 55%, transparent);
     }
 
     /* ── The zero state. Nothing here is warm, bright, or animated. ── */
@@ -76,8 +87,13 @@ export class MuxStartCard extends LitElement {
       border-color: var(--chrome-border);
     }
 
-    .start.zero.here {
-      box-shadow: 0 0 0 1px var(--chrome-border);
+    /* At zero the card's own border is --chrome-border, which barely separates
+       it from the panel, so the ring would float off an invisible edge. The
+       accent picks the edge up. Stated for :hover too so a future reorder of
+       the .start.zero:hover rule (same specificity) cannot silently win. */
+    .start.zero.here,
+    .start.zero.here:hover {
+      border-color: var(--chrome-accent);
     }
 
     .head {
@@ -148,26 +164,45 @@ export class MuxStartCard extends LitElement {
     const zero = this.count === 0;
     const cls = `start ${zero ? 'zero' : ''} ${this.active ? 'here' : ''}`;
 
+    // The second line says WHERE the card takes you -- so while home is the
+    // thing on screen it must not still read "click to go home". It says
+    // "home", and keeps the spread when there is one to report.
+    const spread =
+      this.spread > 0
+        ? `across ${this.spread} workspace${this.spread === 1 ? '' : 's'}`
+        : '';
+    const busyLbl = this.active
+      ? spread === ''
+        ? 'home'
+        : `home · ${spread}`
+      : spread === ''
+        ? 'click to go home'
+        : spread;
+
     // At zero the count itself is the wrong headline — there is no number worth
     // 26px. The card says the calm thing instead.
     const body = zero
       ? html`<div class="num">All clear</div>
           <div class="lbl">${this.active ? 'home' : 'click for home'}</div>`
       : html`<div class="num">${this.count}</div>
-          <div class="lbl">
-            ${this.spread > 0
-              ? `across ${this.spread} workspace${this.spread === 1 ? '' : 's'}`
-              : 'click to go home'}
-          </div>`;
+          <div class="lbl">${busyLbl}</div>`;
+
+    // Selection has to reach a screen reader too, or the fix is only for
+    // people who can see the ring. aria-current="page" is the cue for "this
+    // is the view you are on"; it replaces aria-pressed, which described the
+    // card as a toggle rather than as where you are.
+    const need = zero
+      ? 'Nothing needs input.'
+      : `${this.count} sessions need input.`;
 
     return html`
       <button
         type="button"
         class="${cls}"
-        aria-label="${zero
-          ? 'Nothing needs input. Go to home view.'
-          : `${this.count} sessions need input. Go to home view.`}"
-        aria-pressed="${this.active ? 'true' : 'false'}"
+        aria-label="${this.active
+          ? `${need} Home view, current view.`
+          : `${need} Go to home view.`}"
+        aria-current="${this.active ? 'page' : 'false'}"
         @click="${this._onClick}"
       >
         <div class="head">
