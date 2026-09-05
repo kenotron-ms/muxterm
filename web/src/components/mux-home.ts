@@ -1004,6 +1004,18 @@ export class MuxHome extends LitElement {
 
   /** Give the view keyboard focus. Called by the app when home is opened. */
   focusView(): void {
+    // A surviving draft means the user was mid-sentence when they stepped away
+    // -- the composer's state now outlives the toggle (cache() in app.ts). Put
+    // the caret back at the end of what they typed rather than on the scroller,
+    // where the next keystroke would be swallowed as j/k navigation.
+    if (this._draft) {
+      const box = this.renderRoot.querySelector<HTMLTextAreaElement>('.prompt');
+      if (box) {
+        box.focus();
+        box.setSelectionRange(box.value.length, box.value.length);
+        return;
+      }
+    }
     this.renderRoot.querySelector<HTMLElement>('.home')?.focus();
   }
 

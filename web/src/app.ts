@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
+import { cache } from 'lit/directives/cache.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
 import { MonitorX } from 'lucide';
@@ -1045,7 +1046,18 @@ export class MuxApp extends LitElement {
                   @layout-save="${this._onLayoutSave}"
                 ></mux-dock>
               `}
-          ${this._showHome
+          <!-- cache(): home is TOGGLED, not created and destroyed. A bare
+               ternary swaps <mux-home> out of the DOM, which destroys the
+               element and every @state on it -- including the half-typed
+               prompt in the composer, the workspace it was aimed at, and the
+               harness picked for it. Leaving to answer a pane and coming back
+               to an empty box is a data-loss bug, not a re-render. cache()
+               parks the same instance in a fragment (disconnectedCallback
+               still fires, so nothing leaks a live listener) and re-inserts it
+               on the way back with its draft intact. Still lazy: nothing is
+               built until home is opened the first time. -->
+          ${cache(
+            this._showHome
             ? html`
                 <!-- Covers .main-pane as an opaque absolute overlay. The dock
                      underneath is NEVER unmounted: unmounting would risk
@@ -1068,7 +1080,8 @@ export class MuxApp extends LitElement {
                   @home-dismiss="${this._onHomeHide}"
                 ></mux-home>
               `
-            : ''}
+            : '',
+          )}
         </div>
 
       </div>
