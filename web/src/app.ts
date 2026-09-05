@@ -558,7 +558,8 @@ export class MuxApp extends LitElement {
   private _showHome = false;
 
   /**
-   * argv for a composer dispatch that is waiting on an attach. null = none.
+   * A composer dispatch waiting on an attach: where it is going, and what to
+   * run when it gets there. null = none.
    *
    * "Start it in workspace X" is necessarily two round-trips on this wire.
    * One browser connection is attached to exactly one workspace at a time
@@ -566,12 +567,26 @@ export class MuxApp extends LitElement {
    * resolves the target as `c.attached` and ignores any workspaceId on the
    * message (internal/sessiond/server.go createPane). So a dispatch aimed
    * anywhere other than the current attachment cannot be sent yet -- it is
-   * parked here until that workspace's composition lands, then spawned.
+   * parked here until its workspace's composition lands, then spawned.
+   *
+   * The parked `workspaceId` is the whole safety property, and it is why this
+   * is a pair rather than a bare argv. The spawn fires on POSITIVE IDENTITY:
+   * the arriving composition must be for the workspace the user picked. Any
+   * other composition -- a recovery attach after the target was closed, a
+   * bootstrap attach after a reconnect, a switch the user made in between --
+   * simply does not match, so the prompt cannot start somewhere it was never
+   * aimed. Enumerating every way an attach can go wrong and clearing at each
+   * one is the weaker form of this: it holds only until someone adds a path
+   * nobody remembered to clear.
+   *
+   * `workspaceId: null` means "the workspace I am about to create"; it is
+   * filled in from the workspace-created reply before that workspace's
+   * composition can arrive.
    *
    * Deliberately NOT @state: it never reaches the template, and a re-render
    * per dispatch would be noise.
    */
-  private _pendingDispatch: string[] | null = null;
+  private _pendingDispatch: { workspaceId: string | null; cmd: string[] } | null = null;
 
   /**
    * Pane the home view asked for, handed to mux-dock as an input to its
@@ -775,8 +790,21 @@ export class MuxApp extends LitElement {
           terminalRegistry.setExpectedReplayBytes(paneId, pane.totalSeq ?? 0);
         }
       }
+      // "The workspace I am about to create" becomes a real id here. The reply
+      // to our own create-workspace is the only place that id exists before its
+      // composition arrives, so the parked dispatch adopts it now -- otherwise
+      // the identity check below could never match for the new-workspace route.
+      if (
+        msg.type === SessiondType.WorkspaceCreated &&
+        this._pendingDispatch &&
+        this._pendingDispatch.workspaceId === null &&
+        typeof msg.workspaceId === 'string'
+      ) {
+        this._pendingDispatch.workspaceId = msg.workspaceId;
+      }
       // The composition IS the "you are now in that workspace" signal, so it is
-      // where a parked composer dispatch (_pendingDispatch) finally spawns.
+      // where a parked composer dispatch (_pendingDispatch) finally spawns --
+      // but only when the composition is for the workspace it was aimed at.
       //
       // It also STANDS IN for the one-terminal-per-workspace auto-spawn below,
       // rather than running alongside it: a freshly created workspace has zero
@@ -788,20 +816,24 @@ export class MuxApp extends LitElement {
       // getter means an already-overlaid optimistic pane suppresses a double-spawn.
       if (msg.type === SessiondType.Composition) {
         const pending = this._pendingDispatch;
-        if (pending) {
+        if (pending && pending.workspaceId === msg.workspaceId) {
           this._pendingDispatch = null;
-          this._spawnPane(pending);
+          this._spawnPane(pending.cmd);
         } else if (store.panes.length === 0) {
           this._createPaneOptimistic();
         }
       }
-      // A parked dispatch is aimed at ONE workspace. When the attach for it
-      // fails, WorkspaceController recovers by attaching somewhere else -- and
-      // a still-parked argv would ride that recovery composition and start the
-      // prompt in a workspace the user never picked. Drop it instead.
+      // The identity check above already prevents a parked dispatch from
+      // spawning anywhere but its own target. These two drop it once that
+      // target is known to be unreachable, so it cannot sit indefinitely
+      // waiting for a composition that is never coming: the attach was
+      // refused, or the workspace was closed out from under it.
       if (
-        msg.type === SessiondType.Error &&
-        msg.code === SessiondErrorCode.UnknownWorkspace
+        (msg.type === SessiondType.Error &&
+          msg.code === SessiondErrorCode.UnknownWorkspace) ||
+        (msg.type === SessiondType.WorkspaceClosed &&
+          this._pendingDispatch !== null &&
+          this._pendingDispatch.workspaceId === msg.workspaceId)
       ) {
         this._pendingDispatch = null;
       }
@@ -1780,7 +1812,7 @@ export class MuxApp extends LitElement {
     // attaches on workspace-created, so the argv only has to survive until
     // that workspace's composition arrives.
     if (d.workspaceId === null) {
-      this._pendingDispatch = cmd;
+      this._pendingDispatch = { workspaceId: null, cmd };
       this._socket?.createWorkspace();
       return;
     }
@@ -1794,7 +1826,7 @@ export class MuxApp extends LitElement {
     // A different existing workspace: go there first, spawn on arrival.
     // Switching attachment invalidates any live dictation target, same as
     // _onWorkspaceSelected.
-    this._pendingDispatch = cmd;
+    this._pendingDispatch = { workspaceId: d.workspaceId, cmd };
     voiceInputController.invalidateIfActive();
     this._socket?.attachWithBreakpoint(d.workspaceId, currentLayoutMode());
   };
