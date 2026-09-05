@@ -310,11 +310,12 @@ export class MuxSocket {
    * Create a new workspace; name and clientRef are each included only when
    * truthy.
    */
-  createWorkspace(name?: string, clientRef?: string): void {
+  /** Returns whether the request actually went out; see sendSessiond. */
+  createWorkspace(name?: string, clientRef?: string): boolean {
     const msg: SessiondMessage = { type: SessiondType.CreateWorkspace };
     if (name) msg.name = name;
     if (clientRef) msg.clientRef = clientRef;
-    this.sendSessiond(msg);
+    return this.sendSessiond(msg);
   }
 
   /** Rename an existing workspace. */

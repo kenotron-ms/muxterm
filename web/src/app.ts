@@ -853,6 +853,9 @@ export class MuxApp extends LitElement {
         if (isOurTarget && stillHeadedThere) {
           this._pendingDispatch = null;
           this._spawnPane(pending.cmd);
+          // `pending` is necessarily non-null wherever isOurTarget is true --
+          // it is the first term of that expression. The redundant-looking
+          // test is TypeScript narrowing the reference, not a reachable case.
         } else if (isOurTarget && pending) {
           // Our target, but the connection has moved on. Do not chase it --
           // the user chose to be elsewhere. Hand the prompt back instead.
@@ -889,6 +892,22 @@ export class MuxApp extends LitElement {
             ? 'the workspace was closed'
             : 'the workspace could not be reached',
         );
+      }
+      // The one state where correlation is impossible: still waiting on a
+      // workspace to be created, so there is no id yet to match an error
+      // against -- a rejected create-workspace cannot name the workspace it
+      // failed to make. `null === undefined` is false, so the correlated arm
+      // above can never fire for it, and the dispatch would wait for a
+      // composition that is never coming. Any error while in that state is
+      // therefore taken as this one's. It cannot over-drop: once the id has
+      // been adopted from workspace-created, the dispatch is no longer in the
+      // null state and this arm stops applying to it.
+      if (
+        this._pendingDispatch !== null &&
+        this._pendingDispatch.workspaceId === null &&
+        msg.type === SessiondType.Error
+      ) {
+        this._dropPendingDispatch('the workspace could not be created');
       }
       // Server confirmed the workspace — clear loading state and close modal.
       if (msg.type === SessiondType.WorkspaceCreated && this._creatingWorkspace) {
@@ -1901,7 +1920,12 @@ export class MuxApp extends LitElement {
     // that workspace's composition arrives.
     if (d.workspaceId === null) {
       this._pendingDispatch = { workspaceId: null, cmd, prompt: d.prompt };
-      this._socket.createWorkspace();
+      // The connected check above is a moment earlier than this send, and the
+      // socket can close in between. Park on the send actually happening, not
+      // on it having been possible a moment ago.
+      if (!this._socket.createWorkspace()) {
+        this._dropPendingDispatch('the connection was lost before the request went out');
+      }
       return;
     }
 
