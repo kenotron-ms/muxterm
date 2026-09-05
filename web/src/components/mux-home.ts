@@ -31,6 +31,11 @@ import {
   type HomeGroup,
   type SessionState,
 } from '../lib/session-state.js';
+import {
+  LAUNCHABLE_HARNESSES,
+  harnessLabel,
+  type HarnessName,
+} from '../lib/harness.js';
 import { TILE_COLS, TILE_ROWS, tileForSession, tileLinesFor } from '../lib/home-tile.js';
 import { renderTile, fontReady } from '../lib/preview-canvas.js';
 import { PREVIEW_CELL } from '../lib/fonts.js';
@@ -208,6 +213,12 @@ export class MuxHome extends LitElement {
 
   @state() private _draft = '';
   @state() private _target = '';
+  /**
+   * Which coding-agent CLI the new pane runs. The composer starts a SESSION in
+   * that harness -- it does not open a shell and type at it -- so this is the
+   * program, not a label.
+   */
+  @state() private _harness: 'amplifier' | 'claude' = 'amplifier';
   @state() private _view: HomeView = loadView();
   @state() private _cursor = 0;
   @state() private _peek = false;
@@ -1483,6 +1494,19 @@ export class MuxHome extends LitElement {
           <div class="crow">
             <select
               class="wsel"
+              aria-label="Which coding agent to start"
+              .value="${this._harness}"
+              @change="${(e: Event) => {
+                this._harness = (e.target as HTMLSelectElement)
+                  .value as HarnessName;
+              }}"
+            >
+              ${LAUNCHABLE_HARNESSES.map(
+                (h) => html`<option value="${h}">${harnessLabel(h)}</option>`,
+              )}
+            </select>
+            <select
+              class="wsel"
               aria-label="Workspace to start it in"
               .value="${this._target}"
               @change="${(e: Event) => {
@@ -1545,7 +1569,11 @@ export class MuxHome extends LitElement {
     if (!prompt) return;
     this.dispatchEvent(
       new CustomEvent('home-dispatch', {
-        detail: { prompt, workspaceId: this._target || null },
+        detail: {
+          prompt,
+          workspaceId: this._target || null,
+          harness: this._harness,
+        },
         bubbles: true,
         composed: true,
       }),
