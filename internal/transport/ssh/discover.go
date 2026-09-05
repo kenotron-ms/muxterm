@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kenotron-ms/muxterm/internal/sshconfig"
 	"github.com/kenotron-ms/muxterm/internal/transport"
 )
 
@@ -76,13 +77,13 @@ func parseHostAliases(ctx context.Context, path, sshDir, home string, depth int,
 
 	var aliases []string
 	for _, line := range strings.Split(string(data), "\n") {
-		keyword, rest, ok := splitKeyword(line)
+		keyword, rest, ok := sshconfig.SplitKeyword(line)
 		if !ok {
 			continue
 		}
 		switch strings.ToLower(keyword) {
 		case "host":
-			for _, pattern := range tokenize(rest) {
+			for _, pattern := range sshconfig.Tokenize(rest) {
 				if !connectableHost(pattern) || seen[pattern] {
 					continue
 				}
@@ -90,7 +91,7 @@ func parseHostAliases(ctx context.Context, path, sshDir, home string, depth int,
 				aliases = append(aliases, pattern)
 			}
 		case "include":
-			for _, spec := range tokenize(rest) {
+			for _, spec := range sshconfig.Tokenize(rest) {
 				for _, inc := range expandInclude(spec, sshDir, home) {
 					sub, err := parseHostAliases(ctx, inc, sshDir, home, depth+1, seen)
 					if err != nil {
@@ -115,71 +116,6 @@ func connectableHost(pattern string) bool {
 		return false
 	}
 	return !strings.ContainsAny(pattern, "*?")
-}
-
-// splitKeyword separates a config line's keyword from its arguments, returning
-// ok=false for blank and comment lines.
-//
-// ssh accepts either whitespace or '=' between a keyword and its arguments, so
-// both are separators here — but only for the keyword, so an '=' inside an
-// argument (a path, an option value) survives intact.
-//
-// Unlike OpenSSH this also treats a '#' token as starting a comment for the
-// rest of the line. OpenSSH only honors '#' as the FIRST token, which means
-// `Host boxb # my laptop` genuinely declares hosts named "#" and "my". Since
-// this output is a list shown to a human, dropping the comment is the useful
-// divergence.
-func splitKeyword(line string) (keyword, rest string, ok bool) {
-	line = strings.TrimSpace(line)
-	if line == "" || strings.HasPrefix(line, "#") {
-		return "", "", false
-	}
-	if i := strings.IndexAny(line, " \t="); i >= 0 {
-		keyword = line[:i]
-		rest = line[i+1:]
-	} else {
-		keyword = line
-	}
-	if keyword == "" {
-		return "", "", false
-	}
-	return keyword, rest, true
-}
-
-// tokenize splits a config line's arguments on whitespace, honoring double
-// quotes (ssh's own quoting for values containing spaces) and stopping at an
-// unquoted '#' comment.
-func tokenize(s string) []string {
-	var (
-		out     []string
-		cur     strings.Builder
-		inQuote bool
-		started bool
-	)
-	flush := func() {
-		if started {
-			out = append(out, cur.String())
-			cur.Reset()
-			started = false
-		}
-	}
-	for _, r := range s {
-		switch {
-		case r == '"':
-			inQuote = !inQuote
-			started = true
-		case !inQuote && (r == ' ' || r == '\t' || r == '\r'):
-			flush()
-		case !inQuote && r == '#':
-			flush()
-			return out
-		default:
-			cur.WriteRune(r)
-			started = true
-		}
-	}
-	flush()
-	return out
 }
 
 // expandInclude resolves one Include argument to concrete file paths: ~ is

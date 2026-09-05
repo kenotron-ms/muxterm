@@ -21,8 +21,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sort"
-	"sync"
 )
 
 // HostRef names one reachable far end.
@@ -104,56 +102,4 @@ type Transport interface {
 	// Identity reports what the far end can prove about the caller from the
 	// connection alone. Callers must not assume IdentityPeerCred.
 	Identity() IdentityModel
-}
-
-// registry holds the process-wide set of transports keyed by Name.
-var registry struct {
-	mu sync.RWMutex
-	m  map[string]Transport
-}
-
-// Register adds t to the process-wide registry under t.Name().
-//
-// It panics on an empty name or a duplicate registration, following the
-// database/sql precedent: registration is wiring done at startup, so a
-// collision is a programming error that must surface immediately rather than
-// silently replacing whichever transport lost the race.
-func Register(t Transport) {
-	if t == nil {
-		panic("transport: Register(nil)")
-	}
-	name := t.Name()
-	if name == "" {
-		panic("transport: Register with empty Name()")
-	}
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	if registry.m == nil {
-		registry.m = make(map[string]Transport)
-	}
-	if _, dup := registry.m[name]; dup {
-		panic("transport: Register called twice for " + name)
-	}
-	registry.m[name] = t
-}
-
-// Get returns the registered transport named name.
-func Get(name string) (Transport, bool) {
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	t, ok := registry.m[name]
-	return t, ok
-}
-
-// All returns every registered transport, sorted by name so callers (and any
-// UI that renders one section per transport) get a stable order.
-func All() []Transport {
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	out := make([]Transport, 0, len(registry.m))
-	for _, t := range registry.m {
-		out = append(out, t)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
-	return out
 }

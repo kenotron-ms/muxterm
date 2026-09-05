@@ -206,17 +206,17 @@ func scanHosts(path, baseDir string, depth int, seenFiles map[string]bool) ([]ho
 		if insideBlock(blocks, sp.start) {
 			continue
 		}
-		keyword, rest, ok := splitKeyword(content[sp.start:sp.end])
+		keyword, rest, ok := SplitKeyword(content[sp.start:sp.end])
 		if !ok {
 			continue
 		}
 		switch strings.ToLower(keyword) {
 		case "host":
-			for _, pattern := range tokenize(rest) {
+			for _, pattern := range Tokenize(rest) {
 				out = append(out, hostDecl{pattern: pattern, file: path, line: i + 1})
 			}
 		case "include":
-			for _, spec := range tokenize(rest) {
+			for _, spec := range Tokenize(rest) {
 				for _, inc := range expandInclude(spec, baseDir) {
 					sub, err := scanHosts(inc, baseDir, depth+1, seenFiles)
 					if err != nil {
@@ -253,11 +253,11 @@ func collidingHost(decls []hostDecl, name string) (hostDecl, bool) {
 func parseEntry(name, text string) Entry {
 	e := Entry{Name: name}
 	for _, sp := range lineSpans(text) {
-		keyword, rest, ok := splitKeyword(text[sp.start:sp.end])
+		keyword, rest, ok := SplitKeyword(text[sp.start:sp.end])
 		if !ok {
 			continue
 		}
-		values := tokenize(rest)
+		values := Tokenize(rest)
 		if len(values) == 0 {
 			continue
 		}
@@ -277,13 +277,13 @@ func parseEntry(name, text string) Entry {
 	return e
 }
 
-// splitKeyword separates a config line's keyword from its arguments, returning
+// SplitKeyword separates a config line's keyword from its arguments, returning
 // ok=false for blank and comment lines.
 //
 // ssh accepts either whitespace or '=' between a keyword and its arguments, so
 // both are separators here — but only for the keyword, so an '=' inside an
 // argument (a path, an option value) survives intact.
-func splitKeyword(line string) (keyword, rest string, ok bool) {
+func SplitKeyword(line string) (keyword, rest string, ok bool) {
 	line = strings.TrimSpace(line)
 	if line == "" || strings.HasPrefix(line, "#") {
 		return "", "", false
@@ -300,10 +300,10 @@ func splitKeyword(line string) (keyword, rest string, ok bool) {
 	return keyword, rest, true
 }
 
-// tokenize splits a config line's arguments on whitespace, honoring double
+// Tokenize splits a config line's arguments on whitespace, honoring double
 // quotes (ssh's own quoting for values containing spaces) and stopping at an
 // unquoted '#'.
-func tokenize(s string) []string {
+func Tokenize(s string) []string {
 	var (
 		out     []string
 		cur     strings.Builder

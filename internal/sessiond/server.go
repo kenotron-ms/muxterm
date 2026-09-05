@@ -101,8 +101,21 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // error only for an unexpected accept failure. Serve takes ownership of ln and
 // closes it when ctx is done.
 //
-// Serve carries no socket assumptions: the listener is supplied by the caller,
-// which is what lets a sessiond serve something other than its Unix socket.
+// Serve carries no socket assumptions from the framing side: the listener is
+// supplied by the caller, which is what lets a sessiond eventually serve
+// something other than its Unix socket.
+//
+// It is NOT yet safe to pass a non-Unix listener. On Linux peerAllowed
+// type-asserts every accepted connection to *net.UnixConn and rejects whatever
+// fails, so a TCP listener would have each connection closed in the accept loop
+// below -- no error, no log, a Serve that returns nothing and serves nothing.
+// Worse, peerAllowed is an unconditional true on non-Linux, so the same code
+// would appear to work there and fail only on Linux.
+//
+// Serve is therefore correct only with a Unix listener until the per-listener
+// identity policy lands (see docs/designs/2026-09-05-remote-sessiond-design.md,
+// D2b). The listener parameter exists so that step is a change to auth policy
+// rather than another change to this function.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	// Cold-start: ensure the first attach always lands somewhere.
 	s.reg.EnsureDefault()
