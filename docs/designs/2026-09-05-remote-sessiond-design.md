@@ -13,12 +13,18 @@ transport-agnostic and nobody noticed.**
 ## Scope and Non-goals
 
 In scope: making `sessiond.Dial` accept any `net.Conn`, splitting `Server.ListenAndServe`
-into a listener-agnostic `Serve`, an SSH transport, edge-side workspace namespacing, and a
-flow-control fix that WAN links make mandatory.
+into a listener-agnostic `Serve`, a **transport interface** with SSH as its first
+implementation, edge-side workspace namespacing, and a flow-control fix that WAN links make
+mandatory.
 
 Not in scope: a network listener on sessiond, TLS, a token scheme, changes to
 `protocol.go`, sessiond-to-sessiond federation, and anything at the PTY layer. PTYs do not
 remote; that is what the daemon is for.
+
+**SSH is one transport, not the transport.** Amplifier Sandboxes (durable Azure microVMs,
+`kenotron-ms/amplifier-sandboxes`) is the known second one, and it differs on every axis
+that matters. D2 defines the contract; D2b records what Sandboxes can and cannot supply
+today.
 
 ## The premise, verified before designing
 
@@ -93,30 +99,119 @@ peercred, and the accept loop in one function. Split into `Serve(ln net.Listener
 `protocol.go` is declared FROZEN v1 (`:230-232`) and **stays untouched**. Authentication and
 framing hardening go in a wrapper around the `net.Conn`, never inside the protocol.
 
-### D2. The transport is SSH, and that is not a shortcut
+### D2. Transport is an interface; the byte stream is the only contract
 
-Add `muxterm sessiond-connect`: a subcommand that pipes stdin/stdout to the local unix
-socket, roughly forty lines. Locally, `ssh <host> muxterm sessiond-connect` and wrap the
-pipe as a `net.Conn`.
+muxterm needs exactly one thing from a remote: **a bidirectional, binary-clean byte stream
+to a unix socket inside the far machine.** How that stream is obtained is not muxterm's
+business.
 
-The alternative — TCP plus mTLS — needs cert management, a new auth scheme, and a fix to the
-unbounded `u32` length in `ReadFrame` (`protocol.go:218-222`) before it is safe to expose.
-SSH needs none of it:
+```go
+type Transport interface {
+    Dial(ctx context.Context, host HostRef) (net.Conn, error)  // the whole point
+    Discover(ctx context.Context) ([]HostRef, error)           // enumerate candidates
+    Provision(ctx context.Context, host HostRef) error         // get muxterm onto the far side
+    Identity() IdentityModel                                   // what the far end can prove
+}
+```
 
-- SSH keys become the auth. `ProxyJump`, bastions, `Match` blocks, agent forwarding, and
-  hardware keys all work because muxterm shells out to the system `ssh` rather than
-  reimplementing it.
-- Encryption and host verification are already solved and already audited.
-- **`SO_PEERCRED` still passes.** The remote-side pipe runs *as the user*, connecting to a
-  *local* socket. `peercred_linux.go:35` compares uids and is satisfied. The daemon-side auth
-  problem does not get worked around — it disappears.
+Five properties vary per transport, and the design must not assume SSH's answers:
 
-That last point is the whole argument. A TCP transport would have to replace peercred
-outright (and `peercred_other.go:12` is already a no-op on non-Linux, so there is nothing to
-extend). SSH means sessiond never gets a network listener at all.
+| Property | Why it varies |
+|---|---|
+| **Stream acquisition** | subprocess pipe vs. dialing a URL vs. an exec API |
+| **Peer identity** | what, if anything, the far end can prove about the caller |
+| **Discovery** | a config file vs. a REST list vs. nothing |
+| **Provisioning** | how the muxterm binary gets there |
+| **Liveness** | whether the far end stays up, or suspends itself by design |
 
-Reconnect is re-exec'ing `ssh` with exponential backoff. Handshake cost (~200-350 ms) is
-paid per connect, not per frame.
+`HostRef` carries a stable id and a separate display name, because these are only the same
+thing for SSH.
+
+#### SSH is transport #1, and it is unusually generous
+
+`muxterm sessiond-connect` pipes stdin/stdout to the local unix socket (~40 lines).
+Locally: `ssh <host> muxterm sessiond-connect`, wrap the pipe as a `net.Conn`.
+
+- **Identity: `SO_PEERCRED` passes.** The remote-side pipe runs *as the user*, connecting to
+  a *local* socket, so `peercred_linux.go:35` is satisfied. Daemon auth needs no change.
+- **Discovery:** `Host` blocks in `~/.ssh/config`, following `Include` (D7).
+- **Provisioning:** `muxterm deploy <host>` (`internal/deploy/ssh.go`), already exists.
+- **Liveness:** stable; drops are exceptional.
+- Keys, `ProxyJump`, bastions, `Match`, agent forwarding, and hardware keys all work because
+  muxterm shells out to the system `ssh` rather than reimplementing it.
+
+The alternative — TCP plus mTLS — would need cert management, a new auth scheme, and a fix
+to the unbounded `u32` in `ReadFrame` (`protocol.go:218-222`) before it is safe to expose.
+SSH needs none of it, and sessiond never gets a network listener.
+
+**But every one of those five bullets is a property of SSH, not of remoting.** The peercred
+win in particular does not generalize — see D2b. Do not let it harden into an assumption.
+
+**PATH gotcha, verified on `vela0`:** non-interactive `ssh` gets
+`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` — no `~/.local/bin`. So
+`ssh host muxterm sessiond-connect` fails with *command not found* even when muxterm is
+installed. `Provision` must distinguish "absent" from "not on PATH" (they need different
+UI), and `Dial` must use `bash -lc` or an absolute path.
+
+### D2b. Transport #2: Amplifier Sandboxes — what it can and cannot supply
+
+Surveyed against `kenotron-ms/amplifier-sandboxes` (`Microsoft.App/SandboxGroups` —
+hardware-isolated microVMs, not Container Apps). Recorded now so the interface is shaped by
+a real second case rather than a hypothetical one.
+
+| Requirement | Sandboxes today |
+|---|---|
+| Bidirectional byte stream | **No.** `executeShellCommand` is synchronous JSON req/resp — no stdin, no incremental output, process is dead before you get a reply. |
+| Binary-clean | **No** via exec: `stdout`/`stderr` are JSON strings. The repo base64-encodes even *text* files to survive the channel, and a single apostrophe once broke a command chain. |
+| Long-lived connection | **No mechanism**, and see liveness below. |
+| Peer identity | **None.** Everything inside runs as root; the caller's Entra `oid` is erased at the broker boundary. |
+| Reach a unix socket in the VM | **No path exists today.** |
+
+**The viable path is `add_port` plus a sandbox-side bridge.** `add_port(N, email=...)`
+exposes a port behind an HTTPS ingress URL with Entra auth or anonymous, plus source-CIDR
+ACLs. A small listener in the sandbox proxies that to `/run/muxterm/sessiond.sock`; muxterm
+dials the URL, upgrades to WebSocket, wraps it as a `net.Conn`. Getting the binary there is
+`write_file` (`Content-Type: application/octet-stream`, `mode` param) — genuinely
+binary-safe, unlike exec — or baking it into the image.
+
+Two things must be verified against a live sandbox before committing, neither answerable
+from the repo:
+
+1. Does the sandbox port ingress honor `Connection: Upgrade` for WebSocket? Protocol is
+   `Http`/`Http2` only — there is no raw TCP.
+2. Does an open-but-idle ingress connection count as an "external touch" for auto-suspend?
+   If not, the substrate severs the stream mid-session.
+
+Nothing in that repo calls `add_port`. This path is entirely unexercised.
+
+Consequences for muxterm, all of which the interface must absorb:
+
+- **Identity cannot come from the connection.** Whatever authenticates a sandbox stream must
+  live in a handshake *above* the transport, and sessiond's peercred check has to become a
+  per-listener policy rather than a global assumption. `peercred_other.go:12` is already a
+  no-op on non-Linux, so the check is not load-bearing everywhere today anyway.
+- **Discovery is a REST list**, filtered by owner `oid`, not a config file.
+- **Ids are server-assigned UUIDs**; human names are labels capped at 63 characters. This is
+  why `HostRef` separates id from display name.
+- **Liveness is hostile by design** — see D2c.
+
+### D2c. Reconnect-and-resume is the model, not the failure path
+
+Amplifier Sandboxes auto-suspend on lack of *external touch*, snapshotting memory and disk.
+The far end will go away mid-session as normal operation, and come back with its processes
+intact.
+
+So a transport must not be modelled as a stable `net.Conn` that occasionally breaks. It is a
+**resumable session that is sometimes attached.** Reconnect is routine, not exceptional.
+
+This is not a new burden — it is the same shape D4 already needs, and it is why D4's
+coalesce-and-resync is the right primitive rather than a hack: **resync costs 15 KB
+(measured), which makes a suspend/resume cycle cheap enough to be invisible.** A
+delta-resume scheme would be more efficient and much more fragile against a far end that
+snapshots and restores underneath it.
+
+For SSH the practical effect is small (re-exec `ssh`, backoff 1s → 30s). For Sandboxes it is
+the central fact of the transport.
 
 ### D3. Namespace at the edge; the remote daemon never learns it is remote
 
@@ -124,9 +219,13 @@ paid per connect, not per frame.
 (`registry.go:59-72`) and pane ids are workspace-local (`:120-129`). Nothing in the `Message`
 envelope carries an origin.
 
-Rather than add one, the local process holds `map[alias]DaemonConn` and rewrites `w1` ⇄
+Rather than add one, the local process holds `map[HostRef]DaemonConn` and rewrites `w1` ⇄
 `boxb/w1` on the way out and back. Zero remote-side change, zero protocol change, and the
 frozen-v1 promise stays honest.
+
+The qualifier is the `HostRef` **stable id**, not the display name — `ssh:boxb` and
+`sandbox:cb997d3d-…`. Sandbox names are mutable labels; a workspace reference that breaks
+when someone relabels a sandbox would be a bug that only shows up in production.
 
 MCP keeps integer pane ids — agents should not have to parse a host out of `pane://3` — so
 the edge allocates local proxy ids and reports the owning host as a separate field in
@@ -173,14 +272,18 @@ a chain reaction across two independent links.
 
 A small queue plus a writer goroutine decouples the hops. Worth doing regardless of remotes.
 
-### D7. SSH config is the entire discovery story
+### D7. Discovery is per-transport, and for SSH it is the config file
 
 Verified on `vela0`: `~/.ssh/known_hosts` is hashed (`|1|…` entries), so it **cannot** be
 enumerated. `Host` blocks in `~/.ssh/config` plus `Include`d files are the only listable
-source; everything else is manual entry.
+source for SSH; everything else is manual entry. Since the transport is the system `ssh`
+binary, any alias the user has configured works, and any host they can type works.
 
-This is not a limitation worth engineering around. Since the transport is the system `ssh`
-binary, any alias the user has already configured works, and any host they can type works.
+Sandboxes enumerate over REST instead (`GET /v1/sandboxes`, filtered to the caller's `oid`).
+`Transport.Discover()` exists so neither mechanism leaks into the caller, and so the UI can
+render one section per transport without knowing what a transport is.
+
+Manual entry must always remain available. A transport with no discovery at all is valid.
 
 ## Components and Boundaries
 
@@ -189,13 +292,19 @@ binary, any alias the user has already configured works, and any host they can t
 | `internal/sessiond/client.go` | `DialConn(net.Conn)` alongside `Dial(path)` |
 | `internal/sessiond/server.go` | `Serve(ln net.Listener)` extracted from `ListenAndServe` |
 | `internal/sessiond/subscriber.go` | control lane; coalesce-and-resync overflow (D4) |
-| `internal/sessiond/transport_ssh.go` | **new** — `ssh` subprocess as a `net.Conn` |
+| `internal/transport/` | **new** — `Transport`, `HostRef`, `IdentityModel`, registry (D2) |
+| `internal/transport/ssh/` | **new** — subprocess as `net.Conn`; ssh-config discovery |
+| `internal/transport/sandbox/` | **later** — `add_port` + WS dial (D2b) |
 | `cmd/muxterm/sessiond_connect.go` | **new** — `muxterm sessiond-connect`, ~40 lines |
-| `internal/server/remotes.go` | **new** — `map[alias]DaemonConn`, id rewriting (D3) |
+| `internal/server/remotes.go` | **new** — `map[HostRef]DaemonConn`, id rewriting (D3) |
 | `internal/server/ws.go` | relay queue (D6) |
 | `internal/mcp/` | host field on `list_panes`; edge-allocated pane ids |
-| `internal/sshconfig/` | **new** — parse `Host` blocks, follow `Include` |
+| `internal/sessiond/server.go` | peercred becomes per-listener policy, not global (D2b) |
 | `protocol.go` | **none** |
+
+`sessiond-connect` is deliberately transport-agnostic: it pipes stdio to the socket and does
+not know or care what carried its stdio. The same subcommand serves SSH today and an
+in-sandbox bridge tomorrow.
 
 ## Failure Handling
 
@@ -239,11 +348,15 @@ Per AGENTS.md, no unit tests. Verification is a real browser against a real remo
 ## Rollout
 
 1. `Serve(net.Listener)` + `DialConn(net.Conn)` — pure refactor, no behavior change.
-2. `muxterm sessiond-connect` + SSH transport + `--remote <host>`, single-host, CLI only.
+2. `muxterm sessiond-connect` + the `Transport` interface + its SSH implementation +
+   `--remote <host>`, single-host, CLI only. **Write the interface here, not later** — a
+   second implementation retrofitted onto SSH-shaped code is a rewrite (see Risks).
 3. Edge namespacing (D3) and the web relay.
 4. D4 and D6 — the flow-control work. **Ship before promoting remotes past experimental.**
 5. MCP host-aware pane ids.
 6. UI, per `2026-09-05-remote-sessiond-ux-design.md`.
+7. Sandbox transport (D2b) — gated on the two live-sandbox verifications, and on
+   per-listener identity policy replacing the global peercred assumption.
 
 ## Assumptions and Risks
 
@@ -256,6 +369,17 @@ Per AGENTS.md, no unit tests. Verification is a real browser against a real remo
   different and much larger design.
 - **Two failure domains, one UI.** The hardest ongoing cost is not the transport; it is that
   every state in the interface now has an "or the host is gone" variant.
+- **The peercred win is SSH's, not muxterm's.** The strongest argument for transport #1 is
+  the one that transfers least. Sandboxes have no peer identity at all (D2b). If the
+  interface is built while only SSH exists, peercred will quietly become load-bearing and
+  transport #2 will require surgery on the daemon rather than a new package.
+- **Transport #2's stream does not exist yet.** Amplifier Sandboxes has no bidirectional
+  channel today. `add_port` + WebSocket is a plausible path with two unverified assumptions,
+  and nothing in that repo exercises it. Do not schedule against it until both are tested
+  against a live sandbox.
+- **One interface, two very different liveness models.** SSH stays up; Sandboxes suspend
+  themselves. Building the abstraction against the stable case first risks baking in
+  "connected" as a steady state, which D2c says it is not.
 
 ## Shared Seams
 
