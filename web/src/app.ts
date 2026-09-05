@@ -828,6 +828,16 @@ export class MuxApp extends LitElement {
       // target is known to be unreachable, so it cannot sit indefinitely
       // waiting for a composition that is never coming: the attach was
       // refused, or the workspace was closed out from under it.
+      //
+      // The unknown-workspace arm is deliberately UNCONDITIONAL, and that is
+      // worth knowing: replyError (internal/sessiond/server.go) sends no
+      // workspaceId, so this frame cannot say which request it answers. Today
+      // a dispatch is only ever parked with home dismissed and no other
+      // request of ours in flight, so the only candidate is ours. That is a
+      // property of the current call sites, not a guarantee from the wire --
+      // so the drop is LOGGED rather than silent. A future concurrent path
+      // (an MCP pane op racing a dispatch, say) would show up here as a
+      // dispatch disappearing with a prompt the user never saw start.
       if (
         (msg.type === SessiondType.Error &&
           msg.code === SessiondErrorCode.UnknownWorkspace) ||
@@ -835,6 +845,12 @@ export class MuxApp extends LitElement {
           this._pendingDispatch !== null &&
           this._pendingDispatch.workspaceId === msg.workspaceId)
       ) {
+        if (this._pendingDispatch) {
+          muxLog('home dispatch', `dropped, target unreachable (${msg.type})`, {
+            target: this._pendingDispatch.workspaceId,
+            cmd: this._pendingDispatch.cmd,
+          });
+        }
         this._pendingDispatch = null;
       }
       // Server confirmed the workspace — clear loading state and close modal.
