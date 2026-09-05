@@ -47,6 +47,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm install [flags]     Install as a system service")
 	fmt.Fprintln(w, "  muxterm uninstall           Remove system service")
 	fmt.Fprintln(w, "  muxterm deploy <host>       Deploy to a remote host via SSH")
+	fmt.Fprintln(w, "  muxterm remote <cmd>        add | list | remove ssh config entries for remotes")
 	fmt.Fprintln(w, "  muxterm doctor              Check daemon and service status")
 	fmt.Fprintln(w, "  muxterm read-screen <pane>  Print a pane's screen (or --scrollback history)")
 	fmt.Fprintln(w, "  muxterm workspace <cmd>     list | create <name> | close <workspace-id>")
@@ -78,6 +79,11 @@ func ParseArgs(args []string) (Config, error) {
 		return parseServe(args[1:])
 	case "sessiond":
 		return Config{Mode: "sessiond"}, nil
+	case "sessiond-connect":
+		// Plumbing primitive, deliberately absent from printUsage for the same
+		// reason "sessiond" is: it is invoked by muxterm itself (over a
+		// transport), not typed by a user.
+		return Config{Mode: "sessiond-connect"}, nil
 	case "deploy":
 		return parseDeploy(args[1:])
 	case "version":
@@ -102,6 +108,8 @@ func ParseArgs(args []string) (Config, error) {
 		return Config{Mode: "pane", Args: args[1:]}, nil
 	case "layout":
 		return Config{Mode: "layout", Args: args[1:]}, nil
+	case "remote":
+		return Config{Mode: "remote", Args: args[1:]}, nil
 	default:
 		return Config{}, fmt.Errorf("unknown command %q\n\nRun 'muxterm --help' for usage.", args[0])
 	}

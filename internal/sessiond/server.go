@@ -70,6 +70,9 @@ func (s *Server) Registry() *Registry { return s.reg }
 // cold-start default workspace, and serves control connections until ctx is
 // cancelled. It returns nil on a graceful (ctx-driven) shutdown and a non-nil
 // error only for an unexpected accept/listen failure.
+//
+// It is the Unix-socket half only: everything from the cold-start workspace
+// onward lives in Serve, which is listener-agnostic.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	dir := filepath.Dir(s.socket)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -89,6 +92,18 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 
+	return s.Serve(ctx, ln)
+}
+
+// Serve guarantees a cold-start default workspace, starts the daemon's
+// background loops, and accepts control connections off ln until ctx is
+// cancelled. It returns nil on a graceful (ctx-driven) shutdown and a non-nil
+// error only for an unexpected accept failure. Serve takes ownership of ln and
+// closes it when ctx is done.
+//
+// Serve carries no socket assumptions: the listener is supplied by the caller,
+// which is what lets a sessiond serve something other than its Unix socket.
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	// Cold-start: ensure the first attach always lands somewhere.
 	s.reg.EnsureDefault()
 
