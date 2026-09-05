@@ -1875,12 +1875,19 @@ export class MuxApp extends LitElement {
     // adopt the next unrelated workspace-created that came along. Say so and
     // keep the composer open with the words still in it.
     if (!this._socket?.connected) {
+      e.preventDefault(); // composer keeps the draft; see mux-home _submit
       this._dispatchAlert = {
         message: 'Not connected, so that session could not be started.',
         prompt: d.prompt,
       };
       return;
     }
+    // A dispatch already waiting is about to lose its only reference. Say so
+    // before overwriting it: reopening home and sending a second prompt while
+    // the first is still mid-attach is an ordinary thing to do, and the first
+    // one disappearing without a word is the exact failure _dropPendingDispatch
+    // exists to prevent.
+    this._dropPendingDispatch('another session was started before it arrived');
     this._showHome = false;
 
     // The composer's `workspaceId` is a DESTINATION, and create-pane cannot
