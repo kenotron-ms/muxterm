@@ -200,22 +200,56 @@ export class MuxSocket {
   // wrapping) and consume the frozen SessiondType vocabulary, never raw
   // strings.
 
-  /** Send one flat sessiond control message if the socket is open. */
-  private sendSessiond(msg: SessiondMessage): void {
+  /**
+   * Send one flat sessiond control message if the socket is open.
+   *
+   * Returns whether it actually went out. A closed socket drops the frame
+   * silently, which is fine for fire-and-forget senders but NOT for a caller
+   * that arms state expecting a reply -- it would wait forever on an answer to
+   * a question that was never asked.
+   */
+  private sendSessiond(msg: SessiondMessage): boolean {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify(msg));
+      return true;
     }
+    return false;
   }
+
+  /**
+   * The workspace of the most recent attach this connection actually sent,
+   * or null if it has never sent one.
+   *
+   * This is INTENT, and it is deliberately distinct from `store.attached`,
+   * which is confirmation -- the store is only written when a composition
+   * comes back. Between the two lies every in-flight attach, including the
+   * autonomous ones WorkspaceController fires on recovery and on
+   * workspace-created, which no user action announces.
+   *
+   * Recorded here, at the one choke point every attach must pass through,
+   * rather than at each call site: a caller that needs to know "is the
+   * connection still going where I think it is" then cannot be defeated by a
+   * new attach path someone adds later and forgets to notify.
+   */
+  get lastAttachTarget(): string | null {
+    return this._lastAttachTarget;
+  }
+
+  private _lastAttachTarget: string | null = null;
 
   /** Attach this connection to a workspace. */
   attach(workspaceId: string): void {
-    this.sendSessiond({ type: SessiondType.Attach, workspaceId });
+    if (this.sendSessiond({ type: SessiondType.Attach, workspaceId })) {
+      this._lastAttachTarget = workspaceId;
+    }
   }
 
   /** Attach, telling the daemon our responsive breakpoint so it returns the
    *  matching saved layout in the composition reply. */
   attachWithBreakpoint(workspaceId: string, breakpoint: string): void {
-    this.sendSessiond({ type: SessiondType.Attach, workspaceId, breakpoint });
+    if (this.sendSessiond({ type: SessiondType.Attach, workspaceId, breakpoint })) {
+      this._lastAttachTarget = workspaceId;
+    }
   }
 
   renamePane(paneId: number, name: string): void {
@@ -274,13 +308,17 @@ export class MuxSocket {
 
   /**
    * Create a new workspace; name and clientRef are each included only when
-   * truthy.
+   * truthy. Returns whether the request actually went out; see sendSessiond.
+   *
+   * clientRef is what makes the reply attributable: the relay echoes it on
+   * workspace-created, so a caller holding state for its own request can tell
+   * that reply from one caused by another tab or another surface in this one.
    */
-  createWorkspace(name?: string, clientRef?: string): void {
+  createWorkspace(name?: string, clientRef?: string): boolean {
     const msg: SessiondMessage = { type: SessiondType.CreateWorkspace };
     if (name) msg.name = name;
     if (clientRef) msg.clientRef = clientRef;
-    this.sendSessiond(msg);
+    return this.sendSessiond(msg);
   }
 
   /** Rename an existing workspace. */
@@ -550,6 +588,10 @@ export class MuxSocket {
     };
 
     ws.onclose = () => {
+      // Intent does not survive the connection that carried it. Leaving the
+      // last attach target set would let a reader during the reconnect window
+      // believe the connection is still headed somewhere it can no longer go.
+      this._lastAttachTarget = null;
       this._rejectPendingCloseRequests(
         new Error('The close outcome could not be confirmed because the connection was lost.'),
       );
