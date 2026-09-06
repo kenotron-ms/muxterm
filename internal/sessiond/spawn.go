@@ -261,14 +261,69 @@ func WriteServerURL(addr, token string) error {
 	if err != nil {
 		return fmt.Errorf("parse addr %q: %w", addr, err)
 	}
-	if err := os.MkdirAll(socketDir(), 0o700); err != nil {
+	dir := socketDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create socket dir: %w", err)
+	}
+	// MkdirAll is a no-op on an existing directory REGARDLESS of its mode,
+	// so the 0o700 above guarantees nothing when the path already exists.
+	// That matters now that this file carries a credential and not just a
+	// URL: with XDG_RUNTIME_DIR unset, socketDir() is the predictable
+	// /tmp/muxterm-<uid>, which an adversary can pre-create world-writable
+	// and then read the token out of. Verify rather than assume.
+	if err := ensurePrivateDir(dir); err != nil {
+		return err
 	}
 	blob, err := json.Marshal(serverInfo{URL: "http://localhost:" + port, Token: token})
 	if err != nil {
 		return fmt.Errorf("encode server info: %w", err)
 	}
-	return os.WriteFile(serverURLPath(), blob, 0o600)
+	// Write to a fresh O_EXCL temp file and rename over the target. Two
+	// reasons beyond atomicity: os.WriteFile applies its mode argument
+	// only when it CREATES the file, so an existing file keeps whatever
+	// permissions it already had; and a plain truncating write leaves a
+	// window where a reader observes an empty file.
+	tmp, err := os.CreateTemp(dir, ".server.url.*")
+	if err != nil {
+		return fmt.Errorf("create temp server info: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close() //nolint:errcheck
+		return fmt.Errorf("chmod temp server info: %w", err)
+	}
+	if _, err := tmp.Write(blob); err != nil {
+		tmp.Close() //nolint:errcheck
+		return fmt.Errorf("write temp server info: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp server info: %w", err)
+	}
+	return os.Rename(tmpName, serverURLPath())
+}
+
+// ensurePrivateDir verifies dir is owned by the current user and not
+// accessible to group or other, tightening it when it is not. It refuses
+// when the directory belongs to someone else, since that cannot be made
+// safe by changing permissions.
+func ensurePrivateDir(dir string) error {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("stat socket dir: %w", err)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		if int(st.Uid) != os.Getuid() {
+			return fmt.Errorf("socket dir %s is owned by uid %d, not %d; refusing to write a credential there",
+				dir, st.Uid, os.Getuid())
+		}
+	}
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("socket dir %s is mode %04o and could not be tightened: %w", dir, perm, err)
+		}
+	}
+	return nil
 }
 
 // readServerInfo loads the serve-layer handoff file. A file that is not JSON
@@ -282,7 +337,14 @@ func readServerInfo() (serverInfo, error) {
 	}
 	var info serverInfo
 	if err := json.Unmarshal(data, &info); err != nil || info.URL == "" {
-		return serverInfo{URL: strings.TrimSpace(string(data))}, nil
+		info = serverInfo{URL: strings.TrimSpace(string(data))}
+	}
+	// An empty file yields an empty URL, and an empty URL turns every
+	// caller's request into http.NewRequest(method, "/api/...") failing
+	// with `unsupported protocol scheme ""` -- an error that points
+	// nowhere near the cause. Name the real problem instead.
+	if info.URL == "" {
+		return serverInfo{}, fmt.Errorf("server URL file (%s) is empty (is muxterm serve running?)", serverURLPath())
 	}
 	return info, nil
 }

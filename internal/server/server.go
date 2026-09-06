@@ -80,6 +80,20 @@ type Server struct {
 	authSrv        *authserver.AuthServer
 	webRedirectURI string
 
+	// behindReverseProxy is the EFFECTIVE reverse-proxy mode for this
+	// server, taken from Config.BehindReverseProxy -- deliberately NOT
+	// read from cfg.Server, which carries the config FILE's value.
+	//
+	// Local mode (bare `muxterm`) ignores the [server] section by design
+	// and leaves this false even when config.toml sets
+	// behind_reverse_proxy = true, so that a machine configured for
+	// production keeps working for direct local use. Reading the file's
+	// value here instead would set Secure on cookies served over plain
+	// http -- browsers drop those, so local login would fail outright --
+	// and would hand out absolute tunnel URLs pointing at the public
+	// origin.
+	behindReverseProxy bool
+
 	// configPath is the file path for persisting PATCH /api/config writes.
 	// Empty string means writes are skipped (dev/test mode).
 	configPath string
@@ -119,6 +133,7 @@ func New(cfg Config) *Server {
 	s.configPath = cfg.ConfigPath
 	// Use the supplied initial config if it looks populated (palette is never
 	// empty in a real config), otherwise fall back to hardcoded defaults.
+	s.behindReverseProxy = cfg.BehindReverseProxy
 	s.cfg = cfg.InitialConfig
 	if s.cfg.Theme.Palette == "" {
 		s.cfg = muxcfg.Defaults()
@@ -130,16 +145,7 @@ func New(cfg Config) *Server {
 	}
 	s.ai = ai.NewManager(aiKeyPath)
 
-	// publicHost lets the middleware recognize a browser that arrived on
-	// some other host than the configured origin -- a login started there
-	// can never complete. Empty unless reverse-proxy mode is on.
-	publicHost := ""
-	if sc := cfg.InitialConfig.Server; sc.BehindReverseProxy {
-		if u, err := url.Parse(sc.Normalize().BaseURL()); err == nil {
-			publicHost = u.Host
-		}
-	}
-	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy, cfg.LocalToken, publicHost)
+	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy, cfg.LocalToken)
 	protect := func(h http.Handler) http.Handler {
 		return authMW.Wrap(h)
 	}
@@ -316,14 +322,12 @@ func (s *Server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
 // resolves itself. Never derived from a request header: see the note on
 // ServerConfig for why headers are not trusted for self-origin.
 func (s *Server) tunnelURL(id string) string {
-	s.cfgMu.RLock()
-	sc := s.cfg.Server
-	s.cfgMu.RUnlock()
 	path := "/t/" + id + "/"
-	if !sc.BehindReverseProxy || sc.BaseURL() == "" {
+	base := s.publicBaseURL()
+	if base == "" {
 		return path
 	}
-	return sc.BaseURL() + path
+	return base + path
 }
 
 // handleTunnelClose deregisters the tunnel identified by the {id} path

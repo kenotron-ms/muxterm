@@ -77,7 +77,27 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(pkceCookieName)
 	if err != nil {
-		http.Error(w, "missing or expired login state; try again", http.StatusBadRequest)
+		// The verifier cookie is absent. Either it expired (5 minutes), or
+		// -- the case that is otherwise impossible to diagnose -- the login
+		// was begun on a DIFFERENT origin than the configured public one.
+		// The cookie is written to whichever host the browser first
+		// arrived at, and this callback runs at public_origin, so a
+		// mismatch means the browser never sends it and retrying loops
+		// forever with no new information.
+		//
+		// Detected here rather than by comparing r.Host in the auth
+		// middleware: this needs no trust in a proxy-supplied header, and
+		// it fires exactly when the flow actually breaks.
+		msg := "missing or expired login state.\n\n" +
+			"If you waited more than a few minutes, start over.\n\n" +
+			"Otherwise you most likely began signing in at a different address than the one " +
+			"muxterm is configured to use"
+		if base := s.publicBaseURL(); base != "" {
+			msg += " (" + base + ").\n\nStart at " + base + " and sign in there."
+		} else {
+			msg += ".\n\nStart at the address configured as public_origin and sign in there."
+		}
+		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 	raw, err := base64.URLEncoding.DecodeString(cookie.Value)
@@ -174,19 +194,29 @@ func randomURLSafeString(nBytes int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
+// publicBaseURL returns the configured public origin, or "" when muxterm is
+// not in reverse-proxy mode.
+func (s *Server) publicBaseURL() string {
+	// s.behindReverseProxy, not s.cfg.Server.BehindReverseProxy: the
+	// former is this server's effective mode, the latter is whatever the
+	// config file said. Local mode intentionally diverges. See the field
+	// comment on Server.behindReverseProxy.
+	if !s.behindReverseProxy {
+		return ""
+	}
+	s.cfgMu.RLock()
+	sc := s.cfg.Server
+	s.cfgMu.RUnlock()
+	return sc.Normalize().BaseURL()
+}
+
 // secureCookies reports whether auth cookies should carry the Secure
 // attribute. It is keyed off the configured public origin's scheme rather
 // than set unconditionally: Secure cookies are dropped by browsers over
 // plain http, which would break local development and any deployment that
 // legitimately terminates at http on a trusted network.
 func (s *Server) secureCookies() bool {
-	s.cfgMu.RLock()
-	sc := s.cfg.Server
-	s.cfgMu.RUnlock()
-	if !sc.BehindReverseProxy {
-		return false
-	}
-	return strings.HasPrefix(strings.ToLower(sc.BaseURL()), "https://")
+	return strings.HasPrefix(strings.ToLower(s.publicBaseURL()), "https://")
 }
 
 // safeReturnTo constrains a post-login redirect to a path inside muxterm.
@@ -228,5 +258,12 @@ func safeReturnTo(raw string) string {
 	if err != nil || parsed.IsAbs() || parsed.Host != "" || parsed.Scheme != "" {
 		return fallback
 	}
-	return normalized
+	// Return the ORIGINAL, still-encoded value. The decoded form was only
+	// ever a lens for validation: decoding is what makes "%2F%2Fevil" and
+	// "/%09//evil" visible as the origin-crossing references they are.
+	// http.Redirect writes Location verbatim without re-encoding, so
+	// returning the decoded string would corrupt any path that legitimately
+	// contains an encoded "?", "#", or space -- "/api/res%3Fx%3D1" would go
+	// out as "/api/res?x=1" and land somewhere else entirely.
+	return raw
 }

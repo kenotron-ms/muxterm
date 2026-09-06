@@ -44,15 +44,6 @@ type AuthMiddleware struct {
 	// to 401 every tunnel and config tool with no indication why. Empty
 	// string disables the check entirely (never matches).
 	localToken string
-	// publicHost is the host[:port] of the configured public origin, set
-	// only when behindReverseProxy is on. It exists to detect a browser
-	// that arrived on some OTHER host: the OAuth flow it would be sent
-	// into sets its PKCE cookie on the arrival host but finishes at the
-	// public origin, a different cookie domain, so the verifier is never
-	// sent back and the token exchange fails with "missing or expired
-	// login state" no matter how many times the user retries. Better to
-	// say so than to start a flow that cannot finish.
-	publicHost string
 }
 
 // NewAuthMiddleware returns a middleware wired to authSrv, which may be
@@ -63,25 +54,26 @@ type AuthMiddleware struct {
 // checks (including loopback and the fail-closed case) are skipped.
 // behindReverseProxy disables the loopback bypass entirely.
 // localToken is the same-user helper-process credential; pass "" to disable.
-// publicHost is the configured public origin's host[:port]; pass "" to skip
-// the arrival-origin check.
-func NewAuthMiddleware(authSrv *authserver.AuthServer, noAuth, behindReverseProxy bool, localToken, publicHost string) *AuthMiddleware {
+//
+// Deliberately NOT parameterized by the configured public host. An earlier
+// revision compared r.Host against it to pre-empt a login that could not
+// complete, and that was wrong: nginx's documented default is
+// `proxy_set_header Host $proxy_host` and Apache's ProxyPreserveHost
+// defaults to Off, so on both the Host muxterm sees is the upstream
+// loopback address, never the public one. The guard would have rejected
+// every request on the majority of proxy configurations. An explicit
+// default port and an IDN domain each break the comparison too.
+//
+// The underlying problem -- a login begun on one origin cannot finish on
+// another -- is now explained where it actually surfaces, in
+// handleAuthCallback, which needs no header trust to detect it.
+func NewAuthMiddleware(authSrv *authserver.AuthServer, noAuth, behindReverseProxy bool, localToken string) *AuthMiddleware {
 	return &AuthMiddleware{
 		authSrv:            authSrv,
 		noAuth:             noAuth,
 		behindReverseProxy: behindReverseProxy,
 		localToken:         localToken,
-		publicHost:         publicHost,
 	}
-}
-
-// wrongArrivalOrigin reports whether r reached muxterm on a host other than
-// the configured public origin while reverse-proxy mode is on.
-func (m *AuthMiddleware) wrongArrivalOrigin(r *http.Request) bool {
-	if !m.behindReverseProxy || m.publicHost == "" || r.Host == "" {
-		return false
-	}
-	return !strings.EqualFold(r.Host, m.publicHost)
 }
 
 // Wrap returns next wrapped with the auth check.
@@ -153,24 +145,6 @@ func (m *AuthMiddleware) deny(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		httpJSONError(w, http.StatusServiceUnavailable, "login_backend_unavailable", msg)
-		return
-	}
-
-	// Arrived somewhere other than the configured public origin. Starting
-	// the OAuth flow from here cannot succeed: the PKCE cookie would be
-	// written to this host and the callback lands on the public origin,
-	// which never receives it.
-	if m.wrongArrivalOrigin(r) {
-		msg := "muxterm is configured to be reached at " + m.publicHost +
-			", but this request arrived at " + r.Host + ".\n\n" +
-			"Logging in from here cannot complete -- the login flow finishes at the " +
-			"configured origin, which does not receive the cookie set here.\n\n" +
-			"Use the configured origin, or change public_origin in muxterm's config file."
-		if wantsHTML {
-			httpPlainText(w, http.StatusMisdirectedRequest, msg)
-			return
-		}
-		httpJSONError(w, http.StatusMisdirectedRequest, "wrong_origin", msg)
 		return
 	}
 
