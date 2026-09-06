@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,7 +82,73 @@ func (s ServerConfig) Validate() error {
 	if u.Host == "" {
 		return fmt.Errorf("config: public_origin %q must include a host", s.PublicOrigin)
 	}
+
+	// Everything below rejects a public_origin that parses but is not an
+	// ORIGIN. Each of these forms silently produces a broken redirect URI:
+	// publicBaseURL()+"/auth/callback" appends the path to whatever it is
+	// given, and authserver compares the result byte-for-byte against the
+	// redirect_uri it derived the same way. Both sides therefore agree,
+	// the comparison passes, and the browser is sent somewhere that never
+	// reaches /auth/callback -- so login silently never completes and
+	// nothing anywhere reports an error. Reject at startup instead.
+	if u.Path != "" && u.Path != "/" {
+		return fmt.Errorf("config: public_origin %q must not include a path (got %q); use scheme://host[:port] only", s.PublicOrigin, u.Path)
+	}
+	if u.RawQuery != "" {
+		return fmt.Errorf("config: public_origin %q must not include a query string (got %q)", s.PublicOrigin, u.RawQuery)
+	}
+	if u.Fragment != "" {
+		return fmt.Errorf("config: public_origin %q must not include a fragment (got %q)", s.PublicOrigin, u.Fragment)
+	}
+	if u.User != nil {
+		return fmt.Errorf("config: public_origin %q must not include userinfo credentials", s.PublicOrigin)
+	}
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("config: public_origin %q has an invalid port %q; must be 1-65535", s.PublicOrigin, p)
+		}
+	}
 	return nil
+}
+
+// Normalize returns a copy of s with PublicOrigin reduced to its canonical
+// origin form: trailing slashes trimmed and the scheme and host lowercased.
+// Host comparison is case-insensitive per RFC 3986, but the redirect-URI
+// check in authserver is a byte comparison -- so an origin that differs
+// only in case from what the browser sends would fail to match. Callers
+// should normalize BEFORE Validate so that validation reports on the value
+// that will actually be used.
+func (s ServerConfig) Normalize() ServerConfig {
+	if s.PublicOrigin == "" {
+		return s
+	}
+	trimmed := strings.TrimRight(s.PublicOrigin, "/")
+	if u, err := url.Parse(trimmed); err == nil && u.Host != "" {
+		u.Scheme = strings.ToLower(u.Scheme)
+		u.Host = strings.ToLower(u.Host)
+		trimmed = u.String()
+	}
+	s.PublicOrigin = trimmed
+	return s
+}
+
+// Warnings reports configuration that is accepted but will not do what the
+// operator most likely intended. These are deliberately NOT errors: unlike
+// the fail-closed cases in Validate, none of them leaves muxterm in an
+// ambiguous security posture, and refusing to start would turn a harmless
+// misconfiguration into an outage on the one service the operator may need
+// in order to fix it.
+func (s ServerConfig) Warnings() []string {
+	var w []string
+	if s.PublicOrigin != "" && !s.BehindReverseProxy {
+		w = append(w, fmt.Sprintf(
+			"config: public_origin is set to %q but behind_reverse_proxy is false, so it is being IGNORED "+
+				"and muxterm will keep deriving its public URLs from the listen address. "+
+				"Set behind_reverse_proxy = true to use it, or clear public_origin to silence this.",
+			s.PublicOrigin))
+	}
+	return w
 }
 
 // BaseURL returns PublicOrigin ready to have an absolute path appended

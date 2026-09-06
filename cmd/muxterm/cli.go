@@ -18,15 +18,21 @@ type Config struct {
 	Transport string // mcp mode: transport type ("stdio"); SSE arrives in Phase 5
 	MCPPort   int    // mcp mode: SSE port (Phase 5, parsed but rejected for now)
 
-	// PublicOrigin is the serve-mode --public-origin override for the
-	// config file's [server].public_origin. Empty means "unset — use the
-	// config file value."
+	// PublicOrigin is the --public-origin value for `serve` and `install`.
+	// Empty means "unset — use the config file value."
+	//
+	// The two modes consume it differently, and deliberately so. For
+	// `serve` it is a runtime override of the config file's
+	// [server].public_origin for this process only. For `install` it is
+	// not an override at all: it is WRITTEN to the config file (see
+	// writeInstallServerConfig) and never baked into the generated
+	// systemd unit or launchd plist.
 	PublicOrigin string
-	// BehindReverseProxy is the serve-mode --behind-reverse-proxy override
-	// for the config file's [server].behind_reverse_proxy. false means
-	// "unset — use the config file value"; the flag can only turn the
-	// setting on, never off (same one-way bool limitation config.Merge
-	// documents).
+	// BehindReverseProxy is the --behind-reverse-proxy value for `serve`
+	// and `install`. false means "unset — use the config file value"; the
+	// flag can only turn the setting on, never off (same one-way bool
+	// limitation config.Merge documents). Same serve-overrides /
+	// install-persists split as PublicOrigin above.
 	BehindReverseProxy bool
 
 	// Args holds the un-parsed remainder for the socket-client subcommand
@@ -214,11 +220,20 @@ func parseInstall(args []string) (Config, error) {
 	addr := fs.String("addr", "127.0.0.1:8311", "listen address for the service")
 	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
 	force := fs.Bool("force", false, "stop and overwrite an existing installation")
+	// Declared to mirror `serve`, but NOT carried into the generated unit's
+	// ExecStart (or the launchd plist). install persists them to the
+	// muxterm config file instead -- see writeInstallServerConfig for why.
+	publicOrigin := fs.String("public-origin", "", "canonical public origin when behind a reverse proxy (e.g. https://muxterm.example.com); written to the muxterm config file, not to the service unit")
+	behindProxy := fs.Bool("behind-reverse-proxy", false, "run behind a reverse proxy: derive public URLs from --public-origin and disable the loopback auth bypass; written to the muxterm config file, not to the service unit")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm install [flags]")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Install muxterm as a system service (systemd on Linux, launchd on macOS).")
 		fmt.Fprintln(os.Stdout, "Use --force to stop and overwrite an existing installation.")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "--public-origin and --behind-reverse-proxy are persisted to the muxterm")
+		fmt.Fprintln(os.Stdout, "config file, not to the service unit, so re-running 'muxterm install' to")
+		fmt.Fprintln(os.Stdout, "upgrade keeps them. Omit them to leave the configured values untouched.")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Flags:")
 		fs.PrintDefaults()
@@ -227,9 +242,11 @@ func parseInstall(args []string) (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		Mode:   "install",
-		Addr:   *addr,
-		Secret: *secret,
-		Force:  *force,
+		Mode:               "install",
+		Addr:               *addr,
+		Secret:             *secret,
+		Force:              *force,
+		PublicOrigin:       *publicOrigin,
+		BehindReverseProxy: *behindProxy,
 	}, nil
 }
