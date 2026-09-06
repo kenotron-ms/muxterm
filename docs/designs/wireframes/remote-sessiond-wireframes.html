@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>muxterm · Remotes — design mocks</title>
+<style>
+/* ─── real muxterm tokens: theme.ts CHROME_DARK + tokyo-night palette ─── */
+:root{
+  --chrome-bar:#16161e; --chrome-body:#1a1b26; --chrome-border:#292e42;
+  --chrome-text-dim:#565f89; --chrome-text-bright:#c0caf5;
+  --chrome-accent:#7aa2f7; --chrome-driver-accent:#bb9af7;
+  --chrome-hover:#1f2335; --chrome-danger:#f7768e;
+
+  --mux-bg:#1a1b26; --mux-fg:#a9b1d6; --mux-accent:#7aa2f7;
+  --mux-border:#414868; --mux-selection:#283457;
+  --mux-ok:#9ece6a; --mux-warn:#e0af68; --mux-error:#f7768e;
+  --mux-bell:#e0af68; --mux-ansi-6:#7dcfff;
+
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --t-meta:10px; --t-ui:12px; --t-name:13px; --t-lede:18px;
+  --lh-tight:1.25; --lh-body:1.5;
+  --s-1:2px; --s-2:4px; --s-3:6px; --s-4:8px; --s-5:12px; --s-6:16px; --s-7:24px;
+  --r-chip:3px; --r-ctl:5px; --r-card:8px;
+  --ink-1:var(--chrome-text-bright);
+  --ink-2:color-mix(in srgb, var(--chrome-text-bright) 78%, var(--chrome-text-dim));
+  --ink-3:color-mix(in srgb, var(--chrome-text-dim) 55%, var(--chrome-text-bright));
+  --surface:var(--chrome-bar);
+  --edge:color-mix(in srgb, var(--chrome-border) 40%, var(--chrome-text-dim));
+  --need:var(--mux-warn); --work:var(--mux-ansi-6); --ok:var(--mux-ok);
+  --fail:var(--mux-error); --autonomous:var(--chrome-driver-accent);
+  --dur:120ms;
+
+  /* the only token this feature adds */
+  --remote: var(--chrome-driver-accent);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--chrome-body);color:var(--mux-fg);
+  font-family:system-ui,-apple-system,sans-serif;font-size:13px}
+
+/* ─── mock harness (not part of the product) ─── */
+.harness{position:fixed;top:0;left:0;right:0;height:46px;z-index:100;
+  background:#0e0e14;border-bottom:1px solid var(--chrome-border);
+  display:flex;align-items:center;gap:14px;padding:0 16px}
+.harness .h-brand{font-weight:700;color:var(--chrome-text-bright);font-size:13px;letter-spacing:.04em}
+.harness .h-brand span{color:var(--remote)}
+.harness nav{display:flex;gap:4px;flex-wrap:wrap}
+.harness nav button{font:inherit;font-size:12px;padding:5px 10px;border-radius:5px;
+  background:transparent;border:1px solid transparent;color:var(--chrome-text-dim);cursor:pointer}
+.harness nav button:hover{background:var(--chrome-hover);color:var(--chrome-text-bright)}
+.harness nav button.on{background:color-mix(in srgb,var(--chrome-accent) 18%,var(--surface));
+  color:var(--chrome-text-bright);border-color:color-mix(in srgb,var(--chrome-accent) 45%,transparent)}
+.stage{position:absolute;top:46px;left:0;right:0;bottom:0;overflow:auto}
+.screen{display:none;height:100%}
+.screen.on{display:block}
+.note{max-width:900px;margin:0 auto;padding:22px 24px 60px;color:var(--ink-2);line-height:1.6;font-size:13px}
+.note h3{margin:24px 0 8px;font-family:var(--mono);font-size:10px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.note code{font-family:var(--mono);font-size:11.5px;background:var(--chrome-bar);
+  border:1px solid var(--chrome-border);border-radius:3px;padding:1px 5px;color:var(--ink-1)}
+.note ul{margin:6px 0;padding-left:18px} .note li{margin:5px 0}
+.note del{color:var(--ink-3);text-decoration-color:var(--mux-error)}
+.callout{border-left:2px solid var(--remote);padding:2px 0 2px 14px;margin:14px 0}
+.cutlist{border:1px solid var(--edge);border-radius:8px;overflow:hidden;margin:12px 0}
+.cutlist div{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:8px 12px;
+  border-bottom:1px solid var(--chrome-border);font-size:12px}
+.cutlist div:last-child{border-bottom:none}
+.cutlist div:first-child{background:var(--chrome-bar);font-family:var(--mono);font-size:9px;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3)}
+.cutlist .was{color:var(--ink-3)} .cutlist .now{color:var(--ink-1)}
+
+/* ─── app shell ─── */
+.app{display:flex;height:100%;min-height:0}
+.sidebar{width:248px;flex-shrink:0;background:var(--chrome-bar);
+  border-right:1px solid var(--chrome-border);display:flex;flex-direction:column;overflow:hidden}
+.sb-header{padding:10px 12px 8px;font-size:13px;font-weight:700;color:var(--chrome-text-bright);
+  letter-spacing:.06em;border-bottom:1px solid var(--chrome-border);flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between}
+.launcher-btn{width:26px;height:22px;background:transparent;border:none;border-radius:4px;
+  color:var(--chrome-text-bright);cursor:pointer;display:flex;align-items:center;justify-content:center}
+.launcher-btn:hover{background:rgba(255,255,255,.08)}
+.tab-content{flex:1;overflow-y:auto;padding:6px 0}
+.sb-footer{flex-shrink:0;padding:8px 12px 10px;border-top:1px solid var(--chrome-border)}
+.footer-line{font-size:12px;color:var(--chrome-text-dim)}
+
+/* start card */
+.start{margin:6px;border:1px solid var(--mux-warn);border-radius:8px;
+  background:color-mix(in srgb,var(--mux-warn) 10%,var(--chrome-bar));padding:9px 10px 8px;cursor:pointer}
+.start:hover{background:color-mix(in srgb,var(--mux-warn) 16%,var(--chrome-bar))}
+.start .head{display:flex;justify-content:space-between;align-items:center;gap:6px;
+  font-family:var(--mono);font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--mux-warn)}
+.start .kb{font-family:var(--mono);font-size:10.5px;line-height:1.3;color:var(--chrome-text-dim);
+  border:1px solid var(--chrome-border);border-radius:3px;padding:0 5px}
+.start .num{font-size:26px;font-weight:700;letter-spacing:-.03em;line-height:1.15;margin-top:2px;color:var(--mux-warn)}
+.start .split{margin-top:4px;padding-top:5px;border-top:1px solid color-mix(in srgb,var(--mux-warn) 22%,transparent);
+  display:flex;flex-direction:column;gap:2px}
+.start .splitrow{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9.5px;color:var(--ink-3)}
+.start .splitrow b{color:var(--mux-warn);font-weight:600;font-variant-numeric:tabular-nums}
+.start .splitrow .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.start .splitrow.unknown b{color:var(--chrome-text-dim)}
+
+/* ─── host group header ─── */
+.hostgroup{margin:10px 0 2px}
+.hg-head{display:flex;align-items:center;gap:6px;padding:3px 9px 3px 6px;margin:0 4px;
+  border-radius:4px;cursor:pointer;user-select:none}
+.hg-head:hover{background:var(--chrome-hover)}
+.hg-chev{width:12px;flex-shrink:0;color:var(--ink-3);font-size:9px;line-height:1;
+  transition:transform var(--dur) ease;display:inline-block;text-align:center}
+.hg-head.collapsed .hg-chev{transform:rotate(-90deg)}
+.hg-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.hg-dot.ok{background:var(--mux-ok)}
+.hg-dot.warn{background:var(--mux-warn)}
+.hg-dot.off{background:transparent;border:1px solid var(--chrome-text-dim)}
+.hg-name{flex:1;min-width:0;font-family:var(--mono);font-size:9px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--chrome-text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hg-name.remote{color:color-mix(in srgb,var(--remote) 55%,var(--chrome-text-dim))}
+.hg-needs{flex-shrink:0;font-family:var(--mono);font-size:9px;line-height:1.5;color:var(--mux-warn);
+  background:color-mix(in srgb,var(--mux-warn) 18%,transparent);
+  border:1px solid color-mix(in srgb,var(--mux-warn) 45%,transparent);padding:0 5px;border-radius:8px}
+/* summary pill only when the group is closed — otherwise the cards already say it */
+.hg-head:not(.collapsed) .hg-needs{display:none}
+.hg-meta{flex-shrink:0;font-family:var(--mono);font-size:9px;color:var(--mux-warn)}
+.hg-body{overflow:hidden}
+.hg-body.hidden{display:none}
+
+/* workspace preview card */
+.ws-card{position:relative;z-index:0;margin:3px 6px;border-radius:6px;overflow:hidden;
+  background:var(--mux-bg);border:1px solid color-mix(in srgb,var(--chrome-border) 60%,var(--chrome-text-dim));
+  box-shadow:0 1px 3px -1px rgba(0,0,0,.5);cursor:pointer;
+  transition:border-color var(--dur),box-shadow var(--dur),opacity var(--dur)}
+.ws-card:hover{border-color:var(--chrome-text-dim)}
+.ws-card.active{border-color:var(--chrome-accent);
+  box-shadow:0 2px 8px -2px color-mix(in srgb,var(--chrome-accent) 40%,transparent)}
+.ws-card.remote.active{border-color:var(--remote);
+  box-shadow:0 2px 8px -2px color-mix(in srgb,var(--remote) 40%,transparent)}
+.ws-card::before{content:'';position:absolute;top:0;left:0;right:0;height:24px;z-index:1;pointer-events:none;
+  background:linear-gradient(to bottom,var(--chrome-bar),
+    color-mix(in srgb,var(--chrome-bar) 55%,transparent) 60%,transparent)}
+.ws-header{position:absolute;top:0;left:0;right:0;z-index:2;display:flex;align-items:center;gap:5px;
+  padding:0 6px;min-height:24px;text-shadow:0 1px 2px rgba(0,0,0,.65)}
+.dot{font-size:7px;flex-shrink:0;line-height:1}
+.dot.active{color:var(--chrome-accent)} .dot.inactive{color:var(--chrome-text-dim)}
+.dot.bell{color:var(--mux-bell)}
+.ws-card.remote .dot.active{color:var(--remote)}
+.ws-name{flex:1;font-size:12px;font-weight:600;color:var(--chrome-text-bright);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ws-needs{flex-shrink:0;font-family:var(--mono);font-size:9px;line-height:1.5;color:var(--mux-warn);
+  background:color-mix(in srgb,var(--mux-warn) 18%,transparent);
+  border:1px solid color-mix(in srgb,var(--mux-warn) 45%,transparent);padding:0 5px;border-radius:8px}
+.ws-panes{flex-shrink:0;font-family:var(--mono);font-size:9px;line-height:1.5;color:var(--chrome-text-dim)}
+.ws-canvas{font-family:var(--mono);font-size:8px;line-height:8px;
+  padding:24px 4px 4px;height:104px;overflow:hidden;color:#787c99;white-space:pre}
+.ws-card:not(.active) .ws-canvas{filter:saturate(.25) opacity(.55)}
+.ws-card:not(.active):hover .ws-canvas{filter:saturate(.5) opacity(.85)}
+.ws-chip{position:absolute;bottom:4px;right:4px;max-width:62%;padding:1px 4px;border-radius:3px;
+  font-size:10px;line-height:1.4;color:var(--chrome-text-dim);
+  background:color-mix(in srgb,var(--chrome-bar) 80%,transparent);backdrop-filter:blur(2px);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;z-index:2}
+.ws-card.active .ws-chip .x{color:var(--chrome-accent)}
+.ws-card.remote.active .ws-chip .x{color:var(--remote)}
+.g-green{color:#9ece6a}.g-blue{color:#7aa2f7}.g-cyan{color:#7dcfff}.g-yel{color:#e0af68}
+.g-red{color:#f7768e}.g-pur{color:#bb9af7}.g-dim{color:#565f89}
+
+/* disconnected treatment */
+.hg-body.stale .ws-card{opacity:.5;border-style:dashed;
+  border-color:color-mix(in srgb,var(--mux-warn) 40%,var(--chrome-border))}
+.hg-body.stale .ws-canvas{filter:saturate(0) opacity(.45)!important}
+.stale-banner{margin:3px 6px;padding:5px 8px;border-radius:5px;font-size:11px;
+  display:flex;align-items:center;gap:7px;
+  border:1px solid color-mix(in srgb,var(--mux-warn) 45%,transparent);
+  background:color-mix(in srgb,var(--mux-warn) 10%,var(--chrome-bar));color:var(--ink-2)}
+.stale-banner .spin{color:var(--mux-warn);font-family:var(--mono);font-size:10px}
+.retry-btn{margin-left:auto;font:inherit;font-size:10px;font-family:var(--mono);padding:1px 6px;
+  border-radius:3px;border:1px solid var(--chrome-border);background:transparent;
+  color:var(--ink-3);cursor:pointer}
+.retry-btn:hover{border-color:var(--mux-warn);color:var(--mux-warn)}
+
+/* dashed action buttons */
+.new-btn{display:block;width:calc(100% - 12px);margin:6px 6px 4px;
+  padding:7px 10px;background:transparent;border:1px dashed var(--chrome-text-dim);border-radius:5px;
+  color:var(--chrome-accent);font:inherit;font-size:12px;text-align:left;cursor:pointer;
+  transition:border-color var(--dur),background var(--dur)}
+.new-btn:hover{border-color:var(--chrome-accent);background:var(--chrome-hover)}
+.new-btn.remote{color:var(--remote)}
+.new-btn.remote:hover{border-color:var(--remote)}
+
+/* main pane */
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--chrome-body);position:relative}
+.tabstrip{height:35px;flex-shrink:0;background:var(--chrome-bar);display:flex;align-items:stretch;
+  border-bottom:1px solid var(--chrome-border)}
+.dv-tab{display:flex;align-items:center;gap:6px;padding:.25rem .6rem;min-width:80px;max-width:200px;
+  border-top:2px solid transparent;border-right:1px solid var(--chrome-bar);font-size:12px;
+  color:var(--chrome-text-dim);cursor:pointer;background:var(--chrome-bar);white-space:nowrap}
+.dv-tab.active{border-top-color:var(--chrome-accent);background:var(--chrome-body);color:var(--chrome-text-bright)}
+.dv-tab.active.remote{border-top-color:var(--remote)}
+.mark{font-style:normal;margin-left:2px}
+.mark.need{color:var(--mux-warn)}.mark.work{color:var(--mux-ansi-6)}
+.hostpin{font-family:var(--mono);font-size:9px;color:var(--remote);
+  background:color-mix(in srgb,var(--remote) 15%,transparent);
+  border:1px solid color-mix(in srgb,var(--remote) 40%,transparent);
+  border-radius:3px;padding:0 4px;line-height:1.4;flex-shrink:0}
+.term{flex:1;background:var(--mux-bg);padding:10px 14px;font-family:var(--mono);font-size:13px;
+  line-height:1.45;color:var(--mux-fg);overflow:hidden;white-space:pre-wrap}
+.dropbar{height:24px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 12px;
+  font-family:var(--mono);font-size:10px;color:var(--ink-3);
+  background:color-mix(in srgb,var(--mux-warn) 10%,var(--chrome-bar));
+  border-bottom:1px solid color-mix(in srgb,var(--mux-warn) 40%,var(--chrome-border))}
+.dropbar b{color:var(--mux-warn);font-weight:600}
+
+/* ─── home view ─── */
+.home{max-width:928px;margin-inline:auto;padding:20px 16px 60px}
+.home-top{display:flex;align-items:center;justify-content:space-between;gap:var(--s-5);margin-bottom:var(--s-5)}
+.lede{font-size:var(--t-lede);letter-spacing:-.01em;color:var(--ink-1);line-height:var(--lh-tight)}
+.seg{display:inline-flex;border:1px solid var(--edge);border-radius:var(--r-ctl);overflow:hidden;background:var(--surface)}
+.seg button{padding:var(--s-3) var(--s-5);background:transparent;border:none;color:var(--ink-3);
+  font:inherit;font-size:var(--t-ui);cursor:pointer}
+.seg button+button{border-left:1px solid var(--edge)}
+.seg button.on{background:color-mix(in srgb,var(--chrome-accent) 18%,var(--surface));color:var(--ink-1)}
+
+.fleetstrip{display:flex;gap:var(--s-3);flex-wrap:wrap;margin-bottom:var(--s-6);
+  padding-bottom:var(--s-5);border-bottom:1px solid var(--edge)}
+.fchip{display:flex;align-items:center;gap:var(--s-3);padding:var(--s-3) var(--s-5);
+  border:1px solid var(--edge);border-radius:var(--r-card);background:var(--surface);
+  cursor:pointer;transition:border-color var(--dur),background var(--dur)}
+.fchip:hover{background:var(--chrome-hover)}
+.fchip.on{border-color:var(--chrome-accent);background:color-mix(in srgb,var(--chrome-accent) 10%,var(--surface))}
+.fchip.remote.on{border-color:var(--remote);background:color-mix(in srgb,var(--remote) 10%,var(--surface))}
+.fchip .fdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.fchip .fname{font-size:var(--t-name);color:var(--ink-1);font-weight:500}
+.fchip .fcounts{display:flex;gap:var(--s-3);font-family:var(--mono);font-size:var(--t-meta);
+  padding-left:var(--s-3);border-left:1px solid var(--edge)}
+.fchip .c-need{color:var(--need)} .fchip .c-work{color:var(--work)}
+.fchip.down{border-style:dashed;border-color:color-mix(in srgb,var(--mux-warn) 45%,transparent)}
+.fchip.off{opacity:.55}
+
+.group{font-family:var(--mono);font-size:var(--t-meta);letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-3);margin:var(--s-7) 0 var(--s-4)}
+.group:first-of-type{margin-top:var(--s-5)}
+.item{border:1px solid color-mix(in srgb,var(--need) 40%,var(--edge));
+  background:color-mix(in srgb,var(--need) 7%,var(--surface));border-radius:var(--r-card);
+  padding:var(--s-5);cursor:pointer;margin-bottom:var(--s-4);transition:background var(--dur) ease}
+.item:hover{background:color-mix(in srgb,var(--need) 13%,var(--surface))}
+.item-head{display:flex;align-items:center;gap:var(--s-3);margin-bottom:var(--s-3);flex-wrap:wrap}
+.item-name{font-size:var(--t-name);font-weight:600;color:var(--ink-1);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item-doing{font-size:var(--t-ui);color:var(--ink-2);line-height:var(--lh-body);margin-bottom:var(--s-4)}
+.item-doing .q{color:var(--need)}
+.item-doing .p{font-family:var(--mono);font-size:11px;color:var(--ink-1)}
+.item-acts{display:flex;gap:var(--s-3);flex-wrap:wrap}
+.badge{font-family:var(--mono);font-size:var(--t-meta);line-height:var(--lh-tight);padding:0 var(--s-2);
+  border:1px solid transparent;border-radius:var(--r-chip);color:var(--ink-3);white-space:nowrap;flex-shrink:0}
+.badge.host{color:var(--remote);background:color-mix(in srgb,var(--remote) 15%,transparent);
+  border-color:color-mix(in srgb,var(--remote) 45%,transparent)}
+.badge.host.down{border-style:dashed;color:var(--mux-warn);
+  background:color-mix(in srgb,var(--mux-warn) 12%,transparent);
+  border-color:color-mix(in srgb,var(--mux-warn) 45%,transparent)}
+.badge.autonomous{color:var(--autonomous);background:color-mix(in srgb,var(--autonomous) 18%,transparent);
+  border-color:color-mix(in srgb,var(--autonomous) 45%,transparent)}
+.badge.pr{color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent);
+  border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+.btn{font:inherit;font-size:var(--t-ui);line-height:var(--lh-tight);padding:var(--s-3) var(--s-5);
+  border:1px solid var(--edge);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink-2);cursor:pointer}
+.btn:hover{border-color:var(--chrome-accent);color:var(--ink-1)}
+.btn.pri{background:color-mix(in srgb,var(--ok) 14%,var(--surface));
+  border-color:color-mix(in srgb,var(--ok) 45%,transparent);color:var(--ink-1)}
+.rowc{display:grid;grid-template-columns:var(--s-6) 1fr auto;gap:var(--s-4);align-items:start;
+  padding:var(--s-3) var(--s-5);border:1px solid var(--edge);border-radius:var(--r-card);
+  background:var(--surface);cursor:pointer;margin-bottom:var(--s-3)}
+.rowc:hover{background:var(--chrome-hover)}
+.rowc .m{font-size:var(--t-name);line-height:var(--lh-tight);text-align:center}
+.m-need{color:var(--need)}.m-work{color:var(--work)}.m-done{color:var(--ok)}
+.m-fail{color:var(--fail)}.m-none{color:var(--ink-3)}
+.rowc .b-name{font-size:var(--t-name);color:var(--ink-1);display:flex;align-items:center;gap:var(--s-3);flex-wrap:wrap}
+.rowc .b-doing{font-size:var(--t-ui);color:var(--ink-3);margin-top:1px}
+.rowc .meta{font-family:var(--mono);font-size:var(--t-meta);color:var(--ink-3)}
+.rowc.stale{border-style:dashed;opacity:.65}
+.rowc.stale .b-doing{color:var(--mux-warn)}
+.keyhelp{margin-top:var(--s-7);display:flex;gap:var(--s-5);font-size:11px;color:var(--ink-3);
+  align-items:center;flex-wrap:wrap}
+kbd{font-family:var(--mono);font-size:10.5px;color:var(--chrome-text-dim);
+  border:1px solid var(--chrome-border);border-radius:3px;padding:0 5px}
+
+/* ─── dialogs ─── */
+.backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;
+  justify-content:center;z-index:50}
+.dialog{background:var(--chrome-body);border:1px solid var(--chrome-border);border-radius:10px;
+  width:min(600px,calc(100vw - 32px));height:min(80vh,600px);display:flex;flex-direction:column;
+  box-shadow:0 24px 64px rgba(0,0,0,.7);overflow:hidden;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;color:var(--chrome-text-bright)}
+.d-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px 14px;
+  border-bottom:1px solid var(--chrome-border);flex-shrink:0}
+.d-header h2{margin:0;font-size:15px;font-weight:600}
+.close-btn{background:transparent;border:none;color:var(--chrome-text-dim);cursor:pointer;
+  font-size:18px;line-height:1;padding:3px 7px;border-radius:4px}
+.close-btn:hover{color:var(--chrome-text-bright);background:var(--chrome-hover)}
+.d-body{display:flex;flex:1;overflow:hidden}
+.d-nav{width:156px;flex-shrink:0;border-right:1px solid var(--chrome-border);padding:12px 0;overflow-y:auto}
+.d-nav button{display:block;width:100%;padding:9px 18px;background:transparent;border:none;cursor:pointer;
+  font-size:13px;font-family:inherit;color:var(--chrome-text-dim);text-align:left}
+.d-nav button:hover{color:var(--chrome-text-bright);background:var(--chrome-hover)}
+.d-nav button.active{color:var(--chrome-text-bright);background:var(--chrome-hover);font-weight:500}
+.d-content{flex:1;overflow-y:auto;padding:24px 28px 40px}
+.section-title{margin:0 0 14px;font-size:11px;font-weight:600;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--chrome-text-dim)}
+.section-gap{margin-top:30px}
+.divider{height:1px;background:var(--chrome-border);margin:22px 0}
+
+.r-row{display:flex;align-items:center;gap:11px;padding:10px 12px;border:1px solid var(--chrome-border);
+  border-radius:6px;margin-bottom:8px;background:var(--chrome-bar)}
+.r-row.connected{border-color:color-mix(in srgb,var(--mux-ok) 35%,var(--chrome-border))}
+.r-row.degraded{border-color:color-mix(in srgb,var(--mux-warn) 45%,var(--chrome-border));
+  background:color-mix(in srgb,var(--mux-warn) 6%,var(--chrome-bar))}
+.r-row.err{border-color:color-mix(in srgb,var(--mux-error) 40%,var(--chrome-border))}
+.r-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.r-dot.ok{background:var(--mux-ok)}.r-dot.warn{background:var(--mux-warn)}
+.r-dot.err{background:var(--mux-error)}.r-dot.off{background:transparent;border:1px solid var(--chrome-text-dim)}
+.r-main{flex:1;min-width:0}
+.r-name{font-size:13px;font-weight:500;color:var(--chrome-text-bright)}
+.r-sub{font-family:var(--mono);font-size:10.5px;color:var(--chrome-text-dim);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.r-sub.err{color:var(--mux-error)}
+.r-state{font-family:var(--mono);font-size:10px;flex-shrink:0;color:var(--mux-warn)}
+.r-btn{padding:5px 11px;border:1px solid var(--chrome-border);border-radius:6px;background:transparent;
+  color:var(--chrome-text-dim);font:inherit;font-size:12px;cursor:pointer;flex-shrink:0}
+.r-btn:hover{border-color:var(--chrome-accent);color:var(--chrome-text-bright)}
+.r-btn.pri{border-color:var(--chrome-accent);color:var(--chrome-accent)}
+.r-btn.pri:hover{background:var(--chrome-accent);color:var(--chrome-body)}
+.r-btn.danger:hover{border-color:var(--chrome-danger);color:var(--chrome-danger)}
+.ai-input{padding:6px 8px;background:var(--chrome-body);border:1px solid var(--chrome-border);
+  border-radius:4px;color:var(--chrome-text-bright);font:inherit;font-size:12px;width:100%}
+.ai-input:focus{outline:none;border-color:var(--chrome-accent);
+  box-shadow:0 0 0 2px color-mix(in srgb,var(--chrome-accent) 25%,transparent)}
+
+.cdialog{width:min(520px,calc(100vw - 32px));height:auto;max-height:min(80vh,600px)}
+.cd-body{padding:18px 20px;overflow-y:auto}
+.cand{display:flex;align-items:center;gap:11px;padding:9px 11px;border:1px solid transparent;
+  border-radius:6px;cursor:pointer}
+.cand:hover{background:var(--chrome-hover)}
+.cand.sel{background:var(--chrome-hover);border-color:var(--chrome-accent)}
+.cand-radio{width:14px;height:14px;border-radius:50%;border:1px solid var(--chrome-text-dim);flex-shrink:0;position:relative}
+.cand.sel .cand-radio{border-color:var(--chrome-accent)}
+.cand.sel .cand-radio::after{content:'';position:absolute;inset:3px;border-radius:50%;background:var(--chrome-accent)}
+.cand-main{flex:1;min-width:0}
+.cand-name{font-size:13px;color:var(--chrome-text-bright);font-weight:500}
+.cand-sub{font-family:var(--mono);font-size:10.5px;color:var(--chrome-text-dim);margin-top:2px}
+.cand-tag{font-family:var(--mono);font-size:9px;padding:1px 5px;border-radius:3px;flex-shrink:0;
+  color:var(--mux-warn);border:1px solid color-mix(in srgb,var(--mux-warn) 45%,transparent);
+  background:color-mix(in srgb,var(--mux-warn) 12%,transparent)}
+.cd-foot{display:flex;justify-content:flex-end;gap:9px;padding:14px 20px 16px;
+  border-top:1px solid var(--chrome-border)}
+.b-confirm{padding:10px 22px;background:var(--chrome-accent);color:var(--chrome-body);border:none;
+  border-radius:7px;font:inherit;font-size:14px;font-weight:600;min-width:96px;cursor:pointer}
+.b-cancel{padding:10px 18px;background:transparent;color:var(--chrome-text-dim);
+  border:1px solid var(--chrome-border);border-radius:7px;font:inherit;font-size:14px;cursor:pointer}
+.probe{font-family:var(--mono);font-size:11px;color:var(--ink-3);line-height:1.8;
+  background:var(--chrome-bar);border:1px solid var(--chrome-border);border-radius:6px;
+  padding:10px 12px;margin-top:14px;white-space:pre-wrap}
+.probe .ok{color:var(--mux-ok)} .probe .run{color:var(--mux-ansi-6)}
+</style>
+</head>
+<body>
+
+<div class="harness">
+  <div class="h-brand">muxterm · <span>remotes</span></div>
+  <nav>
+    <button data-s="s1" class="on">1 · Sidebar</button>
+    <button data-s="s2">2 · Home</button>
+    <button data-s="s3">3 · Settings</button>
+    <button data-s="s4">4 · Connect</button>
+    <button data-s="s5">5 · Link drops</button>
+    <button data-s="s6">6 · Notes</button>
+  </nav>
+</div>
+
+<div class="stage">
+
+<!-- ══════════ 1 · SIDEBAR ══════════ -->
+<section class="screen on" id="s1">
+<div class="app">
+  <aside class="sidebar">
+    <div class="sb-header">vela0<button class="launcher-btn">⋯</button></div>
+    <div class="tab-content">
+
+      <div class="start">
+        <div class="head"><span>✽ needs input</span><span class="kb">⌃`</span></div>
+        <div class="num">3</div>
+        <div class="split">
+          <div class="splitrow"><span class="nm">vela0</span><b>1</b></div>
+          <div class="splitrow"><span class="nm" style="color:color-mix(in srgb,var(--remote) 70%,var(--ink-3))">amplifier-resolve-vm</span><b>2</b></div>
+        </div>
+      </div>
+
+      <div class="hostgroup">
+        <div class="hg-head" onclick="tg(this)">
+          <span class="hg-chev">▾</span><span class="hg-dot ok"></span>
+          <span class="hg-name">vela0</span><span class="hg-needs">✽ 1</span>
+        </div>
+        <div class="hg-body">
+          <div class="ws-card active">
+            <div class="ws-header"><span class="dot active">●</span><span class="ws-name">try-0-15</span>
+              <span class="ws-needs">✽ 1</span></div>
+            <div class="ws-canvas"><span class="g-dim">ken@vela0</span>:<span class="g-blue">~/workspace/muxterm</span>$ make test
+<span class="g-green">ok</span>   internal/sessiond      2.104s
+<span class="g-green">ok</span>   internal/server        0.882s
+<span class="g-green">ok</span>   internal/mcp           0.311s
+<span class="g-dim">ken@vela0</span>:<span class="g-blue">~/workspace/muxterm</span>$ git status
+On branch feat/remote-sessiond
+Changes not staged for commit:
+  modified:   internal/sessiond/client.go
+  modified:   internal/sessiond/server.go
+<span class="g-yel">?? </span>internal/sessiond/transport_ssh.go
+<span class="g-dim">ken@vela0</span>:<span class="g-blue">~/workspace/muxterm</span>$ █</div>
+            <div class="ws-chip">make test <span class="x">+3</span></div>
+          </div>
+          <div class="ws-card">
+            <div class="ws-header"><span class="dot inactive">●</span><span class="ws-name">docs</span>
+              <span class="ws-panes">2 panes</span></div>
+            <div class="ws-canvas"><span class="g-dim">ken@vela0</span>:<span class="g-blue">~/notes</span>$ nvim design.md
+────────────────────────────────────
+# Remote sessiond
+
+The transport is already a net.Conn.
+The unix socket is an implementation
+detail, not a constraint.
+
+Seam: sessiond.Dial + Serve(Listener)
+────────────────────────────────────
+<span class="g-dim">-- INSERT --</span>                 12,4</div>
+            <div class="ws-chip">nvim <span class="x">+1</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hostgroup">
+        <div class="hg-head" onclick="tg(this)">
+          <span class="hg-chev">▾</span><span class="hg-dot ok"></span>
+          <span class="hg-name remote">amplifier-resolve-vm</span><span class="hg-needs">✽ 2</span>
+        </div>
+        <div class="hg-body">
+          <div class="ws-card remote">
+            <div class="ws-header"><span class="dot bell">●</span><span class="ws-name">resolver-fix</span>
+              <span class="ws-needs">✽ 2</span></div>
+            <div class="ws-canvas"><span class="g-dim">azureuser@resolve-vm</span>:<span class="g-blue">~/amplifier-resolve</span>$
+<span class="g-pur">amplifier</span> › running goal loop…
+  <span class="g-cyan">▸</span> rewrote dot_graph resolver plan
+  <span class="g-cyan">▸</span> 14 files changed, 302 insertions
+<span class="g-yel">?</span> Apply patch to resolver/plan.go
+  <span class="g-yel">[y] yes  [n] no  [d] diff</span>
+<span class="g-yel">›</span> █</div>
+            <div class="ws-chip">amplifier <span class="x">+2</span></div>
+          </div>
+          <div class="ws-card remote">
+            <div class="ws-header"><span class="dot inactive">●</span><span class="ws-name">ci-debug</span>
+              <span class="ws-panes">3 panes</span></div>
+            <div class="ws-canvas"><span class="g-dim">azureuser@resolve-vm</span>:<span class="g-blue">~</span>$ gh run watch 4471
+<span class="g-cyan">*</span> build          in_progress  1m14s
+<span class="g-green">✓</span> lint           success      0m22s
+<span class="g-green">✓</span> unit           success      1m03s
+<span class="g-red">✗</span> integration    failure      2m41s
+    resolver_test.go:88: want 3 got 0
+<span class="g-dim">azureuser@resolve-vm</span>:<span class="g-blue">~</span>$ █</div>
+            <div class="ws-chip">gh run watch <span class="x">+2</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hostgroup">
+        <div class="hg-head collapsed" onclick="tg(this)">
+          <span class="hg-chev">▾</span><span class="hg-dot warn"></span>
+          <span class="hg-name remote">mac-studio</span><span class="hg-meta">reconnecting</span>
+        </div>
+        <div class="hg-body hidden"></div>
+      </div>
+
+      <div class="hostgroup">
+        <div class="hg-head collapsed" onclick="tg(this)">
+          <span class="hg-chev">▾</span><span class="hg-dot off"></span>
+          <span class="hg-name remote">gpu-01</span>
+        </div>
+        <div class="hg-body hidden"></div>
+      </div>
+
+      <button class="new-btn">+ New workspace</button>
+      <button class="new-btn remote">+ Connect machine</button>
+    </div>
+    <div class="sb-footer">
+      <div class="footer-line">muxterm v0.9.2</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="tabstrip">
+      <div class="dv-tab active remote"><span class="hostpin">resolve-vm</span>amplifier<span class="mark need">✽</span></div>
+      <div class="dv-tab"><span class="hostpin">resolve-vm</span>shell</div>
+      <div class="dv-tab">make test<span class="mark work">✽</span></div>
+      <div class="dv-tab">nvim</div>
+    </div>
+    <div class="term">azureuser@resolve-vm:~/amplifier-resolve$ amplifier
+<span class="g-pur">amplifier</span> › goal: "make the integration suite green on main"
+
+  <span class="g-cyan">▸</span> read internal/resolver/plan.go
+  <span class="g-cyan">▸</span> read internal/resolver/plan_test.go
+  <span class="g-cyan">▸</span> ran: go test ./internal/resolver/ -run TestPlan
+      <span class="g-red">--- FAIL: TestPlanOrdering (0.01s)</span>
+      <span class="g-red">    resolver_test.go:88: want 3 got 0</span>
+  <span class="g-cyan">▸</span> rewrote dot_graph resolver plan
+  <span class="g-cyan">▸</span> 14 files changed, 302 insertions(+), 41 deletions(-)
+
+<span class="g-yel">?</span> Apply patch to internal/resolver/plan.go
+  <span class="g-yel">[y] yes   [n] no   [d] show diff</span>
+
+<span class="g-yel">›</span> █</div>
+  </main>
+</div>
+</section>
+
+<!-- ══════════ 2 · HOME ══════════ -->
+<section class="screen" id="s2">
+<div class="app">
+  <aside class="sidebar">
+    <div class="sb-header">vela0<button class="launcher-btn">⋯</button></div>
+    <div class="tab-content" style="opacity:.3;pointer-events:none">
+      <div class="start"><div class="head"><span>✽ needs input</span><span class="kb">⌃`</span></div>
+        <div class="num">3</div></div>
+      <div class="hostgroup"><div class="hg-head collapsed"><span class="hg-chev">▾</span>
+        <span class="hg-dot ok"></span><span class="hg-name">vela0</span><span class="hg-needs">✽ 1</span></div></div>
+      <div class="hostgroup"><div class="hg-head collapsed"><span class="hg-chev">▾</span>
+        <span class="hg-dot ok"></span><span class="hg-name remote">amplifier-resolve-vm</span>
+        <span class="hg-needs">✽ 2</span></div></div>
+    </div>
+  </aside>
+  <main class="main" style="overflow-y:auto">
+    <div class="home">
+      <div class="home-top">
+        <div class="lede">3 sessions need you</div>
+        <div class="seg"><button>▦ Tiles</button><button class="on">☰ Cards</button></div>
+      </div>
+
+      <div class="fleetstrip">
+        <div class="fchip on"><span class="fdot" style="background:var(--mux-ok)"></span>
+          <span class="fname">vela0</span>
+          <span class="fcounts"><span class="c-need">✽1</span><span class="c-work">▸2</span></span></div>
+        <div class="fchip remote on"><span class="fdot" style="background:var(--mux-ok)"></span>
+          <span class="fname">amplifier-resolve-vm</span>
+          <span class="fcounts"><span class="c-need">✽2</span><span class="c-work">▸1</span></span></div>
+        <div class="fchip remote down"><span class="fdot" style="background:var(--mux-warn)"></span>
+          <span class="fname">mac-studio</span></div>
+        <div class="fchip remote off"><span class="fdot" style="background:transparent;border:1px solid var(--chrome-text-dim)"></span>
+          <span class="fname">gpu-01</span></div>
+      </div>
+
+      <div class="group">needs input · 3</div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="m m-need">✽</span>
+          <span class="item-name">make the integration suite green on main</span>
+          <span class="badge host">resolve-vm</span>
+          <span class="badge autonomous">autonomous</span>
+          <span class="badge">amplifier</span>
+        </div>
+        <div class="item-doing"><span class="q">permission prompt</span> · Apply patch to
+          <span class="p">internal/resolver/plan.go</span></div>
+        <div class="item-acts">
+          <button class="btn pri">Approve</button><button class="btn">Deny</button><button class="btn">Open ↗</button>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="m m-need">✽</span>
+          <span class="item-name">upgrade resolver-sdk to 2.4</span>
+          <span class="badge host">resolve-vm</span>
+          <span class="badge autonomous">autonomous</span>
+          <span class="badge pr">#412</span>
+        </div>
+        <div class="item-doing"><span class="q">input needed</span> · Two migration paths found; which one?</div>
+        <div class="item-acts"><button class="btn pri">Answer</button><button class="btn">Open ↗</button></div>
+      </div>
+
+      <div class="item">
+        <div class="item-head">
+          <span class="m m-need">✽</span>
+          <span class="item-name">wire remote dialer into DaemonConn</span>
+          <span class="badge">amplifier</span>
+        </div>
+        <div class="item-doing"><span class="q">sandbox request</span> ·
+          <span class="p">go test ./... -race</span></div>
+        <div class="item-acts"><button class="btn pri">Allow</button><button class="btn">Deny</button><button class="btn">Open ↗</button></div>
+      </div>
+
+      <div class="group">running · 3</div>
+      <div class="rowc">
+        <span class="m m-work">✽</span>
+        <div><div class="b-name">chase integration flake <span class="badge host">resolve-vm</span></div>
+          <div class="b-doing">watching gh run 4471</div></div>
+        <div class="meta">2m</div>
+      </div>
+      <div class="rowc">
+        <span class="m m-work">✽</span>
+        <div><div class="b-name">make test</div>
+          <div class="b-doing">go test ./internal/… · 3 of 9</div></div>
+        <div class="meta">18s</div>
+      </div>
+      <div class="rowc stale">
+        <span class="m m-none">✽</span>
+        <div><div class="b-name">xcode build · ios companion <span class="badge host down">mac-studio</span></div>
+          <div class="b-doing">⟳ unreachable</div></div>
+        <div class="meta">8s</div>
+      </div>
+
+      <div class="group">completed · 2</div>
+      <div class="rowc">
+        <span class="m m-done">✽</span>
+        <div><div class="b-name">split Server.ListenAndServe <span class="badge pr">#409</span></div>
+          <div class="b-doing">listener-agnostic Serve(net.Listener)</div></div>
+        <div class="meta">21m</div>
+      </div>
+      <div class="rowc">
+        <span class="m m-fail">✽</span>
+        <div><div class="b-name">bump vt buffer history cap <span class="badge host">resolve-vm</span></div>
+          <div class="b-doing">replay exceeded frame budget</div></div>
+        <div class="meta">44m</div>
+      </div>
+
+      <div class="keyhelp"><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>space</kbd> peek</span>
+        <span><kbd>enter</kbd> open</span><span><kbd>esc</kbd> dismiss</span></div>
+    </div>
+  </main>
+</div>
+</section>
+
+<!-- ══════════ 3 · SETTINGS ══════════ -->
+<section class="screen" id="s3">
+<div class="app" style="position:relative">
+  <aside class="sidebar" style="opacity:.3"><div class="sb-header">vela0<button class="launcher-btn">⋯</button></div></aside>
+  <main class="main"></main>
+  <div class="backdrop">
+    <div class="dialog">
+      <div class="d-header"><h2>Settings</h2><button class="close-btn">×</button></div>
+      <div class="d-body">
+        <nav class="d-nav">
+          <button>Appearance</button><button>Notifications</button>
+          <button>AI</button><button class="active">Remotes</button>
+        </nav>
+        <div class="d-content">
+
+          <div class="section-title">Connected</div>
+
+          <div class="r-row connected">
+            <span class="r-dot ok"></span>
+            <div class="r-main">
+              <div class="r-name">amplifier-resolve-vm</div>
+              <div class="r-sub">azureuser@20.230.240.43</div>
+            </div>
+            <button class="r-btn danger">Disconnect</button>
+          </div>
+
+          <div class="r-row degraded">
+            <span class="r-dot warn"></span>
+            <div class="r-main">
+              <div class="r-name">mac-studio</div>
+              <div class="r-sub">ken@mac-studio.local</div>
+            </div>
+            <span class="r-state">reconnecting</span>
+            <button class="r-btn">Retry</button>
+          </div>
+
+          <div class="section-title section-gap">From ~/.ssh/config</div>
+
+          <div class="r-row">
+            <span class="r-dot off"></span>
+            <div class="r-main">
+              <div class="r-name">gpu-01</div>
+              <div class="r-sub">ken@10.4.2.19</div>
+            </div>
+            <button class="r-btn pri">Connect</button>
+          </div>
+
+          <div class="r-row">
+            <span class="r-dot off"></span>
+            <div class="r-main">
+              <div class="r-name">resolve-vm-b</div>
+              <div class="r-sub">azureuser@20.55.18.7</div>
+            </div>
+            <button class="r-btn">Install &amp; connect</button>
+          </div>
+
+          <div class="r-row err">
+            <span class="r-dot err"></span>
+            <div class="r-main">
+              <div class="r-name">old-builder</div>
+              <div class="r-sub err">ssh: connect to host old-builder port 22: No route to host</div>
+            </div>
+            <button class="r-btn">Retry</button>
+          </div>
+
+          <div class="divider"></div>
+          <div class="section-title">Add a host</div>
+          <input class="ai-input" placeholder="user@host">
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ══════════ 4 · CONNECT ══════════ -->
+<section class="screen" id="s4">
+<div class="app" style="position:relative">
+  <aside class="sidebar" style="opacity:.3"><div class="sb-header">vela0<button class="launcher-btn">⋯</button></div></aside>
+  <main class="main"></main>
+  <div class="backdrop">
+    <div class="dialog cdialog">
+      <div class="d-header"><h2>Connect machine</h2><button class="close-btn">×</button></div>
+      <div class="cd-body">
+        <div class="cand sel">
+          <span class="cand-radio"></span>
+          <div class="cand-main"><div class="cand-name">amplifier-resolve-vm</div>
+            <div class="cand-sub">azureuser@20.230.240.43</div></div>
+        </div>
+        <div class="cand">
+          <span class="cand-radio"></span>
+          <div class="cand-main"><div class="cand-name">gpu-01</div>
+            <div class="cand-sub">ken@10.4.2.19</div></div>
+        </div>
+        <div class="cand">
+          <span class="cand-radio"></span>
+          <div class="cand-main"><div class="cand-name">resolve-vm-b</div>
+            <div class="cand-sub">azureuser@20.55.18.7</div></div>
+          <span class="cand-tag">not installed</span>
+        </div>
+        <div class="cand">
+          <span class="cand-radio"></span>
+          <div class="cand-main"><div class="cand-name">mac-studio</div>
+            <div class="cand-sub">ken@mac-studio.local</div></div>
+        </div>
+
+        <div class="divider" style="margin:14px 0 12px"></div>
+        <input class="ai-input" placeholder="user@host">
+
+        <div class="probe"><span class="ok">✓</span> authenticated as azureuser
+<span class="ok">✓</span> muxterm 0.9.2
+<span class="run">▸</span> attaching… <span style="color:var(--ink-3)">2 workspaces, 5 panes</span></div>
+      </div>
+      <div class="cd-foot">
+        <button class="b-cancel">Cancel</button>
+        <button class="b-confirm">Connect</button>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ══════════ 5 · LINK DROPS ══════════ -->
+<section class="screen" id="s5">
+<div class="app">
+  <aside class="sidebar">
+    <div class="sb-header">vela0<button class="launcher-btn">⋯</button></div>
+    <div class="tab-content">
+      <div class="start"><div class="head"><span>✽ needs input</span><span class="kb">⌃`</span></div>
+        <div class="num">1</div>
+        <div class="split">
+          <div class="splitrow"><span class="nm">vela0</span><b>1</b></div>
+          <div class="splitrow unknown"><span class="nm">amplifier-resolve-vm</span><b>?</b></div>
+        </div></div>
+
+      <div class="hostgroup">
+        <div class="hg-head" onclick="tg(this)"><span class="hg-chev">▾</span><span class="hg-dot ok"></span>
+          <span class="hg-name">vela0</span><span class="hg-needs">✽ 1</span></div>
+        <div class="hg-body">
+          <div class="ws-card">
+            <div class="ws-header"><span class="dot inactive">●</span><span class="ws-name">try-0-15</span>
+              <span class="ws-needs">✽ 1</span></div>
+            <div class="ws-canvas"><span class="g-dim">ken@vela0</span>:<span class="g-blue">~/workspace/muxterm</span>$ make test
+<span class="g-green">ok</span>   internal/sessiond      2.104s
+<span class="g-green">ok</span>   internal/server        0.882s
+<span class="g-dim">ken@vela0</span>:<span class="g-blue">~/workspace/muxterm</span>$ █</div>
+            <div class="ws-chip">make test <span class="x">+3</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hostgroup">
+        <div class="hg-head" onclick="tg(this)"><span class="hg-chev">▾</span><span class="hg-dot warn"></span>
+          <span class="hg-name remote">amplifier-resolve-vm</span><span class="hg-meta">reconnecting</span></div>
+        <div class="hg-body stale">
+          <div class="stale-banner"><span class="spin">⟳</span>
+            <span>Disconnected 12s ago</span>
+            <button class="retry-btn">retry</button></div>
+          <div class="ws-card remote">
+            <div class="ws-header"><span class="dot inactive">●</span><span class="ws-name">resolver-fix</span>
+              <span class="ws-panes">3 panes</span></div>
+            <div class="ws-canvas"><span class="g-dim">azureuser@resolve-vm</span>:<span class="g-blue">~/amplifier-resolve</span>$
+<span class="g-pur">amplifier</span> › running goal loop…
+  <span class="g-cyan">▸</span> rewrote dot_graph resolver plan
+<span class="g-yel">?</span> Apply patch to resolver/plan.go
+<span class="g-yel">›</span> </div>
+          </div>
+          <div class="ws-card remote">
+            <div class="ws-header"><span class="dot inactive">●</span><span class="ws-name">ci-debug</span>
+              <span class="ws-panes">3 panes</span></div>
+            <div class="ws-canvas"><span class="g-dim">azureuser@resolve-vm</span>:<span class="g-blue">~</span>$ gh run watch 4471
+<span class="g-cyan">*</span> build          in_progress  1m14s
+<span class="g-green">✓</span> lint           success      0m22s</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="new-btn">+ New workspace</button>
+      <button class="new-btn remote">+ Connect machine</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="tabstrip">
+      <div class="dv-tab active remote" style="border-top-color:var(--mux-warn);opacity:.8">
+        <span class="hostpin" style="color:var(--mux-warn);border-color:color-mix(in srgb,var(--mux-warn) 40%,transparent);background:color-mix(in srgb,var(--mux-warn) 12%,transparent)">⟳ resolve-vm</span>amplifier</div>
+      <div class="dv-tab" style="opacity:.5"><span class="hostpin">resolve-vm</span>shell</div>
+      <div class="dv-tab">make test<span class="mark work">✽</span></div>
+    </div>
+    <div class="dropbar">
+      <b>⟳ reconnecting</b> · 4s
+      <button class="retry-btn">retry</button>
+    </div>
+    <div class="term" style="opacity:.45;filter:saturate(.3)">azureuser@resolve-vm:~/amplifier-resolve$ amplifier
+<span class="g-pur">amplifier</span> › goal: "make the integration suite green on main"
+
+  <span class="g-cyan">▸</span> rewrote dot_graph resolver plan
+  <span class="g-cyan">▸</span> 14 files changed, 302 insertions(+), 41 deletions(-)
+
+<span class="g-yel">?</span> Apply patch to internal/resolver/plan.go
+  <span class="g-yel">[y] yes   [n] no   [d] show diff</span>
+
+<span class="g-yel">›</span> </div>
+  </main>
+</div>
+</section>
+
+<!-- ══════════ 6 · NOTES ══════════ -->
+<section class="screen" id="s6">
+<div class="note">
+
+<h3>the rule</h3>
+<div class="callout">
+<b style="color:var(--chrome-text-bright)">Machine is a property, not a group — everywhere except the sidebar.</b><br>
+The sidebar answers <i>where is my stuff</i>, so it groups by host. Home answers <i>what needs me</i>;
+grouping that by machine means scanning five groups to find two things. Home keeps
+<code>Needs input / Running / Completed</code>; machine is a badge — the same treatment
+<code>SessionState.pr</code> already gets in the source: “a property, not a group.”
+</div>
+
+<h3>second rule: mark the exception, not the norm</h3>
+<p>Local is unmarked. No <code>vela0</code> badge on local sessions, no <code>LOCAL</code> tag,
+no “this machine” prefix. Only remote gets purple. A solo user's screen is identical to today's.</p>
+
+<h3>what the yagni pass removed</h3>
+<div class="cutlist">
+  <div><span>cut</span><span>why</span></div>
+  <div><span class="was">Connected-host status rail under the tabs</span><span class="now">The tab pin already names the host. Rail now appears <i>only</i> when the link drops.</span></div>
+  <div><span class="was">rtt · uptime · remote version · pane totals</span><span class="now">Telemetry nobody acts on.</span></div>
+  <div><span class="was">“Panes on a disconnected host keep running…”</span><span class="now">Explanation. The ghosted card is the explanation.</span></div>
+  <div><span class="was">“Anything ssh can reach, muxterm can reach…”</span><span class="now">Marketing copy in a settings pane.</span></div>
+  <div><span class="was">“Parsed from ~/.ssh/config, following Include…”</span><span class="now">The section is titled <code>From ~/.ssh/config</code>.</span></div>
+  <div><span class="was">Behavior section (3 toggles + 3 sublines)</span><span class="now">Reconnecting is just what it does. Add a toggle when someone asks.</span></div>
+  <div><span class="was">Toggle sublines (“Exponential backoff, 1s → 30s”)</span><span class="now">Guarded subtitles. The label was already the whole story.</span></div>
+  <div><span class="was">“not connected”, “LOCAL”, “OFF”, “muxterm found”</span><span class="now">The dot colour and the button verb already say it.</span></div>
+  <div><span class="was">Lede subtitle “2 machines connected · 1 reconnecting”</span><span class="now">The fleet strip is directly below it.</span></div>
+  <div><span class="was">“3 hosts” header badge · footer host/pane counts</span><span class="now">The list underneath is the count.</span></div>
+  <div><span class="was">“Show diff” button</span><span class="now">Approve / Deny / Open. Three is the budget.</span></div>
+  <div><span class="was">“input is queued locally and discarded on reattach”</span><span class="now">Made it behaviour instead: the pane goes read-only. Nothing to explain.</span></div>
+  <div><span class="was">Probe steps: protocol check, latency, binary path</span><span class="now">Invisible successes. Three lines, not five.</span></div>
+  <div><span class="was">“Add machine” chip in Home</span><span class="now">Two entry points is enough: sidebar and settings.</span></div>
+</div>
+
+<h3>one behaviour worth naming</h3>
+<p>The needs-pill on a host group shows <b>only while collapsed</b>. Expanded, the cards
+already carry their own pills — the summary would be saying it twice.</p>
+
+<h3>still open</h3>
+<ul>
+<li><b>Host pins on tabs</b> — on every remote tab (as mocked), or only when more than one host has tabs open?</li>
+<li><b>Fleet strip</b> — keep, or is the sidebar enough? It is the one element I am least sure earns its space.</li>
+<li><b>gpu-01 in the sidebar</b> — should never-connected hosts from ssh config appear there at all,
+or only in settings until you connect once?</li>
+</ul>
+</div>
+</section>
+
+</div>
+
+<script>
+document.querySelectorAll('.harness nav button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('.harness nav button').forEach(x=>x.classList.remove('on'));
+    document.querySelectorAll('.screen').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    document.getElementById(b.dataset.s).classList.add('on');
+  };
+});
+function tg(el){
+  el.classList.toggle('collapsed');
+  const body=el.nextElementSibling;
+  if(body) body.classList.toggle('hidden');
+}
+document.querySelectorAll('.fchip').forEach(c=>c.onclick=()=>c.classList.toggle('on'));
+document.querySelectorAll('.cand').forEach(c=>c.onclick=()=>{
+  document.querySelectorAll('.cand').forEach(x=>x.classList.remove('sel'));c.classList.add('sel');});
+</script>
+</body>
+</html>

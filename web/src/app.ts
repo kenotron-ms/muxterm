@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
+import { cache } from 'lit/directives/cache.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
 import { MonitorX } from 'lucide';
@@ -40,6 +41,7 @@ import { PaneFocusCoordinator } from './lib/pane-focus-coordinator.js';
 import { mintClientRef } from './lib/client-ref.js';
 import {
   SessiondType,
+  SessiondErrorCode,
   type CloseConfirmationRequiredOutcome,
   type CloseOutcome,
   type CloseTarget,
@@ -556,6 +558,67 @@ export class MuxApp extends LitElement {
   private _showHome = false;
 
   /**
+   * A composer dispatch waiting on an attach: where it is going, and what to
+   * run when it gets there. null = none.
+   *
+   * "Start it in workspace X" is necessarily two round-trips on this wire.
+   * One browser connection is attached to exactly one workspace at a time
+   * (internal/server/ws.go), and create-pane is CONNECTION-scoped: the daemon
+   * resolves the target as `c.attached` and ignores any workspaceId on the
+   * message (internal/sessiond/server.go createPane). So a dispatch aimed
+   * anywhere other than the current attachment cannot be sent yet -- it is
+   * parked here until its workspace's composition lands, then spawned.
+   *
+   * The parked `workspaceId` is the whole safety property, and it is why this
+   * is a pair rather than a bare argv. The spawn fires on POSITIVE IDENTITY:
+   * the arriving composition must be for the workspace the user picked. Any
+   * other composition -- a recovery attach after the target was closed, a
+   * bootstrap attach after a reconnect, a switch the user made in between --
+   * simply does not match, so the prompt cannot start somewhere it was never
+   * aimed. Enumerating every way an attach can go wrong and clearing at each
+   * one is the weaker form of this: it holds only until someone adds a path
+   * nobody remembered to clear.
+   *
+   * Identity alone is not enough, though: it validates the FRAME, not the
+   * connection. create-pane is resolved against the daemon's `c.attached` at
+   * the moment it lands, so a composition can match this target while the
+   * connection has already been sent on somewhere else -- queue an attach to
+   * B, then one to C, and B's composition still arrives with the connection
+   * bound to C. So the spawn requires BOTH: the composition is for our
+   * target, and `socket.lastAttachTarget` says the connection is still headed
+   * there. A newer attach intent means the user moved on, and this dispatch
+   * is stale.
+   *
+   * `workspaceId: null` means "the workspace I am about to create"; it is
+   * filled in from the workspace-created reply before that workspace's
+   * composition can arrive. `clientRef` is what makes that reply
+   * attributable -- the create-workspace modal, another tab, and a recovery
+   * all produce workspace-created frames too, and adopting the first one to
+   * arrive would aim this dispatch at a workspace it did not ask for.
+   *
+   * `prompt` is kept verbatim so a drop can hand the words back to the user
+   * rather than making them reconstruct the sentence from an argv array.
+   *
+   * Deliberately NOT @state: it never reaches the template, and a re-render
+   * per dispatch would be noise.
+   */
+  private _pendingDispatch:
+    | { workspaceId: string | null; cmd: string[]; prompt: string; clientRef: string }
+    | null = null;
+
+  /**
+   * A composer dispatch that could not be started, surfaced to the user with
+   * the prompt they typed. null = nothing to report.
+   *
+   * A prompt that silently evaporates is the worst outcome this feature has:
+   * the user pressed enter, home closed, and nothing ever started. muxLog is
+   * console-only and off by default in production, so it cannot be the only
+   * account of a dropped dispatch.
+   */
+  @state()
+  private _dispatchAlert: { message: string; prompt: string } | null = null;
+
+  /**
    * Pane the home view asked for, handed to mux-dock as an input to its
    * workspace restore. -1 = no request, which is the default and leaves the
    * dock's behaviour byte-identical to before this existed.
@@ -757,11 +820,111 @@ export class MuxApp extends LitElement {
           terminalRegistry.setExpectedReplayBytes(paneId, pane.totalSeq ?? 0);
         }
       }
+      // "The workspace I am about to create" becomes a real id here. The reply
+      // to our own create-workspace is the only place that id exists before its
+      // composition arrives, so the parked dispatch adopts it now -- otherwise
+      // the identity check below could never match for the new-workspace route.
+      //
+      // Correlated by clientRef, not by arrival order: the create-workspace
+      // modal, a second tab, and a recovery all produce workspace-created
+      // frames on this same connection, and adopting whichever landed first
+      // would aim the dispatch at a workspace the user never asked for.
+      if (
+        msg.type === SessiondType.WorkspaceCreated &&
+        this._pendingDispatch &&
+        this._pendingDispatch.workspaceId === null &&
+        msg.clientRef === this._pendingDispatch.clientRef &&
+        typeof msg.workspaceId === 'string'
+      ) {
+        this._pendingDispatch.workspaceId = msg.workspaceId;
+      }
+      // The composition IS the "you are now in that workspace" signal, so it is
+      // where a parked composer dispatch (_pendingDispatch) finally spawns --
+      // but only when the composition is for the workspace it was aimed at.
+      //
+      // It also STANDS IN for the one-terminal-per-workspace auto-spawn below,
+      // rather than running alongside it: a freshly created workspace has zero
+      // panes, so both would fire and the user would get a bare $SHELL next to
+      // the harness they actually asked for -- two panes, the wanted one buried.
+      //
       // One-terminal-per-workspace: when a composition is applied and the folded
       // store has zero panes, auto-spawn exactly one. Guarding on the FOLDED
       // getter means an already-overlaid optimistic pane suppresses a double-spawn.
-      if (msg.type === SessiondType.Composition && store.panes.length === 0) {
-        this._createPaneOptimistic();
+      if (msg.type === SessiondType.Composition) {
+        const pending = this._pendingDispatch;
+        const isOurTarget = !!pending && pending.workspaceId === msg.workspaceId;
+        // ...and the connection must still be headed there. A newer attach
+        // (the user picked another workspace, or a recovery fired) means this
+        // composition is a frame we are already leaving behind, and a
+        // create-pane sent now would resolve against the NEWER attachment.
+        const stillHeadedThere =
+          this._socket?.lastAttachTarget === msg.workspaceId;
+        if (isOurTarget && stillHeadedThere) {
+          this._pendingDispatch = null;
+          this._spawnPane(pending.cmd);
+          // `pending` is necessarily non-null wherever isOurTarget is true --
+          // it is the first term of that expression. The redundant-looking
+          // test is TypeScript narrowing the reference, not a reachable case.
+        } else if (isOurTarget && pending) {
+          // Our target, but the connection has moved on. Do not chase it --
+          // the user chose to be elsewhere. Hand the prompt back instead.
+          this._dropPendingDispatch('the workspace was left before it started');
+          if (store.panes.length === 0) this._createPaneOptimistic();
+        } else if (store.panes.length === 0) {
+          this._createPaneOptimistic();
+        }
+      }
+      // The identity check above already prevents a parked dispatch from
+      // spawning anywhere but its own target. These two drop it once that
+      // target is known to be unreachable, so it cannot sit indefinitely
+      // waiting for a composition that is never coming: the attach was
+      // refused, or the workspace was closed out from under it.
+      //
+      // BOTH arms are correlated by workspace id. The relay's sendError
+      // (internal/server/ws.go) populates WorkspaceID from the failing
+      // request, and from DaemonError.WorkspaceID when it carries one -- the
+      // same field WorkspaceController already recovers on. An uncorrelated
+      // drop would let any unrelated failure take the dispatch down with it:
+      // a debounced save-layout is timer-driven and fires with the PREVIOUS
+      // workspace during a switch, so it can fail with unknown-workspace
+      // inside the dispatch's own attach round-trip, with no user action
+      // involved at all.
+      if (
+        this._pendingDispatch !== null &&
+        this._pendingDispatch.workspaceId === msg.workspaceId &&
+        ((msg.type === SessiondType.Error &&
+          msg.code === SessiondErrorCode.UnknownWorkspace) ||
+          msg.type === SessiondType.WorkspaceClosed)
+      ) {
+        this._dropPendingDispatch(
+          msg.type === SessiondType.WorkspaceClosed
+            ? 'the workspace was closed'
+            : 'the workspace could not be reached',
+        );
+      }
+      // The one state where correlation is impossible: still waiting on a
+      // workspace to be created, so there is no id yet to match an error
+      // against -- a rejected create-workspace cannot name the workspace it
+      // failed to make, and the relay's sendError does not echo clientRef the
+      // way workspace-created does. `null === undefined` is false, so the
+      // correlated arm above can never fire for it.
+      //
+      // So this arm is deliberately broad, and the trade is deliberate too.
+      // Being too eager costs a false drop: an unrelated error inside the same
+      // round-trip ends a dispatch that would have worked, and the user is
+      // told, with their prompt handed back. Being too narrow costs a dispatch
+      // that waits forever for a composition that is never coming, silently.
+      // A recoverable wrong answer beats an unrecoverable silent one.
+      //
+      // It cannot over-drop beyond that window: once the id has been adopted
+      // from workspace-created, the dispatch has left the null state and this
+      // arm stops applying to it.
+      if (
+        this._pendingDispatch !== null &&
+        this._pendingDispatch.workspaceId === null &&
+        msg.type === SessiondType.Error
+      ) {
+        this._dropPendingDispatch('the workspace could not be created');
       }
       // Server confirmed the workspace — clear loading state and close modal.
       if (msg.type === SessiondType.WorkspaceCreated && this._creatingWorkspace) {
@@ -783,6 +946,10 @@ export class MuxApp extends LitElement {
       this._showReconnectOverlay = true;
       this._reconnectMessage = 'Connection lost. Reconnecting...';
       this._creatingWorkspace = false;
+      // The attach this dispatch was waiting on is gone. Reconnect replays its
+      // own bootstrap attach; letting the argv survive would spawn the prompt
+      // into whatever that lands on, minutes later and unasked.
+      this._dropPendingDispatch('the connection was lost');
       const interruptedTargets = new Map<string, CloseTarget>();
       for (const [key, request] of this._closeRequests) {
         interruptedTargets.set(key, request.target);
@@ -1045,7 +1212,18 @@ export class MuxApp extends LitElement {
                   @layout-save="${this._onLayoutSave}"
                 ></mux-dock>
               `}
-          ${this._showHome
+          <!-- cache(): home is TOGGLED, not created and destroyed. A bare
+               ternary swaps <mux-home> out of the DOM, which destroys the
+               element and every @state on it -- including the half-typed
+               prompt in the composer, the workspace it was aimed at, and the
+               harness picked for it. Leaving to answer a pane and coming back
+               to an empty box is a data-loss bug, not a re-render. cache()
+               parks the same instance in a fragment (disconnectedCallback
+               still fires, so nothing leaks a live listener) and re-inserts it
+               on the way back with its draft intact. Still lazy: nothing is
+               built until home is opened the first time. -->
+          ${cache(
+            this._showHome
             ? html`
                 <!-- Covers .main-pane as an opaque absolute overlay. The dock
                      underneath is NEVER unmounted: unmounting would risk
@@ -1068,12 +1246,28 @@ export class MuxApp extends LitElement {
                   @home-dismiss="${this._onHomeHide}"
                 ></mux-home>
               `
-            : ''}
+            : '',
+          )}
         </div>
 
       </div>
 
       <div class="close-alert-stack" aria-live="polite">
+        ${this._dispatchAlert
+          ? html`
+              <div class="close-alert" role="alert">
+                <span>${this._dispatchAlert.message} Your prompt:
+                  "${this._dispatchAlert.prompt}"</span>
+                <button
+                  type="button"
+                  aria-label="Dismiss session start error"
+                  @click="${() => {
+                    this._dispatchAlert = null;
+                  }}"
+                >Dismiss</button>
+              </div>
+            `
+          : ''}
         ${[...this._closeAlerts.entries()].map(
           ([key, alert]) => html`
             <div class="close-alert" role="alert">
@@ -1269,6 +1463,20 @@ export class MuxApp extends LitElement {
    * by exact identity (clientRef match) and replaces the temp with the real id.
    */
   private _createPaneOptimistic = (): void => {
+    // Wrapped, not aliased: this is bound as a DOM event handler
+    // (@pane-create), which would otherwise pass the Event in as `cmd`.
+    this._spawnPane();
+  };
+
+  /**
+   * The body of the above, with the pane's argv as a parameter.
+   *
+   * `cmd` undefined => the daemon's default $SHELL (protocol.go "cmd"). A
+   * composer dispatch passes harnessArgv() instead, so the pane RUNS the agent
+   * with the prompt as an argv element rather than opening a shell and typing
+   * at it.
+   */
+  private _spawnPane(cmd?: string[]): void {
     const ref = mintClientRef();
     const tempId = _nextTempPaneId--;
     store.mutate({
@@ -1277,8 +1485,8 @@ export class MuxApp extends LitElement {
       optimistic: (draft) => draft.panes.push({ paneId: tempId, cols: 0, rows: 0, clientRef: ref }),
       settled: (base) => base.panes.some((p) => p.clientRef === ref),
     });
-    this._socket?.createPane(undefined, ref);
-  };
+    this._socket?.createPane(cmd, ref);
+  }
 
   /** Forward a layout-command from the server (via window CustomEvent) to the dock. */
   private _onLayoutCommand = (e: Event): void => {
@@ -1695,18 +1903,100 @@ export class MuxApp extends LitElement {
       harness?: HarnessName;
     };
     if (!d?.prompt) return;
-    const ref = mintClientRef();
-    const tempId = _nextTempPaneId--;
-    store.mutate({
-      workspaceId: ref,
-      kind: 'create-pane',
-      optimistic: (draft) =>
-        draft.panes.push({ paneId: tempId, cols: 0, rows: 0, clientRef: ref }),
-      settled: (base) => base.panes.some((p) => p.clientRef === ref),
-    });
-    this._socket?.createPane(harnessArgv(d.harness ?? 'amplifier', d.prompt), ref);
+    const cmd = harnessArgv(d.harness ?? 'amplifier', d.prompt);
+
+    // Nothing can be arranged over a socket that is not open: createWorkspace
+    // and attach would both be dropped on the floor, and a dispatch parked
+    // behind them would wait for a reply to a question never asked -- then
+    // adopt the next unrelated workspace-created that came along. Say so and
+    // keep the composer open with the words still in it.
+    if (!this._socket?.connected) {
+      e.preventDefault(); // composer keeps the draft; see mux-home _submit
+      this._dispatchAlert = {
+        message: 'Not connected, so that session could not be started.',
+        prompt: d.prompt,
+      };
+      return;
+    }
+    // A dispatch already waiting is about to lose its only reference. Say so
+    // before overwriting it: reopening home and sending a second prompt while
+    // the first is still mid-attach is an ordinary thing to do, and the first
+    // one disappearing without a word is the exact failure _dropPendingDispatch
+    // exists to prevent.
+    this._dropPendingDispatch('another session was started before it arrived');
     this._showHome = false;
+
+    // The composer's `workspaceId` is a DESTINATION, and create-pane cannot
+    // carry one -- the daemon spawns into whatever this connection is attached
+    // to. Sending create-pane straight out therefore ignores the dropdown
+    // entirely: "New workspace" silently became "another pane in whatever
+    // workspace happened to be open". Each destination gets its own route.
+
+    // "New workspace" (the composer's default, value ""). WorkspaceController
+    // attaches on workspace-created, so the argv only has to survive until
+    // that workspace's composition arrives.
+    if (d.workspaceId === null) {
+      const ref = mintClientRef();
+      this._pendingDispatch = { workspaceId: null, cmd, prompt: d.prompt, clientRef: ref };
+      // The connected check above is a moment earlier than this send, and the
+      // socket can close in between. Park on the send actually happening, not
+      // on it having been possible a moment ago.
+      if (!this._socket.createWorkspace(undefined, ref)) {
+        this._dropPendingDispatch('the connection was lost before the request went out');
+      }
+      return;
+    }
+
+    // Spawn straight away ONLY when the connection is provably already there:
+    // confirmed by the store AND not on its way anywhere else. store.attached
+    // alone is the last CONFIRMED attach, so it still names the old workspace
+    // while an attach is in flight -- and WorkspaceController fires those on
+    // its own, on recovery and on workspace-created, announced by no user
+    // action. Trusting the store alone would spawn into whatever the
+    // connection had been re-pointed at.
+    if (
+      d.workspaceId === store.attached &&
+      this._socket.lastAttachTarget === d.workspaceId
+    ) {
+      this._spawnPane(cmd);
+      return;
+    }
+
+    // Otherwise: go there explicitly, spawn on arrival. This covers both a
+    // different workspace and the case above's inverse -- nominally "here",
+    // but with the connection mid-flight elsewhere, where a re-attach is what
+    // makes "here" true again.
+    // Switching attachment invalidates any live dictation target, same as
+    // _onWorkspaceSelected.
+    this._pendingDispatch = {
+      workspaceId: d.workspaceId,
+      cmd,
+      prompt: d.prompt,
+      clientRef: mintClientRef(),
+    };
+    voiceInputController.invalidateIfActive();
+    this._socket.attachWithBreakpoint(d.workspaceId, currentLayoutMode());
   };
+
+  /**
+   * Give up on a parked dispatch and tell the user, with their words.
+   *
+   * Every path that abandons a dispatch goes through here so that none of
+   * them can be the silent one.
+   */
+  private _dropPendingDispatch(reason: string): void {
+    const pending = this._pendingDispatch;
+    if (!pending) return;
+    this._pendingDispatch = null;
+    muxLog('home dispatch', `dropped: ${reason}`, {
+      target: pending.workspaceId,
+      cmd: pending.cmd,
+    });
+    this._dispatchAlert = {
+      message: `That session did not start because ${reason}.`,
+      prompt: pending.prompt,
+    };
+  }
 
   private _onHomeOpen = (e: Event): void => {
     const d = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;

@@ -13,6 +13,12 @@ import (
 // peerAllowed enforces an SO_PEERCRED uid check using only the standard library
 // syscall package (no golang.org/x/sys). It accepts a connection only when the
 // peer's uid matches this process's uid, rejecting on any error.
+//
+// Note the first rejection below: anything that is not a *net.UnixConn fails
+// here, which makes this the reason Server.Serve is only correct with a Unix
+// listener today. Callers adding another listener type must replace this with a
+// per-listener policy rather than widening the type assertion -- SO_PEERCRED
+// answers a question a network peer simply cannot be asked.
 func (s *Server) peerAllowed(nc net.Conn) bool {
 	uc, ok := nc.(*net.UnixConn)
 	if !ok {
