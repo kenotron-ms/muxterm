@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"runtime"
 	"text/template"
+
+	"github.com/kenotron-ms/muxterm/internal/config"
 )
 
 var systemdTemplate = template.Must(template.New("systemd").Parse(`[Unit]
@@ -14,7 +16,13 @@ Wants=muxterm-sessiond.service
 
 [Service]
 Type=simple
-ExecStart={{.BinaryPath}} serve --addr {{.Addr}} --secret {{.Secret}}
+# No policy on this line, deliberately. The listen address, public origin,
+# and reverse-proxy mode live in muxterm's config file, because
+# "muxterm install" is the documented upgrade command and rewrites this
+# file wholesale on every run -- anything configured here is discarded the
+# next time the operator upgrades. Everything else in this unit IS
+# mechanism and belongs here.
+ExecStart={{.BinaryPath}} serve
 Restart=on-failure
 RestartSec=5s
 Environment=PATH={{.SafePATH}}
@@ -74,10 +82,6 @@ var launchdTemplate = template.Must(template.New("launchd").Parse(`<?xml version
     <array>
         <string>{{.BinaryPath}}</string>
         <string>serve</string>
-        <string>--addr</string>
-        <string>{{.Addr}}</string>
-        <string>--secret</string>
-        <string>{{.Secret}}</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -122,10 +126,12 @@ func RenderSessiondSystemdUnit(cfg ServiceConfig) (string, error) {
 
 type ServiceConfig struct {
 	BinaryPath string
-	Addr       string
-	Secret     string
-	SafePATH   string
-	Force      bool // stop and overwrite an existing installation
+	// Addr is NOT rendered into the unit or the plist -- see the ExecStart
+	// comment in systemdTemplate. It is carried here only so the installer
+	// can report the address the service will actually use.
+	Addr     string
+	SafePATH string
+	Force    bool // stop and overwrite an existing installation
 }
 
 func DetectPlatform() string {
@@ -134,6 +140,6 @@ func DetectPlatform() string {
 
 func DefaultConfig() ServiceConfig {
 	return ServiceConfig{
-		Addr: "0.0.0.0:8311",
+		Addr: config.DefaultAddr,
 	}
 }

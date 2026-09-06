@@ -6,13 +6,14 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/kenotron-ms/muxterm/internal/config"
 )
 
 func TestRenderSystemdUnit_ContainsBinaryPath(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "abc123",
 		SafePATH:   "/usr/bin:/usr/local/bin",
 	}
 	out, err := RenderSystemdUnit(cfg)
@@ -28,15 +29,25 @@ func TestRenderSystemdUnit_ContainsServeCommand(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "0.0.0.0:8311",
-		Secret:     "secret123",
 		SafePATH:   "/usr/bin",
 	}
 	out, err := RenderSystemdUnit(cfg)
 	if err != nil {
 		t.Fatalf("RenderSystemdUnit() error: %v", err)
 	}
-	if !contains(out, "muxterm serve --addr 0.0.0.0:8311 --secret secret123") {
-		t.Errorf("output missing serve command with flags, got:\n%s", out)
+	// The unit carries MECHANISM only: a bare `serve`. The listen address is
+	// policy and lives in muxterm's config file, because `muxterm install` is
+	// the documented upgrade command and rewrites this unit wholesale on every
+	// run -- anything baked into ExecStart is discarded on the next upgrade.
+	// cfg.Addr above is carried only so the installer can report where the
+	// service will listen; it is deliberately not rendered.
+	if !contains(out, "ExecStart=/usr/local/bin/muxterm serve\n") {
+		t.Errorf("output missing bare 'serve' ExecStart, got:\n%s", out)
+	}
+	for _, unwanted := range []string{"--addr", "--secret", "0.0.0.0:8311"} {
+		if contains(out, unwanted) {
+			t.Errorf("ExecStart must not carry %q, got:\n%s", unwanted, out)
+		}
 	}
 }
 
@@ -44,7 +55,6 @@ func TestRenderSystemdUnit_ContainsPATH(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "s",
 		SafePATH:   "/usr/bin:/usr/local/bin:/home/user/.local/bin",
 	}
 	out, err := RenderSystemdUnit(cfg)
@@ -60,7 +70,6 @@ func TestRenderSystemdUnit_HasRequiredSections(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "s",
 		SafePATH:   "/usr/bin",
 	}
 	out, err := RenderSystemdUnit(cfg)
@@ -97,8 +106,8 @@ func TestDetectPlatform_ReturnsCurrentOS(t *testing.T) {
 
 func TestServiceConfig_Defaults(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Addr != "localhost:8080" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "localhost:8080")
+	if cfg.Addr != config.DefaultAddr {
+		t.Errorf("Addr = %q, want %q", cfg.Addr, config.DefaultAddr)
 	}
 	if cfg.BinaryPath != "" {
 		t.Errorf("BinaryPath = %q, want empty (resolved at install time)", cfg.BinaryPath)
@@ -109,7 +118,6 @@ func TestRenderLaunchdPlist_ContainsBinaryPath(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "abc123",
 		SafePATH:   "/usr/bin:/usr/local/bin",
 	}
 	out, err := RenderLaunchdPlist(cfg)
@@ -125,7 +133,6 @@ func TestRenderLaunchdPlist_ContainsLabel(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "abc123",
 		SafePATH:   "/usr/bin:/usr/local/bin",
 	}
 	out, err := RenderLaunchdPlist(cfg)
@@ -141,22 +148,25 @@ func TestRenderLaunchdPlist_ContainsServeArgs(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "0.0.0.0:8311",
-		Secret:     "secret123",
 		SafePATH:   "/usr/bin",
 	}
 	out, err := RenderLaunchdPlist(cfg)
 	if err != nil {
 		t.Fatalf("RenderLaunchdPlist() error: %v", err)
 	}
-	for _, want := range []string{
-		"<string>serve</string>",
+	// Same mechanism/policy split as the systemd unit: ProgramArguments is
+	// {BinaryPath, "serve"} and nothing else. Address and credentials are
+	// not arguments.
+	if !contains(out, "<string>serve</string>") {
+		t.Errorf("output missing <string>serve</string>, got:\n%s", out)
+	}
+	for _, unwanted := range []string{
 		"<string>--addr</string>",
 		"<string>0.0.0.0:8311</string>",
 		"<string>--secret</string>",
-		"<string>secret123</string>",
 	} {
-		if !contains(out, want) {
-			t.Errorf("output missing %s", want)
+		if contains(out, unwanted) {
+			t.Errorf("ProgramArguments must not carry %s, got:\n%s", unwanted, out)
 		}
 	}
 }
@@ -165,7 +175,6 @@ func TestRenderLaunchdPlist_ContainsPATH(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "s",
 		SafePATH:   "/usr/bin:/usr/local/bin:/home/user/.local/bin",
 	}
 	out, err := RenderLaunchdPlist(cfg)
@@ -181,7 +190,6 @@ func TestRenderLaunchdPlist_IsValidXML(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "abc123",
 		SafePATH:   "/usr/bin:/usr/local/bin",
 	}
 	out, err := RenderLaunchdPlist(cfg)
@@ -216,7 +224,6 @@ func TestRenderSessiondSystemdUnit_ContainsSessiondCommand(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "abc123",
 		SafePATH:   "/usr/bin:/usr/local/bin",
 	}
 	out, err := RenderSessiondSystemdUnit(cfg)
@@ -240,7 +247,6 @@ func TestRenderSessiondSystemdUnit_ContainsPATH(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "s",
 		SafePATH:   "/usr/bin:/usr/local/bin",
 	}
 	out, err := RenderSessiondSystemdUnit(cfg)
@@ -256,7 +262,6 @@ func TestRenderSystemdUnit_WebUnitDependsOnSessiond(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "s",
 		SafePATH:   "/usr/bin",
 	}
 	out, err := RenderSystemdUnit(cfg)

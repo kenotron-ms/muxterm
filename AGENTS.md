@@ -95,6 +95,29 @@ to the user's environment:
 Reach for a DTU when the thing under test genuinely requires a live server, a browser, a
 real service manager, or a network hop.
 
+### ⛔ `go test ./cmd/muxterm/...` is destructive on a machine with muxterm installed
+
+Some tests in `cmd/muxterm/main_test.go` call `runInstall()` and `runUninstall()`
+directly, against **real** paths — not a temp dir. `runUninstall` runs
+`systemctl --user disable --now` on both `muxterm.service` and
+`muxterm-sessiond.service` and then deletes the unit files. Killing sessiond
+destroys every live pane on the machine, including the session running the tests.
+
+Before running Go tests on this host, scope them:
+
+```bash
+go test ./internal/...                       # always safe
+go test ./cmd/muxterm/... -run 'TestParseArgs_'   # scoped, safe
+```
+
+The destructive test is guarded behind
+`MUXTERM_ALLOW_DESTRUCTIVE_SERVICE_TESTS=1`. Set that variable **only inside a
+DTU container**, never on this host. If you add a test that installs, uninstalls,
+or restarts a service, put it behind the same guard.
+
+Note also that `go build ./...` does **not** compile `_test.go` files, so a change
+that breaks a test literal builds green. Run `go vet ./...` to catch it.
+
 ## Architectural invariants
 
 ### Terminal query ownership (CSI 6n, OSC 11;?)

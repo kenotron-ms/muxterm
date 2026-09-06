@@ -41,7 +41,6 @@ func TestInstall_Linux_WritesUnitFile(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "test-secret",
 		SafePATH:   "/usr/bin:/usr/local/bin",
 	}
 	cmd := &mockCommander{}
@@ -59,8 +58,16 @@ func TestInstall_Linux_WritesUnitFile(t *testing.T) {
 	if !strings.Contains(content, "/usr/local/bin/muxterm") {
 		t.Error("unit file missing binary path")
 	}
-	if !strings.Contains(content, "test-secret") {
-		t.Error("unit file missing secret")
+	// The written unit is mechanism only: a bare `serve`, no --addr and no
+	// credential. Both are policy and live in muxterm's config file, which
+	// this installer does not overwrite on an upgrade.
+	if !strings.Contains(content, "ExecStart=/usr/local/bin/muxterm serve\n") {
+		t.Errorf("unit file missing bare 'serve' ExecStart, got:\n%s", content)
+	}
+	for _, unwanted := range []string{"--addr", "--secret", "localhost:8080"} {
+		if strings.Contains(content, unwanted) {
+			t.Errorf("unit file must not carry %q, got:\n%s", unwanted, content)
+		}
 	}
 }
 
@@ -71,7 +78,6 @@ func TestInstall_Linux_RunsSystemctlEnable(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "s",
 		SafePATH:   "/usr/bin",
 	}
 	cmd := &mockCommander{}
@@ -113,7 +119,6 @@ func TestInstall_Linux_WritesBothUnitFiles(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "test-secret",
 		SafePATH:   "/usr/bin:/usr/local/bin",
 	}
 	cmd := &mockCommander{}
@@ -146,7 +151,6 @@ func TestInstall_Darwin_WritesPlistFile(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "darwin-secret",
 		SafePATH:   "/usr/bin:/usr/local/bin",
 	}
 	cmd := &mockCommander{}
@@ -164,8 +168,14 @@ func TestInstall_Darwin_WritesPlistFile(t *testing.T) {
 	if !strings.Contains(content, "/usr/local/bin/muxterm") {
 		t.Error("plist file missing binary path")
 	}
-	if !strings.Contains(content, "darwin-secret") {
-		t.Error("plist file missing secret")
+	// Same as the systemd unit: ProgramArguments is {BinaryPath, "serve"}.
+	if !strings.Contains(content, "<string>serve</string>") {
+		t.Errorf("plist file missing <string>serve</string>, got:\n%s", content)
+	}
+	for _, unwanted := range []string{"--addr", "--secret", "localhost:8080"} {
+		if strings.Contains(content, unwanted) {
+			t.Errorf("plist file must not carry %q, got:\n%s", unwanted, content)
+		}
 	}
 }
 
@@ -175,7 +185,6 @@ func TestInstall_Darwin_RunsLaunchctl(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "s",
 		SafePATH:   "/usr/bin",
 	}
 	cmd := &mockCommander{}
@@ -206,7 +215,6 @@ func TestInstall_Linux_CreatesMissingDirs(t *testing.T) {
 	cfg := ServiceConfig{
 		BinaryPath: "/usr/local/bin/muxterm",
 		Addr:       "localhost:8080",
-		Secret:     "s",
 		SafePATH:   "/usr/bin",
 	}
 	cmd := &mockCommander{}

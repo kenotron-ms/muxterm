@@ -41,17 +41,31 @@ import (
 // is what makes a bare `muxterm install` upgrade non-destructive to an
 // already-configured origin.
 func writeInstallServerConfig(cli Config, path string) (config.ServerConfig, bool, error) {
-	if cli.PublicOrigin == "" && !cli.BehindReverseProxy {
-		return config.ServerConfig{}, false, nil
-	}
-
-	// config.Load never errors: a missing file yields Defaults(), and a
-	// malformed one yields Defaults() plus a logged warning (visible on
-	// stderr right above this install's output). The err is checked anyway
-	// so a future non-nil return cannot silently clobber the file.
-	cfg, err := config.Load(path)
+	// Read first regardless: even with no flags supplied the caller needs
+	// to know the CONFIGURED addr, so it can tell whether the installed
+	// unit is carrying one the config file does not account for.
+	//
+	// LoadStrictServer, not Load: a malformed file degrades every section
+	// to defaults, and writing that back would silently replace the
+	// operator's whole config -- theme, keybindings, and the [server]
+	// values this function exists to preserve -- with built-in defaults,
+	// during an upgrade they ran for unrelated reasons.
+	cfg, malformed, err := config.LoadStrictServer(path)
 	if err != nil {
 		return config.ServerConfig{}, false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if malformed {
+		return config.ServerConfig{}, false, fmt.Errorf(
+			"%s could not be parsed. Installing would overwrite it with built-in "+
+				"defaults and lose every setting in it. Fix the file, or move it aside "+
+				"and re-run", path)
+	}
+
+	if cli.Addr == "" && cli.PublicOrigin == "" && !cli.BehindReverseProxy {
+		// Nothing to persist. Report the CONFIGURED section so the caller
+		// can reason about it, but write nothing: a bare install must
+		// leave an already-configured deployment exactly as it found it.
+		return cfg.Server, false, nil
 	}
 
 	// Same one-way precedence as resolveServerConfig: a supplied flag wins
@@ -59,6 +73,12 @@ func writeInstallServerConfig(cli Config, path string) (config.ServerConfig, boo
 	// --behind-reverse-proxy can only turn the setting on; to turn it off,
 	// edit the config file.
 	next := cfg.Server
+	if cli.Addr != "" {
+		if err := config.ValidateAddr(cli.Addr); err != nil {
+			return config.ServerConfig{}, false, err
+		}
+		next.Addr = cli.Addr
+	}
 	if cli.PublicOrigin != "" {
 		next.PublicOrigin = cli.PublicOrigin
 	}
@@ -75,10 +95,17 @@ func writeInstallServerConfig(cli Config, path string) (config.ServerConfig, boo
 	// written entirely unchecked and only blow up much later, at the startup
 	// where the operator finally flips behind_reverse_proxy = true. Reject a
 	// malformed origin here, at the moment it is typed.
-	check := next
-	check.BehindReverseProxy = true
-	if err := check.Validate(); err != nil {
-		return config.ServerConfig{}, false, err
+	// Only when an origin is actually in play. Forcing the check
+	// unconditionally would demand a public_origin from an operator who
+	// supplied nothing but --addr -- and --addr alone is exactly what the
+	// unit-migration message tells them to run, so that combination has to
+	// work on a host that has never configured an origin.
+	if next.PublicOrigin != "" || next.BehindReverseProxy {
+		check := next
+		check.BehindReverseProxy = true
+		if err := check.Validate(); err != nil {
+			return config.ServerConfig{}, false, err
+		}
 	}
 
 	// Nothing above this line has written anything: an invalid origin fails

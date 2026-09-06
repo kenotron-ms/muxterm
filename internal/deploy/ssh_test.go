@@ -110,18 +110,31 @@ func TestDeploy_SCPFailure(t *testing.T) {
 	}
 }
 
-func TestSystemdUnit_ContainsSecret(t *testing.T) {
-	secret := "abc123deadbeef"
+// TestSystemdUnit_CarriesAddrNotSecret is the regression guard for the split
+// this unit deliberately makes: --addr STAYS in the deploy unit, no credential
+// ever goes in.
+//
+// --addr stays because a deploy target has no muxterm config file at all --
+// unlike `muxterm install`, which persists the address to the config file and
+// renders a bare `serve`. This unit is regenerated wholesale on every deploy
+// and nobody hand-edits it, so there is nothing here for an ExecStart value to
+// silently discard. Without --addr the remote would fall back to a loopback
+// default and be unreachable at the URL this command prints.
+//
+// The credential is gone because muxterm authenticates browser sessions
+// through its own login flow; the value this unit used to embed was generated,
+// written, and read by nothing.
+func TestSystemdUnit_CarriesAddrNotSecret(t *testing.T) {
 	addr := "0.0.0.0:8080"
-	unit := systemdUnit(secret, addr)
+	unit := systemdUnit(addr)
 
-	if !strings.Contains(unit, secret) {
-		t.Errorf("unit does not contain secret %q", secret)
-	}
 	if !strings.Contains(unit, addr) {
-		t.Errorf("unit does not contain addr %q", addr)
+		t.Errorf("unit does not contain addr %q, got:\n%s", addr, unit)
 	}
 	if !strings.Contains(unit, "muxterm serve") {
-		t.Errorf("unit does not contain 'muxterm serve'")
+		t.Errorf("unit does not contain 'muxterm serve', got:\n%s", unit)
+	}
+	if strings.Contains(unit, "--secret") {
+		t.Errorf("unit must not carry a credential in ExecStart, got:\n%s", unit)
 	}
 }
