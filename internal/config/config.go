@@ -30,22 +30,25 @@ type Config struct {
 	Restore   RestoreConfig   `toml:"restore"    json:"restore"`
 }
 
-// ServerConfig holds deployment-topology settings that decide how muxterm
-// derives its own public-facing URLs and whether the loopback auth bypass
-// applies. Both fields are explicit and opt-in, and are NEVER derived from
-// request headers (X-Forwarded-Host, X-Forwarded-Proto, or anything else):
-// headers are spoofable, and the design rejects trusting them for any
-// trust-relevant value.
-//
-// These fields are deliberately absent from Merge(), which backs the
-// browser-facing PATCH /api/config route — a deployment-topology and
-// security setting must not be mutable from a web request.
 // DefaultAddr is the ONE canonical listen address for muxterm's serve layer.
 // Loopback-only by default: muxterm hands out interactive shells, so a
 // wildcard bind is an opt-in decision an operator makes deliberately, never
 // a default anyone backs into. Every default-addr site derives from here.
 const DefaultAddr = "127.0.0.1:8311"
 
+// ServerConfig holds deployment-topology settings: where muxterm listens,
+// where it is publicly reachable, and whether the loopback auth bypass
+// applies. These are POLICY and live in the config file rather than in the
+// generated service unit, which `muxterm install` rewrites wholesale on
+// every run.
+//
+// They are NEVER derived from request headers (X-Forwarded-Host,
+// X-Forwarded-Proto, or anything else): headers are spoofable, and the
+// design rejects trusting them for any trust-relevant value.
+//
+// These fields are deliberately absent from Merge(), which backs the
+// browser-facing PATCH /api/config route -- a deployment-topology and
+// security setting must not be mutable from a web request.
 type ServerConfig struct {
 	// Addr is the address the serve layer listens on, e.g.
 	// "127.0.0.1:8311". This is POLICY and lives here rather than in the
@@ -421,6 +424,17 @@ func Write(path string, cfg Config) error {
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("config.Write: rename: %w", err)
+	}
+	// Atomicity and durability are separate properties. The rename above
+	// gives readers all-or-nothing, but the directory entry itself lives in
+	// the page cache until the OS flushes it -- so a crash here can leave a
+	// file whose blocks are on disk and whose name reverted. Syncing the
+	// parent closes that gap. Best-effort: the write has already succeeded
+	// by every observable measure, so a sync failure must not report one
+	// that did not happen.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close() //nolint:errcheck
 	}
 	return nil
 }

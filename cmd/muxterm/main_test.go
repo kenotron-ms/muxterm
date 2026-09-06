@@ -127,18 +127,17 @@ func TestRunInstall_ReportsConfiguredAddr(t *testing.T) {
 	// --addr is therefore persisted, and comes back out for the report.
 	path := filepath.Join(t.TempDir(), "config.toml")
 
-	// NOTE: --public-origin/--behind-reverse-proxy are supplied here only to
-	// get past writeInstallServerConfig's "validate as if behind_reverse_proxy
-	// were on" gate. `--addr` ALONE currently fails that gate with
-	// "behind_reverse_proxy is set but public_origin is empty", because
-	// cli.Addr != "" now reaches the write path that only an origin or the
-	// proxy flag used to reach. That is a defect in the install path, not
-	// something this test should bless, so it is left uncovered here.
+	// --addr ALONE, on a host with no configured origin. This is the exact
+	// form the unit-migration message tells an operator to run, so it has to
+	// work without a public_origin: writeInstallServerConfig gates its
+	// "validate as if behind_reverse_proxy were on" check on an origin
+	// actually being in play. An earlier revision ran that check
+	// unconditionally and failed here with "behind_reverse_proxy is set but
+	// public_origin is empty" -- which would have made the recovery command
+	// unusable on precisely the hosts that need it.
 	srvCfg, wrote, err := writeInstallServerConfig(Config{
-		Mode:               "install",
-		Addr:               "127.0.0.1:8399",
-		PublicOrigin:       "https://muxterm.example.com",
-		BehindReverseProxy: true,
+		Mode: "install",
+		Addr: "127.0.0.1:8399",
 	}, path)
 	if err != nil {
 		t.Fatalf("writeInstallServerConfig: %v", err)
