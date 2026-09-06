@@ -11,6 +11,8 @@ node_modules/
 web/dist/
 # Standalone home-view preview build (vite.demo.config.ts)
 web/dist-demo/
+# Mobile-navigation mockup build (vite.mobile-demo.config.ts)
+web/dist-mobile-demo/
 # web/package-lock.json — committed for reproducible CI builds
 
 # IDE/Editor

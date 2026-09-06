@@ -1,0 +1,1353 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover so env(safe-area-inset-*) is non-zero on a notched
+         phone (that is the whole point of state D9), and
+         interactive-widget=resizes-content so the layout viewport shrinks when
+         the on-screen keyboard opens instead of the keyboard sitting on top of
+         a sticky composer. Both are D8/D9 of the design, tried here first. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <title>muxterm · mobile navigation (mockup)</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <style>
+      /* The 5x8 bitmap preview font, declared HERE rather than injected from
+         TypeScript, and with a RELATIVE url.
+
+         Here, because the rule has to exist before <mux-home> upgrades: the
+         component probes document.fonts on connect, and a rule that lands a
+         tick later makes the probe report "unusable" and silently drops every
+         tile to the text fallback. The app has no such race — app.ts injects
+         at module top level, before its own element is defined.
+
+         Relative, because the demo is served as plain files from wherever it
+         is put, possibly under a tunnel path prefix, where an absolute
+         /fonts/... would 404.
+
+         Family name must match PREVIEW_FONT_FAMILY in src/lib/fonts.ts. If it
+         ever stops matching, tiles degrade to readable text rather than
+         breaking. */
+      @font-face {
+        font-family: 'Spleen5x8';
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+        src: url('./fonts/Spleen5x8.woff2') format('woff2');
+      }
+
+      /* ═══════════════════════════════════════════════════════════════════
+         TOKENS
+
+         The --chrome-* and --mux-* tokens are applied to <html> at boot by
+         applyThemeTokens() / applyChromeTokens(), exactly as the app does it.
+         Nothing below invents a colour; there is not one hex literal in this
+         stylesheet.
+
+         The --t-* / --s-* / --ink-* / --r-* scale is mux-home's own, copied
+         name-for-name and value-for-value from mux-home.ts (its :host token
+         block). The mockup borrows the house's scale instead of minting a
+         second one, so a mock surface and the real <mux-home> mounted next to
+         it are measured with the same ruler.
+
+         mux-home re-declares all of these on its own :host, so declaring them
+         at :root here cannot leak into or override the component.
+         ═══════════════════════════════════════════════════════════════════ */
+      :root {
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+        --t-meta: 10px;
+        --t-ui: 12px;
+        --t-name: 13px;
+        --t-lede: 18px;
+        /* 16px is iOS Safari's focus-zoom threshold: below it, tapping a field
+           zooms the whole page. Load-bearing on the <select> in state 4. */
+        --t-input: 16px;
+
+        --lh-tight: 1.25;
+        --lh-body: 1.5;
+
+        --s-1: 2px;
+        --s-2: 4px;
+        --s-3: 6px;
+        --s-4: 8px;
+        --s-5: 12px;
+        --s-6: 16px;
+        --s-7: 24px;
+
+        --r-chip: 3px;
+        --r-ctl: 5px;
+        --r-card: 8px;
+
+        --ink-1: var(--chrome-text-bright);
+        --ink-2: color-mix(in srgb, var(--chrome-text-bright) 78%, var(--chrome-text-dim));
+        --ink-3: color-mix(in srgb, var(--chrome-text-dim) 55%, var(--chrome-text-bright));
+
+        --surface: var(--chrome-bar);
+        --edge: color-mix(in srgb, var(--chrome-border) 40%, var(--chrome-text-dim));
+
+        --need: var(--mux-warn);
+        --work: var(--mux-ansi-6);
+        --ok: var(--mux-ok);
+        --fail: var(--mux-error);
+        --autonomous: var(--chrome-driver-accent);
+
+        --dur: 120ms;
+
+        /* Mockup-local geometry, all of it quoted from the design doc. */
+        --nav-h: 44px; /* nav bar / icon button floor */
+        --row-h: 56px; /* list row: scanned and stabbed at, not aimed at */
+        --scrim: color-mix(in srgb, var(--chrome-body) 62%, transparent);
+      }
+
+      /* Someone who asked for less motion asked for less motion. Kills the
+         drawer and sheet slide; they still open and close, instantly. */
+      @media (prefers-reduced-motion: reduce) {
+        :root {
+          --dur: 0ms;
+        }
+        .drawer,
+        .sheet,
+        .term {
+          transition: none !important;
+        }
+      }
+
+      *,
+      *::before,
+      *::after {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        /* System colours, not hex, for the few milliseconds before boot()
+           applies the real tokens. */
+        background: var(--chrome-body, Canvas);
+        color: var(--chrome-text-bright, CanvasText);
+        font-family: system-ui, -apple-system, sans-serif;
+        -webkit-text-size-adjust: 100%;
+      }
+
+      /* Plain-DOM icons, so there is no shadow root to carry this rule for
+         them. Every lucide SVG in the mockup is inline in the light DOM and
+         picks this up. */
+      .lucide-icon {
+        display: inline-block;
+        vertical-align: middle;
+        flex-shrink: 0;
+      }
+
+      button {
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 0;
+        cursor: pointer;
+      }
+
+      /* ══ shell: contact sheet (desktop) ═════════════════════════════════ */
+
+      body.bleed {
+        overflow: hidden;
+      }
+
+      #app.mode-sheet {
+        min-height: 100%;
+        padding-bottom: var(--s-7);
+      }
+
+      .deskbar {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        display: flex;
+        align-items: center;
+        gap: var(--s-5);
+        flex-wrap: wrap;
+        padding: var(--s-4) var(--s-6);
+        background: var(--chrome-bar);
+        border-bottom: 1px solid var(--chrome-border);
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-3);
+      }
+      .deskbar h1 {
+        font-size: var(--t-name);
+        font-weight: 600;
+        color: var(--ink-1);
+        letter-spacing: 0.02em;
+      }
+      .deskbar .tag {
+        color: var(--mux-warn);
+        border: 1px solid var(--mux-warn);
+        border-radius: var(--r-chip);
+        padding: 0 var(--s-2);
+      }
+      .deskbar label {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--s-2);
+      }
+      .deskbar select {
+        font: inherit;
+        background: var(--chrome-body);
+        color: var(--ink-1);
+        border: 1px solid var(--chrome-border);
+        border-radius: var(--r-ctl);
+        padding: var(--s-1) var(--s-3);
+      }
+      .deskbar .grow {
+        margin-left: auto;
+      }
+      .deskbar .inv {
+        color: var(--mux-ok);
+      }
+
+      /* The D7 review instrument. Measured frame width -> chosen column
+         count -> derived terminal columns, for every tile state on the
+         page, live. One glance says whether the whole breakpoint table is
+         behaving; a wrong breakpoint becomes obvious instead of arguable.
+         Every value is read back off the laid-out DOM, never predicted. */
+      .readout {
+        flex-basis: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--s-2) var(--s-4);
+        padding-top: var(--s-3);
+        border-top: 1px dashed var(--chrome-border);
+      }
+      .readout .r {
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.7;
+        color: var(--ink-3);
+        border: 1px solid var(--edge);
+        border-radius: var(--r-chip);
+        padding: 0 var(--s-3);
+      }
+      .readout .r b {
+        color: var(--ink-1);
+        font-weight: 600;
+      }
+      .readout .r i {
+        font-style: normal;
+        color: var(--chrome-accent);
+      }
+      /* A frame whose chosen column count disagrees with the D7 table for
+         its measured width. Never expected to fire; loud if it does. */
+      .readout .r.bad {
+        color: var(--mux-error);
+        border-color: var(--mux-error);
+      }
+
+      .contact {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: center;
+        gap: var(--s-7) var(--s-7);
+        padding: var(--s-7) var(--s-6);
+      }
+      .cell {
+        display: flex;
+        flex-direction: column;
+        gap: var(--s-4);
+        width: 406px; /* 390 screen + 2 x 8px bezel */
+      }
+      .cell figcaption {
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        line-height: var(--lh-body);
+        color: var(--ink-3);
+      }
+      .cell figcaption b {
+        display: block;
+        font-size: var(--t-ui);
+        color: var(--ink-1);
+        margin-bottom: var(--s-1);
+      }
+
+      /* ══ the phone frame ════════════════════════════════════════════════ */
+
+      .phone {
+        /* The bezel is ADDITIVE, not inset. box-sizing: border-box would
+           otherwise make a frame labelled "390x844" hand its screen 374x828,
+           and D7's whole readout is a claim about what a 390px viewport does
+           — a frame that is quietly 16px narrow makes that claim a lie by
+           16px. Same reason the landscape frame has to be genuinely 844:
+           828 falls in the 2-column band and 844 is the 3-column one. */
+        --bezel: 8px;
+        --screen-w: 390px;
+        --screen-h: 844px;
+
+        position: relative;
+        flex: none;
+        width: calc(var(--screen-w) + 2 * var(--bezel));
+        height: calc(var(--screen-h) + 2 * var(--bezel));
+        padding: var(--bezel);
+        border-radius: 44px;
+        background: color-mix(in srgb, var(--chrome-border) 70%, var(--chrome-body));
+        box-shadow:
+          0 0 0 1px var(--chrome-border),
+          0 18px 40px color-mix(in srgb, var(--chrome-body) 70%, transparent);
+      }
+      .phone > .screen {
+        height: 100%;
+        border-radius: 36px;
+      }
+      .notch {
+        position: absolute;
+        top: 8px;
+        left: 50%;
+        translate: -50% 0;
+        width: 118px;
+        height: 26px;
+        border-radius: 0 0 14px 14px;
+        background: color-mix(in srgb, var(--chrome-border) 70%, var(--chrome-body));
+        z-index: 5;
+        pointer-events: none;
+      }
+
+      /* The SAME phone, rotated. 844x390, and the notch travels with the
+         hardware to the short LEFT edge — which is exactly the case D9 is
+         about ("in landscape the drawer currently starts under the notch").
+         State 8 lands on 3 columns because 844 does, so the frame has to be
+         genuinely 844 wide rather than a 390 frame with a caption. */
+      .phone.land {
+        --screen-w: 844px;
+        --screen-h: 390px;
+      }
+      .cell.frame-phone-landscape {
+        width: 860px; /* 844 screen + 2 x 8px bezel */
+      }
+      .phone.land > .notch {
+        top: 50%;
+        left: 8px;
+        translate: 0 -50%;
+        width: 26px;
+        height: 118px;
+        border-radius: 0 14px 14px 0;
+      }
+      /* Rotated insets: the notch is on the left now, and the home
+         indicator with it. */
+      .mode-sheet .phone.land > .screen {
+        --sa-top: 0px;
+        --sa-left: 24px;
+        --sa-bottom: 12px;
+      }
+
+      /* ══ the mock app ═══════════════════════════════════════════════════ */
+
+      .screen {
+        /* D9. Declared exactly once, read by every edge-anchored surface
+           below, and env() is the real value — on a phone this IS the notch
+           and the home indicator.
+
+           The contact sheet overrides these with a notched phone's measured
+           values, because on a desktop browser env() is 0 and a review that
+           cannot SEE the inset cannot tell whether it was honoured. */
+        --sa-top: env(safe-area-inset-top, 0px);
+        --sa-right: env(safe-area-inset-right, 0px);
+        --sa-bottom: env(safe-area-inset-bottom, 0px);
+        --sa-left: env(safe-area-inset-left, 0px);
+
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: var(--chrome-body);
+        color: var(--ink-1);
+        /* Keeps every in-screen z-index a private matter, so the frame's notch
+           can sit above the whole mock app with a single number. */
+        isolation: isolate;
+      }
+      .mode-sheet .screen {
+        --sa-top: 24px;
+        --sa-bottom: 18px;
+      }
+      .mode-bleed .screen {
+        flex: 1;
+        min-height: 0;
+        /* The state switcher FLOATS over the app (it is fixed, translucent and
+           blurred), so the app has to be told the bottom strip is spoken for —
+           otherwise it sits on the home composer, which is the one thing
+           states 5-7 exist to show. Same measurement drives both, so the bar
+           and the reserve cannot drift apart. A phone browser's own bottom
+           chrome behaves exactly like this. */
+        padding-bottom: var(--switcher-h);
+      }
+      #app.mode-bleed {
+        --switcher-h: calc(32px + 2 * var(--s-3) + env(safe-area-inset-bottom, 0px));
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ── nav bar ─────────────────────────────────────────────────────── */
+
+      .navbar {
+        position: relative;
+        z-index: 2;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: var(--s-1);
+        height: calc(var(--nav-h) + var(--sa-top));
+        padding-top: var(--sa-top);
+        padding-left: var(--sa-left);
+        padding-right: var(--sa-right);
+        background: var(--chrome-bar);
+        border-bottom: 1px solid var(--chrome-border);
+      }
+      .nav-btn {
+        position: relative;
+        flex: none;
+        width: var(--nav-h);
+        height: var(--nav-h);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: var(--r-card);
+        color: var(--ink-2);
+      }
+      .nav-btn:hover,
+      .nav-btn:active {
+        background: var(--chrome-hover);
+        color: var(--ink-1);
+      }
+
+      /* D4 — the one piece of genuinely new visual design in the nav.
+         At zero it is ABSENT, never a grey zero (mux-start-card.ts:68). */
+      .needs-badge {
+        position: absolute;
+        top: 3px;
+        right: 1px;
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        line-height: 1.3;
+        color: var(--need);
+        background: color-mix(in srgb, var(--need) 16%, var(--chrome-bar));
+        border: 1px solid color-mix(in srgb, var(--need) 45%, transparent);
+        border-radius: var(--r-chip);
+        padding: 0 var(--s-1);
+        pointer-events: none;
+      }
+
+      .crumb {
+        flex: 1;
+        min-width: 0;
+        min-height: var(--nav-h);
+        display: flex;
+        align-items: center;
+        gap: var(--s-2); /* DESIGN.md: 4px between the bell dot and its label */
+        padding: 0 var(--s-3);
+        border-radius: var(--r-card);
+        color: var(--chrome-text-bright);
+        font-size: 15px;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+      .crumb:hover,
+      .crumb:active {
+        background: var(--chrome-hover);
+      }
+      .crumb .ws,
+      .crumb .sep,
+      .crumb .caret {
+        flex: none;
+        color: var(--ink-3);
+      }
+      .crumb .bell {
+        flex: none;
+        font-size: 9px;
+        color: var(--mux-bell);
+      }
+      .crumb .pane {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* State 4: the breadcrumb IS a real <select>. */
+      .crumb-wrap {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: var(--s-2);
+        padding-left: var(--s-3);
+        position: relative;
+      }
+      .crumb-wrap > .ws,
+      .crumb-wrap > .sep {
+        flex: none;
+        color: var(--ink-3);
+        font-size: 15px;
+      }
+      .crumb-select {
+        flex: 1;
+        min-width: 0;
+        min-height: var(--nav-h);
+        appearance: none;
+        -webkit-appearance: none;
+        background: transparent;
+        border: 0;
+        color: var(--chrome-text-bright);
+        font-family: inherit;
+        /* 16px, deliberately: anything smaller makes iOS Safari zoom the page
+           when the picker opens, and the user has to pinch back out. */
+        font-size: var(--t-input);
+        padding: 0 var(--s-6) 0 0;
+      }
+      .crumb-select:focus-visible {
+        outline: 1px solid var(--chrome-accent);
+        outline-offset: -1px;
+      }
+      .crumb-select option {
+        background: var(--chrome-bar);
+        color: var(--chrome-text-bright);
+      }
+      .crumb-wrap::after {
+        content: '▾';
+        position: absolute;
+        right: var(--s-2);
+        color: var(--ink-3);
+        pointer-events: none;
+      }
+
+      /* ── terminal backdrop ───────────────────────────────────────────── */
+
+      .term {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        padding: var(--s-4) var(--s-3);
+        background: var(--mux-bg);
+        color: var(--mux-fg);
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.45;
+        white-space: pre;
+        transition: filter var(--dur) linear;
+      }
+      .term.dim {
+        filter: brightness(0.5);
+      }
+      .term .cur {
+        background: var(--mux-fg);
+        color: var(--mux-bg);
+      }
+
+      /* ── in-frame caption ────────────────────────────────────────────── */
+
+      .note {
+        flex: none;
+        padding: var(--s-3) var(--s-5);
+        background: color-mix(in srgb, var(--mux-warn) 9%, var(--chrome-bar));
+        border-bottom: 1px solid var(--chrome-border);
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        line-height: var(--lh-body);
+        color: var(--ink-2);
+      }
+
+      /* ── home stage / simulated keyboard ─────────────────────────────── */
+
+      .stage {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+      }
+      .kbd-reserve {
+        flex: none;
+        height: 300px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: color-mix(in srgb, var(--chrome-border) 55%, var(--chrome-body));
+        border-top: 1px solid var(--chrome-border);
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+      }
+
+      /* ══ D7 · the width-driven tile grid ═════════════════════════════════
+
+         MOCKUP-ONLY, and it is a RESTATEMENT of <mux-home>'s tile chrome in
+         the light DOM rather than the component itself. The component cannot
+         be made to do this from outside — its `.tiles` track is a literal
+         218px with no custom property to hook, and `renderTile()` rewrites
+         `canvas.style.width` from a fixed 40 columns on every update, so an
+         injected stylesheet moves the grid and leaves a 200px canvas
+         stranded in a 342px track. The measurement behind that claim is in
+         the header comment of src/demo/mobile-demo.ts.
+
+         Class names are mux-home's OWN (.tiles / .tl / .th / .tbody / .tf /
+         .ta), scoped under `.d7` so nothing leaks either way, so whoever
+         lands the real change can diff the two rule sets by name.
+
+         The one substantive difference is the line D7 is about:
+
+             grid-template-columns: repeat(var(--tile-cols), 1fr)
+             instead of              repeat(auto-fill, 218px)
+
+         Everything else here is quoted, not invented.
+         ══════════════════════════════════════════════════════════════════ */
+
+      .d7 {
+        /* Set from JS, off THIS element's own measured width, never a media
+           query: the contact sheet puts several differently-sized frames on
+           one page and each has to pick its own column count. A media query
+           would ask the browser window instead and every frame would agree
+           with every other one, which would prove nothing. */
+        --tile-cols: 1;
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        background: var(--chrome-body);
+      }
+      .d7-page {
+        /* mux-home's `.home` measure. D7's "consequence to accept": with 1fr
+           tracks this stops being 4 x TILE_BOX and becomes a chosen page
+           width, wide enough for the 5-column cap. */
+        max-width: calc(1200px + 2 * var(--s-6));
+        margin-inline: auto;
+        padding: var(--s-6);
+        /* D9 — the grid is an edge-anchored surface like any other. */
+        padding-left: max(var(--s-6), var(--sa-left));
+        padding-right: max(var(--s-6), var(--sa-right));
+        padding-bottom: max(var(--s-6), var(--sa-bottom));
+      }
+      .d7-h {
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+        margin: var(--s-6) 0 var(--s-4);
+      }
+      .d7-h:first-child {
+        margin-top: 0;
+      }
+
+      .d7 .tiles {
+        display: grid;
+        grid-template-columns: repeat(var(--tile-cols), 1fr);
+        gap: var(--s-4);
+      }
+      .d7 .tl {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--edge);
+        border-radius: var(--r-card);
+        background: var(--mux-bg);
+      }
+      .d7 .tl.need {
+        border-color: color-mix(in srgb, var(--need) 45%, var(--edge));
+      }
+      .d7 .tl.fail {
+        border-color: color-mix(in srgb, var(--fail) 45%, var(--edge));
+      }
+      .d7 .th {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--s-3);
+        padding: var(--s-3) var(--s-4);
+        background: var(--surface);
+        border-bottom: 1px solid var(--edge);
+      }
+      .d7 .name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: var(--t-name);
+        font-weight: 600;
+        line-height: var(--lh-tight);
+        color: var(--ink-1);
+      }
+      .d7 .mark {
+        flex: none;
+        font-size: var(--t-name);
+        line-height: var(--lh-tight);
+        text-align: center;
+      }
+      .d7 .m-need {
+        color: var(--need);
+      }
+      .d7 .m-work {
+        color: var(--work);
+      }
+      .d7 .m-done {
+        color: var(--ok);
+      }
+      .d7 .m-fail {
+        color: var(--fail);
+      }
+      .d7 .m-none {
+        color: var(--ink-3);
+      }
+
+      .d7 .tbody {
+        padding: var(--s-4);
+        overflow: hidden;
+        /* height is set inline to rows * PREVIEW_CELL.h + 2 x padding, so
+           the box is right on the first frame AND follows the rows A/B
+           toggle instead of clipping the aspect-locked variant. */
+      }
+      .d7 .tbody canvas {
+        display: block;
+        /* Other half of the integer-scale bargain (preview-canvas.ts). */
+        image-rendering: pixelated;
+      }
+      .d7 .tbtext {
+        margin: 0;
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        line-height: var(--lh-body);
+        color: var(--ink-3);
+        white-space: pre;
+        overflow: hidden;
+      }
+      .d7 .meta {
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        line-height: var(--lh-tight);
+        color: var(--ink-3);
+        white-space: nowrap;
+      }
+      .d7 .tf {
+        display: flex;
+        justify-content: space-between;
+        gap: var(--s-3);
+        margin-top: auto;
+        padding: var(--s-2) var(--s-4);
+        border-top: 1px solid var(--edge);
+        overflow: hidden;
+      }
+      .d7 .ta {
+        display: flex;
+        gap: var(--s-2);
+        padding: var(--s-3) var(--s-4);
+        border-top: 1px solid var(--edge);
+      }
+      .d7 .btn {
+        font: inherit;
+        font-size: var(--t-ui);
+        line-height: var(--lh-tight);
+        padding: var(--s-3) var(--s-5);
+        border: 1px solid var(--edge);
+        border-radius: var(--r-ctl);
+        background: var(--surface);
+        color: var(--ink-2);
+      }
+      .d7 .btn.pri {
+        background: color-mix(in srgb, var(--ok) 14%, var(--surface));
+        border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+        color: var(--ink-1);
+      }
+
+      /* ── the measured caption ─────────────────────────────────────────
+         Replaces the old hand-written "wastes ~40% of the width" note. Every
+         number in it is read back off the DOM at layout time, so it cannot
+         drift away from what the frame is actually doing. Neutral tint, not
+         the warning tint of `.note`: this is a measurement, not a defect. */
+      .note.measure {
+        background: color-mix(in srgb, var(--chrome-accent) 9%, var(--chrome-bar));
+        color: var(--ink-2);
+      }
+      .note b {
+        color: var(--ink-1);
+        font-weight: 600;
+      }
+
+      /* ── the in-frame A/B toggle ──────────────────────────────────────
+         ONE control, two open questions. State 6 uses it for tile rows
+         (content-derived vs aspect-locked) and state 2 for where the drawer's
+         "+ New workspace" sits (first vs last). Neither is a setting: each is
+         an unresolved question in the design doc, rendered as both answers so
+         it can be decided by looking rather than by arguing.
+
+         Mockup chrome, not the design — it is styled as a strip above the
+         surface so nobody mistakes it for something that ships. */
+      .abseg {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: var(--s-3);
+        padding: var(--s-3) var(--s-5);
+        background: var(--chrome-bar);
+        border-bottom: 1px solid var(--chrome-border);
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        color: var(--ink-3);
+        /* Above the pinned-mode scrim (z-index 10), or the contact sheet
+           would render a control nobody can press. A popover in full-bleed is
+           in the browser's TOP layer and still covers it — dismiss the drawer,
+           flip the toggle, reopen from the hamburger. That round trip is the
+           one the state already advertises as the thing being tested. */
+        position: relative;
+        z-index: 30;
+      }
+      .abseg button {
+        min-height: 28px;
+        padding: 0 var(--s-4);
+        border: 1px solid var(--chrome-border);
+        border-radius: 14px;
+        color: var(--ink-3);
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        white-space: nowrap;
+      }
+      .abseg button[aria-pressed='true'] {
+        color: var(--chrome-accent);
+        border-color: var(--chrome-accent);
+        background: color-mix(in srgb, var(--chrome-accent) 14%, transparent);
+      }
+
+      /* ── simulated-width panels (states 8 and 9) ──────────────────────
+         A plain rounded panel, deliberately NOT a phone bezel: 1200 and 1400
+         are a tablet and a desktop window, and a bezel would lie about that.
+
+         The panel's width is set inline and is its GENUINE layout width, so
+         the column logic measures something real. Overflow beyond the
+         reviewing screen is handled by SCROLLING the strip, never by
+         transform: scale() — a scaled panel reports a shrunken clientWidth
+         to the very measurement this state exists to prove, and it would
+         blur the 5px cells that are the invariant. */
+      .cell.frame-panels {
+        width: 100%;
+      }
+      .d7-strip {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--s-6);
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: var(--s-4);
+      }
+      .d7-panel {
+        flex: none;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border-radius: var(--r-card);
+        background: var(--chrome-body);
+        /* An INSET SHADOW, not a border. box-sizing: border-box would take
+           the edge out of the panel's content box, and a panel set to 1400px
+           would hand the grid 1398 — one band down from the 5-column cap the
+           state exists to show. A shadow never touches layout. */
+        box-shadow: inset 0 0 0 1px var(--chrome-border);
+        /* A desktop window has no notch. */
+        --sa-top: 0px;
+        --sa-right: 0px;
+        --sa-bottom: 0px;
+        --sa-left: 0px;
+      }
+      .d7-strip > .d7-panel {
+        height: 560px;
+      }
+      /* Full-bleed: the phone cannot BE 844 or 1400 wide, so the panel keeps
+         its real width and the viewport scrolls over it. */
+      .d7-sim {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .d7-sim > .d7-strip {
+        height: 100%;
+        align-items: stretch;
+        padding: 0;
+      }
+      .d7-sim > .d7-strip > .d7-panel {
+        height: 100%;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      /* ══ surface: the workspace drawer ══════════════════════════════════
+         ONE set of rules. `[popover]` adapts it to the top layer on a phone;
+         `.pinned` adapts the SAME markup to sit inside a contact-sheet frame,
+         where a top-layer popover would escape the phone and cover the page.
+         ═══════════════════════════════════════════════════════════════════ */
+
+      .drawer {
+        width: min(86vw, 340px);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: var(--chrome-bar);
+        color: var(--chrome-text-bright);
+        border-right: 1px solid var(--chrome-border);
+        /* D9 */
+        padding-top: var(--sa-top);
+        padding-bottom: var(--sa-bottom);
+        padding-left: var(--sa-left);
+        padding-right: 0;
+      }
+
+      [popover].drawer {
+        position: fixed;
+        inset: 0 auto 0 0;
+        height: 100%;
+        max-width: none;
+        max-height: none;
+        margin: 0;
+        border-top: 0;
+        border-bottom: 0;
+        border-left: 0;
+        translate: -100% 0;
+        transition:
+          translate var(--dur) ease,
+          display var(--dur) allow-discrete,
+          overlay var(--dur) allow-discrete;
+      }
+      [popover].drawer:popover-open {
+        translate: 0 0;
+      }
+      @starting-style {
+        [popover].drawer:popover-open {
+          translate: -100% 0;
+        }
+      }
+      /* Non-modal by design: the terminal behind stays visibly alive, so the
+         scrim is a tint rather than a blackout. */
+      [popover].drawer::backdrop {
+        background: var(--scrim);
+      }
+      .drawer.pinned {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: min(86%, 340px);
+        z-index: 20;
+      }
+
+      .sb-heading {
+        flex: none;
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+        padding: var(--s-5) var(--s-4) var(--s-3);
+      }
+
+      .ws-list {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        display: flex;
+        flex-direction: column;
+        gap: var(--s-4);
+        padding: 0 var(--s-3) var(--s-4);
+      }
+
+      .ws-card {
+        flex: none;
+        overflow: hidden;
+        border: 1px solid var(--chrome-border);
+        border-radius: var(--r-card);
+        /* Terminal background, so the card reads as a little screen. */
+        background: var(--mux-bg);
+      }
+      .ws-card.active {
+        border-color: var(--chrome-accent);
+      }
+      .ws-head {
+        display: flex;
+        align-items: center;
+        min-height: var(--nav-h);
+        background: var(--chrome-bar);
+        border-bottom: 1px solid var(--chrome-border);
+      }
+      .ws-open {
+        flex: 1;
+        min-width: 0;
+        min-height: var(--nav-h);
+        display: flex;
+        align-items: center;
+        gap: var(--s-2);
+        padding: 0 0 0 var(--s-4);
+        text-align: left;
+      }
+      .ws-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: var(--t-name);
+        font-weight: 600;
+        color: var(--ink-1);
+      }
+      .ws-bell {
+        flex: none;
+        font-size: 9px;
+        color: var(--mux-bell);
+      }
+      .ws-panes {
+        flex: none;
+        margin-left: auto;
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        line-height: 1.5;
+        color: var(--ink-3);
+        border: 1px solid var(--edge);
+        border-radius: var(--r-chip);
+        padding: 0 var(--s-2);
+      }
+      /* Always visible, never hover-only: a coarse pointer has no hover. */
+      .ws-close,
+      .pane-close {
+        flex: none;
+        width: var(--nav-h);
+        height: var(--nav-h);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: var(--r-card);
+        color: var(--ink-3);
+      }
+      .ws-close:hover,
+      .ws-close:active,
+      .pane-close:hover,
+      .pane-close:active {
+        color: var(--chrome-danger);
+        background: var(--chrome-hover);
+      }
+      .ws-screen {
+        position: relative;
+        overflow: hidden;
+        background: var(--mux-bg);
+        /* height is set inline to rows * PREVIEW_CELL.h, so the tile box is
+           reserved from the first paint and nothing shifts when it lands. */
+      }
+      .ws-canvas {
+        display: block;
+      }
+      /* mux-sidebar.ts:497 — ghosting the idle cards IS the hierarchy. The
+         workspace you are in paints live and vivid; the rest are pushes. */
+      .ws-card:not(.active) .ws-canvas {
+        filter: saturate(0.25) opacity(0.55);
+      }
+      .ws-ph {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        letter-spacing: 0.3em;
+        color: var(--ink-3);
+        pointer-events: none;
+      }
+
+      /* "+ New workspace", in either of the two positions open question 1
+         is asking about. Pinned OUTSIDE .ws-list in both — the question is
+         which END it pins to, not whether it scrolls; a control that scrolls
+         away has already lost the argument.
+
+         The divider always faces the scroller, so the boundary reads the
+         same way round in both variants. Same weight as the pane sheet's
+         scroll edge, for the same reason. */
+      .drawer-act {
+        flex: none;
+      }
+      .drawer-act.last {
+        border-top: 2px solid var(--edge);
+      }
+      .drawer-act.first {
+        border-bottom: 2px solid var(--edge);
+      }
+      /* Empty in whichever position is not currently chosen: no border, no
+         height, nothing. A 2px rule floating over nothing would read as a
+         boundary that is not there. */
+      .drawer-act:empty {
+        border: 0;
+      }
+
+      /* ══ surface: the pane sheet ════════════════════════════════════════ */
+
+      .sheet {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        max-height: 60dvh;
+        background: var(--chrome-bar);
+        color: var(--chrome-text-bright);
+        border-radius: var(--s-6) var(--s-6) 0 0;
+        border-top: 1px solid var(--chrome-border);
+        /* NO padding-bottom here any more. The inset belongs to the SCROLLER
+           (see .pane-list), or the pinned header would be pushed up by a
+           notch it does not touch and the list would still run under it. */
+        padding: 0;
+      }
+
+      /* The pinned block: grab handle, heading, "+ New pane".
+         flex: none, so it keeps its height while .pane-list absorbs the rest
+         of the 60dvh — that is what makes it genuinely not scroll, rather
+         than merely appearing not to. */
+      .sheet-head {
+        flex: none;
+        /* THE SCROLL EDGE. Deliberately heavier than the 1px
+           var(--chrome-border) hairline between two pane rows: 2px, and
+           --edge rather than --chrome-border, which is the lighter of the
+           two mixes. Two steps of difference, so the boundary reads at a
+           glance and without waiting for motion to reveal it. */
+        border-bottom: 2px solid var(--edge);
+      }
+      [popover].sheet {
+        position: fixed;
+        inset: auto 0 0 0;
+        width: auto;
+        max-width: none;
+        margin: 0;
+        border-right: 0;
+        border-bottom: 0;
+        border-left: 0;
+        translate: 0 100%;
+        transition:
+          translate var(--dur) ease,
+          display var(--dur) allow-discrete,
+          overlay var(--dur) allow-discrete;
+      }
+      [popover].sheet:popover-open {
+        translate: 0 0;
+      }
+      @starting-style {
+        [popover].sheet:popover-open {
+          translate: 0 100%;
+        }
+      }
+      [popover].sheet::backdrop {
+        background: var(--scrim);
+      }
+      /* 60dvh is the viewport; inside a contact-sheet frame the equivalent
+         measure is 60% of the frame, which is what the phone would see. */
+      .sheet.pinned {
+        position: absolute;
+        inset: auto 0 0 0;
+        max-height: 60%;
+        z-index: 20;
+      }
+
+      .grab {
+        flex: none;
+        width: 36px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--ink-3);
+        margin: var(--s-4) auto var(--s-1);
+      }
+      .sheet-title {
+        flex: none;
+        font-family: var(--mono);
+        font-size: var(--t-meta);
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        color: var(--ink-3);
+        padding: var(--s-3) var(--s-5) var(--s-2);
+      }
+      .pane-list {
+        flex: 1;
+        /* Load-bearing. Without min-height:0 a flex item refuses to shrink
+           below its content, the sheet grows past its own max-height, and
+           the "bounded height with the list scrolling inside" that the whole
+           surface exists to fix silently does not happen. */
+        min-height: 0;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        /* D9, moved off .sheet: the inset is the strip a thumb cannot reach,
+           so it has to be padding INSIDE the scrolling area — the last pane
+           row scrolls up clear of the home indicator instead of resting
+           under it. */
+        padding-bottom: var(--sa-bottom);
+      }
+      .pane-row {
+        display: grid;
+        /* pick | gap | 44x44 close. The gap is real estate, not decoration:
+           a thumb aiming at "switch to logs" must not kill it. */
+        grid-template-columns: 1fr var(--s-4) var(--nav-h);
+        align-items: center;
+        min-height: var(--row-h);
+        padding-right: var(--s-3);
+        border-bottom: 1px solid var(--chrome-border);
+      }
+      .pane-pick {
+        min-width: 0;
+        min-height: var(--row-h);
+        display: flex;
+        align-items: center;
+        gap: var(--s-2);
+        text-align: left;
+        font-size: var(--t-name);
+        color: var(--ink-1);
+      }
+      .pane-check {
+        flex: none;
+        width: var(--s-7); /* the fixed 24px check gutter */
+        text-align: center;
+        color: var(--chrome-accent);
+      }
+      .pane-bell {
+        flex: none;
+        font-size: 9px;
+        color: var(--mux-bell);
+      }
+      .pane-title {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* Shared by "+ New workspace" and "+ New pane" — one 56px row, one look. */
+      .rowbtn {
+        display: flex;
+        align-items: center;
+        gap: var(--s-4);
+        width: 100%;
+        min-height: var(--row-h);
+        padding: 0 var(--s-5);
+        font-size: var(--t-name);
+        color: var(--ink-1);
+      }
+      .rowbtn .lucide-icon {
+        color: var(--chrome-accent);
+      }
+      .rowbtn:hover,
+      .rowbtn:active {
+        background: var(--chrome-hover);
+      }
+      .rowbtn.accent {
+        background: color-mix(in srgb, var(--chrome-accent) 10%, transparent);
+        color: var(--chrome-accent);
+      }
+
+      /* Pinned-mode scrim. The popover path gets ::backdrop instead; both read
+         from --scrim so they cannot drift. */
+      .scrim {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        background: var(--scrim);
+      }
+
+      /* ══ full-bleed state switcher (mockup chrome, not the design) ══════ */
+
+      .switcher {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        gap: var(--s-3);
+        height: var(--switcher-h);
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: var(--s-3) var(--s-4) calc(var(--s-3) + env(safe-area-inset-bottom, 0px));
+        background: color-mix(in srgb, var(--chrome-bar) 88%, transparent);
+        border-top: 1px solid var(--chrome-border);
+        backdrop-filter: blur(10px);
+      }
+      .chip {
+        flex: none;
+        min-height: 32px;
+        padding: 0 var(--s-4);
+        border-radius: 16px;
+        border: 1px solid var(--chrome-border);
+        color: var(--ink-3);
+        font-family: var(--mono);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .chip.on {
+        color: var(--chrome-accent);
+        border-color: var(--chrome-accent);
+        background: color-mix(in srgb, var(--chrome-accent) 14%, transparent);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="../src/demo/mobile-demo.ts"></script>
+
+    <!-- Deliberately a CLASSIC script, not a module: its whole job is to run in
+         the case where the module above could NOT run.
+
+         Opening this file straight off disk (a file:// URL) makes the browser
+         refuse the module bundle — "blocked by CORS policy: Cross origin
+         requests are only supported for protocol schemes: ... http, https".
+         That is a browser rule about file://, not something a build can fix,
+         and the page would otherwise just sit there blank with the reason
+         buried in devtools. Say it out loud instead, with the fix. -->
+    <script>
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          if (window.customElements && customElements.get('mux-home')) return;
+
+          var wrap = document.createElement('div');
+          // Identified so a check can ask whether the panel is actually in the
+          // DOM. document.body.textContent includes THIS script's own source,
+          // so grepping the page text for the message is a false positive.
+          wrap.id = 'mux-serve-me';
+          wrap.style.cssText =
+            'position:fixed;inset:0;display:flex;align-items:center;' +
+            'justify-content:center;background:#1a1b26;color:#c0caf5;' +
+            'font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;' +
+            'font-size:13px;line-height:1.7;padding:32px;z-index:9999';
+
+          var box = document.createElement('div');
+          box.style.cssText = 'max-width:640px';
+
+          var h = document.createElement('div');
+          h.style.cssText = 'color:#e0af68;margin-bottom:12px;font-size:15px';
+          h.textContent = 'This page has to be SERVED, not opened from disk.';
+
+          var p = document.createElement('div');
+          p.style.cssText = 'color:#565f89;margin-bottom:14px';
+          p.textContent =
+            location.protocol === 'file:'
+              ? 'Browsers block JavaScript modules on file:// URLs. Nothing is broken — serve the directory over HTTP and it will load.'
+              : 'The application bundle did not load. Check that assets/ sits next to this file.';
+
+          var pre = document.createElement('pre');
+          pre.style.cssText =
+            'background:#16161e;border:1px solid #292e42;border-radius:6px;' +
+            'padding:12px 14px;color:#9ece6a;overflow:auto;margin:0';
+          pre.textContent =
+            'cd ' + '"' + 'the folder holding this index.html' + '"' + '\n' +
+            'python3 -m http.server 8791 --bind 127.0.0.1\n' +
+            '# then open http://127.0.0.1:8791/';
+
+          box.appendChild(h);
+          box.appendChild(p);
+          box.appendChild(pre);
+          wrap.appendChild(box);
+          document.body.appendChild(wrap);
+        }, 500);
+      });
+    </script>
+  </body>
+</html>

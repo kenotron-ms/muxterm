@@ -60,12 +60,28 @@ export type HomeView = 'tiles' | 'cards';
  */
 const VIEW_KEY = 'muxterm.home.view';
 
+/**
+ * The stored preference if there is one, Cards if there is not.
+ *
+ * D7: at narrow width the FIRST RUN defaults to Cards — a card row is one
+ * line and scans faster while thumb-scrolling, and full-width tiles make
+ * Tiles good on a phone rather than mandatory. That is also what every width
+ * already defaulted to, so there is one rule here and no width test: the
+ * default is Cards, and the segmented control is how you leave it.
+ *
+ * Both stored values are read explicitly rather than "'tiles', else cards".
+ * The old form could not tell "chose Cards" from "never chose", so a user
+ * who had deliberately picked Cards would be silently re-defaulted the day
+ * the fallback changed.
+ */
 function loadView(): HomeView {
   try {
-    return localStorage.getItem(VIEW_KEY) === 'tiles' ? 'tiles' : 'cards';
+    const stored = localStorage.getItem(VIEW_KEY);
+    if (stored === 'tiles' || stored === 'cards') return stored;
   } catch {
-    return 'cards'; // private mode / storage disabled: still usable, just not sticky
+    /* private mode / storage disabled: still usable, just not sticky */
   }
+  return 'cards';
 }
 
 function saveView(v: HomeView): void {
@@ -169,15 +185,29 @@ function markClass(s: SessionState): string {
 }
 
 // ---------------------------------------------------------------------------
-// Geometry
+// Geometry — D7
 //
-// The view's one measure is DERIVED from the preview tile, not chosen: the
-// content column is exactly four tiles wide, so the tiles grid fills it
-// precisely and cards, rows and the composer all sit on the same rails. Change
-// TILE_COLS and every one of these follows.
+// The tile grid is WIDTH-DRIVEN, in two steps, and both of them are MEASURED
+// rather than declared:
+//
+//   1. COLUMN COUNT comes from this component's own width, through the
+//      D7_COLUMNS table. Its own width, not the window's: <mux-home> is one
+//      box inside the layout, so a media query would size the tiles against
+//      a viewport the grid does not occupy.
+//
+//   2. TERMINAL COLUMNS come from the resulting track's measured width,
+//      divided by the 5px preview cell and clamped to the sidebar's own band.
+//      Width buys COLUMNS, never scale — a wider tile draws MORE CHARACTERS
+//      per line at the same crisp 5x8 cell, and no canvas here is ever
+//      stretched. That is D1 of 2026-09-02-sidebar-live-preview-design.md,
+//      and it is the invariant the rest of this block exists to protect.
+//
+// So a tile no longer has a width of its own, and the cascade that used to run
+// TILE_COLS -> TILE_W -> TILE_BOX -> PAGE_W -> composer goes with it: PAGE_W
+// is now a chosen page measure and the 1fr tracks divide it.
 // ---------------------------------------------------------------------------
 
-const TILE_W = TILE_COLS * PREVIEW_CELL.w;
+/** Canvas height. Rows stay content-derived at TILE_ROWS, so this is fixed. */
 const TILE_H = TILE_ROWS * PREVIEW_CELL.h;
 
 /** `.tl .tbody` padding, per side. Mirrors `--s-4` in the CSS below. */
@@ -186,10 +216,77 @@ const TILE_PAD = 8;
 const TILE_BORDER = 1;
 /** Gap between tiles. Mirrors `--s-4`. */
 const TILE_GAP = 8;
-/** Outer width of one tile, canvas plus its own chrome. */
-const TILE_BOX = TILE_W + 2 * TILE_PAD + 2 * TILE_BORDER;
-/** The content measure: four tiles and the three gaps between them. */
-const PAGE_W = 4 * TILE_BOX + 3 * TILE_GAP;
+
+/**
+ * The content measure: one page width for the tiles grid, the cards, the rows
+ * and the composer, so they all sit on the same rails.
+ *
+ * CHOSEN, not derived — the one number in this view that has no measurement
+ * behind it. It used to be `4 * TILE_BOX + 3 * TILE_GAP` = 896, which made
+ * "four tiles" and "the page width" the same fact and therefore capped the
+ * view at four columns by arithmetic. With 1fr tracks there is no tile width
+ * left to add up, so the page needs its own number, and the one the column
+ * table asks for is the one that carries the 5-column cap without starving a
+ * tile: 1200 across five tracks is a 233px track, 43 terminal columns each —
+ * still more than the 40 a desktop tile had before D7.
+ */
+const PAGE_W = 1200;
+
+/**
+ * The band of terminal columns a preview may carry, whatever its track
+ * measures. The sidebar's own numbers (mux-sidebar.ts:52), deliberately: a
+ * preview is a preview, and the two surfaces should not disagree about how
+ * much terminal is legible at 5x8.
+ */
+const PREVIEW_MIN_COLS = 24;
+const PREVIEW_MAX_COLS = 80;
+
+/**
+ * D7's column table, keyed on this component's own CONTENT width in CSS px —
+ * NOT the viewport. Highest band first; `gridColsForWidth` returns the first
+ * band it clears.
+ *
+ * The distinction is load-bearing and was measured, not assumed. In wide mode
+ * home sits beside the 220px sidebar column plus a 4px Split.js gutter, so its
+ * content width is viewport − 224 and every band fires 224px later than the
+ * viewport number would suggest. That is the correct behaviour, not a bug to
+ * correct: keying on the container keeps the track itself in a consistent
+ * ~280–340px band at every width, and follows the sidebar live when the user
+ * drags the gutter. Keying on the viewport would cram 5 tracks of 235px into
+ * the 1176px home actually has at a 1400px viewport — narrower tiles, fewer
+ * terminal columns, for a rounder number that no one can see.
+ *
+ * Consequence to know rather than trip over: at a 844px viewport the app is
+ * already WIDE (>= 768), so a landscape phone gets 620px of content and 2
+ * columns, not 3.
+ */
+const D7_COLUMNS: readonly { min: number; cols: number }[] = [
+  { min: 1400, cols: 5 }, // cap — a 1624px viewport in wide mode
+  { min: 1100, cols: 4 },
+  { min: 840, cols: 3 },
+  { min: 600, cols: 2 },
+  { min: 0, cols: 1 }, // portrait phone — the tile spans the width
+];
+
+function gridColsForWidth(px: number): number {
+  for (const band of D7_COLUMNS) if (px >= band.min) return band.cols;
+  return 1;
+}
+
+/**
+ * Terminal columns the measured track `px` can carry, at the real 5px cell.
+ *
+ * The track is the whole grid item, so its own chrome comes off first: a
+ * border each side and the body's padding each side. 390px portrait → 358px
+ * track → 340px inner → 68 columns.
+ */
+function termColsForTrack(px: number): number {
+  const inner = Math.max(0, px - 2 * TILE_BORDER - 2 * TILE_PAD);
+  return Math.min(
+    PREVIEW_MAX_COLS,
+    Math.max(PREVIEW_MIN_COLS, Math.floor(inner / PREVIEW_CELL.w)),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -226,6 +323,25 @@ export class MuxHome extends LitElement {
   @state() private _peek = false;
   /** null = probing, false = fall back to text, true = draw the bitmap tile. */
   @state() private _fontOk: boolean | null = null;
+
+  /**
+   * D7 step 1: grid tracks, from this component's measured width. Written to
+   * each `.tiles` grid as `--tile-cols`. Starts at 1 rather than at the old
+   * four, so the first frame of a phone is not a four-column grid it then
+   * corrects.
+   */
+  @state() private _gridCols = 1;
+
+  /**
+   * D7 step 2: terminal columns inside one tile, from the measured track.
+   * TILE_COLS is the pre-measurement value, so a tile that has not been
+   * measured yet renders the geometry it had before D7 rather than nothing.
+   */
+  @state() private _termCols = TILE_COLS;
+
+  private _ro: ResizeObserver | null = null;
+  /** The composer box, once it exists. Measured, not computed — see _measure. */
+  private _composerEl: HTMLElement | null = null;
 
   private _now = Math.floor(Date.now() / 1000);
 
@@ -297,9 +413,12 @@ export class MuxHome extends LitElement {
          load-bearing on a phone, not taste. */
       --t-input: 16px;
       /* MEASURED, not chosen — the only such size here. The fallback tile
-         is a ${TILE_COLS}-column text grid that has to fit ${TILE_W}px; at
-         a typical 0.6em monospace advance the largest size that fits is
-         ${TILE_W} / ${TILE_COLS} / 0.6, floored to a whole pixel. */
+         is the same text grid the canvas would have drawn, in a real
+         monospace font, so it wants a cell as close to PREVIEW_CELL.w as
+         that font gets: at a typical 0.6em advance, 8px is 4.8px per column
+         against the canvas's 5. The column COUNT is measured per tile now
+         (D7), so matching the CELL is what keeps the two grids the same
+         width at any width. */
       --t-grid: 8px;
 
       --lh-tight: 1.25; /* headline, names, one-line chrome */
@@ -360,7 +479,16 @@ export class MuxHome extends LitElement {
 
       /* The composer's resting height, from its own parts rather than a
          guess. The hard-coded 92px clearance this replaces was ~30px short
-         of the box it was clearing, so the last row sat underneath it. */
+         of the box it was clearing, so the last row sat underneath it.
+
+         PRE-MEASUREMENT ONLY. This expression assumes a two-line prompt and
+         ONE un-wrapped row of controls, and D8 lets that row wrap below
+         560px — at which point the reserve would be a whole control row
+         short and the last session would sit under the composer again, the
+         exact bug the calc was written to fix. _measure() overwrites it
+         inline with the composer's real height, wrapping, coarse-pointer
+         targets and safe-area inset included; this is what renders until
+         that lands. */
       --composer-h: calc(
         2 * var(--t-input) * var(--lh-body) + 2 * var(--s-5) + var(--s-4) + var(--ctl)
       );
@@ -402,10 +530,10 @@ export class MuxHome extends LitElement {
     }
 
     .home {
-      /* One measure for the whole view: exactly four preview tiles wide
-         (see PAGE_W). Derived rather than chosen, so the tiles grid fills
-         the column exactly and the composer sits on the same rails as the
-         list above it. */
+      /* One measure for the whole view, so the tiles grid, the lists and the
+         composer all sit on the same rails. Now that the tracks are 1fr this
+         is a CHOSEN page width rather than four tile boxes added up — wide
+         enough for D7's five-column cap; see PAGE_W. */
       max-width: calc(${PAGE_W}px + 2 * var(--s-6));
       margin-inline: auto;
       padding: var(--s-6) var(--s-6) calc(var(--composer-h) + var(--s-6) + var(--s-7));
@@ -715,7 +843,12 @@ export class MuxHome extends LitElement {
 
     .rowc {
       display: grid;
-      grid-template-columns: var(--s-6) 1fr auto;
+      /* minmax(0, ...) on both flexible tracks: the right-hand column is
+         .meta, which is nowrap, so as an auto track its minimum was the
+         whole "ws3 · p2" string and it took that width out of the title's
+         1fr. Both tracks may now shrink; the cap that decides WHICH one
+         gives way on a phone is in the 560px block. */
+      grid-template-columns: var(--s-6) minmax(0, 1fr) minmax(0, auto);
       gap: var(--s-4);
       /* start, not center: a row with a "doing" line is two lines tall, and
          centring left the state mark floating between them instead of
@@ -740,18 +873,29 @@ export class MuxHome extends LitElement {
       flex-direction: column;
       align-items: flex-end;
       gap: var(--s-1);
+      min-width: 0;
+    }
+    /* .meta is nowrap, so without a box to overflow the ellipsis has
+       nowhere to happen and the text simply escapes the row. */
+    .rowc .rr > span {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    /* ── TILES ────────────────────────────────────────────────────────
-       Fixed columns rather than 1fr, so a section holding one session
-       shows one thumbnail at the same size as every other instead of a
-       lone tile stretched across the row. auto-fill (not auto-fit) keeps
-       the column structure when a section is short. No max-width any
-       more: .home's measure IS four columns, so the grid fills it. */
+    /* ── TILES — D7 ──────────────────────────────────────────────────
+       One track per column, each 1fr, so the row FILLS the measure. The
+       fixed 218px tracks this replaces always ended a row in dead gutter,
+       and left a 390px phone showing one 218px tile — 40% of the width
+       spent on nothing, at the width that has the least of it.
+
+       The count comes from --tile-cols, written per grid from the
+       component's own measured width (see _measure). The value here is
+       what renders before the first measurement, and it is 1 because a
+       phone is the width that cannot afford a wrong guess. */
     .tiles {
       display: grid;
-      grid-template-columns: repeat(auto-fill, ${TILE_BOX}px);
-      justify-content: start;
+      grid-template-columns: repeat(var(--tile-cols, 1), 1fr);
       gap: ${TILE_GAP}px;
     }
     .tl {
@@ -762,6 +906,13 @@ export class MuxHome extends LitElement {
       cursor: pointer;
       display: flex;
       flex-direction: column;
+      /* A grid item's automatic minimum size is its CONTENT, and at the
+         24-column floor the canvas is wider than a very narrow track. Left
+         at auto, the canvas would push the track out, which would measure
+         wider, which would derive a wider canvas. min-width: 0 makes the
+         track own the width and the tile clip — the derivation runs one
+         way only. */
+      min-width: 0;
       transition: border-color var(--dur) ease;
     }
     .tl:hover {
@@ -878,7 +1029,12 @@ export class MuxHome extends LitElement {
     .dispatch {
       position: sticky;
       bottom: 0;
-      padding: 0 var(--s-6) var(--s-6);
+      /* D9. index.html has set viewport-fit=cover for as long as it has had
+         a viewport meta, so on a notched phone the bottom of the scrollport
+         is behind the home indicator and this box is the app's bottom edge.
+         max(), not calc(): the 16px is the design's own gutter, and the
+         inset only matters where it is bigger than that. */
+      padding: 0 var(--s-6) max(var(--s-6), env(safe-area-inset-bottom));
       /* Full-bleed on purpose. The scrim used to be capped at the
          composer's own 780px, so on a wide window content scrolled past it
          un-faded down both sides of a 1180px column. */
@@ -926,6 +1082,12 @@ export class MuxHome extends LitElement {
       display: flex;
       align-items: center;
       gap: var(--s-5);
+      /* D8. Two selects and the send button are three 44px coarse-pointer
+         targets, and below ~560px they do not fit one line. Wrapping
+         reflows them onto a second row; the alternative is each one
+         squeezed under its own hit box, which is the same as not having
+         44px targets at all. */
+      flex-wrap: wrap;
     }
     /* Same box height as the send button, so the composer's footer reads as
        one row of controls rather than three things that happened to land on
@@ -955,10 +1117,26 @@ export class MuxHome extends LitElement {
       text-overflow: ellipsis;
       color: var(--ink-3);
     }
-    /* A phone has no Shift+Enter to tell anyone about. */
     @media (max-width: 560px) {
+      /* A phone has no Shift+Enter to tell anyone about. */
       .hint {
         display: none;
+      }
+      /* With the hint gone the two selects take the row it left. min-width:
+         0 is what lets a long workspace name clip instead of pushing the
+         send button onto a line of its own — and it is scoped to this
+         width, because on a desktop the hint is still there to absorb the
+         squeeze and a clipped select would be a regression. */
+      .crow .wsel {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      /* Which column gives way. "ws3 · p2 / 4m" is nowrap and would
+         otherwise take whatever it needs out of the session name; capped at
+         40% of the row it truncates first, and the name — the thing you are
+         actually scanning for — keeps the rest. */
+      .rowc {
+        grid-template-columns: var(--s-6) minmax(0, 1fr) minmax(0, 40%);
       }
     }
     .send {
@@ -997,9 +1175,22 @@ export class MuxHome extends LitElement {
     void fontReady().then((ok) => {
       this._fontOk = ok;
     });
+    // D7 measures this element, not the window: home is one box inside the
+    // layout, and on a desktop it shares the row with the sidebar.
+    if (typeof ResizeObserver !== 'undefined') {
+      this._ro = new ResizeObserver(() => this._measure());
+      this._ro.observe(this);
+    }
     // The home view is not a terminal, so it takes the keyboard. Focus lands on
     // the scroller itself; j/k/Space/Enter/Esc are handled there.
     void this.updateComplete.then(() => this.focusView());
+  }
+
+  override disconnectedCallback(): void {
+    this._ro?.disconnect();
+    this._ro = null;
+    this._composerEl = null;
+    super.disconnectedCallback();
   }
 
   /** Give the view keyboard focus. Called by the app when home is opened. */
@@ -1020,7 +1211,64 @@ export class MuxHome extends LitElement {
   }
 
   override updated(): void {
+    this._observeComposer();
+    this._measure();
     this._paintTiles();
+  }
+
+  // -------------------------------------------------------------------------
+  // Measurement (D7, and the composer reserve)
+  // -------------------------------------------------------------------------
+
+  /**
+   * The composer resizes for reasons this component never renders: the prompt
+   * grows with its text, the control row wraps below 560px, and the safe-area
+   * inset appears when the phone rotates. Observed rather than recomputed.
+   */
+  private _observeComposer(): void {
+    const el = this.renderRoot.querySelector<HTMLElement>('.dispatch');
+    if (!el || el === this._composerEl) return;
+    if (this._composerEl) this._ro?.unobserve(this._composerEl);
+    this._composerEl = el;
+    this._ro?.observe(el);
+  }
+
+  /**
+   * Read the layout. Nothing here is assumed; every number is measured off
+   * the box it describes.
+   *
+   * The two D7 steps run in one pass and settle over two: writing
+   * `--tile-cols` cannot change the track this pass has already measured, so
+   * a column change is seen with the OLD track and the state write it makes
+   * re-enters here against the new one. It terminates because both
+   * derivations are pure functions of a width that has stopped moving, and
+   * because Lit does not re-update when a @state is set to the value it
+   * already holds.
+   *
+   * offsetWidth/clientWidth, not getBoundingClientRect(): these are LAYOUT
+   * sizes. A transform anywhere above this element would make the rect report
+   * the scale factor, and the tile grid would quietly size itself to a
+   * painted size rather than a real one.
+   */
+  private _measure(): void {
+    // 1. Tracks, from this component's content width — clientWidth, so a
+    //    scrollbar is not counted as page width the grid does not have.
+    const width = this.clientWidth;
+    if (width > 0) this._gridCols = gridColsForWidth(width);
+
+    // 2. Terminal columns, from a REAL laid-out track: the grid item's own
+    //    width IS the track. Asking the DOM rather than dividing PAGE_W means
+    //    a drawer, a split or a scrollbar is already accounted for.
+    const track = this.renderRoot.querySelector<HTMLElement>('.tl')?.offsetWidth ?? 0;
+    if (track > 0) this._termCols = termColsForTrack(track);
+
+    // 3. The composer's real height, which the --composer-h calc in :host
+    //    cannot know: that expression assumes one un-wrapped control row and
+    //    a two-line prompt, and D8 lets the row wrap. Written inline (so it
+    //    beats the fallback) and off the host rather than through @state,
+    //    because nothing renders differently — only the scroll reserve moves.
+    const composerH = this._composerEl?.offsetHeight ?? 0;
+    if (composerH > 0) this.style.setProperty('--composer-h', `${composerH}px`);
   }
 
   // -------------------------------------------------------------------------
@@ -1052,7 +1300,7 @@ export class MuxHome extends LitElement {
       // mono: the stand-in tile has no per-cell colour to honour, and the ink
       // carries the state instead. Swapping in a real per-pane tile means
       // dropping `mono` and passing the tile's own fg/bg through.
-      renderTile(canvas, tileForSession(s), {
+      renderTile(canvas, tileForSession(s, this._termCols, TILE_ROWS), {
         palette: ansi,
         fg: ink,
         bg: palette.background,
@@ -1316,14 +1564,18 @@ export class MuxHome extends LitElement {
     let body: TemplateResult;
     if (this._fontOk === false) {
       // The 5x8 bitmap font is unusable. A 5x8 grid in fallback monospace is
-      // unreadable garbage, so show the same lines as plain text instead.
-      body = html`<pre class="tbtext">${tileLinesFor(s).join('\n')}</pre>`;
+      // unreadable garbage, so show the same lines as plain text instead —
+      // wrapped at the same measured width the canvas would have used.
+      body = html`<pre class="tbtext">${tileLinesFor(s, this._termCols, TILE_ROWS).join(
+        '\n',
+      )}</pre>`;
     } else {
       // Sized here as well as in renderTile() so the box is right on the very
-      // first frame, before any pixels exist.
+      // first frame, before any pixels exist. Width is COLUMNS x the 5px cell,
+      // never a scale: renderTile writes exactly this back on every paint.
       body = html`<canvas
         data-session="${s.sessionId}"
-        style="width:${TILE_W}px;height:${TILE_H}px"
+        style="width:${this._termCols * PREVIEW_CELL.w}px;height:${TILE_H}px"
       ></canvas>`;
     }
 
@@ -1366,7 +1618,10 @@ export class MuxHome extends LitElement {
     const isFocused = (s: SessionState): boolean => s.sessionId === focusedId;
 
     if (this._view === 'tiles') {
-      return html`<div class="tiles">
+      // --tile-cols is per grid rather than on :host so the count travels with
+      // the thing it sizes; the CSS default is what renders before the first
+      // measurement lands.
+      return html`<div class="tiles" style="--tile-cols:${this._gridCols}">
         ${members.map((s) => this._tile(s, isFocused(s)))}
       </div>`;
     }

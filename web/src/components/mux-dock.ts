@@ -719,8 +719,15 @@ export class MuxDock extends LitElement {
         mux-dock .mux-session-mark.fail { color: var(--mux-error, #f7768e); }
         mux-dock .mux-session-mark.idle { color: var(--chrome-text-dim, #565f89); }
 
-        /* Mobile: hide tab bar on narrow viewports */
-        @media (max-width: 768px) {
+        /* Mobile: hide tab bar on narrow viewports.
+           767.98, not 768 (D10): breakpoint.ts calls >= 768 WIDE, and a
+           max-width query is inclusive, so at exactly 768px the app showed
+           the wide layout AND hid its tab strip -- one column of viewport
+           with no way to name or reach the other panes. The .98 is the
+           conventional sub-pixel step; the two rules now meet without
+           overlapping, and 'wide'/'narrow' stay the only two breakpoints
+           (they are wire values -- ws.ts:217). */
+        @media (max-width: 767.98px) {
           mux-dock .dv-tabs-and-actions-container {
             display: none !important;
           }
