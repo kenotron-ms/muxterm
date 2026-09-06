@@ -1214,6 +1214,16 @@ export class MuxCos extends LitElement {
     // The fleet's ONE seam -- home-sessions.ts, the same store <mux-home>,
     // the Dashboard card and the title-bar dot all read.
     this._unsubFleet = homeSessions.subscribe(this._onFleet);
+    // Adopt the store's CURRENT state, not just its next change. This element
+    // is parked by cache() when the Dashboard closes, so disconnectedCallback
+    // drops the subscription and every session that starts, blocks or ends
+    // while it is parked arrives unheard. Re-subscribing alone only registers
+    // for the NEXT notification, so reopening the Dashboard rendered the fleet
+    // as it was when you left -- typically "Nothing is running" -- until some
+    // unrelated change forced a re-render. Reading the store on reattach is
+    // what makes lanes spawned while the Dashboard was closed show up the
+    // moment you open it, which is the whole promise of the surface.
+    this._onFleet();
     this._unsubVoice = voiceInputController.onStateChange((s) => {
       this._voice = s;
     });
