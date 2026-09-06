@@ -24,6 +24,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/server"
 	"github.com/kenotron-ms/muxterm/internal/service"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/transport"
 	webstatic "github.com/kenotron-ms/muxterm/web"
 )
 
@@ -38,6 +39,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// The single assignment of the --remote target, before the dispatch below
+	// runs anything: every socket-client subcommand reaches its daemon through
+	// dialDaemon, which reads this and nothing else.
+	cliRemote = cfg.Remote
 
 	switch cfg.Mode {
 	case "help":
@@ -217,30 +223,54 @@ func runDoctor() error {
 // unit-testable seam: point it at any live Unix socket and it returns a
 // connection-scoped client. serve/local use newSessiondDialer (which also
 // ensures the daemon); this variant exists for tests.
+//
+// It is the FIXED-SOCKET seam and has no transport, so a non-zero host is an
+// error rather than something quietly resolved to the local socket.
 func newSessiondDialerForSocket(socketPath string) server.DialFunc {
-	return func() (server.DaemonConn, error) {
+	return func(ctx context.Context, host transport.HostRef) (server.DaemonConn, error) {
+		if host.ID != "" {
+			return nil, fmt.Errorf("fixed-socket dialer cannot reach remote host %s", host.ID)
+		}
 		return sessiond.Dial(socketPath)
 	}
 }
 
-// newSessiondDialer returns the DialFunc used by serve/local. Each call ensures
-// the sessiond daemon is reachable (Phase 2 helpers: SocketPath + DefaultLogPath
-// + EnsureDaemon, a no-op under systemd) and then dials a fresh per-browser
+// newSessiondDialer returns the DialFunc used by serve/local.
+//
+// A zero host is the local daemon and takes today's exact path: each call
+// ensures the sessiond daemon is reachable (SocketPath + DefaultLogPath +
+// EnsureDaemon, a no-op under systemd) and then dials a fresh per-browser
 // sessiond.Client. The hub invokes this once per browser WebSocket.
-func newSessiondDialer() server.DialFunc {
-	return func() (server.DaemonConn, error) {
-		sock, err := sessiond.SocketPath()
+//
+// Any other host goes through tr. EnsureDaemon is deliberately NEVER run for a
+// remote: `sessiond-connect` refuses to spawn a daemon by design, so a mistyped
+// host fails loudly instead of silently starting a daemon somewhere
+// unexpected. tr may be nil, in which case only local dials are possible.
+func newSessiondDialer(tr server.RemoteTransport) server.DialFunc {
+	return func(ctx context.Context, host transport.HostRef) (server.DaemonConn, error) {
+		if host.ID == "" {
+			sock, err := sessiond.SocketPath()
+			if err != nil {
+				return nil, err
+			}
+			logPath, err := sessiond.DefaultLogPath()
+			if err != nil {
+				return nil, err
+			}
+			if err := sessiond.EnsureDaemon(sock, logPath); err != nil {
+				return nil, err
+			}
+			return sessiond.Dial(sock)
+		}
+
+		if tr == nil {
+			return nil, fmt.Errorf("no remote transport configured: cannot reach %s", host.ID)
+		}
+		conn, err := tr.Dial(ctx, host)
 		if err != nil {
 			return nil, err
 		}
-		logPath, err := sessiond.DefaultLogPath()
-		if err != nil {
-			return nil, err
-		}
-		if err := sessiond.EnsureDaemon(sock, logPath); err != nil {
-			return nil, err
-		}
-		return sessiond.Dial(sock)
+		return sessiond.DialConn(conn), nil
 	}
 }
 
@@ -357,6 +387,8 @@ func runLocal(cfg Config) error {
 		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
 	}
 
+	rt := newSSHRemoteTransport()
+
 	// Local mode keeps the loopback bypass, so the token is not strictly
 	// required here -- but publishing it anyway keeps the handoff file's
 	// shape identical across both modes and costs nothing.
@@ -376,9 +408,10 @@ func runLocal(cfg Config) error {
 		WebRedirectURI: webRedirectURIFor(cfg.Addr, localServerCfg),
 		LocalToken:     localToken,
 		Version:        version,
+		Remotes:        rt,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
-	srv.Hub().SetDialer(newSessiondDialer())
+	srv.Hub().SetDialer(newSessiondDialer(rt))
 
 	// Publish serve-layer URL + local token so the MCP server can discover
 	// and authenticate to the tunnel API.
@@ -437,6 +470,8 @@ func runServe(cfg Config) error {
 		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
 	}
 
+	rt := newSSHRemoteTransport()
+
 	// Mint the same-user helper-process credential before the server is
 	// built, so the middleware and the on-disk handoff file agree. Without
 	// it the MCP tools have no credential at all and rely entirely on the
@@ -457,9 +492,10 @@ func runServe(cfg Config) error {
 		BehindReverseProxy: srvCfg.BehindReverseProxy,
 		LocalToken:         localToken,
 		Version:            version,
+		Remotes:            rt,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
-	srv.Hub().SetDialer(newSessiondDialer())
+	srv.Hub().SetDialer(newSessiondDialer(rt))
 
 	// Publish serve-layer URL + local token so the MCP server can discover
 	// and authenticate to the tunnel API.

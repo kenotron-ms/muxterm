@@ -14,8 +14,12 @@
  * session-state.ts owns that placement; this file never re-derives it.
  *
  * PRESENTATIONAL. It is handed `sessions` and reports intent through events.
- * It imports no socket, no store, no daemon — which is exactly why the
- * standalone fixture demo can mount this same component with no backend.
+ * It imports no socket and no daemon — which is exactly why the standalone
+ * fixture demo can mount this same component with no backend. The one store it
+ * does read, `remotesStore`, is a passive map of host connection state fed from
+ * outside; with no remotes configured it is empty, every remote-aware branch
+ * below returns what it returned before the fleet existed, and the demo runs
+ * exactly as it always has.
  *
  *   home-open      { sessionId, paneId, workspaceId }  Enter / click a tile
  *   home-action    { sessionId, paneId, workspaceId, action }  an ask button
@@ -44,6 +48,11 @@ import { paletteAnsiArray, resolvePalette } from '../lib/theme.js';
 import { icon } from '../lib/icons.js';
 import { ArrowUp, LayoutGrid, Rows3 } from 'lucide';
 import { NEEDS_GLYPH } from './mux-start-card.js';
+import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
+import { parseHostRef } from '../lib/host-ref.js';
+
+/** The spinner the dropped state is marked with, here and in the tab strip. */
+const DROP_GLYPH = '⟲';
 
 // ---------------------------------------------------------------------------
 // View mode
@@ -340,6 +349,8 @@ export class MuxHome extends LitElement {
   @state() private _termCols = TILE_COLS;
 
   private _ro: ResizeObserver | null = null;
+  /** Unsubscribe from host connection state. Null while disconnected. */
+  private _unsubRemotes: (() => void) | null = null;
   /** The composer box, once it exists. Measured, not computed — see _measure. */
   private _composerEl: HTMLElement | null = null;
 
@@ -609,6 +620,25 @@ export class MuxHome extends LitElement {
       color: var(--ok);
       background: color-mix(in srgb, var(--ok) 12%, transparent);
       border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+    }
+    /* WHICH MACHINE — a property of the row, not a group of its own (ux D1).
+       Home answers "what needs me right now"; grouping that by host would
+       mean scanning five groups to find two things. Same geometry as every
+       badge above it, in the one token the fleet added. Local sessions carry
+       no badge at all: only the exception is marked. */
+    .badge.host {
+      color: var(--remote);
+      background: color-mix(in srgb, var(--remote) 15%, transparent);
+      border-color: color-mix(in srgb, var(--remote) 45%, transparent);
+    }
+    /* The machine is not answering. Dashed, because dashed is already this
+       view's word for "muxterm has no current opinion" (.badge.unknown), and
+       warn because that is the colour of every other degraded thing here. */
+    .badge.host.down {
+      border-style: dashed;
+      color: var(--need);
+      background: color-mix(in srgb, var(--need) 12%, transparent);
+      border-color: color-mix(in srgb, var(--need) 45%, transparent);
     }
 
     .mark {
@@ -882,6 +912,21 @@ export class MuxHome extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    /* A row whose machine is not answering. GHOSTED, NEVER REMOVED (ux D8):
+       the panes are still running over there — sessiond owns those PTYs —
+       and dropping the row would say they died. Dashed and dimmed says the
+       true thing instead: this is the last we heard. */
+    .rowc.stale {
+      border-style: dashed;
+      opacity: 0.65;
+    }
+    /* The doing line goes with it. What it was doing is what it was doing
+       when the link went, and leaving it in the reading colour states it as
+       present tense — so it is replaced rather than annotated (see
+       _doingLine). */
+    .rowc.stale .doing {
+      color: var(--need);
+    }
 
     /* ── TILES — D7 ──────────────────────────────────────────────────
        One track per column, each 1fr, so the row FILLS the measure. The
@@ -965,6 +1010,7 @@ export class MuxHome extends LitElement {
       display: flex;
       gap: var(--s-2);
     }
+
 
     /* ── PEEK ─────────────────────────────────────────────────────────
        A left rule, because it is a detail OF the row above it. Nothing
@@ -1181,6 +1227,12 @@ export class MuxHome extends LitElement {
       this._ro = new ResizeObserver(() => this._measure());
       this._ro.observe(this);
     }
+    // A machine going away changes what these rows MEAN, and no session
+    // property changes when it happens — the producer on the other end has
+    // simply stopped talking. So the view listens to host state directly. A
+    // browser with no remotes never receives a host-state frame, so this
+    // subscription fires zero times there and costs one Set entry.
+    this._unsubRemotes = remotesStore.subscribe(() => this.requestUpdate());
     // The home view is not a terminal, so it takes the keyboard. Focus lands on
     // the scroller itself; j/k/Space/Enter/Esc are handled there.
     void this.updateComplete.then(() => this.focusView());
@@ -1189,6 +1241,8 @@ export class MuxHome extends LitElement {
   override disconnectedCallback(): void {
     this._ro?.disconnect();
     this._ro = null;
+    this._unsubRemotes?.();
+    this._unsubRemotes = null;
     this._composerEl = null;
     super.disconnectedCallback();
   }
@@ -1457,9 +1511,78 @@ export class MuxHome extends LitElement {
     >`;
   }
 
+  // ── The fleet, as a property of a row ──────────────────────────────────────
+  //
+  // THE ZERO-REMOTE GATE lives in the three helpers below. Each begins by
+  // asking remotesStore whether this browser has heard of a single machine, and
+  // each returns EXACTLY what this view returned before the fleet existed when
+  // the answer is no — the same string, the same class list, the same template.
+  //
+  // Note what is NOT here: a second grouping, a fleet strip, a per-host filter.
+  // Home answers "what needs me right now" and keeps its Needs input / Running
+  // / Completed sections untouched (ux D1). Machine is a badge.
+
+  /** The machine a session lives on, or null for local / no remotes at all. */
+  private _hostOf(s: SessionState): { name: string; state: HostConnState } | null {
+    if (!remotesStore.any) return null;
+    const { host } = parseHostRef(s.workspaceId);
+    if (host === '') return null;
+    const entry = remotesStore.get(host);
+    // Unknown is not local: a namespaced id whose host we have no frame for is
+    // still elsewhere, and reporting it as here would be the one lie that
+    // matters. stateOf() fails closed for the same reason.
+    return { name: entry?.name || host, state: entry?.state ?? 'never-connected' };
+  }
+
+  /** True when this session is on a machine that is not currently answering. */
+  private _isStale(s: SessionState): boolean {
+    const host = this._hostOf(s);
+    return host !== null && host.state !== 'connected';
+  }
+
+  /**
+   * The workspace id as a person should read it: `w1`, not `ssh:boxb/w1`.
+   *
+   * The qualifier is machine plumbing — the badge already says which machine,
+   * in its name rather than its id — and repeating it in the metadata line
+   * spends the row's narrowest column on the thing it least needs to say.
+   */
+  private _wsLabel(workspaceId: string): string {
+    if (!remotesStore.any) return workspaceId;
+    const { host, localId } = parseHostRef(workspaceId);
+    if (host === '' || localId === '') return workspaceId;
+    return localId;
+  }
+
+  /** The machine badge. Nothing at all for a local session (ux D2). */
+  private _hostChip(s: SessionState): TemplateResult | '' {
+    const host = this._hostOf(s);
+    if (!host) return '';
+    const down = host.state !== 'connected';
+    return html`<span
+      class="badge host ${down ? 'down' : ''}"
+      title="${down ? `${host.name} — ${host.state}` : host.name}"
+      >${down ? `${DROP_GLYPH} ${host.name}` : host.name}</span
+    >`;
+  }
+
+  /**
+   * The qualifiers that follow a session's name: run mode, then machine.
+   *
+   * ONE binding, not two, and that is deliberate. A second `${...}` in the card
+   * and row templates would add a ChildPart marker comment to every session on
+   * every machine, including the ones that have no remotes at all — so the host
+   * chip is composed inside this value instead. With no remotes this returns
+   * precisely what `_modeChip` returns, into the slot `_modeChip` already had.
+   */
+  private _qualifiers(s: SessionState): TemplateResult | '' {
+    if (!remotesStore.any) return this._modeChip(s);
+    return html`${this._modeChip(s)}${this._hostChip(s)}`;
+  }
+
   private _loc(s: SessionState): string {
     const a = age(s.updatedAt, this._now);
-    const base = `${s.workspaceId} · p${s.paneId}`;
+    const base = `${this._wsLabel(s.workspaceId)} · p${s.paneId}`;
     return a ? `${base} · ${a}` : base;
   }
 
@@ -1504,7 +1627,7 @@ export class MuxHome extends LitElement {
       >
         <div class="nrow">
           <span class="name">${s.name}</span>
-          ${this._harnessChip(s)}${this._modeChip(s)}
+          ${this._harnessChip(s)}${this._qualifiers(s)}
           <span class="meta loc">${this._loc(s)}</span>
         </div>
         <div class="doing">${askFor(s)}</div>
@@ -1522,13 +1645,40 @@ export class MuxHome extends LitElement {
     `;
   }
 
+  /**
+   * A row's class list: the cursor, and whether its machine is answering.
+   *
+   * One binding again, for the same reason `_qualifiers` is one: appending a
+   * second `${...}` to the class attribute would put a second space in the
+   * rendered `class` of every row on a machine with no remotes.
+   */
+  private _rowCls(s: SessionState, focused: boolean): string {
+    const sel = focused ? 'sel' : '';
+    if (!remotesStore.any || !this._isStale(s)) return sel;
+    return sel === '' ? 'stale' : `${sel} stale`;
+  }
+
+  /**
+   * The second line of a row.
+   *
+   * A stale row's last words are stale too: whatever it was doing, it was doing
+   * when the link went, and rendering that sentence in the reading colour
+   * states it as present tense. Replaced with the state, not annotated with it.
+   */
+  private _doingLine(s: SessionState): TemplateResult | '' {
+    if (this._isStale(s)) {
+      return html`<div class="doing">${DROP_GLYPH} unreachable</div>`;
+    }
+    const doing = s.doing?.trim() ?? '';
+    return doing ? html`<div class="doing">${doing}</div>` : '';
+  }
+
   /** A non-blocking session, one compact row. */
   private _row(s: SessionState, focused: boolean): TemplateResult {
     const a = age(s.updatedAt, this._now);
-    const doing = s.doing?.trim() ?? '';
     return html`
       <div
-        class="rowc ${focused ? 'sel' : ''}"
+        class="rowc ${this._rowCls(s, focused)}"
         aria-current="${focused ? 'true' : 'false'}"
         @click="${() => this._onItemClick(s)}"
       >
@@ -1536,16 +1686,16 @@ export class MuxHome extends LitElement {
         <div class="rmid">
           <div class="nrow">
             <span class="name">${s.name}</span>
-            ${this._harnessChip(s)}${this._modeChip(s)}
+            ${this._harnessChip(s)}${this._qualifiers(s)}
           </div>
           <!-- Omitted entirely when there is nothing to say. An empty div
                still took a line box and pushed the row taller for no text. -->
-          ${doing ? html`<div class="doing">${doing}</div>` : ''}
+          ${this._doingLine(s)}
         </div>
         <div class="meta rr">
           ${s.pr && s.pr > 0
             ? html`<span class="badge pr">#${s.pr}</span>`
-            : html`<span>${s.workspaceId} · p${s.paneId}</span>`}
+            : html`<span>${this._wsLabel(s.workspaceId)} · p${s.paneId}</span>`}
           <span>${a || '—'}</span>
         </div>
       </div>
@@ -1591,7 +1741,7 @@ export class MuxHome extends LitElement {
         </div>
         <div class="tbody">${body}</div>
         <div class="meta tf">
-          <span>${s.workspaceId} · p${s.paneId}</span>
+          <span>${this._wsLabel(s.workspaceId)} · p${s.paneId}</span>
           <span>${age(s.updatedAt, this._now) || s.mode}</span>
         </div>
         ${needs

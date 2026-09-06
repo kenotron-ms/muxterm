@@ -7,12 +7,13 @@ import (
 	"testing"
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/transport"
 )
 
 // newTestHub builds a Hub whose dialer always returns the supplied DaemonConn,
 // so a per-browser attach binds to the test double instead of a real socket.
 func newTestHub(dc DaemonConn) *Hub {
-	return NewHub(func() (DaemonConn, error) { return dc, nil })
+	return NewHub(func(ctx context.Context, host transport.HostRef) (DaemonConn, error) { return dc, nil })
 }
 
 // decodeMsg unmarshals a frozen sessiond.Message from a relayed text frame.

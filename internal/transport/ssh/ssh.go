@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -123,8 +124,24 @@ func targetOf(host transport.HostRef) (string, error) {
 //     on a prompt no one can answer.
 //   - --: end of options, so a target is never parsed as a flag.
 func baseArgs(target string) []string {
-	return []string{"-T", "-o", "BatchMode=yes", "--", target}
+	args := []string{"-T", "-o", "BatchMode=yes"}
+	if f := configOverride(); f != "" {
+		args = append(args, "-F", f)
+	}
+	return append(args, "--", target)
 }
+
+// configOverride returns the ssh config file to dial through, or "" for the
+// user's own.
+//
+// MUXTERM_SSH_CONFIG already redirects the sshconfig WRITER (sshconfig.go:29)
+// so nothing that edits a config has to be verified against a real one. The
+// dialer did not honour it, and OpenSSH finds ~/.ssh/config through getpwuid()
+// rather than $HOME -- so setting HOME redirects Go and not ssh. The two
+// together meant an end-to-end --remote run had no scratch config available at
+// all: it either wrote the user's real ~/.ssh/config or it did not run. Same
+// variable, same reason, now also on the read path.
+func configOverride() string { return os.Getenv("MUXTERM_SSH_CONFIG") }
 
 // remoteCommand builds the single command string ssh hands to the remote shell.
 //

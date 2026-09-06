@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/transport"
 )
 
 // startEchoDaemon launches a scripted Unix-socket daemon that speaks the frozen
@@ -85,7 +86,9 @@ func TestE2EBrowserToDaemonRoundTrip(t *testing.T) {
 	sock := startEchoDaemon(t)
 
 	srv := New(Config{Addr: "127.0.0.1:0"})
-	srv.Hub().SetDialer(func() (DaemonConn, error) { return sessiond.Dial(sock) })
+	srv.Hub().SetDialer(func(ctx context.Context, h transport.HostRef) (DaemonConn, error) {
+		return sessiond.Dial(sock)
+	})
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
