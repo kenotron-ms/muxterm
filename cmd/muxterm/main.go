@@ -117,6 +117,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "cos":
+		if err := runCos(cfg.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "amplifier-install":
 		if err := runAmplifierBundleInstall(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
