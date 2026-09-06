@@ -32,6 +32,16 @@ func (t *Transport) Discover(ctx context.Context) ([]transport.HostRef, error) {
 	}
 	sshDir := filepath.Join(home, ".ssh")
 	cfg := filepath.Join(sshDir, "config")
+	// MUXTERM_SSH_CONFIG redirects the writer (sshconfig.go:29) and the dialer
+	// (ssh.go configOverride). Discovery has to follow, or the override is
+	// half-applied in the way that produces the worst symptom: --remote <alias>
+	// connects fine while Settings shows an empty discovered list, because the
+	// two are reading different files. Include is still resolved relative to
+	// the config's own directory, so a scratch config keeps working.
+	if f := configOverride(); f != "" {
+		cfg = f
+		sshDir = filepath.Dir(f)
+	}
 	if _, err := os.Stat(cfg); err != nil {
 		return out, nil
 	}

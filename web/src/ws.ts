@@ -12,6 +12,8 @@ import {
 } from './types';
 import type { MuxStore } from './state';
 import { wsUrl } from './lib/base-path.js';
+import { hostSelector } from './lib/host-ref.js';
+import { HOST_STATE, remotesStore } from './lib/remotes-store.js';
 
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
 export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
@@ -165,6 +167,19 @@ export class MuxSocket {
    * frozen wire-state store a message type it has no projection for.
    */
   onCosFrame?: (frame: Record<string, unknown>) => void;
+  /**
+   * Fires on a host-state frame: one remote host's connection state changed
+   * (or the server is describing the registry to a freshly attached tab).
+   *
+   * Typed as a raw record rather than SessiondMessage on purpose — host-state
+   * is RELAY-ONLY. It is not a sessiond message type, it never travels on a
+   * daemon socket, and it exists precisely so that adding remotes costs
+   * `internal/sessiond/protocol.go` nothing.
+   *
+   * A browser with no remotes configured never receives one, which is the
+   * mechanism behind the zero-remote gate.
+   */
+  onHostState?: (msg: Record<string, unknown>) => void;
 
   constructor(store: MuxStore, url: string) {
     this._store = store;
@@ -200,7 +215,29 @@ export class MuxSocket {
     }
   }
 
+  /**
+   * Send one pane-input frame, unless the host behind the attached workspace
+   * is not currently connected.
+   *
+   * The drop is the whole point: input aimed at a host whose link is down is
+   * DISCARDED, never queued. Replaying a buffer of keystrokes into a shell
+   * that has moved on — a different directory, a different prompt, a
+   * half-typed command — is how you `rm -rf` the wrong thing. A read-only
+   * window is the honest state, and it lasts exactly as long as the outage.
+   *
+   * Local panes are untouched: remotesStore.stateOf() returns null for a bare
+   * (local) workspace id, and with no remotes configured every id is bare, so
+   * this reduces to today's send.
+   *
+   * It lives here rather than at each keyboard handler because this is the one
+   * choke point all three input paths already pass through.
+   */
   sendPaneInput(paneId: number, data: Uint8Array): void {
+    const attached = this._store.attached;
+    if (attached !== null) {
+      const hostState = remotesStore.stateOf(attached);
+      if (hostState !== null && hostState !== 'connected') return;
+    }
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
       this._ws.send(encodePaneFrame(paneId, data));
     }
@@ -388,11 +425,19 @@ export class MuxSocket {
    * clientRef is what makes the reply attributable: the relay echoes it on
    * workspace-created, so a caller holding state for its own request can tell
    * that reply from one caused by another tab or another surface in this one.
+   *
+   * host names which machine to create it on, as a HostRef.ID ("ssh:boxb").
+   * It travels as the HOST SELECTOR — a namespaced id with an empty local part
+   * ("ssh:boxb/") in workspaceId — which is the one message type where that
+   * form is legal, and which the relay strips before forwarding. Absent or
+   * empty means the local daemon and the message on the wire is byte-identical
+   * to today's: no workspaceId field at all.
    */
-  createWorkspace(name?: string, clientRef?: string): boolean {
+  createWorkspace(name?: string, clientRef?: string, host?: string): boolean {
     const msg: SessiondMessage = { type: SessiondType.CreateWorkspace };
     if (name) msg.name = name;
     if (clientRef) msg.clientRef = clientRef;
+    if (host) msg.workspaceId = hostSelector(host);
     return this.sendSessiond(msg);
   }
 
@@ -669,6 +714,11 @@ export class MuxSocket {
             this.onWorkspacePreview?.(raw as unknown as SessiondMessage);
           } else if (raw.type === SessiondType.SessionState) {
             this.onSessionState?.(raw as unknown as SessiondMessage);
+          } else if (raw.type === HOST_STATE) {
+            // Relay-only, and inert for the frozen store: state.ts's
+            // applySessiond already ends in `default: return`, so this frame
+            // passing through onSessiondMessage above changes nothing there.
+            this.onHostState?.(raw);
           }
         }
       }

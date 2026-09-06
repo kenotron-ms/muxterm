@@ -420,7 +420,10 @@ func registerTunnelTools(srv *Server) {
 
 	srv.Register(
 		"create_tunnel",
-		"create a new port-forward tunnel for the given local port; returns id and the /t/{id}/ proxy path",
+		"create a new port-forward tunnel for the given local port (1-65535); returns id, port, and url. "+
+			"url is absolute only when muxterm is configured with a public origin; otherwise it is the "+
+			"relative path /t/{id}/, which the caller resolves against whatever origin it reached muxterm on. "+
+			"The tunnel is auth-protected: it is reachable by this already-authenticated user, not shareable as an anonymous link",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{

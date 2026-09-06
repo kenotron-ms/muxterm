@@ -1,8 +1,6 @@
 package deploy
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -53,57 +51,95 @@ func (d *Deployer) Deploy(target string) error {
 		return fmt.Errorf("chmod binary: %w", err)
 	}
 
-	// 3. Generate secret
-	secret, err := generateSecret()
-	if err != nil {
-		return fmt.Errorf("generate secret: %w", err)
-	}
-
-	// 4. SSH write systemd unit
-	unit := systemdUnit(secret, "0.0.0.0:8080")
+	// 3. SSH write systemd unit
+	unit := systemdUnit(remoteAddr)
 	writeCmd := fmt.Sprintf("cat > /etc/systemd/system/muxterm.service << 'EOF'\n%s\nEOF", unit)
 	if _, err := d.runner.Run("ssh", target, writeCmd); err != nil {
 		return fmt.Errorf("write systemd unit: %w", err)
 	}
 
-	// 5. SSH systemctl daemon-reload && systemctl enable --now muxterm.service
+	// 4. SSH systemctl daemon-reload && systemctl enable --now muxterm.service
 	if _, err := d.runner.Run("ssh", target, "systemctl daemon-reload && systemctl enable --now muxterm.service"); err != nil {
 		return fmt.Errorf("start service: %w", err)
 	}
 
-	// 6. Extract hostname from target, print URL and token
+	// 5. Extract hostname from target and report how to reach it
 	hostname := target
 	if parts := strings.SplitN(target, "@", 2); len(parts) == 2 {
 		hostname = parts[1]
 	}
 
 	log.Printf("muxterm deployed to %s", target)
-	log.Printf("URL: http://%s:8080", hostname)
-	log.Printf("secret: %s", secret)
+	log.Printf("URL: http://%s%s", hostname, remotePortSuffix)
+	// Deliberately no credential printed here. muxterm authenticates
+	// browser sessions through its own login flow, not through a shared
+	// string; the value this used to print was generated, embedded in the
+	// unit, and read by nothing.
+	log.Printf("Sign in at that URL. If it is reached through a reverse proxy or a public")
+	log.Printf("hostname, set public_origin and behind_reverse_proxy in muxterm's config")
+	log.Printf("file ON THE REMOTE HOST -- this unit intentionally carries no policy.")
 
 	return nil
 }
 
+// remoteAddr is the address the deployed unit binds on the remote host, and
+// remotePortSuffix is the matching suffix for the URL reported to the
+// operator. Unlike the local install path, --addr stays in THIS unit: it is
+// regenerated wholesale on every deploy, nobody hand-edits it, and a remote
+// host with no config file would otherwise fall back to a loopback default
+// and be unreachable -- while this command cheerfully printed a working URL.
+const (
+	remoteAddr       = "0.0.0.0:8080"
+	remotePortSuffix = ":8080"
+)
+
 // systemdUnit generates a systemd unit file for the muxterm service.
-func systemdUnit(secret, addr string) string {
+//
+// This is a SECOND, independent unit template -- internal/service renders
+// the one used by `muxterm install`. The two are not shared and do not track
+// each other; a change to either must be considered for both.
+//
+// THE PUBLIC ORIGIN IS NOT CARRIED BY THIS UNIT, DELIBERATELY.
+//
+// public_origin / behind_reverse_proxy are config-file settings, exactly as
+// they are for `muxterm install` (see writeInstallServerConfig in
+// cmd/muxterm). Do not add --public-origin to the ExecStart below. Three
+// reasons, all of which apply here too:
+//
+//   - Injection: this unit is built with fmt.Sprintf and no escaping at all,
+//     and is then shipped over ssh inside a `cat > ... << 'EOF'` heredoc. An
+//     operator-supplied origin containing a newline, or `%` (a systemd
+//     specifier), or the literal line "EOF" would break out of the value.
+//   - Survival: any redeploy overwrites this file wholesale.
+//   - Visibility: a flag in ExecStart outranks the config.toml an operator
+//     would naturally edit (resolveServerConfig gives flags precedence),
+//     with nothing in the config file to say why it is being ignored.
+//
+// CONSEQUENCE, KNOWN AND UNFIXED HERE: `muxterm deploy` never writes a
+// config file on the remote host, so a pushed deployment always starts with
+// public_origin unset -- muxterm derives its public URLs from --addr, and a
+// browser arriving through a fronting reverse proxy gets redirected to the
+// remote's own listen address. Configuring a public origin on a deploy
+// target is a MANUAL step on that host.
+//
+// Note also that this unit is a SYSTEM unit with no User=, so it runs as
+// root, and systemd sets $HOME only for units that set User= (systemd.exec).
+// With $HOME unset, config.DefaultPath() resolves to the RELATIVE path
+// ".config/muxterm/config.toml", taken against the system manager's default
+// WorkingDirectory of "/" -- i.e. /.config/muxterm/config.toml, not
+// /root/.config/... . Any manual remote configuration has to account for
+// that (write the file there, or add User= / Environment=XDG_CONFIG_HOME=
+// to this unit) or the file will be silently ignored.
+func systemdUnit(addr string) string {
 	return fmt.Sprintf(`[Unit]
 Description=muxterm remote terminal
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/muxterm serve --addr %s --secret %s
+ExecStart=/usr/local/bin/muxterm serve --addr %s
 Restart=on-failure
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target`, addr, secret)
-}
-
-// generateSecret generates a 16-byte random hex-encoded secret.
-func generateSecret() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
+WantedBy=multi-user.target`, addr)
 }

@@ -5,29 +5,52 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"github.com/kenotron-ms/muxterm/internal/config"
 )
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode      string // local, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, cos, spawn-lane, amplifier-install, help
-	Addr      string // listen address
-	Secret    string // auth token for serve mode
+	Mode string // local, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, cos, spawn-lane, amplifier-install, help
+	Addr string // listen address
+	// Secret is accepted and ignored. It exists only so an installed unit
+	// that still passes --secret keeps parsing: the documented upgrade
+	// path and the browser's self-update both restart the service without
+	// regenerating the unit, so an old flag-bearing ExecStart can outlive
+	// the binary indefinitely. flag treats an unknown flag as a fatal
+	// error, which under Restart=on-failure is a five-second crash loop.
+	// Nothing reads the value; muxterm authenticates via browser login.
+	Secret    string
 	NoAuth    bool   // skip WebSocket auth check (dev only — never use in production)
 	Target    string // SSH target for deploy mode
 	Force     bool   // install: overwrite existing service installation
 	Transport string // mcp mode: transport type ("stdio"); SSE arrives in Phase 5
 	MCPPort   int    // mcp mode: SSE port (Phase 5, parsed but rejected for now)
 
-	// PublicOrigin is the serve-mode --public-origin override for the
-	// config file's [server].public_origin. Empty means "unset — use the
-	// config file value."
+	// PublicOrigin is the --public-origin value for `serve` and `install`.
+	// Empty means "unset — use the config file value."
+	//
+	// The two modes consume it differently, and deliberately so. For
+	// `serve` it is a runtime override of the config file's
+	// [server].public_origin for this process only. For `install` it is
+	// not an override at all: it is WRITTEN to the config file (see
+	// writeInstallServerConfig) and never baked into the generated
+	// systemd unit or launchd plist.
 	PublicOrigin string
-	// BehindReverseProxy is the serve-mode --behind-reverse-proxy override
-	// for the config file's [server].behind_reverse_proxy. false means
-	// "unset — use the config file value"; the flag can only turn the
-	// setting on, never off (same one-way bool limitation config.Merge
-	// documents).
+	// BehindReverseProxy is the --behind-reverse-proxy value for `serve`
+	// and `install`. false means "unset — use the config file value"; the
+	// flag can only turn the setting on, never off (same one-way bool
+	// limitation config.Merge documents). Same serve-overrides /
+	// install-persists split as PublicOrigin above.
 	BehindReverseProxy bool
+
+	// Remote names an ssh target to run this subcommand against instead of the
+	// local daemon. Empty means local. Position is GLOBAL and leading
+	// ("muxterm --remote boxb pane send ..."), like `git -C`, so it can never be
+	// confused with a subcommand's own argument -- `pane send --text "--remote x"`
+	// must keep working.
+	Remote string
 
 	// Args holds the un-parsed remainder for the socket-client subcommand
 	// trees (read-screen / session / pane / layout / spawn-lane). Those parse
@@ -42,7 +65,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "muxterm — browser-based terminal multiplexer")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  muxterm                     Open in browser (127.0.0.1:8311, default)")
+	fmt.Fprintln(w, "  muxterm                     Open in browser ("+config.DefaultAddr+", default)")
 	fmt.Fprintln(w, "  muxterm serve [flags]       Start server for remote access")
 	fmt.Fprintln(w, "  muxterm install [flags]     Install as a system service")
 	fmt.Fprintln(w, "  muxterm uninstall           Remove system service")
@@ -61,16 +84,92 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm amplifier install   Install muxterm bundle into Amplifier")
 	fmt.Fprintln(w, "  muxterm version             Print version")
 	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Global flags:")
+	fmt.Fprintln(w, "  --remote <host>             Run a daemon subcommand against a remote host over ssh")
+	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Run 'muxterm <command> --help' for command-specific flags.")
+}
+
+// remoteScopeMsg is the error for --remote handed to a mode that cannot use
+// it. Naming the modes that CAN is more useful than naming the one that
+// cannot, since the list is short and closed.
+const remoteScopeMsg = "--remote is only valid for the daemon subcommands: workspace, session, pane, layout, read-screen"
+
+// remoteCapableModes are the modes that do nothing but speak the frozen
+// sessiond protocol to a daemon, and so work identically against a remote one.
+// Every other mode is local BY NATURE -- it binds a listener, edits this
+// machine's service files, spawns this machine's daemon, or prints a build
+// constant -- so --remote is rejected for it rather than silently ignored.
+var remoteCapableModes = map[string]bool{
+	"read-screen": true,
+	"session":     true,
+	"workspace":   true,
+	"pane":        true,
+	"layout":      true,
 }
 
 // ParseArgs parses command-line arguments and returns a Config.
 // It is a pure function with no side effects beyond flag parsing.
 func ParseArgs(args []string) (Config, error) {
+	remote, rest, err := peelRemote(args)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg, err := parseCommand(rest)
+	if err != nil {
+		return Config{}, err
+	}
+	if remote != "" {
+		if !remoteCapableModes[cfg.Mode] {
+			return Config{}, fmt.Errorf("%s", remoteScopeMsg)
+		}
+		cfg.Remote = remote
+	}
+	return cfg, nil
+}
+
+// peelRemote strips LEADING "--remote <host>" / "--remote=<host>" tokens off
+// args and returns the target they name plus the remainder to dispatch on.
+//
+// Leading is the whole point: the flag is global and positional like `git -C`,
+// so parsing stops at the first token that is not one, and a --remote appearing
+// anywhere else stays untouched as a subcommand's own argument. That is what
+// keeps `pane send --text "--remote x"` sending the literal text it always has.
+// A repeated flag takes the last value, matching flag.Parse's own semantics.
+func peelRemote(args []string) (string, []string, error) {
+	remote := ""
+	for len(args) > 0 {
+		switch {
+		case args[0] == "--remote":
+			if len(args) < 2 {
+				return "", nil, fmt.Errorf("--remote requires a host argument (e.g. --remote boxb)")
+			}
+			remote, args = args[1], args[2:]
+		case strings.HasPrefix(args[0], "--remote="):
+			remote, args = strings.TrimPrefix(args[0], "--remote="), args[1:]
+		default:
+			return remote, args, nil
+		}
+		if remote == "" {
+			return "", nil, fmt.Errorf("--remote requires a host argument (e.g. --remote boxb)")
+		}
+	}
+	return remote, args, nil
+}
+
+// parseCommand is ParseArgs' dispatch, split out so the global --remote prefix
+// is peeled exactly once, before it, and can never reach a subcommand's own
+// flag set.
+func parseCommand(args []string) (Config, error) {
 	if len(args) == 0 {
 		return Config{
 			Mode: "local",
-			Addr: "127.0.0.1:8311",
+			// Explicit, not the empty sentinel: runLocal deliberately
+			// ignores [server], so this is local mode's ONLY source for a
+			// listen address. An empty Addr here would reach
+			// http.Server.Addr, which net/http documents as meaning ":http"
+			// -- port 80 on every interface.
+			Addr: config.DefaultAddr,
 		}, nil
 	}
 
@@ -165,8 +264,14 @@ func parseMCP(args []string) (Config, error) {
 func parseServe(args []string) (Config, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
-	addr := fs.String("addr", "127.0.0.1:8311", "listen address")
-	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
+	// Empty default, NOT config.DefaultAddr. A non-empty flag default is
+	// indistinguishable from a value the operator typed, and the
+	// precedence idiom this repo uses is `if cli.X != ""` -- so a
+	// defaulted flag would beat a configured [server].addr every time and
+	// the config file would never be consulted. Absence must be
+	// representable. The default is applied after resolution instead.
+	addr := fs.String("addr", "", "listen address (default "+config.DefaultAddr+"; overrides [server].addr)")
+	secret := fs.String("secret", "", "deprecated and ignored; muxterm authenticates via browser login")
 	noAuth := fs.Bool("no-auth", false, "skip WebSocket auth check (dev only — never use in production)")
 	publicOrigin := fs.String("public-origin", "", "canonical public origin when behind a reverse proxy (e.g. https://muxterm.example.com); required with --behind-reverse-proxy")
 	behindProxy := fs.Bool("behind-reverse-proxy", false, "run behind a reverse proxy: derive public URLs from --public-origin and disable the loopback auth bypass")
@@ -217,14 +322,25 @@ func parseDeploy(args []string) (Config, error) {
 func parseInstall(args []string) (Config, error) {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
-	addr := fs.String("addr", "127.0.0.1:8311", "listen address for the service")
-	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
+	// Empty default -- see the note on serve's --addr. Absent means "leave
+	// whatever is already configured alone", which is what makes a bare
+	// `muxterm install` upgrade non-destructive.
+	addr := fs.String("addr", "", "listen address to persist to the muxterm config file (default "+config.DefaultAddr+"; omit to keep the configured value)")
 	force := fs.Bool("force", false, "stop and overwrite an existing installation")
+	// Declared to mirror `serve`, but NOT carried into the generated unit's
+	// ExecStart (or the launchd plist). install persists them to the
+	// muxterm config file instead -- see writeInstallServerConfig for why.
+	publicOrigin := fs.String("public-origin", "", "canonical public origin when behind a reverse proxy (e.g. https://muxterm.example.com); written to the muxterm config file, not to the service unit")
+	behindProxy := fs.Bool("behind-reverse-proxy", false, "run behind a reverse proxy: derive public URLs from --public-origin and disable the loopback auth bypass; written to the muxterm config file, not to the service unit")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm install [flags]")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Install muxterm as a system service (systemd on Linux, launchd on macOS).")
 		fmt.Fprintln(os.Stdout, "Use --force to stop and overwrite an existing installation.")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "--public-origin and --behind-reverse-proxy are persisted to the muxterm")
+		fmt.Fprintln(os.Stdout, "config file, not to the service unit, so re-running 'muxterm install' to")
+		fmt.Fprintln(os.Stdout, "upgrade keeps them. Omit them to leave the configured values untouched.")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Flags:")
 		fs.PrintDefaults()
@@ -233,9 +349,10 @@ func parseInstall(args []string) (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		Mode:   "install",
-		Addr:   *addr,
-		Secret: *secret,
-		Force:  *force,
+		Mode:               "install",
+		Addr:               *addr,
+		Force:              *force,
+		PublicOrigin:       *publicOrigin,
+		BehindReverseProxy: *behindProxy,
 	}, nil
 }

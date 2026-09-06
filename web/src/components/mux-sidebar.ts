@@ -4,6 +4,7 @@ import { store } from '../state.js';
 import { workspaceLabel } from '../lib/workspace-label.js';
 import './launcher-menu.js';
 import './mux-start-card.js';
+import type { StartSplitRow } from './mux-start-card.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputByWorkspace, needsInputCount } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
@@ -15,6 +16,9 @@ import { renderTile, fontReady } from '../lib/preview-canvas.js';
 import { tileHash, type PreviewTile } from '../lib/preview-tile.js';
 import { PREVIEW_CELL } from '../lib/fonts.js';
 import { paletteAnsiArray, resolvePalette } from '../lib/theme.js';
+import { parseHostRef, isRemoteId } from '../lib/host-ref.js';
+import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
+import { apiPath } from '../lib/base-path.js';
 import {
   fetchUpdateStatus,
   applyUpdate,
@@ -142,6 +146,175 @@ function cardsSignature(cards: CardState[], mode: PreviewMode, cols: number): st
     sig += `|${c.visual}|${c.title}|${c.extra}|${c.hint}|${c.needs}|${c.paneCount}`;
   }
   return sig;
+}
+
+// ---------------------------------------------------------------------------
+// Host groups
+//
+// The sidebar answers "where is my stuff", which is a spatial question, so it
+// is the ONE surface that groups by machine (ux D1). Everything here is dead
+// code until the browser hears about a remote: `_renderWorkspaces()` returns
+// today's flat list while `remotesStore.any` is false.
+// ---------------------------------------------------------------------------
+
+/** One machine's section of the workspace list. */
+interface HostGroup {
+  /** HostRef.ID, or '' for the local daemon. */
+  host: string;
+  /** Header label. The display NAME, never the id (ux D7). */
+  name: string;
+  /** Connection state, or null for local — local is not a remote (ux D2). */
+  state: HostConnState | null;
+  /** ms epoch the current state began; 0 when unknown. */
+  since: number;
+  cards: CardState[];
+  /** This machine's share of the Start card's needs-input total. */
+  needs: number;
+}
+
+/**
+ * Split the cards into per-machine groups.
+ *
+ * Order is local first, then `remotesStore.hosts` (sorted by id), which is the
+ * same stable order the server merges its workspace list in — so a push can
+ * never reshuffle the sidebar.
+ *
+ * A connected host with no workspaces still gets a group: it is the header
+ * that carries its "+ New workspace". The one host that is dropped is an
+ * `unreachable` one with nothing on it, which lives in settings rather than
+ * here (ux failure table). An unreachable host that DOES hold workspaces keeps
+ * its group, because workspaces ghost, never vanish (ux D8).
+ */
+function groupCards(cards: CardState[], localName: string): HostGroup[] {
+  const byHost = new Map<string, CardState[]>();
+  for (const card of cards) {
+    const { host } = parseHostRef(card.id);
+    const list = byHost.get(host);
+    if (list) list.push(card);
+    else byHost.set(host, [card]);
+  }
+
+  const take = (host: string): CardState[] => {
+    const list = byHost.get(host) ?? [];
+    byHost.delete(host);
+    return list;
+  };
+  const group = (
+    host: string,
+    name: string,
+    state: HostConnState | null,
+    since: number,
+    groupCardList: CardState[],
+  ): HostGroup => ({
+    host,
+    name,
+    state,
+    since,
+    cards: groupCardList,
+    needs: groupCardList.reduce((sum, c) => sum + c.needs, 0),
+  });
+
+  const groups: HostGroup[] = [group('', localName, null, 0, take(''))];
+  for (const host of remotesStore.hosts) {
+    const hostCards = take(host.id);
+    if (host.state === 'unreachable' && hostCards.length === 0) continue;
+    groups.push(group(host.id, host.name, host.state, host.since, hostCards));
+  }
+  // Anything left names a host this browser holds cards for but has no frame
+  // for. It should not happen; dropping the cards on the floor if it does
+  // would make a workspace disappear, so they get a group of their own.
+  for (const host of [...byHost.keys()].sort()) {
+    groups.push(group(host, host, 'never-connected', 0, take(host)));
+  }
+  return groups;
+}
+
+/**
+ * The empty split, as ONE array that never changes identity.
+ *
+ * Lit compares property values by identity, so handing the card a fresh `[]`
+ * every render would mark it dirty and re-render it on every sidebar update
+ * for a user who has no remotes at all. Same DOM either way — but the zero-
+ * remote path is supposed to cost nothing, and a wasted render per frame is
+ * not nothing.
+ */
+const NO_SPLIT: StartSplitRow[] = [];
+
+/**
+ * The Start card's per-machine split (ux D5), and the ONLY producer of it.
+ *
+ * Never called while `remotesStore.any` is false — the caller passes NO_SPLIT
+ * instead, and an empty split renders nothing at all, which is what keeps the
+ * card byte-identical for a browser with one machine.
+ *
+ * Two rules carry the whole feature:
+ *
+ *   1. A machine that is not CONNECTED contributes `null`, which the card
+ *      renders `?`. Never 0. The rows for a dropped host are still cached at
+ *      the Go edge (A.4) and still counted in the headline total, so a number
+ *      is available here — and it would be a lie, because it describes what
+ *      that machine was doing when the link died, not what it is doing now.
+ *      Zero is the specific lie that matters: it says "nothing is waiting for
+ *      you over there", which is exactly the claim a silent machine cannot
+ *      support.
+ *   2. The rows are the same machines, in the same order, as groupCards() puts
+ *      in the list below — including its one exclusion, an `unreachable` host
+ *      holding nothing, which lives in settings rather than the sidebar (ux
+ *      failure table). A `?` for a machine with no group would be the card
+ *      reporting on something the user cannot see.
+ *
+ * The counts come from the SAME needsInputByWorkspace() map the card badges and
+ * the group marks come from, so per-host and per-workspace answers cannot
+ * disagree. What reaches the screen is a dot, a `?`, or nothing -- the card
+ * reduces every row, and no number in this function is ever rendered.
+ */
+function fleetSplit(needsByWs: Map<string, number>, localName: string): StartSplitRow[] {
+  const perHost = new Map<string, number>();
+  for (const [wsId, n] of needsByWs) {
+    const { host } = parseHostRef(wsId);
+    perHost.set(host, (perHost.get(host) ?? 0) + n);
+  }
+  // Workspace presence per host, from the same list the cards are built from.
+  const populated = new Set<string>();
+  for (const ws of store.workspaces) populated.add(parseHostRef(ws.workspaceId).host);
+
+  // Local is first and is never `?`: its daemon is in this process, so there
+  // is no link that can be down (ux D2).
+  const rows: StartSplitRow[] = [{ name: localName, count: perHost.get('') ?? 0 }];
+  for (const host of remotesStore.hosts) {
+    if (host.state === 'unreachable' && !populated.has(host.id)) continue;
+    rows.push({
+      name: host.name,
+      count: host.state === 'connected' ? (perHost.get(host.id) ?? 0) : null,
+    });
+  }
+  // One row is not a split, it is the headline said twice. Reachable when the
+  // only remote is an `unreachable` one holding nothing: `any` is true, so the
+  // sidebar groups, but there is no second machine worth reporting on.
+  return rows.length > 1 ? rows : NO_SPLIT;
+}
+
+/**
+ * Status dot class, reusing the existing colour vocabulary (ux D3):
+ * `--mux-ok` connected, `--mux-warn` reconnecting, hollow otherwise.
+ * Local has no connection state and is always shown as up — the daemon it
+ * talks to is in this process.
+ */
+function hostDotClass(state: HostConnState | null): string {
+  if (state === null || state === 'connected') return 'ok';
+  if (state === 'reconnecting') return 'warn';
+  // unreachable's red belongs to settings (ux failure table); in the sidebar
+  // it reads the same as never-connected: this one is not here.
+  return 'off';
+}
+
+/** "12s" / "4m" / "2h" — the age of a host's current state. */
+function ageLabel(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h`;
 }
 
 // ---------------------------------------------------------------------------
@@ -580,6 +753,209 @@ export class MuxSidebar extends LitElement {
       background: var(--chrome-hover);
     }
 
+    /* ---- host groups ----
+       Every rule below needs a class that only appears once this browser has
+       heard of a remote (.hostgroup, .hg-*, .stale-banner, .retry-btn) or a
+       "remote" modifier on an existing one. With no remotes, none of them can
+       match, which is the CSS half of the zero-remote guarantee. */
+
+    .hostgroup {
+      margin: 10px 0 2px;
+    }
+
+    .hg-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px 3px 6px;
+      margin: 0 4px;
+      border-radius: 4px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .hg-head:hover {
+      background: var(--chrome-hover);
+    }
+
+    .hg-head:focus-visible {
+      outline: 2px solid var(--chrome-accent);
+      outline-offset: 2px;
+    }
+
+    .hg-chev {
+      width: 12px;
+      flex-shrink: 0;
+      color: var(--chrome-text-dim);
+      font-size: 9px;
+      line-height: 1;
+      transition: transform 0.12s ease;
+      display: inline-block;
+      text-align: center;
+    }
+
+    .hg-head.collapsed .hg-chev {
+      transform: rotate(-90deg);
+    }
+
+    .hg-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+
+    .hg-dot.ok {
+      background: var(--mux-ok);
+    }
+
+    .hg-dot.warn {
+      background: var(--mux-warn);
+    }
+
+    .hg-dot.off {
+      background: transparent;
+      border: 1px solid var(--chrome-text-dim);
+    }
+
+    /* Same type as .sb-heading: a host group IS a section heading. */
+    .hg-name {
+      flex: 1;
+      min-width: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+      color: var(--chrome-text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Mark the exception, not the norm (ux D2): only remote is tinted. */
+    .hg-name.remote {
+      color: color-mix(in srgb, var(--remote) 55%, var(--chrome-text-dim));
+    }
+
+    /* A DOT, not a number -- the same mark and the same --mux-warn token as
+       .ws-needs above. A group heading that said "3" over rows that each say
+       "•" would be the sidebar contradicting itself, and it would be the one
+       place a count survived. */
+    .hg-needs {
+      flex-shrink: 0;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--mux-warn);
+    }
+
+    /* ux D6: the group summary shows only while the group is CLOSED. Open, the
+       cards carry their own .ws-needs pills and the header would say it twice. */
+    .hg-head:not(.collapsed) .hg-needs {
+      display: none;
+    }
+
+    .hg-meta {
+      flex-shrink: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
+      color: var(--mux-warn);
+      white-space: nowrap;
+    }
+
+    .hg-body {
+      overflow: hidden;
+    }
+
+    .hg-body.hidden {
+      display: none;
+    }
+
+    /* ---- disconnected treatment (ux D8) ----
+       Workspaces GHOST, never vanish: removing them would imply they died,
+       and they have not — sessiond owns those PTYs on that machine. */
+
+    .hg-body.stale .ws-card {
+      opacity: 0.5;
+      border-style: dashed;
+      border-color: color-mix(in srgb, var(--mux-warn) 40%, var(--chrome-border));
+    }
+
+    /* !important beats the per-card ghosting filter above, which is a
+       hierarchy cue and must not soften the drop state. */
+    .hg-body.stale .ws-canvas {
+      filter: saturate(0) opacity(0.45) !important;
+    }
+
+    .stale-banner {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin: 3px 6px;
+      padding: 5px 8px;
+      border-radius: 5px;
+      font-size: 11px;
+      border: 1px solid color-mix(in srgb, var(--mux-warn) 45%, transparent);
+      background: color-mix(in srgb, var(--mux-warn) 10%, var(--chrome-bar));
+      color: var(--chrome-text-bright);
+    }
+
+    .stale-banner .spin {
+      flex-shrink: 0;
+      color: var(--mux-warn);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+    }
+
+    .retry-btn {
+      margin-left: auto;
+      flex-shrink: 0;
+      font: inherit;
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      padding: 1px 6px;
+      border-radius: 3px;
+      border: 1px solid var(--chrome-border);
+      background: transparent;
+      color: var(--chrome-text-dim);
+      cursor: pointer;
+    }
+
+    .retry-btn:hover {
+      border-color: var(--mux-warn);
+      color: var(--mux-warn);
+    }
+
+    /* ---- remote modifiers on existing furniture ----
+       The wireframe calls the dashed button .new-btn; this component has
+       always called it .new-ws-btn. The NAME stays, only the modifier is new. */
+
+    .new-ws-btn.remote {
+      color: var(--remote);
+    }
+
+    .new-ws-btn.remote:hover {
+      border-color: var(--remote);
+    }
+
+    .ws-card.remote.active {
+      border-color: var(--remote);
+    }
+
+    .ws-card.preview.remote.active {
+      border-color: var(--remote);
+      box-shadow: 0 2px 8px -2px color-mix(in srgb, var(--remote) 40%, transparent);
+    }
+
+    .ws-card.remote .dot.active {
+      color: var(--remote);
+    }
+
+    .ws-card.preview.remote.active .ws-chip-extra {
+      color: var(--remote);
+    }
+
     /* ---- update footer (pinned; never scrolls with .tab-content) ---- */
 
     .footer {
@@ -709,7 +1085,27 @@ export class MuxSidebar extends LitElement {
   @state() private _updatePhase: UpdatePhase = 'idle';
   @state() private _updateError = '';
 
+  /**
+   * Host groups the user has closed. Seeded with every remote the first time
+   * it is seen, so remotes start COLLAPSED and local starts open: a remote's
+   * cards are 104px each and the machine you are sitting at is the one you
+   * are most likely to want.
+   *
+   * Replaced rather than mutated on every change — a Set's identity is what
+   * Lit compares. Deliberately not persisted (YAGNI): a page reload is not a
+   * frequent enough event to earn a storage key.
+   */
+  @state() private _collapsed = new Set<string>();
+
+  /** Hosts already given their default collapse state. Not reactive. */
+  private _seededHosts = new Set<string>();
+
   private _unsub: (() => void) | null = null;
+  private _unsubRemotes: (() => void) | null = null;
+  /** 1 Hz clock, live ONLY while a `.stale-banner` age is on screen. */
+  private _ageTimer: number | null = null;
+  /** Set by the render that just ran: is any banner age displayed? */
+  private _ageTicking = false;
   private _updatePollTimer: number | null = null;
   private _updatePollAttempts = 0;
 
@@ -770,6 +1166,16 @@ export class MuxSidebar extends LitElement {
       this._version++;
     });
 
+    // Per-host connection state. One frame per transition, so a plain
+    // re-render is right here too. A browser with no remotes never receives
+    // one, so this callback never fires and the sidebar renders exactly as it
+    // does today.
+    this._seedCollapsed();
+    this._unsubRemotes = remotesStore.subscribe(() => {
+      this._seedCollapsed();
+      this._version++;
+    });
+
     // Preview tiles arrive at ~6 Hz. This callback deliberately does NOT bump
     // _version — see _onPreviewTick. Gated on `previewsVisible` (D6).
     this._syncPreviewSubscription();
@@ -793,11 +1199,17 @@ export class MuxSidebar extends LitElement {
     this._unsubPreview = null;
     this._unsubSessions?.();
     this._unsubSessions = null;
+    this._unsubRemotes?.();
+    this._unsubRemotes = null;
     this._resizeObserver?.disconnect();
     this._resizeObserver = null;
     if (this._resizeTimer !== null) {
       window.clearTimeout(this._resizeTimer);
       this._resizeTimer = null;
+    }
+    if (this._ageTimer !== null) {
+      window.clearInterval(this._ageTimer);
+      this._ageTimer = null;
     }
     this._canvases.clear();
     this._cards = [];
@@ -830,6 +1242,44 @@ export class MuxSidebar extends LitElement {
     if (changed.has('previewsVisible')) this._syncPreviewSubscription();
     this._collectCanvases();
     this._paintAll(this._cards);
+    this._syncAgeTicker();
+  }
+
+  /**
+   * The `.stale-banner` says "Disconnected 12s ago", which is only true if
+   * something advances it. Gated on the render having produced one, so with
+   * no remotes — and with remotes that are all connected — there is no timer
+   * at all rather than a second-by-second re-render nobody can see.
+   */
+  private _syncAgeTicker(): void {
+    const want = this._ageTicking;
+    if (want === (this._ageTimer !== null)) return;
+    if (want) {
+      this._ageTimer = window.setInterval(() => {
+        this._version++;
+      }, 1000);
+    } else if (this._ageTimer !== null) {
+      window.clearInterval(this._ageTimer);
+      this._ageTimer = null;
+    }
+  }
+
+  /**
+   * Give every newly-seen remote its default collapse state, once.
+   *
+   * Once, not on every frame: re-seeding would slam a group shut under a user
+   * who had just opened it every time its host so much as changed state.
+   */
+  private _seedCollapsed(): void {
+    let changed = false;
+    const next = new Set(this._collapsed);
+    for (const host of remotesStore.hosts) {
+      if (this._seededHosts.has(host.id)) continue;
+      this._seededHosts.add(host.id);
+      next.add(host.id);
+      changed = true;
+    }
+    if (changed) this._collapsed = next;
   }
 
   /**
@@ -1141,6 +1591,72 @@ export class MuxSidebar extends LitElement {
     );
   }
 
+  /**
+   * A host group's own "+ New workspace".
+   *
+   * The group IS the choice of machine (Decision 3) — there is no picker to
+   * open and no host to guess. The same `workspace-create` event as the
+   * bottom button, carrying the one extra fact this affordance knows.
+   */
+  private _onNewWsOn(host: string): void {
+    this.dispatchEvent(
+      new CustomEvent('workspace-create', {
+        detail: { host },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  /** "+ Connect machine" — opens the connect dialog, which lives in app.ts. */
+  private _onConnectMachine(): void {
+    this.dispatchEvent(
+      new CustomEvent('connect-machine', {
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  /**
+   * Retry a dropped host now instead of waiting out the backoff.
+   *
+   * One door, POST, already idempotent: reconnecting is the server's job and
+   * this only asks it to stop waiting. There is no local success state to
+   * keep — the answer arrives as the next host-state frame, which is the same
+   * path an automatic reconnect takes.
+   */
+  private _onRetryHost(e: Event, hostId: string): void {
+    e.stopPropagation();
+    void fetch(apiPath(`/api/remotes/${encodeURIComponent(hostId)}/connect`), {
+      method: 'POST',
+    }).catch(() => {
+      // Offline, or the server is gone. The reconnect loop is still running
+      // on its own schedule; inventing an error state here would claim this
+      // click was the only thing that could have worked.
+    });
+  }
+
+  private _toggleGroup(host: string): void {
+    const next = new Set(this._collapsed);
+    if (!next.delete(host)) next.add(host);
+    this._collapsed = next;
+  }
+
+  private _onGroupKeyDown(e: KeyboardEvent, host: string): void {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    this._toggleGroup(host);
+  }
+
+  /** Remotes are collapsed by default; local is open by default. */
+  private _isCollapsed(host: string): boolean {
+    if (host === '') return this._collapsed.has('');
+    // A host with cards but no host-state frame was never seeded. It is still
+    // a remote, and remotes start closed.
+    return this._collapsed.has(host) || !this._seededHosts.has(host);
+  }
+
   private _onWsRemove(e: Event, wsId: string, name: string): void {
     e.stopPropagation();
     this.dispatchEvent(
@@ -1245,11 +1761,20 @@ export class MuxSidebar extends LitElement {
     `;
   }
 
+  /**
+   * `remote ` when this workspace lives on another machine, `''` when it does
+   * not — and `''` is every workspace until a remote is connected, which is
+   * what keeps the class attribute byte-identical to today's.
+   */
+  private _remoteClass(card: CardState): string {
+    return isRemoteId(card.id) ? 'remote ' : '';
+  }
+
   /** Previews off, or the bitmap font failed: today's exact card. */
   private _renderTextCard(card: CardState) {
     return html`
       <div
-        class="ws-card ${card.active ? 'active' : ''}"
+        class="ws-card ${this._remoteClass(card)}${card.active ? 'active' : ''}"
         @click="${() => this._onWsClick(card.id)}"
       >
         ${this._renderHeader(card)}
@@ -1292,12 +1817,117 @@ export class MuxSidebar extends LitElement {
 
     return html`
       <div
-        class="ws-card preview ${compact ? 'compact' : 'full'} ${card.active ? 'active' : ''}"
+        class="ws-card preview ${compact ? 'compact' : 'full'} ${this._remoteClass(card)}${card.active ? 'active' : ''}"
         @click="${() => this._onWsClick(card.id)}"
       >
         ${this._renderHeader(card)}
         <div class="ws-screen" style="height:${tileH}px">${body}</div>
         ${chip}
+      </div>
+    `;
+  }
+
+  /**
+   * TODAY'S EXACT RENDER: every card, then the one bottom "+ New workspace".
+   *
+   * Extracted rather than inlined behind the zero-remote gate so this template
+   * literal keeps its ORIGINAL indentation. The whitespace between these tags
+   * is text nodes in the shadow DOM, so re-indenting it by two spaces would
+   * quietly break the byte-identical guarantee it exists to keep.
+   */
+  private _renderFlatList(
+    cards: CardState[],
+    previewOn: boolean,
+    rows: number,
+    cols: number,
+    compact: boolean,
+  ) {
+    return html`
+      ${cards.map((card) =>
+        previewOn
+          ? this._renderPreviewCard(card, rows, cols, compact)
+          : this._renderTextCard(card),
+      )}
+      <button class="new-ws-btn" @click="${() => this._onNewWs()}">
+        + New workspace
+      </button>
+    `;
+  }
+
+  /** One machine's section: header, then its cards (ux D1). */
+  private _renderHostGroup(
+    group: HostGroup,
+    previewOn: boolean,
+    rows: number,
+    cols: number,
+    compact: boolean,
+  ) {
+    const collapsed = this._isCollapsed(group.host);
+    const remote = group.host !== '';
+    // Local has no connection state, so it is never stale (ux D2).
+    const stale = group.state !== null && group.state !== 'connected';
+    // "Disconnected 12s ago" is a statement about a link that was up. A host
+    // that has never connected has nothing to count from.
+    const dropped =
+      group.state === 'reconnecting' || group.state === 'unreachable';
+    if (dropped) this._ageTicking = true;
+
+    const headClass = ['hg-head', collapsed ? 'collapsed' : '']
+      .filter(Boolean)
+      .join(' ');
+    const bodyClass = ['hg-body', collapsed ? 'hidden' : '', stale ? 'stale' : '']
+      .filter(Boolean)
+      .join(' ');
+
+    return html`
+      <div class="hostgroup">
+        <div
+          class="${headClass}"
+          role="button"
+          tabindex="0"
+          aria-expanded="${collapsed ? 'false' : 'true'}"
+          @click="${() => this._toggleGroup(group.host)}"
+          @keydown="${(e: KeyboardEvent) => this._onGroupKeyDown(e, group.host)}"
+        >
+          <span class="hg-chev">▾</span>
+          <span class="hg-dot ${hostDotClass(group.state)}"></span>
+          <span class="hg-name ${remote ? 'remote' : ''}">${group.name}</span>
+          ${group.state === 'reconnecting'
+            ? html`<span class="hg-meta">reconnecting</span>`
+            : group.needs > 0
+              ? html`<span
+                  class="hg-needs"
+                  role="img"
+                  aria-label="Something on this machine needs input"
+                  title="Something here needs input"
+                ></span>`
+              : ''}
+        </div>
+        <div class="${bodyClass}">
+          ${dropped
+            ? html`<div class="stale-banner">
+                <span class="spin">⟳</span>
+                <span>Disconnected ${ageLabel(Date.now() - group.since)} ago</span>
+                <button
+                  class="retry-btn"
+                  @click="${(e: Event) => this._onRetryHost(e, group.host)}"
+                >retry</button>
+              </div>`
+            : ''}
+          ${group.cards.map((card) =>
+            previewOn
+              ? this._renderPreviewCard(card, rows, cols, compact)
+              : this._renderTextCard(card),
+          )}
+          ${remote
+            ? html`<button
+                class="new-ws-btn remote"
+                @click="${() => this._onNewWsOn(group.host)}"
+              >
+                + New workspace
+              </button>`
+            : ''}
+        </div>
       </div>
     `;
   }
@@ -1318,14 +1948,31 @@ export class MuxSidebar extends LitElement {
     const previewOn = rows > 0;
     const compact = previewStore.mode === 'compact';
 
+    // Recomputed every render: a host that stopped being dropped must stop
+    // the 1 Hz clock, and only the render knows.
+    this._ageTicking = false;
+
+    // ┌───────────────────────────────────────────────────────────────────┐
+    // │ THE ZERO-REMOTE GATE. A browser with no remotes receives no       │
+    // │ host-state frame, so `any` is false and the sidebar below this    │
+    // │ line is the sidebar that shipped on main — same DOM, same         │
+    // │ whitespace, same single bottom button. The feature costs nothing  │
+    // │ until it is used (ux D2).                                         │
+    // └───────────────────────────────────────────────────────────────────┘
+    if (!remotesStore.any) {
+      return this._renderFlatList(cards, previewOn, rows, cols, compact);
+    }
+
+    const groups = groupCards(cards, instanceLabel());
     return html`
-      ${cards.map((card) =>
-        previewOn
-          ? this._renderPreviewCard(card, rows, cols, compact)
-          : this._renderTextCard(card),
+      ${groups.map((group) =>
+        this._renderHostGroup(group, previewOn, rows, cols, compact),
       )}
       <button class="new-ws-btn" @click="${() => this._onNewWs()}">
         + New workspace
+      </button>
+      <button class="new-ws-btn remote" @click="${() => this._onConnectMachine()}">
+        + Connect machine
       </button>
     `;
   }
@@ -1421,6 +2068,19 @@ export class MuxSidebar extends LitElement {
 
   override render() {
     void this._version; // suppress unused-variable lint; triggers re-render on store change
+
+    // ONE derivation for the headline total, the spread, and the per-machine
+    // split, so the three numbers on the card are arithmetically incapable of
+    // disagreeing with each other or with the badges below.
+    const sessions = homeSessions.sessions;
+    const needsByWs = needsInputByWorkspace(sessions);
+
+    // THE ZERO-REMOTE GATE for the Start card. NO_SPLIT is the same array
+    // every time, so a browser with no remotes hands the card a value it has
+    // already seen and the card is not even marked dirty. The card's own gate
+    // (`split.length === 0` renders nothing) is the second half of this.
+    const split = remotesStore.any ? fleetSplit(needsByWs, instanceLabel()) : NO_SPLIT;
+
     return html`
       <div class="header">
         <span title="${window.location.hostname}">${instanceLabel()}</span>
@@ -1439,10 +2099,11 @@ export class MuxSidebar extends LitElement {
       </div>
       <div class="tab-content">
         <mux-start-card
-          .count="${needsInputCount(homeSessions.sessions)}"
-          .spread="${needsInputByWorkspace(homeSessions.sessions).size}"
+          .count="${needsInputCount(sessions)}"
+          .spread="${needsByWs.size}"
           .active="${this.homeActive}"
           .hint="${this.homeKey}"
+          .split="${split}"
           @start-click="${() => this._onStartClick()}"
         ></mux-start-card>
         <div class="sb-heading">workspaces</div>

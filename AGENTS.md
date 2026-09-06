@@ -1,3 +1,123 @@
+## ⛔ NEVER KILL, RESTART, OR DISTURB THE RUNNING MUXTERM
+
+**The live muxterm on this machine is the user's actual working environment. It is
+hosting the terminal you are running inside right now. Killing it kills the session
+that is reading this file. There is no recovery from inside.**
+
+Never run any of these, in any form, for any reason:
+
+```
+pkill muxterm            killall muxterm           kill <muxterm pid>
+pkill sessiond           kill <sessiond pid>       kill -9 anything muxterm-related
+systemctl --user stop|restart|disable  muxterm | muxterm-sessiond | muxterm-proxy
+muxterm kill | muxterm stop | muxterm restart      (against the installed binary)
+make install / make install-stable                 (replaces the running binary)
+```
+
+This applies even when a restart looks obviously necessary — to load a config change,
+to pick up a rebuild, to clear stale state, to test a fix. It is never necessary,
+because you have two isolated alternatives below. **If you believe you have found a
+case that genuinely requires touching the live server, stop and ask the user. Do not
+decide this on your own.**
+
+### What is off-limits (verify before touching anything)
+
+| Unit | What it is | Port |
+|---|---|---|
+| `muxterm.service` | `muxterm serve --addr 127.0.0.1:9090` | 9090 |
+| `muxterm-sessiond.service` | PTY daemon — **holds every live terminal, including yours** | unix socket |
+| `muxterm-proxy.service` | Caddy loopback bridge → 9090 | **8311** |
+
+`muxterm sessiond` is the one that matters most. It owns every running shell. Killing
+it destroys in-flight work across every pane and workspace, not just yours.
+
+**Port 8311 and port 9090 are production.** Never point a test, a browser, a build, or
+a `curl` that mutates state at either one. Read-only `curl` against 9090 is acceptable
+for inspection.
+
+### Do dev work one of these two ways instead
+
+**1. `make dev-local` — isolated second instance, same machine.** This is the default
+choice and it is safe to start, kill, and restart freely.
+
+```bash
+make dev-local
+#   muxterm-dev   http://127.0.0.1:8313   (air hot-reload, own bin/muxterm-dev)
+#   runtime dir   ${TMPDIR:-/tmp}/muxterm-dev-local   (isolated sessiond socket/log)
+#   production    127.0.0.1:8311 / 9090   -- untouched
+```
+
+It gets its own binary, its own port (8313), and its own `XDG_RUNTIME_DIR`, so its
+sessiond cannot collide with the production one. Killing and restarting *this* stack is
+encouraged (see verification hygiene below).
+
+**2. A Digital Twin Universe (DTU) — fully isolated container.** Use this when the work
+needs a realistic deployment: reverse proxies, TLS, systemd units, install/upgrade
+paths, public origins, or anything that would otherwise tempt you to reconfigure the
+real service. Load the `digital-twin-universe` skill, or delegate to
+`digital-twin-universe:dtu-profile-builder`.
+
+Anything involving `muxterm install`, `muxterm deploy`, systemd unit or launchd plist
+generation, `public_origin`, `behind_reverse_proxy`, or the self-update path belongs in a
+**DTU**. Those code paths exist to write service files, replace binaries, and rewrite
+config — a DTU is the only place where being wrong about one of them is survivable.
+
+### ⛔ Do NOT hand-roll a scratch instance on the host
+
+Setting `XDG_RUNTIME_DIR` / `XDG_CONFIG_HOME` to temp dirs and starting a server on a
+spare port is **not** isolation and is not permitted. It is a convention, enforced by
+nothing:
+
+- One command that forgets to set them writes to `~/.config/muxterm/config.toml` or
+  `$XDG_RUNTIME_DIR/muxterm/server.url` — the live handoff file the running MCP tools
+  read.
+- Any code path that resolves a path without consulting those variables walks straight
+  out of the sandbox. `muxterm doctor`, for one, reports on the **real** installed
+  systemd unit regardless of what `XDG_*` is set to.
+- A `pkill`/`killall` typed against "just my scratch process" matches production too.
+
+If a change cannot be verified by `make dev-local`, verify it in a **DTU**. Do not
+improvise a third option.
+
+### Verifying without running muxterm at all
+
+Most of what needs checking is not a running-server question, and these carry zero risk
+to the user's environment:
+
+- **Pure functions** (URL/origin normalization and validation, redirect-target
+  construction, path guards): write a throwaway `main.go` under `tmp/`, `go run` it,
+  print a table of inputs and outputs, then delete it. It never binds a port, never
+  reads config, never touches the runtime dir.
+- **Generated file contents** (systemd unit, launchd plist, config writes): call the
+  rendering function directly and print the string. Do not install it.
+- **Compile and lint**: `go build ./...` and `cd web && npm run check:fast`.
+
+Reach for a DTU when the thing under test genuinely requires a live server, a browser, a
+real service manager, or a network hop.
+
+### ⛔ `go test ./cmd/muxterm/...` is destructive on a machine with muxterm installed
+
+Some tests in `cmd/muxterm/main_test.go` call `runInstall()` and `runUninstall()`
+directly, against **real** paths — not a temp dir. `runUninstall` runs
+`systemctl --user disable --now` on both `muxterm.service` and
+`muxterm-sessiond.service` and then deletes the unit files. Killing sessiond
+destroys every live pane on the machine, including the session running the tests.
+
+Before running Go tests on this host, scope them:
+
+```bash
+go test ./internal/...                       # always safe
+go test ./cmd/muxterm/... -run 'TestParseArgs_'   # scoped, safe
+```
+
+The destructive test is guarded behind
+`MUXTERM_ALLOW_DESTRUCTIVE_SERVICE_TESTS=1`. Set that variable **only inside a
+DTU container**, never on this host. If you add a test that installs, uninstalls,
+or restarts a service, put it behind the same guard.
+
+Note also that `go build ./...` does **not** compile `_test.go` files, so a change
+that breaks a test literal builds green. Run `go vet ./...` to catch it.
+
 ## Architectural invariants
 
 ### Terminal query ownership (CSI 6n, OSC 11;?)
@@ -37,21 +157,22 @@ Unit tests are banned in this project. Do not write them. Do not ask if you shou
 
 Every feature or fix must be verified by actually running muxterm and observing the behavior in a real browser. Use the `/muxterm-verify` skill and `playwright-cli` for this. Do not say a feature is done until you have seen it work with your own tool calls.
 
-Verification pattern:
+Verification pattern — **against `dev-local` on 8313, never production on 8311**:
 ```bash
-# 1. Build
-make build
+# 1. Start the isolated dev stack (own binary, own port, own runtime dir)
+make dev-local
 
-# 2. Run
-./bin/muxterm &
-
-# 3. Open and observe
-playwright-cli open http://localhost:8311
+# 2. Open and observe — 8313 is dev-local; 8311 and 9090 are the live server
+playwright-cli open http://127.0.0.1:8313
 playwright-cli snapshot
 playwright-cli click e5
 # ... verify the actual behavior
 playwright-cli close
 ```
+
+`make dev-local` rebuilds on change via `air`, so a separate `make build` step is not
+needed. Do not run a bare `./bin/muxterm &` without an isolated `XDG_RUNTIME_DIR` — it
+will contend with the production sessiond socket.
 
 **You are not done until playwright-cli (or the muxterm-verify skill) confirms the feature works in a real browser.**
 
@@ -62,7 +183,7 @@ Lesson learned the hard way (multi-client resize/focus-authority fix, 2026-07-31
 **Rules to avoid this:**
 
 - **Create a brand-new workspace (and therefore a brand-new pane) for every verification run**, especially every re-run while debugging something flaky. Never reuse a pane across multiple test iterations. A pane that's been resized/reattached dozens of times is not the same as a pane a real user just opened.
-- **Kill and fully restart `make dev-local` (wiped `XDG_RUNTIME_DIR`) before a "clean" verification pass**, not just fresh browser sessions. A fresh browser tab against a long-lived, heavily-poked sessiond process is not a clean test.
+- **Kill and fully restart `make dev-local` (wiped `XDG_RUNTIME_DIR`) before a "clean" verification pass**, not just fresh browser sessions. A fresh browser tab against a long-lived, heavily-poked sessiond process is not a clean test. This applies to the **dev-local** stack only — restarting it is encouraged; the production units named at the top of this file remain off-limits.
 - **Never edit source files while `air`'s dev-local watch loop is mid-test.** Concurrent edits trigger a rebuild that kills in-flight browser WebSocket connections, producing failures that look like application bugs but are actually the test harness pulling the rug out from under itself. Finish the test, *then* edit.
 - **Check for stale sessiond processes from a different worktree before trusting a result.** `make dev-local` uses a fixed, worktree-independent socket path (`${TMPDIR:-/tmp}/muxterm-dev-local`) so it survives long paths — but that means two worktrees running `make dev-local` at different times can leave a stale daemon squatting on the same socket. Run `ps aux | grep sessiond` and confirm the binary path matches the worktree you're actually testing before trusting what you see in the browser.
 - If a scenario is flaky (passes once, fails on the next identical-looking run), don't just re-run it more — that's the "3+ failures = question the pattern" signal. Rule out fixture/environment staleness with a fresh-everything run *before* concluding it's a real code defect.

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,17 +30,40 @@ type Config struct {
 	Restore   RestoreConfig   `toml:"restore"    json:"restore"`
 }
 
-// ServerConfig holds deployment-topology settings that decide how muxterm
-// derives its own public-facing URLs and whether the loopback auth bypass
-// applies. Both fields are explicit and opt-in, and are NEVER derived from
-// request headers (X-Forwarded-Host, X-Forwarded-Proto, or anything else):
-// headers are spoofable, and the design rejects trusting them for any
-// trust-relevant value.
+// DefaultAddr is the ONE canonical listen address for muxterm's serve layer.
+// Loopback-only by default: muxterm hands out interactive shells, so a
+// wildcard bind is an opt-in decision an operator makes deliberately, never
+// a default anyone backs into. Every default-addr site derives from here.
+const DefaultAddr = "127.0.0.1:8311"
+
+// ServerConfig holds deployment-topology settings: where muxterm listens,
+// where it is publicly reachable, and whether the loopback auth bypass
+// applies. These are POLICY and live in the config file rather than in the
+// generated service unit, which `muxterm install` rewrites wholesale on
+// every run.
+//
+// They are NEVER derived from request headers (X-Forwarded-Host,
+// X-Forwarded-Proto, or anything else): headers are spoofable, and the
+// design rejects trusting them for any trust-relevant value.
 //
 // These fields are deliberately absent from Merge(), which backs the
-// browser-facing PATCH /api/config route — a deployment-topology and
+// browser-facing PATCH /api/config route -- a deployment-topology and
 // security setting must not be mutable from a web request.
 type ServerConfig struct {
+	// Addr is the address the serve layer listens on, e.g.
+	// "127.0.0.1:8311". This is POLICY and lives here rather than in the
+	// generated systemd unit or launchd plist: `muxterm install` is the
+	// documented upgrade command and rewrites those files wholesale, so a
+	// value that lives only in ExecStart is discarded on the next upgrade.
+	//
+	// omitempty is load-bearing, not cosmetic. The browser's
+	// PATCH /api/config path re-serializes this whole section back to
+	// disk, so a field that is absent in memory would be written back as
+	// `addr = ""` -- and net.Listen("tcp", "") does NOT error, it binds a
+	// random port on every interface. Omitting the empty value keeps that
+	// state off disk; ValidateAddr keeps it from being honored if it
+	// arrives some other way.
+	Addr string `toml:"addr,omitempty"       json:"addr"`
 	// PublicOrigin is the canonical public origin at which muxterm is
 	// reachable through its fronting reverse proxy, e.g.
 	// "https://muxterm.ampbox.io". Scheme and host (with optional port)
@@ -80,6 +105,115 @@ func (s ServerConfig) Validate() error {
 	}
 	if u.Host == "" {
 		return fmt.Errorf("config: public_origin %q must include a host", s.PublicOrigin)
+	}
+
+	// Everything below rejects a public_origin that parses but is not an
+	// ORIGIN. Each of these forms silently produces a broken redirect URI:
+	// publicBaseURL()+"/auth/callback" appends the path to whatever it is
+	// given, and authserver compares the result byte-for-byte against the
+	// redirect_uri it derived the same way. Both sides therefore agree,
+	// the comparison passes, and the browser is sent somewhere that never
+	// reaches /auth/callback -- so login silently never completes and
+	// nothing anywhere reports an error. Reject at startup instead.
+	if u.Path != "" && u.Path != "/" {
+		return fmt.Errorf("config: public_origin %q must not include a path (got %q); use scheme://host[:port] only", s.PublicOrigin, u.Path)
+	}
+	if u.RawQuery != "" {
+		return fmt.Errorf("config: public_origin %q must not include a query string (got %q)", s.PublicOrigin, u.RawQuery)
+	}
+	if u.Fragment != "" {
+		return fmt.Errorf("config: public_origin %q must not include a fragment (got %q)", s.PublicOrigin, u.Fragment)
+	}
+	if u.User != nil {
+		return fmt.Errorf("config: public_origin %q must not include userinfo credentials", s.PublicOrigin)
+	}
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("config: public_origin %q has an invalid port %q; must be 1-65535", s.PublicOrigin, p)
+		}
+	}
+	return nil
+}
+
+// Normalize returns a copy of s with PublicOrigin reduced to its canonical
+// origin form: trailing slashes trimmed and the scheme and host lowercased.
+// Host comparison is case-insensitive per RFC 3986, but the redirect-URI
+// check in authserver is a byte comparison -- so an origin that differs
+// only in case from what the browser sends would fail to match. Callers
+// should normalize BEFORE Validate so that validation reports on the value
+// that will actually be used.
+func (s ServerConfig) Normalize() ServerConfig {
+	if s.PublicOrigin == "" {
+		return s
+	}
+	trimmed := strings.TrimRight(s.PublicOrigin, "/")
+	if u, err := url.Parse(trimmed); err == nil && u.Host != "" {
+		u.Scheme = strings.ToLower(u.Scheme)
+		u.Host = strings.ToLower(u.Host)
+		trimmed = u.String()
+	}
+	s.PublicOrigin = trimmed
+	return s
+}
+
+// IsZero reports whether the section carries no operator intent at all.
+// Used to distinguish "the file had no [server] section" from "the file
+// failed to parse and we substituted defaults", which matter differently.
+func (s ServerConfig) IsZero() bool {
+	return s.Addr == "" && s.PublicOrigin == "" && !s.BehindReverseProxy
+}
+
+// Warnings reports configuration that is accepted but will not do what the
+// operator most likely intended. These are deliberately NOT errors: unlike
+// the fail-closed cases in Validate, none of them leaves muxterm in an
+// ambiguous security posture, and refusing to start would turn a harmless
+// misconfiguration into an outage on the one service the operator may need
+// in order to fix it.
+func (s ServerConfig) Warnings() []string {
+	var w []string
+	if s.PublicOrigin != "" && !s.BehindReverseProxy {
+		w = append(w, fmt.Sprintf(
+			"config: public_origin is set to %q but behind_reverse_proxy is false, so it is being IGNORED "+
+				"and muxterm will keep deriving its public URLs from the listen address. "+
+				"Set behind_reverse_proxy = true to use it, or clear public_origin to silence this.",
+			s.PublicOrigin))
+	}
+	return w
+}
+
+// ValidateAddr checks that addr is a listen address muxterm can actually
+// bind, and returns a diagnosis naming the offending part when it is not.
+//
+// Deliberately stricter than net.SplitHostPort, which accepts several
+// strings that then fail or silently misbehave at net.Listen time:
+//
+//	""                  SplitHostPort errors, but net.Listen BINDS
+//	                    [::]:<random> -- a wildcard bind on a port nobody
+//	                    asked for, with no error anywhere
+//	":0" / "host:0"     port 0 means "pick any free port", so the service
+//	                    comes up unreachable at the address it printed
+//	"127.0.0.1:8311 "   trailing space parses, then fails at Listen with
+//	                    an opaque "unknown port" much later
+//	"host:99999"        parses, fails at Listen
+func ValidateAddr(addr string) error {
+	if strings.TrimSpace(addr) == "" {
+		return errors.New(`config: addr is empty; set [server].addr (e.g. "127.0.0.1:8311")`)
+	}
+	if addr != strings.TrimSpace(addr) {
+		return fmt.Errorf("config: addr %q has leading or trailing whitespace", addr)
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("config: addr %q is not host:port: %w", addr, err)
+	}
+	_ = host // an empty host is a legitimate wildcard bind (":8311")
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return fmt.Errorf("config: addr %q has a non-numeric port %q", addr, port)
+	}
+	if n < 1 || n > 65535 {
+		return fmt.Errorf("config: addr %q has port %d; must be 1-65535 (0 would bind an arbitrary free port)", addr, n)
 	}
 	return nil
 }
@@ -183,15 +317,34 @@ type RestoreConfig struct {
 //   - Malformed file → Defaults() + logged warning, no error (a typo can never take the app down)
 //   - Present and valid → Defaults() with the file's set fields applied on top (partial configs supported)
 func Load(path string) (Config, error) {
-	cfg := Defaults()
+	cfg, _, err := LoadStrictServer(path)
+	return cfg, err
+}
+
+// LoadStrictServer loads path and additionally reports whether the file was
+// present but unparseable.
+//
+// Load's contract -- a malformed file degrades to defaults with only a log
+// line, so "a typo can never take the app down" -- is right for the
+// cosmetic sections and wrong for [server]. Silently substituting defaults
+// there moves the listener, and clears behind_reverse_proxy, which
+// re-enables the loopback auth bypass. Both are silent, and both are
+// exactly the kind of change an operator must never get by accident.
+//
+// So the degradation stays for everything else, and callers that depend on
+// [server] -- serve and install -- use this and refuse to continue when
+// malformed is true. The returned Config is still Defaults(), so a caller
+// that does not care can ignore the flag and behave exactly as before.
+func LoadStrictServer(path string) (cfg Config, malformed bool, err error) {
+	cfg = Defaults()
 	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
-		return cfg, nil
+		return cfg, false, nil
 	}
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		log.Printf("config: %s is malformed (%v); using built-in defaults", path, err)
-		return Defaults(), nil
+	if _, decErr := toml.DecodeFile(path, &cfg); decErr != nil {
+		log.Printf("config: %s is malformed (%v); using built-in defaults", path, decErr)
+		return Defaults(), true, nil
 	}
-	return cfg, nil
+	return cfg, false, nil
 }
 
 // Merge returns a copy of base with non-zero fields from partial applied.
@@ -227,19 +380,61 @@ func Merge(base, partial Config) Config {
 	return result
 }
 
-// Write encodes cfg as TOML and atomically writes it to path.
-// Parent directories are created if they do not exist.
+// Write encodes cfg as TOML and atomically replaces path with it. Parent
+// directories are created if they do not exist.
+//
+// Genuinely atomic: encode into a temp file in the same directory, fsync
+// it, then rename over the target. A rename within a directory is atomic,
+// so a reader sees either the whole old file or the whole new one, never a
+// partial write. The previous implementation truncated in place, which
+// left a window where a crash or a full disk produced a half-written file
+// -- and Load treats a half-written file as "malformed", substituting
+// defaults. That is survivable for a font size and not survivable for a
+// listen address.
 func Write(path string, cfg Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("config.Write: mkdir: %w", err)
 	}
-	f, err := os.Create(path)
+	tmp, err := os.CreateTemp(dir, ".config.toml.*")
 	if err != nil {
-		return fmt.Errorf("config.Write: create: %w", err)
+		return fmt.Errorf("config.Write: create temp: %w", err)
 	}
-	defer f.Close()
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+
+	if err := toml.NewEncoder(tmp).Encode(cfg); err != nil {
+		tmp.Close() //nolint:errcheck
 		return fmt.Errorf("config.Write: encode: %w", err)
+	}
+	// fsync before rename: rename is atomic with respect to readers, but
+	// without the sync the rename can land while the contents are still
+	// only in the page cache, so a power loss yields an atomically-renamed
+	// EMPTY file.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close() //nolint:errcheck
+		return fmt.Errorf("config.Write: sync: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("config.Write: close temp: %w", err)
+	}
+	// Match the 0644 the previous os.Create produced; CreateTemp makes 0600.
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return fmt.Errorf("config.Write: chmod temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("config.Write: rename: %w", err)
+	}
+	// Atomicity and durability are separate properties. The rename above
+	// gives readers all-or-nothing, but the directory entry itself lives in
+	// the page cache until the OS flushes it -- so a crash here can leave a
+	// file whose blocks are on disk and whose name reverted. Syncing the
+	// parent closes that gap. Best-effort: the write has already succeeded
+	// by every observable measure, so a sync failure must not report one
+	// that did not happen.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close() //nolint:errcheck
 	}
 	return nil
 }

@@ -9,12 +9,14 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/kenotron-ms/muxterm/internal/cos"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/transport"
 )
 
 // Client represents a connected WebSocket client. Each browser WebSocket is
@@ -32,14 +34,21 @@ type Client struct {
 	cancel  context.CancelFunc
 	writeMu sync.Mutex
 
-	// daemon is the per-browser connection this client relays to. nil until the
-	// hub attaches the client.
-	daemon DaemonConn
+	// sessMu guards sessions and unsubscribeRemotes. sessions holds this
+	// browser's daemon links keyed by transport.HostRef.ID; the empty key is
+	// the LOCAL daemon, which is a hostSession like any other. It is empty
+	// until the hub attaches the client.
+	//
+	// One connection per browser per host, never pooled (design D5): PTY
+	// sizing authority is keyed on daemon-connection pointer identity.
+	sessMu             sync.Mutex
+	sessions           map[string]*hostSession
+	unsubscribeRemotes func()
 
 	// closeTickets retains browser-local target identity for opaque confirmation
 	// tickets. It is touched only by this Client's readPump; the ticket remains
 	// the sole daemon authorization input.
-	closeTickets map[string]sessiond.CloseTarget
+	closeTickets map[string]closeTicket
 
 	// writeTextFn/writeBinaryFn perform the actual frame writes. Production
 	// wires them to the real WebSocket writers in newClient; tests inject
@@ -47,13 +56,45 @@ type Client struct {
 	writeTextFn   func([]byte) error
 	writeBinaryFn func([]byte) error
 
-	// wsMu guards workspaceID, the workspace this client is currently attached
-	// to. It is set on a successful TypeAttach and read by daemon event relay
-	// handlers (e.g. OnPaneAdded) that need to stamp WorkspaceID onto events
-	// the daemon itself does not carry a workspace id on, since a client is
-	// only ever attached to a single workspace at a time.
-	wsMu        sync.Mutex
-	workspaceID string
+	// wsMu guards workspaceID and attachedHost, the workspace this client is
+	// currently attached to and the host it lives on. They are set together on
+	// a successful TypeAttach and read by daemon event relay handlers (e.g.
+	// OnPaneAdded) that need to stamp WorkspaceID onto events the daemon
+	// itself does not carry a workspace id on, since a client is only ever
+	// attached to a single workspace at a time.
+	//
+	// workspaceID is stored NAMESPACED (it is browser-facing); attachedHost is
+	// the bare HostRef.ID, "" for local. attachedHost is also the pane-id
+	// namespace: pane ids never carry a host qualifier (design A.3), so the
+	// attached session is what disambiguates them.
+	//
+	// breakpoint is the responsive layout key the browser sent with that
+	// attach. It is remembered for one reason: an attach re-issued by the
+	// server (hostSession.reattach, after a remote host's link comes back) has
+	// no browser message to read it off, and the daemon answers a blank
+	// breakpoint with a BLANK layout -- which would silently flatten the user's
+	// saved arrangement on every reconnect.
+	wsMu         sync.Mutex
+	workspaceID  string
+	attachedHost string
+	breakpoint   string
+
+	// subMu guards the browser's subscription opt-ins. They are recorded here
+	// so that every session started AFTERWARDS can re-assert them on connect
+	// (design A.5) -- without that, a host connected after page load silently
+	// produces no preview tiles and no session rows.
+	subMu              sync.Mutex
+	previewWanted      bool
+	sessionStateWanted bool
+
+	// mergeMu guards the whole-state merge caches. workspace-list and
+	// session-state are complete-set REPLACEMENTS that the browser applies
+	// wholesale, so with N sessions each pushing its own full set, forwarding
+	// them raw would make every host clobber the last. The edge is the merge
+	// point (design A.4). Ids in both caches are ALREADY namespaced.
+	mergeMu  sync.Mutex
+	wsByHost map[string][]sessiond.WorkspaceInfo
+	ssByHost map[string][]sessiond.SessionState
 
 	// cosMu guards cosSub, this connection's opt-in subscription to the
 	// server-owned chief-of-staff event stream (cos.go). nil means "never
@@ -86,19 +127,75 @@ const (
 	closeRelayFailureMessage = "Close request could not be completed; try again."
 )
 
-// setWorkspaceID records the workspace this client is currently attached to.
-func (c *Client) setWorkspaceID(id string) {
+// setAttached records the workspace this client is currently attached to, the
+// host it lives on, and the breakpoint it asked for. workspaceID is the
+// NAMESPACED id, because that is what the browser was told.
+func (c *Client) setAttached(host, workspaceID, breakpoint string) {
 	c.wsMu.Lock()
-	c.workspaceID = id
+	c.attachedHost = host
+	c.workspaceID = workspaceID
+	c.breakpoint = breakpoint
 	c.wsMu.Unlock()
 }
 
-// getWorkspaceID returns the workspace this client is currently attached to,
-// or "" if it has not attached yet.
+// attachedTo reports the BARE, daemon-local workspace id this client is
+// attached to on host, plus the breakpoint that attach carried, and whether it
+// is attached there at all.
+//
+// It is how a session re-establishes the browser's attachment on a fresh
+// connection. The bare id is the point: the attach travels to a daemon, and no
+// daemon may ever see a namespaced id (rule P6). The host check makes the local
+// daemon and every OTHER host answer false -- for local, because
+// hostSession.run (the only caller's caller) never runs for it, and for another
+// host, because its attachment belongs to a different session's connection.
+func (c *Client) attachedTo(host string) (workspaceID, breakpoint string, ok bool) {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if host == "" || c.attachedHost != host || c.workspaceID == "" {
+		return "", "", false
+	}
+	qualifier, local := splitID(c.workspaceID)
+	if qualifier != host || local == "" {
+		return "", "", false
+	}
+	return local, c.breakpoint, true
+}
+
+// getWorkspaceID returns the namespaced workspace this client is currently
+// attached to, or "" if it has not attached yet.
 func (c *Client) getWorkspaceID() string {
 	c.wsMu.Lock()
 	defer c.wsMu.Unlock()
 	return c.workspaceID
+}
+
+// getAttachedHost returns the HostRef.ID of the session this client is
+// attached to. "" is the local daemon AND the value before any attach, which
+// is why a browser with no remotes takes the local branch everywhere.
+func (c *Client) getAttachedHost() string {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	return c.attachedHost
+}
+
+// setPreviewWanted / setSessionStateWanted record the browser's opt-ins;
+// subscriptions reads them back for a session that connects later (A.5).
+func (c *Client) setPreviewWanted(v bool) {
+	c.subMu.Lock()
+	c.previewWanted = v
+	c.subMu.Unlock()
+}
+
+func (c *Client) setSessionStateWanted(v bool) {
+	c.subMu.Lock()
+	c.sessionStateWanted = v
+	c.subMu.Unlock()
+}
+
+func (c *Client) subscriptions() (preview, sessionState bool) {
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	return c.previewWanted, c.sessionStateWanted
 }
 
 func validCloseTarget(target sessiond.CloseTarget) bool {
@@ -115,7 +212,21 @@ func validCloseTarget(target sessiond.CloseTarget) bool {
 	}
 }
 
-func (c *Client) rememberCloseTicket(outcome sessiond.CloseOutcome) {
+// closeTicket is the browser-local memory of one opaque confirmation ticket:
+// the target to echo back and the host whose session issued it.
+//
+// The target's WorkspaceID is NAMESPACED, because every use of it is
+// browser-facing. host is what routes the eventual close-confirm, since the
+// ticket string itself is daemon-random and says nothing about where it came
+// from. Ticket strings are daemon-random, so a cross-host collision is
+// theoretically possible and resolves last-writer-wins: accepted, and recorded
+// here rather than defended against.
+type closeTicket struct {
+	target sessiond.CloseTarget
+	host   string
+}
+
+func (c *Client) rememberCloseTicket(host string, outcome sessiond.CloseOutcome) {
 	target := sessiond.CloseTarget{
 		Kind:        outcome.TargetKind,
 		WorkspaceID: outcome.WorkspaceID,
@@ -127,7 +238,7 @@ func (c *Client) rememberCloseTicket(outcome sessiond.CloseOutcome) {
 	}
 
 	if c.closeTickets == nil {
-		c.closeTickets = make(map[string]sessiond.CloseTarget)
+		c.closeTickets = make(map[string]closeTicket)
 	}
 	if _, exists := c.closeTickets[outcome.Ticket]; !exists &&
 		len(c.closeTickets) >= sessiond.CloseTicketCapacity {
@@ -136,12 +247,12 @@ func (c *Client) rememberCloseTicket(outcome sessiond.CloseOutcome) {
 			break
 		}
 	}
-	c.closeTickets[outcome.Ticket] = target
+	c.closeTickets[outcome.Ticket] = closeTicket{target: target, host: host}
 }
 
 func (c *Client) closeTargetForTicket(ticket string) (sessiond.CloseTarget, bool) {
-	target, ok := c.closeTickets[ticket]
-	return target, ok
+	t, ok := c.closeTickets[ticket]
+	return t.target, ok
 }
 
 func (c *Client) forgetCloseTicket(ticket string) {
@@ -177,7 +288,10 @@ func newClient(hub *Hub, conn *websocket.Conn) *Client {
 		conn:         conn,
 		ctx:          ctx,
 		cancel:       cancel,
-		closeTickets: make(map[string]sessiond.CloseTarget),
+		sessions:     make(map[string]*hostSession),
+		closeTickets: make(map[string]closeTicket),
+		wsByHost:     make(map[string][]sessiond.WorkspaceInfo),
+		ssByHost:     make(map[string][]sessiond.SessionState),
 	}
 	c.writeTextFn = func(data []byte) error {
 		c.writeMu.Lock()
@@ -231,13 +345,78 @@ func (c *Client) handleBinaryInput(data []byte) {
 		log.Printf("handleBinaryInput: decode error: %v", err)
 		return
 	}
-	if c.daemon == nil {
+	// The frame carries a bare, workspace-local pane id -- a 4-byte
+	// little-endian uint32 that a host prefix does not fit into and the frozen
+	// protocol forbids widening (design A.3). It therefore belongs to whichever
+	// session this browser is currently attached to, which IS the pane-id
+	// namespace. With no remotes that is always the local daemon.
+	var dc DaemonConn
+	if sess, ok := c.session(c.getAttachedHost()); ok {
+		dc = sess.daemon()
+	}
+	if dc == nil {
 		log.Printf("handleBinaryInput: no daemon connection")
 		return
 	}
-	if err := c.daemon.Input(paneID, payload); err != nil {
+	if err := dc.Input(paneID, payload); err != nil {
 		log.Printf("handleBinaryInput: Input error: %v", err)
 	}
+}
+
+// route resolves which host a browser message is for, strips the host
+// qualifier from every id it carries, and returns the session to run the
+// existing switch against. browserWSID is the ORIGINAL namespaced id, kept
+// because every error and every reply must echo what the browser sent.
+//
+// This is the inbound half of the rewrite boundary (design A.2). Nothing below
+// it ever sees a namespaced id, and no daemon ever does.
+func (c *Client) route(msg *sessiond.Message) (sess *hostSession, browserWSID string, err error) {
+	browserWSID = msg.WorkspaceID
+	host := ""
+
+	switch msg.Type {
+	case sessiond.TypeCreateWorkspace:
+		// The id here is a HOST SELECTOR ("ssh:boxb/"), not a workspace
+		// reference: it names WHERE to create, and the daemon must never see
+		// it (rule P6). Absent or empty means local.
+		host, _ = splitID(msg.WorkspaceID)
+		msg.WorkspaceID = ""
+
+	case sessiond.TypeAttach,
+		sessiond.TypeRenameWorkspace,
+		sessiond.TypeCloseWorkspace,
+		sessiond.TypeSaveLayout,
+		sessiond.TypeCloseIntent:
+		host, msg.WorkspaceID = splitID(msg.WorkspaceID)
+
+	case sessiond.TypeCloseConfirm:
+		// The ticket is opaque daemon-random state carrying no host, so the
+		// host is whichever session produced the outcome that minted it.
+		if t, ok := c.closeTickets[msg.Ticket]; ok {
+			host = t.host
+		}
+
+	case sessiond.TypeListWorkspaces,
+		sessiond.TypePreviewSubscribe,
+		sessiond.TypeSessionStateSubscribe:
+		// Fan-out types. They reach every session, but the LOCAL one drives
+		// the browser's reply -- which is what keeps zero-remote behaviour
+		// byte-for-byte unchanged.
+		host = ""
+
+	default:
+		// create-pane, close-pane, rename-pane, resize, pane-focus (and any
+		// unknown type, so its error still echoes correctly) follow the
+		// attached session: their pane ids are bare and workspace-local, and
+		// the attached session is their namespace (design A.3).
+		host = c.getAttachedHost()
+	}
+
+	sess, ok := c.session(host)
+	if !ok || sess.daemon() == nil {
+		return nil, browserWSID, errHostNotConnected(host)
+	}
+	return sess, browserWSID, nil
 }
 
 // handleTextInput unmarshals a frozen sessiond.Message from the browser and
@@ -261,77 +440,91 @@ func (c *Client) handleTextInput(data []byte) {
 		c.sendError(0, "", fmt.Errorf("invalid JSON: %w", err))
 		return
 	}
-	if c.daemon == nil {
-		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("no daemon connection"))
+
+	// One routing step before the switch: pick the session, strip the host
+	// qualifier off every id the message carries, and keep the browser's
+	// original id for the echo. With no remotes configured route always yields
+	// the local session and strips nothing, so everything below is unchanged.
+	sess, browserWSID, err := c.route(&msg)
+	if err != nil {
+		c.sendError(msg.CID, browserWSID, err)
+		return
+	}
+	host := sess.host.ID
+	dc := sess.daemon()
+	if dc == nil {
+		c.sendError(msg.CID, browserWSID, errHostNotConnected(host))
 		return
 	}
 
 	switch msg.Type {
 	case sessiond.TypeAttach:
 		// attachSeq must be held for the entire Attach()+sendMessage sequence:
-		// it also gates OnPaneOutput's binary relay (see attachClient), so no
-		// replay pane-data frame can reach the WebSocket before the
+		// it also gates OnPaneOutput's binary relay (see installHandlers), so
+		// no replay pane-data frame can reach the WebSocket before the
 		// composition reply that announces its pane, preserving the frozen
 		// "composition FIRST" wire ordering across the goroutine boundary.
 		c.attachSeq.Lock()
-		comp, err := c.daemon.Attach(msg.WorkspaceID, msg.Breakpoint, "interactive")
+		comp, err := dc.Attach(msg.WorkspaceID, msg.Breakpoint, "interactive")
 		if err != nil {
 			c.attachSeq.Unlock()
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
-		c.setWorkspaceID(comp.WorkspaceID)
+		attachedID := nsID(host, comp.WorkspaceID)
+		c.setAttached(host, attachedID, msg.Breakpoint)
 		c.sendMessage(&sessiond.Message{
 			Type:        sessiond.TypeComposition,
 			CID:         msg.CID,
-			WorkspaceID: comp.WorkspaceID,
+			WorkspaceID: attachedID,
 			Panes:       comp.Panes,
 			Layout:      comp.Layout,
 		})
 		c.attachSeq.Unlock()
 
 	case sessiond.TypeListWorkspaces:
-		workspaces, err := c.daemon.ListWorkspaces()
-		if err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+		// Fan-out (design A.4): every session refreshes its cache in parallel
+		// under one deadline and ONE merged reply carries the union. A remote
+		// that fails keeps its last-known list; a LOCAL failure is still
+		// reported verbatim, which is exactly what a browser sees today.
+		if err := c.refreshWorkspaceLists(); err != nil {
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
-		c.sendMessage(&sessiond.Message{
-			Type:       sessiond.TypeWorkspaceList,
-			CID:        msg.CID,
-			Workspaces: workspaces,
-		})
+		c.emitWorkspaceList(msg.CID)
 
 	case sessiond.TypeCreateWorkspace:
-		id, err := c.daemon.CreateWorkspace(msg.Name)
+		id, err := dc.CreateWorkspace(msg.Name)
 		if err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
 		c.sendMessage(&sessiond.Message{
 			Type:        sessiond.TypeWorkspaceCreated,
 			CID:         msg.CID,
-			WorkspaceID: id,
+			WorkspaceID: nsID(host, id),
 			Name:        msg.Name,
 			ClientRef:   msg.ClientRef,
 		})
 
 	case sessiond.TypeRenameWorkspace:
-		if err := c.daemon.RenameWorkspace(msg.WorkspaceID, msg.Name); err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+		if err := dc.RenameWorkspace(msg.WorkspaceID, msg.Name); err != nil {
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
-		if wsList, err := c.daemon.ListWorkspaces(); err == nil {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: wsList})
+		if wsList, err := dc.ListWorkspaces(); err == nil {
+			c.setWorkspaces(host, wsList)
+			c.emitWorkspaceList(0)
 		}
 
 	case sessiond.TypeCloseWorkspace:
-		if err := c.daemon.CloseWorkspace(msg.WorkspaceID); err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+		if err := dc.CloseWorkspace(msg.WorkspaceID); err != nil {
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
-		if wsList, err := c.daemon.ListWorkspaces(); err == nil {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: wsList})
+		if wsList, err := dc.ListWorkspaces(); err == nil {
+			c.setWorkspaces(host, wsList)
+			c.emitWorkspaceList(0)
 		}
 
 	case sessiond.TypeCloseIntent:
@@ -340,32 +533,40 @@ func (c *Client) handleTextInput(data []byte) {
 			WorkspaceID: msg.WorkspaceID,
 			PaneID:      msg.PaneID,
 		}
-		outcome, err := c.daemon.CloseIntent(target)
+		outcome, err := dc.CloseIntent(target)
 		if err != nil {
-			c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, closeRelayFailure(target)))
+			// The relay-failure outcome is browser-facing, so it echoes the
+			// id the browser sent, not the stripped one.
+			browserTarget := target
+			browserTarget.WorkspaceID = browserWSID
+			c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, closeRelayFailure(browserTarget)))
 			return
 		}
-		c.rememberCloseTicket(outcome)
+		outcome.WorkspaceID = nsID(host, outcome.WorkspaceID)
+		c.rememberCloseTicket(host, outcome)
 		c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, outcome))
 
 	case sessiond.TypeCloseConfirm:
+		// The remembered target is already namespaced; every use of it below
+		// goes straight to the browser.
 		target, knownTarget := c.closeTargetForTicket(msg.Ticket)
-		outcome, err := c.daemon.CloseConfirm(msg.Ticket)
+		outcome, err := dc.CloseConfirm(msg.Ticket)
 		if err != nil {
 			c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, closeRelayFailure(target)))
 			return
 		}
 		c.forgetCloseTicket(msg.Ticket)
+		outcome.WorkspaceID = nsID(host, outcome.WorkspaceID)
 		if knownTarget {
 			outcome = closeOutcomeWithFallbackTarget(outcome, target)
 		}
-		c.rememberCloseTicket(outcome)
+		c.rememberCloseTicket(host, outcome)
 		c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, outcome))
 
 	case sessiond.TypeCreatePane:
-		paneID, err := c.daemon.CreatePane(msg.Cmd, msg.Placement, msg.ReferencePaneID, msg.ClientRef)
+		paneID, err := dc.CreatePane(msg.Cmd, msg.Placement, msg.ReferencePaneID, msg.ClientRef)
 		if err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
 		c.sendMessage(&sessiond.Message{
@@ -376,26 +577,26 @@ func (c *Client) handleTextInput(data []byte) {
 
 	case sessiond.TypeResize:
 		// Fire-and-forget: the daemon sends no reply.
-		if err := c.daemon.Resize(msg.PaneID, msg.Cols, msg.Rows); err != nil {
+		if err := dc.Resize(msg.PaneID, msg.Cols, msg.Rows); err != nil {
 			log.Printf("handleTextInput: resize error: %v", err)
 		}
 
 	case sessiond.TypePaneFocus:
 		// Fire-and-forget: the daemon sends no reply.
-		if err := c.daemon.PaneFocus(uint32(msg.PaneID), msg.Cols, msg.Rows); err != nil {
+		if err := dc.PaneFocus(uint32(msg.PaneID), msg.Cols, msg.Rows); err != nil {
 			log.Printf("handleTextInput: pane-focus error: %v", err)
 		}
 
 	case sessiond.TypeRenamePane:
-		if err := c.daemon.RenamePane(msg.PaneID, msg.Name); err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+		if err := dc.RenamePane(msg.PaneID, msg.Name); err != nil {
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
 
 	case sessiond.TypeClosePane:
-		if err := c.daemon.ClosePane(msg.PaneID); err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+		if err := dc.ClosePane(msg.PaneID); err != nil {
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
 		// The daemon broadcasts pane-closed to all subscribers; the ok
@@ -403,8 +604,8 @@ func (c *Client) handleTextInput(data []byte) {
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
 
 	case sessiond.TypeSaveLayout:
-		if err := c.daemon.SaveLayout(msg.WorkspaceID, msg.Breakpoint, msg.Layout); err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+		if err := dc.SaveLayout(msg.WorkspaceID, msg.Breakpoint, msg.Layout); err != nil {
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
 		c.sendMessage(&sessiond.Message{Type: sessiond.TypeOK, CID: msg.CID})
@@ -414,8 +615,14 @@ func (c *Client) handleTextInput(data []byte) {
 		// the daemon is older than this browser and does not know the message
 		// type; relaying it lets the browser fall back to its non-preview
 		// cards immediately instead of waiting for tiles that never arrive.
-		if err := c.daemon.PreviewSubscribe(msg.OK); err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+		//
+		// Recorded on the Client first so a host connected later re-asserts
+		// it (A.5), then fanned out; only the LOCAL daemon's answer reaches
+		// the browser, so zero-remote behaviour is unchanged.
+		c.setPreviewWanted(msg.OK)
+		c.broadcastSubscribe(host, func(conn DaemonConn) error { return conn.PreviewSubscribe(msg.OK) })
+		if err := dc.PreviewSubscribe(msg.OK); err != nil {
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
 		c.sendMessage(&sessiond.Message{
@@ -429,8 +636,10 @@ func (c *Client) handleTextInput(data []byte) {
 		// old-daemon contract as preview-subscribe above: an error means this
 		// daemon predates the feature, and relaying it lets the browser stop
 		// waiting for rows that are never coming.
-		if err := c.daemon.SessionStateSubscribe(msg.OK); err != nil {
-			c.sendError(msg.CID, msg.WorkspaceID, err)
+		c.setSessionStateWanted(msg.OK)
+		c.broadcastSubscribe(host, func(conn DaemonConn) error { return conn.SessionStateSubscribe(msg.OK) })
+		if err := dc.SessionStateSubscribe(msg.OK); err != nil {
+			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
 		c.sendMessage(&sessiond.Message{
@@ -440,8 +649,193 @@ func (c *Client) handleTextInput(data []byte) {
 		})
 
 	default:
-		c.sendError(msg.CID, msg.WorkspaceID, fmt.Errorf("unknown action: %s", msg.Type))
+		c.sendError(msg.CID, browserWSID, fmt.Errorf("unknown action: %s", msg.Type))
 	}
+}
+
+// broadcastSubscribe forwards a browser subscription to every session EXCEPT
+// the one driving the reply. A remote that rejects it is logged, not surfaced:
+// the browser's fallback decision belongs to the local daemon (design A.5).
+func (c *Client) broadcastSubscribe(except string, apply func(DaemonConn) error) {
+	for _, s := range c.sessionsSnapshot() {
+		if s.host.ID == except {
+			continue
+		}
+		conn := s.daemon()
+		if conn == nil {
+			continue
+		}
+		if err := apply(conn); err != nil {
+			log.Printf("broadcastSubscribe %s: %v", s.host.ID, err)
+		}
+	}
+}
+
+// refreshWorkspaceLists re-reads every session's workspace list in parallel
+// under one deadline and refreshes the merge cache.
+//
+// A session that fails keeps its last-known list -- workspaces ghost, they do
+// not vanish. The one error returned is the LOCAL daemon's, because that is
+// the failure a browser is shown today and the zero-remote path must not
+// change.
+func (c *Client) refreshWorkspaceLists() error {
+	var (
+		wg    sync.WaitGroup
+		local *hostSession
+	)
+
+	for _, s := range c.sessionsSnapshot() {
+		if s.isLocal() {
+			local = s
+			continue
+		}
+		conn := s.daemon()
+		if conn == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(s *hostSession, conn DaemonConn) {
+			defer wg.Done()
+			wsList, err := conn.ListWorkspaces()
+			if err != nil {
+				log.Printf("refreshWorkspaceLists %s: %v", s.host.ID, err)
+				return
+			}
+			c.setWorkspaces(s.host.ID, wsList)
+		}(s, conn)
+	}
+
+	// The local daemon is called on this goroutine, unbounded, exactly as it
+	// is today: it owns the reply, and wrapping it in a deadline it never had
+	// would be a behaviour change on the one path that must not change.
+	var localErr error
+	if local != nil {
+		if conn := local.daemon(); conn != nil {
+			wsList, err := conn.ListWorkspaces()
+			if err != nil {
+				localErr = err
+			} else {
+				c.setWorkspaces("", wsList)
+			}
+		}
+	}
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(workspaceListFanoutDeadline):
+		// A stalled remote must not hold the browser's list-workspaces open.
+		// Whatever answered is already in the cache and whatever did not keeps
+		// its last-known list; the next push repairs it, because both merged
+		// messages are whole-state documents.
+		log.Printf("refreshWorkspaceLists: fan-out deadline exceeded")
+	}
+	return localErr
+}
+
+// workspaceListFanoutDeadline bounds one browser-initiated list-workspaces
+// fan-out across every session.
+const workspaceListFanoutDeadline = 5 * time.Second
+
+// setWorkspaces replaces host's cached workspace list, stamping every id.
+func (c *Client) setWorkspaces(host string, workspaces []sessiond.WorkspaceInfo) {
+	stamped := stampWorkspaces(host, workspaces)
+	c.mergeMu.Lock()
+	if c.wsByHost == nil {
+		c.wsByHost = make(map[string][]sessiond.WorkspaceInfo)
+	}
+	c.wsByHost[host] = stamped
+	c.mergeMu.Unlock()
+}
+
+// setSessions replaces host's cached session-state set, stamping every row.
+func (c *Client) setSessions(host string, sessions []sessiond.SessionState) {
+	stamped := stampSessions(host, sessions)
+	c.mergeMu.Lock()
+	if c.ssByHost == nil {
+		c.ssByHost = make(map[string][]sessiond.SessionState)
+	}
+	c.ssByHost[host] = stamped
+	c.mergeMu.Unlock()
+}
+
+// forgetHost drops a host's cached slices and re-emits both merged documents.
+//
+// This is the EXPLICIT-disconnect half of the retention rule (design A.4): a
+// transport drop keeps the cache so the sidebar can ghost the workspaces,
+// while a disconnect deletes it so they vanish -- because that is what the
+// user asked for.
+func (c *Client) forgetHost(host string) {
+	c.mergeMu.Lock()
+	delete(c.wsByHost, host)
+	delete(c.ssByHost, host)
+	c.mergeMu.Unlock()
+	c.emitWorkspaceList(0)
+	c.emitSessionState()
+}
+
+// mergedHosts returns the cache keys in the browser's stable render order:
+// local ("") first, then hosts sorted by id, so the sidebar does not reshuffle
+// on every push.
+func mergedHosts[T any](byHost map[string][]T) []string {
+	out := make([]string, 0, len(byHost))
+	for h := range byHost {
+		if h != "" {
+			out = append(out, h)
+		}
+	}
+	sort.Strings(out)
+	if _, ok := byHost[""]; ok {
+		out = append([]string{""}, out...)
+	}
+	return out
+}
+
+// emitWorkspaceList sends ONE workspace-list carrying the union across every
+// session. It is a whole-state document, so re-emitting the union on any
+// change is idempotent and a dropped frame is repaired by the next one.
+//
+// With only the local daemon in the cache the union IS the local list, in the
+// daemon's own order, with the daemon's own bare ids -- byte-for-byte today's
+// message.
+func (c *Client) emitWorkspaceList(cid uint64) {
+	c.mergeMu.Lock()
+	total := 0
+	for _, v := range c.wsByHost {
+		total += len(v)
+	}
+	out := make([]sessiond.WorkspaceInfo, 0, total)
+	for _, h := range mergedHosts(c.wsByHost) {
+		out = append(out, c.wsByHost[h]...)
+	}
+	c.mergeMu.Unlock()
+
+	c.sendMessage(&sessiond.Message{
+		Type:       sessiond.TypeWorkspaceList,
+		CID:        cid,
+		Workspaces: out,
+	})
+}
+
+// emitSessionState sends ONE session-state carrying the union across every
+// session, with the same whole-state/idempotent contract as emitWorkspaceList.
+func (c *Client) emitSessionState() {
+	c.mergeMu.Lock()
+	total := 0
+	for _, v := range c.ssByHost {
+		total += len(v)
+	}
+	out := make([]sessiond.SessionState, 0, total)
+	for _, h := range mergedHosts(c.ssByHost) {
+		out = append(out, c.ssByHost[h]...)
+	}
+	c.mergeMu.Unlock()
+
+	c.sendMessage(&sessiond.Message{
+		Type:     sessiond.TypeSessionState,
+		Sessions: out,
+	})
 }
 
 // sendMessage marshals a frozen sessiond.Message and writes it as a text frame.
@@ -506,6 +900,11 @@ type Hub struct {
 	dial           DialFunc
 	resolvedConfig any             // muxterm-owned resolved config, shipped to clients on connect
 	tunnels        *TunnelRegistry // shared tunnel registry for /t/{id}/ proxy
+	// remotes is the process-wide record of which hosts the user asked to
+	// reach. It holds no connection of its own -- those are per browser (D5).
+	// nil when the process was wired without a remote transport, which makes
+	// the whole feature inert.
+	remotes *RemoteRegistry
 
 	// cos owns the single, lazily-started chief-of-staff sidecar every
 	// browser tab shares. One per hub, i.e. one per muxterm server -- the
@@ -513,6 +912,16 @@ type Hub struct {
 	// beside resolvedConfig rather than on the Client. Nothing is spawned
 	// until a browser sends cos-subscribe or cos-turn.
 	cos *cosRelay
+}
+
+// Remotes returns the hub's remote host registry, or nil when there is none.
+func (h *Hub) Remotes() *RemoteRegistry {
+	if h == nil {
+		return nil
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.remotes
 }
 
 // SetResolvedConfig stores the resolved configuration on the hub. The config is
@@ -594,16 +1003,17 @@ func (h *Hub) SetDialer(d DialFunc) {
 	h.dial = d
 }
 
-// Dial creates a new daemon connection using the hub's configured dialer.
-// Returns an error if no dialer is set (server not fully initialized).
-func (h *Hub) Dial() (DaemonConn, error) {
+// Dial creates a new daemon connection to host using the hub's configured
+// dialer. The zero HostRef is the local daemon. Returns an error if no dialer
+// is set (server not fully initialized).
+func (h *Hub) Dial(ctx context.Context, host transport.HostRef) (DaemonConn, error) {
 	h.mu.Lock()
 	dial := h.dial
 	h.mu.Unlock()
 	if dial == nil {
 		return nil, fmt.Errorf("server: no sessiond dialer configured")
 	}
-	return dial()
+	return dial(ctx, host)
 }
 
 // attachClient dials a daemon for the browser, installs relay handlers that
@@ -613,99 +1023,29 @@ func (h *Hub) attachClient(c *Client) error {
 	h.mu.RLock()
 	dial := h.dial
 	cfg := h.resolvedConfig
+	remotes := h.remotes
 	h.mu.RUnlock()
 
 	if dial == nil {
 		return fmt.Errorf("attachClient: no dialer configured")
 	}
 
-	dc, err := dial()
+	// The local daemon is a hostSession like any other, with the ZERO HostRef
+	// (id ""). That is the whole trick behind the zero-remote guarantee: one
+	// code path, and nsID("", id) == id makes it emit today's bytes.
+	dc, err := dial(c.ctx, transport.HostRef{})
 	if err != nil {
 		return fmt.Errorf("attachClient: dial: %w", err)
 	}
-	c.daemon = dc
-
-	dc.SetHandlers(sessiond.Handlers{
-		OnPaneOutput: func(paneID uint32, data []byte) {
-			// Blocks while an Attach() reply is being forwarded to the
-			// browser/app WebSocket (see attachSeq), so replay frames for the
-			// pane just announced in that composition can never overtake it
-			// on the wire.
-			c.attachSeq.Lock()
-			err := c.writeBinary(EncodeBinaryFrame(paneID, data))
-			c.attachSeq.Unlock()
-			if err != nil {
-				log.Printf("attachClient: pane output write error: %v", err)
-			}
-		},
-		OnPaneAdded: func(pane sessiond.PaneInfo) {
-			c.sendMessage(&sessiond.Message{
-				Type:            sessiond.TypePaneAdded,
-				WorkspaceID:     c.getWorkspaceID(),
-				PaneID:          pane.PaneID,
-				Cols:            pane.Cols,
-				Rows:            pane.Rows,
-				Title:           pane.Title,
-				Placement:       pane.Placement,
-				ReferencePaneID: pane.ReferencePaneID,
-				ClientRef:       pane.ClientRef,
-			})
-		},
-		OnPaneClosedWithWorkspace: func(workspaceID string, paneID int, processExitCode *int, runtimeMs int64) {
-			c.sendMessage(&sessiond.Message{
-				Type: sessiond.TypePaneClosed, WorkspaceID: workspaceID, PaneID: paneID,
-				ProcessExitCode: processExitCode, RuntimeMs: runtimeMs,
-			})
-		},
-		OnWorkspaceClosed: func(workspaceID string) {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceClosed, WorkspaceID: workspaceID})
-		},
-		OnWorkspaceRenamed: func(workspaceID, name string) {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceRenamed, WorkspaceID: workspaceID, Name: name})
-		},
-		OnWorkspaceList: func(workspaces []sessiond.WorkspaceInfo) {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: workspaces})
-		},
-		OnPaneRenamed: func(paneID int, name string) {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneRenamed, PaneID: paneID, Name: name})
-		},
-		OnPaneResized: func(paneID uint32, cols, rows int) {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneResized, PaneID: int(paneID), Cols: cols, Rows: rows})
-		},
-		OnWorkspacePreview: func(msg *sessiond.Message) {
-			// The tile names its own workspace (it is pushed for workspaces
-			// this client is NOT attached to), so unlike OnPaneAdded there is
-			// no getWorkspaceID stamping here.
-			c.sendMessage(&sessiond.Message{
-				Type:        sessiond.TypeWorkspacePreview,
-				WorkspaceID: msg.WorkspaceID,
-				PaneID:      msg.PaneID,
-				Title:       msg.Title,
-				Cols:        msg.Cols,
-				Rows:        msg.Rows,
-				Lines:       msg.Lines,
-			})
-		},
-		OnSessionState: func(msg *sessiond.Message) {
-			// Every row names its own workspace and pane (the set spans
-			// workspaces this client is not attached to), so as with
-			// OnWorkspacePreview there is no getWorkspaceID stamping here.
-			// Copied field-by-field rather than forwarded wholesale, following
-			// the same whitelist discipline: nothing else on the envelope has
-			// any business reaching the browser.
-			c.sendMessage(&sessiond.Message{
-				Type:     sessiond.TypeSessionState,
-				Sessions: msg.Sessions,
-			})
-		},
-	})
+	local := c.adoptSession(transport.HostRef{}, dc)
+	local.installHandlers()
 
 	go func() {
 		if err := dc.Run(); err != nil {
 			// net.ErrClosed means hub.Remove closed the daemon connection while
 			// dc.Run was blocked in ReadFrame — this is the normal teardown path
-			// (readPump exited → hub.Remove → c.daemon.Close → dc.Run unblocks).
-			// Don't log noise on every normal browser disconnect.
+			// (readPump exited → hub.Remove → local session Close → dc.Run
+			// unblocks). Don't log noise on every normal browser disconnect.
 			//
 			// Any other error means the daemon dropped unexpectedly (crash, EOF,
 			// etc.) while the browser WebSocket may still be open. Remove the
@@ -726,7 +1066,30 @@ func (h *Hub) attachClient(c *Client) error {
 	if err != nil {
 		log.Printf("attachClient: ListWorkspaces error: %v", err)
 	} else {
-		c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceList, Workspaces: workspaces})
+		c.setWorkspaces("", workspaces)
+		c.emitWorkspaceList(0)
+	}
+
+	// Every host the user has asked to reach gets its OWN session for THIS
+	// browser -- design D5 forbids sharing one, because PTY sizing authority
+	// is keyed on daemon-connection pointer identity.
+	//
+	// With no remotes configured this subscribes to an empty registry and
+	// starts nothing, so the browser has now seen exactly today's bytes and
+	// will never receive a host-state frame.
+	if remotes != nil {
+		unsub := remotes.Subscribe(c)
+		c.sessMu.Lock()
+		c.unsubscribeRemotes = unsub
+		c.sessMu.Unlock()
+
+		// startHostSession announces each host with a host-state frame before
+		// its first dial, so this loop is also design D's "one frame per
+		// registry member immediately after attachClient": a fresh tab renders
+		// its host groups without waiting for any dial to resolve.
+		for _, host := range remotes.Hosts() {
+			c.startHostSession(host)
+		}
 	}
 
 	return nil
@@ -745,17 +1108,15 @@ func (h *Hub) Add(c *Client) {
 	}
 }
 
-// Remove deletes a client from the hub, closes its daemon connection, and
-// closes the client.
+// Remove deletes a client from the hub, cancels every host session it holds
+// (closing each daemon connection), and closes the client.
 func (h *Hub) Remove(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.clients[c]; ok {
 		delete(h.clients, c)
 		c.stopCos()
-		if c.daemon != nil {
-			_ = c.daemon.Close()
-		}
+		c.teardownSessions()
 		c.close()
 	}
 }

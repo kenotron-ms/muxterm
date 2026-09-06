@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,7 +32,6 @@ func init() {
 // Config holds the configuration for creating a new Server.
 type Config struct {
 	Addr          string
-	Secret        string
 	StaticFS      fs.FS
 	NoAuth        bool          // skip all auth checks, including loopback bypass (dev only)
 	ConfigPath    string        // path to write config.toml on PATCH /api/config (empty = skip writes)
@@ -55,9 +56,25 @@ type Config struct {
 	// internal/server/authmiddleware.go.
 	BehindReverseProxy bool
 
+	// LocalToken authenticates same-user helper processes on this machine
+	// (today: the MCP server) to the HTTP API. It is published only via the
+	// 0600 handoff file in the 0700 runtime dir that sessiond.WriteServerURL
+	// writes. Empty disables the check, which is correct for callers that
+	// publish no token. See internal/server/authmiddleware.go.
+	LocalToken string
+
 	// Version is the running binary's version string (main.version). Empty or
 	// "dev" marks a development build, for which self-update is not offered.
 	Version string
+
+	// Remotes is how this process reaches machines that are not this one.
+	// nil means the whole remote feature is inert: nothing is discoverable,
+	// nothing can be connected, and /api/remotes reports empty lists -- which
+	// is what a build wired without a transport should do.
+	//
+	// The concrete transport is adapted to this interface in cmd/muxterm, so
+	// internal/server never imports internal/transport/ssh or internal/deploy.
+	Remotes RemoteTransport
 }
 
 // Server is the HTTP server for muxterm.
@@ -70,6 +87,20 @@ type Server struct {
 
 	authSrv        *authserver.AuthServer
 	webRedirectURI string
+
+	// behindReverseProxy is the EFFECTIVE reverse-proxy mode for this
+	// server, taken from Config.BehindReverseProxy -- deliberately NOT
+	// read from cfg.Server, which carries the config FILE's value.
+	//
+	// Local mode (bare `muxterm`) ignores the [server] section by design
+	// and leaves this false even when config.toml sets
+	// behind_reverse_proxy = true, so that a machine configured for
+	// production keeps working for direct local use. Reading the file's
+	// value here instead would set Secure on cookies served over plain
+	// http -- browsers drop those, so local login would fail outright --
+	// and would hand out absolute tunnel URLs pointing at the public
+	// origin.
+	behindReverseProxy bool
 
 	// configPath is the file path for persisting PATCH /api/config writes.
 	// Empty string means writes are skipped (dev/test mode).
@@ -95,6 +126,7 @@ func New(cfg Config) *Server {
 	tunnels := NewTunnelRegistry()
 	hub := NewHub(nil)
 	hub.tunnels = tunnels
+	hub.remotes = NewRemoteRegistry(cfg.Remotes)
 
 	s := &Server{
 		addr:           cfg.Addr,
@@ -110,6 +142,7 @@ func New(cfg Config) *Server {
 	s.configPath = cfg.ConfigPath
 	// Use the supplied initial config if it looks populated (palette is never
 	// empty in a real config), otherwise fall back to hardcoded defaults.
+	s.behindReverseProxy = cfg.BehindReverseProxy
 	s.cfg = cfg.InitialConfig
 	if s.cfg.Theme.Palette == "" {
 		s.cfg = muxcfg.Defaults()
@@ -121,7 +154,7 @@ func New(cfg Config) *Server {
 	}
 	s.ai = ai.NewManager(aiKeyPath)
 
-	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy)
+	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy, cfg.LocalToken)
 	protect := func(h http.Handler) http.Handler {
 		return authMW.Wrap(h)
 	}
@@ -173,6 +206,17 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/tunnels", protect(http.HandlerFunc(s.handleTunnelCreate)))
 	s.mux.Handle("DELETE /api/tunnels/{id}", protect(http.HandlerFunc(s.handleTunnelClose)))
 	s.mux.Handle("/t/", protect(http.HandlerFunc(s.handleTunnelProxy)))
+
+	// Remote machines. {id} is a HostRef.ID such as "ssh:boxb"; a colon is a
+	// legal pchar in a path segment and rule P3 (no "/" in a host id) is what
+	// keeps it to one segment. See internal/server/remotes_api.go.
+	s.mux.Handle("GET /api/remotes", protect(http.HandlerFunc(s.handleRemotesList)))
+	s.mux.Handle("POST /api/remotes", protect(http.HandlerFunc(s.handleRemotesAdd)))
+	s.mux.Handle("DELETE /api/remotes/{id}", protect(http.HandlerFunc(s.handleRemotesRemove)))
+	s.mux.Handle("POST /api/remotes/{id}/connect", protect(http.HandlerFunc(s.handleRemotesConnect)))
+	s.mux.Handle("POST /api/remotes/{id}/disconnect", protect(http.HandlerFunc(s.handleRemotesDisconnect)))
+	s.mux.Handle("POST /api/remotes/{id}/provision", protect(http.HandlerFunc(s.handleRemotesProvision)))
+
 	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
 
 	if cfg.StaticFS != nil {
@@ -256,6 +300,7 @@ func (s *Server) handleTunnelList(w http.ResponseWriter, r *http.Request) {
 		items = append(items, map[string]any{
 			"id":   e.id,
 			"port": e.port,
+			"url":  s.tunnelURL(e.id),
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -269,8 +314,21 @@ func (s *Server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Port int `json:"port"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Port == 0 {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "port required", http.StatusBadRequest)
+		return
+	}
+	// A port outside the valid range is accepted by the registry but
+	// produces a target URL that url.Parse rejects, so the tunnel 500s on
+	// first use instead of failing here where the caller can see why.
+	if body.Port < 1 || body.Port > 65535 {
+		http.Error(w, "port must be between 1 and 65535", http.StatusBadRequest)
+		return
+	}
+	// Tunneling muxterm's own listen port to itself is always a mistake and
+	// makes a proxy loop that is tedious to diagnose from the other end.
+	if _, listenPort, err := net.SplitHostPort(s.addr); err == nil && listenPort == strconv.Itoa(body.Port) {
+		http.Error(w, "cannot tunnel muxterm's own listen port", http.StatusBadRequest)
 		return
 	}
 	id, err := s.tunnels.Create(body.Port)
@@ -282,7 +340,28 @@ func (s *Server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
 		"id":   id,
 		"port": body.Port,
+		"url":  s.tunnelURL(id),
 	})
+}
+
+// tunnelURL returns the address a caller should use to reach tunnel id.
+//
+// It returns an ABSOLUTE url only when an operator has configured a public
+// origin; otherwise it returns the relative path "/t/{id}/". This asymmetry
+// is deliberate. The only origin muxterm can derive without configuration is
+// its own listen address, which in every deployment that has a remote caller
+// is a loopback address that is wrong for that caller by construction --
+// handing back "http://127.0.0.1:9090/t/ab12c/" would be a confidently
+// incorrect answer, which is worse than an honest relative one the caller
+// resolves itself. Never derived from a request header: see the note on
+// ServerConfig for why headers are not trusted for self-origin.
+func (s *Server) tunnelURL(id string) string {
+	path := "/t/" + id + "/"
+	base := s.publicBaseURL()
+	if base == "" {
+		return path
+	}
+	return base + path
 }
 
 // handleTunnelClose deregisters the tunnel identified by the {id} path
