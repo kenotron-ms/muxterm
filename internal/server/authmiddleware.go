@@ -149,7 +149,16 @@ func (m *AuthMiddleware) deny(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if wantsHTML {
-		http.Redirect(w, r, loginRedirectTarget(r), http.StatusFound)
+		// Rooted, and honestly so. An earlier revision emitted a relative
+		// "../auth/login" here believing it would survive an outer path
+		// prefix. It does not: http.Redirect resolves a relative URL
+		// against the request path and path.Clean's the result BEFORE
+		// writing Location, so the header is byte-identical to this line
+		// in every case. Serving muxterm under a path prefix would require
+		// writing Location by hand (as handleTunnelProxy does for its
+		// trailing-slash redirect) plus a server-side notion of the mount
+		// point -- deliberately out of scope here.
+		http.Redirect(w, r, "/auth/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -173,31 +182,6 @@ func httpJSONError(w http.ResponseWriter, code int, errCode, desc string) {
 		"error":             errCode,
 		"error_description": desc,
 	})
-}
-
-// loginRedirectTarget builds a RELATIVE Location pointing at /auth/login.
-//
-// A rooted "/auth/login" is wrong whenever muxterm is reached through an
-// outer path prefix -- muxterm proxied through its own /t/{id}/ tunnel is
-// the case that exists today -- because it escapes the prefix and lands on
-// whatever is mounted at the real origin root.
-//
-// A relative target is correct in BOTH topologies without the server having
-// to know its own mount point. The proxy strips the prefix before muxterm
-// sees the path, so the depth computed here is the depth below the mount
-// point; the browser then resolves that relative reference against the URL
-// it actually requested, which still carries the prefix, and puts it back.
-//
-//	direct:  GET /foo/bar        -> "../auth/login" resolved against /foo/  -> /auth/login
-//	prefixed: GET /t/ab/foo/bar  -> muxterm sees /foo/bar, emits "../auth/login",
-//	                                browser resolves against /t/ab/foo/     -> /t/ab/auth/login
-func loginRedirectTarget(r *http.Request) string {
-	target := "auth/login?return_to=" + url.QueryEscape(r.URL.RequestURI())
-	// Number of path segments below the mount point that the browser will
-	// strip when resolving: everything after the leading slash, minus the
-	// final segment (the resource itself, or "" for a directory URL).
-	depth := len(strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")) - 1
-	return strings.Repeat("../", depth) + target
 }
 
 // matchesLocalToken reports whether tok is the configured same-user helper
