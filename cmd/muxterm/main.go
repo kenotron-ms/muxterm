@@ -209,11 +209,7 @@ func runDoctor() error {
 	// The listen address, and where it came from. Without this the one
 	// artifact doctor points at -- the unit file -- no longer mentions an
 	// address at all, so a confused operator has nowhere to look.
-	effAddr := sc.Addr
-	src := config.DefaultPath()
-	if effAddr == "" {
-		effAddr, src = config.DefaultAddr, "built-in default"
-	}
+	effAddr, src := resolveAddr("", sc.Addr)
 	if err := config.ValidateAddr(effAddr); err != nil {
 		fmt.Printf("  %s  addr:    %v\n", fail, err)
 	} else {
@@ -334,18 +330,29 @@ func resolveServerConfig(cli Config, file config.ServerConfig) config.ServerConf
 	return out
 }
 
-// addrSource names where the effective listen address came from, so the
-// startup log answers "why is it on this port" without anyone reading
-// source. flagVal is the raw --addr flag (empty when unset); fileVal is
-// [server].addr as read from the config file.
-func addrSource(flagVal, fileVal string) string {
+// resolveAddr returns the effective listen address and a human-readable
+// account of where it came from.
+//
+// ONE home for the question "which source supplied this address". Three
+// separate answers to it -- in doctor, in runServe, and in runInstall --
+// diverged three times during this change, each time reporting a built-in
+// default as though the config file had specified it. That sends an
+// operator to a file with no answer in it, which is precisely the
+// diagnostic gap moving the address into config was meant to close. Any
+// new consumer must call this rather than reimplement the precedence.
+//
+// flagVal is the raw --addr flag, empty when unset. fileVal is
+// [server].addr as it stands in the config file -- captured BEFORE any
+// default-fill, or the default becomes indistinguishable from an
+// operator's choice.
+func resolveAddr(flagVal, fileVal string) (addr, source string) {
 	switch {
 	case flagVal != "":
-		return "from --addr"
+		return flagVal, "from --addr"
 	case fileVal != "":
-		return "from " + config.DefaultPath()
+		return fileVal, "from " + config.DefaultPath()
 	default:
-		return "built-in default"
+		return config.DefaultAddr, "built-in default"
 	}
 }
 
@@ -537,13 +544,11 @@ func runServe(cfg Config) error {
 	// URI yields a server on one port advertising a callback on another --
 	// login fails for every remote user while nothing crashes and the
 	// journal looks healthy.
-	if srvCfg.Addr == "" {
-		srvCfg.Addr = config.DefaultAddr
-	}
-	if err := config.ValidateAddr(srvCfg.Addr); err != nil {
+	addr, addrSrc := resolveAddr(cfg.Addr, fileAddr)
+	srvCfg.Addr = addr
+	if err := config.ValidateAddr(addr); err != nil {
 		return err
 	}
-	addr := srvCfg.Addr
 	// Accepted-but-probably-not-what-you-meant. Logged, never fatal: a
 	// setting that is merely ineffective must not take the service down.
 	for _, w := range srvCfg.Warnings() {
@@ -602,7 +607,7 @@ func runServe(cfg Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("muxterm listening on %s (%s)", addr, addrSource(cfg.Addr, fileAddr))
+	log.Printf("muxterm listening on %s (%s)", addr, addrSrc)
 	return srv.ListenAndServe(ctx)
 }
 
@@ -660,10 +665,10 @@ func runInstall(cfg Config) error {
 	// The resolved address, not the raw flag: after this install the
 	// service reads it from the config file, so the flag is usually empty
 	// and printing it would misreport where the service actually listens.
-	effectiveAddr := srvCfg.Addr
-	if effectiveAddr == "" {
-		effectiveAddr = config.DefaultAddr
-	}
+	// srvCfg.Addr is post-write: anything the flag supplied has already
+	// been persisted, so the file genuinely is the source whenever it is
+	// non-empty. Empty means nothing was written and the default applies.
+	effectiveAddr, addrSrc := resolveAddr("", srvCfg.Addr)
 
 	svcCfg := service.ServiceConfig{
 		Addr:  effectiveAddr,
@@ -672,7 +677,7 @@ func runInstall(cfg Config) error {
 	if err := service.Install(svcCfg); err != nil {
 		return err
 	}
-	fmt.Printf("muxterm installed; it will listen on %s (from %s)\n", effectiveAddr, configPath)
+	fmt.Printf("muxterm installed; it will listen on %s (%s)\n", effectiveAddr, addrSrc)
 	return nil
 }
 
