@@ -117,12 +117,36 @@ type queue struct {
 	closed  bool
 	closErr error
 
-	send func(o op) error
-	logf func(string, ...any)
+	send    func(o op) error
+	publish func(Event)
+	logf    func(string, ...any)
 }
 
-func newQueue(send func(op) error, logf func(string, ...any)) *queue {
-	return &queue{send: send, logf: logf}
+func newQueue(send func(op) error, publish func(Event), logf func(string, ...any)) *queue {
+	return &queue{send: send, publish: publish, logf: logf}
+}
+
+// fail resolves a turn on its handle AND announces it on the event stream.
+//
+// Both halves are load-bearing. The handle is what a caller holding a *Turn
+// waits on; the stream is what everyone ELSE watching the shared conversation
+// sees, and a browser only ever has the stream. A synthesized terminal event
+// delivered to the handle alone is invisible to them, which reintroduces the
+// silent turn loss this queue exists to prevent: the prompt goes in and
+// nothing ever comes back.
+//
+// Every other synthesized terminal event in this package already reaches the
+// broker - handleExit publishes sidecarDown's, and all three callers of close
+// publish close's. The two paths below were the exceptions.
+func (q *queue) fail(t *Turn, code string, cause error) {
+	ev := synthEvent(Event{
+		Ev: EvError, TurnID: t.ID, Code: code,
+		Message: cause.Error(), Fatal: true,
+	})
+	t.finish(ev, cause)
+	if q.publish != nil {
+		q.publish(ev)
+	}
 }
 
 // submit enqueues a prompt and returns its handle immediately. Dispatch
@@ -138,10 +162,12 @@ func (q *queue) submit(prompt string) *Turn {
 	}
 	if q.closed {
 		q.mu.Unlock()
-		t.finish(synthEvent(Event{
-			Ev: EvError, TurnID: t.ID, Code: CodeShutdown,
-			Message: ErrQueueClosed.Error(), Fatal: true,
-		}), ErrQueueClosed)
+		// PERMANENT, which is exactly why it has to be said out loud: the
+		// queue closes when the supervisor gives up for good, so this turn and
+		// every one after it fails the same way until the process restarts. A
+		// caller told nothing here goes on typing into a chief of staff that
+		// is never coming back.
+		q.fail(t, CodeShutdown, ErrQueueClosed)
 		return t
 	}
 	q.pending = append(q.pending, t)
@@ -183,10 +209,7 @@ func (q *queue) pump() {
 		}
 		q.mu.Unlock()
 		q.logf("cos: dispatch of turn %s failed: %v", t.ID, err)
-		t.finish(synthEvent(Event{
-			Ev: EvError, TurnID: t.ID, Code: CodeDispatchFailed,
-			Message: err.Error(), Fatal: true,
-		}), fmt.Errorf("%w: %v", ErrTurnFailed, err))
+		q.fail(t, CodeDispatchFailed, fmt.Errorf("%w: %v", ErrTurnFailed, err))
 	}
 }
 

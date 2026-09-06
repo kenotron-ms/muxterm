@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -126,6 +127,18 @@ const (
 	// of the cap is that a reconnecting browser never pulls a transcript-sized
 	// payload down the WebSocket.
 	DefaultHistoryLimit = 50
+	// drainGrace bounds how long runOnce waits for the sidecar's output pipes
+	// to reach EOF AFTER the process itself has been reaped.
+	//
+	// This is not a courtesy timeout; it is the only bound that exists. A
+	// grandchild that inherited stdout - an amplifier sub-agent, a tool
+	// process - keeps the write end open after python is gone, and a read to
+	// EOF then never returns: runOnce would never return, supervise would
+	// never restart, the turn in flight would hang forever and two reader
+	// goroutines would leak behind it. os/exec's WaitDelay cannot cover this
+	// (see runOnce), so the drain is bounded here and the pipes are closed out
+	// from under the orphan.
+	drainGrace = 5 * time.Second
 )
 
 // ErrNotRunning reports that no sidecar process is currently accepting ops.
@@ -234,7 +247,10 @@ func New(cfg Config) *Supervisor {
 		sessionSource: sessionSource,
 		cwdSource:     cwdSource,
 	}
-	s.q = newQueue(s.sendOp, cfg.Logf)
+	// The queue publishes the terminal events it synthesizes, so a turn that
+	// fails BEFORE it reaches the sidecar is visible to subscribers and not
+	// only to whoever holds its handle (queue.fail).
+	s.q = newQueue(s.sendOp, s.broker.Publish, cfg.Logf)
 	return s
 }
 
@@ -711,8 +727,13 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	// whole events in libc until the buffer filled, turning a token stream
 	// into one late burst and making a mid-turn crash lose everything.
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=utf-8")
-	// Graceful first. WaitDelay bounds the gap between the process exiting and
-	// its pipes closing, so Wait can never block forever on an inherited fd.
+	// Graceful first: a cancelled context sends SIGTERM, and WaitDelay is what
+	// escalates to SIGKILL five seconds later if the sidecar ignores it.
+	//
+	// That is ALL WaitDelay does here, and the distinction matters. It cannot
+	// bound the pipe drain: os/exec only closes pipes IT created for a copying
+	// goroutine, and the pipes below are ours. The drain is bounded explicitly
+	// instead - see drainGrace.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 5 * time.Second
 	// Last line of defence: if THIS process dies without running any cleanup
@@ -720,24 +741,38 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	// an orphan holding the amplifier session. See pdeathsig_linux.go.
 	setPdeathsig(cmd)
 
-	stdin, err := cmd.StdinPipe()
+	// OUR pipes, deliberately, rather than cmd.StdinPipe/StdoutPipe/StderrPipe.
+	//
+	// exec's Wait closes the pipes exec created, which forces the caller to
+	// drain them to EOF BEFORE calling Wait - and that ordering is exactly what
+	// lets an orphaned grandchild wedge this function forever: it holds the
+	// write end open after python exits, the drain never sees EOF, and Wait is
+	// never reached, so no timeout in Wait can help. Owning the parent ends
+	// means Wait can run the moment the process exits and the drain gets a
+	// bound of its own.
+	stdinR, stdinW, err := os.Pipe()
 	if err != nil {
 		return false, fmt.Errorf("stdin pipe: %w", err)
 	}
-	stdout, err := cmd.StdoutPipe()
+	stdoutR, stdoutW, err := os.Pipe()
 	if err != nil {
-		_ = stdin.Close()
+		closeAll(stdinR, stdinW)
 		return false, fmt.Errorf("stdout pipe: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
+	stderrR, stderrW, err := os.Pipe()
 	if err != nil {
-		_ = stdin.Close()
+		closeAll(stdinR, stdinW, stdoutR, stdoutW)
 		return false, fmt.Errorf("stderr pipe: %w", err)
 	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdinR, stdoutW, stderrW
+
 	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
+		closeAll(stdinR, stdinW, stdoutR, stdoutW, stderrR, stderrW)
 		return false, fmt.Errorf("start %s: %w", s.python, err)
 	}
+	// The child holds its own copies now. Ours would keep the pipes open past
+	// its exit and hide the EOF from the readers below.
+	closeAll(stdinR, stdoutW, stderrW)
 
 	ops := make(chan []byte, opQueueDepth)
 	incarnation := make(chan struct{})
@@ -750,18 +785,39 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	s.mu.Unlock()
 	s.cfg.Logf("cos: sidecar started pid=%d session=%s", cmd.Process.Pid, s.cfg.SessionID)
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); s.writeLoop(stdin, ops, incarnation) }()
-	go func() { defer wg.Done(); s.readStderr(stderr) }()
+	// Recorded as the ready event is SEEN rather than returned at the end of
+	// the drain: the drain can be cut short below, and by then whether this
+	// incarnation ever booted is already known.
+	var sawReady atomic.Bool
+	stdoutDone := make(chan struct{})
+	stderrDone := make(chan struct{})
+	writerDone := make(chan struct{})
+	go func() { defer close(stdoutDone); s.readStdout(stdoutR, &sawReady) }()
+	go func() { defer close(stderrDone); s.readStderr(stderrR) }()
+	go func() { defer close(writerDone); s.writeLoop(stdinW, ops, incarnation) }()
 
-	// Reading stdout on this goroutine is what makes the exit ordering safe:
-	// cmd.Wait closes the pipes, so it must not run until every read is done.
-	reachedReady = s.readStdout(stdout)
-
-	close(incarnation) // stops writeLoop, which closes stdin
-	wg.Wait()
+	// Wait FIRST, and independently of the drain. With our own pipes Wait has
+	// nothing to close and no copying goroutine to join, so it reaps the
+	// process and returns the moment it exits - whatever its orphans are still
+	// holding open.
 	waitErr := cmd.Wait()
+	close(incarnation) // stops writeLoop, which closes our end of stdin
+
+	// Then finish the drain, BOUNDED. The ordinary case costs nothing: the
+	// pipes hit EOF when the last holder of the write end goes away, which is
+	// normally the process we just reaped.
+	if !waitFor(drainGrace, stdoutDone, stderrDone, writerDone) {
+		s.cfg.Logf("cos: sidecar exited but its pipes are still open after %s; "+
+			"an orphaned child is holding them, closing them out", drainGrace)
+	}
+	// Closing the read ends unblocks a reader still parked on an orphan's copy
+	// of the write end, which is the only thing that can make the joins below
+	// return. In the ordinary path they are already at EOF and this is fd
+	// hygiene.
+	closeAll(stdoutR, stderrR, stdinW)
+	<-stdoutDone
+	<-stderrDone
+	<-writerDone
 
 	s.mu.Lock()
 	s.running = false
@@ -770,16 +826,45 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	s.pid = 0
 	s.mu.Unlock()
 
-	return reachedReady, waitErr
+	return sawReady.Load(), waitErr
 }
 
-// readStdout consumes NDJSON events until the pipe closes. It reports whether
-// a ready event was seen.
+// closeAll closes every non-nil file and ignores the errors: these are pipe
+// ends being torn down, and a second close (the ordinary path has already let
+// the readers finish) is not news.
+func closeAll(files ...*os.File) {
+	for _, f := range files {
+		if f != nil {
+			_ = f.Close()
+		}
+	}
+}
+
+// waitFor reports whether every channel closed within d.
+func waitFor(d time.Duration, chans ...<-chan struct{}) bool {
+	deadline := time.NewTimer(d)
+	defer deadline.Stop()
+	for _, ch := range chans {
+		select {
+		case <-ch:
+		case <-deadline.C:
+			return false
+		}
+	}
+	return true
+}
+
+// readStdout consumes NDJSON events until the pipe closes, setting sawReady
+// the moment a ready event arrives.
+//
+// sawReady is a pointer rather than a return value because this now runs on
+// its own goroutine and the drain it belongs to is bounded (runOnce): the
+// caller may stop waiting for this function before it returns, and "did this
+// incarnation boot?" has to survive that.
 //
 // A malformed line is logged and skipped, never fatal (2.4 law 5): a sidecar
 // that leaks one stray line to stdout must not take the session down with it.
-func (s *Supervisor) readStdout(r io.Reader) bool {
-	sawReady := false
+func (s *Supervisor) readStdout(r io.Reader, sawReady *atomic.Bool) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	for sc.Scan() {
@@ -793,14 +878,13 @@ func (s *Supervisor) readStdout(r io.Reader) bool {
 			continue
 		}
 		if ev.Ev == EvReady {
-			sawReady = true
+			sawReady.Store(true)
 		}
 		s.handleEvent(ev)
 	}
 	if err := sc.Err(); err != nil {
 		s.cfg.Logf("cos: sidecar stdout read error: %v", err)
 	}
-	return sawReady
 }
 
 // handleEvent advances queue state FIRST, then fans out.

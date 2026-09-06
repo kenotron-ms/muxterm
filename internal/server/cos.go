@@ -80,6 +80,23 @@ const (
 	cosTypeEvent           = "cos-event"
 )
 
+// Why a cos-history frame was sent. An ADDITIVE field on an existing frame
+// (2.4 law 5), and the browser needs it because the two replays mean opposite
+// things about a turn the replay does NOT contain:
+//
+//	subscribe  the transcript as it stood a moment ago. A live turn missing
+//	           from it may simply have finished after the snapshot was taken,
+//	           somewhere in the gap between WaitReady and the frame landing.
+//	clear      the transcript AFTER a prune the user asked for. A turn missing
+//	           from it was deleted, and must not come back.
+//
+// An older browser ignores the field and keeps today's behaviour, which is the
+// "clear" one.
+const (
+	cosHistoryReasonSubscribe = "subscribe"
+	cosHistoryReasonClear     = "clear"
+)
+
 const (
 	// cosSubscriberDepth is how far one browser may fall behind before its
 	// events start being dropped. Sized for a full token-stream burst.
@@ -316,7 +333,7 @@ func cosSynthEvent(fields map[string]any) json.RawMessage {
 	return data
 }
 
-// decorateTurnStart adds client_ref (and the prompt) to a turn_start.
+// decorateTurn adds client_ref (and the prompt) to an event that names a turn.
 //
 // The sidecar's turn_start carries only a turn id, so without this a tab cannot
 // tell which of its own submissions just started, and a SECOND tab would watch
@@ -324,11 +341,17 @@ func cosSynthEvent(fields map[string]any) json.RawMessage {
 // existing event, which spec 2.4 law 5 requires every consumer to ignore if it
 // does not know them.
 //
+// It is applied to a turn's ERROR event as well, and for a sharper reason: a
+// turn that fails at dispatch (queue.fail) never produced a turn_start at all,
+// so the error is the ONLY frame the browser will ever see for it. Undecorated,
+// it renders as a failure with no question above it -- the user watches their
+// prompt vanish and gets an error that does not say what it was about.
+//
 // The decode is into map[string]json.RawMessage on purpose: every value the
 // sidecar sent survives as the exact bytes it sent, so nothing is re-typed.
 // Any failure returns the original line unmodified -- a turn_start missing its
 // client_ref is a cosmetic loss, a dropped turn_start is not.
-func (r *cosRelay) decorateTurnStart(raw json.RawMessage, turnID string) json.RawMessage {
+func (r *cosRelay) decorateTurn(raw json.RawMessage, turnID string) json.RawMessage {
 	sub, ok := r.submission(turnID)
 	if !ok {
 		return raw
@@ -460,7 +483,7 @@ func (c *Client) cosSendHistory(sup *cos.Supervisor, sub *cos.Subscription) {
 	if !c.cosHolds(sub) {
 		return
 	}
-	c.sendCosHistory(turns)
+	c.sendCosHistory(turns, cosHistoryReasonSubscribe)
 }
 
 // cosHolds reports whether sub is still THIS connection's live subscription.
@@ -486,7 +509,7 @@ func (c *Client) cosSubscribed() bool {
 // tab makes the post-prune transcript belong to every tab. Follows the
 // BroadcastConfig shape next door -- snapshot the client set under the lock,
 // write outside it.
-func (h *Hub) broadcastCosHistory(turns json.RawMessage) {
+func (h *Hub) broadcastCosHistory(turns json.RawMessage, reason string) {
 	h.mu.Lock()
 	clients := make([]*Client, 0, len(h.clients))
 	for c := range h.clients {
@@ -496,7 +519,7 @@ func (h *Hub) broadcastCosHistory(turns json.RawMessage) {
 
 	for _, c := range clients {
 		if c.cosSubscribed() {
-			c.sendCosHistory(turns)
+			c.sendCosHistory(turns, reason)
 		}
 	}
 }
@@ -527,8 +550,8 @@ func (c *Client) cosPump(sub *cos.Subscription, relay *cosRelay) {
 			}
 			raw = encoded
 		}
-		if ev.Ev == cos.EvTurnStart && ev.TurnID != "" {
-			raw = relay.decorateTurnStart(raw, ev.TurnID)
+		if (ev.Ev == cos.EvTurnStart || ev.Ev == cos.EvError) && ev.TurnID != "" {
+			raw = relay.decorateTurn(raw, ev.TurnID)
 		}
 		frame := cosEventFrame(raw)
 		if frame == nil {
@@ -686,10 +709,20 @@ func (c *Client) cosRunClear(relay *cosRelay, olderThanDays int) {
 	// a still-live lane, and no browser can work out that set for itself.
 	turns, herr := relay.history(ctx, cosHistoryTurns)
 	if herr != nil {
+		// SAY SO, rather than logging where no user will look. The browser
+		// drops its transcript the moment it sees ok:true and waits for this
+		// replay to say what survived, so a silent return leaves an EMPTY
+		// conversation that reads exactly like a total wipe -- after a prune
+		// that may have kept most of it. Nothing pushes another replay until
+		// the next subscribe, so this is the only chance to say the surface
+		// is not the truth.
 		log.Printf("cos: cleared, but the post-clear replay failed: %v", herr)
+		c.sendCosError("", "history_failed", fmt.Sprintf(
+			"the conversation was cleared, but what survived could not be read back (%v); reload to see it",
+			herr))
 		return
 	}
-	c.hub.broadcastCosHistory(turns)
+	c.hub.broadcastCosHistory(turns, cosHistoryReasonClear)
 }
 
 // --- outbound frames -------------------------------------------------------
@@ -736,14 +769,15 @@ func (c *Client) sendCosClearResult(ok bool, removed, kept int, errMsg string) {
 // is the sidecar's shape, and a field added to a replayed turn must reach the
 // browser rather than being filtered out by a Go struct written before it
 // existed.
-func (c *Client) sendCosHistory(turns json.RawMessage) {
+func (c *Client) sendCosHistory(turns json.RawMessage, reason string) {
 	if len(turns) == 0 {
 		turns = json.RawMessage("[]")
 	}
 	frame := struct {
-		Type  string          `json:"type"`
-		Turns json.RawMessage `json:"turns"`
-	}{Type: cosTypeHistory, Turns: turns}
+		Type   string          `json:"type"`
+		Turns  json.RawMessage `json:"turns"`
+		Reason string          `json:"reason,omitempty"`
+	}{Type: cosTypeHistory, Turns: turns, Reason: reason}
 	data, err := json.Marshal(frame)
 	if err != nil {
 		log.Printf("cos: encode history frame: %v", err)

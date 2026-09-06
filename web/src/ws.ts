@@ -391,9 +391,15 @@ export class MuxSocket {
    * `approved` is always written, never omitted: a denial is `false`, and the
    * server treats a missing field as a denial precisely because guessing wrong
    * here runs the command the user just refused.
+   *
+   * Returns whether it actually went out, and that return is not optional
+   * housekeeping: a caller that assumes it did shows the user a confirmed
+   * security decision the sidecar never received, and the sidecar then times
+   * the request out to DENIED (2.4 law 3). The UI has to be able to tell those
+   * two apart.
    */
-  cosApproval(requestId: string, approved: boolean, reason = ''): void {
-    this._sendCos({ type: 'cos-approval', request_id: requestId, approved, reason });
+  cosApproval(requestId: string, approved: boolean, reason = ''): boolean {
+    return this._sendCos({ type: 'cos-approval', request_id: requestId, approved, reason });
   }
 
   /** Ask the sidecar to abandon a turn. It ends when its terminal event lands. */

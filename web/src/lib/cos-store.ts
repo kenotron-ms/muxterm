@@ -115,6 +115,16 @@ export interface CosTurn {
    * transcript the menu is offering to clear.
    */
   createdAt: number;
+  /**
+   * When this browser saw the turn REACH a terminal state, or 0 while it is
+   * still live.
+   *
+   * Read by _replaceHistory and nothing else. It is what separates "this turn
+   * finished after the server took its snapshot" from "this turn is gone",
+   * which are the same thing on the wire -- both are simply absent from the
+   * replay -- and mean opposite things.
+   */
+  endedAt: number;
 }
 
 /** Anything that went wrong outside a turn. Cleared on the next good news. */
@@ -188,6 +198,16 @@ class CosStore {
   private _approvals: CosApproval[] = [];
   private _fault: CosFault | null = null;
   private _subscribed = false;
+  /**
+   * When this browser last ASKED for a replay, in ms since the epoch.
+   *
+   * The server snapshots the transcript some time after this -- after the ~2s
+   * amplifier boot, on a cold server -- so a turn that ended before this line
+   * is certainly in the snapshot, and one that ended after it may not be.
+   * _replaceHistory needs that line to know which local turns a replay is
+   * entitled to erase.
+   */
+  private _replayRequestedAt = 0;
 
   get status(): CosStatus {
     return this._status;
@@ -243,6 +263,7 @@ class CosStore {
   open(): void {
     if (this._subscribed) return;
     this._subscribed = true;
+    this._replayRequestedAt = Date.now();
     if (this._status === 'idle') this._setStatus('starting');
     this._socket?.cosSubscribe(true);
     this._notify();
@@ -263,11 +284,31 @@ class CosStore {
     return this._socket.cosTurn(text, `cos-${Date.now().toString(36)}`);
   }
 
-  /** Answer an approval. Marked answered locally so the card settles at once. */
-  answer(requestId: string, approved: boolean): void {
+  /**
+   * Answer an approval.
+   *
+   * THE SEND IS CHECKED FIRST, and this is the one place in the store where
+   * that ordering is a security property rather than tidiness. Marking the
+   * card answered is a claim that the sidecar has the decision; on a dead
+   * socket it does not, and it will time the request out to DENIED (2.4 law
+   * 3). Showing a green \"approved\" for a request that is about to be denied
+   * is worse than showing nothing -- so on a failed send nothing is marked,
+   * the card stays live, and the notice says why.
+   *
+   * Returns whether the decision actually went out.
+   */
+  answer(requestId: string, approved: boolean): boolean {
+    if (!this._socket?.cosApproval(requestId, approved)) {
+      this._fault = {
+        code: 'approval_failed',
+        message: 'the chief of staff could not be reached, so nothing was answered',
+        fatal: false,
+      };
+      this._notify();
+      return false;
+    }
     const a = this._approvals.find((x) => x.requestId === requestId);
     if (a) a.answered = approved ? 'approved' : 'denied';
-    this._socket?.cosApproval(requestId, approved);
     // Held for a beat so the card can show the decision rather than vanishing
     // out from under the click that made it.
     setTimeout(() => {
@@ -275,6 +316,7 @@ class CosStore {
       this._notify();
     }, 900);
     this._notify();
+    return true;
   }
 
   cancel(turnId: string): void {
@@ -330,6 +372,9 @@ class CosStore {
   markReconnected(): void {
     if (this._status === 'idle') return;
     this._subscribed = true;
+    // ws.ts replays the subscribe frame, so a replay is on its way and the
+    // window it covers starts now.
+    this._replayRequestedAt = Date.now();
     this._setStatus('starting');
     this._notify();
   }
@@ -353,7 +398,15 @@ class CosStore {
       return;
     }
     if (type === 'cos-history') {
-      this._replaceHistory(Array.isArray(frame.turns) ? frame.turns : []);
+      // A replay sent because the transcript was PRUNED is authoritative about
+      // what is gone; a replay sent because this tab subscribed is only a
+      // snapshot, and may be older than what this browser has already seen.
+      // An older server sends no reason, and the stricter reading is the one
+      // it already gets today.
+      this._replaceHistory(
+        Array.isArray(frame.turns) ? frame.turns : [],
+        str(frame.reason) !== 'subscribe',
+      );
       this._notify();
       return;
     }
@@ -403,6 +456,7 @@ class CosStore {
       // a reply stream in with no question above it.
       case 'turn_submitted': {
         const t = this._ensure(turnId);
+        if (!t) return;
         t.prompt = str(ev.prompt) || t.prompt;
         t.clientRef = str(ev.client_ref) || t.clientRef;
         return;
@@ -410,8 +464,9 @@ class CosStore {
 
       case 'turn_start': {
         const t = this._ensure(turnId);
+        if (!t) return;
         // The relay DECORATES turn_start with the prompt and the client_ref
-        // (internal/server/cos.go decorateTurnStart). The sidecar's own
+        // (internal/server/cos.go decorateTurn). The sidecar's own
         // turn_start carries neither, so without this a reply streams in with
         // no question above it -- including in the tab that asked.
         //
@@ -430,6 +485,7 @@ class CosStore {
         const text = str(ev.text);
         if (!text) return;
         const t = this._ensure(turnId);
+        if (!t) return;
         if (t.status === 'pending') t.status = 'streaming';
         const tail = t.blocks[t.blocks.length - 1];
         if (tail && tail.kind === 'text') tail.text += text;
@@ -441,6 +497,7 @@ class CosStore {
         const text = str(ev.text);
         if (!text) return;
         const t = this._ensure(turnId);
+        if (!t) return;
         const tail = t.blocks[t.blocks.length - 1];
         if (tail && tail.kind === 'thinking') tail.text += text;
         else t.blocks.push({ kind: 'thinking', text });
@@ -449,6 +506,7 @@ class CosStore {
 
       case 'tool_start': {
         const t = this._ensure(turnId);
+        if (!t) return;
         const callId = str(ev.call_id);
         if (t.blocks.some((b) => b.kind === 'tool' && b.callId === callId && callId !== '')) return;
         t.blocks.push({
@@ -466,6 +524,7 @@ class CosStore {
 
       case 'tool_end': {
         const t = this._ensure(turnId);
+        if (!t) return;
         const callId = str(ev.call_id);
         // Newest-first: a call id may repeat across turns, and the one being
         // closed is always the most recent open one.
@@ -519,11 +578,12 @@ class CosStore {
 
       case 'turn_end': {
         const t = this._ensure(turnId);
+        if (!t) return;
         this._reconcile(t, str(ev.response));
         t.costUsd = cost(ev.cost_usd);
         t.ms = num(ev.ms);
         t.error = str(ev.error);
-        t.status = t.error ? 'failed' : 'done';
+        this._finish(t, t.error ? 'failed' : 'done');
         this._clearApprovalsFor(turnId);
         return;
       }
@@ -531,9 +591,10 @@ class CosStore {
       case 'cancelled':
       case 'turn_cancelled': {
         const t = this._ensure(turnId);
+        if (!t) return;
         this._reconcile(t, str(ev.response));
         t.ms = num(ev.ms);
-        t.status = 'cancelled';
+        this._finish(t, 'cancelled');
         this._clearApprovalsFor(turnId);
         return;
       }
@@ -546,12 +607,18 @@ class CosStore {
         // (2.4 law 2): a refused turn will never run, so leaving it "streaming"
         // would spin a cursor forever.
         const terminal = fatal || code === 'busy' || code === 'cancelled';
-        if (turnId) {
-          const t = this._ensure(turnId);
+        const t = turnId ? this._ensure(turnId) : null;
+        if (t) {
+          // A turn that failed AT DISPATCH never produced a turn_start, so
+          // this is the only frame that will ever carry its question. The
+          // relay decorates it for exactly that case (decorateTurn); an
+          // undecorated error leaves whatever is already known intact.
+          t.prompt = str(ev.prompt) || t.prompt;
+          t.clientRef = str(ev.client_ref) || t.clientRef;
           t.notices.push(message);
           if (terminal) {
-            t.status = code === 'cancelled' ? 'cancelled' : 'failed';
             t.error = message;
+            this._finish(t, code === 'cancelled' ? 'cancelled' : 'failed');
             this._clearApprovalsFor(turnId);
           }
         }
@@ -561,8 +628,8 @@ class CosStore {
           // Nothing is coming back for anything still in flight.
           for (const t of this._turns) {
             if (t.status === 'pending' || t.status === 'streaming') {
-              t.status = 'failed';
               t.error = message;
+              this._finish(t, 'failed');
             }
           }
           this._approvals = [];
@@ -606,6 +673,17 @@ class CosStore {
     t.blocks.push({ kind: 'text', text: response });
   }
 
+  /**
+   * Move a turn to a terminal state and stamp when.
+   *
+   * The one door every terminal branch goes through, so that endedAt cannot be
+   * forgotten by whichever branch is added next.
+   */
+  private _finish(t: CosTurn, status: CosTurnStatus): void {
+    t.status = status;
+    t.endedAt = Date.now();
+  }
+
   private _clearApprovalsFor(turnId: string): void {
     this._approvals = this._approvals.filter((a) => a.turnId !== turnId);
   }
@@ -620,26 +698,49 @@ class CosStore {
    * arrives more than once per page and appending would double the visible
    * transcript every time.
    *
-   * The only turns carried across are the ones still IN FLIGHT in this
-   * browser. They are not in the server's transcript yet -- it is written at
-   * turn end -- so dropping them would erase a question whose answer is still
-   * streaming. Replayed ids are `h-*` and live ids are `t-*`, so the two sets
-   * can never collide.
+   * Turns still IN FLIGHT in this browser are always carried across. They are
+   * not in the server's transcript yet -- it is written at turn end -- so
+   * dropping them would erase a question whose answer is still streaming.
+   * Replayed ids are `h-*` and live ids are `t-*`, so the two sets can never
+   * collide.
+   *
+   * A FINISHED turn missing from the replay is the hard case, because absence
+   * has two opposite meanings and the frame's reason is the only thing that
+   * distinguishes them:
+   *
+   *   authoritative (a clear)  it was pruned. Drop it; putting it back is the
+   *                            "clear that only emptied browser memory" bug.
+   *   a subscribe replay       it may simply have finished AFTER the server
+   *                            took its snapshot. The server subscribes and
+   *                            snapshots on independent goroutines, and the
+   *                            snapshot waits out the ~2s amplifier boot while
+   *                            live events keep arriving, so a turn can start
+   *                            and finish entirely inside that gap. It was in
+   *                            neither list, and vanished in front of the user.
+   *
+   * Hence the endedAt cut: only turns this browser saw finish AFTER it asked
+   * for the replay are kept, and a turn that finished inside the gap but
+   * before the snapshot -- so present in BOTH -- is recognised by its prompt
+   * and left to the replay, rather than rendered twice.
    *
    * Replayed turns are ordinary CosTurns: same fields, same blocks, same
    * render path. Nothing downstream can tell a replayed turn from a live one,
    * which is the point -- a reloaded tab has to look like the tab it replaced.
    */
-  private _replaceHistory(raw: readonly unknown[]): void {
+  private _replaceHistory(raw: readonly unknown[], authoritative: boolean): void {
     const replayed: CosTurn[] = [];
     for (const item of raw) {
       const turn = this._fromHistory(item);
       if (turn) replayed.push(turn);
     }
-    const inFlight = this._turns.filter(
-      (t) => t.status === 'pending' || t.status === 'streaming',
-    );
-    this._turns = [...replayed, ...inFlight];
+    const replayedPrompts = new Set(replayed.map((t) => t.prompt).filter((p) => p !== ''));
+    const carried = this._turns.filter((t) => {
+      if (t.status === 'pending' || t.status === 'streaming') return true;
+      if (authoritative) return false;
+      if (t.endedAt < this._replayRequestedAt) return false;
+      return !(t.prompt !== '' && replayedPrompts.has(t.prompt));
+    });
+    this._turns = [...replayed, ...carried];
     this._byId = new Map(this._turns.map((t) => [t.id, t]));
   }
 
@@ -697,12 +798,28 @@ class CosStore {
       ms: num(rec.ms),
       error: '',
       createdAt: Number.isFinite(stamped) ? stamped : Date.now(),
+      // Zero, not `stamped`: endedAt answers "did THIS browser watch it
+      // finish, since it last asked for a replay?", and the answer for a turn
+      // read out of the server's transcript is no. Any later replay is
+      // entitled to replace it.
+      endedAt: 0,
     };
   }
 
-  /** Upsert by turn id — the ordering guarantee this whole store rests on. */
-  private _ensure(turnId: string): CosTurn {
-    const id = turnId || '(unknown)';
+  /**
+   * Upsert by turn id — the ordering guarantee this whole store rests on.
+   *
+   * NULL when the event named no turn, and the caller must then drop the
+   * event. The alternative this replaced was a shared '(unknown)' bucket, and
+   * it was a trap: no real event ever carries that id, so nothing could ever
+   * terminate the turn it created. It stayed `pending` for the life of the
+   * page — `busy` true forever, the stop button lit, the phantom carried
+   * across every replay, its blocks growing without bound. Ignoring an event
+   * that cannot be placed is what the file header promises anyway (2.4 law 5).
+   */
+  private _ensure(turnId: string): CosTurn | null {
+    const id = turnId;
+    if (!id) return null;
     const found = this._byId.get(id);
     if (found) return found;
     const t: CosTurn = {
@@ -716,6 +833,7 @@ class CosStore {
       ms: 0,
       error: '',
       createdAt: Date.now(),
+      endedAt: 0,
     };
     this._byId.set(id, t);
     this._turns = [...this._turns, t];

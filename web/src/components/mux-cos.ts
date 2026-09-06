@@ -219,8 +219,19 @@ export class MuxCos extends LitElement {
    */
   @property({ type: String, reflect: true }) view: FleetView = loadFleetView();
 
-  /** Divider position, as a percent of the surface width. Persisted. */
-  @state() private _split = restoreDashboardSplit();
+  /**
+   * Divider position, as a percent of the surface width. Persisted.
+   *
+   * NOT @state, deliberately. render() does not read it -- the divider moves
+   * by writing --chat-w on the host (see _gripMove) precisely so that dragging
+   * costs one CSS custom property and not a Lit update. As @state it scheduled
+   * a full re-render on every pointermove: the whole transcript and every
+   * fleet card rebuilt sixty times a second, and updated() then read
+   * scrollHeight (a forced synchronous layout) and yanked a pinned reader to
+   * the bottom for each one. The direct style write existed to avoid exactly
+   * that, and the decorator quietly defeated it.
+   */
+  private _split = restoreDashboardSplit();
 
   private _unsub: (() => void) | null = null;
   private _unsubFleet: (() => void) | null = null;
@@ -1208,6 +1219,7 @@ export class MuxCos extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    document.addEventListener('mousedown', this._onOutsideClick);
     this._unsub = cosStore.subscribe(() => {
       this._version++;
     });
@@ -1240,6 +1252,7 @@ export class MuxCos extends LitElement {
   }
 
   override disconnectedCallback(): void {
+    document.removeEventListener('mousedown', this._onOutsideClick);
     this._unsub?.();
     this._unsub = null;
     this._unsubFleet?.();
@@ -1253,7 +1266,36 @@ export class MuxCos extends LitElement {
     // Only OUR session. An unconditional abort here would kill a dictation
     // the title bar's mic started against a terminal pane.
     if (this._voice === 'listening') voiceInputController.invalidateIfActive();
+    // NO DRAG MAY OUTLIVE THE DETACH. This element is parked by cache(), not
+    // destroyed, so a _drag left non-null is still non-null when the Dashboard
+    // reopens -- and _gripMove checks nothing else. Moving the mouse across
+    // the grip with no button held would then resize the panel out from under
+    // someone who never pressed anything.
+    this._endDrags();
+    // The divider position was only ever written in _gripUp, so a drag
+    // interrupted by closing the Dashboard threw away the position the user
+    // had just chosen.
+    persistDashboardSplit(this._split);
     super.disconnectedCallback();
+  }
+
+  /** Cancel any drag in progress and leave no half-dragged DOM behind. */
+  private _endDrags(): void {
+    if (this._drag) {
+      this._drag = null;
+      this.renderRoot.querySelector<HTMLElement>('.grip')?.classList.remove('drag');
+    }
+    if (this._sheetDrag) {
+      this._sheetDrag = null;
+      const sheet = this._sheet;
+      if (sheet) {
+        sheet.classList.remove('dragging');
+        // The inline height is the drag's, and _handleUp is what normally
+        // clears it; without this the sheet reopens at whatever height the
+        // interrupted gesture left it.
+        sheet.style.height = '';
+      }
+    }
   }
 
   /** Put the caret in the box. Called by the app when the Dashboard opens. */
@@ -1865,6 +1907,33 @@ export class MuxCos extends LitElement {
   private _toggleMenu = (e: Event): void => {
     e.stopPropagation();
     this._menuOpen = !this._menuOpen;
+  };
+
+  /**
+   * Dismiss the housekeeping menu on a press anywhere outside it.
+   *
+   * <mux-sidebar> installs the same document listener for the same reason. The
+   * PREDICATE differs on purpose: that menu's outside is outside the element,
+   * while this one floats over its own component, so
+   * `!composedPath().includes(this)` would leave it hanging over the fleet,
+   * the transcript and the composer -- everything a user is likely to press
+   * next. What counts as outside here is "not the menu, and not the button
+   * that opened it".
+   *
+   * mousedown rather than click: the toggle stops propagation on the click,
+   * and a press that starts a drag or lands on a scrollbar never produces one.
+   * The dots button is excluded so its own click still closes the menu instead
+   * of re-opening what this had just closed.
+   */
+  private _onOutsideClick = (e: MouseEvent): void => {
+    if (!this._menuOpen) return;
+    const path = e.composedPath();
+    const pressed = (sel: string): boolean => {
+      const el = this.renderRoot.querySelector(sel);
+      return el !== null && path.includes(el);
+    };
+    if (pressed('.menu') || pressed('.dots')) return;
+    this._menuOpen = false;
   };
 
   private _ask(which: Housekeeping): void {
