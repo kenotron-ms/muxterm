@@ -1420,8 +1420,18 @@ export class MuxSettingsSurface extends LitElement {
     );
   }
 
+  /**
+   * "Remove" deletes the host from ~/.ssh/config, so it is a dismissal in the
+   * strongest sense available: the user is saying this machine should stop
+   * being offered. It forgets for the same reason _disconnect does -- DELETE
+   * also emits a trailing host-state{never-connected}, and without the forget
+   * the removed host reappears in the sidebar as an empty group labelled with
+   * its raw HostRef.ID, because the tail frame carries no name.
+   */
   private _remove(row: RemoteRow): void {
-    void this._act(row.id, `/api/remotes/${encodeURIComponent(row.id)}`, 'DELETE');
+    void this._act(row.id, `/api/remotes/${encodeURIComponent(row.id)}`, 'DELETE', () =>
+      remotesStore.forget(row.id),
+    );
   }
 
   /**

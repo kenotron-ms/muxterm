@@ -66,9 +66,17 @@ type Client struct {
 	// the bare HostRef.ID, "" for local. attachedHost is also the pane-id
 	// namespace: pane ids never carry a host qualifier (design A.3), so the
 	// attached session is what disambiguates them.
+	//
+	// breakpoint is the responsive layout key the browser sent with that
+	// attach. It is remembered for one reason: an attach re-issued by the
+	// server (hostSession.reattach, after a remote host's link comes back) has
+	// no browser message to read it off, and the daemon answers a blank
+	// breakpoint with a BLANK layout -- which would silently flatten the user's
+	// saved arrangement on every reconnect.
 	wsMu         sync.Mutex
 	workspaceID  string
 	attachedHost string
+	breakpoint   string
 
 	// subMu guards the browser's subscription opt-ins. They are recorded here
 	// so that every session started AFTERWARDS can re-assert them on connect
@@ -109,14 +117,38 @@ const (
 	closeRelayFailureMessage = "Close request could not be completed; try again."
 )
 
-// setAttached records the workspace this client is currently attached to and
-// the host it lives on. workspaceID is the NAMESPACED id, because that is what
-// the browser was told.
-func (c *Client) setAttached(host, workspaceID string) {
+// setAttached records the workspace this client is currently attached to, the
+// host it lives on, and the breakpoint it asked for. workspaceID is the
+// NAMESPACED id, because that is what the browser was told.
+func (c *Client) setAttached(host, workspaceID, breakpoint string) {
 	c.wsMu.Lock()
 	c.attachedHost = host
 	c.workspaceID = workspaceID
+	c.breakpoint = breakpoint
 	c.wsMu.Unlock()
+}
+
+// attachedTo reports the BARE, daemon-local workspace id this client is
+// attached to on host, plus the breakpoint that attach carried, and whether it
+// is attached there at all.
+//
+// It is how a session re-establishes the browser's attachment on a fresh
+// connection. The bare id is the point: the attach travels to a daemon, and no
+// daemon may ever see a namespaced id (rule P6). The host check makes the local
+// daemon and every OTHER host answer false -- for local, because
+// hostSession.run (the only caller's caller) never runs for it, and for another
+// host, because its attachment belongs to a different session's connection.
+func (c *Client) attachedTo(host string) (workspaceID, breakpoint string, ok bool) {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if host == "" || c.attachedHost != host || c.workspaceID == "" {
+		return "", "", false
+	}
+	qualifier, local := splitID(c.workspaceID)
+	if qualifier != host || local == "" {
+		return "", "", false
+	}
+	return local, c.breakpoint, true
 }
 
 // getWorkspaceID returns the namespaced workspace this client is currently
@@ -417,7 +449,7 @@ func (c *Client) handleTextInput(data []byte) {
 			return
 		}
 		attachedID := nsID(host, comp.WorkspaceID)
-		c.setAttached(host, attachedID)
+		c.setAttached(host, attachedID, msg.Breakpoint)
 		c.sendMessage(&sessiond.Message{
 			Type:        sessiond.TypeComposition,
 			CID:         msg.CID,

@@ -361,15 +361,29 @@ func (s *hostSession) enter(st HostState, errText string, delay time.Duration) {
 	now := time.Now()
 
 	s.mu.Lock()
+	// since marks when this STATE began, not when it was last re-entered. A
+	// failing reconnect calls enter(HostReconnecting) once per attempt, so
+	// re-stamping unconditionally reset the clock every retry: the sidebar's
+	// "Disconnected 12s ago" could only ever count 0s, 1s, 0s, 1s, and the
+	// banner became a metronome instead of a measurement. The user is asking
+	// how long the machine has been gone, and that answer does not restart
+	// because we tried again.
+	changed := s.state != st
 	s.state = st
 	s.lastErr = errText
-	s.since = now
+	if changed {
+		s.since = now
+	}
 	if delay > 0 {
 		s.retryAt = now.Add(delay)
 	} else {
 		s.retryAt = time.Time{}
 	}
 	attempt := s.attempt
+	// Read back the RECORDED start of this state, which is not `now` on a
+	// re-entry. Sending `now` would put the metronome back on the wire even
+	// though the field it comes from is now stable.
+	since := s.since
 	s.mu.Unlock()
 
 	s.client.remoteRegistry().Note(s.host.ID, st, errText)
@@ -380,7 +394,7 @@ func (s *hostSession) enter(st HostState, errText string, delay time.Duration) {
 		Name:   s.host.DisplayName,
 		Target: s.host.Addr,
 		State:  st,
-		Since:  now.UnixMilli(),
+		Since:  since.UnixMilli(),
 		Error:  errText,
 	}
 	if st == HostReconnecting {
@@ -399,10 +413,21 @@ func (s *hostSession) nextDelay() time.Duration {
 	return backoffFor(attempt - 1)
 }
 
-// adopt installs a freshly dialed connection and marks the session up.
-func (s *hostSession) adopt(conn DaemonConn) {
+// hold installs (or, with nil, releases) the session's connection WITHOUT
+// claiming the host is up. Separate from markUp because a dialed connection and
+// a working one are not the same thing here -- see bringUp.
+func (s *hostSession) hold(conn DaemonConn) {
 	s.mu.Lock()
 	s.conn = conn
+	s.mu.Unlock()
+}
+
+// markUp declares the link proven and the host up. It is the ONLY place attempt
+// resets, which is what keeps the 1s->30s ladder monotonic across a long
+// outage, and the only place everUp is set, which is what keeps "never worked"
+// (stop, show the raw error) distinct from "was working" (retry forever).
+func (s *hostSession) markUp() {
+	s.mu.Lock()
 	s.state = HostConnected
 	s.attempt = 0
 	s.lastErr = ""
@@ -414,17 +439,27 @@ func (s *hostSession) adopt(conn DaemonConn) {
 
 // run drives the state machine described in the design:
 //
-//	never-connected --dial ok--> connected
-//	never-connected --dial err--> unreachable          STOP, show the raw error
+//	never-connected --dial+proof ok--> connected
+//	never-connected --dial or proof err--> unreachable STOP, show the raw error
 //	connected       --read loop exits--> reconnecting
 //	reconnecting    --backoff elapsed--> dial          retries FOREVER
+//
+// "proof" is bringUp's round trip, and it is part of the dial as far as this
+// machine is concerned: a transport can hand back a connection before the far
+// side has agreed to anything.
 //
 // It is the goroutine for exactly one remote host and exits only when ctx is
 // cancelled (browser gone, explicit disconnect) or the host is declared
 // unreachable.
 func (s *hostSession) run(ctx context.Context) {
 	for {
+		// A dial that returns no error has not yet proved anything, so the two
+		// steps are reported as one failure: see bringUp.
 		conn, err := s.client.hub.Dial(ctx, s.host)
+		var live chan struct{}
+		if err == nil {
+			live, err = s.bringUp(conn)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -446,22 +481,8 @@ func (s *hostSession) run(ctx context.Context) {
 			continue
 		}
 
-		s.adopt(conn)
-		// Handlers before Run: the read loop starts dispatching the moment it
-		// is scheduled, and an event that arrives before SetHandlers is an
-		// event nobody receives.
-		s.installHandlers()
-
-		done := make(chan struct{})
-		go func() {
-			_ = conn.Run()
-			close(done)
-		}()
-
-		s.afterConnect(conn)
-
 		select {
-		case <-done:
+		case <-live:
 		case <-ctx.Done():
 			_ = conn.Close()
 			return
@@ -482,9 +503,54 @@ func (s *hostSession) run(ctx context.Context) {
 	}
 }
 
-// afterConnect performs the fixed post-connect sequence: re-assert the
-// browser's subscriptions, refresh the merge cache, announce the host.
-func (s *hostSession) afterConnect(conn DaemonConn) {
+// bringUp installs conn, starts its read loop, and PROVES the link with one
+// round trip before the session is willing to call the host up. It returns the
+// channel that closes when that read loop exits.
+//
+// The proof is not ceremony. A transport Dial is OPTIMISTIC: the ssh transport
+// returns as soon as the ssh PROCESS starts (internal/transport/ssh, Dial),
+// which is long before the handshake -- so dialing a machine that is down
+// "succeeds" and the failure only surfaces on the first request. Treating that
+// as connected produced a once-per-second connected->reconnecting FLAP with two
+// visible costs: attempt was reset every cycle so the 1s->30s ladder never
+// advanced (measured: 154 ssh processes spawned in 195 s of one outage), and
+// the connected state, however brief, was a real state change, so the sidebar's
+// "Disconnected 12s ago" was re-stamped every cycle and could still only count
+// 0s, 1s, 0s, 1s.
+//
+// A failure here is returned to run() as if the dial itself had failed, because
+// as far as the user is concerned it did.
+func (s *hostSession) bringUp(conn DaemonConn) (chan struct{}, error) {
+	// Handlers before Run: the read loop starts dispatching the moment it is
+	// scheduled, and an event that arrives before SetHandlers is an event
+	// nobody receives.
+	s.hold(conn)
+	s.installHandlers()
+
+	live := make(chan struct{})
+	go func() {
+		_ = conn.Run()
+		close(live)
+	}()
+
+	// The workspace list is the proof, and it costs nothing extra: the
+	// post-connect sequence has to read it anyway.
+	workspaces, err := conn.ListWorkspaces()
+	if err != nil {
+		s.hold(nil)
+		_ = conn.Close()
+		return nil, err
+	}
+
+	s.markUp()
+	s.afterConnect(conn, workspaces)
+	return live, nil
+}
+
+// afterConnect performs the fixed post-connect sequence on a link bringUp has
+// already proven: re-assert the browser's subscriptions and its attachment,
+// refresh the merge cache, announce the host.
+func (s *hostSession) afterConnect(conn DaemonConn, workspaces []sessiond.WorkspaceInfo) {
 	c := s.client
 
 	// A.5: subscriptions are recorded on the Client, and every session started
@@ -504,14 +570,72 @@ func (s *hostSession) afterConnect(conn DaemonConn) {
 		}
 	}
 
-	if workspaces, err := conn.ListWorkspaces(); err != nil {
-		log.Printf("hostSession %s: ListWorkspaces: %v", s.host.ID, err)
-	} else {
-		c.setWorkspaces(s.host.ID, workspaces)
-		c.emitWorkspaceList(0)
-	}
+	// The browser's ATTACHMENT is subscription state too, and it lives on the
+	// daemon connection exactly like the two above -- see internal/sessiond's
+	// conn.attached, which gates pane input, and s.subs, which gates pane
+	// output. A re-dial produces a brand new DaemonConn with neither, so
+	// without this the host recovers everything EXCEPT the one thing the user
+	// was actually doing: the chrome goes green, the cards un-ghost, and the
+	// pane is a corpse in both directions until a page reload.
+	//
+	// It goes here, before the workspace list is emitted, so that a remote
+	// whose daemon restarted (workspace ids all gone) fails the attach first
+	// and is then repaired by the list that follows, which tells the browser
+	// the workspace no longer exists instead of leaving it bound to a ghost.
+	s.reattach(conn)
+
+	c.setWorkspaces(s.host.ID, workspaces)
+	c.emitWorkspaceList(0)
 
 	s.enter(HostConnected, "", 0)
+}
+
+// reattach re-establishes this browser's pane attachment on a freshly dialed
+// connection, and hands the browser the composition it needs to rebind to it.
+//
+// It is a no-op unless the browser is attached to a workspace on THIS host, so
+// the local daemon and a browser working on some other machine are untouched.
+//
+// The composition frame is not optional and not cosmetic. The browser already
+// holds these pane ids, but its terminals are mid-session with ready=true and a
+// spent replay barrier; app.ts only calls terminalRegistry.resetForReattach and
+// setExpectedReplayBytes from a composition, and those are what let the replay
+// bytes that follow repaint the pane instead of piling onto it. It carries no
+// cid because no browser asked for it -- this is the same unsolicited-push
+// shape the daemon already uses for workspace-list.
+//
+// attachSeq is held across Attach()+sendMessage for the reason handleTextInput
+// holds it: the daemon's read loop delivers the composition reply and then
+// immediately dispatches the replay pane-data frames that belong to it, so
+// without the lock those frames reach the WebSocket first and the browser
+// writes a repaint for a pane it has not been told to reset.
+func (s *hostSession) reattach(conn DaemonConn) {
+	if s.isLocal() {
+		return
+	}
+	c := s.client
+	wsID, breakpoint, ok := c.attachedTo(s.host.ID)
+	if !ok {
+		return
+	}
+
+	c.attachSeq.Lock()
+	defer c.attachSeq.Unlock()
+
+	comp, err := conn.Attach(wsID, breakpoint, sessiond.ClientKindInteractive)
+	if err != nil {
+		// Logged, not surfaced. The workspace may simply be gone (the far
+		// daemon restarted), and the workspace-list that follows is what tells
+		// the browser that in the vocabulary it already handles.
+		log.Printf("hostSession %s: reattach %s: %v", s.host.ID, wsID, err)
+		return
+	}
+	c.sendMessage(&sessiond.Message{
+		Type:        sessiond.TypeComposition,
+		WorkspaceID: nsID(s.host.ID, comp.WorkspaceID),
+		Panes:       comp.Panes,
+		Layout:      comp.Layout,
+	})
 }
 
 // installHandlers wires this session's daemon events to the browser, with the

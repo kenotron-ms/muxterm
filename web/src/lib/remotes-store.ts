@@ -226,6 +226,14 @@ class RemotesStore {
    * for); forgetting one is how it leaves the sidebar.
    */
   forget(id: string): void {
+    // Record the dismissal BEFORE dropping the entry, and record it even when
+    // there is no entry to drop. Both routes that dismiss a host answer over
+    // HTTP and then emit a trailing host-state{never-connected}; without this
+    // line `_forgotten` was never populated at all, so that frame re-admitted
+    // every host the user had just dismissed and the group came back empty.
+    // The guard is the whole mechanism -- deleting from _hosts alone only wins
+    // the race when the frame happens to be slow.
+    this._forgotten.add(id);
     if (!this._hosts.delete(id)) return;
     this._sorted = null;
     this._notify();
