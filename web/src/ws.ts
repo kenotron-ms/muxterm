@@ -11,6 +11,7 @@ import {
   type SessiondMessage,
 } from './types';
 import type { MuxStore } from './state';
+import { wsUrl } from './lib/base-path.js';
 
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
 export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
@@ -609,6 +610,9 @@ export class MuxSocket {
 }
 
 export function buildWsUrl(path = '/ws'): string {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}${path}`;
+  // wsUrl() prefixes the path with BASE_PATH, so the socket follows the app
+  // when it is served under a path prefix (e.g. /t/<id>/ws) instead of always
+  // dialing the origin root. At the root this is byte-identical to the old
+  // `${proto}//${location.host}${path}`.
+  return wsUrl(path);
 }

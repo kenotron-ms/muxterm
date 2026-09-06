@@ -8,6 +8,8 @@
 // as MISSING KEYS rather than empty strings — every read goes through
 // parseUpdateStatus(), which normalizes anything unexpected.
 
+import { apiPath } from './base-path.js';
+
 export type UpdateMethod = 'binary' | 'homebrew' | 'unsupported';
 
 export interface UpdateStatus {
@@ -78,7 +80,7 @@ export class UpdateEndpointMissingError extends Error {
  * server is down" apart from "the server says version X".
  */
 export async function fetchUpdateStatus(): Promise<UpdateStatus> {
-  const res = await fetch('/api/update/status');
+  const res = await fetch(apiPath('/api/update/status'));
   if (res.status === 404) throw new UpdateEndpointMissingError();
   if (!res.ok) throw new Error(`fetchUpdateStatus: HTTP ${res.status}`);
   return parseUpdateStatus(await res.json());
@@ -91,7 +93,7 @@ export async function fetchUpdateStatus(): Promise<UpdateStatus> {
  * actionable, 500 download/checksum/replace failure), so the UI can show it.
  */
 export async function applyUpdate(): Promise<{ version: string }> {
-  const res = await fetch('/api/update/apply', { method: 'POST' });
+  const res = await fetch(apiPath('/api/update/apply'), { method: 'POST' });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
     const err = typeof body['error'] === 'string' && body['error'] !== ''

@@ -7,6 +7,8 @@
 // The API key is write-only across the wire: it is sent by saveAIKey and never
 // returned by any endpoint, so nothing in this module ever holds or caches it.
 
+import { apiPath } from './base-path.js';
+
 export type AISource = 'settings' | 'env' | 'none';
 
 export interface AIStatus {
@@ -38,7 +40,7 @@ export function parseAIStatus(raw: unknown): AIStatus {
 
 /** GET /api/ai/status — the capability flag. Never returns the key. */
 export async function fetchAIStatus(): Promise<AIStatus> {
-  const res = await fetch('/api/ai/status');
+  const res = await fetch(apiPath('/api/ai/status'));
   if (!res.ok) return DEFAULT_AI_STATUS;
   return parseAIStatus(await res.json());
 }
@@ -50,7 +52,7 @@ export async function fetchAIStatus(): Promise<AIStatus> {
  * never keystroke-debounced onto the wire.
  */
 export async function saveAIKey(key: string): Promise<AIStatus> {
-  const res = await fetch('/api/ai/key', {
+  const res = await fetch(apiPath('/api/ai/key'), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ apiKey: key }),
@@ -61,14 +63,14 @@ export async function saveAIKey(key: string): Promise<AIStatus> {
 
 /** DELETE /api/ai/key — idempotent. */
 export async function clearAIKey(): Promise<AIStatus> {
-  const res = await fetch('/api/ai/key', { method: 'DELETE' });
+  const res = await fetch(apiPath('/api/ai/key'), { method: 'DELETE' });
   if (!res.ok) throw new Error(`clearAIKey: HTTP ${res.status}`);
   return parseAIStatus(await res.json());
 }
 
 /** POST /api/ai/ping — the authoritative key-validity check. */
 export async function pingAI(): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch('/api/ai/ping', { method: 'POST' });
+  const res = await fetch(apiPath('/api/ai/ping'), { method: 'POST' });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (res.ok && body['ok'] === true) return { ok: true };
   const err = typeof body['error'] === 'string' ? body['error'] : `http_${res.status}`;

@@ -21,6 +21,8 @@
 // This module also injects the sidebar preview font (Spleen 5x8), which is NOT
 // a terminal font and deliberately not in FONT_FAMILIES — see below.
 
+import { apiPath } from './base-path.js';
+
 /** Default CSS font-family for the terminal (the bundled JetBrains Mono NF). */
 export const TERMINAL_FONT_FAMILY = 'JetBrainsMonoNerdFont';
 
@@ -70,6 +72,12 @@ export function injectTerminalFonts(): void {
   const STYLE_ID = 'mux-terminal-fonts';
   if (document.getElementById(STYLE_ID)) return;
 
+  // These @font-face rules are built at runtime, so Vite's build-time `base`
+  // rewriting never sees them: the URLs must be prefixed here or every woff2
+  // 404s when the app is served under a path prefix. '/fonts' at the origin
+  // root, '/t/abc/fonts' behind a tunnel.
+  const fontsBase = apiPath('/fonts');
+
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
@@ -79,28 +87,28 @@ export function injectTerminalFonts(): void {
   font-style: normal;
   font-weight: 400;
   font-display: block;
-  src: url('/fonts/JetBrainsMonoNerdFont-Regular.woff2') format('woff2');
+  src: url('${fontsBase}/JetBrainsMonoNerdFont-Regular.woff2') format('woff2');
 }
 @font-face {
   font-family: 'JetBrainsMonoNerdFont';
   font-style: normal;
   font-weight: 700;
   font-display: block;
-  src: url('/fonts/JetBrainsMonoNerdFont-Bold.woff2') format('woff2');
+  src: url('${fontsBase}/JetBrainsMonoNerdFont-Bold.woff2') format('woff2');
 }
 @font-face {
   font-family: 'JetBrainsMonoNerdFont';
   font-style: italic;
   font-weight: 400;
   font-display: block;
-  src: url('/fonts/JetBrainsMonoNerdFont-Italic.woff2') format('woff2');
+  src: url('${fontsBase}/JetBrainsMonoNerdFont-Italic.woff2') format('woff2');
 }
 @font-face {
   font-family: 'JetBrainsMonoNerdFont';
   font-style: italic;
   font-weight: 700;
   font-display: block;
-  src: url('/fonts/JetBrainsMonoNerdFont-BoldItalic.woff2') format('woff2');
+  src: url('${fontsBase}/JetBrainsMonoNerdFont-BoldItalic.woff2') format('woff2');
 }
 /* ── Fira Code Nerd Font ── */
 @font-face {
@@ -108,14 +116,14 @@ export function injectTerminalFonts(): void {
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('/fonts/FiraCodeNerdFont-Regular.woff2') format('woff2');
+  src: url('${fontsBase}/FiraCodeNerdFont-Regular.woff2') format('woff2');
 }
 @font-face {
   font-family: 'FiraCodeNerdFont';
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url('/fonts/FiraCodeNerdFont-Bold.woff2') format('woff2');
+  src: url('${fontsBase}/FiraCodeNerdFont-Bold.woff2') format('woff2');
 }
 /* ── Cascadia Code NF ── */
 @font-face {
@@ -123,14 +131,14 @@ export function injectTerminalFonts(): void {
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('/fonts/CascadiaCodeNF-Regular.woff2') format('woff2');
+  src: url('${fontsBase}/CascadiaCodeNF-Regular.woff2') format('woff2');
 }
 @font-face {
   font-family: 'CascadiaCodeNF';
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url('/fonts/CascadiaCodeNF-Bold.woff2') format('woff2');
+  src: url('${fontsBase}/CascadiaCodeNF-Bold.woff2') format('woff2');
 }
 /* ── Hack Nerd Font ── */
 @font-face {
@@ -138,14 +146,14 @@ export function injectTerminalFonts(): void {
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('/fonts/HackNerdFont-Regular.woff2') format('woff2');
+  src: url('${fontsBase}/HackNerdFont-Regular.woff2') format('woff2');
 }
 @font-face {
   font-family: 'HackNerdFont';
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url('/fonts/HackNerdFont-Bold.woff2') format('woff2');
+  src: url('${fontsBase}/HackNerdFont-Bold.woff2') format('woff2');
 }
 /* ── Iosevka Term Nerd Font ── */
 @font-face {
@@ -153,14 +161,14 @@ export function injectTerminalFonts(): void {
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('/fonts/IosevkaTermNerdFont-Regular.woff2') format('woff2');
+  src: url('${fontsBase}/IosevkaTermNerdFont-Regular.woff2') format('woff2');
 }
 @font-face {
   font-family: 'IosevkaTermNerdFont';
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url('/fonts/IosevkaTermNerdFont-Bold.woff2') format('woff2');
+  src: url('${fontsBase}/IosevkaTermNerdFont-Bold.woff2') format('woff2');
 }
 /* ── Spleen 5x8 — sidebar preview only, never a terminal font ──
    font-display: block because a 5x8 grid drawn in a fallback font at 8px is
@@ -170,7 +178,7 @@ export function injectTerminalFonts(): void {
   font-style: normal;
   font-weight: 400;
   font-display: block;
-  src: url('/fonts/Spleen5x8.woff2') format('woff2');
+  src: url('${fontsBase}/Spleen5x8.woff2') format('woff2');
 }
 `.trim();
   document.head.appendChild(style);
