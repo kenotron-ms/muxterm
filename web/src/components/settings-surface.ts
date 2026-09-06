@@ -19,6 +19,8 @@ import {
   pingAI,
   type AIStatus,
 } from '../lib/ai.js';
+import { apiPath } from '../lib/base-path.js';
+import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -40,6 +42,124 @@ const LIGHT_THEMES: ThemeCard[] = [
   { id: 'one-light',       label: 'One Light' },
   { id: 'github-light',    label: 'GitHub'    },
 ];
+
+// ── Remotes ──────────────────────────────────────────────────────────────────
+
+/** One row of GET /api/remotes, in all three arrays (plan C.0). */
+interface RemoteRow {
+  /** HostRef.ID, e.g. "ssh:boxb" — the key every other route takes. */
+  id: string;
+  /** Display label. Never a key. */
+  name: string;
+  /** Dial target, e.g. "azureuser@20.230.240.43" — the .r-sub line. */
+  target: string;
+  /** Section heading key (ux D7). */
+  transport: string;
+  /** Written by muxterm between its own markers, so muxterm may remove it. */
+  managed: boolean;
+  state: HostConnState;
+  probe: 'present' | 'login-shell-only' | 'absent' | 'unknown';
+  /** The transport's own failure text, verbatim. Only when unreachable. */
+  error?: string;
+}
+
+/** GET /api/remotes (plan C.1). All three arrays always present, never null. */
+interface RemotesList {
+  connected: RemoteRow[];
+  discovered: RemoteRow[];
+  errors: RemoteRow[];
+}
+
+const EMPTY_REMOTES: RemotesList = { connected: [], discovered: [], errors: [] };
+
+/**
+ * The Add-a-host request's key in `_pending`. The empty string cannot collide
+ * with a host id: remoteRows() drops any row without one.
+ */
+const ADD_HOST_KEY = '';
+
+/**
+ * Section headings for the un-connected half of the pane, keyed by transport
+ * (ux D7). A second transport adds a section here and nowhere else — this map
+ * is the ONLY part of the UI that knows transports exist. An unmapped
+ * transport heads its own section under its own name rather than inventing
+ * prose about it.
+ */
+const TRANSPORT_TITLES: Record<string, string> = {
+  ssh: 'From ~/.ssh/config',
+};
+
+/**
+ * Same order the server sorts each array in (remotes_api.go sortRows): by
+ * display name, id breaking ties. Code-unit order, not locale order — host
+ * names are machine identifiers and the order must not depend on the browser's
+ * locale.
+ */
+function byNameThenID(a: RemoteRow, b: RemoteRow): number {
+  if (a.name !== b.name) return a.name < b.name ? -1 : 1;
+  if (a.id === b.id) return 0;
+  return a.id < b.id ? -1 : 1;
+}
+
+function remoteRows(raw: unknown): RemoteRow[] {
+  if (!Array.isArray(raw)) return [];
+  const out: RemoteRow[] = [];
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    const id = typeof r['id'] === 'string' ? r['id'] : '';
+    if (id === '') continue;
+    const row: RemoteRow = {
+      id,
+      name: typeof r['name'] === 'string' && r['name'] !== '' ? r['name'] : id,
+      target: typeof r['target'] === 'string' ? r['target'] : '',
+      transport: typeof r['transport'] === 'string' && r['transport'] !== ''
+        ? r['transport']
+        : 'ssh',
+      managed: r['managed'] === true,
+      state: r['state'] === 'connected' || r['state'] === 'reconnecting'
+        || r['state'] === 'unreachable'
+        ? r['state']
+        : 'never-connected',
+      probe: r['probe'] === 'present' || r['probe'] === 'login-shell-only'
+        || r['probe'] === 'absent'
+        ? r['probe']
+        : 'unknown',
+    };
+    if (typeof r['error'] === 'string' && r['error'] !== '') row.error = r['error'];
+    out.push(row);
+  }
+  return out;
+}
+
+function parseRemotesList(raw: unknown): RemotesList {
+  if (raw === null || typeof raw !== 'object') return EMPTY_REMOTES;
+  const r = raw as Record<string, unknown>;
+  return {
+    connected: remoteRows(r['connected']),
+    discovered: remoteRows(r['discovered']),
+    errors: remoteRows(r['errors']),
+  };
+}
+
+/**
+ * The server's own words for a failed request, verbatim.
+ *
+ * Every 4xx/5xx body is `{"error": "..."}` and those strings are already
+ * written for a human — sshconfig explains the hand-written-Host collision in
+ * full sentences, and ssh's "No route to host" is more useful than anything
+ * this file could write about it. Paraphrasing loses what the user needs.
+ */
+async function remoteErrorText(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as Record<string, unknown>;
+    const err = body['error'];
+    if (typeof err === 'string' && err !== '') return err;
+  } catch {
+    // Fall through to the status line below.
+  }
+  return `HTTP ${res.status}`;
+}
 
 /**
  * mux-settings-surface — Phase 5 two-column settings panel.
@@ -599,13 +719,122 @@ export class MuxSettingsSurface extends LitElement {
       line-height: 1.5;
       color: var(--chrome-text-dim);
     }
+
+    /* ── Remotes ── */
+    .r-row {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 10px 12px;
+      border: 1px solid var(--chrome-border);
+      border-radius: 6px;
+      margin-bottom: 8px;
+      background: var(--chrome-bar);
+    }
+    .r-row.connected {
+      border-color: color-mix(in srgb, var(--mux-ok) 35%, var(--chrome-border));
+    }
+    .r-row.degraded {
+      border-color: color-mix(in srgb, var(--mux-warn) 45%, var(--chrome-border));
+      background: color-mix(in srgb, var(--mux-warn) 6%, var(--chrome-bar));
+    }
+    .r-row.err {
+      border-color: color-mix(in srgb, var(--mux-error) 40%, var(--chrome-border));
+    }
+
+    .r-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .r-dot.ok { background: var(--mux-ok); }
+    .r-dot.warn { background: var(--mux-warn); }
+    .r-dot.err { background: var(--mux-error); }
+    .r-dot.off {
+      background: transparent;
+      border: 1px solid var(--chrome-text-dim);
+    }
+
+    .r-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .r-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--chrome-text-bright);
+    }
+
+    .r-sub {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10.5px;
+      color: var(--chrome-text-dim);
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .r-sub.err {
+      color: var(--mux-error);
+    }
+
+    .r-state {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      flex-shrink: 0;
+      color: var(--mux-warn);
+    }
+
+    .r-btn {
+      padding: 5px 11px;
+      border: 1px solid var(--chrome-border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--chrome-text-dim);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .r-btn:hover {
+      border-color: var(--chrome-accent);
+      color: var(--chrome-text-bright);
+    }
+    .r-btn.pri {
+      border-color: var(--chrome-accent);
+      color: var(--chrome-accent);
+    }
+    .r-btn.pri:hover {
+      background: var(--chrome-accent);
+      color: var(--chrome-body);
+    }
+    .r-btn.danger:hover {
+      border-color: var(--chrome-danger);
+      color: var(--chrome-danger);
+    }
+    .r-btn[disabled] {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    /* The server's verbatim message for a request that failed outside a row:
+       a list that could not be read, or an address it refused to add. */
+    .r-error {
+      margin-top: 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      color: var(--mux-error);
+    }
   `;
 
   @property({ attribute: false }) config: ResolvedConfig | null = null;
   @property({ type: String }) serverAddr = '';
   @property({ attribute: false }) aiStatus: AIStatus = DEFAULT_AI_STATUS;
 
-  @state() private _section: 'appearance' | 'notifications' | 'ai' = 'appearance';
+  @state() private _section: 'appearance' | 'notifications' | 'ai' | 'remotes' = 'appearance';
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
   @state() private _aiKeyInput = '';
@@ -615,9 +844,39 @@ export class MuxSettingsSurface extends LitElement {
   // machine's window/PWA from other muxterm instances. See instance-identity.ts.
   @state() private _titlebarColor: string | null = restoreTitlebarColor();
 
+  @state() private _remotes: RemotesList = EMPTY_REMOTES;
+  @state() private _remotesError = '';
+  @state() private _addTarget = '';
+  @state() private _addError = '';
+  /**
+   * The verbatim failure of the last action on a host, by id.
+   *
+   * A failed /connect is already recorded server-side (the host turns
+   * unreachable and the next GET carries ssh's words), but a failed
+   * /provision is not: the deploy never got far enough to make the host
+   * unreachable, so without this the button would sit silent for up to three
+   * minutes and then change nothing. Rendered through the same .r-row.err the
+   * server's own errors use — no second vocabulary for the same fact.
+   */
+  private _rowErrors = new Map<string, string>();
+  /** Host ids with a request in flight. Their buttons are disabled. */
+  private _pending = new Set<string>();
+  private _unsubRemotes: (() => void) | null = null;
+
   override connectedCallback(): void {
     super.connectedCallback();
     this._refreshNotifPermission();
+    // host-state is the only thing that moves a row between sections without
+    // this pane asking for it, so it is the only thing that refetches.
+    this._unsubRemotes = remotesStore.subscribe(() => {
+      if (this._section === 'remotes') void this._loadRemotes();
+    });
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this._unsubRemotes?.();
+    this._unsubRemotes = null;
   }
 
   private _refreshNotifPermission(): void {
@@ -1076,6 +1335,239 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
+  // ── Remotes ───────────────────────────────────────────────────────────────
+
+  /** GET /api/remotes — on open, on every host-state, after every mutation. */
+  private async _loadRemotes(): Promise<void> {
+    // Deliberately the bare GET: ?probe=1 spends an ssh round trip per host
+    // and belongs to the connect dialog (plan C.1). This pane serves whatever
+    // the probe cache learned, and "unknown" simply offers Connect.
+    try {
+      const res = await fetch(apiPath('/api/remotes'));
+      if (!res.ok) {
+        this._remotesError = await remoteErrorText(res);
+        return;
+      }
+      this._remotes = parseRemotesList(await res.json());
+      this._remotesError = '';
+      // A host the server now reports as connected or reconnecting is one
+      // whose last failure is over; keeping the message would explain a
+      // problem that no longer exists.
+      for (const row of this._remotes.connected) this._rowErrors.delete(row.id);
+    } catch (e) {
+      this._remotesError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /** POST/DELETE one host route, then refetch. */
+  private async _act(id: string, path: string, method: 'POST' | 'DELETE'): Promise<void> {
+    if (this._pending.has(id)) return;
+    this._pending.add(id);
+    this._rowErrors.delete(id);
+    this.requestUpdate();
+    try {
+      const res = await fetch(apiPath(path), { method });
+      if (!res.ok) this._rowErrors.set(id, await remoteErrorText(res));
+    } catch (e) {
+      this._rowErrors.set(id, e instanceof Error ? e.message : String(e));
+    } finally {
+      this._pending.delete(id);
+      await this._loadRemotes();
+      this.requestUpdate();
+    }
+  }
+
+  private _connect(row: RemoteRow): void {
+    void this._act(row.id, `/api/remotes/${encodeURIComponent(row.id)}/connect`, 'POST');
+  }
+
+  private _provision(row: RemoteRow): void {
+    void this._act(row.id, `/api/remotes/${encodeURIComponent(row.id)}/provision`, 'POST');
+  }
+
+  private _disconnect(row: RemoteRow): void {
+    void this._act(row.id, `/api/remotes/${encodeURIComponent(row.id)}/disconnect`, 'POST');
+  }
+
+  private _remove(row: RemoteRow): void {
+    void this._act(row.id, `/api/remotes/${encodeURIComponent(row.id)}`, 'DELETE');
+  }
+
+  /**
+   * Retry repeats the action the row's probe implies: a host we know has no
+   * muxterm needs installing, not another dial that can only fail the same
+   * way. Everything else — including every host we have never probed — dials.
+   */
+  private _retry(row: RemoteRow): void {
+    if (row.probe === 'absent') this._provision(row);
+    else this._connect(row);
+  }
+
+  private async _addHost(): Promise<void> {
+    const target = this._addTarget.trim();
+    if (target === '' || this._pending.has(ADD_HOST_KEY)) return;
+    this._pending.add(ADD_HOST_KEY);
+    this._addError = '';
+    this.requestUpdate();
+    try {
+      // No name: the server derives one from the target and validates it, and
+      // says so in the 400 when the derived name will not do.
+      const res = await fetch(apiPath('/api/remotes'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+      });
+      if (!res.ok) {
+        this._addError = await remoteErrorText(res);
+        return;
+      }
+      this._addTarget = '';
+    } catch (e) {
+      this._addError = e instanceof Error ? e.message : String(e);
+    } finally {
+      this._pending.delete(ADD_HOST_KEY);
+      // Adding does not connect (plan C.2); the new host appears in its
+      // transport's section with a Connect button, which is the next decision.
+      await this._loadRemotes();
+      this.requestUpdate();
+    }
+  }
+
+  /** Only entries muxterm wrote between its own markers can be removed. */
+  private _renderRemoveBtn(row: RemoteRow) {
+    if (!row.managed) return '';
+    return html`
+      <button
+        class="r-btn danger"
+        ?disabled="${this._pending.has(row.id)}"
+        @click="${() => this._remove(row)}"
+      >Remove</button>
+    `;
+  }
+
+  private _renderConnectedRow(row: RemoteRow) {
+    const dropped = row.state === 'reconnecting';
+    const busy = this._pending.has(row.id);
+    return html`
+      <div class="r-row ${dropped ? 'degraded' : 'connected'}">
+        <span class="r-dot ${dropped ? 'warn' : 'ok'}"></span>
+        <div class="r-main">
+          <div class="r-name">${row.name}</div>
+          <div class="r-sub">${row.target}</div>
+        </div>
+        ${dropped ? html`<span class="r-state">reconnecting</span>` : ''}
+        ${dropped
+          ? html`<button
+              class="r-btn"
+              ?disabled="${busy}"
+              @click="${() => this._retry(row)}"
+            >Retry</button>`
+          : html`<button
+              class="r-btn danger"
+              ?disabled="${busy}"
+              @click="${() => this._disconnect(row)}"
+            >Disconnect</button>`}
+        ${this._renderRemoveBtn(row)}
+      </div>
+    `;
+  }
+
+  private _renderDiscoveredRow(row: RemoteRow) {
+    // The row's own error wins over ours: the server saw the failure the whole
+    // fleet sees, we only saw the last button this browser pressed.
+    const error = row.error ?? this._rowErrors.get(row.id) ?? '';
+    const busy = this._pending.has(row.id);
+
+    // This is the only place in the whole UI where a host reads as broken.
+    if (error !== '') {
+      return html`
+        <div class="r-row err">
+          <span class="r-dot err"></span>
+          <div class="r-main">
+            <div class="r-name">${row.name}</div>
+            <div class="r-sub err">${error}</div>
+          </div>
+          <button
+            class="r-btn"
+            ?disabled="${busy}"
+            @click="${() => this._retry(row)}"
+          >Retry</button>
+          ${this._renderRemoveBtn(row)}
+        </div>
+      `;
+    }
+
+    // "absent" is the one probe result that changes the verb: connecting a
+    // host with no muxterm on it can only fail.
+    const install = row.probe === 'absent';
+    return html`
+      <div class="r-row">
+        <span class="r-dot off"></span>
+        <div class="r-main">
+          <div class="r-name">${row.name}</div>
+          <div class="r-sub">${row.target}</div>
+        </div>
+        ${install
+          ? html`<button
+              class="r-btn"
+              ?disabled="${busy}"
+              @click="${() => this._provision(row)}"
+            >Install &amp; connect</button>`
+          : html`<button
+              class="r-btn pri"
+              ?disabled="${busy}"
+              @click="${() => this._connect(row)}"
+            >Connect</button>`}
+        ${this._renderRemoveBtn(row)}
+      </div>
+    `;
+  }
+
+  private _renderRemotes() {
+    const connected = this._remotes.connected;
+    // The error rows sit among the ssh-config rows rather than in a section of
+    // their own, because that is where the host lives.
+    const rest = [...this._remotes.discovered, ...this._remotes.errors].sort(byNameThenID);
+    const transports = [...new Set(rest.map(r => r.transport))].sort();
+
+    // A heading with nothing under it explains nothing. The first heading that
+    // does render carries no top gap.
+    let first = connected.length === 0;
+
+    return html`
+      ${this._remotesError ? html`<div class="r-error">${this._remotesError}</div>` : ''}
+      ${connected.length > 0
+        ? html`
+            <div class="section-title">Connected</div>
+            ${connected.map(row => this._renderConnectedRow(row))}
+          `
+        : ''}
+      ${transports.map(transport => {
+        const gap = first ? '' : ' section-gap';
+        first = false;
+        return html`
+          <div class="section-title${gap}">${TRANSPORT_TITLES[transport] ?? transport}</div>
+          ${rest
+            .filter(row => row.transport === transport)
+            .map(row => this._renderDiscoveredRow(row))}
+        `;
+      })}
+      <div class="divider"></div>
+      <div class="section-title">Add a host</div>
+      <input
+        class="ai-input"
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="user@host"
+        .value="${this._addTarget}"
+        @input="${(e: Event) => { this._addTarget = (e.target as HTMLInputElement).value; }}"
+        @keydown="${(e: KeyboardEvent) => { if (e.key === 'Enter') void this._addHost(); }}"
+      />
+      ${this._addError ? html`<div class="r-error">${this._addError}</div>` : ''}
+    `;
+  }
+
   override render() {
     if (!this.config) return html``;
 
@@ -1098,13 +1590,19 @@ export class MuxSettingsSurface extends LitElement {
             class="sidebar-item ${this._section === 'ai' ? 'active' : ''}"
             @click="${() => { this._section = 'ai'; }}"
           >AI</button>
+          <button
+            class="sidebar-item ${this._section === 'remotes' ? 'active' : ''}"
+            @click="${() => { this._section = 'remotes'; void this._loadRemotes(); }}"
+          >Remotes</button>
         </nav>
         <div class="content">
           ${this._section === 'appearance'
             ? this._renderAppearance()
             : this._section === 'notifications'
               ? this._renderNotifications()
-              : this._renderAI()}
+              : this._section === 'remotes'
+                ? this._renderRemotes()
+                : this._renderAI()}
         </div>
       </div>
     `;

@@ -34,6 +34,7 @@ import type { LauncherAction } from './components/launcher-menu.js';
 import './components/close-confirmation-modal.js';
 import type { CloseConfirmationModal } from './components/close-confirmation-modal.js';
 import './components/reconnect-overlay.js';
+import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
 import './components/mux-home.js';
 import { homeSessions } from './lib/home-sessions.js';
@@ -360,6 +361,16 @@ export class MuxApp extends LitElement {
       overflow: hidden;
     }
 
+    /* The connect dialog is the one overlay that is content-sized: it holds a
+       list whose length is the user's ssh config, and a fixed 640px box would
+       be mostly empty for the common case of two or three machines. Same
+       backdrop, same chrome, different box — the wireframe's .cdialog. */
+    .overlay-dialog.cdialog {
+      width: min(520px, calc(100vw - 32px));
+      height: auto;
+      max-height: min(80vh, 600px);
+    }
+
     .overlay-body {
       flex: 1;
       overflow: hidden;
@@ -636,7 +647,7 @@ export class MuxApp extends LitElement {
   private _createModalHost = '';
 
   @state()
-  private _overlayPanel: 'settings' | 'shortcuts' | 'about' | null = null;
+  private _overlayPanel: 'settings' | 'shortcuts' | 'about' | 'connect' | null = null;
 
   @state()
   private _layoutMode: 'wide' | 'narrow' = currentLayoutMode();
@@ -837,6 +848,12 @@ export class MuxApp extends LitElement {
     // dock, sidebar, mobile picker, and the dormant workspace picker.
     this.addEventListener('pane-close', this._onPaneCloseIntent);
     this.addEventListener('workspace-close', this._onWorkspaceCloseIntent);
+    // "+ Connect machine" — opens the connect dialog. Listened for on the HOST
+    // rather than bound on <mux-sidebar> because there are two sidebars (the
+    // wide column and the narrow drawer) and the button lives in both; a
+    // composed event bubbling to here covers them, and any later entry point,
+    // without a third binding to keep in step.
+    this.addEventListener('connect-machine', this._onConnectMachine);
     // Update layout mode when the viewport crosses the 768px breakpoint.
     window.addEventListener('resize', this._onViewportResize);
     this._layoutMode = currentLayoutMode();
@@ -1159,6 +1176,7 @@ export class MuxApp extends LitElement {
     window.removeEventListener('resize', this._onViewportResize);
     this.removeEventListener('pane-close', this._onPaneCloseIntent);
     this.removeEventListener('workspace-close', this._onWorkspaceCloseIntent);
+    this.removeEventListener('connect-machine', this._onConnectMachine);
     this._disposePaneFocusListeners?.();
     this._disposePaneFocusListeners = null;
     this._paneFocusCoordinator = null;
@@ -1531,9 +1549,16 @@ export class MuxApp extends LitElement {
       ` : ''}
       ${this._overlayPanel ? html`
         <div class="overlay-backdrop" @click="${this._closeOverlayPanel}">
-          <div class="overlay-dialog" @click="${(e: Event) => e.stopPropagation()}">
+          <div
+            class="overlay-dialog${this._overlayPanel === 'connect' ? ' cdialog' : ''}"
+            @click="${(e: Event) => e.stopPropagation()}"
+          >
             <div class="overlay-body">
-              ${this._overlayPanel === 'settings' ? html`
+              ${this._overlayPanel === 'connect' ? html`
+                <mux-connect-dialog
+                  @close="${this._closeOverlayPanel}"
+                ></mux-connect-dialog>
+              ` : this._overlayPanel === 'settings' ? html`
                 <mux-settings-surface
                   .config="${store.config}"
                   .aiStatus="${store.aiStatus}"
@@ -2310,6 +2335,17 @@ export class MuxApp extends LitElement {
         this._onOpenCreateModal();
         break;
     }
+  };
+
+  /**
+   * Open the connect dialog.
+   *
+   * The event carries no detail and this handler reads none: "connect a
+   * machine" is the whole message, and the dialog asks which one. Tolerant by
+   * design — any surface that wants this door only has to dispatch the event.
+   */
+  private _onConnectMachine = (): void => {
+    this._overlayPanel = 'connect';
   };
 
   private _closeOverlayPanel = (): void => {

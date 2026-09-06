@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // Config holds the parsed CLI configuration.
@@ -28,6 +29,13 @@ type Config struct {
 	// setting on, never off (same one-way bool limitation config.Merge
 	// documents).
 	BehindReverseProxy bool
+
+	// Remote names an ssh target to run this subcommand against instead of the
+	// local daemon. Empty means local. Position is GLOBAL and leading
+	// ("muxterm --remote boxb pane send ..."), like `git -C`, so it can never be
+	// confused with a subcommand's own argument -- `pane send --text "--remote x"`
+	// must keep working.
+	Remote string
 
 	// Args holds the un-parsed remainder for the socket-client subcommand
 	// trees (read-screen / session / pane / layout). Those commands parse
@@ -59,12 +67,83 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm amplifier install   Install muxterm bundle into Amplifier")
 	fmt.Fprintln(w, "  muxterm version             Print version")
 	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Global flags:")
+	fmt.Fprintln(w, "  --remote <host>             Run a daemon subcommand against a remote host over ssh")
+	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Run 'muxterm <command> --help' for command-specific flags.")
+}
+
+// remoteScopeMsg is the error for --remote handed to a mode that cannot use
+// it. Naming the modes that CAN is more useful than naming the one that
+// cannot, since the list is short and closed.
+const remoteScopeMsg = "--remote is only valid for the daemon subcommands: workspace, session, pane, layout, read-screen"
+
+// remoteCapableModes are the modes that do nothing but speak the frozen
+// sessiond protocol to a daemon, and so work identically against a remote one.
+// Every other mode is local BY NATURE -- it binds a listener, edits this
+// machine's service files, spawns this machine's daemon, or prints a build
+// constant -- so --remote is rejected for it rather than silently ignored.
+var remoteCapableModes = map[string]bool{
+	"read-screen": true,
+	"session":     true,
+	"workspace":   true,
+	"pane":        true,
+	"layout":      true,
 }
 
 // ParseArgs parses command-line arguments and returns a Config.
 // It is a pure function with no side effects beyond flag parsing.
 func ParseArgs(args []string) (Config, error) {
+	remote, rest, err := peelRemote(args)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg, err := parseCommand(rest)
+	if err != nil {
+		return Config{}, err
+	}
+	if remote != "" {
+		if !remoteCapableModes[cfg.Mode] {
+			return Config{}, fmt.Errorf("%s", remoteScopeMsg)
+		}
+		cfg.Remote = remote
+	}
+	return cfg, nil
+}
+
+// peelRemote strips LEADING "--remote <host>" / "--remote=<host>" tokens off
+// args and returns the target they name plus the remainder to dispatch on.
+//
+// Leading is the whole point: the flag is global and positional like `git -C`,
+// so parsing stops at the first token that is not one, and a --remote appearing
+// anywhere else stays untouched as a subcommand's own argument. That is what
+// keeps `pane send --text "--remote x"` sending the literal text it always has.
+// A repeated flag takes the last value, matching flag.Parse's own semantics.
+func peelRemote(args []string) (string, []string, error) {
+	remote := ""
+	for len(args) > 0 {
+		switch {
+		case args[0] == "--remote":
+			if len(args) < 2 {
+				return "", nil, fmt.Errorf("--remote requires a host argument (e.g. --remote boxb)")
+			}
+			remote, args = args[1], args[2:]
+		case strings.HasPrefix(args[0], "--remote="):
+			remote, args = strings.TrimPrefix(args[0], "--remote="), args[1:]
+		default:
+			return remote, args, nil
+		}
+		if remote == "" {
+			return "", nil, fmt.Errorf("--remote requires a host argument (e.g. --remote boxb)")
+		}
+	}
+	return remote, args, nil
+}
+
+// parseCommand is ParseArgs' dispatch, split out so the global --remote prefix
+// is peeled exactly once, before it, and can never reach a subcommand's own
+// flag set.
+func parseCommand(args []string) (Config, error) {
 	if len(args) == 0 {
 		return Config{
 			Mode: "local",

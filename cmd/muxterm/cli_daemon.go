@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,17 +10,34 @@ import (
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/transport"
+	sshtransport "github.com/kenotron-ms/muxterm/internal/transport/ssh"
 )
 
 const cliRequestTimeout = 5 * time.Second
 
+// daemonNotRunningMsg is the LOCAL path's message and stays that way: the
+// remote path's error text already names the host and wraps ssh's own stderr,
+// and telling a user to run "muxterm serve" here would name the wrong machine.
 const daemonNotRunningMsg = `muxterm daemon not running — start it with "muxterm serve"`
+
+// cliRemote is the --remote target for this invocation. Assigned EXACTLY ONCE
+// in main(), before any subcommand runs, and never mutated afterwards; a CLI
+// process handles one command against one daemon, so a parameter threaded
+// through twelve call sites would carry no information this does not.
+var cliRemote string
 
 // dialDaemon resolves the sessiond socket path, fails fast with a clear
 // message if the daemon is not running (mirroring runDoctor's precedent),
 // dials it, and starts the client's background read loop. Callers must
 // Close() the returned client.
+//
+// It is the ONE seam every socket-client subcommand dials through, which is
+// why --remote needs no change at any of those twelve call sites.
 func dialDaemon() (*sessiond.Client, error) {
+	if cliRemote != "" {
+		return dialRemoteDaemon(cliRemote)
+	}
 	sock, err := sessiond.SocketPath()
 	if err != nil {
 		return nil, fmt.Errorf("resolve sessiond socket path: %w", err)
@@ -31,6 +49,30 @@ func dialDaemon() (*sessiond.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s (dialing %s: %v)", daemonNotRunningMsg, sock, err)
 	}
+	go func() { _ = c.Run() }()
+	return c, nil
+}
+
+// dialRemoteDaemon reaches the sessiond on target over ssh. It does NOT ensure
+// a daemon there: sessiond-connect refuses to spawn one by design, so a
+// mistyped host fails loudly instead of starting a daemon somewhere unexpected.
+//
+// The ids that come back are the remote daemon's own bare ids. --remote SELECTS
+// a daemon, it does not merge two, so there is nothing here to namespace: this
+// process talks to exactly one daemon and `--remote boxb pane send --workspace
+// w1` consumes exactly what `--remote boxb workspace list` printed. Namespacing
+// exists only at the browser edge, because only the browser sees more than one
+// daemon at once.
+func dialRemoteDaemon(target string) (*sessiond.Client, error) {
+	tr := sshtransport.New()
+	host := transport.HostRef{ID: "ssh:" + target, DisplayName: target, Addr: target}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	conn, err := tr.Dial(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("muxterm --remote %s: %w", target, err)
+	}
+	c := sessiond.DialConn(conn)
 	go func() { _ = c.Run() }()
 	return c, nil
 }

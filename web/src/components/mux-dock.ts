@@ -17,6 +17,9 @@ import type { CloseTarget, SessiondPaneInfo, LayoutCommand } from '../types.js';
 import { store } from '../state.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { groupFor, type SessionState } from '../lib/session-state.js';
+import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
+import { parseHostRef } from '../lib/host-ref.js';
+import { apiPath } from '../lib/base-path.js';
 
 type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
 
@@ -44,6 +47,33 @@ function sessionMarkTitle(s: SessionState): string {
   // rides along with the state instead of replacing it.
   if (s.pr && s.pr > 0) return `${s.name}: ${s.state} \u00b7 PR #${s.pr}`;
   return `${s.name}: ${s.state}`;
+}
+
+/** The spinner glyph the dropped state is marked with, everywhere. */
+const DROP_GLYPH = '\u27f2';
+
+/**
+ * The word the dropbar leads with.
+ *
+ * The store's own vocabulary, with exactly one substitution: 'never-connected'
+ * is a state name in a protocol, not something to say to somebody looking at
+ * their own panes.
+ */
+function dropLabel(state: HostConnState): string {
+  if (state === 'reconnecting') return 'reconnecting';
+  if (state === 'unreachable') return 'unreachable';
+  return 'disconnected';
+}
+
+/** One host, as the tab strip needs it. */
+interface DockHost {
+  /** HostRef.ID -- what POST /api/remotes/{id}/connect takes. */
+  id: string;
+  /** Display label. Never the raw "ssh:" id. */
+  name: string;
+  state: HostConnState;
+  /** ms epoch of the next dial, when the store knows of one. */
+  retryAt?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -448,7 +478,36 @@ export class MuxDock extends LitElement {
     );
   }
 
-  /** Repaint one tab: [bell dot] title [session state mark]. */
+  /**
+   * The machine the attached workspace lives on, or null when there is nothing
+   * to mark.
+   *
+   * THE ZERO-REMOTE GATE for this component. `remotesStore.any` is false until
+   * the first host-state frame arrives, and a browser with no remotes never
+   * receives one -- so on that machine this returns null, no pin is created, no
+   * dropbar is mounted and no class lands on the host element. The tab strip is
+   * the one main renders, node for node.
+   *
+   * A LOCAL workspace returns null too, and that is ux D2 rather than an
+   * optimisation: local is the norm, and the norm is unmarked.
+   */
+  private _remoteHost(): DockHost | null {
+    if (!remotesStore.any) return null;
+    const { host } = parseHostRef(this.workspaceKey);
+    if (host === '') return null;
+    const entry = remotesStore.get(host);
+    // No entry means a namespaced id whose host this browser has never had a
+    // frame for. Unknown is not local, and a surface deciding whether a pane is
+    // still live must fail closed -- the same rule stateOf() follows.
+    return {
+      id: host,
+      name: entry?.name || host,
+      state: entry?.state ?? 'never-connected',
+      retryAt: entry?.retryAt,
+    };
+  }
+
+  /** Repaint one tab: [bell dot] [host pin] title [session state mark]. */
   private _paintTab(tabEl: HTMLElement, paneId: number, title: string): void {
     tabEl.textContent = '';
     if (store.paneBellActive(paneId)) {
@@ -456,6 +515,19 @@ export class MuxDock extends LitElement {
       bell.className = 'mux-bell-prefix';
       bell.textContent = '● ';
       tabEl.appendChild(bell);
+    }
+    // WHICH MACHINE this pane is on, before its name -- the tab strip's answer
+    // to the question the sidebar's host groups answer spatially. Dropped, the
+    // pin takes the spinner and the warn colour, so one look at the strip is
+    // enough to know which panes are still being served.
+    const host = this._remoteHost();
+    if (host) {
+      const pin = document.createElement('span');
+      const dropped = host.state !== 'connected';
+      pin.className = dropped ? 'hostpin warn' : 'hostpin';
+      pin.textContent = dropped ? `${DROP_GLYPH} ${host.name}` : host.name;
+      pin.title = dropped ? `${host.name} — ${dropLabel(host.state)}` : host.name;
+      tabEl.appendChild(pin);
     }
     tabEl.appendChild(document.createTextNode(title));
     // Bell and session mark are different questions -- "something happened here
@@ -479,6 +551,159 @@ export class MuxDock extends LitElement {
     }
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // The dropbar (ux D8: disconnection is a state, not an error)
+  //
+  // The always-present connected-host rail was the FIRST thing the YAGNI pass
+  // cut: the pin already names the machine, so a permanent strip repeating it
+  // is a row of chrome that never changes. What survived is this -- a bar that
+  // exists ONLY while the link is down, carrying the only two things a person
+  // can act on: how long until the next dial, and a way to skip the wait.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  private _dropbar: HTMLElement | null = null;
+  private _dropTick: number | undefined;
+  private _unsubRemotes: (() => void) | null = null;
+
+  /**
+   * Put the dock into (or out of) the dropped state.
+   *
+   * Everything here is driven off one class on the host element rather than
+   * per-tab classes: every pane in this dock belongs to ONE workspace, which
+   * lives on ONE machine, so the state is a property of the dock and not of a
+   * tab. It also means nothing depends on dockview having built a particular
+   * tab element yet.
+   */
+  private _syncDropState(): void {
+    const host = this._remoteHost();
+    const dropped = host !== null && host.state !== 'connected';
+    // toggle(x, false) on an absent class does not touch the attribute, so a
+    // local or zero-remote dock keeps exactly the class list it has on main.
+    this.classList.toggle('remote', host !== null);
+    this.classList.toggle('dropped', dropped);
+
+    if (!dropped || !host) {
+      this._removeDropbar();
+      return;
+    }
+    this._paintDropbar(this._ensureDropbar(), host);
+  }
+
+  /**
+   * The bar itself, mounted between a group's tab strip and its content --
+   * `.dv-groupview` is a flex column whose content container is the only
+   * flexible track, so a 24px sibling simply takes 24px from the terminal.
+   *
+   * ONE bar, in the first group in DOM order, not one per group: the message is
+   * about the machine, and a split dock would otherwise repeat it three times.
+   * First-in-DOM rather than the active group so the bar does not hop around as
+   * focus moves between splits.
+   */
+  private _ensureDropbar(): HTMLElement {
+    const group = this.querySelector<HTMLElement>('.dv-groupview');
+    const tabs = group?.querySelector<HTMLElement>(':scope > .dv-tabs-and-actions-container');
+
+    if (this._dropbar && this._dropbar.parentElement === group) return this._dropbar;
+
+    // A rebuilt layout (fromJSON, a split, a closed pane) discards the group
+    // that held the bar. Re-home it rather than leaving an orphan behind.
+    this._dropbar?.remove();
+
+    const bar = document.createElement('div');
+    bar.className = 'dropbar';
+
+    const state = document.createElement('b');
+    state.className = 'dropbar-state';
+    bar.appendChild(state);
+
+    const count = document.createElement('span');
+    count.className = 'dropbar-count';
+    bar.appendChild(count);
+
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'retry-btn';
+    retry.textContent = 'retry';
+    retry.addEventListener('click', this._onRetry);
+    bar.appendChild(retry);
+
+    if (group && tabs) group.insertBefore(bar, tabs.nextSibling);
+    else if (group) group.appendChild(bar);
+    else this.insertBefore(bar, this.firstChild);
+
+    this._dropbar = bar;
+    this._refit();
+    return bar;
+  }
+
+  private _paintDropbar(bar: HTMLElement, host: DockHost): void {
+    const state = bar.querySelector<HTMLElement>('.dropbar-state');
+    if (state) state.textContent = `${DROP_GLYPH} ${dropLabel(host.state)}`;
+
+    // The wire carries a DURATION and the store turned it into a deadline on
+    // receipt, precisely so the server never has to tick a frame per second.
+    // The clock is local, and it is the only timer this component runs.
+    const count = bar.querySelector<HTMLElement>('.dropbar-count');
+    if (count) {
+      const left = host.retryAt === undefined ? -1 : Math.max(0, host.retryAt - Date.now());
+      count.textContent = left < 0 ? '' : ` · ${Math.ceil(left / 1000)}s`;
+    }
+
+    if (this._dropTick === undefined) {
+      this._dropTick = window.setInterval(() => {
+        const h = this._remoteHost();
+        if (!h || h.state === 'connected' || !this._dropbar) {
+          this._syncDropState();
+          return;
+        }
+        this._paintDropbar(this._dropbar, h);
+      }, 1000);
+    }
+  }
+
+  private _removeDropbar(): void {
+    if (this._dropTick !== undefined) {
+      clearInterval(this._dropTick);
+      this._dropTick = undefined;
+    }
+    if (!this._dropbar) return;
+    this._dropbar.querySelector('.retry-btn')?.removeEventListener('click', this._onRetry);
+    this._dropbar.remove();
+    this._dropbar = null;
+    this._refit();
+  }
+
+  /**
+   * The terminals lost (or regained) 24px of height without dockview being
+   * involved, and xterm.js measures its own container. Re-fit on the next frame
+   * so the grid matches the box it is in.
+   */
+  private _refit(): void {
+    requestAnimationFrame(() => {
+      for (const paneId of terminalRegistry.visiblePaneIds()) {
+        terminalRegistry.fitIfVisible(paneId);
+      }
+    });
+  }
+
+  /**
+   * Skip the backoff. One door, already idempotent and already authenticated --
+   * there is no browser → server host-state message, by design.
+   */
+  private _onRetry = (e: Event): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    const host = this._remoteHost();
+    if (!host) return;
+    void fetch(apiPath(`/api/remotes/${encodeURIComponent(host.id)}/connect`), {
+      method: 'POST',
+    }).catch(() => {
+      // The answer that matters is the next host-state frame, not this
+      // response. A failed POST leaves the bar exactly as it was, counting
+      // down to the dial the server was going to make anyway.
+    });
+  };
+
   override connectedCallback(): void {
     super.connectedCallback();
 
@@ -486,6 +711,15 @@ export class MuxDock extends LitElement {
     // session state change), and it touches text nodes only — no Lit render,
     // so dockview's DOM is never rebuilt underneath it.
     this._unsubSessions = homeSessions.subscribe(() => this._refreshBellTitles());
+
+    // Host state changes repaint the pins and raise or drop the bar. Same
+    // shape, same reason: text nodes and one class, never a rebuild. A browser
+    // with no remotes never receives a host-state frame, so this fires zero
+    // times there.
+    this._unsubRemotes = remotesStore.subscribe(() => {
+      this._refreshBellTitles();
+      this._syncDropState();
+    });
 
     // mux-dock is a light-DOM element but lives inside mux-app's ShadowRoot.
     // All styles must be injected into that ShadowRoot — document.head styles
@@ -719,6 +953,95 @@ export class MuxDock extends LitElement {
         mux-dock .mux-session-mark.fail { color: var(--mux-error, #f7768e); }
         mux-dock .mux-session-mark.idle { color: var(--chrome-text-dim, #565f89); }
 
+        /* ── Remote hosts ─────────────────────────────────────────────────
+           Nothing below this line can match on a machine with no remotes:
+           .hostpin and .dropbar are never created, and .remote/.dropped never
+           land on the host element. The rules are here, inert, rather than
+           injected on demand -- a stylesheet that appears halfway through a
+           session is a repaint nobody asked for. */
+
+        /* The pin: WHICH MACHINE, in the tab, before the name. --remote is
+           the one token the fleet added (ux D3); it plays the same "this one
+           is different" role .badge.autonomous plays in the home view. */
+        mux-dock .hostpin {
+          display: inline-block;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 9px;
+          font-style: normal;
+          line-height: 1.4;
+          padding: 0 4px;
+          margin-right: 5px;
+          border-radius: 3px;
+          color: var(--remote, #bb9af7);
+          background: color-mix(in srgb, var(--remote, #bb9af7) 15%, transparent);
+          border: 1px solid color-mix(in srgb, var(--remote, #bb9af7) 40%, transparent);
+          vertical-align: baseline;
+        }
+        /* Dropped, the pin stops saying "elsewhere" and starts saying
+           "unreachable", so it moves to the warn colour the whole app uses
+           for that. The wireframe did this with an inline style; a class is
+           the same picture without a style attribute per tab. */
+        mux-dock .hostpin.warn {
+          color: var(--mux-warn, #e0af68);
+          background: color-mix(in srgb, var(--mux-warn, #e0af68) 12%, transparent);
+          border-color: color-mix(in srgb, var(--mux-warn, #e0af68) 40%, transparent);
+        }
+
+        /* The active tab's top accent follows the same vocabulary. */
+        mux-dock.remote .dv-tab.dv-active-tab {
+          border-top-color: var(--remote, #bb9af7) !important;
+        }
+        mux-dock.dropped .dv-tab.dv-active-tab {
+          border-top-color: var(--mux-warn, #e0af68) !important;
+        }
+        /* Dimmed, not hidden: the panes are still running on that machine
+           (sessiond owns the PTYs), so the tabs must not read as closed. */
+        mux-dock.dropped .dv-tab { opacity: 0.55; }
+        mux-dock.dropped .dv-tab.dv-active-tab { opacity: 0.8; }
+
+        /* The bar itself. 24px, under the tab strip, only while dropped. */
+        mux-dock .dropbar {
+          height: 24px;
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 0 12px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 10px;
+          color: var(--chrome-text-dim);
+          background: color-mix(in srgb, var(--mux-warn, #e0af68) 10%, var(--chrome-bar));
+          border-bottom: 1px solid
+            color-mix(in srgb, var(--mux-warn, #e0af68) 40%, var(--chrome-border));
+        }
+        mux-dock .dropbar b {
+          color: var(--mux-warn, #e0af68);
+          font-weight: 600;
+        }
+        mux-dock .dropbar .retry-btn {
+          margin-left: auto;
+          font: inherit;
+          padding: 1px 6px;
+          border-radius: 3px;
+          border: 1px solid var(--chrome-border);
+          background: transparent;
+          color: var(--chrome-text-dim);
+          cursor: pointer;
+        }
+        mux-dock .dropbar .retry-btn:hover {
+          border-color: var(--mux-warn, #e0af68);
+          color: var(--mux-warn, #e0af68);
+        }
+
+        /* The pane goes READ-ONLY and looks it. No copy explaining that input
+           will be discarded -- the explanation was cut and replaced by this
+           (ux YAGNI, "behaviour instead of copy"). The refusal itself is U1's
+           guard in sendPaneInput, so it holds even if this class does not. */
+        mux-dock.dropped .dv-content-container {
+          opacity: 0.45;
+          filter: saturate(0.3);
+        }
+
         /* Mobile: hide tab bar on narrow viewports.
            767.98, not 768 (D10): breakpoint.ts calls >= 768 WIDE, and a
            max-width query is inclusive, so at exactly 768px the app showed
@@ -804,6 +1127,9 @@ export class MuxDock extends LitElement {
     this.removeEventListener('dblclick', this._onTabDblClick);
     this._unsubSessions?.();
     this._unsubSessions = null;
+    this._unsubRemotes?.();
+    this._unsubRemotes = null;
+    this._removeDropbar();
     this._dv?.dispose();
     this._dv = null;
   }
@@ -998,6 +1324,10 @@ export class MuxDock extends LitElement {
         this._settingActive = false;
       }
       this._refreshBellTitles();
+      // A different workspace can be on a different machine, and the layout it
+      // just restored is a brand-new set of group elements -- so the bar has to
+      // be re-decided and re-homed, not left pointing at the old DOM.
+      this._syncDropState();
       return;
     }
 
@@ -1071,6 +1401,9 @@ export class MuxDock extends LitElement {
     // _refreshBellTitles(). If the render path ever caches the filtered array,
     // this reactivity chain would silently break — hence this comment.
     this._refreshBellTitles();
+    // Adding or closing a pane can build a new group, and the bar lives inside
+    // one. Idempotent: with nothing dropped this is two no-op class toggles.
+    this._syncDropState();
   }
 
   /**

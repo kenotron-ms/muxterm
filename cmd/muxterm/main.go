@@ -40,6 +40,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The single assignment of the --remote target, before the dispatch below
+	// runs anything: every socket-client subcommand reaches its daemon through
+	// dialDaemon, which reads this and nothing else.
+	cliRemote = cfg.Remote
+
 	switch cfg.Mode {
 	case "help":
 		printUsage(os.Stdout)
