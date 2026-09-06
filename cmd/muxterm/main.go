@@ -192,6 +192,29 @@ func runDoctor() error {
 		}
 	}
 
+	// Public origin / reverse-proxy mode. This is the single most common
+	// source of "I can't log in from my phone": when it is unset, muxterm
+	// derives its own URLs from the listen address and sends remote
+	// browsers to a loopback address they cannot reach. Report it here so
+	// the failure is diagnosable without reading source.
+	fmt.Println()
+	resolved, _ := config.Load(config.DefaultPath())
+	sc := resolved.Server
+	fmt.Printf("     config:  %s\n", config.DefaultPath())
+	switch {
+	case sc.BehindReverseProxy && sc.PublicOrigin != "":
+		fmt.Printf("  %s  origin:  %s (reverse-proxy mode on)\n", ok, sc.Normalize().BaseURL())
+	case sc.BehindReverseProxy:
+		fmt.Printf("  %s  origin:  behind_reverse_proxy is on but public_origin is empty; muxterm will refuse to start\n", fail)
+		fmt.Printf("     hint:    set public_origin in %s\n", config.DefaultPath())
+	case sc.PublicOrigin != "":
+		fmt.Printf("  %s  origin:  public_origin is set to %q but behind_reverse_proxy is false, so it is IGNORED\n", fail, sc.PublicOrigin)
+		fmt.Printf("     hint:    set behind_reverse_proxy = true in %s to use it\n", config.DefaultPath())
+	default:
+		fmt.Printf("     origin:  not configured -- URLs derive from the listen address (direct/local access only)\n")
+		fmt.Printf("     hint:    reaching muxterm through a proxy or public hostname requires public_origin\n")
+	}
+
 	return nil
 }
 
@@ -365,6 +388,15 @@ func runLocal(cfg Config) error {
 	}
 
 	rt := newSSHRemoteTransport()
+
+	// Local mode keeps the loopback bypass, so the token is not strictly
+	// required here -- but publishing it anyway keeps the handoff file's
+	// shape identical across both modes and costs nothing.
+	localToken, err := sessiond.NewLocalToken()
+	if err != nil {
+		return err
+	}
+
 	srv := server.New(server.Config{
 		Addr:          cfg.Addr,
 		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
@@ -374,14 +406,16 @@ func runLocal(cfg Config) error {
 		// No BehindReverseProxy field is set: local mode leaves it at its
 		// zero false, keeping the IsLocalhost() bypass exactly as today.
 		WebRedirectURI: webRedirectURIFor(cfg.Addr, localServerCfg),
+		LocalToken:     localToken,
 		Version:        version,
 		Remotes:        rt,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))
 
-	// Publish serve-layer URL so the MCP server can discover the tunnel API.
-	if err := sessiond.WriteServerURL(cfg.Addr); err != nil {
+	// Publish serve-layer URL + local token so the MCP server can discover
+	// and authenticate to the tunnel API.
+	if err := sessiond.WriteServerURL(cfg.Addr, localToken); err != nil {
 		log.Printf("muxterm: could not write server URL: %v", err)
 	}
 
@@ -408,10 +442,28 @@ func runServe(cfg Config) error {
 	// closed BEFORE the listener binds: an ambiguous or misconfigured
 	// security posture must deny, never silently downgrade to a
 	// loopback-derived URL (which is the exact bug Phase 3 fixes).
-	srvCfg := resolveServerConfig(cfg, resolved.Server)
+	// Normalize BEFORE validating so both the error messages and the value
+	// actually used downstream describe the same canonical origin.
+	srvCfg := resolveServerConfig(cfg, resolved.Server).Normalize()
 	if err := srvCfg.Validate(); err != nil {
 		return err
 	}
+	// Accepted-but-probably-not-what-you-meant. Logged, never fatal: a
+	// setting that is merely ineffective must not take the service down.
+	for _, w := range srvCfg.Warnings() {
+		log.Printf("muxterm: %s", w)
+	}
+
+	// One value, one answer. Everything downstream of here -- the auth
+	// server, the redirect URI, server.Config.InitialConfig, the hub's
+	// resolved config, and the config write-back path that persists
+	// InitialConfig to disk -- must observe the SAME [server] section.
+	// Leaving `resolved` flag-free here would let the process hold two
+	// answers at once: auth would use the flag-applied origin while
+	// internal/server saw the file's (possibly empty) one, and a config
+	// PATCH from the browser would then write that empty value back over
+	// the file.
+	resolved.Server = srvCfg
 
 	authSrv, err := newAuthServer(cfg.Addr, srvCfg)
 	if err != nil {
@@ -419,6 +471,16 @@ func runServe(cfg Config) error {
 	}
 
 	rt := newSSHRemoteTransport()
+
+	// Mint the same-user helper-process credential before the server is
+	// built, so the middleware and the on-disk handoff file agree. Without
+	// it the MCP tools have no credential at all and rely entirely on the
+	// loopback bypass that behind_reverse_proxy disables.
+	localToken, err := sessiond.NewLocalToken()
+	if err != nil {
+		return err
+	}
+
 	srv := server.New(server.Config{
 		Addr:               cfg.Addr,
 		StaticFS:           mustSubFS(webstatic.Dist, "dist"),
@@ -428,14 +490,16 @@ func runServe(cfg Config) error {
 		AuthServer:         authSrv,
 		WebRedirectURI:     webRedirectURIFor(cfg.Addr, srvCfg),
 		BehindReverseProxy: srvCfg.BehindReverseProxy,
+		LocalToken:         localToken,
 		Version:            version,
 		Remotes:            rt,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))
 
-	// Publish serve-layer URL so the MCP server can discover the tunnel API.
-	if err := sessiond.WriteServerURL(cfg.Addr); err != nil {
+	// Publish serve-layer URL + local token so the MCP server can discover
+	// and authenticate to the tunnel API.
+	if err := sessiond.WriteServerURL(cfg.Addr, localToken); err != nil {
 		log.Printf("muxterm: could not write server URL: %v", err)
 	}
 
@@ -457,6 +521,32 @@ func runDeploy(cfg Config) error {
 
 // runInstall installs muxterm as a system service.
 func runInstall(cfg Config) error {
+	// Persist the deployment topology BEFORE the service is installed and
+	// started. installLinux ends in `systemctl enable --now`, and the
+	// server reads its [server] section once at startup -- writing the
+	// config afterwards would leave the just-started service running with
+	// the old (or absent) public origin until something restarted it.
+	//
+	// This deliberately does NOT flow into ServiceConfig: the origin never
+	// reaches the unit's ExecStart or the launchd plist. See
+	// writeInstallServerConfig.
+	configPath := config.DefaultPath()
+	srvCfg, wrote, err := writeInstallServerConfig(cfg, configPath)
+	if err != nil {
+		return err
+	}
+	if wrote {
+		fmt.Printf("wrote %s: public_origin=%q behind_reverse_proxy=%v\n",
+			configPath, srvCfg.PublicOrigin, srvCfg.BehindReverseProxy)
+		// Accepted but probably not what you meant (e.g. an origin set
+		// while behind_reverse_proxy is still false, which muxterm
+		// ignores). Never fatal -- an ineffective setting must not
+		// block the install.
+		for _, w := range srvCfg.Warnings() {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+		}
+	}
+
 	svcCfg := service.ServiceConfig{
 		Addr:   cfg.Addr,
 		Secret: cfg.Secret,

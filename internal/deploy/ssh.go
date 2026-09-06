@@ -85,6 +85,42 @@ func (d *Deployer) Deploy(target string) error {
 }
 
 // systemdUnit generates a systemd unit file for the muxterm service.
+//
+// This is a SECOND, independent unit template -- internal/service renders
+// the one used by `muxterm install`. The two are not shared and do not track
+// each other; a change to either must be considered for both.
+//
+// THE PUBLIC ORIGIN IS NOT CARRIED BY THIS UNIT, DELIBERATELY.
+//
+// public_origin / behind_reverse_proxy are config-file settings, exactly as
+// they are for `muxterm install` (see writeInstallServerConfig in
+// cmd/muxterm). Do not add --public-origin to the ExecStart below. Three
+// reasons, all of which apply here too:
+//
+//   - Injection: this unit is built with fmt.Sprintf and no escaping at all,
+//     and is then shipped over ssh inside a `cat > ... << 'EOF'` heredoc. An
+//     operator-supplied origin containing a newline, or `%` (a systemd
+//     specifier), or the literal line "EOF" would break out of the value.
+//   - Survival: any redeploy overwrites this file wholesale.
+//   - Visibility: a flag in ExecStart outranks the config.toml an operator
+//     would naturally edit (resolveServerConfig gives flags precedence),
+//     with nothing in the config file to say why it is being ignored.
+//
+// CONSEQUENCE, KNOWN AND UNFIXED HERE: `muxterm deploy` never writes a
+// config file on the remote host, so a pushed deployment always starts with
+// public_origin unset -- muxterm derives its public URLs from --addr, and a
+// browser arriving through a fronting reverse proxy gets redirected to the
+// remote's own listen address. Configuring a public origin on a deploy
+// target is a MANUAL step on that host.
+//
+// Note also that this unit is a SYSTEM unit with no User=, so it runs as
+// root, and systemd sets $HOME only for units that set User= (systemd.exec).
+// With $HOME unset, config.DefaultPath() resolves to the RELATIVE path
+// ".config/muxterm/config.toml", taken against the system manager's default
+// WorkingDirectory of "/" -- i.e. /.config/muxterm/config.toml, not
+// /root/.config/... . Any manual remote configuration has to account for
+// that (write the file there, or add User= / Environment=XDG_CONFIG_HOME=
+// to this unit) or the file will be silently ignored.
 func systemdUnit(secret, addr string) string {
 	return fmt.Sprintf(`[Unit]
 Description=muxterm remote terminal

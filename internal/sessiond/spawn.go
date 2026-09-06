@@ -3,6 +3,9 @@
 package sessiond
 
 import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -218,28 +221,154 @@ func serverURLPath() string {
 	return filepath.Join(socketDir(), "server.url")
 }
 
-// WriteServerURL writes the HTTP base URL of the running serve layer to a
-// well-known file so that the MCP server process can discover it. addr is the
+// serverInfo is the on-disk handoff from the serve process to same-user
+// local helper processes (today: the MCP server). It lives at
+// serverURLPath() with mode 0600 inside the 0700 socket dir, so the file
+// permissions ARE the trust boundary: only the user running muxterm can
+// read it.
+type serverInfo struct {
+	URL string `json:"url"`
+	// Token authenticates local helper processes to the serve layer's HTTP
+	// API. It exists because those callers previously relied on the
+	// IsLocalhost() auth bypass, which behind_reverse_proxy disables --
+	// leaving them with no credential at all and every call returning 401.
+	// It is minted fresh on each serve start and never persisted anywhere
+	// else.
+	Token string `json:"token"`
+}
+
+// LocalTokenBytes is the entropy of the local helper-process token.
+const localTokenBytes = 32
+
+// NewLocalToken mints a fresh random token for the serve layer to accept
+// from same-user local helper processes.
+func NewLocalToken() (string, error) {
+	var raw [localTokenBytes]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate local token: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[:]), nil
+}
+
+// WriteServerURL writes the HTTP base URL of the running serve layer, plus a
+// token local helper processes use to authenticate to it, to a well-known
+// 0600 file so that the MCP server process can discover both. addr is the
 // net.Listener address (e.g. ":8311" or "localhost:8311"); WriteServerURL
-// normalises it to "http://localhost:<port>".
-func WriteServerURL(addr string) error {
+// normalises it to "http://localhost:<port>". Pass an empty token to publish
+// a URL with no credential.
+func WriteServerURL(addr, token string) error {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("parse addr %q: %w", addr, err)
 	}
-	if err := os.MkdirAll(socketDir(), 0o700); err != nil {
+	dir := socketDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create socket dir: %w", err)
 	}
-	return os.WriteFile(serverURLPath(), []byte("http://localhost:"+port), 0o600)
+	// MkdirAll is a no-op on an existing directory REGARDLESS of its mode,
+	// so the 0o700 above guarantees nothing when the path already exists.
+	// That matters now that this file carries a credential and not just a
+	// URL: with XDG_RUNTIME_DIR unset, socketDir() is the predictable
+	// /tmp/muxterm-<uid>, which an adversary can pre-create world-writable
+	// and then read the token out of. Verify rather than assume.
+	if err := ensurePrivateDir(dir); err != nil {
+		return err
+	}
+	blob, err := json.Marshal(serverInfo{URL: "http://localhost:" + port, Token: token})
+	if err != nil {
+		return fmt.Errorf("encode server info: %w", err)
+	}
+	// Write to a fresh O_EXCL temp file and rename over the target. Two
+	// reasons beyond atomicity: os.WriteFile applies its mode argument
+	// only when it CREATES the file, so an existing file keeps whatever
+	// permissions it already had; and a plain truncating write leaves a
+	// window where a reader observes an empty file.
+	tmp, err := os.CreateTemp(dir, ".server.url.*")
+	if err != nil {
+		return fmt.Errorf("create temp server info: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close() //nolint:errcheck
+		return fmt.Errorf("chmod temp server info: %w", err)
+	}
+	if _, err := tmp.Write(blob); err != nil {
+		tmp.Close() //nolint:errcheck
+		return fmt.Errorf("write temp server info: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp server info: %w", err)
+	}
+	return os.Rename(tmpName, serverURLPath())
+}
+
+// ensurePrivateDir verifies dir is owned by the current user and not
+// accessible to group or other, tightening it when it is not. It refuses
+// when the directory belongs to someone else, since that cannot be made
+// safe by changing permissions.
+func ensurePrivateDir(dir string) error {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("stat socket dir: %w", err)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		if int(st.Uid) != os.Getuid() {
+			return fmt.Errorf("socket dir %s is owned by uid %d, not %d; refusing to write a credential there",
+				dir, st.Uid, os.Getuid())
+		}
+	}
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("socket dir %s is mode %04o and could not be tightened: %w", dir, perm, err)
+		}
+	}
+	return nil
+}
+
+// readServerInfo loads the serve-layer handoff file. A file that is not JSON
+// is treated as a bare URL with no token: that is exactly what an older
+// muxterm serve process still running across an upgrade will have written,
+// and callers must keep working against it rather than hard-failing.
+func readServerInfo() (serverInfo, error) {
+	data, err := os.ReadFile(serverURLPath())
+	if err != nil {
+		return serverInfo{}, fmt.Errorf("server URL file (%s): %w (is muxterm serve running?)", serverURLPath(), err)
+	}
+	var info serverInfo
+	if err := json.Unmarshal(data, &info); err != nil || info.URL == "" {
+		info = serverInfo{URL: strings.TrimSpace(string(data))}
+	}
+	// An empty file yields an empty URL, and an empty URL turns every
+	// caller's request into http.NewRequest(method, "/api/...") failing
+	// with `unsupported protocol scheme ""` -- an error that points
+	// nowhere near the cause. Name the real problem instead.
+	if info.URL == "" {
+		return serverInfo{}, fmt.Errorf("server URL file (%s) is empty (is muxterm serve running?)", serverURLPath())
+	}
+	return info, nil
 }
 
 // ServerURL returns the HTTP base URL of the running muxterm serve layer. It
 // reads the URL written by WriteServerURL at serve startup. Returns an error
 // when the file does not exist (serve process not running) or cannot be read.
 func ServerURL() (string, error) {
-	data, err := os.ReadFile(serverURLPath())
+	info, err := readServerInfo()
 	if err != nil {
-		return "", fmt.Errorf("server URL file (%s): %w (is muxterm serve running?)", serverURLPath(), err)
+		return "", err
 	}
-	return strings.TrimSpace(string(data)), nil
+	return info.URL, nil
+}
+
+// ServerToken returns the local helper-process token published by the running
+// serve layer, or "" when the serve process published none (an older serve
+// process, or one started without a token). Callers should send it when
+// non-empty and proceed without it otherwise, so that local use keeps working
+// against a serve layer that predates the token.
+func ServerToken() (string, error) {
+	info, err := readServerInfo()
+	if err != nil {
+		return "", err
+	}
+	return info.Token, nil
 }

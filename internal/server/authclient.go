@@ -40,15 +40,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	returnTo := r.URL.Query().Get("return_to")
-	if returnTo == "" {
-		returnTo = "/"
-	} else if parsed, err := url.Parse(returnTo); err != nil || !strings.HasPrefix(returnTo, "/") || strings.HasPrefix(returnTo, "//") || parsed.IsAbs() || parsed.Host != "" {
-		// Only redirect within muxterm after authentication. AuthMiddleware
-		// always supplies a relative request URI, but /auth/login is public
-		// and callers can invoke it directly.
-		returnTo = "/"
-	}
+	returnTo := safeReturnTo(r.URL.Query().Get("return_to"))
 
 	ps := pkceState{State: state, Verifier: verifier, ReturnTo: returnTo}
 	raw, err := json.Marshal(ps)
@@ -61,6 +53,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    base64.URLEncoding.EncodeToString(raw),
 		Path:     "/auth/",
 		HttpOnly: true,
+		Secure:   s.secureCookies(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(pkceCookieTTL.Seconds()),
 	})
@@ -84,7 +77,27 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(pkceCookieName)
 	if err != nil {
-		http.Error(w, "missing or expired login state; try again", http.StatusBadRequest)
+		// The verifier cookie is absent. Either it expired (5 minutes), or
+		// -- the case that is otherwise impossible to diagnose -- the login
+		// was begun on a DIFFERENT origin than the configured public one.
+		// The cookie is written to whichever host the browser first
+		// arrived at, and this callback runs at public_origin, so a
+		// mismatch means the browser never sends it and retrying loops
+		// forever with no new information.
+		//
+		// Detected here rather than by comparing r.Host in the auth
+		// middleware: this needs no trust in a proxy-supplied header, and
+		// it fires exactly when the flow actually breaks.
+		msg := "missing or expired login state.\n\n" +
+			"If you waited more than a few minutes, start over.\n\n" +
+			"Otherwise you most likely began signing in at a different address than the one " +
+			"muxterm is configured to use"
+		if base := s.publicBaseURL(); base != "" {
+			msg += " (" + base + ").\n\nStart at " + base + " and sign in there."
+		} else {
+			msg += ".\n\nStart at the address configured as public_origin and sign in there."
+		}
+		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 	raw, err := base64.URLEncoding.DecodeString(cookie.Value)
@@ -98,7 +111,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Consume the PKCE cookie immediately; it is single-use.
-	http.SetCookie(w, &http.Cookie{Name: pkceCookieName, Value: "", Path: "/auth/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: pkceCookieName, Value: "", Path: "/auth/", Secure: s.secureCookies(), MaxAge: -1})
 
 	if r.URL.Query().Get("state") != ps.State {
 		http.Error(w, "state mismatch", http.StatusBadRequest)
@@ -125,6 +138,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		Value:    accessToken,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   s.secureCookies(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(expiresIn.Seconds()),
 	})
@@ -160,6 +174,7 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   s.secureCookies(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
@@ -177,4 +192,78 @@ func randomURLSafeString(nBytes int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// publicBaseURL returns the configured public origin, or "" when muxterm is
+// not in reverse-proxy mode.
+func (s *Server) publicBaseURL() string {
+	// s.behindReverseProxy, not s.cfg.Server.BehindReverseProxy: the
+	// former is this server's effective mode, the latter is whatever the
+	// config file said. Local mode intentionally diverges. See the field
+	// comment on Server.behindReverseProxy.
+	if !s.behindReverseProxy {
+		return ""
+	}
+	s.cfgMu.RLock()
+	sc := s.cfg.Server
+	s.cfgMu.RUnlock()
+	return sc.Normalize().BaseURL()
+}
+
+// secureCookies reports whether auth cookies should carry the Secure
+// attribute. It is keyed off the configured public origin's scheme rather
+// than set unconditionally: Secure cookies are dropped by browsers over
+// plain http, which would break local development and any deployment that
+// legitimately terminates at http on a trusted network.
+func (s *Server) secureCookies() bool {
+	return strings.HasPrefix(strings.ToLower(s.publicBaseURL()), "https://")
+}
+
+// safeReturnTo constrains a post-login redirect to a path inside muxterm.
+//
+// Anything that could be read by a browser as another origin resolves to
+// "/". url.Parse alone is not sufficient: browsers following the WHATWG URL
+// spec normalize a backslash to a forward slash at path-start, so "/\evil"
+// is treated as "//evil" -- a protocol-relative URL to another host -- while
+// url.Parse reports it as an ordinary relative path. Percent-encoded C0
+// control characters and whitespace are likewise stripped before that
+// normalization, so "/%09//evil" collapses to "//evil". Both are rejected
+// here by decoding and scrubbing before the prefix checks.
+func safeReturnTo(raw string) string {
+	const fallback = "/"
+	if raw == "" {
+		return fallback
+	}
+	// Decode so encoded control characters cannot hide the shape of the
+	// value from the checks below; ignore decode errors and fall through to
+	// checking the raw form.
+	decoded := raw
+	if unescaped, err := url.PathUnescape(raw); err == nil {
+		decoded = unescaped
+	}
+	// Browsers treat backslash as a path separator; normalize before
+	// checking so "/\evil.com" cannot pass as a relative path.
+	normalized := strings.ReplaceAll(decoded, "\\", "/")
+	// Strip leading C0 controls, space, and DEL, which browsers ignore.
+	normalized = strings.TrimLeft(normalized, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\v\f\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f \x7f")
+	if !strings.HasPrefix(normalized, "/") || strings.HasPrefix(normalized, "//") {
+		return fallback
+	}
+	// Any remaining control character or whitespace anywhere in the value is
+	// a header-splitting or normalization hazard; refuse rather than guess.
+	if strings.ContainsFunc(normalized, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return fallback
+	}
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || parsed.Scheme != "" {
+		return fallback
+	}
+	// Return the ORIGINAL, still-encoded value. The decoded form was only
+	// ever a lens for validation: decoding is what makes "%2F%2Fevil" and
+	// "/%09//evil" visible as the origin-crossing references they are.
+	// http.Redirect writes Location verbatim without re-encoding, so
+	// returning the decoded string would corrupt any path that legitimately
+	// contains an encoded "?", "#", or space -- "/api/res%3Fx%3D1" would go
+	// out as "/api/res?x=1" and land somewhere else entirely.
+	return raw
 }
