@@ -1,7 +1,10 @@
 package server
 
 import (
+	"context"
+
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/transport"
 )
 
 // DaemonConn is the serve-side seam over a single sessiond connection. One
@@ -44,4 +47,11 @@ type DaemonConn interface {
 
 // DialFunc creates a new daemon connection for one browser WebSocket. It is
 // injectable so tests can supply a fake instead of dialing a real socket.
-type DialFunc func() (DaemonConn, error)
+//
+// The ZERO HostRef means the local daemon and MUST behave exactly as it does
+// today -- every browser that has configured no remote takes only that branch.
+// Any other value names a remote reached through a transport.
+//
+// ctx governs establishing the connection, not its lifetime: close the
+// returned DaemonConn to end the session.
+type DialFunc func(ctx context.Context, host transport.HostRef) (DaemonConn, error)

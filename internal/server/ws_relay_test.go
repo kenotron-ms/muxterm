@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/transport"
 )
 
 // trackingDaemonConn wraps fakeDaemonConn and records which create method was called.
@@ -38,8 +39,11 @@ func TestHandleTextInput_TypeCreatePane_TerminalSurfaceKind(t *testing.T) {
 		hub:    NewHub(nil),
 		ctx:    ctx,
 		cancel: cancel,
-		daemon: fake,
 	}
+	// The daemon connection now lives in a hostSession keyed by host id; the
+	// zero HostRef is the local daemon, which is where an unqualified browser
+	// message routes.
+	c.adoptSession(transport.HostRef{}, fake)
 	c.writeTextFn = func(data []byte) error { return nil }
 	c.writeBinaryFn = func(data []byte) error { return nil }
 

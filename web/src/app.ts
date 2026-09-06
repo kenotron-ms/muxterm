@@ -37,6 +37,7 @@ import './components/reconnect-overlay.js';
 import './components/mux-sidebar.js';
 import './components/mux-home.js';
 import { homeSessions } from './lib/home-sessions.js';
+import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
 
 
@@ -622,6 +623,18 @@ export class MuxApp extends LitElement {
   @state()
   private _createModalName = '';
 
+  /**
+   * Which host the open create-workspace modal will create on, as a
+   * HostRef.ID; '' is the local daemon.
+   *
+   * Deliberately NOT @state(): nothing renders it, so it must not be able to
+   * trigger a render. It is carried on the `workspace-create` event by the
+   * per-host "+ New workspace" affordances and travels to the daemon as the
+   * host selector (see MuxSocket.createWorkspace). With no remotes, no
+   * surface ever sets it and every create is byte-identical to today's.
+   */
+  private _createModalHost = '';
+
   @state()
   private _overlayPanel: 'settings' | 'shortcuts' | 'about' | null = null;
 
@@ -902,6 +915,14 @@ export class MuxApp extends LitElement {
       homeSessions.set(rows, 'live');
     };
     this._socket.sessionStateSubscribe(true);
+    // Per-host connection state. No subscription to send: the server pushes a
+    // frame per registry member right after attach and one per transition
+    // after that. A browser with no remotes receives NONE, which is exactly
+    // why remotesStore.any stays false and every surface renders as it does
+    // today.
+    this._socket.onHostState = (m) => {
+      remotesStore.applyHostState(m);
+    };
     // visibilitychange + window 'focus': this browser tab/window regaining
     // OS focus re-claims every currently-visible pane. Mirrors the existing
     // window.addEventListener('resize', ...) registration/cleanup pattern
@@ -1067,6 +1088,7 @@ export class MuxApp extends LitElement {
         this._creatingWorkspace = false;
         this._showCreateModal = false;
         this._createModalName = '';
+        this._createModalHost = '';
       }
     };
     // The split shortcut creates a connection-scoped pane (create-pane);
@@ -1614,9 +1636,13 @@ export class MuxApp extends LitElement {
    * WorkspaceCreated reply arrives with the matching clientRef. No provisional
    * row is inserted — the flag is the only local state change.
    */
-  private _onOpenCreateModal = (): void => {
+  private _onOpenCreateModal = (e?: CustomEvent<{ host?: string }>): void => {
     this._showCreateModal = true;
     this._createModalName = '';
+    // Unconditional assignment, not a conditional one: the target host is a
+    // property of THIS opening, so an event without a host must reset the
+    // previous opening's, never inherit it.
+    this._createModalHost = typeof e?.detail?.host === 'string' ? e.detail.host : '';
     // The dialog is centred over the whole viewport; a drawer left open
     // behind it would sit on top of its own backdrop.
     this._closeDrawer();
@@ -1634,13 +1660,16 @@ export class MuxApp extends LitElement {
     const name = (input?.value ?? this._createModalName).trim();
     if (!name || this._creatingWorkspace) return;
     this._creatingWorkspace = true;
-    this._socket?.createWorkspace(name);
+    // '' is the local daemon, and createWorkspace then sends exactly today's
+    // message — no workspaceId field at all.
+    this._socket?.createWorkspace(name, undefined, this._createModalHost);
   };
 
   private _cancelCreate = (): void => {
     if (this._creatingWorkspace) return;
     this._showCreateModal = false;
     this._createModalName = '';
+    this._createModalHost = '';
   };
 
   /**

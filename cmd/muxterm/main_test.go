@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"io/fs"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/server"
+	"github.com/kenotron-ms/muxterm/internal/transport"
 )
 
 // captureStdout runs fn and returns whatever it printed to os.Stdout.
@@ -53,7 +55,7 @@ func TestNewSessiondDialerDials(t *testing.T) {
 	}()
 
 	dial := newSessiondDialerForSocket(sock)
-	conn, err := dial()
+	conn, err := dial(context.Background(), transport.HostRef{})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

@@ -5,6 +5,7 @@ package server
 // between expected teardown (net.ErrClosed) and unexpected daemon crashes.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/transport"
 )
 
 // ----------------------------------------------------------------------
@@ -123,7 +125,7 @@ func TestNetErrClosedIsNormalTeardownNotACrash(t *testing.T) {
 // stuck in a no-daemon state.
 func TestDialFailureRemovesClientFromHub(t *testing.T) {
 	dialErr := errors.New("simulated dial failure: daemon not running")
-	hub := NewHub(func() (DaemonConn, error) { return nil, dialErr })
+	hub := NewHub(func(ctx context.Context, host transport.HostRef) (DaemonConn, error) { return nil, dialErr })
 
 	cap := &capture{}
 	c := newTestClient(hub, cap.text, cap.binary)

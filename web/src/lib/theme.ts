@@ -344,6 +344,10 @@ export function applyChromeTokens(
   root.style.setProperty('--chrome-text-bright',   tokens.textBright);
   root.style.setProperty('--chrome-accent',        tokens.accent);
   root.style.setProperty('--chrome-driver-accent', tokens.driverAccent);
+  // The entire palette addition for remote hosts: one token, written as an
+  // ALIAS rather than a literal so it follows the light/dark palette for free.
+  // Custom properties inherit into shadow roots, so no component needs a copy.
+  root.style.setProperty('--remote',               'var(--chrome-driver-accent)');
   root.style.setProperty('--chrome-hover',         tokens.hover);
   root.style.setProperty('--chrome-danger',        tokens.danger);
 }

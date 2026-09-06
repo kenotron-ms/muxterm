@@ -58,6 +58,15 @@ type Config struct {
 	// Version is the running binary's version string (main.version). Empty or
 	// "dev" marks a development build, for which self-update is not offered.
 	Version string
+
+	// Remotes is how this process reaches machines that are not this one.
+	// nil means the whole remote feature is inert: nothing is discoverable,
+	// nothing can be connected, and /api/remotes reports empty lists -- which
+	// is what a build wired without a transport should do.
+	//
+	// The concrete transport is adapted to this interface in cmd/muxterm, so
+	// internal/server never imports internal/transport/ssh or internal/deploy.
+	Remotes RemoteTransport
 }
 
 // Server is the HTTP server for muxterm.
@@ -95,6 +104,7 @@ func New(cfg Config) *Server {
 	tunnels := NewTunnelRegistry()
 	hub := NewHub(nil)
 	hub.tunnels = tunnels
+	hub.remotes = NewRemoteRegistry(cfg.Remotes)
 
 	s := &Server{
 		addr:           cfg.Addr,
@@ -173,6 +183,17 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/tunnels", protect(http.HandlerFunc(s.handleTunnelCreate)))
 	s.mux.Handle("DELETE /api/tunnels/{id}", protect(http.HandlerFunc(s.handleTunnelClose)))
 	s.mux.Handle("/t/", protect(http.HandlerFunc(s.handleTunnelProxy)))
+
+	// Remote machines. {id} is a HostRef.ID such as "ssh:boxb"; a colon is a
+	// legal pchar in a path segment and rule P3 (no "/" in a host id) is what
+	// keeps it to one segment. See internal/server/remotes_api.go.
+	s.mux.Handle("GET /api/remotes", protect(http.HandlerFunc(s.handleRemotesList)))
+	s.mux.Handle("POST /api/remotes", protect(http.HandlerFunc(s.handleRemotesAdd)))
+	s.mux.Handle("DELETE /api/remotes/{id}", protect(http.HandlerFunc(s.handleRemotesRemove)))
+	s.mux.Handle("POST /api/remotes/{id}/connect", protect(http.HandlerFunc(s.handleRemotesConnect)))
+	s.mux.Handle("POST /api/remotes/{id}/disconnect", protect(http.HandlerFunc(s.handleRemotesDisconnect)))
+	s.mux.Handle("POST /api/remotes/{id}/provision", protect(http.HandlerFunc(s.handleRemotesProvision)))
+
 	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
 
 	if cfg.StaticFS != nil {
