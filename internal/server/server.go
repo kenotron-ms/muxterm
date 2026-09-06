@@ -240,6 +240,20 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		Handler: s.mux,
 	}
 
+	// The chief-of-staff sidecar is a child process of THIS process, so it has
+	// to be stopped or it outlives the server that spawned it -- and an orphan
+	// still holds the amplifier session, so the next muxterm's sidecar becomes
+	// a SECOND writer on one transcript.
+	//
+	// Deferred, not placed in the ctx.Done() arm: this function also returns
+	// when ListenAndServe itself fails (a port already in use, a listener
+	// error), and that exit orphaned the sidecar. A defer covers every return
+	// path, including ones added later. No-op when nobody ever opened the chat.
+	//
+	// It does NOT cover a panic-free-fall past this frame or a SIGKILL; that is
+	// what the child's Pdeathsig is for (internal/cos/pdeathsig_linux.go).
+	defer s.hub.CloseCos()
+
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.ListenAndServe()

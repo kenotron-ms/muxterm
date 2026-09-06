@@ -254,6 +254,18 @@ async def label_session(
         "response_format": ResponseFormatJsonSchema(json_schema=_SCHEMA, strict=True),
         "temperature": 0.0,
         "max_output_tokens": 32,
+        # metadata={"stream": False} marks this as a background utility call so
+        # the provider does NOT take the streaming branch. The streaming branch
+        # emits llm:stream_block_start/delta/end on the hook bus, and those
+        # events are indistinguishable from foreground assistant output to any
+        # consumer reading the stream -- the CLI's streaming overlay today, and
+        # the chief-of-staff chat surface, which would otherwise render this
+        # call's raw JSON ({"label": "..."}) as if the assistant had said it.
+        #
+        # The provider tests this with an identity check (`is False`), not
+        # truthiness, so the literal False matters. Same rationale as
+        # hooks-session-naming and loop-streaming's own background calls.
+        "metadata": {"stream": False},
     }
 
     response = await _complete_with_model_fallback(

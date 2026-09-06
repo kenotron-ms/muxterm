@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/kenotron-ms/muxterm/internal/cos"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
 )
@@ -94,6 +95,15 @@ type Client struct {
 	mergeMu  sync.Mutex
 	wsByHost map[string][]sessiond.WorkspaceInfo
 	ssByHost map[string][]sessiond.SessionState
+
+	// cosMu guards cosSub, this connection's opt-in subscription to the
+	// server-owned chief-of-staff event stream (cos.go). nil means "never
+	// subscribed": a connection that never sends cos-subscribe receives no
+	// cos-event and costs nothing. Every subscription is an independent,
+	// droppable view of the ONE shared broker, so a turn submitted in any tab
+	// streams to all of them without this layer fanning anything out.
+	cosMu  sync.Mutex
+	cosSub *cos.Subscription
 
 	// attachSeq enforces the frozen "composition FIRST" ordering guarantee
 	// across the goroutine boundary between the daemon connection's read loop
@@ -412,6 +422,19 @@ func (c *Client) route(msg *sessiond.Message) (sess *hostSession, browserWSID st
 // handleTextInput unmarshals a frozen sessiond.Message from the browser and
 // relays it to the daemon, re-emitting the reply with the browser's cid echoed.
 func (c *Client) handleTextInput(data []byte) {
+	// Chief-of-staff frames are SERVE-LOCAL: they are answered here and never
+	// relayed to sessiond, so they are routed off before the sessiond decode
+	// and, deliberately, before the "no daemon connection" guard below. The
+	// CoS is server-owned and reaches muxterm through the MCP server, not
+	// through this client's daemon socket.
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &probe); err == nil && isCosMessage(probe.Type) {
+		c.handleCosMessage(data)
+		return
+	}
+
 	var msg sessiond.Message
 	if err := json.Unmarshal(data, &msg); err != nil {
 		c.sendError(0, "", fmt.Errorf("invalid JSON: %w", err))
@@ -882,6 +905,13 @@ type Hub struct {
 	// nil when the process was wired without a remote transport, which makes
 	// the whole feature inert.
 	remotes *RemoteRegistry
+
+	// cos owns the single, lazily-started chief-of-staff sidecar every
+	// browser tab shares. One per hub, i.e. one per muxterm server -- the
+	// conversation is server-owned, not per-browser, which is why it lives
+	// beside resolvedConfig rather than on the Client. Nothing is spawned
+	// until a browser sends cos-subscribe or cos-turn.
+	cos *cosRelay
 }
 
 // Remotes returns the hub's remote host registry, or nil when there is none.
@@ -962,6 +992,7 @@ func NewHub(dial DialFunc) *Hub {
 	return &Hub{
 		clients: make(map[*Client]bool),
 		dial:    dial,
+		cos:     newCosRelay(),
 	}
 }
 
@@ -1084,10 +1115,16 @@ func (h *Hub) Remove(c *Client) {
 	defer h.mu.Unlock()
 	if _, ok := h.clients[c]; ok {
 		delete(h.clients, c)
+		c.stopCos()
 		c.teardownSessions()
 		c.close()
 	}
 }
+
+// CloseCos shuts the chief-of-staff sidecar down if one was ever started, so
+// muxterm does not orphan a python process on exit. Safe to call when no
+// sidecar was launched.
+func (h *Hub) CloseCos() { h.cos.close() }
 
 // ClientCount returns the number of connected clients.
 func (h *Hub) ClientCount() int {

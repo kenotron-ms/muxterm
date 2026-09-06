@@ -45,7 +45,7 @@ func (lc *lazyClient) get() (*Client, error) {
 }
 
 // NewStdioServer creates a Server wired to os.Stdin/Stdout and registers all
-// 15 MCP tools. The sessiond client is dialed lazily on the first tool call,
+// 18 MCP tools. The sessiond client is dialed lazily on the first tool call,
 // so initialize and tools/list work without a running daemon.
 //
 // The returned closer must be called when the server exits: it closes the
@@ -147,13 +147,14 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 	)
 }
 
-// registerAllTools registers the 12 sessiond-backed MCP tools on srv using
+// registerAllTools registers the 13 sessiond-backed MCP tools on srv using
 // wrap to convert func(*Client, map[string]any)(string,error) handlers into
 // ToolFuncs. Tools are registered in the canonical order:
 //
 //	Terminal:   run_command, send_input, get_screen
 //	Workspace:  list_workspaces, create_workspace, switch_workspace, close_workspace
 //	Layout:     create_pane, rename_pane, close_pane, list_panes, get_layout
+//	Delegation: spawn_lane
 //
 // The 3 tunnel tools (list_tunnels, create_tunnel, close_tunnel) are registered
 // separately via registerTunnelTools because they go through the HTTP REST API
@@ -352,6 +353,50 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 		}),
 	)
 
+	// --- Delegation tools ---
+	//
+	// spawn_lane is intentionally CREATE-ONLY, and there is deliberately no
+	// destroy_lane beside it. An agent that delegates must be able to open new
+	// work and must never be able to destroy existing work; closure stays with
+	// the human (docs/designs/2026-09-06-cos-delegation-model.md section 2).
+	// close_pane and close_workspace above are unchanged -- a chief-of-staff
+	// bundle withholds them at composition time, because a tool an agent does
+	// not have cannot be misused, whereas an approval gate on one can be
+	// overwritten out from under you.
+	srv.Register(
+		"spawn_lane",
+		"delegate work: launch a coding-agent session (amplifier|claude) in a pane of the named workspace, creating that workspace if it does not exist; prompt is the session's opening turn; goal (amplifier only) instead launches a /goal loop with that stop condition, and prompt is ignored; returns workspace_id, pane_id, harness, workspace_created",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				// The bounds are in the schema as well as enforced in
+				// tools_lane.go, so a caller is told the rule before it breaks
+				// it rather than only afterwards.
+				"workspace": map[string]any{
+					"type":        "string",
+					"maxLength":   maxWorkspaceNameBytes,
+					"description": "workspace name: one line of plain text, no control characters",
+				},
+				"harness": map[string]any{
+					"type": "string",
+					"enum": []string{"amplifier", "claude"},
+				},
+				"prompt": map[string]any{
+					"type":        "string",
+					"description": "the lane's opening turn, as work to do. It must not begin with '/': the harness would read that as a slash command. Use goal to start a /goal loop",
+				},
+				"goal": map[string]any{"type": "string"},
+				"placement": map[string]any{
+					"type": "string",
+					"enum": []string{"tab", "split-right", "split-left", "split-above", "split-below"},
+				},
+			},
+			"required": []string{"workspace", "harness", "prompt"},
+		},
+		wrap(func(c *Client, args map[string]any) (string, error) {
+			return newLaneTools(c).spawnLane(args)
+		}),
+	)
 }
 
 // registerTunnelTools registers the 3 tunnel MCP tools directly on srv,

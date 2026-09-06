@@ -7,7 +7,6 @@ import { MonitorX } from 'lucide';
 import { MuxSocket, buildWsUrl } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { previewStore } from './lib/preview-store.js';
-import { harnessArgv, type HarnessName } from './lib/harness.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
 import { makeKeyHandler, installAppShortcuts, installHomeToggle, type UIActions } from './lib/keybindings.js';
 import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme.js';
@@ -36,8 +35,12 @@ import type { CloseConfirmationModal } from './components/close-confirmation-mod
 import './components/reconnect-overlay.js';
 import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
-import './components/mux-home.js';
+// <mux-home> is deliberately NOT imported. The Dashboard IS home now (see
+// <mux-cos>), and the two were never meant to be alternatives you could be
+// looking at one of. The component and its standalone demo are untouched.
+import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
+import { cosStore } from './lib/cos-store.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
 
@@ -512,8 +515,8 @@ export class MuxApp extends LitElement {
       flex-direction: column;
       overflow: hidden;
       min-width: 0;
-      /* Containing block for <mux-home>, which covers the pane as an absolute
-         overlay rather than replacing the dock — see render(). */
+      /* Containing block for <mux-cos>, the Dashboard, which covers the pane
+         as an absolute overlay rather than replacing the dock — see render(). */
       position: relative;
     }
 
@@ -665,15 +668,30 @@ export class MuxApp extends LitElement {
   private _drawerOpen = false;
 
   /**
-   * True while the home view covers the main pane.
+   * True while the Dashboard covers the main pane.
    *
-   * Starts FALSE deliberately. The daemon-side session-state producer does not
-   * exist yet, so home currently renders the committed fixture — landing every
-   * user on a fixture-populated surface would be a lie. Flip this to `true`
-   * (one line) the moment homeSessions.set(..., 'live') has a caller.
+   * ONE flag where there used to be two. `_showHome` and `_showCos` were
+   * peers -- two opaque overlays over the same box, each closing the other,
+   * which is a z-index argument nobody can see the result of and, worse, two
+   * answers to "where do I go to see what is running". The Dashboard is now
+   * the single surface: a conversation on the left, the fleet on the right.
+   *
+   * The dock underneath is NEVER unmounted while it is up.
    */
   @state()
-  private _showHome = false;
+  private _showDashboard = false;
+
+  /**
+   * True while the Dashboard's fleet sheet (portrait) is open.
+   *
+   * Mirrored from the popover's own toggle event, which <mux-cos> re-emits as
+   * `fleet-state`, rather than set by the code that opens it -- so light
+   * dismiss and Escape, which no handler of ours ever sees, cannot leave the
+   * title bar's button out of step with what is on screen. Same arrangement
+   * as _drawerOpen above, for the same reason.
+   */
+  @state()
+  private _fleetOpen = false;
 
   /**
    * A composer dispatch waiting on an attach: where it is going, and what to
@@ -758,6 +776,7 @@ export class MuxApp extends LitElement {
   private _socket: MuxSocket | null = null;
   private _unsubscribe: (() => void) | null = null;
   private _unsubHomeSessions: (() => void) | null = null;
+  private _unsubCos: (() => void) | null = null;
   private _controller: WorkspaceController | null = null;
   private _paneFocusCoordinator: PaneFocusCoordinator | null = null;
   private _disposePaneFocusListeners: (() => void) | null = null;
@@ -882,6 +901,11 @@ export class MuxApp extends LitElement {
     this._unsubHomeSessions = homeSessions.subscribe(() => {
       this._version++;
     });
+    // The chief-of-staff chat's one seam. Subscribed here (not in <mux-cos>)
+    // so the entry control can show readiness without the overlay being open.
+    this._unsubCos = cosStore.subscribe(() => {
+      this._version++;
+    });
     // Install fixed app-level shortcuts (Cmd+W close, Cmd+T new pane). These
     // override the browser's native tab-close / new-tab actions so muxterm
     // feels like a native app. Installed once — not re-set on config changes.
@@ -916,6 +940,10 @@ export class MuxApp extends LitElement {
     // Sidebar live previews: the store owns the opt-in and both data sources
     // (local xterm buffer for the attached workspace, daemon push for the rest).
     previewStore.attach(this._socket);
+    // Serve-local cos-* frames. Nothing is asked of the server until the
+    // overlay is opened: cosStore.open() is what sends the first subscribe,
+    // and the sidecar is spawned lazily off that.
+    cosStore.attach(this._socket);
     this._socket.onWorkspacePreview = (msg) => {
       previewStore.handleWorkspacePreview(msg);
     };
@@ -1125,6 +1153,10 @@ export class MuxApp extends LitElement {
       // own bootstrap attach; letting the argv survive would spawn the prompt
       // into whatever that lands on, minutes later and unasked.
       this._dropPendingDispatch('the connection was lost');
+      // The transcript survives a reconnect; the claim that a sidecar is
+      // listening does not. A chat still reading "ready" over a dead socket
+      // would take a turn nobody will ever answer.
+      cosStore.markDisconnected();
       const interruptedTargets = new Map<string, CloseTarget>();
       for (const [key, request] of this._closeRequests) {
         interruptedTargets.set(key, request.target);
@@ -1154,6 +1186,9 @@ export class MuxApp extends LitElement {
       // daemon restart underneath us) silently loses it and tiles would just
       // stop arriving. Re-send it here, alongside the composition re-sync.
       previewStore.resubscribe();
+      // ws.ts replays the cos-subscribe frame itself (the flag lives on the
+      // socket); this only re-arms the header while the replay lands.
+      cosStore.markReconnected();
     };
     this._socket.connect();
     this._connectionStatus = 'reconnecting';
@@ -1186,6 +1221,8 @@ export class MuxApp extends LitElement {
     disposeHomeToggle = undefined;
     this._unsubHomeSessions?.();
     this._unsubHomeSessions = null;
+    this._unsubCos?.();
+    this._unsubCos = null;
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = null;
@@ -1360,22 +1397,25 @@ export class MuxApp extends LitElement {
     return html`
       ${!isWide ? html`<mux-title-bar
         .drawerOpen="${this._drawerOpen}"
+        .dashboardActive="${this._showDashboard}"
+        .fleetOpen="${this._fleetOpen}"
         @launcher-action="${this._onLauncherAction}"
         @pane-select="${this._onActivePane}"
         @pane-create-request="${this._createPaneOptimistic}"
         @drawer-toggle="${this._onDrawerToggle}"
+        @fleet-toggle="${this._onFleetToggle}"
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
       <div class="content-area">
         ${isWide ? html`
           <mux-sidebar
-            .homeActive="${this._showHome}"
+            .homeActive="${this._showDashboard}"
             .homeKey="${store.config.keys.toggleHome}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
             @launcher-action="${this._onLauncherAction}"
-            @home-show="${this._onHomeShow}"
+            @home-show="${this._onDashboardShow}"
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
@@ -1405,39 +1445,42 @@ export class MuxApp extends LitElement {
                   @layout-save="${this._onLayoutSave}"
                 ></mux-dock>
               `}
-          <!-- cache(): home is TOGGLED, not created and destroyed. A bare
-               ternary swaps <mux-home> out of the DOM, which destroys the
-               element and every @state on it -- including the half-typed
-               prompt in the composer, the workspace it was aimed at, and the
-               harness picked for it. Leaving to answer a pane and coming back
-               to an empty box is a data-loss bug, not a re-render. cache()
-               parks the same instance in a fragment (disconnectedCallback
-               still fires, so nothing leaks a live listener) and re-inserts it
-               on the way back with its draft intact. Still lazy: nothing is
-               built until home is opened the first time. -->
+          <!-- THE DASHBOARD. One surface: a conversation with the chief of
+               staff on the left, the fleet on the right, a shared 52px bar
+               across both and a divider you can drag between them.
+
+               Covers .main-pane as an opaque absolute overlay. The dock
+               underneath is NEVER unmounted: unmounting would risk dockview's
+               layout persistence and would silently downgrade the attached
+               workspace's live-colour preview to the monochrome server tile,
+               because previewRegion requires entry.opened
+               (terminal-registry.ts). Keeping it mounted AND laid out also
+               means returning to a pane needs no refit.
+
+               cache(): the Dashboard is TOGGLED, not created and destroyed. A
+               bare ternary swaps the element out of the DOM, which destroys
+               every @state on it -- including the half-typed sentence in the
+               composer and where the user put the divider. Leaving to answer
+               a pane and coming back to an empty box is a data-loss bug, not
+               a re-render. cache() parks the same instance in a fragment
+               (disconnectedCallback still fires, so nothing leaks a live
+               listener) and re-inserts it with its draft intact. Still lazy:
+               nothing is built until the Dashboard is opened the first time.
+
+               No rows are passed in. <mux-cos> subscribes to homeSessions
+               itself -- the ONE seam for session state, exactly as
+               <mux-title-bar> does for its dot -- and reports a card
+               activation as @home-open, the SAME event <mux-home> fires, so
+               there is one handler below and not two ways to reach a pane. -->
           ${cache(
-            this._showHome
+            this._showDashboard
             ? html`
-                <!-- Covers .main-pane as an opaque absolute overlay. The dock
-                     underneath is NEVER unmounted: unmounting would risk
-                     dockview's layout persistence and would silently downgrade
-                     the attached workspace's live-colour preview to the
-                     monochrome server tile, because previewRegion requires
-                     entry.opened (terminal-registry.ts). Keeping it mounted AND
-                     laid out also means returning from home needs no refit. -->
-                <mux-home
-                  .sessions="${homeSessions.sessions}"
-                  .palette="${store.config.theme.palette}"
-                  .fixture="${homeSessions.source === 'fixture'}"
-                  .workspaces="${store.workspaces.map((w) => ({
-                    id: w.workspaceId,
-                    name: w.name ?? '',
-                  }))}"
-                  @home-dispatch="${this._onHomeDispatch}"
+                <mux-cos
+                  .narrow="${!isWide}"
                   @home-open="${this._onHomeOpen}"
-                  @home-action="${this._onHomeAction}"
-                  @home-dismiss="${this._onHomeHide}"
-                ></mux-home>
+                  @home-dismiss="${this._onDashboardHide}"
+                  @fleet-state="${this._onFleetState}"
+                ></mux-cos>
               `
             : '',
           )}
@@ -1465,14 +1508,14 @@ export class MuxApp extends LitElement {
               @toggle="${this._onDrawerPopoverToggle}"
             >
               <mux-sidebar
-                .homeActive="${this._showHome}"
+                .homeActive="${this._showDashboard}"
                 .homeKey="${''}"
                 .previewsVisible="${this._drawerOpen}"
                 @workspace-switch="${this._onWorkspaceSelected}"
                 @workspace-create="${this._onOpenCreateModal}"
                 @workspace-rename="${this._onWorkspaceRename}"
                 @launcher-action="${this._onLauncherAction}"
-                @home-show="${this._onHomeShow}"
+                @home-show="${this._onDashboardShow}"
               ></mux-sidebar>
             </div>
           `
@@ -2091,137 +2134,85 @@ export class MuxApp extends LitElement {
    * the previous workspace survives for when we switch back.
    */
   // -------------------------------------------------------------------------
-  // Home view
+  // The Dashboard
   // -------------------------------------------------------------------------
 
-  /** Start card / ctrl+` — show home from anywhere. */
-  private _onHomeShow = (): void => {
-    this._showHome = true;
-    // On a phone the Start card IS the drawer's top row, so home would open
-    // underneath the drawer that asked for it.
+  /**
+   * Dashboard card / ctrl+` -- open the Dashboard from anywhere.
+   *
+   * This is also what STARTS the sidecar: cosStore.open() sends the first
+   * cos-subscribe and the server spawns the amplifier session lazily off it,
+   * so muxterm pays nothing at all for a surface nobody opened.
+   */
+  private _onDashboardShow = (): void => {
+    this._showDashboard = true;
+    // On a phone the Dashboard card IS the drawer's top row, so the Dashboard
+    // would open underneath the drawer that asked for it.
     this._closeDrawer();
+    cosStore.open();
+    void this.updateComplete.then(() => {
+      this.renderRoot.querySelector('mux-cos')?.focusComposer();
+    });
   };
 
-  /** Esc, or picking a workspace — back to the dock, and give it the keyboard. */
-  private _onHomeHide = (): void => {
-    if (!this._showHome) return;
-    this._showHome = false;
+  /** Esc, or picking a workspace -- back to the dock, which never went away. */
+  private _onDashboardHide = (): void => {
+    if (!this._showDashboard) return;
+    this._showDashboard = false;
+    // A sheet is scoped to the surface that owns it. Leaving _fleetOpen true
+    // here would put the title bar's button in an expanded state for a
+    // popover the browser closed when its host left the DOM.
+    this._fleetOpen = false;
     void this.updateComplete.then(() => {
       terminalRegistry.focus(store.activePaneId);
     });
   };
 
   private _toggleHome = (): void => {
-    if (this._showHome) this._onHomeHide();
-    else this._onHomeShow();
+    if (this._showDashboard) this._onDashboardHide();
+    else this._onDashboardShow();
   };
 
-  /** Enter / click on a home row: go to that session's pane. */
   /**
-   * Start a new session from the home view's new-session bar.
+   * The title bar's fleet button.
    *
-   * A "task" is not an object here -- it is a session's first prompt:submit.
-   * So this spawns a pane and types the prompt into it, which is exactly what
-   * `muxterm pane create` + `muxterm pane send` do from a shell. No new
-   * protocol: create-pane and raw pane input both already exist.
-   *
-   * The pane id is not known synchronously, so we hold the prompt until the
-   * store reports the pane, then write it once.
+   * The sheet lives in <mux-cos>'s shadow root, so `popovertarget` cannot
+   * reach it from the bar -- the attribute resolves ids within the INVOKER's
+   * root. The intent comes up here and this calls the method, exactly as the
+   * workspace drawer already works. Everything the Popover API provides (top
+   * layer, light dismiss, Escape, one-at-a-time) is unaffected by which side
+   * makes the call.
    */
-  /**
-   * Start a SESSION from the home view's composer.
-   *
-   * The pane runs the harness directly, with the prompt as an argv element.
-   * It does NOT open a shell and type the prompt at it: a shell would try to
-   * execute "add resize_pane to the MCP server" as a command and fail, and
-   * anything typed before the program was ready to read would be lost.
-   *
-   * Passing the prompt as argv also removes the readiness race entirely --
-   * there is no window between spawn and first input, because there is no
-   * first input. sessiond takes argv on create-pane already (protocol.go
-   * "cmd", empty => default $SHELL), so this needs no new protocol.
-   */
-  private _onHomeDispatch = (e: Event): void => {
-    const d = (e as CustomEvent).detail as {
-      prompt: string;
-      workspaceId: string | null;
-      harness?: HarnessName;
-    };
-    if (!d?.prompt) return;
-    const cmd = harnessArgv(d.harness ?? 'amplifier', d.prompt);
-
-    // Nothing can be arranged over a socket that is not open: createWorkspace
-    // and attach would both be dropped on the floor, and a dispatch parked
-    // behind them would wait for a reply to a question never asked -- then
-    // adopt the next unrelated workspace-created that came along. Say so and
-    // keep the composer open with the words still in it.
-    if (!this._socket?.connected) {
-      e.preventDefault(); // composer keeps the draft; see mux-home _submit
-      this._dispatchAlert = {
-        message: 'Not connected, so that session could not be started.',
-        prompt: d.prompt,
-      };
-      return;
-    }
-    // A dispatch already waiting is about to lose its only reference. Say so
-    // before overwriting it: reopening home and sending a second prompt while
-    // the first is still mid-attach is an ordinary thing to do, and the first
-    // one disappearing without a word is the exact failure _dropPendingDispatch
-    // exists to prevent.
-    this._dropPendingDispatch('another session was started before it arrived');
-    this._showHome = false;
-
-    // The composer's `workspaceId` is a DESTINATION, and create-pane cannot
-    // carry one -- the daemon spawns into whatever this connection is attached
-    // to. Sending create-pane straight out therefore ignores the dropdown
-    // entirely: "New workspace" silently became "another pane in whatever
-    // workspace happened to be open". Each destination gets its own route.
-
-    // "New workspace" (the composer's default, value ""). WorkspaceController
-    // attaches on workspace-created, so the argv only has to survive until
-    // that workspace's composition arrives.
-    if (d.workspaceId === null) {
-      const ref = mintClientRef();
-      this._pendingDispatch = { workspaceId: null, cmd, prompt: d.prompt, clientRef: ref };
-      // The connected check above is a moment earlier than this send, and the
-      // socket can close in between. Park on the send actually happening, not
-      // on it having been possible a moment ago.
-      if (!this._socket.createWorkspace(undefined, ref)) {
-        this._dropPendingDispatch('the connection was lost before the request went out');
-      }
-      return;
-    }
-
-    // Spawn straight away ONLY when the connection is provably already there:
-    // confirmed by the store AND not on its way anywhere else. store.attached
-    // alone is the last CONFIRMED attach, so it still names the old workspace
-    // while an attach is in flight -- and WorkspaceController fires those on
-    // its own, on recovery and on workspace-created, announced by no user
-    // action. Trusting the store alone would spawn into whatever the
-    // connection had been re-pointed at.
-    if (
-      d.workspaceId === store.attached &&
-      this._socket.lastAttachTarget === d.workspaceId
-    ) {
-      this._spawnPane(cmd);
-      return;
-    }
-
-    // Otherwise: go there explicitly, spawn on arrival. This covers both a
-    // different workspace and the case above's inverse -- nominally "here",
-    // but with the connection mid-flight elsewhere, where a re-attach is what
-    // makes "here" true again.
-    // Switching attachment invalidates any live dictation target, same as
-    // _onWorkspaceSelected.
-    this._pendingDispatch = {
-      workspaceId: d.workspaceId,
-      cmd,
-      prompt: d.prompt,
-      clientRef: mintClientRef(),
-    };
-    voiceInputController.invalidateIfActive();
-    this._socket.attachWithBreakpoint(d.workspaceId, currentLayoutMode());
+  private _onFleetToggle = (): void => {
+    this.renderRoot.querySelector('mux-cos')?.toggleFleet();
   };
+
+  /** The sheet reporting its own open state. Never set from the other side. */
+  private _onFleetState = (e: Event): void => {
+    this._fleetOpen = (e as CustomEvent<{ open: boolean }>).detail?.open === true;
+  };
+
+  /**
+   * NOTE ON THE PARKED-DISPATCH MACHINERY BELOW.
+   *
+   * `_onHomeDispatch` -- the handler for the home view's new-session bar --
+   * is GONE, because that composer is gone: the Dashboard has exactly one
+   * input and it talks to the chief of staff, which starts lanes through its
+   * own tools rather than through this browser.
+   *
+   * `_pendingDispatch`, `_dropPendingDispatch` and their hooks in the
+   * workspace-created / composition handlers are deliberately LEFT IN PLACE.
+   * They encode a subtle and hard-won safety property -- a dispatch may only
+   * spawn when the arriving composition is for the workspace it was aimed at
+   * AND the connection is still headed there -- and they have no producer
+   * today only because the one caller was removed above them. Nothing sets
+   * `_pendingDispatch`, so every path through them is currently a no-op.
+   *
+   * They are the landing site for the next thing that needs to start a pane
+   * somewhere other than the current attachment. Deleting them would mean
+   * re-deriving that identity check from scratch when it is needed again,
+   * which is how this class of bug comes back.
+   */
 
   /**
    * Give up on a parked dispatch and tell the user, with their words.
@@ -2246,7 +2237,11 @@ export class MuxApp extends LitElement {
   private _onHomeOpen = (e: Event): void => {
     const d = (e as CustomEvent<{ workspaceId: string; paneId: number }>).detail;
     if (!d) return;
-    this._showHome = false;
+    // "Go to that pane" cannot mean anything while an opaque overlay is still
+    // covering the dock the pane lives in. The door closes; the dock, which
+    // was never unmounted, is simply uncovered.
+    this._showDashboard = false;
+    this._fleetOpen = false;
     if (d.workspaceId && d.workspaceId !== store.attached) {
       // Hand the pane to the dock as an INPUT to its restore. Applying it from
       // out here after the fact does not work: the restore re-asserts its own
@@ -2262,30 +2257,11 @@ export class MuxApp extends LitElement {
     );
   };
 
-  /**
-   * An ask button.
-   *
-   * ⚠ STUB — answering an ask means writing keys into the session's pane, which
-   * is `muxterm pane send` (Lane A / issue #47). Nothing is sent here; the
-   * intent is logged and the user is taken to the pane so they can answer it
-   * themselves. Replace the body, not the wiring, when send lands.
-   */
-  private _onHomeAction = (e: Event): void => {
-    const d = (e as CustomEvent<{ sessionId: string; paneId: number; action: string }>)
-      .detail;
-    if (!d) return;
-    muxLog(
-      'home action',
-      `STUB (needs \`muxterm pane send\`): ${d.action} for ${d.sessionId}`,
-      { paneId: d.paneId },
-    );
-    this._onHomeOpen(e);
-  };
-
   private _onWorkspaceSelected = (e: CustomEvent<{ workspaceId: string }>): void => {
-    // Picking a workspace is the "go work in there" gesture — home steps aside
-    // and so does the drawer that was covering the terminal.
-    this._onHomeHide();
+    // Picking a workspace is the "go work in there" gesture — the Dashboard
+    // steps aside and so does the drawer that was covering the terminal,
+    // or the click would land on a workspace nobody can see.
+    this._onDashboardHide();
     this._closeDrawer();
     if (e.detail.workspaceId === store.attached) return;
     // Workspace switches are asynchronous (new pane list/active pane arrive

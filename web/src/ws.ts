@@ -158,6 +158,16 @@ export class MuxSocket {
    */
   onSessionState?: (msg: SessiondMessage) => void;
   /**
+   * Fires for every serve-local chief-of-staff frame: cos-subscribe-result and
+   * cos-event. Same direct-callback shape as onSessionState above.
+   *
+   * These are SERVE-LOCAL, not sessiond messages -- the CoS conversation is
+   * owned by the muxterm server, not by any daemon -- so they are routed here
+   * and deliberately NOT forwarded to onSessiondMessage, which would hand the
+   * frozen wire-state store a message type it has no projection for.
+   */
+  onCosFrame?: (frame: Record<string, unknown>) => void;
+  /**
    * Fires on a host-state frame: one remote host's connection state changed
    * (or the server is describing the registry to a freshly attached tab).
    *
@@ -337,6 +347,76 @@ export class MuxSocket {
   sessionStateSubscribe(enabled: boolean): void {
     this._sessionStateWanted = enabled;
     this.sendSessiond({ type: SessiondType.SessionStateSubscribe, ok: enabled });
+  }
+
+  // --- chief-of-staff senders ----------------------------------------------
+  // Serve-local frames. They never reach sessiond, so they bypass
+  // sendSessiond's frozen SessiondMessage type and go out as plain objects.
+
+  /**
+   * Remembered like _sessionStateWanted, and for the same reason: the overlay
+   * can be opened before a reconnect completes, and a subscription lives on
+   * the connection that carried it. Without the replay a reconnect would leave
+   * the chat rendering a conversation it is no longer being told about.
+   */
+  private _cosWanted = false;
+
+  private _sendCos(frame: Record<string, unknown>): boolean {
+    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+      this._ws.send(JSON.stringify(frame));
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Opt this connection in to (or out of) the shared chief-of-staff stream.
+   *
+   * The FIRST `true` is also what starts the sidecar: the server spawns it
+   * lazily, so muxterm pays nothing for a feature nobody opened.
+   */
+  cosSubscribe(on: boolean): void {
+    this._cosWanted = on;
+    this._sendCos({ type: 'cos-subscribe', on });
+  }
+
+  /** Submit one turn. Returns whether it actually went out (see sendSessiond). */
+  cosTurn(prompt: string, clientRef?: string): boolean {
+    return this._sendCos({ type: 'cos-turn', prompt, client_ref: clientRef ?? '' });
+  }
+
+  /**
+   * Answer an approval_request.
+   *
+   * `approved` is always written, never omitted: a denial is `false`, and the
+   * server treats a missing field as a denial precisely because guessing wrong
+   * here runs the command the user just refused.
+   *
+   * Returns whether it actually went out, and that return is not optional
+   * housekeeping: a caller that assumes it did shows the user a confirmed
+   * security decision the sidecar never received, and the sidecar then times
+   * the request out to DENIED (2.4 law 3). The UI has to be able to tell those
+   * two apart.
+   */
+  cosApproval(requestId: string, approved: boolean, reason = ''): boolean {
+    return this._sendCos({ type: 'cos-approval', request_id: requestId, approved, reason });
+  }
+
+  /** Ask the sidecar to abandon a turn. It ends when its terminal event lands. */
+  cosCancel(turnId: string): void {
+    this._sendCos({ type: 'cos-cancel', turn_id: turnId });
+  }
+
+  /**
+   * Prune the shared transcript. `olderThanDays` of 0 means EVERYTHING.
+   *
+   * Returns whether the request actually went out, so a caller waiting on a
+   * confirm dialog can resolve it rather than spin: the server answers with
+   * cos-clear-result and then a fresh cos-history, but neither arrives if the
+   * socket was down when this was called.
+   */
+  cosClear(olderThanDays: number): boolean {
+    return this._sendCos({ type: 'cos-clear', older_than_days: olderThanDays });
   }
 
   /** Request the list of workspaces. */
@@ -594,6 +674,11 @@ export class MuxSocket {
       if (this._sessionStateWanted) {
         this.sendSessiond({ type: SessiondType.SessionStateSubscribe, ok: true });
       }
+      // Same first-connection race as session state: the overlay may have
+      // subscribed before this socket was open, and that frame was dropped.
+      if (this._cosWanted) {
+        this._sendCos({ type: 'cos-subscribe', on: true });
+      }
       this.onReconnect?.();
     };
 
@@ -617,6 +702,13 @@ export class MuxSocket {
         // the sessiond hook. (Legacy single-key envelopes have no "type" field,
         // so the two paths never collide.)
         if (typeof raw.type === 'string') {
+          // Serve-local chief-of-staff frames are answered by the server, not
+          // the daemon. Routed off BEFORE onSessiondMessage so the frozen
+          // wire-state store never sees a type it has no projection for.
+          if (raw.type.startsWith('cos-')) {
+            this.onCosFrame?.(raw);
+            return;
+          }
           this.onSessiondMessage?.(raw as unknown as SessiondMessage);
           // Relay-only types: dispatch as window CustomEvents so app.ts and
           // mux-dock can handle them without coupling to the socket directly.

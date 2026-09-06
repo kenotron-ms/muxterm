@@ -1,15 +1,33 @@
 /**
- * mux-start-card.ts — the sidebar's Start card.
+ * mux-start-card.ts -- the sidebar's Dashboard card.
  *
- * Sits above the workspace cards. Shows the "Needs input" count and is the way
- * back to the home view from anywhere.
+ * Sits above the workspace cards. It is the door to the Dashboard from
+ * anywhere, and it says one thing beyond its own name: whether anything is
+ * waiting on you.
  *
- * The zero state is designed, not defaulted. Zero is the state the user is
- * trying to reach, so it is the calmest thing on screen: grey, small, no ring,
- * no pulse, nothing warm. Anything that draws the eye at zero teaches the user
- * to stop looking at the card entirely, which costs the whole feature.
+ * IT SHOWS NO COUNT. It used to show a 26px number, and the number is gone on
+ * purpose: the Dashboard shows no counts anywhere -- not sessions, not groups,
+ * not messages -- and the sidebar is not allowed to be the one place a number
+ * survived. What replaced it is a dot, present or absent.
  *
- * Presentational only — it is handed a count and reports clicks. It is shared
+ * The zero state is designed, not defaulted, and that survives the change:
+ * zero is the state the user is trying to reach, so it is the calmest thing on
+ * screen -- no dot, no ring, no warm border, nothing animated. Anything that
+ * draws the eye at zero teaches the user to stop looking at the card entirely,
+ * which costs the whole feature.
+ *
+ * `count`, `spread` and `split` are still PROPERTIES carrying numbers rather
+ * than booleans, because they are the numbers the caller already has and
+ * reducing them here keeps every caller (the app sidebar, the drawer, and the
+ * two standalone demos) handing over the same thing it always did. Nothing
+ * renders them.
+ *
+ * The per-machine split survives the no-count rule, because it never carried a
+ * count worth keeping: what it is for is saying WHICH machine wants you, and
+ * distinguishing "nothing waiting there" from "I cannot currently see". A dot,
+ * a `?`, or nothing -- the same three states the card itself has.
+ *
+ * Presentational only -- it is handed a count and reports clicks. It is shared
  * verbatim by the app sidebar and the standalone fixture demo, which is the
  * point: the thing the user previews is the thing that ships.
  */
@@ -21,11 +39,13 @@ import { customElement, property } from 'lit/decorators.js';
 export const NEEDS_GLYPH = '✽';
 
 /**
- * One machine's contribution to the fleet-wide count.
+ * One machine's contribution to the fleet-wide attention.
  *
  * `count: null` is the load-bearing case: it means "this host is not currently
  * connected", and it renders `?`. It does NOT mean zero, and the type refuses
- * to let a caller conflate them.
+ * to let a caller conflate them. Any other value is reduced to present/absent
+ * on the way to the screen -- the number itself is never rendered, here or
+ * anywhere else on this card.
  */
 export interface StartSplitRow {
   /** Display label for the machine. The local one is named too, here only:
@@ -44,7 +64,7 @@ export class MuxStartCard extends LitElement {
   /** How many workspaces contribute to `count`. Only shown when > 0. */
   @property({ type: Number }) spread = 0;
 
-  /** True when the home view is the thing currently on screen. */
+  /** True when the Dashboard is the thing currently on screen. */
   @property({ type: Boolean }) active = false;
 
   /** Key chord shown in the corner, e.g. "ctrl+`". Empty hides the chip. */
@@ -161,27 +181,35 @@ export class MuxStartCard extends LitElement {
       flex-shrink: 0;
     }
 
-    .num {
-      font-size: 26px;
-      font-weight: 680;
-      letter-spacing: -0.03em;
-      line-height: 1.15;
+    /* The card's own name. It replaced a 26px count, and it is deliberately
+       the size of a label rather than a headline: this is a door, and a door
+       does not need to shout to be found. */
+    .name {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.3;
       margin-top: 2px;
-      color: var(--mux-warn);
+      color: var(--chrome-text-bright);
     }
 
-    .start.zero .num {
-      font-size: 15px;
-      font-weight: 500;
-      color: var(--chrome-text-dim);
-      line-height: 1.4;
-      margin-top: 1px;
+    /* The one signal left. Present or absent, never a number, never a zero.
+       --mux-warn is the same token the group heading, the workspace badge and
+       the nav bar's dot use, so the four cannot say different things. */
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--mux-warn);
+      flex-shrink: 0;
     }
 
     .lbl {
       font-size: 11px;
       color: var(--chrome-text-dim);
-      margin-top: -1px;
+      margin-top: 1px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -215,19 +243,22 @@ export class MuxStartCard extends LitElement {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .splitrow b {
-      font-weight: 600;
-      font-variant-numeric: tabular-nums;
-      color: var(--mux-warn);
-    }
-    .start.zero .splitrow b {
-      color: var(--chrome-text-dim);
+    /* The per-machine signal, and it obeys the same rule as the card above:
+       present or absent, never a number. Smaller than the card's own dot
+       because it is subordinate to it -- the card says "someone wants you",
+       the row says "it is that one". */
+    .splitrow .dot {
+      width: 5px;
+      height: 5px;
     }
     /* A machine we cannot see. Its "?" is deliberately the DIM colour, not the
-       warn colour: an unknown is not an alarm, and colouring it like a count
-       would make a disconnected host look like work waiting. */
-    .splitrow.unknown b {
+       warn colour: an unknown is not an alarm, and colouring it like a signal
+       would make a disconnected host look like work waiting. It is the only
+       glyph left in the split, and it is not a count. */
+    .splitrow .mk {
+      font-weight: 600;
       color: var(--chrome-text-dim);
+      flex-shrink: 0;
     }
   `;
 
@@ -239,28 +270,28 @@ export class MuxStartCard extends LitElement {
     const zero = this.count === 0;
     const cls = `start ${zero ? 'zero' : ''} ${this.active ? 'here' : ''}`;
 
-    // The second line says WHERE the card takes you -- so while home is the
-    // thing on screen it must not still read "click to go home". It says
-    // "home", and keeps the spread when there is one to report.
+    // The second line says WHERE the card takes you -- so while the Dashboard
+    // is the thing on screen it must not still read "click to go there". The
+    // spread is a shape, not a tally: "across 2 workspaces" tells you the
+    // attention is scattered, which is a different fact from how many rows
+    // there are, and it is the one the sidebar can act on.
     const spread =
-      this.spread > 0
-        ? `across ${this.spread} workspace${this.spread === 1 ? '' : 's'}`
+      this.spread > 1
+        ? `across ${this.spread} workspaces`
         : '';
-    const busyLbl = this.active
-      ? spread === ''
-        ? 'home'
-        : `home · ${spread}`
-      : spread === ''
-        ? 'click to go home'
-        : spread;
+    const lbl = this.active
+      ? spread || 'you are here'
+      : zero
+        ? 'nothing is waiting'
+        : spread || 'something wants you';
 
-    // At zero the count itself is the wrong headline — there is no number worth
-    // 26px. The card says the calm thing instead.
-    const body = zero
-      ? html`<div class="num">All clear</div>
-          <div class="lbl">${this.active ? 'home' : 'click for home'}</div>`
-      : html`<div class="num">${this.count}</div>
-          <div class="lbl">${busyLbl}</div>`;
+    // The card's whole body: its name, the one dot, and the line saying where
+    // it takes you.
+    const body = html`<div class="name">
+        Dashboard
+        ${zero ? '' : html`<span class="dot"></span>`}
+      </div>
+      <div class="lbl">${lbl}</div>`;
 
     // THE ZERO-REMOTE GATE, expressed in Lit rather than as an early return.
     //
@@ -270,6 +301,10 @@ export class MuxStartCard extends LitElement {
     // every machine, including the ones with no remotes at all -- so the split
     // is composed INSIDE the existing binding's value, where it costs a browser
     // with one machine exactly nothing.
+    //
+    // A row shows a dot when that machine wants you, `?` when we cannot see it,
+    // and nothing at all when it is clear. No numbers: this card is the door to
+    // the Dashboard, and the Dashboard counts nothing.
     const shown =
       this.split.length === 0
         ? body
@@ -278,7 +313,11 @@ export class MuxStartCard extends LitElement {
               ${this.split.map(
                 (row) => html`<div class="splitrow ${row.count === null ? 'unknown' : ''}">
                   <span class="nm" title="${row.name}">${row.name}</span>
-                  <b>${row.count === null ? '?' : row.count}</b>
+                  ${row.count === null
+                    ? html`<span class="mk" title="not connected">?</span>`
+                    : row.count > 0
+                      ? html`<span class="dot"></span>`
+                      : ''}
                 </div>`,
               )}
             </div>`;
@@ -286,21 +325,27 @@ export class MuxStartCard extends LitElement {
     // Selection has to reach a screen reader too, or the fix is only for
     // people who can see the ring. aria-current="page" is the cue for "this
     // is the view you are on"; it replaces aria-pressed, which described the
-    // card as a toggle rather than as where you are.
-    const need = zero
-      ? 'Nothing needs input.'
-      : `${this.count} sessions need input.`;
+    // card as a toggle rather than as where you are. The dot is decorative
+    // here -- the label below carries the same fact in words.
+    const need = zero ? 'Nothing needs input.' : 'Sessions need input.';
 
     // An aria-label REPLACES the element's contents for a screen reader, and
     // this card is one button — so a split that exists only in the DOM is a
     // split nobody using one can hear, including the `?` that is the whole
     // point of it. Appended to the label, and empty when there is no split, so
     // the label a machine with no remotes exposes is the string it exposes now.
+    // It says the same three states the dots say, in words, and no numbers.
     const fleet =
       this.split.length === 0
         ? ''
         : ` ${this.split
-            .map((r) => `${r.name}: ${r.count === null ? 'unknown, not connected' : r.count}.`)
+            .map((r) =>
+              r.count === null
+                ? `${r.name}: unknown, not connected.`
+                : r.count > 0
+                  ? `${r.name}: needs input.`
+                  : `${r.name}: nothing waiting.`,
+            )
             .join(' ')}`;
 
     return html`
@@ -308,13 +353,13 @@ export class MuxStartCard extends LitElement {
         type="button"
         class="${cls}"
         aria-label="${(this.active
-          ? `${need} Home view, current view.`
-          : `${need} Go to home view.`) + fleet}"
+          ? `${need} Dashboard, current view.`
+          : `${need} Go to the Dashboard.`) + fleet}"
         aria-current="${this.active ? 'page' : 'false'}"
         @click="${this._onClick}"
       >
         <div class="head">
-          <span>${NEEDS_GLYPH} needs input</span>
+          <span>dashboard</span>
           ${this.hint ? html`<span class="kb">${this.hint}</span>` : ''}
         </div>
         ${shown}

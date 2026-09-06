@@ -14,6 +14,7 @@ Start it with `muxterm` (local mode) or `muxterm serve` (remote access).
 | Workspaces | `mcp_muxterm_create_workspace`, `list_workspaces`, `switch_workspace`, `close_workspace` |
 | Panes | `mcp_muxterm_create_pane`, `list_panes`, `get_layout`, `rename_pane`, `close_pane` |
 | Terminal | `mcp_muxterm_run_command`, `send_input`, `get_screen` |
+| Delegation | `mcp_muxterm_spawn_lane` — launch an amplifier/claude session in a named workspace (created if absent); `goal` makes it a `/goal` loop |
 
 ## When to Delegate to muxterm-expert
 

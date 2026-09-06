@@ -106,14 +106,14 @@ func TestMCPInitializeOverStdio(t *testing.T) {
 	}
 }
 
-// TestMCPToolsListReturns17Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 17 tools
+// TestMCPToolsListReturns18Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 18 tools
 // in the expected order — all without a running sessiond daemon.
 //
 // Tool count history: the count fell from 25 to 17 when a 13-tool family was
 // retired alongside the HTTP proxy and list_tunnels/create_tunnel/close_tunnel
-// (3) and get_config/update_config (2) were added. It has been 17 since.
-func TestMCPToolsListReturns17Tools(t *testing.T) {
+// (3) and get_config/update_config (2) were added. spawn_lane took it to 18.
+func TestMCPToolsListReturns18Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 
 	input := strings.Join([]string{
@@ -168,7 +168,7 @@ func TestMCPToolsListReturns17Tools(t *testing.T) {
 	}
 
 	wantTools := []string{
-		// 12 sessiond-backed tools (terminal + workspace + layout)
+		// 13 sessiond-backed tools (terminal + workspace + layout + delegation)
 		"run_command",
 		"send_input",
 		"get_screen",
@@ -181,6 +181,7 @@ func TestMCPToolsListReturns17Tools(t *testing.T) {
 		"close_pane",
 		"list_panes",
 		"get_layout",
+		"spawn_lane",
 		// 3 tunnel tools (HTTP REST, registered via registerTunnelTools)
 		"list_tunnels",
 		"create_tunnel",

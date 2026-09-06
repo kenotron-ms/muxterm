@@ -109,6 +109,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "spawn-lane":
+		if err := runSpawnLane(cfg.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "remote":
 		if err := runRemote(cfg.Args); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -121,6 +126,11 @@ func main() {
 		}
 	case "mcp":
 		if err := runMCPCommand(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	case "cos":
+		if err := runCos(cfg.Args); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
