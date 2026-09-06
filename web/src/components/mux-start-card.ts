@@ -291,13 +291,25 @@ export class MuxStartCard extends LitElement {
       ? 'Nothing needs input.'
       : `${this.count} sessions need input.`;
 
+    // An aria-label REPLACES the element's contents for a screen reader, and
+    // this card is one button — so a split that exists only in the DOM is a
+    // split nobody using one can hear, including the `?` that is the whole
+    // point of it. Appended to the label, and empty when there is no split, so
+    // the label a machine with no remotes exposes is the string it exposes now.
+    const fleet =
+      this.split.length === 0
+        ? ''
+        : ` ${this.split
+            .map((r) => `${r.name}: ${r.count === null ? 'unknown, not connected' : r.count}.`)
+            .join(' ')}`;
+
     return html`
       <button
         type="button"
         class="${cls}"
-        aria-label="${this.active
+        aria-label="${(this.active
           ? `${need} Home view, current view.`
-          : `${need} Go to home view.`}"
+          : `${need} Go to home view.`) + fleet}"
         aria-current="${this.active ? 'page' : 'false'}"
         @click="${this._onClick}"
       >
