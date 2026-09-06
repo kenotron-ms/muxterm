@@ -106,15 +106,28 @@ func runSpawnLane(args []string) error {
 		if err != nil {
 			return err
 		}
+		// Same invariant as the MCP tool next door (internal/mcp/tools_lane.go):
+		// a delegation that fails leaves nothing behind. Only a workspace this
+		// command created is removed; an existing one is somebody else's.
+		abandon := func(cause error) error {
+			if created {
+				if cerr := c.CloseWorkspace(wsID); cerr != nil {
+					fmt.Fprintf(os.Stderr,
+						"warning: could not remove the workspace %q (%s) this command created: %v\n",
+						workspace, wsID, cerr)
+				}
+			}
+			return cause
+		}
 		// CreatePane is connection-scoped (it carries no workspace id), so the
 		// attach is not optional bookkeeping -- it is what decides which
 		// workspace the pane lands in.
 		if _, err := c.Attach(wsID, "wide", sessiond.ClientKindCLI); err != nil {
-			return err
+			return abandon(err)
 		}
 		paneID, err := c.CreatePane(argv, *placement, 0, "")
 		if err != nil {
-			return err
+			return abandon(err)
 		}
 		if *asJSON {
 			return printJSON(spawnLaneJSON{

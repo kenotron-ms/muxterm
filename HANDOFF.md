@@ -88,3 +88,47 @@ rendered `{"label": "…"}` as if the assistant said it. Fixed in both files.
 
 `make dev-local` stopped, verify workspaces removed, `/tmp/muxterm-dev-local`
 deleted, Chrome closed. Production 8311/9090 running and untouched.
+
+
+## Pre-merge review — six defects found and fixed
+
+The branch was reviewed adversarially before merge. Six real defects surfaced,
+all now fixed with A/B evidence against a binary built from the pre-fix commit.
+
+| | Defect | Fix |
+|---|---|---|
+| **B1** | `muxterm cos` built its own Supervisor and spawned a **second sidecar on the same Amplifier session** — the measured turn-erasure bug, reachable from the CLI. The queue serializes per-Supervisor; two processes are invisible to each other. It also clobbered and then deleted the server's `cos.json`, so `--status` reported the live sidecar as gone. | CLI reads the state file and refuses when a live sidecar owns the session, naming the PID. `writeState`/`removeState` are no-ops for a non-owner. |
+| **B2** | dev-local isolation was incomplete. `AMPLIFIER_HOME` does **not** help: `amplifier_app_cli/session_store.py` hardcodes `Path.home()/".amplifier"` and reads no env var. Dev and production could resume the same session whenever their cwd slugs matched. | `MUXTERM_COS_SESSION_ID=muxterm-cos-dev` — the only lever that works. Session id and cwd are now resolved explicitly and logged at startup. |
+| **B3** | A clear could report `removed: N` while the **live context still held the messages** — the next turn's save wrote them all back. `reloaded:false` was consumed by nobody. | The sidecar refuses up front when `set_messages` is unavailable (`clear_unsupported`), and reports `clear_partial` if the disk prune succeeded but memory did not. Surfaced through Go to the browser as a fault, not a success. |
+| **H1** | Sidecar orphaned on any non-`ctx.Done()` server exit — panic, listener error, SIGKILL. | `PR_SET_PDEATHSIG` on Linux (no-op elsewhere) + `defer s.hub.CloseCos()`. |
+| **H2** | Idle sidecar ignored SIGTERM (parked on `queue.get()`), costing the full systemd `TimeoutStopSec`. | Wake sentinel. Measured: **20s+ then SIGKILL → 0.30s, exit 0.** |
+| **H3** | A spawn that failed after workspace creation left an orphan workspace **and** left the MCP session re-attached elsewhere. | The workspace is deleted and the attachment restored on any post-creation failure. |
+
+Also added: workspace-name length/control-character validation, and a guard
+rejecting prompts that begin with `/` (the harness would read them as slash
+commands rather than as work).
+
+**Corrections to the review itself:** M2's described symptom does not
+reproduce — `backup()` returns `None` for a missing file rather than raising.
+The ordering was changed anyway so correctness does not depend on that detail,
+but it was not a real defect.
+
+### Still open after the fixes
+
+- **Two `muxterm serve` processes on one session id are still unguarded.**
+  Deliberate: making the server refuse would turn a rare collision into a dead
+  chat panel. The fix, if wanted, is the same `ReadState` check in
+  `cosRelay.get()` plus a decision about who wins.
+- **`PR_SET_PDEATHSIG` fires when the forking thread exits, not only the
+  process.** If the Go runtime retires that M, the sidecar dies early; the
+  supervisor treats it as an ordinary death and restarts. Failure mode is a
+  restart, not a lost session. On darwin there is no equivalent — a SIGKILLed
+  muxterm still orphans.
+- **`--status` now describes only the state-file owner.** A legitimate second
+  sidecar (own `--session-id`) publishes nothing. Per-session status files
+  would be the alternative.
+- **`TestWaitForPromptResolves` is time-dependent** (3s deadline) and flaked
+  once under load. Pre-existing on the base commit; it will flake in CI.
+- **`internal/service.TestServiceConfig_Defaults` fails** — pre-existing,
+  reproduced identically on a clean `35dccca` worktree. It reads the host's
+  real config.

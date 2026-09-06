@@ -35,7 +35,8 @@ func runCos(args []string) error {
 	fs.SetOutput(os.Stdout)
 	status := fs.Bool("status", false, "report sidecar status and exit")
 	asJSON := fs.Bool("json", false, "with --status, print machine-readable JSON")
-	sessionID := fs.String("session-id", cos.DefaultSessionID, "amplifier session id the sidecar owns")
+	defaultSessionID, _ := cos.ResolveSessionID("")
+	sessionID := fs.String("session-id", defaultSessionID, "amplifier session id the sidecar owns")
 	bundle := fs.String("bundle", "", "amplifier bundle name (default: the sidecar's own default)")
 	cwd := fs.String("cwd", "", "working directory for the sidecar (default: current directory)")
 	logLevel := fs.String("log-level", "info", "sidecar log level")
@@ -53,8 +54,13 @@ func runCos(args []string) error {
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "The sidecar keeps ONE amplifier session alive across turns, so a turn")
 		fmt.Fprintln(os.Stdout, "costs a turn rather than a process boot. The session is an ordinary")
-		fmt.Fprintln(os.Stdout, "amplifier session: 'amplifier resume "+cos.DefaultSessionID+"' reaches the")
+		fmt.Fprintln(os.Stdout, "amplifier session: 'amplifier resume "+defaultSessionID+"' reaches the")
 		fmt.Fprintln(os.Stdout, "same conversation from a terminal.")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "ONE sidecar owns a session. If the muxterm server (or another terminal)")
+		fmt.Fprintln(os.Stdout, "already has one for this session, this command refuses rather than")
+		fmt.Fprintln(os.Stdout, "starting a second: two processes writing one transcript erase each")
+		fmt.Fprintln(os.Stdout, "other's turns. Pass --session-id for a separate conversation.")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "The reply is printed to stdout; tool activity, approval prompts, and")
 		fmt.Fprintln(os.Stdout, "diagnostics go to stderr.")
@@ -81,6 +87,29 @@ func runCos(args []string) error {
 	if message == "" {
 		fs.Usage()
 		return fmt.Errorf("cos requires a message (quote it if it contains spaces)")
+	}
+
+	// ONE SIDECAR PER SESSION. This is the whole reason the check is here and
+	// not somewhere more elegant: cos.Supervisor's queue serializes turns
+	// within ONE process, and two supervisors in two processes cannot see each
+	// other's queue at all. Both would resume the same amplifier session and
+	// both would write the WHOLE transcript back at turn end
+	// (sidecar/cos/main.py _save_session), so the second one to finish erases
+	// whatever the first one added. That is the measured turn-erasure defect
+	// this feature exists to fix; reaching it from the CLI would reintroduce it.
+	//
+	// Advisory by nature (a pid can be recycled, and there is a window between
+	// this read and the spawn below), which is why it refuses on evidence of a
+	// live owner rather than trying to take a lock. It costs nothing when no
+	// sidecar is running, and it never starts one to find out.
+	if st, err := cos.ReadState(""); err == nil && st.Alive() && st.SessionID == *sessionID {
+		owner := st.OwnerPID
+		if owner <= 0 {
+			owner = st.PID
+		}
+		return fmt.Errorf("a sidecar already owns session %s (pid %d, supervised by pid %d) \u2014 "+
+			"talk to it in the browser, or pass --session-id for a separate conversation",
+			st.SessionID, st.PID, owner)
 	}
 
 	logger := newCosLogger(*verbose)

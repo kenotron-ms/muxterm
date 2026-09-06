@@ -45,22 +45,30 @@ func StatePath() (string, error) {
 	return filepath.Join(filepath.Dir(sock), stateFileName), nil
 }
 
-// Alive reports whether the recorded sidecar process still exists. Signal 0
+// processAlive reports whether pid names a process that still exists. Signal 0
 // performs the permission and existence checks without delivering anything,
 // which is the standard way to ask "is this pid still there".
 //
 // A pid can be recycled, so this is advisory: it distinguishes "clearly gone"
 // from "probably still running", which is all a status command needs.
-func (st State) Alive() bool {
-	if st.PID <= 0 {
+func processAlive(pid int) bool {
+	if pid <= 0 {
 		return false
 	}
-	p, err := os.FindProcess(st.PID)
+	p, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
 	return p.Signal(syscall.Signal(0)) == nil
 }
+
+// Alive reports whether the recorded sidecar process still exists.
+func (st State) Alive() bool { return processAlive(st.PID) }
+
+// OwnerAlive reports whether the muxterm process supervising the sidecar still
+// exists. This is the one that matters for ownership: the owner is who to talk
+// to, and who is entitled to rewrite or delete this file.
+func (st State) OwnerAlive() bool { return processAlive(st.OwnerPID) }
 
 // Uptime reports how long the sidecar has been running.
 func (st State) Uptime() time.Duration {
@@ -107,12 +115,47 @@ func (s *Supervisor) statePath() string {
 	return p
 }
 
+// foreignOwner reports the pid of a LIVE process, other than this one, that
+// already published the status file at path.
+//
+// This is the ownership check behind writeState and removeState. The status
+// file describes ONE sidecar, and the process that supervises that sidecar is
+// its owner. A second muxterm process (the `muxterm cos` CLI verb beside a
+// running server, say) has no business rewriting the owner's pid into it or
+// deleting it on the way out -- do either and `muxterm cos --status` reports
+// the server's live sidecar as gone.
+//
+// A stale file whose owner has exited is NOT foreign: it is debris, and the
+// next owner is entitled to replace it.
+func foreignOwner(path string) (int, bool) {
+	st, err := ReadState(path)
+	if err != nil {
+		return 0, false // absent or unreadable: nobody owns it
+	}
+	if st.OwnerPID <= 0 || st.OwnerPID == os.Getpid() {
+		return 0, false
+	}
+	if !st.OwnerAlive() {
+		return 0, false
+	}
+	return st.OwnerPID, true
+}
+
 // writeState publishes the status file atomically (write-temp-then-rename), so
 // a concurrent --status never reads a half-written file. Failures are logged,
 // never fatal: this file is a convenience, not part of the protocol.
+//
+// It is a NO-OP when another live process owns the file. A second sidecar on
+// this machine (started with its own --session-id) is legitimate; overwriting
+// the first one's published status with its own is not, because that status is
+// what the CLI, and anyone reading it, uses to find the owner.
 func (s *Supervisor) writeState(st State) {
 	path := s.statePath()
 	if path == "" {
+		return
+	}
+	if owner, ok := foreignOwner(path); ok {
+		s.cfg.Logf("cos: not publishing a status file: pid %d already owns %s", owner, path)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -138,9 +181,17 @@ func (s *Supervisor) writeState(st State) {
 // removeState deletes the status file. Only the owning process removes it, so
 // a crashed owner leaves a stale file behind - which is why readers must check
 // Alive rather than trusting the file's existence.
+//
+// "Only the owning process" is ENFORCED here, not merely intended: a non-owner
+// that deleted this on its way out would make the owner's live sidecar report
+// as not running.
 func (s *Supervisor) removeState() {
 	path := s.statePath()
 	if path == "" {
+		return
+	}
+	if owner, ok := foreignOwner(path); ok {
+		s.cfg.Logf("cos: leaving %s alone: pid %d owns it", path, owner)
 		return
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

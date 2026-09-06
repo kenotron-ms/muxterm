@@ -369,13 +369,23 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"workspace": map[string]any{"type": "string"},
+				// The bounds are in the schema as well as enforced in
+				// tools_lane.go, so a caller is told the rule before it breaks
+				// it rather than only afterwards.
+				"workspace": map[string]any{
+					"type":        "string",
+					"maxLength":   maxWorkspaceNameBytes,
+					"description": "workspace name: one line of plain text, no control characters",
+				},
 				"harness": map[string]any{
 					"type": "string",
 					"enum": []string{"amplifier", "claude"},
 				},
-				"prompt": map[string]any{"type": "string"},
-				"goal":   map[string]any{"type": "string"},
+				"prompt": map[string]any{
+					"type":        "string",
+					"description": "the lane's opening turn, as work to do. It must not begin with '/': the harness would read that as a slash command. Use goal to start a /goal loop",
+				},
+				"goal": map[string]any{"type": "string"},
 				"placement": map[string]any{
 					"type": "string",
 					"enum": []string{"tab", "split-right", "split-left", "split-above", "split-below"},

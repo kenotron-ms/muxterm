@@ -54,8 +54,24 @@ dev:
 #     shutdown -- silently corrupting what production would restore after a
 #     crash. Both vars must be overridden together for the isolation claim below
 #     to hold.
-#     With both set, production is never dialed, signaled, or read/written by
-#     this target under any circumstance.
+#     With both set, production's sessiond socket, logs, server.url and
+#     restore-snapshot are all out of reach of this target. That is a claim
+#     about those files, not a blanket one: the amplifier session store under
+#     ~/.amplifier is still SHARED (see the cos session note below) -- what
+#     keeps dev and production apart there is the session id, not the path.
+#   - own cos session  MUXTERM_COS_SESSION_ID=muxterm-cos-dev. REQUIRED for the
+#     same reason XDG_DATA_HOME is, and it is the ONLY lever that works here:
+#     the chief-of-staff sidecar's transcript lives in amplifier's session
+#     store, whose base directory is
+#     ~/.amplifier/projects/<cwd-slug>/sessions/<session-id> --
+#     amplifier_app_cli.session_store.SessionStore hardcodes Path.home() and
+#     consults NO environment variable, so neither XDG_DATA_HOME nor
+#     AMPLIFIER_HOME (which amplifier_foundation does honour, but only for its
+#     registry/cache paths) redirects it. Without this override a dev server
+#     and production would resume the SAME session whenever their working
+#     directories resolve to the same project slug, and each turn's
+#     whole-transcript save would erase the other's turns.
+#     `amplifier resume muxterm-cos-dev` reaches the dev conversation.
 #   - INVOCATION_ID is unset. EnsureDaemon refuses to spawn a sessiond when it
 #     is present (it means "systemd already supervises this"), which is correct
 #     for the production unit and wrong here. Any shell inherited from the
@@ -88,6 +104,8 @@ dev-local:
 	export XDG_RUNTIME_DIR; \
 	XDG_DATA_HOME="$$XDG_RUNTIME_DIR/data"; \
 	export XDG_DATA_HOME; \
+	MUXTERM_COS_SESSION_ID="muxterm-cos-dev"; \
+	export MUXTERM_COS_SESSION_ID; \
 	mkdir -p "$$XDG_RUNTIME_DIR" "$$XDG_DATA_HOME"; \
 	cd $(WEB_SRC) && npx vite build --watch > ../tmp/dev-local-vite.out 2>&1 & VITE_PID=$$!; \
 	$(AIR) -c .air.local.toml & AIR_PID=$$!; \
@@ -101,6 +119,7 @@ dev-local:
 	echo "  vite watch    logging to tmp/dev-local-vite.out"; \
 	echo "  runtime dir   $$XDG_RUNTIME_DIR  (isolated sessiond socket/log)"; \
 	echo "  data dir      $$XDG_DATA_HOME  (isolated crash-restore snapshot)"; \
+	echo "  cos session   $$MUXTERM_COS_SESSION_ID  (isolated chief-of-staff transcript)"; \
 	echo "  production    127.0.0.1:8311 -- untouched"; \
 	wait $$AIR_PID
 

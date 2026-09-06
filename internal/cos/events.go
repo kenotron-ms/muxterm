@@ -76,6 +76,16 @@ const (
 	// which is exactly why supervisor.go treats it as an answer to whatever is
 	// outstanding rather than letting the caller sit out the full timeout.
 	CodeUnknownOp = "unknown_op"
+	// CodeClearPartial and CodeClearUnsupported are the sidecar refusing to
+	// call a prune a success. A clear has to land in TWO places - the
+	// transcript on disk and the session's live memory - and landing in only
+	// the first is not a clear: the next turn saves memory back over the file
+	// and everything returns. clear_unsupported is that refusal made BEFORE
+	// anything is touched; clear_partial is the report that the two halves
+	// disagree, and it carries the split (removed/kept) so the message can say
+	// what actually happened.
+	CodeClearPartial     = "clear_partial"
+	CodeClearUnsupported = "clear_unsupported"
 )
 
 // Event is one decoded NDJSON line from the sidecar.

@@ -35,12 +35,56 @@ const (
 // muxterm-cos` reaches the same conversation from a terminal.
 const DefaultSessionID = "muxterm-cos"
 
-// Environment overrides. Both are escape hatches for a machine whose layout
-// this package cannot infer.
+// Environment overrides. All three are escape hatches for a machine whose
+// layout this package cannot infer.
 const (
 	EnvPython  = "MUXTERM_COS_PYTHON"
 	EnvSidecar = "MUXTERM_COS_SIDECAR"
+	// EnvSessionID names the amplifier session the sidecar owns, and is what
+	// keeps a development muxterm out of production's conversation.
+	//
+	// It is the only lever that reliably separates two muxterms on one
+	// machine. The session STORE is resolved inside amplifier
+	// (amplifier_app_cli.session_store.SessionStore hardcodes
+	// ~/.amplifier/projects/<cwd-slug>/sessions) and neither XDG_DATA_HOME
+	// nor AMPLIFIER_HOME reaches it, so two servers whose cwd resolves to the
+	// same project slug would otherwise share one transcript. `make dev-local`
+	// sets this; see the note there.
+	EnvSessionID = "MUXTERM_COS_SESSION_ID"
 )
+
+// ResolveSessionID returns the amplifier session id to use and where it came
+// from, so a caller can say so out loud instead of leaving the user to guess
+// which conversation they are in.
+//
+// Order, first hit wins: an explicit override (a --session-id flag or a
+// Config field), then $MUXTERM_COS_SESSION_ID, then DefaultSessionID.
+func ResolveSessionID(override string) (id, source string) {
+	if override != "" {
+		return override, "explicit"
+	}
+	if env := os.Getenv(EnvSessionID); env != "" {
+		return env, "$" + EnvSessionID
+	}
+	return DefaultSessionID, "default"
+}
+
+// resolveCwd pins the sidecar's working directory ONCE, at construction.
+//
+// This is not cosmetic: the working directory decides amplifier's project
+// slug, and the project slug decides which directory the session store reads
+// and writes. Leaving it to os.Getwd() at spawn time meant the server's
+// current directory silently chose which conversation the user got, and a
+// restart from a different directory would have looked like amnesia.
+func resolveCwd(override string) (dir, source string) {
+	if override != "" {
+		return override, "explicit"
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd, "process working directory"
+	}
+	return "", "unknown (os.Getwd failed; the sidecar inherits ours)"
+}
 
 // sidecarRelPath is where the sidecar lives inside the muxterm source tree.
 const sidecarRelPath = "sidecar/cos/main.py"
@@ -149,6 +193,12 @@ type Supervisor struct {
 	pending map[string]chan Event
 	reqSeq  int
 
+	// Where the session id and cwd came from, reported at startup so the
+	// answer to "which conversation is this?" is in the log rather than
+	// inferred from a process listing.
+	sessionSource string
+	cwdSource     string
+
 	cancel      context.CancelFunc
 	readyCh     chan struct{}
 	readyOnce   sync.Once
@@ -163,9 +213,10 @@ type Supervisor struct {
 
 // New returns an unstarted Supervisor. Nothing is spawned until Start.
 func New(cfg Config) *Supervisor {
-	if cfg.SessionID == "" {
-		cfg.SessionID = DefaultSessionID
-	}
+	sessionID, sessionSource := ResolveSessionID(cfg.SessionID)
+	cfg.SessionID = sessionID
+	cwd, cwdSource := resolveCwd(cfg.Cwd)
+	cfg.Cwd = cwd
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
@@ -173,13 +224,15 @@ func New(cfg Config) *Supervisor {
 		cfg.Logf = log.Printf
 	}
 	s := &Supervisor{
-		cfg:     cfg,
-		broker:  NewBroker(),
-		readyCh: make(chan struct{}),
-		deadCh:  make(chan struct{}),
-		stopCh:  make(chan struct{}),
-		doneCh:  make(chan struct{}),
-		pending: make(map[string]chan Event),
+		cfg:           cfg,
+		broker:        NewBroker(),
+		readyCh:       make(chan struct{}),
+		deadCh:        make(chan struct{}),
+		stopCh:        make(chan struct{}),
+		doneCh:        make(chan struct{}),
+		pending:       make(map[string]chan Event),
+		sessionSource: sessionSource,
+		cwdSource:     cwdSource,
 	}
 	s.q = newQueue(s.sendOp, cfg.Logf)
 	return s
@@ -214,6 +267,13 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	s.python, s.script = python, script
 	s.cfg.Logf("cos: interpreter %s (%s)", python, pySrc)
 	s.cfg.Logf("cos: sidecar %s (%s)", script, scriptSrc)
+	// Say which conversation this is, and from which directory, BEFORE the
+	// first spawn. Both are resolved (New pinned them), so this line is the
+	// whole answer to "why is the chief of staff not the one I was talking
+	// to?" - the session id and the project slug its cwd implies are what
+	// decide which transcript amplifier opens.
+	s.cfg.Logf("cos: session %s (%s), cwd %s (%s)",
+		s.cfg.SessionID, s.sessionSource, orDash(s.cfg.Cwd), s.cwdSource)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
@@ -263,9 +323,15 @@ func (s *Supervisor) Ping() error { return s.sendOp(op{Op: opPing}) }
 // session store from out here would race the process that is actively
 // appending to it.
 //
-// Two refusals come back as errors rather than as a silent partial prune, and
-// both are the sidecar's to make: it will not clear while a turn is in flight,
-// and it never drops a message that references a still-live lane.
+// Refusals come back as errors rather than as a silent partial prune, and all
+// of them are the sidecar's to make: it will not clear while a turn is in
+// flight, it never drops a message that references a still-live lane, and it
+// will not report a prune that reached the disk but not the live session as a
+// success (CodeClearUnsupported / CodeClearPartial).
+//
+// The counts are returned even on error, because the clear_partial case has
+// real numbers attached: the caller is being told what DID happen on disk
+// alongside why it must not be presented as a completed clear.
 func (s *Supervisor) Clear(olderThanDays int) (removed, kept int, err error) {
 	if olderThanDays < 0 {
 		return 0, 0, fmt.Errorf("cos: older_than_days cannot be negative (got %d)", olderThanDays)
@@ -273,7 +339,7 @@ func (s *Supervisor) Clear(olderThanDays int) (removed, kept int, err error) {
 	days := olderThanDays
 	ev, err := s.request(op{Op: opClear, OlderThanDays: &days})
 	if err != nil {
-		return 0, 0, err
+		return ev.Removed, ev.Kept, err
 	}
 	return ev.Removed, ev.Kept, nil
 }
@@ -619,12 +685,11 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	if s.cfg.Bundle != "" {
 		args = append(args, "--bundle", s.cfg.Bundle)
 	}
+	// Cwd was pinned in New (resolveCwd), never re-derived here: re-reading
+	// os.Getwd() per incarnation would let a chdir anywhere in the host
+	// process silently move the sidecar to a different project slug - and so
+	// to a different transcript - between restarts.
 	cwd := s.cfg.Cwd
-	if cwd == "" {
-		if wd, wdErr := os.Getwd(); wdErr == nil {
-			cwd = wd
-		}
-	}
 	if cwd != "" {
 		args = append(args, "--cwd", cwd)
 	}
@@ -639,6 +704,10 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	// its pipes closing, so Wait can never block forever on an inherited fd.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 5 * time.Second
+	// Last line of defence: if THIS process dies without running any cleanup
+	// (panic, SIGKILL, OOM), the kernel kills the sidecar rather than leaving
+	// an orphan holding the amplifier session. See pdeathsig_linux.go.
+	setPdeathsig(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -1077,6 +1146,13 @@ func existingFile(path string) (string, error) {
 		return path, nil //nolint:nilerr // a usable relative path beats no path
 	}
 	return abs, nil
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func firstNonEmpty(vals ...string) string {

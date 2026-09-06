@@ -672,7 +672,10 @@ func (c *Client) cosRunClear(relay *cosRelay, olderThanDays int) {
 
 	removed, kept, err := relay.clear(ctx, olderThanDays)
 	if err != nil {
-		c.sendCosClearResult(false, 0, 0, err.Error())
+		// The counts travel even on failure: a clear_partial refusal means the
+		// disk WAS pruned while the live session was not, and reporting 0/0
+		// there would hide the very split the sidecar refused to lie about.
+		c.sendCosClearResult(false, removed, kept, err.Error())
 		return
 	}
 	c.sendCosClearResult(true, removed, kept, "")

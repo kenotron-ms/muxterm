@@ -53,6 +53,13 @@ SESSION_COST_CHANNEL = "session.cost"
 DEFAULT_APPROVAL_TIMEOUT = 300.0
 SUMMARY_LIMIT = 240
 
+# Serve-loop wake-up token.  Pushed onto the op queue by the signal handler so
+# an IDLE sidecar (parked on queue.get(), which no signal interrupts) re-reads
+# its stop flag immediately instead of waiting out the service manager's
+# TimeoutStopSec.  A distinct object, not None: None already means "stdin
+# closed", and conflating the two would log the wrong reason for the exit.
+_WAKE = object()
+
 # -- history op -------------------------------------------------------------
 # Replay budget.  These caps exist because events.jsonl for this very session
 # is megabytes with 90KB+ single lines: the history payload is a SUMMARY of
@@ -610,6 +617,11 @@ class Sidecar:
         self._forced_approval: set = set()
         self._stopping = False
         self._prev_cost: "Decimal | None" = None
+        # Set by serve(); read by _on_signal to wake the loop.  Both stay None
+        # until then, so a signal before serve() has nothing to poke and
+        # nothing to crash on.
+        self._loop: "asyncio.AbstractEventLoop | None" = None
+        self._queue: "asyncio.Queue | None" = None
 
     # -- boot ---------------------------------------------------------------
     async def build(self) -> Any:
@@ -1077,6 +1089,15 @@ class Sidecar:
     def _session_dir(self) -> Path:
         return Path(self.store.base_dir) / self.session_id
 
+    def _can_set_context_messages(self) -> bool:
+        """Whether the live context can be REPLACED, not just read.
+
+        A clear that cannot do this is a lie (see _handle_clear), so this is
+        asked before anything is written rather than discovered afterwards.
+        """
+        context = self.session.coordinator.get("context")
+        return context is not None and hasattr(context, "set_messages")
+
     async def _set_context_messages(self, messages: list) -> bool:
         """Replace the live session's context, the same way boot restores it.
 
@@ -1124,14 +1145,29 @@ class Sidecar:
         """
         req_id = msg.get("req_id") if isinstance(msg.get("req_id"), str) else None
 
-        def fail(message: str) -> None:
-            payload = {"ev": "error", "code": "clear_failed", "message": message, "fatal": False}
+        def fail(message: str, code: str = "clear_failed", **extra) -> None:
+            payload = {"ev": "error", "code": code, "message": message, "fatal": False}
+            payload.update(extra)
             if req_id:
                 payload["req_id"] = req_id
             self.proto.emit(**payload)
 
         if self._turn is not None:
             fail(f"turn {self._turn.id} is still running; clearing now would race it")
+            return
+
+        # RULE 3, and it is a refusal for the same reason as the other two: a
+        # prune that cannot also replace the LIVE context is not a clear, it is
+        # a delayed undo.  The next turn ends with _save_session(), which writes
+        # the whole in-memory transcript back over the pruned file, and
+        # everything the user just deleted returns -- after they were told it
+        # was gone.  Checked BEFORE the backup and the write, so a session that
+        # cannot honour a clear is left exactly as it was.
+        if not self._can_set_context_messages():
+            fail("this session cannot forget anything: its context module has no "
+                 "set_messages, so a prune would be undone by the next turn's save. "
+                 "Nothing was changed.",
+                 code="clear_unsupported")
             return
 
         raw_days = msg.get("older_than_days", 0)
@@ -1157,10 +1193,20 @@ class Sidecar:
 
         session_dir = self._session_dir()
         transcript_path = session_dir / TRANSCRIPT_FILENAME
+        backup_path = None
         try:
-            # Backup FIRST.  Everything after this is recoverable by hand.
-            backup_path = backup(transcript_path, "cos-clear")
-            messages = load_transcript(session_dir) if transcript_path.exists() else []
+            # EXISTENCE FIRST, then backup.  A session that has never been
+            # saved has no transcript file, and asking to back one up is not a
+            # read failure -- it is "there was nothing to clear", which is
+            # removed:0.  (backup() happens to return None for a missing file
+            # rather than raising, so this ordering is belt and braces; the
+            # point is that the answer no longer depends on that.)  Everything
+            # after the backup is recoverable by hand.
+            if transcript_path.exists():
+                backup_path = backup(transcript_path, "cos-clear")
+                messages = load_transcript(session_dir)
+            else:
+                messages = []
         except Exception as exc:  # noqa: BLE001
             logger.exception("clear: could not read the transcript")
             fail(f"could not read the transcript: {type(exc).__name__}: {exc}")
@@ -1169,13 +1215,26 @@ class Sidecar:
         if not messages:
             # Nothing on disk.  Still clear memory, so a session that has
             # taken turns but not yet been saved does not keep answering from
-            # a transcript the user just asked to forget.
+            # a transcript the user just asked to forget -- and say so if that
+            # fails, for the reason spelled out at the end of this function.
             try:
-                await self._set_context_messages([])
-            except Exception:
-                logger.debug("clear: context reset on an empty transcript failed", exc_info=True)
+                reset = await self._set_context_messages([])
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("clear: context reset on an empty transcript failed")
+                fail(f"nothing was on disk to prune, but this session's live memory could "
+                     f"not be reset ({type(exc).__name__}: {exc}), so unsaved turns would "
+                     f"come back on the next save. Restart the chief of staff to clear them",
+                     code="clear_partial", removed=0, kept=0, reloaded=False)
+                return
+            if not reset:
+                fail("nothing was on disk to prune, and this session's live memory could not "
+                     "be reset, so unsaved turns would come back on the next save. Restart "
+                     "the chief of staff to clear them",
+                     code="clear_partial", removed=0, kept=0, reloaded=False)
+                return
             payload = {"ev": "cleared", "removed": 0, "kept": 0,
-                       "removed_turns": 0, "kept_turns": 0, "protected": []}
+                       "removed_turns": 0, "kept_turns": 0, "protected": [],
+                       "reloaded": True}
             if req_id:
                 payload["req_id"] = req_id
             self.proto.emit(**payload)
@@ -1265,16 +1324,45 @@ class Sidecar:
                            session_dir / (TRANSCRIPT_FILENAME + ".backup"), exc_info=True)
 
         reloaded = False
+        reload_error = ""
         try:
             reloaded = await self._set_context_messages(kept)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            reload_error = f"{type(exc).__name__}: {exc}"
             logger.exception("clear: could not reload the live context")
-        if not reloaded:
-            logger.warning("clear: context module lacks set_messages -- disk pruned, memory NOT")
 
-        logger.info("clear: removed %d/%d messages (%d/%d turns), backup=%s, protected=%d",
+        logger.info("clear: removed %d/%d messages (%d/%d turns), backup=%s, protected=%d, reloaded=%s",
                     removed_count, len(messages), removed_turns, len(groups), backup_path,
-                    len(protected))
+                    len(protected), reloaded)
+
+        if not reloaded:
+            # DISK PRUNED, MEMORY NOT.  Reporting "cleared" here would be the
+            # worst available answer: the user is told N messages are gone,
+            # then the next turn's _save_session() writes the untouched
+            # in-memory transcript back and every one of them returns.  The
+            # up-front _can_set_context_messages() check makes this rare -- it
+            # means set_messages existed and then RAISED -- but rare is not
+            # never, and the truth is what has to travel.  The state is on
+            # disk, in the backup named below; a restart re-reads the pruned
+            # file and makes memory agree.
+            logger.error("clear: disk pruned, memory NOT -- reporting clear_partial")
+            fail(
+                f"the transcript on disk was pruned ({removed_count} of {len(messages)} "
+                f"messages removed, {len(kept)} kept) but this session's live memory was "
+                f"NOT: the next turn would bring them back. Restart the chief of staff to "
+                f"make it forget them for real"
+                + (f" ({reload_error})" if reload_error else "")
+                + f". Backup: {backup_path}",
+                code="clear_partial",
+                removed=removed_count,
+                kept=len(kept),
+                removed_turns=removed_turns,
+                kept_turns=kept_turns,
+                protected=protected,
+                reloaded=False,
+            )
+            return
+
         payload = {
             "ev": "cleared",
             "removed": removed_count,
@@ -1422,6 +1510,12 @@ class Sidecar:
     async def serve(self) -> None:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
+        # Held on self so _on_signal can WAKE this loop.  Without that, an
+        # idle sidecar parked on queue.get() sets _stopping and then keeps
+        # waiting for a line that is not coming, and systemd pays the full
+        # TimeoutStopSec before SIGKILL ends it.
+        self._loop = loop
+        self._queue = queue
 
         def pump() -> None:
             while True:
@@ -1442,11 +1536,17 @@ class Sidecar:
                 pass
 
         while not self._stopping:
-            line = await queue.get()
-            if line is None:
+            item = await queue.get()
+            if item is _WAKE:
+                # A signal arrived while this loop was parked.  Nothing to
+                # dispatch; the while condition re-reads _stopping and ends
+                # the loop.  Distinct from None so a wake is never logged as
+                # "stdin closed".
+                continue
+            if item is None:
                 logger.info("stdin closed")
                 break
-            await self.dispatch(line)
+            await self.dispatch(item)
 
         await self._drain_active_turn()
 
@@ -1457,6 +1557,19 @@ class Sidecar:
         if turn is not None and turn.task is not None:
             self.session.coordinator.cancellation.request_immediate()
             turn.task.cancel()
+        # WAKE THE SERVE LOOP.  _stopping is only re-read at the top of the
+        # loop, and an idle sidecar is blocked inside queue.get() -- which no
+        # signal interrupts.  Setting the flag without this leaves the process
+        # sitting there until stdin closes or the service manager escalates to
+        # SIGKILL (TimeoutStopSec, 90s by default).  call_soon_threadsafe is
+        # correct from the loop thread too, and is what makes this safe if the
+        # handler is ever reached from a non-asyncio signal path.
+        if self._loop is not None and self._queue is not None:
+            try:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, _WAKE)
+            except RuntimeError:
+                # The loop is already closing; it is not going to sit idle.
+                pass
 
     async def _drain_active_turn(self) -> None:
         turn = self._turn
