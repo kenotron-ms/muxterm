@@ -24,6 +24,15 @@ type Client struct {
 
 	pendMu sync.Mutex
 	pend   map[uint64]*pending // in-flight requests keyed by CID
+	// closeErr is why the read loop exited, kept so a requester blocked on a
+	// channel that just closed can say what actually happened instead of
+	// "connection closed". For a remote daemon that reason is ssh's own
+	// stderr, which is the difference between a user reading "Could not
+	// resolve hostname boxb" and reading nothing they can act on. Guarded by
+	// pendMu: it is written once as the loop exits and read by requesters
+	// that observe the closed channel, which is exactly the same handoff the
+	// pending map already uses.
+	closeErr error
 
 	hmu      sync.Mutex
 	handlers Handlers // unsolicited-event handlers
@@ -229,9 +238,17 @@ func (c *Client) dispatchControl(payload []byte) {
 // failAllPending closes every pending request channel and clears the map. It is
 // called once when the read loop exits so blocked requesters observe a closed
 // connection instead of hanging.
+//
+// err is recorded before the channels close. It used to be accepted and
+// dropped, which meant every remote failure reached the user as the generic
+// "connection closed before reply": a dial over ssh succeeds the moment ssh
+// execs, so a bad host is always an ASYNCHRONOUS failure that arrives here
+// rather than at Dial. The reason ssh printed was assembled correctly all the
+// way up to this function and then discarded one step from the user.
 func (c *Client) failAllPending(err error) {
 	c.pendMu.Lock()
 	defer c.pendMu.Unlock()
+	c.closeErr = err
 	for cid, p := range c.pend {
 		close(p.ch)
 		delete(c.pend, cid)
@@ -289,6 +306,16 @@ func (c *Client) requestWithin(msg *Message, timeout time.Duration) (*Message, e
 		}
 	}
 	if !ok {
+		// The channel closed without a reply, so the read loop exited. If it
+		// recorded why, that reason is the answer -- "ssh: Could not resolve
+		// hostname boxb" tells the user what to fix; "connection closed"
+		// tells them only that something is wrong.
+		c.pendMu.Lock()
+		cerr := c.closeErr
+		c.pendMu.Unlock()
+		if cerr != nil {
+			return nil, fmt.Errorf("sessiond: %w", cerr)
+		}
 		return nil, fmt.Errorf("sessiond: connection closed before reply")
 	}
 	if reply.Type == TypeError {

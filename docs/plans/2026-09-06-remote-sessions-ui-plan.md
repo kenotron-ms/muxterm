@@ -1049,7 +1049,7 @@ ssh <host> true                                     # key auth works, no prompt 
 ./bin/muxterm --remote <host> workspace list         # the REMOTE daemon's workspaces, bare ids
 ./bin/muxterm --remote <host> workspace create acc-remote
 ./bin/muxterm --remote <host> pane create --workspace <wsid>
-./bin/muxterm --remote <host> pane send --pane <n> --text 'uname -n' --keys Enter
+./bin/muxterm --remote <host> pane send <n> --text 'uname -n' --keys Enter
 ./bin/muxterm --remote <host> read-screen <n>        # ← must print the REMOTE hostname
 ./bin/muxterm workspace list                         # local list UNCHANGED, remote ws absent
 ```
