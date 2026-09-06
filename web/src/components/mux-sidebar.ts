@@ -4,7 +4,7 @@ import { store } from '../state.js';
 import { workspaceLabel } from '../lib/workspace-label.js';
 import './launcher-menu.js';
 import './mux-start-card.js';
-import { NEEDS_GLYPH } from './mux-start-card.js';
+import { NEEDS_GLYPH, type StartSplitRow } from './mux-start-card.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputByWorkspace, needsInputCount } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
@@ -227,6 +227,70 @@ function groupCards(cards: CardState[], localName: string): HostGroup[] {
     groups.push(group(host, host, 'never-connected', 0, take(host)));
   }
   return groups;
+}
+
+/**
+ * The empty split, as ONE array that never changes identity.
+ *
+ * Lit compares property values by identity, so handing the card a fresh `[]`
+ * every render would mark it dirty and re-render it on every sidebar update
+ * for a user who has no remotes at all. Same DOM either way — but the zero-
+ * remote path is supposed to cost nothing, and a wasted render per frame is
+ * not nothing.
+ */
+const NO_SPLIT: StartSplitRow[] = [];
+
+/**
+ * The Start card's per-machine split (ux D5), and the ONLY producer of it.
+ *
+ * Never called while `remotesStore.any` is false — the caller passes NO_SPLIT
+ * instead, and an empty split renders nothing at all, which is what keeps the
+ * card byte-identical for a browser with one machine.
+ *
+ * Two rules carry the whole feature:
+ *
+ *   1. A machine that is not CONNECTED contributes `null`, which the card
+ *      renders `?`. Never 0. The rows for a dropped host are still cached at
+ *      the Go edge (A.4) and still counted in the headline total, so a number
+ *      is available here — and it would be a lie, because it describes what
+ *      that machine was doing when the link died, not what it is doing now.
+ *      Zero is the specific lie that matters: it says "nothing is waiting for
+ *      you over there", which is exactly the claim a silent machine cannot
+ *      support.
+ *   2. The rows are the same machines, in the same order, as groupCards() puts
+ *      in the list below — including its one exclusion, an `unreachable` host
+ *      holding nothing, which lives in settings rather than the sidebar (ux
+ *      failure table). A `?` for a machine with no group would be the card
+ *      reporting on something the user cannot see.
+ *
+ * The counts come from the SAME needsInputByWorkspace() map the card badges and
+ * the group pills come from, so per-host and per-workspace numbers cannot
+ * disagree.
+ */
+function fleetSplit(needsByWs: Map<string, number>, localName: string): StartSplitRow[] {
+  const perHost = new Map<string, number>();
+  for (const [wsId, n] of needsByWs) {
+    const { host } = parseHostRef(wsId);
+    perHost.set(host, (perHost.get(host) ?? 0) + n);
+  }
+  // Workspace presence per host, from the same list the cards are built from.
+  const populated = new Set<string>();
+  for (const ws of store.workspaces) populated.add(parseHostRef(ws.workspaceId).host);
+
+  // Local is first and is never `?`: its daemon is in this process, so there
+  // is no link that can be down (ux D2).
+  const rows: StartSplitRow[] = [{ name: localName, count: perHost.get('') ?? 0 }];
+  for (const host of remotesStore.hosts) {
+    if (host.state === 'unreachable' && !populated.has(host.id)) continue;
+    rows.push({
+      name: host.name,
+      count: host.state === 'connected' ? (perHost.get(host.id) ?? 0) : null,
+    });
+  }
+  // One row is not a split, it is the headline said twice. Reachable when the
+  // only remote is an `unreachable` one holding nothing: `any` is true, so the
+  // sidebar groups, but there is no second machine worth reporting on.
+  return rows.length > 1 ? rows : NO_SPLIT;
 }
 
 /**
@@ -2004,6 +2068,19 @@ export class MuxSidebar extends LitElement {
 
   override render() {
     void this._version; // suppress unused-variable lint; triggers re-render on store change
+
+    // ONE derivation for the headline total, the spread, and the per-machine
+    // split, so the three numbers on the card are arithmetically incapable of
+    // disagreeing with each other or with the badges below.
+    const sessions = homeSessions.sessions;
+    const needsByWs = needsInputByWorkspace(sessions);
+
+    // THE ZERO-REMOTE GATE for the Start card. NO_SPLIT is the same array
+    // every time, so a browser with no remotes hands the card a value it has
+    // already seen and the card is not even marked dirty. The card's own gate
+    // (`split.length === 0` renders nothing) is the second half of this.
+    const split = remotesStore.any ? fleetSplit(needsByWs, instanceLabel()) : NO_SPLIT;
+
     return html`
       <div class="header">
         <span title="${window.location.hostname}">${instanceLabel()}</span>
@@ -2022,10 +2099,11 @@ export class MuxSidebar extends LitElement {
       </div>
       <div class="tab-content">
         <mux-start-card
-          .count="${needsInputCount(homeSessions.sessions)}"
-          .spread="${needsInputByWorkspace(homeSessions.sessions).size}"
+          .count="${needsInputCount(sessions)}"
+          .spread="${needsByWs.size}"
           .active="${this.homeActive}"
           .hint="${this.homeKey}"
+          .split="${split}"
           @start-click="${() => this._onStartClick()}"
         ></mux-start-card>
         <div class="sb-heading">workspaces</div>

@@ -1359,15 +1359,27 @@ export class MuxSettingsSurface extends LitElement {
     }
   }
 
-  /** POST/DELETE one host route, then refetch. */
-  private async _act(id: string, path: string, method: 'POST' | 'DELETE'): Promise<void> {
+  /**
+   * POST/DELETE one host route, then refetch.
+   *
+   * `onOk` runs only when the server actually did the thing — the routes are
+   * the authority, so a local state change that is not conditioned on a 2xx is
+   * a guess.
+   */
+  private async _act(
+    id: string,
+    path: string,
+    method: 'POST' | 'DELETE',
+    onOk?: () => void,
+  ): Promise<void> {
     if (this._pending.has(id)) return;
     this._pending.add(id);
     this._rowErrors.delete(id);
     this.requestUpdate();
     try {
       const res = await fetch(apiPath(path), { method });
-      if (!res.ok) this._rowErrors.set(id, await remoteErrorText(res));
+      if (res.ok) onOk?.();
+      else this._rowErrors.set(id, await remoteErrorText(res));
     } catch (e) {
       this._rowErrors.set(id, e instanceof Error ? e.message : String(e));
     } finally {
@@ -1385,8 +1397,27 @@ export class MuxSettingsSurface extends LitElement {
     void this._act(row.id, `/api/remotes/${encodeURIComponent(row.id)}/provision`, 'POST');
   }
 
+  /**
+   * "Not now": the host leaves the sidebar entirely and comes back here as a
+   * discovered row with a Connect button.
+   *
+   * The `forget` is what makes that true. C.5 drops the host's registry
+   * membership, cancels its session and deletes its merged rows — but the
+   * browser's own per-host state lives in `remotesStore`, and an entry left
+   * behind keeps `remotesStore.any` true, which keeps a hollow-dot collapsed
+   * group on screen for a machine the user just dismissed (Gate 8).
+   *
+   * This is EXPLICIT-disconnect only. A host that merely drops keeps its entry
+   * and ghosts (ux D8) — that is what `reconnecting` is for. The difference is
+   * not the outcome on the wire, it is who asked.
+   */
   private _disconnect(row: RemoteRow): void {
-    void this._act(row.id, `/api/remotes/${encodeURIComponent(row.id)}/disconnect`, 'POST');
+    void this._act(
+      row.id,
+      `/api/remotes/${encodeURIComponent(row.id)}/disconnect`,
+      'POST',
+      () => remotesStore.forget(row.id),
+    );
   }
 
   private _remove(row: RemoteRow): void {

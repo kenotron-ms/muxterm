@@ -94,6 +94,22 @@ function byId(a: HostEntry, b: HostEntry): number {
 class RemotesStore {
   private _hosts = new Map<string, HostEntry>();
   /**
+   * Hosts dismissed by an EXPLICIT disconnect, and not yet asked for again.
+   *
+   * C.5 does two things: it answers the disconnect request, and it emits a
+   * final host-state{never-connected} to every browser. Those two arrive over
+   * different connections, and MEASURED IN A REAL BROWSER the frame lands
+   * AFTER the response — so a `forget()` on the response alone is undone a
+   * moment later by the frame, and the hollow-dot group the user just
+   * dismissed comes back (this is exactly what Gate 8 catches).
+   *
+   * So a dismissal has to outlive the frame that announces it. It ends the
+   * moment anything says the host is back: any state other than
+   * never-connected, or an explicit `expect()` from a surface that is about
+   * to ask for a connection.
+   */
+  private _forgotten = new Set<string>();
+  /**
    * Sorted view of _hosts, rebuilt only when the map changes. Consumers
    * re-render on every notification, so handing back the same array identity
    * between changes is what keeps a host group from churning for free.
@@ -164,6 +180,16 @@ class RemotesStore {
     if (id === '') return;
     const state = hostConnState(msg.state);
     if (state === null) return;
+
+    if (this._forgotten.has(id)) {
+      // The tail of the disconnect this browser asked for. Dropping it is the
+      // difference between "the host left" and "the host left and came back
+      // as a ghost 40ms later".
+      if (state === 'never-connected') return;
+      // Anything else means it is genuinely back — another tab connected it,
+      // or this one did. The dismissal is over.
+      this._forgotten.delete(id);
+    }
 
     const prev = this._hosts.get(id);
     // Name and Target are `omitempty` on the Go side, so a frame for a host
