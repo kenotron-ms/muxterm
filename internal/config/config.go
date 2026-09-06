@@ -157,12 +157,6 @@ func (s ServerConfig) Normalize() ServerConfig {
 	return s
 }
 
-// Warnings reports configuration that is accepted but will not do what the
-// operator most likely intended. These are deliberately NOT errors: unlike
-// the fail-closed cases in Validate, none of them leaves muxterm in an
-// ambiguous security posture, and refusing to start would turn a harmless
-// misconfiguration into an outage on the one service the operator may need
-// in order to fix it.
 // IsZero reports whether the section carries no operator intent at all.
 // Used to distinguish "the file had no [server] section" from "the file
 // failed to parse and we substituted defaults", which matter differently.
@@ -170,6 +164,12 @@ func (s ServerConfig) IsZero() bool {
 	return s.Addr == "" && s.PublicOrigin == "" && !s.BehindReverseProxy
 }
 
+// Warnings reports configuration that is accepted but will not do what the
+// operator most likely intended. These are deliberately NOT errors: unlike
+// the fail-closed cases in Validate, none of them leaves muxterm in an
+// ambiguous security posture, and refusing to start would turn a harmless
+// misconfiguration into an outage on the one service the operator may need
+// in order to fix it.
 func (s ServerConfig) Warnings() []string {
 	var w []string
 	if s.PublicOrigin != "" && !s.BehindReverseProxy {

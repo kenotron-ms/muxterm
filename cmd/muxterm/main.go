@@ -522,6 +522,13 @@ func runServe(cfg Config) error {
 		return err
 	}
 
+	// Captured before srvCfg's default-fill and before resolved.Server is
+	// overwritten below. Once either has happened this is indistinguishable
+	// from a value the file actually specified, and the startup log would
+	// attribute the built-in default to the config file -- on a freshly
+	// installed host, which is the exact case the log exists to explain.
+	fileAddr := resolved.Server.Addr
+
 	// ONE resolved listen address, computed once, used everywhere below.
 	// cfg.Addr is the raw flag and is empty unless the operator typed it.
 	// Every consumer must see the same string: srvCfg.Addr feeds the
@@ -595,7 +602,7 @@ func runServe(cfg Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("muxterm listening on %s (%s)", addr, addrSource(cfg.Addr, resolved.Server.Addr))
+	log.Printf("muxterm listening on %s (%s)", addr, addrSource(cfg.Addr, fileAddr))
 	return srv.ListenAndServe(ctx)
 }
 
