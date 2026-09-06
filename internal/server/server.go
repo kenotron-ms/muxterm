@@ -203,6 +203,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		// The chief-of-staff sidecar is a child process of THIS process, so it
+		// has to be stopped here or it outlives the server that spawned it.
+		// No-op when nobody ever opened the chat.
+		s.hub.CloseCos()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {

@@ -44,8 +44,25 @@ dev:
 #   - own port     127.0.0.1:8313  (distinct from prod 8311 and remote-VM dev 8312)
 #   - own runtime  ${TMPDIR:-/tmp}/muxterm-dev-local/ (XDG_RUNTIME_DIR override) --
 #     sessiond socket/log/server.url all live here instead of the default
-#     $TMPDIR/muxterm-<uid>/ where production's sessiond lives, so production is
-#     never dialed, signaled, or read/written by this target under any circumstance.
+#     $TMPDIR/muxterm-<uid>/ where production's sessiond lives.
+#   - own data     ${TMPDIR:-/tmp}/muxterm-dev-local/data/ (XDG_DATA_HOME override).
+#     REQUIRED, not cosmetic: snapshotDir() (internal/sessiond/snapshot.go:126)
+#     resolves the crash-restore snapshot from $XDG_DATA_HOME, falling back to
+#     $HOME/.local/share/muxterm. Overriding only XDG_RUNTIME_DIR leaves that
+#     fallback in force, so a dev sessiond RESTORES PRODUCTION'S WORKSPACES at
+#     boot and OVERWRITES production's restore-snapshot.json periodically and on
+#     shutdown -- silently corrupting what production would restore after a
+#     crash. Both vars must be overridden together for the isolation claim below
+#     to hold.
+#     With both set, production is never dialed, signaled, or read/written by
+#     this target under any circumstance.
+#   - INVOCATION_ID is unset. EnsureDaemon refuses to spawn a sessiond when it
+#     is present (it means "systemd already supervises this"), which is correct
+#     for the production unit and wrong here. Any shell inherited from the
+#     production muxterm unit -- including an agent session running inside a
+#     muxterm pane -- carries it, and without this unset `make dev-local` comes
+#     up with a serve and no sessiond, so every browser connection fails to
+#     attach.
 #     A short, fixed, OS-temp-based path is used instead of a worktree-local path
 #     (e.g. tmp/muxterm-dev-runtime) because a worktree-local path can push the
 #     resulting sessiond.sock path over macOS's 104-byte sockaddr_un limit,
@@ -65,10 +82,13 @@ dev:
 # Requires: air (falls back to $(HOME)/go/bin/air if not on PATH).
 dev-local:
 	@mkdir -p tmp
-	@export XDG_RUNTIME_DIR="$${TMPDIR:-/tmp}"; \
+	@unset INVOCATION_ID; \
+	export XDG_RUNTIME_DIR="$${TMPDIR:-/tmp}"; \
 	XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR%/}/muxterm-dev-local"; \
 	export XDG_RUNTIME_DIR; \
-	mkdir -p "$$XDG_RUNTIME_DIR"; \
+	XDG_DATA_HOME="$$XDG_RUNTIME_DIR/data"; \
+	export XDG_DATA_HOME; \
+	mkdir -p "$$XDG_RUNTIME_DIR" "$$XDG_DATA_HOME"; \
 	cd $(WEB_SRC) && npx vite build --watch > ../tmp/dev-local-vite.out 2>&1 & VITE_PID=$$!; \
 	$(AIR) -c .air.local.toml & AIR_PID=$$!; \
 	kill_tree() { \
@@ -80,6 +100,7 @@ dev-local:
 	echo "  muxterm-dev   http://127.0.0.1:8313  (air hot-reload)"; \
 	echo "  vite watch    logging to tmp/dev-local-vite.out"; \
 	echo "  runtime dir   $$XDG_RUNTIME_DIR  (isolated sessiond socket/log)"; \
+	echo "  data dir      $$XDG_DATA_HOME  (isolated crash-restore snapshot)"; \
 	echo "  production    127.0.0.1:8311 -- untouched"; \
 	wait $$AIR_PID
 

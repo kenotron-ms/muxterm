@@ -9,7 +9,7 @@ import (
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode      string // local, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, cos, amplifier-install, help
+	Mode      string // local, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, cos, spawn-lane, amplifier-install, help
 	Addr      string // listen address
 	Secret    string // auth token for serve mode
 	NoAuth    bool   // skip WebSocket auth check (dev only — never use in production)
@@ -30,7 +30,7 @@ type Config struct {
 	BehindReverseProxy bool
 
 	// Args holds the un-parsed remainder for the socket-client subcommand
-	// trees (read-screen / session / pane / layout). Those commands parse
+	// trees (read-screen / session / pane / layout / spawn-lane). Those parse
 	// their own flags inside their run* functions because they are subcommand
 	// trees ("session list", "pane resize --cols N") that do not flatten into
 	// this struct's flat fields.
@@ -54,6 +54,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm session attach <id> Print a workspace's panes and layout")
 	fmt.Fprintln(w, "  muxterm session report      Publish session state to the home view (any tool)")
 	fmt.Fprintln(w, "  muxterm pane <cmd>          create | send | rename | close | resize")
+	fmt.Fprintln(w, "  muxterm spawn-lane <ws>     Delegate: launch an agent session in a workspace")
 	fmt.Fprintln(w, "  muxterm layout get          Print the workspace layout diagram")
 	fmt.Fprintln(w, "  muxterm mcp [flags]         Start MCP server (stdio transport)")
 	fmt.Fprintln(w, "  muxterm cos <message>       Ask the chief-of-staff sidecar (--status for state)")
@@ -107,6 +108,8 @@ func ParseArgs(args []string) (Config, error) {
 		return Config{Mode: "workspace", Args: args[1:]}, nil
 	case "pane":
 		return Config{Mode: "pane", Args: args[1:]}, nil
+	case "spawn-lane":
+		return Config{Mode: "spawn-lane", Args: args[1:]}, nil
 	case "layout":
 		return Config{Mode: "layout", Args: args[1:]}, nil
 	case "remote":

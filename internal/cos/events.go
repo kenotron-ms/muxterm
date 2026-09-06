@@ -49,6 +49,12 @@ const (
 	EvPong            = "pong"
 	EvCancelled       = "cancelled"
 	EvTurnCancelled   = "turn_cancelled"
+	// EvCleared and EvHistory are REPLIES, not broadcasts: each carries the
+	// req_id of the op that asked for it, and supervisor.go routes them to
+	// that one caller instead of the broker. They are listed here because a
+	// reply whose caller has already given up still has to decode cleanly.
+	EvCleared = "cleared"
+	EvHistory = "history"
 )
 
 // Error codes carried in an EvError's "code" field.
@@ -64,6 +70,12 @@ const (
 	CodeSidecarUnavailable = "sidecar_unavailable"
 	CodeShutdown           = "shutdown"
 	CodeDispatchFailed     = "dispatch_failed"
+	// CodeUnknownOp is an OLDER sidecar refusing an op this build knows how to
+	// send (2.4 law 5). It arrives with no req_id, because a sidecar that does
+	// not understand the op does not understand its correlation field either -
+	// which is exactly why supervisor.go treats it as an answer to whatever is
+	// outstanding rather than letting the caller sit out the full timeout.
+	CodeUnknownOp = "unknown_op"
 )
 
 // Event is one decoded NDJSON line from the sidecar.
@@ -114,6 +126,21 @@ type Event struct {
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
 	Fatal   bool   `json:"fatal,omitempty"`
+
+	// Request/response correlation. ReqID is echoed by the sidecar on the
+	// reply to a clear or history op (and on an error answering one), which
+	// is what lets Supervisor hand the reply to the single caller waiting for
+	// it rather than broadcasting it at every browser.
+	ReqID string `json:"req_id,omitempty"`
+
+	// cleared
+	Removed int `json:"removed,omitempty"`
+	Kept    int `json:"kept,omitempty"`
+
+	// history. Kept RAW on purpose: this package has no opinion about what a
+	// replayed turn looks like, and re-typing it here would mean a sidecar
+	// that adds a field to a turn silently loses it on the way to the browser.
+	Turns json.RawMessage `json:"turns,omitempty"`
 
 	// Raw is the exact line the sidecar wrote, minus the newline. It is not
 	// part of the wire format; it exists so unknown fields survive a round

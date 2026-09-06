@@ -117,9 +117,18 @@ All protocol writes go to `PROTO`. Every log line goes to stderr.
 {"op":"turn","turn_id":"t-1","prompt":"..."}
 {"op":"approval","request_id":"a-1","approved":true,"reason":""}
 {"op":"cancel","turn_id":"t-1"}
+{"op":"clear","req_id":"r-1","older_than_days":7}
+{"op":"history","req_id":"r-2","limit":50}
 {"op":"shutdown"}
 {"op":"ping"}
 ```
+
+`clear` and `history` are the only REQUEST/RESPONSE ops: each carries a
+`req_id` that the sidecar echoes on its answer, so the Go side can hand that
+answer to the one caller waiting for it instead of broadcasting it. Turns do
+not use this - a turn is a long-lived thing with its own event stream.
+
+`older_than_days` of 0 (or absent) on `clear` means EVERYTHING.
 
 ### 2.3 sidecar → Go
 
@@ -135,7 +144,15 @@ All protocol writes go to `PROTO`. Every log line goes to stderr.
 {"ev":"cancelled","turn_id":"t-1","response":"<partial text so far>","ms":44148}
 {"ev":"error","turn_id":"t-1","code":"busy","message":"...","fatal":false}
 {"ev":"pong"}
+{"ev":"cleared","req_id":"r-1","removed":64,"kept":15,"removed_turns":19,"kept_turns":5,"protected":[{"lane":"...","prompt":"..."}]}
+{"ev":"history","req_id":"r-2","session_id":"muxterm-cos","turns":[{"id":"h-0","prompt":"...","ts":"...","ms":1325,"blocks":[{"kind":"text","text":"..."}]}]}
 ```
+
+A `history` turn's `blocks` are `text` | `thinking` | `tool`, where a `tool`
+block carries `call_id`, `name`, a one-line `args`, `ok`, `summary` and `ms`.
+It is a SUMMARY, deliberately: raw tool results and llm payloads are never
+replayed, because `events.jsonl` for a two-turn session is already 464KB with
+a 93KB maximum line.
 
 ### 2.4 Laws
 
@@ -171,7 +188,19 @@ All protocol writes go to `PROTO`. Every log line goes to stderr.
 6. **`cost_usd` is a JSON number or a numeric string.** Decode permissively
    (Go: `json.Number`).
 
-7. **Restart semantics.** If the sidecar dies mid-turn, the in-flight turn fails
+7. **`clear` refuses rather than races.** A clear while a turn is in flight is
+   answered `{"code":"clear_failed"}`: the running turn will save the whole
+   transcript again at turn end, so a prune underneath it would be undone, and
+   rewriting the file while the owner appends to it is a data race. A clear
+   also NEVER drops a message that references a lane that is still alive -- the
+   roster is `$XDG_RUNTIME_DIR/muxterm/session-state/*.json`, read fresh on
+   every clear, with the sidecar's own session id excluded (it is itself a
+   lane in that directory, and protecting it would protect everything). Every
+   ambiguity resolves toward KEEPING: an unparseable state file still
+   contributes its filename, an undated turn survives a days-based cut, and a
+   uuid-shaped lane id also matches on its first 8 characters.
+
+8. **Restart semantics.** If the sidecar dies mid-turn, the in-flight turn fails
    with a synthesized `{"code":"sidecar_exit","fatal":true}` — its effect on the
    session is *unknown* and must be reported as such, never retried. Queued but
    undispatched turns survive and dispatch to the replacement.
@@ -184,6 +213,12 @@ All protocol writes go to `PROTO`. Every log line goes to stderr.
 
 - Args: `--session-id` (required), `--bundle`, `--cwd`, `--log-level`,
   `--approval-timeout` (seconds, default 300).
+- Ops: `turn`, `cancel`, `approval`, `ping`, `shutdown`, `clear`, `history`.
+  `clear` and `history` both work in TURNS, not raw messages: a turn is the
+  human's prompt plus the reply and tool work that followed it, including the
+  ephemeral system-reminder block injected ahead of the prompt. Pruning or
+  replaying half a turn would leave an assistant `tool_call` with no result,
+  which is the exact broken transcript `repair_transcript` exists to clean up.
 - Boot: claim stdout (§2.1) → build session (§0 recipe) → resume transcript if
   present → emit `ready`.
 - Hooks for streaming: `llm:stream_block_delta` → `delta` **and** `thinking`,

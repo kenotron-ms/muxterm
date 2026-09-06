@@ -26,6 +26,8 @@ const (
 	opCancel   = "cancel"
 	opShutdown = "shutdown"
 	opPing     = "ping"
+	opClear    = "clear"
+	opHistory  = "history"
 )
 
 // DefaultSessionID is the amplifier session the chief of staff owns. It is an
@@ -69,6 +71,17 @@ const (
 	// maxLineBytes caps one NDJSON line. A turn_end carries the entire reply,
 	// so the 64KB bufio.Scanner default is far too small.
 	maxLineBytes = 16 << 20
+	// requestTimeout bounds a clear or history round trip. Both read (and
+	// clear rewrites) the session transcript on disk, so this is generous
+	// compared to the milliseconds they take in practice. A sidecar that dies
+	// mid-request does NOT wait this out: handleExit resolves every pending
+	// request immediately.
+	requestTimeout = 30 * time.Second
+	// DefaultHistoryLimit is how many turns a replay carries when the caller
+	// does not say. Deliberately small: history is a SUMMARY, and the point
+	// of the cap is that a reconnecting browser never pulls a transcript-sized
+	// payload down the WebSocket.
+	DefaultHistoryLimit = 50
 )
 
 // ErrNotRunning reports that no sidecar process is currently accepting ops.
@@ -130,6 +143,12 @@ type Supervisor struct {
 	lastErr    error
 	stderrRing []string
 
+	// pending correlates a clear/history reply with the one caller waiting
+	// for it. Keyed by the req_id written onto the op; the sidecar echoes it
+	// back on the answer. Guarded by mu, like everything else here.
+	pending map[string]chan Event
+	reqSeq  int
+
 	cancel      context.CancelFunc
 	readyCh     chan struct{}
 	readyOnce   sync.Once
@@ -160,6 +179,7 @@ func New(cfg Config) *Supervisor {
 		deadCh:  make(chan struct{}),
 		stopCh:  make(chan struct{}),
 		doneCh:  make(chan struct{}),
+		pending: make(map[string]chan Event),
 	}
 	s.q = newQueue(s.sendOp, cfg.Logf)
 	return s
@@ -234,6 +254,132 @@ func (s *Supervisor) Cancel(turnID string) error {
 
 // Ping sends a liveness probe; the reply arrives as a pong event.
 func (s *Supervisor) Ping() error { return s.sendOp(op{Op: opPing}) }
+
+// Clear prunes the sidecar's own transcript and returns how many messages
+// were removed and how many survived.
+//
+// olderThanDays <= 0 means EVERYTHING. The prune itself happens inside the
+// sidecar, because the sidecar owns the amplifier session: rewriting the
+// session store from out here would race the process that is actively
+// appending to it.
+//
+// Two refusals come back as errors rather than as a silent partial prune, and
+// both are the sidecar's to make: it will not clear while a turn is in flight,
+// and it never drops a message that references a still-live lane.
+func (s *Supervisor) Clear(olderThanDays int) (removed, kept int, err error) {
+	if olderThanDays < 0 {
+		return 0, 0, fmt.Errorf("cos: older_than_days cannot be negative (got %d)", olderThanDays)
+	}
+	days := olderThanDays
+	ev, err := s.request(op{Op: opClear, OlderThanDays: &days})
+	if err != nil {
+		return 0, 0, err
+	}
+	return ev.Removed, ev.Kept, nil
+}
+
+// History returns the newest turns of the conversation as the sidecar
+// summarized them: a JSON array, forwarded verbatim by callers that render it.
+//
+// limit <= 0 uses DefaultHistoryLimit. The payload is a SUMMARY - prompt text,
+// reply text, thinking, and one line per tool call. It is never the raw tool
+// results and never the llm payloads, which for this session run to megabytes.
+func (s *Supervisor) History(limit int) (json.RawMessage, error) {
+	if limit <= 0 {
+		limit = DefaultHistoryLimit
+	}
+	ev, err := s.request(op{Op: opHistory, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	if len(ev.Turns) == 0 {
+		return json.RawMessage("[]"), nil
+	}
+	return ev.Turns, nil
+}
+
+// request sends one op and waits for the reply carrying its req_id.
+//
+// This is the ONLY request/response path in the protocol - turns resolve
+// through queue.go's Turn handle instead, because a turn is a long-lived
+// thing with its own event stream, while a clear or a history fetch is a
+// single question with a single answer.
+//
+// It never waits out a dead sidecar: handleExit and fail both resolve every
+// outstanding request, so the longest a caller can block on a process that
+// has gone away is the time it takes the supervise loop to notice.
+func (s *Supervisor) request(o op) (Event, error) {
+	ch := make(chan Event, 1)
+	s.mu.Lock()
+	s.reqSeq++
+	id := fmt.Sprintf("r-%d", s.reqSeq)
+	s.pending[id] = ch
+	s.mu.Unlock()
+	o.ReqID = id
+
+	defer func() {
+		s.mu.Lock()
+		delete(s.pending, id)
+		s.mu.Unlock()
+	}()
+
+	if err := s.sendOp(o); err != nil {
+		return Event{}, err
+	}
+	select {
+	case ev := <-ch:
+		if ev.Ev == EvError {
+			msg := ev.Message
+			if msg == "" {
+				msg = ev.Code
+			}
+			return ev, fmt.Errorf("cos: %s op refused: %s", o.Op, msg)
+		}
+		return ev, nil
+	case <-time.After(requestTimeout):
+		return Event{}, fmt.Errorf("cos: no answer to the %s op within %s", o.Op, requestTimeout)
+	case <-s.stopCh:
+		return Event{}, ErrQueueClosed
+	}
+}
+
+// deliver hands a req_id-bearing event to whoever is waiting for it, and
+// reports whether anyone was. A reply nobody is waiting for (the caller timed
+// out) falls through to the ordinary event path rather than being dropped.
+func (s *Supervisor) deliver(ev Event) bool {
+	s.mu.Lock()
+	ch, ok := s.pending[ev.ReqID]
+	if ok {
+		delete(s.pending, ev.ReqID)
+	}
+	s.mu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- ev:
+	default:
+	}
+	return true
+}
+
+// failPending resolves every outstanding request, so a sidecar that dies with
+// a clear or a history op in flight fails its caller immediately instead of
+// making it sit out the timeout.
+func (s *Supervisor) failPending(code, reason string) {
+	s.mu.Lock()
+	pending := s.pending
+	s.pending = make(map[string]chan Event)
+	s.mu.Unlock()
+	for id, ch := range pending {
+		select {
+		case ch <- synthEvent(Event{
+			Ev: EvError, ReqID: id, Code: code, Message: reason, Fatal: true,
+		}):
+		default:
+		}
+	}
+}
 
 // WaitReady blocks until the sidecar reports ready, the supervisor gives up
 // permanently, or ctx is cancelled. The ready event carries session id, bundle,
@@ -587,6 +733,20 @@ func (s *Supervisor) handleEvent(ev Event) {
 	if ev.Ev == EvReady {
 		s.markReady(ev)
 	}
+	// A req_id-bearing event is an ANSWER to one caller, not news for
+	// everybody: routing it to the waiter and stopping keeps a history
+	// payload off every subscribed browser's socket.
+	if ev.ReqID != "" && s.deliver(ev) {
+		return
+	}
+	// An older sidecar refuses clear/history with unknown_op and no req_id.
+	// Only this build's request ops can produce one, so it is safe - and much
+	// kinder than a 30-second wait - to resolve every outstanding request with
+	// it rather than leaving a confirm dialog spinning on a reply that is
+	// never coming.
+	if ev.Ev == EvError && ev.Code == CodeUnknownOp && ev.ReqID == "" {
+		s.failPending(CodeUnknownOp, firstNonEmpty(ev.Message, "this sidecar does not support that operation"))
+	}
 	s.q.observe(ev)
 	s.broker.Publish(ev)
 }
@@ -661,6 +821,10 @@ func (s *Supervisor) writeLoop(w io.WriteCloser, ops <-chan []byte, done <-chan 
 // Approved is a POINTER because a denial is approved=false, and a plain bool
 // with omitempty would silently drop the field - leaving the sidecar to guess,
 // on the one op where guessing wrong runs a command the user just refused.
+// OlderThanDays is a POINTER for a smaller but related reason: 0 means "clear
+// everything", and omitempty on a plain int would drop it - which the sidecar
+// also reads as everything, so the two agree, but only by accident. Writing
+// it explicitly means the wire says what the caller meant.
 type op struct {
 	Op        string `json:"op"`
 	TurnID    string `json:"turn_id,omitempty"`
@@ -668,6 +832,11 @@ type op struct {
 	RequestID string `json:"request_id,omitempty"`
 	Approved  *bool  `json:"approved,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+
+	// clear / history
+	ReqID         string `json:"req_id,omitempty"`
+	OlderThanDays *int   `json:"older_than_days,omitempty"`
+	Limit         int    `json:"limit,omitempty"`
 }
 
 // sendOp encodes and queues one op for the writer goroutine. It never blocks.
@@ -695,6 +864,7 @@ func (s *Supervisor) sendOp(o op) error {
 // terminal event and tells subscribers the stream has a gap.
 func (s *Supervisor) handleExit(reason string) {
 	s.removeState()
+	s.failPending(CodeSidecarExit, reason)
 	ev, hadTurn := s.q.sidecarDown(reason)
 	if !hadTurn {
 		ev = synthEvent(Event{Ev: EvError, Code: CodeSidecarExit, Message: reason, Fatal: true})
@@ -709,6 +879,7 @@ func (s *Supervisor) fail(err error) {
 	s.lastErr = err
 	s.mu.Unlock()
 	s.cfg.Logf("cos: %v", err)
+	s.failPending(CodeSidecarUnavailable, err.Error())
 	s.broker.Publish(synthEvent(Event{
 		Ev: EvError, Code: CodeSidecarUnavailable, Message: err.Error(), Fatal: true,
 	}))

@@ -4,7 +4,6 @@ import { store } from '../state.js';
 import { workspaceLabel } from '../lib/workspace-label.js';
 import './launcher-menu.js';
 import './mux-start-card.js';
-import { NEEDS_GLYPH } from './mux-start-card.js';
 import { homeSessions } from '../lib/home-sessions.js';
 import { needsInputByWorkspace, needsInputCount } from '../lib/session-state.js';
 import { icon } from '../lib/icons.js';
@@ -307,19 +306,17 @@ export class MuxSidebar extends LitElement {
       box-shadow: 0 0 0 2px var(--chrome-accent)33;
     }
 
-    /* Needs-input badge. Its number is this workspace's share of the Start
-       card total — both come from needsInputByWorkspace(). */
+    /* Needs-input mark. A DOT, not a number: the Dashboard shows no counts
+       anywhere, and the sidebar is not allowed to be the one place a number
+       survived. It is still derived from needsInputByWorkspace(), the same
+       call the Dashboard card reduces, so the two cannot disagree about
+       which workspaces are involved. */
     .ws-needs {
       flex-shrink: 0;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 9px;
-      line-height: 1.5;
-      color: var(--mux-warn);
-      background: color-mix(in srgb, var(--mux-warn) 18%, transparent);
-      border: 1px solid color-mix(in srgb, var(--mux-warn) 45%, transparent);
-      padding: 0 5px;
-      border-radius: 8px;
-      white-space: nowrap;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--mux-warn);
     }
 
     /* Zero needs is not a zero badge: a plain pane count, and nothing warm. */
@@ -1230,9 +1227,10 @@ export class MuxSidebar extends LitElement {
         ${card.needs > 0
           ? html`<span
               class="ws-needs"
-              title="${card.needs} session${card.needs === 1 ? '' : 's'} need input"
-              >${NEEDS_GLYPH} ${card.needs}</span
-            >`
+              role="img"
+              aria-label="Something in this workspace needs input"
+              title="Something here needs input"
+            ></span>`
           : html`<span class="ws-panes"
               >${card.paneCount} pane${card.paneCount === 1 ? '' : 's'}</span
             >`}

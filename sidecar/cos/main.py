@@ -53,6 +53,28 @@ SESSION_COST_CHANNEL = "session.cost"
 DEFAULT_APPROVAL_TIMEOUT = 300.0
 SUMMARY_LIMIT = 240
 
+# -- history op -------------------------------------------------------------
+# Replay budget.  These caps exist because events.jsonl for this very session
+# is megabytes with 90KB+ single lines: the history payload is a SUMMARY of
+# the conversation, never the conversation's raw material.  Raw tool results
+# and llm payloads are never included at any limit.
+HISTORY_DEFAULT_LIMIT = 50
+HISTORY_MAX_LIMIT = 200
+HISTORY_PROMPT_LIMIT = 2000
+HISTORY_TEXT_LIMIT = 4000
+HISTORY_ARGS_LIMIT = 200
+HISTORY_MAX_BLOCKS = 40
+
+# -- clear op ---------------------------------------------------------------
+# Where muxterm publishes one JSON file per live agent lane.  Each carries a
+# "sessionId"; the FILENAME is that same id, which is the fallback when the
+# file is unreadable or half-written.
+SESSION_STATE_REL = ("muxterm", "session-state")
+# How much of a session id has to appear in a message for it to count as a
+# reference.  A full uuid is the normal case; 8 hex characters is the short
+# form humans and tools paste around, and matching it errs toward KEEPING.
+LANE_ID_PREFIX = 8
+
 
 # ---------------------------------------------------------------------------
 # Protocol writer
@@ -245,6 +267,327 @@ def _clip(text: Any, limit: int = SUMMARY_LIMIT) -> str:
     s = text if isinstance(text, str) else str(text)
     s = s.replace("\n", " ").strip()
     return s if len(s) <= limit else s[: limit - 1] + "\u2026"
+
+
+def _trim(text: Any, limit: int) -> str:
+    """Length-cap that KEEPS newlines -- for replayed prose, not log lines."""
+    s = text if isinstance(text, str) else str(text)
+    return s if len(s) <= limit else s[: limit - 1] + "\u2026"
+
+
+# ---------------------------------------------------------------------------
+# Transcript shape
+#
+# Both the `clear` and `history` ops read the same transcript and need the
+# same notion of a TURN, so the grouping lives here once.  The transcript is a
+# flat message list; a turn is:
+#
+#   [ephemeral system-reminder user message]*  <- injected by the harness
+#   user message                               <- the human's actual prompt
+#   (assistant | tool | ephemeral user)*       <- the reply and its tool work
+#
+# Grouping is load-bearing for BOTH callers.  history renders a turn as a
+# unit; clear must never drop half of one, because an assistant message
+# holding a tool_call whose tool result was pruned away is exactly the broken
+# transcript _repair_transcript() exists to clean up after.
+# ---------------------------------------------------------------------------
+def _is_ephemeral(msg: Any) -> bool:
+    if not isinstance(msg, dict):
+        return False
+    md = msg.get("metadata")
+    return bool(isinstance(md, dict) and md.get("ephemeral"))
+
+
+def _opens_turn(msg: Any) -> bool:
+    """True for the human's own prompt, false for everything else."""
+    if not isinstance(msg, dict) or msg.get("role") != "user":
+        return False
+    if _is_ephemeral(msg):
+        return False
+    content = msg.get("content")
+    if isinstance(content, list):
+        # A user message carrying tool_result blocks is a CONTINUATION of the
+        # turn the tool ran in, not a new prompt.
+        return not any(
+            isinstance(b, dict) and b.get("type") in ("tool_result", "tool_use_result")
+            for b in content
+        )
+    return True
+
+
+def _group_turns(messages: list) -> list[list[int]]:
+    """Index groups, one per turn, covering every message exactly once."""
+    if not messages:
+        return []
+    prompts = [i for i, m in enumerate(messages) if _opens_turn(m)]
+    if not prompts:
+        # No human prompt anywhere: one opaque group.  Nothing is ever half
+        # dropped this way.
+        return [list(range(len(messages)))]
+    starts: list[int] = []
+    for p in prompts:
+        s = p
+        # Absorb the reminder block injected immediately ahead of the prompt:
+        # a kept prompt with its preamble pruned is a ghost, and a dropped
+        # prompt whose preamble survived is a bigger one.
+        while s > 0 and _is_ephemeral(messages[s - 1]):
+            s -= 1
+        starts.append(s)
+    starts[0] = 0  # anything before the first prompt belongs with it
+    groups = []
+    for n, s in enumerate(starts):
+        end = starts[n + 1] if n + 1 < len(starts) else len(messages)
+        groups.append(list(range(s, end)))
+    return groups
+
+
+def _msg_epoch(msg: Any) -> "float | None":
+    """Message timestamp in epoch seconds, or None when it cannot be read."""
+    if not isinstance(msg, dict):
+        return None
+    md = msg.get("metadata")
+    raw = md.get("timestamp") if isinstance(md, dict) else None
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _msg_iso(msg: Any) -> str:
+    if not isinstance(msg, dict):
+        return ""
+    md = msg.get("metadata")
+    raw = md.get("timestamp") if isinstance(md, dict) else None
+    return raw if isinstance(raw, str) else ""
+
+
+def _turn_prompt(members: list) -> str:
+    """The human's own words in this turn, or "" if it has none."""
+    for m in members:
+        if _opens_turn(m):
+            content = m.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "\n".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+    return ""
+
+
+def _tool_result_summary(content: Any) -> tuple:
+    """(ok, one-line summary) for a tool result message.
+
+    Mirrors on_tool_post exactly, so a replayed tool line and a live one read
+    the same.  The RAW result never leaves this function.
+    """
+    result: Any = content
+    if isinstance(content, str):
+        try:
+            result = json.loads(content)
+        except (ValueError, TypeError):
+            return True, _clip(content)
+    if isinstance(result, dict):
+        err = result.get("error")
+        if err:
+            return False, _clip(err)
+        out = result.get("output")
+        return True, _clip(out.get("content", out) if isinstance(out, dict) else out)
+    return True, _clip(result)
+
+
+def _summarize_turn(index: int, members: list) -> "dict | None":
+    """One replay turn: prompt, blocks, timestamp.  Nothing raw."""
+    prompt = _turn_prompt(members)
+    blocks: list = []
+    by_call: dict = {}
+    ts = ""
+    # Elapsed time is DERIVED from the transcript's own timestamps, so a
+    # replayed turn carries the same "2.7s" a live one did.  Cost is not
+    # derived and is not sent: the transcript does not record it per turn, and
+    # a plausible-looking invented number is worse than an absent one.
+    stamps = [t for t in (_msg_epoch(m) for m in members) if t is not None]
+    elapsed_ms = int((max(stamps) - min(stamps)) * 1000) if len(stamps) > 1 else 0
+
+    def add_tool(call_id: str, name: str, args: Any) -> None:
+        if len(blocks) >= HISTORY_MAX_BLOCKS:
+            return
+        block = {
+            "kind": "tool",
+            "call_id": str(call_id or ""),
+            "name": str(name or ""),
+            "args": _clip(json.dumps(args, ensure_ascii=False, default=str), HISTORY_ARGS_LIMIT)
+            if isinstance(args, (dict, list)) else _clip(args or "", HISTORY_ARGS_LIMIT),
+            "ok": True,
+            "summary": "",
+            "ms": 0,
+        }
+        if block["args"] in ("{}", "[]", "null"):
+            block["args"] = ""
+        blocks.append(block)
+        if block["call_id"]:
+            by_call[block["call_id"]] = block
+
+    def add_text(kind: str, text: str) -> None:
+        text = _trim(text, HISTORY_TEXT_LIMIT)
+        if not text:
+            return
+        tail = blocks[-1] if blocks else None
+        if tail is not None and tail.get("kind") == kind:
+            tail["text"] = _trim(tail["text"] + text, HISTORY_TEXT_LIMIT)
+            return
+        if len(blocks) >= HISTORY_MAX_BLOCKS:
+            return
+        blocks.append({"kind": kind, "text": text})
+
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        if not ts:
+            ts = _msg_iso(m)
+        if role == "assistant":
+            content = m.get("content")
+            if isinstance(content, str):
+                add_text("text", content)
+            elif isinstance(content, list):
+                saw_call = False
+                for b in content:
+                    if not isinstance(b, dict):
+                        continue
+                    btype = b.get("type")
+                    if btype == "text":
+                        add_text("text", b.get("text") or "")
+                    elif btype == "thinking":
+                        add_text("thinking", b.get("thinking") or b.get("text") or "")
+                    elif btype in ("tool_call", "tool_use"):
+                        saw_call = True
+                        add_tool(b.get("id") or b.get("tool_call_id") or "",
+                                 b.get("name") or b.get("tool") or "",
+                                 b.get("input") if b.get("input") is not None else b.get("arguments"))
+                if not saw_call:
+                    # Providers that carry calls only in the sibling key.
+                    for call in m.get("tool_calls") or []:
+                        if isinstance(call, dict):
+                            add_tool(call.get("id") or "",
+                                     call.get("tool") or call.get("name") or "",
+                                     call.get("arguments") if call.get("arguments") is not None
+                                     else call.get("input"))
+        elif role == "tool":
+            call_id = str(m.get("tool_call_id") or "")
+            ok, summary = _tool_result_summary(m.get("content"))
+            block = by_call.get(call_id)
+            if block is None:
+                add_tool(call_id, m.get("name") or "", None)
+                block = by_call.get(call_id) or (blocks[-1] if blocks else None)
+            if block is not None:
+                block["ok"] = ok
+                block["summary"] = summary
+                if not block["name"]:
+                    block["name"] = str(m.get("name") or "")
+
+    if not prompt and not blocks:
+        return None
+    return {
+        "id": f"h-{index}",
+        "prompt": _trim(prompt, HISTORY_PROMPT_LIMIT),
+        "ts": ts,
+        "ms": elapsed_ms,
+        "blocks": blocks,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Live lanes
+#
+# The hard rule on clear (spec gap 1): never drop a message that references a
+# lane that is still alive.  muxterm writes one JSON file per live agent
+# session under $XDG_RUNTIME_DIR/muxterm/session-state/, named for the session
+# id it describes, so that directory IS the fleet roster.
+#
+# Every decision here errs toward KEEPING.  A file that cannot be parsed still
+# contributes its filename; liveness is NOT re-checked against /proc, because
+# a lane whose state file is still on disk is a lane muxterm still believes
+# in.  Over-keeping is a harmless surprise; dropping a live lane's context is
+# not.
+# ---------------------------------------------------------------------------
+def _live_lane_ids(exclude: str = "") -> set:
+    base = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    d = Path(base).joinpath(*SESSION_STATE_REL)
+    ids = set()
+    try:
+        entries = sorted(d.glob("*.json"))
+    except OSError:
+        logger.warning("could not read session-state dir %s", d, exc_info=True)
+        return ids
+    for p in entries:
+        ids.add(p.stem)  # the filename is the session id by construction
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            logger.debug("session-state %s unreadable; using its filename", p, exc_info=True)
+            continue
+        if isinstance(data, dict):
+            sid = data.get("sessionId")
+            if isinstance(sid, str) and sid:
+                ids.add(sid)
+    # The chief of staff is ITSELF a lane in that roster -- hooks-muxterm-session
+    # registers the sidecar's own amplifier session like any other.  Protecting
+    # it here would mean every message that names the session this transcript
+    # BELONGS TO survives forever, which is a clear that never clears.
+    ids.discard(exclude)
+    return ids
+
+
+def _is_uuidish(sid: str) -> bool:
+    """True for the uuid-shaped ids muxterm gives agent lanes."""
+    stripped = sid.replace("-", "")
+    return len(stripped) >= 32 and all(c in "0123456789abcdefABCDEF" for c in stripped)
+
+
+def _lane_needles(ids: set) -> list:
+    """The substrings whose presence in a message protects it from a prune.
+
+    The short-form prefix is added ONLY for uuid-shaped ids.  A named session
+    id is a word, and eight characters of a word is a word: `muxterm-cos`
+    would contribute the needle `muxterm-`, which matches every message that
+    mentions muxterm at all -- a "protection" that quietly cancels the whole
+    feature.  Eight hex characters of a uuid is a real identifier and matching
+    it is the intended over-keep.
+    """
+    needles = set()
+    for sid in ids:
+        if not sid:
+            continue
+        needles.add(sid)
+        if len(sid) > LANE_ID_PREFIX and _is_uuidish(sid):
+            needles.add(sid[:LANE_ID_PREFIX])
+    return sorted(needles)
+
+
+def _mentions_lane(msg: Any, needles: list) -> str:
+    """The first live lane id this message mentions, or "" for none.
+
+    The WHOLE message is searched as serialized JSON -- prompt text, assistant
+    text, tool arguments and tool results alike -- because a lane id is just
+    as load-bearing inside a tool call as it is in prose.
+    """
+    if not needles:
+        return ""
+    try:
+        blob = json.dumps(msg, ensure_ascii=False, default=str)
+    except Exception:
+        blob = str(msg)
+    for needle in needles:
+        if needle in blob:
+            return needle
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -730,6 +1073,258 @@ class Sidecar:
             logger.debug("mention expansion skipped", exc_info=True)
             return prompt
 
+    # -- transcript housekeeping --------------------------------------------
+    def _session_dir(self) -> Path:
+        return Path(self.store.base_dir) / self.session_id
+
+    async def _set_context_messages(self, messages: list) -> bool:
+        """Replace the live session's context, the same way boot restores it.
+
+        build() does `await context.set_messages(transcript)` after loading
+        from the store; a prune has to do exactly that again, or the process
+        keeps answering from the messages the user just deleted until it is
+        restarted.
+        """
+        context = self.session.coordinator.get("context")
+        if context is None or not hasattr(context, "set_messages"):
+            return False
+        await context.set_messages(messages)
+        return True
+
+    async def _transcript(self) -> list:
+        """The live transcript, preferring memory and falling back to disk."""
+        try:
+            messages = await self._messages()
+        except Exception:
+            logger.debug("in-memory transcript unavailable", exc_info=True)
+            messages = []
+        if messages:
+            return list(messages)
+        try:
+            from amplifier_foundation.session.store import load_transcript
+
+            return load_transcript(self._session_dir())
+        except Exception:
+            logger.debug("on-disk transcript unavailable", exc_info=True)
+            return []
+
+    async def _handle_clear(self, msg: dict) -> None:
+        """Prune the persisted transcript.  older_than_days 0/absent = all.
+
+        Two rules are non-negotiable, and both are refusals rather than
+        best-effort behaviour:
+
+          1. NEVER while a turn is in flight.  The turn is actively appending
+             to this transcript and will save it again at turn end, which
+             would resurrect everything this prune removed -- and rewriting
+             the file underneath a running turn is a straight data race.
+          2. NEVER drop a message that references a live lane.  See
+             _live_lane_ids(): the roster is read fresh on every clear, and
+             every ambiguity resolves toward keeping.
+        """
+        req_id = msg.get("req_id") if isinstance(msg.get("req_id"), str) else None
+
+        def fail(message: str) -> None:
+            payload = {"ev": "error", "code": "clear_failed", "message": message, "fatal": False}
+            if req_id:
+                payload["req_id"] = req_id
+            self.proto.emit(**payload)
+
+        if self._turn is not None:
+            fail(f"turn {self._turn.id} is still running; clearing now would race it")
+            return
+
+        raw_days = msg.get("older_than_days", 0)
+        try:
+            days = int(raw_days or 0)
+        except (TypeError, ValueError):
+            fail(f"older_than_days must be a number, got {raw_days!r}")
+            return
+        if days < 0:
+            fail("older_than_days cannot be negative")
+            return
+
+        try:
+            from amplifier_foundation.session.store import (
+                TRANSCRIPT_FILENAME,
+                backup,
+                load_transcript,
+                write_transcript,
+            )
+        except Exception as exc:  # noqa: BLE001
+            fail(f"session store unavailable: {type(exc).__name__}: {exc}")
+            return
+
+        session_dir = self._session_dir()
+        transcript_path = session_dir / TRANSCRIPT_FILENAME
+        try:
+            # Backup FIRST.  Everything after this is recoverable by hand.
+            backup_path = backup(transcript_path, "cos-clear")
+            messages = load_transcript(session_dir) if transcript_path.exists() else []
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("clear: could not read the transcript")
+            fail(f"could not read the transcript: {type(exc).__name__}: {exc}")
+            return
+
+        if not messages:
+            # Nothing on disk.  Still clear memory, so a session that has
+            # taken turns but not yet been saved does not keep answering from
+            # a transcript the user just asked to forget.
+            try:
+                await self._set_context_messages([])
+            except Exception:
+                logger.debug("clear: context reset on an empty transcript failed", exc_info=True)
+            payload = {"ev": "cleared", "removed": 0, "kept": 0,
+                       "removed_turns": 0, "kept_turns": 0, "protected": []}
+            if req_id:
+                payload["req_id"] = req_id
+            self.proto.emit(**payload)
+            return
+
+        cutoff = None if days <= 0 else time.time() - days * 86400
+        needles = _lane_needles(_live_lane_ids(exclude=self.session_id))
+        logger.info("clear: older_than_days=%d, %d live-lane needle(s): %s",
+                    days, len(needles), needles)
+        groups = _group_turns(messages)
+
+        keep_idx: set = set()
+        kept_turns = 0
+        protected: list = []
+        for group in groups:
+            members = [messages[i] for i in group]
+            stamps = [t for t in (_msg_epoch(m) for m in members) if t is not None]
+            newest = max(stamps) if stamps else None
+
+            reason = ""
+            hit = ""
+            for m in members:
+                hit = _mentions_lane(m, needles)
+                if hit:
+                    reason = "live-lane"
+                    break
+            if not reason:
+                if cutoff is None:
+                    # "clear everything" means everything that is not pinned.
+                    pass
+                elif newest is None:
+                    # Unknown age.  KEEP -- see the module note: over-keeping
+                    # is a harmless surprise, dropping is not.
+                    reason = "undated"
+                elif newest >= cutoff:
+                    reason = "recent"
+
+            if reason:
+                kept_turns += 1
+                keep_idx.update(group)
+                if reason == "live-lane":
+                    protected.append({"lane": hit, "prompt": _clip(_turn_prompt(members), 120)})
+
+        kept = [m for i, m in enumerate(messages) if i in keep_idx]
+        removed_count = len(messages) - len(kept)
+        removed_turns = len(groups) - kept_turns
+
+        # Grouping should keep tool_call/tool_result pairs together, but the
+        # cost of being wrong is a transcript the NEXT turn cannot send, so
+        # check anyway and repair before anything is written.
+        try:
+            from amplifier_foundation.session import diagnose_transcript, repair_transcript
+
+            diagnosis = diagnose_transcript(kept)
+            if diagnosis.get("status") == "broken":
+                logger.warning("clear: repairing pruned transcript: %s", diagnosis.get("failure_modes"))
+                kept = repair_transcript(kept, diagnosis)
+        except Exception:
+            logger.debug("clear: post-prune diagnosis skipped", exc_info=True)
+
+        try:
+            write_transcript(session_dir, kept)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("clear: could not write the pruned transcript")
+            fail(f"could not write the pruned transcript: {type(exc).__name__}: {exc}")
+            return
+
+        # SessionStore._load_transcript falls back to transcript.jsonl.backup
+        # when the main file will not parse.  Leaving the pre-prune copy there
+        # means a corrupted write could resurrect exactly what the user asked
+        # to forget, so the recovery copy is pruned too.  The timestamped
+        # bak-cos-clear-* file above is the audit trail.
+        #
+        # Its OWN try: the prune has already landed by this point, and
+        # reporting a failed clear because a secondary copy could not be
+        # rewritten would be a lie about what happened to the transcript.
+        try:
+            recovery = session_dir / (TRANSCRIPT_FILENAME + ".backup")
+            if recovery.exists():
+                recovery.write_text(
+                    "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in kept),
+                    encoding="utf-8",
+                )
+        except Exception:
+            logger.warning("clear: pruned the transcript but not its recovery copy "
+                           "(%s); a corrupt-file recovery could resurrect cleared messages",
+                           session_dir / (TRANSCRIPT_FILENAME + ".backup"), exc_info=True)
+
+        reloaded = False
+        try:
+            reloaded = await self._set_context_messages(kept)
+        except Exception:
+            logger.exception("clear: could not reload the live context")
+        if not reloaded:
+            logger.warning("clear: context module lacks set_messages -- disk pruned, memory NOT")
+
+        logger.info("clear: removed %d/%d messages (%d/%d turns), backup=%s, protected=%d",
+                    removed_count, len(messages), removed_turns, len(groups), backup_path,
+                    len(protected))
+        payload = {
+            "ev": "cleared",
+            "removed": removed_count,
+            "kept": len(kept),
+            "removed_turns": removed_turns,
+            "kept_turns": kept_turns,
+            "protected": protected,
+            "reloaded": reloaded,
+        }
+        if req_id:
+            payload["req_id"] = req_id
+        self.proto.emit(**payload)
+
+    async def _handle_history(self, msg: dict) -> None:
+        """Answer with the newest N turns, summarized.
+
+        Summarized is the whole point: role, text, thinking, and a one-line
+        tool summary.  Never a raw tool result, never an llm payload -- the
+        events log for this session is megabytes with 90KB single lines, and a
+        replay that carried that would be worse than no replay at all.
+        """
+        req_id = msg.get("req_id") if isinstance(msg.get("req_id"), str) else None
+        try:
+            limit = int(msg.get("limit") or HISTORY_DEFAULT_LIMIT)
+        except (TypeError, ValueError):
+            limit = HISTORY_DEFAULT_LIMIT
+        limit = max(1, min(limit, HISTORY_MAX_LIMIT))
+
+        turns: list = []
+        try:
+            messages = await self._transcript()
+            groups = _group_turns(messages)
+            for n, group in enumerate(groups[-limit:], start=max(0, len(groups) - limit)):
+                turn = _summarize_turn(n, [messages[i] for i in group])
+                if turn is not None:
+                    turns.append(turn)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("history: could not build the replay")
+            payload = {"ev": "error", "code": "history_failed",
+                       "message": f"{type(exc).__name__}: {exc}", "fatal": False}
+            if req_id:
+                payload["req_id"] = req_id
+            self.proto.emit(**payload)
+            return
+
+        payload = {"ev": "history", "turns": turns, "session_id": self.session_id}
+        if req_id:
+            payload["req_id"] = req_id
+        self.proto.emit(**payload)
+
     # -- op dispatch --------------------------------------------------------
     def _handle_turn(self, msg: dict) -> None:
         turn_id = msg.get("turn_id")
@@ -810,6 +1405,10 @@ class Sidecar:
             self._handle_cancel(msg)
         elif op == "approval":
             self._handle_approval(msg)
+        elif op == "clear":
+            await self._handle_clear(msg)
+        elif op == "history":
+            await self._handle_history(msg)
         elif op == "ping":
             self.proto.emit(ev="pong")
         elif op == "shutdown":

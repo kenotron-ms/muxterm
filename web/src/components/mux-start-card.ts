@@ -1,15 +1,27 @@
 /**
- * mux-start-card.ts — the sidebar's Start card.
+ * mux-start-card.ts -- the sidebar's Dashboard card.
  *
- * Sits above the workspace cards. Shows the "Needs input" count and is the way
- * back to the home view from anywhere.
+ * Sits above the workspace cards. It is the door to the Dashboard from
+ * anywhere, and it says one thing beyond its own name: whether anything is
+ * waiting on you.
  *
- * The zero state is designed, not defaulted. Zero is the state the user is
- * trying to reach, so it is the calmest thing on screen: grey, small, no ring,
- * no pulse, nothing warm. Anything that draws the eye at zero teaches the user
- * to stop looking at the card entirely, which costs the whole feature.
+ * IT SHOWS NO COUNT. It used to show a 26px number, and the number is gone on
+ * purpose: the Dashboard shows no counts anywhere -- not sessions, not groups,
+ * not messages -- and the sidebar is not allowed to be the one place a number
+ * survived. What replaced it is a dot, present or absent.
  *
- * Presentational only — it is handed a count and reports clicks. It is shared
+ * The zero state is designed, not defaulted, and that survives the change:
+ * zero is the state the user is trying to reach, so it is the calmest thing on
+ * screen -- no dot, no ring, no warm border, nothing animated. Anything that
+ * draws the eye at zero teaches the user to stop looking at the card entirely,
+ * which costs the whole feature.
+ *
+ * `count` and `spread` are still PROPERTIES rather than a boolean, because
+ * they are the numbers the caller already has and reducing them here keeps
+ * every caller (the app sidebar, the drawer, and the two standalone demos)
+ * handing over the same thing it always did. Nothing renders them.
+ *
+ * Presentational only -- it is handed a count and reports clicks. It is shared
  * verbatim by the app sidebar and the standalone fixture demo, which is the
  * point: the thing the user previews is the thing that ships.
  */
@@ -29,7 +41,7 @@ export class MuxStartCard extends LitElement {
   /** How many workspaces contribute to `count`. Only shown when > 0. */
   @property({ type: Number }) spread = 0;
 
-  /** True when the home view is the thing currently on screen. */
+  /** True when the Dashboard is the thing currently on screen. */
   @property({ type: Boolean }) active = false;
 
   /** Key chord shown in the corner, e.g. "ctrl+`". Empty hides the chip. */
@@ -134,27 +146,35 @@ export class MuxStartCard extends LitElement {
       flex-shrink: 0;
     }
 
-    .num {
-      font-size: 26px;
-      font-weight: 680;
-      letter-spacing: -0.03em;
-      line-height: 1.15;
+    /* The card's own name. It replaced a 26px count, and it is deliberately
+       the size of a label rather than a headline: this is a door, and a door
+       does not need to shout to be found. */
+    .name {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.3;
       margin-top: 2px;
-      color: var(--mux-warn);
+      color: var(--chrome-text-bright);
     }
 
-    .start.zero .num {
-      font-size: 15px;
-      font-weight: 500;
-      color: var(--chrome-text-dim);
-      line-height: 1.4;
-      margin-top: 1px;
+    /* The one signal left. Present or absent, never a number, never a zero.
+       --mux-warn is the same token the group heading, the workspace badge and
+       the nav bar's dot use, so the four cannot say different things. */
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--mux-warn);
+      flex-shrink: 0;
     }
 
     .lbl {
       font-size: 11px;
       color: var(--chrome-text-dim);
-      margin-top: -1px;
+      margin-top: 1px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -169,52 +189,47 @@ export class MuxStartCard extends LitElement {
     const zero = this.count === 0;
     const cls = `start ${zero ? 'zero' : ''} ${this.active ? 'here' : ''}`;
 
-    // The second line says WHERE the card takes you -- so while home is the
-    // thing on screen it must not still read "click to go home". It says
-    // "home", and keeps the spread when there is one to report.
+    // The second line says WHERE the card takes you -- so while the Dashboard
+    // is the thing on screen it must not still read "click to go there". The
+    // spread is a shape, not a tally: "across 2 workspaces" tells you the
+    // attention is scattered, which is a different fact from how many rows
+    // there are, and it is the one the sidebar can act on.
     const spread =
-      this.spread > 0
-        ? `across ${this.spread} workspace${this.spread === 1 ? '' : 's'}`
+      this.spread > 1
+        ? `across ${this.spread} workspaces`
         : '';
-    const busyLbl = this.active
-      ? spread === ''
-        ? 'home'
-        : `home · ${spread}`
-      : spread === ''
-        ? 'click to go home'
-        : spread;
-
-    // At zero the count itself is the wrong headline — there is no number worth
-    // 26px. The card says the calm thing instead.
-    const body = zero
-      ? html`<div class="num">All clear</div>
-          <div class="lbl">${this.active ? 'home' : 'click for home'}</div>`
-      : html`<div class="num">${this.count}</div>
-          <div class="lbl">${busyLbl}</div>`;
+    const lbl = this.active
+      ? spread || 'you are here'
+      : zero
+        ? 'nothing is waiting'
+        : spread || 'something wants you';
 
     // Selection has to reach a screen reader too, or the fix is only for
     // people who can see the ring. aria-current="page" is the cue for "this
     // is the view you are on"; it replaces aria-pressed, which described the
-    // card as a toggle rather than as where you are.
-    const need = zero
-      ? 'Nothing needs input.'
-      : `${this.count} sessions need input.`;
+    // card as a toggle rather than as where you are. The dot is decorative
+    // here -- the label below carries the same fact in words.
+    const need = zero ? 'Nothing needs input.' : 'Sessions need input.';
 
     return html`
       <button
         type="button"
         class="${cls}"
         aria-label="${this.active
-          ? `${need} Home view, current view.`
-          : `${need} Go to home view.`}"
+          ? `${need} Dashboard, current view.`
+          : `${need} Go to the Dashboard.`}"
         aria-current="${this.active ? 'page' : 'false'}"
         @click="${this._onClick}"
       >
         <div class="head">
-          <span>${NEEDS_GLYPH} needs input</span>
+          <span>dashboard</span>
           ${this.hint ? html`<span class="kb">${this.hint}</span>` : ''}
         </div>
-        ${body}
+        <div class="name">
+          Dashboard
+          ${zero ? '' : html`<span class="dot"></span>`}
+        </div>
+        <div class="lbl">${lbl}</div>
       </button>
     `;
   }
