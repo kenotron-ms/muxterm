@@ -27,9 +27,31 @@ hooks:
   # verdict, because a false alarm teaches people to ignore the indicator.
   - module: hooks-muxterm-session
     source: git+https://github.com/kenotron-ms/muxterm@main#subdirectory=modules/hooks-muxterm-session
-    # config:
-    #   classify_end_of_turn: true   # set false to skip the model call entirely
-    #   classify_model: ""           # defaults to the session's own provider
+    # Both model calls are pinned to the cheapest model available rather than
+    # inheriting the session's own. Neither question benefits from a reasoning
+    # model: the classifier reads one short message and answers a boolean plus
+    # a one-line summary, the labeller reads one prompt and answers three
+    # words, and both are pinned to a strict JSON schema that leaves nothing
+    # to deliberate. Left unset they inherit the session's provider, which for
+    # anyone running a premium reasoning model means paying reasoning-model
+    # rates -- on every single turn -- for a two-field classification.
+    #
+    # `claude-haiku-4-5` is an Anthropic model id, so a user on another
+    # provider will have it rejected. That is survivable only because the
+    # module retries a rejected override once without it and lands on that
+    # user's own default model: the feature degrades to costing more than
+    # intended, never to doing nothing. Without that fallback this line would
+    # switch end-of-turn classification and session labelling off outright for
+    # everyone not on Anthropic, without a word, and only on their machines.
+    #
+    # Both knobs stay overridable per-user. Naming a different model replaces
+    # this one; setting either to an empty string is read as "no override" and
+    # restores the session's own model for that call.
+    config:
+      classify_model: "claude-haiku-4-5"
+      label_model: "claude-haiku-4-5"
+      # classify_end_of_turn: true   # set false to skip the model call entirely
+      # label_first_prompt: true     # set false to skip the labelling call
 
 tools:
   - module: tool-mcp

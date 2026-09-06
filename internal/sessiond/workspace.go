@@ -21,6 +21,11 @@ func (r *Registry) EnsureDefault() *Workspace {
 // RenameWorkspace sets (or clears, when name == "") the display label of the
 // workspace identified by id. There is no uniqueness check because ids are the
 // key. It returns false for an unknown id.
+//
+// This is the public rename verb, so the name becomes explicit and the deriver
+// stops offering its own. Clearing it back to "" is deliberately explicit too
+// -- but an empty name is derivable regardless of provenance, so emptying a
+// workspace's name is also how you hand it back to the deriver.
 func (r *Registry) RenameWorkspace(id, name string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -29,6 +34,58 @@ func (r *Registry) RenameWorkspace(id, name string) bool {
 		return false
 	}
 	ws.Name = name
+	ws.nameOrigin = originExplicit
+	return true
+}
+
+// renameWorkspaceDerived offers a daemon-derived name to a workspace and
+// reports whether the name actually CHANGED -- false for an unknown id, for an
+// empty offer, and for a workspace that already has a name, whoever chose it.
+//
+// That last clause is the write-once invariant: a workspace's derived name is
+// written into an empty name or not at all, and never replaced by another
+// derived name (see applyDerivedNames for why re-deriving would be worse than
+// carrying a stale name). It is enforced here rather than at the call site
+// because this is the only place a derived workspace name is ever written, and
+// here the test and the write happen together under the one lock that owns the
+// field. A caller-side check would be two things worse: the next caller added
+// would silently not have it, and even this caller would be racing -- a
+// person's rename could land between reading the name and writing over it.
+//
+// Only the true return may trigger a broadcast, and that matters more here than
+// anywhere else: a workspace rename re-broadcasts the entire workspace list to
+// every connected client, so a guard that is slightly wrong produces a message
+// storm that reads like a frozen UI rather than like a naming bug.
+func (r *Registry) renameWorkspaceDerived(id, name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[id]
+	if !ok {
+		return false
+	}
+	if !acceptsFirstDerivedName(ws.Name, name) {
+		return false
+	}
+	ws.Name = name
+	ws.nameOrigin = originDerived
+	return true
+}
+
+// restoreWorkspaceNameOrigin re-applies the provenance a snapshot captured
+// alongside a workspace's name.
+//
+// Separate from AddWorkspace, which the restore path uses to recreate the
+// workspace, because creation genuinely is explicit for every live caller and
+// only a restore can legitimately claim a name was derived. Returns false for
+// an unknown id.
+func (r *Registry) restoreWorkspaceNameOrigin(id string, origin nameOrigin) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[id]
+	if !ok {
+		return false
+	}
+	ws.nameOrigin = origin
 	return true
 }
 

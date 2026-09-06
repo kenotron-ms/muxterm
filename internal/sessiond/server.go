@@ -627,14 +627,32 @@ func (c *conn) createPane(msg Message) {
 		c.replyError(msg.CID, CodePaneSpawnFailed, err.Error())
 		return
 	}
+	// A pane started from the home composer carries the user's first prompt in
+	// its argv, which is the only description of this work that exists yet.
+	// Labelling from it here, before the pane is ever published, is what stops
+	// the tab from reading "Pane 7" while something slower is asked for a
+	// better name. An argv that is not a recognised harness launch derives
+	// nothing and stays untitled on purpose -- see autolabel.go.
+	//
+	// Written through the derived path, never SetTitle: this is a guess, and
+	// marking it as such is what lets the session's own label refine it later
+	// while still leaving a human's rename permanent (autoname.go).
+	title := labelFromPrompt(promptFromArgv(msg.Cmd))
+	if title != "" {
+		p.setTitleDerived(title)
+	}
 	c.srv.reg.PutPane(wsID, p)
 	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
 	c.srv.broadcast(wsID, &Message{
-		Type:            TypePaneAdded,
-		WorkspaceID:     wsID,
-		PaneID:          localID,
-		Cols:            cols,
-		Rows:            rows,
+		Type:        TypePaneAdded,
+		WorkspaceID: wsID,
+		PaneID:      localID,
+		Cols:        cols,
+		Rows:        rows,
+		// Carried on the event itself (omitted when empty) so a subscriber
+		// paints the right tab from the broadcast it already handles, instead
+		// of rendering the fallback and correcting it after a round trip.
+		Title:           title,
 		ClientRef:       msg.ClientRef,
 		Placement:       msg.Placement,
 		ReferencePaneID: msg.ReferencePaneID,
@@ -1165,6 +1183,13 @@ func (s *Server) emitSessionState() {
 		// emptiness here would blank the home view over a transient stat error.
 		return
 	}
+	// The rows are already joined to their panes, which is the only thing
+	// naming a tab or a workspace after its session needs. Done before the
+	// publish, and outside every lock, so a tick that renames something emits
+	// the rename alongside the row that caused it rather than a tick behind
+	// it. It is a no-op on every tick that changes nothing -- see
+	// applyDerivedNames.
+	s.applyDerivedNames(rows)
 	s.publishSessionState(rows)
 }
 

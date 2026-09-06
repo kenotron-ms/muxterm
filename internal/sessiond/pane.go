@@ -22,6 +22,12 @@ type Pane struct {
 	LocalID int
 	Title   string // settable; OSC 0/2 title capture is a later phase
 
+	// titleOrigin says whether Title was chosen by a person or derived by the
+	// daemon, and is guarded by mu exactly like Title itself -- the two are
+	// one fact and must never be read apart. See autoname.go for why a name
+	// without provenance cannot be safely re-derived.
+	titleOrigin nameOrigin
+
 	// targetGeneration is assigned by Registry.PutPane and changes whenever a
 	// pane registry identity is replaced. It is read only while Registry.mu is
 	// held and binds close tickets independently of the root-process generation.
@@ -502,11 +508,66 @@ func (p *Pane) Seq() uint64 {
 	return p.buf.Seq()
 }
 
-// SetTitle sets the pane's display title under lock.
+// SetTitle sets the pane's display title under lock and records it as a
+// deliberate choice, which makes it permanent as far as the deriver is
+// concerned. This is the setter behind the public rename verb (rename-pane,
+// reached from the browser, the CLI, and MCP) and it is the ONLY way a title
+// becomes explicit -- anything the daemon works out for itself goes through
+// setTitleDerived instead, so the two intents cannot be confused at a call
+// site.
 func (p *Pane) SetTitle(name string) {
+	p.setTitle(name, originExplicit)
+}
+
+// setTitleDerived offers a title the daemon derived, and reports whether the
+// pane took it. It declines -- silently, and returning false -- when a person
+// has already named this pane, and when the title already reads exactly this.
+// Callers broadcast if and only if it returns true; see applyDerivedNames for
+// why that is what keeps a once-a-second pass quiet.
+func (p *Pane) setTitleDerived(name string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !acceptsRefinedDerivedName(p.Title, p.titleOrigin, name) {
+		return false
+	}
+	p.Title = name
+	p.titleOrigin = originDerived
+	return true
+}
+
+// setTitle is the one place Title and its provenance are written, so they can
+// never drift apart.
+func (p *Pane) setTitle(name string, origin nameOrigin) {
 	p.mu.Lock()
 	p.Title = name
+	p.titleOrigin = origin
 	p.mu.Unlock()
+}
+
+// titleAndOriginSnapshot returns the current title together with who chose it,
+// read in ONE acquisition of the lock that owns both.
+//
+// The pairing is the whole point, and reading them separately is a real bug
+// rather than a tidiness question. setTitle writes the two fields as one
+// transaction, so a rename landing between two separate reads yields the title
+// from before it and the provenance from after: a derived name tagged
+// "explicit". restorePane then writes that pair back faithfully, and from then
+// on acceptsRefinedDerivedName declines forever -- the deriver is locked out of
+// a name no person ever chose, permanently, with nothing on screen to say why.
+//
+// Note this got worse when provenance arrived. Before, a torn read cost a stale
+// title that the next labelling tick simply overwrote; the pane self-corrected
+// within a second. Now the same tear is preserved across restarts and disables
+// the mechanism that used to repair it. The window is not as narrow as it
+// looks, either -- capturePaneSnapshot copies a full replay buffer between the
+// two reads.
+//
+// The workspace side already gets this right: snapshotView copies Name and
+// NameOrigin together under the registry lock. This is the pane equivalent.
+func (p *Pane) titleAndOriginSnapshot() (string, nameOrigin) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.Title, p.titleOrigin
 }
 
 // Info returns a frozen snapshot of this pane's identity and dimensions.

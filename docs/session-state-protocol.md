@@ -186,6 +186,7 @@ disappear *while its process keeps running*.
   "harness": "ci-runner",
   "project": "/home/ken/workspace/muxterm",
   "name": "nightly smoke",
+  "label": "smoke matrix",
   "mode": "autonomous",
   "state": "working",
   "waitingFor": "",
@@ -222,6 +223,7 @@ silently never read, which is the most confusing possible outcome.
 | `pidStart` | int | Process start time (see below). Strongly recommended on Linux. |
 | `harness` | string | Which agent CLI this is. Open set; see [Harness](#harness). |
 | `project` | string | Absolute working directory. |
+| `label` | string | 1–3 words naming the work, for a pane tab. Not a shorter `name`; see below. |
 | `waitingFor` | enum | Why it is blocked. Only meaningful with `state: "blocked"`. |
 | `doing` | string | One short line of current activity. |
 | `doneMeans` | string | This session's own definition of finished. |
@@ -230,6 +232,15 @@ silently never read, which is the most confusing possible outcome.
 
 `waitingFor` is one of: `permission prompt`, `input needed`, `sandbox request`,
 `worker request`, `dialog open`.
+
+`label` is what a pane tab can show whole — about three words and 24
+characters, e.g. `auth redirect`. Two rules make it useful: name the *subject*
+of the work rather than the request for it, and **derive it once and then stop
+changing it**. A label that moves is a session you cannot find twice, which is
+worse than one that was never labelled at all. Omit the field entirely if you
+have nothing to say; an absent `label` means "keep whatever muxterm already
+worked out from the pane's command line", while a label that appears and then
+churns actively costs the user something.
 
 ### Never write these
 
