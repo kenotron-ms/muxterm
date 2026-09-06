@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,6 +56,13 @@ type Config struct {
 	// When true the IsLocalhost() auth bypass is disabled entirely — see
 	// internal/server/authmiddleware.go.
 	BehindReverseProxy bool
+
+	// LocalToken authenticates same-user helper processes on this machine
+	// (today: the MCP server) to the HTTP API. It is published only via the
+	// 0600 handoff file in the 0700 runtime dir that sessiond.WriteServerURL
+	// writes. Empty disables the check, which is correct for callers that
+	// publish no token. See internal/server/authmiddleware.go.
+	LocalToken string
 
 	// Version is the running binary's version string (main.version). Empty or
 	// "dev" marks a development build, for which self-update is not offered.
@@ -121,7 +130,16 @@ func New(cfg Config) *Server {
 	}
 	s.ai = ai.NewManager(aiKeyPath)
 
-	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy)
+	// publicHost lets the middleware recognize a browser that arrived on
+	// some other host than the configured origin -- a login started there
+	// can never complete. Empty unless reverse-proxy mode is on.
+	publicHost := ""
+	if sc := cfg.InitialConfig.Server; sc.BehindReverseProxy {
+		if u, err := url.Parse(sc.Normalize().BaseURL()); err == nil {
+			publicHost = u.Host
+		}
+	}
+	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy, cfg.LocalToken, publicHost)
 	protect := func(h http.Handler) http.Handler {
 		return authMW.Wrap(h)
 	}
@@ -242,6 +260,7 @@ func (s *Server) handleTunnelList(w http.ResponseWriter, r *http.Request) {
 		items = append(items, map[string]any{
 			"id":   e.id,
 			"port": e.port,
+			"url":  s.tunnelURL(e.id),
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -255,8 +274,21 @@ func (s *Server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Port int `json:"port"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Port == 0 {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "port required", http.StatusBadRequest)
+		return
+	}
+	// A port outside the valid range is accepted by the registry but
+	// produces a target URL that url.Parse rejects, so the tunnel 500s on
+	// first use instead of failing here where the caller can see why.
+	if body.Port < 1 || body.Port > 65535 {
+		http.Error(w, "port must be between 1 and 65535", http.StatusBadRequest)
+		return
+	}
+	// Tunneling muxterm's own listen port to itself is always a mistake and
+	// makes a proxy loop that is tedious to diagnose from the other end.
+	if _, listenPort, err := net.SplitHostPort(s.addr); err == nil && listenPort == strconv.Itoa(body.Port) {
+		http.Error(w, "cannot tunnel muxterm's own listen port", http.StatusBadRequest)
 		return
 	}
 	id, err := s.tunnels.Create(body.Port)
@@ -268,7 +300,30 @@ func (s *Server) handleTunnelCreate(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
 		"id":   id,
 		"port": body.Port,
+		"url":  s.tunnelURL(id),
 	})
+}
+
+// tunnelURL returns the address a caller should use to reach tunnel id.
+//
+// It returns an ABSOLUTE url only when an operator has configured a public
+// origin; otherwise it returns the relative path "/t/{id}/". This asymmetry
+// is deliberate. The only origin muxterm can derive without configuration is
+// its own listen address, which in every deployment that has a remote caller
+// is a loopback address that is wrong for that caller by construction --
+// handing back "http://127.0.0.1:9090/t/ab12c/" would be a confidently
+// incorrect answer, which is worse than an honest relative one the caller
+// resolves itself. Never derived from a request header: see the note on
+// ServerConfig for why headers are not trusted for self-origin.
+func (s *Server) tunnelURL(id string) string {
+	s.cfgMu.RLock()
+	sc := s.cfg.Server
+	s.cfgMu.RUnlock()
+	path := "/t/" + id + "/"
+	if !sc.BehindReverseProxy || sc.BaseURL() == "" {
+		return path
+	}
+	return sc.BaseURL() + path
 }
 
 // handleTunnelClose deregisters the tunnel identified by the {id} path

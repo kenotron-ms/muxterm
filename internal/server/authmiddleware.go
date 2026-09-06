@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/subtle"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,6 +33,26 @@ type AuthMiddleware struct {
 	// is a static, config-gated switch: never auto-detected, never derived
 	// from a forwarded header.
 	behindReverseProxy bool
+	// localToken authenticates same-user helper processes on this machine
+	// (today: the MCP server) that talk to the serve layer's HTTP API. It
+	// is published only through a 0600 file inside the 0700 runtime dir,
+	// so possession of it already implies the same UID that runs muxterm.
+	//
+	// It exists because those callers had NO credential at all: they were
+	// admitted solely by the IsLocalhost() bypass above, which
+	// behind_reverse_proxy disables -- so enabling reverse-proxy mode used
+	// to 401 every tunnel and config tool with no indication why. Empty
+	// string disables the check entirely (never matches).
+	localToken string
+	// publicHost is the host[:port] of the configured public origin, set
+	// only when behindReverseProxy is on. It exists to detect a browser
+	// that arrived on some OTHER host: the OAuth flow it would be sent
+	// into sets its PKCE cookie on the arrival host but finishes at the
+	// public origin, a different cookie domain, so the verifier is never
+	// sent back and the token exchange fails with "missing or expired
+	// login state" no matter how many times the user retries. Better to
+	// say so than to start a flow that cannot finish.
+	publicHost string
 }
 
 // NewAuthMiddleware returns a middleware wired to authSrv, which may be
@@ -40,8 +62,26 @@ type AuthMiddleware struct {
 // noAuth mirrors the existing --no-auth dev-only flag: when set, ALL
 // checks (including loopback and the fail-closed case) are skipped.
 // behindReverseProxy disables the loopback bypass entirely.
-func NewAuthMiddleware(authSrv *authserver.AuthServer, noAuth, behindReverseProxy bool) *AuthMiddleware {
-	return &AuthMiddleware{authSrv: authSrv, noAuth: noAuth, behindReverseProxy: behindReverseProxy}
+// localToken is the same-user helper-process credential; pass "" to disable.
+// publicHost is the configured public origin's host[:port]; pass "" to skip
+// the arrival-origin check.
+func NewAuthMiddleware(authSrv *authserver.AuthServer, noAuth, behindReverseProxy bool, localToken, publicHost string) *AuthMiddleware {
+	return &AuthMiddleware{
+		authSrv:            authSrv,
+		noAuth:             noAuth,
+		behindReverseProxy: behindReverseProxy,
+		localToken:         localToken,
+		publicHost:         publicHost,
+	}
+}
+
+// wrongArrivalOrigin reports whether r reached muxterm on a host other than
+// the configured public origin while reverse-proxy mode is on.
+func (m *AuthMiddleware) wrongArrivalOrigin(r *http.Request) bool {
+	if !m.behindReverseProxy || m.publicHost == "" || r.Host == "" {
+		return false
+	}
+	return !strings.EqualFold(r.Host, m.publicHost)
 }
 
 // Wrap returns next wrapped with the auth check.
@@ -55,6 +95,15 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		// proxy every request must complete the real OAuth flow regardless
 		// of which interface it arrived on.
 		if !m.behindReverseProxy && IsLocalhost(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Same-user local helper processes (MCP). Checked BEFORE the
+		// authSrv==nil fail-closed gate on purpose: these callers hold a
+		// credential that never depended on the login backend, so a PAM
+		// outage must not take muxterm's own tooling down with it.
+		if token, ok := bearerToken(r); ok && m.matchesLocalToken(token) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -88,13 +137,103 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 }
 
 func (m *AuthMiddleware) deny(w http.ResponseWriter, r *http.Request) {
-	if strings.Contains(r.Header.Get("Accept"), "text/html") {
-		http.Redirect(w, r, "/auth/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+	wantsHTML := strings.Contains(r.Header.Get("Accept"), "text/html")
+
+	// The login backend is unavailable, so /auth/login is not even mounted
+	// (see Server.registerRoutes). Redirecting there would send every
+	// browser -- including one at the console -- into a 302 that answers
+	// 404, with nothing anywhere saying why. Explain instead.
+	if m.authSrv == nil {
+		const msg = "muxterm cannot authenticate anyone right now: the login backend was " +
+			"unavailable when the server started, so every request is denied.\n\n" +
+			"Check the server log for the \"login backend unavailable\" line, fix the cause, " +
+			"and restart muxterm."
+		if wantsHTML {
+			httpPlainText(w, http.StatusServiceUnavailable, msg)
+			return
+		}
+		httpJSONError(w, http.StatusServiceUnavailable, "login_backend_unavailable", msg)
+		return
+	}
+
+	// Arrived somewhere other than the configured public origin. Starting
+	// the OAuth flow from here cannot succeed: the PKCE cookie would be
+	// written to this host and the callback lands on the public origin,
+	// which never receives it.
+	if m.wrongArrivalOrigin(r) {
+		msg := "muxterm is configured to be reached at " + m.publicHost +
+			", but this request arrived at " + r.Host + ".\n\n" +
+			"Logging in from here cannot complete -- the login flow finishes at the " +
+			"configured origin, which does not receive the cookie set here.\n\n" +
+			"Use the configured origin, or change public_origin in muxterm's config file."
+		if wantsHTML {
+			httpPlainText(w, http.StatusMisdirectedRequest, msg)
+			return
+		}
+		httpJSONError(w, http.StatusMisdirectedRequest, "wrong_origin", msg)
+		return
+	}
+
+	if wantsHTML {
+		http.Redirect(w, r, loginRedirectTarget(r), http.StatusFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	w.Write([]byte(`{"error":"invalid_token"}`)) //nolint:errcheck
+}
+
+// httpPlainText writes a bare text/plain body. Deliberately not HTML: this
+// path runs when auth is broken or misconfigured, and a plain body cannot
+// reflect any request-controlled value into markup.
+func httpPlainText(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(code)
+	w.Write([]byte("muxterm\n\n" + msg + "\n")) //nolint:errcheck
+}
+
+func httpJSONError(w http.ResponseWriter, code int, errCode, desc string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
+		"error":             errCode,
+		"error_description": desc,
+	})
+}
+
+// loginRedirectTarget builds a RELATIVE Location pointing at /auth/login.
+//
+// A rooted "/auth/login" is wrong whenever muxterm is reached through an
+// outer path prefix -- muxterm proxied through its own /t/{id}/ tunnel is
+// the case that exists today -- because it escapes the prefix and lands on
+// whatever is mounted at the real origin root.
+//
+// A relative target is correct in BOTH topologies without the server having
+// to know its own mount point. The proxy strips the prefix before muxterm
+// sees the path, so the depth computed here is the depth below the mount
+// point; the browser then resolves that relative reference against the URL
+// it actually requested, which still carries the prefix, and puts it back.
+//
+//	direct:  GET /foo/bar        -> "../auth/login" resolved against /foo/  -> /auth/login
+//	prefixed: GET /t/ab/foo/bar  -> muxterm sees /foo/bar, emits "../auth/login",
+//	                                browser resolves against /t/ab/foo/     -> /t/ab/auth/login
+func loginRedirectTarget(r *http.Request) string {
+	target := "auth/login?return_to=" + url.QueryEscape(r.URL.RequestURI())
+	// Number of path segments below the mount point that the browser will
+	// strip when resolving: everything after the leading slash, minus the
+	// final segment (the resource itself, or "" for a directory URL).
+	depth := len(strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")) - 1
+	return strings.Repeat("../", depth) + target
+}
+
+// matchesLocalToken reports whether tok is the configured same-user helper
+// token. Constant-time to keep the comparison from leaking the token a byte
+// at a time; an empty configured token never matches anything.
+func (m *AuthMiddleware) matchesLocalToken(tok string) bool {
+	if m.localToken == "" || tok == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(tok), []byte(m.localToken)) == 1
 }
 
 func bearerToken(r *http.Request) (string, bool) {

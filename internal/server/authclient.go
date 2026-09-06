@@ -40,15 +40,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	returnTo := r.URL.Query().Get("return_to")
-	if returnTo == "" {
-		returnTo = "/"
-	} else if parsed, err := url.Parse(returnTo); err != nil || !strings.HasPrefix(returnTo, "/") || strings.HasPrefix(returnTo, "//") || parsed.IsAbs() || parsed.Host != "" {
-		// Only redirect within muxterm after authentication. AuthMiddleware
-		// always supplies a relative request URI, but /auth/login is public
-		// and callers can invoke it directly.
-		returnTo = "/"
-	}
+	returnTo := safeReturnTo(r.URL.Query().Get("return_to"))
 
 	ps := pkceState{State: state, Verifier: verifier, ReturnTo: returnTo}
 	raw, err := json.Marshal(ps)
@@ -61,6 +53,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    base64.URLEncoding.EncodeToString(raw),
 		Path:     "/auth/",
 		HttpOnly: true,
+		Secure:   s.secureCookies(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(pkceCookieTTL.Seconds()),
 	})
@@ -98,7 +91,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Consume the PKCE cookie immediately; it is single-use.
-	http.SetCookie(w, &http.Cookie{Name: pkceCookieName, Value: "", Path: "/auth/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: pkceCookieName, Value: "", Path: "/auth/", Secure: s.secureCookies(), MaxAge: -1})
 
 	if r.URL.Query().Get("state") != ps.State {
 		http.Error(w, "state mismatch", http.StatusBadRequest)
@@ -125,6 +118,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		Value:    accessToken,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   s.secureCookies(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(expiresIn.Seconds()),
 	})
@@ -160,6 +154,7 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   s.secureCookies(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
@@ -177,4 +172,61 @@ func randomURLSafeString(nBytes int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// secureCookies reports whether auth cookies should carry the Secure
+// attribute. It is keyed off the configured public origin's scheme rather
+// than set unconditionally: Secure cookies are dropped by browsers over
+// plain http, which would break local development and any deployment that
+// legitimately terminates at http on a trusted network.
+func (s *Server) secureCookies() bool {
+	s.cfgMu.RLock()
+	sc := s.cfg.Server
+	s.cfgMu.RUnlock()
+	if !sc.BehindReverseProxy {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(sc.BaseURL()), "https://")
+}
+
+// safeReturnTo constrains a post-login redirect to a path inside muxterm.
+//
+// Anything that could be read by a browser as another origin resolves to
+// "/". url.Parse alone is not sufficient: browsers following the WHATWG URL
+// spec normalize a backslash to a forward slash at path-start, so "/\evil"
+// is treated as "//evil" -- a protocol-relative URL to another host -- while
+// url.Parse reports it as an ordinary relative path. Percent-encoded C0
+// control characters and whitespace are likewise stripped before that
+// normalization, so "/%09//evil" collapses to "//evil". Both are rejected
+// here by decoding and scrubbing before the prefix checks.
+func safeReturnTo(raw string) string {
+	const fallback = "/"
+	if raw == "" {
+		return fallback
+	}
+	// Decode so encoded control characters cannot hide the shape of the
+	// value from the checks below; ignore decode errors and fall through to
+	// checking the raw form.
+	decoded := raw
+	if unescaped, err := url.PathUnescape(raw); err == nil {
+		decoded = unescaped
+	}
+	// Browsers treat backslash as a path separator; normalize before
+	// checking so "/\evil.com" cannot pass as a relative path.
+	normalized := strings.ReplaceAll(decoded, "\\", "/")
+	// Strip leading C0 controls, space, and DEL, which browsers ignore.
+	normalized = strings.TrimLeft(normalized, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\v\f\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f \x7f")
+	if !strings.HasPrefix(normalized, "/") || strings.HasPrefix(normalized, "//") {
+		return fallback
+	}
+	// Any remaining control character or whitespace anywhere in the value is
+	// a header-splitting or normalization hazard; refuse rather than guess.
+	if strings.ContainsFunc(normalized, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return fallback
+	}
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || parsed.Scheme != "" {
+		return fallback
+	}
+	return normalized
 }
