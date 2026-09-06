@@ -32,7 +32,6 @@ func init() {
 // Config holds the configuration for creating a new Server.
 type Config struct {
 	Addr          string
-	Secret        string
 	StaticFS      fs.FS
 	NoAuth        bool          // skip all auth checks, including loopback bypass (dev only)
 	ConfigPath    string        // path to write config.toml on PATCH /api/config (empty = skip writes)

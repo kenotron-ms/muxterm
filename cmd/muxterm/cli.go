@@ -6,13 +6,22 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/kenotron-ms/muxterm/internal/config"
 )
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode      string // local, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, amplifier-install, help
-	Addr      string // listen address
-	Secret    string // auth token for serve mode
+	Mode string // local, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, amplifier-install, help
+	Addr string // listen address
+	// Secret is accepted and ignored. It exists only so an installed unit
+	// that still passes --secret keeps parsing: the documented upgrade
+	// path and the browser's self-update both restart the service without
+	// regenerating the unit, so an old flag-bearing ExecStart can outlive
+	// the binary indefinitely. flag treats an unknown flag as a fatal
+	// error, which under Restart=on-failure is a five-second crash loop.
+	// Nothing reads the value; muxterm authenticates via browser login.
+	Secret    string
 	NoAuth    bool   // skip WebSocket auth check (dev only — never use in production)
 	Target    string // SSH target for deploy mode
 	Force     bool   // install: overwrite existing service installation
@@ -56,7 +65,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "muxterm — browser-based terminal multiplexer")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  muxterm                     Open in browser (127.0.0.1:8311, default)")
+	fmt.Fprintln(w, "  muxterm                     Open in browser ("+config.DefaultAddr+", default)")
 	fmt.Fprintln(w, "  muxterm serve [flags]       Start server for remote access")
 	fmt.Fprintln(w, "  muxterm install [flags]     Install as a system service")
 	fmt.Fprintln(w, "  muxterm uninstall           Remove system service")
@@ -153,7 +162,12 @@ func parseCommand(args []string) (Config, error) {
 	if len(args) == 0 {
 		return Config{
 			Mode: "local",
-			Addr: "127.0.0.1:8311",
+			// Explicit, not the empty sentinel: runLocal deliberately
+			// ignores [server], so this is local mode's ONLY source for a
+			// listen address. An empty Addr here would reach
+			// http.Server.Addr, which net/http documents as meaning ":http"
+			// -- port 80 on every interface.
+			Addr: config.DefaultAddr,
 		}, nil
 	}
 
@@ -244,8 +258,14 @@ func parseMCP(args []string) (Config, error) {
 func parseServe(args []string) (Config, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
-	addr := fs.String("addr", "127.0.0.1:8311", "listen address")
-	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
+	// Empty default, NOT config.DefaultAddr. A non-empty flag default is
+	// indistinguishable from a value the operator typed, and the
+	// precedence idiom this repo uses is `if cli.X != ""` -- so a
+	// defaulted flag would beat a configured [server].addr every time and
+	// the config file would never be consulted. Absence must be
+	// representable. The default is applied after resolution instead.
+	addr := fs.String("addr", "", "listen address (default "+config.DefaultAddr+"; overrides [server].addr)")
+	secret := fs.String("secret", "", "deprecated and ignored; muxterm authenticates via browser login")
 	noAuth := fs.Bool("no-auth", false, "skip WebSocket auth check (dev only — never use in production)")
 	publicOrigin := fs.String("public-origin", "", "canonical public origin when behind a reverse proxy (e.g. https://muxterm.example.com); required with --behind-reverse-proxy")
 	behindProxy := fs.Bool("behind-reverse-proxy", false, "run behind a reverse proxy: derive public URLs from --public-origin and disable the loopback auth bypass")
@@ -296,8 +316,10 @@ func parseDeploy(args []string) (Config, error) {
 func parseInstall(args []string) (Config, error) {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
-	addr := fs.String("addr", "127.0.0.1:8311", "listen address for the service")
-	secret := fs.String("secret", "", "auth secret (auto-generated if empty)")
+	// Empty default -- see the note on serve's --addr. Absent means "leave
+	// whatever is already configured alone", which is what makes a bare
+	// `muxterm install` upgrade non-destructive.
+	addr := fs.String("addr", "", "listen address to persist to the muxterm config file (default "+config.DefaultAddr+"; omit to keep the configured value)")
 	force := fs.Bool("force", false, "stop and overwrite an existing installation")
 	// Declared to mirror `serve`, but NOT carried into the generated unit's
 	// ExecStart (or the launchd plist). install persists them to the
@@ -323,7 +345,6 @@ func parseInstall(args []string) (Config, error) {
 	return Config{
 		Mode:               "install",
 		Addr:               *addr,
-		Secret:             *secret,
 		Force:              *force,
 		PublicOrigin:       *publicOrigin,
 		BehindReverseProxy: *behindProxy,

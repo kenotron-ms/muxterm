@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -198,9 +199,41 @@ func runDoctor() error {
 	// browsers to a loopback address they cannot reach. Report it here so
 	// the failure is diagnosable without reading source.
 	fmt.Println()
-	resolved, _ := config.Load(config.DefaultPath())
+	resolved, malformed, _ := config.LoadStrictServer(config.DefaultPath())
 	sc := resolved.Server
 	fmt.Printf("     config:  %s\n", config.DefaultPath())
+	if malformed {
+		fmt.Printf("  %s  config:  could not be parsed; serve mode will refuse to start\n", fail)
+	}
+
+	// The listen address, and where it came from. Without this the one
+	// artifact doctor points at -- the unit file -- no longer mentions an
+	// address at all, so a confused operator has nowhere to look.
+	effAddr := sc.Addr
+	src := config.DefaultPath()
+	if effAddr == "" {
+		effAddr, src = config.DefaultAddr, "built-in default"
+	}
+	if err := config.ValidateAddr(effAddr); err != nil {
+		fmt.Printf("  %s  addr:    %v\n", fail, err)
+	} else {
+		listening := "nothing listening"
+		mark := fail
+		if c, derr := net.DialTimeout("tcp", effAddr, 500*time.Millisecond); derr == nil {
+			c.Close() //nolint:errcheck
+			listening, mark = "listening", ok
+		}
+		fmt.Printf("  %s  addr:    %s (%s) -- %s\n", mark, effAddr, src, listening)
+	}
+	// The installed unit may still carry an address the config file does
+	// not account for, in which case the line above describes what serve
+	// WOULD use, not what the running service is actually bound to. Say so
+	// rather than letting a coincidental listener on the default port read
+	// as confirmation.
+	if found, needs := unitAddrNeedingMigration(sc.Addr); needs {
+		fmt.Printf("  %s  addr:    the installed unit runs muxterm on %s, which is not in the config file\n", fail, found)
+		fmt.Printf("     hint:    run 'muxterm install --addr %s' to move it into the config file\n", found)
+	}
 	switch {
 	case sc.BehindReverseProxy && sc.PublicOrigin != "":
 		fmt.Printf("  %s  origin:  %s (reverse-proxy mode on)\n", ok, sc.Normalize().BaseURL())
@@ -289,6 +322,9 @@ func newSessiondDialer(tr server.RemoteTransport) server.DialFunc {
 // breaking local interactive use on the one machine where it matters most.
 func resolveServerConfig(cli Config, file config.ServerConfig) config.ServerConfig {
 	out := file
+	if cli.Addr != "" {
+		out.Addr = cli.Addr
+	}
 	if cli.PublicOrigin != "" {
 		out.PublicOrigin = cli.PublicOrigin
 	}
@@ -296,6 +332,21 @@ func resolveServerConfig(cli Config, file config.ServerConfig) config.ServerConf
 		out.BehindReverseProxy = true
 	}
 	return out
+}
+
+// addrSource names where the effective listen address came from, so the
+// startup log answers "why is it on this port" without anyone reading
+// source. flagVal is the raw --addr flag (empty when unset); fileVal is
+// [server].addr as read from the config file.
+func addrSource(flagVal, fileVal string) string {
+	switch {
+	case flagVal != "":
+		return "from --addr"
+	case fileVal != "":
+		return "from " + config.DefaultPath()
+	default:
+		return "built-in default"
+	}
 }
 
 // publicBaseURL returns the origin muxterm must use whenever it constructs
@@ -428,6 +479,8 @@ func runLocal(cfg Config) error {
 	}
 	go openBrowser("http://" + browserHost)
 
+	// Local mode deliberately ignores [server], so there is no source to
+	// name here -- cfg.Addr is the only one.
 	log.Printf("muxterm listening on %s", cfg.Addr)
 	return srv.ListenAndServe(ctx)
 }
@@ -436,7 +489,27 @@ func runLocal(cfg Config) error {
 // and blocks until shutdown. The daemon is ensured lazily by the dialer (per
 // browser), which is a no-op under systemd where the daemon is its own unit.
 func runServe(cfg Config) error {
-	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
+	// LoadStrictServer, not Load: a malformed config file degrades every
+	// section to defaults, and for [server] that silently moves the
+	// listener and clears behind_reverse_proxy (re-enabling the loopback
+	// auth bypass). Serve mode depends on that section, so it refuses
+	// rather than guessing.
+	resolved, malformed, _ := config.LoadStrictServer(config.DefaultPath())
+	if malformed {
+		return fmt.Errorf(
+			"config: %s could not be parsed, and serve mode depends on its [server] section "+
+				"(listen address, public origin, reverse-proxy mode). Fix the file, or move it "+
+				"aside to start with built-in defaults", config.DefaultPath())
+	}
+
+	// One line, once, at startup: an installed unit still passing --secret
+	// is the signal that it predates the mechanism/policy split and has
+	// not been regenerated. Harmless, but worth naming so the operator can
+	// see why and fix it at their convenience.
+	if cfg.Secret != "" {
+		log.Printf("muxterm: --secret is deprecated and ignored (muxterm authenticates via browser login); " +
+			"re-run `muxterm install` to regenerate a unit without it")
+	}
 
 	// Serve mode is the ONLY mode that honors the [server] section. Fail
 	// closed BEFORE the listener binds: an ambiguous or misconfigured
@@ -448,6 +521,22 @@ func runServe(cfg Config) error {
 	if err := srvCfg.Validate(); err != nil {
 		return err
 	}
+
+	// ONE resolved listen address, computed once, used everywhere below.
+	// cfg.Addr is the raw flag and is empty unless the operator typed it.
+	// Every consumer must see the same string: srvCfg.Addr feeds the
+	// listener, the OAuth exact-match redirect URI, the auth server, and
+	// the MCP handoff file. Resolving the listener but not the redirect
+	// URI yields a server on one port advertising a callback on another --
+	// login fails for every remote user while nothing crashes and the
+	// journal looks healthy.
+	if srvCfg.Addr == "" {
+		srvCfg.Addr = config.DefaultAddr
+	}
+	if err := config.ValidateAddr(srvCfg.Addr); err != nil {
+		return err
+	}
+	addr := srvCfg.Addr
 	// Accepted-but-probably-not-what-you-meant. Logged, never fatal: a
 	// setting that is merely ineffective must not take the service down.
 	for _, w := range srvCfg.Warnings() {
@@ -465,7 +554,7 @@ func runServe(cfg Config) error {
 	// the file.
 	resolved.Server = srvCfg
 
-	authSrv, err := newAuthServer(cfg.Addr, srvCfg)
+	authSrv, err := newAuthServer(addr, srvCfg)
 	if err != nil {
 		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
 	}
@@ -482,13 +571,13 @@ func runServe(cfg Config) error {
 	}
 
 	srv := server.New(server.Config{
-		Addr:               cfg.Addr,
+		Addr:               addr,
 		StaticFS:           mustSubFS(webstatic.Dist, "dist"),
 		NoAuth:             cfg.NoAuth,
 		ConfigPath:         config.DefaultPath(),
 		InitialConfig:      resolved,
 		AuthServer:         authSrv,
-		WebRedirectURI:     webRedirectURIFor(cfg.Addr, srvCfg),
+		WebRedirectURI:     webRedirectURIFor(addr, srvCfg),
 		BehindReverseProxy: srvCfg.BehindReverseProxy,
 		LocalToken:         localToken,
 		Version:            version,
@@ -499,14 +588,14 @@ func runServe(cfg Config) error {
 
 	// Publish serve-layer URL + local token so the MCP server can discover
 	// and authenticate to the tunnel API.
-	if err := sessiond.WriteServerURL(cfg.Addr, localToken); err != nil {
+	if err := sessiond.WriteServerURL(addr, localToken); err != nil {
 		log.Printf("muxterm: could not write server URL: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("muxterm listening on %s", cfg.Addr)
+	log.Printf("muxterm listening on %s (%s)", addr, addrSource(cfg.Addr, resolved.Server.Addr))
 	return srv.ListenAndServe(ctx)
 }
 
@@ -536,8 +625,8 @@ func runInstall(cfg Config) error {
 		return err
 	}
 	if wrote {
-		fmt.Printf("wrote %s: public_origin=%q behind_reverse_proxy=%v\n",
-			configPath, srvCfg.PublicOrigin, srvCfg.BehindReverseProxy)
+		fmt.Printf("wrote %s: addr=%q public_origin=%q behind_reverse_proxy=%v\n",
+			configPath, srvCfg.Addr, srvCfg.PublicOrigin, srvCfg.BehindReverseProxy)
 		// Accepted but probably not what you meant (e.g. an origin set
 		// while behind_reverse_proxy is still false, which muxterm
 		// ignores). Never fatal -- an ineffective setting must not
@@ -547,16 +636,97 @@ func runInstall(cfg Config) error {
 		}
 	}
 
+	// Refuse to silently discard an address configured somewhere this
+	// installer does not manage. The unit is about to be rewritten
+	// wholesale; if its current ExecStart carries a listen address that
+	// did not come from the config file, overwriting it would move the
+	// listener without saying so. Report and stop instead of guessing.
+	if found, ok := unitAddrNeedingMigration(srvCfg.Addr); ok {
+		return fmt.Errorf(
+			"the installed unit runs muxterm on %s, which is not in %s.\n\n"+
+				"Installing would rewrite that unit and move the listener.\n\n"+
+				"To keep %s, run:\n    muxterm install --addr %s\n\n"+
+				"To accept a different address, pass --addr with the one you want.",
+			found, configPath, found, found)
+	}
+
+	// The resolved address, not the raw flag: after this install the
+	// service reads it from the config file, so the flag is usually empty
+	// and printing it would misreport where the service actually listens.
+	effectiveAddr := srvCfg.Addr
+	if effectiveAddr == "" {
+		effectiveAddr = config.DefaultAddr
+	}
+
 	svcCfg := service.ServiceConfig{
-		Addr:   cfg.Addr,
-		Secret: cfg.Secret,
-		Force:  cfg.Force,
+		Addr:  effectiveAddr,
+		Force: cfg.Force,
 	}
 	if err := service.Install(svcCfg); err != nil {
 		return err
 	}
-	fmt.Printf("muxterm installed and running at http://%s\n", cfg.Addr)
+	fmt.Printf("muxterm installed; it will listen on %s (from %s)\n", effectiveAddr, configPath)
 	return nil
+}
+
+// unitAddrNeedingMigration reports an address found in the installed unit's
+// ExecStart that the config file does not already account for.
+//
+// Deliberately NOT a migration: it does not rewrite anything, and it makes
+// no attempt to be a general systemd parser. Recognizing every legal
+// ExecStart -- line continuations, whitespace around "=", commented-out
+// lines, "--addr=x" versus "--addr x", quoted values, "%" specifiers, the
+// "ExecStart=" reset idiom, and drop-ins under muxterm.service.d/ that this
+// path never even opens -- means a parser that is confidently wrong in ways
+// nobody discovers. This looks for the one shape muxterm itself used to
+// write, and when anything is unclear it reports nothing rather than
+// guessing. A false negative costs one flag; a false positive would move
+// the listener.
+func unitAddrNeedingMigration(configuredAddr string) (string, bool) {
+	if configuredAddr != "" {
+		return "", false // config already has an answer; nothing to preserve
+	}
+	if runtime.GOOS != "linux" {
+		return "", false
+	}
+	data, err := os.ReadFile(service.SystemdUnitPath())
+	if err != nil {
+		return "", false // no unit yet: first install
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "ExecStart=") || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			var candidate string
+			switch {
+			case f == "--addr" || f == "-addr":
+				if i+1 >= len(fields) {
+					continue
+				}
+				candidate = fields[i+1]
+			case strings.HasPrefix(f, "--addr="):
+				candidate = strings.TrimPrefix(f, "--addr=")
+			case strings.HasPrefix(f, "-addr="):
+				candidate = strings.TrimPrefix(f, "-addr=")
+			default:
+				continue
+			}
+			candidate = strings.Trim(candidate, `"'`)
+			// Only report something that is unambiguously a usable listen
+			// address and differs from what a fresh install would choose.
+			if config.ValidateAddr(candidate) != nil || strings.Contains(candidate, "%") {
+				continue
+			}
+			if candidate == config.DefaultAddr {
+				return "", false
+			}
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 // runUninstall removes the muxterm system service.

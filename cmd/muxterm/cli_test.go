@@ -25,8 +25,13 @@ func TestParseArgs_ServeDefaults(t *testing.T) {
 	if cfg.Mode != "serve" {
 		t.Errorf("Mode = %q, want %q", cfg.Mode, "serve")
 	}
-	if cfg.Addr != "127.0.0.1:8311" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "127.0.0.1:8311")
+	// The empty sentinel, NOT config.DefaultAddr. serve has to be able to tell
+	// "operator typed nothing" from "operator typed the default": the
+	// precedence idiom is `if cli.Addr != ""`, so a defaulted flag would beat
+	// [server].addr in the config file every time and the file would never be
+	// consulted. The default is applied after resolution instead.
+	if cfg.Addr != "" {
+		t.Errorf("Addr = %q, want empty (absence must stay representable)", cfg.Addr)
 	}
 	if cfg.Secret != "" {
 		t.Errorf("Secret = %q, want empty string", cfg.Secret)
@@ -118,8 +123,11 @@ func TestParseArgs_Install_DefaultFlags(t *testing.T) {
 	if cfg.Mode != "install" {
 		t.Errorf("Mode = %q, want %q", cfg.Mode, "install")
 	}
-	if cfg.Addr != "127.0.0.1:8311" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "127.0.0.1:8311")
+	// Empty sentinel, as with serve. Absent --addr means "leave whatever is
+	// already in the config file alone", which is what makes a bare
+	// `muxterm install` upgrade non-destructive.
+	if cfg.Addr != "" {
+		t.Errorf("Addr = %q, want empty (absence must stay representable)", cfg.Addr)
 	}
 	if cfg.Secret != "" {
 		t.Errorf("Secret = %q, want empty (auto-generated at install time)", cfg.Secret)
@@ -127,7 +135,7 @@ func TestParseArgs_Install_DefaultFlags(t *testing.T) {
 }
 
 func TestParseArgs_Install_WithFlags(t *testing.T) {
-	cfg, err := ParseArgs([]string{"install", "--addr", "0.0.0.0:8311", "--secret", "mysecret"})
+	cfg, err := ParseArgs([]string{"install", "--addr", "0.0.0.0:8311"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,8 +145,20 @@ func TestParseArgs_Install_WithFlags(t *testing.T) {
 	if cfg.Addr != "0.0.0.0:8311" {
 		t.Errorf("Addr = %q, want %q", cfg.Addr, "0.0.0.0:8311")
 	}
-	if cfg.Secret != "mysecret" {
-		t.Errorf("Secret = %q, want %q", cfg.Secret, "mysecret")
+	if cfg.Secret != "" {
+		t.Errorf("Secret = %q, want empty (install never sets it)", cfg.Secret)
+	}
+
+	// --secret was REMOVED from install, not left as an accepted no-op:
+	// nothing in the install path generates, stores, or renders a credential,
+	// so an operator passing one must be told, not silently ignored.
+	//
+	// serve is the deliberate exception -- it still PARSES --secret and does
+	// nothing with it -- because an already-installed unit whose ExecStart
+	// still passes the flag has to keep starting. flag treats an unknown flag
+	// as fatal, which under Restart=on-failure is a five-second crash loop.
+	if _, err := ParseArgs([]string{"install", "--secret", "mysecret"}); err == nil {
+		t.Error("install --secret should be rejected, got nil error")
 	}
 }
 
