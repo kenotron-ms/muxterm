@@ -611,6 +611,17 @@ func (s *Supervisor) supervise(ctx context.Context) {
 			s.broker.Publish(ev)
 		}
 	}()
+	// deadCh is the "this supervisor will never be ready" signal, and every
+	// exit from this loop has to raise it -- not just the failure paths.
+	// fail() closes it, but a CLEAN stop (Close, or a cancelled ctx) returns
+	// through the stopping() guard without ever calling fail(). A caller that
+	// then did WaitReady(context.Background()) waited forever: readyCh never
+	// closes because the sidecar is gone, deadCh never closed because nothing
+	// failed, and Background() never cancels. Closing it here makes the
+	// invariant hold on every path, and deadOnce keeps fail()'s own close a
+	// no-op. lastErr is left alone, so WaitReady still reports ErrNotRunning
+	// for a clean stop and the real cause for a failure.
+	defer s.deadOnce.Do(func() { close(s.deadCh) })
 
 	backoff := initialBackoff
 	earlyFailures := 0
