@@ -142,12 +142,34 @@ The harness catalog becomes CoS *knowledge*, not CoS *string-building*:
 
 | harness | launchable | argv | good for |
 |---|---|---|---|
-| `amplifier` | ✅ | `amplifier run <prompt> --mode chat` | goal loops, delegation, skills, MCP |
+| `amplifier` (interactive) | ✅ | `amplifier run <prompt> --mode chat` | delegation, skills, MCP |
+| `amplifier` (goal) | ✅ | `amplifier run "/goal <condition>"` | goal loops — **no** `--mode chat` |
 | `claude` | ✅ | `claude <prompt>` | fast interactive edits |
 | `codex`, `opencode` | ❌ recognized only | — | rows render; cannot be launched |
 
-`--mode chat` is load-bearing: without it the run is single-shot and the pane
-dies after one turn (`harness.ts:47-50`).
+`--mode chat` is load-bearing for the **interactive** lane: without it the run
+is single-shot and the pane dies after one turn (`harness.ts`).
+
+It is exactly wrong for a **goal** lane. `/goal` is a slash command and
+amplifier honours it only on the headless path — the single
+`prompt.strip().lower().startswith("/goal ")` test lives in `execute_single`
+(`main.py:4288`). Under `--mode chat` an initial prompt goes straight to
+`_execute_with_interrupt` (`main.py:3992-4005`) and never reaches
+`CommandProcessor`, so the condition arrives as ordinary prompt text,
+`session_state["goal"]` is never set, and the lane comes back
+`mode=interactive` with an empty `doneMeans`. A goal lane runs many turns
+headlessly and then legitimately exits — that exit is the loop finishing, not
+the pane dying early.
+
+**Measured consequence, unsolved:** muxterm keeps no tombstone for an exited
+pane. `Server.handlePaneExit` (`internal/sessiond/server.go`) removes the pane
+on process exit, and `ReapIfEmpty` removes the workspace when that was its last
+pane, taking the session-state row with it. A finished goal lane therefore goes
+`autonomous/working` → absent from `fleet_status`, with no terminal
+`done`/`failed` row observable in between (polled at 3s: present at T, absent at
+T+4). Section 4's promise is only half kept: the CoS can read a goal lane's
+declared intent **while it runs**, and cannot read its verdict afterwards. That
+is a pane/row retention gap, not an argv one.
 
 ---
 
@@ -164,10 +186,12 @@ That is not a limitation. It is the design:
 > **When the CoS delegates, the CoS writes the stop condition.**
 
 `spawn_lane(..., goal: "refresh tokens rotate without re-login")` launches
-`amplifier run "/goal refresh tokens rotate without re-login" --mode chat`. The
-lane now carries its own declared intent on the session-state wire, visible to
-the card, the rail, and the CoS's own monitoring pass. **CoS-delegated work is
-inherently drift-checkable because the CoS declared what done means.**
+`amplifier run "/goal refresh tokens rotate without re-login"` — headless, with
+no `--mode chat` (see the harness table above for why that flag would silently
+disarm the loop). The lane now carries its own declared intent on the
+session-state wire, visible to the card, the rail, and the CoS's own monitoring
+pass. **CoS-delegated work is inherently drift-checkable because the CoS
+declared what done means.**
 
 For lanes the CoS did not create, the intent proxy is `name` (first meaningful
 line of the first prompt, ≤80 chars). Weaker, and the CoS should say so rather

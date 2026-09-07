@@ -23,6 +23,7 @@ func runSession(args []string) error {
 		fmt.Fprintln(os.Stdout, "Commands:")
 		fmt.Fprintln(os.Stdout, "  list                    Alias for 'muxterm workspace list'")
 		fmt.Fprintln(os.Stdout, "  attach <workspace-id>   Print a workspace's composition (panes + layout)")
+		fmt.Fprintln(os.Stdout, "  read <session-id>       Print the tail of an agent session's transcript")
 		fmt.Fprintln(os.Stdout, "  report [flags]          Publish a session-state snapshot to the home view")
 		return nil
 	}
@@ -35,6 +36,11 @@ func runSession(args []string) error {
 		return runWorkspaceList(args[1:], "muxterm session list")
 	case "attach":
 		return runSessionAttach(args[1:])
+	case "read":
+		// The consumer side of the same feed `report` produces: report writes
+		// a session's declared state, fleet lists it, read shows what the
+		// session actually said. See session_read_cmd.go.
+		return runSessionRead(args[1:])
 	case "report":
 		// The universal producer; see session_report_cmd.go. Unlike list and
 		// attach it never dials the daemon -- it writes a file.

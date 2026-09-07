@@ -70,6 +70,13 @@ Each item resolves independently to PASS or BLOCKED(cause).
     claude → `["claude",<prompt>]`; when `goal` is set the amplifier prompt
     becomes `"/goal " + goal`. `goal` with `harness:"claude"` returns a clear
     error rather than being ignored.
+    **CORRECTION (2026-09-07): this item as written specified a bug.** Keeping
+    `--mode chat` on the goal argv makes `/goal` literal prompt text — the
+    command is honoured only on amplifier's headless path — so the lane came
+    back `mode=interactive` with an empty `doneMeans`. A goal lane is
+    `["amplifier","run","/goal "+goal]`, with no `--mode chat`; the flag stays
+    on the interactive lane only. See `HarnessArgv` in
+    `internal/mcp/tools_lane.go` and the correction section in `HANDOFF.md`.
 16. `muxterm spawn-lane` provides CLI parity with the tool.
 17. `spawn_lane` launches the named harness in the created pane — verified by
     reading the pane's screen and seeing the harness running, not a bare shell.

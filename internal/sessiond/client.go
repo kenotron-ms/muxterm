@@ -492,11 +492,29 @@ func (c *Client) PreviewSubscribe(enabled bool) error {
 // as a timeout error, which callers should treat as "session state
 // unavailable" rather than as a failure.
 func (c *Client) SessionStateSubscribe(enabled bool) error {
-	_, err := c.requestWithin(
+	_, err := c.SessionStateSubscribeAck(enabled)
+	return err
+}
+
+// SessionStateSubscribeAck is SessionStateSubscribe with the daemon's
+// acknowledgement exposed rather than discarded.
+//
+// supported reports the OK flag on the TypeSessionStateSubscribeResult reply,
+// which is the ONE signal that says "this daemon understands session-state and
+// applied it". A daemon predating the feature never replies at all, so that
+// case surfaces as a timeout error instead -- the two failures are different,
+// and a caller that wants to explain which one happened has to be able to tell
+// them apart. Callers that only need to opt in (the browser relay in
+// internal/server) keep using SessionStateSubscribe.
+func (c *Client) SessionStateSubscribeAck(enabled bool) (supported bool, err error) {
+	reply, err := c.requestWithin(
 		&Message{Type: TypeSessionStateSubscribe, OK: enabled},
 		previewSubscribeReplyTimeout,
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	return reply.OK, nil
 }
 
 // GetLayout requests an ASCII layout diagram of the currently-attached
