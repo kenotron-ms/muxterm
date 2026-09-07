@@ -377,5 +377,6 @@ func (lt *laneTools) spawnLane(args map[string]any) (string, error) {
 		"pane_id":           paneID,
 		"harness":           harness,
 		"workspace_created": created,
+		"machine":           lt.c.Machine(),
 	}), nil
 }

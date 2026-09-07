@@ -26,6 +26,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/service"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
+	sshtransport "github.com/kenotron-ms/muxterm/internal/transport/ssh"
 	webstatic "github.com/kenotron-ms/muxterm/web"
 )
 
@@ -866,7 +867,11 @@ func runMCPCommand(cfg Config) error {
 	// Redirect all log output to stderr so stdout stays clean for JSON-RPC.
 	log.SetOutput(os.Stderr)
 
-	srv, closer := mcp.NewStdioServer()
+	// The MCP server reaches other machines through the same transport the
+	// browser relay uses, injected here rather than imported there: the
+	// choice of transport belongs to the binary that assembles the process
+	// (see remote_transport.go and internal/server/remotes.go:42).
+	srv, closer := mcp.NewStdioServer(sshtransport.New())
 	defer closer() //nolint:errcheck
 
 	log.Printf("mcp: stdio server ready")

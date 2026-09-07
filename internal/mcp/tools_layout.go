@@ -51,7 +51,7 @@ func (lt *layoutTools) createPane(args map[string]any) (string, error) {
 		return "", fmt.Errorf("unknown pane kind: %s", kind)
 	}
 
-	result := map[string]any{"pane_id": paneID}
+	result := map[string]any{"pane_id": paneID, "machine": lt.c.Machine()}
 	if placement != "" {
 		result["placement"] = placement
 	}
@@ -75,7 +75,7 @@ func (lt *layoutTools) renamePane(args map[string]any) (string, error) {
 	if err := lt.c.conn.RenamePane(paneID, name); err != nil {
 		return "", fmt.Errorf("renaming pane %d: %w", paneID, err)
 	}
-	return jsonText(map[string]any{"ok": true}), nil
+	return jsonText(map[string]any{"ok": true, "machine": lt.c.Machine()}), nil
 }
 
 // closePane kills the pane identified by pane_id and removes it from the
@@ -88,7 +88,7 @@ func (lt *layoutTools) closePane(args map[string]any) (string, error) {
 	if err := lt.c.conn.ClosePane(paneID); err != nil {
 		return "", fmt.Errorf("closing pane %d: %w", paneID, err)
 	}
-	return jsonText(map[string]any{"ok": true}), nil
+	return jsonText(map[string]any{"ok": true, "machine": lt.c.Machine()}), nil
 }
 
 // listPanes returns a JSON array of all panes in the workspace. The workspace
@@ -114,6 +114,8 @@ func (lt *layoutTools) listPanes(args map[string]any) (string, error) {
 			"pane_id": p.PaneID,
 			"kind":    "terminal",
 			"name":    p.Title,
+			// See tools_workspace.go: every row names its machine.
+			"machine": lt.c.Machine(),
 		}
 		items = append(items, item)
 	}

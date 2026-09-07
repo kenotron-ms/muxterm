@@ -2,7 +2,10 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
@@ -14,6 +17,24 @@ import (
 // All fields except conn (set once at construction) are guarded by mu.
 type Client struct {
 	conn *sessiond.Client
+
+	// machine is which daemon this client is connected to: LocalMachine for
+	// the socket on this box, otherwise a transport.HostRef.ID.
+	//
+	// Set once at construction and never mutated, so it is safe to read
+	// without mu. It is carried on the CLIENT rather than passed down through
+	// every tool call because it is a property of the connection, and because
+	// a tool that must label its rows with a machine should be unable to
+	// forget which one it is talking to.
+	machine string
+
+	// dead is closed when the sessiond read loop exits, whatever the cause:
+	// the far end went away, ssh died, the socket closed. deadErr records why.
+	// A local socket effectively never closes; a remote one closing is the
+	// normal end of a machine's life, and callers must be able to see it
+	// without issuing a request first.
+	dead    chan struct{}
+	deadErr error
 
 	mu             sync.Mutex
 	workspace      string
@@ -68,9 +89,23 @@ func DialSocket(socketPath string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newClient(conn, LocalMachine), nil
+}
 
+// newClient wraps an already-established sessiond connection, installs the
+// unsolicited-event handlers, and starts the read loop.
+//
+// It is the ONE constructor, shared by the local socket path (DialSocket) and
+// the remote transport path (machines.dial). That sharing is the point: a
+// remote client is not a different kind of client, it is the same client over
+// a different stream, exactly as sessiond.DialConn's contract promises. Any
+// behaviour added here is automatically true of both, which is what stops
+// "works locally, subtly different remotely" from becoming possible.
+func newClient(conn *sessiond.Client, machine string) *Client {
 	c := &Client{
 		conn:        conn,
+		machine:     machine,
+		dead:        make(chan struct{}),
 		outputBufs:  make(map[int][]byte),
 		promptChans: make(map[int]chan int),
 		fleetReady:  make(chan struct{}),
@@ -120,14 +155,132 @@ func DialSocket(socketPath string) (*Client, error) {
 		},
 	})
 
-	go conn.Run()
+	go func() {
+		err := conn.Run()
+		c.mu.Lock()
+		c.deadErr = err
+		c.mu.Unlock()
+		close(c.dead)
+	}()
 
-	return c, nil
+	return c
 }
 
 // Close closes the underlying sessiond connection.
 func (c *Client) Close() error {
 	return c.conn.Close()
+}
+
+// Machine reports which daemon this client is connected to: LocalMachine, or a
+// transport.HostRef.ID. Never empty.
+func (c *Client) Machine() string {
+	if c.machine == "" {
+		return LocalMachine
+	}
+	return c.machine
+}
+
+// IsRemote reports whether this client crosses a machine boundary.
+func (c *Client) IsRemote() bool { return !isLocal(c.machine) }
+
+// Dead reports whether the sessiond read loop has exited, i.e. this connection
+// can no longer carry a request. Non-blocking.
+func (c *Client) Dead() bool {
+	select {
+	case <-c.dead:
+		return true
+	default:
+		return false
+	}
+}
+
+// DeadErr returns why the read loop exited, or nil while it is still running.
+func (c *Client) DeadErr() error {
+	select {
+	case <-c.dead:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.deadErr
+	default:
+		return nil
+	}
+}
+
+// primeWorkspace issues one bounded ListWorkspaces and records the first
+// workspace it names, so pane and terminal tools work immediately without an
+// explicit switch_workspace call.
+//
+// It is BOTH the liveness handshake and the priming step, deliberately, because
+// they are the same round trip and separating them would spend two.
+//
+// The handshake half matters most for a remote. A stream being ACQUIRED says
+// nothing about a daemon being THERE: an ssh dial returns the moment ssh
+// execs, so "no muxterm on that host", "muxterm present but no daemon
+// running", and "the login shell printed a banner into the protocol stream"
+// all look like a healthy connection until the first request either fails or
+// hangs forever (internal/sessiond/client.go:242). One bounded round trip at
+// dial time turns all three into a dial-time error that can name the machine.
+//
+// It deliberately does NOT Attach: Attach replays every pane's full retained
+// output, and doing it here would double the replay that resources/list must
+// already do, which is the v0.5.0 MCP-pipe deadlock. Recording the id is
+// enough; the attach happens when something needs it.
+func (c *Client) primeWorkspace(timeout time.Duration) error {
+	return c.within(timeout, func() error {
+		ws, err := c.conn.ListWorkspaces()
+		if err != nil {
+			return err
+		}
+		if len(ws) > 0 {
+			c.setWorkspaceOnly(ws[0].WorkspaceID)
+		}
+		return nil
+	})
+}
+
+// attachRemote attaches a REMOTE client to the workspace primeWorkspace
+// recorded, so its pane and terminal tools work without an explicit
+// switch_workspace call.
+//
+// The local client does not do this, and the asymmetry is deliberate rather
+// than an oversight. Locally the attach is performed by the resources/list
+// handler, timed to avoid the v0.5.0 MCP-pipe deadlock: Attach replays every
+// pane's retained output, and if the output notifier is live during that
+// replay the server writes notifications into a stdout pipe the client is not
+// draining, and everything wedges (see registerWithLazy). A remote client is
+// not exposed as MCP resources and never has a notifier installed, so its
+// replay lands in an in-memory buffer and reaches no pipe. The hazard that
+// forces the local timing simply does not exist here.
+//
+// A daemon with no workspaces at all is not an error: there is nothing to
+// attach to yet, and create_workspace is the next call.
+func (c *Client) attachRemote(timeout time.Duration) error {
+	ws := c.Workspace()
+	if ws == "" {
+		return nil
+	}
+	return c.within(timeout, func() error { return c.AttachWorkspace(ws) })
+}
+
+// within runs fn on its own goroutine and bounds its wall-clock time, also
+// returning early if the connection dies underneath it.
+//
+// Every crossing of a machine boundary goes through here or through
+// callWithin in run.go. There is no path that can block forever.
+func (c *Client) within(timeout time.Duration, fn func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	select {
+	case err := <-done:
+		return err
+	case <-c.dead:
+		if err := c.DeadErr(); err != nil {
+			return err
+		}
+		return errors.New("connection closed before the daemon replied")
+	case <-time.After(timeout):
+		return fmt.Errorf("no reply within %s", timeout)
+	}
 }
 
 // SetOutputNotifier installs fn as the callback invoked (best-effort) after each

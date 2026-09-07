@@ -205,8 +205,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMCPToolsListReturns21Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 21 tools
+// TestMCPToolsListReturns22Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 22 tools
 // in the expected order — all without a running sessiond daemon.
 //
 // This is the MANAGER surface: what a session that is not running inside a
@@ -217,7 +217,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 // retired alongside the HTTP proxy and list_tunnels/create_tunnel/close_tunnel
 // (3) and get_config/update_config (2) were added. spawn_lane took it to 18,
 // and the fleet trio (fleet_status, lane_transcript, session_send) to 21.
-func TestMCPToolsListReturns21Tools(t *testing.T) {
+// list_machines, which answers "which machines can I reach", took it to 22.
+func TestMCPToolsListReturns22Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 	got := mcpToolNames(t, bin, "")
 
@@ -239,6 +240,8 @@ func TestMCPToolsListReturns21Tools(t *testing.T) {
 		"fleet_status",
 		"lane_transcript",
 		"session_send",
+		// 1 machine tool (registered via registerMachineTools)
+		"list_machines",
 		// 3 tunnel tools (HTTP REST, registered via registerTunnelTools)
 		"list_tunnels",
 		"create_tunnel",
@@ -284,6 +287,10 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 		"fleet_status",
 		"lane_transcript",
 		"session_send",
+		// 1 machine tool. Present in a pane too: knowing which machines
+		// exist is not a destructive capability, and a lane that can see
+		// the fleet has no reason to be blind to where it runs.
+		"list_machines",
 		// 3 tunnel tools, unchanged.
 		"list_tunnels",
 		"create_tunnel",
