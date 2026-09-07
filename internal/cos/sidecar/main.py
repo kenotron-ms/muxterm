@@ -9,7 +9,12 @@ Run with the amplifier venv interpreter (the one whose site-packages holds
 amplifier_app_cli), e.g.::
 
     ~/.local/share/uv/tools/amplifier/bin/python3 internal/cos/sidecar/main.py \
-        --session-id muxterm-cos --bundle anchors --cwd /path/to/repo
+        --session-id muxterm-cos --cwd /path/to/repo
+
+--bundle defaults to the chief-of-staff bundle shipped in bundle/ beside this
+file: a dispatcher's tool surface, with no shell, no file writer and no
+delegate.  Pass --bundle anchors to get the general-purpose coding roster back
+(and with it every tool this design exists to withhold).
 """
 
 # ---------------------------------------------------------------------------
@@ -49,6 +54,52 @@ _BOOT_T0 = time.monotonic()
 
 logger = logging.getLogger("cos")
 
+# The chief-of-staff bundle, shipped beside this script.
+#
+# A PATH, not a bundle name, and that is the whole distribution story: muxterm
+# installs as one binary, so a bundle that only exists in a source checkout
+# does not exist on any installed machine.  This tree is compiled into the
+# muxterm binary next to main.py (internal/cos/embed.go) and extracted with it
+# under one content digest, so __file__/../bundle/bundle.md resolves both in a
+# source checkout and in the extracted copy.  Nothing has to be registered with
+# `amplifier bundle add` first, and the bundle can never be a version older or
+# newer than the binary that shipped it.
+#
+# Emitted as a file:// URI rather than a bare path because that is the only
+# form amplifier loads directly: load_and_prepare_bundle sends anything without
+# a git+/file:///http(s):///zip+ prefix through name DISCOVERY, which searches
+# .amplifier/bundles, ~/.amplifier/bundles and the packaged bundles -- and an
+# absolute path is in none of them.
+#
+# The path is spliced in RAW.  That loader does not percent-decode, so an
+# encoded path fails ("File not found: /tmp/cos%20bundle"); a space passes
+# through untouched and works.
+#
+# Falls back to the plain name "muxterm-cos" in two cases, both of which then
+# fail loudly naming that bundle rather than quietly loading a different one:
+# the file is missing (a hand-assembled install, or $MUXTERM_COS_SIDECAR
+# pointing at a lone copy of main.py), or the path contains "#"/"?", which a
+# file:// URI splits on with no escape this loader honours.
+def _default_bundle() -> str:
+    local = Path(__file__).resolve().parent / "bundle" / "bundle.md"
+    if not local.is_file():
+        return "muxterm-cos"
+    text = str(local)
+    if "#" in text or "?" in text:
+        return "muxterm-cos"
+    return "file://" + text
+
+
+DEFAULT_BUNDLE = _default_bundle()
+
+# Where a bundle declares the tool surface it wants, by NAME.  See
+# internal/cos/sidecar/bundle/behaviors/muxterm-cos.yaml for the full rationale
+# and the withheld list; the short version is that bundle composition is
+# additive-only and amplifier's app layer composes modes, skills and every
+# `bundle.app` entry onto EVERY root bundle, so a bundle cannot subtract a tool
+# by declining to declare it.
+TOOL_SURFACE_KEYS = ("muxterm_cos", "tools")
+
 SESSION_COST_CHANNEL = "session.cost"
 DEFAULT_APPROVAL_TIMEOUT = 300.0
 SUMMARY_LIMIT = 240
@@ -69,6 +120,12 @@ HISTORY_DEFAULT_LIMIT = 50
 HISTORY_MAX_LIMIT = 200
 HISTORY_PROMPT_LIMIT = 2000
 HISTORY_TEXT_LIMIT = 4000
+# What the ASSISTANT SAID gets a bigger allowance than what it thought.
+# 4000 is a sane cap for commentary; applied to the answer it silently cut
+# real replies of 6445 and 7022 characters off mid-sentence on every replay,
+# which is the one thing a replay exists to bring back. Still bounded, and
+# still a summary: raw tool results and llm payloads are excluded at any limit.
+HISTORY_ANSWER_LIMIT = 16000
 HISTORY_ARGS_LIMIT = 200
 HISTORY_MAX_BLOCKS = 40
 
@@ -441,16 +498,47 @@ def _summarize_turn(index: int, members: list) -> "dict | None":
         if block["call_id"]:
             by_call[block["call_id"]] = block
 
+    def make_room_for_answer() -> bool:
+        """Evict the least valuable block so an answer can still be replayed.
+
+        THE ANSWER IS THE LAST BLOCK A TURN PRODUCES, and the budget is spent
+        in transcript order, so a plain "full -> drop it" cap spends the whole
+        allowance on thinking and tool lines and then discards the one block
+        the user actually asked for.  A turn with sixteen tool calls replayed
+        as thinking + tools + NOTHING, which reads on screen as "it thought
+        about it and never answered" -- the reply had not been lost, only the
+        replay of it, so it came back on a refresh and vanished again.
+
+        Ordering the eviction is what makes this safe rather than a bigger
+        cap: a tool line is a breadcrumb, thinking is commentary, and the
+        answer is the point.  Both breadcrumbs stay bounded, and the payload
+        budget this cap exists to defend is unchanged -- one block goes out
+        for every block that comes in.
+        """
+        for i, b in enumerate(blocks):
+            if b.get("kind") == "tool":
+                by_call.pop(b.get("call_id") or "", None)
+                del blocks[i]
+                return True
+        for i, b in enumerate(blocks):
+            if b.get("kind") == "thinking":
+                del blocks[i]
+                return True
+        return False
+
     def add_text(kind: str, text: str) -> None:
-        text = _trim(text, HISTORY_TEXT_LIMIT)
+        limit = HISTORY_ANSWER_LIMIT if kind == "text" else HISTORY_TEXT_LIMIT
+        text = _trim(text, limit)
         if not text:
             return
         tail = blocks[-1] if blocks else None
         if tail is not None and tail.get("kind") == kind:
-            tail["text"] = _trim(tail["text"] + text, HISTORY_TEXT_LIMIT)
+            tail["text"] = _trim(tail["text"] + text, limit)
             return
         if len(blocks) >= HISTORY_MAX_BLOCKS:
-            return
+            # Commentary yields to the cap; an answer takes a slot from it.
+            if kind != "text" or not make_room_for_answer():
+                return
         blocks.append({"kind": kind, "text": text})
 
     for m in members:
@@ -736,14 +824,17 @@ class Sidecar:
             logger.warning("no approval.register_provider capability -- tool approvals unavailable")
 
         # Policy seam: force host approval for named tools even when the bundle
-        # runs hooks-approval in policy_driven_only mode (the anchors bundle
-        # does, so nothing would ever trigger an approval on its own).
+        # runs hooks-approval in policy_driven_only mode (the chief-of-staff
+        # bundle does, as anchors did before it, so nothing would ever trigger
+        # an approval on its own).
         # Comma separated tool names.  Applied per tool:pre -- see
         # _register_hooks() for why a one-shot seed does not survive.
         forced = os.environ.get("MUXTERM_COS_REQUIRE_APPROVAL", "").strip()
         self._forced_approval = set(n.strip() for n in forced.split(",") if n.strip())
         if self._forced_approval:
             logger.info("host approval forced for tools: %s", sorted(self._forced_approval))
+
+        await self._enforce_tool_surface(session, cfg)
 
         tools = session.coordinator.get("tools") or {}
         self.tool_count = len(tools)
@@ -752,6 +843,97 @@ class Sidecar:
 
         self._register_hooks()
         return session
+
+    # -- tool surface -------------------------------------------------------
+    @staticmethod
+    def _tool_surface(cfg: dict) -> "list | None":
+        """The tool allowlist this bundle declares, or None if it declares none.
+
+        None (the key is absent, or is not a list) and [] (the key is present
+        and empty) are deliberately DIFFERENT answers.  None means "this bundle
+        has no opinion" and nothing is filtered -- which is what keeps anchors,
+        foundation and any bundle a user names on --bundle behaving exactly as
+        before.  [] means "this bundle allows nothing", and is honoured: a
+        surface that filters open when it is misconfigured is not a safety
+        property, it is a coin flip.
+        """
+        node: Any = cfg.get("session")
+        for key in TOOL_SURFACE_KEYS:
+            if not isinstance(node, dict):
+                return None
+            node = node.get(key)
+        if not isinstance(node, list):
+            return None
+        return [str(n).strip() for n in node if str(n).strip()]
+
+    @staticmethod
+    def _surface_allows(name: str, patterns: "list") -> bool:
+        for pat in patterns:
+            if pat.endswith("*"):
+                if name.startswith(pat[:-1]):
+                    return True
+            elif name == pat:
+                return True
+        return False
+
+    async def _enforce_tool_surface(self, session: Any, cfg: dict) -> None:
+        """Unmount every tool the bundle's declared surface does not name.
+
+        The delegation model (docs/designs/2026-09-06-cos-delegation-model.md
+        section 2) rests on a tool being ABSENT rather than gated: "a tool it
+        does not have cannot be misused".  A bundle cannot deliver that on its
+        own -- Bundle.compose() is additive-only, and
+        amplifier_app_cli.runtime.config.resolve_bundle_config composes the
+        modes behaviour (`mode`), the skills behaviour (`load_skill`) and every
+        `bundle.app` entry from the user's settings.yaml onto EVERY root
+        bundle, whatever that bundle asked for.  tool-filesystem is a second,
+        independent reason: it mounts read_file, write_file and edit_file
+        together with no config to choose among them.
+
+        So the bundle declares the surface by name and this enforces it, before
+        the first turn and before the mounted-tools line is logged.  Removal is
+        through the coordinator's own unmount(), and the orchestrator re-reads
+        coordinator.get("tools") on every turn (amplifier_core/_session_exec.py),
+        so an unmounted tool is never offered to the model and has no call path.
+
+        An ALLOWLIST, deliberately: a tool this bundle has never heard of is
+        withheld rather than admitted.  A bundle that declares no surface
+        (anchors, foundation, anything a user names on --bundle) is not touched
+        at all.
+
+        Loud on purpose.  A tool that vanishes because amplifier renamed it, or
+        because a new app bundle brought it, is a thing someone needs to be
+        able to find in the log rather than infer from a count.
+        """
+        surface = self._tool_surface(cfg)
+        if surface is None:
+            return
+
+        # Snapshot the NAMES up front.  coordinator.get("tools") may hand back
+        # a live view, so counting it after the unmount loop would report the
+        # surviving total and call it the original.
+        mounted = sorted(session.coordinator.get("tools") or {})
+        withheld = [n for n in mounted if not self._surface_allows(n, surface)]
+        if not withheld:
+            logger.info("tool surface declared by bundle (%d names); nothing to withhold",
+                        len(surface))
+            return
+
+        removed, failed = [], []
+        for name in withheld:
+            try:
+                await session.coordinator.unmount("tools", name)
+                removed.append(name)
+            except Exception as exc:  # noqa: BLE001
+                failed.append(f"{name} ({type(exc).__name__}: {exc})")
+
+        if removed:
+            logger.info("tool surface: withheld %d of %d -- %s",
+                        len(removed), len(mounted), removed)
+        if failed:
+            # Not fatal, but it means the surface is wider than the bundle says.
+            # Say which ones, so nobody has to diff two log lines to find out.
+            logger.error("tool surface: could NOT withhold %s", failed)
 
     # -- streaming hooks ----------------------------------------------------
     def _register_hooks(self) -> None:
@@ -1601,7 +1783,8 @@ class Sidecar:
 def parse_args(argv: list) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="cos", description="muxterm Chief-of-Staff sidecar")
     p.add_argument("--session-id", required=True, help="amplifier session id (also the resume key)")
-    p.add_argument("--bundle", default="anchors", help="bundle to load (default: anchors)")
+    p.add_argument("--bundle", default=DEFAULT_BUNDLE,
+                   help=f"bundle to load (default: {DEFAULT_BUNDLE})")
     p.add_argument("--cwd", default=None, help="working directory; sets project slug and session store")
     p.add_argument("--log-level", default="info",
                    choices=["debug", "info", "warning", "error", "critical"])

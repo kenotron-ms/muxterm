@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -44,6 +46,13 @@ type Server struct {
 	// (its only mutators, rearm and changed, are both called under it). See
 	// the session-state section at the end of this file.
 	sessions *sessionStore
+
+	// completions is the durable log of lanes that have finished. It carries
+	// its own lock (completion.go) rather than living under mu: it is written
+	// from an exiting pane's readLoop goroutine and read from the
+	// session-state ticker, and a file write must never be able to stall an
+	// attach or a broadcast.
+	completions *completionStore
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -53,14 +62,32 @@ func NewServer(socketPath string) (*Server, error) {
 		return nil, errors.New("sessiond: empty socket path")
 	}
 	s := &Server{
-		reg:      NewRegistry(),
-		socket:   socketPath,
-		subs:     make(map[string]map[*conn]bool),
-		conns:    make(map[*conn]bool),
-		preview:  make(map[string]*previewState),
-		sessions: newSessionStore(),
+		reg:         NewRegistry(),
+		socket:      socketPath,
+		subs:        make(map[string]map[*conn]bool),
+		conns:       make(map[*conn]bool),
+		preview:     make(map[string]*previewState),
+		sessions:    newSessionStore(),
+		completions: newCompletionStore(CompletionsPath()),
 	}
 	return s, nil
+}
+
+// CompletionsPath returns the durable completion log's location.
+//
+// Resolution order mirrors SessionStateDir's, for the same reasons:
+//
+//   - $MUXTERM_COMPLETIONS_PATH   (explicit override, tests and odd deploys)
+//   - $XDG_DATA_HOME/muxterm/completions.json
+//   - $HOME/.local/share/muxterm/completions.json
+//
+// The XDG-derived default is what keeps a dev daemon's completions out of the
+// real log without either side being told which world it is in.
+func CompletionsPath() string {
+	if override := os.Getenv("MUXTERM_COMPLETIONS_PATH"); override != "" {
+		return override
+	}
+	return DefaultCompletionsPath()
 }
 
 // Registry exposes the server's Registry for tests and later phases.
@@ -296,11 +323,37 @@ func (s *Server) broadcastPaneData(wsID string, paneID int, data []byte) {
 // handlePaneExit removes an exited pane and emits the frozen close events. It is
 // a no-op when the pane was already removed (e.g. via close-workspace) so no
 // duplicate events are produced.
+//
+// THIS IS THE ONLY PATH THAT DESTROYS STRUCTURE WITHOUT ANYONE ASKING, and for
+// a one-pane workspace -- which is exactly what spawn-lane creates -- it takes
+// the workspace with the pane. The exit code and runtime are broadcast to
+// whoever happens to be subscribed and then discarded, so a lane that died
+// three seconds after birth and a lane that ran its goal loop to completion
+// leave the identical trace: none. Log it. A vanished lane is otherwise
+// unattributable after the fact, and "did something close it, or did it exit?"
+// is the first question asked every time.
+//
+// A lane's completion record is written HERE, between removing the pane from
+// the registry and announcing that it closed. That ordering is the feature:
+// the record is durable before any client is told the pane is gone and before
+// ReapIfEmpty can consider the workspace, so a finished lane's result cannot
+// be destroyed by its own cleanup.
+//
+// The early return on !ok is also load-bearing, and it is what keeps this from
+// firing on closes a human asked for. close-pane, close-workspace, and the
+// close-intent transaction all remove from the registry FIRST and then kill
+// the process; the exit that follows finds the pane already gone and stops
+// here. So records are written for process-driven exits only -- a lane that
+// ended on its own -- and closing something by hand stays exactly as
+// undramatic as it is today.
 func (s *Server) handlePaneExit(wsID string, paneID int, exitCode int, runtimeMs int64) {
-	_, remaining, ok := s.reg.RemovePane(wsID, paneID)
+	pane, remaining, ok := s.reg.RemovePane(wsID, paneID)
 	if !ok {
 		return
 	}
+	log.Printf("sessiond: pane %s/%d removed: process exited code=%d runtime=%dms remaining=%d",
+		wsID, paneID, exitCode, runtimeMs, remaining)
+	held := s.recordPaneCompletion(wsID, pane, exitCode, runtimeMs, remaining == 0)
 	code := exitCode
 	s.broadcast(wsID, &Message{
 		Type: TypePaneClosed, WorkspaceID: wsID, PaneID: paneID,
@@ -308,10 +361,118 @@ func (s *Server) handlePaneExit(wsID string, paneID int, exitCode int, runtimeMs
 	})
 	if remaining == 0 {
 		if removed, _ := s.reg.ReapIfEmpty(wsID); removed {
+			log.Printf("sessiond: workspace %s reaped: last pane (%d) exited, nobody closed it", wsID, paneID)
 			s.broadcastWorkspaceList()
+			return
 		}
 	}
+	if held {
+		// The workspace survived a reap it would previously have lost. Every
+		// client needs the replacement list to learn it is FINISHED rather
+		// than merely empty -- without this the sidebar would show a bare
+		// zero-pane workspace, which is the old silence with extra steps.
+		s.broadcastWorkspaceList()
+	}
 }
+
+// recordPaneCompletion captures a finished lane and reports whether the
+// workspace is now being held open for it.
+//
+// It answers two questions in order, and the first one is a gate: did this
+// pane host an agent session at all? Only a pane with a session declaration
+// spooled against its root pid is a lane. A shell somebody typed `exit` into
+// is not a result, and turning every shell exit into a workspace that refuses
+// to close would be a worse bug than the one this fixes.
+//
+// holdWorkspace is passed rather than decided here: the workspace is held only
+// when this was its LAST pane, because the hold exists to stop a reap, and a
+// workspace with other panes in it is not being reaped. The record is written
+// either way.
+func (s *Server) recordPaneCompletion(wsID string, pane *Pane, exitCode int, runtimeMs int64, holdWorkspace bool) bool {
+	if pane == nil {
+		return false
+	}
+	declared, hosted := s.sessions.lastDeclarationFor(pane.activitySnapshot().pid)
+	if !hosted {
+		return false
+	}
+
+	info := pane.Info()
+	screen, scanned := paneFinalOutput(pane)
+	record := CompletionRecord{
+		WorkspaceID:   wsID,
+		WorkspaceName: s.reg.workspaceName(wsID),
+		PaneID:        pane.LocalID,
+		PaneTitle:     info.Title,
+		SessionID:     declared.SessionID,
+		Harness:       declared.Harness,
+		Project:       declared.Project,
+		Name:          declared.Name,
+		Label:         declared.Label,
+		Mode:          declared.Mode,
+		DoneMeans:     declared.DoneMeans,
+		Doing:         declared.Doing,
+		DeclaredState: terminalDeclaration(declared.State),
+		ExitCode:      exitCode,
+		RuntimeMs:     runtimeMs,
+		EndedAt:       time.Now().Unix(),
+		Output:        tailBytes(screen, completionOutputBytes),
+	}
+	record.Outcome = completionOutcome(record.DeclaredState, exitCode)
+	// A declared PR is the producer's own claim and outranks anything read off
+	// a screen. Nothing shipped declares one today, which is why the scan
+	// exists at all -- see completionPRFrom.
+	record.PR = declared.PR
+	if record.PR == 0 {
+		record.PR, record.PRURL = completionPRFrom(scanned)
+	}
+
+	stored := s.completions.Append(record)
+	if !holdWorkspace {
+		return false
+	}
+	return s.reg.MarkCompleted(wsID, completionMarkFor(stored))
+}
+
+// terminalDeclaration keeps only an ENDING a session actually declared.
+//
+// A `working` or `blocked` snapshot belonging to a process that is now gone is
+// a crash artifact, not a statement about how the session finished, and
+// carrying it into the record would let a lane that died mid-turn describe its
+// own ending. Empty means "declared nothing", which completionOutcome then
+// resolves from the exit code alone.
+func terminalDeclaration(state string) string {
+	if sessionStateIsTerminal(state) {
+		return state
+	}
+	return ""
+}
+
+// paneFinalOutput returns the pane's last screen and a wider window to scan
+// for artifacts.
+//
+// Two different jobs need two different amounts. The screen is what a human
+// would have been looking at when the lane ended, and it is what the record
+// shows. The scan window adds recent scrollback, because a `gh pr create` URL
+// printed several tool calls before the end has usually scrolled off -- and
+// that URL is the only first-hand evidence of the PR a lane opened.
+func paneFinalOutput(pane *Pane) (screen string, scan string) {
+	vb, ok := pane.buf.(*VTBuffer)
+	if !ok {
+		return "", ""
+	}
+	screen = vb.ScreenText()
+	history, _, _ := vb.ScrollbackPage(nil, completionScanLines)
+	if len(history) == 0 {
+		return screen, screen
+	}
+	return screen, strings.Join(history, "\n") + "\n" + screen
+}
+
+// completionScanLines bounds the scrollback consulted for artifacts. Deep
+// enough to cover the tail of an agent's last few turns, shallow enough that
+// it is a bounded read on a pane's exit path.
+const completionScanLines = 400
 
 // conn is one control connection. attached holds the workspace this connection
 // is attached to ("" when not attached); it is touched only by this conn's own
@@ -332,11 +493,34 @@ type conn struct {
 	// Guarded by Server.mu for the same reason as previewOn: its own ticker
 	// goroutine reads it while fanning rows out. See setSessionStateOn.
 	sessionStateOn bool
+
+	// peerPid is the pid of the process on the other end of nc, from
+	// SO_PEERCRED, or 0 when it could not be established (non-Linux, or a
+	// connection that did not arrive over a Unix socket). Read-only after
+	// newConn, so no lock: the kernel fills it in at connect time and the
+	// peer of a socket never changes. It is the unforgeable half of the
+	// self-close refusal -- see selfclose.go.
+	peerPid int
+}
+
+// clientKind names the connection for a log line. conn.kind is only set by
+// attach(), and the one-shot CLI verbs close a workspace without attaching, so
+// the zero value is a real and common case: say so rather than logging an
+// empty string that reads like a bug.
+func (c *conn) clientKind() string {
+	if c.kind == "" {
+		return "unattached"
+	}
+	return c.kind
 }
 
 // newConn wraps nc with a subscriber for serialized writes.
 func newConn(s *Server, nc net.Conn) *conn {
-	return &conn{srv: s, nc: nc, sub: newSubscriber(nc, 0)}
+	// A failure here is not an error: peerPID is unavailable off Linux and for
+	// non-Unix peers by design, and every caller of peerPid treats 0 as
+	// "cannot prove anything about this peer". See selfclose.go's LIMITS note.
+	pid, _ := peerPID(nc)
+	return &conn{srv: s, nc: nc, sub: newSubscriber(nc, 0), peerPid: pid}
 }
 
 // serve reads frames until the connection closes, dispatching control messages
@@ -668,12 +852,22 @@ func (c *conn) closePane(msg Message) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
 		return
 	}
+	// Before the registry is touched: a session may not close the pane it is
+	// running in. See selfclose.go.
+	if detail, refused := c.refuseSelfClosePane(wsID, msg.PaneID); refused {
+		c.replyError(msg.CID, CodeSelfClose, detail)
+		return
+	}
 	p, _, ok := c.srv.reg.RemovePane(wsID, msg.PaneID)
 	if !ok {
 		// Pane already gone; send ok so the client doesn't hang.
 		c.reply(&Message{Type: TypeOK, CID: msg.CID})
 		return
 	}
+	// Logged so an explicit close is distinguishable from the exit reap in
+	// handlePaneExit. The client kind is the whole point: it says whether a
+	// human's browser, an agent's MCP tool, or a CLI invocation asked.
+	log.Printf("sessiond: pane %s/%d closed on request by client kind=%s", wsID, msg.PaneID, c.clientKind())
 	p.Close()
 	c.reply(&Message{Type: TypeOK, CID: msg.CID})
 	c.srv.broadcast(wsID, &Message{Type: TypePaneClosed, WorkspaceID: wsID, PaneID: msg.PaneID})
@@ -685,16 +879,42 @@ func (c *conn) closePane(msg Message) {
 // handlers see the workspace already gone and emit no duplicate pane-closed
 // events.
 func (c *conn) closeWorkspace(msg Message) {
+	// Before the registry is touched: a session may not close the workspace it
+	// is running in. See selfclose.go.
+	if detail, refused := c.refuseSelfCloseWorkspace(msg.WorkspaceID); refused {
+		c.replyError(msg.CID, CodeSelfClose, detail)
+		return
+	}
 	panes, _, ok := c.srv.reg.CloseWorkspace(msg.WorkspaceID)
 	if !ok {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
 		return
 	}
+	log.Printf("sessiond: workspace %s closed on request by client kind=%s (%d pane(s) killed)",
+		msg.WorkspaceID, c.clientKind(), len(panes))
 	for _, p := range panes {
 		p.Close()
 	}
+	c.srv.dismissCompletions(msg.WorkspaceID)
 	c.reply(&Message{Type: TypeOK, CID: msg.CID})
 	c.srv.broadcastWorkspaceClosed(msg.WorkspaceID)
+}
+
+// dismissCompletions marks a workspace's pending completions as seen.
+//
+// Closing a finished workspace IS the dismissal. No new gesture is invented
+// for it: the workspace was held open so a human would notice it, and closing
+// the thing you noticed is how you say you noticed it. The record itself is
+// kept -- it is history, and history that deletes itself when acknowledged
+// would answer "what happened to lane X yesterday" with silence.
+func (s *Server) dismissCompletions(wsID string) {
+	if s.completions.AcknowledgeWorkspace(wsID) {
+		// Republish so the dismissed lane leaves the fleet on the next tick
+		// even though its row content did not change.
+		s.mu.Lock()
+		s.sessions.rearmLocked()
+		s.mu.Unlock()
+	}
 }
 
 // closeIntent performs one daemon-owned activity assessment and close
@@ -702,11 +922,23 @@ func (c *conn) closeWorkspace(msg Message) {
 // structural broadcasts emitted for an actual registry mutation remain the
 // authority for pane and workspace reconciliation.
 func (c *conn) closeIntent(msg Message) {
-	outcome := c.srv.reg.CloseIntent(CloseTarget{
+	target := CloseTarget{
 		Kind:        CloseTargetKind(msg.TargetKind),
 		WorkspaceID: msg.WorkspaceID,
 		PaneID:      msg.PaneID,
-	})
+	}
+	// Before any assessment, ticket, or mutation: a session may not close the
+	// workspace or pane it is running in. Reported as a failed outcome rather
+	// than a TypeError because this path's contract is that every request
+	// answers with a close-outcome; a confirmation ticket must never be issued
+	// for a target the caller occupies, since confirming it would still
+	// destroy the caller. See selfclose.go.
+	if detail, refused := c.refuseSelfCloseTarget(target); refused {
+		outcome := failedCloseOutcome(target, CloseFailureSelfOccupied, detail)
+		c.reply(CloseOutcomeMessage(msg.CID, outcome))
+		return
+	}
+	outcome := c.srv.reg.CloseIntent(target)
 	c.reply(CloseOutcomeMessage(msg.CID, outcome))
 	c.srv.broadcastCloseMutation(outcome)
 }
@@ -716,6 +948,13 @@ func (c *conn) closeIntent(msg Message) {
 // non-mutating close outcome.
 func (c *conn) closeConfirm(msg Message) {
 	outcome := c.srv.reg.ConfirmClose(msg.Ticket)
+	if outcome.ClosedNow {
+		// The gated close path. Logged for the same reason as the ungated
+		// verbs: so the reap in handlePaneExit is never mistaken for one of
+		// these, or the reverse.
+		log.Printf("sessiond: %s %s/%d closed on confirmed ticket by client kind=%s",
+			outcome.TargetKind, outcome.WorkspaceID, outcome.PaneID, c.clientKind())
+	}
 	c.reply(CloseOutcomeMessage(msg.CID, outcome))
 	c.srv.broadcastCloseMutation(outcome)
 }
@@ -729,6 +968,7 @@ func (s *Server) broadcastCloseMutation(outcome CloseOutcome) {
 		return
 	}
 	if outcome.ReconcileAbsent && outcome.ReconcileWorkspace {
+		s.dismissCompletions(outcome.WorkspaceID)
 		s.broadcastWorkspaceClosed(outcome.WorkspaceID)
 		return
 	}
@@ -740,6 +980,9 @@ func (s *Server) broadcastCloseMutation(outcome CloseOutcome) {
 			PaneID:      outcome.PaneID,
 		})
 	case CloseTargetWorkspace:
+		// This is the browser's close button, and therefore the dismissal
+		// gesture for a held finished workspace.
+		s.dismissCompletions(outcome.WorkspaceID)
 		s.broadcastWorkspaceClosed(outcome.WorkspaceID)
 	}
 }
@@ -1183,12 +1426,22 @@ func (s *Server) emitSessionState() {
 		// emptiness here would blank the home view over a transient stat error.
 		return
 	}
+	// Fold in the lanes that have finished but not been dismissed. This is
+	// what makes the fleet a fleet: without it, a lane's row vanishes the
+	// instant its pane does, so `done` and `failed` are states nothing ever
+	// actually reaches -- a session simply disappears instead, and its PR
+	// with it. The rows come from the durable log, so they survive a restart
+	// of this daemon.
+	rows = mergeCompletionRows(rows, s.completions.Pending())
 	// The rows are already joined to their panes, which is the only thing
 	// naming a tab or a workspace after its session needs. Done before the
 	// publish, and outside every lock, so a tick that renames something emits
 	// the rename alongside the row that caused it rather than a tick behind
 	// it. It is a no-op on every tick that changes nothing -- see
-	// applyDerivedNames.
+	// applyDerivedNames. Completion rows are included deliberately: a held
+	// workspace that never got a name should still be able to take the name
+	// of the lane that finished in it, which is the difference between the
+	// notification saying "w7" and saying what actually completed.
 	s.applyDerivedNames(rows)
 	s.publishSessionState(rows)
 }

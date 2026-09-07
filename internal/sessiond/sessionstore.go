@@ -411,6 +411,63 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 	return rows, true
 }
 
+// lastDeclarationFor returns what the session running in a pane last said
+// about itself, found by the pane's ROOT PID.
+//
+// This is read at pane exit, and it deliberately re-reads the spool rather
+// than consulting anything the ticker cached. Three reasons, all of them
+// timing:
+//
+//   - The ticker runs once a second. A lane that declares `done` and then
+//     exits does both inside that second, so the cached set is a tick behind
+//     precisely when it matters most.
+//   - paneOwners skips an exited pane, so the ordinary join cannot place this
+//     snapshot at all once the process is gone.
+//   - collect() DELETES an ending whose pane it cannot place, which is exactly
+//     this pane a moment from now. Reading before that happens is the only
+//     chance to capture the declaration at all.
+//
+// The match is on the producer-recorded `sid` (a pane's root shell leads its
+// own POSIX session, so that integer IS the pane), falling back to a direct
+// pid match for a pane spawned as the agent itself. The ancestor walk is not
+// available here and would be wrong if it were: /proc has already forgotten
+// the process.
+//
+// Nothing is deleted here. Reclamation stays collect's job, so a mistake in
+// this path can only fail to report -- never destroy a row somebody else was
+// about to publish.
+func (s *sessionStore) lastDeclarationFor(rootPID int) (SessionState, bool) {
+	if rootPID <= 0 {
+		return SessionState{}, false
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return SessionState{}, false
+	}
+	var best SessionState
+	found := false
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		if info, err := entry.Info(); err != nil || info.Size() > maxSessionSnapshotBytes {
+			continue
+		}
+		snap, ok := readSessionSnapshot(filepath.Join(s.dir, entry.Name()))
+		if !ok || snap.V > sessionSnapshotVersion {
+			continue
+		}
+		if snap.SID != rootPID && snap.PID != rootPID {
+			continue
+		}
+		if !found || endingIsNewer(snap.SessionState, best) {
+			best = snap.SessionState
+			found = true
+		}
+	}
+	return best, found
+}
+
 // placeSnapshot resolves the pane a snapshot belongs to.
 //
 // sid first, when the producer wrote one: a pane's root shell leads its own

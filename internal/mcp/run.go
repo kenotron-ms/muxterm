@@ -2,7 +2,10 @@ package mcp
 
 import (
 	"fmt"
+	"os"
 	"sync"
+
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // lazyClient dials the sessiond daemon exactly once, on the first tool call.
@@ -44,9 +47,33 @@ func (lc *lazyClient) get() (*Client, error) {
 	return lc.c, lc.err
 }
 
-// NewStdioServer creates a Server wired to os.Stdin/Stdout and registers all
-// 18 MCP tools. The sessiond client is dialed lazily on the first tool call,
-// so initialize and tools/list work without a running daemon.
+// insidePane reports whether this MCP server is running inside a muxterm pane,
+// which is what makes its client a lane rather than a manager.
+//
+// sessiond stamps sessiond.EnvPaneID into every pane's environment (see the
+// constant's doc comment for why the environment and not something cleverer),
+// and a harness forwards its environment to the MCP server it starts, so the
+// variable is present for a lane and absent for everything else:
+//
+//	lane in a pane   muxterm mcp <- amplifier/claude <- pane process   SET
+//	chief of staff   muxterm mcp <- sidecar <- muxterm serve           unset
+//	a shell anywhere muxterm mcp <- whatever started it                unset
+//
+// Deliberately a presence test, not a parse: the value is a pane id, but
+// nothing here needs the id, and a malformed one still means "inside a pane".
+//
+// This costs no daemon connection, which matters: the whole point of the
+// lazyClient above is that initialize and tools/list answer without dialing
+// sessiond, and the tool list is exactly where this answer is needed.
+func insidePane() bool {
+	return os.Getenv(sessiond.EnvPaneID) != ""
+}
+
+// NewStdioServer creates a Server wired to os.Stdin/Stdout and registers the
+// MCP tools this session is entitled to: all 21 normally, and 19 inside a
+// muxterm pane, where close_workspace and close_pane are withheld (see
+// registerAllTools). The sessiond client is dialed lazily on the first tool
+// call, so initialize and tools/list work without a running daemon.
 //
 // The returned closer must be called when the server exits: it closes the
 // sessiond client connection if one was opened.
@@ -147,14 +174,19 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 	)
 }
 
-// registerAllTools registers the 13 sessiond-backed MCP tools on srv using
+// registerAllTools registers the 16 sessiond-backed MCP tools on srv using
 // wrap to convert func(*Client, map[string]any)(string,error) handlers into
 // ToolFuncs. Tools are registered in the canonical order:
 //
 //	Terminal:   run_command, send_input, get_screen
-//	Workspace:  list_workspaces, create_workspace, switch_workspace, close_workspace
-//	Layout:     create_pane, rename_pane, close_pane, list_panes, get_layout
+//	Workspace:  list_workspaces, create_workspace, switch_workspace, close_workspace*
+//	Layout:     create_pane, rename_pane, close_pane*, list_panes, get_layout
 //	Delegation: spawn_lane
+//	Fleet:      fleet_status, lane_transcript, session_send
+//
+// * Withheld when insidePane() reports this server is running in a muxterm
+// pane, leaving 14 here and 19 overall. Read the comment at each of the two
+// registrations before changing that.
 //
 // The 3 tunnel tools (list_tunnels, create_tunnel, close_tunnel) are registered
 // separately via registerTunnelTools because they go through the HTTP REST API
@@ -255,20 +287,33 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 		}),
 	)
 
-	srv.Register(
-		"close_workspace",
-		"close workspace by id, terminating all panes, cannot be undone",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"workspace_id": map[string]any{"type": "string"},
+	// WITHHELD INSIDE A PANE. A session running in a pane is a lane, and a
+	// lane closing a workspace is the failure this guard exists to prevent:
+	// asked to "tear down what you started", a lane reads its own workspace as
+	// something it started and closes it as a final act, taking its verdict,
+	// its PR number and its report with it. There is no legitimate call in the
+	// other direction either -- a lane has no business closing anybody else's
+	// workspace. So the tool is simply not there.
+	//
+	// Not an approval gate, for the reason already stated at spawn_lane below:
+	// a tool an agent does not have cannot be misused, whereas a gate on one
+	// can be overwritten out from under you.
+	if !insidePane() {
+		srv.Register(
+			"close_workspace",
+			"close workspace by id, terminating all panes, cannot be undone",
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"workspace_id": map[string]any{"type": "string"},
+				},
+				"required": []string{"workspace_id"},
 			},
-			"required": []string{"workspace_id"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newWorkspaceTools(c).closeWorkspace(args)
-		}),
-	)
+			wrap(func(c *Client, args map[string]any) (string, error) {
+				return newWorkspaceTools(c).closeWorkspace(args)
+			}),
+		)
+	}
 
 	// --- Layout tools ---
 
@@ -310,20 +355,26 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 		}),
 	)
 
-	srv.Register(
-		"close_pane",
-		"close pane by id, terminating its process",
-		map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pane_id": map[string]any{"type": "integer"},
+	// WITHHELD INSIDE A PANE, for the same reason as close_workspace above and
+	// with one addition: a lane's own pane IS the lane, so close_pane on it is
+	// suicide with the report still unwritten, and close_pane on a sibling
+	// kills somebody else's work with no way to say sorry.
+	if !insidePane() {
+		srv.Register(
+			"close_pane",
+			"close pane by id, terminating its process",
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"pane_id": map[string]any{"type": "integer"},
+				},
+				"required": []string{"pane_id"},
 			},
-			"required": []string{"pane_id"},
-		},
-		wrap(func(c *Client, args map[string]any) (string, error) {
-			return newLayoutTools(c).closePane(args)
-		}),
-	)
+			wrap(func(c *Client, args map[string]any) (string, error) {
+				return newLayoutTools(c).closePane(args)
+			}),
+		)
+	}
 
 	srv.Register(
 		"list_panes",
@@ -359,10 +410,31 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 	// destroy_lane beside it. An agent that delegates must be able to open new
 	// work and must never be able to destroy existing work; closure stays with
 	// the human (docs/designs/2026-09-06-cos-delegation-model.md section 2).
-	// close_pane and close_workspace above are unchanged -- a chief-of-staff
-	// bundle withholds them at composition time, because a tool an agent does
-	// not have cannot be misused, whereas an approval gate on one can be
-	// overwritten out from under you.
+	// close_pane and close_workspace above are now withheld from any server
+	// running inside a pane, which is every lane this tool starts. The
+	// principle is unchanged and merely enforced one layer lower: a tool an
+	// agent does not have cannot be misused, whereas an approval gate on one
+	// can be overwritten out from under you. What changed is WHERE the surface
+	// is chosen -- an agent's bundle cannot decide this, because muxterm does
+	// not write the bundle a lane runs; the server does.
+	//
+	// SETTLED: the chief-of-staff bundle takes the muxterm tool set WHOLE
+	// (mcp_muxterm_*), so the CoS CAN close a pane or a workspace. That is
+	// deliberate, not an oversight. Managing muxterm is what a chief of staff
+	// for muxterm is for; a CoS that opens workspaces and can never tidy them
+	// leaves an accumulating mess. What it may not do is a LANE's work --
+	// hence no bash, no file writes, no delegate. Section 2 of the delegation
+	// model carries the full table and the reasoning.
+	//
+	// The CoS keeps both tools under the rule above BECAUSE OF WHERE IT RUNS:
+	// it is a sidecar of `muxterm serve`, not a pane process, so insidePane()
+	// is false for it. That is a real coupling, not a coincidence -- move the
+	// sidecar into a pane and it silently loses the two tools. If that day
+	// comes, give it an explicit exemption rather than weakening the rule.
+	//
+	// The broadcast above is still the thing to respect: closure is gated by
+	// ASKING (the approval card) and by the charter rule that the CoS never
+	// closes a workspace it did not create -- not by the tool's absence.
 	srv.Register(
 		"spawn_lane",
 		"delegate work: launch a coding-agent session (amplifier|claude) in a pane of the named workspace, creating that workspace if it does not exist; prompt is the session's opening turn; goal (amplifier only) instead launches a /goal loop with that stop condition, and prompt is ignored; returns workspace_id, pane_id, harness, workspace_created",
@@ -395,6 +467,102 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 		},
 		wrap(func(c *Client, args map[string]any) (string, error) {
 			return newLaneTools(c).spawnLane(args)
+		}),
+	)
+
+	// --- Fleet tools ---
+	//
+	// These three read (and, for session_send, write to) the daemon's
+	// session-state feed -- the same structured rows the browser's home view
+	// renders. They exist because the alternative is scraping terminal screens
+	// to answer a question that is already answered structurally one layer
+	// away, and because two of the fields they carry (done_means, knows) are
+	// DECLARED by each session and appear on no screen at any cost.
+	//
+	// Alone among the sessiond-backed tools they are NOT scoped to the
+	// attached workspace: the daemon fans session state out across every
+	// workspace to every opted-in connection. See the header comment in
+	// fleet.go.
+
+	srv.Register(
+		"fleet_status",
+		"what every agent session on this machine is doing, across ALL workspaces -- not just the attached one. "+
+			"Returns full declared rows: session_id, pane_id, workspace_id, harness, project, name, label, mode "+
+			"(interactive|autonomous), state (working|blocked|done|failed|stopped), waiting_for, doing, done_means "+
+			"(an autonomous lane's own stop condition; empty for interactive ones), knows (files the session has read), "+
+			"pr, updated_at. done_means and knows are declared by the session and appear on no terminal screen, "+
+			"so this is the only way to see them. Optional state filters by exact lifecycle state; optional workspace "+
+			"filters by workspace NAME (an unknown name is an error, never a new workspace). An empty sessions list "+
+			"means no agent sessions are running, which is a normal answer",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"state": map[string]any{
+					"type": "string",
+					"enum": fleetStates,
+				},
+				"workspace": map[string]any{
+					"type":        "string",
+					"description": "workspace NAME (not id); must already exist",
+				},
+			},
+		},
+		wrap(func(c *Client, args map[string]any) (string, error) {
+			return newFleetTools(c).fleetStatus(args)
+		}),
+	)
+
+	srv.Register(
+		"lane_transcript",
+		"read the last few turns a session actually exchanged, from its harness's own on-disk transcript "+
+			"(amplifier and claude). Harness and project directory come from the fleet snapshot, so only a session "+
+			"listed by fleet_status can be read. THIS IS A TAIL, NOT THE CONVERSATION: only the end of the file is "+
+			"read (a bounded window, at most 4 MB, however large the file), each turn's text is clipped to 400 "+
+			"characters, and last_n is capped at 100 (default 10). truncated=true in the result means earlier turns "+
+			"exist and were not read",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]any{
+					"type":        "string",
+					"description": "a session_id from fleet_status",
+				},
+				"last_n": map[string]any{
+					"type":        "integer",
+					"description": "turns to return, newest last (default 10, max 100)",
+				},
+			},
+			"required": []string{"session_id"},
+		},
+		wrap(func(c *Client, args map[string]any) (string, error) {
+			return newFleetTools(c).laneTranscript(args)
+		}),
+	)
+
+	srv.Register(
+		"session_send",
+		"type text into a known session's pane, addressed by session_id -- to unblock one waiting at a prompt, "+
+			"or to steer one that has drifted. submit (default true) appends Enter. Switches the MCP session to that "+
+			"session's workspace if needed, which discards this connection's buffered pane output, so drain anything "+
+			"you care about first. REFUSES any session_id not in the current fleet_status snapshot: this addresses "+
+			"known sessions only and can never target an arbitrary pane id. Returns pane_id, workspace_id",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]any{
+					"type":        "string",
+					"description": "a session_id from fleet_status",
+				},
+				"text": map[string]any{"type": "string"},
+				"submit": map[string]any{
+					"type":        "boolean",
+					"description": "append Enter after the text (default true)",
+				},
+			},
+			"required": []string{"session_id", "text"},
+		},
+		wrap(func(c *Client, args map[string]any) (string, error) {
+			return newFleetTools(c).sessionSend(args)
 		}),
 	)
 }

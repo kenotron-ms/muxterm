@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
 // buildTestBinary compiles the muxterm binary into a temp directory and
@@ -106,15 +109,17 @@ func TestMCPInitializeOverStdio(t *testing.T) {
 	}
 }
 
-// TestMCPToolsListReturns18Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 18 tools
-// in the expected order — all without a running sessiond daemon.
+// mcpToolNames runs `muxterm mcp` with paneID as its sessiond.EnvPaneID and
+// returns the tool names from tools/list, in server order.
 //
-// Tool count history: the count fell from 25 to 17 when a 13-tool family was
-// retired alongside the HTTP proxy and list_tunnels/create_tunnel/close_tunnel
-// (3) and get_config/update_config (2) were added. spawn_lane took it to 18.
-func TestMCPToolsListReturns18Tools(t *testing.T) {
-	bin := buildTestBinary(t)
+// paneID == "" means "not inside a muxterm pane". It is passed EXPLICITLY
+// rather than inherited, and that is the point of this helper: this repo is
+// developed inside muxterm, so `go test` is routinely run from a pane, whose
+// environment now carries EnvPaneID. Without the override the manager-surface
+// test below would pass or fail depending on which terminal the developer
+// happened to run it from.
+func mcpToolNames(t *testing.T, bin, paneID string) []string {
+	t.Helper()
 
 	input := strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
@@ -126,6 +131,17 @@ func TestMCPToolsListReturns18Tools(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, bin, "mcp")
 	cmd.Stdin = strings.NewReader(input)
+
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, sessiond.EnvPaneID+"=") {
+			env = append(env, kv)
+		}
+	}
+	if paneID != "" {
+		env = append(env, sessiond.EnvPaneID+"="+paneID)
+	}
+	cmd.Env = env
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -167,8 +183,46 @@ func TestMCPToolsListReturns18Tools(t *testing.T) {
 		t.Fatalf("tools/list returned error: code=%d message=%q", resp.Error.Code, resp.Error.Message)
 	}
 
+	names := make([]string, len(resp.Result.Tools))
+	for i, tool := range resp.Result.Tools {
+		names[i] = tool.Name
+	}
+	return names
+}
+
+// assertToolNames compares got against want elementwise, reporting the whole
+// list on a length mismatch so a failure names what actually changed.
+func assertToolNames(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("tools/list returned %d tools, want %d\ngot:  %v\nwant: %v",
+			len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("tools[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestMCPToolsListReturns21Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 21 tools
+// in the expected order — all without a running sessiond daemon.
+//
+// This is the MANAGER surface: what a session that is not running inside a
+// muxterm pane gets. The chief-of-staff sidecar and a shell on a laptop both
+// see this list. Its lane counterpart is the test below.
+//
+// Tool count history: the count fell from 25 to 17 when a 13-tool family was
+// retired alongside the HTTP proxy and list_tunnels/create_tunnel/close_tunnel
+// (3) and get_config/update_config (2) were added. spawn_lane took it to 18,
+// and the fleet trio (fleet_status, lane_transcript, session_send) to 21.
+func TestMCPToolsListReturns21Tools(t *testing.T) {
+	bin := buildTestBinary(t)
+	got := mcpToolNames(t, bin, "")
+
 	wantTools := []string{
-		// 13 sessiond-backed tools (terminal + workspace + layout + delegation)
+		// 16 sessiond-backed tools (terminal + workspace + layout + delegation + fleet)
 		"run_command",
 		"send_input",
 		"get_screen",
@@ -182,6 +236,9 @@ func TestMCPToolsListReturns18Tools(t *testing.T) {
 		"list_panes",
 		"get_layout",
 		"spawn_lane",
+		"fleet_status",
+		"lane_transcript",
+		"session_send",
 		// 3 tunnel tools (HTTP REST, registered via registerTunnelTools)
 		"list_tunnels",
 		"create_tunnel",
@@ -191,18 +248,58 @@ func TestMCPToolsListReturns18Tools(t *testing.T) {
 		"update_config",
 	}
 
-	tools := resp.Result.Tools
-	if len(tools) != len(wantTools) {
-		names := make([]string, len(tools))
-		for i, t := range tools {
-			names[i] = t.Name
-		}
-		t.Fatalf("tools/list returned %d tools, want %d\ngot:  %v\nwant: %v",
-			len(tools), len(wantTools), names, wantTools)
+	assertToolNames(t, got, wantTools)
+}
+
+// TestMCPToolsListInsidePaneWithholdsCloseTools is the LANE surface: what a
+// session running inside a muxterm pane gets. close_workspace and close_pane
+// are absent; everything else, spawn_lane and the fleet trio included, is not.
+//
+// A lane that cannot close a workspace cannot end its run by destroying the
+// workspace its verdict, its PR number and its final report are sitting in --
+// which is the failure this whole guard exists to prevent, observed in the
+// wild before it was written. A lane that can still spawn_lane and read
+// fleet_status has lost nothing it needs to do its work.
+//
+// It drives the real binary rather than calling registerAllTools directly,
+// because the claim under test is about what an agent's MCP client actually
+// receives over stdio, and the environment is the channel that carries it.
+func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
+	bin := buildTestBinary(t)
+	got := mcpToolNames(t, bin, "7")
+
+	wantTools := []string{
+		// 14 sessiond-backed tools: the 16 above, less the two closers.
+		"run_command",
+		"send_input",
+		"get_screen",
+		"list_workspaces",
+		"create_workspace",
+		"switch_workspace",
+		"create_pane",
+		"rename_pane",
+		"list_panes",
+		"get_layout",
+		"spawn_lane",
+		"fleet_status",
+		"lane_transcript",
+		"session_send",
+		// 3 tunnel tools, unchanged.
+		"list_tunnels",
+		"create_tunnel",
+		"close_tunnel",
+		// 2 config tools, unchanged.
+		"get_config",
+		"update_config",
 	}
-	for i, want := range wantTools {
-		if tools[i].Name != want {
-			t.Errorf("tools[%d].name = %q, want %q", i, tools[i].Name, want)
+
+	assertToolNames(t, got, wantTools)
+
+	// Stated separately from the ordered comparison above so a failure says
+	// which forbidden tool came back, not merely that a list did not match.
+	for _, name := range got {
+		if name == "close_workspace" || name == "close_pane" {
+			t.Errorf("%s is offered to a session inside a pane; it must be withheld", name)
 		}
 	}
 }

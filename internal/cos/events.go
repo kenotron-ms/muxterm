@@ -247,11 +247,19 @@ const DefaultSubscriberDepth = 512
 
 // Broker fans one sidecar event stream out to many subscribers.
 //
-// DROPPING IS THE POINT. A slow subscriber loses events; it never blocks the
-// reader goroutine and it is never disconnected. This mirrors
-// sessiond.subscriber.enqueuePreview, which drops advisory frames rather than
-// killing a session - the same reasoning applies with more force here, since
-// blocking this reader would stall the amplifier session itself.
+// DROPPING IS THE POINT, BUT ONLY FOR ADVISORY EVENTS. A slow subscriber loses
+// deltas; it never blocks the reader goroutine and it is never disconnected.
+// This mirrors sessiond.subscriber.enqueuePreview, which drops advisory frames
+// rather than killing a session - the same reasoning applies with more force
+// here, since blocking this reader would stall the amplifier session itself.
+//
+// A TERMINAL EVENT IS NOT ADVISORY AND IS NEVER DROPPED (see Publish). It is
+// the one frame that repairs everything the drop cost: turn_end.response is
+// authoritative under 2.4 law 4, so a consumer that receives it can reconstruct
+// the whole reply no matter how many deltas it lost. Dropping it inverts the
+// design - the subscriber that needed the repair most is the only one denied
+// it, and it is left rendering a reply that stops mid-sentence, forever, with
+// nothing on screen to say so.
 //
 // The control plane does NOT ride on this: queue.observe is called by the
 // reader directly, before Publish, so a dropped delta can never cost a caller
@@ -293,21 +301,68 @@ func (b *Broker) Subscribe(depth int) *Subscription {
 }
 
 // Publish delivers ev to every live subscriber. It never blocks and never
-// returns an error: a full subscriber queue drops the event and bumps that
-// subscriber's drop counter.
+// returns an error: a full subscriber queue drops an ADVISORY event and bumps
+// that subscriber's drop counter.
+//
+// A TERMINAL event (2.4 law 2) is delivered even to a full subscriber, by
+// evicting the oldest event still queued for it and taking that slot. That
+// trade is the right way round and not a close call: the evicted event is a
+// delta, which 2.4 law 4 calls advisory precisely because turn_end.response
+// carries the authoritative text; the event taking its place is the one that
+// ends the turn. Trading one advisory frame for the authoritative one turns a
+// permanently truncated reply into a complete one.
+//
+// It still never blocks. Publish holds b.mu, so it is the only producer, and a
+// consumer only ever removes: one eviction therefore guarantees a free slot.
+// The bounded retry is belt and braces, not a spin.
 func (b *Broker) Publish(ev Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
 		return
 	}
+	terminal := ev.IsTerminal()
 	for _, s := range b.subs {
 		select {
 		case s.ch <- ev:
+			continue
 		default:
+		}
+		if !terminal {
 			s.dropped.Add(1)
+			continue
+		}
+		if !forcePush(s.ch, ev) {
+			// Unreachable while b.mu is held; counted rather than ignored so
+			// a future producer added outside this lock cannot make a lost
+			// terminal event invisible.
+			s.dropped.Add(1)
+			continue
+		}
+		// The eviction IS a drop, and saying so keeps Subscription.Dropped
+		// honest: this subscriber did lose an event, just not this one.
+		s.dropped.Add(1)
+	}
+}
+
+// forcePush enqueues ev, evicting the oldest queued event to make room.
+// Reports whether ev was enqueued.
+//
+// The receive is non-blocking, so a channel drained by its consumer between the
+// failed send and the eviction costs nothing: the retry simply succeeds.
+func forcePush(ch chan Event, ev Event) bool {
+	for range 2 {
+		select {
+		case <-ch:
+		default:
+		}
+		select {
+		case ch <- ev:
+			return true
+		default:
 		}
 	}
+	return false
 }
 
 // Close closes every subscriber channel and refuses further publishes.
