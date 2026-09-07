@@ -106,7 +106,18 @@ class Cdp {
 let passed = 0;
 const failures = [];
 
+/**
+ * Every check made in this file, tagged with the item it belongs to.
+ *
+ * The sixteen-verdict ledger at the bottom is DERIVED from this list rather
+ * than written out by hand. A check that is added, removed or renamed moves
+ * its item's verdict with it, so the summary cannot quietly disagree with the
+ * checks it summarises -- which is the only way a summary is worth reading.
+ */
+const checks = [];
+
 function claim(id, what, ok, detail = '') {
+  checks.push({ id, what, ok, detail });
   if (ok) {
     passed++;
     console.log(`  PASS  ${id.padEnd(5)} ${what}`);
@@ -114,6 +125,76 @@ function claim(id, what, ok, detail = '') {
     failures.push(`${id} ${what}${detail ? ` -- ${detail}` : ''}`);
     console.log(`  FAIL  ${id.padEnd(5)} ${what}${detail ? `\n          ${detail}` : ''}`);
   }
+}
+
+/** The closed list. Sixteen items, no more, and each gets exactly one verdict. */
+const ITEMS = [
+  ['C1', 'bold'], ['C2', 'italic'], ['C3', 'inline code'], ['C4', 'fenced code block'],
+  ['C5', 'link'], ['C6', 'bullet list'], ['C7', 'numbered list'], ['C8', 'table'],
+  ['C9', 'heading'], ['C10', 'blockquote'],
+  ['ST1', 'unclosed fence renders as a code block in progress'],
+  ['ST2', 'incomplete table renders progressively'],
+  ['ST3', 'incomplete emphasis neither flashes nor swallows'],
+  ['ST4', 'no re-mount flicker'],
+  ['ST5', 'render cost is linear in message length'],
+  ['ST6', 'convergence: streamed == pasted'],
+];
+
+/**
+ * Print one terminal verdict per item, and return true when all sixteen pass.
+ *
+ * SANITIZATION IS A GATE, NOT A ROW. The brief is explicit that it is "a
+ * requirement of every PASS above, not a separate item": a construct that
+ * renders beautifully and injects unsanitized HTML has not passed. So a failed
+ * SAN check does not fail a seventeenth item -- it BLOCKS all sixteen, because
+ * every one of them was only ever conditionally true.
+ */
+function ledger() {
+  const san = checks.filter((c) => c.id.startsWith('SAN'));
+  const sanFailed = san.filter((c) => !c.ok);
+
+  console.log('\n' + '='.repeat(96));
+  console.log('THE SIXTEEN VERDICTS -- one per item, derived from the checks above');
+  console.log('='.repeat(96));
+  console.log(`ITEM  ${'WHAT'.padEnd(52)}CHECKS  VERDICT`);
+  console.log('-'.repeat(96));
+
+  let allPass = true;
+  for (const [id, what] of ITEMS) {
+    const mine = checks.filter((c) => c.id === id);
+    let v, why = '';
+    if (sanFailed.length > 0) {
+      v = 'BLOCKED';
+      why = `sanitization gate failed: ${sanFailed.map((c) => c.id).join(', ')}`;
+    } else if (mine.length === 0) {
+      v = 'BLOCKED';
+      why = 'no check was run for this item';
+    } else if (mine.some((c) => !c.ok)) {
+      v = 'BLOCKED';
+      why = mine.filter((c) => !c.ok).map((c) => c.what).join('; ');
+    } else {
+      v = 'PASS';
+    }
+    if (v !== 'PASS') allPass = false;
+    console.log(`${id.padEnd(5)} ${what.padEnd(52)}${String(mine.length).padEnd(8)}${v}${why ? `\n      -> ${why}` : ''}`);
+  }
+
+  console.log('-'.repeat(96));
+  const pass = ITEMS.filter(([id]) => sanFailed.length === 0 && checks.some((c) => c.id === id) && !checks.some((c) => c.id === id && !c.ok)).length;
+  console.log(`${ITEMS.length} items, ${pass} PASS, ${ITEMS.length - pass} BLOCKED`);
+  console.log(`sanitization gate: ${san.length} checks, ${sanFailed.length} failed ` +
+    `(a failure here BLOCKS all sixteen -- it is a requirement of every PASS, not a row of its own)`);
+
+  // Coverage is asserted, not assumed: no item may be missing or duplicated.
+  const covered = ITEMS.filter(([id]) => checks.some((c) => c.id === id)).map(([id]) => id);
+  const want = ITEMS.map(([id]) => id);
+  const stray = [...new Set(checks.map((c) => c.id))].filter((id) => !want.includes(id) && !id.startsWith('SAN'));
+  console.log(
+    JSON.stringify(covered) === JSON.stringify(want) && stray.length === 0
+      ? 'coverage: exactly the sixteen required items, each with at least one check, no strays'
+      : `coverage: MISMATCH -- covered ${JSON.stringify(covered)} stray ${JSON.stringify(stray)}`,
+  );
+  return allPass && JSON.stringify(covered) === JSON.stringify(want) && stray.length === 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -728,13 +809,17 @@ async function main() {
 
   cdp.close();
 
-  console.log(`\n${passed} passed, ${failures.length} failed`);
+  console.log(`\n${passed} checks passed, ${failures.length} failed`);
   if (failures.length) {
     console.log('\nfailures:');
     for (const f of failures) console.log(`  ${f}`);
-    process.exit(1);
   }
-  process.exit(0);
+
+  // The ledger is the LAST thing printed and the thing the exit code answers
+  // to. A run that leaves any item without exactly one PASS is a failed run,
+  // even if every individual check happened to pass.
+  const allGreen = ledger();
+  process.exit(allGreen ? 0 : 1);
 }
 
 function firstDiff(a, b) {
