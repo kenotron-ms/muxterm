@@ -232,8 +232,17 @@ async function rawDump(page) {
   const specs = [
     { title: 'T4  speaking -> listening   (the transition under complaint)',
       spec: { from: 'speaking', to: 'listening' } },
+    { title: 'T1  idle -> listening',      spec: { from: 'idle',      to: 'listening' } },
+    { title: 'T2  listening -> thinking',  spec: { from: 'listening', to: 'thinking'  } },
+    { title: 'T3  thinking -> speaking',   spec: { from: 'thinking',  to: 'speaking'  } },
+    { title: 'T5  listening -> idle',      spec: { from: 'listening', to: 'idle'      } },
+    { title: 'T6  speaking -> idle',       spec: { from: 'speaking',  to: 'idle'      } },
     { title: 'K3  speaking -> listening, INTERRUPTED by thinking at 140ms',
       spec: { from: 'speaking', to: 'listening', interruptWith: 'thinking', interruptAfter: 140, ms: 640 } },
+    { title: 'K3  thinking -> speaking, INTERRUPTED by listening at 140ms',
+      spec: { from: 'thinking', to: 'speaking', interruptWith: 'listening', interruptAfter: 140, ms: 640 } },
+    { title: 'K3  listening -> idle, INTERRUPTED by thinking at 140ms',
+      spec: { from: 'listening', to: 'idle', interruptWith: 'thinking', interruptAfter: 140, ms: 640 } },
   ];
   let bad = 0;
   for (const { title, spec } of specs) {
