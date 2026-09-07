@@ -241,7 +241,7 @@ describe('MuxSocket', () => {
       vi.useRealTimers();
     });
 
-    it('schedules reconnect with exponential backoff', () => {
+    it('schedules reconnect on the fast ladder', () => {
       vi.useFakeTimers();
       const store = new MuxStore();
       const mux = new MuxSocket(store, 'ws://localhost:8080/ws');
@@ -250,15 +250,17 @@ describe('MuxSocket', () => {
       const ws0 = MockWebSocket.instances[0];
       ws0.simulateOpen();
 
-      // Close abnormally - first reconnect should be after ~1000ms base
+      // Close abnormally. The ladder opens with three fast attempts at
+      // FAST_DELAY_MS (300ms) before any growth, so a service restart is
+      // picked up quickly -- see the constants block in ws.ts.
       ws0.simulateClose(1006);
 
-      // Not yet reconnected at 500ms
-      vi.advanceTimersByTime(500);
+      // Not yet reconnected at 100ms.
+      vi.advanceTimersByTime(100);
       expect(MockWebSocket.instances).toHaveLength(1);
 
-      // Should reconnect by 1500ms (1000ms base + possible jitter)
-      vi.advanceTimersByTime(1000);
+      // Reconnected by 550ms (300ms base + up to 250ms jitter).
+      vi.advanceTimersByTime(450);
       expect(MockWebSocket.instances).toHaveLength(2);
 
       vi.useRealTimers();
