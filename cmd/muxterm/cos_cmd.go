@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,7 +35,9 @@ func runCos(args []string) error {
 	fs := flag.NewFlagSet("cos", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	status := fs.Bool("status", false, "report sidecar status and exit")
-	asJSON := fs.Bool("json", false, "with --status, print machine-readable JSON")
+	showConfig := fs.Bool("config", false, "report the effective instruction and tool surface, and exit")
+	full := fs.Bool("full", false, "with --config, print the whole system instruction rather than a summary")
+	asJSON := fs.Bool("json", false, "with --status or --config, print machine-readable JSON")
 	defaultSessionID, _ := cos.ResolveSessionID("")
 	sessionID := fs.String("session-id", defaultSessionID, "amplifier session id the sidecar owns")
 	bundle := fs.String("bundle", "", "amplifier bundle (default: the chief-of-staff bundle shipped with muxterm)")
@@ -49,6 +52,7 @@ func runCos(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm cos <message> [flags]")
 		fmt.Fprintln(os.Stdout, "       muxterm cos --status [--json]")
+		fmt.Fprintln(os.Stdout, "       muxterm cos --config [--full] [--json]")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Send one turn to the chief-of-staff sidecar and stream the reply.")
 		fmt.Fprintln(os.Stdout, "")
@@ -64,6 +68,22 @@ func runCos(args []string) error {
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "The reply is printed to stdout; tool activity, approval prompts, and")
 		fmt.Fprintln(os.Stdout, "diagnostics go to stderr.")
+		fmt.Fprintln(os.Stdout, "")
+		cosDir, _ := cos.ConfigDir()
+		fmt.Fprintln(os.Stdout, "TUNING. The system instruction and the tool surface are configurable,")
+		fmt.Fprintln(os.Stdout, "in two files under "+cosDir+":")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "  "+cos.InstructionFile+"   prose appended to (or, with instruction_mode =")
+		fmt.Fprintln(os.Stdout, "                   \"replace\", substituted for) the compiled-in charter")
+		fmt.Fprintln(os.Stdout, "  "+cos.PolicyFile+"     instruction_mode, tools_allow, tools_deny")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "Neither file needs to exist; with neither, the compiled-in defaults are")
+		fmt.Fprintln(os.Stdout, "the whole configuration. An edit takes effect on the NEXT turn -- no")
+		fmt.Fprintln(os.Stdout, "restart, no signal, and the conversation is not disturbed. The chief of")
+		fmt.Fprintln(os.Stdout, "staff cannot write these files through any tool muxterm gives it.")
+		fmt.Fprintln(os.Stdout, "")
+		fmt.Fprintln(os.Stdout, "'muxterm cos --config' reports what is configured, what is in effect,")
+		fmt.Fprintln(os.Stdout, "and which layer supplied each value.")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "When a tool needs approval you are asked on the terminal. If stdin is")
 		fmt.Fprintln(os.Stdout, "not a TTY the request is DENIED and the denial is reported, so a")
@@ -81,6 +101,9 @@ func runCos(args []string) error {
 
 	if *status {
 		return runCosStatus(*asJSON)
+	}
+	if *showConfig {
+		return runCosConfig(*asJSON, *full)
 	}
 
 	message := strings.TrimSpace(strings.Join(fs.Args(), " "))
@@ -193,6 +216,154 @@ func runCos(args []string) error {
 			return fmt.Errorf("turn %s did not complete: %w", turn.ID, turnCtx.Err())
 		}
 	}
+}
+
+// runCosConfig answers "what is the chief of staff actually running with, and
+// which layer decided each part of it" -- without reading any source.
+//
+// It reports TWO things, and keeping them distinct is the whole point:
+//
+//   - CONFIGURED: the tuning files as they stand right now, resolved with
+//     provenance. This is what the NEXT turn will apply.
+//   - EFFECTIVE: what the live sidecar is holding, asked of the process
+//     itself. Absent when nothing is running, which is honest -- there is no
+//     effective instruction when there is no session.
+//
+// They can legitimately disagree: an edit saved a moment ago is configured but
+// not yet effective, because the tuning is applied at turn dispatch. A surface
+// that folded them into one number would report that as agreement and hide the
+// one state a person tuning a prompt most needs to see.
+//
+// Like --status, this never STARTS a sidecar. Asking what something is doing
+// must not be the thing that makes it start doing it.
+func runCosConfig(asJSON, full bool) error {
+	dir, dirSource := cos.ConfigDir()
+	t := cos.LoadTuning(dir)
+
+	// The live half comes from the STATUS FILE, not from a query: the
+	// supervisor lives inside whichever process owns the sidecar (the server),
+	// and this command is a different process. The supervisor refreshes that
+	// file whenever a retune changes something.
+	var live *cos.Effective
+	var liveNote string
+	switch st, err := cos.ReadState(""); {
+	case err != nil:
+		liveNote = "no sidecar is running, so nothing is in effect yet"
+	case !st.Alive():
+		liveNote = "the last sidecar has exited; this is its final reported state"
+		live = st.Effective
+	case st.Effective == nil:
+		liveNote = "a sidecar is running but has taken no turn yet, so it is still on the compiled-in defaults"
+	default:
+		live = st.Effective
+	}
+
+	if asJSON {
+		out := map[string]any{
+			"configured": map[string]any{
+				"dir":               t.Dir,
+				"dirSource":         dirSource,
+				"instruction":       t.Instruction,
+				"instructionSource": t.InstructionSource,
+				"mode":              t.Mode,
+				"modeSource":        t.ModeSource,
+				"toolsAllow":        t.ToolsAllow,
+				"toolsDeny":         t.ToolsDeny,
+				"toolsSource":       t.ToolsSource,
+				"problems":          t.Problems,
+			},
+		}
+		if live != nil {
+			eff := map[string]any{
+				"instructionChars": live.InstructionChars,
+				"bundleChars":      live.BundleChars,
+				"baseChars":        live.BaseChars,
+				"tools":            live.Tools,
+				"toolsKnown":       live.ToolsKnown,
+				"instructionPath":  live.InstructionPath,
+			}
+			if full {
+				eff["instruction"] = readInstructionFile(live.InstructionPath)
+			}
+			out["effective"] = eff
+		}
+		if liveNote != "" {
+			out["effectiveNote"] = liveNote
+		}
+		return printJSON(out)
+	}
+
+	fmt.Println("CONFIGURED (applied to the next turn)")
+	fmt.Printf("  source dir       %s (%s)\n", t.Dir, dirSource)
+	for _, line := range strings.Split(strings.TrimRight(t.Describe(), "\n"), "\n") {
+		if strings.HasPrefix(line, "config dir") {
+			continue // already printed above, with its provenance
+		}
+		fmt.Printf("  %s\n", line)
+	}
+	fmt.Printf("  edit             %s\n", filepath.Join(t.Dir, cos.InstructionFile))
+	fmt.Printf("                   %s\n", filepath.Join(t.Dir, cos.PolicyFile))
+
+	fmt.Println()
+	if live == nil {
+		fmt.Printf("EFFECTIVE: %s.\n", liveNote)
+		fmt.Println("           The configured values above apply to the next turn.")
+		return nil
+	}
+
+	fmt.Println("EFFECTIVE (as the sidecar last reported it)")
+	if liveNote != "" {
+		fmt.Printf("  note             %s\n", liveNote)
+	}
+	fmt.Printf("  system prompt    %d chars on the wire\n", live.InstructionChars)
+	fmt.Printf("  bundle part      %d chars (compiled-in base %d, tuning %+d)\n",
+		live.BundleChars, live.BaseChars, live.BundleChars-live.BaseChars)
+	fmt.Printf("  tools mounted    %d of %d this session knows\n",
+		len(live.Tools), len(live.ToolsKnown))
+	fmt.Printf("  mounted          %s\n", strings.Join(live.Tools, " "))
+	if withheld := missing(live.ToolsKnown, live.Tools); len(withheld) > 0 {
+		fmt.Printf("  withheld         %s\n", strings.Join(withheld, " "))
+	}
+	if live.InstructionPath != "" {
+		fmt.Printf("  full prompt      %s\n", live.InstructionPath)
+	}
+	if full {
+		fmt.Println()
+		fmt.Println("---- effective system instruction ----")
+		fmt.Println(readInstructionFile(live.InstructionPath))
+		fmt.Println("---- end ----")
+	}
+	return nil
+}
+
+// readInstructionFile returns the published system instruction, or a legible
+// account of why it is not there. It returns a STRING rather than an error
+// because it is rendering into a report: "(could not read ...)" in the body is
+// more use than failing the whole command over a missing convenience file.
+func readInstructionFile(path string) string {
+	if path == "" {
+		return "(the sidecar has not published one)"
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // process-owned runtime state
+	if err != nil {
+		return fmt.Sprintf("(could not read %s: %v)", path, err)
+	}
+	return string(data)
+}
+
+// missing returns the entries of all that are not in have.
+func missing(all, have []string) []string {
+	seen := make(map[string]bool, len(have))
+	for _, h := range have {
+		seen[h] = true
+	}
+	var out []string
+	for _, a := range all {
+		if !seen[a] {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // runCosStatus reports whether a sidecar is live, reading the status file the

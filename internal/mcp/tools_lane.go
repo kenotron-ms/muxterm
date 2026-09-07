@@ -304,6 +304,14 @@ func (lt *laneTools) spawnLane(args map[string]any) (string, error) {
 		return "", err
 	}
 
+	// S1, and this is the clause that matters most: a lane is a full coding
+	// agent WITH a shell. Delegating the edit is the obvious way around a
+	// block that only covered this session's own tools, so the lane's opening
+	// turn and its stop condition are inspected before one is launched.
+	if err := guardCosConfig(prompt, goal); err != nil {
+		return "", err
+	}
+
 	// Build argv FIRST: an unlaunchable harness, or a goal on a harness with no
 	// goal mode, must fail before a workspace is created for it, or a rejected
 	// delegation would still leave an empty workspace behind.

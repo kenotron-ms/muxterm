@@ -171,6 +171,11 @@ func (ft *fleetTools) sessionSend(args map[string]any) (string, error) {
 	} else if present {
 		submit = v
 	}
+	// S1. session_send types into a live agent's pane, which is the same
+	// delegation route as spawn_lane with the lane already running.
+	if err := guardCosConfig(text); err != nil {
+		return "", err
+	}
 
 	rows, err := ft.c.Fleet()
 	if err != nil {

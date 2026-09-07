@@ -34,6 +34,60 @@ type State struct {
 	StartedAt time.Time `json:"startedAt"`
 	Python    string    `json:"python,omitempty"`
 	Script    string    `json:"script,omitempty"`
+
+	// Effective is what the live session is running with, refreshed whenever
+	// a retune changes something. Absent until the sidecar has answered once.
+	//
+	// It rides the STATUS FILE rather than a new HTTP route because the
+	// supervisor lives inside whichever process owns the sidecar -- the
+	// server today -- and `muxterm cos --config` is a different process
+	// entirely. That is the same cross-process problem this file already
+	// exists to solve, and solving it twice, differently, is how the two
+	// answers start to disagree.
+	Effective *Effective `json:"effective,omitempty"`
+}
+
+// Effective is the sidecar's own account of its configuration.
+//
+// The instruction is summarized here and written WHOLE to a sibling file
+// (InstructionPath) rather than embedded: it runs to tens of kilobytes, and
+// this file is re-marshalled and renamed on every status update.
+type Effective struct {
+	// InstructionChars is the assembled system instruction's length;
+	// BaseChars is the compiled-in bundle instruction's. Equal means nothing
+	// the user configured is in effect.
+	InstructionChars int `json:"instructionChars"`
+	// BundleChars is the bundle instruction -- the part the tuning files
+	// actually edit. BaseChars is what it was compiled in as. The difference
+	// between them is exactly what the user's configuration contributed;
+	// InstructionChars is much larger because the factory appends the
+	// resolved @mention context block to it.
+	BundleChars int `json:"bundleChars"`
+	BaseChars   int `json:"baseChars"`
+	// Tools is what is mounted right now. ToolsKnown is everything this
+	// session ever mounted, so ToolsKnown minus Tools is the withheld set --
+	// which is the number that answers "did my deny list work?".
+	Tools      []string `json:"tools,omitempty"`
+	ToolsKnown []string `json:"toolsKnown,omitempty"`
+	// InstructionPath names the file holding the whole instruction.
+	InstructionPath string `json:"instructionPath,omitempty"`
+	// At is when the sidecar was last asked.
+	At time.Time `json:"at"`
+}
+
+// instructionFileName is the effective system instruction, written out beside
+// the status file so a human can read the prompt their edits produced without
+// a running server, an API call, or a source checkout. Overwritten whenever it
+// changes; removed with the status file.
+const instructionFileName = "cos-instruction.txt"
+
+// InstructionPath returns where the effective system instruction is published.
+func InstructionPath() (string, error) {
+	sock, err := sessiond.SocketPath()
+	if err != nil {
+		return "", fmt.Errorf("cos: resolve runtime dir: %w", err)
+	}
+	return filepath.Join(filepath.Dir(sock), instructionFileName), nil
 }
 
 // StatePath returns the default status file path.

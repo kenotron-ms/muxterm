@@ -120,6 +120,18 @@ type queue struct {
 	send    func(o op) error
 	publish func(Event)
 	logf    func(string, ...any)
+
+	// beforeDispatch runs immediately before each turn op is written, on the
+	// dispatching goroutine and outside the lock.
+	//
+	// THIS IS THE RELOAD SEAM. It is here rather than in submit() because
+	// this is the one place in the process where a turn becomes bytes on the
+	// pipe: everything queued behind it has not been sent yet, so a
+	// configuration change made while three turns were waiting still reaches
+	// the sidecar ahead of the next turn to actually run. Ordering is what
+	// makes "takes effect for the NEXT turn" true rather than approximately
+	// true -- both ops travel the same single ordered pipe, in this order.
+	beforeDispatch func()
 }
 
 func newQueue(send func(op) error, publish func(Event), logf func(string, ...any)) *queue {
@@ -193,7 +205,16 @@ func (q *queue) pump() {
 		t.dispatched = time.Now()
 		t.mu.Unlock()
 		send := q.send
+		before := q.beforeDispatch
 		q.mu.Unlock()
+
+		// Re-read the tuning and push it ahead of this turn. Deliberately NOT
+		// guarded by an error return: a configuration that cannot be read must
+		// never be able to stop a turn from running. LoadTuning reports its
+		// own problems and falls back to the compiled-in defaults.
+		if before != nil {
+			before()
+		}
 
 		err := send(op{Op: opTurn, TurnID: t.ID, Prompt: t.Prompt})
 		if err == nil {
