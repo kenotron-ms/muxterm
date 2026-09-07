@@ -190,11 +190,12 @@ export async function start(): Promise<void> {
     // 3. The peer connection.
     const pc = new RTCPeerConnection();
     _pc = pc;
+    // addTrack creates a SENDRECV transceiver on its own, so the offer
+    // already asks to receive. An extra addTransceiver('audio') here adds a
+    // SECOND m-line that carries nothing — harmless to the conversation,
+    // but it splits getStats across two outbound-rtp reports and makes the
+    // empty one look like a session that never sent any audio.
     for (const track of _mic.getTracks()) pc.addTrack(track, _mic);
-    // Explicitly ask to RECEIVE audio. Adding a sendonly mic track alone
-    // yields an offer the far end can answer without sending anything back,
-    // and the failure mode is a session that hears you and never speaks.
-    pc.addTransceiver('audio', { direction: 'sendrecv' });
 
     pc.ontrack = (ev) => {
       if (gen !== _gen) return;
@@ -297,10 +298,17 @@ function _onRealtimeEvent(raw: unknown): void {
 
     case 'conversation.item.input_audio_transcription.completed':
       _heard = String(ev.transcript ?? '').trim();
+      _log.push({ at: Date.now(), dir: 'heard', text: _heard });
       _notify();
       break;
 
     case 'response.created':
+      // Reset HERE, not only on speech_started. A response the server
+      // creates on its own -- narration, an injected answer, a tool result
+      // being spoken -- has no preceding user utterance, so a buffer only
+      // cleared on speech_started concatenates two separate answers into
+      // one run-on line.
+      _spoken = '';
       _setState('thinking');
       break;
 
@@ -316,6 +324,7 @@ function _onRealtimeEvent(raw: unknown): void {
       break;
 
     case 'response.done':
+      if (_spoken.trim()) _log.push({ at: Date.now(), dir: 'spoke', text: _spoken.trim() });
       if (_state === 'speaking' || _state === 'thinking') _setState('listening');
       break;
 
@@ -620,3 +629,71 @@ export const voiceSessionController = {
   stop,
   toggle,
 };
+
+// ---------------------------------------------------------------------------
+// DEV verification accessor — extends the SAME window.__muxterm object
+// terminal-registry.ts and voice-input-controller.ts already install, using
+// the IDENTICAL spread pattern so no module clobbers another's keys
+// regardless of evaluation order. Deliberately NOT gated behind
+// import.meta.env.DEV, for the reason voice-input-controller's accessor
+// gives: this repo builds with plain `vite build`, where that flag is false.
+//
+// It exists because this feature's proof CANNOT be a person speaking into a
+// microphone. The automated end-to-end run drives a real browser with a real
+// WAV file in place of a mic and needs to read back what was actually heard
+// and said. Everything here is READ-ONLY except start/stop, which are the
+// same code paths the button uses; there is no way to fake a transcript
+// through it, so a passing run is a real conversation or it is nothing.
+// ---------------------------------------------------------------------------
+
+/** Every transcript event, in order, for the automated end-to-end run. */
+const _log: Array<{ at: number; dir: 'heard' | 'spoke' | 'event'; text: string }> = [];
+
+if (typeof window !== 'undefined') {
+  (window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm = {
+    ...(window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm,
+    voiceSession: {
+      /** Start, by the same path the button takes. */
+      start: (): Promise<void> => start(),
+      stop: (): void => stop(),
+      /** Live snapshot: state, level, both transcripts, any error. */
+      snapshot: (): VoiceSessionSnapshot => snapshot(),
+      /** Ordered transcript log, oldest first. */
+      log: () => _log.slice(),
+      /**
+       * Live inbound-audio statistics, straight from the peer connection.
+       *
+       * This is what proves audio came BACK, as opposed to a handshake that
+       * merely succeeded: bytes and packets on the inbound RTP stream, and
+       * the concealment/played sample counters the browser only maintains
+       * for audio it actually rendered.
+       */
+      stats: async (): Promise<Record<string, number>> => {
+        const out: Record<string, number> = {};
+        if (!_pc) return out;
+        // SUMMED across reports, not assigned. A peer connection can carry
+        // more than one audio m-line, and assigning lets whichever report
+        // arrives last speak for all of them — an empty one then reads as
+        // "no audio was ever sent".
+        const add = (k: string, v: unknown) => {
+          out[k] = (out[k] ?? 0) + Number(v ?? 0);
+        };
+        const report = await _pc.getStats();
+        report.forEach((s: Record<string, unknown>) => {
+          if (s.type === 'inbound-rtp' && s.kind === 'audio') {
+            add('inboundBytes', s.bytesReceived);
+            add('inboundPackets', s.packetsReceived);
+            add('playedSamples', s.totalSamplesReceived);
+            out.audioLevel = Math.max(out.audioLevel ?? 0, Number(s.audioLevel ?? 0));
+          }
+          if (s.type === 'outbound-rtp' && s.kind === 'audio') {
+            add('outboundBytes', s.bytesSent);
+            add('outboundPackets', s.packetsSent);
+          }
+        });
+        return out;
+      },
+      connectionState: (): string => _pc?.connectionState ?? 'none',
+    },
+  };
+}

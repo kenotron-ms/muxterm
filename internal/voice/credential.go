@@ -153,10 +153,14 @@ func (c *entraCredential) Token(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("voice: az account get-access-token --scope %s failed: %s", c.scope, msg)
 	}
 
+	// expires_on is a UNIX SECONDS NUMBER while expiresOn is a local
+	// datetime STRING. Decoding the former into a string field fails the
+	// whole document, which is how a perfectly valid az response became
+	// "output this build could not parse".
 	var out struct {
-		AccessToken string `json:"accessToken"`
-		ExpiresOn   string `json:"expires_on"`
-		Expires     string `json:"expiresOn"`
+		AccessToken string      `json:"accessToken"`
+		ExpiresOn   json.Number `json:"expires_on"`
+		Expires     string      `json:"expiresOn"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
 		// The body is NOT quoted into the error: it contains the token.
@@ -171,7 +175,9 @@ func (c *entraCredential) Token(ctx context.Context) (string, error) {
 	// not fatal: fall back to a conservative short cache, which costs an
 	// extra az invocation and never serves an expired token.
 	c.expires = time.Now().Add(10 * time.Minute)
-	if ts := strings.TrimSpace(out.Expires); ts != "" {
+	if secs, err := out.ExpiresOn.Int64(); err == nil && secs > 0 {
+		c.expires = time.Unix(secs, 0)
+	} else if ts := strings.TrimSpace(out.Expires); ts != "" {
 		for _, layout := range []string{"2006-01-02 15:04:05.000000", "2006-01-02 15:04:05", time.RFC3339} {
 			if t, err := time.ParseInLocation(layout, ts, time.Local); err == nil {
 				c.expires = t

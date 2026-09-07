@@ -72,13 +72,26 @@ func newFakeRealtime(t *testing.T) *fakeRealtime {
 }
 
 // push sends a server event to the attached sideband.
+//
+// Waits for the attach rather than asserting it: websocket.Dial returns as
+// soon as the handshake completes, which can be marginally before the
+// server handler has stored its side.
 func (f *fakeRealtime) push(t *testing.T, ev map[string]any) {
 	t.Helper()
-	f.connMu.Lock()
-	c := f.conn
-	f.connMu.Unlock()
-	if c == nil {
-		t.Fatal("nothing attached to the fake realtime endpoint yet")
+	var c *websocket.Conn
+	deadline := time.After(5 * time.Second)
+	for c == nil {
+		f.connMu.Lock()
+		c = f.conn
+		f.connMu.Unlock()
+		if c != nil {
+			break
+		}
+		select {
+		case <-time.After(5 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("nothing attached to the fake realtime endpoint")
+		}
 	}
 	b, _ := json.Marshal(ev)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -317,7 +330,7 @@ func TestAskHandsOffToTheAsyncPathRatherThanBlocking(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Fatalf("the synchronous tool took %v to answer; it must not block until turn_end", elapsed)
 	}
-	if got := outputs(msgs)[0]; !strings.Contains(strings.ToLower(got), "still working") {
+	if got := outputs(msgs)[0]; !strings.Contains(strings.ToLower(got), "working on this now") {
 		t.Fatalf("first reply = %q, want a still-working hand-off", got)
 	}
 
@@ -520,4 +533,71 @@ func TestWebSocketURLDerivation(t *testing.T) {
 	if got != want {
 		t.Fatalf("WebSocketURL = %q, want %q", got, want)
 	}
+}
+
+// A realtime session runs one response at a time. A second request during an
+// active response is refused outright with
+// conversation_already_has_active_response -- and that refusal EATS THE
+// ANSWER: the tool result sits in the conversation with nothing ever asking
+// the model to speak it. This is the most ordinary timing there is (the
+// model is still saying "I'll go and ask" when the answer lands), so the
+// request has to be held and replayed rather than sent and lost.
+func TestResponseRequestIsHeldWhileAResponseIsActive(t *testing.T) {
+	f := newFakeRealtime(t)
+	turn := &fakeTurn{done: make(chan struct{}), text: "the answer"}
+	b := &fakeBridge{turn: turn}
+	attach(t, f, b, 40*time.Millisecond)
+
+	// The model starts speaking.
+	f.push(t, map[string]any{"type": "response.created", "response": map[string]any{"id": "resp_1"}})
+	time.Sleep(50 * time.Millisecond)
+
+	// A tool call lands and its answer comes back mid-utterance.
+	f.push(t, toolCall(ToolAsk, "call_1", map[string]any{"request": "something"}))
+	f.waitFor(t, "the tool result item", func(m []map[string]any) bool { return len(outputs(m)) > 0 })
+
+	countCreates := func(m []map[string]any) int {
+		n := 0
+		for _, x := range m {
+			if x["type"] == "response.create" {
+				n++
+			}
+		}
+		return n
+	}
+	f.mu.Lock()
+	got := countCreates(f.sent)
+	f.mu.Unlock()
+	if got != 0 {
+		t.Fatalf("%d response.create sent while a response was active; the vendor refuses those and the answer is lost", got)
+	}
+
+	// The utterance ends. The held request goes out now.
+	f.push(t, map[string]any{"type": "response.done"})
+	f.waitFor(t, "the replayed response.create", func(m []map[string]any) bool {
+		return countCreates(m) >= 1
+	})
+}
+
+// A response.done that never arrives must not wedge the queue permanently:
+// a wedged queue is silence, which is the failure this whole area exists to
+// prevent.
+func TestAStaleActiveResponseDoesNotWedgeTheQueue(t *testing.T) {
+	f := newFakeRealtime(t)
+	sb := attach(t, f, &fakeBridge{}, time.Second)
+
+	sb.mu.Lock()
+	sb.respActive = true
+	sb.respStarted = time.Now().Add(-2 * responseStalePeriod)
+	sb.mu.Unlock()
+
+	sb.send(map[string]any{"type": "response.create", "response": map[string]any{}})
+	f.waitFor(t, "the response.create to go out anyway", func(m []map[string]any) bool {
+		for _, x := range m {
+			if x["type"] == "response.create" {
+				return true
+			}
+		}
+		return false
+	})
 }
