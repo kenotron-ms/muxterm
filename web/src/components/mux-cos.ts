@@ -1780,6 +1780,18 @@ export class MuxCos extends LitElement {
           ${live && t.blocks.length === 0
             ? html`<div class="waiting">working...</div>`
             : nothing}
+          <!--
+            A turn CAN legitimately end with no reply: the loop stops after a
+            tool result and the model never speaks again, so turn_end carries
+            an empty response. Rendering that as nothing at all is accurate
+            and unusable -- it is pixel-for-pixel identical to a reply that
+            was lost on the wire, and it has been read as exactly that. Say
+            which one it was. 'cancelled' and 'failed' already say so in the
+            footer; 'done' is the silent case, so it is the only one here.
+          -->
+          ${!live && t.status === 'done' && !t.blocks.some((b) => b.kind === 'text')
+            ? html`<div class="waiting">ended without a reply</div>`
+            : nothing}
           ${asks.map((a) => this._renderAsk(a))}
           ${t.notices.map((n) => html`<div class="notice">${n}</div>`)}
           ${this._renderFoot(t)}

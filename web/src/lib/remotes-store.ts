@@ -14,6 +14,12 @@
  * │  exact DOM it produces on main. That single early return is the     │
  * │  enforcement mechanism, and it is meant to be readable and          │
  * │  diffable at a glance.                                             │
+ * │                                                                     │
+ * │  ONE DOCUMENTED EXCEPTION: the sidebar's WORKSPACE LIST always      │
+ * │  groups by machine, because the group is what carries a machine's   │
+ * │  "+ New workspace" -- an ungrouped mode is one where that button    │
+ * │  has nowhere to live but the sidebar root. Its Start-card split     │
+ * │  (mux-sidebar.ts) and mux-dock.ts still take the gate.              │
  * └─────────────────────────────────────────────────────────────────────┘
  *
  * Deliberately NOT folded into state.ts's MuxStore, and shaped instead like
