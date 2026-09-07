@@ -436,8 +436,50 @@ class CosStore {
     if (type !== 'cos-event') return;
     const ev = frame.event;
     if (!ev || typeof ev !== 'object') return;
-    this._event(ev as Record<string, unknown>, frame.replay === true);
+    const replay = frame.replay === true;
+    this._event(ev as Record<string, unknown>, replay);
+    // Fan the RAW event out to anything that needs the stream itself rather
+    // than the store's digest of it. The voice session is the one consumer
+    // today: tool_start/tool_end/thinking are already exactly the "what am I
+    // doing right now" narration a spoken channel needs, so it subscribes
+    // here rather than inventing its own progress signal.
+    //
+    // Replays are EXCLUDED. A replayed event is history being re-rendered,
+    // not something happening now -- narrating one would have the assistant
+    // announce a tool call it made an hour ago the moment a second tab
+    // opens.
+    if (!replay) this._emitEvent(ev as Record<string, unknown>);
     this._notify();
+  }
+
+  /**
+   * Subscribe to the raw sidecar event stream. Returns an unsubscribe.
+   *
+   * Separate from subscribe(), which is the render notification: that one is
+   * coalesced to at most once per animation frame and says only "something
+   * changed". A narrator needs the individual events, in order, with their
+   * fields.
+   *
+   * A listener that throws must not break the store, so each is called
+   * defensively.
+   */
+  onEvent(cb: (ev: Record<string, unknown>) => void): () => void {
+    this._eventListeners.add(cb);
+    return () => {
+      this._eventListeners.delete(cb);
+    };
+  }
+
+  private _eventListeners = new Set<(ev: Record<string, unknown>) => void>();
+
+  private _emitEvent(ev: Record<string, unknown>): void {
+    for (const cb of this._eventListeners) {
+      try {
+        cb(ev);
+      } catch {
+        /* a bad listener is not the store's problem */
+      }
+    }
   }
 
   private _event(ev: Record<string, unknown>, replay: boolean): void {

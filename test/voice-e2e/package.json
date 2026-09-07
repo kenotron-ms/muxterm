@@ -1,0 +1,13 @@
+{
+  "name": "muxterm-voice-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Automated end-to-end proof for realtime voice. Not part of the muxterm build.",
+  "scripts": {
+    "e2e": "node run.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.50.0",
+    "ws": "^8.18.0"
+  }
+}

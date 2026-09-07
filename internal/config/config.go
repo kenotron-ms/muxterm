@@ -28,7 +28,146 @@ type Config struct {
 	Driver    DriverConfig    `toml:"driver"     json:"driver"`
 	Server    ServerConfig    `toml:"server"     json:"server"`
 	Restore   RestoreConfig   `toml:"restore"    json:"restore"`
+	Voice     VoiceConfig     `toml:"voice"      json:"voice"`
 }
+
+// Auth modes for VoiceConfig.AuthMode. These are the ONLY accepted values.
+//
+// There is no "guess" mode on purpose. The realtime endpoint muxterm was
+// built against has API-key auth DISABLED at the resource level, and a
+// consumer that assumes a key gets an HTTP 401 whose body says nothing about
+// which of the two credentials it should have presented. Naming the mode is
+// what turns that into a startup-time error message instead of a mystery.
+const (
+	// VoiceAuthEntra authenticates to the realtime endpoint with a
+	// Microsoft Entra ID bearer token for the audience named by
+	// VoiceConfig.EntraScope.
+	VoiceAuthEntra = "entra"
+	// VoiceAuthAPIKey authenticates with a static API key read from the
+	// environment variable named by VoiceConfig.APIKeyEnv.
+	VoiceAuthAPIKey = "api_key"
+)
+
+// VoiceConfig is the realtime speech-to-speech capability: where the realtime
+// endpoint is, which deployment answers on it, and HOW TO AUTHENTICATE.
+//
+// Off by default. Turning it on costs money per minute of speech and opens a
+// microphone, so it is an operator decision, never a default anyone backs
+// into.
+//
+// Deliberately absent from Merge(), for the same reason ServerConfig is: this
+// section names an outbound endpoint and an authentication mode, and a
+// browser PATCH /api/config must not be able to repoint muxterm's credential
+// at a host of the caller's choosing.
+//
+// No secret lives here. AuthMode selects WHICH credential source is used;
+// the credential itself comes from the ambient Azure identity (entra) or an
+// environment variable (api_key), and is never written to this file, never
+// serialized to a browser, and never logged.
+type VoiceConfig struct {
+	// Enabled gates the whole capability. When false the /api/cos/voice/*
+	// routes answer 404 and the browser never offers the control.
+	Enabled bool `toml:"enabled" json:"enabled"`
+
+	// Endpoint is the OpenAI-compatible v1 base URL of the realtime
+	// service, with no trailing slash, e.g.
+	// "https://example.openai.azure.com/openai/v1". Every realtime URL is
+	// derived from it: {endpoint}/realtime/client_secrets mints the
+	// ephemeral secret, {endpoint}/realtime/calls does the SDP exchange,
+	// and the ws:// form of {endpoint}/realtime attaches the sideband.
+	Endpoint string `toml:"endpoint" json:"endpoint"`
+
+	// Model is the deployment/model name, e.g. "gpt-realtime-2.1".
+	Model string `toml:"model" json:"model"`
+
+	// AuthMode is VoiceAuthEntra or VoiceAuthAPIKey. Required when
+	// Enabled: see the block comment above for why this is explicit.
+	AuthMode string `toml:"auth_mode" json:"auth_mode"`
+
+	// EntraScope is the token audience for VoiceAuthEntra. Defaults to
+	// "https://ai.azure.com/.default", which is what an Azure AI Foundry
+	// resource accepts; a Cognitive Services resource may want
+	// "https://cognitiveservices.azure.com/.default" instead.
+	EntraScope string `toml:"entra_scope,omitempty" json:"entra_scope"`
+
+	// APIKeyEnv names the environment variable holding the key for
+	// VoiceAuthAPIKey. The key's VALUE is never stored here.
+	APIKeyEnv string `toml:"api_key_env,omitempty" json:"api_key_env"`
+
+	// Voice is the spoken voice, e.g. "marin" or "alloy". Empty means the
+	// model's own default.
+	Voice string `toml:"voice,omitempty" json:"voice"`
+
+	// SyncToolTimeout bounds the SYNCHRONOUS bridge tool. A chief-of-staff
+	// turn can run for minutes and a realtime model expects a tool to
+	// return in seconds, so the synchronous path gives up waiting after
+	// this long and hands the turn to the asynchronous path, which speaks
+	// the result when it lands. It never blocks until done.
+	SyncToolTimeout time.Duration `toml:"sync_tool_timeout,omitempty" json:"sync_tool_timeout"`
+}
+
+// Validate enforces the one rule that cannot be defaulted: an enabled voice
+// capability must say where it points and how it authenticates.
+//
+// When Enabled is false the section is inapplicable and is ignored entirely
+// -- not an error -- so a half-filled [voice] section can sit in a config
+// file without preventing muxterm from starting.
+func (v VoiceConfig) Validate() error {
+	if !v.Enabled {
+		return nil
+	}
+	if v.Endpoint == "" {
+		return errors.New(`config: [voice] enabled but endpoint is empty; set endpoint (e.g. "https://example.openai.azure.com/openai/v1")`)
+	}
+	u, err := url.Parse(v.Endpoint)
+	if err != nil {
+		return fmt.Errorf("config: [voice] endpoint %q is not a valid URL: %w", v.Endpoint, err)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return fmt.Errorf("config: [voice] endpoint %q must use the https or http scheme", v.Endpoint)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("config: [voice] endpoint %q must include a host", v.Endpoint)
+	}
+	if v.Model == "" {
+		return errors.New(`config: [voice] enabled but model is empty; set model (e.g. "gpt-realtime-2.1")`)
+	}
+	switch v.AuthMode {
+	case VoiceAuthEntra, VoiceAuthAPIKey:
+	case "":
+		return fmt.Errorf(`config: [voice] enabled but auth_mode is empty; set auth_mode = %q or %q. This is not defaulted on purpose: a resource with key auth disabled answers an API-key request with a bare 401 that names neither credential`, VoiceAuthEntra, VoiceAuthAPIKey)
+	default:
+		return fmt.Errorf("config: [voice] auth_mode %q is not recognized; use %q or %q", v.AuthMode, VoiceAuthEntra, VoiceAuthAPIKey)
+	}
+	if v.AuthMode == VoiceAuthAPIKey && v.APIKeyEnv == "" {
+		return errors.New(`config: [voice] auth_mode = "api_key" requires api_key_env naming the environment variable that holds the key`)
+	}
+	return nil
+}
+
+// Resolved returns v with every optional field filled in. Callers use this
+// instead of reading the raw struct so a default lives in exactly one place.
+func (v VoiceConfig) Resolved() VoiceConfig {
+	if v.EntraScope == "" {
+		v.EntraScope = DefaultVoiceEntraScope
+	}
+	if v.SyncToolTimeout <= 0 {
+		v.SyncToolTimeout = DefaultVoiceSyncToolTimeout
+	}
+	return v
+}
+
+const (
+	// DefaultVoiceEntraScope is the token audience an Azure AI Foundry
+	// resource accepts. Verified working against a live resource whose
+	// key auth is disabled.
+	DefaultVoiceEntraScope = "https://ai.azure.com/.default"
+	// DefaultVoiceSyncToolTimeout is how long the synchronous bridge tool
+	// waits before handing off to the asynchronous path. Short enough that
+	// the model does not sit silent, long enough that a quick answer still
+	// arrives as a direct tool return.
+	DefaultVoiceSyncToolTimeout = 12 * time.Second
+)
 
 // DefaultAddr is the ONE canonical listen address for muxterm's serve layer.
 // Loopback-only by default: muxterm hands out interactive shells, so a
@@ -490,6 +629,14 @@ func Defaults() Config {
 		Restore: RestoreConfig{
 			Enabled:          true,
 			SnapshotInterval: 30 * time.Second,
+		},
+		// Realtime voice is OFF by default and carries no endpoint. It
+		// opens a microphone and bills per minute of speech; an
+		// operator turns it on deliberately or not at all.
+		Voice: VoiceConfig{
+			Enabled:         false,
+			EntraScope:      DefaultVoiceEntraScope,
+			SyncToolTimeout: DefaultVoiceSyncToolTimeout,
 		},
 	}
 }
