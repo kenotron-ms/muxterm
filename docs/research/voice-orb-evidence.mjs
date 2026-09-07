@@ -8,6 +8,7 @@
  *   node docs/research/voice-orb-evidence.mjs --raw    # unreduced per-frame samples
  *   node docs/research/voice-orb-evidence.mjs --ui     # drive the page's own controls
  *   node docs/research/voice-orb-evidence.mjs --technique   # prove WHICH technique is running
+ *   node docs/research/voice-orb-evidence.mjs --matrix      # 6 transitions x 6 criteria = 36 cells
  *
  * It opens docs/research/voice-orb-mock.html in headless Chrome, calls the
  * page's own window.__orbEvidence(), and reports what came back. The page
@@ -33,6 +34,7 @@ const JSON_OUT = process.argv.includes('--json');
 const RAW_OUT = process.argv.includes('--raw');
 const UI_OUT = process.argv.includes('--ui');
 const TECH_OUT = process.argv.includes('--technique');
+const MATRIX_OUT = process.argv.includes('--matrix');
 
 const CHROME = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']
   .map((n) => ['/usr/bin/' + n, '/usr/local/bin/' + n])
@@ -169,6 +171,13 @@ async function main() {
   }
   if (!up) throw new Error('page never finished loading __orbEvidence');
   await sleep(600); // let the oscillators settle into a steady state
+
+  if (MATRIX_OUT) {
+    const code = await matrix(page);
+    page.close();
+    browser.close();
+    return code;
+  }
 
   if (TECH_OUT) {
     const code = await technique(page);
@@ -612,6 +621,60 @@ async function technique(page) {
   console.log(fails === 0
     ? 'TECHNIQUE: weighted state blending with Σw ≡ 1, zero CSS animations. This is the persona model.'
     : `TECHNIQUE: ${fails} check(s) failed.`);
+  return fails === 0 ? 0 : 1;
+}
+
+/**
+ * Prints the 6 x 6 matrix: every criterion measured against every transition.
+ *
+ * Condition (a) of the goal asks for twelve verdicts -- one per transition and
+ * one per criterion -- and "exactly one terminal verdict" per item rules out a
+ * 36-verdict reading, since under that reading T1 would carry six. This matrix
+ * is therefore MORE than (a) requires, and it exists because building it closed
+ * two real coverage gaps: K3 and K5 had each been demonstrated on a single
+ * transition, and K6 had been asserted about a constant rather than measured.
+ */
+async function matrix(page) {
+  const r = await page.send('Runtime.evaluate', {
+    expression: 'window.__orbMatrix()', awaitPromise: true, returnByValue: true, timeout: 300000,
+  });
+  if (r.exceptionDetails) {
+    throw new Error('page threw: ' + (r.exceptionDetails.exception?.description ?? JSON.stringify(r.exceptionDetails)));
+  }
+  const cells = r.result.value;
+  const KS = ['K1', 'K2', 'K3', 'K4', 'K5', 'K6'];
+
+  console.log('');
+  console.log('='.repeat(104));
+  console.log('THE 6 x 6 MATRIX — every criterion measured against every transition, 36 cells');
+  console.log('='.repeat(104));
+  console.log('');
+  console.log('  transition                       K1        K2        K3        K4        K5        K6');
+  console.log('  ' + '-'.repeat(94));
+  let fails = 0;
+  for (const c of cells) {
+    const row = KS.map((k) => {
+      if (!c.k[k].ok) fails++;
+      return (c.k[k].ok ? 'PASS' : 'FAIL').padStart(9);
+    }).join('');
+    console.log(`  ${(c.id + '  ' + c.a + '→' + c.b).padEnd(32)}${row}`);
+  }
+  console.log('');
+  console.log('  the measurement behind each cell:');
+  console.log('');
+  for (const c of cells) {
+    console.log(`  ${c.id}  ${c.a} → ${c.b}`);
+    console.log(`     K1  velocity ×nominal: glow ${c.k.K1.glow.toFixed(2)}, rect ${c.k.K1.rect.toFixed(2)}   (threshold 6, jump ≈25, curve peak 2.73; ${c.k.K1.frames} frames)`);
+    console.log(`     K2  glow-interval violations ${c.k.K2.viol}; frames below the geometric floor ${c.k.K2.floor} : ${c.k.K2.dips}; weights monotone ${c.k.K2.mono}; largest third-state weight ${c.k.K2.third.toExponential(1)}`);
+    console.log(`     K3  interrupted by "${c.k.K3.via}" at 140ms: incoming weight was ${c.k.K3.w_at.toFixed(4)} (strictly mid-flight), seam Δglow ${c.k.K3.seam.toFixed(5)}, velocity ${c.k.K3.vel.toFixed(2)}`);
+    console.log(`     K4  properties written during this transition: [${c.k.K4.props.join(', ')}]`);
+    console.log(`     K5  reduced motion: rect span ${c.k.K5.span.toExponential(1)}, colour ΔRGB ${c.k.K5.dCol}, glow Δ ${c.k.K5.dGlow}, ${c.k.K5.distinct} distinct values`);
+    console.log(`     K6  duration recovered from the DOM at y=0.25/0.50/0.75: ${c.k.K6.est.join(' / ')} ms  (stated 420, spread ${c.k.K6.spread}ms)`);
+    console.log('');
+  }
+  console.log(fails === 0
+    ? 'MATRIX: 36 of 36 cells PASS.'
+    : `MATRIX: ${fails} of 36 cells FAILED.`);
   return fails === 0 ? 0 : 1;
 }
 

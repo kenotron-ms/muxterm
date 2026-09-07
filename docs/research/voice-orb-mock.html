@@ -1110,6 +1110,161 @@ window.__orbRawSamples = async (spec) => {
   };
 };
 
+/**
+ * Weight vector recovered from measured tint-layer opacities alone.
+ * Normalised painter's alpha a_i = w_i / SUM_{j<=i} w_j is invertible: with
+ * SUM w = 1, w_top = a_top, then S_{i-1} = S_i - w_i and w_{i-1} = a_{i-1}*S_{i-1}.
+ * Nothing here reads the engine.
+ */
+function weightsFromDom() {
+  const a = STATES.map(s => parseFloat(getComputedStyle(stage.querySelector(`.orb-tint[data-state="${s}"]`)).opacity));
+  const w = new Array(a.length).fill(0);
+  let S = 1;
+  for (let i = a.length - 1; i >= 0; i--) { w[i] = a[i] * S; S -= w[i]; }
+  return w;
+}
+
+/** x such that EASE(x) === y, by bisection. Used to recover the duration in use. */
+function easeInv(y, ease) {
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (ease(m) < y) lo = m; else hi = m; }
+  return (lo + hi) / 2;
+}
+
+/**
+ * The full 6 x 6 matrix: every criterion measured against every transition.
+ *
+ * K1 and K2 were already per-transition. K3 and K5 were demonstrated on one
+ * transition each; here they run on all six. K4 is observed per transition
+ * rather than as one global union. K6 stops being an assertion about a constant
+ * and becomes a measurement: the duration and the curve SHAPE are recovered
+ * from the DOM by timing the incoming weight past three points on the curve.
+ */
+window.__orbMatrix = async () => {
+  const D = ORB_CONSTANTS.DURATION_MS;
+  const T = [['T1','idle','listening'],['T2','listening','thinking'],['T3','thinking','speaking'],
+             ['T4','speaking','listening'],['T5','listening','idle'],['T6','speaking','idle']];
+  const xAt = [0.25, 0.5, 0.75].map(y => ({ y, x: easeInv(y, EASE) }));
+  const out = [];
+
+  for (const [id, a, b] of T) {
+    const ia = STATES.indexOf(a), ib = STATES.indexOf(b);
+    const cell = { id, a, b, k: {} };
+
+    // ---- one recording serves K1, K2, K4 and K6 ----
+    orb.setState(a); await settle(D + 400);
+    const before = measure();
+    const t0 = performance.now();
+    orb.setState(b);
+    const fr = [];
+    await new Promise(res => { const step = () => {
+      const el = performance.now() - t0;
+      const m = measure();
+      const props = new Set();
+      for (const e of stage.querySelectorAll('*')) for (let i = 0; i < e.style.length; i++) props.add(e.style[i]);
+      props.delete('--tint');
+      fr.push({ t: performance.now(), el, ...m, w: weightsFromDom(), props: [...props] });
+      el < D + 140 ? requestAnimationFrame(step) : res(); }; requestAnimationFrame(step); });
+
+    // K1 — velocity of two independently measured quantities
+    const k1g = continuity(fr, f => f.glow, Math.abs(PROFILES[b].glow - PROFILES[a].glow) || 1);
+    const k1r = continuity(fr, f => f.rect, rectRange(a, b));
+    cell.k.K1 = { ok: k1g.ok && k1r.ok, glow: k1g.vel_x_nominal, rect: k1r.vel_x_nominal, frames: fr.length };
+
+    // K2 — three independent forms, none of them confounded by the oscillators.
+    //
+    // (i) glow has no oscillator, so the interval test on it is exact.
+    const lo = Math.min(before.glow, PROFILES[b].glow) - 0.002, hi = Math.max(before.glow, PROFILES[b].glow) + 0.002;
+    const viol = fr.filter(f => f.glow < lo || f.glow > hi).length;
+    //
+    // (ii) geometric floor. "Snap through base" means the box goes below what
+    // EITHER state can produce. The comparison basis must be the states'
+    // achievable bands, not two instantaneous samples of a breathing orb —
+    // comparing an oscillating signal against arbitrary endpoint samples flags
+    // ordinary breathing, which is a broken test rather than a broken orb.
+    const floorOf = st => PROFILES[st].coreScale * (1 - PROFILES[st].pulseAmp - PROFILES[st].wobbleAmp);
+    const floor = Math.min(floorOf(a), floorOf(b)) - 0.004;
+    const dips = fr.filter(f => f.rect < floor).length;
+    //
+    // (iii) the decisive form, and the criterion's own wording: the outgoing
+    // weight only ever falls and the incoming only ever rises, so the blend
+    // cannot retreat toward a neutral pose and then animate back out. Weights
+    // are recovered from measured layer opacities; no oscillator touches them.
+    let mono = true;
+    for (let i = 1; i < fr.length; i++) {
+      if (fr[i].w[ia] > fr[i - 1].w[ia] + 1e-6) mono = false;
+      if (fr[i].w[ib] < fr[i - 1].w[ib] - 1e-6) mono = false;
+    }
+    const third = Math.max(...fr.map(f => Math.max(...f.w.filter((_, i) => i !== ia && i !== ib), 0)));
+    cell.k.K2 = { ok: viol === 0 && dips === 0 && mono && third < 1e-6,
+                  viol, dips, floor: +floor.toFixed(4), mono, third };
+
+    // K4 — what was actually written, during THIS transition
+    const props = [...new Set(fr.flatMap(f => f.props))].sort();
+    cell.k.K4 = { ok: props.join(',') === 'opacity,transform', props };
+
+    // K6 — recover duration and curve shape from the DOM
+    const wb = fr.map(f => ({ el: f.el, w: f.w[ib] }));
+    const cross = (y) => { for (let i = 1; i < wb.length; i++) if (wb[i].w >= y) {
+      const p = wb[i - 1], q = wb[i];
+      return p.el + (q.el - p.el) * ((y - p.w) / (q.w - p.w || 1)); } return null; };
+    const est = xAt.map(({ y, x }) => { const t = cross(y); return t == null ? null : t / x; });
+    const good = est.filter(v => v != null);
+    const spread = good.length ? Math.max(...good) - Math.min(...good) : Infinity;
+    cell.k.K6 = { ok: good.length === 3 && good.every(v => Math.abs(v - D) < 45) && spread < 45,
+                  est: good.map(v => Math.round(v)), spread: Math.round(spread) };
+
+    // ---- K3 — interrupt THIS transition mid-flight ----
+    const c = ['thinking', 'speaking', 'listening', 'idle', 'asleep'].find(x => x !== a && x !== b);
+    const ic = STATES.indexOf(c);
+    orb.setState(a); await settle(D + 400);
+    orb.setState(b);
+    const f3 = []; let fired = false, seamIdx = -1;
+    const s0 = performance.now();
+    await new Promise(res => { const step = () => {
+      const el = performance.now() - s0;
+      if (!fired && el >= D / 3) { orb.setState(c); fired = true; seamIdx = f3.length; }
+      f3.push({ t: performance.now(), el, ...measure(), w: weightsFromDom() });
+      el < D + 200 ? requestAnimationFrame(step) : res(); }; requestAnimationFrame(step); });
+    const wAt = f3[seamIdx].w[ib];
+    const seamJump = Math.abs(f3[seamIdx].glow - f3[seamIdx - 1].glow);
+    // Range must span every state the run actually visits. Normalising by
+    // |c − a| alone is degenerate when the abandoned target b lies outside that
+    // interval: the value genuinely travels a → toward b → c, so a → c
+    // understates the distance and inflates the velocity.
+    const g3 = [PROFILES[a].glow, PROFILES[b].glow, PROFILES[c].glow];
+    const k3c = continuity(f3, f => f.glow, (Math.max(...g3) - Math.min(...g3)) || 1);
+    cell.k.K3 = { ok: wAt > 0.05 && wAt < 0.95 && k3c.ok &&
+                      Math.abs(f3[f3.length - 1].glow - PROFILES[c].glow) < 0.01,
+                  via: c, w_at: wAt, seam: seamJump, vel: k3c.vel_x_nominal };
+
+    // ---- K5 — THIS transition under forced reduced motion ----
+    const wasReduced = orb.reduced;
+    orb.setReducedMotion(true);
+    orb.setState(a); await settle(ORB_CONSTANTS.REDUCED_MS + 400);
+    const rBefore = measure();
+    orb.setState(b);
+    const f5 = [];
+    const r0 = performance.now();
+    await new Promise(res => { const step = () => { const el = performance.now() - r0;
+      f5.push({ t: performance.now(), ...measure() });
+      el < ORB_CONSTANTS.REDUCED_MS + 140 ? requestAnimationFrame(step) : res(); }; requestAnimationFrame(step); });
+    const rr = f5.map(f => f.rect);
+    const span = Math.max(...rr) - Math.min(...rr);
+    const dCol = dRGB(f5[0].colour, f5[f5.length - 1].colour);
+    const dGlow = Math.abs(f5[f5.length - 1].glow - rBefore.glow);
+    const distinct = new Set(f5.map(f => f.glow.toFixed(4))).size;
+    const legible = dCol > 1 || dGlow > 0.01;
+    cell.k.K5 = { ok: span < 1e-6 && legible && (distinct > 20 || dCol > 1),
+                  span, dCol: +dCol.toFixed(2), dGlow: +dGlow.toFixed(4), distinct };
+    orb.setReducedMotion(wasReduced ? true : 'auto');
+
+    out.push(cell);
+  }
+  go('idle');
+  return out;
+};
+
 window.__orbEvidence = async () => {
   const r = await runEvidence();
   return { text: renderEvidence(r), results: r };
