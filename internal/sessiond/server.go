@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -296,11 +297,22 @@ func (s *Server) broadcastPaneData(wsID string, paneID int, data []byte) {
 // handlePaneExit removes an exited pane and emits the frozen close events. It is
 // a no-op when the pane was already removed (e.g. via close-workspace) so no
 // duplicate events are produced.
+//
+// THIS IS THE ONLY PATH THAT DESTROYS STRUCTURE WITHOUT ANYONE ASKING, and for
+// a one-pane workspace -- which is exactly what spawn-lane creates -- it takes
+// the workspace with the pane. The exit code and runtime are broadcast to
+// whoever happens to be subscribed and then discarded, so a lane that died
+// three seconds after birth and a lane that ran its goal loop to completion
+// leave the identical trace: none. Log it. A vanished lane is otherwise
+// unattributable after the fact, and "did something close it, or did it exit?"
+// is the first question asked every time.
 func (s *Server) handlePaneExit(wsID string, paneID int, exitCode int, runtimeMs int64) {
 	_, remaining, ok := s.reg.RemovePane(wsID, paneID)
 	if !ok {
 		return
 	}
+	log.Printf("sessiond: pane %s/%d removed: process exited code=%d runtime=%dms remaining=%d",
+		wsID, paneID, exitCode, runtimeMs, remaining)
 	code := exitCode
 	s.broadcast(wsID, &Message{
 		Type: TypePaneClosed, WorkspaceID: wsID, PaneID: paneID,
@@ -308,6 +320,7 @@ func (s *Server) handlePaneExit(wsID string, paneID int, exitCode int, runtimeMs
 	})
 	if remaining == 0 {
 		if removed, _ := s.reg.ReapIfEmpty(wsID); removed {
+			log.Printf("sessiond: workspace %s reaped: last pane (%d) exited, nobody closed it", wsID, paneID)
 			s.broadcastWorkspaceList()
 		}
 	}
@@ -332,6 +345,17 @@ type conn struct {
 	// Guarded by Server.mu for the same reason as previewOn: its own ticker
 	// goroutine reads it while fanning rows out. See setSessionStateOn.
 	sessionStateOn bool
+}
+
+// clientKind names the connection for a log line. conn.kind is only set by
+// attach(), and the one-shot CLI verbs close a workspace without attaching, so
+// the zero value is a real and common case: say so rather than logging an
+// empty string that reads like a bug.
+func (c *conn) clientKind() string {
+	if c.kind == "" {
+		return "unattached"
+	}
+	return c.kind
 }
 
 // newConn wraps nc with a subscriber for serialized writes.
@@ -674,6 +698,10 @@ func (c *conn) closePane(msg Message) {
 		c.reply(&Message{Type: TypeOK, CID: msg.CID})
 		return
 	}
+	// Logged so an explicit close is distinguishable from the exit reap in
+	// handlePaneExit. The client kind is the whole point: it says whether a
+	// human's browser, an agent's MCP tool, or a CLI invocation asked.
+	log.Printf("sessiond: pane %s/%d closed on request by client kind=%s", wsID, msg.PaneID, c.clientKind())
 	p.Close()
 	c.reply(&Message{Type: TypeOK, CID: msg.CID})
 	c.srv.broadcast(wsID, &Message{Type: TypePaneClosed, WorkspaceID: wsID, PaneID: msg.PaneID})
@@ -690,6 +718,8 @@ func (c *conn) closeWorkspace(msg Message) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
 		return
 	}
+	log.Printf("sessiond: workspace %s closed on request by client kind=%s (%d pane(s) killed)",
+		msg.WorkspaceID, c.clientKind(), len(panes))
 	for _, p := range panes {
 		p.Close()
 	}
@@ -716,6 +746,13 @@ func (c *conn) closeIntent(msg Message) {
 // non-mutating close outcome.
 func (c *conn) closeConfirm(msg Message) {
 	outcome := c.srv.reg.ConfirmClose(msg.Ticket)
+	if outcome.ClosedNow {
+		// The gated close path. Logged for the same reason as the ungated
+		// verbs: so the reap in handlePaneExit is never mistaken for one of
+		// these, or the reverse.
+		log.Printf("sessiond: %s %s/%d closed on confirmed ticket by client kind=%s",
+			outcome.TargetKind, outcome.WorkspaceID, outcome.PaneID, c.clientKind())
+	}
 	c.reply(CloseOutcomeMessage(msg.CID, outcome))
 	c.srv.broadcastCloseMutation(outcome)
 }
