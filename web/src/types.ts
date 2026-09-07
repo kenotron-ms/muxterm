@@ -142,11 +142,48 @@ export const SessiondErrorCode = {
 
 export type SessiondErrorCodeValue = (typeof SessiondErrorCode)[keyof typeof SessiondErrorCode];
 
+/**
+ * Completion outcomes, mirroring Go's Completion* constants (completion.go).
+ *
+ * `completed` is asserted ONLY for a session that declared itself done. A lane
+ * that crashed on startup and a lane that finished its work must never be
+ * spelled the same way, which is what makes the badge worth trusting.
+ */
+export type WorkspaceCompletionOutcome = 'completed' | 'failed' | 'stopped' | 'unknown';
+
+/**
+ * A finished lane's result, annotated onto the workspace that held it.
+ *
+ * Present only while the completion is undismissed, which is also exactly
+ * while sessiond is declining to auto-reap that workspace. Mirrors Go's
+ * WorkspaceCompletion (internal/sessiond/protocol.go).
+ */
+export interface SessiondWorkspaceCompletion {
+  recordId: string;
+  paneId: number;
+  /** Human name of what finished. Never empty. */
+  lane: string;
+  outcome: WorkspaceCompletionOutcome;
+  exitCode: number;
+  endedAt: number;
+  pr?: number;
+  prUrl?: string;
+  summary?: string;
+  /** Bounded tail of the lane's final screen. */
+  output?: string;
+}
+
 export interface SessiondWorkspaceInfo {
   workspaceId: string;
   name?: string;
   clientRef?: string;
   paneCount: number;
+  /**
+   * Set when this workspace is holding a finished lane's result. A workspace
+   * with `paneCount: 0` AND a completion is a RESULT, not an empty shell --
+   * render it as finished rather than hiding or reaping it.
+   */
+  completion?: SessiondWorkspaceCompletion;
 }
 
 export interface SessiondPaneInfo {

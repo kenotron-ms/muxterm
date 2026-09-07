@@ -1,6 +1,7 @@
 import { LitElement, html, css, unsafeCSS, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { store } from '../state.js';
+import type { SessiondWorkspaceCompletion } from '../types.js';
 import { workspaceLabel } from '../lib/workspace-label.js';
 import './launcher-menu.js';
 import './mux-start-card.js';
@@ -114,6 +115,15 @@ interface CardState {
   needs: number;
   /** Panes in this workspace — shown instead of a badge when needs === 0. */
   paneCount: number;
+  /**
+   * Set when this workspace is holding a finished lane's result.
+   *
+   * Such a workspace has zero panes and is deliberately NOT reaped, so
+   * without this it would render as a bare "0 panes" card and say nothing
+   * about the lane that just finished in it — which is the silence this
+   * whole feature exists to break.
+   */
+  completion: SessiondWorkspaceCompletion | null;
 }
 
 /**
@@ -152,9 +162,15 @@ function cardsSignature(cards: CardState[], mode: PreviewMode, cols: number): st
 // Host groups
 //
 // The sidebar answers "where is my stuff", which is a spatial question, so it
-// is the ONE surface that groups by machine (ux D1). Everything here is dead
-// code until the browser hears about a remote: `_renderWorkspaces()` returns
-// today's flat list while `remotesStore.any` is false.
+// is the ONE surface that groups by machine (ux D1). EVERY reachable machine
+// gets a group, the local one included, in every connection state -- a browser
+// with no remotes sees exactly one group rather than an ungrouped list.
+//
+// That uniformity is load-bearing, not cosmetic. The group is what carries a
+// machine's "+ New workspace", so a rendering mode with no groups in it is a
+// rendering mode where that button has nowhere to live but the sidebar root --
+// which is the bug this replaced. One shape in all states, one place the
+// button can be.
 // ---------------------------------------------------------------------------
 
 /** One machine's section of the workspace list. */
@@ -179,8 +195,8 @@ interface HostGroup {
  * same stable order the server merges its workspace list in — so a push can
  * never reshuffle the sidebar.
  *
- * A connected host with no workspaces still gets a group: it is the header
- * that carries its "+ New workspace". The one host that is dropped is an
+ * A connected host with no workspaces still gets a group: the group is what
+ * carries that machine's "+ New workspace". The one host that is dropped is an
  * `unreachable` one with nothing on it, which lives in settings rather than
  * here (ux failure table). An unreachable host that DOES hold workspaces keeps
  * its group, because workspaces ghost, never vanish (ux D8).
@@ -492,6 +508,40 @@ export class MuxSidebar extends LitElement {
       background: var(--mux-warn);
     }
 
+    /* Finished-lane verdict. It takes the pane-count slot because a workspace
+       held open for a completion has zero panes, and "0 panes" is the least
+       informative thing the sidebar could say about a lane that just finished.
+
+       Colour carries the verdict, using the same theme tokens as every other
+       status mark in this file. The cases are deliberately NOT the same
+       colour: a startup crash and a completed run must not read alike at a
+       glance, which is the entire reason the record carries an exit status.
+       An exit with no verdict stays dim rather than green -- an absent
+       verdict is not a good one. */
+    .ws-completion {
+      flex-shrink: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
+      line-height: 1.5;
+      white-space: nowrap;
+      padding: 0 4px;
+      border-radius: 3px;
+      border: 1px solid currentColor;
+      color: var(--chrome-text-dim);
+    }
+
+    .ws-completion.completed {
+      color: var(--mux-ok);
+    }
+
+    .ws-completion.failed {
+      color: var(--mux-error);
+    }
+
+    .ws-completion.stopped {
+      color: var(--mux-warn);
+    }
+
     /* Zero needs is not a zero badge: a plain pane count, and nothing warm. */
     .ws-panes {
       flex-shrink: 0;
@@ -754,10 +804,11 @@ export class MuxSidebar extends LitElement {
     }
 
     /* ---- host groups ----
-       Every rule below needs a class that only appears once this browser has
-       heard of a remote (.hostgroup, .hg-*, .stale-banner, .retry-btn) or a
-       "remote" modifier on an existing one. With no remotes, none of them can
-       match, which is the CSS half of the zero-remote guarantee. */
+       .hostgroup and .hg-* apply to EVERY machine, local included, so they
+       match from the first paint whether or not a remote exists. The rules
+       that stay dark until this browser has heard of a remote are the ones
+       needing remote-only state: .stale-banner, .retry-btn, and the "remote"
+       modifiers below. */
 
     .hostgroup {
       margin: 10px 0 2px;
@@ -1556,6 +1607,7 @@ export class MuxSidebar extends LitElement {
         hint,
         needs: needsByWs.get(id) ?? 0,
         paneCount: active ? panes.length : ws.paneCount,
+        completion: ws.completion ?? null,
       };
     });
   }
@@ -1582,21 +1634,15 @@ export class MuxSidebar extends LitElement {
     );
   }
 
-  private _onNewWs(): void {
-    this.dispatchEvent(
-      new CustomEvent('workspace-create', {
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
   /**
-   * A host group's own "+ New workspace".
+   * A host group's own "+ New workspace" — the ONLY create affordance in the
+   * list, once per group, local group included.
    *
    * The group IS the choice of machine (Decision 3) — there is no picker to
-   * open and no host to guess. The same `workspace-create` event as the
-   * bottom button, carrying the one extra fact this affordance knows.
+   * open and no host to guess. `host` is '' for the local group, and app.ts
+   * resolves a missing `detail.host` and an explicit '' to the same empty
+   * string, so local create is byte-identical to what the old root-level
+   * button sent; the button only moved to the machine it always created on.
    */
   private _onNewWsOn(host: string): void {
     this.dispatchEvent(
@@ -1740,25 +1786,66 @@ export class MuxSidebar extends LitElement {
               @dblclick="${(e: Event) => this._startRename(e, card.id)}"
               >${card.label}</span
             >`}
-        ${card.needs > 0
-          ? html`<span
-              class="ws-needs"
-              role="img"
-              aria-label="Something in this workspace needs input"
-              title="Something here needs input"
-            ></span>`
-          : html`<span class="ws-panes"
-              >${card.paneCount} pane${card.paneCount === 1 ? '' : 's'}</span
-            >`}
+        ${card.completion
+          ? this._renderCompletion(card.completion)
+          : card.needs > 0
+            ? html`<span
+                class="ws-needs"
+                role="img"
+                aria-label="Something in this workspace needs input"
+                title="Something here needs input"
+              ></span>`
+            : html`<span class="ws-panes"
+                >${card.paneCount} pane${card.paneCount === 1 ? '' : 's'}</span
+              >`}
         <button
           type="button"
           class="ws-remove-btn"
-          title="Close workspace"
-          aria-label="Close workspace ${card.label}"
+          title="${card.completion ? 'Dismiss finished lane' : 'Close workspace'}"
+          aria-label="${card.completion
+            ? `Dismiss finished lane ${card.completion.lane}`
+            : `Close workspace ${card.label}`}"
           @click="${(e: Event) => this._onWsRemove(e, card.id, card.label)}"
         >×</button>
       </div>
     `;
+  }
+
+  /**
+   * The finished-lane chip: verdict, PR, and the lane's own name.
+   *
+   * It takes the slot the pane count would occupy, because "0 panes" on a
+   * workspace whose lane just finished is the least useful sentence the
+   * sidebar could say. The `title` attribute carries the summary and the tail
+   * of the lane's final output, so the completion record is READABLE from the
+   * notification itself rather than only being discoverable elsewhere.
+   *
+   * The verdict word is never softened: a lane that crashed says `failed` and
+   * a lane that exited with no verdict says `no verdict`. A badge that reads
+   * the same for a success and a startup crash would be worse than nothing,
+   * because it would be believed.
+   */
+  private _renderCompletion(completion: SessiondWorkspaceCompletion) {
+    const verdict =
+      completion.outcome === 'completed'
+        ? 'done'
+        : completion.outcome === 'failed'
+          ? 'failed'
+          : completion.outcome === 'stopped'
+            ? 'stopped'
+            : 'no verdict';
+    const detail = [
+      `${completion.lane}: ${completion.summary || verdict}`,
+      completion.prUrl ? `\n${completion.prUrl}` : '',
+      completion.output ? `\n\n${completion.output}` : '',
+    ].join('');
+    return html`<span
+      class="ws-completion ${completion.outcome}"
+      role="status"
+      aria-label="Lane ${completion.lane} ${verdict}"
+      title="${detail}"
+      >${verdict}${completion.pr ? html` #${completion.pr}` : ''}</span
+    >`;
   }
 
   /**
@@ -1827,33 +1914,6 @@ export class MuxSidebar extends LitElement {
     `;
   }
 
-  /**
-   * TODAY'S EXACT RENDER: every card, then the one bottom "+ New workspace".
-   *
-   * Extracted rather than inlined behind the zero-remote gate so this template
-   * literal keeps its ORIGINAL indentation. The whitespace between these tags
-   * is text nodes in the shadow DOM, so re-indenting it by two spaces would
-   * quietly break the byte-identical guarantee it exists to keep.
-   */
-  private _renderFlatList(
-    cards: CardState[],
-    previewOn: boolean,
-    rows: number,
-    cols: number,
-    compact: boolean,
-  ) {
-    return html`
-      ${cards.map((card) =>
-        previewOn
-          ? this._renderPreviewCard(card, rows, cols, compact)
-          : this._renderTextCard(card),
-      )}
-      <button class="new-ws-btn" @click="${() => this._onNewWs()}">
-        + New workspace
-      </button>
-    `;
-  }
-
   /** One machine's section: header, then its cards (ux D1). */
   private _renderHostGroup(
     group: HostGroup,
@@ -1919,14 +1979,12 @@ export class MuxSidebar extends LitElement {
               ? this._renderPreviewCard(card, rows, cols, compact)
               : this._renderTextCard(card),
           )}
-          ${remote
-            ? html`<button
-                class="new-ws-btn remote"
-                @click="${() => this._onNewWsOn(group.host)}"
-              >
-                + New workspace
-              </button>`
-            : ''}
+          <button
+            class="new-ws-btn${remote ? ' remote' : ''}"
+            @click="${() => this._onNewWsOn(group.host)}"
+          >
+            + New workspace
+          </button>
         </div>
       </div>
     `;
@@ -1952,25 +2010,16 @@ export class MuxSidebar extends LitElement {
     // the 1 Hz clock, and only the render knows.
     this._ageTicking = false;
 
-    // ┌───────────────────────────────────────────────────────────────────┐
-    // │ THE ZERO-REMOTE GATE. A browser with no remotes receives no       │
-    // │ host-state frame, so `any` is false and the sidebar below this    │
-    // │ line is the sidebar that shipped on main — same DOM, same         │
-    // │ whitespace, same single bottom button. The feature costs nothing  │
-    // │ until it is used (ux D2).                                         │
-    // └───────────────────────────────────────────────────────────────────┘
-    if (!remotesStore.any) {
-      return this._renderFlatList(cards, previewOn, rows, cols, compact);
-    }
-
+    // Once the list is grouped, EVERY "+ New workspace" lives inside the group
+    // it creates on -- local included. A bottom one would be the local group's
+    // button orphaned below every remote group, reading as a second, duplicate
+    // copy of the remote group's own button directly above it. The only thing
+    // that belongs after the groups is the affordance that adds a NEW group.
     const groups = groupCards(cards, instanceLabel());
     return html`
       ${groups.map((group) =>
         this._renderHostGroup(group, previewOn, rows, cols, compact),
       )}
-      <button class="new-ws-btn" @click="${() => this._onNewWs()}">
-        + New workspace
-      </button>
       <button class="new-ws-btn remote" @click="${() => this._onConnectMachine()}">
         + Connect machine
       </button>

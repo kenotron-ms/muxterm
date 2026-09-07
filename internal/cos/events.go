@@ -55,6 +55,12 @@ const (
 	// reply whose caller has already given up still has to decode cleanly.
 	EvCleared = "cleared"
 	EvHistory = "history"
+	// EvConfig is the same shape of reply, answering the config op.
+	EvConfig = "config"
+	// EvReconfigured is a genuine broadcast, and is emitted ONLY when a
+	// retune changed something. The tuning is pushed ahead of every turn, so
+	// an event on every push would be one line of noise per message.
+	EvReconfigured = "reconfigured"
 )
 
 // Error codes carried in an EvError's "code" field.
@@ -151,6 +157,22 @@ type Event struct {
 	// replayed turn looks like, and re-typing it here would mean a sidecar
 	// that adds a field to a turn silently loses it on the way to the browser.
 	Turns json.RawMessage `json:"turns,omitempty"`
+
+	// config -- the sidecar's answer to "what are you ACTUALLY running with?"
+	//
+	// Instruction is the WHOLE assembled system instruction, not a summary.
+	// That is the point of the op: a user tuning a prompt needs to read the
+	// prompt, and a truncated one sends them back to the source they were
+	// trying not to read. It is only ever produced on demand, never streamed.
+	Instruction      string   `json:"instruction,omitempty"`
+	InstructionChars int      `json:"instruction_chars,omitempty"`
+	BundleChars      int      `json:"bundle_instruction_chars,omitempty"`
+	BaseChars        int      `json:"base_instruction_chars,omitempty"`
+	ToolNames        []string `json:"tool_names,omitempty"`
+	ToolsKnown       []string `json:"tools_known,omitempty"`
+
+	// reconfigured -- emitted only when a retune actually changed something.
+	Changes []string `json:"changes,omitempty"`
 
 	// Raw is the exact line the sidecar wrote, minus the newline. It is not
 	// part of the wire format; it exists so unknown fields survive a round

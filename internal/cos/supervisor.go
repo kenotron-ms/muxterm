@@ -29,6 +29,14 @@ const (
 	opPing     = "ping"
 	opClear    = "clear"
 	opHistory  = "history"
+	// opReconfigure carries the user's tuning (tuning.go) into the live
+	// session. Fire-and-forget: it is pushed immediately ahead of each turn
+	// on the same ordered pipe, so the turn it precedes is the first to run
+	// under it. See Supervisor.pushTuning.
+	opReconfigure = "reconfigure"
+	// opConfig asks the sidecar what it is ACTUALLY running with, as opposed
+	// to what the files say it should be. Request/reply, like clear/history.
+	opConfig = "config"
 )
 
 // DefaultSessionID is the amplifier session the chief of staff owns. It is an
@@ -221,6 +229,15 @@ type Supervisor struct {
 	sessionSource string
 	cwdSource     string
 
+	// The tuning last resolved and pushed. tuningSent distinguishes "nothing
+	// configured" from "not yet read", which are different answers to the
+	// question `muxterm cos config` asks.
+	tuning     Tuning
+	tuningSent bool
+	// effective is the sidecar's own last account of what it is running with.
+	// Cleared on every (re)boot -- see markReady.
+	effective *Effective
+
 	cancel      context.CancelFunc
 	readyCh     chan struct{}
 	readyOnce   sync.Once
@@ -260,7 +277,137 @@ func New(cfg Config) *Supervisor {
 	// fails BEFORE it reaches the sidecar is visible to subscribers and not
 	// only to whoever holds its handle (queue.fail).
 	s.q = newQueue(s.sendOp, s.broker.Publish, cfg.Logf)
+	s.q.beforeDispatch = s.pushTuning
 	return s
+}
+
+// pushTuning re-reads the user's tuning files and hands them to the sidecar.
+//
+// Called immediately before every turn is dispatched (queue.beforeDispatch),
+// which is what makes the answer to "what must the user do for an edit to take
+// hold?" be NOTHING: save the file, send the next message.
+//
+// It sends on EVERY turn rather than only on change. The alternative -- track
+// what was last sent and skip a no-op -- is wrong here, because the sidecar is
+// a supervised process that restarts on its own: a fresh incarnation comes up
+// running the compiled-in defaults while this side still believes its settings
+// were delivered. Re-sending is a few kilobytes down a pipe already carrying
+// the prompt; the sidecar diffs and only acts when something actually changed.
+func (s *Supervisor) pushTuning() {
+	dir, dirSrc := ConfigDir()
+	t := LoadTuning(dir)
+
+	for _, p := range t.Problems {
+		s.cfg.Logf("cos: tuning: %s", p)
+	}
+
+	s.mu.Lock()
+	changed := !s.tuningSent || !s.tuning.Equal(t)
+	s.tuning = t
+	s.tuningSent = true
+	s.mu.Unlock()
+
+	if changed {
+		s.cfg.Logf("cos: tuning (%s %s):\n%s", dir, dirSrc, indentLines(t.Describe()))
+	}
+
+	instruction := t.Instruction
+	if err := s.sendOp(op{
+		Op:          opReconfigure,
+		Instruction: &instruction,
+		Mode:        t.Mode,
+		ToolsAllow:  t.ToolsAllow,
+		ToolsDeny:   t.ToolsDeny,
+	}); err != nil && !errors.Is(err, ErrNotRunning) {
+		// ErrNotRunning is not worth a line: the turn about to be dispatched
+		// is about to fail for the same reason and will say so properly.
+		s.cfg.Logf("cos: could not push tuning: %v", err)
+	}
+}
+
+// publishEffective asks the sidecar what it is running with and republishes
+// the status file with the answer, writing the whole system instruction to its
+// sibling file.
+//
+// Best-effort throughout. This is a visibility surface: every failure here
+// costs a stale report and nothing else, so none of them is worth failing a
+// turn or logging at error level on a sidecar that is merely busy.
+func (s *Supervisor) publishEffective() {
+	ev, err := s.EffectiveConfig()
+	if err != nil {
+		s.cfg.Logf("cos: could not read back the effective config: %v", err)
+		return
+	}
+
+	eff := &Effective{
+		InstructionChars: ev.InstructionChars,
+		BundleChars:      ev.BundleChars,
+		BaseChars:        ev.BaseChars,
+		Tools:            ev.ToolNames,
+		ToolsKnown:       ev.ToolsKnown,
+		At:               time.Now(),
+	}
+	if path, perr := InstructionPath(); perr == nil {
+		if werr := writeInstructionFile(path, ev.Instruction); werr != nil {
+			s.cfg.Logf("cos: could not publish the effective instruction: %v", werr)
+		} else {
+			eff.InstructionPath = path
+		}
+	}
+
+	s.mu.Lock()
+	s.effective = eff
+	st := s.stateLocked()
+	s.mu.Unlock()
+	s.writeState(st)
+}
+
+// writeInstructionFile publishes the instruction atomically, for the same
+// reason writeState does: a concurrent reader gets the whole old file or the
+// whole new one, never a torn prompt.
+func writeInstructionFile(path, text string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(text), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// Tuning returns the tuning last pushed to the sidecar, and whether anything
+// has been pushed yet. Before the first turn, nothing has.
+func (s *Supervisor) Tuning() (Tuning, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tuning, s.tuningSent
+}
+
+// EffectiveConfig asks the RUNNING sidecar what it is actually operating with:
+// the system instruction as assembled, and the tool names currently mounted.
+//
+// Distinct from Tuning() on purpose. Tuning() is what the files say and what
+// this side sent; this is what the session holds. They disagree exactly when
+// something went wrong -- a tool name in tools_allow that no module exports, a
+// reconfigure that arrived after the last turn -- and a visibility surface that
+// could only ever report the intent would hide precisely that case.
+func (s *Supervisor) EffectiveConfig() (Event, error) {
+	return s.request(op{Op: opConfig})
+}
+
+// indentLines shifts a multi-line block right so it reads as one log entry
+// rather than as several unrelated ones.
+func indentLines(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = "  " + l
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Start resolves the interpreter and sidecar script, then launches the
@@ -906,6 +1053,13 @@ func (s *Supervisor) handleEvent(ev Event) {
 	if ev.Ev == EvReady {
 		s.markReady(ev)
 	}
+	if ev.Ev == EvReconfigured {
+		// In its OWN goroutine, and that is not optional: publishEffective
+		// issues a config request whose reply arrives on THIS goroutine, so
+		// calling it inline would wait for an answer only this frame can
+		// deliver -- a deadlock resolved only by the request timeout.
+		go s.publishEffective()
+	}
 	// A req_id-bearing event is an ANSWER to one caller, not news for
 	// everybody: routing it to the waiter and stopping keeps a history
 	// payload off every subscribed browser's socket.
@@ -930,7 +1084,25 @@ func (s *Supervisor) markReady(ev Event) {
 	s.mu.Lock()
 	s.ready = true
 	s.readyEv = ev
-	st := State{
+	// A fresh incarnation boots from the compiled-in bundle and knows nothing
+	// of the user's tuning until the next turn pushes it. Clearing this is
+	// what stops the status file reporting the DEAD process's effective
+	// configuration as though it were the live one's.
+	s.effective = nil
+	st := s.stateLocked()
+	s.mu.Unlock()
+
+	s.cfg.Logf("cos: %s", ev)
+	s.writeState(st)
+	s.readyOnce.Do(func() { close(s.readyCh) })
+}
+
+// stateLocked builds the published status from supervisor state. Caller holds
+// s.mu. ONE home for the status file's contents, so markReady and
+// publishEffective cannot drift into publishing different shapes of it.
+func (s *Supervisor) stateLocked() State {
+	ev := s.readyEv
+	return State{
 		PID:       s.pid,
 		OwnerPID:  os.Getpid(),
 		SessionID: firstNonEmpty(ev.SessionID, s.cfg.SessionID),
@@ -941,12 +1113,8 @@ func (s *Supervisor) markReady(ev Event) {
 		StartedAt: s.startedAt,
 		Python:    s.python,
 		Script:    s.script,
+		Effective: s.effective,
 	}
-	s.mu.Unlock()
-
-	s.cfg.Logf("cos: %s", ev)
-	s.writeState(st)
-	s.readyOnce.Do(func() { close(s.readyCh) })
 }
 
 // readStderr routes the sidecar's log channel (2.1) into muxterm's logging and
@@ -1006,10 +1174,19 @@ type op struct {
 	Approved  *bool  `json:"approved,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 
-	// clear / history
+	// clear / history / config
 	ReqID         string `json:"req_id,omitempty"`
 	OlderThanDays *int   `json:"older_than_days,omitempty"`
 	Limit         int    `json:"limit,omitempty"`
+
+	// reconfigure. Sent WHOLE every time rather than as a diff: the sidecar
+	// restarts on its own (crash, backoff) and a diff-based protocol would
+	// leave a fresh process running the compiled-in defaults while this side
+	// believed it had already sent the user's settings.
+	Instruction *string  `json:"instruction,omitempty"`
+	Mode        string   `json:"instruction_mode,omitempty"`
+	ToolsAllow  []string `json:"tools_allow,omitempty"`
+	ToolsDeny   []string `json:"tools_deny,omitempty"`
 }
 
 // sendOp encodes and queues one op for the writer goroutine. It never blocks.

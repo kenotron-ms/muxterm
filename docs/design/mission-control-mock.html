@@ -1,0 +1,1472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>muxterm — Mission Control (design prototype, round one)</title>
+<!--
+  Standalone artifact. No build step, no server, no network: open the file.
+
+    xdg-open docs/design/mission-control-mock.html
+    # or: google-chrome docs/design/mission-control-mock.html
+
+  WHAT THIS IS
+  A design prototype of muxterm's right-hand surface reimagined as MISSION
+  CONTROL: a host shell with a tab strip of pluggable APPLETS, replacing today's
+  hardcoded fleet pane and its pinned cards/tiles toggle.
+
+  It changes no production behaviour. Every number, file, lane and pull request
+  below is FIXTURE DATA, marked as such on each applet exactly the way the real
+  Dashboard marks a fixture-populated fleet (mux-cos.ts `.fx`).
+
+  The palette, spacing, type scale and card geometry are lifted verbatim from
+  web/src/lib/theme.ts (CHROME_DARK / Tokyo Night) and
+  web/src/components/mux-cos.ts, so this reads as the product rather than as a
+  wireframe. Where it invents something, the invention is the design proposal.
+
+  WHAT TO LOOK AT
+    · P1  the tab strip, and the control rail at its right end. The topbar has
+          lost the cards/tiles toggle; the Dashboard applet now owns it.
+    · P2  Dashboard — the fleet, one applet among several. Switch cards/tiles.
+    · P3  Files — a git-aware disk explorer. Toggle "changed only".
+    · P4  Pull Requests — ten PRs, six statuses, live check updates. Dismiss a
+          row and watch where it goes.
+    · P5  Chief-of-staff attention — two alternatives, side by side, below the
+          stage. Fire each and watch the surface react differently.
+
+  The divider drags. The tabs switch. Nothing here talks to a network.
+-->
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOKENS. Palette verbatim from web/src/lib/theme.ts CHROME_DARK (Tokyo
+   Night, the default). Scales verbatim from mux-cos.ts :host. The --ink-*
+   and --edge derivations are kept as live color-mix() expressions rather
+   than flattened hexes, exactly as the components write them.
+   ═══════════════════════════════════════════════════════════════════════ */
+:root{
+  --chrome-bar:#16161e; --chrome-body:#1a1b26; --chrome-border:#292e42;
+  --chrome-text-dim:#565f89; --chrome-text-bright:#c0caf5;
+  --chrome-accent:#7aa2f7; --chrome-driver-accent:#bb9af7;
+  --chrome-hover:#1f2335; --chrome-danger:#f7768e;
+
+  --mux-ok:#9ece6a; --mux-warn:#e0af68; --mux-error:#f7768e;
+  --mux-ansi-6:#7dcfff; --mux-ansi-5:#bb9af7;
+
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+
+  --t-meta:10px; --t-ui:12px; --t-name:13px; --t-body:13.5px; --t-input:13.5px;
+  --lh-tight:1.25; --lh-body:1.5;
+
+  --s-1:2px; --s-2:4px; --s-3:6px; --s-4:8px; --s-5:12px; --s-6:16px; --s-7:24px;
+  --r-chip:3px; --r-ctl:5px; --r-card:8px;
+
+  --ink-1:var(--chrome-text-bright);
+  --ink-2:color-mix(in srgb,var(--chrome-text-bright) 78%,var(--chrome-text-dim));
+  --ink-3:color-mix(in srgb,var(--chrome-text-dim) 55%,var(--chrome-text-bright));
+
+  --surface:var(--chrome-bar);
+  --edge:color-mix(in srgb,var(--chrome-border) 40%,var(--chrome-text-dim));
+  --scrim:color-mix(in srgb,var(--chrome-body) 62%,transparent);
+
+  --need:var(--mux-warn);
+  --work:var(--mux-ansi-6);
+  --ok:var(--mux-ok);
+  --fail:var(--mux-error);
+  --autonomous:var(--chrome-driver-accent);
+
+  --dur:120ms;
+  --ctl:28px;
+
+  /* The fixed-height card contract, verbatim from mux-cos.ts. */
+  --meta-h:74px;
+  --thumb-h:84px;
+
+  /* Prototype-local. */
+  --tab-h:34px;
+  --stage-h:min(780px, calc(100vh - 210px));
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--chrome-body); color:var(--ink-2);
+  font:var(--t-body)/var(--lh-body) system-ui,-apple-system,sans-serif;
+  display:flex; flex-direction:column; overflow-y:auto;
+  color-scheme:dark;
+}
+h1,h2,h3{margin:0;font-size:inherit;font-weight:inherit}
+button{font:inherit}
+
+/* ── page chrome ─────────────────────────────────────────────────────────── */
+.bar{
+  display:flex; align-items:center; gap:var(--s-5); flex:none;
+  padding:var(--s-4) var(--s-6); background:var(--chrome-bar);
+  border-bottom:1px solid var(--chrome-border); font-size:var(--t-ui);
+  position:sticky; top:0; z-index:40;
+}
+.bar b{color:var(--ink-1)}
+.bar span{color:var(--ink-3)}
+.bar .sp{flex:1}
+.bar .dot{width:10px;height:10px;border-radius:50%;background:var(--chrome-accent);flex:none}
+.pill{
+  font-size:var(--t-meta); text-transform:uppercase; letter-spacing:.7px;
+  border:1px solid var(--edge); border-radius:var(--r-chip);
+  padding:2px 8px; color:var(--ink-3); white-space:nowrap;
+}
+.pill.warn{color:var(--need);border-color:color-mix(in srgb,var(--need) 55%,transparent)}
+
+main{flex:1;padding:var(--s-6);display:flex;flex-direction:column;gap:var(--s-6)}
+.cap{
+  font-size:var(--t-meta); text-transform:uppercase; letter-spacing:1.3px;
+  color:var(--ink-3); display:flex; align-items:center; gap:var(--s-4);
+}
+.cap .rule{flex:1;height:1px;background:var(--chrome-border)}
+.card{
+  background:var(--chrome-bar); border:1px solid var(--chrome-border);
+  border-radius:var(--r-card); padding:var(--s-6);
+}
+.card h2{
+  margin:0 0 var(--s-5); font-size:var(--t-meta); text-transform:uppercase;
+  letter-spacing:1.3px; color:var(--ink-3); font-weight:400;
+}
+.note{color:var(--ink-3);font-size:var(--t-ui);margin:var(--s-4) 0 0}
+.note b{color:var(--ink-2);font-weight:600}
+.note code,code{font-family:var(--mono);color:var(--chrome-accent);font-size:.94em}
+.row{display:flex;flex-wrap:wrap;gap:var(--s-4);align-items:center}
+.pbtn{
+  font-size:var(--t-ui); background:transparent; border:1px solid var(--edge);
+  color:var(--ink-2); border-radius:var(--r-ctl); padding:5px 11px; cursor:pointer;
+}
+.pbtn:hover{background:var(--chrome-hover);color:var(--ink-1);border-color:var(--chrome-accent)}
+.pbtn.primary{border-color:var(--chrome-accent);color:var(--chrome-accent)}
+.pbtn.primary:hover{background:color-mix(in srgb,var(--chrome-accent) 14%,transparent)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE STAGE. mux-cos.ts :host, reproduced: one grid, two columns, a 5px
+   divider that is a real track, and a 52px bar across the top.
+   ═══════════════════════════════════════════════════════════════════════ */
+.stage{
+  height:var(--stage-h); min-height:600px;
+  border:1px solid var(--chrome-border); border-radius:var(--r-card);
+  overflow:hidden; background:var(--chrome-body); color:var(--ink-2);
+  font-size:var(--t-ui); line-height:var(--lh-body);
+  display:grid;
+  grid-template-columns:var(--chat-w) 5px minmax(0,1fr);
+  grid-template-rows:52px minmax(0,1fr);
+  grid-template-areas:'top top top' 'chat grip dash';
+  --chat-w:42%;
+}
+
+/* -- TOPBAR (P1) ---------------------------------------------------------- */
+.topbar{
+  grid-area:top; display:flex; align-items:center; gap:var(--s-5);
+  position:relative; padding:0 var(--s-6) 0 var(--s-7);
+  border-bottom:1px solid var(--chrome-border); background:var(--chrome-body);
+}
+.topbar h1{
+  font-size:14px; font-weight:600; line-height:1; letter-spacing:.01em;
+  color:var(--ink-1); flex:none;
+}
+.spacer{flex:1;min-width:0}
+.dots{
+  color:var(--ink-3); background:transparent; border:0;
+  width:var(--ctl); height:var(--ctl); display:grid; place-items:center;
+  border-radius:var(--r-ctl); cursor:pointer; flex:none;
+}
+.dots:hover,.dots.on{background:var(--chrome-hover);color:var(--ink-1)}
+/* ANNOTATION, not chrome. Deliberately dashed and struck so it cannot be
+   mistaken for a control; hidden entirely when annotations are off, which is
+   how you read the surface as it would actually ship. */
+.gone{
+  font-family:var(--mono); font-size:var(--t-meta); letter-spacing:.04em;
+  color:var(--ink-3); border:1px dashed var(--edge); border-radius:var(--r-chip);
+  padding:3px 8px; flex:none; text-decoration:line-through;
+  text-decoration-color:color-mix(in srgb,var(--fail) 70%,transparent);
+}
+.gone::before{content:'was here: ';text-decoration:none;opacity:.75}
+body.clean .gone{display:none}
+
+/* -- CONVERSATION --------------------------------------------------------- */
+.chat{grid-area:chat;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.chatbody{
+  flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;
+  padding:var(--s-7) var(--s-7) var(--s-4);
+  display:flex;flex-direction:column;gap:var(--s-7);
+}
+.turn{display:grid;grid-template-columns:42px minmax(0,1fr);gap:var(--s-5);align-items:start}
+.who{
+  font-family:var(--mono); font-size:10.5px; line-height:1.8; letter-spacing:.05em;
+  text-transform:uppercase; color:var(--ink-3); user-select:none;
+}
+.turn.cos .who{color:var(--chrome-accent)}
+.bd{display:flex;flex-direction:column;gap:var(--s-5);min-width:0}
+.say{
+  margin:0;font-size:var(--t-body);line-height:var(--lh-body);color:var(--ink-1);
+  white-space:pre-wrap;overflow-wrap:anywhere;
+}
+.turn.you .say{color:var(--ink-2)}
+.tool{
+  display:flex;align-items:baseline;gap:var(--s-4);font-family:var(--mono);
+  font-size:11.5px;line-height:1.5;color:var(--ink-3);min-width:0;
+}
+.tool .ok{color:var(--ok);flex:none}
+.tool .tname{color:var(--ink-2);flex:none}
+.tool .targs{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.75}
+.tool .ms{margin-left:auto;padding-left:var(--s-4);flex:none;opacity:.7;font-variant-numeric:tabular-nums}
+.foot{
+  display:flex;align-items:center;gap:var(--s-4);font-family:var(--mono);
+  font-size:var(--t-meta);color:var(--ink-3);font-variant-numeric:tabular-nums;
+}
+.btn{
+  font-size:var(--t-ui);font-weight:600;line-height:1;padding:8px 13px;
+  border-radius:var(--r-ctl);cursor:pointer;border:1px solid var(--edge);
+  background:var(--surface);color:var(--ink-1);
+}
+.btn:hover:not([disabled]){border-color:var(--chrome-accent)}
+.btn.pri{background:color-mix(in srgb,var(--chrome-accent) 20%,var(--surface));
+  border-color:color-mix(in srgb,var(--chrome-accent) 55%,transparent)}
+.btn.no{color:var(--ink-2)}
+
+/* the composer, verbatim geometry */
+.comp{position:relative;flex:none;padding:var(--s-4) var(--s-7) var(--s-6);background:var(--chrome-body)}
+.comp::before{
+  content:'';position:absolute;left:0;right:0;bottom:100%;height:22px;pointer-events:none;
+  background:linear-gradient(to top,var(--chrome-body),transparent);
+}
+.cbox{
+  width:100%;background:var(--surface);border:1px solid var(--edge);border-radius:14px;
+  padding:var(--s-5) var(--s-5) var(--s-4);display:flex;flex-direction:column;gap:var(--s-3);
+}
+.cbox:focus-within{border-color:color-mix(in srgb,var(--chrome-accent) 55%,transparent)}
+.ctext{
+  width:100%;resize:none;border:0;outline:none;background:transparent;color:var(--ink-1);
+  font:inherit;font-size:var(--t-input);line-height:1.5;min-height:21px;max-height:120px;display:block;
+}
+.ctext::placeholder{color:var(--ink-3)}
+.crow{display:flex;align-items:center;gap:var(--s-3);justify-content:flex-end}
+.cbtn{
+  width:30px;height:30px;border-radius:50%;flex:none;display:grid;place-items:center;
+  border:0;background:transparent;color:var(--ink-3);cursor:pointer;padding:0;
+}
+.cbtn.send{background:var(--ink-1);color:var(--chrome-body)}
+
+/* -- DIVIDER -------------------------------------------------------------- */
+.grip{grid-area:grip;background:var(--chrome-border);cursor:col-resize;position:relative;touch-action:none}
+.grip:hover,.grip.drag{background:var(--chrome-accent)}
+.grip::after{content:'';position:absolute;inset:0 -5px;cursor:col-resize}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P1 — THE APPLET HOST. Everything below this line is new surface.
+   ═══════════════════════════════════════════════════════════════════════ */
+.dash{
+  grid-area:dash;background:var(--chrome-bar);display:flex;flex-direction:column;
+  overflow:hidden;min-width:0;
+}
+
+/* THE TAB STRIP. The dockview idiom muxterm already re-skins in mux-dock.ts:
+   a bar-coloured strip, and the ACTIVE tab painted the colour of the surface
+   below it so the two merge. Here the surface below is .dash (--chrome-bar),
+   so the strip takes --chrome-body and the active tab takes --chrome-bar. */
+.tabs{
+  flex:none;display:flex;align-items:stretch;gap:0;height:var(--tab-h);
+  background:var(--chrome-body);border-bottom:1px solid var(--chrome-border);
+  padding-left:var(--s-3);
+}
+.tab{
+  position:relative;display:inline-flex;align-items:center;gap:var(--s-3);
+  padding:0 var(--s-5);border:0;border-right:1px solid var(--chrome-border);
+  background:transparent;color:var(--ink-3);cursor:pointer;
+  font-size:11.5px;font-weight:600;line-height:1;white-space:nowrap;
+  transition:color var(--dur) ease,background var(--dur) ease;
+}
+.tab:first-child{border-left:1px solid var(--chrome-border)}
+.tab:hover{color:var(--ink-1);background:var(--chrome-hover)}
+.tab[aria-selected='true']{background:var(--chrome-bar);color:var(--ink-1)}
+.tab[aria-selected='true']::before{
+  content:'';position:absolute;inset:0 0 auto 0;height:2px;background:var(--chrome-accent);
+}
+.tab:focus-visible{outline:2px solid var(--chrome-accent);outline-offset:-2px}
+/* P5-B: the badge a chief of staff raises on a tab it wants you to look at. */
+.tab .tbadge{
+  min-width:15px;height:15px;padding:0 4px;border-radius:8px;flex:none;
+  display:inline-grid;place-items:center;font-family:var(--mono);font-size:9px;
+  font-weight:700;line-height:1;background:var(--chrome-accent);color:var(--chrome-body);
+  animation:tbadge 1.4s ease-in-out 3;
+}
+.tab .tbadge.urgent{background:var(--need)}
+@keyframes tbadge{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* THE CONTROL RAIL. P1's answer to "where did cards/tiles go": the right end
+   of the strip belongs to whichever applet is showing. The host paints the
+   rail; the applet fills it. An applet with no controls leaves it empty. */
+.rail{
+  margin-left:auto;display:flex;align-items:center;gap:var(--s-4);
+  padding:0 var(--s-4) 0 var(--s-5);border-left:1px solid var(--chrome-border);
+}
+.seg{
+  display:flex;gap:2px;background:var(--surface);padding:2px;
+  border-radius:var(--r-ctl);border:1px solid var(--edge);flex:none;
+}
+.seg button{
+  display:inline-flex;align-items:center;gap:var(--s-2);
+  font-size:10.5px;font-weight:600;line-height:1;color:var(--ink-3);
+  background:transparent;border:0;padding:5px 9px;border-radius:3px;cursor:pointer;
+}
+.seg button:hover{color:var(--ink-1)}
+.seg button.on{background:color-mix(in srgb,var(--chrome-accent) 22%,var(--surface));color:var(--ink-1)}
+.toggle{
+  display:inline-flex;align-items:center;gap:var(--s-3);cursor:pointer;
+  font-size:10.5px;font-weight:600;color:var(--ink-3);background:transparent;
+  border:1px solid var(--edge);border-radius:var(--r-ctl);padding:5px 9px;line-height:1;
+}
+.toggle:hover{color:var(--ink-1);border-color:var(--chrome-accent)}
+.toggle.on{color:var(--ink-1);background:color-mix(in srgb,var(--chrome-accent) 18%,var(--surface));
+  border-color:color-mix(in srgb,var(--chrome-accent) 55%,transparent)}
+.live{
+  display:inline-flex;align-items:center;gap:var(--s-3);font-family:var(--mono);
+  font-size:var(--t-meta);color:var(--ink-3);white-space:nowrap;
+}
+.live .beat{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none;animation:beat 2s ease-in-out infinite}
+.live.off .beat{background:var(--ink-3);animation:none}
+@keyframes beat{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* THE APPLET BODY. One scroller the host owns; the applet renders into it. */
+.appletbody{flex:1;min-height:0;overflow-y:auto;padding:var(--s-6)}
+
+/* the fixture banner, verbatim idiom from mux-cos.ts .fx */
+.fx{
+  font-family:var(--mono);font-size:var(--t-meta);letter-spacing:.04em;
+  text-transform:uppercase;color:var(--need);padding:0 var(--s-1) var(--s-4);
+}
+.grp{
+  font-family:var(--mono);font-size:10.5px;font-weight:600;line-height:1;
+  letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);
+  padding:var(--s-6) var(--s-1) var(--s-4);
+}
+.grp:first-of-type{padding-top:0}
+
+/* ── P5: the banner the host paints when a chief of staff took the wheel ─── */
+.pointed{
+  display:flex;align-items:center;gap:var(--s-4);margin:0 0 var(--s-5);
+  padding:var(--s-4) var(--s-5);border-radius:var(--r-ctl);
+  border:1px solid color-mix(in srgb,var(--chrome-accent) 48%,transparent);
+  background:color-mix(in srgb,var(--chrome-accent) 10%,var(--surface));
+  font-size:var(--t-ui);color:var(--ink-1);
+}
+.pointed .lbl{
+  font-family:var(--mono);font-size:var(--t-meta);text-transform:uppercase;
+  letter-spacing:.06em;color:var(--chrome-accent);flex:none;
+}
+.pointed .x{
+  margin-left:auto;flex:none;border:0;background:transparent;color:var(--ink-3);
+  cursor:pointer;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
+}
+.pointed .x:hover{background:var(--chrome-hover);color:var(--ink-1)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P2 — DASHBOARD APPLET. The existing fleet view, card geometry unchanged.
+   ═══════════════════════════════════════════════════════════════════════ */
+.grid{display:grid;gap:var(--s-4);grid-template-columns:repeat(auto-fill,minmax(214px,1fr))}
+.stage[data-view='tiles'] .grid{grid-template-columns:repeat(auto-fill,minmax(252px,1fr))}
+.fcard{
+  font:inherit;text-align:left;width:100%;height:var(--meta-h);
+  background:var(--surface);border:1px solid var(--chrome-border);
+  border-left:3px solid var(--edge);border-radius:var(--r-card);overflow:hidden;
+  display:flex;flex-direction:column;cursor:pointer;padding:0;color:var(--ink-2);
+  transition:border-color var(--dur) ease,background var(--dur) ease;
+}
+.stage[data-view='tiles'] .fcard{height:calc(var(--meta-h) + var(--thumb-h))}
+.fcard:hover{background:var(--chrome-hover)}
+.fcard.need{border-left-color:var(--need)}
+.fcard.work{border-left-color:var(--work)}
+.fcard.done{border-left-color:var(--ok)}
+.fcard.fail{border-left-color:var(--fail)}
+.fcard .meta{
+  flex:none;height:var(--meta-h);padding:10px var(--s-5);display:flex;
+  flex-direction:column;gap:var(--s-2);min-width:0;overflow:hidden;
+}
+.fcard .n,.fcard .m,.fcard .g{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fcard .n{font-size:12.5px;font-weight:600;line-height:var(--lh-tight);color:var(--ink-1);
+  display:flex;align-items:center;gap:var(--s-3)}
+.fcard .n .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fcard .m{font-family:var(--mono);font-size:11px;line-height:1.35;color:var(--ink-3)}
+.fcard .g{font-size:11.5px;line-height:1.35;color:var(--ink-2)}
+/* PROPOSAL: the PR badge is the visible seam between two applets. Clicking it
+   navigates to Pull Requests and points at that row. */
+.prbadge{
+  font-family:var(--mono);font-size:9.5px;font-weight:700;line-height:1;flex:none;
+  padding:3px 5px;border-radius:var(--r-chip);border:1px solid var(--edge);
+  color:var(--ink-3);background:transparent;cursor:pointer;
+}
+.prbadge:hover{color:var(--chrome-accent);border-color:var(--chrome-accent)}
+.thumb{
+  display:none;flex:1;min-height:0;background:var(--chrome-body);
+  border-top:1px solid var(--chrome-border);font-family:var(--mono);
+  font-size:9.5px;line-height:1.35;color:var(--ink-3);padding:7px 9px;margin:0;
+  overflow:hidden;white-space:pre-wrap;
+}
+.stage[data-view='tiles'] .thumb{display:block}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P3 — FILES APPLET.
+   ═══════════════════════════════════════════════════════════════════════ */
+.frepo{
+  display:flex;align-items:center;gap:var(--s-4);padding:0 var(--s-1) var(--s-5);
+  font-family:var(--mono);font-size:11px;color:var(--ink-3);
+}
+.frepo b{color:var(--ink-1);font-weight:600}
+.frepo .branch{color:var(--chrome-accent)}
+.ftree{display:flex;flex-direction:column;gap:1px}
+.frow{
+  display:flex;align-items:center;gap:var(--s-3);width:100%;text-align:left;
+  background:transparent;border:0;border-radius:var(--r-ctl);
+  padding:4px var(--s-4);cursor:pointer;color:var(--ink-3);
+  font-size:12px;line-height:1.4;min-width:0;
+}
+.frow:hover{background:var(--chrome-hover)}
+.frow.sel{background:var(--chrome-hover);box-shadow:inset 2px 0 0 var(--chrome-accent)}
+.frow .tw{flex:none;width:12px;display:grid;place-items:center;color:var(--ink-3);opacity:.8}
+.frow .ic{flex:none;color:var(--ink-3);display:grid;place-items:center}
+.frow .nm{
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--mono);
+}
+.frow.dir .nm{color:var(--ink-2)}
+/* A file git has something to say about is bright and carries a status letter.
+   An unchanged file is dim and carries nothing. That is the whole distinction. */
+.frow.chg .nm{color:var(--ink-1)}
+.frow.chg.gM .nm{color:var(--need)}
+.frow.chg.gA .nm{color:var(--ok)}
+.frow.chg.gD .nm{color:var(--fail);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--fail) 55%,transparent)}
+.frow.chg.gU .nm{color:var(--ink-2)}
+.gst{
+  flex:none;font-family:var(--mono);font-size:9.5px;font-weight:700;line-height:1;
+  width:20px;text-align:center;padding:3px 0;border-radius:var(--r-chip);
+  border:1px solid transparent;
+}
+.gM .gst{color:var(--need);border-color:color-mix(in srgb,var(--need) 45%,transparent);
+  background:color-mix(in srgb,var(--need) 12%,transparent)}
+.gA .gst{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent);
+  background:color-mix(in srgb,var(--ok) 12%,transparent)}
+.gD .gst{color:var(--fail);border-color:color-mix(in srgb,var(--fail) 45%,transparent);
+  background:color-mix(in srgb,var(--fail) 12%,transparent)}
+.gU .gst{color:var(--ink-3);border-color:var(--edge)}
+.diffstat{
+  flex:none;font-family:var(--mono);font-size:10px;line-height:1;
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+.diffstat .a{color:var(--ok)}
+.diffstat .d{color:var(--fail)}
+.diffstat{margin-right:3px}
+.frow .sp{flex:1;min-width:var(--s-4)}
+/* A directory whose subtree contains changes wears one dot, so you can find
+   the change without opening every folder. */
+.dirdot{flex:none;width:5px;height:5px;border-radius:50%;background:var(--need);opacity:.85}
+.fempty{font-size:var(--t-ui);color:var(--ink-3);padding:var(--s-5) var(--s-1)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P4 — PULL REQUESTS APPLET.
+   ═══════════════════════════════════════════════════════════════════════ */
+.prlist{display:flex;flex-direction:column;gap:var(--s-4)}
+.pr{
+  display:flex;align-items:stretch;gap:0;background:var(--surface);
+  border:1px solid var(--chrome-border);border-left:3px solid var(--edge);
+  border-radius:var(--r-card);overflow:hidden;
+  transition:border-color var(--dur) ease,background var(--dur) ease,opacity var(--dur) ease;
+}
+.pr:hover{background:var(--chrome-hover)}
+.pr.s-open{border-left-color:var(--ok)}
+.pr.s-draft{border-left-color:var(--ink-3)}
+.pr.s-running{border-left-color:var(--work)}
+.pr.s-failed{border-left-color:var(--fail)}
+.pr.s-merged{border-left-color:var(--autonomous)}
+.pr.s-closed{border-left-color:var(--edge)}
+.pr .core{flex:1;min-width:0;padding:9px var(--s-5);display:flex;flex-direction:column;gap:var(--s-2)}
+.pr .l1{display:flex;align-items:center;gap:var(--s-4);min-width:0}
+.pr .num{
+  font-family:var(--mono);font-size:11.5px;font-weight:700;color:var(--ink-3);flex:none;
+  font-variant-numeric:tabular-nums;
+}
+.pr .ttl{
+  font-size:12.5px;font-weight:600;line-height:var(--lh-tight);color:var(--ink-1);
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.pr .l2{
+  display:flex;align-items:center;gap:var(--s-4);min-width:0;
+  font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
+}
+.pr .l2 .lane{
+  color:var(--ink-2);cursor:pointer;border-bottom:1px dotted var(--edge);
+}
+.pr .l2 .lane:hover{color:var(--chrome-accent);border-bottom-color:var(--chrome-accent)}
+.pr .l2 .sep{opacity:.5}
+.st{
+  flex:none;display:inline-flex;align-items:center;gap:var(--s-2);
+  font-family:var(--mono);font-size:9.5px;font-weight:700;line-height:1;
+  letter-spacing:.04em;text-transform:uppercase;padding:3px 6px;
+  border-radius:var(--r-chip);border:1px solid var(--edge);color:var(--ink-3);
+}
+.st.open{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 48%,transparent);
+  background:color-mix(in srgb,var(--ok) 10%,transparent)}
+.st.draft{color:var(--ink-3)}
+.st.running{color:var(--work);border-color:color-mix(in srgb,var(--work) 48%,transparent);
+  background:color-mix(in srgb,var(--work) 10%,transparent)}
+.st.running svg{animation:spin 1.6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.st.failed{color:var(--fail);border-color:color-mix(in srgb,var(--fail) 48%,transparent);
+  background:color-mix(in srgb,var(--fail) 10%,transparent)}
+.st.merged{color:var(--autonomous);border-color:color-mix(in srgb,var(--autonomous) 48%,transparent);
+  background:color-mix(in srgb,var(--autonomous) 10%,transparent)}
+.st.closed{color:var(--ink-3);border-color:var(--edge)}
+.rv{
+  flex:none;font-family:var(--mono);font-size:9.5px;line-height:1;padding:3px 6px;
+  border-radius:var(--r-chip);border:1px solid var(--edge);color:var(--ink-3);
+}
+.rv.appr{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
+.rv.chg{color:var(--need);border-color:color-mix(in srgb,var(--need) 40%,transparent)}
+/* The dismiss affordance. One target, at the trailing edge, full row height,
+   so it is never hunted for and never hit by accident on the way somewhere. */
+.pr .dz{
+  flex:none;width:34px;border:0;border-left:1px solid var(--chrome-border);
+  background:transparent;color:var(--ink-3);cursor:pointer;display:grid;place-items:center;
+}
+.pr .dz:hover{background:color-mix(in srgb,var(--fail) 16%,transparent);color:var(--fail)}
+.pr.flash{animation:flash 1.1s ease-out 2}
+@keyframes flash{0%{background:color-mix(in srgb,var(--chrome-accent) 26%,var(--surface))}100%{background:var(--surface)}}
+.pr.pointed-row{border-color:var(--chrome-accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--chrome-accent) 45%,transparent)}
+
+/* the undo strip that stands in the dismissed row's place */
+.undo{
+  display:flex;align-items:center;gap:var(--s-4);padding:9px var(--s-5);
+  border:1px dashed var(--edge);border-radius:var(--r-card);
+  font-family:var(--mono);font-size:11px;color:var(--ink-3);
+}
+.undo b{color:var(--ink-2);font-weight:600}
+.undo button{
+  margin-left:auto;background:transparent;border:1px solid var(--edge);color:var(--ink-2);
+  border-radius:var(--r-ctl);padding:3px 9px;font-size:10.5px;cursor:pointer;font-family:var(--mono);
+}
+.undo button:hover{color:var(--ink-1);border-color:var(--chrome-accent)}
+
+/* where dismissed rows go */
+.dismissed{margin-top:var(--s-6)}
+.dishead{
+  display:flex;align-items:center;gap:var(--s-4);width:100%;text-align:left;
+  background:transparent;border:0;border-top:1px solid var(--chrome-border);
+  padding:var(--s-5) var(--s-1) var(--s-4);cursor:pointer;
+  font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--ink-3);
+}
+.dishead:hover{color:var(--ink-2)}
+.dishead .ct{
+  font-variant-numeric:tabular-nums;border:1px solid var(--edge);border-radius:var(--r-chip);
+  padding:2px 6px;font-size:9.5px;
+}
+.dispanel{display:flex;flex-direction:column;gap:var(--s-4);padding-top:var(--s-2)}
+.pr.dis{opacity:.42;border-left-color:var(--edge);background:transparent}
+.pr.dis:hover{opacity:.72;background:var(--chrome-hover)}
+.pr.dis .ttl{color:var(--ink-3);font-weight:400}
+.pr.dis .dz{color:var(--ink-3)}
+.pr.dis .dz:hover{background:color-mix(in srgb,var(--chrome-accent) 16%,transparent);color:var(--chrome-accent)}
+.dnote{
+  font-family:var(--mono);font-size:var(--t-meta);color:var(--ink-3);
+  padding:var(--s-2) var(--s-1) 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P5 — the two alternatives, presented side by side.
+   ═══════════════════════════════════════════════════════════════════════ */
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:var(--s-6)}
+.alt{
+  border:1px solid var(--chrome-border);border-radius:var(--r-card);
+  background:var(--chrome-body);padding:var(--s-5);display:flex;flex-direction:column;gap:var(--s-4);
+}
+.alt.armed{border-color:var(--chrome-accent)}
+.alt h3{
+  font-size:var(--t-name);font-weight:600;color:var(--ink-1);
+  display:flex;align-items:baseline;gap:var(--s-4);
+}
+.alt h3 .tag{
+  font-family:var(--mono);font-size:var(--t-meta);text-transform:uppercase;
+  letter-spacing:.08em;color:var(--chrome-accent);flex:none;
+}
+.alt p{margin:0;font-size:var(--t-ui);color:var(--ink-2);line-height:var(--lh-body)}
+.tradeoff{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--s-3)}
+.tradeoff li{
+  display:flex;gap:var(--s-4);font-size:11.5px;line-height:1.45;color:var(--ink-3);
+}
+.tradeoff li .s{flex:none;font-family:var(--mono);font-weight:700;width:12px}
+.tradeoff li.plus .s{color:var(--ok)}
+.tradeoff li.minus .s{color:var(--fail)}
+.alt .go{margin-top:auto;padding-top:var(--s-3)}
+
+table.read{border-collapse:collapse;font-size:var(--t-ui);width:100%}
+table.read th,table.read td{
+  padding:5px 12px 5px 0;text-align:left;vertical-align:top;
+  border-bottom:1px solid var(--chrome-border);
+}
+table.read th{
+  font-family:var(--mono);font-size:var(--t-meta);text-transform:uppercase;
+  letter-spacing:.06em;color:var(--ink-3);font-weight:400;white-space:nowrap;
+}
+table.read td{color:var(--ink-2)}
+table.read td:first-child{color:var(--ink-3);font-family:var(--mono);font-size:11px;white-space:nowrap}
+
+.look{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--s-4)}
+.look li{display:flex;gap:var(--s-5);font-size:var(--t-ui);color:var(--ink-2);line-height:1.5}
+.look li .k{
+  flex:none;font-family:var(--mono);font-size:var(--t-meta);font-weight:700;
+  color:var(--chrome-accent);width:20px;padding-top:2px;
+}
+
+svg{display:inline-block;vertical-align:middle;flex-shrink:0;pointer-events:none}
+
+/* Narrow viewports are explicitly out of scope this round (see D3). The stage
+   simply stops being a two-column surface rather than pretending. */
+@media (max-width:900px){
+  .stage{grid-template-columns:minmax(0,1fr);grid-template-rows:52px minmax(0,1fr);
+    grid-template-areas:'top' 'dash'}
+  .chat,.grip{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <span class="dot"></span>
+  <b>muxterm</b><span>Mission Control — design prototype, round one</span>
+  <span class="sp"></span>
+  <span class="pill warn">fixture data · not production</span>
+  <button class="pbtn" id="annBtn" type="button" aria-pressed="true">annotations: on</button>
+  <button class="pbtn" id="resetBtn" type="button">reset</button>
+</div>
+
+<main>
+
+  <div class="cap"><span>the surface</span><span class="rule"></span><span>drag the divider · switch tabs · dismiss a PR</span></div>
+
+  <!-- ══ THE STAGE ══════════════════════════════════════════════════════ -->
+  <div class="stage" id="stage" data-view="cards">
+
+    <!-- P1: topbar. Title is "Mission Control". No cards/tiles here. -->
+    <div class="topbar">
+      <h1>Mission Control</h1>
+      <span class="spacer"></span>
+      <span class="gone" title="Removed from the topbar in this design: the Dashboard applet now owns it, in the control rail on the right of the tab strip">cards | tiles</span>
+      <button class="dots" type="button" aria-label="Conversation options" id="dotsBtn"></button>
+    </div>
+
+    <div class="chat">
+      <div class="chatbody" id="chatbody"></div>
+      <div class="comp">
+        <div class="cbox">
+          <textarea class="ctext" rows="1" placeholder="describe a problem…" aria-label="Describe a problem"></textarea>
+          <div class="crow">
+            <button class="cbtn send" type="button" aria-label="Send"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grip" id="grip" role="separator" aria-orientation="vertical"
+         aria-label="Resize the conversation" title="Drag to resize"></div>
+
+    <!-- P1: the applet host -->
+    <div class="dash">
+      <div class="tabs" id="tabs" role="tablist" aria-label="Applets"></div>
+      <div class="appletbody" id="appletbody" role="tabpanel"></div>
+    </div>
+  </div>
+
+  <!-- ══ P5 ════════════════════════════════════════════════════════════ -->
+  <section class="card">
+    <h2>P5 — how the chief of staff draws you to a view</h2>
+    <p class="note" style="margin-top:0">
+      Both are implementable; they differ in who decides when you look. Fire each and watch the
+      surface above. <b>Neither is picked here</b> — the trade-off is the deliverable.
+    </p>
+    <div class="two" style="margin-top:var(--s-6)">
+
+      <div class="alt" id="altA">
+        <h3><span class="tag">alt A</span> it takes the wheel</h3>
+        <p>
+          The chief of staff calls <code>show(applet, target)</code>. The host switches the visible
+          applet, scrolls the row into view, flashes it, and paints a banner saying who brought you
+          here and why. The banner is dismissible and leaves no residue.
+        </p>
+        <ul class="tradeoff">
+          <li class="plus"><span class="s">+</span><span>Zero clicks. The thing that needs you is on screen the instant it happens.</span></li>
+          <li class="plus"><span class="s">+</span><span>The reason travels with the jump, so the surface is never mysteriously different.</span></li>
+          <li class="minus"><span class="s">−</span><span>It steals the surface. If you were three levels into Files, you lose your place.</span></li>
+          <li class="minus"><span class="s">−</span><span>Two events in quick succession fight each other; the second wins and the first is never seen.</span></li>
+          <li class="minus"><span class="s">−</span><span>Nothing is left behind to acknowledge, so a jump you missed while looking away is simply gone.</span></li>
+        </ul>
+        <div class="go"><button class="pbtn primary" type="button" id="fireA">fire alt A — #79 checks fail</button></div>
+      </div>
+
+      <div class="alt" id="altB">
+        <h3><span class="tag">alt B</span> it raises a flag</h3>
+        <p>
+          The chief of staff calls <code>flag(applet, target, urgency)</code>. The host badges the tab
+          and offers an inline <b>show me</b> in the conversation. The visible applet does not change.
+          The badge survives until you look.
+        </p>
+        <ul class="tradeoff">
+          <li class="plus"><span class="s">+</span><span>Never steals focus. What you were doing survives what just happened.</span></li>
+          <li class="plus"><span class="s">+</span><span>Badges accumulate, so three events in a minute are three counts, not one survivor.</span></li>
+          <li class="plus"><span class="s">+</span><span>The badge is the acknowledgement receipt: it is still there when you come back from lunch.</span></li>
+          <li class="minus"><span class="s">−</span><span>Costs a click, and a badge that is never clicked is a thing that never got seen.</span></li>
+          <li class="minus"><span class="s">−</span><span>Needs an escalation rule, or a genuinely urgent event looks exactly like a routine one.</span></li>
+        </ul>
+        <div class="go"><button class="pbtn primary" type="button" id="fireB">fire alt B — #79 checks fail</button></div>
+      </div>
+
+    </div>
+    <p class="note">
+      <b>What is NOT settled:</b> whether the two coexist under one policy (flag by default, take the
+      wheel only when you asked for it or the surface is idle), and whether a third shape — peek, a
+      transient overlay that reverts — is worth building. Carried into D3 of the design note.
+    </p>
+  </section>
+
+  <!-- ══ reading guide ════════════════════════════════════════════════ -->
+  <section class="card">
+    <h2>what this prototype is claiming</h2>
+    <ul class="look">
+      <li><span class="k">P1</span><span><b>The shell.</b> The title is <b>Mission Control</b>. The topbar carries the title and the <code>⋯</code> menu, and nothing else — the struck-through <span class="gone" style="text-decoration:line-through">cards | tiles</span> marks where the toggle used to be pinned. Applet-owned controls live in the <b>control rail</b> at the right end of the tab strip, inside the applet host. The rail's contents change with the tab; the host paints the rail, the applet fills it.</span></li>
+      <li><span class="k">P2</span><span><b>Dashboard.</b> The fleet view, unchanged in geometry — same fixed-height card contract, same three groups (<code>wants you</code> / <code>working</code> / <code>done</code>), same 3px state border. Its cards/tiles switch is now <b>its own</b>, in the rail. The <code>#84</code> chips on cards are new: a proposal for the seam between applets. Click one.</span></li>
+      <li><span class="k">P3</span><span><b>Files.</b> Changed files are bright and carry a status letter and a diffstat; unchanged files are dim and carry nothing. A closed directory containing changes wears one dot. <b>changed only</b> in the rail collapses it to just the work.</span></li>
+      <li><span class="k">P4</span><span><b>Pull Requests.</b> Ten PRs across six statuses. Checks tick live (the rail says how stale the view is, and can be paused). Each row dismisses from the trailing edge; a dashed undo strip stands in its place, then it moves to <b>dismissed</b> at the bottom, dimmed, where it can be watched again. Dismiss means <i>stop watching</i>, never <i>close the PR</i>.</span></li>
+      <li><span class="k">P5</span><span><b>Attention.</b> Two alternatives above, both live on this surface.</span></li>
+    </ul>
+    <p class="note">
+      Companion design note: <code>docs/design/mission-control.md</code> — the applet contract (D1),
+      where pull-request data comes from (D2), and the decisions this round deliberately left open (D3).
+    </p>
+  </section>
+
+</main>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   ICONS. lucide paths, inlined. muxterm uses lucide via its icon() helper.
+   ═══════════════════════════════════════════════════════════════════════ */
+const P = {
+  rows3:'<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M21 9H3"/><path d="M21 15H3"/>',
+  grid:'<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
+  dash:'<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+  folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  folderOpen:'<path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
+  file:'<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  pr:'<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/>',
+  merge:'<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+  ellipsis:'<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  x:'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  check:'<path d="M20 6 9 17l-5-5"/>',
+  arrowUp:'<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  chevR:'<path d="m9 18 6-6-6-6"/>',
+  chevD:'<path d="m6 9 6 6 6-6"/>',
+  loader:'<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+  alert:'<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  eyeOff:'<path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/>',
+  eye:'<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  dot:'<circle cx="12" cy="12" r="4"/>',
+};
+function svg(name, size){
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="'+size+'" height="'+size+
+    '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '+
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+P[name]+'</svg>';
+}
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FIXTURE DATA — the Dashboard applet's fleet.
+
+   Field names are the wire's, verbatim from `fleet_status` / the session-state
+   protocol: session_id, pane_id, workspace_id, harness, project, name, label,
+   mode, state, waiting_for, doing, done_means, knows, pr, updated_at.
+   ═══════════════════════════════════════════════════════════════════════ */
+const FLEET = [
+  { session_id:'f2a17c40-voice', pane_id:1, workspace_id:'w11',
+    harness:'amplifier', project:'/home/ken/workspace/muxterm-voice-build',
+    name:'THE OUTCOME', label:'voice realtime', mode:'autonomous', state:'blocked',
+    waiting_for:'permission prompt',
+    doing:'Waiting on approval to write web/src/lib/voice-session.ts',
+    done_means:'A realtime voice session streams to the composer and back.',
+    knows:['web/src/lib/orb-persona.ts','docs/research/voice-orb-mock.html'],
+    pr:0, updated_at:'3m',
+    thumb:'  Write  web/src/lib/voice-session.ts\n\n  Allow this write? (y/N)\n  ›\n' },
+
+  { session_id:'8b04ef11-sidebar', pane_id:2, workspace_id:'w09',
+    harness:'claude', project:'/home/ken/workspace/muxterm-sidebar-remote-groups',
+    name:'sidebar groups', label:'sidebar remote groups', mode:'interactive', state:'blocked',
+    waiting_for:'input needed',
+    doing:'Asked: should a remote workspace land in its host group or at top level?',
+    done_means:'', knows:['web/src/components/mux-sidebar.ts'],
+    pr:80, updated_at:'11m',
+    thumb:'  Two readings of the spec here. Should a\n  remote workspace land in its host group,\n  or at top level next to the locals?\n\n  > ' },
+
+  { session_id:'c9d3ba7e-lanedeath', pane_id:1, workspace_id:'w13',
+    harness:'amplifier', project:'/home/ken/workspace/muxterm-lane-death',
+    name:'THE BUG', label:'lane lifecycle', mode:'autonomous', state:'stopped',
+    waiting_for:'',
+    doing:'Went quiet after 41 turns without declaring done',
+    done_means:'A lane whose harness exits is marked failed, not left working.',
+    knows:['internal/sessiond/sessionstore.go','internal/sessiond/reaper.go'],
+    pr:0, updated_at:'26m',
+    thumb:'  reaper_test.go:88: want failed, got working\n  --- FAIL: TestExitedLaneIsFailed (0.02s)\n  FAIL\n\n  $ ' },
+
+  { session_id:'2508f840-merges', pane_id:1, workspace_id:'w15',
+    harness:'amplifier', project:'/home/ken/workspace/muxterm-merge-79-80',
+    name:'THE OUTCOME', label:'pr merges', mode:'autonomous', state:'working',
+    waiting_for:'', doing:'Rebasing #79 onto main after the lint fix',
+    done_means:'PR #79 and PR #80 are MERGED into main.',
+    knows:['web/src/lib/markdown.ts'],
+    pr:79, updated_at:'12s',
+    thumb:'  $ git rebase origin/main\n  Successfully rebased and updated\n  detached HEAD.\n  $ npm run lint -w web' },
+
+  { session_id:'3c39f733-coscfg', pane_id:1, workspace_id:'w16',
+    harness:'amplifier', project:'/home/ken/workspace/muxterm-cos-tuning',
+    name:'THE OUTCOME', label:'chief-of-staff config', mode:'autonomous', state:'working',
+    waiting_for:'', doing:'Running the sidecar test suite (18/33)',
+    done_means:'The sidecar takes its instruction and tools from user config.',
+    knows:['internal/cos/supervisor.go','internal/cos/sidecar/main.py'],
+    pr:0, updated_at:'44s',
+    thumb:'  ok   internal/cos          0.412s\n  ok   internal/cos/sidecar   1.980s\n  --- running: TestToolsetOverride\n  ' },
+
+  { session_id:'ada2da54-toolblk', pane_id:1, workspace_id:'w18',
+    harness:'amplifier', project:'/home/ken/workspace/muxterm-tool-blocks',
+    name:'THE BUG', label:'tool call blocks', mode:'autonomous', state:'working',
+    waiting_for:'', doing:'[anchors:explorer] Reading internal/cos/events.go',
+    done_means:'TOOL CALL blocks render in the conversation again.',
+    knows:['internal/cos/events.go','web/src/lib/cos-store.ts'],
+    pr:0, updated_at:'8s',
+    thumb:'  → delegate(anchors:explorer)\n    reading internal/cos/events.go\n    reading web/src/lib/cos-store.ts\n  ' },
+
+  { session_id:'c383739a-markdown', pane_id:3, workspace_id:'w12',
+    harness:'claude', project:'/home/ken/workspace/muxterm-streaming-markdown',
+    name:'streaming markdown', label:'streaming markdown', mode:'interactive', state:'working',
+    waiting_for:'', doing:'Editing web/src/lib/markdown.ts',
+    done_means:'', knows:['web/src/lib/markdown.ts','web/src/components/mux-cos.ts'],
+    pr:79, updated_at:'2m',
+    thumb:'  Edited web/src/lib/markdown.ts\n   +  const flushPartialFence = () => {\n   +    if (!open) return;\n  ' },
+
+  { session_id:'b1cc3fd0-polish', pane_id:1, workspace_id:'w07',
+    harness:'amplifier', project:'/home/ken/workspace/muxterm-dashboard-polish',
+    name:'THE OUTCOME', label:'dashboard polish', mode:'autonomous', state:'done',
+    waiting_for:'', doing:'Opened #84 and reported it here',
+    done_means:'Brand, markdown and titlebar polish is open as a PR.',
+    knows:['web/src/components/title-bar.ts'],
+    pr:84, updated_at:'1h',
+    thumb:'  ✓ opened https://github.com/kenotron-ms\n    /muxterm/pull/84\n  ✓ muxterm session report --pr 84\n  ' },
+
+  { session_id:'73bbfa80-durab', pane_id:2, workspace_id:'w14',
+    harness:'amplifier', project:'/home/ken/workspace/muxterm-stream-durability',
+    name:'THE OUTCOME', label:'stream durability', mode:'autonomous', state:'failed',
+    waiting_for:'', doing:'go vet failed: 3 issues in internal/cos',
+    done_means:'A dropped SSE stream resumes without losing a turn.',
+    knows:['internal/cos/queue.go'],
+    pr:0, updated_at:'2h',
+    thumb:'  internal/cos/queue.go:212: lost cancel\n  internal/cos/queue.go:264: unused ctx\n  exit status 1\n  ' },
+
+  { session_id:'7cc09501-harness', pane_id:1, workspace_id:'w10',
+    harness:'amplifier', project:'/home/ken/workspace/muxterm-cos-harness',
+    name:'THE OUTCOME', label:'cos verification harness', mode:'autonomous', state:'done',
+    waiting_for:'', doing:'Merged as #71',
+    done_means:'A repeatable harness proves the sidecar end to end.',
+    knows:['docs/verification/cos-harness.md'],
+    pr:71, updated_at:'3h',
+    thumb:'  ✓ 6 scenarios, 6 passed\n  ✓ merged #71 into main\n  ' },
+];
+
+/* groupFor / needsInput / stateClass — the real predicates from
+   web/src/lib/session-state.ts and mux-cos.ts, reproduced so the mock groups
+   and colours cannot drift from the product's. */
+const needsInput = (s) => s.state === 'blocked' || (s.mode === 'autonomous' && s.state === 'stopped');
+const groupFor = (s) => needsInput(s) ? 'Needs input' : (s.state === 'working' ? 'Running' : 'Completed');
+function stateClass(s){
+  const g = groupFor(s);
+  if (g === 'Needs input') return 'need';
+  if (g === 'Running') return 'work';
+  if (s.state === 'failed') return 'fail';
+  if (s.state === 'done') return 'done';
+  return '';
+}
+const HOME_GROUPS = ['Needs input','Running','Completed'];
+const GROUP_LABEL = {'Needs input':'wants you', Running:'working', Completed:'done'};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FIXTURE DATA — the Files applet. A flat list carrying its own depth, which
+   is all a tree needs when collapse is the only structural operation.
+   git: '' unchanged | 'M' modified | 'A' added | 'D' deleted | 'U' untracked
+   ═══════════════════════════════════════════════════════════════════════ */
+const FILES = [
+  {d:0,k:'dir', n:'docs',                     open:true},
+  {d:1,k:'dir', n:'design',                   open:true},
+  {d:2,k:'file',n:'mission-control-mock.html',git:'A',a:1043,r:0},
+  {d:2,k:'file',n:'mission-control.md',       git:'A',a:246, r:0},
+  {d:1,k:'dir', n:'research',                 open:false},
+  {d:2,k:'file',n:'voice-orb-mock.html'},
+  {d:2,k:'file',n:'voice-orb-verdicts.md'},
+  {d:1,k:'file',n:'session-state-protocol.md',git:'M',a:18,r:4},
+  {d:1,k:'file',n:'design.md'},
+
+  {d:0,k:'dir', n:'internal',                 open:true},
+  {d:1,k:'dir', n:'mcp',                      open:true},
+  {d:2,k:'file',n:'fleet.go',                 git:'M',a:12,r:1},
+  {d:2,k:'file',n:'run.go'},
+  {d:2,k:'file',n:'tools_lane.go'},
+  {d:1,k:'dir', n:'sessiond',                 open:false},
+  {d:2,k:'file',n:'sessionstate.go',          git:'M',a:6,r:0},
+  {d:2,k:'file',n:'sessionstore.go'},
+  {d:2,k:'file',n:'reaper.go'},
+  {d:1,k:'dir', n:'server',                   open:false},
+  {d:2,k:'file',n:'cos.go'},
+
+  {d:0,k:'dir', n:'web',                      open:true},
+  {d:1,k:'dir', n:'src',                      open:true},
+  {d:2,k:'dir', n:'applets',                  open:true, git:'U'},
+  {d:3,k:'file',n:'applet-dashboard.ts',      git:'U',a:311,r:0},
+  {d:3,k:'file',n:'applet-files.ts',          git:'U',a:198,r:0},
+  {d:3,k:'file',n:'applet-prs.ts',            git:'U',a:274,r:0},
+  {d:2,k:'dir', n:'components',               open:true},
+  {d:3,k:'file',n:'mux-cos.ts',               git:'M',a:184,r:57},
+  {d:3,k:'file',n:'mux-home.ts'},
+  {d:3,k:'file',n:'title-bar.ts',             git:'M',a:3,r:3},
+  {d:3,k:'file',n:'mux-sidebar.ts'},
+  {d:2,k:'dir', n:'lib',                      open:false},
+  {d:3,k:'file',n:'applet-registry.ts',       git:'U',a:96,r:0},
+  {d:3,k:'file',n:'fleet-view.ts',            git:'D',a:0,r:41},
+  {d:3,k:'file',n:'theme.ts'},
+  {d:1,k:'file',n:'index.html'},
+
+  {d:0,k:'file',n:'.muxterm-scratch.log',     git:'U',a:0,r:0},
+  {d:0,k:'file',n:'AGENTS.md'},
+  {d:0,k:'file',n:'go.mod'},
+  {d:0,k:'file',n:'README.md'},
+];
+const GIT_WORD = {M:'modified', A:'added', D:'deleted', U:'untracked'};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FIXTURE DATA — the Pull Requests applet.
+   status: open | draft | running | failed | merged | closed
+   ═══════════════════════════════════════════════════════════════════════ */
+const PRS = [
+  {num:84, title:'fix: title-bar height and the brand row', branch:'fix/titlebar-height',
+   status:'open',    checks:'4/4', review:'appr', lane:'dashboard polish', age:'1h'},
+  {num:80, title:'fix: new workspace lands in the current group', branch:'fix/sidebar-new-workspace-in-group',
+   status:'running', checks:'2/4', review:'', lane:'sidebar remote groups', age:'11m'},
+  {num:79, title:'feat: streaming markdown render in the chat pane', branch:'feat/streaming-markdown-render',
+   status:'failed',  checks:'3/4', review:'chg', lane:'streaming markdown', age:'12m',
+   why:'lint (web) failed'},
+  {num:78, title:'fix: chief-of-staff stream durability across reconnects', branch:'fix/cos-stream-durability',
+   status:'failed',  checks:'2/4', review:'', lane:'stream durability', age:'2h',
+   why:'go vet failed'},
+  {num:77, title:'fix: a lane whose harness exits is marked failed', branch:'fix/lane-lifecycle',
+   status:'draft',   checks:'1/4', review:'', lane:'lane lifecycle', age:'26m'},
+  {num:76, title:'research: realtime voice, sideband architecture', branch:'research/realtime-voice',
+   status:'draft',   checks:'0/4', review:'', lane:'voice research', age:'6h'},
+  {num:73, title:'Dashboard polish: brand, markdown, title-bar height, no shell for the sidecar',
+   branch:'fix/dashboard-brand-markdown-titlebar',
+   status:'open',    checks:'4/4', review:'', lane:'', age:'2d',
+   note:'opened by hand \u2014 the one real row in this fixture'},
+  {num:72, title:'fix: sidebar duplicate New Workspace entry', branch:'fix/sidebar-duplicate-new-workspace',
+   status:'closed',  checks:'—',   review:'', lane:'', age:'5h', why:'superseded by #80'},
+  {num:71, title:'chore: chief-of-staff verification harness', branch:'chore/cos-verification-harness',
+   status:'merged',  checks:'4/4', review:'appr', lane:'cos verification harness', age:'3h'},
+  {num:68, title:'fix: single service-control surface', branch:'fix/single-service-control-surface',
+   status:'merged',  checks:'4/4', review:'appr', lane:'', age:'3d'},
+];
+const ST_LABEL = {open:'open', draft:'draft', running:'checks running', failed:'checks failed',
+                  merged:'merged', closed:'closed'};
+const ST_ICON  = {open:'pr', draft:'pr', running:'loader', failed:'alert',
+                  merged:'merge', closed:'x'};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE APPLET REGISTRY. Round one hardcodes three built-ins; the SHAPE is the
+   design proposal, described properly in D1 of the companion note.
+   ═══════════════════════════════════════════════════════════════════════ */
+const APPLETS = [
+  {id:'dashboard', label:'Dashboard',     icon:'dash',   render:renderDashboard, rail:railDashboard},
+  {id:'files',     label:'Files',         icon:'folder', render:renderFiles,     rail:railFiles},
+  {id:'prs',       label:'Pull Requests', icon:'pr',     render:renderPRs,       rail:railPRs},
+];
+
+/* ── host state ──────────────────────────────────────────────────────────── */
+const S = {
+  applet:'dashboard',
+  view:'cards',            // dashboard applet
+  changedOnly:false,       // files applet
+  selectedFile:null,
+  collapsed:new Set(['research','sessiond','server','lib']),
+  dismissed:[],            // pr numbers, most recent first
+  showDismissed:false,
+  undo:null,               // {num, at}
+  live:true,               // prs applet
+  lastTick:0,
+  badges:{},               // appletId -> {n, urgent}
+  banner:null,             // {applet, text, target}
+  attention:null,          // 'A' | 'B' | null
+  chatExtra:[],
+};
+
+const $ = (id) => document.getElementById(id);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HOST CHROME
+   ═══════════════════════════════════════════════════════════════════════ */
+function renderTabs(){
+  const a = APPLETS.map(ap => {
+    const on = S.applet === ap.id;
+    const b = S.badges[ap.id];
+    return '<button class="tab" type="button" role="tab" data-applet="'+ap.id+'" '+
+      'aria-selected="'+(on?'true':'false')+'">'+
+      svg(ap.icon, 13)+'<span>'+esc(ap.label)+'</span>'+
+      (b ? '<span class="tbadge'+(b.urgent?' urgent':'')+'">'+b.n+'</span>' : '')+
+      '</button>';
+  }).join('');
+  const rail = (APPLETS.find(x => x.id === S.applet).rail || (()=>''))();
+  $('tabs').innerHTML = a + '<div class="rail">'+rail+'</div>';
+}
+
+function renderApplet(){
+  const ap = APPLETS.find(x => x.id === S.applet);
+  const banner = (S.banner && S.banner.applet === S.applet)
+    ? '<div class="pointed"><span class="lbl">chief of staff</span>'+
+      '<span>'+esc(S.banner.text)+'</span>'+
+      '<button class="x" type="button" data-act="closebanner" aria-label="Dismiss">'+svg('x',13)+'</button></div>'
+    : '';
+  $('appletbody').innerHTML = banner + '<div class="fx">fixture</div>' + ap.render();
+  $('appletbody').setAttribute('aria-label', ap.label);
+}
+
+function paint(){ renderTabs(); renderApplet(); renderChat(); $('stage').dataset.view = S.view; }
+
+function go(appletId, opts){
+  S.applet = appletId;
+  delete S.badges[appletId];
+  if (opts && opts.banner) S.banner = {applet:appletId, text:opts.banner};
+  paint();
+  if (opts && opts.flash){
+    const el = document.querySelector('[data-pr="'+opts.flash+'"]');
+    if (el){ el.classList.add('flash','pointed-row'); el.scrollIntoView({block:'center'}); }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P2 — DASHBOARD APPLET
+   ═══════════════════════════════════════════════════════════════════════ */
+function railDashboard(){
+  return '<div class="seg" role="group" aria-label="Fleet view">'+
+    '<button type="button" data-view="cards" class="'+(S.view==='cards'?'on':'')+'" '+
+      'aria-pressed="'+(S.view==='cards')+'">'+svg('rows3',12)+'cards</button>'+
+    '<button type="button" data-view="tiles" class="'+(S.view==='tiles'?'on':'')+'" '+
+      'aria-pressed="'+(S.view==='tiles')+'">'+svg('grid',12)+'tiles</button>'+
+  '</div>';
+}
+
+function renderDashboard(){
+  const by = {'Needs input':[], Running:[], Completed:[]};
+  FLEET.forEach(s => by[groupFor(s)].push(s));
+  return HOME_GROUPS.map(g => {
+    const m = by[g];
+    if (!m.length) return '';
+    return '<h2 class="grp">'+GROUP_LABEL[g]+'</h2><div class="grid">'+
+      m.map(fleetCard).join('')+'</div>';
+  }).join('');
+}
+
+function fleetCard(s){
+  const bits = [];
+  bits.push(s.harness);
+  if (s.mode === 'autonomous') bits.push('autonomous');
+  bits.push(s.workspace_id);
+  bits.push(s.updated_at);
+  const line = s.doing || s.waiting_for || '';
+  const badge = s.pr > 0
+    ? '<span class="prbadge" role="button" tabindex="0" data-gopr="'+s.pr+'" '+
+      'title="Open #'+s.pr+' in the Pull Requests applet">#'+s.pr+'</span>' : '';
+  return '<button type="button" class="fcard '+stateClass(s)+'" title="'+esc(s.name)+'">'+
+    '<div class="meta">'+
+      '<div class="n"><span class="nm">'+esc(s.label || s.name)+'</span>'+badge+'</div>'+
+      '<div class="m">'+esc(bits.join(' \u00b7 '))+'</div>'+
+      (line ? '<div class="g">'+esc(line)+'</div>' : '')+
+    '</div>'+
+    '<pre class="thumb">'+esc(s.thumb || '')+'</pre>'+
+  '</button>';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P3 — FILES APPLET
+   ═══════════════════════════════════════════════════════════════════════ */
+function railFiles(){
+  const n = FILES.filter(f => f.k === 'file' && f.git).length;
+  return '<span class="live off" style="letter-spacing:.04em">'+n+' changed</span>'+
+    '<button type="button" class="toggle '+(S.changedOnly?'on':'')+'" data-act="changedonly" '+
+    'aria-pressed="'+S.changedOnly+'">changed only</button>';
+}
+
+/* Which directories contain a change somewhere beneath them. Computed rather
+   than declared, so the fixture cannot lie about itself. */
+function dirsWithChanges(){
+  const marked = new Set();
+  const stack = [];
+  FILES.forEach((f, i) => {
+    while (stack.length && stack[stack.length-1].d >= f.d) stack.pop();
+    if (f.k === 'file' && f.git) stack.forEach(d => marked.add(d.i));
+    if (f.k === 'dir') stack.push({d:f.d, i});
+  });
+  return marked;
+}
+
+function renderFiles(){
+  const marked = dirsWithChanges();
+  const rows = [];
+  let hideBelow = -1;
+
+  FILES.forEach((f, i) => {
+    if (hideBelow >= 0 && f.d > hideBelow) return;
+    hideBelow = -1;
+
+    if (S.changedOnly){
+      // In changed-only the tree flattens to the changed files and the
+      // directories on their path; a directory with nothing under it goes.
+      if (f.k === 'dir' && !marked.has(i)) return;
+      if (f.k === 'file' && !f.git) return;
+    }
+
+    const pad = 'padding-left:'+(var_s4() + f.d * 14)+'px';
+    if (f.k === 'dir'){
+      const open = S.changedOnly ? true : !S.collapsed.has(f.n);
+      if (!open) hideBelow = f.d;
+      rows.push(
+        '<button type="button" class="frow dir" style="'+pad+'" data-dir="'+esc(f.n)+'">'+
+          '<span class="tw">'+svg(open?'chevD':'chevR',11)+'</span>'+
+          '<span class="ic">'+svg(open?'folderOpen':'folder',13)+'</span>'+
+          '<span class="nm">'+esc(f.n)+'/</span>'+
+          '<span class="sp"></span>'+
+          (marked.has(i) && !open ? '<span class="dirdot" title="contains changes"></span>' : '')+
+        '</button>');
+    } else {
+      const g = f.git || '';
+      const cls = 'frow'+(g ? ' chg g'+g : '')+(S.selectedFile === f.n ? ' sel' : '');
+      const stat = (f.a || f.r)
+        ? '<span class="diffstat"><span class="a">+'+f.a+'</span> <span class="d">\u2212'+f.r+'</span></span>' : '';
+      rows.push(
+        '<button type="button" class="'+cls+'" style="'+pad+'" data-file="'+esc(f.n)+'" '+
+          'title="'+esc(g ? GIT_WORD[g] : 'unchanged')+'">'+
+          '<span class="tw"></span>'+
+          '<span class="ic">'+svg('file',13)+'</span>'+
+          '<span class="nm">'+esc(f.n)+'</span>'+
+          '<span class="sp"></span>'+ stat +
+          (g ? '<span class="gst">'+(g === 'U' ? '??' : g)+'</span>' : '<span class="gst"></span>')+
+        '</button>');
+    }
+  });
+
+  // Counted, never declared: a fixture that states its own totals will
+  // eventually state them wrongly.
+  const tally = {M:0,A:0,D:0,U:0};
+  FILES.forEach(f => { if (f.k === 'file' && f.git) tally[f.git]++; });
+  const summary = [[tally.M,'modified'],[tally.A,'added'],[tally.D,'deleted'],[tally.U,'untracked']]
+    .filter(x => x[0]).map(x => x[0]+' '+x[1]).join(', ');
+
+  return '<div class="frepo">'+svg('folder',13)+
+      '<b>muxterm-mission-control</b><span>on</span>'+
+      '<span class="branch">design/mission-control-applets</span>'+
+      '<span>\u00b7 '+summary+'</span>'+
+    '</div>'+
+    '<div class="ftree">'+rows.join('')+'</div>'+
+    (rows.length ? '' : '<div class="fempty">Nothing changed on this branch.</div>');
+}
+function var_s4(){ return 8; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P4 — PULL REQUESTS APPLET
+   ═══════════════════════════════════════════════════════════════════════ */
+function railPRs(){
+  const ago = S.live ? Math.max(1, Math.round((Date.now() - S.lastTick)/1000)) : null;
+  return '<span class="live'+(S.live?'':' off')+'"><span class="beat"></span>'+
+      (S.live ? 'live \u00b7 '+ago+'s ago' : 'paused')+'</span>'+
+    '<button type="button" class="toggle '+(S.live?'on':'')+'" data-act="live" '+
+      'aria-pressed="'+S.live+'">'+(S.live?'pause':'resume')+'</button>';
+}
+
+function prRow(p, dismissed){
+  const cls = 'pr s-'+p.status+(dismissed ? ' dis' : '');
+  const meta = [];
+  meta.push(p.branch);
+  if (p.checks && p.checks !== '\u2014') meta.push(p.checks+' checks');
+  if (p.why) meta.push(p.why);
+  if (p.note) meta.push(p.note);
+  meta.push(p.age);
+
+  const lane = p.lane
+    ? '<span class="lane" role="button" tabindex="0" data-lane="'+esc(p.lane)+'">'+esc(p.lane)+'</span><span class="sep">\u00b7</span>'
+    : '<span class="sep" title="no lane declared this PR">\u2014 no lane \u00b7</span>';
+
+  return '<div class="'+cls+'" data-pr="'+p.num+'">'+
+    '<div class="core">'+
+      '<div class="l1">'+
+        '<span class="num">#'+p.num+'</span>'+
+        '<span class="ttl">'+esc(p.title)+'</span>'+
+        '<span class="st '+p.status+'">'+svg(ST_ICON[p.status],10)+ST_LABEL[p.status]+'</span>'+
+        (p.review === 'appr' ? '<span class="rv appr">approved</span>' : '')+
+        (p.review === 'chg'  ? '<span class="rv chg">changes requested</span>' : '')+
+      '</div>'+
+      '<div class="l2">'+lane+'<span>'+esc(meta.join(' \u00b7 '))+'</span></div>'+
+    '</div>'+
+    '<button type="button" class="dz" data-act="'+(dismissed?'rewatch':'dismiss')+'" data-num="'+p.num+'" '+
+      'title="'+(dismissed?'Watch #'+p.num+' again':'Stop watching #'+p.num)+'" '+
+      'aria-label="'+(dismissed?'Watch again':'Stop watching')+'">'+
+      svg(dismissed?'eye':'eyeOff',14)+'</button>'+
+  '</div>';
+}
+
+function renderPRs(){
+  const watched = PRS.filter(p => !S.dismissed.includes(p.num));
+  const gone    = S.dismissed.map(n => PRS.find(p => p.num === n)).filter(Boolean);
+
+  let list = watched.map(p => prRow(p, false));
+  if (S.undo){
+    const p = PRS.find(x => x.num === S.undo);
+    list.splice(Math.min(S.undoAt ?? 0, list.length), 0,
+      '<div class="undo">'+svg('eyeOff',12)+'<span>no longer watching <b>#'+p.num+'</b> \u2014 '+
+      'it moved to <b>dismissed</b> below</span>'+
+      '<button type="button" data-act="undo" data-num="'+p.num+'">undo</button></div>');
+  }
+
+  const dis = gone.length
+    ? '<div class="dismissed">'+
+        '<button type="button" class="dishead" data-act="showdis" aria-expanded="'+S.showDismissed+'">'+
+          svg(S.showDismissed?'chevD':'chevR',11)+'dismissed<span class="ct">'+gone.length+'</span>'+
+        '</button>'+
+        (S.showDismissed
+          ? '<div class="dispanel">'+gone.map(p => prRow(p, true)).join('')+
+            '<p class="dnote">Dismissed means muxterm stops watching \u2014 the pull request itself is '+
+            'untouched on GitHub. Nothing here is deleted; the eye puts a row back.</p></div>'
+          : '')+
+      '</div>'
+    : '';
+
+  return '<div class="prlist">'+list.join('')+'</div>'+dis;
+}
+
+/* THE LIVE TICKER. A scripted status change, so "statuses live update" is
+   something you can watch rather than something a caption claims. */
+const SCRIPT = [
+  {at:5000,  run(){ const p = PRS.find(x=>x.num===80); p.checks='3/4'; }},
+  {at:11000, run(){ const p = PRS.find(x=>x.num===80); p.checks='4/4'; p.status='open'; p.review='appr';
+                    flashPR(80); }},
+  {at:18000, run(){ const p = PRS.find(x=>x.num===77); p.status='running'; p.checks='2/4'; }},
+];
+let scriptIdx = 0, t0 = Date.now();
+function flashPR(num){
+  const el = document.querySelector('[data-pr="'+num+'"]');
+  if (el) el.classList.add('flash');
+}
+setInterval(() => {
+  if (!S.live) return;
+  S.lastTick = Date.now();
+  while (scriptIdx < SCRIPT.length && Date.now() - t0 >= SCRIPT[scriptIdx].at){
+    SCRIPT[scriptIdx].run(); scriptIdx++;
+    if (S.applet === 'prs') renderApplet();
+  }
+  if (S.applet === 'prs') renderTabs();   // refresh the "Ns ago"
+}, 1000);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE CONVERSATION
+   ═══════════════════════════════════════════════════════════════════════ */
+const CHAT = [
+  {who:'you', say:'where do the muxterm lanes stand?'},
+  {who:'cos', tool:{name:'fleet_status', args:'{}', ms:'118ms'},
+   say:'Ten lanes. Three want you: voice realtime is sitting at a permission prompt, sidebar remote '+
+       'groups asked you a question about grouping, and lane lifecycle went quiet after 41 turns '+
+       'without declaring done. Four are working. Two finished; stream durability failed go vet.'},
+  {who:'you', say:'merge 79 and 80 once they are both green'},
+  {who:'cos', tool:{name:'spawn_lane', args:'{"workspace":"pr merges","harness":"amplifier","goal":"…"}', ms:'1.4s'},
+   say:'Started it in w15. It will rebase, wait for checks, merge both, and report back here. '+
+       'I am watching #79 and #80 on your behalf \u2014 they are both in Pull Requests.',
+   foot:'2 tools \u00b7 4.1s \u00b7 $0.031'},
+];
+
+function renderChat(){
+  const turns = CHAT.concat(S.chatExtra);
+  $('chatbody').innerHTML = turns.map(t => {
+    const bd = [];
+    if (t.tool){
+      bd.push('<div class="tool"><span class="ok">'+svg('check',11)+'</span>'+
+        '<span class="tname">'+esc(t.tool.name)+'</span>'+
+        '<span class="targs">'+esc(t.tool.args)+'</span>'+
+        '<span class="ms">'+esc(t.tool.ms)+'</span></div>');
+    }
+    if (t.say) bd.push('<p class="say">'+esc(t.say)+'</p>');
+    if (t.action) bd.push('<div style="display:flex;gap:var(--s-4)">'+t.action+'</div>');
+    if (t.foot) bd.push('<div class="foot"><span>'+esc(t.foot)+'</span></div>');
+    return '<div class="turn '+t.who+'"><div class="who">'+(t.who==='you'?'you':'cos')+'</div>'+
+      '<div class="bd">'+bd.join('')+'</div></div>';
+  }).join('');
+  $('chatbody').scrollTop = $('chatbody').scrollHeight;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P5 — the two attention alternatives
+   ═══════════════════════════════════════════════════════════════════════ */
+function resetAttention(){
+  S.chatExtra = []; S.badges = {}; S.banner = null; S.attention = null;
+  document.querySelectorAll('.alt').forEach(e => e.classList.remove('armed'));
+  document.querySelectorAll('.pointed-row').forEach(e => e.classList.remove('pointed-row'));
+}
+
+function fireA(){
+  resetAttention();
+  S.attention = 'A';
+  $('altA').classList.add('armed');
+  const p = PRS.find(x => x.num === 79);
+  p.status = 'failed'; p.checks = '3/4'; p.why = 'lint (web) failed';
+  S.chatExtra = [{who:'cos',
+    say:'#79 just went red \u2014 lint (web) failed, so the merge lane is parked. '+
+        'Showing you Pull Requests.'}];
+  go('prs', {banner:'#79 \u2014 lint (web) failed. The merge lane for #79 and #80 is parked until it is green.',
+             flash:79});
+}
+
+function fireB(){
+  resetAttention();
+  S.attention = 'B';
+  $('altB').classList.add('armed');
+  const p = PRS.find(x => x.num === 79);
+  p.status = 'failed'; p.checks = '3/4'; p.why = 'lint (web) failed';
+  S.badges['prs'] = {n:1, urgent:true};
+  S.chatExtra = [{who:'cos',
+    say:'#79 just went red \u2014 lint (web) failed, so the merge lane is parked. '+
+        'I have flagged it on Pull Requests; nothing on your screen has moved.',
+    action:'<button class="btn pri" type="button" data-act="showme">show me</button>'+
+           '<button class="btn no" type="button" data-act="notnow">not now</button>'}];
+  paint();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   EVENTS. One delegated listener; this is a mock, not an architecture.
+   ═══════════════════════════════════════════════════════════════════════ */
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-applet],[data-view],[data-act],[data-dir],[data-file],[data-gopr],[data-lane]');
+  if (!t) return;
+
+  if (t.dataset.applet){ go(t.dataset.applet); return; }
+  if (t.dataset.view){ S.view = t.dataset.view; paint(); return; }
+  if (t.dataset.gopr){
+    go('prs', {banner:'Opened from the Dashboard \u2014 the lane that declared #'+t.dataset.gopr+'.',
+               flash:Number(t.dataset.gopr)});
+    return;
+  }
+  if (t.dataset.lane){ go('dashboard', {banner:'Opened from Pull Requests \u2014 the lane "'+t.dataset.lane+'".'}); return; }
+  if (t.dataset.dir){
+    if (S.collapsed.has(t.dataset.dir)) S.collapsed.delete(t.dataset.dir);
+    else S.collapsed.add(t.dataset.dir);
+    renderApplet(); return;
+  }
+  if (t.dataset.file){ S.selectedFile = t.dataset.file; renderApplet(); return; }
+
+  const num = Number(t.dataset.num);
+  switch (t.dataset.act){
+    case 'changedonly': S.changedOnly = !S.changedOnly; paint(); break;
+    case 'live':        S.live = !S.live; S.lastTick = Date.now(); paint(); break;
+    case 'showdis':     S.showDismissed = !S.showDismissed; renderApplet(); break;
+    case 'dismiss': {
+      const watched = PRS.filter(p => !S.dismissed.includes(p.num));
+      S.undoAt = watched.findIndex(p => p.num === num);
+      S.dismissed.unshift(num);
+      S.undo = num;
+      renderApplet();
+      setTimeout(() => { if (S.undo === num){ S.undo = null; renderApplet(); } }, 6000);
+      break;
+    }
+    case 'undo':
+      S.dismissed = S.dismissed.filter(n => n !== num);
+      S.undo = null; renderApplet(); break;
+    case 'rewatch':
+      S.dismissed = S.dismissed.filter(n => n !== num);
+      renderApplet(); break;
+    case 'closebanner': S.banner = null; renderApplet(); break;
+    case 'showme':      go('prs', {banner:'#79 \u2014 lint (web) failed. You asked to be shown.', flash:79}); break;
+    case 'notnow':      S.chatExtra = []; renderChat(); break;
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const t = e.target.closest('[data-gopr],[data-lane]');
+  if (t){ e.preventDefault(); t.click(); }
+});
+
+$('fireA').addEventListener('click', fireA);
+$('fireB').addEventListener('click', fireB);
+$('resetBtn').addEventListener('click', () => location.reload());
+$('annBtn').addEventListener('click', (e) => {
+  const off = document.body.classList.toggle('clean');
+  e.currentTarget.textContent = 'annotations: ' + (off ? 'off' : 'on');
+  e.currentTarget.setAttribute('aria-pressed', String(!off));
+});
+$('dotsBtn').innerHTML = svg('ellipsis',16);
+document.querySelector('.cbtn.send').innerHTML = svg('arrowUp',15);
+
+/* THE DIVIDER. --chat-w is written straight onto the stage, never through
+   state; the same trick mux-cos.ts uses so a drag cannot re-render. */
+(function(){
+  const stage = $('stage'), grip = $('grip');
+  let dragging = false;
+  const MIN = 18, MAX = 78;
+  grip.addEventListener('pointerdown', (e) => {
+    dragging = true; grip.classList.add('drag'); grip.setPointerCapture(e.pointerId);
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const r = stage.getBoundingClientRect();
+    if (r.width <= 0) return;
+    const pct = Math.min(MAX, Math.max(MIN, ((e.clientX - r.left) / r.width) * 100));
+    stage.style.setProperty('--chat-w', pct.toFixed(1)+'%');
+  });
+  const up = (e) => { dragging = false; grip.classList.remove('drag'); };
+  grip.addEventListener('pointerup', up);
+  grip.addEventListener('pointercancel', up);
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DEEP LINKS. So a reviewer can be handed a view rather than a click path,
+   and so a screenshot run is reproducible.
+
+     #dashboard   #tiles   #files   #changed   #prs   #dismissed   #alt-a   #alt-b
+     ?frozen=1    stops the live ticker, for a deterministic capture
+     ?clean=1     hides the annotations, so the surface reads as it would ship
+   ═══════════════════════════════════════════════════════════════════════ */
+function applyHash(){
+  const h = (location.hash || '').replace('#','');
+  switch (h){
+    case 'dashboard': S.applet='dashboard'; S.view='cards'; break;
+    case 'tiles':     S.applet='dashboard'; S.view='tiles'; break;
+    case 'files':     S.applet='files'; S.changedOnly=false; break;
+    case 'changed':   S.applet='files'; S.changedOnly=true; break;
+    case 'prs':       S.applet='prs'; break;
+    case 'dismissed':
+      S.applet='prs'; S.dismissed=[72,68]; S.showDismissed=true; S.undo=null;
+      paint(); $('appletbody').scrollTop = $('appletbody').scrollHeight; return;
+    case 'alt-a':     paint(); fireA(); return;
+    case 'alt-b':     paint(); fireB(); return;
+    default: break;
+  }
+  paint();
+}
+const Q = new URLSearchParams(location.search);
+if (Q.get('frozen') === '1') S.live = false;
+if (Q.get('clean') === '1'){
+  document.body.classList.add('clean');
+  const b = $('annBtn'); b.textContent = 'annotations: off'; b.setAttribute('aria-pressed','false');
+}
+window.addEventListener('hashchange', applyHash);
+
+S.lastTick = Date.now();
+applyHash();
+</script>
+</body>
+</html>
