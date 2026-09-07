@@ -120,6 +120,12 @@ HISTORY_DEFAULT_LIMIT = 50
 HISTORY_MAX_LIMIT = 200
 HISTORY_PROMPT_LIMIT = 2000
 HISTORY_TEXT_LIMIT = 4000
+# What the ASSISTANT SAID gets a bigger allowance than what it thought.
+# 4000 is a sane cap for commentary; applied to the answer it silently cut
+# real replies of 6445 and 7022 characters off mid-sentence on every replay,
+# which is the one thing a replay exists to bring back. Still bounded, and
+# still a summary: raw tool results and llm payloads are excluded at any limit.
+HISTORY_ANSWER_LIMIT = 16000
 HISTORY_ARGS_LIMIT = 200
 HISTORY_MAX_BLOCKS = 40
 
@@ -492,16 +498,47 @@ def _summarize_turn(index: int, members: list) -> "dict | None":
         if block["call_id"]:
             by_call[block["call_id"]] = block
 
+    def make_room_for_answer() -> bool:
+        """Evict the least valuable block so an answer can still be replayed.
+
+        THE ANSWER IS THE LAST BLOCK A TURN PRODUCES, and the budget is spent
+        in transcript order, so a plain "full -> drop it" cap spends the whole
+        allowance on thinking and tool lines and then discards the one block
+        the user actually asked for.  A turn with sixteen tool calls replayed
+        as thinking + tools + NOTHING, which reads on screen as "it thought
+        about it and never answered" -- the reply had not been lost, only the
+        replay of it, so it came back on a refresh and vanished again.
+
+        Ordering the eviction is what makes this safe rather than a bigger
+        cap: a tool line is a breadcrumb, thinking is commentary, and the
+        answer is the point.  Both breadcrumbs stay bounded, and the payload
+        budget this cap exists to defend is unchanged -- one block goes out
+        for every block that comes in.
+        """
+        for i, b in enumerate(blocks):
+            if b.get("kind") == "tool":
+                by_call.pop(b.get("call_id") or "", None)
+                del blocks[i]
+                return True
+        for i, b in enumerate(blocks):
+            if b.get("kind") == "thinking":
+                del blocks[i]
+                return True
+        return False
+
     def add_text(kind: str, text: str) -> None:
-        text = _trim(text, HISTORY_TEXT_LIMIT)
+        limit = HISTORY_ANSWER_LIMIT if kind == "text" else HISTORY_TEXT_LIMIT
+        text = _trim(text, limit)
         if not text:
             return
         tail = blocks[-1] if blocks else None
         if tail is not None and tail.get("kind") == kind:
-            tail["text"] = _trim(tail["text"] + text, HISTORY_TEXT_LIMIT)
+            tail["text"] = _trim(tail["text"] + text, limit)
             return
         if len(blocks) >= HISTORY_MAX_BLOCKS:
-            return
+            # Commentary yields to the cap; an answer takes a slot from it.
+            if kind != "text" or not make_room_for_answer():
+                return
         blocks.append({"kind": kind, "text": text})
 
     for m in members:
