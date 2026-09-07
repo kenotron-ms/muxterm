@@ -89,16 +89,32 @@ func (r *Registry) restoreWorkspaceNameOrigin(id string, origin nameOrigin) bool
 	return true
 }
 
-// ReapIfEmpty removes the workspace wsID iff it has no panes (auto-reap). If the removal leaves the registry empty, it creates and returns a
-// fresh unnamed default as recreatedDefault so the next attach always lands
-// somewhere. It returns (removed, recreatedDefault); recreatedDefault is nil
-// unless a default was made. It returns (false, nil) for an unknown or non-empty
-// workspace.
+// ReapIfEmpty removes the workspace wsID iff it has no panes (auto-reap) AND
+// it is not holding an undismissed lane completion. If the removal leaves the
+// registry empty, it creates and returns a fresh unnamed default as
+// recreatedDefault so the next attach always lands somewhere. It returns
+// (removed, recreatedDefault); recreatedDefault is nil unless a default was
+// made. It returns (false, nil) for an unknown or non-empty workspace.
+//
+// THE COMPLETION HOLD. A workspace whose lane finished destroys the lane's
+// result when it is reaped: the verdict, the PR it opened, and the final
+// report all go with it, and from outside a success and a crash look
+// identical -- both are a workspace that is no longer there. So a workspace
+// carrying a completion mark stays, visibly finished, until a human dismisses
+// it by closing it (which is the ordinary close path, not a new gesture).
+//
+// The hold is deliberately narrow. Only a pane that hosted an agent session
+// sets the mark, so a workspace that emptied for any other reason -- a shell
+// the user exited, a pane that was never a lane -- is reaped exactly as it is
+// today. Nothing about the no-lane case changes.
 func (r *Registry) ReapIfEmpty(wsID string) (bool, *Workspace) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	ws, ok := r.workspaces[wsID]
 	if !ok || len(ws.Panes) != 0 {
+		return false, nil
+	}
+	if ws.completion != nil {
 		return false, nil
 	}
 	delete(r.workspaces, wsID)
