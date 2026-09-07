@@ -1,0 +1,1239 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>muxterm Android voice probe</title>
+    <meta
+      name="description"
+      content="Measures what Android Chrome does to an open microphone capture and continuous audio playback while the screen is off."
+    />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <meta name="theme-color" content="#1a1b26" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <style>
+      :root {
+        --bg: #1a1b26;
+        --panel: #20222f;
+        --panel2: #262838;
+        --fg: #c0caf5;
+        --dim: #7f88b0;
+        --blue: #7aa2f7;
+        --green: #9ece6a;
+        --red: #f7768e;
+        --amber: #e0af68;
+        --line: #2f3347;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        -webkit-text-size-adjust: 100%;
+      }
+      body { padding: 12px 12px calc(28px + env(safe-area-inset-bottom)); max-width: 720px; margin: 0 auto; }
+      h1 { font-size: 19px; letter-spacing: -0.01em; }
+      h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--dim); margin-bottom: 8px; }
+      p { margin: 6px 0; }
+      code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+      .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin: 12px 0; }
+      .sub { color: var(--dim); font-size: 13px; }
+      header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 4px 2px 0; }
+      header .sub { font-size: 12px; }
+
+      ol.script { margin: 0 0 0 20px; }
+      ol.script li { margin: 10px 0; }
+      ol.script b { color: #fff; }
+      .warn { color: var(--amber); }
+      .bad { color: var(--red); }
+      .good { color: var(--green); }
+
+      button {
+        font: inherit; font-weight: 600; color: var(--bg); background: var(--blue);
+        border: 0; border-radius: 10px; padding: 15px 18px; width: 100%;
+        cursor: pointer; touch-action: manipulation;
+      }
+      button.secondary { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); font-weight: 500; padding: 12px 14px; }
+      button.danger { background: var(--panel2); color: var(--red); border: 1px solid var(--line); font-weight: 500; padding: 12px 14px; }
+      button:disabled { opacity: 0.4; cursor: default; }
+      .row { display: flex; gap: 8px; margin-top: 8px; }
+      .row > button { flex: 1; }
+
+      label.opt { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; font-size: 13px; color: var(--dim); }
+      label.opt input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+
+      table.kv { width: 100%; border-collapse: collapse; }
+      table.kv td { padding: 5px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
+      table.kv td:first-child { color: var(--dim); width: 44%; padding-right: 10px; }
+      table.kv tr:last-child td { border-bottom: 0; }
+      .val { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; word-break: break-word; }
+
+      .meter { height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; margin-top: 4px; }
+      .meter > i { display: block; height: 100%; width: 0%; background: var(--green); transition: width 0.12s linear; }
+
+      pre.log {
+        background: #14151d; border: 1px solid var(--line); border-radius: 8px;
+        padding: 10px; overflow: auto; max-height: 55vh; white-space: pre;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px; line-height: 1.45; color: #b6c0e0;
+      }
+      .verdict { border-left: 3px solid var(--line); padding-left: 10px; margin: 8px 0; }
+      .verdict.good { border-color: var(--green); }
+      .verdict.bad { border-color: var(--red); }
+      .verdict.warn { border-color: var(--amber); }
+      .verdict.info { border-color: var(--blue); }
+      .verdict b { display: block; color: #fff; font-size: 13.5px; }
+      .verdict span { color: var(--dim); font-size: 12.5px; }
+      .banner { border-radius: 10px; padding: 12px 14px; margin: 12px 0; font-size: 13.5px; }
+      .banner.bad { background: #3a1d26; border: 1px solid #6b2f3f; color: #ffc9d3; }
+      .banner.warn { background: #3a2f1d; border: 1px solid #6b552f; color: #ffe2b0; }
+      .banner.good { background: #1d3a26; border: 1px solid #2f6b3f; color: #c9ffd3; }
+      hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+      .hide { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>muxterm Android voice probe</h1>
+      <span class="sub" id="modeBadge">&hellip;</span>
+    </header>
+
+    <div id="secureBanner"></div>
+
+    <!-- ================= THE SCRIPT ================= -->
+    <div class="card">
+      <h2>Do this once</h2>
+      <ol class="script">
+        <li>
+          <b>Install this page.</b> Chrome menu (&vellip;) &rarr; <i>Add to Home screen</i> / <i>Install app</i>.
+          Then close Chrome and open it from the new icon.
+          <span class="sub">Skipping this tests a browser tab, not an installed PWA &mdash; and that difference is
+          the whole question. The badge at the top of this page says which one you are in right now.</span>
+        </li>
+        <li><b>Tap START.</b> Allow the microphone when asked.</li>
+        <li>
+          <b>You will hear a soft tone.</b> That is deliberate and required &mdash; a silent audio track does not
+          count as "playing audio" to Chrome. Turn the volume <i>down</i>. Do not mute.
+        </li>
+        <li><b>Say something.</b> Check that both bars below move. If the mic bar never moves, stop and fix that first.</li>
+        <li><b>Press the power button</b> so the screen goes off. Put the phone down.</li>
+        <li><b>Wait 15 minutes.</b> Do not touch it, do not open another app.</li>
+        <li><b>Wake the screen and open this page again</b> (from the same icon, or just unlock if it is still on screen).</li>
+        <li><b>Read the VERDICT.</b> Then tap <i>Copy report</i> and paste it wherever you keep notes.</li>
+      </ol>
+    </div>
+
+    <!-- ================= CONTROLS ================= -->
+    <div class="card">
+      <button id="startBtn">START</button>
+      <div class="row">
+        <button id="stopBtn" class="secondary" disabled>Stop</button>
+        <button id="reportBtn" class="secondary">Show report</button>
+      </div>
+      <label class="opt">
+        <input type="checkbox" id="optElement" />
+        <span>
+          <b style="color: var(--fg)">Run&nbsp;2 (optional):</b> also play a normal
+          <code>&lt;audio src&gt;</code> element alongside the MediaStream one.
+          Leave this OFF for the first run &mdash; OFF is what muxterm actually does. Turning it ON tests whether a
+          normal media element (rather than a WebRTC-style stream) gets you Android lock-screen media controls and
+          different background treatment.
+        </span>
+      </label>
+    </div>
+
+    <!-- ================= LIVE ================= -->
+    <div class="card" id="liveCard">
+      <h2>Live</h2>
+      <table class="kv">
+        <tr><td>state</td><td class="val" id="lState">idle</td></tr>
+        <tr><td>elapsed</td><td class="val" id="lElapsed">&mdash;</td></tr>
+        <tr><td>visibility</td><td class="val" id="lVis">&mdash;</td></tr>
+        <tr><td>wake lock</td><td class="val" id="lWake">&mdash;</td></tr>
+        <tr><td>mic track</td><td class="val" id="lMic">&mdash;</td></tr>
+        <tr>
+          <td>mic level</td>
+          <td><span class="val" id="lMicRms">0.000</span><span class="meter"><i id="mMic"></i></span></td>
+        </tr>
+        <tr>
+          <td>speaker level</td>
+          <td><span class="val" id="lOutRms">0.000</span><span class="meter"><i id="mOut"></i></span></td>
+        </tr>
+        <tr><td>audio clock vs wall</td><td class="val" id="lDrift">&mdash;</td></tr>
+        <tr><td>mic frames (worklet)</td><td class="val" id="lFrames">&mdash;</td></tr>
+        <tr><td>heartbeats</td><td class="val" id="lHb">0</td></tr>
+        <tr><td>events logged</td><td class="val" id="lEvents">0</td></tr>
+      </table>
+    </div>
+
+    <!-- ================= REPORT ================= -->
+    <div class="card hide" id="reportCard">
+      <h2>Verdict</h2>
+      <div id="verdicts"></div>
+      <hr />
+      <h2>Report</h2>
+      <pre class="log" id="reportOut"></pre>
+      <div class="row">
+        <button id="copyBtn" class="secondary">Copy report</button>
+        <button id="dlBtn" class="secondary">Download</button>
+      </div>
+      <div class="row">
+        <button id="clearBtn" class="danger">Clear stored trail</button>
+      </div>
+    </div>
+
+    <p class="sub" style="padding: 0 2px">
+      The event trail is written synchronously to <code>localStorage</code> on every event, so it survives the page
+      being frozen, discarded, or killed. Reload after a run and it is still here.
+    </p>
+
+    <script>
+      'use strict';
+
+      /* ====================================================================
+       * muxterm Android voice probe
+       *
+       * WHAT THIS MEASURES, AND WHY IT IS BUILT THIS WAY
+       *
+       * The question is whether an installed PWA can hold a two-way realtime
+       * voice conversation with the phone's screen off. Documentation answers
+       * some of that and not the rest. This page measures the rest.
+       *
+       * Four instruments, in increasing order of how much they survive:
+       *
+       *  1. EVENT LISTENERS (visibilitychange, freeze, resume, pagehide,
+       *     track mute/unmute/ended, media element pause/play). These stop
+       *     firing the moment the page is frozen, which is itself a datum.
+       *
+       *  2. A 1s HEARTBEAT on setInterval. Its GAPS are the measurement.
+       *     A jump from 1s to 60s is intensive wake-up throttling; a gap of
+       *     minutes with no `resume` event is freezing or discard. The last
+       *     heartbeat is persisted on every tick, so even if the page is
+       *     killed outright we know the wall-clock moment JS stopped.
+       *
+       *  3. THE AUDIO CLOCK. AudioContext.currentTime advances only while the
+       *     audio graph is actually rendering, on a thread separate from the
+       *     one that gets frozen. Comparing its delta against wall-clock delta
+       *     ACROSS a heartbeat gap answers "did audio keep flowing while
+       *     JavaScript was suspended?" -- which no event can tell you.
+       *
+       *  4. AN AUDIOWORKLET counting microphone frames. It runs on the audio
+       *     thread and counts total frames and non-silent frames. This is the
+       *     one instrument that distinguishes the three outcomes that matter:
+       *       - capture stopped        -> frame count stops advancing
+       *       - capture delivered zeros -> frames advance, non-silent does not
+       *       - capture kept working    -> both advance
+       *     Android silences a background app's microphone rather than
+       *     stopping it, and does so WITHOUT firing a `mute` event. Only a
+       *     sample-level counter catches that.
+       *
+       * Everything is persisted synchronously. IndexedDB was rejected on
+       * purpose: its writes are asynchronous, and an async write queued
+       * immediately before a freeze may simply never run. A synchronous
+       * localStorage write commits inside the task that observed the event.
+       * ==================================================================== */
+
+      // ---------------------------------------------------------------- keys
+      var K_EVENTS = 'avp.events';
+      var K_HB = 'avp.hb';
+      var K_RUN = 'avp.run';
+      var MAX_EVENTS = 4000;
+
+      // ------------------------------------------------------------ elements
+      var $ = function (id) { return document.getElementById(id); };
+
+      // --------------------------------------------------------------- state
+      var run = null;              // current run metadata
+      var events = [];             // in-memory mirror of the persisted trail
+      var micStream = null;
+      var ctx = null;              // the one AudioContext for tone + analysis
+      var micAnalyser = null, micBuf = null;
+      var outAnalyser = null, outBuf = null;
+      var toneNodes = null;
+      var streamDest = null;       // MediaStreamAudioDestinationNode
+      var streamEl = null;         // <audio srcObject> -- the muxterm-shaped path
+      var fileEl = null;           // <audio src=blob> -- the Run 2 comparison
+      var wakeLock = null;
+      var hbTimer = null;
+      var hbSeq = 0;
+      var lastTickWall = 0, lastTickAudio = 0;
+      var micSilentSince = null, micWasSilent = null, micSilenceReported = false;
+      var workletLatest = null, workletMsgs = 0;
+      var running = false;
+
+      // ================================================================ store
+      function loadEvents() {
+        try {
+          var raw = localStorage.getItem(K_EVENTS);
+          return raw ? JSON.parse(raw) : [];
+        } catch (err) {
+          return [];
+        }
+      }
+
+      /**
+       * Append one event and flush synchronously.
+       *
+       * Synchronous is the entire point: if this page is about to be frozen or
+       * killed, the write must complete inside this task or the observation is
+       * lost -- and the observations that matter most are precisely the ones
+       * immediately before the page stops running.
+       */
+      function log(name, detail) {
+        var ev = { t: Date.now(), e: name };
+        if (detail !== undefined) ev.d = detail;
+        events.push(ev);
+        if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
+        try {
+          localStorage.setItem(K_EVENTS, JSON.stringify(events));
+        } catch (err) {
+          // Quota. Halve the trail and try once more; a truncated trail beats
+          // an instrument that silently stops recording.
+          events.splice(0, Math.floor(events.length / 2));
+          try { localStorage.setItem(K_EVENTS, JSON.stringify(events)); } catch (err2) { /* give up */ }
+        }
+        if ($('lEvents')) $('lEvents').textContent = String(events.length);
+        return ev;
+      }
+
+      function saveRun() {
+        try { localStorage.setItem(K_RUN, JSON.stringify(run)); } catch (err) { /* ignore */ }
+      }
+
+      function loadRun() {
+        try {
+          var raw = localStorage.getItem(K_RUN);
+          return raw ? JSON.parse(raw) : null;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function loadHb() {
+        try {
+          var raw = localStorage.getItem(K_HB);
+          return raw ? JSON.parse(raw) : null;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      // ============================================================ environment
+      function displayMode() {
+        var modes = ['standalone', 'fullscreen', 'minimal-ui', 'window-controls-overlay'];
+        for (var i = 0; i < modes.length; i++) {
+          try {
+            if (window.matchMedia('(display-mode: ' + modes[i] + ')').matches) return modes[i];
+          } catch (err) { /* ignore */ }
+        }
+        return 'browser';
+      }
+
+      function envSnapshot() {
+        var nav = navigator;
+        return {
+          ua: nav.userAgent,
+          displayMode: displayMode(),
+          secureContext: !!window.isSecureContext,
+          origin: location.origin,
+          path: location.pathname,
+          lang: nav.language,
+          hardwareConcurrency: nav.hardwareConcurrency || null,
+          deviceMemory: nav.deviceMemory || null,
+          hasWakeLock: !!nav.wakeLock,
+          hasMediaSession: !!nav.mediaSession,
+          // `in` rather than a property read: `AudioContext.prototype.audioWorklet`
+          // invokes the getter with the prototype as its receiver, which throws
+          // "Illegal invocation" and would take the whole probe down at boot.
+          hasAudioWorklet: !!(window.AudioContext && 'audioWorklet' in window.AudioContext.prototype),
+          hasServiceWorker: 'serviceWorker' in nav,
+          wasDiscarded: !!document.wasDiscarded,
+          navType: (function () {
+            try { return performance.getEntriesByType('navigation')[0].type; } catch (err) { return null; }
+          })(),
+        };
+      }
+
+      // ============================================================== audio
+      /** A short WAV of the same soft tone, for the Run 2 normal-element path.
+       *  12 seconds: comfortably over the 5s threshold Chrome uses to decide
+       *  whether media is worth taking full audio focus for. */
+      function makeToneWav(seconds, freq, amp) {
+        var rate = 22050;
+        var n = Math.floor(rate * seconds);
+        var bytes = 44 + n * 2;
+        var buf = new ArrayBuffer(bytes);
+        var v = new DataView(buf);
+        function str(off, s) { for (var i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); }
+        str(0, 'RIFF'); v.setUint32(4, bytes - 8, true); str(8, 'WAVE');
+        str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+        v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+        v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+        str(36, 'data'); v.setUint32(40, n * 2, true);
+        for (var i = 0; i < n; i++) {
+          var t = i / rate;
+          // Same character as the live tone: sine with a slow tremolo, so a
+          // listener can tell it is still alive without it being shrill.
+          var env = 0.75 + 0.25 * Math.sin(2 * Math.PI * 0.25 * t);
+          var s = Math.sin(2 * Math.PI * freq * t) * amp * env;
+          v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, s)) * 32767, true);
+        }
+        return new Blob([buf], { type: 'audio/wav' });
+      }
+
+      var WORKLET_SRC = [
+        // Runs on the audio thread. Counts frames so we can tell "capture
+        // stopped" apart from "capture delivered silence" -- Android does the
+        // latter to background apps, and fires no event when it does.
+        'class MicProbe extends AudioWorkletProcessor {',
+        '  constructor() {',
+        '    super();',
+        '    this.frames = 0;',
+        '    this.nonSilent = 0;',
+        '    this.lastNonSilent = 0;',
+        '    this.peak = 0;',
+        '    this.nextPost = 0;',
+        '  }',
+        '  process(inputs) {',
+        '    const ch = inputs[0] && inputs[0][0];',
+        '    if (ch) {',
+        '      this.frames += ch.length;',
+        '      let peak = 0;',
+        '      for (let i = 0; i < ch.length; i++) { const a = ch[i] < 0 ? -ch[i] : ch[i]; if (a > peak) peak = a; }',
+        '      if (peak > 1e-5) { this.nonSilent += ch.length; this.lastNonSilent = currentTime; }',
+        '      if (peak > this.peak) this.peak = peak;',
+        '    }',
+        '    if (currentTime >= this.nextPost) {',
+        '      this.nextPost = currentTime + 2;',
+        '      this.port.postMessage({',
+        '        audioTime: currentTime,',
+        '        frames: this.frames,',
+        '        nonSilent: this.nonSilent,',
+        '        lastNonSilent: this.lastNonSilent,',
+        '        peak: this.peak,',
+        '        sampleRate: sampleRate,',
+        '      });',
+        '      this.peak = 0;',
+        '    }',
+        '    return true;',
+        '  }',
+        '}',
+        'registerProcessor("mic-probe", MicProbe);',
+      ].join('\n');
+
+      function rmsFrom(analyser, buf) {
+        if (!analyser) return 0;
+        analyser.getByteTimeDomainData(buf);
+        var sum = 0;
+        for (var i = 0; i < buf.length; i++) {
+          var v = (buf[i] - 128) / 128;
+          sum += v * v;
+        }
+        return Math.sqrt(sum / buf.length);
+      }
+
+      // ============================================================ wake lock
+      function requestWakeLock(reason) {
+        if (!navigator.wakeLock) {
+          log('wakelock.unsupported');
+          return Promise.resolve();
+        }
+        return navigator.wakeLock
+          .request('screen')
+          .then(function (sentinel) {
+            wakeLock = sentinel;
+            log('wakelock.acquired', { reason: reason });
+            sentinel.addEventListener('release', function () {
+              log('wakelock.released', {
+                visibility: document.visibilityState,
+                // The spec releases a screen wake lock the moment the document
+                // becomes hidden. Recording the visibility state alongside the
+                // release is what proves that is what happened, rather than a
+                // battery-driven or user-driven release.
+              });
+              wakeLock = null;
+              paint();
+            });
+            paint();
+          })
+          .catch(function (err) {
+            log('wakelock.rejected', { name: err && err.name, message: String(err && err.message), reason: reason });
+          });
+      }
+
+      // ========================================================= media session
+      function setupMediaSession() {
+        if (!navigator.mediaSession) {
+          log('mediasession.unsupported');
+          return;
+        }
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'muxterm voice probe',
+            artist: 'screen-off measurement in progress',
+            album: 'muxterm',
+            artwork: [
+              { src: './icon-192.png', sizes: '192x192', type: 'image/png' },
+              { src: './icon-512.png', sizes: '512x512', type: 'image/png' },
+            ],
+          });
+          navigator.mediaSession.playbackState = 'playing';
+          var actions = ['play', 'pause', 'stop', 'previoustrack', 'nexttrack', 'seekbackward', 'seekforward', 'togglemicrophone', 'hangup'];
+          var accepted = [];
+          actions.forEach(function (a) {
+            try {
+              navigator.mediaSession.setActionHandler(a, function () {
+                // If any of these ever fire, Android surfaced a control for it.
+                // That is the observation; the handler deliberately does nothing.
+                log('mediasession.action', { action: a });
+              });
+              accepted.push(a);
+            } catch (err) {
+              // Chrome throws TypeError for actions it does not support.
+            }
+          });
+          log('mediasession.ready', { acceptedActions: accepted });
+        } catch (err) {
+          log('mediasession.error', { message: String(err && err.message) });
+        }
+      }
+
+      // ============================================================== start
+      function start() {
+        if (running) return;
+        $('startBtn').disabled = true;
+        $('lState').textContent = 'starting';
+
+        var wantElement = $('optElement').checked;
+
+        events = [];
+        try { localStorage.removeItem(K_EVENTS); } catch (err) { /* ignore */ }
+
+        run = {
+          startedAt: Date.now(),
+          mode: wantElement ? 'stream+element' : 'stream',
+          env: envSnapshot(),
+          sw: null,
+        };
+        saveRun();
+        log('run.start', { mode: run.mode, env: run.env });
+
+        if (!window.isSecureContext) {
+          log('fatal.insecureContext', { origin: location.origin });
+        }
+
+        navigator.mediaDevices
+          .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+          .then(function (stream) {
+            micStream = stream;
+            var track = stream.getAudioTracks()[0];
+            log('mic.granted', {
+              label: track ? track.label : null,
+              settings: track && track.getSettings ? track.getSettings() : null,
+            });
+            if (track) {
+              track.addEventListener('mute', function () { log('mic.track.mute', { readyState: track.readyState }); paint(); });
+              track.addEventListener('unmute', function () { log('mic.track.unmute', { readyState: track.readyState }); paint(); });
+              track.addEventListener('ended', function () { log('mic.track.ended', {}); paint(); });
+            }
+            return buildAudio(wantElement);
+          })
+          .then(function () {
+            running = true;
+            $('stopBtn').disabled = false;
+            $('lState').textContent = 'running';
+            setupMediaSession();
+            requestWakeLock('start');
+            startHeartbeat();
+            askServiceWorker();
+            log('run.ready', {});
+            paint();
+          })
+          .catch(function (err) {
+            log('fatal.start', { name: err && err.name, message: String(err && err.message) });
+            $('startBtn').disabled = false;
+            $('lState').textContent = 'failed: ' + (err && err.name ? err.name : 'error');
+            paint();
+            showReport();
+          });
+      }
+
+      function buildAudio(wantElement) {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        ctx = new AC();
+        log('audioctx.created', { sampleRate: ctx.sampleRate, state: ctx.state, baseLatency: ctx.baseLatency || null });
+        ctx.addEventListener('statechange', function () {
+          log('audioctx.statechange', { state: ctx.state });
+          paint();
+        });
+
+        // --- the continuous tone -------------------------------------------
+        // A silent track does not count as "playing audio" to Chrome, so this
+        // has to make real sound. Soft sine with a slow tremolo: audible enough
+        // to register, gentle enough to leave running for fifteen minutes.
+        var osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = 220;
+        var lfo = ctx.createOscillator();
+        lfo.frequency.value = 0.25;
+        var lfoGain = ctx.createGain();
+        lfoGain.gain.value = 0.25;
+        var gain = ctx.createGain();
+        gain.gain.value = 0.10;
+        lfo.connect(lfoGain);
+        lfoGain.connect(gain.gain);
+        osc.connect(gain);
+        osc.start();
+        lfo.start();
+        toneNodes = { osc: osc, lfo: lfo, gain: gain };
+
+        // --- the muxterm-shaped playback path -------------------------------
+        // muxterm's realtime voice plays a REMOTE WebRTC MediaStream through an
+        // <audio> element via srcObject. That path is treated differently from a
+        // normal <audio src> by Chrome's media session, so the probe reproduces
+        // it exactly rather than approximating it with a file.
+        streamDest = ctx.createMediaStreamDestination();
+        gain.connect(streamDest);
+        streamEl = new Audio();
+        streamEl.srcObject = streamDest.stream;
+        streamEl.autoplay = true;
+        streamEl.loop = true;
+        attachElementLogging(streamEl, 'streamEl');
+
+        // Known Chromium defect, and the reason the analyser is wired to a
+        // separate MediaStreamSource rather than to `gain` directly: a remote
+        // WebRTC audio track feeds an AnalyserNode nothing but zeros unless the
+        // stream is ALSO consumed by a media element. Measuring the stream the
+        // element is playing -- with the element attached -- is the only way the
+        // reading is honest for the real WebRTC case this stands in for.
+        var outSrc = ctx.createMediaStreamSource(streamDest.stream);
+        outAnalyser = ctx.createAnalyser();
+        outAnalyser.fftSize = 512;
+        outAnalyser.smoothingTimeConstant = 0.3;
+        outSrc.connect(outAnalyser);
+        outBuf = new Uint8Array(outAnalyser.frequencyBinCount);
+
+        // Also route to the real speakers. Without this the tone exists but is
+        // never heard, and an inaudible page is not the thing being tested.
+        gain.connect(ctx.destination);
+
+        // --- optional Run 2: a normal media element -------------------------
+        if (wantElement) {
+          var blob = makeToneWav(12, 293.66, 0.08);
+          fileEl = new Audio(URL.createObjectURL(blob));
+          fileEl.loop = true;
+          attachElementLogging(fileEl, 'fileEl');
+        }
+
+        // --- microphone analysis --------------------------------------------
+        var micSrc = ctx.createMediaStreamSource(micStream);
+        micAnalyser = ctx.createAnalyser();
+        micAnalyser.fftSize = 512;
+        micAnalyser.smoothingTimeConstant = 0.3;
+        micSrc.connect(micAnalyser);
+        micBuf = new Uint8Array(micAnalyser.frequencyBinCount);
+
+        var plays = [];
+        plays.push(
+          streamEl.play().then(
+            function () { log('audio.play.ok', { el: 'streamEl' }); },
+            function (e) { log('audio.play.blocked', { el: 'streamEl', name: e && e.name, message: String(e && e.message) }); },
+          ),
+        );
+        if (fileEl) {
+          plays.push(
+            fileEl.play().then(
+              function () { log('audio.play.ok', { el: 'fileEl' }); },
+              function (e) { log('audio.play.blocked', { el: 'fileEl', name: e && e.name, message: String(e && e.message) }); },
+            ),
+          );
+        }
+
+        var worklet = addMicWorklet(micSrc).catch(function (err) {
+          log('worklet.failed', { message: String(err && err.message) });
+        });
+
+        return ctx.resume().catch(function () { /* already running */ }).then(function () {
+          return Promise.all(plays.concat([worklet]));
+        });
+      }
+
+      function addMicWorklet(micSrc) {
+        if (!ctx.audioWorklet) {
+          log('worklet.unsupported');
+          return Promise.resolve();
+        }
+        var url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'application/javascript' }));
+        return ctx.audioWorklet.addModule(url).then(function () {
+          var node = new AudioWorkletNode(ctx, 'mic-probe');
+          node.port.onmessage = function (ev) {
+            workletMsgs++;
+            workletLatest = ev.data;
+          };
+          micSrc.connect(node);
+          // A worklet with no downstream connection can be optimised away on
+          // some builds. Route it to a zero gain so the graph must render it,
+          // without adding the microphone to what comes out of the speaker.
+          var mute = ctx.createGain();
+          mute.gain.value = 0;
+          node.connect(mute);
+          mute.connect(ctx.destination);
+          log('worklet.ready', {});
+          URL.revokeObjectURL(url);
+        });
+      }
+
+      function attachElementLogging(el, name) {
+        ['play', 'pause', 'ended', 'stalled', 'suspend', 'waiting', 'error', 'emptied'].forEach(function (type) {
+          el.addEventListener(type, function () {
+            // `pause` is the load-bearing one. When Android takes audio focus
+            // away -- a phone call, a navigation prompt, another media app --
+            // there is no web API that says so. A pause event on the element is
+            // the only signal a page ever gets, and for a MediaStream-sourced
+            // element it may not even get that.
+            log('audio.' + type, { el: name, paused: el.paused, muted: el.muted, readyState: el.readyState });
+            paint();
+          });
+        });
+      }
+
+      // ============================================================ heartbeat
+      function startHeartbeat() {
+        lastTickWall = Date.now();
+        lastTickAudio = ctx ? ctx.currentTime : 0;
+        micWasSilent = null;
+        hbTimer = setInterval(tick, 1000);
+        tick();
+      }
+
+      function tick() {
+        var now = Date.now();
+        var audioNow = ctx ? ctx.currentTime : 0;
+        var wallDt = now - lastTickWall;
+        var audioDt = (audioNow - lastTickAudio) * 1000;
+        hbSeq++;
+
+        var micRms = rmsFrom(micAnalyser, micBuf);
+        var outRms = rmsFrom(outAnalyser, outBuf);
+
+        // A gap is the whole point of the heartbeat. 2.5s is comfortably above
+        // ordinary jitter and comfortably below the 1-per-second throttle floor
+        // a hidden page gets, so anything reported here is real.
+        if (wallDt > 2500) {
+          log('gap', {
+            wallMs: wallDt,
+            audioMs: Math.round(audioDt),
+            // The ratio is the answer to "did audio keep running while
+            // JavaScript did not?". Near 1.0 means the audio graph rendered
+            // through the whole gap. Near 0 means it stopped with the page.
+            audioOverWall: wallDt > 0 ? Number((audioDt / wallDt).toFixed(3)) : null,
+            visibility: document.visibilityState,
+            audioState: ctx ? ctx.state : null,
+            streamPaused: streamEl ? streamEl.paused : null,
+            filePaused: fileEl ? fileEl.paused : null,
+            micTrack: micTrackState(),
+          });
+        }
+
+        // Silence transitions on the microphone. Android silences a background
+        // app's capture instead of stopping it and fires no event when it does,
+        // so this transition is the only way to see it happen. Both directions
+        // are logged: an absence of `mic.silenced` in the trail must mean the
+        // mic never went silent, not that nobody was watching.
+        var silent = micRms < 0.0008;
+        if (micWasSilent === null) {
+          micWasSilent = silent;
+          micSilentSince = silent ? now : null;
+        } else if (silent && !micWasSilent) {
+          micSilentSince = now;
+          micWasSilent = true;
+        } else if (!silent && micWasSilent) {
+          log('mic.audible', { afterSilentMs: micSilentSince ? now - micSilentSince : null, rms: Number(micRms.toFixed(4)) });
+          micWasSilent = false;
+          micSilentSince = null;
+        }
+        // Report sustained silence once, three seconds in, rather than on the
+        // first quiet tick -- a conversation has pauses, and an event per pause
+        // would bury the one that matters.
+        if (micWasSilent && micSilentSince && !micSilenceReported && now - micSilentSince >= 3000) {
+          micSilenceReported = true;
+          log('mic.silenced', {
+            forMs: now - micSilentSince,
+            visibility: document.visibilityState,
+            // The whole point: if readyState is still "live" and muted is still
+            // false while the samples are zeros, the capture was silenced by the
+            // platform and the page was never told.
+            micTrack: micTrackState(),
+            workletNonSilent: workletLatest ? workletLatest.nonSilent : null,
+          });
+        }
+        if (!micWasSilent) micSilenceReported = false;
+
+        var hb = {
+          t: now,
+          seq: hbSeq,
+          vis: document.visibilityState,
+          dm: displayMode(),
+          ac: ctx ? Number(ctx.currentTime.toFixed(3)) : null,
+          acState: ctx ? ctx.state : null,
+          micRms: Number(micRms.toFixed(4)),
+          outRms: Number(outRms.toFixed(4)),
+          wake: !!wakeLock,
+          micTrack: micTrackState(),
+          wl: workletLatest
+            ? { frames: workletLatest.frames, nonSilent: workletLatest.nonSilent, msgs: workletMsgs, rate: workletLatest.sampleRate }
+            : null,
+          streamPaused: streamEl ? streamEl.paused : null,
+          filePaused: fileEl ? fileEl.paused : null,
+        };
+        try { localStorage.setItem(K_HB, JSON.stringify(hb)); } catch (err) { /* ignore */ }
+
+        // A periodic full sample keeps a readable spine in the trail without
+        // writing 900 entries for a 15 minute run.
+        if (hbSeq % 15 === 1) log('hb', hb);
+
+        lastTickWall = now;
+        lastTickAudio = audioNow;
+        paint(hb, micRms, outRms);
+      }
+
+      function micTrackState() {
+        if (!micStream) return null;
+        var t = micStream.getAudioTracks()[0];
+        if (!t) return null;
+        return { readyState: t.readyState, muted: t.muted, enabled: t.enabled };
+      }
+
+      // ================================================================= stop
+      function stop(reason) {
+        if (!running) return;
+        running = false;
+        log('run.stop', { reason: reason || 'user' });
+        if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
+        try { if (wakeLock) wakeLock.release(); } catch (err) { /* ignore */ }
+        wakeLock = null;
+        try { if (streamEl) { streamEl.pause(); streamEl.srcObject = null; } } catch (err) { /* ignore */ }
+        try { if (fileEl) { fileEl.pause(); fileEl.src = ''; } } catch (err) { /* ignore */ }
+        try { if (toneNodes) { toneNodes.osc.stop(); toneNodes.lfo.stop(); } } catch (err) { /* ignore */ }
+        try { if (micStream) micStream.getTracks().forEach(function (t) { t.stop(); }); } catch (err) { /* ignore */ }
+        try { if (ctx) ctx.close(); } catch (err) { /* ignore */ }
+        micStream = null; ctx = null; micAnalyser = null; outAnalyser = null;
+        if (navigator.mediaSession) {
+          try { navigator.mediaSession.playbackState = 'none'; } catch (err) { /* ignore */ }
+        }
+        $('startBtn').disabled = false;
+        $('stopBtn').disabled = true;
+        $('lState').textContent = 'stopped';
+        paint();
+        showReport();
+      }
+
+      // ================================================= service worker probe
+      function askServiceWorker() {
+        if (!('serviceWorker' in navigator)) {
+          log('sw.unsupported');
+          return;
+        }
+        navigator.serviceWorker
+          .register('./sw.js', { scope: './' })
+          .then(function () { return navigator.serviceWorker.ready; })
+          .then(function (reg) {
+            var worker = reg.active || navigator.serviceWorker.controller;
+            if (!worker) { log('sw.noActiveWorker'); return; }
+            var chan = new MessageChannel();
+            chan.port1.onmessage = function (ev) {
+              // R1, measured on this device rather than asserted from a spec:
+              // a service worker has no mediaDevices, no RTCPeerConnection and
+              // no AudioContext, so it cannot host any part of a voice session.
+              run.sw = ev.data.caps;
+              saveRun();
+              log('sw.capabilities', ev.data.caps);
+            };
+            worker.postMessage({ type: 'probe:capabilities' }, [chan.port2]);
+          })
+          .catch(function (err) {
+            log('sw.registerFailed', { message: String(err && err.message) });
+          });
+      }
+
+      // ============================================================= lifecycle
+      document.addEventListener('visibilitychange', function () {
+        log('visibilitychange', { state: document.visibilityState, displayMode: displayMode() });
+        if (document.visibilityState === 'visible' && running) {
+          // A screen wake lock is released the moment the document is hidden and
+          // cannot be re-acquired while hidden, so re-acquiring on the way back
+          // is the only thing a page can do. Whether that is enough is exactly
+          // what this run is measuring.
+          requestWakeLock('revisible');
+          rearm('visible');
+        }
+        paint();
+      });
+
+      document.addEventListener('freeze', function () {
+        log('freeze', { visibility: document.visibilityState });
+      });
+      document.addEventListener('resume', function () {
+        log('resume', { visibility: document.visibilityState, wasDiscarded: !!document.wasDiscarded });
+        rearm('resume');
+        paint();
+      });
+
+      /**
+       * Put audio back after a freeze, and say so in the trail.
+       *
+       * Freezing pauses every media element on the page, and nothing puts them
+       * back automatically in a way this probe can rely on. A real voice app
+       * would try to recover, so the probe does too -- but every attempt and
+       * every outcome is logged under its own name, so a reader can always tell
+       * "the browser kept it playing" from "the probe restarted it". Without
+       * this, a page that freezes at minute one measures nothing for the
+       * remaining fourteen.
+       */
+      function rearm(why) {
+        if (!running) return;
+        if (ctx && ctx.state !== 'running') {
+          ctx.resume().then(
+            function () { log('rearm.audioctx.ok', { why: why, state: ctx ? ctx.state : null }); },
+            function (e) { log('rearm.audioctx.failed', { why: why, message: String(e && e.message) }); },
+          );
+        }
+        [[streamEl, 'streamEl'], [fileEl, 'fileEl']].forEach(function (pair) {
+          var el = pair[0];
+          if (!el || !el.paused) return;
+          el.play().then(
+            function () { log('rearm.play.ok', { why: why, el: pair[1] }); },
+            function (e) { log('rearm.play.failed', { why: why, el: pair[1], name: e && e.name, message: String(e && e.message) }); },
+          );
+        });
+      }
+      window.addEventListener('pagehide', function (e) { log('pagehide', { persisted: e.persisted }); });
+      window.addEventListener('pageshow', function (e) { log('pageshow', { persisted: e.persisted }); });
+      window.addEventListener('blur', function () { log('window.blur'); });
+      window.addEventListener('focus', function () { log('window.focus'); });
+
+      // ================================================================ paint
+      function paint(hb, micRms, outRms) {
+        $('modeBadge').textContent =
+          displayMode() === 'browser' ? 'running as a BROWSER TAB' : 'running as an INSTALLED PWA (' + displayMode() + ')';
+        $('modeBadge').className = 'sub ' + (displayMode() === 'browser' ? 'warn' : 'good');
+
+        $('lVis').textContent = document.visibilityState;
+        $('lWake').textContent = wakeLock ? 'held' : navigator.wakeLock ? 'not held' : 'unsupported';
+        var mt = micTrackState();
+        $('lMic').textContent = mt ? mt.readyState + (mt.muted ? ' / MUTED' : ' / unmuted') : '—';
+        if (typeof micRms === 'number') {
+          $('lMicRms').textContent = micRms.toFixed(4);
+          $('mMic').style.width = Math.min(100, micRms * 320) + '%';
+        }
+        if (typeof outRms === 'number') {
+          $('lOutRms').textContent = outRms.toFixed(4);
+          $('mOut').style.width = Math.min(100, outRms * 320) + '%';
+        }
+        if (run) {
+          var secs = Math.round((Date.now() - run.startedAt) / 1000);
+          $('lElapsed').textContent = Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+        }
+        if (hb && hb.ac !== null && run) {
+          var wallS = (hb.t - run.startedAt) / 1000;
+          $('lDrift').textContent = hb.ac.toFixed(1) + 's audio / ' + wallS.toFixed(1) + 's wall';
+        }
+        if (workletLatest) {
+          var secsAudio = workletLatest.frames / workletLatest.sampleRate;
+          var secsNon = workletLatest.nonSilent / workletLatest.sampleRate;
+          $('lFrames').textContent = secsAudio.toFixed(1) + 's captured / ' + secsNon.toFixed(1) + 's non-silent';
+        }
+        $('lHb').textContent = String(hbSeq);
+        $('lEvents').textContent = String(events.length);
+      }
+
+      // =============================================================== report
+      function analyse(r, evs, hb) {
+        var v = [];
+        function add(kind, title, detail) { v.push({ kind: kind, title: title, detail: detail }); }
+
+        if (!r) { add('info', 'No run recorded yet.', 'Tap START and follow the script.'); return v; }
+
+        var installed = r.env.displayMode !== 'browser';
+        add(
+          installed ? 'good' : 'warn',
+          installed ? 'Ran as an INSTALLED PWA (' + r.env.displayMode + ').' : 'Ran as a BROWSER TAB.',
+          installed
+            ? 'This is the case that matters for muxterm.'
+            : 'Install to the home screen and run again — the tab-versus-installed distinction is one of the things this probe exists to settle.',
+        );
+
+        // -- gaps --------------------------------------------------------
+        var gaps = evs.filter(function (e) { return e.e === 'gap'; });
+        var worst = null;
+        gaps.forEach(function (g) { if (!worst || g.d.wallMs > worst.d.wallMs) worst = g; });
+        if (!gaps.length) {
+          add('good', 'JavaScript never stopped.', 'No heartbeat gap over 2.5s for the whole run. The page was never throttled hard enough or frozen.');
+        } else {
+          var s = (worst.d.wallMs / 1000).toFixed(1);
+          add(
+            worst.d.wallMs > 30000 ? 'bad' : 'warn',
+            'JavaScript stalled. Longest gap ' + s + 's (' + gaps.length + ' gap' + (gaps.length === 1 ? '' : 's') + ').',
+            'Visibility at the time: ' + worst.d.visibility + '. A gap of a few seconds is background timer throttling; tens of seconds to minutes is intensive throttling or page freezing.',
+          );
+          if (worst.d.audioOverWall !== null && worst.d.audioOverWall !== undefined) {
+            var ratio = worst.d.audioOverWall;
+            add(
+              ratio > 0.9 ? 'good' : ratio > 0.2 ? 'warn' : 'bad',
+              'Audio clock advanced ' + (ratio * 100).toFixed(0) + '% of wall clock across the longest gap.',
+              ratio > 0.9
+                ? 'The audio graph kept rendering the whole time JavaScript was suspended. Audio survived; only script stopped.'
+                : ratio > 0.2
+                  ? 'The audio graph rendered for part of the gap and then stopped. Audio did NOT survive the whole screen-off period.'
+                  : 'The audio graph stopped along with JavaScript. Audio did not survive.',
+            );
+          }
+        }
+
+        // -- freeze / discard -------------------------------------------
+        var froze = evs.some(function (e) { return e.e === 'freeze'; });
+        var resumed = evs.some(function (e) { return e.e === 'resume'; });
+        if (froze) {
+          add('bad', 'The page was FROZEN.', 'A `freeze` event fired' + (resumed ? ' and a `resume` event followed.' : ' with no `resume` recorded.') + ' Frozen means no timers, no fetch callbacks, no JavaScript at all.');
+        } else if (gaps.length && worst && worst.d.wallMs > 60000) {
+          add('warn', 'A long stall with no `freeze` event.', 'Either the freeze event did not fire, or the renderer was killed and this page was reloaded from scratch. Check `wasDiscarded` below.');
+        }
+        if (r.env.wasDiscarded) {
+          add('bad', 'The page was DISCARDED and reloaded.', 'document.wasDiscarded was true on this load. Android reclaimed the renderer entirely; everything in memory was lost.');
+        }
+
+        // -- wake lock ---------------------------------------------------
+        var wlRel = evs.filter(function (e) { return e.e === 'wakelock.released'; });
+        var wlRej = evs.filter(function (e) { return e.e === 'wakelock.rejected'; });
+        if (evs.some(function (e) { return e.e === 'wakelock.unsupported'; })) {
+          add('warn', 'No Screen Wake Lock API on this browser.', 'navigator.wakeLock was absent.');
+        } else if (wlRel.length) {
+          add('bad', 'The screen wake lock was released ' + wlRel.length + '×.', 'Released at visibility=' + wlRel[0].d.visibility + '. A screen wake lock is released as soon as the document is hidden and cannot be re-acquired while hidden — it cannot keep anything alive with the screen off.');
+        } else {
+          add('info', 'The screen wake lock was never released during this run.', 'Expected only if the screen never actually turned off.');
+        }
+        if (wlRej.length) {
+          add('info', 'Re-acquiring the wake lock was refused ' + wlRej.length + '×.', 'First refusal: ' + wlRej[0].d.name + ' — ' + wlRej[0].d.message);
+        }
+
+        // -- microphone --------------------------------------------------
+        var muted = evs.filter(function (e) { return e.e === 'mic.track.mute'; });
+        var ended = evs.filter(function (e) { return e.e === 'mic.track.ended'; });
+        if (ended.length) {
+          add('bad', 'The microphone track ENDED.', 'The capture was torn down, not merely silenced. A voice session cannot survive this without re-prompting.');
+        } else if (muted.length) {
+          add('warn', 'The microphone track fired `mute` ' + muted.length + '×.', 'The capture stayed live but stopped delivering samples, and the page was told. That is the well-behaved failure — recoverable, and observable.');
+        } else {
+          add('info', 'The microphone track never fired `mute` or `ended`.', 'Which does NOT by itself mean it kept working — see the frame counters.');
+        }
+
+        if (hb && hb.wl && r) {
+          var capturedS = hb.wl.frames / (hb.wl.rate || 48000);
+          var nonSilentS = hb.wl.nonSilent / (hb.wl.rate || 48000);
+          var wallS = (hb.t - r.startedAt) / 1000;
+          var cov = wallS > 0 ? capturedS / wallS : 0;
+          add(
+            cov > 0.95 ? 'good' : cov > 0.5 ? 'warn' : 'bad',
+            'Microphone delivered ' + capturedS.toFixed(0) + 's of audio over ' + wallS.toFixed(0) + 's of wall clock (' + (cov * 100).toFixed(0) + '%).',
+            cov > 0.95
+              ? 'The capture pipeline ran continuously.'
+              : 'The capture pipeline stopped delivering for ' + (wallS - capturedS).toFixed(0) + 's of the run.',
+          );
+          add(
+            nonSilentS > capturedS * 0.5 ? 'good' : 'bad',
+            'Of that, ' + nonSilentS.toFixed(0) + 's carried a non-zero signal (' + (capturedS > 0 ? ((nonSilentS / capturedS) * 100).toFixed(0) : '0') + '%).',
+            nonSilentS < capturedS * 0.5
+              ? 'The microphone kept delivering FRAMES but they were SILENT. This is the failure mode Android produces for a background app with no microphone foreground service — and note that no `mute` event accompanies it. A voice session in this state hears nothing and is never told.'
+              : 'Real audio was reaching the page.',
+          );
+        } else {
+          add('info', 'No AudioWorklet frame counters were recorded.', 'The worklet failed to load, or the run was too short. The RMS meters are the fallback.');
+        }
+
+        // -- playback ----------------------------------------------------
+        var pauses = evs.filter(function (e) { return e.e === 'audio.pause'; });
+        if (pauses.length) {
+          add('warn', 'A media element was PAUSED ' + pauses.length + '× during the run.', 'On element ' + pauses.map(function (p) { return p.d.el; }).join(', ') + '. Android taking audio focus away — a call, a notification, another app — surfaces to a page as nothing but this pause event.');
+        } else {
+          add('info', 'No media element ever paused.', 'Note that a MediaStream-sourced element does not get paused on audio-focus loss the way a normal one does, so silence here is weak evidence.');
+        }
+        var acSusp = evs.filter(function (e) { return e.e === 'audioctx.statechange' && e.d && e.d.state === 'suspended'; });
+        if (acSusp.length) {
+          add('bad', 'The AudioContext was SUSPENDED ' + acSusp.length + '×.', 'Rendering stopped. Nothing was heard while it was in this state.');
+        }
+
+        // -- media session ------------------------------------------------
+        var msActions = evs.filter(function (e) { return e.e === 'mediasession.action'; });
+        if (msActions.length) {
+          add('good', 'Android surfaced media controls and they were used.', 'Actions fired: ' + msActions.map(function (a) { return a.d.action; }).join(', '));
+        } else {
+          add('info', 'No MediaSession action ever fired.', 'Expected if no lock-screen media notification appeared. Whether one appeared at all is something only you can see — write down whether you saw one.');
+        }
+
+        // -- service worker -----------------------------------------------
+        if (r.sw) {
+          var audioCapable = r.sw.hasGetUserMedia || r.sw.hasRTCPeerConnection || r.sw.hasAudioContext;
+          add(
+            audioCapable ? 'warn' : 'good',
+            audioCapable
+              ? 'A service worker on this device DOES expose an audio API — that would be surprising, check the detail.'
+              : 'Measured on this device: a service worker has no getUserMedia, no RTCPeerConnection and no AudioContext.',
+            'getUserMedia=' + r.sw.hasGetUserMedia + ', RTCPeerConnection=' + r.sw.hasRTCPeerConnection +
+              ', AudioContext=' + r.sw.hasAudioContext + ', mediaDevices=' + r.sw.hasNavigatorMediaDevices +
+              ' — versus fetch=' + r.sw.hasFetch + ', indexedDB=' + r.sw.hasIndexedDB + ', push=' + r.sw.hasPushManager + '.',
+          );
+        }
+
+        return v;
+      }
+
+      function buildReport(r, evs, hb) {
+        var lines = [];
+        lines.push('muxterm Android voice probe — report');
+        lines.push('generated ' + new Date().toISOString());
+        lines.push('');
+        if (r) {
+          lines.push('RUN');
+          lines.push('  started      ' + new Date(r.startedAt).toISOString());
+          lines.push('  mode         ' + r.mode);
+          lines.push('  displayMode  ' + r.env.displayMode + (r.env.displayMode === 'browser' ? '   <-- BROWSER TAB, not installed' : '   <-- installed PWA'));
+          lines.push('  secure ctx   ' + r.env.secureContext);
+          lines.push('  origin       ' + r.env.origin + r.env.path);
+          lines.push('  wasDiscarded ' + r.env.wasDiscarded + '   navType=' + r.env.navType);
+          lines.push('  wakeLock API ' + r.env.hasWakeLock + '   mediaSession API ' + r.env.hasMediaSession);
+          lines.push('  ua           ' + r.env.ua);
+          if (r.sw) {
+            lines.push('  service worker capabilities (measured in ServiceWorkerGlobalScope):');
+            Object.keys(r.sw).forEach(function (k) { lines.push('      ' + k + ' = ' + r.sw[k]); });
+          }
+          lines.push('');
+        }
+        if (hb) {
+          lines.push('LAST HEARTBEAT BEFORE THE PAGE STOPPED RUNNING');
+          lines.push('  ' + new Date(hb.t).toISOString() + '  seq=' + hb.seq + '  visibility=' + hb.vis + '  displayMode=' + hb.dm);
+          lines.push('  audioClock=' + hb.ac + 's  ctxState=' + hb.acState + '  wakeLockHeld=' + hb.wake);
+          lines.push('  micRms=' + hb.micRms + '  outRms=' + hb.outRms + '  micTrack=' + JSON.stringify(hb.micTrack));
+          lines.push('  streamPaused=' + hb.streamPaused + '  filePaused=' + hb.filePaused);
+          if (hb.wl) {
+            lines.push('  worklet: frames=' + hb.wl.frames + ' (' + (hb.wl.frames / (hb.wl.rate || 48000)).toFixed(1) + 's)  nonSilent=' + hb.wl.nonSilent + ' (' + (hb.wl.nonSilent / (hb.wl.rate || 48000)).toFixed(1) + 's)  msgs=' + hb.wl.msgs + '  rate=' + hb.wl.rate);
+          }
+          if (r) {
+            var stoppedAfter = (hb.t - r.startedAt) / 1000;
+            lines.push('  => JavaScript was last seen alive ' + stoppedAfter.toFixed(0) + 's into the run.');
+          }
+          lines.push('');
+        }
+        lines.push('VERDICT');
+        analyse(r, evs, hb).forEach(function (v) {
+          lines.push('  [' + v.kind.toUpperCase() + '] ' + v.title);
+          lines.push('        ' + v.detail);
+        });
+        lines.push('');
+        lines.push('EVENT TRAIL (' + evs.length + ' events, oldest first)');
+        var t0 = r ? r.startedAt : evs.length ? evs[0].t : Date.now();
+        evs.forEach(function (e) {
+          var rel = ((e.t - t0) / 1000).toFixed(1);
+          var pad = '        '.slice(0, Math.max(0, 8 - rel.length));
+          lines.push('  +' + pad + rel + 's  ' + e.e + (e.d !== undefined ? '  ' + JSON.stringify(e.d) : ''));
+        });
+        return lines.join('\n');
+      }
+
+      function showReport() {
+        var r = loadRun();
+        var evs = events.length ? events : loadEvents();
+        var hb = loadHb();
+        $('reportCard').classList.remove('hide');
+        var vs = analyse(r, evs, hb);
+        $('verdicts').innerHTML = '';
+        vs.forEach(function (v) {
+          var d = document.createElement('div');
+          d.className = 'verdict ' + v.kind;
+          var b = document.createElement('b');
+          b.textContent = v.title;
+          var s = document.createElement('span');
+          s.textContent = v.detail;
+          d.appendChild(b);
+          d.appendChild(s);
+          $('verdicts').appendChild(d);
+        });
+        $('reportOut').textContent = buildReport(r, evs, hb);
+        $('reportCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+
+      // ================================================================ wiring
+      $('startBtn').addEventListener('click', start);
+      $('stopBtn').addEventListener('click', function () { stop('user'); });
+      $('reportBtn').addEventListener('click', showReport);
+      $('copyBtn').addEventListener('click', function () {
+        var text = $('reportOut').textContent;
+        var done = function () { $('copyBtn').textContent = 'Copied'; setTimeout(function () { $('copyBtn').textContent = 'Copy report'; }, 1500); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+        } else {
+          fallbackCopy(text, done);
+        }
+      });
+      function fallbackCopy(text, done) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); done(); } catch (err) { /* ignore */ }
+        document.body.removeChild(ta);
+      }
+      $('dlBtn').addEventListener('click', function () {
+        var blob = new Blob([$('reportOut').textContent], { type: 'text/plain' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'muxterm-voice-probe-' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+      });
+      $('clearBtn').addEventListener('click', function () {
+        try { localStorage.removeItem(K_EVENTS); localStorage.removeItem(K_HB); localStorage.removeItem(K_RUN); } catch (err) { /* ignore */ }
+        events = [];
+        run = null;
+        $('reportCard').classList.add('hide');
+        paint();
+      });
+
+      // =============================================================== on load
+      (function boot() {
+        events = loadEvents();
+        run = loadRun();
+
+        // The single most common way this whole exercise fails before it
+        // starts: an insecure origin. getUserMedia, the Screen Wake Lock API,
+        // service workers and AudioWorklet all require a secure context, so a
+        // plain http:// LAN address cannot test any of this.
+        var banner = $('secureBanner');
+        if (!window.isSecureContext) {
+          banner.className = 'banner bad';
+          banner.innerHTML =
+            '<b>This page is not a secure context.</b> getUserMedia, the Screen Wake Lock API, service workers and ' +
+            'AudioWorklet are all unavailable here, so nothing below will work. Open this page over <code>https://</code> ' +
+            '(or on <code>localhost</code>) instead of <code>' + location.origin + '</code>.';
+        } else if (displayMode() === 'browser') {
+          banner.className = 'banner warn';
+          banner.innerHTML =
+            '<b>You are in a browser tab.</b> Install this page to the home screen and open it from the icon to test ' +
+            'the case that actually matters. You can run it here too — just run it installed as well and compare.';
+        } else {
+          banner.className = 'banner good';
+          banner.innerHTML = '<b>Running as an installed app.</b> This is the configuration muxterm would ship in.';
+        }
+
+        if (document.wasDiscarded) log('boot.wasDiscarded', {});
+        log('boot', { env: envSnapshot(), priorEvents: events.length });
+
+        paint();
+        if (events.length > 1) showReport();
+      })();
+    </script>
+  </body>
+</html>
