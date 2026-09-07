@@ -28,7 +28,7 @@ talks back, both can interrupt.
 | **Q1** | What voice capability does muxterm already have? | **ANSWERED** — press-to-dictate STT only, browser-side, one utterance at a time, into a text box. Zero audio output. |
 | **Q2** | Which realtime voice APIs are reachable through Amplifier's provider layer? | **ANSWERED** — none *through the provider layer*, which has no audio surface at all. **AMENDED:** Azure OpenAI realtime is reachable **directly** and verified working. |
 | **Q3** | What exists in the Amplifier ecosystem for voice? | **ANSWERED** — nothing *installed*. **AMENDED:** one of the four catalog entries, `bkrabach/amplifier-voice`, is a complete public working implementation. |
-| **Q4** | What is the gap between today's dictation and real conversation? | **ANSWERED** — eight named gaps; the load-bearing one is that there is no audio-out path of any kind. |
+| **Q4** | What is the gap between today's dictation and real conversation? | **ANSWERED** — nine named gaps; the load-bearing one is that there is no audio-out path of any kind. |
 | **Q5** | Recommendation | **ANSWERED** — do **not** route this through Amplifier's provider layer; sidecar the voice model and meet at the tool boundary. **AMENDED:** the credential blocker is resolved, and the recommended architecture now has a named reference implementation (*sideband* + `delegate`/`dispatch`). |
 
 ### Reading the evidence markers
@@ -402,7 +402,7 @@ appears in a box → a human reads it → the human presses send → the assista
 A conversation is: **both parties' audio channels are open continuously, either can start talking at
 any moment, and either can interrupt the other.**
 
-These are not the same system with a feature missing. They are different systems. Here are the eight
+These are not the same system with a feature missing. They are different systems. Here are the nine
 specific gaps.
 
 ### Gap 1 — There is no audio out. At all.
