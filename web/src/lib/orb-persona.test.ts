@@ -251,6 +251,87 @@ describe('K3 — repeated interruption never accumulates a jump', () => {
   });
 });
 
+describe('the persona technique, recovered from the rendered DOM', () => {
+  /**
+   * Inverts the normalised painter's alpha the layer stack is composited with.
+   *
+   * apply() writes a_i = w_i / SUM_{j<=i} w_j to each tint layer's opacity. With
+   * SUM w = 1 that is invertible from the top down: w_top = a_top, then
+   * S_{i-1} = S_i - w_i and w_{i-1} = a_{i-1} * S_{i-1}. So the weight vector can
+   * be read back out of the rendered opacities without touching the engine.
+   *
+   * This is the CI-level form of the browser check in
+   * `voice-orb-evidence.mjs --technique`. It is here because it is the invariant
+   * that makes the layered-crossfade claim true: an implementation that switched
+   * layers, or cross-faded them with naive alphas, would not return a vector
+   * summing to 1 with exactly two non-zero components mid-transition.
+   */
+  const weightsFromDom = (root: HTMLElement): number[] => {
+    const els = Array.from(root.querySelectorAll<HTMLElement>('.orb-tint'));
+    const a = els.map((el) => Number(el.style.opacity));
+    const w = new Array(a.length).fill(0) as number[];
+    let S = 1;
+    for (let i = a.length - 1; i >= 0; i--) {
+      w[i] = a[i] * S;
+      S -= w[i];
+    }
+    return w;
+  };
+
+  it('the rendered opacities encode a weight vector that sums to 1', () => {
+    const r = rig('speaking');
+    r.orb.setState('listening');
+    const iS = ORB_STATES.indexOf('speaking');
+    const iL = ORB_STATES.indexOf('listening');
+
+    const seen: number[][] = [];
+    for (let i = 0; i < 26; i++) {
+      r.advance(1000 / 60);          // one frame, then read what was rendered
+      seen.push(weightsFromDom(r.root));
+    }
+
+    for (const w of seen) {
+      expect(w.reduce((x, y) => x + y, 0)).toBeCloseTo(1, 4);
+      for (const v of w) {
+        expect(v).toBeGreaterThanOrEqual(-1e-6);
+        expect(v).toBeLessThanOrEqual(1 + 1e-6);
+      }
+      // Only the two states in play are ever recruited — no detour through idle.
+      w.forEach((v, i) => {
+        if (i !== iS && i !== iL) expect(v).toBeCloseTo(0, 4);
+      });
+      expect(w.filter((v) => v > 1e-4).length).toBeLessThanOrEqual(2);
+    }
+    // And at least one frame is a genuine mix rather than a switch.
+    expect(seen.some((w) => w[iS] > 0.05 && w[iL] > 0.05)).toBe(true);
+    // Outgoing falls, incoming rises, measured from the DOM alone.
+    for (let i = 1; i < seen.length; i++) {
+      expect(seen[i][iS]).toBeLessThanOrEqual(seen[i - 1][iS] + 1e-4);
+      expect(seen[i][iL]).toBeGreaterThanOrEqual(seen[i - 1][iL] - 1e-4);
+    }
+  });
+
+  it('recovered weights match the engine, to the precision the DOM carries', () => {
+    // apply() writes alphas with toFixed(5), so a rendered opacity is quantised
+    // to 1e-5 and the top-down inversion accumulates that across six layers.
+    // 1e-4 is the honest agreement bound, not a slackened one — and 5 decimal
+    // places is already well past the 8-bit alpha the compositor actually uses,
+    // so the quantisation is invisible on screen.
+    const r = rig('thinking');
+    r.orb.setState('idle');
+    let worst = 0;
+    for (let i = 0; i < 20; i++) {
+      const s = r.advance(1000 / 60)[0];
+      const fromDom = weightsFromDom(r.root);
+      ORB_STATES.forEach((st, i2) => {
+        worst = Math.max(worst, Math.abs(fromDom[i2] - s.weights[st]));
+        expect(fromDom[i2]).toBeCloseTo(s.weights[st], 4);
+      });
+    }
+    expect(worst).toBeLessThan(1e-4);
+  });
+});
+
 describe('K4 — only transform and opacity are written per frame', () => {
   it('touches no layout- or paint-triggering property', () => {
     const r = rig('idle');
