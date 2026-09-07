@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -663,6 +664,23 @@ func (w *endWatch) endCount() int {
 	return len(w.ended)
 }
 
+// dump renders the trace ring with millisecond offsets, so a -v run shows
+// the ordering C3 claims rather than asserting it out of sight.
+func (w *endWatch) dump() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.traces) == 0 {
+		return "(no traces)"
+	}
+	t0 := w.traces[0].At
+	var b strings.Builder
+	for _, tr := range w.traces {
+		fmt.Fprintf(&b, "  +%6dms  %-8s %-18s %s\n",
+			tr.At.Sub(t0).Milliseconds(), tr.Kind, tr.Name, tr.Detail)
+	}
+	return b.String()
+}
+
 func (w *endWatch) firstEndAt() (time.Time, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -904,6 +922,7 @@ func TestConfirmedEndWaitsForTheGoodbyeToBeHeard(t *testing.T) {
 	if !tr.At.After(confirmed.At) {
 		t.Fatalf("the ended trace (%v) does not follow the confirmed trace (%v)", tr.At, confirmed.At)
 	}
+	t.Logf("the spoken exit, in order:\n%s", w.dump())
 }
 
 // C3, the conservative half: a goodbye the user talks over is not a goodbye.
