@@ -119,7 +119,10 @@ func (ft *fleetTools) laneTranscript(args map[string]any) (string, error) {
 		return "", unknownSessionErr(sessionID, rows)
 	}
 
-	tr, err := ReadTranscript(row, lastN)
+	// Read through the daemon on the session's OWN machine. Same call for a
+	// local session and a remote one -- the client already is whichever
+	// machine the caller named.
+	tr, err := ReadTranscriptOn(ft.c, row, lastN)
 	if err != nil {
 		return "", err
 	}
@@ -129,6 +132,7 @@ func (ft *fleetTools) laneTranscript(args map[string]any) (string, error) {
 		turns = append(turns, transcriptTurnJSON(t))
 	}
 	return jsonText(map[string]any{
+		"machine":   ft.c.Machine(),
 		"harness":   tr.Harness,
 		"path":      tr.Path,
 		"truncated": tr.Truncated,
