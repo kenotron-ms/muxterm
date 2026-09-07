@@ -179,8 +179,8 @@ interface HostGroup {
  * same stable order the server merges its workspace list in — so a push can
  * never reshuffle the sidebar.
  *
- * A connected host with no workspaces still gets a group: it is the header
- * that carries its "+ New workspace". The one host that is dropped is an
+ * A connected host with no workspaces still gets a group: the group is what
+ * carries that machine's "+ New workspace". The one host that is dropped is an
  * `unreachable` one with nothing on it, which lives in settings rather than
  * here (ux failure table). An unreachable host that DOES hold workspaces keeps
  * its group, because workspaces ghost, never vanish (ux D8).
@@ -1592,11 +1592,14 @@ export class MuxSidebar extends LitElement {
   }
 
   /**
-   * A host group's own "+ New workspace".
+   * A host group's own "+ New workspace" — the ONLY create affordance in the
+   * grouped list, once per group, local group included.
    *
    * The group IS the choice of machine (Decision 3) — there is no picker to
-   * open and no host to guess. The same `workspace-create` event as the
-   * bottom button, carrying the one extra fact this affordance knows.
+   * open and no host to guess. The same `workspace-create` event the flat list
+   * dispatches, carrying the one extra fact this affordance knows. `host` is
+   * '' for the local group, which is exactly what `_onNewWs` would have sent,
+   * so local create is unchanged by being asked for from inside its group.
    */
   private _onNewWsOn(host: string): void {
     this.dispatchEvent(
@@ -1919,14 +1922,12 @@ export class MuxSidebar extends LitElement {
               ? this._renderPreviewCard(card, rows, cols, compact)
               : this._renderTextCard(card),
           )}
-          ${remote
-            ? html`<button
-                class="new-ws-btn remote"
-                @click="${() => this._onNewWsOn(group.host)}"
-              >
-                + New workspace
-              </button>`
-            : ''}
+          <button
+            class="new-ws-btn${remote ? ' remote' : ''}"
+            @click="${() => this._onNewWsOn(group.host)}"
+          >
+            + New workspace
+          </button>
         </div>
       </div>
     `;
@@ -1963,14 +1964,16 @@ export class MuxSidebar extends LitElement {
       return this._renderFlatList(cards, previewOn, rows, cols, compact);
     }
 
+    // Once the list is grouped, EVERY "+ New workspace" lives inside the group
+    // it creates on -- local included. A bottom one would be the local group's
+    // button orphaned below every remote group, reading as a second, duplicate
+    // copy of the remote group's own button directly above it. The only thing
+    // that belongs after the groups is the affordance that adds a NEW group.
     const groups = groupCards(cards, instanceLabel());
     return html`
       ${groups.map((group) =>
         this._renderHostGroup(group, previewOn, rows, cols, compact),
       )}
-      <button class="new-ws-btn" @click="${() => this._onNewWs()}">
-        + New workspace
-      </button>
       <button class="new-ws-btn remote" @click="${() => this._onConnectMachine()}">
         + Connect machine
       </button>
