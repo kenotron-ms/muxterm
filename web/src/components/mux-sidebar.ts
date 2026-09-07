@@ -1582,15 +1582,6 @@ export class MuxSidebar extends LitElement {
     );
   }
 
-  private _onNewWs(): void {
-    this.dispatchEvent(
-      new CustomEvent('workspace-create', {
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
   /**
    * A host group's own "+ New workspace" — the ONLY create affordance in the
    * grouped list, once per group, local group included.
@@ -1830,33 +1821,6 @@ export class MuxSidebar extends LitElement {
     `;
   }
 
-  /**
-   * TODAY'S EXACT RENDER: every card, then the one bottom "+ New workspace".
-   *
-   * Extracted rather than inlined behind the zero-remote gate so this template
-   * literal keeps its ORIGINAL indentation. The whitespace between these tags
-   * is text nodes in the shadow DOM, so re-indenting it by two spaces would
-   * quietly break the byte-identical guarantee it exists to keep.
-   */
-  private _renderFlatList(
-    cards: CardState[],
-    previewOn: boolean,
-    rows: number,
-    cols: number,
-    compact: boolean,
-  ) {
-    return html`
-      ${cards.map((card) =>
-        previewOn
-          ? this._renderPreviewCard(card, rows, cols, compact)
-          : this._renderTextCard(card),
-      )}
-      <button class="new-ws-btn" @click="${() => this._onNewWs()}">
-        + New workspace
-      </button>
-    `;
-  }
-
   /** One machine's section: header, then its cards (ux D1). */
   private _renderHostGroup(
     group: HostGroup,
@@ -1952,17 +1916,6 @@ export class MuxSidebar extends LitElement {
     // Recomputed every render: a host that stopped being dropped must stop
     // the 1 Hz clock, and only the render knows.
     this._ageTicking = false;
-
-    // ┌───────────────────────────────────────────────────────────────────┐
-    // │ THE ZERO-REMOTE GATE. A browser with no remotes receives no       │
-    // │ host-state frame, so `any` is false and the sidebar below this    │
-    // │ line is the sidebar that shipped on main — same DOM, same         │
-    // │ whitespace, same single bottom button. The feature costs nothing  │
-    // │ until it is used (ux D2).                                         │
-    // └───────────────────────────────────────────────────────────────────┘
-    if (!remotesStore.any) {
-      return this._renderFlatList(cards, previewOn, rows, cols, compact);
-    }
 
     // Once the list is grouped, EVERY "+ New workspace" lives inside the group
     // it creates on -- local included. A bottom one would be the local group's
