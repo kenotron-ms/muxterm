@@ -411,12 +411,28 @@ def summarise() -> int:
     return 1 if failed else 0
 
 
+def _default_dev_bundle() -> str:
+    """Mirror main.py's _default_bundle so the driver smokes what ships."""
+    local = HERE / "bundle" / "bundle.md"
+    if not local.is_file():
+        return "muxterm-cos"
+    text = str(local)
+    if "#" in text or "?" in text:
+        return "muxterm-cos"
+    return "file://" + text
+
+
 def main() -> int:
     default_python = sys.executable
     p = argparse.ArgumentParser(description="drive the CoS sidecar")
     p.add_argument("--python", default=default_python, help="amplifier venv interpreter")
     p.add_argument("--session-id", default=f"cos-dev-{int(time.time())}")
-    p.add_argument("--bundle", default="anchors")
+    # Default to the CoS bundle, exactly as main.py does. Hardcoding "anchors"
+    # here meant this driver exercised the FULL 36-tool surface with no
+    # allowlist enforcement -- so the one thing it exists to smoke was the one
+    # thing it could never reach, and a tool-surface regression would surface
+    # only in production.
+    p.add_argument("--bundle", default=_default_dev_bundle())
     p.add_argument("--cwd", default=str(HERE.parent.parent))
     p.add_argument("--log-level", default="info")
     p.add_argument("--stderr", action="store_true", help="mirror all sidecar stderr")
