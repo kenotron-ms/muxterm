@@ -2,12 +2,15 @@ import type {
   SessiondMessage,
   SessiondWorkspaceInfo,
   SessiondPaneInfo,
+  PaneMetadata,
+  PaneStatus,
 } from './types';
 import { SessiondType } from './types';
 import type { Composition } from './lib/arrangement-store.js';
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from './lib/config.js';
 import { DEFAULT_AI_STATUS, type AIStatus } from './lib/ai.js';
 import { muxLog } from './lib/mux-log.js';
+import { ActivityTracker, classifyPaneStatus } from './lib/status-classifier.js';
 
 // --- optimistic-mutation seam -----------------------------------------------
 // A pending mutation overlays an optimistic patch over a COPY of the
@@ -74,6 +77,13 @@ export class MuxStore {
   private _bellWorkspaces: Set<string> = new Set();
   /** Pane IDs that have an unacknowledged activity bell. */
   private _bellPanes: Set<number> = new Set();
+  /** Extended pane metadata: tracked flag + status classification. */
+  private _paneMetadata: Map<number, PaneMetadata> = new Map();
+  /** Activity tracker for status classification. */
+  private _activityTracker = new ActivityTracker();
+  /** Periodic status check interval (not continuous polling). */
+  private _statusCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private _statusCheckIntervalMs = 5000; // Check every 5 seconds
 
 
   get config(): ResolvedConfig {
@@ -201,6 +211,83 @@ export class MuxStore {
     this._notify();
   }
 
+  /**
+   * Get metadata for a pane (tracked flag + status).
+   * Returns default metadata if pane is unknown.
+   */
+  getPaneMetadata(paneId: number): PaneMetadata {
+    return this._paneMetadata.get(paneId) ?? { tracked: false, status: 'running' };
+  }
+
+  /**
+   * Mark a pane as tracked (created/manipulated by MCP/agent service).
+   * Typically called when MCP creates or manipulates a pane.
+   */
+  markPaneTracked(paneId: number, tracked = true): void {
+    const meta = this.getPaneMetadata(paneId);
+    meta.tracked = tracked;
+    this._paneMetadata.set(paneId, meta);
+    this._notify();
+  }
+
+  /**
+   * Update pane status classification.
+   * Called periodically by the status check mechanism.
+   */
+  updatePaneStatus(paneId: number, status: PaneStatus): void {
+    const meta = this.getPaneMetadata(paneId);
+    if (meta.status !== status) {
+      meta.status = status;
+      this._paneMetadata.set(paneId, meta);
+      this._notify();
+    }
+  }
+
+  /**
+   * Track activity for a pane (for status classification).
+   * Called when terminal receives output.
+   */
+  trackPaneActivity(paneId: number): void {
+    this._activityTracker.track(paneId);
+    // Activity means pane is likely running - update status
+    const status = classifyPaneStatus(paneId, this._activityTracker.get(paneId));
+    this.updatePaneStatus(paneId, status);
+  }
+
+  /**
+   * Check and update status for all panes.
+   * Called periodically by the status check mechanism.
+   */
+  private _checkAllPaneStatus(): void {
+    for (const pane of this._panes) {
+      const paneId = pane.paneId;
+      const status = classifyPaneStatus(paneId, this._activityTracker.get(paneId));
+      this.updatePaneStatus(paneId, status);
+    }
+  }
+
+  /**
+   * Start periodic status checks.
+   * Called when the first pane is added or workspace is attached.
+   */
+  startStatusChecks(): void {
+    if (this._statusCheckInterval !== null) return; // Already running
+    this._statusCheckInterval = setInterval(() => {
+      this._checkAllPaneStatus();
+    }, this._statusCheckIntervalMs);
+  }
+
+  /**
+   * Stop periodic status checks.
+   * Called when all panes are removed or on cleanup.
+   */
+  stopStatusChecks(): void {
+    if (this._statusCheckInterval !== null) {
+      clearInterval(this._statusCheckInterval);
+      this._statusCheckInterval = null;
+    }
+  }
+
   setActivePane(paneId: number): void {
     if (this._activePaneId === paneId) return;
     muxLog('state active', `setActivePane ${this._activePaneId} → ${paneId}`);
@@ -238,6 +325,7 @@ export class MuxStore {
           { paneIds: this._panes.map(p => p.paneId), prevActive: this._activePaneId });
         this._activePaneId = newActivePaneId;
         this._layout = msg.layout ?? '';
+        this.startStatusChecks(); // Start periodic checks when workspace attached
         break;
       }
 
@@ -253,6 +341,7 @@ export class MuxStore {
           title: msg.title,
           clientRef: msg.clientRef,
         });
+        this.startStatusChecks(); // Ensure status checks are running
         break;
       }
 
@@ -262,8 +351,15 @@ export class MuxStore {
         const paneId = msg.paneId ?? 0;
         this._panes = this._panes.filter((p) => p.paneId !== paneId);
         this._bellPanes.delete(paneId);
+        // Clean up metadata for closed pane
+        this._paneMetadata.delete(paneId);
+        this._activityTracker.clear(paneId);
         if (this._activePaneId === paneId) {
           this._activePaneId = this._panes[0]?.paneId ?? 0;
+        }
+        // Stop status checks if no panes remain
+        if (this._panes.length === 0) {
+          this.stopStatusChecks();
         }
         break;
       }
