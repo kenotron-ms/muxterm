@@ -2326,7 +2326,17 @@ export class MuxCos extends LitElement {
     const nowhere =
       from === document.body || from === document.documentElement || from === document;
     if (!mine && !nowhere) return;
-    if (this._menuOpen || this._confirm !== null) return;
+    // The same layers _onKey unwinds, DISMISSED and not merely deferred.
+    // _onKey is bound to the textarea, which solo mode does not render -- so
+    // deferring here without closing anything left Escape a dead key for
+    // exactly as long as the menu stayed open, which is the opposite of
+    // unwinding one layer at a time.
+    if (this._menuOpen || this._confirm !== null) {
+      e.preventDefault();
+      this._menuOpen = false;
+      this._confirm = null;
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     voiceSessionController.stop();
