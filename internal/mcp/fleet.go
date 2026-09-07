@@ -80,10 +80,6 @@ func (c *Client) Fleet() ([]sessiond.SessionState, error) {
 			c.fleetSubErr = wrapSubscribeErr(err)
 		case !supported:
 			c.fleetSubErr = errSessionStateUnsupported()
-		default:
-			c.mu.Lock()
-			c.fleetSubscribed = true
-			c.mu.Unlock()
 		}
 	})
 	if c.fleetSubErr != nil {
