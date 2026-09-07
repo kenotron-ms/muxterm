@@ -295,6 +295,16 @@ func (s *Sideband) handle(data []byte) {
 		s.respStarted = time.Now()
 		s.lastResponseCreated = time.Now()
 		s.mu.Unlock()
+	case ev.Type == "output_audio_buffer.started":
+		// The assistant is audibly speaking. Treated as busy even without
+		// a response.created, because over-blocking costs a beat of delay
+		// (the sweep and the queue recover it) while under-blocking costs
+		// the whole sideband.
+		s.mu.Lock()
+		s.respActive = true
+		s.respStarted = time.Now()
+		s.lastResponseCreated = time.Now()
+		s.mu.Unlock()
 	case ev.Type == "response.done" || ev.Type == "response.cancelled":
 		s.releaseResponse()
 	case strings.HasPrefix(ev.Type, "error"):
@@ -624,7 +634,7 @@ func (s *Sideband) requestResponse(instructions string) {
 
 // responseGrace is how long the model is given to start speaking on its own
 // after an item is added, before one is asked for.
-const responseGrace = 1200 * time.Millisecond
+const responseGrace = 2 * time.Second
 
 // inject makes the model say something that answers no pending tool call.
 //

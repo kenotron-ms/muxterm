@@ -119,6 +119,23 @@ const _spokenApprovals = new Set<string>();
 /** When narration last spoke, so progress does not become chatter. */
 let _lastNarration = 0;
 
+/**
+ * Whether the model is mid-response, and anything waiting for it to finish.
+ *
+ * This gate is not politeness, it is protection. Asking for a response while
+ * one is running is answered with conversation_already_has_active_response
+ * -- and on this platform that error CLOSES the server's tool sideband,
+ * taking every tool and every pending answer with it, silently, for the rest
+ * of the conversation.
+ *
+ * The browser is the right place to enforce it because the browser has
+ * perfect information: every response.created and response.done arrives on
+ * its data channel. The server, watching the same session as an observer,
+ * learns the same facts a beat later.
+ */
+let _responseActive = false;
+let _pendingSay: Array<{ text: string; instructions: string }> = [];
+
 /** Minimum gap between two spoken progress notes. */
 const NARRATION_GAP_MS = 9000;
 /** How long a turn must have been running before progress is worth saying. */
@@ -303,6 +320,7 @@ function _onRealtimeEvent(raw: unknown): void {
       break;
 
     case 'response.created':
+      _responseActive = true;
       // Reset HERE, not only on speech_started. A response the server
       // creates on its own -- narration, an injected answer, a tool result
       // being spoken -- has no preceding user utterance, so a buffer only
@@ -324,7 +342,9 @@ function _onRealtimeEvent(raw: unknown): void {
       break;
 
     case 'response.done':
+    case 'response.cancelled':
       if (_spoken.trim()) _log.push({ at: Date.now(), dir: 'spoke', text: _spoken.trim() });
+      _releaseResponse();
       if (_state === 'speaking' || _state === 'thinking') _setState('listening');
       break;
 
@@ -359,7 +379,26 @@ function _say(text: string, instructions: string): void {
   ) {
     return;
   }
+  if (_responseActive) {
+    // Held, not dropped, and coalesced to the most recent: three progress
+    // notes queued behind one long answer would be delivered as a
+    // monologue nobody asked for.
+    _pendingSay = [{ text, instructions }];
+    return;
+  }
+  _responseActive = true;
   _send({ type: 'response.create', response: { instructions } });
+}
+
+/** Called when a response ends: release the gate and flush one held ask. */
+function _releaseResponse(): void {
+  _responseActive = false;
+  const next = _pendingSay.pop();
+  _pendingSay = [];
+  if (next) {
+    _responseActive = true;
+    _send({ type: 'response.create', response: { instructions: next.instructions } });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +445,7 @@ function _subscribeToChiefOfStaff(): void {
         if (Date.now() - _lastNarration < NARRATION_GAP_MS) break;
         _narratedTools.add(name);
         _lastNarration = Date.now();
+        _log.push({ at: Date.now(), dir: 'event', text: `narrate:tool_start:${name}` });
         _say(
           `[progress] Still working. Currently running: ${name}.`,
           'Tell the user in ONE short sentence what you are doing right now. Do not repeat yourself and do not add detail.',
@@ -424,6 +464,7 @@ function _subscribeToChiefOfStaff(): void {
         _lastNarration = Date.now();
         const tool = String(ev.tool ?? 'something');
         const detail = String(ev.detail ?? '').slice(0, 400);
+        _log.push({ at: Date.now(), dir: 'event', text: `narrate:approval_request:${tool}` });
         _say(
           `[approval needed] request_id=${id} tool=${tool} detail=${detail}`,
           'The chief of staff needs permission. Say plainly what it wants to do and ask the user to approve or deny. ' +
@@ -571,6 +612,8 @@ function _teardown(): void {
   _level = 0;
   _spokenApprovals.clear();
   _narratedTools = new Set<string>();
+  _responseActive = false;
+  _pendingSay = [];
 
   // Best-effort: tell muxterm to drop the sideband. keepalive so it still
   // goes out if this fires during a page unload.
@@ -694,6 +737,16 @@ if (typeof window !== 'undefined') {
         return out;
       },
       connectionState: (): string => _pc?.connectionState ?? 'none',
+      /**
+       * Feed one sidecar event through the REAL path — cos-store's own
+       * frame handler, the same one the WebSocket calls — so the narration
+       * and approval wiring is exercised exactly as it is in production.
+       * There is no shortcut into the narrator; an event injected here
+       * takes every gate a real one does.
+       */
+      feedCosEvent: (ev: Record<string, unknown>): void => {
+        cosStore.handleFrame({ type: 'cos-event', event: ev });
+      },
     },
   };
 }

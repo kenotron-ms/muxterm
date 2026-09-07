@@ -391,7 +391,57 @@ async function main() {
   }
   ok('C4 swap', 'text in the box → send arrow returns, voice control stands down');
 
-  // ── 12. no credential leaked to the browser ─────────────────────────────
+  // ── 12. narration (C6) ──────────────────────────────────────────────────
+  //
+  // Fed through cos-store's own frame handler — the same one the WebSocket
+  // calls — so every gate a real event passes, this one passes too. A
+  // turn_start dated a minute ago is what clears the "say nothing for the
+  // first few seconds" gate without waiting a minute.
+  await page.evaluate(() => {
+    const v = window.__muxterm.voiceSession;
+    v.feedCosEvent({ ev: 'turn_start', turn_id: 'narr-1' });
+    return new Promise((r) => setTimeout(r, 50));
+  });
+  await page.waitForTimeout(7000); // clear NARRATION_AFTER_MS honestly
+  await page.evaluate(() => {
+    window.__muxterm.voiceSession.feedCosEvent({
+      ev: 'tool_start',
+      turn_id: 'narr-1',
+      name: 'bash',
+      args: {},
+    });
+  });
+  await page.waitForFunction(
+    () => window.__muxterm.voiceSession.log().some((e) => e.text?.startsWith('narrate:tool_start')),
+    null,
+    { timeout: 20_000 },
+  );
+  ok('C6 narration', 'a tool_start on the sidecar stream became a spoken progress note');
+
+  // ── 13. voice approvals, browser half (C7) ──────────────────────────────
+  //
+  // The DECISION is not made here and cannot be: the gate is server-side,
+  // in the sideband, where an answer must survive a two-step confirmation
+  // before anything is transmitted (see internal/voice/approvals.go and its
+  // tests). What is proven here is that an approval_request reaches the
+  // spoken channel at all.
+  await page.evaluate(() => {
+    window.__muxterm.voiceSession.feedCosEvent({
+      ev: 'approval_request',
+      request_id: 'req-e2e-1',
+      tool: 'bash',
+      detail: 'remove a temporary directory',
+    });
+  });
+  await page.waitForFunction(
+    () =>
+      window.__muxterm.voiceSession.log().some((e) => e.text?.startsWith('narrate:approval_request')),
+    null,
+    { timeout: 20_000 },
+  );
+  ok('C7 spoken approval', 'an approval_request reached the voice channel to be read aloud');
+
+  // ── 14. no credential leaked to the browser ─────────────────────────────
   const leak = await page.evaluate(async (tok) => {
     const hay = [
       document.documentElement.outerHTML,
