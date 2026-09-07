@@ -37,6 +37,22 @@ const APP_URL = argOf('--url', 'http://127.0.0.1:5199/');
 const CDP_URL = argOf('--cdp', 'http://127.0.0.1:9333');
 const SHOT_DIR = argOf('--shot', '');
 
+/**
+ * --frames [ST1|ST2|ST3|ST4|all] -- print the INTERMEDIATE DOM, delta by delta.
+ *
+ * The verdict ledger says whether ST1..ST4 hold. This says WHY, by showing the
+ * thing those items are actually about: what the reader sees while the message
+ * is still half-written. A summary of mid-stream behaviour is not mid-stream
+ * behaviour, so this is a named reproduction rather than a paragraph -- run
+ * `node web/e2e/markdown-stream.mjs --frames ST2` and read the table forming.
+ */
+const FRAMES = (() => {
+  const i = args.indexOf('--frames');
+  if (i < 0) return null;
+  const next = args[i + 1];
+  return next && !next.startsWith('--') ? next.toUpperCase() : 'ALL';
+})();
+
 // ---------------------------------------------------------------------------
 // A very small CDP client. No dependency: Node has WebSocket and fetch.
 // ---------------------------------------------------------------------------
@@ -128,16 +144,24 @@ function claim(id, what, ok, detail = '') {
 }
 
 /** The closed list. Sixteen items, no more, and each gets exactly one verdict. */
+const SUITE = 'node web/e2e/markdown-stream.mjs';
 const ITEMS = [
-  ['C1', 'bold'], ['C2', 'italic'], ['C3', 'inline code'], ['C4', 'fenced code block'],
-  ['C5', 'link'], ['C6', 'bullet list'], ['C7', 'numbered list'], ['C8', 'table'],
-  ['C9', 'heading'], ['C10', 'blockquote'],
-  ['ST1', 'unclosed fence renders as a code block in progress'],
-  ['ST2', 'incomplete table renders progressively'],
-  ['ST3', 'incomplete emphasis neither flashes nor swallows'],
-  ['ST4', 'no re-mount flicker'],
-  ['ST5', 'render cost is linear in message length'],
-  ['ST6', 'convergence: streamed == pasted'],
+  ['C1', 'bold', SUITE],
+  ['C2', 'italic', SUITE],
+  ['C3', 'inline code', SUITE],
+  ['C4', 'fenced code block', SUITE],
+  ['C5', 'link', SUITE],
+  ['C6', 'bullet list', SUITE],
+  ['C7', 'numbered list', SUITE],
+  ['C8', 'table', SUITE],
+  ['C9', 'heading', SUITE],
+  ['C10', 'blockquote', SUITE],
+  ['ST1', 'unclosed fence renders as a code block in progress', `${SUITE} --frames ST1`],
+  ['ST2', 'incomplete table renders progressively', `${SUITE} --frames ST2`],
+  ['ST3', 'incomplete emphasis neither flashes nor swallows', `${SUITE} --frames ST3`],
+  ['ST4', 'no re-mount flicker', `${SUITE} --frames ST4`],
+  ['ST5', 'render cost is linear in message length', SUITE],
+  ['ST6', 'convergence: streamed == pasted', SUITE],
 ];
 
 /**
@@ -160,7 +184,7 @@ function ledger() {
   console.log('-'.repeat(96));
 
   let allPass = true;
-  for (const [id, what] of ITEMS) {
+  for (const [id, what, repro] of ITEMS) {
     const mine = checks.filter((c) => c.id === id);
     let v, why = '';
     if (sanFailed.length > 0) {
@@ -177,6 +201,7 @@ function ledger() {
     }
     if (v !== 'PASS') allPass = false;
     console.log(`${id.padEnd(5)} ${what.padEnd(52)}${String(mine.length).padEnd(8)}${v}${why ? `\n      -> ${why}` : ''}`);
+    console.log(`      repro: ${repro}`);
   }
 
   console.log('-'.repeat(96));
@@ -257,6 +282,28 @@ const HARNESS = `
       const say = api.say();
       return say ? [...say.children].map((c) => c.tagName.toLowerCase()) : [];
     },
+    /**
+     * The rendered DOM as an indented tree, for --frames.
+     *
+     * Prints an element's own text only when it has no children, so the tree
+     * shows WHERE text sits rather than repeating every ancestor's textContent.
+     */
+    tree() {
+      const say = api.say();
+      if (!say) return '(nothing rendered yet)';
+      const out = [];
+      const walk = (e, d) => {
+        const at = [...e.attributes].map((a) => a.name + (a.value ? '="' + a.value + '"' : '')).sort().join(' ');
+        const kids = [...e.children];
+        out.push(
+          '  '.repeat(d) + '<' + e.tagName.toLowerCase() + (at ? ' ' + at : '') + '>' +
+          (kids.length ? '' : '  ' + JSON.stringify((e.textContent || '').replace(/\\s+/g, ' ').trim())),
+        );
+        for (const c of kids) walk(c, d + 1);
+      };
+      for (const c of say.children) walk(c, 0);
+      return out.join('\\n');
+    },
     /** Structure + text, for the streamed-vs-pasted comparison. */
     shape() {
       const say = api.say();
@@ -289,6 +336,126 @@ const HARNESS = `
   return 'ready';
 })()
 `;
+
+// ---------------------------------------------------------------------------
+// --frames: the intermediate state, printed
+// ---------------------------------------------------------------------------
+
+/**
+ * ST1..ST4 are claims about half-written messages, so each dump below feeds
+ * text in CHUNKS and prints the real DOM after EVERY ONE. A reader can see for
+ * themselves that the <pre> exists before the closing fence arrives, that the
+ * table has rows before the delimiter row does, and that the same DOM nodes
+ * carry the growing content.
+ */
+const FRAME_DUMPS = {
+  ST1: {
+    title: 'ST1  unclosed fence -- DOM after every delta',
+    run: async (cdp) => {
+      const out = await cdp.eval(`(async () => {
+        const md = window.__md; await md.reset(); await md.start(); const o = [];
+        for (const c of ['Here is the fix.\\n\\n','\\u0060\\u0060\\u0060go\\n','func main() {\\n','  println("a")\\n','}\\n','\\u0060\\u0060\\u0060']) {
+          await md.delta(c); const say = md.say(), pre = say.querySelector('pre.md-pre');
+          o.push({ c, tree: md.tree(), ticks: md.seen().includes('\\u0060'),
+            sibs: [...say.children].map(x=>x.tagName.toLowerCase()).join(','),
+            open: pre ? pre.hasAttribute('data-streaming') : null,
+            fits: pre ? Math.round(pre.getBoundingClientRect().width) <= Math.round(say.getBoundingClientRect().width) : null });
+        } return o; })()`);
+      for (const f of out) {
+        console.log(`\n--- after delta ${JSON.stringify(f.c)}   [fence still open: ${f.open}]`);
+        console.log(f.tree.split('\n').map((l) => '    ' + l).join('\n'));
+        console.log(`    backticks visible: ${f.ticks}   siblings: ${f.sibs}   block fits in message: ${f.fits}`);
+      }
+      console.log(`\n  ${out.filter((f) => f.open).length} of ${out.length} frames were mid-fence.`);
+      console.log(`  frames showing literal backticks: ${out.filter((f) => f.ticks).length}`);
+    },
+  },
+  ST2: {
+    title: 'ST2  incomplete table -- DOM after every delta',
+    run: async (cdp) => {
+      const out = await cdp.eval(`(async () => {
+        const md = window.__md; await md.reset(); await md.start(); const o = [];
+        for (const c of ['| lane ','| state |\\n','| --- ','| --- |\\n','| alpha ','| working |\\n','| beta | done |\\n']) {
+          await md.delta(c); const w = md.say().querySelector('.md-tablewrap'), tb = md.say().querySelector('table.md-table');
+          o.push({ c, tree: md.tree(), pipes: md.seen().includes('|'),
+            speculative: w ? w.hasAttribute('data-streaming') : null,
+            th: tb ? [...tb.querySelectorAll('th')].map(x=>x.textContent.trim()).join('|') : '',
+            rows: tb ? tb.querySelectorAll('tbody tr').length : 0 });
+        } return o; })()`);
+      for (const f of out) {
+        console.log(`\n--- after delta ${JSON.stringify(f.c)}   [delimiter row synthesized: ${f.speculative}]`);
+        console.log(f.tree.split('\n').map((l) => '    ' + l).join('\n'));
+        console.log(`    pipes visible: ${f.pipes}   header: [${f.th}]   body rows: ${f.rows}`);
+      }
+      console.log(`\n  ${out.filter((f) => f.speculative).length} of ${out.length} frames rendered a table GFM could not yet see.`);
+      console.log(`  frames showing literal pipes: ${out.filter((f) => f.pipes).length}`);
+      console.log(`  body rows over time: ${out.map((f) => f.rows).join(' -> ')} (never decreases)`);
+    },
+  },
+  ST3: {
+    title: 'ST3  incomplete emphasis -- every character-frame',
+    run: async (cdp) => {
+      const out = await cdp.eval(`(async () => {
+        const md = window.__md; await md.reset(); await md.start();
+        const text = 'ok **bold** and *lean* end'; const o = []; let typed = '';
+        for (const ch of text) { await md.delta(ch); typed += ch;
+          o.push({ typed, seen: md.seen(), dom: md.tree().replace(/\\n\\s*/g, ' | ') }); }
+        return o; })()`);
+      console.log('\n  typed so far                  visible text                 rendered DOM');
+      console.log('  ' + '-'.repeat(84));
+      for (const f of out)
+        console.log(`  ${JSON.stringify(f.typed).padEnd(30)}${JSON.stringify(f.seen).padEnd(29)}${f.dom}`);
+      const letters = (x) => x.replace(/[^0-9A-Za-z ]/g, '').replace(/\s+/g, ' ').trim();
+      console.log(`\n  frames with * or _ visible: ${out.filter((f) => /[*_]/.test(f.seen)).length} of ${out.length}`);
+      console.log(`  frames where a typed letter went missing: ${out.filter((f) => letters(f.seen) !== letters(f.typed)).length} of ${out.length}`);
+    },
+  },
+  ST4: {
+    title: 'ST4  no re-mount -- node identity while content grows',
+    run: async (cdp) => {
+      const out = await cdp.eval(`(async () => {
+        const md = window.__md; await md.reset(); await md.start();
+        await md.delta('First paragraph.\\n\\n');
+        const p0 = md.say().querySelector('p.md-p');
+        await md.delta('\\u0060\\u0060\\u0060js\\n'); await md.delta('const a = 1;\\n');
+        const pre0 = md.say().querySelector('pre.md-pre'), c0 = pre0.querySelector('code');
+        const o = [];
+        const snap = (at) => { const s = md.say();
+          o.push({ at, pre: s.querySelector('pre.md-pre')===pre0, code: s.querySelector('pre.md-pre code')===c0,
+            p: s.querySelector('p.md-p')===p0, lines: s.querySelector('pre code').textContent.split('\\n').length,
+            open: s.querySelector('pre.md-pre').hasAttribute('data-streaming') }); };
+        for (let i = 2; i <= 9; i++) { await md.delta('const v'+i+' = '+i+';\\n'); snap('delta ' + i); }
+        await md.delta('\\u0060\\u0060\\u0060'); snap('closing fence');
+        await md.end(); snap('turn_end');
+        return o; })()`);
+      console.log('\n  after            <pre> same?  <code> same?  <p> same?  code lines  fence open');
+      console.log('  ' + '-'.repeat(84));
+      for (const r of out)
+        console.log(`  ${r.at.padEnd(17)}${String(r.pre).padEnd(13)}${String(r.code).padEnd(13)}${String(r.p).padEnd(11)}${String(r.lines).padEnd(12)}${r.open}`);
+      const rebuilt = out.filter((r) => !r.pre || !r.code || !r.p).length;
+      console.log(`\n  node references were captured at the first delta and compared with === thereafter.`);
+      console.log(`  rebuilds: ${rebuilt} of ${out.length * 3} identity comparisons`);
+      console.log(`  content grew to ${out[out.length - 1].lines} lines inside nodes that were never replaced.`);
+    },
+  },
+};
+
+async function dumpFrames(cdp, which) {
+  const ids = which === 'ALL' ? Object.keys(FRAME_DUMPS) : [which];
+  for (const idKey of ids) {
+    const d = FRAME_DUMPS[idKey];
+    if (!d) {
+      console.error(`unknown frame dump ${JSON.stringify(idKey)} -- try ${Object.keys(FRAME_DUMPS).join(', ')} or all`);
+      return 2;
+    }
+    console.log('');
+    console.log('='.repeat(84));
+    console.log(d.title);
+    console.log('='.repeat(84));
+    await d.run(cdp);
+  }
+  return 0;
+}
 
 // ---------------------------------------------------------------------------
 
@@ -328,7 +495,14 @@ async function main() {
     process.exit(2);
   }
 
-  console.log(`\nrunning against ${APP_URL} in ${(await cdp.eval('navigator.userAgent')).match(/Chrome\/[\d.]+/)?.[0]}\n`);
+  console.log(`\nrunning against ${APP_URL} in ${(await cdp.eval('navigator.userAgent')).match(/Chrome\/[\d.]+/)?.[0]}`);
+
+  if (FRAMES) {
+    const rc = await dumpFrames(cdp, FRAMES);
+    cdp.close();
+    process.exit(rc);
+  }
+  console.log('');
 
   // -- C1..C10 -------------------------------------------------------------
   console.log('C1..C10 -- constructs render as formatting, in the real chat pane');
