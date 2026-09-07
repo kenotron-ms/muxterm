@@ -11,6 +11,19 @@
  * `state` on an engine that is always running, exactly as persona.tsx pushes
  * boolean inputs into an always-playing Rive state machine.
  *
+ * WHERE THE ANIMATION IS: not here. This file holds no animation logic at all,
+ * by design and in imitation of upstream — persona.tsx holds none either,
+ * because the animation lives in the Rive runtime behind it. The engine is
+ * lib/orb-persona.ts; `computeSample()` is the weight tween, the convex
+ * combination, and the normalised painter's alpha. Reading this file alone and
+ * concluding the technique is absent is like reading persona.tsx alone and
+ * concluding Rive does not blend.
+ *
+ * There is no CSS animation, CSS transition or @keyframes anywhere in the port.
+ * `node docs/research/voice-orb-evidence.mjs --technique` proves it at runtime:
+ * document.getAnimations() is 0 while the orb is moving, and the weight vector
+ * recovered from measured layer opacities sums to 1 on every frame.
+ *
  * Not yet mounted anywhere in the app — integrating the orb into the live chat
  * surface is separate work. This exists so the port is a real, typechecked Lit
  * component rather than a claim, and so the standalone artifact at

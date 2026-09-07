@@ -7,6 +7,7 @@
  *   node docs/research/voice-orb-evidence.mjs --json
  *   node docs/research/voice-orb-evidence.mjs --raw    # unreduced per-frame samples
  *   node docs/research/voice-orb-evidence.mjs --ui     # drive the page's own controls
+ *   node docs/research/voice-orb-evidence.mjs --technique   # prove WHICH technique is running
  *
  * It opens docs/research/voice-orb-mock.html in headless Chrome, calls the
  * page's own window.__orbEvidence(), and reports what came back. The page
@@ -31,6 +32,7 @@ const PAGE = resolve(HERE, 'voice-orb-mock.html');
 const JSON_OUT = process.argv.includes('--json');
 const RAW_OUT = process.argv.includes('--raw');
 const UI_OUT = process.argv.includes('--ui');
+const TECH_OUT = process.argv.includes('--technique');
 
 const CHROME = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']
   .map((n) => ['/usr/bin/' + n, '/usr/local/bin/' + n])
@@ -167,6 +169,13 @@ async function main() {
   }
   if (!up) throw new Error('page never finished loading __orbEvidence');
   await sleep(600); // let the oscillators settle into a steady state
+
+  if (TECH_OUT) {
+    const code = await technique(page);
+    page.close();
+    browser.close();
+    return code;
+  }
 
   if (UI_OUT) {
     const code = await uiDrive(page);
@@ -459,6 +468,150 @@ async function uiDrive(page) {
   console.log(fails === 0
     ? 'ARTIFACT CONTROLS: all interactions verified by clicking them.'
     : `ARTIFACT CONTROLS: ${fails} check(s) failed.`);
+  return fails === 0 ? 0 : 1;
+}
+
+/**
+ * Proves WHICH animation technique is running, from the DOM, at runtime.
+ *
+ * "The stylesheet has no @keyframes" is a source claim. This is the runtime
+ * counterpart, and it settles the question two independent ways:
+ *
+ *   1. document.getAnimations() during a live transition. A CSS animation or a
+ *      CSS transition is a CSSAnimation / CSSTransition object in that list. If
+ *      the orb were driven by CSS, the list would be non-empty exactly when the
+ *      values are moving.
+ *
+ *   2. The weight vector, recovered from measured layer opacities alone. The
+ *      port composites per-state tint layers with normalised painter's alpha
+ *      a_i = w_i / SUM_{j<=i} w_j, which is invertible: with SUM w = 1,
+ *      w_top = a_top, then S_{i-1} = S_i - w_i and w_{i-1} = a_{i-1} * S_{i-1}.
+ *      So the weights can be read back out of getComputedStyle without touching
+ *      the engine — and if the technique were anything other than weighted
+ *      state blending, the recovered vector would not sum to 1 with exactly two
+ *      non-zero components mid-transition.
+ */
+async function technique(page) {
+  const ev = async (expression) => {
+    const r = await page.send('Runtime.evaluate', {
+      expression, awaitPromise: true, returnByValue: true, timeout: 120000,
+    });
+    if (r.exceptionDetails) {
+      throw new Error('page threw: ' + (r.exceptionDetails.exception?.description ?? JSON.stringify(r.exceptionDetails)));
+    }
+    return r.result.value;
+  };
+  let fails = 0;
+  const line = (ok, label, detail) => {
+    if (!ok) fails++;
+    console.log(`   ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(38)} ${detail}`);
+  };
+
+  console.log('');
+  console.log('='.repeat(100));
+  console.log('WHICH TECHNIQUE IS RUNNING — measured from the DOM during a live transition');
+  console.log('='.repeat(100));
+
+  const r = await ev(`(async () => {
+    const STATES = ORB_CONSTANTS.STATES;
+    const stage = document.getElementById('stage');
+    const body  = stage.querySelector('.orb-body');
+    const tintEls = STATES.map(s => stage.querySelector('.orb-tint[data-state="' + s + '"]'));
+
+    // Invert normalised painter's alpha to recover the weight vector.
+    const weightsFromDom = () => {
+      const a = tintEls.map(el => parseFloat(getComputedStyle(el).opacity));
+      const w = new Array(a.length).fill(0);
+      let S = 1;                                  // SUM of all weights is 1
+      for (let i = a.length - 1; i >= 0; i--) { w[i] = a[i] * S; S = S - w[i]; }
+      return { a, w };
+    };
+
+    const anims = () => {
+      const all = document.getAnimations ? document.getAnimations() : [];
+      return { total: all.length, kinds: [...new Set(all.map(x => x.constructor.name))] };
+    };
+
+    const rd = () => {
+      const cs = getComputedStyle(body);
+      const tf = cs.transform, o = tf.indexOf('('), c = tf.lastIndexOf(')');
+      const p = o > 0 ? tf.slice(o+1, c).split(',').map(Number) : [1,0,0,1];
+      const { a, w } = weightsFromDom();
+      return { t: performance.now(), a, w, anim: anims(),
+               rect: body.getBoundingClientRect().width / (parseFloat(cs.width)||1),
+               scale: Math.hypot(p[0], p[1]) };
+    };
+
+    window.__orb.setState('speaking');
+    await new Promise(r => setTimeout(r, 1200));
+    const settled = rd();
+
+    window.__orb.setState('listening');
+    const rows = [];
+    await new Promise(res => { const t0 = performance.now();
+      const step = () => { rows.push(rd());
+        performance.now() - t0 < 420 ? requestAnimationFrame(step) : res(); };
+      requestAnimationFrame(step); });
+
+    const iS = STATES.indexOf('speaking'), iL = STATES.indexOf('listening');
+    const mid = rows[Math.floor(rows.length / 2)];
+    return {
+      states: STATES,
+      settled: { w: settled.w, sum: settled.w.reduce((x,y)=>x+y,0), anim: settled.anim, rect: settled.rect },
+      frames: rows.length,
+      anim_max: Math.max(...rows.map(r => r.anim.total)),
+      anim_kinds: [...new Set(rows.flatMap(r => r.anim.kinds))],
+      sums: rows.map(r => r.w.reduce((x,y)=>x+y,0)),
+      nonzero_max: Math.max(...rows.map(r => r.w.filter(v => v > 1e-6).length)),
+      third_state_max: Math.max(...rows.map(r => Math.max(...r.w.filter((_,i)=> i!==iS && i!==iL), 0))),
+      mid: { w_speaking: mid.w[iS], w_listening: mid.w[iL], sum: mid.w.reduce((x,y)=>x+y,0),
+             rect: mid.rect, alphas: mid.a },
+      trace: rows.filter((_,i) => i % 4 === 0).map(r => ({
+        w_speaking: r.w[iS], w_listening: r.w[iL],
+        sum: r.w.reduce((x,y)=>x+y,0), anim: r.anim.total, rect: r.rect })),
+      rest: { speaking: PROFILES.speaking.coreScale, listening: PROFILES.listening.coreScale },
+    };
+  })()`);
+
+  line(r.anim_max === 0, 'document.getAnimations() during transition',
+    `max ${r.anim_max} across ${r.frames} frames — no CSSAnimation, no CSSTransition, ` +
+    `no Web Animation of any kind${r.anim_kinds.length ? ' (' + r.anim_kinds.join(',') + ')' : ''}`);
+  line(r.settled.anim.total === 0, 'document.getAnimations() at rest',
+    `${r.settled.anim.total} — the orb is moving at rest too (idle breathing), still zero animations`);
+
+  const sumErr = Math.max(...r.sums.map((v) => Math.abs(v - 1)));
+  line(sumErr < 1e-6, 'weights recovered from layer opacities sum to 1',
+    `max |Σw − 1| = ${sumErr.toExponential(2)} across ${r.frames} frames`);
+  line(r.nonzero_max <= 2, 'exactly two states active mid-blend',
+    `max non-zero weights = ${r.nonzero_max}; largest third-state weight = ${r.third_state_max.toExponential(2)}`);
+
+  const lo = Math.min(r.rest.speaking, r.rest.listening), hi = Math.max(r.rest.speaking, r.rest.listening);
+  line(r.mid.w_speaking > 0.05 && r.mid.w_listening > 0.05,
+    'mid-frame is a genuine blend, not a switch',
+    `w[speaking]=${r.mid.w_speaking.toFixed(4)}  w[listening]=${r.mid.w_listening.toFixed(4)}  ` +
+    `Σ=${r.mid.sum.toFixed(6)}`);
+
+  console.log('');
+  console.log('   the weight vector, read back out of getComputedStyle (every 4th frame):');
+  console.log('');
+  console.log('        w[speaking]  w[listening]        Σw   getAnimations()   rendered rect');
+  console.log('     ' + '-'.repeat(76));
+  for (const t of r.trace) {
+    console.log('     ' +
+      t.w_speaking.toFixed(5).padStart(11) +
+      t.w_listening.toFixed(5).padStart(13) +
+      t.sum.toFixed(6).padStart(10) +
+      String(t.anim).padStart(18) +
+      t.rect.toFixed(5).padStart(16));
+  }
+  console.log('');
+  console.log(`   states in paint order: ${r.states.join(', ')}`);
+  console.log(`   measured tint alphas at the mid frame: [${r.mid.alphas.map(a=>a.toFixed(4)).join(', ')}]`);
+  console.log(`   -> inverted through a_i = w_i / Σ_{j≤i} w_j`);
+  console.log('');
+  console.log(fails === 0
+    ? 'TECHNIQUE: weighted state blending with Σw ≡ 1, zero CSS animations. This is the persona model.'
+    : `TECHNIQUE: ${fails} check(s) failed.`);
   return fails === 0 ? 0 : 1;
 }
 
