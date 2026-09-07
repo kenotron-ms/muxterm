@@ -206,20 +206,70 @@ func (c *Client) DeadErr() error {
 	}
 }
 
-// handshake issues one cheap request and waits at most timeout for the answer.
+// primeWorkspace issues one bounded ListWorkspaces and records the first
+// workspace it names, so pane and terminal tools work immediately without an
+// explicit switch_workspace call.
 //
-// It exists because a stream being ACQUIRED says nothing about a daemon being
-// THERE. An ssh dial returns the moment ssh execs, so "no muxterm on that
-// host", "muxterm present but no daemon running", and "login shell printed a
-// banner into the protocol stream" all look like a healthy connection until
-// the first request either fails or hangs forever. One bounded round trip at
-// dial time turns all three into a dial-time error naming the machine.
-func (c *Client) handshake(timeout time.Duration) error {
+// It is BOTH the liveness handshake and the priming step, deliberately, because
+// they are the same round trip and separating them would spend two.
+//
+// The handshake half matters most for a remote. A stream being ACQUIRED says
+// nothing about a daemon being THERE: an ssh dial returns the moment ssh
+// execs, so "no muxterm on that host", "muxterm present but no daemon
+// running", and "the login shell printed a banner into the protocol stream"
+// all look like a healthy connection until the first request either fails or
+// hangs forever (internal/sessiond/client.go:242). One bounded round trip at
+// dial time turns all three into a dial-time error that can name the machine.
+//
+// It deliberately does NOT Attach: Attach replays every pane's full retained
+// output, and doing it here would double the replay that resources/list must
+// already do, which is the v0.5.0 MCP-pipe deadlock. Recording the id is
+// enough; the attach happens when something needs it.
+func (c *Client) primeWorkspace(timeout time.Duration) error {
+	return c.within(timeout, func() error {
+		ws, err := c.conn.ListWorkspaces()
+		if err != nil {
+			return err
+		}
+		if len(ws) > 0 {
+			c.setWorkspaceOnly(ws[0].WorkspaceID)
+		}
+		return nil
+	})
+}
+
+// attachRemote attaches a REMOTE client to the workspace primeWorkspace
+// recorded, so its pane and terminal tools work without an explicit
+// switch_workspace call.
+//
+// The local client does not do this, and the asymmetry is deliberate rather
+// than an oversight. Locally the attach is performed by the resources/list
+// handler, timed to avoid the v0.5.0 MCP-pipe deadlock: Attach replays every
+// pane's retained output, and if the output notifier is live during that
+// replay the server writes notifications into a stdout pipe the client is not
+// draining, and everything wedges (see registerWithLazy). A remote client is
+// not exposed as MCP resources and never has a notifier installed, so its
+// replay lands in an in-memory buffer and reaches no pipe. The hazard that
+// forces the local timing simply does not exist here.
+//
+// A daemon with no workspaces at all is not an error: there is nothing to
+// attach to yet, and create_workspace is the next call.
+func (c *Client) attachRemote(timeout time.Duration) error {
+	ws := c.Workspace()
+	if ws == "" {
+		return nil
+	}
+	return c.within(timeout, func() error { return c.AttachWorkspace(ws) })
+}
+
+// within runs fn on its own goroutine and bounds its wall-clock time, also
+// returning early if the connection dies underneath it.
+//
+// Every crossing of a machine boundary goes through here or through
+// callWithin in run.go. There is no path that can block forever.
+func (c *Client) within(timeout time.Duration, fn func() error) error {
 	done := make(chan error, 1)
-	go func() {
-		_, err := c.conn.ListWorkspaces()
-		done <- err
-	}()
+	go func() { done <- fn() }()
 	select {
 	case err := <-done:
 		return err

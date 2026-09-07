@@ -279,14 +279,16 @@ func (m *machines) dial(host transport.HostRef) (*Client, error) {
 
 	c := newClient(sessiond.DialConn(conn), host.ID)
 
-	// An ssh dial succeeds the moment ssh execs, so a bad host, a missing
-	// remote muxterm, and a daemon that is not running there are all
-	// ASYNCHRONOUS failures that surface on the first request rather than
-	// here (internal/sessiond/client.go:242). One cheap round trip converts
-	// them into a dial-time error, which is where a caller can act on them.
-	if err := c.handshake(machineDialTimeout); err != nil {
+	// One bounded round trip, which both proves the far daemon is really
+	// answering and records a workspace so pane tools work immediately --
+	// the same priming the local client gets. See primeWorkspace.
+	if err := c.primeWorkspace(machineDialTimeout); err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("machine %q: reached %s but its muxterm daemon did not answer: %w", host.ID, host.Addr, err)
+	}
+	if err := c.attachRemote(machineDialTimeout); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("machine %q: attaching to a workspace on %s: %w", host.ID, host.Addr, err)
 	}
 	return c, nil
 }
@@ -413,7 +415,7 @@ func (m *machines) probeAll(hosts []transport.HostRef, rows []machineRow) {
 				return
 			}
 			c := newClient(sessiond.DialConn(conn), hosts[i].ID)
-			if err := c.handshake(machineProbeTimeout); err != nil {
+			if err := c.primeWorkspace(machineProbeTimeout); err != nil {
 				rows[i].Error = err.Error()
 				_ = c.Close()
 				return

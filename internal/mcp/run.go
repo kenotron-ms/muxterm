@@ -108,15 +108,15 @@ func (lc *lazyClient) get() (*Client, error) {
 			lc.err = fmt.Errorf("connect to sessiond: %w", err)
 			return
 		}
-		// Record the first workspace ID so resources/list knows which workspace to
-		// attach later. We intentionally do NOT call AttachWorkspace here: that
-		// would trigger a full scrollback replay from the sessiond right now, and
-		// the resources/list Attach (below) will do the same replay — so doing it
-		// twice doubles the data on the Unix socket and risks the MCP-pipe
-		// deadlock on Linux that was the root cause of the v0.5.0 regression.
-		if workspaces, wsErr := c.conn.ListWorkspaces(); wsErr == nil && len(workspaces) > 0 {
-			c.setWorkspaceOnly(workspaces[0].WorkspaceID)
-		}
+		// Record the first workspace ID so resources/list knows which workspace
+		// to attach later, via the SAME priming a remote client gets -- a local
+		// client and a remote one must not arrive in different states, or a
+		// tool works on one and not the other for reasons no one can see.
+		//
+		// The error is ignored here exactly as it was before: an empty daemon
+		// is not a dial failure locally. It is NOT ignored for a remote, where
+		// the same round trip is also the liveness handshake.
+		_ = c.primeWorkspace(localPrimeTimeout)
 		lc.c = c
 	})
 	return lc.c, lc.err
@@ -186,6 +186,12 @@ func (p *clientPool) get(args map[string]any) (*Client, error) {
 // window. There the socket is open, no error arrives, and the request waits
 // forever. Forever is the one answer a tool must never give.
 const remoteCallTimeout = 45 * time.Second
+
+// localPrimeTimeout bounds the local client's one priming round trip. The
+// local path had no bound at all, which meant a wedged local daemon hung the
+// first tool call forever with no message. A generous bound is strictly better
+// than none: it cannot fire in normal use and it cannot hang.
+const localPrimeTimeout = 30 * time.Second
 
 // callBound returns the wall-clock bound for one remote call. A caller that
 // asked run_command to wait two minutes gets two minutes plus the overhead
