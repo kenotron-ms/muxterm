@@ -360,10 +360,23 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 	// destroy_lane beside it. An agent that delegates must be able to open new
 	// work and must never be able to destroy existing work; closure stays with
 	// the human (docs/designs/2026-09-06-cos-delegation-model.md section 2).
-	// close_pane and close_workspace above are unchanged -- a chief-of-staff
-	// bundle withholds them at composition time, because a tool an agent does
-	// not have cannot be misused, whereas an approval gate on one can be
-	// overwritten out from under you.
+	// close_pane and close_workspace above are unchanged: the MCP server
+	// offers them to everyone, and which of them any given agent actually
+	// holds is decided one layer up, in that agent's bundle -- because a tool
+	// an agent does not have cannot be misused, whereas an approval gate on
+	// one can be overwritten out from under you.
+	//
+	// SETTLED: the chief-of-staff bundle takes the muxterm tool set WHOLE
+	// (mcp_muxterm_*), so the CoS CAN close a pane or a workspace. That is
+	// deliberate, not an oversight. Managing muxterm is what a chief of staff
+	// for muxterm is for; a CoS that opens workspaces and can never tidy them
+	// leaves an accumulating mess. What it may not do is a LANE's work --
+	// hence no bash, no file writes, no delegate. Section 2 of the delegation
+	// model carries the full table and the reasoning.
+	//
+	// The broadcast above is still the thing to respect: closure is gated by
+	// ASKING (the approval card) and by the charter rule that the CoS never
+	// closes a workspace it did not create -- not by the tool's absence.
 	srv.Register(
 		"spawn_lane",
 		"delegate work: launch a coding-agent session (amplifier|claude) in a pane of the named workspace, creating that workspace if it does not exist; prompt is the session's opening turn; goal (amplifier only) instead launches a /goal loop with that stop condition, and prompt is ignored; returns workspace_id, pane_id, harness, workspace_created",

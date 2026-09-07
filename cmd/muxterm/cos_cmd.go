@@ -37,7 +37,7 @@ func runCos(args []string) error {
 	asJSON := fs.Bool("json", false, "with --status, print machine-readable JSON")
 	defaultSessionID, _ := cos.ResolveSessionID("")
 	sessionID := fs.String("session-id", defaultSessionID, "amplifier session id the sidecar owns")
-	bundle := fs.String("bundle", "", "amplifier bundle name (default: the sidecar's own default)")
+	bundle := fs.String("bundle", "", "amplifier bundle (default: the chief-of-staff bundle shipped with muxterm)")
 	cwd := fs.String("cwd", "", "working directory for the sidecar (default: current directory)")
 	logLevel := fs.String("log-level", "info", "sidecar log level")
 	python := fs.String("python", "", "python interpreter to run the sidecar with (default: $"+cos.EnvPython+", then the amplifier venv)")

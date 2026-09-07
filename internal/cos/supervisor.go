@@ -154,6 +154,12 @@ type Config struct {
 	// SessionID is the amplifier session id (default DefaultSessionID).
 	SessionID string
 	// Bundle names the amplifier bundle; empty lets the sidecar choose.
+	//
+	// Leave it empty. The sidecar's choice is the chief-of-staff bundle it
+	// ships beside itself (internal/cos/sidecar/bundle) -- a dispatcher's tool
+	// surface with no shell, no file writer and no delegate. Naming anything
+	// here replaces that surface wholesale; naming a general-purpose coding
+	// bundle gives the chief of staff every tool it is designed not to have.
 	Bundle string
 	// Cwd is the sidecar's working directory; empty means the current one.
 	Cwd string
