@@ -449,6 +449,43 @@ type WorkspaceInfo struct {
 	Name        string `json:"name,omitempty"`
 	ClientRef   string `json:"clientRef,omitempty"`
 	PaneCount   int    `json:"paneCount"`
+
+	// Completion is present (ADDITIVE, post-v1) only on a workspace whose
+	// lane has finished and has not yet been dismissed. Its presence is what
+	// makes a zero-pane workspace a RESULT rather than an empty shell, and it
+	// is why such a workspace is not reaped.
+	//
+	// It rides the workspace list rather than a new event type deliberately:
+	// the list is already a whole-state document delivered to every client on
+	// every structural change, so a dropped frame repairs itself and an old
+	// client that ignores the field simply sees a workspace that lingers.
+	Completion *WorkspaceCompletion `json:"completion,omitempty"`
+}
+
+// WorkspaceCompletion is the finished-lane annotation on a workspace.
+//
+// It is a projection of a CompletionRecord (completion.go), carrying enough to
+// NAME the lane, state its verdict, and point at what it produced -- without
+// shipping the full record to every client on every list broadcast. The
+// authoritative record lives in the durable log.
+type WorkspaceCompletion struct {
+	RecordID string `json:"recordId"`
+	PaneID   int    `json:"paneId"`
+	// Lane is the human name of what finished. Never empty: a notification
+	// that cannot say which lane finished is the bug this feature fixes.
+	Lane string `json:"lane"`
+	// Outcome is one of the Completion* constants. `completed` is asserted
+	// only for a session that declared itself done; a crash is never
+	// spelled the same way as a success.
+	Outcome  string `json:"outcome"`
+	ExitCode int    `json:"exitCode"`
+	EndedAt  int64  `json:"endedAt"`
+	PR       int    `json:"pr,omitempty"`
+	PRURL    string `json:"prUrl,omitempty"`
+	Summary  string `json:"summary,omitempty"`
+	// Output is a bounded tail of the lane's final screen -- enough to read
+	// the result in place. The full capture stays in the record.
+	Output string `json:"output,omitempty"`
 }
 
 // PaneInfo is one entry in a composition reply or pane-added event.

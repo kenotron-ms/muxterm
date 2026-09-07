@@ -28,6 +28,17 @@ type Workspace struct {
 	// daemon-owned close-ticket bindings and never cross the wire.
 	generation           uint64
 	membershipGeneration uint64
+
+	// completion holds a finished lane's result for a workspace that is now
+	// empty. While it is set, ReapIfEmpty declines to remove the workspace --
+	// that is the whole of "no silent reap". It is cleared when a new pane
+	// arrives (the workspace is in use again) and the workspace is removed
+	// outright when a human dismisses it via the ordinary close path.
+	//
+	// Set only for a workspace whose pane hosted an agent session. A
+	// workspace that emptied for any other reason has nil here and is reaped
+	// exactly as before.
+	completion *WorkspaceCompletion
 }
 
 // Registry is the single source of truth for workspaces and their panes. All
@@ -120,6 +131,7 @@ func (r *Registry) List() []WorkspaceInfo {
 			Name:        ws.Name,
 			ClientRef:   ws.ClientRef,
 			PaneCount:   len(ws.Panes),
+			Completion:  ws.completion,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -154,7 +166,54 @@ func (r *Registry) PutPane(wsID string, p *Pane) bool {
 	p.targetGeneration = r.nextPaneGeneration
 	ws.Panes[p.LocalID] = p
 	ws.membershipGeneration++
+	// A workspace somebody has put a pane back into is in use again, not a
+	// result sitting there waiting to be read. Reusing it is as good a
+	// dismissal as closing it, and leaving a stale "finished" badge on a
+	// workspace with live work in it would be worse than no badge at all.
+	// The durable record is untouched; only the badge and the reap hold go.
+	ws.completion = nil
 	return true
+}
+
+// MarkCompleted attaches a finished lane's result to a workspace, which also
+// suspends auto-reap for it. It returns false for an unknown workspace.
+//
+// Called from the pane-exit path before the pane-closed broadcast, so the
+// workspace-list snapshot any client takes after that broadcast already
+// carries the annotation.
+func (r *Registry) MarkCompleted(wsID string, completion *WorkspaceCompletion) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok {
+		return false
+	}
+	ws.completion = completion
+	return true
+}
+
+// workspaceName returns wsID's display name, or "" for an unknown workspace.
+// Used by the completion path to capture a name into a record while the
+// workspace still exists, since the record outlives it.
+func (r *Registry) workspaceName(wsID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok {
+		return ""
+	}
+	return ws.Name
+}
+
+// Completion returns the finished-lane annotation for wsID, or nil.
+func (r *Registry) Completion(wsID string) *WorkspaceCompletion {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok {
+		return nil
+	}
+	return ws.completion
 }
 
 // Pane returns the pane paneID within wsID and whether it exists.
