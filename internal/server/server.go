@@ -20,6 +20,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/ai"
 	"github.com/kenotron-ms/muxterm/internal/authserver"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
+	"github.com/kenotron-ms/muxterm/internal/voice"
 )
 
 func init() {
@@ -107,6 +108,11 @@ type Server struct {
 	configPath string
 	cfgMu      sync.RWMutex
 	cfg        muxcfg.Config
+
+	// voice owns the opt-in realtime speech-to-speech capability. nil
+	// unless [voice] is enabled and valid; the routes are registered only
+	// alongside it, so a nil here means the paths do not exist.
+	voice *voice.Manager
 
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
@@ -197,6 +203,10 @@ func New(cfg Config) *Server {
 	s.mux.Handle("DELETE /api/ai/key", protect(http.HandlerFunc(s.handleAIDeleteKey)))
 	s.mux.Handle("POST /api/ai/ping", protect(http.HandlerFunc(s.handleAIPing)))
 
+	// Opt-in realtime voice. Registered only when [voice] is enabled and
+	// valid -- see internal/server/voice.go.
+	s.registerVoiceRoutes(s.cfg.Voice, protect)
+
 	// Self-update. Protected like every other owner surface: applying an
 	// update rewrites the binary this process is running from.
 	s.mux.Handle("GET /api/update/status", protect(http.HandlerFunc(s.handleUpdateStatus)))
@@ -253,6 +263,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// It does NOT cover a panic-free-fall past this frame or a SIGKILL; that is
 	// what the child's Pdeathsig is for (internal/cos/pdeathsig_linux.go).
 	defer s.hub.CloseCos()
+
+	// A voice sideband is a live outbound WebSocket to the realtime
+	// vendor. Left open it keeps billing a session nobody is listening to,
+	// so it goes down on every return path, exactly as the sidecar does.
+	if s.voice != nil {
+		defer s.voice.Close()
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

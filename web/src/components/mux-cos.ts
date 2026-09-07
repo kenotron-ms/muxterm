@@ -80,6 +80,11 @@ import {
   restoreDashboardSplit,
 } from '../lib/dashboard-split.js';
 import { voiceInputController, type VoiceState } from '../lib/voice-input-controller.js';
+import {
+  voiceSessionController,
+  type VoiceSessionSnapshot,
+} from '../lib/voice-session-controller.js';
+import './mux-voice-orb.js';
 
 // ---------------------------------------------------------------------------
 // The fleet
@@ -211,6 +216,14 @@ export class MuxCos extends LitElement {
   /** Which housekeeping action is awaiting a yes. null = none pending. */
   @state() private _confirm: Housekeeping | null = null;
   @state() private _voice: VoiceState = voiceInputController.getState();
+  /**
+   * The LIVE session, which is a different thing from _voice above.
+   *
+   * _voice is dictation: free, one utterance, fills the box. This is a
+   * metered two-way conversation. They are separate controls on purpose and
+   * neither one drives the other.
+   */
+  @state() private _session: VoiceSessionSnapshot = voiceSessionController.snapshot();
 
   /**
    * Cards or tiles. Reflected to the host so the grid's minmax and the thumb
@@ -237,6 +250,7 @@ export class MuxCos extends LitElement {
   private _unsubFleet: (() => void) | null = null;
   private _unsubVoice: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
+  private _unsubSession: (() => void) | null = null;
   private _ticker: ReturnType<typeof setInterval> | undefined;
 
   /** False once the reader scrolls up: streaming must not yank them back down. */
@@ -917,6 +931,24 @@ export class MuxCos extends LitElement {
       background: var(--ink-1);
       color: var(--chrome-body);
     }
+    /* The voice control occupies the same 30px slot the send arrow does, so
+       swapping between them does not reflow the composer row. The orb is
+       sized to the slot; its halos overflow it, which is the intended look. */
+    .cbtn.voice {
+      background: transparent;
+      overflow: visible;
+    }
+    .cbtn.voice mux-voice-orb {
+      --orb-box: 30px;
+      --orb-d: 22px;
+      pointer-events: none;
+    }
+    .cbtn.voice:hover {
+      background: transparent;
+    }
+    .cbtn.voice.live mux-voice-orb {
+      --orb-d: 24px;
+    }
     .cbtn.send:hover:not([disabled]) {
       background: var(--chrome-text-bright);
     }
@@ -1242,6 +1274,10 @@ export class MuxCos extends LitElement {
     this._unsubTranscript = voiceInputController.onTranscript((p) => {
       this._takeTranscript(p.text);
     });
+    this._unsubSession = voiceSessionController.subscribe((s) => {
+      this._session = s;
+    });
+    this._session = voiceSessionController.snapshot();
     // One second is the whole resolution of an mm:ss countdown, and the
     // ticker only runs while something is counting: an idle Dashboard costs
     // no timer.
@@ -1261,6 +1297,13 @@ export class MuxCos extends LitElement {
     this._unsubVoice = null;
     this._unsubTranscript?.();
     this._unsubTranscript = null;
+    this._unsubSession?.();
+    this._unsubSession = null;
+    // The live session is NOT stopped here. This element is parked by
+    // cache() when the Dashboard closes, and hanging up a conversation
+    // because a panel was collapsed would be the wrong reading of that
+    // entirely -- the microphone stays live and the orb reappears in the
+    // state the conversation is actually in when the panel reopens.
     if (this._ticker !== undefined) clearInterval(this._ticker);
     this._ticker = undefined;
     // Only OUR session. An unconditional abort here would kill a dictation
@@ -1751,6 +1794,45 @@ export class MuxCos extends LitElement {
     `;
   }
 
+  /**
+   * The composer's send slot, when there is nothing to send.
+   *
+   * `ready` is false whenever the box is empty, and the send button was
+   * already `?disabled` in exactly that case -- a DEAD AFFORDANCE sitting in
+   * the most reachable position on the surface. So the slot is swapped
+   * rather than greyed out: text present, send arrow; box empty, the voice
+   * control. No new chrome is added anywhere, and a control that did nothing
+   * becomes the front door to the feature.
+   *
+   * The mic button to its left is untouched. Dictation and a live session
+   * are different jobs -- one is free and fills the box for you to check,
+   * the other is metered and acts -- and they must not share a control.
+   */
+  private _renderVoiceControl(): TemplateResult {
+    const s = this._session;
+    const active = s.state !== 'idle' && s.state !== 'error';
+    const orbState =
+      s.state === 'idle' || s.state === 'error' ? 'asleep' : s.state;
+    const label = active ? 'End the spoken conversation' : 'Talk to the chief of staff';
+    return html`
+      <button
+        class="cbtn voice ${active ? 'live' : ''}"
+        type="button"
+        title="${s.state === 'error' && s.error ? s.error : label}"
+        aria-label="${label}"
+        aria-pressed="${active ? 'true' : 'false'}"
+        data-voice-state="${s.state}"
+        @click="${this._toggleSession}"
+      >
+        <mux-voice-orb .state="${orbState}" .level="${s.level}"></mux-voice-orb>
+      </button>
+    `;
+  }
+
+  private _toggleSession = (): void => {
+    void voiceSessionController.toggle();
+  };
+
   private _renderComposer(): TemplateResult {
     const ready = this._draft.trim().length > 0;
     const listening = this._voice === 'listening';
@@ -1788,13 +1870,15 @@ export class MuxCos extends LitElement {
                   @click="${this._toggleVoice}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
-            <button
-              class="cbtn send"
-              type="button"
-              aria-label="Send"
-              ?disabled="${!ready}"
-              @click="${this._submit}"
-            >${icon(ArrowUp, { size: 15 })}</button>
+            ${ready || !voiceSessionController.isSupported()
+              ? html`<button
+                  class="cbtn send"
+                  type="button"
+                  aria-label="Send"
+                  ?disabled="${!ready}"
+                  @click="${this._submit}"
+                >${icon(ArrowUp, { size: 15 })}</button>`
+              : this._renderVoiceControl()}
           </div>
         </div>
       </div>
