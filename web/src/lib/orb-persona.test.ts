@@ -55,6 +55,7 @@ const MEASURED = [
 interface Rig {
   orb: OrbPersona;
   advance: (ms: number) => OrbSample[];
+  advanceBy: (step: number, total: number) => OrbSample[];
   root: HTMLElement;
 }
 
@@ -68,6 +69,20 @@ function rig(initial: OrbState, reducedMotion: boolean | 'auto' = false): Rig {
     autoStart: false,
     now: () => clock,
   });
+  /**
+   * Steps the engine at an arbitrary resolution, which is what makes sub-frame
+   * sampling possible: `tick(t)` takes the timestamp as a parameter, so the
+   * engine can be evaluated at any instant, not only on frame boundaries.
+   */
+  const advanceBy = (step: number, total: number): OrbSample[] => {
+    const out: OrbSample[] = [];
+    const end = clock + total;
+    while (clock < end) {
+      clock = Math.min(clock + step, end);
+      out.push(structuredClone(orb.tick(clock)));
+    }
+    return out;
+  };
   const advance = (ms: number): OrbSample[] => {
     const out: OrbSample[] = [];
     const end = clock + ms;
@@ -80,7 +95,7 @@ function rig(initial: OrbState, reducedMotion: boolean | 'auto' = false): Rig {
   // Settle the idle oscillators so the starting pose is a real running frame,
   // not a construction artefact.
   advance(500);
-  return { orb, advance, root };
+  return { orb, advance, advanceBy, root };
 }
 
 const series = (frames: OrbSample[], key: keyof OrbProfile) => frames.map((f) => f.blend[key]);
@@ -248,6 +263,123 @@ describe('K3 — repeated interruption never accumulates a jump', () => {
       }
       expect(total).toBeCloseTo(1, 9);
     }
+  });
+});
+
+describe('K1 — continuity below the frame boundary', () => {
+  /**
+   * Frame-boundary sampling shows the value differs from frame to frame. It does
+   * not, by itself, exclude the value snapping somewhere between two samples.
+   *
+   * That objection is testable, because the engine takes the timestamp as a
+   * parameter: `tick(t)` evaluates the pose at any instant, so the same
+   * transition can be sampled at 60Hz or at 60,000Hz. The signature that
+   * separates a continuous function from a step function is how the largest
+   * observed step behaves as the sampling interval shrinks:
+   *
+   *   continuous (Lipschitz)  max step is proportional to dt — sample 10x finer,
+   *                           the largest step gets 10x smaller, without bound
+   *   discontinuous           max step floors at the size of the jump and stays
+   *                           there however finely you sample
+   *
+   * So this measures max step at four sampling rates spanning 1000x and asserts
+   * the ratio tracks dt. A snap of any size anywhere in the transition — between
+   * frames, at the start, at the retarget — puts a floor under the sequence and
+   * fails it.
+   */
+  const RATES = [60, 600, 6000, 60000];
+
+  const maxStepAt = (hz: number, key: 'glow' | 'bodyAlpha' | 'coreScale'): number => {
+    const r = rig('speaking');
+    r.orb.setState('listening');
+    const step = 1000 / hz;
+    const frames = r.advanceBy(step, TIMING.DURATION_MS);
+    const xs = frames.map((f) => f.blend[key]);
+    return maxStep(xs);
+  };
+
+  it('max step shrinks in proportion to the sampling interval', () => {
+    const steps = RATES.map((hz) => maxStepAt(hz, 'glow'));
+
+    // Printed so the numbers are in the test output, not only in an assertion.
+    const rows = RATES.map((hz, i) => ({
+      hz,
+      dt_ms: +(1000 / hz).toFixed(4),
+      max_step: +steps[i].toPrecision(4),
+      ratio_to_previous: i === 0 ? null : +(steps[i - 1] / steps[i]).toFixed(2),
+      step_over_dt: +(steps[i] / (1 / hz)).toFixed(4),
+    }));
+    // eslint-disable-next-line no-console
+    console.table(rows);
+
+    // Every tenfold increase in sampling rate must cut the largest step by
+    // roughly tenfold. A discontinuity cannot do this: its step is bounded below
+    // by the size of the jump no matter how fine the sampling.
+    for (let i = 1; i < steps.length; i++) {
+      const ratio = steps[i - 1] / steps[i];
+      expect(ratio).toBeGreaterThan(7);
+      expect(ratio).toBeLessThan(13);
+    }
+    // Across the full 1000x span the step falls by ~1000x.
+    expect(steps[0] / steps[steps.length - 1]).toBeGreaterThan(700);
+    // And the limit of step/dt is the curve's peak slope times range/duration:
+    // 2.73 * 0.12 / 0.42 = 0.78 units/s. Checked at the finest rate.
+    const dt = 1 / RATES[RATES.length - 1];
+    const velocity = steps[steps.length - 1] / dt;
+    expect(velocity).toBeGreaterThan(0.6);
+    expect(velocity).toBeLessThan(0.9);
+  });
+
+  it('holds for every animated scalar, not just glow', () => {
+    for (const key of ['glow', 'bodyAlpha', 'coreScale'] as const) {
+      const coarse = maxStepAt(60, key);
+      const fine = maxStepAt(6000, key);
+      if (coarse < 1e-9) continue;               // constant across these states
+      expect(coarse / fine).toBeGreaterThan(70); // 100x finer sampling, ~100x smaller step
+    }
+  });
+
+  it('the inline styles the DOM receives are continuous below the frame too', () => {
+    // Same test, but reading what was actually written to the element rather
+    // than the engine's own numbers.
+    const read = (r: Rig) => Number(r.root.querySelector<HTMLElement>('.orb-halos')!.style.opacity);
+    const sample = (hz: number) => {
+      const r = rig('speaking');
+      r.orb.setState('listening');
+      const step = 1000 / hz;
+      const xs: number[] = [];
+      const n = Math.floor(TIMING.DURATION_MS / step);
+      for (let i = 0; i < n; i++) {
+        r.advanceBy(step, step);
+        xs.push(read(r));
+      }
+      return maxStep(xs);
+    };
+    // toFixed(5) quantises the written opacity, so the finest useful rate here
+    // is where the step is still well above 1e-5.
+    const a = sample(60);
+    const b = sample(600);
+    expect(a / b).toBeGreaterThan(7);
+    expect(a / b).toBeLessThan(13);
+  });
+
+  it('is continuous by construction, and the retarget preserves that', () => {
+    // The empirical result above is what it is because the value is a closed
+    // form: v(t) = from + ease(clamp((t - t0) / D)) * (to - from). ease() is a
+    // cubic Bezier solve — continuous on [0,1] — composed with a continuous
+    // time map, so v is continuous in t. There is no animation system between
+    // the function and the property; apply() writes v(t) directly.
+    //
+    // The one discrete event is setState(), and it sets from := the live value,
+    // so v is unchanged at the instant of retarget. Checked here to within
+    // floating point at a sub-millisecond spacing around the seam.
+    const r = rig('speaking');
+    r.orb.setState('listening');
+    r.advanceBy(0.05, 140);
+    const before = r.orb.sample().blend.glow;
+    r.orb.setState('thinking');            // retarget, mid-flight
+    const after = r.advanceBy(0.05, 0.05)[0].blend.glow;
+    expect(Math.abs(after - before)).toBeLessThan(1e-4);
   });
 });
 
