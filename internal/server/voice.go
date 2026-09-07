@@ -143,6 +143,13 @@ func (s *Server) registerVoiceRoutes(cfg config.VoiceConfig, protect func(http.H
 		return
 	}
 	s.voice = mgr
+	// The browser's half of a spoken exit: when the model hangs up, the
+	// page has to hear about it or it keeps a microphone open on a session
+	// that is gone. Uses the WebSocket every browser already holds rather
+	// than a second channel.
+	mgr.SetOnEnded(func(sessionID, reason string) {
+		s.hub.BroadcastVoiceEnded(sessionID, reason)
+	})
 
 	s.mux.Handle("POST /api/cos/voice/token", protect(http.HandlerFunc(s.handleVoiceToken)))
 	s.mux.Handle("POST /api/cos/voice/sdp", protect(http.HandlerFunc(s.handleVoiceSDP)))

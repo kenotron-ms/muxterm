@@ -41,11 +41,25 @@ type Sideband struct {
 	// types and tool names are published.
 	events func(Trace)
 
+	// endSession tears this voice session down through the manager, which
+	// is the same path POST /api/cos/voice/end takes. Held as a callback
+	// rather than a manager reference so the sideband stays testable and
+	// knows nothing about HTTP -- see endsession.go.
+	endSession func(reason string)
+
 	conn *websocket.Conn
 
 	mu      sync.Mutex
 	closed  bool
 	pending map[string]*approvalIntent
+
+	// The spoken exit, all of it guarded by mu. endIntent is a hangup that
+	// has been read back and not yet confirmed; ending means a confirmed
+	// goodbye is on its way out; farewellCh carries the read loop's view
+	// of that goodbye's audio to the goroutine waiting to hang up.
+	endIntent  *endIntent
+	ending     bool
+	farewellCh chan string
 
 	// A realtime session runs ONE response at a time. Asking for another
 	// while one is in flight is refused outright:
@@ -107,13 +121,27 @@ const (
 	TraceSaw = "saw"
 	// TraceReattached is a sideband that was dropped and came back.
 	TraceReattached = "reattached"
+	// TraceEnding is a step in the spoken exit that did NOT end the
+	// session: an intent read back, a goodbye requested, an interrupted
+	// goodbye abandoned.
+	TraceEnding = "ending"
+	// TraceEnded is the moment teardown is triggered by a spoken request.
+	// It is emitted after the goodbye has been heard, so its position
+	// relative to the audio events around it IS the ordering evidence.
+	TraceEnded = "ended"
 )
 
 // Dial attaches a sideband to callID and starts listening.
 //
 // The ephemeral secret is the bearer here too, and it is the ONLY credential
 // this connection ever sees: the long-lived one stays with the Client.
-func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridge, events func(Trace)) (*Sideband, error) {
+//
+// endSession may be nil, and is the callback the spoken exit pulls to hang
+// up. It is supplied HERE rather than assigned afterwards because a function
+// call can arrive on the very first frame after the dial returns, and an
+// end_voice_session that lands before the callback is installed would be a
+// hangup with nowhere to go.
+func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridge, events func(Trace), endSession func(reason string)) (*Sideband, error) {
 	if callID == "" {
 		return nil, errors.New("voice: cannot attach a sideband without a call id")
 	}
@@ -123,14 +151,15 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 	}
 
 	sb := &Sideband{
-		callID:  callID,
-		url:     u,
-		secret:  ephemeral,
-		bridge:  bridge,
-		cfg:     sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
-		events:  events,
-		pending: map[string]*approvalIntent{},
-		done:    make(chan struct{}),
+		callID:     callID,
+		url:        u,
+		secret:     ephemeral,
+		bridge:     bridge,
+		cfg:        sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
+		events:     events,
+		endSession: endSession,
+		pending:    map[string]*approvalIntent{},
+		done:       make(chan struct{}),
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -305,8 +334,19 @@ func (s *Sideband) handle(data []byte) {
 		s.respStarted = time.Now()
 		s.lastResponseCreated = time.Now()
 		s.mu.Unlock()
+		s.signalFarewell(sigAudioStarted)
+	case ev.Type == "output_audio_buffer.stopped":
+		// The buffer drained: the user has HEARD what was in it. This is
+		// the only event on this wire that describes delivery rather than
+		// generation, which is why the spoken exit waits for it.
+		s.signalFarewell(sigAudioStopped)
+	case ev.Type == "output_audio_buffer.cleared":
+		// Audio thrown away mid-play -- a barge-in, on a session whose
+		// turn detection carries interrupt_response.
+		s.signalFarewell(sigAudioCleared)
 	case ev.Type == "response.done" || ev.Type == "response.cancelled":
 		s.releaseResponse()
+		s.signalFarewell(sigResponseDone)
 	case strings.HasPrefix(ev.Type, "error"):
 		// The one error worth acting on rather than reporting.
 		//
@@ -461,6 +501,8 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 		s.runApproval(ev.CallID, args)
 	case ToolCancel:
 		s.runCancel(ev.CallID)
+	case ToolEnd:
+		s.runEnd(ev.CallID, args)
 	default:
 		s.answer(ev.CallID, fmt.Sprintf("There is no tool called %q.", ev.Name),
 			"Tell the user you tried to do something you have no way to do, and ask what they want instead.")
