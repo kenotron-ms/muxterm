@@ -36,17 +36,25 @@ var Launchable = []string{HarnessAmplifier, HarnessClaude}
 // its own declared intent, which is what makes drift detectable later
 // (docs/designs/2026-09-06-cos-delegation-model.md section 4).
 //
+// A GOAL LANE AND AN INTERACTIVE LANE ARE NOT THE SAME COMMAND: the goal branch
+// carries no `--mode chat` and must never be "tidied" into one that does. The
+// reason is spelled out at the two returns below; read it before merging them.
+//
 // This is the ONE place lane argv is built. The MCP spawn_lane tool below and
 // the `muxterm spawn-lane` CLI subcommand (cmd/muxterm/spawn_lane_cmd.go) both
 // call it, so a lane started by an agent and a lane started from a shell cannot
 // drift apart. The duplicated key table in cmd/muxterm/pane_cmd.go is what that
 // drift looks like when it is allowed to happen.
 //
-// TWIN: web/src/lib/harness.ts:41 is the TypeScript version of this, used by
-// the browser's composer, and the two MUST stay in sync -- a lane started from
-// the UI and a lane started by the chief of staff have to be the same kind of
-// thing. harness.ts has no goal branch today; if one is added there, mirror the
-// "/goal " prefix exactly.
+// TWIN: harnessArgv in web/src/lib/harness.ts is the TypeScript version of
+// this, used by the browser's composer, and the two MUST agree on every lane
+// they both build -- a lane started from the UI and a lane started by the chief
+// of staff have to be the same kind of thing. The twin is deliberately PARTIAL:
+// it builds the interactive lane only, because the composer has no goal control
+// to build the other one from, and its `amplifier run <prompt> --mode chat`
+// matches this function's goal-unset branch exactly. If a goal control is ever
+// added there, mirror the goal branch WHOLE -- the "/goal " prefix AND the
+// absence of `--mode chat` -- not just the prefix.
 func HarnessArgv(harness, prompt, goal string) ([]string, error) {
 	// A PROMPT IS NOT A COMMAND. Both harnesses read a leading "/" as a slash
 	// command, so a caller-supplied prompt of "/clear" or "/goal ..." would
@@ -79,17 +87,63 @@ func HarnessArgv(harness, prompt, goal string) ([]string, error) {
 		return []string{"claude", prompt}, nil
 
 	case HarnessAmplifier:
-		first := prompt
 		if goal != "" {
-			first = "/goal " + goal
+			// NO `--mode chat` HERE, AND THAT IS THE WHOLE POINT.
+			//
+			// `/goal` is a slash command, and amplifier only honours it on the
+			// HEADLESS path: the single `prompt.strip().lower().startswith(
+			// "/goal ")` test lives in execute_single (main.py:4288). In
+			// `--mode chat` an initial prompt is handed straight to
+			// _execute_with_interrupt (main.py:3992-4005) and never reaches
+			// CommandProcessor, so "/goal <condition>" arrives at the model as
+			// ordinary prompt text: session_state["goal"] is never set, the
+			// orchestrator's auto-continuation never arms, and the lane comes
+			// back mode=interactive with an empty doneMeans -- a lane that
+			// looks delegated and declares no intent, which is precisely what
+			// the goal parameter exists to prevent.
+			//
+			// Adding `--mode chat` back to make this branch match the one below
+			// REINTRODUCES that bug. The two branches differ because the two
+			// lanes are different: an interactive lane must survive its first
+			// turn, and a goal lane must be headless to loop at all.
+			//
+			// A goal lane therefore runs many turns headlessly and then EXITS,
+			// and that exit is the loop finishing, not the pane dying early.
+			// The auto-continuation is driven INSIDE the orchestrator
+			// (loop-streaming's execute(), off session_state["goal"]) -- see
+			// the note at main.py:4000-4004 and amplifier's
+			// docs/GOAL_COMMAND.md -- so nothing on this side needs to keep the
+			// process alive between turns.
+			//
+			// KNOWN CONSEQUENCE, measured, not yet solved: muxterm has no
+			// exited-pane tombstone. Server.handlePaneExit (sessiond/server.go)
+			// removes the pane on process exit and ReapIfEmpty removes the
+			// workspace when that was its last one, which reclaims the
+			// session-state row with it. A finished goal lane therefore goes
+			// `autonomous/working` -> gone from fleet_status, with no terminal
+			// done/failed row observable in between (polled at 3s: present at
+			// T, absent at T+4). The verdict a goal lane exists to produce is
+			// not readable after the fact. That is a gap in pane/row retention,
+			// not a reason to put `--mode chat` back: with the flag there is no
+			// loop and no verdict to lose.
+			//
+			// Blank-checked for the same reason: a goal of only whitespace
+			// yields "/goal " with nothing after it, which fails amplifier's
+			// startswith test and degrades to exactly the literal-prompt lane
+			// described above, silently.
+			if strings.TrimSpace(goal) == "" {
+				return nil, fmt.Errorf("goal is blank: a /goal loop needs a stop condition to declare (drop goal to start an interactive lane)")
+			}
+			return []string{"amplifier", "run", "/goal " + goal}, nil
 		}
-		if first == "" {
+		if prompt == "" {
 			return nil, fmt.Errorf("prompt is required for harness %q (or pass a goal)", HarnessAmplifier)
 		}
-		// `--mode chat` is load-bearing: without it the run is single-shot and
-		// the pane dies the moment it answers its first turn, leaving a
-		// Completed row on the home view for a lane that never did the work.
-		return []string{"amplifier", "run", first, "--mode", "chat"}, nil
+		// `--mode chat` is load-bearing HERE: without it an interactive lane is
+		// single-shot and the pane dies the moment it answers its first turn,
+		// leaving a Completed row on the home view for a lane that never did
+		// the work. It is exactly wrong in the goal branch above.
+		return []string{"amplifier", "run", prompt, "--mode", "chat"}, nil
 
 	case "":
 		return nil, fmt.Errorf("harness is required (launchable: %s)", strings.Join(Launchable, ", "))
@@ -202,9 +256,12 @@ func newLaneTools(c *Client) *laneTools {
 // It exists instead of an argv passthrough on create_pane because a
 // purpose-built tool makes correct delegation the only expressible delegation.
 // Handing an agent a raw cmd array invites it to hand-build argv, and the argv
-// that actually works is not obvious: drop `--mode chat` and the pane dies
-// after one turn. Here the harness catalog is knowledge the tool holds, not a
-// string the caller assembles.
+// that actually works is neither obvious nor singular: an interactive lane
+// needs `--mode chat` or the pane dies after one turn, and a goal lane needs it
+// ABSENT or "/goal <condition>" is delivered to the model as literal prompt
+// text and the loop never arms. Both failures leave a plausible-looking pane
+// behind. Here the harness catalog is knowledge the tool holds (HarnessArgv,
+// above), not a string the caller assembles.
 //
 // A lane is deliberately CREATE-ONLY. There is no closeLane beside this and
 // there must not be one -- see the registration comment in run.go.

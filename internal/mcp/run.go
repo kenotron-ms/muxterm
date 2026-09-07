@@ -45,7 +45,7 @@ func (lc *lazyClient) get() (*Client, error) {
 }
 
 // NewStdioServer creates a Server wired to os.Stdin/Stdout and registers all
-// 18 MCP tools. The sessiond client is dialed lazily on the first tool call,
+// 21 MCP tools. The sessiond client is dialed lazily on the first tool call,
 // so initialize and tools/list work without a running daemon.
 //
 // The returned closer must be called when the server exits: it closes the
@@ -147,7 +147,7 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 	)
 }
 
-// registerAllTools registers the 13 sessiond-backed MCP tools on srv using
+// registerAllTools registers the 16 sessiond-backed MCP tools on srv using
 // wrap to convert func(*Client, map[string]any)(string,error) handlers into
 // ToolFuncs. Tools are registered in the canonical order:
 //
@@ -155,6 +155,7 @@ func registerWithLazy(srv *Server, lc *lazyClient) {
 //	Workspace:  list_workspaces, create_workspace, switch_workspace, close_workspace
 //	Layout:     create_pane, rename_pane, close_pane, list_panes, get_layout
 //	Delegation: spawn_lane
+//	Fleet:      fleet_status, lane_transcript, session_send
 //
 // The 3 tunnel tools (list_tunnels, create_tunnel, close_tunnel) are registered
 // separately via registerTunnelTools because they go through the HTTP REST API
@@ -395,6 +396,102 @@ func registerAllTools(srv *Server, wrap func(func(*Client, map[string]any) (stri
 		},
 		wrap(func(c *Client, args map[string]any) (string, error) {
 			return newLaneTools(c).spawnLane(args)
+		}),
+	)
+
+	// --- Fleet tools ---
+	//
+	// These three read (and, for session_send, write to) the daemon's
+	// session-state feed -- the same structured rows the browser's home view
+	// renders. They exist because the alternative is scraping terminal screens
+	// to answer a question that is already answered structurally one layer
+	// away, and because two of the fields they carry (done_means, knows) are
+	// DECLARED by each session and appear on no screen at any cost.
+	//
+	// Alone among the sessiond-backed tools they are NOT scoped to the
+	// attached workspace: the daemon fans session state out across every
+	// workspace to every opted-in connection. See the header comment in
+	// fleet.go.
+
+	srv.Register(
+		"fleet_status",
+		"what every agent session on this machine is doing, across ALL workspaces -- not just the attached one. "+
+			"Returns full declared rows: session_id, pane_id, workspace_id, harness, project, name, label, mode "+
+			"(interactive|autonomous), state (working|blocked|done|failed|stopped), waiting_for, doing, done_means "+
+			"(an autonomous lane's own stop condition; empty for interactive ones), knows (files the session has read), "+
+			"pr, updated_at. done_means and knows are declared by the session and appear on no terminal screen, "+
+			"so this is the only way to see them. Optional state filters by exact lifecycle state; optional workspace "+
+			"filters by workspace NAME (an unknown name is an error, never a new workspace). An empty sessions list "+
+			"means no agent sessions are running, which is a normal answer",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"state": map[string]any{
+					"type": "string",
+					"enum": fleetStates,
+				},
+				"workspace": map[string]any{
+					"type":        "string",
+					"description": "workspace NAME (not id); must already exist",
+				},
+			},
+		},
+		wrap(func(c *Client, args map[string]any) (string, error) {
+			return newFleetTools(c).fleetStatus(args)
+		}),
+	)
+
+	srv.Register(
+		"lane_transcript",
+		"read the last few turns a session actually exchanged, from its harness's own on-disk transcript "+
+			"(amplifier and claude). Harness and project directory come from the fleet snapshot, so only a session "+
+			"listed by fleet_status can be read. THIS IS A TAIL, NOT THE CONVERSATION: only the end of the file is "+
+			"read (a bounded window, at most 4 MB, however large the file), each turn's text is clipped to 400 "+
+			"characters, and last_n is capped at 100 (default 10). truncated=true in the result means earlier turns "+
+			"exist and were not read",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]any{
+					"type":        "string",
+					"description": "a session_id from fleet_status",
+				},
+				"last_n": map[string]any{
+					"type":        "integer",
+					"description": "turns to return, newest last (default 10, max 100)",
+				},
+			},
+			"required": []string{"session_id"},
+		},
+		wrap(func(c *Client, args map[string]any) (string, error) {
+			return newFleetTools(c).laneTranscript(args)
+		}),
+	)
+
+	srv.Register(
+		"session_send",
+		"type text into a known session's pane, addressed by session_id -- to unblock one waiting at a prompt, "+
+			"or to steer one that has drifted. submit (default true) appends Enter. Switches the MCP session to that "+
+			"session's workspace if needed, which discards this connection's buffered pane output, so drain anything "+
+			"you care about first. REFUSES any session_id not in the current fleet_status snapshot: this addresses "+
+			"known sessions only and can never target an arbitrary pane id. Returns pane_id, workspace_id",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]any{
+					"type":        "string",
+					"description": "a session_id from fleet_status",
+				},
+				"text": map[string]any{"type": "string"},
+				"submit": map[string]any{
+					"type":        "boolean",
+					"description": "append Enter after the text (default true)",
+				},
+			},
+			"required": []string{"session_id", "text"},
+		},
+		wrap(func(c *Client, args map[string]any) (string, error) {
+			return newFleetTools(c).sessionSend(args)
 		}),
 	)
 }

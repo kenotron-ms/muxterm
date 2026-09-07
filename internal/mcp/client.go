@@ -20,6 +20,28 @@ type Client struct {
 	outputBufs     map[int][]byte
 	promptChans    map[int]chan int
 	outputNotifier func(paneID int) // called after each pane output append; nil = disabled
+
+	// fleet is the latest session-state snapshot pushed by the daemon.
+	//
+	// Caching the LATEST push is not an optimisation, it is the whole design:
+	// every TypeSessionState event carries the CURRENT FULL SET, not a delta
+	// (protocol.go:124), so the most recent frame is by construction the
+	// complete truth and a dropped frame is repaired by the next one. There is
+	// nothing to merge and nothing to replay.
+	//
+	// GLOBAL, unlike everything else on this struct. The daemon fans this set
+	// out across EVERY workspace, not just the one this connection is attached
+	// to, which is exactly why the fleet tools are not workspace-scoped the way
+	// create_pane and send_input are. An agent parked in one workspace can see
+	// -- and only see -- the whole fleet through this field.
+	fleet           []sessiond.SessionState
+	fleetSubscribed bool // SessionStateSubscribe(true) has been accepted
+
+	// fleetReady is closed by fleetReadyOnce when the first snapshot lands, so
+	// the first caller can block on a real event instead of sleeping a fixed
+	// interval. Never reassigned after construction; safe to read without mu.
+	fleetReady     chan struct{}
+	fleetReadyOnce sync.Once
 }
 
 // Dial resolves the sessiond Unix socket path via sessiond.SocketPath and
@@ -46,6 +68,7 @@ func DialSocket(socketPath string) (*Client, error) {
 		conn:        conn,
 		outputBufs:  make(map[int][]byte),
 		promptChans: make(map[int]chan int),
+		fleetReady:  make(chan struct{}),
 	}
 
 	conn.SetHandlers(sessiond.Handlers{
@@ -74,6 +97,21 @@ func DialSocket(socketPath string) (*Client, error) {
 				default:
 				}
 			}
+		},
+		// OnSessionState REPLACES the cached fleet wholesale. msg.Sessions is
+		// nil for the empty set (the field is omitempty), and replacing with
+		// nil is correct: the ARRIVAL of the frame is the signal, never the
+		// presence of the field. Merging instead of replacing here would
+		// freeze the view showing sessions that have already ended.
+		//
+		// The handler is installed unconditionally but costs nothing until
+		// something calls Fleet: the daemon pushes only to connections that
+		// opted in, and this one has not until then.
+		OnSessionState: func(msg *sessiond.Message) {
+			c.mu.Lock()
+			c.fleet = msg.Sessions
+			c.mu.Unlock()
+			c.fleetReadyOnce.Do(func() { close(c.fleetReady) })
 		},
 	})
 

@@ -91,18 +91,22 @@ func wordSet(words string) map[string]struct{} {
 }
 
 // promptFromArgv returns the human-written prompt a harness was launched with,
-// or "" when argv is not one of the shapes the composer produces:
+// or "" when argv is not one of the shapes a lane is started with:
 //
-//	amplifier run <prompt> --mode chat
+//	amplifier run <prompt> --mode chat        interactive lane
+//	amplifier run "/goal <condition>"         goal lane -- headless, no --mode
 //	claude <prompt>
 //
-// Those two are matched literally, straight off web/src/lib/harness.ts. A
-// general "find the argument that looks like English" heuristic was
-// deliberately not written: it would have to guess about flags it has never
-// seen, and guessing wrong means a pane titled after a file path or a model
-// name. The composer is the only thing that puts a prompt in argv and it emits
-// exactly these two forms, so recognising exactly these two forms is both
-// sufficient and honest about what is actually known.
+// Those are matched literally, straight off web/src/lib/harness.ts and
+// mcp.HarnessArgv. The match is on `run` plus a non-flag argument, NOT on the
+// trailing flags, which is what lets the first two share one case: do not
+// "tighten" it to require `--mode chat`, because a goal lane deliberately has
+// none and would then lose its label. A general "find the argument that looks
+// like English" heuristic was deliberately not written: it would have to guess
+// about flags it has never seen, and guessing wrong means a pane titled after a
+// file path or a model name. Only the composer and spawn_lane put a prompt in
+// argv, and between them they emit exactly these forms, so recognising exactly
+// these forms is both sufficient and honest about what is actually known.
 func promptFromArgv(argv []string) string {
 	if len(argv) == 0 {
 		return ""
