@@ -559,6 +559,22 @@ async function uiDrive(page) {
     `${rev.verdict} — ${rev.pass} PASS, ${rev.fail} FAIL, rendered into the page`);
   line(rev.chart, 'live strip chart present', '2d context on #chart');
 
+  const rmx = await ev(`(async () => {
+    document.getElementById('runMatrix').click();                 // <-- interaction
+    const out = document.getElementById('evidenceOut');
+    for (let i = 0; i < 1200; i++) {
+      await new Promise(r => setTimeout(r, 250));
+      if (/MATRIX: /.test(out.textContent)) break;
+    }
+    const txt = out.textContent;
+    const m = txt.match(/MATRIX: .*/);
+    return { verdict: m ? m[0] : 'never finished',
+             rows: (txt.match(/^  T[1-6] /gm) || []).length,
+             pass: (txt.match(/PASS/g) || []).length };
+  })()`);
+  line(/36 of 36 cells PASS/.test(rmx.verdict), 'in-page "run the 6 x 6 matrix" button',
+    `${rmx.verdict} — ${rmx.rows} transition rows, ${rmx.pass} PASS tokens rendered into the page`);
+
   const errs = page.evs.filter((e) =>
     e.method === 'Runtime.exceptionThrown' ||
     (e.method === 'Log.entryAdded' && e.params.entry.level === 'error'));

@@ -329,6 +329,10 @@ canvas{
       <button class="primary" id="runEvidence">run evidence</button>
       <span class="k">samples every frame of all six transitions plus an interrupt, then checks K1–K6</span>
     </div>
+    <div class="row" style="margin-top:var(--s-4)">
+      <button class="primary" id="runMatrix">run the 6 × 6 matrix</button>
+      <span class="k">every criterion against every transition — 36 cells, ~90s</span>
+    </div>
     <pre class="out" id="evidenceOut">not run yet</pre>
   </section>
 
@@ -1281,6 +1285,46 @@ document.getElementById('runEvidence').onclick = async (e) => {
     .replace(/\bPASS\b/g, '<span class="pass">PASS</span>')
     .replace(/\bFAIL\b/g, '<span class="fail">FAIL</span>');
   btn.disabled = false; btn.textContent = 'run evidence';
+};
+
+/* Renders window.__orbMatrix() into the page. The matrix was reachable only
+   from the CLI harness (--matrix); a human judging this page could run the
+   61-check evidence pass but not the per-transition view, which is the more
+   legible of the two. Same data, same code path. */
+function renderMatrix(cells) {
+  const KS = ['K1', 'K2', 'K3', 'K4', 'K5', 'K6'];
+  const L = ['  transition                       ' + KS.map(k => k.padStart(9)).join(''),
+             '  ' + '-'.repeat(88)];
+  let fails = 0;
+  for (const c of cells) {
+    L.push('  ' + (c.id + '  ' + c.a + '→' + c.b).padEnd(32) +
+      KS.map(k => { if (!c.k[k].ok) fails++; return (c.k[k].ok ? 'PASS' : 'FAIL').padStart(9); }).join(''));
+  }
+  L.push('', '  the measurement behind each cell:', '');
+  for (const c of cells) {
+    L.push(`  ${c.id}  ${c.a} → ${c.b}`);
+    L.push(`     K1  velocity ×nominal: glow ${c.k.K1.glow.toFixed(2)}, rect ${c.k.K1.rect.toFixed(2)}   (threshold 6, jump ≈25, curve peak 2.73)`);
+    L.push(`     K2  glow-interval violations ${c.k.K2.viol}; below geometric floor ${c.k.K2.floor}: ${c.k.K2.dips}; weights monotone ${c.k.K2.mono}`);
+    L.push(`     K3  interrupted by "${c.k.K3.via}": incoming weight ${c.k.K3.w_at.toFixed(4)} (mid-flight), seam Δglow ${c.k.K3.seam.toFixed(5)}`);
+    L.push(`     K4  properties written: [${c.k.K4.props.join(', ')}]`);
+    L.push(`     K5  reduced motion: rect span ${c.k.K5.span.toExponential(1)}, colour ΔRGB ${c.k.K5.dCol}, ${c.k.K5.distinct} distinct values`);
+    L.push(`     K6  duration recovered from the DOM at y=.25/.50/.75: ${c.k.K6.est.join(' / ')} ms  (stated ${ORB_CONSTANTS.DURATION_MS}, spread ${c.k.K6.spread}ms)`);
+    L.push('');
+  }
+  L.push(fails === 0 ? 'MATRIX: 36 of 36 cells PASS.' : `MATRIX: ${fails} of 36 cells FAILED.`);
+  return L.join('\n');
+}
+
+document.getElementById('runMatrix').onclick = async (e) => {
+  const btn = e.target;
+  btn.disabled = true; btn.textContent = 'running…';
+  const outEl = document.getElementById('evidenceOut');
+  outEl.textContent = 'running — 6 transitions × 6 criteria, ~90s\n';
+  outEl.textContent = renderMatrix(await window.__orbMatrix());
+  outEl.innerHTML = outEl.textContent
+    .replace(/\bPASS\b/g, '<span class="pass">PASS</span>')
+    .replace(/\bFAIL\b/g, '<span class="fail">FAIL</span>');
+  btn.disabled = false; btn.textContent = 'run the 6 × 6 matrix';
 };
 
 go('idle');
