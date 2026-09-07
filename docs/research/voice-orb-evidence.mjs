@@ -9,6 +9,7 @@
  *   node docs/research/voice-orb-evidence.mjs --ui     # drive the page's own controls
  *   node docs/research/voice-orb-evidence.mjs --technique   # prove WHICH technique is running
  *   node docs/research/voice-orb-evidence.mjs --matrix      # 6 transitions x 6 criteria = 36 cells
+ *   node docs/research/voice-orb-evidence.mjs --verdicts    # emit the recorded verdict table
  *   node docs/research/voice-orb-evidence.mjs --trace-teardown  # log what is started and reclaimed
  *
  * It opens docs/research/voice-orb-mock.html in headless Chrome, calls the
@@ -36,6 +37,7 @@ const RAW_OUT = process.argv.includes('--raw');
 const UI_OUT = process.argv.includes('--ui');
 const TECH_OUT = process.argv.includes('--technique');
 const MATRIX_OUT = process.argv.includes('--matrix');
+const VERDICTS_OUT = process.argv.includes('--verdicts');
 const TRACE_TD = process.argv.includes('--trace-teardown');
 
 const CHROME = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']
@@ -254,6 +256,13 @@ async function main() {
   }
   if (!up) throw new Error('page never finished loading __orbEvidence');
   await sleep(600); // let the oscillators settle into a steady state
+
+  if (VERDICTS_OUT) {
+    const code = await verdicts(page);
+    page.close();
+    browser.close();
+    return code;
+  }
 
   if (MATRIX_OUT) {
     const code = await matrix(page);
@@ -784,6 +793,111 @@ async function matrix(page) {
     ? 'MATRIX: 36 of 36 cells PASS.'
     : `MATRIX: ${fails} of 36 cells FAILED.`);
   return fails === 0 ? 0 : 1;
+}
+
+/**
+ * Emits the recorded verdict table as markdown, for committing to the repo.
+ *
+ * The twelve terminal verdicts are DERIVED from the 36 measured cells rather
+ * than asserted: a transition passes iff all six criteria hold for it, and a
+ * criterion passes iff it holds on all six transitions. Anything that fails
+ * comes out BLOCKED with the failing measurement named, automatically -- there
+ * is no path by which a failing cell yields a PASS verdict in this document.
+ */
+async function verdicts(page) {
+  const r = await page.send('Runtime.evaluate', {
+    expression: 'window.__orbMatrix()', awaitPromise: true, returnByValue: true, timeout: 300000,
+  });
+  if (r.exceptionDetails) {
+    throw new Error('page threw: ' + (r.exceptionDetails.exception?.description ?? JSON.stringify(r.exceptionDetails)));
+  }
+  const cells = r.result.value;
+  const KS = ['K1', 'K2', 'K3', 'K4', 'K5', 'K6'];
+  const KNAME = {
+    K1: 'no discontinuous jump', K2: 'no snap-through-base', K3: 'interruptible',
+    K4: 'compositor-only', K5: 'reduced motion', K6: 'duration and easing stated',
+  };
+  const why = (c, k) => {
+    const v = c.k[k];
+    switch (k) {
+      case 'K1': return `velocity x nominal: glow ${v.glow.toFixed(2)}, rect ${v.rect.toFixed(2)} (threshold 6; a jump is ~25)`;
+      case 'K2': return `glow-interval violations ${v.viol}; frames below geometric floor ${v.floor}: ${v.dips}; weights monotone ${v.mono}; largest third-state weight ${v.third.toExponential(1)}`;
+      case 'K3': return `interrupted by "${v.via}" at 140ms with incoming weight ${v.w_at.toFixed(4)} (mid-flight); seam d(glow) ${v.seam.toFixed(5)}; velocity ${v.vel.toFixed(2)}`;
+      case 'K4': return `properties written: [${v.props.join(', ')}]`;
+      case 'K5': return `rect span ${v.span.toExponential(1)}; colour dRGB ${v.dCol}; glow d ${v.dGlow}; ${v.distinct} distinct values`;
+      case 'K6': return `duration recovered from the DOM at y=.25/.50/.75: ${v.est.join(' / ')} ms (stated 420, spread ${v.spread}ms)`;
+      default: return '';
+    }
+  };
+
+  const L = [];
+  L.push('# Voice orb — recorded verdicts', '');
+  L.push('Generated, not hand-written. Regenerate with:', '');
+  L.push('```console');
+  L.push('node docs/research/voice-orb-evidence.mjs --verdicts > docs/research/voice-orb-verdicts.md');
+  L.push('```', '');
+  L.push(`Captured ${new Date().toISOString().slice(0, 19).replace('T', ' ')}Z against`);
+  L.push('`docs/research/voice-orb-mock.html` in headless Chrome. Every number is a');
+  L.push('`getComputedStyle` or `getBoundingClientRect` reading taken during a live transition.', '');
+  L.push('The twelve terminal verdicts below are **derived from the 36 measured cells**, not');
+  L.push('asserted: a transition passes iff all six criteria hold for it, and a criterion passes');
+  L.push('iff it holds on all six transitions. A failing cell propagates to a BLOCKED verdict with');
+  L.push('the failing measurement named — there is no path here by which a failure yields a PASS.', '');
+
+  const tFail = (c) => KS.filter((k) => !c.k[k].ok);
+  const kFail = (k) => cells.filter((c) => !c.k[k].ok);
+
+  L.push('## Terminal verdicts', '');
+  L.push('| # | item | verdict | derived from |');
+  L.push('|---|---|---|---|');
+  for (const c of cells) {
+    const f = tFail(c);
+    L.push(f.length === 0
+      ? `| **${c.id}** | ${c.a} → ${c.b} | **PASS** | all six criteria hold; see the row below |`
+      : `| **${c.id}** | ${c.a} → ${c.b} | **BLOCKED** | ${f.map((k) => `${k}: ${why(c, k)}`).join('; ')} |`);
+  }
+  for (const k of KS) {
+    const f = kFail(k);
+    L.push(f.length === 0
+      ? `| **${k}** | ${KNAME[k]} | **PASS** | holds on all six transitions; per-transition measurements below |`
+      : `| **${k}** | ${KNAME[k]} | **BLOCKED** | fails on ${f.map((c) => `${c.id} (${why(c, k)})`).join('; ')} |`);
+  }
+  L.push('| **Persona** | use the AI Elements persona component | **ADOPTED** | state model (`persona.tsx:281-294`) and layered visual approach ported to Lit; timing values NOT PORTABLE — the upstream source contains none. See `persona-reference/README.md`. |');
+  L.push('');
+
+  const blocked = cells.filter((c) => tFail(c).length).length + KS.filter((k) => kFail(k).length).length;
+  L.push(`**BLOCKED items: ${blocked}.**` + (blocked === 0
+    ? ' Every item carries PASS, so no BLOCKED reasons are required. Had any cell failed, the'
+      + ' verdict above would read BLOCKED with the failing measurement named.'
+    : ''), '');
+
+  L.push('## The 36 cells', '');
+  L.push('| transition | ' + KS.map((k) => `${k}<br>${KNAME[k]}`).join(' | ') + ' |');
+  L.push('|---|' + KS.map(() => '---').join('|') + '|');
+  for (const c of cells) {
+    L.push(`| **${c.id}** ${c.a} → ${c.b} | ` +
+      KS.map((k) => (c.k[k].ok ? 'PASS' : '**BLOCKED**')).join(' | ') + ' |');
+  }
+  L.push('');
+  L.push('### The measurement in every cell', '');
+  for (const c of cells) {
+    L.push(`#### ${c.id}  ${c.a} → ${c.b}`, '');
+    for (const k of KS) L.push(`- **${k}** ${c.k[k].ok ? 'PASS' : 'BLOCKED'} — ${why(c, k)}`);
+    L.push('');
+  }
+  L.push('## Where the rest of the evidence lives', '');
+  L.push('| | |');
+  L.push('|---|---|');
+  L.push('| unreduced per-frame samples, all six transitions + three interrupts | `docs/research/voice-orb-samples.txt` |');
+  L.push('| which technique is running, measured at runtime | `--technique` (`getAnimations()` = 0, Σw = 1.000000) |');
+  L.push('| the artifact\'s controls, driven by clicking them | `--ui` |');
+  L.push('| the technique asserted in CI, mutation-proven | `web/src/lib/orb-persona.test.ts` (30 tests, `npm test`) |');
+  L.push('| the engine | `web/src/lib/orb-persona.ts` |');
+  L.push('| the artifact | `docs/research/voice-orb-mock.html` |');
+  L.push('');
+
+  console.log(L.join('\n'));
+  return blocked === 0 ? 0 : 1;
 }
 
 let code = 1;
