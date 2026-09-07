@@ -227,6 +227,14 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/remotes/{id}/disconnect", protect(http.HandlerFunc(s.handleRemotesDisconnect)))
 	s.mux.Handle("POST /api/remotes/{id}/provision", protect(http.HandlerFunc(s.handleRemotesProvision)))
 
+	// Mission Control's read-only applets: one git-annotated directory listing
+	// for Files, and every open pull request across the named worktrees for
+	// Pull Requests. Both add no authority over /ws -- the same auth boundary
+	// already hands out a shell. See internal/server/files_api.go and
+	// internal/server/prs_api.go.
+	s.mux.Handle("GET /api/files", protect(http.HandlerFunc(s.handleFilesList)))
+	s.mux.Handle("GET /api/prs", protect(http.HandlerFunc(s.handlePRsList)))
+
 	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
 
 	if cfg.StaticFS != nil {

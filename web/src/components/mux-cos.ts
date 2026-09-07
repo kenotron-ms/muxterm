@@ -1,10 +1,11 @@
 /**
- * mux-cos.ts -- the Dashboard. ONE surface.
+ * mux-cos.ts -- Mission Control. ONE surface.
  *
  * Not a peer of <mux-home>: it IS home. The left column is a conversation with
- * the chief of staff; the right column is the fleet -- the same rows home used
- * to render, from the same store -- and a draggable divider between them says
- * how much of each you want. One topbar spans both.
+ * the chief of staff; the right column is <mux-applets>, a tab strip over a
+ * stack of applets, of which the Dashboard applet is the fleet -- the same
+ * rows home used to render, from the same store. A draggable divider between
+ * them says how much of each you want, and one topbar spans both.
  *
  * An OVERLAY covering .main-pane. The dock underneath is NEVER unmounted:
  * dockview's layout persistence and the attached workspace's live-colour
@@ -26,18 +27,21 @@
  *
  * THE ONE INVARIANT WORTH A COMMENT OF ITS OWN: dragging the divider must not
  * change a card's HEIGHT. Only the column count and the scroll extent may
- * move. That is why the fleet grid is auto-fill/minmax with an explicitly
- * fixed --meta-h on every card and ellipsis on every line inside it -- a card
- * whose text is allowed to wrap re-flows its neighbours on every pointermove,
- * and the whole right column jitters under the hand that is dragging.
+ * move. That invariant now lives with the grid it constrains, in
+ * applets/applet-dashboard.ts -- but it is a property of THIS divider, so it
+ * is named here too: a card whose text is allowed to wrap re-flows its
+ * neighbours on every pointermove, and the whole right column jitters under
+ * the hand that is dragging.
  *
- * PRESENTATIONAL over two stores, both read-only here: cosStore for the
- * conversation, homeSessions for the fleet -- the ONE seam for session state,
- * subscribed, never duplicated. It imports no socket and parses no wire frame,
- * and reports intent through events only: `home-open` (the SAME event
- * <mux-home> fires when a card is activated, so both reach a pane by one path
- * in app.ts), `home-dismiss` (Esc), and `fleet-state` (the mobile sheet
- * opened or closed, so the title bar's button can say so).
+ * PRESENTATIONAL over one store, read-only here: cosStore for the
+ * conversation. Session state belongs to the Dashboard applet now, which
+ * subscribes to homeSessions itself and only while it is on screen. This file
+ * imports no socket and parses no wire frame, and reports intent through
+ * events only: `home-dismiss` (Esc) and `fleet-state` (the mobile sheet opened
+ * or closed, so the title bar's button can say so). `home-open` still leaves
+ * this element -- the SAME event <mux-home> fires when a card is activated --
+ * but it is now dispatched by the applet and passes THROUGH here on its way to
+ * app.ts, which is why the sheet listens for it rather than firing it.
  *
  * Tokens are mux-home's, verbatim. This is a new surface in an existing app,
  * not a new visual language.
@@ -46,18 +50,7 @@
 import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { icon } from '../lib/icons.js';
-import {
-  ArrowUp,
-  Check,
-  ChevronDown,
-  Ellipsis,
-  LayoutGrid,
-  Mic,
-  Rows3,
-  Square,
-  TriangleAlert,
-  X,
-} from 'lucide';
+import { ArrowUp, Check, ChevronDown, Ellipsis, Mic, Square, TriangleAlert, X } from 'lucide';
 import {
   cosStore,
   shortToolName,
@@ -65,15 +58,6 @@ import {
   type CosBlock,
   type CosTurn,
 } from '../lib/cos-store.js';
-import { homeSessions } from '../lib/home-sessions.js';
-import {
-  HOME_GROUPS,
-  groupFor,
-  isKnownHarness,
-  type HomeGroup,
-  type SessionState,
-} from '../lib/session-state.js';
-import { tileLinesFor } from '../lib/home-tile.js';
 import {
   clampDashboardSplit,
   persistDashboardSplit,
@@ -85,6 +69,11 @@ import {
   type VoiceSessionSnapshot,
 } from '../lib/voice-session-controller.js';
 import './mux-voice-orb.js';
+import './mux-applets.js';
+// The portrait sheet renders a SECOND instance of the Dashboard applet
+// directly, outside the applet host: in portrait the whole right-hand region
+// is display:none and the fleet is a bottom sheet instead.
+import './applets/applet-dashboard.js';
 import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 
@@ -108,93 +97,6 @@ function renderMarkdown(block: object, text: string, streaming: boolean): Templa
   }
   return renderSegments(s.update(text, streaming));
 }
-
-// ---------------------------------------------------------------------------
-// The fleet
-// ---------------------------------------------------------------------------
-
-/** Which way the fleet draws itself. Desktop only -- portrait is cards. */
-export type FleetView = 'cards' | 'tiles';
-
-/**
- * localStorage, not the server config -- mux-home's VIEW_KEY reasoning
- * verbatim: this is a per-eyeball display preference with no server-side
- * meaning, and config.toml would make it machine-wide.
- *
- * A key of its OWN rather than mux-home's, because the two grids are not the
- * same grid: home's tiles are 5x8 terminal canvases sized by a measured
- * track, and these are 214/252px auto-fill cards. Sharing the key would let a
- * choice made about one silently re-shape the other.
- */
-const FLEET_VIEW_KEY = 'muxterm.dashboard.fleetView';
-
-function loadFleetView(): FleetView {
-  try {
-    const stored = localStorage.getItem(FLEET_VIEW_KEY);
-    if (stored === 'tiles' || stored === 'cards') return stored;
-  } catch {
-    /* private mode / storage disabled: still usable, just not sticky */
-  }
-  return 'cards';
-}
-
-function saveFleetView(v: FleetView): void {
-  try {
-    localStorage.setItem(FLEET_VIEW_KEY, v);
-  } catch {
-    /* not sticky; not fatal */
-  }
-}
-
-/**
- * The group headings, in the mockup's words.
- *
- * HOME_GROUPS remains the SOURCE of the grouping -- groupFor() decides which
- * bucket a row lands in and this file never re-derives it. Only the LABEL is
- * local, because the Dashboard speaks in the second person (\"wants you\")
- * where a list view names a state (\"Needs input\"), and the mockup is the
- * approved copy.
- */
-const GROUP_LABEL: Record<HomeGroup, string> = {
-  'Needs input': 'wants you',
-  Running: 'working',
-  Completed: 'done',
-};
-
-/**
- * Left-edge state colour class -- DUPLICATED from mux-home.ts's markClass()
- * with eyes open. The class names and their colours have to live in this
- * shadow root anyway (mux-home's `.m-need` is unreachable from here), so
- * sharing the function would still leave two copies of the CSS and buy only
- * the five-line mapping. What MUST agree between the two surfaces is which
- * group a row is in, and that is groupFor() -- imported, never re-derived.
- */
-function stateClass(s: SessionState): string {
-  const g = groupFor(s);
-  if (g === 'Needs input') return 'need';
-  if (g === 'Running') return 'work';
-  if (s.state === 'failed') return 'fail';
-  if (s.state === 'done') return 'done';
-  return '';
-}
-
-/**
- * Coarse age, mux-home's age() verbatim -- duplicated for the same reason as
- * stateClass: eight lines of formatting against a lib module for one string.
- * '' for an unset timestamp rather than \"56y ago\".
- */
-function age(updatedAt: number, nowSec: number): string {
-  if (!Number.isFinite(updatedAt) || updatedAt <= 0) return '';
-  const d = Math.max(0, Math.floor(nowSec - updatedAt));
-  if (d < 60) return `${d}s`;
-  if (d < 3600) return `${Math.floor(d / 60)}m`;
-  if (d < 86400) return `${Math.floor(d / 3600)}h`;
-  return `${Math.floor(d / 86400)}d`;
-}
-
-/** Thumbnail geometry. Six lines is what fits the 84px thumb strip. */
-const THUMB_COLS = 44;
-const THUMB_ROWS = 6;
 
 /** mm:ss for the approval countdown. Clamped at zero, never negative. */
 function clock(msLeft: number): string {
@@ -230,8 +132,6 @@ export class MuxCos extends LitElement {
 
   /** Bumped by the cosStore subscription and by the approval ticker. */
   @state() private _version = 0;
-  /** Bumped by the homeSessions subscription. */
-  @state() private _fleetVersion = 0;
 
   @state() private _draft = '';
   @state() private _showThinking = new Set<string>();
@@ -249,11 +149,14 @@ export class MuxCos extends LitElement {
   @state() private _session: VoiceSessionSnapshot = voiceSessionController.snapshot();
 
   /**
-   * Cards or tiles. Reflected to the host so the grid's minmax and the thumb
-   * strip are pure CSS -- the segmented control writes ONE attribute and the
-   * layout follows, rather than every card re-rendering to a different shape.
+   * Whether the portrait fleet sheet is open.
+   *
+   * Its ONLY job is to tell the Dashboard applet inside the sheet whether it
+   * is active -- a closed sheet must not leave a subscription running, for
+   * exactly the reason a hidden applet must not. The browser owns open/closed
+   * (see _onSheetToggle); this mirrors it.
    */
-  @property({ type: String, reflect: true }) view: FleetView = loadFleetView();
+  @state() private _sheetOpen = false;
 
   /**
    * Divider position, as a percent of the surface width. Persisted.
@@ -270,7 +173,6 @@ export class MuxCos extends LitElement {
   private _split = restoreDashboardSplit();
 
   private _unsub: (() => void) | null = null;
-  private _unsubFleet: (() => void) | null = null;
   private _unsubVoice: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
   private _unsubSession: (() => void) | null = null;
@@ -285,14 +187,6 @@ export class MuxCos extends LitElement {
   /** Live sheet drag. `moved` separates a drag from a tap on the handle. */
   private _sheetDrag: { pointerId: number; moved: boolean } | null = null;
   private _detent: SheetDetent = 'half';
-
-  /**
-   * Clock for the fleet's ages. Refreshed when the fleet changes rather than
-   * on a timer of its own: a row's age only becomes interesting when
-   * something about the fleet moved, and mux-home takes the same reading once
-   * and does not tick it at all.
-   */
-  private _now = Math.floor(Date.now() / 1000);
 
   static styles = css`
     *,
@@ -366,14 +260,6 @@ export class MuxCos extends LitElement {
 
       --dur: 120ms;
       --ctl: 28px;
-
-      /* THE FIXED-HEIGHT CONTRACT. A card is exactly this tall in cards mode
-         and exactly this plus the thumb strip in tiles mode, at every
-         divider position. Three ellipsised lines plus their gaps plus the
-         padding: 16 + 15 + 15 + 8 + 20. Written here rather than inline so
-         the two modes and the mobile sheet cannot drift apart. */
-      --meta-h: 74px;
-      --thumb-h: 84px;
     }
 
     /* 16px is iOS Safari's focus-zoom threshold and index.html sets no
@@ -450,39 +336,6 @@ export class MuxCos extends LitElement {
       min-width: 0;
     }
 
-    /* The segmented control, mux-home's geometry. */
-    .seg {
-      display: flex;
-      gap: 2px;
-      background: var(--surface);
-      padding: 2px;
-      border-radius: var(--r-ctl);
-      border: 1px solid var(--edge);
-      flex: none;
-    }
-    .seg button {
-      display: inline-flex;
-      align-items: center;
-      gap: var(--s-2);
-      font: inherit;
-      font-size: 10.5px;
-      font-weight: 600;
-      line-height: 1;
-      color: var(--ink-3);
-      background: transparent;
-      border: 0;
-      padding: 6px 10px;
-      border-radius: 3px;
-      cursor: pointer;
-    }
-    .seg button:hover {
-      color: var(--ink-1);
-    }
-    .seg button.on {
-      background: color-mix(in srgb, var(--chrome-accent) 22%, var(--surface));
-      color: var(--ink-1);
-    }
-
     .dots {
       font: inherit;
       color: var(--ink-3);
@@ -502,10 +355,8 @@ export class MuxCos extends LitElement {
       color: var(--ink-1);
     }
 
-    .seg button:focus-visible,
     .dots:focus-visible,
     .btn:focus-visible,
-    .card:focus-visible,
     .cbtn:focus-visible {
       outline: 2px solid var(--chrome-accent);
       outline-offset: 2px;
@@ -1158,7 +1009,11 @@ export class MuxCos extends LitElement {
       cursor: col-resize;
     }
 
-    /* -- FLEET ------------------------------------------------------------ */
+    /* -- THE APPLET REGION ------------------------------------------------
+       Formerly the fleet, in this shadow root. It is now one grid area
+       handed whole to <mux-applets>: the tab strip must not scroll away, and
+       the applet body owns its own scroller, so this element gives the host
+       the full area and nothing else. */
     .dash {
       grid-area: dash;
       background: var(--chrome-bar);
@@ -1167,144 +1022,10 @@ export class MuxCos extends LitElement {
       overflow: hidden;
       min-width: 0;
     }
-    .dashbody {
+    .dash mux-applets {
       flex: 1;
       min-height: 0;
-      overflow-y: auto;
-      padding: var(--s-6);
-    }
-    .grp {
-      font-family: var(--mono);
-      font-size: 10.5px;
-      font-weight: 600;
-      line-height: 1;
-      letter-spacing: 0.07em;
-      text-transform: uppercase;
-      color: var(--ink-3);
-      padding: var(--s-6) var(--s-1) var(--s-4);
-    }
-    .grp:first-child {
-      padding-top: 0;
-    }
-    /* A fixture-populated fleet must never be mistaken for a live one. */
-    .fx {
-      font-family: var(--mono);
-      font-size: var(--t-meta);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--need);
-      padding: 0 var(--s-1) var(--s-4);
-    }
-
-    /* THE GRID. auto-fill + minmax is the whole reason a card's height does
-       not move when the divider does: a narrower column drops a TRACK, it
-       does not squeeze the cards that are left. */
-    .grid {
-      display: grid;
-      gap: var(--s-4);
-      grid-template-columns: repeat(auto-fill, minmax(214px, 1fr));
-    }
-    :host([view='tiles']) .grid {
-      grid-template-columns: repeat(auto-fill, minmax(252px, 1fr));
-    }
-
-    .card {
-      font: inherit;
-      text-align: left;
-      width: 100%;
-      /* FIXED. Not min-height, not aspect-ratio, not content. */
-      height: var(--meta-h);
-      background: var(--surface);
-      border: 1px solid var(--chrome-border);
-      border-left: 3px solid var(--edge);
-      border-radius: var(--r-card);
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      cursor: pointer;
-      padding: 0;
-      color: var(--ink-2);
-      transition: border-color var(--dur) ease, background var(--dur) ease;
-    }
-    :host([view='tiles']) .card {
-      height: calc(var(--meta-h) + var(--thumb-h));
-    }
-    .card:hover {
-      background: var(--chrome-hover);
-    }
-    .card.need {
-      border-left-color: var(--need);
-    }
-    .card.work {
-      border-left-color: var(--work);
-    }
-    .card.done {
-      border-left-color: var(--ok);
-    }
-    .card.fail {
-      border-left-color: var(--fail);
-    }
-    .card .meta {
-      flex: none;
-      height: var(--meta-h);
-      padding: 10px var(--s-5);
-      display: flex;
-      flex-direction: column;
-      gap: var(--s-2);
       min-width: 0;
-      overflow: hidden;
-    }
-    /* Every line ellipsises. A line allowed to wrap is a card allowed to
-       change height, and that is the one thing this grid must never do. */
-    .card .n,
-    .card .m,
-    .card .g {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .card .n {
-      font-size: 12.5px;
-      font-weight: 600;
-      line-height: var(--lh-tight);
-      color: var(--ink-1);
-    }
-    .card .m {
-      font-family: var(--mono);
-      font-size: 11px;
-      line-height: 1.35;
-      color: var(--ink-3);
-    }
-    .card .g {
-      font-size: 11.5px;
-      line-height: 1.35;
-      color: var(--ink-2);
-    }
-    .thumb {
-      display: none;
-      flex: 1;
-      min-height: 0;
-      background: var(--chrome-body);
-      border-top: 1px solid var(--chrome-border);
-      font-family: var(--mono);
-      font-size: 9.5px;
-      line-height: 1.35;
-      color: var(--ink-3);
-      padding: 7px 9px;
-      margin: 0;
-      overflow: hidden;
-      white-space: pre-wrap;
-    }
-    :host([view='tiles']) .thumb {
-      display: block;
-    }
-
-    .fzero {
-      font-size: var(--t-ui);
-      line-height: var(--lh-body);
-      color: var(--ink-3);
-      padding: var(--s-4) var(--s-1);
     }
 
     /* -- THE FLEET SHEET (portrait) ---------------------------------------
@@ -1405,10 +1126,11 @@ export class MuxCos extends LitElement {
       padding-bottom: max(var(--s-6), env(safe-area-inset-bottom, 0px));
     }
     /* Portrait is CARDS ONLY -- a tile is a terminal thumbnail and needs
-       width to say anything. Belt and braces with the render side. */
-    .pslist .thumb {
-      display: none;
-    }
+       width to say anything. The rule that enforces it USED to live here, as
+       .pslist .thumb; a thumbnail is now inside the applet's shadow root
+       where this selector cannot reach it, so the applet is handed insheet
+       and suppresses its own thumbs. See applet-dashboard's
+       :host([insheet]) .thumb. */
   `;
 
   // -------------------------------------------------------------------------
@@ -1421,19 +1143,9 @@ export class MuxCos extends LitElement {
     this._unsub = cosStore.subscribe(() => {
       this._version++;
     });
-    // The fleet's ONE seam -- home-sessions.ts, the same store <mux-home>,
-    // the Dashboard card and the title-bar dot all read.
-    this._unsubFleet = homeSessions.subscribe(this._onFleet);
-    // Adopt the store's CURRENT state, not just its next change. This element
-    // is parked by cache() when the Dashboard closes, so disconnectedCallback
-    // drops the subscription and every session that starts, blocks or ends
-    // while it is parked arrives unheard. Re-subscribing alone only registers
-    // for the NEXT notification, so reopening the Dashboard rendered the fleet
-    // as it was when you left -- typically "Nothing is running" -- until some
-    // unrelated change forced a re-render. Reading the store on reattach is
-    // what makes lanes spawned while the Dashboard was closed show up the
-    // moment you open it, which is the whole promise of the surface.
-    this._onFleet();
+    // Session state is the Dashboard APPLET's subscription now, held only
+    // while that applet is on screen. The adopt-current-state-on-reattach
+    // reasoning moved with it, to applet-dashboard's _sync().
     this._unsubVoice = voiceInputController.onStateChange((s) => {
       this._voice = s;
     });
@@ -1457,8 +1169,6 @@ export class MuxCos extends LitElement {
     document.removeEventListener('mousedown', this._onOutsideClick);
     this._unsub?.();
     this._unsub = null;
-    this._unsubFleet?.();
-    this._unsubFleet = null;
     this._unsubVoice?.();
     this._unsubVoice = null;
     this._unsubTranscript?.();
@@ -1526,11 +1236,6 @@ export class MuxCos extends LitElement {
     this._pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
   };
 
-  private _onFleet = (): void => {
-    this._now = Math.floor(Date.now() / 1000);
-    this._fleetVersion++;
-  };
-
   // -------------------------------------------------------------------------
   // The divider
   // -------------------------------------------------------------------------
@@ -1585,10 +1290,16 @@ export class MuxCos extends LitElement {
     const sheet = this._sheet;
     if (!sheet) return;
     try {
-      if (sheet.matches(':popover-open')) sheet.hidePopover();
-      else {
+      if (sheet.matches(':popover-open')) {
+        sheet.hidePopover();
+        this._sheetOpen = false;
+      } else {
         this._setDetent('half');
         sheet.showPopover();
+        // Set BEFORE the toggle event arrives so the applet inside subscribes
+        // and adopts the store in the same update that reveals it -- opening
+        // the sheet onto one frame of "Nothing is running" is a lie.
+        this._sheetOpen = true;
       }
     } catch {
       /* raced with a light dismiss; the toggle event below settles the truth */
@@ -1601,6 +1312,7 @@ export class MuxCos extends LitElement {
     } catch {
       /* already closed */
     }
+    this._sheetOpen = false;
   };
 
   private _setDetent(d: SheetDetent): void {
@@ -1618,6 +1330,10 @@ export class MuxCos extends LitElement {
    */
   private _onSheetToggle = (e: Event): void => {
     const open = (e as ToggleEvent).newState === 'open';
+    // Authoritative, including for the closes nothing of ours asked for --
+    // light dismiss and Escape. A sheet closed that way must still put the
+    // applet inside it back to sleep.
+    this._sheetOpen = open;
     this.dispatchEvent(
       new CustomEvent('fleet-state', { detail: { open }, bubbles: true, composed: true }),
     );
@@ -1709,9 +1425,7 @@ export class MuxCos extends LitElement {
         @pointerup="${this._gripUp}"
         @pointercancel="${this._gripUp}"
       ></div>
-      <div class="dash">
-        <div class="dashbody">${this._renderFleet(false)}</div>
-      </div>
+      <div class="dash"><mux-applets .narrow="${this.narrow}"></mux-applets></div>
       ${this.narrow ? this._renderSheet() : nothing}
     `;
   }
@@ -1719,22 +1433,8 @@ export class MuxCos extends LitElement {
   private _renderTopbar(): TemplateResult {
     return html`
       <div class="topbar">
-        <h1>Dashboard</h1>
+        <h1>Mission Control</h1>
         <span class="spacer"></span>
-        <div class="seg" role="group" aria-label="Fleet view">
-          <button
-            type="button"
-            class="${this.view === 'cards' ? 'on' : ''}"
-            aria-pressed="${this.view === 'cards' ? 'true' : 'false'}"
-            @click="${() => this._setView('cards')}"
-          >${icon(Rows3, { size: 12 })} cards</button>
-          <button
-            type="button"
-            class="${this.view === 'tiles' ? 'on' : ''}"
-            aria-pressed="${this.view === 'tiles' ? 'true' : 'false'}"
-            @click="${() => this._setView('tiles')}"
-          >${icon(LayoutGrid, { size: 12 })} tiles</button>
-        </div>
         <button
           class="dots ${this._menuOpen ? 'on' : ''}"
           type="button"
@@ -1799,8 +1499,8 @@ export class MuxCos extends LitElement {
       <div class="zero">
         <div class="lede">What needs you?</div>
         <p class="sub">
-          Describe a problem and the Dashboard splits it, routes it, and starts
-          the lanes. What it starts shows up on the right.
+          Describe a problem and your chief of staff splits it, routes it, and
+          starts the lanes. What it starts shows up on the right.
         </p>
       </div>
     `;
@@ -1939,7 +1639,7 @@ export class MuxCos extends LitElement {
       ? 'Clear all messages?'
       : `Clear messages older than ${which} days?`;
     const detail = all
-      ? 'The Dashboard forgets this conversation entirely. Running lanes are unaffected \u2014 no session is stopped, closed or altered \u2014 and it will not drop a message about a lane that is still alive.'
+      ? 'Your chief of staff forgets this conversation entirely. Running lanes are unaffected \u2014 no session is stopped, closed or altered \u2014 and it will not drop a message about a lane that is still alive.'
       : 'Anything older goes. Running lanes are unaffected \u2014 no session is stopped, closed or altered \u2014 and it will not drop a message about a lane that is still alive.';
     return html`
       <div class="turn">
@@ -2058,81 +1758,19 @@ export class MuxCos extends LitElement {
   }
 
   // -------------------------------------------------------------------------
-  // The fleet
+  // The fleet sheet (portrait)
   // -------------------------------------------------------------------------
 
   /**
-   * What is running, live.
+   * A SECOND instance of the Dashboard applet, not the one in the applet
+   * host: in portrait the whole right-hand region is display:none and the
+   * fleet is this sheet instead. `insheet` is what tells it so -- the sheet
+   * owns the scroller and portrait draws no thumbnails.
    *
-   * Grouping is groupFor()'s -- the SAME function <mux-home> calls, imported
-   * rather than re-implemented, so the two surfaces cannot disagree about
-   * what \"wants you\" means. HOME_GROUPS gives the order.
+   * `home-open` is caught HERE rather than fired here. Opening a pane used to
+   * close the sheet as part of the same method; the applet dispatches the
+   * event now, so the sheet listens for it on its way past.
    */
-  private _renderFleet(inSheet: boolean): TemplateResult {
-    void this._fleetVersion; // read so Lit re-renders on every fleet change
-    const byGroup = new Map<HomeGroup, SessionState[]>(
-      HOME_GROUPS.map((g) => [g, [] as SessionState[]]),
-    );
-    for (const s of homeSessions.sessions) byGroup.get(groupFor(s))?.push(s);
-    const total = homeSessions.sessions.length;
-
-    if (total === 0) {
-      return html`<div class="fzero">
-        Nothing is running. Describe a problem on the left and the lanes it
-        starts appear here.
-      </div>`;
-    }
-
-    return html`
-      ${homeSessions.source === 'fixture' ? html`<div class="fx">fixture</div>` : nothing}
-      ${HOME_GROUPS.map((g) => {
-        const members = byGroup.get(g) ?? [];
-        if (members.length === 0) return nothing;
-        return html`
-          <h2 class="grp">${GROUP_LABEL[g]}</h2>
-          <div class="grid">
-            ${members.map((s) => this._renderCard(s, inSheet))}
-          </div>
-        `;
-      })}
-    `;
-  }
-
-  /**
-   * One session. Activation dispatches `home-open` -- byte-identical to what
-   * <mux-home> fires, so app.ts's one handler opens the workspace and focuses
-   * the pane for either surface.
-   */
-  private _renderCard(s: SessionState, inSheet: boolean): TemplateResult {
-    const bits: string[] = [];
-    if (s.harness) bits.push(isKnownHarness(s.harness) ? s.harness : `${s.harness}?`);
-    if (s.mode === 'autonomous') bits.push('autonomous');
-    bits.push(s.workspaceId);
-    const a = age(s.updatedAt, this._now);
-    if (a) bits.push(a);
-    const doing = s.doing?.trim() ?? '';
-    // Portrait is cards only. Gated here as well as in CSS so a phone never
-    // even builds the six lines of text it would not draw.
-    const thumb = !inSheet && this.view === 'tiles';
-    return html`
-      <button
-        type="button"
-        class="card ${stateClass(s)}"
-        title="${s.name}"
-        @click="${() => this._openPane(s)}"
-      >
-        <div class="meta">
-          <div class="n">${s.label || s.name}</div>
-          <div class="m">${bits.join(' \u00b7 ')}</div>
-          ${doing ? html`<div class="g">${doing}</div>` : nothing}
-        </div>
-        ${thumb
-          ? html`<pre class="thumb">${tileLinesFor(s, THUMB_COLS, THUMB_ROWS).join('\n')}</pre>`
-          : nothing}
-      </button>
-    `;
-  }
-
   private _renderSheet(): TemplateResult {
     return html`
       <div
@@ -2141,6 +1779,7 @@ export class MuxCos extends LitElement {
         data-state="half"
         aria-label="Fleet"
         @toggle="${this._onSheetToggle}"
+        @home-open="${this._hideSheet}"
       >
         <div
           class="pshandle"
@@ -2157,7 +1796,9 @@ export class MuxCos extends LitElement {
             @click="${this._hideSheet}"
           >${icon(X, { size: 14 })}</button>
         </div>
-        <div class="pslist">${this._renderFleet(true)}</div>
+        <div class="pslist">
+          <applet-dashboard insheet .active="${this._sheetOpen}"></applet-dashboard>
+        </div>
       </div>
     `;
   }
@@ -2165,12 +1806,6 @@ export class MuxCos extends LitElement {
   // -------------------------------------------------------------------------
   // Intent
   // -------------------------------------------------------------------------
-
-  private _setView(v: FleetView): void {
-    if (this.view === v) return;
-    this.view = v;
-    saveFleetView(v);
-  }
 
   private _toggleMenu = (e: Event): void => {
     e.stopPropagation();
@@ -2306,16 +1941,6 @@ export class MuxCos extends LitElement {
     });
   }
 
-  private _openPane(s: SessionState): void {
-    this._hideSheet();
-    this.dispatchEvent(
-      new CustomEvent('home-open', {
-        detail: { sessionId: s.sessionId, paneId: s.paneId, workspaceId: s.workspaceId },
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
 }
 
 declare global {

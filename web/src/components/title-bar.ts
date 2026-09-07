@@ -363,7 +363,7 @@ export class MuxTitleBar extends LitElement {
         ${needs ? html`<span class="needs-dot"></span>` : ''}
       </button>
       ${this.dashboardActive
-        ? html`<span class="title">Dashboard</span>`
+        ? html`<span class="title">Mission Control</span>`
         : html`
             <div class="brand">
               <span class="brand-dot"></span>
