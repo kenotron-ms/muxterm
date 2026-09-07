@@ -205,8 +205,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMCPToolsListReturns22Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 22 tools
+// TestMCPToolsListReturns24Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 24 tools
 // in the expected order — all without a running sessiond daemon.
 //
 // This is the MANAGER surface: what a session that is not running inside a
@@ -218,7 +218,9 @@ func assertToolNames(t *testing.T, got, want []string) {
 // (3) and get_config/update_config (2) were added. spawn_lane took it to 18,
 // and the fleet trio (fleet_status, lane_transcript, session_send) to 21.
 // list_machines, which answers "which machines can I reach", took it to 22.
-func TestMCPToolsListReturns22Tools(t *testing.T) {
+// read_file and list_dir, which answer "what is IN a file on one of them",
+// took it to 24.
+func TestMCPToolsListReturns24Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 	got := mcpToolNames(t, bin, "")
 
@@ -242,6 +244,9 @@ func TestMCPToolsListReturns22Tools(t *testing.T) {
 		"session_send",
 		// 1 machine tool (registered via registerMachineTools)
 		"list_machines",
+		// 2 read-only filesystem tools (registered via registerRemoteReadTools)
+		"read_file",
+		"list_dir",
 		// 3 tunnel tools (HTTP REST, registered via registerTunnelTools)
 		"list_tunnels",
 		"create_tunnel",
@@ -291,6 +296,11 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 		// exist is not a destructive capability, and a lane that can see
 		// the fleet has no reason to be blind to where it runs.
 		"list_machines",
+		// 2 read-only filesystem tools. Present in a pane for the same
+		// reason: reading a file destroys nothing, and the guard above
+		// withholds DESTRUCTIVE reach, not reach.
+		"read_file",
+		"list_dir",
 		// 3 tunnel tools, unchanged.
 		"list_tunnels",
 		"create_tunnel",

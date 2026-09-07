@@ -698,6 +698,10 @@ func (c *conn) handle(msg Message) {
 		})
 	case TypeScrollbackPage:
 		c.scrollbackPage(msg)
+	case TypeReadFile:
+		c.readFile(msg)
+	case TypeListDir:
+		c.listDir(msg)
 	case TypePreviewSubscribe:
 		c.setPreviewOn(msg.OK)
 		// OK is unconditionally true: it acknowledges that THIS daemon
@@ -756,6 +760,70 @@ func (c *conn) scrollbackPage(msg Message) {
 		StartLine:  start,
 		NextCursor: next,
 	})
+}
+
+// readFile answers a TypeReadFile request with one bounded window of a file on
+// THIS machine, as text.
+//
+// Unlike every other request on this connection it is NOT scoped to an attached
+// workspace: a file has nothing to do with a workspace, and requiring an attach
+// first would make the answer depend on unrelated state. It is the same
+// exception fleet.go already makes for session state.
+//
+// Failures are reported with the stable fs-* codes rather than a generic error,
+// because "no such file", "that is a directory", "permission denied", "too
+// large" and "not text" each imply a different next move for the caller. The
+// bounds are applied in ReadFileBounded, i.e. on this side, so no client can
+// raise them.
+func (c *conn) readFile(msg Message) {
+	res, err := ReadFileBounded(msg.Path, msg.Offset, msg.Limit)
+	if err != nil {
+		c.replyFSError(msg.CID, err)
+		return
+	}
+	c.reply(&Message{
+		Type:         TypeReadFileResult,
+		CID:          msg.CID,
+		Path:         res.Path,
+		ResolvedPath: res.ResolvedPath,
+		Content:      res.Content,
+		Offset:       &res.Offset,
+		FileSize:     res.FileSize,
+		NextOffset:   res.NextOffset,
+		EOF:          res.EOF,
+		Truncated:    res.Truncated,
+	})
+}
+
+// listDir answers a TypeListDir request with a bounded, name-sorted listing of
+// a directory on THIS machine. Workspace-independent for the same reason
+// readFile is.
+func (c *conn) listDir(msg Message) {
+	res, err := ListDirBounded(msg.Path, msg.Limit)
+	if err != nil {
+		c.replyFSError(msg.CID, err)
+		return
+	}
+	c.reply(&Message{
+		Type:         TypeListDirResult,
+		CID:          msg.CID,
+		Path:         res.Path,
+		ResolvedPath: res.ResolvedPath,
+		Entries:      res.Entries,
+		Truncated:    res.Truncated,
+	})
+}
+
+// replyFSError puts a filesystem failure on the wire with its stable code
+// intact. An error that is somehow not an *FSError still gets a reply rather
+// than silence, because a caller waiting on a cid needs an answer more than it
+// needs a perfectly categorised one.
+func (c *conn) replyFSError(cid uint64, err error) {
+	if fe, ok := err.(*FSError); ok {
+		c.replyError(cid, fe.Code, fe.Msg)
+		return
+	}
+	c.replyError(cid, CodeFSBadPath, err.Error())
 }
 
 // attach attaches this connection to the requested workspace, replying with the

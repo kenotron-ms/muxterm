@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -18,14 +19,27 @@ const (
 	destructiveRemoteRefusal = "close_workspace and close_pane are deliberately local-only. " +
 		"Destroying panes on another machine is irreversible, invisible from here, and not needed to " +
 		"enumerate or drive a remote. Close it from a session on that machine, or from the browser"
-
-	// transcriptRemoteRefusal explains a limit of the mechanism rather than a
-	// policy: the transcript is a file, and files do not travel over the
-	// sessiond protocol.
-	transcriptRemoteRefusal = "a harness transcript is a file on the machine the session runs on, and this " +
-		"process has no way to read a file across a machine boundary. Use get_screen with the same machine " +
-		"to see what that session is showing"
 )
+
+// lane_transcript was once refused across machines with a reason that has since
+// stopped being true: "a harness transcript is a file on the machine the session
+// runs on, and this process has no way to read a file across a machine
+// boundary." That was a limit of the MECHANISM, not a policy, and the mechanism
+// changed -- the sessiond protocol now carries read-file and list-dir (see
+// internal/sessiond/protocol.go TypeReadFile), so a file on another machine is
+// reachable through the same stream everything else already uses.
+//
+// The distinction is worth keeping in view. The other refusal above is a
+// POLICY: close_workspace and close_pane stay local because destroying panes on
+// a machine you cannot see is a hazard, and that reasoning is unaffected by any
+// new capability. Read crosses the boundary; destroy does not.
+
+// registerRemoteReadTools registers the machine-scoped read-only filesystem
+// tools. Split out so the read-only surface is one call site rather than
+// something spread through registerAllTools.
+func registerRemoteReadTools(srv *Server, wrap func(func(*Client, map[string]any) (string, error)) ToolFunc) {
+	registerFSTools(srv, wrap)
+}
 
 // machineArg is the schema fragment every machine-scoped tool shares.
 //
@@ -229,7 +243,7 @@ func callWithin(machine string, bound time.Duration, fn func() (string, error)) 
 }
 
 // NewStdioServer creates a Server wired to os.Stdin/Stdout and registers the
-// MCP tools this session is entitled to: all 22 normally, and 20 inside a
+// MCP tools this session is entitled to: all 24 normally, and 22 inside a
 // muxterm pane, where close_workspace and close_pane are withheld (see
 // registerAllTools). The sessiond client is dialed lazily on the first tool
 // call, so initialize and tools/list work without a running daemon.
@@ -241,7 +255,19 @@ func callWithin(machine string, bound time.Duration, fn func() (string, error)) 
 // The returned closer must be called when the server exits: it closes the
 // local sessiond client if one was opened, and every remote connection.
 func NewStdioServer(tr MachineTransport) (*Server, func() error) {
-	srv := NewServer()
+	return NewServerWithTransport(os.Stdin, os.Stdout, tr)
+}
+
+// NewServerWithTransport is NewStdioServer with explicit IO, mirroring the
+// NewServer / NewServerWithIO pair on Server itself and existing for the same
+// reason: the tool surface is worth driving over something other than this
+// process's real stdin and stdout.
+//
+// It is the whole assembled server -- same registrations, same clientPool, same
+// remote wiring -- so exercising it exercises what ships, rather than a
+// reimplementation of it that can drift.
+func NewServerWithTransport(in io.Reader, out io.Writer, tr MachineTransport) (*Server, func() error) {
+	srv := NewServerWithIO(in, out)
 	pool := &clientPool{local: &lazyClient{}, machines: newMachines(tr)}
 	registerWithLazy(srv, pool)
 	closer := func() error {
@@ -299,6 +325,7 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 
 	registerAllTools(srv, wrap, localOnly)
 	registerMachineTools(srv, pool.machines)
+	registerRemoteReadTools(srv, wrap)
 	registerTunnelTools(srv)
 	registerConfigTools(srv)
 
@@ -749,9 +776,9 @@ func registerAllTools(
 			"listed by fleet_status can be read. THIS IS A TAIL, NOT THE CONVERSATION: only the end of the file is "+
 			"read (a bounded window, at most 4 MB, however large the file), each turn's text is clipped to 400 "+
 			"characters, and last_n is capped at 100 (default 10). truncated=true in the result means earlier turns "+
-			"exist and were not read. LOCAL MACHINE ONLY: the transcript is a file on the machine the session runs on, "+
-			"which this process cannot read across a machine boundary, so a remote machine argument is refused rather "+
-			"than answered with this machine's files",
+			"exist and were not read. Defaults to this machine; pass machine to read the transcript of a session on "+
+			"a connected remote, which is read from THAT machine's disk through its own daemon -- never answered "+
+			"with this machine's files. The result carries the machine it came from",
 		map[string]any{
 			"type": "object",
 			"properties": withMachine(map[string]any{
@@ -766,7 +793,7 @@ func registerAllTools(
 			}),
 			"required": []string{"session_id"},
 		},
-		localOnly(transcriptRemoteRefusal, func(c *Client, args map[string]any) (string, error) {
+		wrap(func(c *Client, args map[string]any) (string, error) {
 			return newFleetTools(c).laneTranscript(args)
 		}),
 	)
