@@ -65,21 +65,29 @@ func wrapSubscribeErr(err error) error {
 // "no rows yet", would teach a caller to retry through a condition that is
 // simply true.
 func (c *Client) Fleet() ([]sessiond.SessionState, error) {
-	c.mu.Lock()
-	subscribed := c.fleetSubscribed
-	c.mu.Unlock()
-
-	if !subscribed {
+	// Subscribe exactly once. The read-then-act this replaces was harmless --
+	// sessiond answers a repeated subscribe with OK, and fleetReadyOnce closes
+	// the channel once regardless -- but two callers could both observe
+	// "not subscribed" and both send, which reads like a race whether or not
+	// it behaves as one. sync.Once also gives every caller the same verdict:
+	// the error from the single attempt is cached and returned to all of them,
+	// so a daemon that does not understand session-state fails the same way on
+	// call one and call fifty.
+	c.fleetSubOnce.Do(func() {
 		supported, err := c.conn.SessionStateSubscribeAck(true)
-		if err != nil {
-			return nil, wrapSubscribeErr(err)
+		switch {
+		case err != nil:
+			c.fleetSubErr = wrapSubscribeErr(err)
+		case !supported:
+			c.fleetSubErr = errSessionStateUnsupported()
+		default:
+			c.mu.Lock()
+			c.fleetSubscribed = true
+			c.mu.Unlock()
 		}
-		if !supported {
-			return nil, errSessionStateUnsupported()
-		}
-		c.mu.Lock()
-		c.fleetSubscribed = true
-		c.mu.Unlock()
+	})
+	if c.fleetSubErr != nil {
+		return nil, c.fleetSubErr
 	}
 
 	select {

@@ -409,9 +409,18 @@ func claudeTurn(raw []byte) (TranscriptTurn, bool) {
 		turn.Text = clip(claudeBlocksText(blocks))
 
 	case "system":
+		// Claude system records frequently carry "content": null, and Go
+		// unmarshals a JSON null into a string as "" with a nil error -- so
+		// the err check alone lets every one of them through as an empty
+		// turn. A caller reading the last N turns of a session would get a
+		// run of blank rows that are initialisation bookkeeping, not
+		// conversation, and would have to guess that. Drop them.
 		var s string
 		if err := json.Unmarshal(rec.Content, &s); err != nil {
-			return TranscriptTurn{}, false // system records often carry null
+			return TranscriptTurn{}, false
+		}
+		if strings.TrimSpace(s) == "" {
+			return TranscriptTurn{}, false
 		}
 		turn.Role = "system"
 		turn.Text = clip(s)

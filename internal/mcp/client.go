@@ -42,6 +42,12 @@ type Client struct {
 	// interval. Never reassigned after construction; safe to read without mu.
 	fleetReady     chan struct{}
 	fleetReadyOnce sync.Once
+
+	// fleetSubOnce guards the one SessionStateSubscribe attempt; fleetSubErr
+	// caches its verdict so every caller gets the same answer. Written inside
+	// the Once and read after it, which is the ordering sync.Once guarantees.
+	fleetSubOnce sync.Once
+	fleetSubErr  error
 }
 
 // Dial resolves the sessiond Unix socket path via sessiond.SocketPath and
