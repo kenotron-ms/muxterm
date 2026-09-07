@@ -80,6 +80,29 @@ import {
   restoreDashboardSplit,
 } from '../lib/dashboard-split.js';
 import { voiceInputController, type VoiceState } from '../lib/voice-input-controller.js';
+import { MarkdownStream } from '../lib/markdown-stream.js';
+import { renderSegments } from '../lib/markdown-view.js';
+
+/**
+ * One markdown parser per text block, for as long as the block exists.
+ *
+ * Keyed by the BLOCK OBJECT rather than by turn id and index because that is
+ * the identity cos-store actually preserves: a delta does `block.text += ...`
+ * on the same object, and a reconcile that cannot append pushes a NEW one. So
+ * a parser follows its block through every delta, and is collected with it --
+ * no cache to invalidate, no key to get wrong, and no growth when the
+ * housekeeping menu clears the transcript.
+ */
+const parsers = new WeakMap<object, MarkdownStream>();
+
+function renderMarkdown(block: object, text: string, streaming: boolean): TemplateResult {
+  let s = parsers.get(block);
+  if (!s) {
+    s = new MarkdownStream();
+    parsers.set(block, s);
+  }
+  return renderSegments(s.update(text, streaming));
+}
 
 // ---------------------------------------------------------------------------
 // The fleet
@@ -588,6 +611,149 @@ export class MuxCos extends LitElement {
     }
     .turn.you .say {
       color: var(--ink-2);
+    }
+
+    /* -- MARKDOWN --------------------------------------------------------- *
+     *
+     * A rendered message is BLOCKS now, so pre-wrap is wrong for it: each
+     * block owns its own whitespace, and leaving pre-wrap on would add the
+     * source's newlines back on top of the paragraphs it just became. The
+     * user's own prompt is still plain text and keeps it.
+     *
+     * min-width: 0 on the container is what stops a long code line or a wide
+     * table from forcing the whole chat column wider than the pane. The
+     * scrollers below then take the overflow, which is the ONE requirement
+     * these styles have to meet rather than merely look nice: a code block
+     * still being written must not push the conversation off screen.
+     */
+    .say.md,
+    .thought.md {
+      white-space: normal;
+      min-width: 0;
+    }
+    .md > *:first-child {
+      margin-top: 0;
+    }
+    .md > *:last-child {
+      margin-bottom: 0;
+    }
+    .md .md-p {
+      margin: 0 0 var(--s-4);
+      overflow-wrap: anywhere;
+    }
+    .md .md-p:last-child {
+      margin-bottom: 0;
+    }
+    .md .md-h {
+      margin: var(--s-5) 0 var(--s-3);
+      line-height: var(--lh-tight);
+      font-weight: 600;
+      color: var(--ink-1);
+    }
+    .md h1.md-h {
+      font-size: 1.3em;
+    }
+    .md h2.md-h {
+      font-size: 1.18em;
+    }
+    .md h3.md-h {
+      font-size: 1.08em;
+    }
+    .md h4.md-h,
+    .md h5.md-h,
+    .md h6.md-h {
+      font-size: 1em;
+      color: var(--ink-2);
+    }
+    .md strong {
+      font-weight: 650;
+      color: var(--chrome-text-bright, var(--ink-1));
+    }
+    .md em {
+      font-style: italic;
+    }
+    .md .md-code {
+      font-family: var(--mono);
+      font-size: 0.92em;
+      padding: 0.1em 0.34em;
+      border-radius: var(--r-ctl);
+      background: var(--chrome-hover);
+      overflow-wrap: anywhere;
+    }
+    .md .md-pre {
+      margin: 0 0 var(--s-4);
+      padding: var(--s-4);
+      border: 1px solid var(--chrome-border);
+      border-radius: var(--r-card);
+      background: var(--chrome-bar);
+      /* The block scrolls; the conversation does not reflow around it. */
+      overflow-x: auto;
+      max-width: 100%;
+    }
+    .md .md-pre code {
+      font-family: var(--mono);
+      font-size: 0.92em;
+      line-height: var(--lh-tight);
+      white-space: pre;
+      color: var(--ink-1);
+    }
+    /* A fence whose closer has not arrived. Said quietly -- the reader can see
+       the block growing; this only keeps the seam from looking finished. */
+    .md .md-pre[data-streaming] {
+      border-bottom-color: var(--chrome-accent);
+    }
+    .md .md-link {
+      color: var(--chrome-accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      overflow-wrap: anywhere;
+    }
+    .md .md-ul,
+    .md .md-ol {
+      margin: 0 0 var(--s-4);
+      padding-left: var(--s-6);
+    }
+    .md .md-li {
+      margin: var(--s-2) 0;
+    }
+    .md .md-li > .md-p {
+      margin: 0;
+    }
+    .md .md-li .md-ul,
+    .md .md-li .md-ol {
+      margin: var(--s-2) 0 0;
+    }
+    .md .md-quote {
+      margin: 0 0 var(--s-4);
+      padding: 0 0 0 var(--s-4);
+      border-left: 2px solid var(--chrome-border);
+      color: var(--ink-2);
+    }
+    .md .md-hr {
+      margin: var(--s-5) 0;
+      border: 0;
+      border-top: 1px solid var(--chrome-border);
+    }
+    .md .md-tablewrap {
+      margin: 0 0 var(--s-4);
+      overflow-x: auto;
+      max-width: 100%;
+    }
+    .md .md-table {
+      border-collapse: collapse;
+      font-size: 0.94em;
+    }
+    .md .md-th,
+    .md .md-td {
+      padding: var(--s-2) var(--s-4);
+      border: 1px solid var(--chrome-border);
+      text-align: left;
+      vertical-align: top;
+    }
+    .md .md-th {
+      background: var(--chrome-bar);
+      font-weight: 600;
+      white-space: nowrap;
     }
 
     /* The state between \"sent\" and the first token. Said in words, in the
@@ -1635,8 +1801,14 @@ export class MuxCos extends LitElement {
   }
 
   private _renderBlock(t: CosTurn, b: CosBlock, i: number): TemplateResult {
+    // Only the LAST block of a live turn is still being written. An earlier
+    // one is finished even though the turn is not, so it gets its final,
+    // unspeculated render immediately rather than waiting for turn_end.
+    const live = t.status === 'pending' || t.status === 'streaming';
+    const streaming = live && i === t.blocks.length - 1;
+
     if (b.kind === 'text') {
-      return html`<p class="say">${b.text}</p>`;
+      return html`<div class="say md">${renderMarkdown(b, b.text, streaming)}</div>`;
     }
     if (b.kind === 'thinking') {
       const key = `${t.id}:${i}`;
@@ -1644,7 +1816,7 @@ export class MuxCos extends LitElement {
       return html`
         <details class="think" ?open="${open}" @toggle="${(e: Event) => this._onThink(key, e)}">
           <summary>${icon(ChevronDown, { size: 11 })} thinking</summary>
-          <p class="thought">${b.text}</p>
+          <div class="thought md">${renderMarkdown(b, b.text, streaming)}</div>
         </details>
       `;
     }
