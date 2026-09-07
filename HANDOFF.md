@@ -29,8 +29,43 @@ workspaces.
 | 14 | Portrait cards only | `thumbs: 0`, no segmented control in the sheet; heights fixed |
 | 15 | `spawn_lane` MCP tool | tool count 17→18, `required:[workspace,harness,prompt]`, `harness` enum |
 | 16 | `muxterm spawn-lane` CLI | `spawned amplifier lane in pane 1 of new workspace w2 ("verify-a")` |
-| 17 | Launches the real harness | pane showed `Amplifier Interactive Session / Session ID: 01304f2a-…`, not a shell. `--goal` argv verified: `["amplifier" "run" "/goal the suite is green" "--mode" "chat"]` — the original prompt correctly dropped. |
+| 17 | Launches the real harness | pane showed `Amplifier Interactive Session / Session ID: 01304f2a-…`, not a shell. **The `--goal` half of this row was wrong — see the correction below.** |
 | 18 | Browser verification | all of 3–14 above, in Chrome, my own tool calls. |
+
+## Correction to row 17 (2026-09-07): the goal lane never armed a goal loop
+
+Row 17 verified the `--goal` **argv shape** —
+`["amplifier" "run" "/goal the suite is green" "--mode" "chat"]` — and called
+that a pass. Reading argv is not verification. That argv does not start a goal
+loop at all.
+
+`/goal` is a slash command and amplifier honours it only on the **headless**
+path: the one `prompt.strip().lower().startswith("/goal ")` test lives in
+`execute_single` (`main.py:4288`). Under `--mode chat` an initial prompt is
+handed straight to `_execute_with_interrupt` (`main.py:3992-4005`) and never
+reaches `CommandProcessor`, so the stop condition was delivered to the model as
+ordinary prompt text. `session_state["goal"]` was never set, so every lane
+spawned with `--goal` came back `mode=interactive` with an empty `doneMeans` —
+delegated work that declared no intent, which is the whole thing `goal` exists
+to provide.
+
+Fixed in `HarnessArgv` (`internal/mcp/tools_lane.go`): a goal lane is now
+`["amplifier", "run", "/goal <condition>"]` with **no** `--mode chat`. The flag
+stays on the interactive branch, where it is still load-bearing. Verified the
+right way this time, by what the lane declares: `muxterm fleet` reporting
+`mode=autonomous` with the condition in `doneMeans`, and the lane taking
+several turns instead of answering once.
+
+That verification also surfaced a gap the old behavior had been hiding. A goal
+lane now exits when its loop ends, and muxterm keeps no tombstone for an exited
+pane — `handlePaneExit` removes the pane, `ReapIfEmpty` removes the workspace
+when it was the last one, and the session-state row goes with them. A finished
+goal lane reads `autonomous/working` and then simply vanishes from
+`fleet_status`; no terminal `done`/`failed` row was observable at 3s polling.
+So a goal lane's intent is readable while it runs and its verdict is not
+readable afterwards. Not fixed here: it is pane/row retention, not argv, and it
+is not a reason to restore `--mode chat` (with the flag there was no loop and no
+verdict to lose).
 
 ## Two bugs found and fixed outside the checklist
 
