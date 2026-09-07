@@ -1,0 +1,162 @@
+bundle:
+  name: muxterm-cos-behavior
+  version: 1.0.0
+  description: >
+    The chief of staff's tool surface. It delegates, observes, unblocks and
+    reports; it does not do the work. Everything here exists to make that the
+    only expressible behaviour -- see
+    docs/designs/2026-09-06-cos-delegation-model.md section 2.
+
+# ---------------------------------------------------------------------------
+# TOOLS
+#
+# This list is the whole point of the bundle. Read the withheld list under
+# `session.muxterm_cos.tools` at the bottom before adding anything here.
+# ---------------------------------------------------------------------------
+tools:
+  # The muxterm tools. This is the CoS's actual job: spawn_lane starts work,
+  # fleet_status is how it knows what is happening, send_input/session_send
+  # relay the human's answers into a lane, lane_transcript reads what a lane
+  # is saying.
+  #
+  # run_command is in this set and `bash` (withheld, below) is not, and the
+  # difference is not cosmetic. run_command runs in a VISIBLE PANE: the human
+  # can watch it, scroll it back, and interrupt it, so it is auditable by
+  # construction -- which is the premise this whole system rests on. `bash`
+  # runs silently inside the sidecar's own process, where nothing is
+  # observable. Do not "simplify" by adding tool-bash on the grounds that
+  # run_command is already here; they are not the same capability wearing
+  # different names.
+  - module: tool-mcp
+    source: git+https://github.com/microsoft/amplifier-module-tool-mcp@main
+    config:
+      servers:
+        muxterm:
+          command: muxterm
+          args: ["mcp"]
+          # `muxterm mcp` reaches the running server through the sessiond
+          # socket under $XDG_RUNTIME_DIR, so it lands on the same instance
+          # that spawned this sidecar without being told where that is.
+
+  # read_file. Routing decisions need some ground truth -- which repo is this,
+  # what does that design doc actually say -- before a lane is spawned against
+  # a guess. write_file and edit_file ride along inside this module and are
+  # withheld by name below; that is a module-granularity limitation, not a
+  # decision to allow writes.
+  - module: tool-filesystem
+    source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
+
+  # glob, grep. Same reason: locate the thing before dispatching someone to it.
+  - module: tool-search
+    source: git+https://github.com/microsoft/amplifier-module-tool-search@main
+
+  # web_search, web_fetch. Research in service of dispatching -- reading what
+  # an error actually means before choosing which lane gets it.
+  - module: tool-web
+    source: git+https://github.com/microsoft/amplifier-module-tool-web@main
+
+  # todo. Tracking what it dispatched, across a conversation that outlives any
+  # single lane.
+  - module: tool-todo
+    source: git+https://github.com/microsoft/amplifier-module-tool-todo@main
+
+hooks:
+  # Kept from the anchors roster because the sidecar's approval protocol needs
+  # a provider to drive: HostApprovalProvider is registered against this, and
+  # MUXTERM_COS_REQUIRE_APPROVAL forces named tools through it.
+  #
+  # policy_driven_only means nothing is gated by default, which is right here:
+  # the safety property in this bundle is the ABSENCE of dangerous tools, not
+  # a gate in front of them.
+  #
+  # It has to be, because hooks-mode arrives whether this bundle wants it or
+  # not: amplifier's app layer composes the modes behaviour onto every root
+  # bundle, and hooks-mode overwrites require_approval_tools on every tool:pre
+  # at priority -20, ahead of hooks-approval at -10. A gate declared here would
+  # simply not survive it. That is the whole argument for removing tools rather
+  # than gating them, restated as a measured fact about this exact mount plan.
+  #
+  # Two other modules ride in the same way and are worth knowing about, neither
+  # of which adds a tool: hooks-wayfinder (an in-session guidance channel), and
+  # -- when the user has muxterm-behavior in `bundle.app` --
+  # hooks-muxterm-session, which publishes this sidecar's own state to the home
+  # view. Agent DEFINITIONS leak in too (cli-expert and whatever the user's app
+  # bundles declare); with no delegate tool there is nothing that can call one.
+  - module: hooks-approval
+    source: git+https://github.com/microsoft/amplifier-module-hooks-approval
+    config:
+      rules: []
+      default_action: continue
+      policy_driven_only: true
+
+# No `context:` section here on purpose. Both context files are @mentioned from
+# the root bundle's body (bundle.md), which is what makes them the system
+# prompt rather than a separate injected block. Including them here as well
+# would put the same text in front of the model twice.
+
+# ---------------------------------------------------------------------------
+# THE TOOL SURFACE, BY NAME
+#
+# Composition alone cannot produce this surface, for two independent reasons,
+# so the sidecar enforces this list against the mounted tool registry and
+# unmounts everything not named here (_enforce_tool_surface in
+# internal/cos/sidecar/main.py). A bundle that omits this key is not filtered
+# at all, so nothing here changes the behaviour of any other bundle.
+#
+#   1. amplifier's app layer composes behaviours onto EVERY root bundle
+#      unconditionally -- amplifier_app_cli.runtime.config.resolve_bundle_config
+#      always adds modes (`mode`) and skills (`load_skill`), plus every entry
+#      in `bundle.app` from the user's own settings.yaml. Bundle composition
+#      is additive-only; Bundle.compose() has no subtract.
+#   2. tool-filesystem mounts read_file, write_file and edit_file from one
+#      module and offers no config to select among them, and this surface
+#      wants the first without the other two.
+#
+# It is an ALLOWLIST, not a denylist, and that is deliberate: a tool nobody
+# here has heard of yet -- from a future app bundle, or a module that grows a
+# new export -- is withheld rather than admitted. Fail closed.
+#
+# A trailing `*` matches a prefix. It exists for exactly one thing: the
+# muxterm MCP tool names, which include a resource entry
+# (mcp_muxterm_resource_Pane_<n>_output) whose name depends on which panes are
+# live and so cannot be enumerated ahead of time.
+#
+# WITHHELD, and why. Do not re-add one without reading its line:
+#
+#   delegate      the load-bearing cut. _is_child() in
+#                 modules/hooks-muxterm-session gates on parent_id, so a
+#                 delegate() sub-agent never gets its own session-state row:
+#                 no pane, no card, no doneMeans, nothing for the human to
+#                 attach to or monitor. It surfaces only as an [agent-name]
+#                 prefix on this session's own `doing` line. It is also the
+#                 reflex tool every amplifier agent reaches for first, so
+#                 leaving it mounted means the chief of staff quietly works in
+#                 the shadows while the fleet view stays empty. spawn_lane is
+#                 the only delegation path.
+#   bash          doing the lane's work, unobserved. See run_command above.
+#   write_file    doing the lane's work.
+#   edit_file     doing the lane's work.
+#   apply_patch   doing the lane's work.
+#   recipes       multi-step execution -- the same objection as bash, wearing
+#                 a workflow.
+#   load_skill    skills write files and assume a working directory: goalify
+#                 writes .amplifier/goals/<slug>.md as step 1 of its own
+#                 procedure. The CoS has no business writing there, and does
+#                 not need to -- spawn_lane takes `goal` as a STRING, so no
+#                 file is ever in the loop. The discipline that skill encodes
+#                 ships as context instead (cos-stop-conditions.md).
+#   mode          meaningless for an agent with no editing tools to gate, and
+#                 hooks-mode (which the modes behaviour brings with it)
+#                 overwrites session_state["require_approval_tools"] on every
+#                 tool:pre at priority -20, ahead of hooks-approval at -10.
+# ---------------------------------------------------------------------------
+session:
+  muxterm_cos:
+    tools:
+      - mcp_muxterm_*
+      - read_file
+      - glob
+      - grep
+      - web_search
+      - web_fetch
+      - todo

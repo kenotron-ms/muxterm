@@ -78,29 +78,94 @@ that already ships, not a feature to write.
 
 ## 2. Delegate, never act
 
-**The CoS's tool surface is workspace/pane/session lifecycle and reading. Nothing
-else.** No bash. No file writes. No git. Not gated behind approval — *absent*.
+**The CoS may manage muxterm. It may not do a lane's work.** Those are two
+different questions and an earlier draft of this section collapsed them into
+one, cutting far more than it should have.
 
-This is a bundle-composition decision, and it is the strongest safety property in
-the design: **a tool it does not have cannot be misused.** It also sidesteps a
-trap found while building: `hooks-mode` runs `handle_tool_pre` at priority −20,
-ahead of `hooks-approval` at −10, and overwrites `require_approval_tools` on
-every `tool:pre` — so approval-gating a specific tool is not reliably enforceable
-from a bundle. Removing the tool is.
+The test is not "does this change something." It is:
 
-| CoS may | CoS may not |
+| question | verdict |
 |---|---|
-| create a workspace | close a workspace *(broadcasts to every connection, yanks the human's browser)* |
-| create a pane, launch a lane in it | close a pane |
-| send input to a lane (unblock, answer, steer) | run bash, edit files, commit, push |
-| read fleet state and transcripts | do the work itself |
+| Can it do the **lane's** work? | absent |
+| Can it manage the **app**? | present — that is the job |
 
-Closure stays human, permanently. That matches the sessiond invariant already in
-AGENTS.md — sessiond alone authorizes destructive closure — and it means the
-worst a confused CoS can do is make a mess of *new* things, never destroy
-existing ones.
+The CoS is a chief of staff *for muxterm*. Closing a workspace it opened,
+adjusting config, opening a tunnel to show you a dev server, reading the web to
+route a problem correctly — all app management, none of it touching your repos.
 
----
+| CoS has | CoS does not have |
+|---|---|
+| the fleet trio: `fleet_status`, `lane_transcript`, `session_send` | `bash` |
+| `spawn_lane` — the only way work starts | `edit_file`, `write_file`, `apply_patch` |
+| workspace/pane lifecycle, incl. close and rename | `delegate` |
+| `send_input`, `run_command` | `recipes` |
+| `update_config`, tunnel CRUD | `load_skill`, `mode` |
+| `read_file`, `glob`, `grep`, `web_search`, `web_fetch`, `todo` | |
+
+### Why each absence, precisely
+
+**`delegate` is the load-bearing one, and it is a visibility cut rather than a
+capability cut.** `_is_child()` (`hooks-muxterm-session/state.py:657`) gates on
+`parent_id`, so a delegated sub-agent **never gets a session-state row** — it
+can only ever surface as an `[agent-name]` prefix on its parent's `doing` line.
+Work would happen with no pane, no card, no `doneMeans`, nothing to attach to
+or monitor: the exact failure this whole design exists to prevent. It is also
+the tool every amplifier agent reaches for first, so leaving it in means the
+CoS quietly works in the shadows while the fleet view stays empty.
+
+**`bash` is out but `run_command` is in**, and the difference is not power —
+it is auditability. `run_command` executes in a *visible pane*; `bash` executes
+silently inside the sidecar's own process. For a system whose premise is that
+delegation is visible, that distinction is the whole point.
+
+**`load_skill` is out because skills write files and assume a working
+directory** — `goalify` writes `.amplifier/goals/<slug>.md` as step 1 of its
+own procedure. The CoS has no business writing there and does not need to:
+`spawn_lane` takes `goal` as a **string parameter**, so no file is ever in the
+loop. What the CoS needs from goalify is its *lint discipline*, which is
+ambient bundle context instead (`context/cos-stop-conditions.md`) and therefore
+applies to every delegation rather than only the ones where it remembered to
+invoke a skill.
+
+**`mode` is out** because it is meaningless for this agent and `hooks-mode`
+overwrites `session_state["require_approval_tools"]` on every `tool:pre`
+(priority −20, ahead of `hooks-approval` at −10). Note the *hook* remains
+mounted; only the tool is withheld.
+
+### Closure: allowed, and gated by asking rather than by absence
+
+An earlier draft forbade `close_pane`/`close_workspace` outright. That was
+wrong, and it contradicted this design's own mockup, where the CoS asks
+permission to close a workspace and waits for an answer.
+
+`broadcastWorkspaceClosed` (`internal/sessiond/server.go:783-789`) fans out to
+**every live connection** and moves the human's browser to a survivor
+workspace. That is real and the CoS must understand it — but it is a
+disruption to reckon with, not a reason a chief of staff cannot tidy up after
+itself. The gate is the approval card, and the charter rule that it never
+closes a workspace it did not create.
+
+### The limit, stated plainly
+
+`send_input` is **irreducibly powerful**. Relaying keystrokes into a pane *is*
+the unblock capability, and the same call could type a destructive command and
+press Enter. There is no tool-shaped fix. That one boundary is held by the
+approval card and the charter, not by absence — and it is worth saying so,
+because a tool list that implies otherwise is a list that lies.
+
+### A bundle alone cannot deliver this
+
+`resolve_bundle_config` composes the modes and skills behaviors onto **every**
+root bundle before anything else runs, `Bundle.compose()` is additive-only with
+no subtract at any layer, and `tool-filesystem` mounts `read_file`,
+`write_file` and `edit_file` from one module with no config to choose among
+them.
+
+So the bundle *declares* the surface by name and the sidecar *enforces* it with
+`coordinator.unmount()` before the first turn. It is an **allowlist** — a tool
+nobody anticipated is withheld and named in the log, rather than admitted
+silently. That matters because `bundle.app` in user settings layers onto any
+root bundle and can introduce tools this design never saw.
 
 ## 3. The blocking gap: MCP `create_pane` cannot launch anything
 
