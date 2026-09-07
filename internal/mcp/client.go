@@ -34,8 +34,7 @@ type Client struct {
 	// to, which is exactly why the fleet tools are not workspace-scoped the way
 	// create_pane and send_input are. An agent parked in one workspace can see
 	// -- and only see -- the whole fleet through this field.
-	fleet           []sessiond.SessionState
-	fleetSubscribed bool // SessionStateSubscribe(true) has been accepted
+	fleet []sessiond.SessionState
 
 	// fleetReady is closed by fleetReadyOnce when the first snapshot lands, so
 	// the first caller can block on a real event instead of sleeping a fixed
