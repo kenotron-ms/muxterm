@@ -9,6 +9,7 @@
  *   node docs/research/voice-orb-evidence.mjs --ui     # drive the page's own controls
  *   node docs/research/voice-orb-evidence.mjs --technique   # prove WHICH technique is running
  *   node docs/research/voice-orb-evidence.mjs --matrix      # 6 transitions x 6 criteria = 36 cells
+ *   node docs/research/voice-orb-evidence.mjs --trace-teardown  # log what is started and reclaimed
  *
  * It opens docs/research/voice-orb-mock.html in headless Chrome, calls the
  * page's own window.__orbEvidence(), and reports what came back. The page
@@ -23,7 +24,7 @@
 
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -35,6 +36,7 @@ const RAW_OUT = process.argv.includes('--raw');
 const UI_OUT = process.argv.includes('--ui');
 const TECH_OUT = process.argv.includes('--technique');
 const MATRIX_OUT = process.argv.includes('--matrix');
+const TRACE_TD = process.argv.includes('--trace-teardown');
 
 const CHROME = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']
   .map((n) => ['/usr/bin/' + n, '/usr/local/bin/' + n])
@@ -96,13 +98,87 @@ let chrome = null;
 let profile = null;
 let xdg = null;
 
-async function teardown() {
-  if (chrome && !chrome.killed) {
-    chrome.kill('SIGTERM');
-    await sleep(300);
-    if (!chrome.killed) chrome.kill('SIGKILL');
+const td = (msg) => { if (TRACE_TD) console.error(`[teardown] ${msg}`); };
+
+/** True if the pid is still a live process. */
+function alive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+/**
+ * Every live process in the browser's process group.
+ *
+ * Chrome is a process TREE, not a process: /usr/bin/google-chrome is a shell
+ * script that execs /opt/google/chrome/chrome, which then forks a zygote, a GPU
+ * process, utility processes and a crashpad handler. Checking only the pid
+ * returned by spawn() would report a clean teardown while children were still
+ * running, so the group is what gets signalled and the group is what gets
+ * verified.
+ */
+function groupMembers(pgid) {
+  if (!pgid) return [];
+  const out = [];
+  for (const name of readdirSync('/proc')) {
+    if (!/^[0-9]+$/.test(name)) continue;
+    try {
+      const stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+      // field 5 is pgrp; comm (field 2) may contain spaces, so index past ')'
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      if (Number(fields[2]) === pgid) {
+        const cmd = readFileSync(`/proc/${name}/cmdline`, 'utf8').split('\0').join(' ').trim();
+        out.push({ pid: Number(name), cmd: cmd.slice(0, 90) });
+      }
+    } catch { /* process exited while we looked at it */ }
   }
-  for (const d of [profile, xdg]) if (d) await rm(d, { recursive: true, force: true });
+  return out;
+}
+
+/**
+ * Reclaims everything this process started, and then VERIFIES the reclaim
+ * rather than assuming the kill and the rm worked. Runs from a `finally`, so it
+ * runs on success, on failure and on a thrown exception alike.
+ *
+ * Nothing else is touched. The browser gets a throwaway --user-data-dir and
+ * throwaway XDG_RUNTIME_DIR / XDG_DATA_HOME / XDG_CONFIG_HOME, so it cannot
+ * reach ~/.local/share -- and in particular can never reach muxterm's restore
+ * snapshot. No muxterm process is started, signalled or read.
+ */
+async function teardown() {
+  const pid = chrome?.pid;
+  if (chrome && !chrome.killed) {
+    const before = groupMembers(pid);
+    td(`process group ${pid} has ${before.length} member(s): ${before.map((m) => m.pid).join(', ')}`);
+    // Signal the whole group, not just the leader. spawn() used detached:true
+    // so the browser is its own group leader and -pid addresses the tree.
+    td(`SIGTERM -> process group ${pid}`);
+    try { process.kill(-pid, 'SIGTERM'); } catch { chrome.kill('SIGTERM'); }
+    await sleep(400);
+    let left = groupMembers(pid);
+    if (left.length) {
+      td(`${left.length} still alive, SIGKILL -> process group ${pid}`);
+      try { process.kill(-pid, 'SIGKILL'); } catch { chrome.kill('SIGKILL'); }
+      await sleep(300);
+    }
+  }
+  for (const d of [profile, xdg]) {
+    if (!d) continue;
+    td(`rm -rf ${d}`);
+    await rm(d, { recursive: true, force: true });
+  }
+  // Post-conditions, checked rather than assumed.
+  const leaks = [];
+  const survivors = groupMembers(pid);
+  if (survivors.length) leaks.push(`${survivors.length} process(es) left in group ${pid}: ` +
+    survivors.map((m) => `${m.pid} (${m.cmd})`).join(', '));
+  if (alive(pid)) leaks.push(`chrome pid ${pid} still running`);
+  for (const d of [profile, xdg]) if (d && existsSync(d)) leaks.push(`directory still present: ${d}`);
+  if (leaks.length) {
+    console.error('TEARDOWN INCOMPLETE: ' + leaks.join('; '));
+    process.exitCode = 3;
+  } else {
+    td(`verified: process group ${pid} empty, both directories removed`);
+  }
 }
 
 async function main() {
@@ -110,6 +186,9 @@ async function main() {
   profile = await mkdtemp(join(tmpdir(), 'orb-evidence-profile-'));
   xdg = await mkdtemp(join(tmpdir(), 'orb-evidence-xdg-'));
 
+  td(`starting ${CHROME}`);
+  td(`  --user-data-dir  ${profile}`);
+  td(`  XDG_* redirected ${xdg}`);
   chrome = spawn(
     CHROME,
     [
@@ -128,11 +207,15 @@ async function main() {
     ],
     {
       stdio: 'ignore',
+      // Own process group, so teardown can signal the whole browser tree.
+      detached: true,
       // Throwaway XDG dirs: nothing this harness runs may touch the real
       // ~/.local/share, and in particular never muxterm's restore snapshot.
       env: { ...process.env, XDG_RUNTIME_DIR: xdg, XDG_DATA_HOME: xdg, XDG_CONFIG_HOME: xdg },
     },
   );
+
+  td(`chrome pid ${chrome.pid}, devtools on 127.0.0.1:${port}`);
 
   // Wait for the debugging endpoint.
   let version = null;
