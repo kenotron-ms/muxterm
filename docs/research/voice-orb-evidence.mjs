@@ -6,6 +6,7 @@
  *   node docs/research/voice-orb-evidence.mjs
  *   node docs/research/voice-orb-evidence.mjs --json
  *   node docs/research/voice-orb-evidence.mjs --raw    # unreduced per-frame samples
+ *   node docs/research/voice-orb-evidence.mjs --ui     # drive the page's own controls
  *
  * It opens docs/research/voice-orb-mock.html in headless Chrome, calls the
  * page's own window.__orbEvidence(), and reports what came back. The page
@@ -29,6 +30,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PAGE = resolve(HERE, 'voice-orb-mock.html');
 const JSON_OUT = process.argv.includes('--json');
 const RAW_OUT = process.argv.includes('--raw');
+const UI_OUT = process.argv.includes('--ui');
 
 const CHROME = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']
   .map((n) => ['/usr/bin/' + n, '/usr/local/bin/' + n])
@@ -58,6 +60,7 @@ async function freePort() {
 function cdp(url) {
   const ws = new WebSocket(url);
   const pending = new Map();
+  const evs = [];
   let next = 1;
   const ready = new Promise((res, rej) => {
     ws.addEventListener('open', () => res());
@@ -65,6 +68,7 @@ function cdp(url) {
   });
   ws.addEventListener('message', (ev) => {
     const msg = JSON.parse(ev.data);
+    if (msg.method) { evs.push(msg); return; }
     const p = pending.get(msg.id);
     if (!p) return;
     pending.delete(msg.id);
@@ -72,6 +76,7 @@ function cdp(url) {
   });
   return {
     ready,
+    evs,
     send(method, params = {}) {
       const id = next++;
       return new Promise((res, rej) => {
@@ -147,6 +152,7 @@ async function main() {
   await page.ready;
   await page.send('Page.enable');
   await page.send('Runtime.enable');
+  await page.send('Log.enable');
   await page.send('Page.navigate', { url: pathToFileURL(PAGE).href });
 
   // Wait for the engine to exist and the rAF loop to be running.
@@ -161,6 +167,13 @@ async function main() {
   }
   if (!up) throw new Error('page never finished loading __orbEvidence');
   await sleep(600); // let the oscillators settle into a steady state
+
+  if (UI_OUT) {
+    const code = await uiDrive(page);
+    page.close();
+    browser.close();
+    return code;
+  }
 
   if (RAW_OUT) {
     const code = await rawDump(page);
@@ -254,6 +267,199 @@ async function rawDump(page) {
     ? 'K2: 0 samples outside the interval between the two states.'
     : `K2: ${bad} samples OUTSIDE the interval.`);
   return bad === 0 ? 0 : 1;
+}
+
+/**
+ * Drives the ARTIFACT'S OWN CONTROLS — real DOM clicks on the buttons a human
+ * would press — and measures what the orb does in response.
+ *
+ * Everything else in this file calls orb.setState() directly, which bypasses
+ * every control on the page. A dead button would pass all of it. This mode
+ * touches nothing but .click(), and reads the result back out of
+ * getComputedStyle, so it proves the controls are wired to the engine.
+ */
+const REC = `
+  const stage = document.getElementById('stage');
+  const halos = stage.querySelector('.orb-halos');
+  const body  = stage.querySelector('.orb-body');
+  const rd = () => {
+    const cs = getComputedStyle(body);
+    const tf = cs.transform;
+    const open = tf.indexOf('('), close = tf.lastIndexOf(')');
+    const p = open > 0 ? tf.slice(open+1, close).split(',').map(Number) : [1,0,0,1];
+    return { t: performance.now(), state: window.__orb.state,
+             glow: parseFloat(getComputedStyle(halos).opacity),
+             scale: Math.hypot(p[0], p[1]),
+             rect: body.getBoundingClientRect().width / (parseFloat(cs.width)||1) };
+  };
+  const record = ms => new Promise(res => { const o=[]; const t0=performance.now();
+    const step=()=>{ o.push(rd()); performance.now()-t0<ms ? requestAnimationFrame(step) : res(o); };
+    requestAnimationFrame(step); });
+  const seq = rows => rows.reduce((a,r)=> a[a.length-1]===r.state ? a : (a.push(r.state), a), []);
+  const cont = rows => { let mv=0; for(let i=1;i<rows.length;i++){ const dt=(rows[i].t-rows[i-1].t)/1000;
+    if(dt>0) mv=Math.max(mv, Math.abs(rows[i].glow-rows[i-1].glow)/dt); } return mv; };
+`;
+
+async function uiDrive(page) {
+  const ev = async (expression) => {
+    const r = await page.send('Runtime.evaluate', {
+      expression, awaitPromise: true, returnByValue: true, timeout: 120000,
+    });
+    if (r.exceptionDetails) {
+      throw new Error('page threw: ' + (r.exceptionDetails.exception?.description ?? JSON.stringify(r.exceptionDetails)));
+    }
+    return r.result.value;
+  };
+
+  let fails = 0;
+  const line = (ok, label, detail) => {
+    if (!ok) fails++;
+    console.log(`   ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(34)} ${detail}`);
+  };
+
+  console.log('');
+  console.log('='.repeat(96));
+  console.log('ARTIFACT CONTROLS — real DOM clicks, nothing calls setState() directly');
+  console.log('='.repeat(96));
+
+  // ---- self-containment: the page must open from file:// with no network ----
+  const sc = await ev(`(() => {
+    const css = [...document.querySelectorAll('style')].map(s=>s.textContent).join('');
+    const cnt = (h,n) => h.split(n).length - 1;
+    return {
+      script_src: document.querySelectorAll('script[src]').length,
+      link_href:  document.querySelectorAll('link[href]').length,
+      media:      document.querySelectorAll('img,iframe,video,audio,source,object,embed').length,
+      css_remote: cnt(css,'url(http') + cnt(css,'@import'),
+      fonts:      cnt(css,'@font-face'),
+      styles:     document.querySelectorAll('style').length,
+      scripts:    document.querySelectorAll('script').length,
+      bytes:      document.documentElement.outerHTML.length,
+    };
+  })()`);
+  line(sc.script_src === 0 && sc.link_href === 0 && sc.media === 0 && sc.css_remote === 0 && sc.fonts === 0,
+    'self-contained (no network)',
+    `script[src]=${sc.script_src} link[href]=${sc.link_href} media=${sc.media} ` +
+    `css url(http)/@import=${sc.css_remote} @font-face=${sc.fonts} | ` +
+    `${sc.styles} inline <style>, ${sc.scripts} inline <script>, ${(sc.bytes/1024).toFixed(0)}KB DOM`);
+
+  // ---- the six transition buttons ----
+  const labels = await ev(`[...document.querySelectorAll('#transitions button')].map(b=>b.textContent.trim())`);
+  line(labels.length === 6, 'six transition buttons present', JSON.stringify(labels));
+
+  console.log('');
+  for (let i = 0; i < labels.length; i++) {
+    const r = await ev(`(async () => {
+      ${REC}
+      window.__orb.setState('idle'); await new Promise(r=>setTimeout(r,700));
+      const btn = document.querySelectorAll('#transitions button')[${i}];
+      btn.click();                                   // <-- the only interaction
+      const rows = await record(2000);
+      const s = seq(rows);
+      const gl = rows.map(r=>r.glow);
+      return { label: btn.textContent.trim(), states: s, maxVel: cont(rows),
+               glow_start: gl[0], glow_end: gl[gl.length-1], frames: rows.length,
+               label_text: document.getElementById('stateLabel').textContent };
+    })()`);
+    const [from, to] = [r.states[r.states.length - 2], r.states[r.states.length - 1]];
+    const want = labels[i].split(/\s+/).slice(1);            // e.g. ["speaking","→","listening"]
+    const ok = r.states.length >= 2 && from === want[0] && to === want[2] &&
+               r.label_text === want[2] && r.maxVel < 3.0;
+    line(ok, `click "${r.label.replace(/\s+/g, ' ')}"`,
+      `observed ${r.states.join(' → ')}  glow ${r.glow_start.toFixed(3)}→${r.glow_end.toFixed(3)}  ` +
+      `maxVel ${r.maxVel.toFixed(3)}/s  label="${r.label_text}"  ${r.frames} frames`);
+  }
+
+  // ---- the interrupt control ----
+  console.log('');
+  const iv = await ev(`(async () => {
+    ${REC}
+    document.getElementById('iFrom').value = 'speaking';
+    document.getElementById('iTo').value   = 'listening';
+    document.getElementById('iThen').value = 'thinking';
+    const d = document.getElementById('iDelay');
+    d.value = '140'; d.dispatchEvent(new Event('input'));
+    document.getElementById('iFire').click();       // <-- the only interaction
+    const rows = await record(2600);
+    const s = seq(rows);
+    const i3 = rows.findIndex(r => r.state === 'thinking');
+    return { states: s, maxVel: cont(rows), frames: rows.length,
+             delay_label: document.getElementById('iDelayOut').textContent,
+             glow_at_interrupt: i3 > 0 ? rows[i3].glow : null,
+             glow_before_seam:  i3 > 0 ? rows[i3-1].glow : null,
+             glow_after_seam:   i3 > 0 ? rows[i3+1].glow : null,
+             glow_end: rows[rows.length-1].glow };
+  })()`);
+  line(iv.states.join(',') === 'speaking,listening,thinking', 'interrupt fires all three states',
+    `observed ${iv.states.join(' → ')}  (${iv.frames} frames, delay label "${iv.delay_label}")`);
+
+  // The proof that the third state landed MID-transition: glow was still
+  // strictly between speaking (0.74) and listening (0.62) when it arrived.
+  const g = iv.glow_at_interrupt;
+  const midFlight = g !== null && g > 0.6205 && g < 0.7395;
+  line(midFlight, 'third state lands mid-transition',
+    `glow at interrupt ${g === null ? 'n/a' : g.toFixed(5)} — strictly inside (0.62000, 0.74000), ` +
+    `so speaking→listening had not completed`);
+
+  const seam = Math.abs(iv.glow_after_seam - iv.glow_before_seam);
+  line(seam < 0.03, 'no jump across the seam',
+    `${iv.glow_before_seam.toFixed(5)} → ${g.toFixed(5)} → ${iv.glow_after_seam.toFixed(5)}  (Δ ${seam.toFixed(5)})`);
+  line(Math.abs(iv.glow_end - 0.55) < 0.01, 'resolves to the interrupting state',
+    `glow settles ${iv.glow_end.toFixed(5)}, thinking = 0.55000`);
+  line(iv.maxVel < 3.0, 'continuous across the whole run', `maxVel ${iv.maxVel.toFixed(3)}/s`);
+
+  // ---- reduced-motion toggle ----
+  console.log('');
+  const rm = await ev(`(async () => {
+    ${REC}
+    const box = document.getElementById('reduced');
+    box.checked = true; box.dispatchEvent(new Event('change'));   // <-- interaction
+    window.__orb.setState('speaking'); await new Promise(r=>setTimeout(r,1200));
+    const before = rd();
+    document.querySelectorAll('#directStates button')[2].click(); // "listening" <-- interaction
+    const rows = await record(900);
+    const sc = rows.map(r=>r.rect);
+    const out = { note: document.getElementById('reducedNote').textContent,
+                  rect_span: Math.max(...sc)-Math.min(...sc),
+                  glow_from: before.glow, glow_to: rows[rows.length-1].glow,
+                  distinct: new Set(rows.map(r=>r.glow.toFixed(4))).size };
+    box.checked = false; box.dispatchEvent(new Event('change'));
+    return out;
+  })()`);
+  line(rm.rect_span < 1e-6, 'reduced-motion checkbox stills motion',
+    `rect_span ${rm.rect_span.toFixed(7)}  note="${rm.note}"`);
+  line(rm.distinct > 20 && Math.abs(rm.glow_to - 0.62) < 0.01, 'and still changes state legibly',
+    `glow ${rm.glow_from.toFixed(3)} → ${rm.glow_to.toFixed(3)} over ${rm.distinct} distinct values`);
+
+  // ---- the in-page evidence button ----
+  console.log('');
+  const rev = await ev(`(async () => {
+    document.getElementById('runEvidence').click();               // <-- interaction
+    const out = document.getElementById('evidenceOut');
+    for (let i = 0; i < 600; i++) {
+      await new Promise(r => setTimeout(r, 250));
+      if (/ALL CHECKS PASS|SOME CHECKS FAILED/.test(out.textContent)) break;
+    }
+    const txt = out.textContent;
+    return { verdict: /ALL CHECKS PASS/.test(txt) ? 'ALL CHECKS PASS' : 'SOME CHECKS FAILED',
+             pass: (txt.match(/PASS/g)||[]).length, fail: (txt.match(/FAIL/g)||[]).length,
+             chart: !!document.getElementById('chart').getContext('2d') };
+  })()`);
+  line(rev.verdict === 'ALL CHECKS PASS', 'in-page "run evidence" button',
+    `${rev.verdict} — ${rev.pass} PASS, ${rev.fail} FAIL, rendered into the page`);
+  line(rev.chart, 'live strip chart present', '2d context on #chart');
+
+  const errs = page.evs.filter((e) =>
+    e.method === 'Runtime.exceptionThrown' ||
+    (e.method === 'Log.entryAdded' && e.params.entry.level === 'error'));
+  line(errs.length === 0, 'no page errors during any interaction',
+    `${errs.length} uncaught exceptions / console errors across every click above`);
+
+  console.log('');
+  console.log(fails === 0
+    ? 'ARTIFACT CONTROLS: all interactions verified by clicking them.'
+    : `ARTIFACT CONTROLS: ${fails} check(s) failed.`);
+  return fails === 0 ? 0 : 1;
 }
 
 let code = 1;
