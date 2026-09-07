@@ -277,6 +277,23 @@ export class MuxCos extends LitElement {
   private _held: { h: number; start: number; end: number; focused: boolean } | null = null;
 
   /**
+   * The user asked for the keyboard back WITHOUT hanging up.
+   *
+   * Only ever true while a session is live, and reset on every start and
+   * every end -- a call always begins with the orb, and the composer that
+   * comes back afterwards is the ordinary one, not a mode.
+   *
+   * Switching does NOT end the session. That is the whole point of it: the
+   * orb's own press already ends the call, so a switch that also ended it
+   * would be a second hang-up button wearing a different label rather than a
+   * way to type mid-conversation. The cost of keeping it running is that the
+   * microphone is open while a text box is on screen, which is why the live
+   * composer says "microphone open" in words and keeps the orb -- the one
+   * control that hangs up -- in the row.
+   */
+  @state() private _textMode = false;
+
+  /**
    * Cards or tiles. Reflected to the host so the grid's minmax and the thumb
    * strip are pure CSS -- the segmented control writes ONE attribute and the
    * layout follows, rather than every card re-rendering to a different shape.
@@ -534,7 +551,9 @@ export class MuxCos extends LitElement {
     .dots:focus-visible,
     .btn:focus-visible,
     .card:focus-visible,
-    .cbtn:focus-visible {
+    .cbtn:focus-visible,
+    .tomode:focus-visible,
+    .micback:focus-visible {
       outline: 2px solid var(--chrome-accent);
       outline-offset: 2px;
     }
@@ -1086,9 +1105,128 @@ export class MuxCos extends LitElement {
        measured box (see _renderVoiceComposer), so the conversation above
        never gives up a pixel and the reader's scroll position does not move. */
     .cbox.solo {
+      position: relative;
       align-items: center;
       justify-content: center;
       padding: 0;
+    }
+    /* THE WAY BACK TO THE KEYBOARD, without hanging up.
+       A NAVIGATION control, and built to read as one: no fill, no ring, no
+       30px slot -- a plain word, dim, parked at the edge. The orb keeps the
+       centre and every pixel of visual weight. Absolutely positioned so it
+       takes NO layout space: the box stays pinned to the height the log gave
+       up, and the orb stays centred on both axes exactly as it was before
+       this existed. */
+    .tomode {
+      position: absolute;
+      right: var(--s-5);
+      top: 50%;
+      transform: translateY(-50%);
+      border: 0;
+      background: transparent;
+      color: var(--ink-3);
+      font: inherit;
+      font-size: var(--t-meta);
+      line-height: 1;
+      padding: var(--s-2) var(--s-3);
+      border-radius: 8px;
+      cursor: pointer;
+      /* Never reaches the orb. Half the box, less the orb's own half-width
+         and a gap -- so on a composer too narrow to hold both, the WORD
+         gives way and the orb keeps its centre. The accessible name is on
+         the button, not in the visible text, so a clipped label is still a
+         labelled control. */
+      max-width: calc(50% - 48px);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .tomode:hover {
+      color: var(--ink-1);
+      background: var(--chrome-hover);
+    }
+    /* MICROPHONE OPEN, said in words. The orb beside it animates, but an
+       animation is not a statement -- a text box on screen with a live
+       microphone behind it has to SAY so. Takes the crow's spare width, so
+       it adds no row and no height. */
+    .micon {
+      display: flex;
+      align-items: center;
+      gap: var(--s-2);
+      margin-right: auto;
+      /* LAST to give up room, not first -- see .micback's shrink weight. A
+         row too tight for everything drops the convenience, never the
+         warning: a text box with a live microphone behind it and no notice
+         saying so is the one state this control exists to prevent. */
+      flex: 0 1 auto;
+      min-width: 0;
+      color: var(--chrome-accent);
+      font-size: var(--t-meta);
+      white-space: nowrap;
+      /* A CHIP, not a word. Accent text alone measured as ordinary metadata
+         at a glance -- the same weight as the link beside it -- and "there is
+         a microphone open behind this text box" is not metadata. The tinted
+         ground and the ring make it read as a live status at a glance while
+         staying small enough to sit inside the button row, so it still costs
+         the log nothing. */
+      padding: 2px var(--s-3) 2px var(--s-2);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--chrome-accent) 16%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chrome-accent) 40%, transparent);
+    }
+    .micword {
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .micdot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--chrome-accent);
+      flex: none;
+      /* Breathing, because "open" is a thing happening rather than a label.
+         Opacity only -- no size, no layout, nothing the row's height can
+         notice. */
+      animation: micbreath 2s ease-in-out infinite;
+    }
+    @keyframes micbreath {
+      0%,
+      100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.35;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .micdot {
+        animation: none;
+      }
+    }
+    .micback {
+      border: 0;
+      background: transparent;
+      color: var(--ink-3);
+      font: inherit;
+      font-size: var(--t-meta);
+      line-height: 1;
+      padding: var(--s-2) var(--s-3);
+      border-radius: 8px;
+      cursor: pointer;
+      /* Shrinks FOUR TIMES faster than the notice beside it, and clips
+         rather than wraps: a second line here would grow the row, and the
+         row's height is the log's. */
+      flex: 0 4 auto;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .micback:hover {
+      color: var(--ink-1);
+      background: var(--chrome-hover);
     }
     .ctext {
       width: 100%;
@@ -1499,7 +1637,12 @@ export class MuxCos extends LitElement {
       // the DOM read here is of the idle composer, not the live one.
       const was = this._live;
       const now = isSessionLive(s);
-      if (!was && now) this._holdComposer();
+      // Every call opens with the orb. Text mode is a thing the user asks
+      // for during one, never a state a new call inherits.
+      if (!was && now) {
+        this._holdComposer();
+        this._textMode = false;
+      }
       this._session = s;
       if (was && !now) this._releaseComposer();
     });
@@ -2099,17 +2242,60 @@ export class MuxCos extends LitElement {
    */
   private _releaseComposer(): void {
     const held = this._held;
+    const wasSolo = !this._textMode;
     this._held = null;
-    if (!held) return;
+    this._textMode = false;
+    // Ending a call the user was already typing through restores nothing:
+    // the real composer never left the screen, so its height, caret and
+    // focus are the ones the user has been using. Re-applying the snapshot
+    // here would drag the caret back to where it was before the call.
+    if (!held || !wasSolo) return;
     const wasOnOrb = this.shadowRoot?.activeElement?.classList.contains('voice') === true;
+    this._restoreComposer(held, held.focused || wasOnOrb);
+  }
+
+  /** Put the textarea back: its autosized height, its caret, and if asked, focus. */
+  private _restoreComposer(held: { start: number; end: number }, focus: boolean): void {
     void this.updateComplete.then(() => {
       const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
       if (!el) return;
       this._fit(el);
       el.setSelectionRange(held.start, held.end);
-      if (held.focused || wasOnOrb) el.focus();
+      if (focus) el.focus();
     });
   }
+
+  /**
+   * The keyboard back, WITHOUT hanging up. (The way out that is not an exit.)
+   *
+   * Escape and the orb both end the call; this is the third way out of the
+   * takeover and the only one that leaves the conversation running -- for the
+   * path you have to paste or the name you have to spell, which is not worth
+   * dropping a call over. Focus goes to the textarea unconditionally: the
+   * user just asked for the keyboard, and the button they asked with is about
+   * to stop existing.
+   */
+  private _toText = (): void => {
+    const held = this._held;
+    this._textMode = true;
+    this._restoreComposer(held ?? { start: 0, end: 0 }, true);
+  };
+
+  /**
+   * Back to the orb, still without hanging up.
+   *
+   * Re-measures on the way in rather than reusing the height captured when
+   * the call started: the draft may have grown while the user was typing, and
+   * the pinned height has to match the composer that is on screen NOW or the
+   * log gives up pixels on the way back.
+   */
+  private _toVoice = (): void => {
+    this._holdComposer();
+    this._textMode = false;
+    void this.updateComplete.then(() => {
+      this.renderRoot.querySelector<HTMLButtonElement>('.cbtn.voice.solo')?.focus();
+    });
+  };
 
   /**
    * Escape, when there is no text box to receive it.
@@ -2163,20 +2349,47 @@ export class MuxCos extends LitElement {
       <div class="comp">
         <div class="cbox solo" style="${size}">
           ${this._renderVoiceControl(true)}
+          <button
+            class="tomode"
+            type="button"
+            title="Type instead, without ending the conversation"
+            aria-label="Type instead, without ending the spoken conversation"
+            @click="${this._toText}"
+          >type instead</button>
         </div>
       </div>
     `;
   }
 
+  /**
+   * The composer, in whichever of its three states applies.
+   *
+   * Live and voice mode  -- the orb and nothing else (the takeover).
+   * Live and text mode   -- the ordinary composer, plus the words
+   *                         "microphone open" and the orb, which still ends
+   *                         the call in one press.
+   * Not live             -- exactly what it always was.
+   *
+   * The live text row adds NO row and NO height: the notice and the way back
+   * take the crow's spare width, which the buttons were never using. That is
+   * what lets the mode switch cost the conversation nothing -- the box is the
+   * same height it would be with the same draft and no session at all, so
+   * switching in either direction moves neither the log nor its scroll.
+   *
+   * The dictation mic is not offered here. It belongs to a different
+   * controller with a different job, and two microphone affordances at once,
+   * one of them already open, is the confusion this whole change is against.
+   */
   private _renderComposer(): TemplateResult {
-    if (this._live) return this._renderVoiceComposer();
+    if (this._live && !this._textMode) return this._renderVoiceComposer();
+    const call = this._live;
     const ready = this._draft.trim().length > 0;
-    const listening = this._voice === 'listening';
+    const listening = !call && this._voice === 'listening';
     const busy = cosStore.busy;
     const last = cosStore.turns[cosStore.turns.length - 1];
     return html`
       <div class="comp">
-        <div class="cbox ${listening ? 'live' : ''}">
+        <div class="cbox ${listening || call ? 'live' : ''}">
           <textarea
             class="ctext"
             rows="1"
@@ -2189,6 +2402,20 @@ export class MuxCos extends LitElement {
             @keydown="${this._onKey}"
           ></textarea>
           <div class="crow">
+            ${call
+              ? html`
+                  <span class="micon" role="status">
+                    <span class="micdot"></span><span class="micword">microphone open</span>
+                  </span>
+                  <button
+                    class="micback"
+                    type="button"
+                    title="Back to the orb, without ending the conversation"
+                    aria-label="Back to the orb, without ending the spoken conversation"
+                    @click="${this._toVoice}"
+                  >back to the orb</button>
+                `
+              : nothing}
             ${busy && last
               ? html`<button
                   class="btn no"
@@ -2196,7 +2423,8 @@ export class MuxCos extends LitElement {
                   @click="${() => cosStore.cancel(last.id)}"
                 >stop</button>`
               : nothing}
-            ${voiceInputController.isSupported()
+            ${call ? this._renderVoiceControl() : nothing}
+            ${!call && voiceInputController.isSupported()
               ? html`<button
                   class="cbtn ${listening ? 'rec' : ''}"
                   type="button"
@@ -2206,7 +2434,7 @@ export class MuxCos extends LitElement {
                   @click="${this._toggleVoice}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
-            ${ready || !voiceSessionController.isSupported()
+            ${call || ready || !voiceSessionController.isSupported()
               ? html`<button
                   class="cbtn send"
                   type="button"
@@ -2422,6 +2650,15 @@ export class MuxCos extends LitElement {
         e.preventDefault();
         this._menuOpen = false;
         this._confirm = null;
+        return;
+      }
+      // A live call is a layer too, and in text mode the keystroke never
+      // reaches _onDocKey -- this handler stops propagation at the top. So
+      // Escape ends the call from the text box exactly as it does from the
+      // orb, rather than walking off the surface with the microphone open.
+      if (this._live) {
+        e.preventDefault();
+        voiceSessionController.stop();
         return;
       }
       this.dispatchEvent(new CustomEvent('home-dismiss', { bubbles: true, composed: true }));
