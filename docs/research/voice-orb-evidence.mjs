@@ -812,6 +812,19 @@ async function verdicts(page) {
     throw new Error('page threw: ' + (r.exceptionDetails.exception?.description ?? JSON.stringify(r.exceptionDetails)));
   }
   const cells = r.result.value;
+
+  // Capture the actual per-frame series for each transition, so every K1/K2/K3
+  // verdict in this document carries the measurement that proves it rather than
+  // a pointer to a measurement kept somewhere else.
+  const series = {};
+  for (const c of cells) {
+    const s = await page.send('Runtime.evaluate', {
+      expression: `window.__orbRawSamples(${JSON.stringify({ from: c.a, to: c.b, preFrames: 2 })})`,
+      awaitPromise: true, returnByValue: true, timeout: 120000,
+    });
+    if (s.exceptionDetails) throw new Error('page threw: ' + JSON.stringify(s.exceptionDetails));
+    series[c.id] = s.result.value;
+  }
   const KS = ['K1', 'K2', 'K3', 'K4', 'K5', 'K6'];
   const KNAME = {
     K1: 'no discontinuous jump', K2: 'no snap-through-base', K3: 'interruptible',
@@ -884,6 +897,34 @@ async function verdicts(page) {
     L.push(`#### ${c.id}  ${c.a} → ${c.b}`, '');
     for (const k of KS) L.push(`- **${k}** ${c.k[k].ok ? 'PASS' : 'BLOCKED'} — ${why(c, k)}`);
     L.push('');
+
+    const { rows, endpoints } = series[c.id];
+    const lo = Math.min(endpoints.glow_from, endpoints.glow_to);
+    const hi = Math.max(endpoints.glow_from, endpoints.glow_to);
+    L.push(`<details><summary>the captured measurement behind K1, K2 and K3 for ${c.id}` +
+           ` — every frame, contiguous</summary>`, '');
+    L.push('```');
+    L.push(`glow ${endpoints.glow_from.toFixed(4)} -> ${endpoints.glow_to.toFixed(4)}` +
+           `   K2: every sample must lie inside [${lo.toFixed(4)}, ${hi.toFixed(4)}]`);
+    L.push('');
+    L.push('     ms  phase        rect      d(rect)     glow     d(glow)  tint[from] tint[to]   K2');
+    L.push('  ' + '-'.repeat(84));
+    let prev = null;
+    for (const row of rows) {
+      const dR = prev ? row.rect - prev.rect : null;
+      const dG = prev ? row.glow - prev.glow : null;
+      const inBand = row.glow >= lo - 0.002 && row.glow <= hi + 0.002 ? 'ok' : 'OUT';
+      L.push('  ' + (row.ms == null ? '    --' : row.ms.toFixed(1).padStart(6)) +
+        '  ' + row.phase.padEnd(11) +
+        row.rect.toFixed(5).padStart(9) +
+        (dR == null ? '        --' : (dR >= 0 ? '  +' : '  ') + dR.toFixed(5)).padStart(11) +
+        row.glow.toFixed(5).padStart(10) +
+        (dG == null ? '       --' : (dG >= 0 ? '  +' : '  ') + dG.toFixed(5)).padStart(11) +
+        row.tintFrom.toFixed(4).padStart(11) + row.tintTo.toFixed(4).padStart(9) +
+        '   ' + inBand);
+      prev = row;
+    }
+    L.push('```', '', '</details>', '');
   }
   L.push('## Where the rest of the evidence lives', '');
   L.push('| | |');
