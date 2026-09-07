@@ -66,6 +66,7 @@ import {
   type CosTurn,
 } from '../lib/cos-store.js';
 import { homeSessions } from '../lib/home-sessions.js';
+import { renderMarkdown } from '../lib/markdown.js';
 import {
   HOME_GROUPS,
   groupFor,
@@ -588,6 +589,75 @@ export class MuxCos extends LitElement {
     }
     .turn.you .say {
       color: var(--ink-2);
+    }
+
+    /* --- markdown (D2) ---------------------------------------------------
+       .say sets the type; these set the STRUCTURE markdown adds. The wrapper
+       drops pre-wrap (block spacing is the elements' job now) and hands it
+       back to <p>, so a soft line break inside a paragraph still breaks --
+       the behaviour every already-read message was written under. */
+    .md {
+      white-space: normal;
+    }
+    .md > * {
+      margin: 0;
+    }
+    .md > * + * {
+      margin-top: var(--s-4);
+    }
+    .md p {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .md strong {
+      font-weight: 650;
+      color: var(--chrome-text-bright);
+    }
+    .md em {
+      font-style: italic;
+    }
+    .md code {
+      font-family: var(--mono);
+      font-size: 0.92em;
+      background: color-mix(in srgb, var(--chrome-text-dim) 18%, transparent);
+      border-radius: 3px;
+      padding: 0.1em 0.32em;
+      overflow-wrap: anywhere;
+    }
+    /* The block form scrolls sideways rather than wrapping: a wrapped command
+       line is a command you cannot copy without reading it twice. */
+    .md pre {
+      font-family: var(--mono);
+      font-size: var(--t-ui);
+      line-height: var(--lh-body);
+      background: color-mix(in srgb, var(--chrome-text-dim) 12%, transparent);
+      border: 1px solid var(--edge);
+      border-radius: 5px;
+      padding: var(--s-4) var(--s-5);
+      overflow-x: auto;
+      white-space: pre;
+    }
+    .md pre code {
+      background: none;
+      border-radius: 0;
+      padding: 0;
+      font-size: inherit;
+    }
+    .md ul,
+    .md ol {
+      padding-left: 1.5em;
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-2);
+    }
+    .md li {
+      overflow-wrap: anywhere;
+    }
+    .md a {
+      color: var(--chrome-accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      overflow-wrap: anywhere;
     }
 
     /* The state between \"sent\" and the first token. Said in words, in the
@@ -1608,7 +1678,7 @@ export class MuxCos extends LitElement {
           </div>`
         : nothing}
       <div class="turn cos">
-        <div class="who">cos</div>
+        <div class="who">muxterm</div>
         <div class="bd">
           ${t.blocks.map((b, i) => this._renderBlock(t, b, i))}
           ${live && t.blocks.length === 0
@@ -1624,7 +1694,11 @@ export class MuxCos extends LitElement {
 
   private _renderBlock(t: CosTurn, b: CosBlock, i: number): TemplateResult {
     if (b.kind === 'text') {
-      return html`<p class="say">${b.text}</p>`;
+      // A DIV, not the <p> this used to be: renderMarkdown emits block-level
+      // elements (<pre>, <ul>, <ol>) and a <ul> inside a <p> is invalid HTML --
+      // the browser would close the paragraph early and Lit's parts would then
+      // address nodes that had moved.
+      return html`<div class="say md">${renderMarkdown(b.text)}</div>`;
     }
     if (b.kind === 'thinking') {
       const key = `${t.id}:${i}`;

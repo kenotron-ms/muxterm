@@ -340,7 +340,20 @@ export class MuxSidebar extends LitElement {
     }
 
     .header {
-      padding: 10px 12px 8px;
+      /* D3. Height comes from the SAME token <mux-title-bar> uses for its own
+         row (--mux-titlebar-height, theme.ts), not from padding + font-size.
+         A content-driven header is a height that changes whenever anyone
+         touches the type scale, which is exactly how this drifted away from
+         the title bar in the first place. The safe-area inset is deliberately
+         NOT added here: in narrow mode app.ts pads .drawer > mux-sidebar
+         with it, and in wide mode there is no notch above this rail. */
+      height: var(--mux-titlebar-height, var(--mux-dock-height, 44px));
+      /* border-box so the 1px bottom border is INSIDE the token height -- the
+         title bar's :host is border-box too, and content-box here would make
+         this row exactly one pixel taller than the bar it must match. Shadow
+         roots do not inherit index.html's global box-sizing reset. */
+      box-sizing: border-box;
+      padding: 0 12px;
       font-size: 13px;
       font-weight: 700;
       color: var(--chrome-text-bright);

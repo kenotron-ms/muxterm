@@ -303,6 +303,14 @@ export function paletteToCSSVars(p: Palette): Record<string, string> {
     // New tokens for attention management + dock redesign
     '--mux-bell':               'var(--mux-warn)',  // bell indicator dot color
     '--mux-dock-height':        '44px',             // dock bar row height / touch target
+    // ONE height for the app's top chrome. The narrow-mode <mux-title-bar> and
+    // <mux-sidebar>'s .header BOTH read this token and nothing else, so the two
+    // cannot drift apart the way they did when the sidebar header's height was
+    // content-driven (padding + font-size) and the title bar's was declared.
+    // Derived from the dock height so the top row and the dock row stay one
+    // touch target, but it is a SEPARATE name because "how tall is the title
+    // bar" and "how tall is a dock slot" are different questions.
+    '--mux-titlebar-height':    'var(--mux-dock-height, 44px)',
     '--mux-dock-item-padding':  '0 16px',           // horizontal padding on each dock slot
     '--mux-dock-font-size':     '0.85rem',          // workspace label font size
     '--mux-dock-active-weight': '600',              // active workspace label font weight

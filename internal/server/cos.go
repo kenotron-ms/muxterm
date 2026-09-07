@@ -426,7 +426,7 @@ func (c *Client) cosSubscribe(on bool) {
 
 	relay := c.hub.cos
 	if relay == nil {
-		c.sendCosSubscribeResult(false, "the chief of staff is not available on this server", "", false)
+		c.sendCosSubscribeResult(false, "muxterm is not available on this server", "", false)
 		return
 	}
 	sup, err := relay.get()
@@ -591,7 +591,7 @@ func (c *Client) cosTurn(msg cosClientMessage) {
 	}
 	relay := c.hub.cos
 	if relay == nil {
-		c.sendCosError("", cos.CodeSidecarUnavailable, "the chief of staff is not available on this server")
+		c.sendCosError("", cos.CodeSidecarUnavailable, "muxterm is not available on this server")
 		return
 	}
 	sup, err := relay.get()
@@ -623,7 +623,7 @@ func (c *Client) cosApproval(msg cosClientMessage) {
 	}
 	sup := relay.started()
 	if sup == nil {
-		c.sendCosError("", cos.CodeSidecarUnavailable, "no chief-of-staff sidecar is running")
+		c.sendCosError("", cos.CodeSidecarUnavailable, "muxterm is not running here")
 		return
 	}
 
@@ -682,7 +682,7 @@ func (c *Client) cosClear(msg cosClientMessage) {
 	}
 	relay := c.hub.cos
 	if relay == nil {
-		c.sendCosClearResult(false, 0, 0, "the chief of staff is not available on this server")
+		c.sendCosClearResult(false, 0, 0, "muxterm is not available on this server")
 		return
 	}
 	go c.cosRunClear(relay, msg.OlderThanDays)
