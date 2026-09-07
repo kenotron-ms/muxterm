@@ -152,9 +152,15 @@ function cardsSignature(cards: CardState[], mode: PreviewMode, cols: number): st
 // Host groups
 //
 // The sidebar answers "where is my stuff", which is a spatial question, so it
-// is the ONE surface that groups by machine (ux D1). Everything here is dead
-// code until the browser hears about a remote: `_renderWorkspaces()` returns
-// today's flat list while `remotesStore.any` is false.
+// is the ONE surface that groups by machine (ux D1). EVERY reachable machine
+// gets a group, the local one included, in every connection state -- a browser
+// with no remotes sees exactly one group rather than an ungrouped list.
+//
+// That uniformity is load-bearing, not cosmetic. The group is what carries a
+// machine's "+ New workspace", so a rendering mode with no groups in it is a
+// rendering mode where that button has nowhere to live but the sidebar root --
+// which is the bug this replaced. One shape in all states, one place the
+// button can be.
 // ---------------------------------------------------------------------------
 
 /** One machine's section of the workspace list. */
@@ -754,10 +760,11 @@ export class MuxSidebar extends LitElement {
     }
 
     /* ---- host groups ----
-       Every rule below needs a class that only appears once this browser has
-       heard of a remote (.hostgroup, .hg-*, .stale-banner, .retry-btn) or a
-       "remote" modifier on an existing one. With no remotes, none of them can
-       match, which is the CSS half of the zero-remote guarantee. */
+       .hostgroup and .hg-* apply to EVERY machine, local included, so they
+       match from the first paint whether or not a remote exists. The rules
+       that stay dark until this browser has heard of a remote are the ones
+       needing remote-only state: .stale-banner, .retry-btn, and the "remote"
+       modifiers below. */
 
     .hostgroup {
       margin: 10px 0 2px;
@@ -1584,13 +1591,13 @@ export class MuxSidebar extends LitElement {
 
   /**
    * A host group's own "+ New workspace" — the ONLY create affordance in the
-   * grouped list, once per group, local group included.
+   * list, once per group, local group included.
    *
    * The group IS the choice of machine (Decision 3) — there is no picker to
-   * open and no host to guess. The same `workspace-create` event the flat list
-   * dispatches, carrying the one extra fact this affordance knows. `host` is
-   * '' for the local group, which is exactly what `_onNewWs` would have sent,
-   * so local create is unchanged by being asked for from inside its group.
+   * open and no host to guess. `host` is '' for the local group, and app.ts
+   * resolves a missing `detail.host` and an explicit '' to the same empty
+   * string, so local create is byte-identical to what the old root-level
+   * button sent; the button only moved to the machine it always created on.
    */
   private _onNewWsOn(host: string): void {
     this.dispatchEvent(
