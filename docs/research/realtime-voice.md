@@ -4,6 +4,12 @@
 **Repo state:** `kenotron-ms/muxterm`, branch `research/realtime-voice` off `origin/main` @ `794677b`
 **Status:** research only. No muxterm behaviour was changed, nothing was provisioned, purchased, or enabled.
 
+> ⚠️ **AMENDED 2026-09-07 — read [the amendment](#amendment--2026-09-07) before acting on Q2 or Q5.**
+> After this report was first written, an Azure OpenAI endpoint with realtime models was
+> supplied and **verified working end to end**. The Q5 "Step 0 is procurement" blocker is
+> **resolved**. A working reference implementation was also found that the original Q3 survey
+> understated. Q1 and Q4 are unchanged.
+
 ---
 
 ## The question
@@ -20,10 +26,10 @@ talks back, both can interrupt.
 | | Question | Verdict |
 |---|---|---|
 | **Q1** | What voice capability does muxterm already have? | **ANSWERED** — press-to-dictate STT only, browser-side, one utterance at a time, into a text box. Zero audio output. |
-| **Q2** | Which realtime voice APIs are reachable through Amplifier's provider layer? | **ANSWERED** — none. The provider layer has no audio surface at all, and of the three named vendors zero have a working credential on this machine. |
-| **Q3** | What exists in the Amplifier ecosystem for voice? | **ANSWERED** — nothing installed. Four uninstalled catalog entries and one documented architectural pattern. |
+| **Q2** | Which realtime voice APIs are reachable through Amplifier's provider layer? | **ANSWERED** — none *through the provider layer*, which has no audio surface at all. **AMENDED:** Azure OpenAI realtime is reachable **directly** and verified working. |
+| **Q3** | What exists in the Amplifier ecosystem for voice? | **ANSWERED** — nothing *installed*. **AMENDED:** one of the four catalog entries, `bkrabach/amplifier-voice`, is a complete public working implementation. |
 | **Q4** | What is the gap between today's dictation and real conversation? | **ANSWERED** — eight named gaps; the load-bearing one is that there is no audio-out path of any kind. |
-| **Q5** | Recommendation | **ANSWERED** — architecture is ready and unusually favourable; the blocker is a credential, not code; do **not** route this through Amplifier's provider layer. |
+| **Q5** | Recommendation | **ANSWERED** — do **not** route this through Amplifier's provider layer; sidecar the voice model and meet at the tool boundary. **AMENDED:** the credential blocker is resolved, and the recommended architecture now has a named reference implementation (*sideband* + `delegate`/`dispatch`). |
 
 ### Reading the evidence markers
 
@@ -767,3 +773,210 @@ how-to (updated 2026-07-29) omits `gpt-realtime-2.1` while the Foundry models pa
 it as preview; `silence_duration_ms` defaults differ across all three vendors (500 / 200 / ~800 ms);
 `gpt-realtime-2.1` context window is documented as 128k on OpenAI direct but "32,000 input / 4,096
 output" for Azure Realtime models.
+
+
+---
+
+# Amendment — 2026-09-07
+
+Written the same day as the report, after new evidence. Everything above is left intact so
+the change is traceable. **Q1 and Q4 are unaffected.**
+
+## A1. The credential blocker is resolved — Azure OpenAI realtime is verified working
+
+The original Q2 tested `OPENAI_API_KEY` (invalid, HTTP 401) and found no Google or Azure
+credential. An Azure OpenAI resource was then supplied:
+
+```
+OPENAI_BASE_URL=https://amplifier-model-hosting.openai.azure.com/openai/v1
+```
+
+**API-key auth is disabled on it.** It authenticates with Microsoft Entra ID.
+
+### [VERIFIED] The full browser chain, end to end
+
+| Step | Call | Result |
+|---|---|---|
+| 1 | `az account get-access-token --scope https://ai.azure.com/.default` | token acquired |
+| 2 | `GET {base}/models` with the Entra token | **HTTP 200** — 426 models |
+| 3 | `POST {base}/realtime/client_secrets` with the Entra token | **HTTP 200** — `ek_…` minted |
+| 4 | `POST {base}/realtime/calls` with the **`ek_`** token | **HTTP 400 `invalid_offer`** |
+
+Step 4 is the pass. It cleared authentication entirely and failed only at SDP parsing,
+because the offer sent was deliberately `NOT-A-REAL-SDP`:
+
+```json
+{"error":{"message":"Failed to parse offer: failed to unmarshal SDP: sdp: syntax error at pos 5",
+          "code":"invalid_offer","type":"invalid_request_error"}}
+```
+
+A real browser offer completes that handshake. **The WebRTC path a muxterm browser client
+needs is open today.**
+
+Identity used: `SC-fi767@microsoft.com`, tenant `72f988bf-…`, subscription *OCTO - MADE
+Explorations*. Scope `https://ai.azure.com/.default` worked first try;
+`https://cognitiveservices.azure.com/.default` was not needed.
+
+### [VERIFIED] All three named realtime models are deployed
+
+`gpt-realtime-2.1` · `gpt-realtime-2.1-mini-2026-07-07` · `gpt-realtime-1.5`
+(plus `gpt-realtime-2`, `gpt-realtime-mini`, `gpt-live-transcribe`, `gpt-4o-transcribe-diarize`).
+
+Two minted sessions, compared:
+
+| | `gpt-realtime-2.1` | `gpt-realtime-1.5` |
+|---|---|---|
+| Default voice | `marin` | `alloy` |
+| `turn_detection` | `server_vad` | `server_vad` |
+| `threshold` | 0.5 | 0.5 |
+| `prefix_padding_ms` | 300 | 300 |
+| `silence_duration_ms` | **500** | **200** |
+| `interrupt_response` | **`true`** | **`true`** |
+| Ephemeral TTL | **7200 s** | **7200 s** |
+
+### Two documentation gaps closed by measurement
+
+1. **Azure's ephemeral token TTL.** The original Q2 recorded this as *"NOT DOCUMENTED"* —
+   Azure's pages state no lifetime anywhere. **Measured: 7200 s (2 hours)**, matching
+   OpenAI's documented maximum.
+2. **`silence_duration_ms`.** The report flagged a three-way doc disagreement (OpenAI 500 /
+   Azure sample 200 / Google ~800). Confirmed: it is **model-dependent**, not
+   platform-dependent. Azure's "sample" value of 200 is the real default on `gpt-realtime-1.5`.
+
+**And `interrupt_response: true` is the default** — barge-in (Gap 3) costs zero configuration
+on this stack.
+
+### [VERIFIED] Azure enforces the credential-separation pattern
+
+`POST /realtime/calls` with the *Entra* token is refused:
+
+> `"This operation requires ephemeral tokens for authentication."`
+
+The mint-server-side / hand-`ek_`-to-the-browser split is **enforced by the platform**, not
+merely recommended. Q5's step 1 is stronger than assumed.
+
+### Carried caveats
+
+- `az account get-access-token` yields a **user-delegated token that expires hourly**. Fine
+  for development, wrong for a long-running gateway, which wants
+  `DefaultAzureCredential` with a service principal or managed identity (role:
+  `Cognitive Services OpenAI User`) and its own refresh.
+- `~/.config/muxterm/keys.env` declares only `OPENAI_BASE_URL`. Nothing states *how* to
+  authenticate, so a consumer that assumes an API key will 401 mysteriously. An explicit
+  auth-mode key is wanted.
+- Azure Realtime models are documented at **32k input / 4,096 output** vs 128k for
+  `gpt-realtime-2.1` on OpenAI direct. Verify before designing for long sessions.
+
+## A2. Q3 understated `amplifier-voice` — it is a complete working implementation
+
+Q3 listed `amplifier-voice` as one of four uninstalled `MODULES.md` catalog rows. That was
+accurate about *this machine* and misleading about the ecosystem.
+
+**`github.com/bkrabach/amplifier-voice` is public and complete** — `voice-server/`,
+`voice-client/`, a 358-line `ARCHITECTURE.md`, 56 research findings and 31 brainstorm
+documents. Its `HEAD` reads *"docs: update all documentation for realtime 1.5 upgrade —
+sideband architecture, dispatch tool, retention truncation."*
+
+Its sibling `bkrabach/cortex` is the same product thesis as this report's:
+
+> **Your chief of staff.** … | **Calling** | Realtime voice. Talk to it. |
+
+Cortex's own gateway is private, but its installer and CLI corroborate the architecture: the
+OpenAI key lives at `~/.config/cortex/gateway/openai_key` mode `0600`, *"never committed,
+never logged, and never appears in an HTTP response"*, read **per request** — and
+`bin/cortex:220` reports **"voice minting will 503"** when it is absent.
+
+## A3. The recommended architecture has a name: sideband
+
+`amplifier-voice/ARCHITECTURE.md:124-126`:
+
+> **"Key difference from old architecture**: The browser never sees tool calls. All tool
+> execution is handled server-side via the sideband WebSocket. The browser is a pure audio
+> transport."
+
+```
+Browser ──WebRTC (audio ONLY)──▶ OpenAI Realtime ◀──Sideband WS──▶ Backend ──▶ Amplifier
+```
+
+Two channels on **one** session: audio takes the low-latency direct path, tool calls take the
+trusted server path. This is strictly better than the original Q5's "one bridge tool in the
+browser", which would have put tool authority in the client — unacceptable for muxterm, where
+tools run shell commands.
+
+### The long-turn risk has a solved answer
+
+Q5 named the biggest technical risk as *"the impedance mismatch between a sub-second voice
+turn and a chief-of-staff turn that runs for minutes"*, and predicted the fix would be to
+return immediately and narrate asynchronously. That is exactly what shipped, as **two tools**:
+
+| Tool | Behaviour |
+|---|---|
+| `delegate` | Synchronous. Quick tasks, **1–5 s**. Model waits. |
+| `dispatch` | **Async fire-and-forget. Heavy tasks, 10 s–5 min. Model keeps talking; result injected when done.** |
+
+(`ARCHITECTURE.md:128-144`, `voice-server/voice_server/tools/dispatch_tool.py`.)
+
+And it confirms the hybrid: *"Agents run on **Anthropic Claude** and have access to all
+Amplifier tools internally"* (`ARCHITECTURE.md:210`). **OpenAI for the voice, Claude for the
+thinking.** The chief of staff keeps its brain.
+
+`amplifier-voice` targets `gpt-realtime-1.5` — deployed on the Azure resource above. It is a
+base-URL and auth swap away from running here, not a rewrite.
+
+## A4. A browser-integration hazard not in the original report
+
+**Chromium bug 40094084** — *"MediaStream from RTC is silent (in WebAudio, MediaRecorder,
+etc.) if not attached to a media element."*
+
+A remote WebRTC audio track feeds an `AnalyserNode` **nothing but zeros in Chrome** unless the
+stream is *also* attached to an `<audio>` element. Works in Firefox. Chromium will not start
+its `WebRTCAudioRenderer` for an inbound track until something consumes it as media, and Web
+Audio does not count. There is no error — any audio visualisation simply sits still.
+
+```js
+pc.ontrack = (e) => {
+  const stream = e.streams[0] ?? new MediaStream([e.track]);
+  const el = new Audio();           // MANDATORY on Chromium
+  el.srcObject = stream; el.muted = true; el.autoplay = true;
+  el.play().catch(() => {});
+  src = ctx.createMediaStreamSource(stream);   // now returns real samples
+};
+```
+
+Two independent 2026 codebases still apply this workaround (`orb-ui`'s OpenAI Realtime
+adapter and `@neongate-ai/orbz`'s), which is strong evidence it remains live.
+
+## A5. UX decisions taken after the report
+
+Recorded here because they constrain the build. Mock: `docs/research/voice-orb-mock.html`.
+
+- **Entry point is the composer's send slot.** `mux-cos.ts:1743` computes
+  `const ready = this._draft.trim().length > 0`, and the send button is `?disabled="${!ready}"` —
+  i.e. **already a dead slot when the draft is empty**. Swap it rather than disable it:
+  text present → send arrow; box empty → voice button. No new chrome; a dead affordance
+  becomes the feature's front door.
+- **The mic stays exactly as it is.** Dictation (free, one utterance, fills the composer) and
+  a live session (metered per minute) are different jobs and must not share a control.
+- **Voice takes over the composer box only — never the log.** A panel that displaces the log
+  reflows it and moves scroll position on every entry and exit. The log is the receipt; tool
+  calls and approvals must stay visible. This is a deliberate divergence from ChatGPT, which
+  hides the transcript in voice mode.
+- **Spoken turns are ordinary history**, tagged `◉ spoken`. Both transcripts come free
+  (`conversation.item.input_audio_transcription.completed`,
+  `response.output_audio_transcript.delta`) and both are on Azure's `?webrtcfilter=on`
+  allowlist, so this works even in the most locked-down browser configuration.
+- **Open schema decision:** the spoken text and Claude's full answer are two different texts.
+  Recommendation: the **spoken** text is the message, Claude's detail is the tool result —
+  otherwise the log reads back as a conversation that did not happen.
+- **The orb is a leaf component** with two inputs (`state`, `level`) and zero dependencies.
+  Persona (`elements.ai-sdk.dev`) was evaluated and rejected as a dependency: it is a **Rive
+  animation** requiring a 2.15 MB WASM runtime that self-fetches from a public CDN — fatal for
+  a single-binary tool with embedded assets. Its *state model* (`idle · listening · thinking ·
+  speaking · asleep`) and its enter→loop→exit structure with alternating idle loops were
+  adopted; the art was reimplemented in CSS.
+
+## A6. What is still NOT built
+
+For the avoidance of doubt: **this branch contains research and a UX mock. No production
+code.** Not started: the `[voice]` config section, `POST /api/voice/token`, the
+`<mux-voice-orb>` Lit component, the browser session controller, the sideband bridge.

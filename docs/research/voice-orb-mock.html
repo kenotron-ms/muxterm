@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>muxterm — voice in the composer</title>
+<style>
+/* Palette verbatim from web/src/lib/theme.ts CHROME_DARK (Tokyo Night). */
+:root{
+  --chrome-bar:#16161e;--chrome-body:#1a1b26;--chrome-border:#292e42;
+  --chrome-text-dim:#565f89;--chrome-text-bright:#c0caf5;
+  --chrome-accent:#7aa2f7;--chrome-driver-accent:#bb9af7;
+  --chrome-hover:#1f2335;--chrome-danger:#f7768e;
+  --mux-ok:#9ece6a;--mux-warn:#e0af68;--mux-ansi-6:#7dcfff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --t-meta:10px;--t-ui:12px;--t-body:13.5px;
+  --s-2:4px;--s-3:6px;--s-4:8px;--s-5:12px;--s-6:16px;--s-7:24px;
+  --r-chip:3px;--r-ctl:5px;--r-card:8px;
+  --ink-1:var(--chrome-text-bright);
+  --ink-2:color-mix(in srgb,var(--chrome-text-bright) 78%,var(--chrome-text-dim));
+  --ink-3:color-mix(in srgb,var(--chrome-text-dim) 55%,var(--chrome-text-bright));
+  --edge:color-mix(in srgb,var(--chrome-border) 40%,var(--chrome-text-dim));
+  --work:var(--mux-ansi-6);--ok:var(--mux-ok);--ctl:28px;--orb-d:62px;--orb-box:84px;
+  --level:0;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--chrome-body);color:var(--ink-1);overflow:hidden;
+  font:var(--t-body)/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  display:flex;flex-direction:column}
+
+.bar{height:38px;flex:0 0 auto;background:var(--chrome-bar);
+  border-bottom:1px solid var(--chrome-border);display:flex;align-items:center;
+  gap:var(--s-5);padding:0 var(--s-6);font-size:var(--t-ui);color:var(--ink-3)}
+.bar b{color:var(--ink-1);font-weight:600}.bar .sp{flex:1}
+.pill{font-size:var(--t-meta);text-transform:uppercase;letter-spacing:.7px;padding:2px 7px;
+  border-radius:var(--r-chip);border:1px solid var(--edge);color:var(--ink-3);
+  opacity:0;transition:opacity .3s}
+body[data-mode="voice"] .pill{opacity:1;color:var(--ok);
+  border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+
+.chat{flex:1;display:flex;flex-direction:column;min-height:0}
+
+/* ═══ LOG — full height, never displaced. Voice turns land here. ═══ */
+.log{flex:1;overflow-y:auto;padding:var(--s-6);display:flex;flex-direction:column;gap:var(--s-5)}
+.log::-webkit-scrollbar{width:8px}
+.log::-webkit-scrollbar-thumb{background:var(--chrome-border);border-radius:4px}
+.turn{display:flex;flex-direction:column;gap:var(--s-3);animation:rise 240ms ease-out}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.who{font-size:var(--t-meta);text-transform:uppercase;letter-spacing:.8px;color:var(--ink-3);
+  display:flex;align-items:center;gap:var(--s-3)}
+.who .spoke{color:var(--chrome-accent);font-size:9px;display:flex;align-items:center;gap:3px}
+.msg{padding:var(--s-5) var(--s-6);border-radius:var(--r-card);background:var(--chrome-bar);
+  border:1px solid var(--chrome-border);color:var(--ink-2);white-space:pre-wrap}
+.turn.me .msg{background:color-mix(in srgb,var(--chrome-accent) 9%,var(--chrome-bar));
+  border-color:color-mix(in srgb,var(--chrome-accent) 26%,var(--chrome-border))}
+.turn.spoken .msg{border-left:2px solid color-mix(in srgb,var(--chrome-accent) 55%,transparent)}
+.tool{display:flex;align-items:center;gap:var(--s-4);font-family:var(--mono);font-size:var(--t-ui);
+  padding:var(--s-4) var(--s-5);border-radius:var(--r-ctl);background:var(--chrome-bar);
+  border:1px solid var(--chrome-border);border-left:2px solid var(--work);color:var(--ink-3)}
+.tool.done{border-left-color:var(--ok)}
+.tool .nm{color:var(--ink-2)}.tool .ms{margin-left:auto;font-size:var(--t-meta)}
+.dots::after{content:"";animation:dots 1.4s steps(4,end) infinite}
+@keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+/* ═══ COMPOSER — this is the only thing that changes shape. ═══ */
+.comp{flex:0 0 auto;border-top:1px solid var(--chrome-border);background:var(--chrome-bar);
+  padding:var(--s-5) var(--s-6)}
+.cbox{display:flex;align-items:flex-end;gap:var(--s-4);background:var(--chrome-body);
+  border:1px solid var(--chrome-border);border-radius:var(--r-card);padding:var(--s-4);
+  transition:border-color 200ms}
+.cbox:focus-within{border-color:color-mix(in srgb,var(--chrome-accent) 45%,var(--chrome-border))}
+.ctext{flex:1;background:transparent;border:0;outline:0;color:var(--ink-1);font:inherit;
+  font-size:var(--t-body);resize:none;padding:5px var(--s-3);max-height:100px}
+.ctext::placeholder{color:var(--ink-3)}
+.cbtn{width:var(--ctl);height:var(--ctl);flex:0 0 auto;border-radius:var(--r-ctl);border:1px solid transparent;
+  background:transparent;color:var(--ink-3);cursor:pointer;display:grid;place-items:center;
+  transition:background 120ms,color 120ms}
+.cbtn:hover{background:var(--chrome-hover);color:var(--ink-1)}
+.cbtn.rec{background:var(--chrome-danger);color:var(--chrome-bar)}
+.cbtn.send{background:color-mix(in srgb,var(--chrome-accent) 88%,#000);color:#0b0d1a}
+.cbtn.vmode{
+  background:color-mix(in srgb,var(--chrome-accent) 88%,#000);color:#0b0d1a;
+  border-color:transparent}
+.cbtn.vmode:hover{background:var(--chrome-accent);color:#0b0d1a}
+.cbtn.vmode .bars{display:flex;align-items:center;gap:2px;height:15px}
+.cbtn.vmode .bars i{
+  width:2px;border-radius:1px;background:currentColor;
+  transition:height 220ms cubic-bezier(.22,1,.36,1)}
+/* static staggered heights — reads as a waveform glyph, not as activity */
+.cbtn.vmode .bars i:nth-child(1){height:6px}
+.cbtn.vmode .bars i:nth-child(2){height:13px}
+.cbtn.vmode .bars i:nth-child(3){height:9px}
+.cbtn.vmode .bars i:nth-child(4){height:5px}
+/* only on click, as it hands off to the session */
+.cbtn.vmode.firing .bars i{animation:eq .42s ease-in-out}
+.cbtn.vmode.firing .bars i:nth-child(2){animation-delay:.05s}
+.cbtn.vmode.firing .bars i:nth-child(3){animation-delay:.1s}
+.cbtn.vmode.firing .bars i:nth-child(4){animation-delay:.15s}
+@keyframes eq{0%,100%{height:5px}50%{height:15px}}
+
+.comp.dictating .cbox{border-color:color-mix(in srgb,var(--chrome-danger) 55%,transparent)}
+
+/* ── voice takes over THE BOX ONLY. The log above never moves. ── */
+.vbox{
+  display:flex;align-items:center;gap:var(--s-6);
+  height:0;opacity:0;overflow:hidden;padding:0 var(--s-5);
+  background:var(--chrome-body);border:1px solid var(--chrome-border);border-radius:var(--r-card);
+  transition:height 380ms cubic-bezier(.22,1,.36,1),opacity 240ms,border-color 400ms}
+body[data-mode="voice"] .vbox{height:var(--vbox-h,104px);opacity:1;
+  border-color:color-mix(in srgb,var(--hue,var(--chrome-accent)) 34%,var(--chrome-border))}
+body[data-mode="voice"] .cbox{display:none}
+
+/* ═══ ORB — layer structure per the `opal` Rive artboard:
+   ball · Glow Center + Glow 1..4 · Highlight 1,2 · shadow · follow group ═══ */
+.stage{
+  width:var(--orb-box,84px);height:var(--orb-box,84px);flex:0 0 auto;
+  display:grid;place-items:center;position:relative;
+  transition:width 320ms cubic-bezier(.22,1,.36,1),height 320ms cubic-bezier(.22,1,.36,1);
+  --fx:0;--fy:0;                      /* cursor-follow offset, -1..1 */
+}
+/* contact shadow — makes it sit in space instead of floating on top */
+.shadow{
+  position:absolute;bottom:calc(var(--orb-d,62px) * .02);left:50%;
+  width:calc(var(--orb-d,62px) * .74);height:calc(var(--orb-d,62px) * .17);
+  translate:-50% 0;border-radius:50%;
+  background:radial-gradient(ellipse,rgba(0,0,0,.55),transparent 70%);
+  filter:blur(calc(var(--orb-d,62px) * .06));
+  opacity:calc(.4 + var(--level)*.22);
+  scale:calc(1 - var(--level)*.1) 1;
+  transition:opacity 120ms,scale 120ms;
+}
+/* four independent glow shells, coprime drifts so they never re-sync */
+.g{position:absolute;border-radius:50%;pointer-events:none;
+   translate:calc(var(--fx)*4px) calc(var(--fy)*4px)}
+.g1{inset:calc(var(--orb-d,62px) * -.30);
+  background:radial-gradient(circle,color-mix(in srgb,var(--hue) 46%,transparent) 0%,transparent 62%);
+  filter:blur(calc(var(--orb-d,62px) * .22));
+  opacity:calc(.26+var(--level)*.62);animation:drift1 7s ease-in-out infinite}
+.g2{inset:calc(var(--orb-d,62px) * -.16);
+  background:radial-gradient(circle at 40% 38%,color-mix(in srgb,var(--hue) 60%,transparent) 0%,transparent 58%);
+  filter:blur(calc(var(--orb-d,62px) * .13));
+  opacity:calc(.3+var(--level)*.5);animation:drift2 11s ease-in-out infinite}
+.g3{inset:calc(var(--orb-d,62px) * -.05);
+  background:radial-gradient(circle at 62% 66%,color-mix(in srgb,#fff 34%,var(--hue)) 0%,transparent 52%);
+  filter:blur(calc(var(--orb-d,62px) * .09));
+  opacity:calc(.16+var(--level)*.44);animation:drift3 13s ease-in-out infinite}
+.g4{inset:calc(var(--orb-d,62px) * -.40);
+  background:radial-gradient(circle,color-mix(in srgb,var(--hue) 30%,transparent) 0%,transparent 55%);
+  filter:blur(calc(var(--orb-d,62px) * .30));
+  opacity:calc(.14+var(--level)*.5);animation:drift1 17s ease-in-out infinite reverse}
+@keyframes drift1{0%,100%{translate:0 0}50%{translate:4% -5%}}
+@keyframes drift2{0%,100%{translate:0 0}50%{translate:-5% 4%}}
+@keyframes drift3{0%,100%{translate:0 0}50%{translate:3% 4%}}
+
+.orb{
+  --hue:var(--chrome-accent);
+  position:relative;width:var(--orb-d,62px);height:var(--orb-d,62px);
+  border-radius:56% 44% 47% 53%/49% 52% 48% 51%;
+  background:
+    radial-gradient(circle at calc(34% + var(--fx)*7%) calc(28% + var(--fy)*7%),
+      color-mix(in srgb,#fff 40%,var(--hue)) 0%,
+      var(--hue) 32%,
+      color-mix(in srgb,var(--hue) 52%,#080a14) 70%,
+      color-mix(in srgb,var(--hue) 14%,#080a14) 100%);
+  box-shadow:
+    0 0 calc(var(--orb-d,62px)*.24 + var(--level)*var(--orb-d,62px)*.5)
+      color-mix(in srgb,var(--hue) 48%,transparent),
+    inset 0 0 calc(var(--orb-d,62px)*.34) color-mix(in srgb,#080a14 58%,transparent),
+    inset calc(var(--fx)*-6px - 4px) calc(var(--fy)*-6px - 5px)
+      calc(var(--orb-d,62px)*.26) color-mix(in srgb,#080a14 72%,transparent);
+  transform:scale(calc(1 + var(--level)*.16));
+  translate:calc(var(--fx)*6px) calc(var(--fy)*6px);
+  transition:transform 80ms ease-out,box-shadow 120ms linear,
+             background 420ms ease,translate 260ms cubic-bezier(.22,1,.36,1),
+             width 320ms cubic-bezier(.22,1,.36,1),height 320ms cubic-bezier(.22,1,.36,1);
+  /* two idle loops on coprime periods — the rest state never visibly repeats */
+  animation:morphA 7s ease-in-out infinite, morphB 11s ease-in-out infinite;
+  overflow:hidden;
+}
+@keyframes morphA{
+  0%,100%{border-radius:56% 44% 47% 53%/49% 52% 48% 51%}
+  50%{border-radius:44% 56% 55% 45%/56% 46% 54% 44%}}
+@keyframes morphB{
+  0%,100%{rotate:0deg}
+  33%{rotate:2.5deg}
+  66%{rotate:-2deg}}
+
+.swirl{position:absolute;inset:-34%;pointer-events:none;
+  background:conic-gradient(from 0deg,transparent 0deg,
+    color-mix(in srgb,#fff 30%,transparent) 40deg,transparent 94deg,
+    color-mix(in srgb,var(--hue) 80%,#fff) 166deg,transparent 230deg,
+    color-mix(in srgb,#fff 20%,transparent) 298deg,transparent 360deg);
+  filter:blur(calc(var(--orb-d,62px)*.11));
+  opacity:calc(.3+var(--level)*.5);
+  animation:spin var(--swirl-d,14s) linear infinite}
+@keyframes spin{to{rotate:360deg}}
+
+/* Highlight 1 — large, soft. Highlight 2 — small, sharp. Both counter-move. */
+.hl1{position:absolute;pointer-events:none;
+  left:calc(20% - var(--fx)*5%);top:calc(13% - var(--fy)*5%);
+  width:36%;height:27%;border-radius:50%;
+  background:radial-gradient(circle,rgba(255,255,255,.62),transparent 66%);
+  filter:blur(calc(var(--orb-d,62px)*.055));
+  opacity:calc(.62+var(--level)*.3);transition:opacity 140ms}
+.hl2{position:absolute;pointer-events:none;
+  left:calc(29% - var(--fx)*8%);top:calc(20% - var(--fy)*8%);
+  width:12%;height:9%;border-radius:50%;
+  background:rgba(255,255,255,.92);
+  filter:blur(calc(var(--orb-d,62px)*.014));
+  opacity:calc(.7+var(--level)*.3)}
+
+.ring{position:absolute;width:calc(var(--orb-d,62px)*1.22);height:calc(var(--orb-d,62px)*1.22);
+  border-radius:50%;pointer-events:none;
+  border:1px solid color-mix(in srgb,var(--chrome-accent) 42%,transparent);opacity:0}
+[data-state="listening"] .ring{animation:ripple 2s ease-out infinite}
+[data-state="listening"] .ring.b{animation-delay:.66s}
+@keyframes ripple{0%{transform:scale(.85);opacity:.5}100%{transform:scale(1.5);opacity:0}}
+
+/* state entrance flourish — every state change punches, never cuts */
+.orb.enter{animation:morphA 7s ease-in-out infinite,morphB 11s ease-in-out infinite,punch 460ms cubic-bezier(.22,1.4,.4,1)}
+@keyframes punch{0%{scale:.9}55%{scale:1.07}100%{scale:1}}
+
+[data-state="connecting"] .orb{--hue:var(--chrome-text-dim);--swirl-d:6s}
+[data-state="listening"] .orb{--hue:var(--chrome-accent);--swirl-d:9s}
+[data-state="thinking"] .orb{--hue:var(--chrome-driver-accent);--swirl-d:3s;
+  animation:morphA 2.8s ease-in-out infinite,morphB 4.3s ease-in-out infinite}
+[data-state="asleep"] .orb{--hue:var(--chrome-text-dim);--swirl-d:34s;
+  animation:morphA 13s ease-in-out infinite,morphB 19s ease-in-out infinite;filter:saturate(.4) brightness(.7)}
+[data-state="asleep"] .g{opacity:.1}
+[data-state="speaking"] .orb{--hue:var(--mux-ansi-6);--swirl-d:5s}
+
+.vtxt{flex:1;min-width:0}
+[data-state="asleep"] .vtxt .st{color:var(--ink-3)}
+.vtxt .st{font-size:var(--t-meta);text-transform:uppercase;letter-spacing:1.3px;
+  color:var(--ink-3);margin-bottom:3px}
+[data-state="listening"] [data-state="asleep"] .vtxt .st{color:var(--ink-3)}
+.vtxt .st{color:var(--chrome-accent)}
+[data-state="thinking"] [data-state="asleep"] .vtxt .st{color:var(--ink-3)}
+.vtxt .st{color:var(--chrome-driver-accent)}
+[data-state="speaking"] [data-state="asleep"] .vtxt .st{color:var(--ink-3)}
+.vtxt .st{color:var(--mux-ansi-6)}
+.vtxt .tx{font-size:14px;color:var(--ink-2);line-height:1.4;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:20px}
+.vtxt .tx.partial{color:var(--ink-3);font-style:italic}
+.vend{width:32px;height:32px;flex:0 0 auto;border-radius:50%;border:1px solid var(--edge);
+  background:transparent;color:var(--ink-3);cursor:pointer;display:grid;place-items:center;font-size:14px}
+.vend:hover{background:var(--chrome-hover);color:var(--chrome-danger);border-color:var(--chrome-danger)}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:0ms!important}}
+@media (max-width:700px){body[data-mode="voice"] .vbox{height:92px}
+  .stage{width:70px;height:70px}.orb{width:52px;height:52px}}
+</style>
+</head>
+<body data-mode="text">
+
+<div class="bar">
+  <b>muxterm</b><span>chief of staff</span><span class="sp"></span>
+  <button id="sizeBtn" style="font:inherit;font-size:var(--t-meta);text-transform:uppercase;letter-spacing:.7px;
+    background:transparent;border:1px solid var(--edge);color:var(--ink-3);border-radius:var(--r-chip);
+    padding:2px 8px;cursor:pointer">size: inline</button>
+  <span class="pill">● realtime · gpt-realtime-2.1</span>
+</div>
+
+<section class="chat" id="chat" data-state="idle">
+  <div class="log" id="log">
+    <div class="turn">
+      <div class="who">chief of staff</div>
+      <div class="msg">The composer is the only thing that changes. The log stays exactly where it is, and everything spoken lands in it as ordinary history.
+
+Click the bars.</div>
+    </div>
+  </div>
+
+  <div class="comp" id="comp">
+    <!-- text mode -->
+    <div class="cbox">
+      <textarea class="ctext" id="draft" rows="1" placeholder="Ask anything…"></textarea>
+      <button class="cbtn" id="mic" title="Dictate">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4"/></svg>
+      </button>
+      <button class="cbtn vmode" id="slot" title="Start voice conversation">
+        <span class="bars"><i></i><i></i><i></i><i></i></span>
+      </button>
+    </div>
+
+    <!-- voice mode: same footprint, different contents -->
+    <div class="vbox">
+      <div class="stage">
+        <div class="shadow"></div>
+        <div class="g g4"></div><div class="g g1"></div><div class="g g2"></div><div class="g g3"></div>
+        <div class="ring"></div><div class="ring b"></div>
+        <div class="orb" id="orb"><div class="swirl"></div><div class="hl1"></div><div class="hl2"></div></div>
+      </div>
+      <div class="vtxt">
+        <div class="st" id="stateLabel">connecting</div>
+        <div class="tx" id="caption">…</div>
+      </div>
+      <button class="vend" id="vend" title="End voice session">✕</button>
+    </div>
+
+  </div>
+</section>
+
+<script>
+const chat=document.getElementById('chat'),log=document.getElementById('log'),
+  cap=document.getElementById('caption'),lab=document.getElementById('stateLabel'),
+  draft=document.getElementById('draft'),slot=document.getElementById('slot'),
+  mic=document.getElementById('mic'),comp=document.getElementById('comp');
+let state='idle',level=0,target=0,timers=[],dictating=false;
+const LABEL={idle:'idle',connecting:'connecting',listening:'listening',thinking:'working',speaking:'speaking',asleep:'asleep'};
+
+/* the slot: send when there's a draft, voice when empty (mux-cos.ts:1743) */
+const SEND=`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>`;
+const BARS=`<span class="bars"><i></i><i></i><i></i><i></i></span>`;
+function syncSlot(){
+  const ready=draft.value.trim().length>0;
+  slot.classList.toggle('send',ready);slot.classList.toggle('vmode',!ready);
+  slot.title=ready?'Send':'Start voice conversation';slot.innerHTML=ready?SEND:BARS;
+}
+draft.addEventListener('input',()=>{draft.style.height='auto';
+  draft.style.height=Math.min(draft.scrollHeight,100)+'px';syncSlot();});
+syncSlot();
+
+/* mux-cos.ts:1978-1993 — Enter submits, Shift+Enter newlines, Escape unwinds,
+   and every keystroke is stopped so it can never reach a terminal pane. */
+draft.addEventListener('keydown',e=>{
+  e.stopPropagation();
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();return;}
+  if(e.key==='Escape'){e.preventDefault();draft.value='';draft.dispatchEvent(new Event('input'));}
+});
+/* Escape also unwinds a live voice session, one layer at a time. */
+window.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&document.body.dataset.mode==='voice'){e.preventDefault();exitVoice();}
+});
+
+function submit(){
+  const t=draft.value.trim();if(!t)return;
+  msg('you',false).textContent=t;
+  draft.value='';draft.style.height='auto';draft.dispatchEvent(new Event('input'));
+}
+
+/* mic = dictation. fills the box, never sends. */
+mic.onclick=()=>{if(dictating)return;dictating=true;
+  comp.classList.add('dictating');mic.classList.add('rec');
+  const w="show me what changed in the sidecar this week";let i=0;
+  const id=setInterval(()=>{draft.value=w.slice(0,i+=1);draft.dispatchEvent(new Event('input'));
+    if(i>=w.length){clearInterval(id);dictating=false;comp.classList.remove('dictating');
+      mic.classList.remove('rec');draft.focus();}},38);};
+
+slot.onclick=()=>{
+  if(slot.classList.contains('send')){submit();return;}
+  slot.classList.add('firing');                 // bars animate only on the click
+  setTimeout(()=>slot.classList.remove('firing'),460);
+  enterVoice();
+};
+document.getElementById('vend').onclick=exitVoice;
+
+function setState(s){
+  state=s;chat.dataset.state=s;lab.textContent=LABEL[s]||s;
+  const o=document.getElementById('orb');            // entrance flourish, never a cut
+  if(o){o.classList.remove('enter');void o.offsetWidth;o.classList.add('enter');}
+}
+
+/* cursor-follow — the `follow` group from the opal artboard */
+(function(){
+  const stage=document.querySelector('.stage');if(!stage)return;
+  window.addEventListener('pointermove',e=>{
+    const r=stage.getBoundingClientRect();
+    if(!r.width)return;
+    const cx=r.left+r.width/2, cy=r.top+r.height/2;
+    const fx=Math.max(-1,Math.min(1,(e.clientX-cx)/260));
+    const fy=Math.max(-1,Math.min(1,(e.clientY-cy)/260));
+    stage.style.setProperty('--fx',fx.toFixed(3));
+    stage.style.setProperty('--fy',fy.toFixed(3));
+  },{passive:true});
+})();
+
+/* size toggle — inline (real) vs large (judge the detail) */
+(function(){
+  const b=document.getElementById('sizeBtn');let big=false;
+  b.onclick=()=>{
+    big=!big;
+    document.documentElement.style.setProperty('--orb-d',big?'180px':'62px');
+    document.documentElement.style.setProperty('--orb-box',big?'240px':'84px');
+    document.body.style.setProperty('--vbox-h',big?'268px':'104px');
+    b.textContent='size: '+(big?'large':'inline');
+  };
+})();
+function enterVoice(){
+  document.body.dataset.mode='voice';setState('connecting');
+  cap.className='tx';cap.textContent='Minting session token…';
+  at(850,run);
+}
+function exitVoice(){clearAll();document.body.dataset.mode='text';setState('asleep');
+  draft.focus();}
+
+(function tick(){
+  if(state==='listening')target=.18+Math.random()*.5;
+  else if(state==='speaking')target=.3+Math.abs(Math.sin(Date.now()/150))*.55;
+  else if(state==='thinking')target=.1+Math.abs(Math.sin(Date.now()/700))*.14;
+  else target=.05+Math.abs(Math.sin(Date.now()/1400))*.07;
+  level+=(target-level)*(target>level?.35:.08);
+  chat.style.setProperty('--level',level.toFixed(3));
+  requestAnimationFrame(tick);
+})();
+
+const el=h=>{const d=document.createElement('div');d.innerHTML=h.trim();return d.firstElementChild;};
+const add=n=>{log.appendChild(n);log.scrollTop=log.scrollHeight;return n;};
+/* spoken turns are ordinary history, tagged so you can tell later */
+function msg(who,spoken){
+  return add(el(`<div class="turn ${who==='you'?'me':''} ${spoken?'spoken':''}">
+    <div class="who">${who}${spoken?'<span class="spoke">◉ spoken</span>':''}</div>
+    <div class="msg"></div></div>`)).querySelector('.msg');}
+function type(n,t,done){let i=0;const id=setInterval(()=>{n.textContent=t.slice(0,++i);
+  log.scrollTop=log.scrollHeight;if(i>=t.length){clearInterval(id);done&&done();}},16);timers.push(id);}
+const at=(ms,fn)=>timers.push(setTimeout(fn,ms));
+function clearAll(){timers.forEach(t=>{clearTimeout(t);clearInterval(t);});timers=[];}
+
+function run(){
+  setState('listening');cap.className='tx partial';cap.textContent='…';
+  const heard="What's blocking the release?";let i=0;
+  const id=setInterval(()=>{cap.textContent=heard.slice(0,++i)+'…';if(i>=heard.length)clearInterval(id);},40);
+  timers.push(id);
+  at(1750,()=>{
+    cap.className='tx';cap.textContent=heard;
+    msg('you',true).textContent=heard;             /* ← lands in history */
+    setState('thinking');cap.textContent='Checking…';
+    const t1=add(el(`<div class="tool"><span class="nm">gh pr list</span><span class="dots"></span></div>`));
+    at(1350,()=>{
+      t1.classList.add('done');t1.innerHTML='<span class="nm">gh pr list</span><span class="ms">1.4s · 3 open</span>';
+      const t2=add(el(`<div class="tool"><span class="nm">gh run list --branch main</span><span class="dots"></span></div>`));
+      at(1550,()=>{
+        t2.classList.add('done');t2.innerHTML='<span class="nm">gh run list --branch main</span><span class="ms">1.6s · 1 failing</span>';
+        setState('speaking');
+        const reply="PR 74's integration suite is failing on the storage adapter. The other two are green.";
+        cap.className='tx';cap.textContent=reply;
+        type(msg('chief of staff',true),reply,     /* ← spoken words, recorded */
+          ()=>at(500,()=>{setState('listening');cap.className='tx partial';cap.textContent='Listening…';}));
+      });
+    });
+  });
+}
+</script>
+</body>
+</html>
