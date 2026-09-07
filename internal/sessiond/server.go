@@ -345,6 +345,14 @@ type conn struct {
 	// Guarded by Server.mu for the same reason as previewOn: its own ticker
 	// goroutine reads it while fanning rows out. See setSessionStateOn.
 	sessionStateOn bool
+
+	// peerPid is the pid of the process on the other end of nc, from
+	// SO_PEERCRED, or 0 when it could not be established (non-Linux, or a
+	// connection that did not arrive over a Unix socket). Read-only after
+	// newConn, so no lock: the kernel fills it in at connect time and the
+	// peer of a socket never changes. It is the unforgeable half of the
+	// self-close refusal -- see selfclose.go.
+	peerPid int
 }
 
 // clientKind names the connection for a log line. conn.kind is only set by
@@ -360,7 +368,11 @@ func (c *conn) clientKind() string {
 
 // newConn wraps nc with a subscriber for serialized writes.
 func newConn(s *Server, nc net.Conn) *conn {
-	return &conn{srv: s, nc: nc, sub: newSubscriber(nc, 0)}
+	// A failure here is not an error: peerPID is unavailable off Linux and for
+	// non-Unix peers by design, and every caller of peerPid treats 0 as
+	// "cannot prove anything about this peer". See selfclose.go's LIMITS note.
+	pid, _ := peerPID(nc)
+	return &conn{srv: s, nc: nc, sub: newSubscriber(nc, 0), peerPid: pid}
 }
 
 // serve reads frames until the connection closes, dispatching control messages
@@ -692,6 +704,12 @@ func (c *conn) closePane(msg Message) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
 		return
 	}
+	// Before the registry is touched: a session may not close the pane it is
+	// running in. See selfclose.go.
+	if detail, refused := c.refuseSelfClosePane(wsID, msg.PaneID); refused {
+		c.replyError(msg.CID, CodeSelfClose, detail)
+		return
+	}
 	p, _, ok := c.srv.reg.RemovePane(wsID, msg.PaneID)
 	if !ok {
 		// Pane already gone; send ok so the client doesn't hang.
@@ -713,6 +731,12 @@ func (c *conn) closePane(msg Message) {
 // handlers see the workspace already gone and emit no duplicate pane-closed
 // events.
 func (c *conn) closeWorkspace(msg Message) {
+	// Before the registry is touched: a session may not close the workspace it
+	// is running in. See selfclose.go.
+	if detail, refused := c.refuseSelfCloseWorkspace(msg.WorkspaceID); refused {
+		c.replyError(msg.CID, CodeSelfClose, detail)
+		return
+	}
 	panes, _, ok := c.srv.reg.CloseWorkspace(msg.WorkspaceID)
 	if !ok {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "unknown workspace")
@@ -732,11 +756,23 @@ func (c *conn) closeWorkspace(msg Message) {
 // structural broadcasts emitted for an actual registry mutation remain the
 // authority for pane and workspace reconciliation.
 func (c *conn) closeIntent(msg Message) {
-	outcome := c.srv.reg.CloseIntent(CloseTarget{
+	target := CloseTarget{
 		Kind:        CloseTargetKind(msg.TargetKind),
 		WorkspaceID: msg.WorkspaceID,
 		PaneID:      msg.PaneID,
-	})
+	}
+	// Before any assessment, ticket, or mutation: a session may not close the
+	// workspace or pane it is running in. Reported as a failed outcome rather
+	// than a TypeError because this path's contract is that every request
+	// answers with a close-outcome; a confirmation ticket must never be issued
+	// for a target the caller occupies, since confirming it would still
+	// destroy the caller. See selfclose.go.
+	if detail, refused := c.refuseSelfCloseTarget(target); refused {
+		outcome := failedCloseOutcome(target, CloseFailureSelfOccupied, detail)
+		c.reply(CloseOutcomeMessage(msg.CID, outcome))
+		return
+	}
+	outcome := c.srv.reg.CloseIntent(target)
 	c.reply(CloseOutcomeMessage(msg.CID, outcome))
 	c.srv.broadcastCloseMutation(outcome)
 }

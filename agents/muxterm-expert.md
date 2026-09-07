@@ -41,6 +41,10 @@ Switch the UI to a different workspace.
 
 **`mcp_muxterm_close_workspace`** `(workspace_id: string)`
 Close a workspace and all its panes (terminals killed).
+**Withheld from any session running inside a muxterm pane** — check your own tool
+list before reaching for it. Even when a session does hold it, the daemon refuses
+a workspace the calling session occupies: closing it would kill the caller before
+it could report. Report and stop instead.
 
 ---
 
@@ -76,6 +80,9 @@ Update the tab title shown in the UI.
 
 **`mcp_muxterm_close_pane`** `(pane_id: number)`
 Close a pane (kills the PTY process).
+**Withheld from any session running inside a muxterm pane**, and refused by the
+daemon for the pane the calling session occupies — same reasoning as
+`close_workspace` above.
 
 ---
 
