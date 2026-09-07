@@ -203,6 +203,18 @@ function clock(msLeft: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/**
+ * Is this snapshot a session the user is actually in?
+ *
+ * ONE definition, read by the render, by the composer takeover and by the
+ * Escape route. `connecting` counts: the microphone is already open and the
+ * only control that hangs it up is the orb, so the takeover has to happen
+ * then rather than a beat later when the first word is heard.
+ */
+function isSessionLive(s: VoiceSessionSnapshot): boolean {
+  return s.state !== 'idle' && s.state !== 'error';
+}
+
 /** What the housekeeping menu offers. `days` is the cut, or 'all'. */
 type Housekeeping = 7 | 30 | 'all';
 
@@ -247,6 +259,22 @@ export class MuxCos extends LitElement {
    * neither one drives the other.
    */
   @state() private _session: VoiceSessionSnapshot = voiceSessionController.snapshot();
+
+  /**
+   * What the composer looked like the instant a live session took it over,
+   * so ending the session can put it back exactly as it was.
+   *
+   * `h` is the .cbox height in px. The live composer is pinned to it, which
+   * is what keeps the CONVERSATION from reflowing: .comp is `flex: none` in
+   * a column flex, so any height it gains comes straight out of .chatbody's
+   * -- the log would shrink, re-wrap and move the reader's scroll position,
+   * for a change that is supposed to be confined to the composer.
+   *
+   * null means no idle composer was ever measured: the element was parked by
+   * cache() while the session was already live, so there is no prior height
+   * to hold and nothing on screen to disturb.
+   */
+  private _held: { h: number; start: number; end: number; focused: boolean } | null = null;
 
   /**
    * Cards or tiles. Reflected to the host so the grid's minmax and the thumb
@@ -1049,8 +1077,18 @@ export class MuxCos extends LitElement {
       gap: var(--s-3);
     }
     .cbox:focus-within,
-    .cbox.live {
+    .cbox.live,
+    .cbox.solo {
       border-color: color-mix(in srgb, var(--chrome-accent) 55%, transparent);
+    }
+    /* THE COMPOSER, DURING A CALL. One control, centred, and exactly as tall
+       as the composer it replaced -- the height is written inline from the
+       measured box (see _renderVoiceComposer), so the conversation above
+       never gives up a pixel and the reader's scroll position does not move. */
+    .cbox.solo {
+      align-items: center;
+      justify-content: center;
+      padding: 0;
     }
     .ctext {
       width: 100%;
@@ -1114,6 +1152,21 @@ export class MuxCos extends LitElement {
     }
     .cbtn.voice.live mux-voice-orb {
       --orb-d: 24px;
+    }
+    /* SOLE CONTROL, so no longer slot-sized. Not a taste decision: 64px is
+       the largest layout box that fits inside the composer's own resting
+       height, which is all the room C5's no-reflow rule leaves. The disc is
+       52px because 52/64 is the SAME proportion the live slot orb already
+       uses (24/30) -- this is the identical orb, scaled up. Nothing about
+       its visuals or its states is touched; only the two size variables it
+       already exposes are turned up. */
+    .cbtn.voice.solo {
+      width: 64px;
+      height: 64px;
+    }
+    .cbtn.voice.solo mux-voice-orb {
+      --orb-box: 64px;
+      --orb-d: 52px;
     }
     .cbtn.send:hover:not([disabled]) {
       background: var(--chrome-text-bright);
@@ -1441,9 +1494,17 @@ export class MuxCos extends LitElement {
       this._takeTranscript(p.text);
     });
     this._unsubSession = voiceSessionController.subscribe((s) => {
+      // Measured BEFORE the assignment, while the composer on screen is still
+      // the one being taken over. Lit batches its update to a microtask, so
+      // the DOM read here is of the idle composer, not the live one.
+      const was = this._live;
+      const now = isSessionLive(s);
+      if (!was && now) this._holdComposer();
       this._session = s;
+      if (was && !now) this._releaseComposer();
     });
     this._session = voiceSessionController.snapshot();
+    document.addEventListener('keydown', this._onDocKey);
     // One second is the whole resolution of an mm:ss countdown, and the
     // ticker only runs while something is counting: an idle Dashboard costs
     // no timer.
@@ -1455,6 +1516,7 @@ export class MuxCos extends LitElement {
 
   override disconnectedCallback(): void {
     document.removeEventListener('mousedown', this._onOutsideClick);
+    document.removeEventListener('keydown', this._onDocKey);
     this._unsub?.();
     this._unsub = null;
     this._unsubFleet?.();
@@ -1980,15 +2042,15 @@ export class MuxCos extends LitElement {
    * are different jobs -- one is free and fills the box for you to check,
    * the other is metered and acts -- and they must not share a control.
    */
-  private _renderVoiceControl(): TemplateResult {
+  private _renderVoiceControl(solo = false): TemplateResult {
     const s = this._session;
-    const active = s.state !== 'idle' && s.state !== 'error';
+    const active = isSessionLive(s);
     const orbState =
       s.state === 'idle' || s.state === 'error' ? 'asleep' : s.state;
     const label = active ? 'End the spoken conversation' : 'Talk to the chief of staff';
     return html`
       <button
-        class="cbtn voice ${active ? 'live' : ''}"
+        class="cbtn voice ${active ? 'live' : ''} ${solo ? 'solo' : ''}"
         type="button"
         title="${s.state === 'error' && s.error ? s.error : label}"
         aria-label="${label}"
@@ -2005,7 +2067,109 @@ export class MuxCos extends LitElement {
     void voiceSessionController.toggle();
   };
 
+  /**
+   * Remember the composer, then let the orb have it.
+   *
+   * Starting a conversation must never cost the user a sentence they typed.
+   * The draft itself is safe for free -- _draft is component state and the
+   * live render simply does not read it -- but the things that live on the
+   * ELEMENT die with it: the autosized height, the caret, the focus. Those
+   * are what this captures, along with the height the log is entitled to
+   * keep.
+   */
+  private _holdComposer(): void {
+    const box = this.renderRoot.querySelector<HTMLElement>('.cbox');
+    const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
+    if (!box) return;
+    this._held = {
+      h: box.getBoundingClientRect().height,
+      start: el?.selectionStart ?? 0,
+      end: el?.selectionEnd ?? 0,
+      focused: this.shadowRoot?.activeElement === el,
+    };
+  }
+
+  /**
+   * Give it back, exactly as it was.
+   *
+   * Focus is restored when the composer had it before the session OR when
+   * the orb has it now -- the second case being the user pressing the orb to
+   * hang up, where the focused element is about to be removed and focus would
+   * otherwise fall to <body> and leave the keyboard nowhere.
+   */
+  private _releaseComposer(): void {
+    const held = this._held;
+    this._held = null;
+    if (!held) return;
+    const wasOnOrb = this.shadowRoot?.activeElement?.classList.contains('voice') === true;
+    void this.updateComplete.then(() => {
+      const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
+      if (!el) return;
+      this._fit(el);
+      el.setSelectionRange(held.start, held.end);
+      if (held.focused || wasOnOrb) el.focus();
+    });
+  }
+
+  /**
+   * Escape, when there is no text box to receive it.
+   *
+   * _onKey is bound to the textarea, and while a session is live there is no
+   * textarea -- so the surface's one keyboard exit would simply stop
+   * existing at the exact moment the composer is gone and the orb is the only
+   * thing on screen. This is that exit, and ONLY that: it does nothing unless
+   * a session is live, and it defers to the layers _onKey unwinds first, so
+   * a menu or a pending confirmation still closes before the call ends.
+   */
+  private _onDocKey = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || !this._live) return;
+    if (this._menuOpen || this._confirm !== null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    voiceSessionController.stop();
+  };
+
+  /** The one reading of "the user is in a session", from the rendered state. */
+  private get _live(): boolean {
+    return isSessionLive(this._session);
+  }
+
+  /**
+   * The composer, WHILE A SESSION IS LIVE: the orb and nothing else.
+   *
+   * The orb was built as the doorway INTO voice, sized to the send slot it
+   * borrowed. Once you are through the door it is the only control that
+   * matters, and leaving the text box, the send arrow and the dictation mic
+   * standing behind it presented two inputs for one conversation -- the user
+   * looking at a box they are meant to be talking to instead of typing in.
+   * So the whole row goes and the orb is promoted to primary.
+   *
+   * Removed, not disabled or greyed: a control you can see but must not use
+   * is worse than one that is not there, and every one of them comes back
+   * untouched the moment the session ends.
+   *
+   * The height is PINNED to whatever the composer measured the instant it
+   * was taken over (see _held). That is what confines the change to the
+   * composer -- the conversation above keeps its height and the reader keeps
+   * their scroll position, and the size the orb may grow to is whatever fits
+   * inside that (see .cbtn.voice.solo).
+   */
+  private _renderVoiceComposer(): TemplateResult {
+    const h = this._held?.h;
+    // An EXACT height, not a minimum: a minimum would still let the padding
+    // and the orb push the box past what the log gave up.
+    const size = h ? `height:${h}px` : 'min-height:72px';
+    return html`
+      <div class="comp">
+        <div class="cbox solo" style="${size}">
+          ${this._renderVoiceControl(true)}
+        </div>
+      </div>
+    `;
+  }
+
   private _renderComposer(): TemplateResult {
+    if (this._live) return this._renderVoiceComposer();
     const ready = this._draft.trim().length > 0;
     const listening = this._voice === 'listening';
     const busy = cosStore.busy;
