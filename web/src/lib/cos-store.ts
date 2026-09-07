@@ -301,7 +301,7 @@ class CosStore {
     if (!this._socket?.cosApproval(requestId, approved)) {
       this._fault = {
         code: 'approval_failed',
-        message: 'the chief of staff could not be reached, so nothing was answered',
+        message: 'muxterm could not be reached, so nothing was answered',
         fatal: false,
       };
       this._notify();
@@ -354,7 +354,7 @@ class CosStore {
       // that is not there.
       this._fault = {
         code: 'clear_failed',
-        message: 'the chief of staff could not be reached, so nothing was cleared',
+        message: 'muxterm could not be reached, so nothing was cleared',
         fatal: false,
       };
     }
@@ -389,7 +389,7 @@ class CosStore {
       this._sessionId = str(frame.session_id);
       if (!ok) {
         this._setStatus('down');
-        this._fault = { code: 'subscribe_failed', message: str(frame.error) || 'the chief of staff could not be reached', fatal: true };
+        this._fault = { code: 'subscribe_failed', message: str(frame.error) || 'muxterm could not be reached', fatal: true };
       } else {
         this._fault = null;
         this._setStatus(frame.ready === true ? 'ready' : 'starting');
@@ -602,7 +602,7 @@ class CosStore {
       case 'error': {
         const fatal = ev.fatal === true;
         const code = str(ev.code);
-        const message = str(ev.message) || code || 'the chief of staff reported an error';
+        const message = str(ev.message) || code || 'muxterm reported an error';
         // `busy` is marked fatal:false by the spec but IS terminal for its turn
         // (2.4 law 2): a refused turn will never run, so leaving it "streaming"
         // would spin a cursor forever.

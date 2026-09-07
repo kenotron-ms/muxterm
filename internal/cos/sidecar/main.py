@@ -598,6 +598,53 @@ def _mentions_lane(msg: Any, needles: list) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tool policy
+# ---------------------------------------------------------------------------
+# The sidecar does NOT get a shell of its own.
+#
+# It is a long-lived session that anybody who can reach the muxterm web UI can
+# type into, and it runs as the user who started muxterm. A `bash` tool in that
+# session is a remote shell on the host wearing a chat window's clothes -- one
+# approval-fatigued click away from `rm -rf`, and invisible afterwards because
+# the command never appeared in any pane.
+#
+# Losing it costs nothing it cannot get back a better way. Shell work belongs
+# in a LANE: mcp_muxterm_spawn_lane starts a real agent session in a real pane,
+# and mcp_muxterm_run_command / send_input drive a pane that a human can watch,
+# scroll back through, and Ctrl-C. Both leave the work on screen instead of
+# inside a transcript, which is what you actually want from "it ran something
+# on my machine".
+#
+# Module names, not tool names: the bundle config lists MODULES, and the module
+# is what mounts the tool. tool-bash is amplifier's shell module.
+SHELL_TOOL_MODULES = frozenset({"tool-bash"})
+
+
+def drop_shell_tools(cfg: dict) -> dict:
+    """Remove shell-tool modules from a resolved bundle config or mount plan.
+
+    Mutates `cfg` IN PLACE and returns it, so it works on a config dict the
+    caller reassigns and on a PreparedBundle's mount_plan, which nobody
+    reassigns and everybody mounts from. A config with no `tools` key, or one
+    whose entries are not dicts, is left alone rather than guessed at.
+    """
+    tools = cfg.get("tools")
+    if not isinstance(tools, list):
+        return cfg
+
+    def is_shell(entry: object) -> bool:
+        return isinstance(entry, dict) and entry.get("module") in SHELL_TOOL_MODULES
+
+    dropped = [e["module"] for e in tools if is_shell(e)]
+    cfg["tools"] = [e for e in tools if not is_shell(e)]
+    if dropped:
+        logger.info("shell tool modules removed from sidecar config: %s", sorted(dropped))
+    else:
+        logger.debug("no shell tool modules in sidecar config")
+    return cfg
+
+
+# ---------------------------------------------------------------------------
 # Sidecar
 # ---------------------------------------------------------------------------
 class Sidecar:
@@ -656,6 +703,16 @@ class Sidecar:
         # MANDATORY: without this hook-context-intelligence dies validating
         # "Unknown level: '${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}'".
         cfg = expand_env_vars(cfg)
+        # BOTH, and prepared.mount_plan is the one that actually decides.
+        # resolve_bundle_config hands back a config dict AND a PreparedBundle,
+        # and it is prepared_bundle.create_session() -- reading its own
+        # mount_plan -- that mounts the tools. cfg starts out as that same plan
+        # but expand_env_vars returns a NEW dict, so editing cfg alone changes a
+        # copy nobody mounts from. Filtering only cfg looks correct, logs
+        # correct, and leaves bash on the session; the boot-time assertion
+        # further down is what caught exactly that.
+        cfg = drop_shell_tools(cfg)
+        drop_shell_tools(prepared.mount_plan)
 
         # -- resume ---------------------------------------------------------
         # The session lives in the ordinary amplifier session store for this
@@ -749,6 +806,19 @@ class Sidecar:
         self.tool_count = len(tools)
         self.muxterm_tool_count = len([t for t in tools if t.startswith("mcp_muxterm_")])
         logger.info("tools mounted (%d): %s", self.tool_count, sorted(tools))
+
+        # Belt and braces for drop_shell_tools(). That filter works on module
+        # names in the bundle config; if a future bundle mounts a shell under a
+        # different module, or a settings override puts one back, the config
+        # never says so and only the MOUNTED roster can tell us. Say it loudly
+        # rather than discovering it from a transcript later.
+        leaked = sorted(t for t in tools if t in {"bash", "shell", "run_command"})
+        if leaked:
+            logger.error(
+                "shell tool(s) %s are mounted in the sidecar session -- the sidecar is "
+                "meant to run shell work in a lane or a pane, never in its own session",
+                leaked,
+            )
 
         self._register_hooks()
         return session
@@ -1223,13 +1293,13 @@ class Sidecar:
                 logger.exception("clear: context reset on an empty transcript failed")
                 fail(f"nothing was on disk to prune, but this session's live memory could "
                      f"not be reset ({type(exc).__name__}: {exc}), so unsaved turns would "
-                     f"come back on the next save. Restart the chief of staff to clear them",
+                     f"come back on the next save. Restart muxterm to clear them",
                      code="clear_partial", removed=0, kept=0, reloaded=False)
                 return
             if not reset:
                 fail("nothing was on disk to prune, and this session's live memory could not "
                      "be reset, so unsaved turns would come back on the next save. Restart "
-                     "the chief of staff to clear them",
+                     "muxterm to clear them",
                      code="clear_partial", removed=0, kept=0, reloaded=False)
                 return
             payload = {"ev": "cleared", "removed": 0, "kept": 0,
@@ -1349,7 +1419,7 @@ class Sidecar:
             fail(
                 f"the transcript on disk was pruned ({removed_count} of {len(messages)} "
                 f"messages removed, {len(kept)} kept) but this session's live memory was "
-                f"NOT: the next turn would bring them back. Restart the chief of staff to "
+                f"NOT: the next turn would bring them back. Restart muxterm to "
                 f"make it forget them for real"
                 + (f" ({reload_error})" if reload_error else "")
                 + f". Backup: {backup_path}",
@@ -1599,7 +1669,7 @@ class Sidecar:
 # entry point
 # ---------------------------------------------------------------------------
 def parse_args(argv: list) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="cos", description="muxterm Chief-of-Staff sidecar")
+    p = argparse.ArgumentParser(prog="cos", description="muxterm sidecar")
     p.add_argument("--session-id", required=True, help="amplifier session id (also the resume key)")
     p.add_argument("--bundle", default="anchors", help="bundle to load (default: anchors)")
     p.add_argument("--cwd", default=None, help="working directory; sets project slug and session store")

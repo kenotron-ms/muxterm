@@ -80,7 +80,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm spawn-lane <ws>     Delegate: launch an agent session in a workspace")
 	fmt.Fprintln(w, "  muxterm layout get          Print the workspace layout diagram")
 	fmt.Fprintln(w, "  muxterm mcp [flags]         Start MCP server (stdio transport)")
-	fmt.Fprintln(w, "  muxterm cos <message>       Ask the chief-of-staff sidecar (--status for state)")
+	fmt.Fprintln(w, "  muxterm cos <message>       Ask muxterm (--status for state)")
 	fmt.Fprintln(w, "  muxterm amplifier install   Install muxterm bundle into Amplifier")
 	fmt.Fprintln(w, "  muxterm version             Print version")
 	fmt.Fprintln(w, "")

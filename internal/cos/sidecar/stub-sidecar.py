@@ -20,6 +20,9 @@ the Go side has to survive:
     approval  - emit an approval_request and block until it is answered
     crash     - die mid-turn with os._exit, producing no terminal event
     big       - emit a reply larger than one pipe buffer
+    markdown  - reply with every construct <mux-cos> renders as formatting,
+                streamed in several deltas so the check also covers a reply
+                that is re-parsed while it is still half-written
 
 It also ENFORCES section 2.4 law 1 from the sidecar side: a turn arriving while
 another is active is refused with {"ev":"error","code":"busy"} and logs loudly.
@@ -39,6 +42,21 @@ os.dup2(2, 1)
 PROTO = os.fdopen(_real, "w", buffering=1)
 
 _write_lock = threading.Lock()
+
+# The `markdown` fixture reply: one chunk per construct <mux-cos> promises to
+# render as formatting. Split across deltas ON PURPOSE -- the renderer re-parses
+# the whole accumulated string on every delta, so a reply that arrives in pieces
+# is the case where a naive parser flickers (a half-typed fence briefly looking
+# like a stray ``` , a lone ** looking like literal asterisks). Splitting mid-fence
+# keeps that path covered by anything that drives this fixture.
+MARKDOWN_CHUNKS = [
+    "Here is **bold text** and *italic text* and `inline_code()` in a sentence.\n\n",
+    "A fenced block:\n\n```sh\ngo build ./...\n",
+    "go vet ./...\n```\n\n",
+    "A link to [the muxterm repo](https://github.com/kenotron-ms/muxterm).\n\n",
+    "Bullets:\n\n- first bullet\n- second bullet with `code`\n- third bullet\n\n",
+    "Numbered:\n\n1. step one\n2. step two\n3. step three\n",
+]
 
 
 def emit(**event):
@@ -101,6 +119,8 @@ class Stub:
         chunks = [f"you said: {prompt}", " -- ", "and this is a canned reply."]
         if "big" in lowered:
             chunks = [f"chunk-{i:04d} " * 8 for i in range(400)]
+        if "markdown" in lowered:
+            chunks = MARKDOWN_CHUNKS
 
         emit(ev="thinking", turn_id=turn_id, text="deciding what to say")
 

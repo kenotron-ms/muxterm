@@ -51,7 +51,10 @@ export class MuxTitleBar extends LitElement {
   static styles = css`
     :host {
       --scrim: color-mix(in srgb, var(--chrome-body) 62%, transparent);
-      --nav-h: var(--mux-dock-height, 44px);
+      /* D3. The ONE top-chrome height token, shared with <mux-sidebar>'s
+         .header. Change it in theme.ts and both surfaces move together; there
+         is no second place to forget. */
+      --nav-h: var(--mux-titlebar-height, var(--mux-dock-height, 44px));
 
       display: flex;
       align-items: center;

@@ -50,7 +50,7 @@ func runCos(args []string) error {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm cos <message> [flags]")
 		fmt.Fprintln(os.Stdout, "       muxterm cos --status [--json]")
 		fmt.Fprintln(os.Stdout, "")
-		fmt.Fprintln(os.Stdout, "Send one turn to the chief-of-staff sidecar and stream the reply.")
+		fmt.Fprintln(os.Stdout, "Send one turn to muxterm and stream the reply.")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "The sidecar keeps ONE amplifier session alive across turns, so a turn")
 		fmt.Fprintln(os.Stdout, "costs a turn rather than a process boot. The session is an ordinary")
