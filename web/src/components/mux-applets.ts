@@ -50,6 +50,8 @@ import {
 // knows nothing else about them -- no import of their classes, no switch on
 // their ids.
 import './applets/applet-dashboard.js';
+import './applets/applet-files.js';
+import './applets/applet-prs.js';
 
 /**
  * Which tab is showing. localStorage rather than the server config, for
