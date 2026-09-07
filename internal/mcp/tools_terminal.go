@@ -125,6 +125,10 @@ func (tt *terminalTools) runCommand(args map[string]any) (string, error) {
 	return jsonText(map[string]any{
 		"output":    output,
 		"exit_code": exitCode,
+		// Which machine actually ran this. Echoed on EVERY response, so a
+		// caller that asked for a remote can verify it got one instead of
+		// having to trust that no silent local fallback happened.
+		"machine": tt.c.Machine(),
 	}), nil
 }
 
@@ -230,10 +234,10 @@ func (tt *terminalTools) sendInput(args map[string]any) (string, error) {
 	}
 
 	if err := tt.c.conn.Input(uint32(paneID), payload); err != nil {
-		return "", fmt.Errorf("sending input to pane %d: %w", paneID, err)
+		return "", fmt.Errorf("sending input to pane %d on machine %s: %w", paneID, tt.c.Machine(), err)
 	}
 
-	return jsonText(map[string]any{"ok": true}), nil
+	return jsonText(map[string]any{"ok": true, "pane_id": paneID, "machine": tt.c.Machine()}), nil
 }
 
 // getScreen returns the current VT-grid state of the pane identified by
@@ -246,7 +250,7 @@ func (tt *terminalTools) getScreen(args map[string]any) (string, error) {
 
 	snap, err := tt.c.conn.ScreenSnapshot(paneID)
 	if err != nil {
-		return "", fmt.Errorf("screen snapshot for pane %d: %w", paneID, err)
+		return "", fmt.Errorf("screen snapshot for pane %d on machine %s: %w", paneID, tt.c.Machine(), err)
 	}
 
 	cursor := map[string]any{"row": 0, "col": 0}
@@ -256,7 +260,8 @@ func (tt *terminalTools) getScreen(args map[string]any) (string, error) {
 	}
 
 	return jsonText(map[string]any{
-		"text":   snap.Text,
-		"cursor": cursor,
+		"text":    snap.Text,
+		"cursor":  cursor,
+		"machine": tt.c.Machine(),
 	}), nil
 }

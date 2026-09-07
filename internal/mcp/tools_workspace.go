@@ -13,9 +13,10 @@ func newWorkspaceTools(c *Client) *workspaceTools {
 	return &workspaceTools{c: c}
 }
 
-// listWorkspaces returns a JSON array of all workspaces. Each element has the
-// fields id, name, pane_count, and active (true when that workspace is the one
-// this MCP session is currently attached to).
+// listWorkspaces returns a JSON array of all workspaces on the machine this
+// client is connected to. Each element has the fields id, name, pane_count,
+// active (true when that workspace is the one this MCP session is currently
+// attached to), and machine.
 func (wt *workspaceTools) listWorkspaces(_ map[string]any) (string, error) {
 	workspaces, err := wt.c.conn.ListWorkspaces()
 	if err != nil {
@@ -30,6 +31,11 @@ func (wt *workspaceTools) listWorkspaces(_ map[string]any) (string, error) {
 			"name":       ws.Name,
 			"pane_count": ws.PaneCount,
 			"active":     ws.WorkspaceID == current,
+			// Which machine this row came from. Present on EVERY row,
+			// including local ones, so a caller never has to infer the
+			// machine from the absence of a field -- and so a row can be fed
+			// straight back to another tool's machine argument.
+			"machine": wt.c.Machine(),
 		})
 	}
 
@@ -49,7 +55,7 @@ func (wt *workspaceTools) createWorkspace(args map[string]any) (string, error) {
 		return "", fmt.Errorf("creating workspace %q: %w", name, err)
 	}
 
-	return jsonText(map[string]any{"workspace_id": id}), nil
+	return jsonText(map[string]any{"workspace_id": id, "machine": wt.c.Machine()}), nil
 }
 
 // switchWorkspace attaches the MCP session to the workspace identified by
@@ -62,10 +68,10 @@ func (wt *workspaceTools) switchWorkspace(args map[string]any) (string, error) {
 	}
 
 	if err := wt.c.AttachWorkspace(id); err != nil {
-		return "", fmt.Errorf("switching to workspace %q: %w", id, err)
+		return "", fmt.Errorf("switching to workspace %q on machine %s: %w", id, wt.c.Machine(), err)
 	}
 
-	return jsonText(map[string]any{"ok": true}), nil
+	return jsonText(map[string]any{"ok": true, "machine": wt.c.Machine()}), nil
 }
 
 // closeWorkspace closes the workspace identified by workspace_id, terminating
@@ -80,5 +86,5 @@ func (wt *workspaceTools) closeWorkspace(args map[string]any) (string, error) {
 		return "", fmt.Errorf("closing workspace %q: %w", id, err)
 	}
 
-	return jsonText(map[string]any{"ok": true}), nil
+	return jsonText(map[string]any{"ok": true, "machine": wt.c.Machine()}), nil
 }

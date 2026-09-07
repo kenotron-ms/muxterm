@@ -239,12 +239,17 @@ func unknownSessionErr(sessionID string, rows []sessiond.SessionState) error {
 // Emitting an empty done_means rather than omitting the key is also load-
 // bearing: a /goal lane carries one and an interactive lane does not, and that
 // asymmetry is only legible if the absence is shown rather than hidden.
-func fleetRowJSON(r sessiond.SessionState) map[string]any {
+func fleetRowJSON(r sessiond.SessionState, machine string) map[string]any {
 	knows := r.Knows
 	if knows == nil {
 		knows = []string{}
 	}
 	return map[string]any{
+		// machine is on EVERY row, not only remote ones. A field that appears
+		// conditionally teaches a caller to infer "local" from its absence,
+		// and that inference is wrong the first time a row is dropped or a
+		// response is merged. Always present, always answerable.
+		"machine":      machine,
 		"session_id":   r.SessionID,
 		"pane_id":      r.PaneID,
 		"workspace_id": r.WorkspaceID,

@@ -74,9 +74,9 @@ func (ft *fleetTools) fleetStatus(args map[string]any) (string, error) {
 
 	sessions := make([]map[string]any, 0, len(rows))
 	for _, r := range rows {
-		sessions = append(sessions, fleetRowJSON(r))
+		sessions = append(sessions, fleetRowJSON(r, ft.c.Machine()))
 	}
-	return jsonText(map[string]any{"sessions": sessions}), nil
+	return jsonText(map[string]any{"sessions": sessions, "machine": ft.c.Machine()}), nil
 }
 
 // transcriptTurnJSON projects one turn into the MCP result shape (snake_case
@@ -216,5 +216,6 @@ func (ft *fleetTools) sessionSend(args map[string]any) (string, error) {
 	return jsonText(map[string]any{
 		"pane_id":      row.PaneID,
 		"workspace_id": row.WorkspaceID,
+		"machine":      ft.c.Machine(),
 	}), nil
 }
