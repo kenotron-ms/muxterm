@@ -588,6 +588,39 @@ async function teardown() {
     await Promise.race([new Promise((r) => proc.once('exit', r)), sleep(5000)]);
     if (proc.exitCode === null) proc.kill('SIGKILL');
     done.push(`muxterm pid ${proc.pid} stopped`);
+
+    // The sessiond it spawned is DETACHED and outlives it by design --
+    // terminal sessions are meant to survive a server restart. For a
+    // throwaway run that design is a leak: it keeps a handle on the temp
+    // dir (so removing it just makes sessiond recreate it) and leaves a
+    // process per run. Matched on the exact binary path of THIS worktree,
+    // so nothing else on the machine -- production's sessiond least of all
+    // -- is ever in range.
+    const self = path.join(REPO, 'bin/muxterm');
+    try {
+      const { stdout } = await execFileAsync('pgrep', ['-f', `^${self} sessiond$`]);
+      const pids = stdout.split('\n').map((x) => x.trim()).filter(Boolean);
+      for (const pid of pids) {
+        try {
+          process.kill(Number(pid), 'SIGTERM');
+        } catch {
+          /* already gone */
+        }
+      }
+      if (pids.length) {
+        await sleep(1500);
+        for (const pid of pids) {
+          try {
+            process.kill(Number(pid), 'SIGKILL');
+          } catch {
+            /* already gone */
+          }
+        }
+        done.push(`${pids.length} detached sessiond stopped`);
+      }
+    } catch {
+      // pgrep exits non-zero when nothing matches, which is the good case.
+    }
   }
   if (tmp && !KEEP) {
     fs.rmSync(tmp, { recursive: true, force: true });
