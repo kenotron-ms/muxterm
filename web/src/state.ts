@@ -74,6 +74,12 @@ export class MuxStore {
   private _bellWorkspaces: Set<string> = new Set();
   /** Pane IDs that have an unacknowledged activity bell. */
   private _bellPanes: Set<number> = new Set();
+  /**
+   * Completion record ids this client has already rung for. Bounded by the
+   * daemon's own completion log, which is capped -- and by the fact that an
+   * acknowledged completion is never sent again.
+   */
+  private _seenCompletions: Set<string> = new Set();
 
 
   get config(): ResolvedConfig {
@@ -201,6 +207,29 @@ export class MuxStore {
     this._notify();
   }
 
+  /**
+   * Ring the workspace bell for every lane that has finished since the last
+   * workspace list.
+   *
+   * This is the notification, and it deliberately reuses the bell rather than
+   * inventing a channel: the sidebar dot already means "this workspace wants
+   * you", and a lane that just finished is the strongest case of that there
+   * is. Previously the workspace simply vanished and nothing rang at all.
+   *
+   * Keyed on the completion's record id, not on mere presence, so a held
+   * workspace re-broadcast on every unrelated list change rings ONCE. A record
+   * the user has already acknowledged never comes back on the wire, so this
+   * set only ever grows within a session and is pruned with its workspace.
+   */
+  private _ringNewCompletions(): void {
+    for (const ws of this._workspaces) {
+      const recordId = ws.completion?.recordId;
+      if (!recordId || this._seenCompletions.has(recordId)) continue;
+      this._seenCompletions.add(recordId);
+      this._bellWorkspaces.add(ws.workspaceId);
+    }
+  }
+
   setActivePane(paneId: number): void {
     if (this._activePaneId === paneId) return;
     muxLog('state active', `setActivePane ${this._activePaneId} → ${paneId}`);
@@ -215,6 +244,7 @@ export class MuxStore {
     switch (msg.type) {
       case SessiondType.WorkspaceList:
         this._workspaces = msg.workspaces ?? [];
+        this._ringNewCompletions();
         // Prune stale workspace bell entries for workspaces that no longer exist.
         for (const wsId of this._bellWorkspaces) {
           if (!this._workspaces.some((w) => w.workspaceId === wsId)) {

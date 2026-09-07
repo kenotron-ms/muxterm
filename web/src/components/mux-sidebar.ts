@@ -1,6 +1,7 @@
 import { LitElement, html, css, unsafeCSS, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { store } from '../state.js';
+import type { SessiondWorkspaceCompletion } from '../types.js';
 import { workspaceLabel } from '../lib/workspace-label.js';
 import './launcher-menu.js';
 import './mux-start-card.js';
@@ -114,6 +115,15 @@ interface CardState {
   needs: number;
   /** Panes in this workspace — shown instead of a badge when needs === 0. */
   paneCount: number;
+  /**
+   * Set when this workspace is holding a finished lane's result.
+   *
+   * Such a workspace has zero panes and is deliberately NOT reaped, so
+   * without this it would render as a bare "0 panes" card and say nothing
+   * about the lane that just finished in it — which is the silence this
+   * whole feature exists to break.
+   */
+  completion: SessiondWorkspaceCompletion | null;
 }
 
 /**
@@ -496,6 +506,40 @@ export class MuxSidebar extends LitElement {
       height: 6px;
       border-radius: 50%;
       background: var(--mux-warn);
+    }
+
+    /* Finished-lane verdict. It takes the pane-count slot because a workspace
+       held open for a completion has zero panes, and "0 panes" is the least
+       informative thing the sidebar could say about a lane that just finished.
+
+       Colour carries the verdict, using the same theme tokens as every other
+       status mark in this file. The cases are deliberately NOT the same
+       colour: a startup crash and a completed run must not read alike at a
+       glance, which is the entire reason the record carries an exit status.
+       An exit with no verdict stays dim rather than green -- an absent
+       verdict is not a good one. */
+    .ws-completion {
+      flex-shrink: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
+      line-height: 1.5;
+      white-space: nowrap;
+      padding: 0 4px;
+      border-radius: 3px;
+      border: 1px solid currentColor;
+      color: var(--chrome-text-dim);
+    }
+
+    .ws-completion.completed {
+      color: var(--mux-ok);
+    }
+
+    .ws-completion.failed {
+      color: var(--mux-error);
+    }
+
+    .ws-completion.stopped {
+      color: var(--mux-warn);
     }
 
     /* Zero needs is not a zero badge: a plain pane count, and nothing warm. */
@@ -1563,6 +1607,7 @@ export class MuxSidebar extends LitElement {
         hint,
         needs: needsByWs.get(id) ?? 0,
         paneCount: active ? panes.length : ws.paneCount,
+        completion: ws.completion ?? null,
       };
     });
   }
@@ -1741,25 +1786,66 @@ export class MuxSidebar extends LitElement {
               @dblclick="${(e: Event) => this._startRename(e, card.id)}"
               >${card.label}</span
             >`}
-        ${card.needs > 0
-          ? html`<span
-              class="ws-needs"
-              role="img"
-              aria-label="Something in this workspace needs input"
-              title="Something here needs input"
-            ></span>`
-          : html`<span class="ws-panes"
-              >${card.paneCount} pane${card.paneCount === 1 ? '' : 's'}</span
-            >`}
+        ${card.completion
+          ? this._renderCompletion(card.completion)
+          : card.needs > 0
+            ? html`<span
+                class="ws-needs"
+                role="img"
+                aria-label="Something in this workspace needs input"
+                title="Something here needs input"
+              ></span>`
+            : html`<span class="ws-panes"
+                >${card.paneCount} pane${card.paneCount === 1 ? '' : 's'}</span
+              >`}
         <button
           type="button"
           class="ws-remove-btn"
-          title="Close workspace"
-          aria-label="Close workspace ${card.label}"
+          title="${card.completion ? 'Dismiss finished lane' : 'Close workspace'}"
+          aria-label="${card.completion
+            ? `Dismiss finished lane ${card.completion.lane}`
+            : `Close workspace ${card.label}`}"
           @click="${(e: Event) => this._onWsRemove(e, card.id, card.label)}"
         >×</button>
       </div>
     `;
+  }
+
+  /**
+   * The finished-lane chip: verdict, PR, and the lane's own name.
+   *
+   * It takes the slot the pane count would occupy, because "0 panes" on a
+   * workspace whose lane just finished is the least useful sentence the
+   * sidebar could say. The `title` attribute carries the summary and the tail
+   * of the lane's final output, so the completion record is READABLE from the
+   * notification itself rather than only being discoverable elsewhere.
+   *
+   * The verdict word is never softened: a lane that crashed says `failed` and
+   * a lane that exited with no verdict says `no verdict`. A badge that reads
+   * the same for a success and a startup crash would be worse than nothing,
+   * because it would be believed.
+   */
+  private _renderCompletion(completion: SessiondWorkspaceCompletion) {
+    const verdict =
+      completion.outcome === 'completed'
+        ? 'done'
+        : completion.outcome === 'failed'
+          ? 'failed'
+          : completion.outcome === 'stopped'
+            ? 'stopped'
+            : 'no verdict';
+    const detail = [
+      `${completion.lane}: ${completion.summary || verdict}`,
+      completion.prUrl ? `\n${completion.prUrl}` : '',
+      completion.output ? `\n\n${completion.output}` : '',
+    ].join('');
+    return html`<span
+      class="ws-completion ${completion.outcome}"
+      role="status"
+      aria-label="Lane ${completion.lane} ${verdict}"
+      title="${detail}"
+      >${verdict}${completion.pr ? html` #${completion.pr}` : ''}</span
+    >`;
   }
 
   /**
