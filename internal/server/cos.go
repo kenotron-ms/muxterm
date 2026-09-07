@@ -560,6 +560,15 @@ func (c *Client) cosPump(sub *cos.Subscription, relay *cosRelay) {
 		if err := c.writeText(frame); err != nil {
 			// The socket is going away (or wedged past the 5s write deadline);
 			// readPump will remove the client.
+			//
+			// SAY WHICH EVENT DIED WITH IT. A pump that returns silently here
+			// is indistinguishable, from every log anyone will read, from a
+			// pump that simply had nothing more to forward -- and the two mean
+			// opposite things when the frame being written is the turn_end
+			// that carries the whole reply. Diagnosing this cost a round of
+			// inference that one line would have answered.
+			log.Printf("cos: subscriber write failed on %s (turn %s); "+
+				"stream ends here for this connection: %v", ev.Ev, ev.TurnID, err)
 			return
 		}
 	}

@@ -851,8 +851,44 @@ class CosStore {
     };
   }
 
+  /**
+   * Tell every reader that something changed, AT MOST ONCE PER FRAME.
+   *
+   * The coalescing is not a micro-optimisation; it is the backpressure this
+   * store had none of. A delta is a few dozen bytes, but the view re-binds the
+   * WHOLE accumulated reply on every notify (mux-cos.ts _renderBlock), so
+   * notifying per event costs O(reply so far) per event and O(reply^2) per
+   * turn. Measured on a 1 MB reply streamed as 5,243 deltas: the server
+   * finished at 30s and the browser was still rendering at 271s, the gap
+   * between deltas growing linearly with the text already on screen.
+   *
+   * That lag is what turns into LOSS. A browser that cannot drain its socket
+   * stops draining it; the relay's per-subscriber queue fills; the broker
+   * drops events into it -- and the reply is left truncated mid-sentence with
+   * nothing on screen to say so. Same run at 4 MB: 2,895 events dropped, and
+   * the transcript stopped at 26% of the answer.
+   *
+   * requestAnimationFrame is the right primitive because it is SELF-LIMITING:
+   * the next callback is only scheduled once the previous frame has been
+   * painted, so a browser that is struggling renders less often instead of
+   * falling further behind. A hidden tab schedules no frames at all, which is
+   * correct -- the store keeps accumulating and the whole turn is painted in
+   * one pass when the tab comes back.
+   *
+   * The setTimeout fallback is for environments with no rAF (tests, SSR),
+   * where the coalescing still holds but the cadence is the task queue's.
+   */
+  private _notifyPending = false;
+
   private _notify(): void {
-    for (const cb of this._listeners) cb();
+    if (this._notifyPending) return;
+    this._notifyPending = true;
+    const flush = () => {
+      this._notifyPending = false;
+      for (const cb of this._listeners) cb();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
+    else setTimeout(flush, 0);
   }
 }
 
