@@ -119,8 +119,10 @@ Each item resolves independently to PASS or BLOCKED(cause).
 These are a speed aid only. They do not substitute for the checklist.
 
 - Committed and working at `78244ed`: `sidecar/cos/main.py` (NDJSON over
-  stdio, one long-lived AmplifierSession), `internal/cos/` (supervisor,
-  single-consumer queue, event broker, state file), `cmd/muxterm/cos_cmd.go`.
+  stdio, one long-lived AmplifierSession) -- since moved to
+  `internal/cos/sidecar/main.py` so `go:embed` can reach it -- plus
+  `internal/cos/` (supervisor, single-consumer queue, event broker, state
+  file), `cmd/muxterm/cos_cmd.go`.
   Measured: boot 1.96s, plain turn 1.19s, MCP-tool turn 2.82s, 31–32 tools
   mounted of which 18 are `mcp_muxterm_*`.
 - The MCP `create_pane` cannot launch a command:

@@ -78,7 +78,7 @@ browser  ──WS──►  muxterm server (Go)
                         │  spawn + supervise + single-consumer queue
                         │  NDJSON over stdin/stdout
                         ▼
-                  sidecar/cos/main.py   (amplifier venv python)
+                  internal/cos/sidecar/main.py   (amplifier venv python)
                         ├── ONE AmplifierSession, alive across turns
                         ├── Display  ─┐
                         ├── Approval ─┼─► NDJSON events on real stdout
@@ -209,7 +209,7 @@ a 93KB maximum line.
 
 ## 3. Components
 
-### 3.1 `sidecar/cos/main.py` — Python
+### 3.1 `internal/cos/sidecar/main.py` — Python
 
 - Args: `--session-id` (required), `--bundle`, `--cwd`, `--log-level`,
   `--approval-timeout` (seconds, default 300).
@@ -240,10 +240,28 @@ a 93KB maximum line.
 
 ### 3.2 `internal/cos/` — Go
 
-- `supervisor.go` — locate interpreter, spawn, supervise, restart with backoff.
+- `supervisor.go` — locate interpreter and script, spawn, supervise, restart with
+  backoff.
   **Interpreter discovery order:** `$MUXTERM_COS_PYTHON` → shebang of the resolved
   `amplifier` binary (verified: `/home/ken/.local/bin/amplifier` is a symlink whose
   target's shebang is the venv python) → `python3`.
+  **Sidecar discovery order:** explicit override (`--sidecar` / `Config.Script`) →
+  `$MUXTERM_COS_SIDECAR` → a walk up from the binary, then from the working
+  directory, for `internal/cos/sidecar/main.py` → the embedded copy, extracted.
+  An override that does not exist is a hard error, never a fall-through. The
+  source tree beats the embedded copy on purpose, so `make dev-local` runs live
+  edits to the Python without a Go rebuild.
+- `embed.go` — `go:embed sidecar/main.py`, extracted on demand to
+  `$XDG_CACHE_HOME/muxterm/sidecar/<sha256[:16]>/main.py` (HOME fallback
+  `~/.cache`). **This is the distribution mechanism, not an optimization.** A
+  muxterm release is one binary: the homebrew tap installs `bin.install
+  "muxterm"`, the curl installer drops a single file, and v0.19.0's tarball held
+  exactly `LICENSE`, `README.md`, `muxterm`. A sidecar that only lives beside the
+  binary does not exist on any installed machine, and v0.19.0 duly failed on
+  first Dashboard use for everyone outside a source checkout. The path is
+  content-addressed so an upgrade can never be handed the old script, and the
+  write is temp-file-plus-rename so two servers booting at once cannot produce a
+  torn file.
 - `queue.go` — strictly single-consumer per session. This is where the concurrency
   law is enforced.
 - `events.go` — parse NDJSON, fan out to subscribers (CLI verb and/or WS).

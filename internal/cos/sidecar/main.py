@@ -8,7 +8,7 @@ document is the contract; this file implements it.
 Run with the amplifier venv interpreter (the one whose site-packages holds
 amplifier_app_cli), e.g.::
 
-    ~/.local/share/uv/tools/amplifier/bin/python3 sidecar/cos/main.py \
+    ~/.local/share/uv/tools/amplifier/bin/python3 internal/cos/sidecar/main.py \
         --session-id muxterm-cos --bundle anchors --cwd /path/to/repo
 """
 

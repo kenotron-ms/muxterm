@@ -51,6 +51,14 @@ archives:
     files:
       - README.md
       - LICENSE
+      # Belt and braces. The binary already carries this file via go:embed
+      # (internal/cos/embed.go) and extracts it at runtime, which is what
+      # actually makes the chief-of-staff sidecar work on an installed
+      # machine -- v0.19.0 shipped without it and the Dashboard failed on
+      # first use. Shipping it in the tarball too makes the artifact
+      # self-describing and gives a user something to point
+      # MUXTERM_COS_SIDECAR at.
+      - internal/cos/sidecar/main.py
 
 checksum:
   name_template: "checksums.txt"

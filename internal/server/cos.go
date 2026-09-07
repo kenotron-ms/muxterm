@@ -145,7 +145,7 @@ type cosClientMessage struct {
 
 // cosSubmission is what the browser told us about a turn that the sidecar
 // itself never learns: which tab asked, and what it asked. turn_start carries
-// only a turn id (sidecar/cos/main.py:752).
+// only a turn id (internal/cos/sidecar/main.py:752).
 type cosSubmission struct {
 	clientRef string
 	prompt    string

@@ -41,7 +41,7 @@ func runCos(args []string) error {
 	cwd := fs.String("cwd", "", "working directory for the sidecar (default: current directory)")
 	logLevel := fs.String("log-level", "info", "sidecar log level")
 	python := fs.String("python", "", "python interpreter to run the sidecar with (default: $"+cos.EnvPython+", then the amplifier venv)")
-	sidecar := fs.String("sidecar", "", "path to sidecar/cos/main.py (default: $"+cos.EnvSidecar+", then discovery)")
+	sidecar := fs.String("sidecar", "", "path to the sidecar main.py (default: $"+cos.EnvSidecar+", then discovery)")
 	timeout := fs.Duration("timeout", cosDefaultTurnTimeout, "give up on the turn after this long")
 	bootTimeout := fs.Duration("boot-timeout", cos.DefaultReadyTimeout, "give up if the sidecar has not booted in this long")
 	yes := fs.Bool("yes", false, "approve every approval request without asking")
@@ -94,7 +94,7 @@ func runCos(args []string) error {
 	// within ONE process, and two supervisors in two processes cannot see each
 	// other's queue at all. Both would resume the same amplifier session and
 	// both would write the WHOLE transcript back at turn end
-	// (sidecar/cos/main.py _save_session), so the second one to finish erases
+	// (internal/cos/sidecar/main.py _save_session), so the second one to finish erases
 	// whatever the first one added. That is the measured turn-erasure defect
 	// this feature exists to fix; reaching it from the CLI would reintroduce it.
 	//
