@@ -150,6 +150,74 @@ const (
 	TypeCloseOutcome = "close-outcome" // reply: daemon -> browser relay
 )
 
+// Read-only filesystem message types (ADDITIVE, post-v1). They follow the
+// TypeScrollbackPage precedent exactly: a client -> daemon request and a
+// daemon -> client reply echoing the request cid, with every bound clamped on
+// the DAEMON side so no client can ask for more than the daemon will give.
+//
+// WHY THESE LIVE IN THE PROTOCOL AND NOT IN A TRANSPORT. muxterm reaches a
+// remote machine through exactly one thing: a binary-clean byte stream to a
+// sessiond socket (internal/transport/transport.go:1). transport.Transport
+// offers Dial, Discover, Provision and Identity -- there is deliberately no
+// Exec, because SSH's ability to run arbitrary commands is a property of SSH,
+// not of remoting, and nothing above internal/transport may assume it. Putting
+// a file read here instead means EVERY transport that can carry this protocol
+// gains it for free, and no transport has to grow a second, command-shaped
+// capability to provide it.
+//
+// READ-ONLY IS STRUCTURAL. There is no write-file, no create, no delete, no
+// rename, no chmod and no exec in this protocol, so there is no argument to
+// either message below that can become one: the daemon's switch (server.go)
+// reaches fsread.go, which contains no mutating syscall at all. A frame naming
+// an operation that does not exist is not dispatched to anything.
+//
+//	Request (TypeReadFile): Path, Offset (pointer), Limit
+//	Reply   (TypeReadFileResult): Path, ResolvedPath, Content, Offset,
+//	                              FileSize, NextOffset, EOF, Truncated
+//	Request (TypeListDir):  Path, Limit
+//	Reply   (TypeListDirResult):  Path, ResolvedPath, Entries, Truncated
+const (
+	TypeReadFile       = "read-file"        // request: client -> daemon
+	TypeReadFileResult = "read-file-result" // reply:   daemon -> client
+	TypeListDir        = "list-dir"         // request: client -> daemon
+	TypeListDirResult  = "list-dir-result"  // reply:   daemon -> client
+)
+
+// Read-only filesystem error codes (ADDITIVE, post-v1). Every distinguishable
+// failure gets its own code, because the caller's next move differs for each:
+// a missing file is a typo, a directory is a wrong tool, a permission denial
+// is an identity problem, an oversized file needs paging, and a binary file
+// needs a different question entirely. One generic "read failed" would collapse
+// five different next moves into a shrug.
+const (
+	CodeFSBadPath    = "fs-bad-path"           // not absolute, or otherwise unusable as a path
+	CodeFSNotFound   = "fs-not-found"          // no such file or directory
+	CodeFSPermission = "fs-permission-denied"  // the daemon's user cannot read it
+	CodeFSIsDir      = "fs-is-a-directory"     // read-file aimed at a directory
+	CodeFSNotDir     = "fs-not-a-directory"    // list-dir aimed at a non-directory
+	CodeFSNotRegular = "fs-not-a-regular-file" // fifo, socket, device: reading would block or lie
+	CodeFSTooLarge   = "fs-file-too-large"     // whole-file read of a file past the size bound
+	CodeFSNotText    = "fs-not-utf8"           // bytes are not valid UTF-8; not returnable as text
+)
+
+// DirEntryInfo is one entry of a TypeListDirResult. It is a wire type with
+// fixed JSON tags, following the CloseRiskInfo / SessionState precedent, so its
+// spelling is independent of any internal directory representation.
+//
+// Kind is one of "file", "dir", "symlink" or "other" and comes from an LSTAT,
+// so a symlink is reported AS a symlink rather than silently as whatever it
+// points at. SymlinkTo carries the raw link target for the same reason: a
+// caller navigating a tree must be able to see that it is about to leave the
+// place it thinks it is in.
+type DirEntryInfo struct {
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Size      int64  `json:"size"`
+	Mode      string `json:"mode,omitempty"`
+	ModTime   string `json:"modTime,omitempty"`
+	SymlinkTo string `json:"symlinkTo,omitempty"`
+}
+
 // CloseRiskInfo is one user-safe activity warning in a close-outcome. It is
 // deliberately a wire type rather than the daemon's internal CloseRisk so its
 // JSON field names are fixed independently of internal transaction state.
@@ -331,6 +399,43 @@ type Message struct {
 	Lines      []string `json:"lines,omitempty"`
 	NextCursor *uint64  `json:"nextCursor,omitempty"`
 	StartLine  uint64   `json:"startLine,omitempty"`
+
+	// Read-only filesystem fields (ADDITIVE, post-v1; see TypeReadFile).
+	//
+	// Limit above is REUSED as the per-call bound for both new operations
+	// (maximum bytes for read-file, maximum entries for list-dir), exactly as
+	// Lines is already shared between scrollback pages and preview tiles: the
+	// uses never appear on the same message, so no second integer field is
+	// minted for the same concept.
+	//
+	// Offset is a POINTER, and the distinction it draws is the whole size
+	// policy. Nil means "read this file", and a file past the whole-file size
+	// bound is REFUSED with CodeFSTooLarge naming the limit. Non-nil --
+	// INCLUDING zero -- means "read this window of this file", which is
+	// bounded by construction and therefore allowed at any file size. A plain
+	// int64 could not tell "from the start" from "I did not ask to page",
+	// which is the same reason BusyCount and ProcessExitCode above are
+	// pointers. A NEGATIVE offset counts back from the end, so a bounded tail
+	// of an arbitrarily large file costs one round trip and no size guess.
+	//
+	// ResolvedPath is the path after ~ expansion and symlink resolution, and
+	// is always reported. Symlinks are followed, but never silently: when
+	// ResolvedPath differs from Path the caller is looking at a different file
+	// from the one it named, and it can see that.
+	//
+	// EOF and Truncated are both needed and are not the same claim. EOF says
+	// the returned window reaches the end of the file; Truncated says the
+	// answer was cut short by a bound (bytes past Limit, or entries past the
+	// directory cap) and more exists.
+	Path         string         `json:"path,omitempty"`
+	ResolvedPath string         `json:"resolvedPath,omitempty"`
+	Offset       *int64         `json:"offset,omitempty"`
+	Content      string         `json:"content,omitempty"`
+	FileSize     int64          `json:"fileSize,omitempty"`
+	NextOffset   *int64         `json:"nextOffset,omitempty"`
+	EOF          bool           `json:"eof,omitempty"`
+	Truncated    bool           `json:"truncated,omitempty"`
+	Entries      []DirEntryInfo `json:"entries,omitempty"`
 }
 
 // CloseOutcomeMessage maps a daemon close transaction result onto the additive

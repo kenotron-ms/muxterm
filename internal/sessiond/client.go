@@ -457,6 +457,47 @@ func (c *Client) ScrollbackPage(paneID int, cursor *uint64, limit int) (lines []
 	return reply.Lines, reply.StartLine, reply.NextCursor, nil
 }
 
+// ReadFile reads one bounded window of a file on the daemon's machine and
+// returns it as text.
+//
+// This is the operation that makes a file on a remote machine readable at all.
+// It is a protocol request rather than anything transport-specific precisely so
+// that it costs no transport anything: whatever carries the framed stream
+// carries this (see the TypeReadFile comment in protocol.go).
+//
+// offset nil means "read this file" and is refused for a file past the
+// daemon's whole-file size bound. A non-nil offset -- including zero -- means
+// "read this window", works at any file size, and counts back from the end of
+// the file when negative. limit is the maximum number of bytes to return; 0
+// lets the daemon apply its default and any value above its ceiling is clamped
+// daemon-side.
+//
+// Failures arrive as *DaemonError carrying one of the fs-* codes, so a caller
+// can tell a missing file from a directory from a permission denial without
+// reading English.
+func (c *Client) ReadFile(path string, offset *int64, limit int) (*Message, error) {
+	return c.request(&Message{Type: TypeReadFile, Path: path, Offset: offset, Limit: limit})
+}
+
+// ReadFileWithin is ReadFile with a wall-clock bound on the reply.
+//
+// The bound matters here in a way it does not for a local call: this request
+// may be travelling over an ssh pipe to a machine that can stop answering
+// without the socket ever closing. sessiond's read loop fails pending requests
+// when the connection ERRORS, which does not cover a connection that simply
+// goes quiet.
+func (c *Client) ReadFileWithin(path string, offset *int64, limit int, timeout time.Duration) (*Message, error) {
+	return c.requestWithin(&Message{Type: TypeReadFile, Path: path, Offset: offset, Limit: limit}, timeout)
+}
+
+// ListDir lists a directory on the daemon's machine, name-sorted and bounded.
+// limit is the maximum number of entries; 0 takes the daemon's default and any
+// value above its ceiling is clamped daemon-side. The reply's Truncated field
+// reports that more entries existed than were returned.
+func (c *Client) ListDir(path string, limit int) (*Message, error) {
+	return c.request(&Message{Type: TypeListDir, Path: path, Limit: limit})
+}
+
 // PreviewSubscribe turns sidebar preview tiles on or off for THIS connection.
 // Opting in is per-connection and off by default, so a daemon never pushes
 // cosmetic frames at a CLI or agent client that did not ask for them.
