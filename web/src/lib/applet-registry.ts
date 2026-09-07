@@ -83,6 +83,17 @@ export interface AppletNavigateDetail {
   target?: string;
 }
 
+/**
+ * Detail of the `applet-attention` event. Deliberately carries NO urgency,
+ * severity or priority field: there is nothing for a caller to escalate with,
+ * which is how "urgency alone never promotes a flag to a jump" is enforced --
+ * by the shape of the event, not by a rule someone has to remember.
+ */
+export interface AppletAttentionDetail {
+  applet: AppletId;
+  count?: number;
+}
+
 const registry: AppletManifest[] = [];
 
 /**

@@ -175,7 +175,7 @@ export class MuxTitleBar extends LitElement {
       pointer-events: none;
     }
 
-    /* The Dashboard's own title. Takes the space the brand and the
+    /* Mission Control's own title. Takes the space the brand and the
        breadcrumb between them used to, because on this surface neither has
        anything to say. */
     .title {

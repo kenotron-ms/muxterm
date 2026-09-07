@@ -32,9 +32,13 @@ import { LitElement, html, css, nothing, type PropertyValues, type TemplateResul
 import { customElement, property, state } from 'lit/decorators.js';
 import { GitPullRequest, X } from 'lucide';
 import { icon } from '../../lib/icons.js';
-import { registerApplet, type AppletElement } from '../../lib/applet-registry.js';
+import {
+  registerApplet,
+  type AppletAttentionDetail,
+  type AppletElement,
+} from '../../lib/applet-registry.js';
 import { appletEmpty, appletError, appletStateStyles } from '../mux-applets.js';
-import { fetchPRs, type PRListing, type PullRequest } from '../../lib/prs-api.js';
+import { fetchPRs, type PRChecks, type PRListing, type PullRequest } from '../../lib/prs-api.js';
 import { homeSessions } from '../../lib/home-sessions.js';
 import { isRemoteId } from '../../lib/host-ref.js';
 
@@ -187,6 +191,16 @@ export class AppletPRs extends LitElement implements AppletElement {
 
   private _timer: ReturnType<typeof setInterval> | null = null;
   private _abort: AbortController | null = null;
+
+  /**
+   * Checks as of the PREVIOUS poll, keyed by "owner/name#number".
+   *
+   * null until the first listing lands, and that distinction is load-bearing:
+   * "turned failing" is a TRANSITION, and the first poll has nothing to have
+   * turned from. Seeding it silently is why opening this tab on three
+   * long-since-red pull requests flags nothing -- none of that is news.
+   */
+  private _prevChecks: Map<string, PRChecks> | null = null;
 
   /** Clock for the ages. Re-read on every landing rather than ticked: a row's
    * age only becomes interesting when the poll brought something new. */
@@ -570,6 +584,7 @@ export class AppletPRs extends LitElement implements AppletElement {
       this._now = Math.floor(Date.now() / 1000);
       this._error = '';
       this._listing = listing;
+      this._flagNewlyFailing(listing);
     } catch (err) {
       if (this._abort !== ctrl) return; // aborted or superseded: not ours to report
       this._abort = null;
@@ -579,6 +594,63 @@ export class AppletPRs extends LitElement implements AppletElement {
       // with a note under it; one blip must not blank a list you were reading.
       this._error = err instanceof Error ? err.message : String(err);
     }
+  }
+
+  /**
+   * A pull request whose checks WENT red since the last poll.
+   *
+   * Only the transition counts. A pull request that has been failing for an
+   * hour is not news, and re-flagging it every minute would teach the reader
+   * to ignore the flag -- which is the only way this feature can actually
+   * fail. A key that was absent last time IS news: it either just appeared or
+   * just came back, and either way this is the first red we have seen on it.
+   *
+   * A DISMISSED PULL REQUEST NEVER FLAGS. You put that row down; it does not
+   * get to tap you on the shoulder (D3.5). It is still recorded in the map, so
+   * picking it back up later does not manufacture a transition out of a state
+   * that never changed.
+   *
+   * WHAT THIS DOES NOT DO YET, said plainly rather than left to be found:
+   * this applet polls ONLY while active, and a load still in flight when the
+   * tab changes is aborted before it can land (_sync). So very nearly every
+   * flag it raises is for the tab you are already on -- and the host drops
+   * those, correctly, because you are looking at it. The diff is dormant, not
+   * decorative: the moment pull-request state arrives from something that
+   * keeps watching while you are elsewhere -- the sessiond-owned watchlist of
+   * design D2, pushed on the channel the fleet already uses -- this raises the
+   * flag with no further thought.
+   *
+   * ADDING A BACKGROUND POLL TO MAKE IT FIRE SOONER IS THE WRONG FIX. It would
+   * be every open tab polling GitHub on your behalf, which is the exact thing
+   * D2 exists to replace, and it would break the contract's teeth (an inactive
+   * applet issues zero requests) to buy a flag a minute early.
+   */
+  private _flagNewlyFailing(l: PRListing): void {
+    // gh missing or logged out. An unavailable listing observed NOTHING about
+    // any pull request's checks, so recording its empty list as the new
+    // baseline would make every red PR look freshly red the moment gh comes
+    // back. Leave the previous poll's map exactly where it is.
+    if (!l.available) return;
+
+    const prev = this._prevChecks;
+    const next = new Map<string, PRChecks>();
+    let fresh = 0;
+    for (const p of l.prs) {
+      next.set(p.key, p.checks);
+      if (p.checks !== 'failing' || this._dismissed.has(p.key)) continue;
+      // prev === null is the first listing: nothing has turned yet.
+      if (prev !== null && prev.get(p.key) !== 'failing') fresh++;
+    }
+    this._prevChecks = next;
+    if (fresh === 0) return;
+
+    this.dispatchEvent(
+      new CustomEvent<AppletAttentionDetail>('applet-attention', {
+        detail: { applet: 'prs', count: fresh },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -664,9 +736,13 @@ export class AppletPRs extends LitElement implements AppletElement {
       return appletError(l.error || 'The GitHub CLI is not available.', this._retry);
     }
 
+    // Zero repos means neither the fleet nor anything remembered resolved to a
+    // GitHub checkout, AND the server's own working directory is not one
+    // either -- the server falls back to its cwd when we name no roots, and
+    // stays silent about it when it is not a checkout.
     if (l.repos.length === 0) {
       return appletEmpty(
-        'No git repositories in the fleet yet. Start a lane in a repo and its pull requests show up here.',
+        'No git repositories yet. Start a lane in a repo and its pull requests show up here.',
       );
     }
 

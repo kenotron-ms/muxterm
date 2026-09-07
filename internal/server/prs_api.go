@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -126,10 +127,13 @@ func writePRsJSON(w http.ResponseWriter, code int, v any) {
 
 // handlePRsList answers GET /api/prs?root=<abs>&root=<abs>...
 //
-// ?root repeats, one per worktree the applet is showing. Zero roots is a legal
-// request and answers with empty arrays -- a browser that has not opened a
-// project yet should still learn whether gh works, so it can show the "install
-// gh" or "run gh auth login" hint before the user picks anything.
+// ?root repeats, one per worktree the applet is showing. Zero roots falls back
+// to the server's OWN working directory, silently: a browser attached to an
+// empty fleet has no root to name, and answering "no repositories" when muxterm
+// is itself running inside one would be the applet's least useful moment. The
+// fallback is silent -- if the cwd is not a checkout it contributes no repos[]
+// row, because nobody asked about it and an error the user did not cause is
+// noise. A root the caller NAMED always gets its row, error and all.
 //
 // A root that cannot be resolved becomes a repos[] row carrying its error and
 // is skipped for listing. It must never fail the request: one directory that is
@@ -162,6 +166,13 @@ func (s *Server) handlePRsList(w http.ResponseWriter, r *http.Request) {
 	if len(roots) > prsMaxRoots {
 		roots = roots[:prsMaxRoots]
 	}
+	// Named roots are reported on; the implicit cwd fallback is not.
+	named := len(roots) > 0
+	if !named {
+		if cwd, err := os.Getwd(); err == nil {
+			roots = []string{cwd}
+		}
+	}
 
 	// Resolve first, sequentially: it is a cheap local git call plus a gh call
 	// that is usually served from gh's own config, and doing it in order keeps
@@ -172,6 +183,10 @@ func (s *Server) handlePRsList(w http.ResponseWriter, r *http.Request) {
 		row := prRepoRow{Root: root}
 		repo, err := resolveGHRepo(r.Context(), bin, root)
 		if err != nil {
+			if !named {
+				// The silent fallback. Nobody asked about this directory.
+				continue
+			}
 			row.Error = gitErrText(err)
 		} else {
 			row.Repo = repo

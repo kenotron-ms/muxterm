@@ -1143,9 +1143,11 @@ export class MuxCos extends LitElement {
     this._unsub = cosStore.subscribe(() => {
       this._version++;
     });
-    // Session state is the Dashboard APPLET's subscription now, held only
-    // while that applet is on screen. The adopt-current-state-on-reattach
-    // reasoning moved with it, to applet-dashboard's _sync().
+    // Session state is the Dashboard APPLET's subscription now. It is held
+    // while that applet is CONNECTED rather than while it is on screen, so an
+    // unseen tab can still notice a lane going blocked; the argument for that
+    // exception, and the adopt-current-state-on-reattach reasoning, moved with
+    // it to applet-dashboard's _onFleet() and _sync().
     this._unsubVoice = voiceInputController.onStateChange((s) => {
       this._voice = s;
     });

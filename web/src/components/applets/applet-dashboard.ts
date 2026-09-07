@@ -7,10 +7,14 @@
  * new is three things the applet contract asks for:
  *
  *   1. IT GOES QUIET WHEN INACTIVE. The host keeps every applet mounted, so
- *      an applet that kept its subscription would keep re-rendering a hidden
- *      tree forever. _sync() is the whole rule: subscribed while active and
- *      connected, unsubscribed otherwise. Nothing else in here polls, ticks
- *      or animates, so an inactive Dashboard costs exactly nothing.
+ *      an applet that kept working would re-render a hidden tree forever.
+ *      _sync() is the rule: an inactive Dashboard renders nothing, polls
+ *      nothing and animates nothing.
+ *
+ *      With ONE named exception, and it is the only one in the file: the
+ *      fleet subscription is held while CONNECTED rather than while ACTIVE,
+ *      so an unseen tab can still notice that a lane went blocked. The
+ *      argument for it, and its cost, are on _onFleet.
  *
  *   2. IT OWNS ITS OWN CONTROL. cards|tiles used to sit in the surface's
  *      topbar, where it was the only control there and meant nothing to
@@ -34,7 +38,11 @@ import { LitElement, html, css, nothing, type PropertyValues, type TemplateResul
 import { customElement, property, state } from 'lit/decorators.js';
 import { LayoutGrid, Rows3 } from 'lucide';
 import { icon } from '../../lib/icons.js';
-import { registerApplet, type AppletElement } from '../../lib/applet-registry.js';
+import {
+  registerApplet,
+  type AppletAttentionDetail,
+  type AppletElement,
+} from '../../lib/applet-registry.js';
 import { homeSessions } from '../../lib/home-sessions.js';
 import {
   HOME_GROUPS,
@@ -170,10 +178,18 @@ export class AppletDashboard extends LitElement implements AppletElement {
    */
   @property({ type: String, reflect: true }) view: FleetView = loadView();
 
-  /** Bumped by the homeSessions subscription. */
+  /** Bumped by the homeSessions subscription, and only while active. */
   @state() private _fleetVersion = 0;
 
   private _unsubFleet: (() => void) | null = null;
+
+  /**
+   * How many sessions wanted a human at the last notification. An INTEGER, and
+   * that is the entire cost of the always-on listener -- see _onFleet.
+   *
+   * Not reactive: it is a comparison baseline, not something anything draws.
+   */
+  private _needsInput = 0;
 
   /**
    * Clock for the fleet's ages. Refreshed when the fleet changes rather than
@@ -380,10 +396,11 @@ export class AppletDashboard extends LitElement implements AppletElement {
   `;
 
   // -------------------------------------------------------------------------
-  // The inactive rule
+  // The inactive rule, and its one exception
   // -------------------------------------------------------------------------
 
   override connectedCallback(): void {
+    // This is where the fleet subscription starts, regardless of `active`.
     super.connectedCallback();
     this._sync();
   }
@@ -404,41 +421,106 @@ export class AppletDashboard extends LitElement implements AppletElement {
   }
 
   /**
-   * THE ONE OBLIGATION the applet contract puts on an applet: hold the
-   * subscription only while active AND connected, and hold nothing at all
-   * otherwise. The host keeps this element mounted and merely hides it, so
-   * without this an unseen Dashboard would re-render on every session change
-   * for the whole life of the app.
+   * THE OBLIGATION the applet contract puts on an applet: an inactive
+   * Dashboard renders nothing and holds nothing that costs anything. The host
+   * keeps this element mounted and merely hides it, so without this an unseen
+   * Dashboard would re-render on every session change for the life of the app.
+   *
+   * The subscription itself is keyed to CONNECTED, not to ACTIVE. That is the
+   * exception, and _onFleet is where it is argued.
    */
   private _sync(): void {
-    const want = this.active && this.isConnected;
-    if (want && !this._unsubFleet) {
+    if (this.isConnected && !this._unsubFleet) {
       // The fleet's ONE seam -- home-sessions.ts, the same store <mux-home>,
       // the Dashboard card and the title-bar dot all read.
+      //
+      // BASELINE FIRST. The flag is a RISE, so the first notification has to
+      // compare against the fleet as it is right now; starting at zero would
+      // make attaching to a fleet that already has two blocked lanes look like
+      // two lanes just blocked, and flag news that is not news.
+      this._needsInput = this.needsInput;
       this._unsubFleet = homeSessions.subscribe(this._onFleet);
-      // Adopt the store's CURRENT state, not just its next change. This
-      // element is kept mounted and inactive when another tab is showing (and
-      // is parked wholesale by cache() when the Dashboard surface closes), so
-      // every session that starts, blocks or ends while it is inactive
-      // arrives unheard. Re-subscribing alone only registers for the NEXT
-      // notification, so coming back rendered the fleet as it was when you
-      // left -- typically "Nothing is running" -- until some unrelated change
-      // forced a re-render. Reading the store on reactivation is what makes
-      // lanes spawned in the meantime show up the moment you look, which is
-      // the whole promise of the surface.
-      this._onFleet();
-      return;
-    }
-    if (!want && this._unsubFleet) {
+    } else if (!this.isConnected && this._unsubFleet) {
       this._unsubFleet();
       this._unsubFleet = null;
     }
+    // Adopt the store's CURRENT state on reactivation, not just its next
+    // change. While inactive this element deliberately drops every
+    // notification on the floor (_onFleet), and it is parked wholesale by
+    // cache() when the Dashboard surface closes, so the fleet on screen is the
+    // fleet as it was when you left -- typically "Nothing is running" -- until
+    // something forces a re-render. Reading the store on reactivation is what
+    // makes lanes spawned in the meantime show up the moment you look, which
+    // is the whole promise of the surface.
+    if (this.active && this.isConnected) this._onFleet();
   }
 
+  /**
+   * A fleet change. Two different jobs, and which one runs is `active`.
+   *
+   * ACTIVE: refresh the clock and re-render, exactly as before.
+   *
+   * INACTIVE: count the sessions that want a human, and if that count ROSE,
+   * say so. Nothing else. No _fleetVersion bump, so lit never schedules an
+   * update; no render, so no DOM is touched; no fetch, no timer, no animation.
+   * An inactive Dashboard's entire response to a fleet change is one integer
+   * comparison.
+   *
+   * THIS IS THE FILE'S ONE EXCEPTION TO THE CONTRACT'S TEETH, and it is worth
+   * naming precisely rather than leaving for someone to find. The rule is: an
+   * inactive applet stops polling, stops animating, and holds no open
+   * connection. A subscription to a store that already exists is none of those
+   * three -- it opens nothing, polls nothing and paints nothing; it is a
+   * callback in a Set that some other component's data was going to fire
+   * anyway. And without it this surface cannot tell you that a lane went
+   * blocked while you were reading a diff on another tab, which is the entire
+   * point of the flag: a flag you only get when you look is not a flag.
+   *
+   * THE COST, NAMED: it is a listener, and listeners are how "costs nothing"
+   * turns into "costs everything" one reasonable exception at a time. A future
+   * applet that wants one has to make this same argument -- opens nothing,
+   * polls nothing, paints nothing, and the feature is impossible without it.
+   * Three out of four is not the argument.
+   */
   private _onFleet = (): void => {
+    const n = this.needsInput;
+    const rose = n > this._needsInput;
+    this._needsInput = n;
+
+    if (!this.active) {
+      if (rose) this._raiseAttention(n);
+      return;
+    }
     this._now = Math.floor(Date.now() / 1000);
     this._fleetVersion++;
   };
+
+  /** For the host's benefit: how many sessions want a human right now. */
+  get needsInput(): number {
+    let n = 0;
+    for (const s of homeSessions.sessions) if (groupFor(s) === 'Needs input') n++;
+    return n;
+  }
+
+  /**
+   * Tell the host something here wants attention. The host decides what that
+   * means -- a dot on this tab, or the surface moving -- and this applet has
+   * no say in it and nothing to escalate with (applet-registry.ts).
+   *
+   * composed, because there are two shadow boundaries between here and the
+   * host when this element is in the applet stack. The SHEET instance in
+   * <mux-cos> also fires this; nothing above it listens, because events go up
+   * and the applet host is sideways from there.
+   */
+  private _raiseAttention(count: number): void {
+    this.dispatchEvent(
+      new CustomEvent<AppletAttentionDetail>('applet-attention', {
+        detail: { applet: 'dashboard', count },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Intent

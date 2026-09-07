@@ -27,6 +27,12 @@
  * not get to restyle it. That is why three applets cannot make one strip look
  * like three products.
  *
+ * The ATTENTION POLICY is also the host's, because only the host knows what
+ * you are looking at. An applet says "something here wants a human"; the host
+ * decides whether that is a badge on a tab or a move of the whole surface,
+ * and it decides it the same way every time. The rule and the reasoning are
+ * on _onAttention.
+ *
  * Tokens are never re-declared here. --chrome-*, --ink-*, --edge, --surface
  * and the --r/--s/--t scales all inherit into this shadow root from
  * <mux-cos>'s :host and the document root (theme.ts:349), which is the entire
@@ -40,6 +46,7 @@ import { icon } from '../lib/icons.js';
 import {
   appletById,
   applets,
+  type AppletAttentionDetail,
   type AppletElement,
   type AppletId,
   type AppletManifest,
@@ -79,6 +86,14 @@ function saveTab(id: AppletId): void {
     /* not sticky; not fatal */
   }
 }
+
+/**
+ * How long the surface has to sit untouched before an applet is allowed to
+ * move it. A minute and a half, and the number is a claim about the PERSON
+ * rather than about the data -- the full reasoning is on _onAttention, which
+ * is the only thing that reads it.
+ */
+const IDLE_MS = 90_000;
 
 /**
  * THE ONE empty/error presentation, exported so three applets do not invent
@@ -138,6 +153,22 @@ export class MuxApplets extends LitElement {
 
   /** The selected tab. Persisted; falls back to the Dashboard. */
   @state() private _current: AppletId = loadTab();
+
+  /**
+   * Applets with something waiting, and how many things. Never contains the
+   * current tab -- looking at an applet is what clears its flag.
+   *
+   * REPLACED, never mutated: lit dirty-checks by identity, so a `set()` on the
+   * live Map would change the strip and not repaint it.
+   */
+  @state() private _flags = new Map<AppletId, number>();
+
+  /**
+   * When this surface was last touched by a person. NOT reactive state, on
+   * purpose: it changes on every keystroke, and a render per keystroke to
+   * repaint nothing is a cost with no reader.
+   */
+  private _lastGesture = Date.now();
 
   /**
    * A navigation target waiting for its applet element to exist. Applied in
@@ -234,6 +265,34 @@ export class MuxApplets extends LitElement {
       background: var(--chrome-accent);
     }
 
+    /* -- THE FLAG ---------------------------------------------------------
+       Something on a tab you are not looking at wants a human. A dot when it
+       is one thing, the count when it is more.
+
+       It does not blink, pulse or slide. An animation on the edge of vision
+       pulls the eye off whatever the person is actually reading, which is the
+       precise harm the attention policy exists to avoid -- a flag that steals
+       attention is just a slower version of stealing the surface. */
+    .flag {
+      flex: none;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--need);
+    }
+    /* The same flag, counting. Geometry off, type on. */
+    .flag.n {
+      width: auto;
+      height: auto;
+      border-radius: 0;
+      background: transparent;
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      color: var(--need);
+    }
+
     /* -- THE RAIL'S VOCABULARY -------------------------------------------
        mux-cos's topbar geometry, verbatim. An applet's rail() fills these
        classes; it cannot introduce a control kind the host has no style for,
@@ -322,11 +381,21 @@ export class MuxApplets extends LitElement {
     super.connectedCallback();
     this.addEventListener('applet-rail-changed', this._onRailChanged);
     this.addEventListener('applet-navigate', this._onNavigate);
+    this.addEventListener('applet-attention', this._onAttention);
+    // CAPTURE, on the host itself. Every applet body sits inside this element,
+    // and pointer and keyboard events are composed, so catching them on the
+    // way down is one pair of listeners for the whole region -- no applet has
+    // to remember to report that it was touched.
+    this.addEventListener('pointerdown', this._onGesture, { capture: true });
+    this.addEventListener('keydown', this._onGesture, { capture: true });
   }
 
   override disconnectedCallback(): void {
     this.removeEventListener('applet-rail-changed', this._onRailChanged);
     this.removeEventListener('applet-navigate', this._onNavigate);
+    this.removeEventListener('applet-attention', this._onAttention);
+    this.removeEventListener('pointerdown', this._onGesture, { capture: true });
+    this.removeEventListener('keydown', this._onGesture, { capture: true });
     super.disconnectedCallback();
   }
 
@@ -354,11 +423,26 @@ export class MuxApplets extends LitElement {
     if (el) el.target = pending.target;
   }
 
-  /** Point the host at an applet, optionally at something inside it. */
+  /**
+   * Point the host at an applet, optionally at something inside it.
+   *
+   * This is the "the user asked" arm of the attention policy: it switches
+   * immediately and unconditionally, because everything that reaches it is a
+   * gesture -- a tab click, an arrow key, or an `applet-navigate` that D3.4
+   * only ever fires from a user gesture and never from a data change.
+   */
   show(id: AppletId, target?: string): void {
     if (!appletById(id)) return;
+    // A tab switch counts as touching this surface however it was caused --
+    // including the promotion test below, which switches on your behalf. That
+    // it counts its own jump is deliberate: the surface never yanks twice in
+    // a row, so the second lane to block while you are away leaves a flag
+    // rather than another move.
+    this._lastGesture = Date.now();
     this._current = id;
     saveTab(id);
+    // You have seen it, which is the whole of what a flag ever claimed.
+    this._clearFlag(id);
     if (target !== undefined) this._pending = { id, target };
     this.requestUpdate();
   }
@@ -377,12 +461,77 @@ export class MuxApplets extends LitElement {
    * Navigation, always from a user gesture and never from a data change: an
    * applet that yanked the tab strip because a poll returned something new
    * would be moving the surface out from under the person reading it.
+   *
+   * This is the "the user asked" arm of the attention policy, and its
+   * exemption from the promotion test below is the whole reason the two arms
+   * are different events: `applet-navigate` is only ever fired from a gesture
+   * (D3.4), so it never has to earn the right to move the surface.
    */
   private _onNavigate = (e: Event): void => {
     const detail = (e as CustomEvent<AppletNavigateDetail>).detail;
     if (!detail?.applet) return;
     this.show(detail.applet, detail.target);
   };
+
+  /** A person touched this surface. The only thing that resets the clock. */
+  private _onGesture = (): void => {
+    this._lastGesture = Date.now();
+  };
+
+  /**
+   * Something on another tab wants a human.
+   *
+   * THE PROMOTION TEST -- flag by default, take the wheel only when the
+   * surface has been left alone. Two things and only two things move it: the
+   * user asking (show/_onNavigate above), and this.
+   *
+   * URGENCY IS NOT AN INPUT, and cannot be made into one. The event carries no
+   * severity to consult -- see AppletAttentionDetail, which has no such field
+   * on purpose -- so a caller convinced its news is important has nothing to
+   * argue up with. Urgency alone never promotes a flag to a jump.
+   *
+   * The threshold is a claim about the PERSON, not about the data. Someone who
+   * has not touched this surface in a minute and a half is not reading it, and
+   * moving it costs them nothing. Someone who touched it four seconds ago IS
+   * reading it, and moving it costs them their place -- the paragraph they
+   * were halfway through, the row they were about to click. Stealing the
+   * surface from a reader is worse than a badge they notice thirty seconds
+   * late, every time, so the tie always goes to the flag.
+   */
+  private _onAttention = (e: Event): void => {
+    const detail = (e as CustomEvent<AppletAttentionDetail>).detail;
+    if (!detail?.applet || !appletById(detail.applet)) return;
+    // You are already looking at it. There is nothing left to tell you, and a
+    // flag on the tab you are on would be the surface talking to itself.
+    if (detail.applet === this._current) return;
+
+    if (Date.now() - this._lastGesture > IDLE_MS) {
+      // Nobody is here. Take the wheel, and leave NO flag behind: the surface
+      // moving is a louder announcement than a dot, and a dot on the tab you
+      // now have open would only be something to dismiss.
+      this.show(detail.applet);
+      return;
+    }
+
+    // Somebody is here. Flag it and do not move.
+    const raw = detail.count ?? 1;
+    // A count that is not a whole number of things is a caller bug, not a
+    // state to draw: a flag reading "0 needing attention" is worse than none.
+    const count = Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+    // WHOLE-STATE, IDEMPOTENT -- the count replaces whatever was there rather
+    // than adding to it, the same contract the fleet's session snapshots use.
+    // Two reports of "three lanes want you" mean three, not six.
+    const next = new Map(this._flags);
+    next.set(detail.applet, count);
+    this._flags = next;
+  };
+
+  private _clearFlag(id: AppletId): void {
+    if (!this._flags.has(id)) return;
+    const next = new Map(this._flags);
+    next.delete(id);
+    this._flags = next;
+  }
 
   /** Roving focus across the strip, so a tablist behaves like one. */
   private _onTabKey = (e: KeyboardEvent): void => {
@@ -419,6 +568,7 @@ export class MuxApplets extends LitElement {
 
   private _renderTab(m: AppletManifest): TemplateResult {
     const on = m.id === this._current;
+    const flag = this._flags.get(m.id) ?? 0;
     return html`
       <button
         type="button"
@@ -427,10 +577,26 @@ export class MuxApplets extends LitElement {
         class="${on ? 'tab on' : 'tab'}"
         aria-selected="${on ? 'true' : 'false'}"
         aria-controls="${`panel-${m.id}`}"
+        aria-label="${flag > 0 ? `${m.label}, ${flag} needing attention` : nothing}"
         tabindex="${on ? '0' : '-1'}"
         @click="${() => this.show(m.id)}"
-      >${icon(m.icon, { size: 13 })} ${m.label}</button>
+      >${icon(m.icon, { size: 13 })} ${m.label}${this._renderFlag(flag)}</button>
     `;
+  }
+
+  /**
+   * The flag on a tab. A dot at one, the number above one -- "1" beside a
+   * label is noise, and the dot already says the only thing one waiting thing
+   * has to say.
+   *
+   * aria-hidden, because the tab's aria-label carries the same fact in words.
+   * Without it a screen reader announces the count twice, once as a number
+   * with no noun attached.
+   */
+  private _renderFlag(count: number): TemplateResult | typeof nothing {
+    if (count <= 0) return nothing;
+    if (count === 1) return html`<span class="flag" aria-hidden="true"></span>`;
+    return html`<span class="flag n" aria-hidden="true">${count}</span>`;
   }
 
   private _renderRail(m: AppletManifest): TemplateResult | typeof nothing {
