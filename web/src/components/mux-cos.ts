@@ -2309,6 +2309,23 @@ export class MuxCos extends LitElement {
    */
   private _onDocKey = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape' || !this._live) return;
+    // WHOSE Escape is this? A document listener hears the whole page, and the
+    // page is mostly TERMINALS. xterm.js calls preventDefault() on the keys it
+    // consumes but never stopPropagation(), so an Escape typed at vim arrives
+    // here exactly like one typed at the Dashboard -- and ending a call
+    // because someone left insert mode is far worse than not offering the
+    // shortcut at all. <mux-dock> and <mux-cos> are siblings, so no shadow
+    // boundary separates them; the origin has to be checked.
+    //
+    // Two origins qualify: this component's own subtree, and NO focused
+    // element at all. The second is the whole reason this handler exists --
+    // the composer removed the textarea that used to receive Escape, so
+    // during a call the keystroke lands on <body> with nowhere else to go.
+    const from = e.composedPath()[0];
+    const mine = e.composedPath().includes(this);
+    const nowhere =
+      from === document.body || from === document.documentElement || from === document;
+    if (!mine && !nowhere) return;
     if (this._menuOpen || this._confirm !== null) return;
     e.preventDefault();
     e.stopPropagation();
