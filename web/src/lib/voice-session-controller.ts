@@ -271,6 +271,28 @@ export function stop(): void {
   _setState('idle');
 }
 
+/**
+ * The server tore this session down and is telling us so.
+ *
+ * That is the spoken exit: the user asked the model to hang up, the model
+ * confirmed it with them, said goodbye, and muxterm ended the session in its
+ * own process. None of that reaches the microphone light, the peer connection
+ * or the idle state — those all live here — so the page follows.
+ *
+ * The session id is cleared BEFORE tearing down, so this path does not post
+ * /api/cos/voice/end back at a server that has already ended it.
+ *
+ * A broadcast naming a different session is ignored: only one voice session
+ * runs at a time, but a late frame for a previous one must not close the one
+ * that replaced it.
+ */
+export function endedByServer(sessionId: string): void {
+  if (!_sessionId) return;
+  if (sessionId && sessionId !== _sessionId) return;
+  _sessionId = '';
+  stop();
+}
+
 // ---------------------------------------------------------------------------
 // realtime events
 // ---------------------------------------------------------------------------
@@ -671,6 +693,7 @@ export const voiceSessionController = {
   start,
   stop,
   toggle,
+  endedByServer,
 };
 
 // ---------------------------------------------------------------------------

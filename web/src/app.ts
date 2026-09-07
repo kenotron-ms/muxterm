@@ -13,6 +13,7 @@ import { applyThemeTokens, applyChromeTokens, resolvePalette } from './lib/theme
 import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './lib/instance-identity.js';
 import { injectTerminalFont } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
+import { voiceSessionController } from './lib/voice-session-controller.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
 
@@ -1804,6 +1805,14 @@ export class MuxApp extends LitElement {
     // derived status only -- never the key.
     if ('aiStatus' in msg) {
       store.setAIStatus(parseAIStatus(msg['aiStatus']));
+    }
+    // {"voiceEnded":...} envelope (no "type" field, same reason as aiStatus):
+    // a voice session was torn down server-side. That is how the SPOKEN exit
+    // reaches the page — the user asked the model to hang up, it did, and the
+    // microphone light only goes out if this tab follows.
+    if ('voiceEnded' in msg) {
+      const ended = msg['voiceEnded'] as { session_id?: string } | null;
+      voiceSessionController.endedByServer(ended?.session_id ?? '');
     }
   };
 

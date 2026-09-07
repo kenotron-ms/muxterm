@@ -2,30 +2,39 @@ package voice
 
 // The realtime model's tool surface.
 //
-// FOUR tools, and the shape of the list is the design:
+// FIVE tools, and the shape of the list is the design:
 //
 //   - ask_chief_of_staff  -- synchronous, for short work
 //   - dispatch_chief_of_staff -- asynchronous fire-and-forget, for long work
 //   - answer_approval     -- the voice-approval path, two-step by contract
 //   - cancel_chief_of_staff -- stop a turn that is running
+//   - end_voice_session    -- hang up, two-step by contract
 //
-// Every one of them executes in muxterm's own process, over the sideband,
-// and lands on the SAME amplifier session the text chat uses. The realtime
-// model never gets a shell; it gets a way to ask the chief of staff for one.
+// The first four execute in muxterm's own process, over the sideband, and
+// land on the SAME amplifier session the text chat uses. The realtime model
+// never gets a shell; it gets a way to ask the chief of staff for one.
+//
+// The fifth is different in kind: it acts on the CONVERSATION rather than on
+// the chief of staff. It exists because every other way out of a spoken
+// session is a mouse or a keyboard -- which is no way out at all for someone
+// who is talking. See endsession.go for why it is gated the way it is.
 const (
 	ToolAsk      = "ask_chief_of_staff"
 	ToolDispatch = "dispatch_chief_of_staff"
 	ToolApproval = "answer_approval"
 	ToolCancel   = "cancel_chief_of_staff"
+	ToolEnd      = "end_voice_session"
 )
 
 // Instructions is the realtime session's system prompt.
 //
-// Two things in it are load-bearing rather than stylistic. The first is the
+// Three things in it are load-bearing rather than stylistic. The first is the
 // instruction to speak BEFORE calling a tool: silence during a long turn is
 // indistinguishable from a crash, and this is the cheapest defence against
 // it. The second is the approval protocol, which is written as a hard rule
-// because it is a security surface -- see approvals.go.
+// because it is a security surface -- see approvals.go. The third is the
+// ending protocol, which is written as a hard rule because "stop" and "end"
+// are ordinary words in a conversation about terminals -- see endsession.go.
 func Instructions() string {
 	return `You are the spoken voice of muxterm's chief of staff.
 
@@ -65,7 +74,28 @@ that happens you will be told the tool and what it wants to do.
    unclear, deny. Denying by mistake costs one retry. Approving by mistake
    runs a command on their machine.
 Never call answer_approval with confirm set to true on the first answer.
-Never approve on the user's behalf.`
+Never approve on the user's behalf.
+
+ENDING THE CONVERSATION
+The user cannot hang up by talking to anything except you. When they ask to
+leave -- "end the voice session", "hang up", "I'm done talking", "exit voice
+mode" -- that is end_voice_session, and it works the same way approvals do.
+1. Call end_voice_session with confirm false. You will be given a line to
+   read back. Say it and wait.
+2. Only after they say yes out loud, call it again with confirm true. Then
+   say the goodbye you are asked for, and the connection drops after they
+   have heard it.
+Hear the difference between the two kinds of stopping. "Stop", "cancel" and
+"never mind" while the chief of staff is working mean stop THE WORK: that is
+cancel_chief_of_staff, and the conversation continues. Only words about the
+conversation, the call, or talking itself end the session. If you cannot tell
+which one they meant, ask -- do not guess, and do not reach for the one that
+hangs up.
+Never call end_voice_session on your own initiative. Not because the
+conversation feels finished, not because they have gone quiet, not because
+you have run out of things to say, and not to tidy up after a long task. A
+silence is someone thinking. Only the user ends this conversation, and only
+by asking for it.`
 }
 
 // ToolDefinitions is the tool list sent at session-mint time.
@@ -148,6 +178,31 @@ func ToolDefinitions() []map[string]any {
 			"parameters": map[string]any{
 				"type":                 "object",
 				"properties":           map[string]any{},
+				"additionalProperties": false,
+			},
+		},
+		{
+			"type": "function",
+			"name": ToolEnd,
+			"description": "End the spoken conversation and disconnect. " +
+				"Call it TWICE: first with confirm false, which has you read the decision back " +
+				"to the user, then -- only after they say yes out loud -- with confirm true, " +
+				"which says goodbye and hangs up. A first call with confirm true is refused. " +
+				"Only the user ends the conversation: never call this because the conversation " +
+				"feels finished or because they have gone quiet.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"confirm": map[string]any{
+						"type":        "boolean",
+						"description": "False on the first call. True only after the user has confirmed out loud that they want to end the conversation.",
+					},
+					"farewell": map[string]any{
+						"type":        "string",
+						"description": "A short line to say before disconnecting. One sentence.",
+					},
+				},
+				"required":             []string{"confirm"},
 				"additionalProperties": false,
 			},
 		},

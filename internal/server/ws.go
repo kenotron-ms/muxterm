@@ -985,6 +985,48 @@ func (h *Hub) BroadcastAIStatus(status any) {
 	}
 }
 
+// sendVoiceEnded writes the end of a voice session as a text frame. Same
+// serve-local envelope as sendAIStatus ({"voiceEnded":...}, no "type" field,
+// for the reason given there).
+func (c *Client) sendVoiceEnded(sessionID, reason string) {
+	data, err := json.Marshal(map[string]any{
+		"voiceEnded": map[string]string{"session_id": sessionID, "reason": reason},
+	})
+	if err != nil {
+		log.Printf("sendVoiceEnded: marshal error: %v", err)
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("sendVoiceEnded: write error: %v", err)
+	}
+}
+
+// BroadcastVoiceEnded tells every connected browser that a voice session has
+// been torn down server-side.
+//
+// It exists for the spoken exit. When the realtime model hangs up on the
+// user's request, the session ends in THIS process -- but the microphone
+// light, the peer connection and the idle state are all in the page, and a
+// browser left holding a session that no longer exists is the same failure
+// as one that would not end.
+//
+// Broadcast rather than addressed because a voice session is a property of
+// the machine, not of a tab: only one runs at a time, and every tab showing
+// it needs to stop showing it. It carries a session id and a reason -- no
+// credential, no transcript.
+func (h *Hub) BroadcastVoiceEnded(sessionID, reason string) {
+	h.mu.Lock()
+	clients := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.Unlock()
+
+	for _, c := range clients {
+		c.sendVoiceEnded(sessionID, reason)
+	}
+}
+
 // NewHub creates a new Hub that dials a fresh daemon connection per browser via
 // dial. dial may be nil and supplied later via SetDialer. tunnels is nil until
 // set by the caller (server.New sets it via hub.tunnels = tunnels).

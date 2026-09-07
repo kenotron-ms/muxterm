@@ -24,6 +24,7 @@ type Manager struct {
 	mu       sync.Mutex
 	handles  map[string]*handle
 	live     *handle
+	onEnded  func(sessionID, reason string)
 	traces   []Trace
 	tracesMu sync.Mutex
 }
@@ -115,7 +116,11 @@ func (m *Manager) Connect(ctx context.Context, sessionID, offerSDP string) (Answ
 		return Answer{}, err
 	}
 
-	sb, err := Dial(ctx, m.client, answer.CallID, h.secret, m.bridge, m.record)
+	// The teardown callback closes over THIS session's id, so a spoken
+	// exit lands on the same Manager.End the browser's POST reaches
+	// instead of inventing a second way to tear a session down.
+	sb, err := Dial(ctx, m.client, answer.CallID, h.secret, m.bridge, m.record,
+		func(reason string) { m.endWithReason(sessionID, reason) })
 	if err != nil {
 		// Audio would still work, but a chief of staff that cannot act
 		// is not the feature. Fail the connection rather than hand back
@@ -135,18 +140,48 @@ func (m *Manager) Connect(ctx context.Context, sessionID, offerSDP string) (Answ
 	return answer, nil
 }
 
+// SetOnEnded installs the hook called after a session is torn down.
+//
+// It exists so the browser can be TOLD. A session the model hangs up ends
+// server-side, but the microphone light, the peer connection and the idle
+// state all live in the page -- and a browser still showing a live session
+// that is gone is the same lie as a session that would not end. The hook
+// carries no credential and no transcript: a session id and a reason.
+func (m *Manager) SetOnEnded(fn func(sessionID, reason string)) {
+	m.mu.Lock()
+	m.onEnded = fn
+	m.mu.Unlock()
+}
+
 // End tears down a session. Idempotent, and safe for a session id that was
 // minted but never connected.
 func (m *Manager) End(sessionID string) {
+	m.endWithReason(sessionID, "ended by the browser")
+}
+
+// endWithReason is the ONE teardown. Every way a voice session can end --
+// the browser's POST, the model's spoken exit -- arrives here.
+func (m *Manager) endWithReason(sessionID, reason string) {
 	m.mu.Lock()
 	h := m.handles[sessionID]
 	delete(m.handles, sessionID)
-	if m.live == h {
+	if h != nil && m.live == h {
 		m.live = nil
 	}
+	onEnded := m.onEnded
 	m.mu.Unlock()
-	if h != nil && h.sideband != nil {
+
+	if h == nil {
+		// Already gone. Nothing ended, so nothing is announced: a
+		// browser that tears down on the hook and then posts /end for
+		// the same id must not be told again.
+		return
+	}
+	if h.sideband != nil {
 		h.sideband.Close()
+	}
+	if onEnded != nil {
+		onEnded(sessionID, reason)
 	}
 }
 
