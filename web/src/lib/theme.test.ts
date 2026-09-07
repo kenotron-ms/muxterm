@@ -32,4 +32,14 @@ describe('paletteToCSSVars', () => {
     expect(vars['--mux-dock-font-size']).toBe('0.85rem');
     expect(vars['--mux-dock-active-weight']).toBe('600');
   });
+
+  // D3. The title bar and the sidebar header must not be able to drift apart,
+  // which means exactly one token may decide their height. If this name ever
+  // stops being emitted, both surfaces silently fall back to their own local
+  // defaults and the drift is back -- so the token's EXISTENCE is the thing
+  // worth asserting, not just its current value.
+  it('emits one shared top-chrome height token', () => {
+    const vars = paletteToCSSVars(resolvePalette('tokyo-night'));
+    expect(vars['--mux-titlebar-height']).toBe('var(--mux-dock-height, 44px)');
+  });
 });
