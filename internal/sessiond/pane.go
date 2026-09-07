@@ -15,6 +15,28 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// EnvPaneID is stamped into every pane process's environment with that pane's
+// local id, and is the marker that says "this process is running inside a
+// muxterm pane".
+//
+// It exists because an agent session cannot otherwise tell. The MCP server a
+// harness starts (`muxterm mcp`) is a plain child process: it sees the same
+// world whether its parent is a lane in a pane, the chief-of-staff sidecar, or
+// a shell on a laptop. That distinction decides whether the session is allowed
+// to hold close_workspace and close_pane (internal/mcp/run.go), so something
+// has to carry it, and the pane's own environment is the only channel every
+// harness already forwards -- verified against a live amplifier session, whose
+// `muxterm mcp` child inherits the full parent environment rather than the MCP
+// SDK's safe subset.
+//
+// It is ADVISORY, not a security boundary: any process can set or unset it.
+// That is fine, because it is only ever the first of two layers. The second --
+// the daemon's own refusal to let a connection close the workspace it occupies
+// (conn.refuseSelfClose in server.go) -- derives occupancy from SO_PEERCRED and
+// /proc, which the calling process cannot forge. Removing the tool is what
+// stops the honest mistake; the daemon check is what stops everything else.
+const EnvPaneID = "MUXTERM_PANE_ID"
+
 // Pane wraps exactly one PTY-backed child process. It streams output to a
 // PaneBuffer (scrollback) and an optional onData callback, accepts input,
 // resizes the PTY, and fires onExit exactly once when the process exits.
@@ -163,6 +185,11 @@ func NewPane(
 
 	c := exec.Command(launch.argv[0], launch.argv[1:]...)
 	c.Env = append(os.Environ(), "TERM=xterm-256color")
+	// Every pane, not just lanes spawned by spawn_lane. A pane is a pane
+	// however it was created, and an agent started by hand inside one can
+	// destroy its own workspace exactly as readily as a delegated one. See
+	// EnvPaneID.
+	c.Env = append(c.Env, EnvPaneID+"="+strconv.Itoa(localID))
 	c.Env = append(c.Env, launch.env...)
 	if cwd != "" {
 		// Restore path: reopen the pane in the directory it was last seen
