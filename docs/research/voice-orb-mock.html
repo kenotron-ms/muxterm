@@ -1049,6 +1049,67 @@ function renderEvidence(results) {
   return lines.join('\n');
 }
 
+const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+
+/**
+ * RAW per-frame dump — the unreduced measurement behind K1, K2 and K3.
+ *
+ * __orbEvidence() reports statistics computed over these samples. This returns
+ * the samples themselves, so the continuity claim can be read off the numbers
+ * instead of trusted to the code that summarises them. Every value comes from
+ * getComputedStyle or getBoundingClientRect on that frame; nothing is read out
+ * of the engine.
+ *
+ *   node docs/research/voice-orb-evidence.mjs --raw
+ */
+function snapAt(a, b) {
+  const m = measure();
+  const tint = s => parseFloat(getComputedStyle(stage.querySelector(`.orb-tint[data-state="${s}"]`)).opacity);
+  return { rect: m.rect, glow: m.glow, colour: m.colour, tintFrom: tint(a), tintTo: tint(b) };
+}
+
+window.__orbRawSamples = async (spec) => {
+  const { from, to, interruptWith = null, interruptAfter = 140,
+          ms = ORB_CONSTANTS.DURATION_MS + 160, preFrames = 3 } = spec;
+  const tintB = interruptWith || to;
+
+  orb.setState(from);
+  await settle(ORB_CONSTANTS.DURATION_MS + 500);
+
+  const rows = [];
+  for (let i = 0; i < preFrames; i++) {
+    await nextFrame();
+    rows.push({ ms: null, phase: 'settled', ...snapAt(from, tintB) });
+  }
+
+  let fired = false, firedAt = null;
+  const t0 = performance.now();
+  orb.setState(to);
+  await new Promise(res => {
+    const step = () => {
+      const el = performance.now() - t0;
+      if (interruptWith && !fired && el >= interruptAfter) {
+        orb.setState(interruptWith); fired = true; firedAt = el;
+      }
+      rows.push({ ms: el, phase: fired ? 'post-interrupt' : 'transition', ...snapAt(from, tintB) });
+      el < ms ? requestAnimationFrame(step) : res();
+    };
+    requestAnimationFrame(step);
+  });
+
+  return {
+    spec: { from, to, interruptWith, interruptAfter, firedAt },
+    endpoints: {
+      glow_from: PROFILES[from].glow,
+      glow_to: PROFILES[interruptWith || to].glow,
+      coreScale_from: PROFILES[from].coreScale,
+      coreScale_to: PROFILES[interruptWith || to].coreScale,
+      rect_band: rectRange(from, interruptWith || to),
+    },
+    rows,
+  };
+};
+
 window.__orbEvidence = async () => {
   const r = await runEvidence();
   return { text: renderEvidence(r), results: r };

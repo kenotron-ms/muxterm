@@ -5,6 +5,7 @@
  *
  *   node docs/research/voice-orb-evidence.mjs
  *   node docs/research/voice-orb-evidence.mjs --json
+ *   node docs/research/voice-orb-evidence.mjs --raw    # unreduced per-frame samples
  *
  * It opens docs/research/voice-orb-mock.html in headless Chrome, calls the
  * page's own window.__orbEvidence(), and reports what came back. The page
@@ -27,6 +28,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PAGE = resolve(HERE, 'voice-orb-mock.html');
 const JSON_OUT = process.argv.includes('--json');
+const RAW_OUT = process.argv.includes('--raw');
 
 const CHROME = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']
   .map((n) => ['/usr/bin/' + n, '/usr/local/bin/' + n])
@@ -160,6 +162,13 @@ async function main() {
   if (!up) throw new Error('page never finished loading __orbEvidence');
   await sleep(600); // let the oscillators settle into a steady state
 
+  if (RAW_OUT) {
+    const code = await rawDump(page);
+    page.close();
+    browser.close();
+    return code;
+  }
+
   const r = await page.send('Runtime.evaluate', {
     expression: 'window.__orbEvidence()',
     awaitPromise: true,
@@ -182,6 +191,69 @@ async function main() {
   page.close();
   browser.close();
   return failed ? 1 : 0;
+}
+
+/**
+ * Prints the unreduced per-frame series: what getComputedStyle and
+ * getBoundingClientRect actually returned on each frame of a transition.
+ */
+async function rawDump(page) {
+  const specs = [
+    { title: 'T4  speaking -> listening   (the transition under complaint)',
+      spec: { from: 'speaking', to: 'listening' } },
+    { title: 'K3  speaking -> listening, INTERRUPTED by thinking at 140ms',
+      spec: { from: 'speaking', to: 'listening', interruptWith: 'thinking', interruptAfter: 140, ms: 640 } },
+  ];
+  let bad = 0;
+  for (const { title, spec } of specs) {
+    const r = await page.send('Runtime.evaluate', {
+      expression: `window.__orbRawSamples(${JSON.stringify(spec)})`,
+      awaitPromise: true, returnByValue: true, timeout: 60000,
+    });
+    if (r.exceptionDetails) throw new Error('page threw: ' + JSON.stringify(r.exceptionDetails));
+    const { endpoints, rows, spec: got } = r.result.value;
+
+    console.log('');
+    console.log('='.repeat(96));
+    console.log(title);
+    console.log('='.repeat(96));
+    console.log(`glow      ${endpoints.glow_from.toFixed(4)} -> ${endpoints.glow_to.toFixed(4)}` +
+                `      K2 interval: every sample must lie inside ` +
+                `[${Math.min(endpoints.glow_from, endpoints.glow_to).toFixed(4)}, ` +
+                `${Math.max(endpoints.glow_from, endpoints.glow_to).toFixed(4)}]`);
+    console.log(`rect band ${endpoints.rect_band.toFixed(4)}      (achievable range of the rendered box across both states)`);
+    if (got.interruptWith) console.log(`interrupt fired at ${got.firedAt.toFixed(1)}ms -> ${got.interruptWith}`);
+    console.log('');
+    console.log('    ms   phase           rect      d(rect)     glow     d(glow)   tint[from] tint[to]   colour(r,g,b)      K2');
+    console.log('  ' + '-'.repeat(94));
+
+    let prev = null;
+    const lo = Math.min(endpoints.glow_from, endpoints.glow_to) - 0.002;
+    const hi = Math.max(endpoints.glow_from, endpoints.glow_to) + 0.002;
+    for (const row of rows) {
+      const dRect = prev ? row.rect - prev.rect : null;
+      const dGlow = prev ? row.glow - prev.glow : null;
+      const inBand = got.interruptWith ? '-' : (row.glow >= lo && row.glow <= hi ? 'ok' : 'OUT');
+      if (inBand === 'OUT') bad++;
+      const seam = got.firedAt != null && prev && prev.phase === 'transition' && row.phase === 'post-interrupt';
+      console.log(
+        '  ' + (row.ms == null ? '  --' : row.ms.toFixed(1).padStart(6)) +
+        '   ' + row.phase.padEnd(15) +
+        row.rect.toFixed(5).padStart(8) +
+        (dRect == null ? '        --' : (dRect >= 0 ? '  +' : '  ') + dRect.toFixed(5)).padStart(11) +
+        row.glow.toFixed(5).padStart(10) +
+        (dGlow == null ? '       --' : (dGlow >= 0 ? '  +' : '  ') + dGlow.toFixed(5)).padStart(11) +
+        row.tintFrom.toFixed(4).padStart(11) + row.tintTo.toFixed(4).padStart(9) +
+        '   ' + row.colour.map(c => Math.round(c).toString().padStart(3)).join(',') +
+        '   ' + inBand + (seam ? '   <-- SEAM: state changed on this frame' : ''));
+      prev = row;
+    }
+  }
+  console.log('');
+  console.log(bad === 0
+    ? 'K2: 0 samples outside the interval between the two states.'
+    : `K2: ${bad} samples OUTSIDE the interval.`);
+  return bad === 0 ? 0 : 1;
 }
 
 let code = 1;
