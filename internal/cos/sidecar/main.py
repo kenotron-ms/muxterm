@@ -705,6 +705,29 @@ class Sidecar:
         self._forced_approval: set = set()
         self._stopping = False
         self._prev_cost: "Decimal | None" = None
+        # -- tuning (the `reconfigure` op) ----------------------------------
+        # The three things a live retune needs and cannot recover later:
+        #
+        #   _prepared      holds .bundle, the SAME object the foundation system
+        #                  prompt factory captured (amplifier_foundation/bundle/
+        #                  _prepared.py _create_system_prompt_factory captures
+        #                  `bundle` and re-reads `.instruction` on every call).
+        #                  Mutating .instruction is therefore the whole reload:
+        #                  no factory is replaced, so peer hooks that WRAP the
+        #                  factory -- hooks-status-context does -- keep working.
+        #   _base_*        the compiled-in defaults, captured before anything is
+        #                  applied.  Every reconfigure is resolved against these
+        #                  rather than against the last one, so a tuning that is
+        #                  removed leaves no residue.
+        #   _tool_registry every tool object seen at boot, INCLUDING the ones the
+        #                  bundle surface withheld.  A tool that has been
+        #                  unmounted cannot be recovered from the coordinator,
+        #                  so allowing one back later means having kept it.
+        self._prepared: Any = None
+        self._base_instruction: str = ""
+        self._base_surface: "list | None" = None
+        self._tool_registry: dict = {}
+        self._tuning: dict = {}
         # Set by serve(); read by _on_signal to wake the loop.  Both stay None
         # until then, so a signal before serve() has nothing to poke and
         # nothing to crash on.
@@ -741,6 +764,7 @@ class Sidecar:
 
         settings = AppSettings()
         cfg, prepared = await resolve_bundle_config(self.bundle, settings, None)
+        self._prepared = prepared
         # MANDATORY: without this hook-context-intelligence dies validating
         # "Unknown level: '${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}'".
         cfg = expand_env_vars(cfg)
@@ -833,6 +857,24 @@ class Sidecar:
         self._forced_approval = set(n.strip() for n in forced.split(",") if n.strip())
         if self._forced_approval:
             logger.info("host approval forced for tools: %s", sorted(self._forced_approval))
+
+        # Capture the compiled-in baseline BEFORE anything is withheld or
+        # tuned.  _tool_registry has to be taken here, ahead of
+        # _enforce_tool_surface, because that is the last moment the withheld
+        # tools still exist as objects -- after it they are gone from the
+        # coordinator and no user allowlist could ever bring one back.
+        #
+        # dict(), not the value itself: coordinator.get("tools") hands back a
+        # LIVE view, so a bare reference would follow every later unmount and
+        # the "registry" would end up holding exactly the tools that were never
+        # withheld.
+        self._tool_registry = dict(session.coordinator.get("tools") or {})
+        self._base_instruction = getattr(prepared.bundle, "instruction", None) or ""
+        self._base_surface = self._tool_surface(cfg)
+        logger.info("tuning baseline: instruction %d chars, bundle surface %s",
+                    len(self._base_instruction),
+                    "none (unfiltered)" if self._base_surface is None
+                    else f"{len(self._base_surface)} names")
 
         await self._enforce_tool_surface(session, cfg)
 
@@ -934,6 +976,216 @@ class Sidecar:
             # Not fatal, but it means the surface is wider than the bundle says.
             # Say which ones, so nobody has to diff two log lines to find out.
             logger.error("tool surface: could NOT withhold %s", failed)
+
+    # -- live retune (the `reconfigure` op) ---------------------------------
+    #
+    # WHAT MAKES THIS POSSIBLE, with the evidence, because both halves look
+    # like they ought to require a restart and neither does:
+    #
+    #   INSTRUCTION.  amplifier_foundation/bundle/_prepared.py:395 defines the
+    #   system prompt factory as `async def factory()` closing over
+    #   `captured_bundle`, and its first statement (line 397) is
+    #   `main_instruction = captured_bundle.instruction or ""`.  Read on EVERY
+    #   call.  amplifier_module_context_simple calls that factory from
+    #   get_messages_for_request (line 399), once per provider request, and
+    #   builds the system message into a per-request COPY -- self.messages,
+    #   the transcript, is never touched (line 404-410).  So assigning
+    #   prepared.bundle.instruction changes the next request and nothing else.
+    #
+    #   Assigning the INSTRUCTION rather than calling set_system_prompt_factory
+    #   is deliberate.  Hooks wrap that slot: hooks-status-context's
+    #   _ensure_prefix re-wraps whatever factory it finds and detects its own
+    #   marker in the rendered output.  Replacing the factory would silently
+    #   drop every peer hook's contribution to the system prompt.  Mutating the
+    #   innermost source leaves the entire wrap chain intact.
+    #
+    #   TOOLS.  amplifier_core/_session_exec.py:36 re-reads
+    #   `coordinator.get("tools")` inside run_orchestrator, which is called once
+    #   per session.execute() -- once per turn.  mount() and unmount() are both
+    #   on the coordinator (amplifier_core/_engine.pyi:210-213), so the surface
+    #   can be narrowed AND widened between turns.
+    #
+    # Both were verified against the installed library before this was written,
+    # not inferred from the docstrings.
+    def _effective_instruction(self, extra: str, mode: str) -> str:
+        if not extra:
+            return self._base_instruction
+        if mode == "replace":
+            return extra
+        # Appended, and appended LAST.  The bundle's own @mentions are resolved
+        # by the factory into a context block that follows the instruction, so
+        # this text sits between the charter and that block -- close enough to
+        # the charter to read as an amendment to it.
+        return f"{self._base_instruction}\n\n{extra}" if self._base_instruction else extra
+
+    def _effective_tool_names(self, allow: list, deny: list) -> "list | None":
+        """The tool names that should be mounted, or None for "no opinion".
+
+        DENY WINS, over the bundle's surface and the user's allow list alike.
+        Narrowing is the direction that can only ever be safe, so it gets the
+        last word; an allow entry that contradicts a deny entry loses, rather
+        than the answer depending on which file was read first.
+        """
+        base = self._base_surface
+        if base is None and not allow and not deny:
+            return None
+        patterns = list(base or [])
+        patterns.extend(allow)
+        names = sorted(self._tool_registry)
+        if base is None and not patterns:
+            # No bundle surface and no user allow: everything the session
+            # mounted is in play, minus whatever is denied.
+            keep = names
+        else:
+            keep = [n for n in names if self._surface_allows(n, patterns)]
+        if deny:
+            keep = [n for n in keep if not self._surface_allows(n, deny)]
+        return keep
+
+    async def _apply_tuning(self, msg: dict) -> dict:
+        """Apply one reconfigure. Returns a summary of what actually changed."""
+        extra = msg.get("instruction")
+        extra = extra.strip() if isinstance(extra, str) else ""
+        mode = msg.get("instruction_mode")
+        mode = mode if mode in ("append", "replace") else "append"
+        allow = [str(x) for x in (msg.get("tools_allow") or []) if str(x).strip()]
+        deny = [str(x) for x in (msg.get("tools_deny") or []) if str(x).strip()]
+
+        changes: list = []
+
+        # -- instruction ----------------------------------------------------
+        want = self._effective_instruction(extra, mode)
+        bundle = getattr(self._prepared, "bundle", None) if self._prepared else None
+        if bundle is None:
+            logger.error("reconfigure: no prepared bundle -- instruction NOT applied")
+        elif (getattr(bundle, "instruction", None) or "") != want:
+            before = len(getattr(bundle, "instruction", None) or "")
+            bundle.instruction = want
+            changes.append(f"instruction {before} -> {len(want)} chars ({mode})")
+
+        # -- tools ----------------------------------------------------------
+        want_names = self._effective_tool_names(allow, deny)
+        if want_names is not None:
+            # sorted(), not the live view: coordinator.get("tools") follows
+            # every mount below, so a bare reference would make the loop read
+            # its own edits.
+            have = sorted(self._session_tools())
+            to_remove = [n for n in have if n not in want_names]
+            to_add = [n for n in want_names if n not in have and n in self._tool_registry]
+            for name in to_remove:
+                try:
+                    await self.session.coordinator.unmount("tools", name)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("reconfigure: could not withhold %s: %s", name, exc)
+            for name in to_add:
+                try:
+                    await self.session.coordinator.mount("tools", self._tool_registry[name], name)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("reconfigure: could not restore %s: %s", name, exc)
+            after = sorted(self._session_tools())
+            gone = [n for n in have if n not in after]
+            back = [n for n in after if n not in have]
+            if gone:
+                changes.append(f"tools withheld: {gone}")
+            if back:
+                changes.append(f"tools restored: {back}")
+            # An allow entry naming a tool that does not exist is a typo the
+            # user will otherwise chase for an hour wondering why nothing
+            # happened.  Say it every time, not just when something changed.
+            unknown = [a for a in allow
+                       if not any(self._surface_allows(n, [a]) for n in self._tool_registry)]
+            if unknown:
+                logger.warning("reconfigure: tools_allow names nothing this session has: %s",
+                               unknown)
+
+        self._tuning = {"instruction": extra, "instruction_mode": mode,
+                        "tools_allow": allow, "tools_deny": deny}
+        return {"changes": changes}
+
+    def _session_tools(self) -> dict:
+        return dict(self.session.coordinator.get("tools") or {}) if self.session else {}
+
+    async def _assembled_system_prompt(self) -> str:
+        """The system prompt as the PROVIDER will receive it, or "" if unknown.
+
+        Not the same thing as bundle.instruction, and the difference is large
+        enough to mislead: the CoS bundle's instruction is 85 characters and
+        the prompt on the wire is ~30,000, because the factory resolves the
+        instruction's @mentions into a context block and appends it
+        (_prepared.py:502-506).  A visibility surface that reported the 85 and
+        called it "the system instruction" would send someone hunting for text
+        that is really there, in a part of the prompt it never showed them.
+
+        get_messages_for_request is the honest source: it is the exact call the
+        orchestrator makes to build a request, it runs the whole factory chain
+        including every hook that wraps it, and it composes into a NEW list
+        rather than touching self.messages -- so asking is free of side
+        effects on the transcript.
+        """
+        context = self.session.coordinator.get("context") if self.session else None
+        if context is None or not hasattr(context, "get_messages_for_request"):
+            return ""
+        try:
+            msgs = await context.get_messages_for_request()
+        except Exception:
+            logger.debug("could not assemble the system prompt for reporting", exc_info=True)
+            return ""
+        for m in msgs or []:
+            if isinstance(m, dict) and m.get("role") == "system":
+                content = m.get("content")
+                return content if isinstance(content, str) else str(content)
+        return ""
+
+    async def _effective_report(self) -> dict:
+        """What this session is ACTUALLY running with, for the `config` op."""
+        bundle = getattr(self._prepared, "bundle", None) if self._prepared else None
+        bundle_instruction = (getattr(bundle, "instruction", None) or "") if bundle else ""
+        assembled = await self._assembled_system_prompt()
+        return {
+            # The wire payload, whole. Someone tuning a prompt has to be able
+            # to read the prompt.
+            "instruction": assembled or bundle_instruction,
+            "instruction_chars": len(assembled or bundle_instruction),
+            # The part tuning actually edits, and what it started from.
+            "bundle_instruction_chars": len(bundle_instruction),
+            "base_instruction_chars": len(self._base_instruction),
+            # tool_names, not "tools": the ready event already uses "tools"
+            # for a COUNT, and one wire name with two types is how a decoder
+            # starts silently dropping one of them.
+            "tool_names": sorted(self._session_tools()),
+            "tools_known": sorted(self._tool_registry),
+            "tuning": dict(self._tuning),
+        }
+
+    async def _handle_reconfigure(self, msg: dict) -> None:
+        """Fire-and-forget retune.  NEVER fatal, NEVER refuses.
+
+        A configuration that cannot be applied must not be able to stop the
+        turn behind it from running -- this op arrives immediately ahead of a
+        turn on the same pipe, so raising here would turn a typo in a tuning
+        file into a chief of staff that cannot answer at all.
+        """
+        try:
+            result = await self._apply_tuning(msg)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("reconfigure failed")
+            self.proto.emit(ev="error", code="reconfigure_failed",
+                            message=f"{type(exc).__name__}: {exc}", fatal=False)
+            return
+        changes = result.get("changes") or []
+        if not changes:
+            return  # Steady state: pushed on every turn, so silence is normal.
+        logger.info("reconfigure applied: %s", "; ".join(changes))
+        self.proto.emit(ev="reconfigured", changes=changes,
+                        tools=len(self._session_tools()))
+
+    async def _handle_config(self, msg: dict) -> None:
+        """Answer with the effective instruction and tool list."""
+        req_id = msg.get("req_id") if isinstance(msg.get("req_id"), str) else None
+        payload = {"ev": "config", **(await self._effective_report())}
+        if req_id:
+            payload["req_id"] = req_id
+        self.proto.emit(**payload)
 
     # -- streaming hooks ----------------------------------------------------
     def _register_hooks(self) -> None:
@@ -1679,6 +1931,10 @@ class Sidecar:
             await self._handle_clear(msg)
         elif op == "history":
             await self._handle_history(msg)
+        elif op == "reconfigure":
+            await self._handle_reconfigure(msg)
+        elif op == "config":
+            await self._handle_config(msg)
         elif op == "ping":
             self.proto.emit(ev="pong")
         elif op == "shutdown":
