@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """DEV FIXTURE - NOT THE REAL SIDECAR.
 
-This is a canned-response stand-in for sidecar/cos/main.py, used to exercise
+This is a canned-response stand-in for internal/cos/sidecar/main.py, used to exercise
 internal/cos (spawn, supervise, queue, fan-out, approvals, crash recovery)
 without booting a real amplifier session. It speaks the wire protocol in
 docs/designs/2026-09-06-cos-sidecar-spec.md section 2 and nothing else: no
 amplifier, no model, no tools, no session store.
 
-The real sidecar is sidecar/cos/main.py. Point the supervisor at this one
+The real sidecar is internal/cos/sidecar/main.py. Point the supervisor at this one
 explicitly:
 
-    MUXTERM_COS_SIDECAR=sidecar/cos/stub-sidecar.py muxterm cos "hi"
+    MUXTERM_COS_SIDECAR=internal/cos/sidecar/stub-sidecar.py muxterm cos "hi"
 
 Prompt keywords steer the canned behaviour, so one fixture covers every path
 the Go side has to survive:

@@ -88,7 +88,10 @@ func resolveCwd(override string) (dir, source string) {
 }
 
 // sidecarRelPath is where the sidecar lives inside the muxterm source tree.
-const sidecarRelPath = "sidecar/cos/main.py"
+// It sits under internal/cos/ because that is the package that owns its
+// lifecycle AND because go:embed cannot reach a parent directory -- see
+// embed.go, which compiles this same file into the binary.
+const sidecarRelPath = "internal/cos/sidecar/main.py"
 
 // Supervision tuning.
 const (
@@ -1160,12 +1163,21 @@ func pythonFromAmplifierShebang() (string, error) {
 	return interp, nil
 }
 
-// ResolveSidecarScript locates sidecar/cos/main.py.
+// ResolveSidecarScript locates the chief-of-staff sidecar script.
 //
-// Order, first hit wins: override, $MUXTERM_COS_SIDECAR, a walk up from the
-// muxterm binary (covers bin/muxterm in a worktree and an installed layout),
-// then a walk up from the working directory (covers `go run`, whose binary
-// lives in a temp dir that tells us nothing).
+// Order, first hit wins:
+//
+//  1. an explicit override (the --sidecar flag or a Config field)
+//  2. $MUXTERM_COS_SIDECAR
+//  3. a muxterm source tree: a walk up from the binary (covers bin/muxterm in
+//     a worktree), then a walk up from the working directory (covers `go run`,
+//     whose binary lives in a temp dir that tells us nothing)
+//  4. the copy embedded in this binary, extracted to the cache dir
+//
+// The source tree deliberately beats the embedded copy, so `make dev-local`
+// picks up live edits to the Python without a Go rebuild. Step 4 is what every
+// INSTALLED muxterm uses: the release ships one binary and nothing beside it,
+// so on those machines there is no sidecar on disk to find.
 //
 // An explicit override that does not exist is an ERROR, never a fall-through:
 // silently running a different sidecar than the one asked for is worse than
@@ -1186,45 +1198,48 @@ func ResolveSidecarScript(override string) (path, source string, err error) {
 		return abs, "$" + EnvSidecar, nil
 	}
 
-	var tried []string
 	if exe, err := os.Executable(); err == nil {
 		if real, err := filepath.EvalSymlinks(exe); err == nil {
 			exe = real
 		}
-		p, cands := searchUp(filepath.Dir(exe), 5)
-		if p != "" {
+		if p := searchUp(filepath.Dir(exe), 5); p != "" {
 			return p, "next to the muxterm binary", nil
 		}
-		tried = append(tried, cands...)
 	}
 	if wd, err := os.Getwd(); err == nil {
-		p, cands := searchUp(wd, 8)
-		if p != "" {
+		if p := searchUp(wd, 8); p != "" {
 			return p, "in the working directory tree", nil
 		}
-		tried = append(tried, cands...)
 	}
-	return "", "", fmt.Errorf("cos: could not find %s; set %s. Tried: %s",
-		sidecarRelPath, EnvSidecar, strings.Join(tried, ", "))
+
+	// Nothing on disk, which is the normal case for an installed muxterm, so
+	// use the copy compiled into this binary. There is no "could not find it"
+	// outcome past this point: either extraction succeeds or it reports
+	// exactly which path it could not write and why. The caller logs the
+	// resolved path next to this source string, so naming the extraction
+	// directory again here would only stutter.
+	p, err := ExtractEmbeddedSidecar()
+	if err != nil {
+		return "", "", err
+	}
+	return p, "embedded in the muxterm binary", nil
 }
 
-// searchUp walks up to levels parent directories from dir looking for the
-// sidecar script, returning the paths it tried when it finds nothing.
-func searchUp(dir string, levels int) (string, []string) {
-	var tried []string
+// searchUp walks up to levels parent directories from dir looking for a
+// muxterm source tree carrying the sidecar script, returning "" if none does.
+func searchUp(dir string, levels int) string {
 	for i := 0; i <= levels; i++ {
 		cand := filepath.Join(dir, sidecarRelPath)
 		if abs, err := existingFile(cand); err == nil {
-			return abs, nil
+			return abs
 		}
-		tried = append(tried, cand)
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			break
 		}
 		dir = parent
 	}
-	return "", tried
+	return ""
 }
 
 // existingFile returns the absolute path of an existing regular file.

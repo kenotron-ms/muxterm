@@ -5,7 +5,7 @@ Stands in for internal/cos until the Go side exists: spawns the sidecar,
 speaks the NDJSON protocol, prints the event stream, and asserts the
 behaviours the spec's laws promise.
 
-    ~/.local/share/uv/tools/amplifier/bin/python3 sidecar/cos/dev-driver.py
+    ~/.local/share/uv/tools/amplifier/bin/python3 internal/cos/sidecar/dev-driver.py
 
 Read-only by design: the only muxterm MCP tool it ever asks for is
 list_workspaces.  It never creates or closes a pane or workspace -- the
