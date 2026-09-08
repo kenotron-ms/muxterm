@@ -39,6 +39,10 @@ var Launchable = []string{HarnessAmplifier, HarnessClaude}
 // A GOAL LANE AND AN INTERACTIVE LANE ARE NOT THE SAME COMMAND: the goal branch
 // carries no `--mode chat` and must never be "tidied" into one that does. The
 // reason is spelled out at the two returns below; read it before merging them.
+// The goal branch is now a two-phase command (headless loop, then an
+// interactive resume of that same session in the same pane -- goallane.go),
+// which is what keeps the finished lane's context reachable. It still contains
+// no `--mode chat`, and adding one would still destroy the loop.
 //
 // This is the ONE place lane argv is built. The MCP spawn_lane tool below and
 // the `muxterm spawn-lane` CLI subcommand (cmd/muxterm/spawn_lane_cmd.go) both
@@ -53,8 +57,10 @@ var Launchable = []string{HarnessAmplifier, HarnessClaude}
 // it builds the interactive lane only, because the composer has no goal control
 // to build the other one from, and its `amplifier run <prompt> --mode chat`
 // matches this function's goal-unset branch exactly. If a goal control is ever
-// added there, mirror the goal branch WHOLE -- the "/goal " prefix AND the
-// absence of `--mode chat` -- not just the prefix.
+// added there, do NOT re-describe the goal argv in TypeScript: it is a shell
+// wrapper now (sessiond.GoalLaneArgv), and half of it -- the "/goal " prefix,
+// the absence of `--mode chat`, the session-id join, the resume -- is not
+// guessable from the outside. Call spawn_lane with a goal instead.
 func HarnessArgv(harness, prompt, goal string) ([]string, error) {
 	// A PROMPT IS NOT A COMMAND. Both harnesses read a leading "/" as a slash
 	// command, so a caller-supplied prompt of "/clear" or "/goal ..." would
@@ -115,26 +121,38 @@ func HarnessArgv(harness, prompt, goal string) ([]string, error) {
 			// docs/GOAL_COMMAND.md -- so nothing on this side needs to keep the
 			// process alive between turns.
 			//
-			// KNOWN CONSEQUENCE, measured, not yet solved: muxterm has no
-			// exited-pane tombstone. Server.handlePaneExit (sessiond/server.go)
-			// removes the pane on process exit and ReapIfEmpty removes the
-			// workspace when that was its last one, which reclaims the
-			// session-state row with it. A finished goal lane therefore goes
-			// `autonomous/working` -> gone from fleet_status, with no terminal
-			// done/failed row observable in between (polled at 3s: present at
-			// T, absent at T+4). The verdict a goal lane exists to produce is
-			// not readable after the fact. That is a gap in pane/row retention,
-			// not a reason to put `--mode chat` back: with the flag there is no
-			// loop and no verdict to lose.
+			// WHAT USED TO HAPPEN WHEN THAT EXIT CAME, and what happens now.
+			// The command was once exactly `amplifier run "/goal <cond>"`, so
+			// the loop finishing exited the pane's only process.
+			// Server.handlePaneExit removed the pane, ReapIfEmpty removed the
+			// workspace when that was its last one, and the session-state row
+			// went with it: a finished goal lane went `autonomous/working` ->
+			// gone from fleet_status with no terminal row observable in between
+			// (polled at 3s: present at T, absent at T+4), and the verdict the
+			// lane existed to produce was not readable afterwards. Worse for
+			// the human than for the tooling: a lane that got 80% of the way
+			// there took its whole context with it, so "now also handle the
+			// empty case" meant writing a fresh goal that re-derives
+			// everything.
 			//
-			// Blank-checked for the same reason: a goal of only whitespace
-			// yields "/goal " with nothing after it, which fails amplifier's
-			// startswith test and degrades to exactly the literal-prompt lane
-			// described above, silently.
+			// So the loop is still headless -- that part was never negotiable
+			// -- but it is now phase 1 of a two-phase command that resumes the
+			// SAME session interactively in the SAME pane when the loop ends
+			// (sessiond.GoalLaneArgv). The `/goal ` prefix and the absence of
+			// `--mode chat` both still apply, to phase 1, for every reason
+			// above; phase 2 is `amplifier resume <id>`, which is interactive
+			// by construction and takes no mode flag at all.
+			//
+			// Blank-checked for the same reason as ever: a goal of only
+			// whitespace yields "/goal " with nothing after it, which fails
+			// amplifier's startswith test and degrades to exactly the
+			// literal-prompt lane described above, silently. Checked here
+			// rather than only in the builder so the error names the parameter
+			// the caller actually passed.
 			if strings.TrimSpace(goal) == "" {
 				return nil, fmt.Errorf("goal is blank: a /goal loop needs a stop condition to declare (drop goal to start an interactive lane)")
 			}
-			return []string{"amplifier", "run", "/goal " + goal}, nil
+			return sessiond.GoalLaneArgv(goal)
 		}
 		if prompt == "" {
 			return nil, fmt.Errorf("prompt is required for harness %q (or pass a goal)", HarnessAmplifier)

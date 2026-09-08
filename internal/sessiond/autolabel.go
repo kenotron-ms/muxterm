@@ -94,7 +94,7 @@ func wordSet(words string) map[string]struct{} {
 // or "" when argv is not one of the shapes a lane is started with:
 //
 //	amplifier run <prompt> --mode chat        interactive lane
-//	amplifier run "/goal <condition>"         goal lane -- headless, no --mode
+//	bash -c <script> muxterm-goal-lane <cond> goal lane -- see goallane.go
 //	claude <prompt>
 //
 // Those are matched literally, straight off web/src/lib/harness.ts and
@@ -110,6 +110,15 @@ func wordSet(words string) map[string]struct{} {
 func promptFromArgv(argv []string) string {
 	if len(argv) == 0 {
 		return ""
+	}
+	// A goal lane is a shell wrapper now (goallane.go), so argv[0] is `bash`
+	// and the amplifier invocation is inside a script argument. Recognised
+	// through the ONE builder that produces it rather than by re-describing
+	// its shape here: a goal lane that stops being labelled is a tab that
+	// reads "Pane 7" for the rest of its life, and nothing about that failure
+	// is visible in a diff to the argv builder.
+	if goal, ok := goalLaneGoal(argv); ok {
+		return goal
 	}
 	// A harness invoked by absolute path, or installed as a "claude.js" shim,
 	// is still the harness -- the same normalisation matchArgvBasename applies
