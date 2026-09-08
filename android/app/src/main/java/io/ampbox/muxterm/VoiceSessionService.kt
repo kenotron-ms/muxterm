@@ -52,15 +52,24 @@ class VoiceSessionService : Service() {
         const val ACTION_USER_STOP = "io.ampbox.muxterm.VOICE_USER_STOP"
         const val EXTRA_STATE = "state"
 
-        /** Grace period before an idle microphone tears the session down. */
-        private const val IDLE_STOP_MS = 8_000L
+        /**
+         * Grace period before an idle microphone tears the session down.
+         *
+         * Deliberately generous. Tearing the service down mid-conversation is
+         * the exact failure this wrapper exists to prevent, and a momentary gap
+         * in the recording configuration - a device switch, a barge-in restart -
+         * must not be mistaken for the user hanging up. The cost of being slow
+         * here is a stale notification for a minute; the cost of being quick is
+         * a silenced microphone.
+         */
+        private const val IDLE_STOP_MS = 60_000L
 
         /**
          * If capture never starts at all - getUserMedia rejected, no microphone
          * on the device - give up rather than leave an ongoing notification
          * attached to a session that never happened.
          */
-        private const val NEVER_STARTED_MS = 25_000L
+        private const val NEVER_STARTED_MS = 60_000L
 
         /**
          * Set by the service, read by the Activity. One voice session at a time,
