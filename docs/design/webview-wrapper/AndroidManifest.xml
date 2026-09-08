@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Reference manifest for the muxterm webview wrapper (design artifact).
+
+  This is the ENTIRE delta from an empty Android app. Six permissions, one
+  activity, one service. If this file grows, W3's boundary has been crossed.
+
+  Every line traces to a citation in docs/design/webview-wrapper.md W1.2.
+  Written 2026-09-08 against the platform documentation of that date; NOT
+  compiled, because this machine has no Android SDK.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Load the web app. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      The runtime permission the microphone foreground service requires.
+      Android 12+: a microphone FGS CANNOT be created while the app is in the
+      background, and cannot be created at all without this granted. Both are
+      why VoiceSessionService is started from a visible Activity, on a tap.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!--
+      Android 14+: startForeground() without the type-specific permission
+      throws SecurityException. All three are normal permissions, granted at
+      install, not revocable by the user.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <!--
+      Android 13+: runtime permission. NOT required to launch the FGS — the
+      service still runs if the user denies it, the notification just is not
+      shown. So voice must never be gated on this.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      Deliberately NOT declared, and each absence is a decision:
+
+        REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            Would help against vendor battery managers. Play requires a
+            declared, reviewable justification for it. Add it only when a
+            real device shows it is needed, with that justification written.
+
+        WAKE_LOCK
+            The foreground service is what keeps the process alive. A partial
+            wake lock on top is cargo cult until something proves otherwise.
+
+        CAMERA / READ_MEDIA_*
+            Not until attachments are actually built. A permission declared
+            before it is used is a permission that shows up in the store
+            listing and gets asked about.
+    -->
+
+    <application
+        android:label="muxterm"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          android:foregroundServiceType MUST list every type ever passed to
+          startForeground(). Passing an undeclared type throws
+          IllegalArgumentException; omitting the attribute entirely throws
+          MissingForegroundServiceTypeException on Android 14+.
+
+          Declared: both. Passed at runtime: only what the session uses, per
+          the platform's own guidance to declare the minimum per use case.
+        -->
+        <service
+            android:name=".VoiceSessionService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|mediaPlayback" />
+
+    </application>
+</manifest>
