@@ -912,7 +912,30 @@ type Hub struct {
 	// beside resolvedConfig rather than on the Client. Nothing is spawned
 	// until a browser sends cos-subscribe or cos-turn.
 	cos *cosRelay
+
+	// attachFailures counts CONSECUTIVE attachClient failures across all
+	// browsers, reset by the first success. Guarded by mu.
+	//
+	// It exists because attachClient fails in roughly zero milliseconds when
+	// the daemon socket is missing: dial returns ENOENT immediately, Add
+	// removes the client, the WebSocket closes, and the browser reconnects
+	// about once a second forever. The user watches a "reconnecting" spinner
+	// that is telling them a lie -- nothing is going to reconnect, because the
+	// daemon is unreachable for a structural reason no amount of retrying
+	// fixes. A hundred silent retries is worse than one honest error.
+	attachFailures int
 }
+
+// attachFailureNoticeThreshold is how many consecutive attach failures are
+// tolerated before the browser is told the truth instead of being left to
+// spin.
+//
+// Small on purpose. A genuinely transient failure -- a daemon restarting under
+// a self-update, say -- resolves within one or two attempts, so three is past
+// the point where "it is still coming up" remains a credible explanation, but
+// early enough that the user has waited about three seconds rather than
+// minutes.
+const attachFailureNoticeThreshold = 3
 
 // Remotes returns the hub's remote host registry, or nil when there is none.
 func (h *Hub) Remotes() *RemoteRegistry {
@@ -1140,14 +1163,85 @@ func (h *Hub) attachClient(c *Client) error {
 // Add registers a client in the hub and attaches its daemon connection. If
 // attachment fails the client is immediately removed so the WebSocket is
 // closed and the browser can reconnect rather than hanging in a broken state.
+//
+// After attachFailureNoticeThreshold CONSECUTIVE failures it stops letting the
+// browser reconnect in silence and sends it a diagnosis first. That bound is
+// the whole point: without it, a structurally-unreachable daemon presents as an
+// endless spinner and nothing anywhere -- not the UI, not the log, not the
+// browser console -- ever says what is actually wrong.
 func (h *Hub) Add(c *Client) {
 	h.mu.Lock()
 	h.clients[c] = true
 	h.mu.Unlock()
-	if err := h.attachClient(c); err != nil {
-		log.Printf("Add: attachClient error: %v", err)
-		h.Remove(c)
+
+	err := h.attachClient(c)
+
+	h.mu.Lock()
+	if err == nil {
+		h.attachFailures = 0
+	} else {
+		h.attachFailures++
 	}
+	failures := h.attachFailures
+	h.mu.Unlock()
+
+	if err == nil {
+		return
+	}
+
+	// Log only at the threshold and every threshold-multiple after it. The
+	// per-attempt log this replaces produced hundreds of identical lines a
+	// minute, which buried the one line that mattered.
+	if failures%attachFailureNoticeThreshold == 0 {
+		log.Printf("Add: attachClient failed %d consecutive times: %v", failures, err)
+	}
+
+	if failures >= attachFailureNoticeThreshold {
+		c.sendDaemonUnreachable(failures, err)
+	}
+	h.Remove(c)
+}
+
+// sendDaemonUnreachable tells the browser the daemon cannot be reached, and
+// why, so the reconnect overlay can stop claiming a reconnection is in
+// progress.
+//
+// It is sent immediately before the WebSocket is closed. The frame is written
+// to the socket before the close, and browsers deliver queued messages ahead of
+// the close event, so the surface has the diagnosis in hand by the time it
+// learns the connection went away.
+func (c *Client) sendDaemonUnreachable(attempts int, cause error) {
+	detail := daemonUnreachableDetail(cause)
+	data, err := json.Marshal(map[string]any{
+		"type":     sessiond.TypeError,
+		"code":     sessiond.CodeDaemonUnreachable,
+		"error":    fmt.Sprintf("Cannot reach the muxterm session daemon (%d attempts).", attempts),
+		"detail":   detail,
+		"attempts": attempts,
+	})
+	if err != nil {
+		log.Printf("sendDaemonUnreachable: marshal error: %v", err)
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("sendDaemonUnreachable: write error: %v", err)
+	}
+}
+
+// daemonUnreachableDetail turns a dial failure into something a human can act
+// on. The stranded case gets its specific diagnosis and recovery command,
+// because that is the failure whose symptom -- a socket path that simply does
+// not exist while the daemon is demonstrably still running -- otherwise
+// requires reading /proc/net/unix by hand to understand.
+func daemonUnreachableDetail(cause error) string {
+	sock, sockErr := sessiond.SocketPath()
+	if sockErr == nil {
+		if stranded, ok := sessiond.FindStrandedListener(sock); ok {
+			return stranded.RecoveryHint()
+		}
+		return fmt.Sprintf("No daemon is listening on %s.\n\nStart one with: muxterm serve\nDiagnose with:  muxterm doctor\n\nUnderlying error: %v", sock, cause)
+	}
+	return fmt.Sprintf("Underlying error: %v", cause)
 }
 
 // Remove deletes a client from the hub, cancels every host session it holds

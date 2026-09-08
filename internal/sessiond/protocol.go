@@ -67,6 +67,14 @@ const (
 	CodePaneNotFound     = "pane-not-found"
 )
 
+// CodeDaemonUnreachable is ADDITIVE, post-v1, and is emitted by the SERVE
+// layer rather than by the daemon -- it is the one error that by definition
+// cannot come from a daemon, because it means no daemon could be reached. The
+// browser receives it after several consecutive failed attach attempts, so the
+// reconnect overlay can report the real problem instead of continuing to
+// promise a reconnection that will never happen.
+const CodeDaemonUnreachable = "daemon-unreachable"
+
 // Scrollback pagination message types (ADDITIVE, post-v1). These extend the
 // frozen protocol above without altering any existing constant or field:
 // TypeScrollbackPage is a client -> daemon request for one page of a pane's

@@ -98,6 +98,11 @@ func (s *Server) Registry() *Registry { return s.reg }
 // cancelled. It returns nil on a graceful (ctx-driven) shutdown and a non-nil
 // error only for an unexpected accept/listen failure.
 //
+// It REFUSES to start when another daemon is already listening on the socket
+// path (ClaimSocket returns ErrSocketOwned). This is the one guard that cannot
+// be bypassed: every way of starting a daemon -- systemd, EnsureDaemon, a dev
+// shim, or a bare `muxterm sessiond` typed by hand -- binds through here.
+//
 // It is the Unix-socket half only: everything from the cold-start workspace
 // onward lives in Serve, which is listener-agnostic.
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -108,7 +113,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
-	_ = os.Remove(s.socket)
+	// Ask before unlinking. ClaimSocket removes the name ONLY when nothing is
+	// listening behind it; when a live daemon owns it, this returns an error
+	// naming the path and the daemon refuses to start. See ClaimSocket for
+	// what binding over a live daemon actually costs.
+	if err := ClaimSocket(s.socket); err != nil {
+		return err
+	}
 
 	ln, err := net.Listen("unix", s.socket)
 	if err != nil {
