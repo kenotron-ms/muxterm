@@ -43,6 +43,15 @@ import {
 } from '../../lib/files-api.js';
 import { homeSessions } from '../../lib/home-sessions.js';
 import { isRemoteId } from '../../lib/host-ref.js';
+import {
+  absoluteURL,
+  fetchPublications,
+  formatTimeLeft,
+  publishFile,
+  revokePublication,
+  statusWord,
+  type Publication,
+} from '../../lib/publications-api.js';
 
 /**
  * A place this applet can be rooted at.
@@ -213,6 +222,30 @@ export class AppletFiles extends LitElement implements AppletElement {
 
   /** Bumped by the fleet subscription: the root picker is derived from it. */
   @state() private _fleetVersion = 0;
+
+  // ── Publishing ───────────────────────────────────────────────────────────
+  //
+  // Everything published from THIS machine, not just from this directory: a
+  // row has to know it is exposed, and the answer to "is this file public"
+  // does not live in the directory listing.
+  @state() private _pubs: Publication[] = [];
+  /** One sentence from the server when a publish or revoke was refused. */
+  @state() private _pubError = '';
+  /**
+   * The absolute path of the file whose publish is awaiting confirmation.
+   *
+   * A CONFIRM STEP EXISTS ON PURPOSE. Every other control in this applet
+   * navigates; this one puts a file on the public internet, and the row is one
+   * mis-click away from the row above it. The confirmation is inline and
+   * typographic rather than a modal, and it SAYS WHAT IT MEANS -- anyone with
+   * the link, live, and for how long -- because "are you sure?" is not
+   * informed consent.
+   */
+  @state() private _confirming: string | null = null;
+  /** Path with a request in flight, so the row can stop taking clicks. */
+  @state() private _busy = '';
+  /** Path whose link was just copied; clears itself after a moment. */
+  @state() private _copied = '';
 
   /** Where we are, or want to be. null means "the server's cwd". */
   private _path: string | null = loadPath();
@@ -472,6 +505,118 @@ export class AppletFiles extends LitElement implements AppletElement {
       text-decoration-color: color-mix(in srgb, var(--fail) 55%, transparent);
     }
 
+    /* ── PUBLISHED ────────────────────────────────────────────────────────
+       A file with a live public URL is marked TYPOGRAPHICALLY and with a
+       whole-row wash: the ↗ marker, the word in accent ink, brighter name,
+       heavier weight. Deliberately NOT a rounded card with one bolded edge --
+       that reads as generic chrome and carries no information the word
+       "public" does not already carry. */
+    .row.published {
+      background: color-mix(in srgb, var(--chrome-accent) 9%, transparent);
+    }
+    .row.published .nm {
+      color: var(--ink-1);
+      font-weight: 600;
+    }
+    .row.pubbroken {
+      background: color-mix(in srgb, var(--fail) 10%, transparent);
+    }
+    .row.confirm {
+      background: color-mix(in srgb, var(--need) 12%, transparent);
+    }
+
+    .pub {
+      margin-left: auto;
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: var(--s-2, 4px);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .pubmark {
+      color: var(--chrome-accent);
+      font-weight: 700;
+    }
+    .pubmark.bad,
+    .publbl.bad {
+      color: var(--fail);
+    }
+    .publbl {
+      color: var(--chrome-accent);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .left {
+      color: var(--ink-3);
+    }
+    .warnline {
+      color: var(--ink-2);
+      letter-spacing: 0.02em;
+    }
+
+    .act {
+      font: inherit;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 1;
+      color: var(--ink-3);
+      background: transparent;
+      border: 0;
+      padding: 2px 4px;
+      border-radius: var(--r-chip);
+      cursor: pointer;
+    }
+    .act:hover:not(:disabled) {
+      color: var(--ink-1);
+      background: var(--chrome-hover);
+    }
+    .act:focus-visible {
+      outline: 2px solid var(--chrome-accent);
+      outline-offset: -1px;
+    }
+    .act:disabled {
+      cursor: default;
+      opacity: 0.55;
+    }
+    .act.go {
+      color: var(--chrome-accent);
+      font-weight: 600;
+    }
+    .act.warn:hover:not(:disabled) {
+      color: var(--fail);
+    }
+    /* The offer is quiet until the row is under the pointer or holds focus.
+       opacity rather than display, so the button stays in the tab order and a
+       keyboard user reveals it by arriving at it. */
+    .act.quiet {
+      opacity: 0;
+    }
+    .row:hover .act.quiet,
+    .row:focus-within .act.quiet {
+      opacity: 1;
+    }
+    @media (hover: none) {
+      /* No pointer to hover with: the offer is simply always visible. */
+      .act.quiet {
+        opacity: 1;
+      }
+    }
+
+    /* One sentence, in the server's own words, when a publish or revoke was
+       refused. It sits above the tree because it is about an ACTION, not about
+       the listing -- the listing is still perfectly good. */
+    .puberr {
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      line-height: var(--lh-tight);
+      color: var(--fail);
+      padding: 0 var(--s-1) var(--s-4);
+      overflow-wrap: anywhere;
+    }
+
     /* First read of a directory. Not an empty state and not an error --
        just the honest word for "the request is out". */
     .hint {
@@ -617,6 +762,7 @@ export class AppletFiles extends LitElement implements AppletElement {
       if (path === null) this._serverCwd = listing.path;
       this._path = listing.path;
       savePath(listing.path);
+      void this._loadPubs();
     } catch (err) {
       if (this._abort !== ctrl) return; // aborted or superseded: not ours to report
       this._abort = null;
@@ -683,7 +829,9 @@ export class AppletFiles extends LitElement implements AppletElement {
     const l = this._listing;
     return html`
       <div class="body">
-        ${l ? this._renderHead(l) : nothing} ${this._renderPicker(l)} ${this._renderBody(l)}
+        ${l ? this._renderHead(l) : nothing} ${this._renderPicker(l)}
+        ${this._pubError === '' ? nothing : html`<div class="puberr">${this._pubError}</div>`}
+        ${this._renderBody(l)}
       </div>
     `;
   }
@@ -773,6 +921,156 @@ export class AppletFiles extends LitElement implements AppletElement {
     return html`<div class="tree">${up}${rows.map((e) => this._renderEntry(e, l.path))}</div>`;
   }
 
+  // -------------------------------------------------------------------------
+  // Publishing
+  // -------------------------------------------------------------------------
+
+  /**
+   * Refresh the publication list. Failure is DELIBERATELY SILENT for the list
+   * (a server too old to know the route, or a transient error, must not cost
+   * the user their file listing) but never for an action -- _publish and
+   * _revoke report in words.
+   */
+  private async _loadPubs(): Promise<void> {
+    try {
+      this._pubs = await fetchPublications();
+    } catch {
+      this._pubs = [];
+    }
+  }
+
+  /**
+   * The publication for `path`, if any.
+   *
+   * Matched on the PINNED path first and the requested path second, because
+   * the server publishes what a path RESOLVES to: publishing
+   * /w/current/doc.md through a symlinked directory pins /w/real/doc.md, and
+   * the row the user clicked is the one they typed.
+   */
+  private _pubFor(path: string): Publication | undefined {
+    return this._pubs.find((p) => p.path === path || p.requestedPath === path);
+  }
+
+  private async _publish(path: string): Promise<void> {
+    this._confirming = null;
+    this._busy = path;
+    this._pubError = '';
+    try {
+      await publishFile(path);
+      await this._loadPubs();
+    } catch (err) {
+      this._pubError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this._busy = '';
+    }
+  }
+
+  private async _revoke(p: Publication): Promise<void> {
+    this._busy = p.path;
+    this._pubError = '';
+    try {
+      await revokePublication(p.id);
+      await this._loadPubs();
+    } catch (err) {
+      this._pubError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this._busy = '';
+    }
+  }
+
+  /**
+   * Copy the link.
+   *
+   * navigator.clipboard needs a secure context, which muxterm has over https
+   * and on loopback but NOT over plain http to a LAN address -- a real
+   * deployment shape. So a failure is not swallowed: the URL is put on screen
+   * as selectable text instead, which is worse than a copy and much better
+   * than a button that silently does nothing.
+   */
+  private async _copy(p: Publication): Promise<void> {
+    const url = absoluteURL(p);
+    try {
+      await navigator.clipboard.writeText(url);
+      this._copied = p.path;
+      window.setTimeout(() => {
+        if (this._copied === p.path) this._copied = '';
+      }, 1600);
+    } catch {
+      this._pubError = `could not reach the clipboard from this page. The link is ${url}`;
+    }
+  }
+
+  /**
+   * The trailing zone of a file row.
+   *
+   * ⛔ NO CARD, NO SIDE BORDER. Published state is carried by a typographic
+   * marker, the ink, the weight, and a whole-row wash -- see the .pub* rules in
+   * styles. A rounded card with one bolded edge reads as generic chrome and
+   * says nothing that the word "public" in accent ink does not already say.
+   */
+  private _renderPub(path: string): TemplateResult {
+    const busy = this._busy === path;
+    const pub = this._pubFor(path);
+
+    if (pub) {
+      const word = statusWord(pub);
+      const bad = pub.status !== 'ok';
+      const left = pub.status === 'ok' ? formatTimeLeft(pub.secondsLeft) : '';
+      return html`<span class="pub">
+        <span class="${bad ? 'pubmark bad' : 'pubmark'}" aria-hidden="true">↗</span>
+        <span class="${bad ? 'publbl bad' : 'publbl'}" title="${pub.statusDetail || absoluteURL(pub)}"
+          >${word}</span
+        >
+        ${left === '' ? nothing : html`<span class="left">${left}</span>`}
+        <button
+          type="button"
+          class="act"
+          ?disabled="${busy}"
+          title="Copy the public link"
+          @click="${() => void this._copy(pub)}"
+        >
+          ${this._copied === path ? 'copied' : 'copy link'}
+        </button>
+        <button
+          type="button"
+          class="act warn"
+          ?disabled="${busy}"
+          title="Stop serving this link. It cannot recall anything already read."
+          @click="${() => void this._revoke(pub)}"
+        >
+          revoke
+        </button>
+      </span>`;
+    }
+
+    if (this._confirming === path) {
+      return html`<span class="pub confirming">
+        <span class="warnline">anyone with the link · live · 24h</span>
+        <button
+          type="button"
+          class="act go"
+          ?disabled="${busy}"
+          @click="${() => void this._publish(path)}"
+        >
+          publish
+        </button>
+        <button type="button" class="act" @click="${() => (this._confirming = null)}">cancel</button>
+      </span>`;
+    }
+
+    return html`<span class="pub">
+      <button
+        type="button"
+        class="act quiet"
+        ?disabled="${busy}"
+        title="Publish this file to a public URL anyone with the link can read"
+        @click="${() => (this._confirming = path)}"
+      >
+        ${busy ? 'publishing…' : 'publish'}
+      </button>
+    </span>`;
+  }
+
   private _renderEntry(e: FileEntry, dir: string): TemplateResult {
     const cls = [
       'row',
@@ -789,10 +1087,22 @@ export class AppletFiles extends LitElement implements AppletElement {
     >`;
     const glyph = html`<span class="ic">${icon(e.dir ? Folder : FileGlyph, { size: 13 })}</span>`;
     const name = html`<span class="nm">${e.name}</span>`;
-    // A directory navigates; a file is a name. No file viewer this round, so a
-    // file row is not a control at all rather than a control that does nothing.
+    // A directory navigates; a file is a name plus its publishing state. The
+    // name is still not a control -- there is no file viewer this round -- but
+    // the row now carries one, at its trailing edge.
     if (!e.dir) {
-      return html`<div class="${cls}" title="${e.name}">${mark}${glyph}${name}</div>`;
+      const path = dir.endsWith('/') ? `${dir}${e.name}` : `${dir}/${e.name}`;
+      const pub = this._pubFor(path);
+      const rowCls = [
+        cls,
+        pub ? (pub.status === 'ok' ? 'published' : 'pubbroken') : '',
+        this._confirming === path ? 'confirm' : '',
+      ]
+        .filter((c) => c !== '')
+        .join(' ');
+      return html`<div class="${rowCls}" title="${e.name}">
+        ${mark}${glyph}${name}${this._renderPub(path)}
+      </div>`;
     }
     const path = dir.endsWith('/') ? `${dir}${e.name}` : `${dir}/${e.name}`;
     return html`<button type="button" class="${cls}" title="${path}" @click="${() => this._go(path)}">

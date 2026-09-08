@@ -484,6 +484,7 @@ func runLocal(cfg Config) error {
 	srv := server.New(server.Config{
 		Addr:          cfg.Addr,
 		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
+		PublicDocFS:   mustSubFS(webstatic.PublicDist, "dist-public"),
 		ConfigPath:    config.DefaultPath(),
 		InitialConfig: resolved,
 		AuthServer:    authSrv,
@@ -611,6 +612,7 @@ func runServe(cfg Config) error {
 	srv := server.New(server.Config{
 		Addr:               addr,
 		StaticFS:           mustSubFS(webstatic.Dist, "dist"),
+		PublicDocFS:        mustSubFS(webstatic.PublicDist, "dist-public"),
 		NoAuth:             cfg.NoAuth,
 		ConfigPath:         config.DefaultPath(),
 		InitialConfig:      resolved,

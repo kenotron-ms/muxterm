@@ -205,8 +205,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMCPToolsListReturns24Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 24 tools
+// TestMCPToolsListReturns27Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 27 tools
 // in the expected order — all without a running sessiond daemon.
 //
 // This is the MANAGER surface: what a session that is not running inside a
@@ -219,8 +219,10 @@ func assertToolNames(t *testing.T, got, want []string) {
 // and the fleet trio (fleet_status, lane_transcript, session_send) to 21.
 // list_machines, which answers "which machines can I reach", took it to 22.
 // read_file and list_dir, which answer "what is IN a file on one of them",
-// took it to 24.
-func TestMCPToolsListReturns24Tools(t *testing.T) {
+// took it to 24. The publishing trio (publish_file, list_publications,
+// revoke_publication), which serves one pinned file to anonymous callers,
+// took it to 27.
+func TestMCPToolsListReturns27Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 	got := mcpToolNames(t, bin, "")
 
@@ -251,6 +253,10 @@ func TestMCPToolsListReturns24Tools(t *testing.T) {
 		"list_tunnels",
 		"create_tunnel",
 		"close_tunnel",
+		// 3 publishing tools (HTTP REST, registered via registerPublishTools)
+		"publish_file",
+		"list_publications",
+		"revoke_publication",
 		// 2 config tools (HTTP REST, registered via registerConfigTools)
 		"get_config",
 		"update_config",
@@ -305,6 +311,12 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 		"list_tunnels",
 		"create_tunnel",
 		"close_tunnel",
+		// 3 publishing tools, unchanged: publishing is not a destructive
+		// capability against the workspace this lane's report sits in, and a
+		// lane that can publish can hand a human a URL for what it produced.
+		"publish_file",
+		"list_publications",
+		"revoke_publication",
 		// 2 config tools, unchanged.
 		"get_config",
 		"update_config",
