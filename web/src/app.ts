@@ -1491,8 +1491,10 @@ export class MuxApp extends LitElement {
                 ></mux-dock>
               `}
           <!-- THE DASHBOARD. One surface: a conversation with the chief of
-               staff on the left, the fleet on the right, a shared 52px bar
-               across both and a divider you can drag between them.
+               staff on the left, the fleet on the right, a shared bar across
+               both -- one --mux-titlebar-height tall, the same token the
+               sidebar header beside it reads -- and a divider you can drag
+               between them.
 
                Covers .main-pane as an opaque absolute overlay. The dock
                underneath is NEVER unmounted: unmounting would risk dockview's
