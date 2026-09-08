@@ -259,7 +259,25 @@ export class MuxCos extends LitElement {
          dragged without any element moving under the pointer. */
       display: grid;
       grid-template-columns: var(--chat-w) 5px minmax(0, 1fr);
-      grid-template-rows: 52px minmax(0, 1fr);
+      /* D3. The top row is THE shared top-chrome height token -- the same one
+         <mux-title-bar> reads as --nav-h and <mux-sidebar>'s .header reads as
+         its height. This surface sits in the same top row as that sidebar
+         header, side by side, so a literal here (it was 52px) is an 8px step
+         between two things a person sees as one bar.
+
+         WHY THE TRACK AND NOT .topbar. .topbar is grid-area: top, so this
+         track is a hard floor and ceiling on it: an explicit height on .topbar
+         cannot win against a track that disagrees, it can only sit inside one
+         and leave a gap above the divider. The track is where the height is
+         actually decided, so the token goes here and .topbar stretches to it.
+         Declaring it in both places would be two places to forget, which is
+         the exact failure the token exists to prevent.
+
+         box-sizing is already handled: the shadow-root reset at the top of
+         this stylesheet makes everything in here border-box, so the 1px
+         border-bottom sits INSIDE the row rather than adding a pixel to it.
+         (mux-sidebar has to say so itself because it has no such reset.) */
+      grid-template-rows: var(--mux-titlebar-height, var(--mux-dock-height, 44px)) minmax(0, 1fr);
       grid-template-areas:
         'top top top'
         'chat grip dash';
@@ -357,7 +375,12 @@ export class MuxCos extends LitElement {
       pointer-events: none;
     }
 
-    /* -- TOPBAR ---------------------------------------------------------- */
+    /* -- TOPBAR ----------------------------------------------------------
+       Its HEIGHT is not here: it is the "top" grid track on :host, which is
+       --mux-titlebar-height, shared with <mux-title-bar> and <mux-sidebar>'s
+       .header. Do not add a height to this rule -- a height that disagrees
+       with the track cannot win it, it only opens a gap above the divider.
+       Read the comment on grid-template-rows above before changing either. */
     .topbar {
       grid-area: top;
       display: flex;
