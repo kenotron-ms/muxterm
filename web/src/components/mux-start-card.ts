@@ -1,12 +1,12 @@
 /**
- * mux-start-card.ts -- the sidebar's Dashboard card.
+ * mux-start-card.ts -- the sidebar's Mission Control card.
  *
- * Sits above the workspace cards. It is the door to the Dashboard from
+ * Sits above the workspace cards. It is the door to Mission Control from
  * anywhere, and it says one thing beyond its own name: whether anything is
  * waiting on you.
  *
  * IT SHOWS NO COUNT. It used to show a 26px number, and the number is gone on
- * purpose: the Dashboard shows no counts anywhere -- not sessions, not groups,
+ * purpose: Mission Control shows no counts anywhere -- not sessions, not groups,
  * not messages -- and the sidebar is not allowed to be the one place a number
  * survived. What replaced it is a dot, present or absent.
  *
@@ -64,7 +64,7 @@ export class MuxStartCard extends LitElement {
   /** How many workspaces contribute to `count`. Only shown when > 0. */
   @property({ type: Number }) spread = 0;
 
-  /** True when the Dashboard is the thing currently on screen. */
+  /** True when Mission Control is the thing currently on screen. */
   @property({ type: Boolean }) active = false;
 
   /** Key chord shown in the corner, e.g. "ctrl+`". Empty hides the chip. */
@@ -270,7 +270,7 @@ export class MuxStartCard extends LitElement {
     const zero = this.count === 0;
     const cls = `start ${zero ? 'zero' : ''} ${this.active ? 'here' : ''}`;
 
-    // The second line says WHERE the card takes you -- so while the Dashboard
+    // The second line says WHERE the card takes you -- so while Mission Control
     // is the thing on screen it must not still read "click to go there". The
     // spread is a shape, not a tally: "across 2 workspaces" tells you the
     // attention is scattered, which is a different fact from how many rows
@@ -288,7 +288,7 @@ export class MuxStartCard extends LitElement {
     // The card's whole body: its name, the one dot, and the line saying where
     // it takes you.
     const body = html`<div class="name">
-        Dashboard
+        Mission Control
         ${zero ? '' : html`<span class="dot"></span>`}
       </div>
       <div class="lbl">${lbl}</div>`;
@@ -304,7 +304,7 @@ export class MuxStartCard extends LitElement {
     //
     // A row shows a dot when that machine wants you, `?` when we cannot see it,
     // and nothing at all when it is clear. No numbers: this card is the door to
-    // the Dashboard, and the Dashboard counts nothing.
+    // Mission Control, and Mission Control counts nothing.
     const shown =
       this.split.length === 0
         ? body
@@ -353,13 +353,13 @@ export class MuxStartCard extends LitElement {
         type="button"
         class="${cls}"
         aria-label="${(this.active
-          ? `${need} Dashboard, current view.`
-          : `${need} Go to the Dashboard.`) + fleet}"
+          ? `${need} Mission Control, current view.`
+          : `${need} Go to Mission Control.`) + fleet}"
         aria-current="${this.active ? 'page' : 'false'}"
         @click="${this._onClick}"
       >
         <div class="head">
-          <span>dashboard</span>
+          <span>mission control</span>
           ${this.hint ? html`<span class="kb">${this.hint}</span>` : ''}
         </div>
         ${shown}

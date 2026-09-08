@@ -178,7 +178,7 @@ export class MuxTitleBar extends LitElement {
       pointer-events: none;
     }
 
-    /* The Dashboard's own title. Takes the space the brand and the
+    /* Mission Control's own title. Takes the space the brand and the
        breadcrumb between them used to, because on this surface neither has
        anything to say. */
     .title {
@@ -366,7 +366,7 @@ export class MuxTitleBar extends LitElement {
         ${needs ? html`<span class="needs-dot"></span>` : ''}
       </button>
       ${this.dashboardActive
-        ? html`<span class="title">Dashboard</span>`
+        ? html`<span class="title">Mission Control</span>`
         : html`
             <div class="brand">
               <span class="brand-dot"></span>

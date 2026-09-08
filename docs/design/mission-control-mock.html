@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>muxterm — Mission Control (design prototype, round one)</title>
+<title>muxterm — Mission Control (design prototype, tracking the shipped applets)</title>
 <!--
   Standalone artifact. No build step, no server, no network: open the file.
 
@@ -11,28 +11,36 @@
     # or: google-chrome docs/design/mission-control-mock.html
 
   WHAT THIS IS
-  A design prototype of muxterm's right-hand surface reimagined as MISSION
-  CONTROL: a host shell with a tab strip of pluggable APPLETS, replacing today's
-  hardcoded fleet pane and its pinned cards/tiles toggle.
+  A design prototype of muxterm's right-hand surface as MISSION CONTROL: a host
+  shell with a tab strip of pluggable APPLETS, in place of the hardcoded fleet
+  pane and its pinned cards/tiles toggle.
 
-  It changes no production behaviour. Every number, file, lane and pull request
-  below is FIXTURE DATA, marked as such on each applet exactly the way the real
-  Dashboard marks a fixture-populated fleet (mux-cos.ts `.fx`).
+  IT NO LONGER PROPOSES. The host and three applets are built — mux-applets.ts,
+  applet-dashboard.ts, applet-files.ts, applet-prs.ts — and this file now TRACKS
+  that implementation: the row shapes, the status column, the rail's contents
+  and the attention policy below are what the code does. WHERE THE TWO DIFFER,
+  THE CODE WINS and this file is wrong. The few things here that are still only
+  proposed say so where they appear.
+
+  Every number, file, lane and pull request below is FIXTURE DATA, marked as
+  such on each applet exactly the way the Dashboard applet marks a
+  fixture-populated fleet (applet-dashboard.ts `.fx`).
 
   The palette, spacing, type scale and card geometry are lifted verbatim from
   web/src/lib/theme.ts (CHROME_DARK / Tokyo Night) and
   web/src/components/mux-cos.ts, so this reads as the product rather than as a
-  wireframe. Where it invents something, the invention is the design proposal.
+  wireframe.
 
   WHAT TO LOOK AT
     · P1  the tab strip, and the control rail at its right end. The topbar has
           lost the cards/tiles toggle; the Dashboard applet now owns it.
     · P2  Dashboard — the fleet, one applet among several. Switch cards/tiles.
-    · P3  Files — a git-aware disk explorer. Toggle "changed only".
-    · P4  Pull Requests — ten PRs, six statuses, live check updates. Dismiss a
-          row and watch where it goes.
-    · P5  Chief-of-staff attention — two alternatives, side by side, below the
-          stage. Fire each and watch the surface react differently.
+    · P3  Files — a root PICKER over known worktrees, breadcrumbs, and git's own
+          letter in a fixed-width column. Toggle "changed only".
+    · P4  Pull Requests — open PRs across the worktrees this surface has seen.
+          Dismiss a row from the row; the rail grows `dismissed (N)`.
+    · P5  Attention — SETTLED, below the stage. Flag by default; take the wheel
+          only when asked, or after 90s untouched. Fire both and watch.
 
   The divider drags. The tabs switch. Nothing here talks to a network.
 -->
@@ -217,16 +225,6 @@ body.clean .gone{display:none}
   display:flex;align-items:center;gap:var(--s-4);font-family:var(--mono);
   font-size:var(--t-meta);color:var(--ink-3);font-variant-numeric:tabular-nums;
 }
-.btn{
-  font-size:var(--t-ui);font-weight:600;line-height:1;padding:8px 13px;
-  border-radius:var(--r-ctl);cursor:pointer;border:1px solid var(--edge);
-  background:var(--surface);color:var(--ink-1);
-}
-.btn:hover:not([disabled]){border-color:var(--chrome-accent)}
-.btn.pri{background:color-mix(in srgb,var(--chrome-accent) 20%,var(--surface));
-  border-color:color-mix(in srgb,var(--chrome-accent) 55%,transparent)}
-.btn.no{color:var(--ink-2)}
-
 /* the composer, verbatim geometry */
 .comp{position:relative;flex:none;padding:var(--s-4) var(--s-7) var(--s-6);background:var(--chrome-body)}
 .comp::before{
@@ -256,7 +254,7 @@ body.clean .gone{display:none}
 .grip::after{content:'';position:absolute;inset:0 -5px;cursor:col-resize}
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   P1 — THE APPLET HOST. Everything below this line is new surface.
+   P1 — THE APPLET HOST. Everything below this line is the applet surface.
    ═══════════════════════════════════════════════════════════════════════ */
 .dash{
   grid-area:dash;background:var(--chrome-bar);display:flex;flex-direction:column;
@@ -286,15 +284,17 @@ body.clean .gone{display:none}
   content:'';position:absolute;inset:0 0 auto 0;height:2px;background:var(--chrome-accent);
 }
 .tab:focus-visible{outline:2px solid var(--chrome-accent);outline-offset:-2px}
-/* P5-B: the badge a chief of staff raises on a tab it wants you to look at. */
-.tab .tbadge{
-  min-width:15px;height:15px;padding:0 4px;border-radius:8px;flex:none;
-  display:inline-grid;place-items:center;font-family:var(--mono);font-size:9px;
-  font-weight:700;line-height:1;background:var(--chrome-accent);color:var(--chrome-body);
-  animation:tbadge 1.4s ease-in-out 3;
+/* THE FLAG, verbatim from mux-applets.ts. Something on a tab you are not
+   looking at wants a human: a dot when it is one thing, the count when it is
+   more. It does not blink, pulse or slide — an animation on the edge of vision
+   pulls the eye off whatever you are actually reading, which is the precise
+   harm the attention policy exists to avoid. */
+.tab .flag{flex:none;width:6px;height:6px;border-radius:50%;background:var(--need)}
+.tab .flag.n{
+  width:auto;height:auto;border-radius:0;background:transparent;
+  font-family:var(--mono);font-size:var(--t-meta);font-variant-numeric:tabular-nums;
+  line-height:1;color:var(--need);
 }
-.tab .tbadge.urgent{background:var(--need)}
-@keyframes tbadge{0%,100%{opacity:1}50%{opacity:.35}}
 
 /* THE CONTROL RAIL. P1's answer to "where did cards/tiles go": the right end
    of the strip belongs to whichever applet is showing. The host paints the
@@ -322,18 +322,18 @@ body.clean .gone{display:none}
 .toggle:hover{color:var(--ink-1);border-color:var(--chrome-accent)}
 .toggle.on{color:var(--ink-1);background:color-mix(in srgb,var(--chrome-accent) 18%,var(--surface));
   border-color:color-mix(in srgb,var(--chrome-accent) 55%,transparent)}
-.live{
-  display:inline-flex;align-items:center;gap:var(--s-3);font-family:var(--mono);
-  font-size:var(--t-meta);color:var(--ink-3);white-space:nowrap;
-}
-.live .beat{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none;animation:beat 2s ease-in-out infinite}
-.live.off .beat{background:var(--ink-3);animation:none}
-@keyframes beat{0%,100%{opacity:1}50%{opacity:.25}}
 
 /* THE APPLET BODY. One scroller the host owns; the applet renders into it. */
 .appletbody{flex:1;min-height:0;overflow-y:auto;padding:var(--s-6)}
 
-/* the fixture banner, verbatim idiom from mux-cos.ts .fx */
+/* THE ONE EMPTY/ERROR PRESENTATION (D3.8), exported by the host as
+   appletEmpty() so three applets do not invent three idioms for the same
+   sentence. Both applets below use it. */
+.astate{max-width:34ch;margin:var(--s-7) auto;text-align:center;font-size:13px;
+  line-height:var(--lh-body);color:var(--ink-3)}
+
+/* the fixture marker, verbatim idiom from applet-dashboard.ts .fx:
+   a fixture-populated fleet must never be mistaken for a live one. */
 .fx{
   font-family:var(--mono);font-size:var(--t-meta);letter-spacing:.04em;
   text-transform:uppercase;color:var(--need);padding:0 var(--s-1) var(--s-4);
@@ -343,25 +343,10 @@ body.clean .gone{display:none}
   letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);
   padding:var(--s-6) var(--s-1) var(--s-4);
 }
-.grp:first-of-type{padding-top:0}
-
-/* ── P5: the banner the host paints when a chief of staff took the wheel ─── */
-.pointed{
-  display:flex;align-items:center;gap:var(--s-4);margin:0 0 var(--s-5);
-  padding:var(--s-4) var(--s-5);border-radius:var(--r-ctl);
-  border:1px solid color-mix(in srgb,var(--chrome-accent) 48%,transparent);
-  background:color-mix(in srgb,var(--chrome-accent) 10%,var(--surface));
-  font-size:var(--t-ui);color:var(--ink-1);
-}
-.pointed .lbl{
-  font-family:var(--mono);font-size:var(--t-meta);text-transform:uppercase;
-  letter-spacing:.06em;color:var(--chrome-accent);flex:none;
-}
-.pointed .x{
-  margin-left:auto;flex:none;border:0;background:transparent;color:var(--ink-3);
-  cursor:pointer;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
-}
-.pointed .x:hover{background:var(--chrome-hover);color:var(--ink-1)}
+/* The applet body opens with the fixture marker, so no group heading is
+   ever the first child — the same reason the shipped rule does nothing on the
+   Dashboard, kept so the two cannot drift. */
+.grp:first-child{padding-top:0}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    P2 — DASHBOARD APPLET. The existing fleet view, card geometry unchanged.
@@ -410,59 +395,84 @@ body.clean .gone{display:none}
 /* ═══════════════════════════════════════════════════════════════════════════
    P3 — FILES APPLET.
    ═══════════════════════════════════════════════════════════════════════ */
-.frepo{
-  display:flex;align-items:center;gap:var(--s-4);padding:0 var(--s-1) var(--s-5);
-  font-family:var(--mono);font-size:11px;color:var(--ink-3);
+/* ── WHERE YOU ARE. Breadcrumbs for the current path; the branch, dim, at the
+      right. Every crumb navigates, which is the only way up a listing that
+      shows one directory at a time. ────────────────────────────────────── */
+.fhead{
+  display:flex;align-items:baseline;gap:var(--s-4);min-width:0;
+  padding:0 var(--s-1) var(--s-3);
 }
-.frepo b{color:var(--ink-1);font-weight:600}
-.frepo .branch{color:var(--chrome-accent)}
+.crumbs{
+  display:flex;align-items:baseline;flex-wrap:wrap;min-width:0;
+  font-family:var(--mono);font-size:11px;line-height:var(--lh-tight);color:var(--ink-3);
+}
+.crumb{
+  font:inherit;color:var(--ink-3);background:transparent;border:0;
+  padding:1px 2px;border-radius:var(--r-chip);cursor:pointer;
+}
+.crumb:hover{color:var(--ink-1);background:var(--chrome-hover)}
+.crumbs .sep{opacity:.45}
+.crumbs .here{padding:1px 2px;color:var(--ink-1);font-weight:600}
+.fbranch{
+  margin-left:auto;flex:none;font-family:var(--mono);font-size:var(--t-meta);
+  line-height:var(--lh-tight);color:var(--ink-3);
+}
+/* git had nothing to say, and says why. The listing is NOT hidden. */
+.fnote{
+  font-family:var(--mono);font-size:var(--t-meta);line-height:var(--lh-tight);
+  color:var(--ink-3);padding:0 var(--s-1) var(--s-4);
+}
+
+/* ── WHICH ROOT. A <select> in the applet BODY, not the rail: the rail is
+      shared chrome painted by the host in the host's vocabulary, and a select
+      is not in that vocabulary. ───────────────────────────────────────── */
+.pick{display:flex;align-items:center;gap:var(--s-3);min-width:0;padding:0 var(--s-1) var(--s-5)}
+.pick .lbl{
+  flex:none;font-family:var(--mono);font-size:var(--t-meta);line-height:1;
+  letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);
+}
+.pick select{
+  font:inherit;font-family:var(--mono);font-size:11px;line-height:var(--lh-tight);
+  color:var(--ink-2);background:var(--surface);border:1px solid var(--edge);
+  border-radius:var(--r-ctl);padding:3px var(--s-3);min-width:0;max-width:100%;cursor:pointer;
+}
+.pick select:hover{color:var(--ink-1)}
+
+/* ── THE LISTING ─────────────────────────────────────────────────────────── */
 .ftree{display:flex;flex-direction:column;gap:1px}
 .frow{
   display:flex;align-items:center;gap:var(--s-3);width:100%;text-align:left;
   background:transparent;border:0;border-radius:var(--r-ctl);
-  padding:4px var(--s-4);cursor:pointer;color:var(--ink-3);
-  font-size:12px;line-height:1.4;min-width:0;
+  padding:3px var(--s-4);color:var(--ink-2);
+  font:inherit;font-size:12px;line-height:1.4;min-width:0;
 }
-.frow:hover{background:var(--chrome-hover)}
-.frow.sel{background:var(--chrome-hover);box-shadow:inset 2px 0 0 var(--chrome-accent)}
-.frow .tw{flex:none;width:12px;display:grid;place-items:center;color:var(--ink-3);opacity:.8}
+/* Only directories navigate, so only directories look pressable. A file row is
+   quiet, not disabled: it is not a broken control, it is simply a name. */
+button.frow{cursor:pointer}
+button.frow:hover{background:var(--chrome-hover)}
 .frow .ic{flex:none;color:var(--ink-3);display:grid;place-items:center}
 .frow .nm{
   min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-family:var(--mono);
 }
-.frow.dir .nm{color:var(--ink-2)}
-/* A file git has something to say about is bright and carries a status letter.
-   An unchanged file is dim and carries nothing. That is the whole distinction. */
+/* THE STATUS COLUMN. git's own letter, fixed width, in front of every row —
+   including the unchanged ones, which get a blank of the same width so the
+   column cannot jitter as a worktree goes dirty under you. */
+.mark{
+  flex:none;width:14px;text-align:center;font-family:var(--mono);
+  font-size:9.5px;font-weight:700;line-height:1;color:var(--ink-3);
+}
+.st-need{color:var(--need)}
+.st-ok{color:var(--ok)}
+.st-fail{color:var(--fail)}
+.st-dim{color:var(--ink-3)}
+/* A row git has something to say about is BRIGHT; an unchanged one is dim. The
+   letter carries which kind of change; this carries that there is one. */
 .frow.chg .nm{color:var(--ink-1)}
-.frow.chg.gM .nm{color:var(--need)}
-.frow.chg.gA .nm{color:var(--ok)}
-.frow.chg.gD .nm{color:var(--fail);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--fail) 55%,transparent)}
-.frow.chg.gU .nm{color:var(--ink-2)}
-.gst{
-  flex:none;font-family:var(--mono);font-size:9.5px;font-weight:700;line-height:1;
-  width:20px;text-align:center;padding:3px 0;border-radius:var(--r-chip);
-  border:1px solid transparent;
+.frow.st-fail .nm{
+  text-decoration:line-through;
+  text-decoration-color:color-mix(in srgb,var(--fail) 55%,transparent);
 }
-.gM .gst{color:var(--need);border-color:color-mix(in srgb,var(--need) 45%,transparent);
-  background:color-mix(in srgb,var(--need) 12%,transparent)}
-.gA .gst{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent);
-  background:color-mix(in srgb,var(--ok) 12%,transparent)}
-.gD .gst{color:var(--fail);border-color:color-mix(in srgb,var(--fail) 45%,transparent);
-  background:color-mix(in srgb,var(--fail) 12%,transparent)}
-.gU .gst{color:var(--ink-3);border-color:var(--edge)}
-.diffstat{
-  flex:none;font-family:var(--mono);font-size:10px;line-height:1;
-  font-variant-numeric:tabular-nums;white-space:nowrap;
-}
-.diffstat .a{color:var(--ok)}
-.diffstat .d{color:var(--fail)}
-.diffstat{margin-right:3px}
-.frow .sp{flex:1;min-width:var(--s-4)}
-/* A directory whose subtree contains changes wears one dot, so you can find
-   the change without opening every folder. */
-.dirdot{flex:none;width:5px;height:5px;border-radius:50%;background:var(--need);opacity:.85}
-.fempty{font-size:var(--t-ui);color:var(--ink-3);padding:var(--s-5) var(--s-1)}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    P4 — PULL REQUESTS APPLET.
@@ -475,130 +485,110 @@ body.clean .gone{display:none}
   transition:border-color var(--dur) ease,background var(--dur) ease,opacity var(--dur) ease;
 }
 .pr:hover{background:var(--chrome-hover)}
-.pr.s-open{border-left-color:var(--ok)}
-.pr.s-draft{border-left-color:var(--ink-3)}
-.pr.s-running{border-left-color:var(--work)}
-.pr.s-failed{border-left-color:var(--fail)}
-.pr.s-merged{border-left-color:var(--autonomous)}
-.pr.s-closed{border-left-color:var(--edge)}
+/* The left edge takes its colour from the CHECKS, and so does the number. No
+   checks configured is not the same claim as passing, so it gets no colour. */
+.pr.b-ok{border-left-color:var(--ok)}
+.pr.b-need{border-left-color:var(--need)}
+.pr.b-fail{border-left-color:var(--fail)}
+/* A dismissed row is present, quiet, and clearly put down. */
+.pr.dis{opacity:.62;border-style:dashed}
 .pr .core{flex:1;min-width:0;padding:9px var(--s-5);display:flex;flex-direction:column;gap:var(--s-2)}
-.pr .l1{display:flex;align-items:center;gap:var(--s-4);min-width:0}
+.pr .l1{display:flex;align-items:center;gap:var(--s-4);min-width:0;flex-wrap:wrap}
 .pr .num{
   font-family:var(--mono);font-size:11.5px;font-weight:700;color:var(--ink-3);flex:none;
-  font-variant-numeric:tabular-nums;
+  line-height:var(--lh-tight);font-variant-numeric:tabular-nums;
 }
+.pr .num.b-ok{color:var(--ok)}
+.pr .num.b-need{color:var(--need)}
+.pr .num.b-fail{color:var(--fail)}
 .pr .ttl{
-  font-size:12.5px;font-weight:600;line-height:var(--lh-tight);color:var(--ink-1);
-  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  flex:1;font-size:12.5px;font-weight:600;line-height:var(--lh-tight);color:var(--ink-1);
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none;
 }
+.pr .ttl:hover{text-decoration:underline}
 .pr .l2{
-  display:flex;align-items:center;gap:var(--s-4);min-width:0;
-  font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
+  display:flex;align-items:center;gap:var(--s-4);min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--mono);font-size:10.5px;line-height:var(--lh-tight);color:var(--ink-3);
 }
-.pr .l2 .lane{
-  color:var(--ink-2);cursor:pointer;border-bottom:1px dotted var(--edge);
+/* ONE badge geometry — draft, checks, review decision. A modifier supplies
+   COLOUR and nothing else, so three chips cannot become three shapes. */
+.badge{
+  flex:none;font-family:var(--mono);font-size:var(--t-meta);line-height:var(--lh-tight);
+  letter-spacing:.04em;text-transform:uppercase;padding:1px var(--s-2);
+  border:1px solid var(--edge);border-radius:var(--r-chip);color:var(--ink-3);white-space:nowrap;
 }
-.pr .l2 .lane:hover{color:var(--chrome-accent);border-bottom-color:var(--chrome-accent)}
-.pr .l2 .sep{opacity:.5}
-.st{
-  flex:none;display:inline-flex;align-items:center;gap:var(--s-2);
-  font-family:var(--mono);font-size:9.5px;font-weight:700;line-height:1;
-  letter-spacing:.04em;text-transform:uppercase;padding:3px 6px;
-  border-radius:var(--r-chip);border:1px solid var(--edge);color:var(--ink-3);
-}
-.st.open{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 48%,transparent);
-  background:color-mix(in srgb,var(--ok) 10%,transparent)}
-.st.draft{color:var(--ink-3)}
-.st.running{color:var(--work);border-color:color-mix(in srgb,var(--work) 48%,transparent);
-  background:color-mix(in srgb,var(--work) 10%,transparent)}
-.st.running svg{animation:spin 1.6s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-.st.failed{color:var(--fail);border-color:color-mix(in srgb,var(--fail) 48%,transparent);
-  background:color-mix(in srgb,var(--fail) 10%,transparent)}
-.st.merged{color:var(--autonomous);border-color:color-mix(in srgb,var(--autonomous) 48%,transparent);
-  background:color-mix(in srgb,var(--autonomous) 10%,transparent)}
-.st.closed{color:var(--ink-3);border-color:var(--edge)}
-.rv{
-  flex:none;font-family:var(--mono);font-size:9.5px;line-height:1;padding:3px 6px;
-  border-radius:var(--r-chip);border:1px solid var(--edge);color:var(--ink-3);
-}
-.rv.appr{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
-.rv.chg{color:var(--need);border-color:color-mix(in srgb,var(--need) 40%,transparent)}
-/* The dismiss affordance. One target, at the trailing edge, full row height,
-   so it is never hunted for and never hit by accident on the way somewhere. */
+.badge.b-ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent);
+  border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+.badge.b-need{color:var(--need);background:color-mix(in srgb,var(--need) 12%,transparent);
+  border-color:color-mix(in srgb,var(--need) 45%,transparent)}
+.badge.b-fail{color:var(--fail);background:color-mix(in srgb,var(--fail) 12%,transparent);
+  border-color:color-mix(in srgb,var(--fail) 45%,transparent)}
+/* THE DISMISS AFFORDANCE, in the row and not in the rail (D3.9). One target,
+   at the trailing edge, full row height, so it is never hunted for and never
+   hit by accident on the way somewhere. */
 .pr .dz{
   flex:none;width:34px;border:0;border-left:1px solid var(--chrome-border);
   background:transparent;color:var(--ink-3);cursor:pointer;display:grid;place-items:center;
 }
 .pr .dz:hover{background:color-mix(in srgb,var(--fail) 16%,transparent);color:var(--fail)}
+/* Picking a row back up. The only way a dismissed row returns. */
+.pr .undo{
+  flex:none;align-self:center;margin-right:var(--s-5);font:inherit;font-family:var(--mono);
+  font-size:10.5px;line-height:1;color:var(--ink-2);background:transparent;
+  border:1px solid var(--edge);border-radius:var(--r-ctl);padding:4px var(--s-4);cursor:pointer;
+}
+.pr .undo:hover{color:var(--ink-1);border-color:var(--chrome-accent)}
 .pr.flash{animation:flash 1.1s ease-out 2}
 @keyframes flash{0%{background:color-mix(in srgb,var(--chrome-accent) 26%,var(--surface))}100%{background:var(--surface)}}
 .pr.pointed-row{border-color:var(--chrome-accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--chrome-accent) 45%,transparent)}
 
-/* the undo strip that stands in the dismissed row's place */
-.undo{
-  display:flex;align-items:center;gap:var(--s-4);padding:9px var(--s-5);
-  border:1px dashed var(--edge);border-radius:var(--r-card);
-  font-family:var(--mono);font-size:11px;color:var(--ink-3);
-}
-.undo b{color:var(--ink-2);font-weight:600}
-.undo button{
-  margin-left:auto;background:transparent;border:1px solid var(--edge);color:var(--ink-2);
-  border-radius:var(--r-ctl);padding:3px 9px;font-size:10.5px;cursor:pointer;font-family:var(--mono);
-}
-.undo button:hover{color:var(--ink-1);border-color:var(--chrome-accent)}
-
-/* where dismissed rows go */
-.dismissed{margin-top:var(--s-6)}
-.dishead{
-  display:flex;align-items:center;gap:var(--s-4);width:100%;text-align:left;
-  background:transparent;border:0;border-top:1px solid var(--chrome-border);
-  padding:var(--s-5) var(--s-1) var(--s-4);cursor:pointer;
-  font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.07em;
-  text-transform:uppercase;color:var(--ink-3);
-}
-.dishead:hover{color:var(--ink-2)}
-.dishead .ct{
-  font-variant-numeric:tabular-nums;border:1px solid var(--edge);border-radius:var(--r-chip);
-  padding:2px 6px;font-size:9.5px;
-}
-.dispanel{display:flex;flex-direction:column;gap:var(--s-4);padding-top:var(--s-2)}
-.pr.dis{opacity:.42;border-left-color:var(--edge);background:transparent}
-.pr.dis:hover{opacity:.72;background:var(--chrome-hover)}
-.pr.dis .ttl{color:var(--ink-3);font-weight:400}
-.pr.dis .dz{color:var(--ink-3)}
-.pr.dis .dz:hover{background:color-mix(in srgb,var(--chrome-accent) 16%,transparent);color:var(--chrome-accent)}
+/* What dismissal means, in words, where it is done. */
 .dnote{
-  font-family:var(--mono);font-size:var(--t-meta);color:var(--ink-3);
-  padding:var(--s-2) var(--s-1) 0;
+  margin:0 0 var(--s-4);padding:0 var(--s-1);
+  font-size:11.5px;line-height:var(--lh-body);color:var(--ink-3);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   P5 — the two alternatives, presented side by side.
+   P5 — the settled attention policy, and the log that proves it ran.
    ═══════════════════════════════════════════════════════════════════════ */
 .two{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:var(--s-6)}
-.alt{
+.arm{
   border:1px solid var(--chrome-border);border-radius:var(--r-card);
   background:var(--chrome-body);padding:var(--s-5);display:flex;flex-direction:column;gap:var(--s-4);
 }
-.alt.armed{border-color:var(--chrome-accent)}
-.alt h3{
+.arm.fired{border-color:var(--chrome-accent)}
+.arm h3{
   font-size:var(--t-name);font-weight:600;color:var(--ink-1);
   display:flex;align-items:baseline;gap:var(--s-4);
 }
-.alt h3 .tag{
+.arm h3 .tag{
   font-family:var(--mono);font-size:var(--t-meta);text-transform:uppercase;
   letter-spacing:.08em;color:var(--chrome-accent);flex:none;
 }
-.alt p{margin:0;font-size:var(--t-ui);color:var(--ink-2);line-height:var(--lh-body)}
-.tradeoff{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--s-3)}
-.tradeoff li{
-  display:flex;gap:var(--s-4);font-size:11.5px;line-height:1.45;color:var(--ink-3);
+.arm p{margin:0;font-size:var(--t-ui);color:var(--ink-2);line-height:var(--lh-body)}
+.arm .go{margin-top:auto;padding-top:var(--s-3)}
+
+/* THE DECISION LOG. One line per applet-attention event, written by the same
+   function that decides — so what it says and what the surface did cannot
+   drift apart. */
+.log{
+  margin-top:var(--s-6);border:1px solid var(--chrome-border);border-radius:var(--r-card);
+  background:var(--chrome-body);padding:var(--s-5);
+  font-family:var(--mono);font-size:11px;line-height:1.5;color:var(--ink-3);
+  display:flex;flex-direction:column;gap:var(--s-2);
 }
-.tradeoff li .s{flex:none;font-family:var(--mono);font-weight:700;width:12px}
-.tradeoff li.plus .s{color:var(--ok)}
-.tradeoff li.minus .s{color:var(--fail)}
-.alt .go{margin-top:auto;padding-top:var(--s-3)}
+.log .hd{
+  font-size:var(--t-meta);letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ink-3);padding-bottom:var(--s-2);
+}
+.log .ln{display:flex;flex-wrap:wrap;gap:var(--s-4);align-items:baseline}
+.log .ev{color:var(--ink-2)}
+.log .idle{opacity:.8;font-variant-numeric:tabular-nums}
+.log .verdict{font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.log .ln.jump .verdict{color:var(--chrome-accent)}
+.log .ln.flag .verdict{color:var(--need)}
+.log .ln.drop .verdict{color:var(--ink-3)}
 
 table.read{border-collapse:collapse;font-size:var(--t-ui);width:100%}
 table.read th,table.read td{
@@ -621,12 +611,19 @@ table.read td:first-child{color:var(--ink-3);font-family:var(--mono);font-size:1
 
 svg{display:inline-block;vertical-align:middle;flex-shrink:0;pointer-events:none}
 
-/* Narrow viewports are explicitly out of scope this round (see D3). The stage
-   simply stops being a two-column surface rather than pretending. */
+/* PORTRAIT, as shipped: the applet host is hidden outright, every applet is
+   inactive, and in the product the fleet moves to a bottom sheet that renders
+   the SAME Dashboard applet — not a second copy of the fleet. Files and Pull
+   Requests are unreachable there; the sheet carries the Dashboard only. That
+   is the honest state and not a regression, since neither existed before.
+
+   This prototype does what the product does with the host and does NOT
+   reproduce the sheet, so below 900px the conversation is all there is. Read
+   it on a desktop. */
 @media (max-width:900px){
   .stage{grid-template-columns:minmax(0,1fr);grid-template-rows:52px minmax(0,1fr);
-    grid-template-areas:'top' 'dash'}
-  .chat,.grip{display:none}
+    grid-template-areas:'top' 'chat'}
+  .dash,.grip{display:none}
 }
 </style>
 </head>
@@ -634,7 +631,7 @@ svg{display:inline-block;vertical-align:middle;flex-shrink:0;pointer-events:none
 
 <div class="bar">
   <span class="dot"></span>
-  <b>muxterm</b><span>Mission Control — design prototype, round one</span>
+  <b>muxterm</b><span>Mission Control — design prototype, tracking the shipped applets</span>
   <span class="sp"></span>
   <span class="pill warn">fixture data · not production</span>
   <button class="pbtn" id="annBtn" type="button" aria-pressed="true">annotations: on</button>
@@ -643,7 +640,7 @@ svg{display:inline-block;vertical-align:middle;flex-shrink:0;pointer-events:none
 
 <main>
 
-  <div class="cap"><span>the surface</span><span class="rule"></span><span>drag the divider · switch tabs · dismiss a PR</span></div>
+  <div class="cap"><span>the surface</span><span class="rule"></span><span>drag the divider · switch tabs · pick a root · dismiss a PR</span></div>
 
   <!-- ══ THE STAGE ══════════════════════════════════════════════════════ -->
   <div class="stage" id="stage" data-view="cards">
@@ -652,7 +649,7 @@ svg{display:inline-block;vertical-align:middle;flex-shrink:0;pointer-events:none
     <div class="topbar">
       <h1>Mission Control</h1>
       <span class="spacer"></span>
-      <span class="gone" title="Removed from the topbar in this design: the Dashboard applet now owns it, in the control rail on the right of the tab strip">cards | tiles</span>
+      <span class="gone" title="Gone from the topbar: the Dashboard applet owns it now, in the control rail at the right end of the tab strip">cards | tiles</span>
       <button class="dots" type="button" aria-label="Conversation options" id="dotsBtn"></button>
     </div>
 
@@ -679,53 +676,157 @@ svg{display:inline-block;vertical-align:middle;flex-shrink:0;pointer-events:none
   </div>
 
   <!-- ══ P5 ════════════════════════════════════════════════════════════ -->
-  <section class="card">
-    <h2>P5 — how the chief of staff draws you to a view</h2>
+  <section class="card" id="attention">
+    <h2>P5 — attention: settled. flag by default, take the wheel only when nobody is here</h2>
     <p class="note" style="margin-top:0">
-      Both are implementable; they differ in who decides when you look. Fire each and watch the
-      surface above. <b>Neither is picked here</b> — the trade-off is the deliverable.
+      Round one put two alternatives side by side. They are not alternatives any more. The policy is
+      <b>flag by default; take the wheel only when the user asked, or when the surface has been idle
+      past a threshold</b> — <code>IDLE_MS = 90s</code> in the shipped host — and
+      <b>urgency alone never promotes a flag to a jump</b>.
+    </p>
+    <p class="note">
+      That last part is enforced by the SHAPE of the event rather than by a rule someone has to
+      remember: <code>applet-attention</code> carries <code>applet</code> and an optional
+      <code>count</code>, and <b>no severity field at all</b>. An applet convinced its news is
+      important has nothing to argue up with.
     </p>
     <div class="two" style="margin-top:var(--s-6)">
 
-      <div class="alt" id="altA">
-        <h3><span class="tag">alt A</span> it takes the wheel</h3>
+      <div class="arm" id="armFlag">
+        <h3><span class="tag">flag</span> a lane blocks while you are reading</h3>
         <p>
-          The chief of staff calls <code>show(applet, target)</code>. The host switches the visible
-          applet, scrolls the row into view, flashes it, and paints a banner saying who brought you
-          here and why. The banner is dismissible and leaves no residue.
+          The surface moves to Files first, because the story needs you to be reading something else.
+          Then a lane blocks. The Dashboard tab takes a flag — a dot when it is one thing, the count
+          when it is more — and <b>the surface does not move</b>. Press it again and another lane
+          blocks: the count replaces rather than adds, so two reports of three lanes mean three.
         </p>
-        <ul class="tradeoff">
-          <li class="plus"><span class="s">+</span><span>Zero clicks. The thing that needs you is on screen the instant it happens.</span></li>
-          <li class="plus"><span class="s">+</span><span>The reason travels with the jump, so the surface is never mysteriously different.</span></li>
-          <li class="minus"><span class="s">−</span><span>It steals the surface. If you were three levels into Files, you lose your place.</span></li>
-          <li class="minus"><span class="s">−</span><span>Two events in quick succession fight each other; the second wins and the first is never seen.</span></li>
-          <li class="minus"><span class="s">−</span><span>Nothing is left behind to acknowledge, so a jump you missed while looking away is simply gone.</span></li>
-        </ul>
-        <div class="go"><button class="pbtn primary" type="button" id="fireA">fire alt A — #79 checks fail</button></div>
+        <div class="go">
+          <button class="pbtn primary" type="button" id="fireFlag">a lane blocks while you are reading</button>
+        </div>
       </div>
 
-      <div class="alt" id="altB">
-        <h3><span class="tag">alt B</span> it raises a flag</h3>
+      <div class="arm" id="armWheel">
+        <h3><span class="tag">wheel</span> a lane blocks after 90s of no interaction</h3>
         <p>
-          The chief of staff calls <code>flag(applet, target, urgency)</code>. The host badges the tab
-          and offers an inline <b>show me</b> in the conversation. The visible applet does not change.
-          The badge survives until you look.
+          The same event with the same fields, and one difference: nobody has touched this surface in
+          a minute and a half, so moving it costs them nothing. The host switches tabs and leaves no
+          flag behind. Then, a second later, a second thing wants a human in the same idle window —
+          and it only gets a flag, because <b>the jump recorded a gesture</b> and the surface never
+          yanks twice in a row.
         </p>
-        <ul class="tradeoff">
-          <li class="plus"><span class="s">+</span><span>Never steals focus. What you were doing survives what just happened.</span></li>
-          <li class="plus"><span class="s">+</span><span>Badges accumulate, so three events in a minute are three counts, not one survivor.</span></li>
-          <li class="plus"><span class="s">+</span><span>The badge is the acknowledgement receipt: it is still there when you come back from lunch.</span></li>
-          <li class="minus"><span class="s">−</span><span>Costs a click, and a badge that is never clicked is a thing that never got seen.</span></li>
-          <li class="minus"><span class="s">−</span><span>Needs an escalation rule, or a genuinely urgent event looks exactly like a routine one.</span></li>
-        </ul>
-        <div class="go"><button class="pbtn primary" type="button" id="fireB">fire alt B — #79 checks fail</button></div>
+        <div class="go">
+          <button class="pbtn primary" type="button" id="fireWheel">a lane blocks after 90s of no interaction</button>
+        </div>
       </div>
 
     </div>
+
+    <div class="log" id="log"></div>
+
     <p class="note">
-      <b>What is NOT settled:</b> whether the two coexist under one policy (flag by default, take the
-      wheel only when you asked for it or the surface is idle), and whether a third shape — peek, a
-      transient overlay that reverts — is worth building. Carried into D3 of the design note.
+      The log is written by the same function that decides, so it cannot describe a jump the surface
+      did not make. <b>The second event in the wheel demo comes from Pull Requests</b>, because the
+      difference is only visible on a tab you are not on. What the shipped applet can actually notice
+      today is narrower: it polls only while active, so its red-check diff is dormant until
+      pull-request state arrives from something that keeps watching while you are elsewhere. The
+      host's decision is what this demonstrates, and that part is built.
+    </p>
+    <p class="note">
+      Not built: a banner explaining the move. Round one proposed one; the shipped host paints
+      nothing extra when it takes the wheel — it clears the flag, and the surface is simply there.
+    </p>
+  </section>
+
+  <!-- the host, when you are not looking -->
+  <section class="card">
+    <h2>what the host does while you are not looking</h2>
+    <p class="note" style="margin-top:0">
+      The tab strip <b>mounts every applet all the time</b> and hides all but one, so scroll
+      position, an open disclosure and where you had navigated to all survive a trip to another tab
+      and back. That is exactly why the inactive rule needs teeth: hiding a thing does not stop it
+      working, so the host tells each applet whether it is <code>active</code>, and
+      <b>an inactive applet must go quiet</b> — drop its timers, its subscriptions, and the request
+      that was already on the wire. (This prototype re-renders one applet into one body, because
+      three mounted applets buy a mock nothing. The claim is about the shipped host.)
+    </p>
+    <p class="note">
+      <b>Measured, not asserted.</b> With Pull Requests active its 60s poll fired: 1 request at T0,
+      3 by T+75s. Switching away froze it — still 3 after 140 further seconds inactive, more than
+      two poll intervals with nothing on the wire. The Files applet, mounted for the whole session
+      but never activated, issued <b>zero</b> requests.
+    </p>
+    <p class="note">
+      <b>The one documented exception is the Dashboard's</b>, and it is documented as one: it keeps a
+      store subscription while inactive, and its entire inactive response to a fleet change is one
+      integer comparison — no re-render, no DOM, no fetch, no timer. It opens nothing, polls nothing
+      and paints nothing. Without it the surface cannot tell you a lane blocked while you were
+      reading a diff, and a flag you only get when you look is not a flag.
+    </p>
+    <p class="note">
+      <b>Portrait.</b> The host is inert — every applet inactive, so the contract's one rule holds
+      for free on a phone — and the bottom sheet renders the <b>same Dashboard applet</b> rather than
+      a second copy of the fleet. <b>Files and Pull Requests are unreachable in portrait</b>: the
+      sheet carries the Dashboard only. That is the honest state and not a regression, because
+      neither applet existed before. Giving the sheet the tab strip, with the rail collapsed into a
+      <code>⋯</code> menu, is still the right sketch and still unbuilt.
+    </p>
+  </section>
+
+  <!-- P3 annotations -->
+  <section class="card">
+    <h2>P3 — what Files is rooted at, and why the letters are letters</h2>
+    <p class="note" style="margin-top:0">
+      <b>A picker over known roots, not the active pane's cwd.</b> With eleven worktrees on this
+      machine a single root is wrong within a day; pane-scoping it would make the Files tab mean
+      something different every time focus moved. The candidates are the distinct project paths of
+      the live fleet, plus the server's own working directory as the fallback. The picker sits in the
+      applet <b>body</b> and not the rail, because the rail is shared chrome painted in the host's
+      vocabulary and a <code>&lt;select&gt;</code> is not in that vocabulary.
+    </p>
+    <p class="note">
+      <b>The status column carries git's own letter</b> — <code>M A D ? R U</code> for modified,
+      added, deleted, untracked, renamed and conflicted — in a fixed-width leading column
+      <i>and</i> a colour. The letter is the point: the distinction survives a grayscale screenshot
+      pasted into a ticket, and it survives a light palette. Unchanged rows get a blank of the same
+      width so the column cannot jitter as a worktree goes dirty under you, and a directory shows
+      <code>M</code> when anything beneath it changed — "there is something in here" is all a
+      rolled-up row can honestly say.
+    </p>
+    <p class="note">
+      <b>A root's real identity is <code>(machine, path)</code>, not <code>path</code>:</b> two
+      worktrees on two machines can share a path and are not the same place. The shipped row already
+      carries the <code>machine</code> field, empty meaning this one. Remote roots arrive when
+      read-only cross-machine file reads land — branch <code>feat/remote-read-only-fs</code>, PR #92,
+      unmerged — and this round lists <b>local roots only</b>, because offering a root we cannot open
+      would be a lie told in a dropdown. When #92 lands the change here is: stop filtering remote
+      sessions out, and pass <code>machine</code> through. No row shape changes.
+    </p>
+  </section>
+
+  <!-- P4 annotations -->
+  <section class="card">
+    <h2>P4 — where these pull requests actually come from</h2>
+    <p class="note" style="margin-top:0">
+      <b>Not the sessiond watchlist.</b> What shipped asks the host's own already-authenticated
+      <code>gh</code> over the repos of every root the browser has ever seen — the live fleet's local
+      project paths, <i>union everything it has scanned before</i>. The remembering is the
+      load-bearing part: a lane that exits takes its row out of the fleet at exactly the moment you
+      want to know what it opened.
+    </p>
+    <p class="note">
+      <b>What that is not, plainly.</b> It is not <i>attribution</i>: no GitHub API can say which
+      lane opened a pull request, and this applet does not claim to — which is why no row here names
+      one. It is not <i>durable</i>: a browser-local memory dies with the profile and is invisible to
+      every other client. The durable answer is the D2 watchlist owned by sessiond, fed by
+      <code>muxterm session report --pr N</code> — <b>which still nothing calls</b> — with
+      dismissals in a separate store so a re-scan cannot resurrect them. That is a follow-on, named
+      rather than half-built, and the row shape does not change when it lands.
+    </p>
+    <p class="note">
+      <b>Dismissal is muxterm state and never GitHub state</b>, keyed
+      <code>owner/repo#number</code>, and nothing is ever pruned from the set. A dismissed row never
+      comes back on its own — not when its checks go red, not when a later scan finds it again. A
+      dismissal that undoes itself is not a dismissal.
     </p>
   </section>
 
@@ -733,15 +834,16 @@ svg{display:inline-block;vertical-align:middle;flex-shrink:0;pointer-events:none
   <section class="card">
     <h2>what this prototype is claiming</h2>
     <ul class="look">
-      <li><span class="k">P1</span><span><b>The shell.</b> The title is <b>Mission Control</b>. The topbar carries the title and the <code>⋯</code> menu, and nothing else — the struck-through <span class="gone" style="text-decoration:line-through">cards | tiles</span> marks where the toggle used to be pinned. Applet-owned controls live in the <b>control rail</b> at the right end of the tab strip, inside the applet host. The rail's contents change with the tab; the host paints the rail, the applet fills it.</span></li>
-      <li><span class="k">P2</span><span><b>Dashboard.</b> The fleet view, unchanged in geometry — same fixed-height card contract, same three groups (<code>wants you</code> / <code>working</code> / <code>done</code>), same 3px state border. Its cards/tiles switch is now <b>its own</b>, in the rail. The <code>#84</code> chips on cards are new: a proposal for the seam between applets. Click one.</span></li>
-      <li><span class="k">P3</span><span><b>Files.</b> Changed files are bright and carry a status letter and a diffstat; unchanged files are dim and carry nothing. A closed directory containing changes wears one dot. <b>changed only</b> in the rail collapses it to just the work.</span></li>
-      <li><span class="k">P4</span><span><b>Pull Requests.</b> Ten PRs across six statuses. Checks tick live (the rail says how stale the view is, and can be paused). Each row dismisses from the trailing edge; a dashed undo strip stands in its place, then it moves to <b>dismissed</b> at the bottom, dimmed, where it can be watched again. Dismiss means <i>stop watching</i>, never <i>close the PR</i>.</span></li>
-      <li><span class="k">P5</span><span><b>Attention.</b> Two alternatives above, both live on this surface.</span></li>
+      <li><span class="k">P1</span><span><b>The shell.</b> The surface is <b>Mission Control</b>; the applet is <b>Dashboard</b>; "chief of staff" is the role the assistant plays, and muxterm is the product. The topbar carries the title and the <code>⋯</code> menu and nothing else — the struck-through <span class="gone" style="text-decoration:line-through">cards | tiles</span> marks where the toggle used to be pinned. Applet-owned controls live in the <b>control rail</b> at the right end of the tab strip. The host paints the rail; the applet fills it, in the host's vocabulary, and nothing destructive is allowed there.</span></li>
+      <li><span class="k">P2</span><span><b>Dashboard.</b> The fleet view, moved in whole and unchanged in geometry — same fixed-height card contract, same three groups (<code>wants you</code> / <code>working</code> / <code>done</code>), same 3px state border. Its cards/tiles switch is now <b>its own</b>, in the rail, and there is exactly one of it. The <code>#84</code> chips on cards are still a <b>proposal</b>: navigating from one applet to another is settled and allowed from a user gesture, but nothing in the shipped code fires <code>applet-navigate</code> yet. Click one anyway.</span></li>
+      <li><span class="k">P3</span><span><b>Files.</b> One directory at a time: a <b>root picker</b> over known worktrees, clickable <b>breadcrumbs</b>, the branch dim at the right, and git's own letter in a fixed-width column with a blank of the same width where there is no change. Directories navigate; files are names, because no row opens a file this round. <b>changed only</b> in the rail collapses the listing to just the work.</span></li>
+      <li><span class="k">P4</span><span><b>Pull Requests.</b> Every open pull request across the worktrees this surface has seen. A row is the number (coloured by checks), the title as a link, one badge geometry for <code>draft</code> / checks / review decision, and branch · author · age underneath. <b>Dismiss is an X in the row</b>, never in the rail; the rail carries only <code>dismissed (N)</code>, and it is absent entirely when nothing is dismissed. Dismiss means <i>stop showing it here</i>, never <i>close the PR</i>.</span></li>
+      <li><span class="k">P5</span><span><b>Attention.</b> One settled policy, demonstrated above: flag by default, the wheel only when you asked or after 90s untouched, and no way for a caller to argue urgency.</span></li>
     </ul>
     <p class="note">
       Companion design note: <code>docs/design/mission-control.md</code> — the applet contract (D1),
-      where pull-request data comes from (D2), and the decisions this round deliberately left open (D3).
+      where pull-request data comes from (D2), and "Round two", where every decision round one left
+      open gets an answer. Where this file and the code disagree, the code is right.
     </p>
   </section>
 
@@ -756,21 +858,13 @@ const P = {
   grid:'<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
   dash:'<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
   folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
-  folderOpen:'<path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
   file:'<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  cornerLeftUp:'<path d="M14 9 9 4 4 9"/><path d="M20 20h-7a4 4 0 0 1-4-4V4"/>',
   pr:'<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/>',
-  merge:'<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
   ellipsis:'<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
   x:'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   check:'<path d="M20 6 9 17l-5-5"/>',
   arrowUp:'<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
-  chevR:'<path d="m9 18 6-6-6-6"/>',
-  chevD:'<path d="m6 9 6 6 6-6"/>',
-  loader:'<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
-  alert:'<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
-  eyeOff:'<path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/>',
-  eye:'<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
-  dot:'<circle cx="12" cy="12" r="4"/>',
 };
 function svg(name, size){
   return '<svg xmlns="http://www.w3.org/2000/svg" width="'+size+'" height="'+size+
@@ -896,95 +990,155 @@ const HOME_GROUPS = ['Needs input','Running','Completed'];
 const GROUP_LABEL = {'Needs input':'wants you', Running:'working', Completed:'done'};
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   FIXTURE DATA — the Files applet. A flat list carrying its own depth, which
-   is all a tree needs when collapse is the only structural operation.
-   git: '' unchanged | 'M' modified | 'A' added | 'D' deleted | 'U' untracked
+   FIXTURE DATA — the Files applet.
+
+   ONE DIRECTORY AT A TIME, which is what shipped: a listing, breadcrumbs and a
+   picker over roots. So the fixture is a map from absolute path to that
+   directory's entries, already in the server's order — directories first, then
+   files, each case-insensitive.
+
+   `g` is the wire's own word, verbatim from files-api.ts FileStatus:
+   '' | modified | added | deleted | untracked | renamed | conflicted.
+   Directories carry no `g`: their status is ROLLED UP from what is under them
+   (dirRollup below), so the fixture cannot lie about itself.
    ═══════════════════════════════════════════════════════════════════════ */
-const FILES = [
-  {d:0,k:'dir', n:'docs',                     open:true},
-  {d:1,k:'dir', n:'design',                   open:true},
-  {d:2,k:'file',n:'mission-control-mock.html',git:'A',a:1043,r:0},
-  {d:2,k:'file',n:'mission-control.md',       git:'A',a:246, r:0},
-  {d:1,k:'dir', n:'research',                 open:false},
-  {d:2,k:'file',n:'voice-orb-mock.html'},
-  {d:2,k:'file',n:'voice-orb-verdicts.md'},
-  {d:1,k:'file',n:'session-state-protocol.md',git:'M',a:18,r:4},
-  {d:1,k:'file',n:'design.md'},
-
-  {d:0,k:'dir', n:'internal',                 open:true},
-  {d:1,k:'dir', n:'mcp',                      open:true},
-  {d:2,k:'file',n:'fleet.go',                 git:'M',a:12,r:1},
-  {d:2,k:'file',n:'run.go'},
-  {d:2,k:'file',n:'tools_lane.go'},
-  {d:1,k:'dir', n:'sessiond',                 open:false},
-  {d:2,k:'file',n:'sessionstate.go',          git:'M',a:6,r:0},
-  {d:2,k:'file',n:'sessionstore.go'},
-  {d:2,k:'file',n:'reaper.go'},
-  {d:1,k:'dir', n:'server',                   open:false},
-  {d:2,k:'file',n:'cos.go'},
-
-  {d:0,k:'dir', n:'web',                      open:true},
-  {d:1,k:'dir', n:'src',                      open:true},
-  {d:2,k:'dir', n:'applets',                  open:true, git:'U'},
-  {d:3,k:'file',n:'applet-dashboard.ts',      git:'U',a:311,r:0},
-  {d:3,k:'file',n:'applet-files.ts',          git:'U',a:198,r:0},
-  {d:3,k:'file',n:'applet-prs.ts',            git:'U',a:274,r:0},
-  {d:2,k:'dir', n:'components',               open:true},
-  {d:3,k:'file',n:'mux-cos.ts',               git:'M',a:184,r:57},
-  {d:3,k:'file',n:'mux-home.ts'},
-  {d:3,k:'file',n:'title-bar.ts',             git:'M',a:3,r:3},
-  {d:3,k:'file',n:'mux-sidebar.ts'},
-  {d:2,k:'dir', n:'lib',                      open:false},
-  {d:3,k:'file',n:'applet-registry.ts',       git:'U',a:96,r:0},
-  {d:3,k:'file',n:'fleet-view.ts',            git:'D',a:0,r:41},
-  {d:3,k:'file',n:'theme.ts'},
-  {d:1,k:'file',n:'index.html'},
-
-  {d:0,k:'file',n:'.muxterm-scratch.log',     git:'U',a:0,r:0},
-  {d:0,k:'file',n:'AGENTS.md'},
-  {d:0,k:'file',n:'go.mod'},
-  {d:0,k:'file',n:'README.md'},
+const ROOTS = [
+  {path:'/home/ken/workspace/muxterm',                   branch:'main'},
+  {path:'/home/ken/workspace/muxterm-mission-control-2', branch:'feat/mission-control-applets'},
+  {path:'/home/ken/workspace/muxterm-remote-read',       branch:'feat/remote-read-only-fs'},
 ];
-const GIT_WORD = {M:'modified', A:'added', D:'deleted', U:'untracked'};
+
+const RA = '/home/ken/workspace/muxterm-mission-control-2';
+const RB = '/home/ken/workspace/muxterm';
+const RC = '/home/ken/workspace/muxterm-remote-read';
+
+const DIRS = {
+  /* Above the worktrees. Outside any repo, so git is not consulted at all and
+     every row is blank — the listing survives, which is the point. */
+  '/':                   [{n:'home',d:1}],
+  '/home':               [{n:'ken',d:1}],
+  '/home/ken':           [{n:'workspace',d:1},{n:'.bashrc'}],
+  '/home/ken/workspace': [{n:'muxterm',d:1},{n:'muxterm-mission-control-2',d:1},
+                          {n:'muxterm-remote-read',d:1}],
+
+  /* The worktree this file was written in: one of every status. */
+  [RA]: [{n:'docs',d:1},{n:'internal',d:1},{n:'web',d:1},
+         {n:'.muxterm-scratch.log',g:'untracked'},{n:'AGENTS.md',g:'modified'},
+         {n:'ARCHITECTURE.md',g:'renamed'},{n:'CHANGELOG.md',g:'deleted'},
+         {n:'go.mod'},{n:'go.sum',g:'conflicted'},{n:'README.md'},
+         {n:'SMOKE_TESTS.md',g:'added'}],
+  [RA+'/docs']:              [{n:'design',d:1},{n:'research',d:1},
+                              {n:'README.md'},{n:'session-state-protocol.md',g:'modified'}],
+  [RA+'/docs/design']:       [{n:'mission-control-mock.html',g:'modified'},
+                              {n:'mission-control.md',g:'modified'},{n:'voice-orb.md'}],
+  [RA+'/docs/research']:     [{n:'voice-orb-mock.html'},{n:'voice-orb-verdicts.md'}],
+  [RA+'/internal']:          [{n:'server',d:1},{n:'sessiond',d:1}],
+  [RA+'/internal/server']:   [{n:'cos.go'},{n:'files_api.go',g:'added'},
+                              {n:'prs_api.go',g:'added'},{n:'server.go',g:'modified'}],
+  [RA+'/internal/sessiond']: [{n:'reaper.go'},{n:'sessionstate.go'},{n:'sessionstore.go'}],
+  [RA+'/web']:               [{n:'src',d:1},{n:'index.html'},{n:'package.json'}],
+  [RA+'/web/src']:           [{n:'components',d:1},{n:'lib',d:1}],
+  [RA+'/web/src/components']:[{n:'applets',d:1},{n:'mux-applets.ts',g:'added'},
+                              {n:'mux-cos.ts',g:'modified'},{n:'mux-home.ts'},
+                              {n:'title-bar.ts',g:'modified'}],
+  [RA+'/web/src/components/applets']:[{n:'applet-dashboard.ts',g:'added'},
+                              {n:'applet-files.ts',g:'added'},{n:'applet-prs.ts',g:'added'}],
+  [RA+'/web/src/lib']:       [{n:'applet-registry.ts',g:'added'},{n:'files-api.ts',g:'added'},
+                              {n:'fleet-view.ts',g:'deleted'},{n:'prs-api.ts',g:'added'},
+                              {n:'theme.ts'}],
+
+  /* A clean worktree. Switch the picker to it and `changed only` has nothing
+     to show, which is a state worth being able to look at. */
+  [RB]: [{n:'docs',d:1},{n:'internal',d:1},{n:'web',d:1},
+         {n:'AGENTS.md'},{n:'go.mod'},{n:'README.md'}],
+  [RB+'/docs']:              [{n:'design.md'},{n:'mission-control.md'},
+                              {n:'session-state-protocol.md'}],
+  [RB+'/internal']:          [{n:'server',d:1},{n:'sessiond',d:1}],
+  [RB+'/internal/server']:   [{n:'cos.go'},{n:'server.go'}],
+  [RB+'/internal/sessiond']: [{n:'reaper.go'},{n:'sessionstore.go'}],
+  [RB+'/web']:               [{n:'src',d:1},{n:'index.html'}],
+  [RB+'/web/src']:           [{n:'components',d:1},{n:'lib',d:1}],
+  [RB+'/web/src/components']:[{n:'mux-cos.ts'},{n:'mux-home.ts'},{n:'title-bar.ts'}],
+  [RB+'/web/src/lib']:       [{n:'session-state.ts'},{n:'theme.ts'}],
+
+  /* PR #92's worktree — still a LOCAL root, because this round can only read
+     this machine's filesystem. */
+  [RC]: [{n:'internal',d:1},{n:'web',d:1},
+         {n:'AGENTS.md'},{n:'README.md'},{n:'TODO-remote-read.md',g:'untracked'}],
+  [RC+'/internal']:         [{n:'server',d:1}],
+  [RC+'/internal/server']:  [{n:'files_api.go',g:'modified'},{n:'fs_remote.go',g:'added'},
+                             {n:'machines.go',g:'modified'}],
+  [RC+'/web']:              [{n:'src',d:1}],
+  [RC+'/web/src']:          [{n:'lib',d:1}],
+  [RC+'/web/src/lib']:      [{n:'files-api.ts',g:'modified'},{n:'host-ref.ts'}],
+};
+
+/* THE STATUS COLUMN, from applet-files.ts. git's own letters, so anyone who
+   has read `git status --short` already knows them; the whole word goes on the
+   mark's title for anyone who has not. */
+const STATUS_MARK = {'':'', modified:'M', added:'A', deleted:'D',
+                     untracked:'?', renamed:'R', conflicted:'U'};
+/* Colour per status: --need, --ok, --fail, --ink-3. Nothing invented. */
+const STATUS_CLASS = {'':'', modified:'st-need', renamed:'st-need', added:'st-ok',
+                      deleted:'st-fail', conflicted:'st-fail', untracked:'st-dim'};
 
 /* ═══════════════════════════════════════════════════════════════════════════
    FIXTURE DATA — the Pull Requests applet.
-   status: open | draft | running | failed | merged | closed
+
+   OPEN pull requests only, which is all the route lists, across the worktrees
+   this surface has seen. Field names are the wire's, verbatim from prs-api.ts:
+   key, repo, number, title, isDraft, checks, reviewDecision, headRefName,
+   author, url, updatedAt — with `age` standing in for the last of those, since
+   nothing here has a clock.
+
+   checks: '' | pending | passing | failing. '' means no checks are configured,
+   which is NOT the same claim as passing, so it gets no colour.
+   NO LANE FIELD, deliberately: no GitHub API can say which lane opened a pull
+   request, so a row that named one would be inventing it.
    ═══════════════════════════════════════════════════════════════════════ */
+const REPO = 'kenotron-ms/muxterm';
 const PRS = [
+  {num:92, title:'feat: read-only cross-machine file reads', branch:'feat/remote-read-only-fs',
+   draft:true,  checks:'pending', review:'',                  author:'kenotron-ms', age:'4h'},
   {num:84, title:'fix: title-bar height and the brand row', branch:'fix/titlebar-height',
-   status:'open',    checks:'4/4', review:'appr', lane:'dashboard polish', age:'1h'},
+   draft:false, checks:'passing', review:'APPROVED',          author:'kenotron-ms', age:'1h'},
   {num:80, title:'fix: new workspace lands in the current group', branch:'fix/sidebar-new-workspace-in-group',
-   status:'running', checks:'2/4', review:'', lane:'sidebar remote groups', age:'11m'},
+   draft:false, checks:'pending', review:'REVIEW_REQUIRED',   author:'kenotron-ms', age:'11m'},
   {num:79, title:'feat: streaming markdown render in the chat pane', branch:'feat/streaming-markdown-render',
-   status:'failed',  checks:'3/4', review:'chg', lane:'streaming markdown', age:'12m',
-   why:'lint (web) failed'},
+   draft:false, checks:'failing', review:'CHANGES_REQUESTED', author:'kenotron-ms', age:'12m'},
   {num:78, title:'fix: chief-of-staff stream durability across reconnects', branch:'fix/cos-stream-durability',
-   status:'failed',  checks:'2/4', review:'', lane:'stream durability', age:'2h',
-   why:'go vet failed'},
+   draft:false, checks:'failing', review:'',                  author:'kenotron-ms', age:'2h'},
   {num:77, title:'fix: a lane whose harness exits is marked failed', branch:'fix/lane-lifecycle',
-   status:'draft',   checks:'1/4', review:'', lane:'lane lifecycle', age:'26m'},
+   draft:true,  checks:'pending', review:'',                  author:'kenotron-ms', age:'26m'},
   {num:76, title:'research: realtime voice, sideband architecture', branch:'research/realtime-voice',
-   status:'draft',   checks:'0/4', review:'', lane:'voice research', age:'6h'},
-  {num:73, title:'Dashboard polish: brand, markdown, title-bar height, no shell for the sidecar',
-   branch:'fix/dashboard-brand-markdown-titlebar',
-   status:'open',    checks:'4/4', review:'', lane:'', age:'2d',
-   note:'opened by hand \u2014 the one real row in this fixture'},
-  {num:72, title:'fix: sidebar duplicate New Workspace entry', branch:'fix/sidebar-duplicate-new-workspace',
-   status:'closed',  checks:'—',   review:'', lane:'', age:'5h', why:'superseded by #80'},
-  {num:71, title:'chore: chief-of-staff verification harness', branch:'chore/cos-verification-harness',
-   status:'merged',  checks:'4/4', review:'appr', lane:'cos verification harness', age:'3h'},
-  {num:68, title:'fix: single service-control surface', branch:'fix/single-service-control-surface',
-   status:'merged',  checks:'4/4', review:'appr', lane:'', age:'3d'},
+   draft:true,  checks:'',        review:'',                  author:'kenotron-ms', age:'6h'},
 ];
-const ST_LABEL = {open:'open', draft:'draft', running:'checks running', failed:'checks failed',
-                  merged:'merged', closed:'closed'};
-const ST_ICON  = {open:'pr', draft:'pr', running:'loader', failed:'alert',
-                  merged:'merge', closed:'x'};
+/* The key is the server's: "owner/name#number", because a number alone
+   collides across repos. It is what the dismissal set is written in. */
+PRS.forEach(p => { p.repo = REPO; p.key = REPO + '#' + p.num;
+                   p.url = 'https://github.com/' + REPO + '/pull/' + p.num; });
+
+/* GitHub's review decision, in this view's words and colours. Anything else
+   renders verbatim and uncoloured rather than disappearing. */
+function reviewChip(d){
+  if (d === 'APPROVED')          return {label:'approved',          cls:'b-ok'};
+  if (d === 'CHANGES_REQUESTED') return {label:'changes requested', cls:'b-fail'};
+  if (d === 'REVIEW_REQUIRED')   return {label:'review required',   cls:'b-need'};
+  return {label:d.toLowerCase().replace(/_/g,' '), cls:''};
+}
+/* The number and the row's left edge take their colour from the checks. */
+function checksTone(c){
+  if (c === 'passing') return 'b-ok';
+  if (c === 'failing') return 'b-fail';
+  if (c === 'pending') return 'b-need';
+  return '';
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   THE APPLET REGISTRY. Round one hardcodes three built-ins; the SHAPE is the
-   design proposal, described properly in D1 of the companion note.
+   THE APPLET REGISTRY. Three built-ins, a module-level array, and no plugin
+   loader: third-party applets are out of scope and not designed for. The
+   shipped registry is the same shape — id, label, icon, element, optional
+   rail — described properly in D1 of the companion note.
    ═══════════════════════════════════════════════════════════════════════ */
 const APPLETS = [
   {id:'dashboard', label:'Dashboard',     icon:'dash',   render:renderDashboard, rail:railDashboard},
@@ -997,18 +1151,19 @@ const S = {
   applet:'dashboard',
   view:'cards',            // dashboard applet
   changedOnly:false,       // files applet
-  selectedFile:null,
-  collapsed:new Set(['research','sessiond','server','lib']),
-  dismissed:[],            // pr numbers, most recent first
+  path:RA,                 // files applet: the directory on screen
+  dismissed:[],            // prs applet: keys ("owner/name#number")
   showDismissed:false,
-  undo:null,               // {num, at}
-  live:true,               // prs applet
-  lastTick:0,
-  badges:{},               // appletId -> {n, urgent}
-  banner:null,             // {applet, text, target}
-  attention:null,          // 'A' | 'B' | null
-  chatExtra:[],
+  live:true,               // the scripted check ticker; ?frozen=1 stops it
+  flags:{},                // appletId -> count. Never holds the current tab.
+  lastGesture:0,           // when a person last touched this surface
+  log:[],                  // one entry per applet-attention event
 };
+
+/* The shipped host's threshold, verbatim (mux-applets.ts IDLE_MS). It is a
+   claim about the PERSON rather than about the data: someone who has not
+   touched this surface in a minute and a half is not reading it. */
+const IDLE_MS = 90000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -1018,11 +1173,16 @@ const $ = (id) => document.getElementById(id);
 function renderTabs(){
   const a = APPLETS.map(ap => {
     const on = S.applet === ap.id;
-    const b = S.badges[ap.id];
+    const n = S.flags[ap.id] || 0;
+    /* A dot at one, the number above one: "1" beside a label is noise, and the
+       dot already says the only thing one waiting thing has to say. */
+    const flag = n <= 0 ? ''
+      : (n === 1 ? '<span class="flag" aria-hidden="true"></span>'
+                 : '<span class="flag n" aria-hidden="true">'+n+'</span>');
     return '<button class="tab" type="button" role="tab" data-applet="'+ap.id+'" '+
-      'aria-selected="'+(on?'true':'false')+'">'+
-      svg(ap.icon, 13)+'<span>'+esc(ap.label)+'</span>'+
-      (b ? '<span class="tbadge'+(b.urgent?' urgent':'')+'">'+b.n+'</span>' : '')+
+      'aria-selected="'+(on?'true':'false')+'"'+
+      (n > 0 ? ' aria-label="'+esc(ap.label)+', '+n+' needing attention"' : '')+'>'+
+      svg(ap.icon, 13)+'<span>'+esc(ap.label)+'</span>'+ flag +
       '</button>';
   }).join('');
   const rail = (APPLETS.find(x => x.id === S.applet).rail || (()=>''))();
@@ -1031,21 +1191,20 @@ function renderTabs(){
 
 function renderApplet(){
   const ap = APPLETS.find(x => x.id === S.applet);
-  const banner = (S.banner && S.banner.applet === S.applet)
-    ? '<div class="pointed"><span class="lbl">chief of staff</span>'+
-      '<span>'+esc(S.banner.text)+'</span>'+
-      '<button class="x" type="button" data-act="closebanner" aria-label="Dismiss">'+svg('x',13)+'</button></div>'
-    : '';
-  $('appletbody').innerHTML = banner + '<div class="fx">fixture</div>' + ap.render();
+  $('appletbody').innerHTML = '<div class="fx">fixture</div>' + ap.render();
   $('appletbody').setAttribute('aria-label', ap.label);
 }
 
 function paint(){ renderTabs(); renderApplet(); renderChat(); $('stage').dataset.view = S.view; }
 
+/* Point the host at an applet. Everything that reaches this is a gesture — a
+   tab click, a deep link, or the promotion test switching on your behalf — so
+   it switches immediately and unconditionally, and RECORDS a gesture. That the
+   host counts its own jump is deliberate: the surface never yanks twice. */
 function go(appletId, opts){
   S.applet = appletId;
-  delete S.badges[appletId];
-  if (opts && opts.banner) S.banner = {applet:appletId, text:opts.banner};
+  S.lastGesture = Date.now();
+  delete S.flags[appletId];   // you have seen it, which is all a flag claimed
   paint();
   if (opts && opts.flash){
     const el = document.querySelector('[data-pr="'+opts.flash+'"]');
@@ -1099,166 +1258,186 @@ function fleetCard(s){
 /* ═══════════════════════════════════════════════════════════════════════════
    P3 — FILES APPLET
    ═══════════════════════════════════════════════════════════════════════ */
+/* The rail is ONE toggle. Nothing else: the count that used to sit beside it
+   said what the listing already says, and a rail should stay quiet. */
 function railFiles(){
-  const n = FILES.filter(f => f.k === 'file' && f.git).length;
-  return '<span class="live off" style="letter-spacing:.04em">'+n+' changed</span>'+
-    '<button type="button" class="toggle '+(S.changedOnly?'on':'')+'" data-act="changedonly" '+
-    'aria-pressed="'+S.changedOnly+'">changed only</button>';
+  return '<button type="button" class="toggle '+(S.changedOnly?'on':'')+'" data-act="changedonly" '+
+    'aria-pressed="'+S.changedOnly+'" title="Show only what git has something to say about">'+
+    'changed only</button>';
 }
 
-/* Which directories contain a change somewhere beneath them. Computed rather
-   than declared, so the fixture cannot lie about itself. */
-function dirsWithChanges(){
-  const marked = new Set();
-  const stack = [];
-  FILES.forEach((f, i) => {
-    while (stack.length && stack[stack.length-1].d >= f.d) stack.pop();
-    if (f.k === 'file' && f.git) stack.forEach(d => marked.add(d.i));
-    if (f.k === 'dir') stack.push({d:f.d, i});
+/* Which root a path is under; the longest match wins, and null means "not in a
+   worktree", which is a degraded listing rather than an error. */
+function rootFor(path){
+  let best = null;
+  ROOTS.forEach(r => {
+    if (path !== r.path && path.indexOf(r.path + '/') !== 0) return;
+    if (!best || r.path.length > best.path.length) best = r;
   });
-  return marked;
+  return best;
 }
+
+/* A directory's status is ROLLED UP from what is under it, computed rather
+   than declared so the fixture cannot lie about itself. "modified" whatever
+   the change was, exactly as the server does it: rolling an untracked child up
+   as "untracked" would claim the directory itself is untracked. */
+function dirRollup(path){
+  const kids = DIRS[path];
+  if (!kids) return '';
+  for (let i = 0; i < kids.length; i++){
+    const k = kids[i];
+    if (k.d){ if (dirRollup(path === '/' ? '/'+k.n : path+'/'+k.n)) return 'modified'; }
+    else if (k.g) return 'modified';
+  }
+  return '';
+}
+
+const parentOf = (p) => (p === '/' ? '' : (p.slice(0, p.lastIndexOf('/')) || '/'));
+const joinPath  = (dir, name) => (dir === '/' ? '/'+name : dir+'/'+name);
+/* The last two segments — enough to tell eleven worktrees apart. */
+const shortRoot = (p) => p.split('/').filter(Boolean).slice(-2).join('/') || p;
 
 function renderFiles(){
-  const marked = dirsWithChanges();
-  const rows = [];
-  let hideBelow = -1;
+  const path = S.path;
+  const entries = DIRS[path] || [];
+  const root = rootFor(path);
 
-  FILES.forEach((f, i) => {
-    if (hideBelow >= 0 && f.d > hideBelow) return;
-    hideBelow = -1;
+  /* ── where you are: breadcrumbs, and the branch dim at the right ── */
+  const crumbs = [];
+  let acc = '';
+  const parts = path.split('/').filter(Boolean);
+  crumbs.push({label:'/', path:'/'});
+  parts.forEach(part => { acc += '/'+part; crumbs.push({label:part, path:acc}); });
+  const head = '<div class="fhead"><div class="crumbs">'+
+    crumbs.map((c, i) => i === crumbs.length - 1
+      ? '<span class="here">'+esc(c.label)+'</span>'
+      : '<button type="button" class="crumb" data-path="'+esc(c.path)+'" title="'+esc(c.path)+'">'+
+        esc(c.label)+'</button>'+(c.path === '/' ? '' : '<span class="sep">/</span>')
+    ).join('')+'</div>'+
+    (root ? '<span class="fbranch" title="Current branch">'+esc(root.branch)+'</span>' : '')+
+  '</div>'+
+  (root ? '' : '<div class="fnote">not a git worktree — listing without git status.</div>');
 
-    if (S.changedOnly){
-      // In changed-only the tree flattens to the changed files and the
-      // directories on their path; a directory with nothing under it goes.
-      if (f.k === 'dir' && !marked.has(i)) return;
-      if (f.k === 'file' && !f.git) return;
-    }
+  /* ── which root. A select, in the BODY, over roots we can prove exist ── */
+  const at = root ? root.path : '';
+  const picker = '<div class="pick"><span class="lbl" id="rootlbl">root</span>'+
+    '<select id="rootpick" aria-labelledby="rootlbl" title="'+esc(at || path)+'">'+
+      (at ? '' : '<option value="" disabled selected>'+esc(shortRoot(path))+'</option>')+
+      ROOTS.map(r => '<option value="'+esc(r.path)+'"'+(r.path === at ? ' selected' : '')+
+        ' title="'+esc(r.path)+'">'+esc(shortRoot(r.path))+'</option>').join('')+
+    '</select></div>';
 
-    const pad = 'padding-left:'+(var_s4() + f.d * 14)+'px';
-    if (f.k === 'dir'){
-      const open = S.changedOnly ? true : !S.collapsed.has(f.n);
-      if (!open) hideBelow = f.d;
-      rows.push(
-        '<button type="button" class="frow dir" style="'+pad+'" data-dir="'+esc(f.n)+'">'+
-          '<span class="tw">'+svg(open?'chevD':'chevR',11)+'</span>'+
-          '<span class="ic">'+svg(open?'folderOpen':'folder',13)+'</span>'+
-          '<span class="nm">'+esc(f.n)+'/</span>'+
-          '<span class="sp"></span>'+
-          (marked.has(i) && !open ? '<span class="dirdot" title="contains changes"></span>' : '')+
-        '</button>');
-    } else {
-      const g = f.git || '';
-      const cls = 'frow'+(g ? ' chg g'+g : '')+(S.selectedFile === f.n ? ' sel' : '');
-      const stat = (f.a || f.r)
-        ? '<span class="diffstat"><span class="a">+'+f.a+'</span> <span class="d">\u2212'+f.r+'</span></span>' : '';
-      rows.push(
-        '<button type="button" class="'+cls+'" style="'+pad+'" data-file="'+esc(f.n)+'" '+
-          'title="'+esc(g ? GIT_WORD[g] : 'unchanged')+'">'+
-          '<span class="tw"></span>'+
-          '<span class="ic">'+svg('file',13)+'</span>'+
-          '<span class="nm">'+esc(f.n)+'</span>'+
-          '<span class="sp"></span>'+ stat +
-          (g ? '<span class="gst">'+(g === 'U' ? '??' : g)+'</span>' : '<span class="gst"></span>')+
-        '</button>');
-    }
+  /* ── the listing ── */
+  const marked = entries.map(e => {
+    const g = !root ? '' : (e.d ? dirRollup(joinPath(path, e.n)) : (e.g || ''));
+    return {n:e.n, dir:!!e.d, g:g};
+  });
+  const shown = S.changedOnly ? marked.filter(e => e.g) : marked;
+
+  const up = parentOf(path)
+    ? '<button type="button" class="frow dir" data-path="'+esc(parentOf(path))+'">'+
+        '<span class="mark"></span><span class="ic">'+svg('cornerLeftUp',13)+'</span>'+
+        '<span class="nm">..</span></button>'
+    : '';
+
+  const rows = shown.map(e => {
+    const cls = ['frow', e.dir ? 'dir' : 'file', e.g ? 'chg' : '', STATUS_CLASS[e.g]]
+      .filter(Boolean).join(' ');
+    /* The blank is the same width as the letter, so the column cannot jitter
+       as a worktree goes dirty under you. */
+    const mark = '<span class="'+(e.g ? 'mark '+STATUS_CLASS[e.g] : 'mark')+'"'+
+      (e.g ? ' title="'+esc(e.g)+'"' : '')+'>'+STATUS_MARK[e.g]+'</span>';
+    const ic = '<span class="ic">'+svg(e.dir ? 'folder' : 'file',13)+'</span>';
+    const nm = '<span class="nm">'+esc(e.n)+'</span>';
+    /* A directory navigates; a file is a name. No file viewer this round, so a
+       file row is not a control at all rather than a control that does nothing. */
+    return e.dir
+      ? '<button type="button" class="'+cls+'" data-path="'+esc(joinPath(path, e.n))+'" '+
+        'title="'+esc(joinPath(path, e.n))+'">'+mark+ic+nm+'</button>'
+      : '<div class="'+cls+'" title="'+esc(e.n)+'">'+mark+ic+nm+'</div>';
   });
 
-  // Counted, never declared: a fixture that states its own totals will
-  // eventually state them wrongly.
-  const tally = {M:0,A:0,D:0,U:0};
-  FILES.forEach(f => { if (f.k === 'file' && f.git) tally[f.git]++; });
-  const summary = [[tally.M,'modified'],[tally.A,'added'],[tally.D,'deleted'],[tally.U,'untracked']]
-    .filter(x => x[0]).map(x => x[0]+' '+x[1]).join(', ');
+  const empty = shown.length ? '' :
+    '<div class="astate">'+(entries.length === 0
+      ? 'This directory is empty.'
+      : 'Nothing in this directory has changed.')+'</div>';
 
-  return '<div class="frepo">'+svg('folder',13)+
-      '<b>muxterm-mission-control</b><span>on</span>'+
-      '<span class="branch">design/mission-control-applets</span>'+
-      '<span>\u00b7 '+summary+'</span>'+
-    '</div>'+
-    '<div class="ftree">'+rows.join('')+'</div>'+
-    (rows.length ? '' : '<div class="fempty">Nothing changed on this branch.</div>');
+  return head + picker + '<div class="ftree">'+ up + rows.join('') +'</div>' + empty;
 }
-function var_s4(){ return 8; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    P4 — PULL REQUESTS APPLET
    ═══════════════════════════════════════════════════════════════════════ */
+/* The rail is `dismissed (N)` and ONLY that — dismissing is destructive-ish
+   and lives on the row it acts on (D3.9). The toggle is absent entirely when
+   nothing is dismissed: a control for an empty set is one more thing in a
+   strip that should stay quiet. The count is of rows in THIS listing, never of
+   what storage holds: "dismissed (7)" over two rows is a lie about both. */
 function railPRs(){
-  const ago = S.live ? Math.max(1, Math.round((Date.now() - S.lastTick)/1000)) : null;
-  return '<span class="live'+(S.live?'':' off')+'"><span class="beat"></span>'+
-      (S.live ? 'live \u00b7 '+ago+'s ago' : 'paused')+'</span>'+
-    '<button type="button" class="toggle '+(S.live?'on':'')+'" data-act="live" '+
-      'aria-pressed="'+S.live+'">'+(S.live?'pause':'resume')+'</button>';
+  const n = PRS.filter(p => S.dismissed.includes(p.key)).length;
+  if (n === 0) return '';
+  return '<button type="button" class="toggle '+(S.showDismissed?'on':'')+'" data-act="showdis" '+
+    'aria-pressed="'+S.showDismissed+'" title="Show the pull requests you put down">'+
+    'dismissed ('+n+')</button>';
 }
 
 function prRow(p, dismissed){
-  const cls = 'pr s-'+p.status+(dismissed ? ' dis' : '');
-  const meta = [];
-  meta.push(p.branch);
-  if (p.checks && p.checks !== '\u2014') meta.push(p.checks+' checks');
-  if (p.why) meta.push(p.why);
-  if (p.note) meta.push(p.note);
-  meta.push(p.age);
+  const tone = checksTone(p.checks);
+  const meta = [p.branch, p.author, p.age].filter(Boolean).join(' \u00b7 ');
+  const rv = p.review ? reviewChip(p.review) : null;
 
-  const lane = p.lane
-    ? '<span class="lane" role="button" tabindex="0" data-lane="'+esc(p.lane)+'">'+esc(p.lane)+'</span><span class="sep">\u00b7</span>'
-    : '<span class="sep" title="no lane declared this PR">\u2014 no lane \u00b7</span>';
-
-  return '<div class="'+cls+'" data-pr="'+p.num+'">'+
+  return '<div class="'+['pr', tone, dismissed ? 'dis' : ''].filter(Boolean).join(' ')+'" '+
+      'data-pr="'+p.num+'">'+
     '<div class="core">'+
       '<div class="l1">'+
-        '<span class="num">#'+p.num+'</span>'+
-        '<span class="ttl">'+esc(p.title)+'</span>'+
-        '<span class="st '+p.status+'">'+svg(ST_ICON[p.status],10)+ST_LABEL[p.status]+'</span>'+
-        (p.review === 'appr' ? '<span class="rv appr">approved</span>' : '')+
-        (p.review === 'chg'  ? '<span class="rv chg">changes requested</span>' : '')+
+        '<span class="'+(tone ? 'num '+tone : 'num')+'">#'+p.num+'</span>'+
+        '<a class="ttl" href="'+esc(p.url)+'" target="_blank" rel="noopener" '+
+          'title="'+esc(p.repo+'#'+p.num+' \u2014 '+p.title)+'">'+esc(p.title)+'</a>'+
+        (p.draft ? '<span class="badge">draft</span>' : '')+
+        (p.checks ? '<span class="badge '+tone+'">'+esc(p.checks)+'</span>' : '')+
+        (rv ? '<span class="'+(rv.cls ? 'badge '+rv.cls : 'badge')+'">'+esc(rv.label)+'</span>' : '')+
       '</div>'+
-      '<div class="l2">'+lane+'<span>'+esc(meta.join(' \u00b7 '))+'</span></div>'+
+      '<div class="l2">'+esc(meta)+'</div>'+
     '</div>'+
-    '<button type="button" class="dz" data-act="'+(dismissed?'rewatch':'dismiss')+'" data-num="'+p.num+'" '+
-      'title="'+(dismissed?'Watch #'+p.num+' again':'Stop watching #'+p.num)+'" '+
-      'aria-label="'+(dismissed?'Watch again':'Stop watching')+'">'+
-      svg(dismissed?'eye':'eyeOff',14)+'</button>'+
+    (dismissed
+      ? '<button type="button" class="undo" data-act="undismiss" data-key="'+esc(p.key)+'" '+
+        'title="Show #'+p.num+' here again">undo</button>'
+      : '<button type="button" class="dz" data-act="dismiss" data-key="'+esc(p.key)+'" '+
+        'title="Stop showing #'+p.num+' here" aria-label="Dismiss '+esc(p.repo)+'#'+p.num+'">'+
+        svg('x',14)+'</button>')+
   '</div>';
 }
 
 function renderPRs(){
-  const watched = PRS.filter(p => !S.dismissed.includes(p.num));
-  const gone    = S.dismissed.map(n => PRS.find(p => p.num === n)).filter(Boolean);
+  const visible = PRS.filter(p => !S.dismissed.includes(p.key));
+  const gone    = PRS.filter(p =>  S.dismissed.includes(p.key));
 
-  let list = watched.map(p => prRow(p, false));
-  if (S.undo){
-    const p = PRS.find(x => x.num === S.undo);
-    list.splice(Math.min(S.undoAt ?? 0, list.length), 0,
-      '<div class="undo">'+svg('eyeOff',12)+'<span>no longer watching <b>#'+p.num+'</b> \u2014 '+
-      'it moved to <b>dismissed</b> below</span>'+
-      '<button type="button" data-act="undo" data-num="'+p.num+'">undo</button></div>');
-  }
+  const main = visible.length
+    ? '<div class="prlist">'+visible.map(p => prRow(p, false)).join('')+'</div>'
+    : '<div class="astate">Every open pull request here has been dismissed.</div>';
 
-  const dis = gone.length
-    ? '<div class="dismissed">'+
-        '<button type="button" class="dishead" data-act="showdis" aria-expanded="'+S.showDismissed+'">'+
-          svg(S.showDismissed?'chevD':'chevR',11)+'dismissed<span class="ct">'+gone.length+'</span>'+
-        '</button>'+
-        (S.showDismissed
-          ? '<div class="dispanel">'+gone.map(p => prRow(p, true)).join('')+
-            '<p class="dnote">Dismissed means muxterm stops watching \u2014 the pull request itself is '+
-            'untouched on GitHub. Nothing here is deleted; the eye puts a row back.</p></div>'
-          : '')+
-      '</div>'
+  const dis = (S.showDismissed && gone.length)
+    ? '<h2 class="grp">dismissed</h2>'+
+      '<p class="dnote">Dismissed is muxterm state and never GitHub state: these pull requests are '+
+      'untouched on GitHub \u2014 muxterm has simply stopped showing them here.</p>'+
+      '<div class="prlist">'+gone.map(p => prRow(p, true)).join('')+'</div>'
     : '';
 
-  return '<div class="prlist">'+list.join('')+'</div>'+dis;
+  return main + dis;
 }
 
-/* THE LIVE TICKER. A scripted status change, so "statuses live update" is
-   something you can watch rather than something a caption claims. */
+/* THE POLL, scripted. The shipped applet asks /api/prs every 60s WHILE THE TAB
+   IS SHOWING and not at all otherwise; this stands in for one poll landing with
+   news, so "checks change under you" is something you can watch rather than
+   something a caption claims. ?frozen=1 stops it, for a deterministic capture.
+
+   It raises no flag on purpose: an inactive applet issues zero requests, so it
+   cannot notice a red check while you are on another tab. Attention is the
+   demonstration below the stage. */
 const SCRIPT = [
-  {at:5000,  run(){ const p = PRS.find(x=>x.num===80); p.checks='3/4'; }},
-  {at:11000, run(){ const p = PRS.find(x=>x.num===80); p.checks='4/4'; p.status='open'; p.review='appr';
+  {at:7000,  run(){ const p = PRS.find(x=>x.num===80); p.checks='passing'; p.review='APPROVED';
                     flashPR(80); }},
-  {at:18000, run(){ const p = PRS.find(x=>x.num===77); p.status='running'; p.checks='2/4'; }},
+  {at:16000, run(){ const p = PRS.find(x=>x.num===77); p.checks='failing'; flashPR(77); }},
 ];
 let scriptIdx = 0, t0 = Date.now();
 function flashPR(num){
@@ -1267,12 +1446,10 @@ function flashPR(num){
 }
 setInterval(() => {
   if (!S.live) return;
-  S.lastTick = Date.now();
   while (scriptIdx < SCRIPT.length && Date.now() - t0 >= SCRIPT[scriptIdx].at){
     SCRIPT[scriptIdx].run(); scriptIdx++;
     if (S.applet === 'prs') renderApplet();
   }
-  if (S.applet === 'prs') renderTabs();   // refresh the "Ns ago"
 }, 1000);
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1287,12 +1464,13 @@ const CHAT = [
   {who:'you', say:'merge 79 and 80 once they are both green'},
   {who:'cos', tool:{name:'spawn_lane', args:'{"workspace":"pr merges","harness":"amplifier","goal":"…"}', ms:'1.4s'},
    say:'Started it in w15. It will rebase, wait for checks, merge both, and report back here. '+
-       'I am watching #79 and #80 on your behalf \u2014 they are both in Pull Requests.',
+       'Both are in Pull Requests \u2014 that tab lists every open PR across the worktrees this '+
+       'browser has seen, so they stay there after the lane exits.',
    foot:'2 tools \u00b7 4.1s \u00b7 $0.031'},
 ];
 
 function renderChat(){
-  const turns = CHAT.concat(S.chatExtra);
+  const turns = CHAT;
   $('chatbody').innerHTML = turns.map(t => {
     const bd = [];
     if (t.tool){
@@ -1302,7 +1480,6 @@ function renderChat(){
         '<span class="ms">'+esc(t.tool.ms)+'</span></div>');
     }
     if (t.say) bd.push('<p class="say">'+esc(t.say)+'</p>');
-    if (t.action) bd.push('<div style="display:flex;gap:var(--s-4)">'+t.action+'</div>');
     if (t.foot) bd.push('<div class="foot"><span>'+esc(t.foot)+'</span></div>');
     return '<div class="turn '+t.who+'"><div class="who">'+(t.who==='you'?'you':'cos')+'</div>'+
       '<div class="bd">'+bd.join('')+'</div></div>';
@@ -1311,97 +1488,155 @@ function renderChat(){
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   P5 — the two attention alternatives
+   P5 — the attention policy, settled and reproduced
    ═══════════════════════════════════════════════════════════════════════ */
-function resetAttention(){
-  S.chatExtra = []; S.badges = {}; S.banner = null; S.attention = null;
-  document.querySelectorAll('.alt').forEach(e => e.classList.remove('armed'));
-  document.querySelectorAll('.pointed-row').forEach(e => e.classList.remove('pointed-row'));
+/* THE PROMOTION TEST, reproduced from mux-applets.ts _onAttention.
+   `detail` is {applet, count} and NOTHING ELSE — there is no severity to
+   consult, so a caller convinced its news is important has nothing to argue up
+   with, and urgency alone never promotes a flag to a jump.
+
+   The threshold is a claim about the PERSON. Someone who touched this surface
+   four seconds ago is reading it, and moving it costs them their place;
+   someone who has not touched it in a minute and a half is not, and moving it
+   costs them nothing. The tie always goes to the flag. */
+function attention(detail){
+  const idle = Date.now() - S.lastGesture;
+
+  // You are already looking at it. A flag on the tab you are on would be the
+  // surface talking to itself.
+  if (detail.applet === S.applet){
+    logAttention(detail, idle, 'drop', 'you are looking at it');
+    return;
+  }
+
+  if (idle > IDLE_MS){
+    // Nobody is here. Take the wheel, and leave NO flag behind: the surface
+    // moving is a louder announcement than a dot.
+    logAttention(detail, idle, 'jump', 'switched the surface to '+detail.applet);
+    go(detail.applet);
+    return;
+  }
+
+  // Somebody is here. Flag it and do not move. WHOLE-STATE: the count
+  // replaces whatever was there rather than adding to it, so two reports of
+  // "three lanes want you" mean three, not six.
+  const raw = detail.count == null ? 1 : detail.count;
+  const n = (isFinite(raw) && raw >= 1) ? Math.floor(raw) : 1;
+  S.flags[detail.applet] = n;
+  logAttention(detail, idle, 'flag', n === 1 ? 'a dot on the tab' : 'the count on the tab');
+  renderTabs();
 }
 
-function fireA(){
-  resetAttention();
-  S.attention = 'A';
-  $('altA').classList.add('armed');
-  const p = PRS.find(x => x.num === 79);
-  p.status = 'failed'; p.checks = '3/4'; p.why = 'lint (web) failed';
-  S.chatExtra = [{who:'cos',
-    say:'#79 just went red \u2014 lint (web) failed, so the merge lane is parked. '+
-        'Showing you Pull Requests.'}];
-  go('prs', {banner:'#79 \u2014 lint (web) failed. The merge lane for #79 and #80 is parked until it is green.',
-             flash:79});
+/* The log is written HERE, by the deciding function, so it cannot describe a
+   jump the surface did not make. */
+function logAttention(detail, idleMs, verdict, why){
+  S.log.push({detail:detail, idle:Math.round(idleMs/1000), verdict:verdict, why:why});
+  renderLog();
 }
 
-function fireB(){
-  resetAttention();
-  S.attention = 'B';
-  $('altB').classList.add('armed');
-  const p = PRS.find(x => x.num === 79);
-  p.status = 'failed'; p.checks = '3/4'; p.why = 'lint (web) failed';
-  S.badges['prs'] = {n:1, urgent:true};
-  S.chatExtra = [{who:'cos',
-    say:'#79 just went red \u2014 lint (web) failed, so the merge lane is parked. '+
-        'I have flagged it on Pull Requests; nothing on your screen has moved.',
-    action:'<button class="btn pri" type="button" data-act="showme">show me</button>'+
-           '<button class="btn no" type="button" data-act="notnow">not now</button>'}];
-  paint();
+function renderLog(){
+  const head = '<div class="hd">applet-attention — what the host decided</div>';
+  const body = S.log.length
+    ? S.log.map(e =>
+        '<div class="ln '+e.verdict+'">'+
+          '<span class="ev">{applet:\''+esc(e.detail.applet)+'\''+
+            (e.detail.count == null ? '' : ', count:'+e.detail.count)+'}</span>'+
+          '<span class="idle">idle '+e.idle+'s</span>'+
+          '<span class="verdict">'+e.verdict+'</span>'+
+          '<span class="why">'+esc(e.why)+'</span>'+
+        '</div>').join('')
+    : '<div class="ln">nothing raised yet — press one of the two buttons above.</div>';
+  $('log').innerHTML = head + body;
+}
+
+/* One more fixture lane goes blocked, and the count the Dashboard would report
+   is COUNTED from the fleet, never declared. Returns how many want a human. */
+function blockOneMoreLane(){
+  const next = FLEET.find(s => s.state === 'working');
+  if (next){
+    next.state = 'blocked';
+    next.waiting_for = 'permission prompt';
+    next.doing = 'Waiting on approval to write ' + (next.knows[0] || 'a file');
+    next.updated_at = 'now';
+  }
+  return FLEET.filter(needsInput).length;
+}
+
+/* You are reading something else — which the story needs, because a flag on
+   the tab you are on is not a flag. */
+function readSomethingElse(){
+  if (S.applet === 'dashboard') go('files');
+}
+
+function fireFlag(){
+  $('armFlag').classList.add('fired');
+  readSomethingElse();
+  S.lastGesture = Date.now();            // you touched this surface just now
+  attention({applet:'dashboard', count:blockOneMoreLane()});
+}
+
+function fireWheel(){
+  $('armWheel').classList.add('fired');
+  readSomethingElse();
+  S.lastGesture = Date.now() - (IDLE_MS + 1000);   // nobody has been here
+  attention({applet:'dashboard', count:blockOneMoreLane()});
+  // And the second thing to want a human in the same idle window. It only
+  // gets a flag: the jump above recorded a gesture.
+  setTimeout(() => {
+    const p = PRS.find(x => x.num === 80);
+    if (p) p.checks = 'failing';
+    if (S.applet === 'prs') renderApplet();
+    attention({applet:'prs', count:1});
+  }, 1600);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    EVENTS. One delegated listener; this is a mock, not an architecture.
    ═══════════════════════════════════════════════════════════════════════ */
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-applet],[data-view],[data-act],[data-dir],[data-file],[data-gopr],[data-lane]');
+  const t = e.target.closest('[data-applet],[data-view],[data-act],[data-path],[data-gopr]');
   if (!t) return;
 
   if (t.dataset.applet){ go(t.dataset.applet); return; }
   if (t.dataset.view){ S.view = t.dataset.view; paint(); return; }
-  if (t.dataset.gopr){
-    go('prs', {banner:'Opened from the Dashboard \u2014 the lane that declared #'+t.dataset.gopr+'.',
-               flash:Number(t.dataset.gopr)});
-    return;
-  }
-  if (t.dataset.lane){ go('dashboard', {banner:'Opened from Pull Requests \u2014 the lane "'+t.dataset.lane+'".'}); return; }
-  if (t.dataset.dir){
-    if (S.collapsed.has(t.dataset.dir)) S.collapsed.delete(t.dataset.dir);
-    else S.collapsed.add(t.dataset.dir);
-    renderApplet(); return;
-  }
-  if (t.dataset.file){ S.selectedFile = t.dataset.file; renderApplet(); return; }
+  /* The one cross-applet jump in this file, and it is a PROPOSAL: the rule it
+     obeys is settled (an applet may pull the surface, but only from a user
+     gesture — a click handler is the only legitimate producer), and no shipped
+     card fires it yet. */
+  if (t.dataset.gopr){ go('prs', {flash:Number(t.dataset.gopr)}); return; }
+  if (t.dataset.path !== undefined){ S.path = t.dataset.path; renderApplet(); return; }
 
-  const num = Number(t.dataset.num);
+  const key = t.dataset.key;
   switch (t.dataset.act){
     case 'changedonly': S.changedOnly = !S.changedOnly; paint(); break;
-    case 'live':        S.live = !S.live; S.lastTick = Date.now(); paint(); break;
-    case 'showdis':     S.showDismissed = !S.showDismissed; renderApplet(); break;
-    case 'dismiss': {
-      const watched = PRS.filter(p => !S.dismissed.includes(p.num));
-      S.undoAt = watched.findIndex(p => p.num === num);
-      S.dismissed.unshift(num);
-      S.undo = num;
-      renderApplet();
-      setTimeout(() => { if (S.undo === num){ S.undo = null; renderApplet(); } }, 6000);
-      break;
-    }
-    case 'undo':
-      S.dismissed = S.dismissed.filter(n => n !== num);
-      S.undo = null; renderApplet(); break;
-    case 'rewatch':
-      S.dismissed = S.dismissed.filter(n => n !== num);
-      renderApplet(); break;
-    case 'closebanner': S.banner = null; renderApplet(); break;
-    case 'showme':      go('prs', {banner:'#79 \u2014 lint (web) failed. You asked to be shown.', flash:79}); break;
-    case 'notnow':      S.chatExtra = []; renderChat(); break;
+    case 'showdis':     S.showDismissed = !S.showDismissed; paint(); break;
+    /* A dismissed pull request never comes back on its own — not when its
+       checks go red, not when a later scan finds it again. The person who put
+       the row down is the only one who picks it up. */
+    case 'dismiss':     if (!S.dismissed.includes(key)) S.dismissed.push(key); paint(); break;
+    case 'undismiss':   S.dismissed = S.dismissed.filter(k => k !== key); paint(); break;
+  }
+});
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'rootpick' && e.target.value){
+    S.path = e.target.value; renderApplet();
   }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
-  const t = e.target.closest('[data-gopr],[data-lane]');
+  const t = e.target.closest('[data-gopr]');
   if (t){ e.preventDefault(); t.click(); }
 });
 
-$('fireA').addEventListener('click', fireA);
-$('fireB').addEventListener('click', fireB);
+/* A person touched this surface — the only thing that resets the idle clock.
+   Captured on the stage rather than reported by each applet, which is how the
+   host does it: pointer and keyboard events are composed, so one pair of
+   listeners covers the whole region. */
+['pointerdown','keydown'].forEach(ev =>
+  $('stage').addEventListener(ev, () => { S.lastGesture = Date.now(); }, true));
+
+$('fireFlag').addEventListener('click', fireFlag);
+$('fireWheel').addEventListener('click', fireWheel);
 $('resetBtn').addEventListener('click', () => location.reload());
 $('annBtn').addEventListener('click', (e) => {
   const off = document.body.classList.toggle('clean');
@@ -1436,8 +1671,11 @@ document.querySelector('.cbtn.send').innerHTML = svg('arrowUp',15);
    DEEP LINKS. So a reviewer can be handed a view rather than a click path,
    and so a screenshot run is reproducible.
 
-     #dashboard   #tiles   #files   #changed   #prs   #dismissed   #alt-a   #alt-b
-     ?frozen=1    stops the live ticker, for a deterministic capture
+     #dashboard   #tiles   #files   #changed   #prs   #dismissed   #attention
+     #alt-a #alt-b  round one's two alternatives, kept as links because they
+                    were handed out: both land on the settled policy, which is
+                    the answer to what they used to ask
+     ?frozen=1    stops the scripted check poll, for a deterministic capture
      ?clean=1     hides the annotations, so the surface reads as it would ship
    ═══════════════════════════════════════════════════════════════════════ */
 function applyHash(){
@@ -1445,14 +1683,17 @@ function applyHash(){
   switch (h){
     case 'dashboard': S.applet='dashboard'; S.view='cards'; break;
     case 'tiles':     S.applet='dashboard'; S.view='tiles'; break;
-    case 'files':     S.applet='files'; S.changedOnly=false; break;
-    case 'changed':   S.applet='files'; S.changedOnly=true; break;
+    case 'files':     S.applet='files'; S.changedOnly=false; S.path=RA; break;
+    case 'changed':   S.applet='files'; S.changedOnly=true;  S.path=RA; break;
     case 'prs':       S.applet='prs'; break;
     case 'dismissed':
-      S.applet='prs'; S.dismissed=[72,68]; S.showDismissed=true; S.undo=null;
+      S.applet='prs';
+      S.dismissed=[REPO+'#78', REPO+'#76']; S.showDismissed=true;
       paint(); $('appletbody').scrollTop = $('appletbody').scrollHeight; return;
-    case 'alt-a':     paint(); fireA(); return;
-    case 'alt-b':     paint(); fireB(); return;
+    case 'attention':
+    case 'alt-a':
+    case 'alt-b':
+      paint(); $('attention').scrollIntoView({block:'start'}); return;
     default: break;
   }
   paint();
@@ -1465,7 +1706,8 @@ if (Q.get('clean') === '1'){
 }
 window.addEventListener('hashchange', applyHash);
 
-S.lastTick = Date.now();
+S.lastGesture = Date.now();
+renderLog();
 applyHash();
 </script>
 </body>

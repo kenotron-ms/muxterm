@@ -321,3 +321,269 @@ destroys something belongs in the applet body, next to the thing it destroys.
 matter which pane has focus. Files and Pull Requests are more context-sensitive.
 → **Recommend: applets are surface-scoped by default; any pane-scoping is opt-in
 per applet** — otherwise switching panes silently changes what three tabs mean.
+
+---
+
+# Round two — the decisions are settled, and three applets are built
+
+**Round one proposed. This round decided, and shipped.** Everything above stands
+as written; nothing in it is retracted except where this section says so
+explicitly. The ten items in D3 now each carry an answer, and the shell they
+were blocking is code.
+
+## S1 — The ten, settled
+
+### Settled by the user, not by this round
+
+**D3.1 — attention policy. ADOPTED as recommended.** Flag by default; take the
+wheel only when the user asked, or when the surface has been idle past a
+threshold. **Urgency alone never promotes a flag to a jump.**
+
+The enforcement is structural rather than a rule someone has to remember:
+`AppletAttentionDetail` carries `applet` and an optional `count`, and *no
+severity field at all*. An applet convinced its news is important has nothing to
+argue up with. The threshold is `IDLE_MS = 90_000`, and it is a claim about the
+person rather than about the data — someone who has not touched this surface in
+a minute and a half is not reading it, and moving it costs them nothing; someone
+who touched it four seconds ago is, and moving it costs them their place.
+
+The one asymmetry worth naming: an auto-jump records a gesture, so the surface
+never yanks twice in a row. The second lane to block while you are away leaves a
+flag, not a second jump.
+
+**D3.3 — the naming, and PR #73. OVERRULED, in the specific.** Round one
+recommended letting #73 land first and renaming only afterwards. That is void:
+#73 is being **closed**, not merged — its rename was overruled and its markdown
+work was superseded by #79. There is no competing rename, so the title rename
+happens here.
+
+The surface is **Mission Control**. The applet stays **Dashboard**. "Chief of
+staff" is the *role* the assistant plays, not a name to erase; **muxterm** is
+the product name. Round one observed that "Dashboard" meant three different
+things and that renaming the surface would fix one and make the other two more
+visibly wrong. All three are fixed:
+
+| Was | Now | Where |
+|---|---|---|
+| `<h1>Dashboard</h1>` — the surface | `<h1>Mission Control</h1>` | `mux-cos.ts` topbar |
+| `Dashboard` — the narrow-mode title | `Mission Control` | `title-bar.ts` |
+| "the **Dashboard** splits it, routes it" — *the assistant* | "your **chief of staff** splits it, routes it" | `mux-cos.ts` zero state, and the confirm copy |
+
+**Destructive actions across machines. SETTLED, and separate from the rail
+rule.** Closing does not cross a machine boundary. An applet that grows
+machine-awareness **may read across machines and must never destroy across
+one.** This is a stronger constraint than D3.9 and it survives even where D3.9
+would permit the control: a delete button in an applet's *body*, next to the
+thing it deletes, is still forbidden when the thing lives on another machine.
+
+### D3.2 — where the Dashboard's `cards | tiles` preference lives. **ADOPTED.**
+
+Namespaced to `muxterm.applet.dashboard.view`, with the one-time migration round
+one described: read the new key; if absent, read `muxterm.dashboard.fleetView`,
+write it forward, and remove the old one.
+
+*Why adopt:* the cost is five lines today and an argument later. The moment a
+second applet wants a preference, the flat spelling is already a convention and
+every key after it inherits the ambiguity. Files and Pull Requests each landed
+with preferences in this same round — the window round one was worried about was
+about ten minutes wide.
+
+### D3.4 — cross-applet navigation. **ADOPTED.**
+
+Yes, an applet may pull the surface to another applet — **only in direct
+response to a user gesture, never on a data change.** `applet-navigate` and the
+host's public `show()` are the "the user asked" arm of the attention policy, and
+they switch immediately and unconditionally.
+
+*Why adopt:* it is the same rule as D3.1 with the same justification, and having
+one rule instead of two is worth more than any refinement either could get
+separately. The gate is that the event has exactly one legitimate producer — a
+click handler.
+
+### D3.5 — does a dismissed PR come back? **ADOPTED.**
+
+Never, automatically. Not on a state change, not on a re-scan, not when checks
+fail. A dismissal that undoes itself is not a dismissal.
+
+Dismissal is **muxterm state and never GitHub state**, and the dismissed panel
+says so in those words. The set is keyed `owner/repo#number` and nothing is ever
+pruned from it. If people turn out to miss things, the answer is an explicit
+per-row "tell me if this changes", not a global rule that surprises everyone.
+
+### D3.6 — what the Files applet is rooted at. **SETTLED: a picker, and the root is machine-scoped.**
+
+Round one called this genuinely unsettled and recommended "the active pane's cwd,
+with a picker across known workspaces". **Half adopted, half overruled.**
+
+*Adopted:* it is a picker. With eleven worktrees on this machine a single root is
+wrong within a day, exactly as round one predicted.
+
+*Overruled:* not the active pane's cwd. Pane-scoping the root would make the
+Files tab mean something different every time focus moved, which is the failure
+D3.10 exists to prevent — and it would need pane-cwd plumbing that does not
+exist. The candidates are instead the **distinct `project` paths of the live
+fleet**, which the browser already holds, plus the server's own working
+directory as the fallback. Chosen root and current path persist under
+`muxterm.applet.files.path`.
+
+**Should Files be machine-aware? Yes — and the decision is recorded now even
+though the capability is not built.** Since round one, #90 landed
+machine-scoped MCP tools: every tool takes a `machine`, `list_machines`
+enumerates what is reachable, and a remote machine's workspaces are enumerable
+from here. So a root's real identity is **`(machine, path)`, not `path`** — two
+worktrees on two machines can share a path and are not the same place.
+
+What that costs today is one field. `FilesRoot` carries `machine`, empty
+meaning this one, and the candidate list **filters out sessions that arrived
+from a remote host** — because `/api/files` can read this machine and no other,
+and offering a root we cannot open would be a lie told in a dropdown.
+
+**Remote file reads are a FOLLOW-ON, not a dependency.** The branch
+`feat/remote-read-only-fs` (PR #92) is unmerged and this work does not wait for
+it. When it lands, the change here is: stop filtering remote sessions out, and
+pass `machine` through to the endpoint. No row shape changes.
+
+### D3.7 — narrow and mobile. **SETTLED as scope, deferred as design.**
+
+Today `:host([narrow])` hides `.dash` entirely and the fleet moves to a bottom
+sheet. That behaviour is **preserved exactly**: in portrait the sheet renders
+`<applet-dashboard insheet>` — the same applet, the same code, not a second
+copy of the fleet — and `toggleFleet()`, the `fleet-state` event and the
+title-bar button all still work.
+
+**What is settled:** in portrait the host is inert. Every applet is `active =
+false`, so the contract's one rule holds for free on a phone, and the sheet's
+Dashboard is the only live applet. The narrow title reads Mission Control.
+
+**What remains, named:** the sheet carries the Dashboard *only*. Three tabs plus
+a rail will not fit a 360px sheet, and round one's recommendation — the sheet
+gets the tab strip, the rail collapses into a `⋯` menu — is still the right
+sketch and still unbuilt. **Files and Pull Requests are unreachable in portrait.**
+That is the honest state; it is not a regression, because they did not exist
+before.
+
+### D3.8 — empty and error states. **ADOPTED.**
+
+The host provides one standard presentation, exported as `appletEmpty(message)`,
+`appletError(message, retry?)` and `appletStateStyles`. All three applets use
+them, so three applets do not invent three idioms for the same sentence.
+
+Two refinements the applets earned in the building:
+
+- **A first-load line is not an empty state.** A blank panel while a git-backed
+  listing takes a second reads as broken, so each applet shows a dim `Reading…`
+  on first load only. It is not `appletEmpty`; it is not a state, it is a wait.
+- **A failed refresh with good data on screen does not blank the screen.** One
+  network blip must not erase a list you were reading. `appletError` is for
+  when there is nothing to show; a dim note under the list is for when there is.
+
+### D3.9 — destructive actions in the rail. **ADOPTED, forbidden.**
+
+The rail sits in shared chrome; a control that destroys something belongs in the
+applet body next to the thing it destroys. The Pull Requests applet is the test
+case and it obeys: **dismiss is a button in the row**, and the rail carries only
+`dismissed (N)`, which reveals and never destroys.
+
+The contract carries the prohibition as prose, not as a type. Making it
+mechanical would mean the host classifying arbitrary lit-html, which is more
+machinery than three built-ins in one repo can justify — and the rail's real
+guard is already structural: an applet can only use controls the host has styles
+for, so a destructive control would have to be added to the host first.
+
+### D3.10 — is the surface pane-scoped? **ADOPTED, with the machine axis named.**
+
+Applets are **surface-scoped by default; any pane-scoping is opt-in per applet**,
+and none of the three opt in. Switching panes must not silently change what
+three tabs mean.
+
+**Machine scope is a separate axis from pane scope, and they compose
+independently.** Pane scope asks *which pane is this about*; machine scope asks
+*which machine's filesystem, fleet or repos am I looking at*. An applet may be
+surface-scoped and still machine-aware — Files is exactly that: it ignores pane
+focus entirely, and its root carries a machine. Conflating them would mean
+picking a machine by clicking a pane, which is a worse version of the problem
+D3.10 already rejected.
+
+## What this round did *not* settle
+
+- **A durable pull-request watchlist.** The applet ships against a real source
+  that is not the watchlist. See C4 below.
+- **The narrow-mode tab strip.** D3.7.
+- **Third-party applets.** Still out of scope and still not designed for; the
+  registry is a module array, exactly as round one left it.
+
+## C1–C4 — what was built
+
+**C1 — the applet host.** `<mux-applets>`: a tab strip, a control rail at its
+right end, and a body that mounts **every** registered applet and hides all but
+one. Inactive applets stay mounted so navigation and scroll survive a tab
+switch, which is precisely why the rule has to have teeth.
+
+*Measured, not asserted:* with Pull Requests active, its 60s poll fired — 1
+request at T0, 3 by T+75s. Switching to another tab froze it: **3 requests at
+T+75s, still 3 after 140 further seconds inactive**, more than two poll
+intervals with nothing on the wire. The Files applet, mounted for the entire
+session but never activated, issued **zero** requests. No applet opens a socket;
+the only WebSocket is the app's own, which predates all of this.
+
+**C2 — the Dashboard applet.** The fleet, moved in whole. It adds no capability,
+which is the point: if it works identically inside the host, the host is real.
+It owns `cards | tiles` — the toggle is gone from the surface chrome and there is
+exactly one of it, in the applet's rail.
+
+The contract's rule, for a store subscription rather than a poll: the Dashboard
+holds `homeSessions` and, while inactive, its entire response to a fleet change
+is one integer comparison — no re-render, no DOM, no fetch, no timer. **This is
+the file's one exception and it is documented as one**: a subscription to a
+store that already exists opens nothing, polls nothing and paints nothing, and
+without it the surface cannot tell you a lane went blocked while you were
+reading a diff — which is the whole point of the flag. A flag you only get when
+you look is not a flag.
+
+**C3 — the Files applet.** Real directories, real files, real `git status`, via
+`GET /api/files`. Changed entries carry git's own letter — `M A D ? R U` — in a
+fixed-width leading column *and* a colour, so the distinction survives a
+grayscale screenshot and a light palette. Unchanged rows get a blank of the same
+width so the column cannot jitter as a worktree goes dirty under you. A
+directory shows `M` when anything beneath it changed.
+
+No poll: becoming active *is* the refresh. A directory listing that refreshes
+itself while you are not looking is cost with no benefit.
+
+**C4 — the Pull Requests applet.** Shipped against **a real source that is not
+the watchlist**, which is the middle of the three acceptable outcomes, chosen
+deliberately.
+
+The source is `GET /api/prs`, which asks the host's already-authenticated `gh`
+over the repos of every root the browser knows: the live fleet's local project
+paths, **union everything it has ever seen** (`muxterm.applet.prs.roots`, MRU
+capped at 12), falling back to the server's own working directory when it knows
+none. The remembering is the load-bearing part — a lane that exits takes its row
+out of the fleet at exactly the moment you want to know what it opened.
+
+**What this is not, stated plainly.** It is not attribution: no GitHub API can
+say *which lane opened this PR*, and this applet does not claim to. It is not
+durable: a browser-local memory dies with the profile. The durable answer is
+round one's D2 in full — a watchlist owned by sessiond, fed by
+`muxterm session report --pr N` (**which still nothing calls**) plus a repo scan,
+with dismissals in a separate store so a re-scan cannot resurrect them. That is
+the follow-on, and it is named rather than half-built.
+
+`SessionState.PR` is still the right attribution hint and is still dead for want
+of a producer. This round did not add one; it is a small contained change —
+after `gh pr create` succeeds, report the number — and it belongs with the
+watchlist that consumes it.
+
+## Two endpoints, and the authority they do not add
+
+`GET /api/files` and `GET /api/prs` are read-only, wrapped in `protect()` like
+every other `/api` route, and **add no authority over `/ws`** — the same auth
+boundary already hands out a PTY, and a shell can `cat` any file the listing can
+name. So the guard on the path is correctness (absolute, cleaned, a directory)
+rather than a jail, and it is deliberately not a jail. Inventing a chroot here
+would buy nothing while implying a boundary that the adjacent WebSocket does not
+honour.
+
+`/api/prs` degrades rather than fails: a missing or logged-out `gh` is a `200`
+carrying `available:false` and a sentence a person can act on. Showing "no pull
+requests" when the truth is "I could not ask" would be confidently wrong.
