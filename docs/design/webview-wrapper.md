@@ -1100,3 +1100,210 @@ that work:
 
 Which means the later work is: one more native→web event, one `FileProvider`, and a web-side
 handler that reuses the upload path that already exists. No new concepts.
+
+---
+
+## W5 — Always-listening, costed honestly
+
+**VERDICT: ANSWERED. Continuous streaming costs $259 per user per month at the mini model's rate
+and $821 at the full model's, for a feature whose useful duty cycle is around 6%. That number
+decides the design on its own. Build push-to-talk; leave a wake-word seam; do not build
+continuous.**
+
+### W5.1 — The arithmetic, in full
+
+At the stated rates — **$0.006/minute (mini realtime)** and **$0.019/minute (full realtime)** —
+for one user, listening only:
+
+| | per minute | per hour | per 8-hour day | per 24-hour day | per month @8h/day | per month @24h/day |
+| --- | --- | --- | --- | --- | --- | --- |
+| **mini** | $0.0060 | $0.36 | **$2.88** | **$8.64** | $86.40 | **$259.20** |
+| **full** | $0.0190 | $1.14 | **$9.12** | **$27.36** | $273.60 | **$820.80** |
+
+*(30-day months. Per user. Listening only — output tokens, tool calls and the rest of muxterm's
+bill are on top.)*
+
+Read the fourth column first. **"Always listening" means always.** A phone on a bedside table at
+3 a.m. is listening. $8.64 a day, every day, per person, on the cheap model — for a service whose
+whole selling point is that it is the cheap one.
+
+**And the duty cycle is the indictment.** Generously, a heavy user speaks to muxterm for 30
+minutes in an 8-hour day. That is **6.2%**. The other 93.8% is billed silence. The realtime
+models charge for audio in, not for audio that turned out to contain words.
+
+**The comparison that ends the argument:**
+
+| Option | Audio billed per day | mini/day | mini/month | full/month |
+| --- | --- | --- | --- | --- |
+| Continuous, 24/7 | 1440 min | $8.64 | $259.20 | $820.80 |
+| Continuous, 8h waking | 480 min | $2.88 | $86.40 | $273.60 |
+| Wake-word gated (20 triggers × 90 s) | 30 min | $0.18 | $5.40 | $17.10 |
+| Push-to-talk (10 sessions × 2 min) | 20 min | $0.12 | $3.60 | $11.40 |
+
+**Wake-word gating is 48× cheaper than 24/7 continuous on the same model.** Choosing the mini
+model over the full one saves 3.2×. **The gating decision is fifteen times more consequential
+than the model decision**, which is the sort of thing that is obvious once written down and
+invisible until it is.
+
+### W5.2 — Option 1: continuous streaming to the realtime API
+
+**What it is.** The existing WebRTC session, opened once and never closed. No new technology
+whatsoever — muxterm already does this for the length of a session; continuous just removes the
+end.
+
+**Money:** the table above. $259.20–$820.80 per user per month.
+
+**Battery.** The dominant cost is the radio, not the microphone, and Android says so:
+
+> "Using the wireless radio to transfer data is **potentially one of your app's most significant
+> sources of battery drain**."
+
+> "…the radio will remain at full power for the duration of your transfer — plus an additional 5
+> seconds of tail time — followed by 12 seconds at the low energy state. So for a typical 3G
+> device, every data transfer session will cause the radio to draw energy for **at least 18
+> seconds**." And: "an app which makes a one second data transfer, three times a minute, **will
+> keep the wireless radio perpetually active**."
+
+— <https://developer.android.com/develop/connectivity/network-ops/network-access-optimization>
+(page states last updated 2026-09-01) **[ANDROID]** *(the tail-time figures are explicitly 3G;
+the page notes they vary by radio technology.)*
+
+A continuous Opus upstream is not "three times a minute" — it is unbroken. The radio never
+reaches the low-energy state at all. For scale, RFC 6716 §2.1.1 gives Opus's 20 ms sweet spots as
+*"16-20 kbit/s for WB speech"* (<https://www.rfc-editor.org/rfc/rfc6716.txt>, September 2012)
+**[SPEC]** — so roughly 2.5 kB/s up, continuously, plus the downstream, plus RTCP, forever.
+
+That the whole Doze and App Standby architecture exists to *"defer background network activity"*
+(<https://developer.android.com/training/monitoring-device-state/doze-standby>, last updated
+2026-08-18) **[ANDROID]** is the platform telling you, structurally, that this is the expensive
+thing.
+
+**No primary source quantifies the mA or the %/hour**, and I will not invent one. The defensible
+statement is: Google names the radio as among the most significant battery costs, the mechanism
+by which continuous streaming pins the radio at full power is documented, and the entire
+background-execution regime is built around avoiding exactly this. **[ANDROID]** + **[INFERENCE]**
+
+**What the user must trust.** Everything. Every word spoken near the phone — theirs and other
+people's — is encoded and sent to a third-party vendor, continuously, whenever the app is
+running. Not "when I press the button", not "when I say the word": always. There is no technical
+control the user can verify; there is only the persistent notification and the green microphone
+dot, both of which say "listening" and neither of which says "transmitting to a vendor."
+
+For muxterm specifically this is worse than for a consumer assistant, because muxterm lives on a
+developer's desk during work: the audio would include other people's conversations, calls, and
+whatever is said in a room the user does not control.
+
+**Verdict on Option 1: do not build.** Not primarily on privacy — on arithmetic. It is a $259/user/month
+feature that bills for 94% silence.
+
+### W5.3 — Option 2: on-device wake word, stream only after the word
+
+**Money:** ~$5.40/user/month on mini, ~$17.10 on full, at 20 triggers a day. **48× cheaper than
+continuous.** The API cost stops being a design constraint entirely.
+
+**But the battery cost does not go to zero — it changes shape.** And there is a hard platform
+finding here that anyone budgeting this needs:
+
+**A third-party Android app cannot use the low-power hotword DSP.** The always-on audio hardware
+that "Hey Google" runs on is closed to Play-store apps, at four independent gates:
+
+- `VoiceInteractionService` — public API, but *"the current `VoiceInteractionService` that has
+  been selected by the user is kept always running by the system, to allow it to do things like
+  listen for hotwords in the background"*, and the service *"must also require the
+  `Manifest.permission.BIND_VOICE_INTERACTION` permission"*, which is `protectionLevel="signature"`
+  — platform-key only.
+  <https://developer.android.com/reference/android/service/voice/VoiceInteractionService> **[ANDROID]**
+- `AlwaysOnHotwordDetector` — no longer public SDK. Annotated `@hide` / `@SystemApi` in AOSP, and
+  <https://developer.android.com/reference/android/service/voice/AlwaysOnHotwordDetector> returns
+  **HTTP 404** as of 2026-09-08. **[ANDROID]**
+- `HotwordDetectionService` (Android 12) — `@hide` / `@SystemApi`, bound only by the system, and
+  creating a detector needs `MANAGE_HOTWORD_DETECTION`, documented *"@hide This is not a
+  third-party API (intended for OEMs and system apps)."* **[ANDROID]**
+- `CAPTURE_AUDIO_HOTWORD` — *"Allows an application to capture audio for hotword detection.
+  **Not for use by third-party applications.**"* `protectionLevel="signature|privileged|role"`.
+  **[ANDROID]**
+
+*(Sources: AOSP `core/res/AndroidManifest.xml`, `core/java/android/service/voice/*.java` at
+`main` via Google's `aosp-mirror`, checked 2026-09-08.)*
+
+**Consequence:** muxterm's wake word runs on the **application processor**, using ordinary
+`RECORD_AUDIO` and the same `microphone` foreground service from W1 — held open all day rather
+than for the length of a session. So Option 2 trades API dollars for battery and for a
+permanently-present listening indicator. It is a much better trade than Option 1, and it is not
+free, and nobody should present it as "the cheap one" without that sentence attached.
+
+**What the user must trust:** that the wake-word model really is on-device and really does gate
+the network. That is a *much* smaller ask than Option 1 — and it is verifiable, by the user, from
+outside the app: with no network transmission until the word fires, a packet capture or even a
+data-usage screen tells the truth. **A privacy claim a user can check is categorically different
+from one they must believe**, and that, more than the money, is why this is the right long-term
+answer.
+
+**Candidate engines, named and not selected.** Selecting or integrating one is explicitly out of
+scope; this is the licensing shape, so the choice can be made later without redoing the survey.
+All checked 2026-09-08.
+
+| Engine | Status | Licence *of the engine* | Commercial use | Android build |
+| --- | --- | --- | --- | --- |
+| **Picovoice Porcupine** | Active | **Split.** Repo `LICENSE` is Apache-2.0 but covers wrappers only: *"Picovoice models and inference engines are **proprietary**."* | Requires an `AccessKey` from Picovoice Console; *"there are no dedicated free or paid plans for personal or non-commercial use."* | Yes — `ai.picovoice:porcupine-android` |
+| **sherpa-onnx** (k2-fsa) | **Very active** (push 2026-09-05) | Apache-2.0, engine and all | Free | **Yes — first-class Android/AArch64**; includes keyword spotting |
+| **openWakeWord** | Active (push 2025-12-30) | Apache-2.0, engine *and* models, no key | Free | Linux/Windows/Arm64-Linux documented; **no official Android build — [UNSETTLED]** |
+| **Mycroft Precise** | Effectively unmaintained (last commit 2023-11-25) | Apache-2.0 | Free | Historically yes |
+| **OVOS `precise-lite` plugin** | **Archived**, topic "deprecated" | — | — | — |
+| **Snowboy (KITT.AI)** | **Discontinued.** *"we plan to shut down all KITT.AI products … by Dec. 31st, 2020 … Our github repositories will remain open, but only community support."* | GitHub reports **NOASSERTION** | Do not use | Historically an in-repo demo |
+| **Sensory TrulyHandsfree** | Commercial | Proprietary | Sales-led | Yes |
+
+Sources: `github.com/Picovoice/porcupine/blob/master/LICENSE`, `picovoice.ai/docs/faq/general/`,
+`github.com/k2-fsa/sherpa-onnx`, `github.com/dscripka/openWakeWord/blob/main/LICENSE`,
+`github.com/MycroftAI/mycroft-precise`, `github.com/OpenVoiceOS/ovos-ww-plugin-precise-lite`,
+`github.com/Kitt-AI/snowboy/blob/master/README.md`. **[VENDOR]**
+
+**If someone eventually has to pick one**, the shortlist is two: **sherpa-onnx** if the Apache-2.0
+end-to-end story and a first-class Android build matter most, **Porcupine** if detection quality
+per CPU-cycle matters most and a proprietary engine plus an activation key is acceptable. Note
+that Porcupine's `AccessKey` is a runtime dependency on someone else's server for a feature sold
+as on-device — worth knowing before it is discovered.
+
+**Verdict on Option 2: the right long-term answer, and explicitly not the first slice.** It needs
+a native audio path, a model, a licence decision and a day-long open microphone — every one of
+which is a reason it should not be entangled with proving that the wrapper works at all.
+
+### W5.4 — Option 3: push-to-talk, or a scheduled window
+
+**What it is: what muxterm already ships.** The user taps the orb; the session runs; the model
+hangs up when asked, via the existing `end_voice_session` realtime tool. The wrapper's *entire*
+contribution is that the session now survives the screen going off.
+
+**Money:** ~$3.60/user/month on mini, ~$11.40 on full. **72× cheaper than 24/7 continuous.**
+
+**Battery:** bounded by definition. The radio is pinned only while a session runs, and the user
+knows when that is because they started it.
+
+**What the user must trust:** nothing they cannot see. The microphone opens on their tap, the
+notification says so, the green dot says so, and it all ends when they end it. This is the only
+one of the three options with no privacy argument to have.
+
+*"A scheduled window"* — listen during work hours, say — is the same mechanism with a timer, and
+it is worse than push-to-talk on every axis that matters: it costs the whole window, it is
+listening when the user has forgotten it is, and it needs an FGS started from the background,
+which Android 12+ forbids for while-in-use permissions with no exemption to fall back on (W1.2).
+**Rejected.**
+
+**Verdict on Option 3: build this. It is the first slice.**
+
+### W5.5 — The recommendation
+
+1. **Ship push-to-talk with screen-off survival.** It is what the product already does, plus the
+   one thing it cannot do. W6 is exactly this.
+2. **Leave the wake-word seam and nothing more.** The bridge's `wake` event (W4.3) is defined,
+   costs nothing, and carries only the fact that the word was heard — W3 Rule 4. When someone
+   builds detection, nothing else changes.
+3. **Do not build continuous streaming.** $259.20 per user per month on the cheap model, 94%
+   billed silence, and a privacy posture no notification can honestly convey. If it is ever
+   revisited, revisit it with these four numbers on the page.
+
+*Conservative choice recorded, per instruction: the contested call here is Option 2 versus Option
+3 as the target. I take Option 3 because it is buildable now, provable now, and carries no
+licensing or battery unknowns. The alternative — go straight to a wake word — is recorded, and
+its cost is a native audio path plus a licence decision plus an all-day open microphone, none of
+which help answer the question the first slice exists to answer.*
