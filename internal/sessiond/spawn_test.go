@@ -137,20 +137,6 @@ func TestSpawn_SurvivesParentExit(t *testing.T) {
 	t.Fatalf("marker %q never appeared; grandchild did not survive parent exit", marker)
 }
 
-func TestEnsureDaemon_SystemdGate_NoSpawn(t *testing.T) {
-	t.Setenv("INVOCATION_ID", "deadbeef")
-	dir := t.TempDir()
-	socketPath := filepath.Join(dir, "missing.sock")
-	logPath := filepath.Join(dir, "sessiond.log")
-
-	if err := EnsureDaemon(socketPath, logPath); err != nil {
-		t.Fatalf("EnsureDaemon returned error under systemd gate: %v", err)
-	}
-	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
-		t.Fatalf("log file %q should not exist (no spawn under systemd), stat err = %v", logPath, err)
-	}
-}
-
 func TestEnsureDaemon_AlreadyAlive_NoSpawn(t *testing.T) {
 	t.Setenv("INVOCATION_ID", "")
 	dir := t.TempDir()

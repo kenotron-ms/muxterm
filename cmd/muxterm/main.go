@@ -166,8 +166,18 @@ func runDoctor() error {
 	} else {
 		fmt.Printf("     socket:  %s\n", sock)
 		if _, err := os.Stat(sock); os.IsNotExist(err) {
-			fmt.Printf("  %s  daemon:  not running (socket not found)\n", fail)
-			fmt.Printf("     hint:    start with 'muxterm' or check service logs\n")
+			// "Socket not found" has TWO causes that look identical here and
+			// need opposite responses: no daemon at all (start one), or a
+			// daemon that is alive and listening but lost its filename
+			// (starting another will not help -- only stopping that one
+			// will). Distinguish them rather than printing the same hint for
+			// both.
+			if stranded, ok := sessiond.FindStrandedListener(sock); ok {
+				fmt.Printf("  %s  daemon:  %s\n", fail, stranded.RecoveryHint())
+			} else {
+				fmt.Printf("  %s  daemon:  not running (socket not found)\n", fail)
+				fmt.Printf("     hint:    start with 'muxterm' or check service logs\n")
+			}
 		} else {
 			c, dialErr := sessiond.Dial(sock)
 			if dialErr != nil {

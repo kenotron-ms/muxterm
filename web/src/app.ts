@@ -638,6 +638,21 @@ export class MuxApp extends LitElement {
   _reconnectNextAttemptAt = 0;
 
   @state()
+  _reconnectDetail = '';
+
+  /**
+   * True once the server has told us the session daemon is unreachable.
+   *
+   * It suppresses the "Connection lost. Reconnecting..." message that
+   * onDisconnect would otherwise write over the diagnosis a moment later --
+   * the server sends the error frame and THEN closes the socket, so the
+   * disconnect handler always runs last and would restore the very lie the
+   * diagnosis exists to replace.
+   */
+  @state()
+  _daemonUnreachable = false;
+
+  @state()
   private _creatingWorkspace = false;
 
   @state()
@@ -1167,7 +1182,14 @@ export class MuxApp extends LitElement {
       // Deliberately NOT a message: the overlay derives its headline from the
       // live phase. A message here is an override, reserved for the server
       // telling us something we cannot work out ourselves (see `detached`).
-      this._reconnectMessage = '';
+      //
+      // Except when a daemon-unreachable diagnosis is already on screen. The
+      // socket closing is a CONSEQUENCE of that failure, not new information,
+      // and clearing the message here would drop the user back in front of a
+      // countdown promising a reconnection which cannot happen.
+      if (!this._daemonUnreachable) {
+        this._reconnectMessage = '';
+      }
       this._creatingWorkspace = false;
       // The attach this dispatch was waiting on is gone. Reconnect replays its
       // own bootstrap attach; letting the argv survive would spawn the prompt
@@ -1197,6 +1219,9 @@ export class MuxApp extends LitElement {
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
+      // A successful attach is the only thing that disproves the diagnosis.
+      this._daemonUnreachable = false;
+      this._reconnectDetail = '';
       muxLogReset();
       muxLog('app reconnect', 'WS connected, bootstrapping');
       // On (re)connect: attach the last/known workspace, or list + attach the
@@ -1675,6 +1700,8 @@ export class MuxApp extends LitElement {
       ${this._showReconnectOverlay
         ? html`<mux-reconnect-overlay
             message="${this._reconnectMessage}"
+            detail="${this._reconnectDetail}"
+            ?fatal="${this._daemonUnreachable}"
             phase="${this._reconnectPhase}"
             .nextAttemptAt="${this._reconnectNextAttemptAt}"
             @retry-now="${this._onRetryNow}"
@@ -1808,6 +1835,21 @@ export class MuxApp extends LitElement {
   };
 
   private _handleControlMessage = (msg: Record<string, unknown>): void => {
+    // The serve layer could not reach the session daemon, repeatedly. This is
+    // NOT a transient disconnect: it arrives only after several consecutive
+    // failed attach attempts, and it carries the reason plus the exact
+    // recovery command when the daemon is alive-but-unreachable.
+    if (msg['type'] === 'error' && msg['code'] === 'daemon-unreachable') {
+      this._daemonUnreachable = true;
+      this._showReconnectOverlay = true;
+      this._reconnectMessage =
+        typeof msg['error'] === 'string'
+          ? (msg['error'] as string)
+          : 'Cannot reach the muxterm session daemon.';
+      this._reconnectDetail =
+        typeof msg['detail'] === 'string' ? (msg['detail'] as string) : '';
+      return;
+    }
     if ('detached' in msg && msg.detached && typeof msg.detached === 'object') {
       const detached = msg.detached as { reason?: string };
       this._showReconnectOverlay = true;

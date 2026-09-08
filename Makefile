@@ -16,6 +16,50 @@ CADDY := $(shell command -v caddy 2>/dev/null || echo $(HOME)/go/bin/caddy)
 # instead of silently falling back to main.go's "dev" default.
 DEV_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
+# ---------------------------------------------------------------------------
+# DEV_ISOLATE -- the ONE mechanism that separates a dev instance from production.
+#
+#   $(call DEV_ISOLATE,<runtime-dir-suffix>,<cos-session-id>)
+#
+# Every dev target expands this and no dev target sets XDG_* by hand. That is
+# the entire point: the two variables below are only meaningful TOGETHER, and
+# every incident so far has been someone isolating one and forgetting the other.
+# Making them a single call removes the option of getting it half right.
+#
+#   XDG_RUNTIME_DIR  -- sessiond socket, sessiond log, spawn lock, server.url.
+#     Without it a dev serve writes its own URL and local auth token over
+#     production's server.url, so `muxterm mcp` and every local CLI helper
+#     silently start talking to the DEV server; and a dev sessiond binds
+#     production's socket path.
+#   XDG_DATA_HOME    -- crash-restore snapshot and the completions log
+#     (snapshotDir(), DefaultCompletionsPath()). Without it a dev sessiond
+#     RESTORES PRODUCTION'S WORKSPACES at boot and OVERWRITES production's
+#     restore-snapshot.json periodically and on shutdown.
+#   MUXTERM_COS_SESSION_ID -- the chief-of-staff transcript, which lives in
+#     amplifier's session store under $$HOME and honours NO XDG variable, so
+#     the session id is the only lever that separates it.
+#   INVOCATION_ID    -- unset because it is INHERITED by every descendant of a
+#     systemd unit, including every shell in every muxterm pane. Leaving it set
+#     makes EnsureDaemon's systemd gate fire for a dev serve that genuinely
+#     needs its own daemon (see startedBySystemd in internal/sessiond).
+#
+# The final guard is not paranoia: it is the last line of defence between a
+# typo in this file and the production runtime directory.
+define DEV_ISOLATE
+unset INVOCATION_ID; \
+XDG_RUNTIME_DIR="$${TMPDIR:-/tmp}"; \
+XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR%/}/muxterm-$(1)"; \
+XDG_DATA_HOME="$$XDG_RUNTIME_DIR/data"; \
+MUXTERM_COS_SESSION_ID="$(2)"; \
+export XDG_RUNTIME_DIR XDG_DATA_HOME MUXTERM_COS_SESSION_ID; \
+case "$$XDG_RUNTIME_DIR" in \
+  /run/user/*|"$$HOME"/.local/share*) \
+    echo "refusing: dev isolation resolved to $$XDG_RUNTIME_DIR, which looks like production state"; \
+    exit 1;; \
+esac; \
+mkdir -p "$$XDG_RUNTIME_DIR" "$$XDG_DATA_HOME";
+endef
+
 # Build the frontend and copy dist into the Go embed directory, then build Go binary.
 build: web
 	go build -ldflags "-X main.version=$(DEV_VERSION)" -o bin/muxterm ./cmd/muxterm
@@ -29,9 +73,18 @@ build: web
 #   - Production (systemd) runs separately on :9090 from ~/.local/bin/muxterm — undisturbed.
 # Exposed by the HOST Caddy at https://muxterm-dev.ampbox.io (see /mnt/services/muxterm-dev.caddy)
 # Ctrl-C stops all processes. Requires: air + caddy.
+#
+# ISOLATION: this target previously set NO XDG variable at all, so its serve
+# process wrote production's server.url (redirecting every local CLI helper and
+# the MCP server to the dev instance) and resolved production's restore
+# snapshot. It now takes the same DEV_ISOLATE mechanism as dev-local, with its
+# own runtime dir and cos session so the two dev instances also stay apart.
 dev:
 	@mkdir -p tmp
-	@cd $(WEB_SRC) && npx vite build --watch >/dev/null & VITE_PID=$$!; \
+	@$(call DEV_ISOLATE,dev,muxterm-cos-dev-vm) \
+	echo "  runtime dir   $$XDG_RUNTIME_DIR  (isolated sessiond socket/log/server.url)"; \
+	echo "  data dir      $$XDG_DATA_HOME  (isolated crash-restore snapshot)"; \
+	cd $(WEB_SRC) && npx vite build --watch >/dev/null & VITE_PID=$$!; \
 	$(CADDY) run --config ./Caddyfile > tmp/caddy.out 2>&1 & CADDY_PID=$$!; \
 	trap 'kill $$VITE_PID $$CADDY_PID 2>/dev/null || true' EXIT INT TERM; \
 	echo "dev stack:"; \
@@ -40,6 +93,8 @@ dev:
 	$(AIR)
 
 # Dev-local mode: fully isolated second muxterm instance on THIS Mac only.
+# The isolation itself now lives in DEV_ISOLATE at the top of this file, shared
+# with `make dev`; the notes below explain WHY each part of it is load-bearing.
 #   - own binary   bin/muxterm-dev (air-managed, rebuilds on Go/web changes)
 #   - own port     127.0.0.1:8313  (distinct from prod 8311 and remote-VM dev 8312)
 #   - own runtime  ${TMPDIR:-/tmp}/muxterm-dev-local/ (XDG_RUNTIME_DIR override) --
@@ -98,15 +153,7 @@ dev:
 # Requires: air (falls back to $(HOME)/go/bin/air if not on PATH).
 dev-local:
 	@mkdir -p tmp
-	@unset INVOCATION_ID; \
-	export XDG_RUNTIME_DIR="$${TMPDIR:-/tmp}"; \
-	XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR%/}/muxterm-dev-local"; \
-	export XDG_RUNTIME_DIR; \
-	XDG_DATA_HOME="$$XDG_RUNTIME_DIR/data"; \
-	export XDG_DATA_HOME; \
-	MUXTERM_COS_SESSION_ID="muxterm-cos-dev"; \
-	export MUXTERM_COS_SESSION_ID; \
-	mkdir -p "$$XDG_RUNTIME_DIR" "$$XDG_DATA_HOME"; \
+	@$(call DEV_ISOLATE,dev-local,muxterm-cos-dev) \
 	cd $(WEB_SRC) && npx vite build --watch > ../tmp/dev-local-vite.out 2>&1 & VITE_PID=$$!; \
 	$(AIR) -c .air.local.toml & AIR_PID=$$!; \
 	kill_tree() { \

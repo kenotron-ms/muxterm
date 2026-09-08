@@ -110,6 +110,38 @@ export class MuxReconnectOverlay extends LitElement {
         animation: none;
       }
     }
+
+    /*
+     * The fatal variant replaces the spinner with a static mark and gives the
+     * detail room to hold a multi-line diagnosis and a recovery command. A
+     * spinning spinner is an animated claim that something is still being
+     * attempted; when nothing is, showing one is simply untrue.
+     */
+    .mark {
+      font-size: 28px;
+      line-height: 1;
+      color: #f7768e;
+    }
+
+    .message.fatal {
+      color: #f7768e;
+    }
+
+    .detail.fatal {
+      color: #a9b1d6;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      text-align: left;
+      max-width: min(78ch, 90vw);
+      max-height: 60vh;
+      overflow: auto;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid #414868;
+      border-radius: 6px;
+      padding: 12px 14px;
+      user-select: text;
+    }
   `;
 
   /** 'retrying' | 'waiting' | 'offline' — mirrors ws.ts's ReconnectState. */
@@ -126,6 +158,14 @@ export class MuxReconnectOverlay extends LitElement {
    */
   @property({ type: String })
   message = '';
+
+  /**
+   * The multi-line diagnosis rendered beneath the headline in the fatal
+   * variant. Empty in the ordinary reconnect states, whose detail line is
+   * derived from the live phase instead.
+   */
+  @property({ type: String })
+  detail = '';
 
   @state()
   private _now = Date.now();
@@ -176,8 +216,31 @@ export class MuxReconnectOverlay extends LitElement {
     }
   }
 
+  /**
+   * Fatal means "no retry is in progress and none will help". It swaps the
+   * spinner for a static error mark, which is the difference between the
+   * overlay reporting a state and the overlay performing one.
+   */
+  @property({ type: Boolean })
+  fatal = false;
+
   render() {
     const busy = this.phase === 'retrying';
+    // Fatal outranks the phase-derived presentation. When no retry is in
+    // flight and none can help, the spinner, the countdown and the "Retry now"
+    // button would each promise an attempt that will never succeed -- the
+    // exact lie this overlay exists not to tell.
+    if (this.fatal) {
+      return html`
+        <div class="overlay" role="status" aria-live="polite">
+          <div class="container">
+            <div class="mark">⚠</div>
+            <div class="message fatal">${this.message}</div>
+            ${this.detail ? html`<div class="detail fatal">${this.detail}</div>` : nothing}
+          </div>
+        </div>
+      `;
+    }
     return html`
       <div class="overlay" role="status" aria-live="polite">
         <div class="container">

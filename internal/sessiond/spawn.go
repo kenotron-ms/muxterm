@@ -145,22 +145,28 @@ func acquireSpawnLock(timeout time.Duration) (func(), error) {
 // this exact shape.
 //
 // Order of operations:
-//  1. systemd gate. When running under systemd, INVOCATION_ID is set for every
-//     unit it starts. There the daemon runs as its own unit
-//     (muxterm-sessiond.service) in its own cgroup, so auto-spawning a second
-//     copy inside the web unit's cgroup would double-spawn and race. Bail out
-//     before touching the lock -- there is nothing to serialize.
-//  2. If a daemon is already live, there is nothing to do. This fast path sits
-//     ahead of the lock so the overwhelmingly common case costs one dial.
+//  1. If a daemon is already live, there is nothing to do. This fast path sits
+//     ahead of everything else so the overwhelmingly common case costs one
+//     dial.
+//  2. systemd gate. When THIS PROCESS is itself a systemd unit, the daemon
+//     runs as its own unit (muxterm-sessiond.service) in its own cgroup, so
+//     auto-spawning a second copy inside the web unit's cgroup would
+//     double-spawn and race. Bail out before touching the lock -- there is
+//     nothing to serialize.
 //  3. Otherwise serialize on the spawn lock, re-check liveness under it (a
-//     fresh daemon may have come up while we waited), then clear any stale
-//     socket file left by a crashed daemon so the new one can bind, spawn a
-//     fresh detached daemon, and poll until it comes up.
+//     fresh daemon may have come up while we waited), then claim the socket
+//     name -- removing a stale file, but REFUSING if a live daemon owns it --
+//     spawn a fresh detached daemon, and poll until it comes up.
+//
+// The liveness check now comes FIRST, ahead of the systemd gate. Ordering them
+// the other way round meant a process that merely inherited INVOCATION_ID
+// returned "fine" without ever asking whether a daemon existed, which is how a
+// dev instance in a muxterm pane came up with a serve and no sessiond at all.
 func EnsureDaemon(socketPath, logPath string) error {
-	if os.Getenv("INVOCATION_ID") != "" {
+	if IsAlive(socketPath) {
 		return nil
 	}
-	if IsAlive(socketPath) {
+	if startedBySystemd() {
 		return nil
 	}
 	release, err := acquireSpawnLock(5 * time.Second)
@@ -179,15 +185,21 @@ func EnsureDaemon(socketPath, logPath string) error {
 	return ensureDaemonLocked(socketPath, logPath)
 }
 
-// ensureDaemonLocked clears any stale socket file, spawns a fresh detached
-// daemon, and polls until it answers.
+// ensureDaemonLocked claims the socket name, spawns a fresh detached daemon,
+// and polls until it answers.
 //
 // The caller MUST already hold the spawn lock. RestartDaemon calls this
 // directly rather than EnsureDaemon: it holds the lock for the whole restart
 // window, and re-entering acquireSpawnLock would deadlock against itself.
+//
+// ClaimSocket rather than a bare os.Remove: IsAlive and this call are separated
+// by the lock acquisition, and a daemon that came up in that window would
+// otherwise have its socket unlinked out from under it. The spawn lock does not
+// close that window on its own -- it only serialises callers that TAKE the
+// lock, and a bare `muxterm sessiond` does not.
 func ensureDaemonLocked(socketPath, logPath string) error {
-	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove stale socket: %w", err)
+	if err := ClaimSocket(socketPath); err != nil {
+		return err
 	}
 	if _, err := Spawn(logPath); err != nil {
 		return fmt.Errorf("spawn sessiond: %w", err)
