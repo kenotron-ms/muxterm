@@ -264,7 +264,10 @@ func markdownPageHTML(p *publication, content []byte) []byte {
 	b.WriteString("<title>" + escapeHTMLText(p.filename) + "</title>\n")
 	b.WriteString("<style>" + publicDocCSS + "</style>\n")
 	b.WriteString("</head><body>\n")
-	b.WriteString("<main id=\"doc\" class=\"doc\"><p class=\"loading\">Loading\u2026</p></main>\n")
+	// The placeholder says what is actually true if the script never runs --
+	// a permanent "Loading…" would be a lie told to a reader with JavaScript
+	// disabled. public-doc.ts clears it before rendering.
+	b.WriteString("<main id=\"doc\" class=\"doc\"><p class=\"loading\">This document needs JavaScript to render.</p></main>\n")
 	b.WriteString("<script id=\"doc-title\" type=\"application/json\">")
 	b.Write(title)
 	b.WriteString("</script>\n")

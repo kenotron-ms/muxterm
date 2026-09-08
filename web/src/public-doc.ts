@@ -56,6 +56,11 @@ function main(): void {
     return;
   }
 
+  // Lit's render() inserts into the container without clearing what is
+  // already there, so the shell's placeholder has to go explicitly -- leaving
+  // it produces a document with "This document needs JavaScript to render."
+  // printed above it.
+  host.replaceChildren();
   render(renderSegments(parseMarkdown(source)), host);
 }
 

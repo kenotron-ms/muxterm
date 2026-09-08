@@ -145,13 +145,31 @@ func faultSourceMissing(detail string) *pubFault {
 	}
 }
 
+// faultIdentity is the refusal at the centre of this feature. It fires both
+// for the attack and for a mundane cause worth naming, because they are
+// indistinguishable from the filesystem's side and the publisher deserves to
+// know which one to suspect:
+//
+//	the attack -- the file, or a directory above it, was replaced with a
+//	symlink to something else after the link was sent;
+//
+//	the everyday one -- the file was saved by an editor that writes a new file
+//	and renames it over the old one (sed -i, vim's default writebackup, most
+//	editors' "atomic save"). That is a NEW inode, so the pin no longer matches.
+//
+// Re-pinning automatically would resolve the second case and hand the first
+// one the win: an already-sent URL would silently start serving whatever now
+// occupies the path. So this refuses in both cases, and the remedy for the
+// honest one is to publish again -- which mints a NEW id, leaving the old link
+// dead rather than redirected.
 func faultIdentity(detail string) *pubFault {
 	return &pubFault{
 		Code:   "identity_mismatch",
 		Status: http.StatusConflict,
 		Public: "This link is broken: the file it points to is not the file that was published, so nothing was served.",
-		Owner:  "identity check failed, so this publication refuses to serve: " + detail,
-		Fatal:  false,
+		Owner: "identity check failed, so this publication refuses to serve: " + detail +
+			". Either the file was replaced deliberately, or it was saved by an editor that writes a new file and renames it into place. Publish it again to get a new link",
+		Fatal: false,
 	}
 }
 
