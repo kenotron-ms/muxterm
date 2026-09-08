@@ -8,7 +8,7 @@ playback that survive the screen going off, and later camera and file attachment
 This document designs that wrapper. It does not evaluate whether a wrapper is the right
 architecture, and it does not compare one against a from-scratch native client.
 
-**Status: DRAFT — in progress.**
+**Status: COMPLETE** — every item W1–W6 carries a terminal verdict. See [Verdicts](#verdicts-one-line-each) and the [Recommendation](#recommendation).
 
 ---
 
@@ -1405,3 +1405,332 @@ which Android 12+ forbids for while-in-use permissions with no exemption to fall
 licensing or battery unknowns. The alternative — go straight to a wake word — is recorded, and
 its cost is a native audio path plus a licence decision plus an all-day open microphone, none of
 which help answer the question the first slice exists to answer.*
+
+---
+
+## W6 — The first slice
+
+**VERDICT: ANSWERED.** Seven components, roughly **5–6 focused days** for someone who has shipped
+an Android app and **10–14** for someone who has not, plus a hardware-dependent tail nobody can
+compress. The biggest technical risk is not the foreground service.
+
+### W6.1 — What the slice is, exactly
+
+> **An APK that loads `https://muxterm.ampbox.io`, lets the user start voice by tapping the orb
+> that already exists, and holds the conversation through five minutes of screen-off — including
+> a two-minute silence in the middle.**
+
+The silence clause is not padding. It is the difference between a demo and a proof: W1.4b
+establishes that a session survives screen-off trivially while the assistant is talking, and dies
+1–5 minutes after it stops. **A first slice that does not include a long pause proves nothing.**
+
+Not in the slice: wake word, camera, attachments, tray, desktop, any store listing, any native UI
+beyond the notification the OS requires.
+
+### W6.2 — Components, in build order
+
+Each step ends in something observable. That ordering is deliberate: every step after the first
+can fail, and you want to know which one did.
+
+| # | Component | Ends when you can see | Est. |
+| --- | --- | --- | --- |
+| 1 | Gradle module + `AndroidManifest.xml` | It installs and launches to a blank screen | 0.5 d |
+| 2 | `MainActivity` + `MuxtermWebView` + the three `WebSettings` | **muxterm loads and is usable on a phone.** Terminal, sidebar, everything | 0.5 d |
+| 3 | `MuxtermChromeClient` — the two-layer permission bridge | **The orb works. A voice conversation runs, screen on.** This is the first genuinely load-bearing milestone: it proves WebRTC realtime works inside a WebView at all | 1.0 d |
+| 4 | `VoiceSessionService` + notification + `ServiceCompat.startForeground` | An ongoing notification appears when voice starts and goes when it stops; **Stop voice** ends the session | 1.0 d |
+| 5 | The bridge — `addWebMessageListener` + wiring `native-bridge.ts` into `voice-session-controller.ts` | The service starts *before* `getUserMedia`, tracks state, and stops on hang-up | 1.0 d |
+| 6 | Visibility pin (`pinVisible`, W1.4b) + `AudioRecordingCallback` → `mic.silenced` | The page is told when the OS silences it | 0.5 d |
+| 7 | **Measure.** Point the PWA investigation's existing probe at the wrapper: screen off 5 min with a 2 min silence, count total frames vs non-silent frames | **The answer** | 0.5 d |
+
+**Total: 5.0 days.** Then double it for a first Android app, and add whatever step 7 turns up.
+
+Steps 1–6 are all buildable from what is in this repository plus an SDK. Step 7 needs a phone and
+nothing else will do.
+
+**Build order note:** step 3 before step 4 is not arbitrary. If WebRTC realtime does not work
+inside a WebView at all — a possibility I cannot rule out from here — you find out on day 2 for
+the price of two files, instead of on day 5 having built a foreground service for nothing.
+
+### W6.3 — The single biggest technical risk
+
+**Not the foreground service. The freeze.**
+
+The FGS story is well-documented, the platform names the exact type for this exact use case, and
+if it fails it fails loudly — `SecurityException`, `IllegalArgumentException`,
+`MissingForegroundServiceTypeException`, all at `startForeground()`, all on the first run.
+
+The freeze (W1.4b) is the opposite in every respect:
+
+- **It is silent.** No exception, no callback, no log. Audio simply stops.
+- **It is delayed.** 1–5 minutes after the last sound, on a Finch-controlled timer.
+- **It only appears in the case people skip testing** — a long pause in a real conversation.
+- **The fix depends on an implementation detail.** Pinning window visibility works because of how
+  `AwContents` computes `isVisible`, not because any API promises it. It is **[INFERENCE]** from
+  three source files, and it is the one place this design leans on Chromium internals.
+- **And if the pin does not work, there is no second idea inside the wrapper's remit.** The
+  alternatives — restructure the web app's audio around an `AudioWorklet`, or keep a real visible
+  Activity alive with the screen off — are respectively out of scope and user-hostile.
+
+**What would settle it, and it is cheap:** step 7. Load the probe, start a session, screen off,
+wait five minutes with two minutes of deliberate silence in the middle, read the counters. Total
+frames flat ⇒ frozen (or the renderer died). Total frames advancing with non-silent frames at
+zero ⇒ the OS silenced the capture, so the FGS is the problem, not the freeze. Both advancing ⇒
+it works. **The instrument already exists and needs no changes** — it counts exactly these three
+cases apart, which is what it was built for.
+
+**Second-biggest risk, different in kind:** `kAndroidSuspendWebRtcOnScreenOff`. Chromium has
+landed a hook mapping `ACTION_SCREEN_OFF` to a WebRTC suspend; it is
+`FEATURE_DISABLED_BY_DEFAULT` today. WebView does not read Chrome's Finch config, but it inherits
+source defaults when the WebView provider updates. **If that default flips, the wrapper stops
+working and nothing in the app can prevent it.** This is not a build risk — it is a standing
+watch item, and it belongs in whatever list the team keeps of external things that can break the
+product.
+
+### W6.4 — Honest effort estimate
+
+| | |
+| --- | --- |
+| Someone who has shipped an Android app | **5–6 days** to the end of step 7 |
+| Someone who has not | **10–14 days**, most of it in the Gradle/SDK/signing tax rather than in this design |
+| If step 7 says the freeze wins | **+3–5 days**, and possibly a scope conversation |
+| If step 3 says WebRTC does not work in a WebView | **stop.** That is a different document. |
+
+**What is *not* in that number, and should be said out loud:** a signing key that must never be
+lost, `targetSdk` bumps on Play's schedule, a Play listing with foreground-service and
+`RECORD_AUDIO` declarations and prominent disclosure, and per-vendor battery-manager support
+tickets from every Xiaomi and OnePlus owner. The build is a week. **The app is forever.** The
+earlier PWA investigation was right that this is the real cost; this document's contribution is
+that the *engineering* is small and well-understood, so the decision is about the ongoing cost
+rather than about technical risk.
+
+### W6.5 — What was built here, since the SDK-free parts were buildable
+
+Everything that did not need an Android SDK, an emulator or a device has been written, and where
+it could be verified it was. All in [`webview-wrapper/`](./webview-wrapper/).
+
+**Verified:**
+
+- `native-bridge.ts` — the web half of the bridge, 300 lines. **`tsc --noEmit` clean** under the
+  web app's own compiler options (ES2021 / DOM / `strict`), TypeScript 5.9, exit 0.
+- `native-bridge.test.mjs` — **10/10 checks pass** under Node v24.15.0, driving the module through
+  a fake host channel. It demonstrates, rather than asserts: absent-by-default in a browser;
+  capability-gating rather than version-checking; an unknown envelope version dropped; an unknown
+  message type from a newer wrapper dropped; a command with no reply resolving by timeout instead
+  of hanging; a throwing listener not taking out the others; and an attachment crossing as a URL
+  with no bytes in the envelope.
+
+**Written, not compiled — no Android SDK on this machine, and the README says so:**
+
+- `AndroidManifest.xml` — the complete delta from an empty app. Six permissions, one activity, one
+  service, every line traced to its citation, and every deliberate *absence*
+  (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, `WAKE_LOCK`, `CAMERA`) recorded as a decision.
+- `MainActivity.kt` — the one screen, plus `MuxtermWebView` with the seven-line visibility pin
+  from W1.4b.
+- `MuxtermChromeClient.kt` — the two-layer permission bridge, with the origin check that the
+  standard sample-code version omits.
+- `VoiceSessionService.kt` — the foreground service, the notification, and the
+  `AudioRecordingCallback` watcher.
+- `MuxtermBridge.kt` — the native half of the bridge.
+
+**Not built, deliberately:** anything requiring the web app to change. `native-bridge.ts` lives
+under `docs/design/` and is inert; the README describes exactly how to wire it in when that is in
+scope for whoever owns `web/`.
+
+---
+
+## Camera and file attachment, briefly
+
+The item asks for a short answer, so this is one.
+
+**Both are the same shape, and both are already accommodated by W4's `attachment` event.**
+
+**File attachment** needs one override: `WebChromeClient.onShowFileChooser`. Without it, an
+`<input type="file">` in a WebView does nothing at all — the same fail-closed-and-silent pattern as
+`onPermissionRequest`. The override launches `ACTION_OPEN_DOCUMENT` (or the Photo Picker on
+Android 13+, which needs no storage permission) and returns the resulting URIs to the callback.
+The page then reads the file through the ordinary `File` API and posts it to muxterm's existing
+upload path. **No bridge message required at all** — this is the web platform working normally
+once the host stops blocking it.
+
+**Camera** has two flavours and they are not the same job:
+
+- *Live camera in the page* (`getUserMedia({video:true})`) — needs `<uses-permission CAMERA>`,
+  the runtime grant, and `PermissionRequest.RESOURCE_VIDEO_CAPTURE` added to the same
+  `onPermissionRequest` that already handles audio. Perhaps twenty lines. Note the finding from
+  the load-bearing section: **Chrome explicitly stops video capture on backgrounding**
+  (`VideoCaptureManager::ReleaseDevices`), so a backgrounded camera behaves differently from a
+  backgrounded microphone and should not be assumed to follow the same rules.
+- *Take a photo and attach it* — cheaper and probably what is actually wanted. `ACTION_IMAGE_CAPTURE`
+  to the system camera app, write to a `FileProvider` path, hand the page a `content://` URL via
+  the `attachment` event. **No `CAMERA` permission needed**, because the system camera app takes
+  the picture.
+
+**The rule that keeps both cheap** (W4.6): **payloads cross as URLs, never as bytes**, and the page
+does the upload. Native never talks to muxterm's server and never holds a credential. Which means
+the later work is one more event type, one `FileProvider`, one `onShowFileChooser`, and a web-side
+handler reusing the upload path that already exists. No new concepts, and no change to the
+architecture in this document.
+
+---
+
+## What was built here
+
+| Artifact | Verified |
+| --- | --- |
+| [`webview-wrapper/native-bridge.ts`](./webview-wrapper/native-bridge.ts) | `tsc --noEmit` clean, web app's own options, TS 5.9 |
+| [`webview-wrapper/native-bridge.test.mjs`](./webview-wrapper/native-bridge.test.mjs) | 10/10 pass, Node v24.15.0 |
+| [`webview-wrapper/tsconfig.check.json`](./webview-wrapper/tsconfig.check.json) | — |
+| [`webview-wrapper/AndroidManifest.xml`](./webview-wrapper/AndroidManifest.xml) | Not compiled — no SDK |
+| [`webview-wrapper/MainActivity.kt`](./webview-wrapper/MainActivity.kt) | Not compiled — no SDK |
+| [`webview-wrapper/MuxtermChromeClient.kt`](./webview-wrapper/MuxtermChromeClient.kt) | Not compiled — no SDK |
+| [`webview-wrapper/VoiceSessionService.kt`](./webview-wrapper/VoiceSessionService.kt) | Not compiled — no SDK |
+| [`webview-wrapper/MuxtermBridge.kt`](./webview-wrapper/MuxtermBridge.kt) | Not compiled — no SDK |
+| [`webview-wrapper/README.md`](./webview-wrapper/README.md) | States exactly what is and is not checked |
+
+---
+
+## Verdicts, one line each
+
+| Item | Verdict |
+| --- | --- |
+| **W1** — the Android wrapper | **ANSWERED.** Plain `WebView`, not TWA, on process identity. One service, `microphone\|mediaPlayback`. Two permission layers, both fail closed and silent. And **two independent killers**: the OS mic policy, fixed by the FGS; and Blink's freeze, fixed by pinning window visibility. |
+| **W2** — the desktop wrapper | **ANSWERED.** No screen-off problem on desktop. But stable Tauri 2.11.5 pins `wry ^0.55.0` and the permission handler arrived in `wry` 0.56.0 — **today's Tauri cannot grant its own webview a microphone.** Re-check the pin before starting; Electron is the recorded alternative. |
+| **W3** — the boundary | **ANSWERED.** One sentence, four rules, one deletion test. The sharpest rule: native may own a trigger, never a turn. |
+| **W4** — the bridge | **ANSWERED.** Origin-scoped `WebMessageListener`, versioned JSON envelope, six messages each way, no bytes. Both halves written; the web half is tested. |
+| **W5** — always-listening | **ANSWERED.** $259.20/user/month continuous on mini, $820.80 on full, for ~6% duty cycle. Gating beats model choice 15:1. Third-party apps cannot reach the hotword DSP. Build push-to-talk. |
+| **W6** — the first slice | **ANSWERED.** Seven components, 5–6 days experienced / 10–14 not. Biggest risk is the freeze, not the service — because the freeze is silent, delayed, and only shows up in the test people skip. |
+
+No item is UNANSWERABLE. Four specific claims are **[UNSETTLED]** and each names the measurement
+that settles it: (1) that a `microphone` FGS covers a *WebView's* capture; (2) that the visibility
+pin prevents the freeze; (3) whether Linux stops capture on DPMS blanking; (4) whether macOS
+global shortcuts need an Accessibility grant. The first two are settled by the same five-minute
+screen-off measurement in W6 step 7.
+
+---
+
+## Recommendation
+
+**Build the Android wrapper. Build it as the smallest thing in W6. Do not build the desktop one
+yet, and do not build always-listening at all.**
+
+The case rests on one narrow, verified fact rather than on any general preference for native:
+**Chromium contains no code that stops or mutes microphone capture when an app is backgrounded or
+the screen goes off.** The Android audio-input path has zero app-lifecycle hooks across five
+files; the video path has one, gated on the very feature flag that controls Chrome's foreground
+service. The silencing is done by the OS, to a *process* that has neither a visible UI nor a
+microphone foreground service — and a web page does not have a process of its own to fix. **No
+change to muxterm's web app can address this. A wrapper running a correctly typed foreground
+service addresses it completely.** That is the entire argument, and everything the wrapper does
+beyond it is scope creep.
+
+Three things qualify that, and all three are new to this document:
+
+1. **The foreground service is only half of it.** Blink freezes a hidden WebView's page 1–5
+   minutes after audio stops, and `kStopInBackground` is enabled by default in WebView builds. The
+   FGS is powerless against it. The fix is seven lines that pin window visibility for the life of
+   a session — cheap, but it must be *in the first slice*, because a wrapper without it survives
+   screen-off only while the assistant is talking and dies at the first pause. Anyone testing with
+   continuous speech will ship a broken thing believing it works.
+2. **Desktop is blocked on someone else's version bump.** Stable Tauri cannot resolve to a `wry`
+   with a permission handler. That will change; until it does, desktop costs an Electron-sized
+   decision for a platform that does not have the problem.
+3. **Always-listening is a $259-per-user-per-month feature that bills for 94% silence.** Not a
+   privacy judgement — arithmetic. Gate it, or do not build it. And note that a third-party app
+   cannot reach the low-power hotword DSP, so even the gated version runs detection on the
+   application processor with an all-day open microphone.
+
+**The one thing worth building even if the rest is shelved** is the `mic.silenced` event.
+muxterm's worst failure mode today is a lit orb attached to a dead microphone — `readyState:
+"live"`, `muted: false`, all-zero samples, no event, no error, a conversation that stops being a
+conversation and says nothing about it. Android has a signal for exactly this,
+`AudioManager.AudioRecordingCallback`, and Chromium wires it to nothing. **A wrapper can see it.
+A web page never can.** That single event converts an invisible failure into a visible one, and it
+is worth the channel on its own.
+
+**Recommended next step, for a human to decide on:** build steps 1–3 of W6 — manifest, activity,
+permission bridge. Two days, three files, no foreground service. It answers the one question that
+would invalidate everything else: *does muxterm's WebRTC realtime voice work inside a WebView at
+all?* If yes, the rest of this document is a build plan. If no, it is a different document, and
+better to know on day two.
+
+---
+
+## Sources
+
+**Chromium**, all read at `main` and checked 2026-09-08 via
+<https://chromium.googlesource.com/chromium/src/+/main/>:
+`media/audio/android/audio_manager_android.cc` ·
+`media/audio/android/aaudio_input.cc` ·
+`media/audio/android/opensles_input.cc` ·
+`content/browser/renderer_host/media/audio_input_device_manager.cc` ·
+`content/browser/renderer_host/media/media_stream_manager.cc` ·
+`content/browser/renderer_host/media/video_capture_manager.cc` ·
+`content/public/common/content_features.cc` ·
+`third_party/blink/common/features.cc` ·
+`third_party/blink/renderer/platform/scheduler/main_thread/page_scheduler_impl.{h,cc}` ·
+`android_webview/java/src/org/chromium/android_webview/AwContents.java` ·
+`android_webview/browser/aw_contents.cc` ·
+`android_webview/lib/aw_main_delegate.cc` ·
+`android_webview/docs/architecture.md`
+
+**Android platform**, all checked 2026-09-08:
+Sharing audio input <https://developer.android.com/media/platform/sharing-audio-input> ·
+Foreground service types <https://developer.android.com/develop/background-work/services/fgs/service-types> ·
+Background-start restrictions <https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start> ·
+Launching a foreground service <https://developer.android.com/develop/background-work/services/fgs/launch> ·
+Android 14 FGS types required <https://developer.android.com/about/versions/14/changes/fgs-types-required> ·
+Android 15 behaviour changes <https://developer.android.com/about/versions/15/behavior-changes-15> ·
+Notification runtime permission <https://developer.android.com/develop/ui/views/notifications/notification-permission> ·
+User-initiated stopping of FGS apps (Task Manager) <https://developer.android.com/develop/background-work/services/fgs/stop-apps> ·
+Doze and App Standby <https://developer.android.com/training/monitoring-device-state/doze-standby> ·
+Network access optimization <https://developer.android.com/develop/connectivity/network-ops/network-access-optimization> ·
+`WebChromeClient` <https://developer.android.com/reference/android/webkit/WebChromeClient> ·
+`PermissionRequest` <https://developer.android.com/reference/android/webkit/PermissionRequest> ·
+`WebSettings` <https://developer.android.com/reference/android/webkit/WebSettings> ·
+`WebView` <https://developer.android.com/reference/android/webkit/WebView> ·
+`androidx.webkit.WebViewCompat` <https://developer.android.com/reference/androidx/webkit/WebViewCompat> ·
+`VoiceInteractionService` <https://developer.android.com/reference/android/service/voice/VoiceInteractionService> ·
+AOSP `core/res/AndroidManifest.xml`, `core/java/android/service/voice/*.java`,
+`media/java/android/media/MediaRecorder.java` via <https://github.com/aosp-mirror/platform_frameworks_base>
+
+**Desktop / Tauri / WebKit**, all checked 2026-09-08:
+<https://crates.io/api/v1/crates/tauri> · <https://crates.io/api/v1/crates/wry> ·
+<https://crates.io/api/v1/crates/tauri-runtime-wry/2.11.4/dependencies> ·
+<https://docs.rs/wry/0.56.1/wry/struct.WebViewBuilder.html> ·
+<https://docs.rs/wry/0.56.1/wry/enum.PermissionKind.html> ·
+<https://github.com/tauri-apps/wry/issues/81> · <https://github.com/tauri-apps/wry/pull/1654> ·
+<https://github.com/tauri-apps/wry/issues/1195> ·
+<https://v2.tauri.app/learn/system-tray/> · <https://v2.tauri.app/plugin/global-shortcut/> ·
+<https://v2.tauri.app/start/prerequisites/> · <https://github.com/tauri-apps/global-hotkey> ·
+<https://webkitgtk.org/reference/webkit2gtk/stable/signal.WebView.permission-request.html> ·
+<https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2permissionkind> ·
+<https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2controller.isvisible> ·
+<https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadexecutionstate> ·
+<https://bugs.webkit.org/show_bug.cgi?id=226620> ·
+<https://developer.apple.com/documentation/iokit/kiopmassertiontypepreventuseridledisplaysleep> ·
+<https://developer.apple.com/library/archive/documentation/Performance/Conceptual/power_efficiency_guidelines_osx/AppNap.html> (⚠ archived 2016) ·
+<https://developer.apple.com/documentation/BundleResources/Information-Property-List/UIBackgroundModes> ·
+<https://www.electronjs.org/docs/latest/api/session> ·
+<https://www.electronjs.org/docs/latest/api/system-preferences> ·
+<https://developer.chrome.com/docs/android/trusted-web-activity/> (⚠ page dated 2020-02-04)
+
+**Wake-word engines**, all checked 2026-09-08:
+<https://github.com/Picovoice/porcupine> · <https://picovoice.ai/docs/faq/general/> ·
+<https://github.com/k2-fsa/sherpa-onnx> · <https://github.com/dscripka/openWakeWord> ·
+<https://github.com/MycroftAI/mycroft-precise> ·
+<https://github.com/OpenVoiceOS/ovos-ww-plugin-precise-lite> ·
+<https://github.com/Kitt-AI/snowboy>
+
+**Specifications:** Opus, RFC 6716 <https://www.rfc-editor.org/rfc/rfc6716.txt> (September 2012).
+
+**Prior work in this repository:** [`android-pwa-voice.md`](./android-pwa-voice.md) — the NO-GO
+verdict on the pure-PWA approach, and the probe that measures what documentation cannot.
+
+**Known gap, inherited and unchanged:** `issues.chromium.org` is not usefully citable
+anonymously — search returns HTTP 401 and individual issues return `IamPermissionDeniedException`.
+Where a bug thread would have been the natural citation, Chromium source or a Gerrit CL is cited
+instead.
+
+---
+
+**Status: COMPLETE.** Every item W1–W6 carries a terminal verdict. Written 2026-09-08.

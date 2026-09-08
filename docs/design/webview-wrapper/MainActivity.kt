@@ -1,11 +1,42 @@
 package io.ampbox.muxterm
 
+import android.content.Context
 import android.os.Bundle
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+
+/**
+ * A WebView whose window visibility can be pinned for the duration of a voice
+ * session. Seven lines, and without them the wrapper dies at the first pause in
+ * the conversation.
+ *
+ * Why: WebView reports its page HIDDEN when the containing window goes
+ * invisible (AwContents.java onWindowVisibilityChanged -> setWindowVisibilityInternal
+ * -> updateWebContentsVisibility -> Visibility.HIDDEN). Blink's kStopInBackground
+ * is FEATURE_ENABLED_BY_DEFAULT for Android non-Cast non-desktop builds, which
+ * includes WebView. Freezing is gated on PageSchedulerImpl::IsBackgrounded(),
+ * which is !IsPageVisible() && !IsAudioPlaying() — and IsAudioPlaying() expires
+ * kRecentAudioDelay = 30 seconds after sound stops.
+ *
+ * So with the screen off, a session is safe only while the assistant is talking,
+ * plus 30 seconds. The foreground service does not touch this: it solves the OS
+ * microphone policy one layer down. Two independent killers, two independent
+ * fixes. See docs/design/webview-wrapper.md W1.4b.
+ *
+ * Pinned ONLY while a session is live. A backgrounded muxterm with no voice
+ * session should freeze like any other app.
+ */
+class MuxtermWebView(ctx: Context) : WebView(ctx) {
+    @Volatile var pinVisible = false
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(if (pinVisible) View.VISIBLE else visibility)
+    }
+}
 
 /**
  * The whole native UI: one WebView, full bleed, pointed at muxterm.
@@ -27,13 +58,13 @@ class MainActivity : ComponentActivity() {
         const val JS_OBJECT = "muxtermNative"
     }
 
-    private lateinit var webView: WebView
+    private lateinit var webView: MuxtermWebView
     private lateinit var bridge: MuxtermBridge
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        webView = WebView(this).apply {
+        webView = MuxtermWebView(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -53,6 +84,12 @@ class MainActivity : ComponentActivity() {
             // Deliberately NOT touched: setRendererPriorityPolicy. The default is
             // RENDERER_PRIORITY_IMPORTANT "regardless of visibility", which is
             // exactly what a backgrounded voice session needs.
+        }
+
+        // The bridge pins visibility while VoiceSessionService runs. Pinning is
+        // scoped to a live session so an idle backgrounded app still freezes.
+        VoiceSessionService.onRunningChanged = { running ->
+            webView.post { webView.pinVisible = running }
         }
 
         webView.webChromeClient = MuxtermChromeClient(this)

@@ -58,6 +58,20 @@ class VoiceSessionService : Service() {
         @Volatile var running: Boolean = false
             private set
 
+        /**
+         * Notified when `running` changes, so MainActivity can pin the WebView's
+         * window visibility for the life of the session. Without that pin, Blink
+         * freezes the page ~1-5 minutes after the assistant stops talking, and
+         * the foreground service is powerless to prevent it — see W1.4b.
+         */
+        @Volatile var onRunningChanged: ((Boolean) -> Unit)? = null
+
+        private fun setRunning(value: Boolean) {
+            if (running == value) return
+            running = value
+            onRunningChanged?.invoke(value)
+        }
+
         /** The bridge installs this to receive events. Null when no page is attached. */
         @Volatile var events: ((String) -> Unit)? = null
     }
@@ -96,7 +110,7 @@ class VoiceSessionService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
         )
-        running = true
+        setRunning(true)
         watchRecording()
 
         // NOT sticky. If the system kills us, the peer connection is gone too;
@@ -107,14 +121,14 @@ class VoiceSessionService : Service() {
 
     private fun stop() {
         unwatchRecording()
-        running = false
+        setRunning(false)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
         unwatchRecording()
-        running = false
+        setRunning(false)
         super.onDestroy()
     }
 
