@@ -607,3 +607,245 @@ Nothing here is speculative; every item traces to a citation above.
 6. `web/src/lib/native-bridge.ts` — the web-side half. W4 defines it; it is buildable today.
 
 Effort is costed in W6.
+
+---
+
+## W2 — The desktop wrapper, concretely
+
+**VERDICT: ANSWERED, and the answer contains one hard fact that decides the near term.**
+
+**Desktop has no screen-off problem in Android's sense.** No desktop OS feeds silence to a
+background app's microphone. The wrapper's job on desktop is therefore completely different: not
+*permitting* capture, but *reaching* the machine — tray presence, a global shortcut, a window
+that can hide without dying.
+
+**But Tauri's current stable release cannot grant microphone permission to its own webview.**
+Not "is awkward" — cannot, on any platform, because the API does not exist in the version it
+pins. This is a versioning fact with a date, and it will stop being true; see below.
+
+### W2.1 — The Tauri version fact, stated plainly
+
+| Crate | Version | Published |
+| --- | --- | --- |
+| `tauri` (latest stable) | **2.11.5** | 2026-07-01 |
+| `tauri-runtime-wry` (latest stable) | 2.11.4 | — |
+| ↳ its `wry` dependency requirement | **`^0.55.0`** | — |
+| `wry` 0.55.1 (newest satisfying `^0.55.0`) | 0.55.1 | 2026-05-04 |
+| `wry` **0.56.0** — first release with `WebViewBuilder::with_permission_handler` | 0.56.0 | **2026-07-30** |
+| `wry` 0.56.1 | 0.56.1 | 2026-08-13 |
+
+Verified directly against the crates.io API and docs.rs on 2026-09-08:
+<https://crates.io/api/v1/crates/tauri>, <https://crates.io/api/v1/crates/wry>,
+<https://crates.io/api/v1/crates/tauri-runtime-wry/2.11.4/dependencies>,
+<https://docs.rs/wry/0.56.1/wry/struct.WebViewBuilder.html>,
+<https://docs.rs/wry/0.56.1/wry/enum.PermissionKind.html> (which lists `Microphone` — *"Microphone
+access permission"* — and `Camera` among 16 variants). **[VENDOR]**
+
+Under Cargo's semver rules for `0.x` crates, `^0.55.0` means `>=0.55.0, <0.56.0`. **Stable Tauri
+cannot resolve to a `wry` that has the permission handler.** **[INFERENCE]**, from two verified
+version facts.
+
+Why that matters: a webview denies media permissions by default on every desktop backend, and
+each backend fails closed and quietly, exactly as Android's WebView does.
+
+- **Linux / WebKitGTK:** *"If the last reference is removed on a `WebKitPermissionRequest` and the
+  request has not been handled, `webkit_permission_request_deny()` will be the default action."*
+  — <https://webkitgtk.org/reference/webkit2gtk/stable/signal.WebView.permission-request.html>
+  (checked 2026-09-08) **[VENDOR]**
+- **Windows / WebView2:** the host must handle `PermissionRequested`, which *"is raised when
+  content in a WebView requests permission to access some privileged resources"*, with
+  `CoreWebView2PermissionKind.Microphone = 0x1`, *"Indicates permission to capture audio."*
+  — <https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2permissionkind>
+  (page dated 2026-08-03) **[VENDOR]**
+- **macOS / WKWebView:** the host must implement `requestMediaCapturePermission`. **[VENDOR]**
+
+wry's own issue for this was open for five years: **wry #81, "Support for web APIs that require
+permissions"**, opened 2021-02-25 — *"Currently (at least on Linux), doing any action that
+requires permission… fails as the permission request is immediately denied"* — **closed
+2026-06-11** by **PR #1654**, which *"adds `WebViewBuilder::with_permission_handler`"* and wires
+WebView2's `PermissionRequested`, WKWebView's `requestMediaCapturePermission`, and WebKitGTK's
+`permission-request`. <https://github.com/tauri-apps/wry/issues/81>,
+<https://github.com/tauri-apps/wry/pull/1654> **[VENDOR]**
+
+Also open and worth knowing before building: **wry #1195**, *"Fix `getDisplayMedia()`
+`getUserMedia()` permission prompt on macOS"* (opened 2024-03-20, last updated 2025-09-02) —
+*"Show permission prompt for camera and microphone **twice** (application level and webview
+level)."* **OPEN.** <https://github.com/tauri-apps/wry/issues/1195> **[VENDOR]** A double prompt
+is a UX defect, not a blocker, but it is the state of the art on the platform muxterm's author
+is most likely to build on first.
+
+**Conclusion on Tauri, conservative as instructed.** Tauri is the right shape and the wrong
+version. The gap is one dependency bump wide and closing — the code exists, is merged, and is
+published in `wry`. **Do not build the desktop wrapper on Tauri stable today; re-check
+`tauri-runtime-wry`'s `wry` requirement before starting.** The moment it reads `^0.56`, Tauri is
+the answer.
+
+**If it has not moved when desktop work starts, the alternative is Electron**, recorded and not
+selected. Electron's equivalent is `session.setPermissionRequestHandler`, where camera and
+microphone arrive as the `media` permission with `details.mediaTypes` naming which; plus, on
+macOS, `systemPreferences.askForMediaAccess('microphone')` to trigger the OS TCC prompt, which
+*"In order to properly leverage this API, you must set the `NSMicrophoneUsageDescription` …
+strings in your app's `Info.plist` file."* <https://www.electronjs.org/docs/latest/api/session>,
+<https://www.electronjs.org/docs/latest/api/system-preferences> (checked 2026-09-08) **[VENDOR]**
+The cost of Electron is a Chromium per app and ~100 MB; the cost of waiting is time. Given W3's
+insistence that the wrapper stay thin, either is survivable — this is a packaging choice, not an
+architecture one, and it should be made on the version fact at the moment work starts.
+
+### W2.2 — Can a desktop webview hold the microphone while hidden or minimised?
+
+**Yes, as far as any primary source documents — with one caveat that is about the webview, not
+the OS.**
+
+**macOS: documented, from the WebKit engineer who owns WebRTC.** In WebKit bug 226620,
+*"Microphone stopped/paused when application goes to background"*, youenn fablet replied on
+2022-03-23:
+
+> "**It is not expected that audio tracks be muted in Safari on Mac.**
+> <https://webrtc.github.io/samples/src/content/peerconnection/pc1/> continues to play audio for
+> me when Safari is in the background. …
+> @dharjanto, for WKWebView, **muting is happening on iOS** in case `UIBackgroundModes` … does
+> not contain `"audio"`. Can you try that?"
+
+and closed the bug `RESOLVED / CONFIGURATION CHANGED`.
+<https://bugs.webkit.org/show_bug.cgi?id=226620> (checked 2026-09-08) **[VENDOR]**
+
+Two things fall out. On **macOS**, backgrounding does not mute WKWebView capture — so a Tauri or
+Electron app hidden to the tray keeps its microphone. On **iOS**, it does, and the remedy is one
+Info.plist key, `UIBackgroundModes` containing `"audio"`
+(<https://developer.apple.com/documentation/BundleResources/Information-Property-List/UIBackgroundModes>).
+That is the promised one-or-two-line iOS note, and iOS is otherwise out of scope: the structure —
+a wrapper hosting the web app in its own process, declaring a background capability the OS
+requires — is the same shape as Android, with a different declaration.
+
+*(A later comment on the same bug, 2024-10-19: "This is broken on Web Apps that use Add to Home
+Screen. Safari: Works; Add to Home Screen: Microphone stopped working." That is the iOS analogue
+of the Android PWA verdict, and it is consistent with it.)*
+
+**macOS App Nap does not apply to an audible app.** An app is an App Nap candidate only if,
+among other conditions, *"It isn't audible"*; the measures listed are priority reduction, timer
+throttling and I/O throttling — nothing about capture.
+<https://developer.apple.com/library/archive/documentation/Performance/Conceptual/power_efficiency_guidelines_osx/AppNap.html>
+(⚠ Apple archive, last updated 2016-09-13 — old, but the only primary App Nap document)
+**[VENDOR]**
+
+**Windows: no documented mute-on-background policy for Win32 apps.** The nearest primary API is
+`SetThreadExecutionState`, which exists specifically because *"media-recording and
+media-distribution applications … must perform critical background processing on desktop
+computers while the computer appears to be sleeping"* (`ES_AWAYMODE_REQUIRED`), with
+`ES_SYSTEM_REQUIRED` to *"force the system to be in the working state"*.
+<https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadexecutionstate>
+(page dated 2021-10-13) **[VENDOR]** Windows' "background apps" privacy setting governs
+UWP/Store apps, not Win32. **[UNSETTLED]** as a citable negative — I found no Microsoft page that
+states the absence outright, and absence of a policy is hard to cite.
+
+**The real Windows risk is the webview, not the OS**, and it is documented:
+
+> "There are CPU and memory benefits when the page is hidden. For instance Chromium has code that
+> **throttles activities on the page like animations and some tasks are run less frequently**."
+
+— `CoreWebView2Controller.IsVisible`,
+<https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2controller.isvisible>
+(checked 2026-09-08) **[VENDOR]**
+
+Design consequence, and it is the desktop twin of "do not call `WebView.onPause()`": **when
+hiding to tray, do not set `IsVisible = false` and do not destroy the webview.** Hide the *window*.
+The idiomatic tray implementation does exactly the wrong thing here.
+
+**Linux: [UNSETTLED].** I found no freedesktop, PipeWire or systemd document stating any policy
+on capture during DPMS display blanking, and none is likely to exist because there is no such
+policy — but I will not assert a negative from failure to find it. **What would settle it:** run
+a capture, `xset dpms force off`, and count non-silent frames. Cheap, and doable on the machine
+this is being written on, which is a Linux box — but out of scope for this document, which
+designs rather than tests.
+
+### W2.3 — Display sleep is not system sleep, and only one of them is a problem
+
+This is the honest answer to "does desktop even have a screen-off problem".
+
+**Display sleep and system sleep are separate, documented, independently controllable states on
+both macOS and Windows:**
+
+- macOS: `kIOPMAssertionTypePreventUserIdleDisplaySleep` — *"Prevents the display from dimming
+  automatically… While the display is prevented from dimming, the system cannot go into idle
+  sleep."*
+  <https://developer.apple.com/documentation/iokit/kiopmassertiontypepreventuseridledisplaysleep>
+  **[VENDOR]** And `caffeinate(8)` exposes them as separate flags: `-d` display, `-i` idle
+  system, `-s` system. **[VENDOR]**
+- Windows: `ES_DISPLAY_REQUIRED` *"Forces the display to be on"* versus `ES_SYSTEM_REQUIRED`
+  *"Forces the system to be in the working state"* — two independent flags in the same call.
+  **[VENDOR]**
+
+So: **the display going dark on a desktop does not stop an audio capture.** No OS documents
+doing so, and the APIs that exist treat display and system as orthogonal. **System sleep
+(S3 / Modern Standby) does** suspend capture — that is the real boundary, and it is the same
+boundary a native app faces. The correct behaviour for the wrapper is the same as any conferencing
+app: assert `ES_SYSTEM_REQUIRED` (Windows) or an idle-sleep assertion (macOS) **for the duration
+of a voice session only**, and release it the moment the session ends.
+
+**Net: desktop's problem is not "the screen went off". It is "the window is not on screen and the
+user needs a way back to it".** Which is tray and shortcut.
+
+### W2.4 — Tray presence and global shortcuts
+
+**Tray** is a core Tauri feature, not a plugin: `tauri = { version = "2.x", features = ["tray-icon"] }`,
+built with `tauri::tray::TrayIconBuilder`. The JS API additionally needs the `core:tray:default`
+permission set (`allow-new`, `allow-set-icon`, `allow-set-menu`, `allow-set-tooltip`, …).
+<https://v2.tauri.app/learn/system-tray/> (page last updated 2026-04-20),
+<https://v2.tauri.app/reference/acl/core-permissions/> **[VENDOR]**
+
+Two Linux caveats, both documented:
+
+- Build dependency: `libayatana-appindicator3-dev` (Debian) / `libappindicator-gtk3-devel`
+  (Fedora) / `libappindicator-gtk3` (Arch). <https://v2.tauri.app/start/prerequisites/> **[VENDOR]**
+- Behaviour: **"Linux: Unsupported.** The event is not emitted even though the icon is shown and
+  will still show a context menu on right click." — i.e. left-click-to-toggle does not work; the
+  context menu does. <https://v2.tauri.app/learn/system-tray/> **[VENDOR]**
+
+**Global shortcuts** need `tauri-plugin-global-shortcut` (v2.3.2) plus explicit permissions —
+**"No features are enabled by default"**, so `global-shortcut:allow-register`,
+`:allow-unregister`, `:allow-is-registered` must be listed.
+<https://v2.tauri.app/plugin/global-shortcut/> (page last updated 2025-02-22) **[VENDOR]**
+
+The backing crate is `global-hotkey`, whose README states platform support as **"Windows, macOS,
+Linux (X11 Only)"** and notes *"On macOS, an event loop must be running on the main thread."*
+<https://github.com/tauri-apps/global-hotkey> **[VENDOR]** **Wayland global shortcuts are a real
+gap** — the portal-based path (`org.freedesktop.portal.GlobalShortcuts`) is what Electron uses
+and Tauri's backing crate does not. On a Wayland desktop, plan for tray-only activation.
+
+Whether macOS global shortcuts require an Accessibility or Input Monitoring grant is
+**[UNSETTLED]**: neither the Tauri plugin documentation nor the `global-hotkey` README mentions
+one, and Carbon-style hotkey registration historically needs no TCC grant. Do not assume a
+prompt; do not assume its absence either. Settled by running it once on a Mac.
+
+### W2.5 — Is desktop materially easier? Yes — but not *first*
+
+**Easier, on the merits:**
+
+- No foreground service, no service type, no `startForeground` sequencing, no three distinct
+  crash modes for a manifest/call mismatch.
+- No OS policy silencing a hidden app's microphone (macOS documented; Windows and Linux
+  undocumented-because-absent).
+- Display sleep is not a threat; only system sleep is, and one assertion handles it.
+- No Play policy, no `targetSdk` treadmill, no signing key you must never lose.
+- No vendor battery managers. Nothing on desktop behaves like Xiaomi.
+
+**Harder, or at least not free:**
+
+- Three OS backends instead of one, each with its own permission plumbing.
+- The Tauri version fact above blocks the cheap path *today*.
+- Tray and global-shortcut behaviour is uneven on Linux specifically (no left-click event,
+  X11-only shortcuts).
+
+**And yet: build Android first.** Not because it is easier — it plainly is not — but because
+**desktop does not have the problem the wrapper exists to solve.** A desktop browser tab already
+holds a microphone while hidden. The wrapper adds convenience there (tray, shortcut, a window
+that survives); on Android it adds the *only* path to a capability that is otherwise
+unreachable. Building the easy one first would produce a wrapper that proves nothing about the
+hard one, and W6's first slice is explicitly about proving the model.
+
+Recorded alternative, since this is a genuine judgement call: build desktop first to shake out
+the bridge (W4) on the platform with the fastest edit-run loop, then port. Rejected because the
+bridge's hard case — foreground service lifecycle — exists only on Android, so a desktop-first
+bridge would be designed against the easy half and would need redesigning. *If the Tauri version
+fact resolves and someone wants a two-day morale win, desktop is that. It is not the first
+slice.*
