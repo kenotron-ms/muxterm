@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  muxterm is served over HTTPS with a real certificate, so the wrapper gets a
+  secure context for free and needs no exception - getUserMedia requires one.
+  Cleartext stays OFF everywhere by default.
+
+  The single exception is loopback, which exists so the wrapper can be pointed
+  at a probe page over `adb reverse` during verification. http://localhost is
+  also a secure context in Chromium, so that probe exercises the same code
+  paths as production.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

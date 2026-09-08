@@ -18,3 +18,4 @@ captures/
 # IDE
 .idea/
 *.iml
+.evidence/
