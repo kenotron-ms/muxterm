@@ -274,6 +274,12 @@ page that captures, put the screen off for five minutes, and count non-silent fr
 AudioWorklet. The PWA probe already does exactly this measurement and can be pointed at the
 wrapper unchanged.
 
+**And a warning that turns out to matter more than this caveat:** satisfying Android's microphone
+policy is necessary and **not sufficient**. There is a second, independent mechanism that stops a
+screen-off session — Blink's own page freezing, one layer up, inside the same process, entirely
+indifferent to the foreground service. It is documented in **W1.4b**, and it is the reason a
+wrapper can pass a naive screen-off test and still be broken.
+
 ---
 
 ## W1 — The Android wrapper, concretely
@@ -542,10 +548,10 @@ identically and look like a wrapper bug.
 - **Playback.** Same FGS satisfies Android 15's audio-focus precondition. **[ANDROID]**
 - **The renderer.** Bound at `RENDERER_PRIORITY_IMPORTANT` regardless of visibility.
   **[WEBVIEW]**
-- **JavaScript, the peer connection, the `<audio>` element.** WebView is not Chrome: it has no
-  `PageScheduler` tab-freezing story driven by Chrome's `kStopInBackground`, whose Android
-  default was set for browser tabs. **[INFERENCE]** — and see the caveat below, because this is
-  the weakest claim in the section.
+- **JavaScript, the peer connection, the `<audio>` element.** **Only conditionally — read W1.4b
+  before relying on this.** My first assumption was that WebView, not being a browser, has no
+  tab-freezing story. That assumption is wrong, it is the most dangerous thing anyone could carry
+  out of this section, and W1.4b replaces it with what the source actually says.
 
 **What still kills it — the real list:**
 
@@ -579,11 +585,13 @@ identically and look like a wrapper bug.
    but it does inherit source defaults when the WebView provider updates. **If that default
    flips, the wrapper breaks and no manifest entry saves it.** This is the single largest
    long-term risk to the whole design, and it should be a watch item rather than a mitigation.
+7. **Blink freezing the page.** The one the foreground service cannot touch, and the one that
+   nearly got written down as "does not apply". It gets its own section.
 
 ### W1.4b — The second killer, which the foreground service does not fix
 
-Claim 4 of the survival list above was the weakest, so I went and read it. **It is wrong as
-stated, and the correction is the most actionable thing in W1.**
+The fourth bullet of the survival list above was the weakest claim in the section, so I went and
+read it. **It was wrong, and the correction is the most actionable thing in W1.**
 
 **WebView marks its page hidden when the containing window becomes invisible.** The chain, all in
 `AwContents.java` at `main`, checked 2026-09-08:
