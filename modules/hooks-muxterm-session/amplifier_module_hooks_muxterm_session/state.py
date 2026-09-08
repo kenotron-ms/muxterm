@@ -297,6 +297,70 @@ class SessionRecord:
         self.goal_finished = False
         self.path = spool / f"{session_id}.json"
         self._last_payload: str | None = None
+        self._adopt_prior_ending()
+
+    def _adopt_prior_ending(self) -> None:
+        """Inherit the terminal verdict of an EARLIER run of this same session.
+
+        A goal lane no longer ends when its loop ends: the pane immediately
+        resumes that same session interactively so the work stays reachable
+        (internal/sessiond/goallane.go). The resumed process is a NEW process
+        with a NEW record, and without this it would publish
+        `interactive/working` -- a lane that has finished its goal reporting
+        that it is still working, and indistinguishable from an interactive
+        lane that never had a goal. Those are the two readings the mode
+        distinction exists to prevent, and it would produce both at once.
+
+        Read from the session's own snapshot file, whose name is the session id,
+        so this can only ever adopt from a previous run of the SAME session --
+        never from a neighbouring one. It runs before on_session_start's
+        sweep_stale, which keeps endings for ENDING_TTL_SECONDS anyway, so a
+        resume seconds later always finds it.
+
+        Deliberately narrow. Only an AUTONOMOUS snapshot in a TERMINAL state is
+        adopted, which is exactly "a goal run that ended". An interactive
+        ending, or a row still claiming to work, is left alone and the session
+        starts fresh exactly as before -- being wrong here would pin a goal
+        identity onto an ordinary chat session, and a wrong `doneMeans` is a
+        stop condition nobody agreed to.
+
+        The pin is released by the next prompt:submit
+        (_sync_mode(fresh_turn=True)): the moment a human types, this stops
+        being a finished goal lane and becomes the ordinary chat session it now
+        is, and reads as one.
+        """
+        try:
+            with self.path.open("r", encoding="utf-8") as handle:
+                prior = json.load(handle)
+        except Exception:
+            # No prior snapshot, unreadable, or not JSON. A fresh session is
+            # the correct and safe reading of all three.
+            return
+        if not isinstance(prior, dict):
+            return
+        if prior.get("mode") != MODE_AUTONOMOUS:
+            return
+        state = prior.get("state")
+        if state not in TERMINAL_STATES:
+            return
+
+        self.mode = MODE_AUTONOMOUS
+        self.state = state
+        self.goal_finished = True
+        # The stop condition is the one fact that makes this row legible as a
+        # finished goal lane rather than as some idle session, and it cannot be
+        # recovered from anywhere else once the loop has dropped it.
+        prior_done_means = prior.get("doneMeans")
+        if isinstance(prior_done_means, str) and prior_done_means:
+            self.done_means = prior_done_means
+        # Name and label are carried for continuity only: the pane and the row
+        # should not appear to become a different lane at the handover.
+        prior_name = prior.get("name")
+        if isinstance(prior_name, str) and prior_name:
+            self.name = prior_name
+        prior_label = prior.get("label")
+        if isinstance(prior_label, str) and prior_label:
+            self.label = prior_label
 
     # -- projection ---------------------------------------------------------
 

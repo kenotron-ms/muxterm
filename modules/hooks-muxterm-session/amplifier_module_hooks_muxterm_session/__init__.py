@@ -190,7 +190,7 @@ async def mount(
 
     return {
         "name": "hooks-muxterm-session",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "description": (
             "Stamp session id into process title for muxterm crash recovery, "
             "and publish declared session state for muxterm's home view"

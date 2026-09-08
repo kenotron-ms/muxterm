@@ -67,6 +67,19 @@ readable afterwards. Not fixed here: it is pane/row retention, not argv, and it
 is not a reason to restore `--mode chat` (with the flag there was no loop and no
 verdict to lose).
 
+**Both halves of that gap have since been closed, in this order.** Lane
+completion records (`internal/sessiond/completion.go`) made the verdict survive
+the pane: a finished lane leaves a `done`/`failed` row and holds its workspace
+against `ReapIfEmpty`, so nothing vanishes. What that left was a workspace whose
+pane was gone — the finished lane's *context* was still being thrown away, so a
+lane that got most of the way there could not be asked to finish the job. A goal
+lane is now a two-phase command (`internal/sessiond/goallane.go`): the headless
+loop runs exactly as described above, and when it ends the pane resumes that
+same session interactively instead of exiting. The pane stays, the transcript
+stays, and you can type at it. `--mode chat` is still absent from phase 1, for
+every reason given above, and phase 2 needs no mode flag because `amplifier
+resume` is interactive by construction.
+
 ## Two bugs found and fixed outside the checklist
 
 **1. `make dev-local` was not data-isolated.** It overrode `XDG_RUNTIME_DIR` but

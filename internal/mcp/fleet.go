@@ -239,6 +239,23 @@ func unknownSessionErr(sessionID string, rows []sessiond.SessionState) error {
 // Emitting an empty done_means rather than omitting the key is also load-
 // bearing: a /goal lane carries one and an interactive lane does not, and that
 // asymmetry is only legible if the absence is shown rather than hidden.
+//
+// READING A GOAL LANE, now that a finished one keeps its pane and resumes that
+// session interactively (internal/sessiond/goallane.go). mode and done_means
+// together separate the three states that used to be one:
+//
+//	autonomous + working + done_means   the loop is still running
+//	autonomous + done    + done_means   goal met; the session is open, waiting
+//	                                    for a human, and can be typed at
+//	autonomous + failed  + done_means   goal failed or stopped short; same
+//	interactive + anything, no done_means
+//	                                    a human took over -- it is an ordinary
+//	                                    chat session now, and reads as one
+//
+// The lane does not report `working` once its goal is met, and it never looks
+// like an interactive lane that never had a goal. The flip happens on the
+// human's first prompt (the hook's _sync_mode(fresh_turn=True)), because that
+// is the moment it stops being a goal lane and starts being a conversation.
 func fleetRowJSON(r sessiond.SessionState, machine string) map[string]any {
 	knows := r.Knows
 	if knows == nil {
