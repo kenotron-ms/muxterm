@@ -327,6 +327,7 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 	registerMachineTools(srv, pool.machines)
 	registerRemoteReadTools(srv, wrap)
 	registerTunnelTools(srv)
+	registerPublishTools(srv)
 	registerConfigTools(srv)
 
 	// attachOnce guards the one-time workspace attach for resources/list.
@@ -408,12 +409,14 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 //	Fleet:      fleet_status, lane_transcript, session_send
 //
 // * Withheld when insidePane() reports this server is running in a muxterm
-// pane, leaving 14 here and 19 overall. Read the comment at each of the two
+// pane, leaving 14 here. Read the comment at each of the two
 // registrations before changing that.
 //
-// The 3 tunnel tools (list_tunnels, create_tunnel, close_tunnel) are registered
-// separately via registerTunnelTools because they go through the HTTP REST API
-// of the serve layer rather than the sessiond daemon.
+// The 3 tunnel tools (list_tunnels, create_tunnel, close_tunnel) and the 3
+// publishing tools (publish_file, list_publications, revoke_publication) are
+// registered separately, via registerTunnelTools and registerPublishTools,
+// because they go through the HTTP REST API of the serve layer rather than the
+// sessiond daemon -- and so must keep working when no daemon is running.
 func registerAllTools(
 	srv *Server,
 	wrap func(func(*Client, map[string]any) (string, error)) ToolFunc,
