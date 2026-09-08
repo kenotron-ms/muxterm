@@ -9,6 +9,7 @@ bin/
 # Frontend
 node_modules/
 web/dist/
+web/dist-public/
 # Standalone home-view preview build (vite.demo.config.ts)
 web/dist-demo/
 # Mobile-navigation mockup build (vite.mobile-demo.config.ts)

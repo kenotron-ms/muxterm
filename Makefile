@@ -79,7 +79,7 @@ build: web
 # the MCP server to the dev instance) and resolved production's restore
 # snapshot. It now takes the same DEV_ISOLATE mechanism as dev-local, with its
 # own runtime dir and cos session so the two dev instances also stay apart.
-dev:
+dev: web-public
 	@mkdir -p tmp
 	@$(call DEV_ISOLATE,dev,muxterm-cos-dev-vm) \
 	echo "  runtime dir   $$XDG_RUNTIME_DIR  (isolated sessiond socket/log/server.url)"; \
@@ -151,7 +151,7 @@ dev:
 # sessions must survive a `make dev-local` restart), not a bug. Clean it up
 # by deleting $${TMPDIR:-/tmp}/muxterm-dev-local/ if ever desired.
 # Requires: air (falls back to $(HOME)/go/bin/air if not on PATH).
-dev-local:
+dev-local: web-public
 	@mkdir -p tmp
 	@$(call DEV_ISOLATE,dev-local,muxterm-cos-dev) \
 	cd $(WEB_SRC) && npx vite build --watch > ../tmp/dev-local-vite.out 2>&1 & VITE_PID=$$!; \
@@ -187,6 +187,14 @@ install-stable: web
 # Build the frontend only: install npm deps, run tsc + vite build, copy output.
 web:
 	cd $(WEB_SRC) && npm install && npm run build
+
+# Build ONLY the public-document renderer (web/dist-public/public-doc.js), the
+# single asset the unauthenticated /p/{id} page loads. `npm run build` already
+# does this; this target exists for the watch-based dev targets, whose
+# `vite build --watch` only ever rebuilds the main bundle. web/embed.go embeds
+# dist-public/, so the Go build fails outright if it was never produced.
+web-public:
+	cd $(WEB_SRC) && npx vite build --config vite.public-doc.config.ts
 
 test:
 	go test -v ./...

@@ -32,8 +32,17 @@ func init() {
 
 // Config holds the configuration for creating a new Server.
 type Config struct {
-	Addr          string
-	StaticFS      fs.FS
+	Addr     string
+	StaticFS fs.FS
+
+	// PublicDocFS holds the single asset the UNAUTHENTICATED /p/{id} page
+	// loads: the markdown renderer, built separately so it is one
+	// self-contained file with a fixed name (web/vite.public-doc.config.ts).
+	// Deliberately NOT a subdirectory of StaticFS -- the anonymous route must
+	// not be able to reach the application bundle. nil disables the markdown
+	// page's script, which degrades to "Loading…" rather than to a 500.
+	PublicDocFS fs.FS
+
 	NoAuth        bool          // skip all auth checks, including loopback bypass (dev only)
 	ConfigPath    string        // path to write config.toml on PATCH /api/config (empty = skip writes)
 	InitialConfig muxcfg.Config // initial resolved configuration (zero value = package defaults)
@@ -85,6 +94,16 @@ type Server struct {
 	mux     *http.ServeMux
 	hub     *Hub
 	tunnels *TunnelRegistry
+
+	// publications holds live public file publications. A SIBLING of
+	// tunnels, never a widening of it: a tunnel forwards to a port and stays
+	// behind the auth middleware, a publication serves one file to anyone
+	// holding its link. See internal/server/publish.go.
+	publications *PublicationRegistry
+
+	// publicDocFS is the one asset family reachable without authentication:
+	// the markdown renderer loaded by the /p/{id} page. See Config.
+	publicDocFS fs.FS
 
 	authSrv        *authserver.AuthServer
 	webRedirectURI string
@@ -140,6 +159,8 @@ func New(cfg Config) *Server {
 		mux:            http.NewServeMux(),
 		hub:            hub,
 		tunnels:        tunnels,
+		publications:   NewPublicationRegistry(),
+		publicDocFS:    cfg.PublicDocFS,
 		authSrv:        cfg.AuthServer,
 		webRedirectURI: cfg.WebRedirectURI,
 		version:        cfg.Version,
@@ -182,6 +203,23 @@ func New(cfg Config) *Server {
 
 	// Public, unauthenticated routes.
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
+
+	// ⛔ THE ONLY ROUTES IN THIS SERVER THAT SERVE USER DATA WITHOUT AUTH.
+	//
+	// A published file is readable by anyone holding its link -- that is the
+	// entire point, since a link that needs a muxterm account is not a link
+	// you can send to anyone. The bypass is scoped HERE, by registering
+	// exactly these two patterns without protect(), and it changes nothing
+	// about any other route: no flag, no header, and no request-derived
+	// condition can promote a protected pattern into an unprotected one.
+	//
+	// Both are fixed-shape. "/p/{id}" is two segments and the id must be 22
+	// base64url characters before the registry is even consulted;
+	// "/p/_asset/doc.js" is a literal. Nothing a caller writes reaches the
+	// filesystem, so traversal here is not filtered -- it is unrepresentable.
+	// See internal/server/publish_api.go.
+	s.mux.HandleFunc("GET /p/_asset/doc.js", s.handlePublicAsset)
+	s.mux.HandleFunc("GET /p/{id}", s.handlePublicDocument)
 	if s.authSrv != nil {
 		s.mux.HandleFunc("GET /authorize", s.authSrv.ServeAuthorize)
 		s.mux.HandleFunc("POST /authorize", s.authSrv.ServeAuthorize)
@@ -216,6 +254,13 @@ func New(cfg Config) *Server {
 	s.mux.Handle("POST /api/tunnels", protect(http.HandlerFunc(s.handleTunnelCreate)))
 	s.mux.Handle("DELETE /api/tunnels/{id}", protect(http.HandlerFunc(s.handleTunnelClose)))
 	s.mux.Handle("/t/", protect(http.HandlerFunc(s.handleTunnelProxy)))
+
+	// Owner side of publishing. Protected like every other owner surface --
+	// only the /p/ reader routes above are anonymous. See publish_api.go.
+	s.mux.Handle("GET /api/publications", protect(http.HandlerFunc(s.handlePublicationsList)))
+	s.mux.Handle("POST /api/publications", protect(http.HandlerFunc(s.handlePublicationCreate)))
+	s.mux.Handle("DELETE /api/publications", protect(http.HandlerFunc(s.handlePublicationRevoke)))
+	s.mux.Handle("DELETE /api/publications/{id}", protect(http.HandlerFunc(s.handlePublicationRevoke)))
 
 	// Remote machines. {id} is a HostRef.ID such as "ssh:boxb"; a colon is a
 	// legal pchar in a path segment and rule P3 (no "/" in a host id) is what
@@ -278,6 +323,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if s.voice != nil {
 		defer s.voice.Close()
 	}
+
+	// Expired publications linger briefly as tombstones so a reader who is
+	// seconds late is told "this expired" rather than "this is not valid".
+	// This drops them once that window closes. Stops with the server.
+	sweepDone := make(chan struct{})
+	defer close(sweepDone)
+	go s.sweepPublications(sweepDone)
 
 	errCh := make(chan error, 1)
 	go func() {
