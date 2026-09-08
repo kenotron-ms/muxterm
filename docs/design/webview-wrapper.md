@@ -580,15 +580,113 @@ identically and look like a wrapper bug.
    flips, the wrapper breaks and no manifest entry saves it.** This is the single largest
    long-term risk to the whole design, and it should be a watch item rather than a mitigation.
 
-**Caveat on claim 4 of the survival list, stated honestly:** I have verified that the *capture*
-path has no lifecycle hook, and that the *video* path does. I have **not** verified that WebView
-disables Blink's page-freezing for a backgrounded embedder — `kStopInBackground` is a Blink
-feature, and WebView uses Blink. A WebView whose Activity is stopped may or may not be treated as
-a hidden page by `PageSchedulerImpl`. **[UNSETTLED].** What would settle it, in order of cost:
-(a) read `//android_webview/` for `PageScheduler`/visibility plumbing — cheap, and worth doing
-before writing code; (b) the screen-off frame count in W6. If WebView *does* freeze the page,
-the fix is within the wrapper's remit — keep the Activity technically visible, or drive the audio
-graph from an `AudioWorklet` — and it does not change the architecture.
+### W1.4b — The second killer, which the foreground service does not fix
+
+Claim 4 of the survival list above was the weakest, so I went and read it. **It is wrong as
+stated, and the correction is the most actionable thing in W1.**
+
+**WebView marks its page hidden when the containing window becomes invisible.** The chain, all in
+`AwContents.java` at `main`, checked 2026-09-08:
+
+```java
+@Override
+public void onWindowVisibilityChanged(int visibility) {
+    boolean windowVisible = visibility == View.VISIBLE;
+    if (mIsWindowVisible == windowVisible) return;
+    setWindowVisibilityInternal(windowVisible);       // :5040-5045
+}
+```
+→ `setWindowVisibilityInternal` → `postUpdateVisibility` → `updateWebContentsVisibility()`:
+
+```java
+boolean contentVisible = AwContentsJni.get().isVisible(mNativeAwContents);
+if (contentVisible && !mIsContentVisible) {
+    mWebContents.updateWebContentsVisibility(Visibility.VISIBLE);
+} else if (!contentVisible && mIsContentVisible) {
+    mWebContents.updateWebContentsVisibility(Visibility.HIDDEN);   // :3880-3892
+}
+```
+**[CHROMIUM]** So when the Activity stops, `PageSchedulerImpl::IsPageVisible()` becomes false.
+
+**And Blink's background-freezing feature is enabled for WebView builds:**
+
+```cpp
+// Freeze scheduler task queues in background after allowed grace time.
+BASE_FEATURE(kStopInBackground,
+             "stop-in-background",
+#if BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CAST_ANDROID) && \
+    !BUILDFLAG(IS_DESKTOP_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT
+```
+— `third_party/blink/common/features.cc:2229-2239` **[CHROMIUM]** WebView is `IS_ANDROID`, is not
+Cast, is not desktop Android. It gets the enabled default. (Note the Cast carve-out's stated
+reason — *"to prevent apps that play audio in the background from stopping"* — which is Chromium
+saying in a comment that this feature stops background audio.)
+
+**The one exemption is audibility, and it expires 30 seconds after sound stops:**
+
+```cpp
+bool PageSchedulerImpl::IsBackgrounded() const {
+  return !IsPageVisible() && !IsAudioPlaying() &&
+         !main_thread_scheduler_->IsVirtualTimeEnabled();     // :807-814
+}
+bool PageSchedulerImpl::IsAudioPlaying() const {
+  return audio_state_ == AudioState::kAudible ||
+         audio_state_ == AudioState::kRecentlyAudible;        // :453-456
+}
+```
+with `static constexpr base::TimeDelta kRecentAudioDelay = base::Seconds(30);`
+(`page_scheduler_impl.h:159`). Freezing only runs inside `if (IsBackgrounded())`. **[CHROMIUM]**
+
+**So, the corrected picture.** With the screen off, a voice session in a WebView is protected from
+freezing **only while the assistant is actually speaking, plus 30 seconds.** A conversational gap
+longer than that — the user thinking, reading, walking to another room — makes the page
+backgrounded, and after the freeze grace period (source constant
+`kDefaultDelayForBackgroundTabFreezing` is 1 minute, a neighbouring comment and the WICG spec say
+5, and the shipped value is the Finch parameter `DelayForBackgroundTabFreezingMills`, so treat it
+as **1–5 minutes, server-controlled**) the page is frozen: media elements paused, audio graph
+stopped.
+
+**The foreground service does not help here at all.** It solves the OS's microphone policy. This
+is Blink's scheduler, one layer up, in the same process, and entirely indifferent to it. **Two
+independent killers, two independent fixes.** Anyone who ships the FGS, tests a session with the
+assistant talking continuously, sees it survive, and declares victory will have shipped a
+wrapper that dies during the first pause.
+
+**The fix, and it is one the wrapper owns and a web page could never reach.** `mIsWindowVisible`
+is set from a value the *embedder* supplies. Subclass `WebView`, override
+`onWindowVisibilityChanged(int)`, and pass `View.VISIBLE` to `super` for the duration of a voice
+session:
+
+```kotlin
+class MuxtermWebView(ctx: Context) : WebView(ctx) {
+    /** Set true only while VoiceSessionService is running. */
+    var pinVisible = false
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(if (pinVisible) View.VISIBLE else visibility)
+    }
+}
+```
+
+Then `IsPageVisible()` stays true, `IsBackgrounded()` is false regardless of audio, and no freeze
+timer starts. **[INFERENCE]**, from the three cited code paths — no document states "override
+`onWindowVisibilityChanged` to prevent Blink freezing", and this is exactly the kind of
+implementation-detail dependency W3 would normally be suspicious of. It is admitted because the
+alternative is a wrapper that works only while the assistant is talking, and because it is
+*seven lines inside the wrapper* rather than a change to the product.
+
+*Conservative choice recorded:* pin visibility **only while a session is live**, never
+unconditionally, so a backgrounded muxterm with no voice session behaves like any other app and
+freezes normally. *Alternative considered and rejected:* accept the freeze and drive audio from an
+`AudioWorklet`, which would be a change to the web app's voice implementation — out of scope, and
+it would not save the `<audio>` element that the Page Lifecycle freeze steps explicitly pause.
+
+**Still [UNSETTLED], and now precisely:** that the visibility pin actually prevents the freeze on a
+device, and that a `microphone` FGS in the host app in fact keeps a *WebView's* capture alive.
+Both are settled by the same five-minute measurement in W6 — and the PWA investigation's probe
+already counts total frames and non-silent frames separately, which is exactly the instrument
+that tells "capture stopped" from "capture delivered zeros" from "JavaScript stopped running."
+Point it at the wrapper unchanged.
 
 ### W1.5 — The whole Android app, in one list
 
