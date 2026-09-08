@@ -147,8 +147,27 @@ rc=$?
 
 # The spool path is computed exactly as the hook computes it
 # (state.py spool_dir), which is exactly as the daemon computes it
-# (internal/sessiond/spawn.go socketDir).
-spool=${MUXTERM_SESSION_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/muxterm/session-state}
+# (internal/sessiond/spawn.go socketDir). All three arms, in the same order:
+#
+#   MUXTERM_SESSION_STATE_DIR set -> that directory, verbatim
+#   XDG_RUNTIME_DIR set           -> $XDG_RUNTIME_DIR/muxterm/session-state
+#   neither                       -> <tmp>/muxterm-<uid>/session-state
+#
+# The uid in the last arm is load-bearing and was missing here: socketDir()
+# falls back to os.TempDir()/muxterm-<uid> and spool_dir() to
+# tempfile.gettempdir()/muxterm-<uid>, both uid-scoped so two users on one
+# machine cannot collide. A bare /tmp/muxterm/session-state matches neither, so
+# on a host with no XDG_RUNTIME_DIR -- a plain headless server, the case this
+# arm exists for -- the scan below would read an empty directory and the lane
+# would fall through to the shell reporting "no finished goal run", which is
+# true of that path and false of the machine.
+if [ -n "${MUXTERM_SESSION_STATE_DIR:-}" ]; then
+  spool=$MUXTERM_SESSION_STATE_DIR
+elif [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+  spool=$XDG_RUNTIME_DIR/muxterm/session-state
+else
+  spool=${TMPDIR:-/tmp}/muxterm-$(id -u)/session-state
+fi
 
 session=""
 verdict=""

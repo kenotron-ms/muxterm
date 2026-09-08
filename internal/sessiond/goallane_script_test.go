@@ -300,3 +300,97 @@ func TestGoalLaneScriptDoesNotExecuteGoalText(t *testing.T) {
 		t.Errorf("goal did not reach phase 1 verbatim:\n%s", run.stdout)
 	}
 }
+
+// Every test above sets MUXTERM_SESSION_STATE_DIR, so the two arms the script
+// falls back to were never executed -- and one of them was wrong: it resolved
+// to /tmp/muxterm/session-state while socketDir() (spawn.go) and spool_dir()
+// (state.py) both resolve to <tmp>/muxterm-<uid>/session-state. On a host with
+// no XDG_RUNTIME_DIR the lane scanned an empty directory and reported "no
+// finished goal run", which is a path mismatch wearing the words for a missing
+// run. Both fallback arms are exercised here against the same stub, and each
+// asserts the resume actually happened -- the only outcome that proves the
+// script and the writers agree on where the spool is.
+func runGoalLaneScriptInSpool(t *testing.T, spool string, extraEnv []string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(spool, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := fmt.Sprintf(`
+sid=$PPID
+cat > "%s/11111111-2222-3333-4444-555555555555.json" <<EOF
+{"v":1,"pid":$$,"pidStart":1,"sessionId":"11111111-2222-3333-4444-555555555555","harness":"amplifier","mode":"autonomous","state":"done","updatedAt":1,"sid":$sid,"doneMeans":"whatever"}
+EOF
+`, spool)
+
+	stub := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  run)
+    printf 'STUB-RAN-PHASE-1 %%s\n' "$2"
+    %s
+    exit 0
+    ;;
+  resume)
+    printf 'STUB-RESUMED %%s\n' "$2"
+    exit 0
+    ;;
+esac
+exit 99
+`, snapshot)
+	if err := os.WriteFile(filepath.Join(binDir, "amplifier"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeShell := "#!/bin/sh\nprintf 'STUB-SHELL\\n'\n"
+	if err := os.WriteFile(filepath.Join(binDir, "fakeshell"), []byte(fakeShell), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	argv, err := GoalLaneArgv("the fallback resolves")
+	if err != nil {
+		t.Fatalf("GoalLaneArgv: %v", err)
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	// A fresh environment, not os.Environ(): the point of the test is which
+	// variables are ABSENT, and the test process inherits a real
+	// XDG_RUNTIME_DIR from whatever runs it.
+	cmd.Env = append([]string{
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"SHELL=" + filepath.Join(binDir, "fakeshell"),
+		"HOME=" + dir,
+	}, extraEnv...)
+	out, _ := cmd.CombinedOutput()
+	return string(out)
+}
+
+// No MUXTERM_SESSION_STATE_DIR, no XDG_RUNTIME_DIR: the plain headless server.
+func TestGoalLaneScriptSpoolFallbackIsUIDScoped(t *testing.T) {
+	tmp := t.TempDir()
+	spool := filepath.Join(tmp, fmt.Sprintf("muxterm-%d", os.Getuid()), "session-state")
+	out := runGoalLaneScriptInSpool(t, spool, []string{"TMPDIR=" + tmp})
+	if !strings.Contains(out, "STUB-RESUMED 11111111-2222-3333-4444-555555555555") {
+		t.Errorf("did not find the snapshot at the uid-scoped fallback %s:\n%s", spool, out)
+	}
+	if strings.Contains(out, "STUB-SHELL") {
+		t.Errorf("fell back to a shell despite a resumable run in the spool:\n%s", out)
+	}
+}
+
+// XDG_RUNTIME_DIR set, MUXTERM_SESSION_STATE_DIR unset: the ordinary desktop
+// and the production instance.
+func TestGoalLaneScriptSpoolFollowsXDGRuntimeDir(t *testing.T) {
+	runtimeDir := t.TempDir()
+	spool := filepath.Join(runtimeDir, "muxterm", "session-state")
+	out := runGoalLaneScriptInSpool(t, spool, []string{"XDG_RUNTIME_DIR=" + runtimeDir})
+	if !strings.Contains(out, "STUB-RESUMED 11111111-2222-3333-4444-555555555555") {
+		t.Errorf("did not find the snapshot under XDG_RUNTIME_DIR at %s:\n%s", spool, out)
+	}
+	if strings.Contains(out, "STUB-SHELL") {
+		t.Errorf("fell back to a shell despite a resumable run in the spool:\n%s", out)
+	}
+}
