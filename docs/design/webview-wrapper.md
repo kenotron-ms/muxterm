@@ -949,3 +949,154 @@ the window.
 3. **The bridge surface is a reviewed interface.** W4 defines it; adding a method is a design
    change, not an implementation detail. Every addition must state which OS capability it reaches
    and why the page cannot.
+
+---
+
+## W4 — The bridge
+
+**VERDICT: ANSWERED.** One origin-scoped message channel, a versioned JSON envelope, **six
+messages web→native and six native→web**, no binary payloads in either direction, and a web-side
+half that degrades to a no-op in a browser. Reference implementations of both halves are in
+[`webview-wrapper/`](./webview-wrapper/) and the TypeScript half type-checks against muxterm's
+own config — see [What was built here](#what-was-built-here).
+
+### W4.1 — Transport
+
+**Android: `WebViewCompat.addWebMessageListener`, not `addJavascriptInterface`.**
+
+```java
+@UiThread
+@RequiresFeature(name = WebViewFeature.WEB_MESSAGE_LISTENER,
+                 enforcement = "androidx.webkit.WebViewFeature#isFeatureSupported")
+public static void addWebMessageListener(
+    @NonNull WebView webView,
+    @NonNull String jsObjectName,
+    @NonNull Set<String> allowedOriginRules,
+    @NonNull WebViewCompat.WebMessageListener listener)
+```
+— `androidx.webkit.WebViewCompat`, added in 1.3.0,
+<https://developer.android.com/reference/androidx/webkit/WebViewCompat> (checked 2026-09-08)
+**[WEBVIEW]**
+
+Chosen over `addJavascriptInterface` for one reason that matters more than any other:
+**`allowedOriginRules`**. The documentation is emphatic about why —
+
+> "Note that this is a powerful API, as the JavaScript object will be injected when the frame's
+> origin matches any one of the allowed origins. **The HTTPS scheme is strongly recommended for
+> security**; allowing HTTP origins exposes the injected object to any potential network-based
+> attackers. If a wildcard `"*"` is provided, it will inject the JavaScript object to all frames…
+> When using a wildcard, the app must treat received messages as untrustworthy."
+
+muxterm passes exactly one rule: `https://muxterm.ampbox.io`. Never `*`, never `http://`,
+never a `*.` pattern. If the webview is ever navigated off-origin — a link in terminal output, an
+OAuth redirect — the bridge object simply is not there. That is the correct failure.
+
+Secondary reasons: the injected object arrives *"immediately when the page begins to load"*, so
+there is no race between page start and bridge availability; messages are strings on a
+`WebMessagePort`, so there is no reflection surface and no `@JavascriptInterface` annotation
+hazard; and the API is feature-gated, so `WebViewFeature.isFeatureSupported(WEB_MESSAGE_LISTENER)`
+gives a clean "this device's WebView is too old" path instead of a crash. **[WEBVIEW]**
+
+**Desktop: the same envelope over each toolkit's own channel** — Tauri commands and
+`emit`/`listen`, or Electron `contextBridge` + `ipcRenderer`. The envelope and the message set
+are identical; only the two transport functions differ. The web-side half is written so the
+transport is a swappable detail (`_send` / `_receive`), which is the whole reason to define an
+envelope rather than call platform APIs directly.
+
+### W4.2 — The envelope
+
+```jsonc
+{ "v": 1, "type": "voice.start", "id": "c7", "payload": { /* type-specific */ } }
+```
+
+- `v` — envelope version. Native refuses an envelope whose `v` it does not know, and says so.
+- `type` — a dotted name from the closed set below. Unknown types are dropped with a warning,
+  never guessed at.
+- `id` — optional correlation id. Present on commands that want a reply; the reply carries the
+  same `id`.
+- `payload` — a plain JSON object. **Never a string that needs parsing again.** Never binary.
+
+Versioning rule: the wrapper ships through an app store and the web app deploys continuously, so
+**the web app will routinely be newer than the wrapper.** Therefore: the web side must treat every
+capability as absent until `ready` says otherwise, and native must ignore message types it does
+not recognise rather than failing. Additive changes only; a breaking change bumps `v` and native
+supports both for one release.
+
+### W4.3 — The message set (closed)
+
+**Web → native.** Every one names an OS capability the page cannot reach — Rule 3 of W3.
+
+| Type | Payload | Capability it reaches | Rule 3 justification |
+| --- | --- | --- | --- |
+| `voice.start` | `{sessionId}` | Start the `microphone`+`mediaPlayback` foreground service | No web API starts an Android service |
+| `voice.stop` | `{sessionId}` | `stopForeground` + `stopSelf` | ditto |
+| `voice.state` | `{state}` — one of muxterm's own `VoiceSessionState` values: `idle`/`connecting`/`listening`/`thinking`/`speaking`/`error` | Update the ongoing notification's text | No web API writes an FGS notification |
+| `keepAwake` | `{on: boolean}` | Desktop: `ES_SYSTEM_REQUIRED` / macOS idle-sleep assertion | The web platform's only wake lock is `"screen"`, released on hide |
+| `openOsSettings` | `{which: "notifications"\|"microphone"\|"battery"}` | `Intent` to the OS settings screen | No web API opens an OS settings page |
+| `log` | `{level, msg}` | Write to logcat / the desktop log file | Diagnostics only; carries no product data |
+
+`voice.state` deliberately mirrors `VoiceSessionState` from
+`web/src/lib/voice-session-controller.ts` rather than inventing a parallel vocabulary. The web
+app already exposes `subscribe()` over a `VoiceSessionSnapshot`; the bridge's web half subscribes
+to that and forwards **only the `state` field** — not `level`, not `heard`, not `spoken`. The orb's
+level meter and the transcript never cross.
+
+**Native → web.**
+
+| Type | Payload | Why the page cannot know this itself |
+| --- | --- | --- |
+| `ready` | `{platform, appVersion, capabilities: string[]}` | Announces the bridge and what this build supports |
+| `voice.serviceStarted` | `{ok: true}` \| `{ok: false, reason}` | The FGS either started or threw; the page must not call `getUserMedia` until it knows |
+| `voice.stopRequested` | `{}` | The user tapped **Stop voice** in the notification or the tray |
+| `mic.silenced` / `mic.resumed` | `{}` | **From `AudioManager.AudioRecordingCallback`.** Chromium wires this to nothing (see the load-bearing finding), so this event is information the page could not obtain by any means |
+| `wake` | `{}` | Later. On-device wake word fired. **The fact only** — see W3 Rule 4 |
+| `attachment` | `{kind, mime, url}` | Later. A camera or file payload is ready **at a URL**, not inline — see the short answer below |
+
+`mic.silenced` is the single most valuable thing on this list and the clearest justification for
+having a bridge at all. It converts muxterm's worst failure mode — a lit orb attached to a dead
+microphone, silent and undetectable — into an event the web app can render honestly. Even if
+everything else about the wrapper were deleted, this event would be worth the channel.
+
+### W4.4 — What must never cross
+
+Stated as prohibitions, because each has a plausible-sounding reason to violate it:
+
+| Never crosses | The tempting argument | Why not |
+| --- | --- | --- |
+| **Audio samples, either direction** | "Native already has the mic open for the wake word; forward the PCM and skip a `getUserMedia`" | The moment PCM crosses, native owns audio and W3 Rule 4 is dead. The page opens its own microphone, always. |
+| **The realtime ephemeral token** | "Native could hold the connection when the page is frozen" | The token mints a session that executes shell tools. It is minted server-side, used in the page, and never leaves it. Native holding it is a different product with a different threat model. |
+| **Terminal output or session content** | "The notification could show what the lane is doing" | The notification is one line and one action (W3). Content in a notification is content outside the web app. |
+| **Tool calls or their results** | "Native could handle a tool locally" | muxterm's design already keeps tool calls off the browser entirely, on a server-side bridge. Native must be further away, not nearer. |
+| **A URL for native to navigate to** | "The page knows where it wants to go" | A page that can drive native navigation can be driven off-origin by anything that can inject into the page. The page navigates itself; native never navigates on instruction. |
+| **A command for native to execute** | "One tiny escape hatch for debugging" | This is a remote shell with extra steps. `log` exists precisely so nobody needs to argue for this. |
+| **Binary blobs** | "Camera frames, file bytes" | Attachments cross as a **URL** the page fetches (see below). Payloads stay out of the envelope. |
+
+### W4.5 — Failure model
+
+Three properties, all mandatory:
+
+1. **Absent by default.** `nativeBridge.available` is `false` in a browser, and every method is a
+   safe no-op that resolves. The web app's behaviour in a normal tab must be byte-identical with
+   the bridge module present. This is the deletion test (W3) made executable.
+2. **Capability-gated, not version-gated.** The page checks `capabilities.includes('voice.fgs')`,
+   never `appVersion >= x`. An old wrapper simply announces less.
+3. **Timeouts, not hangs.** `voice.start` waits for `voice.serviceStarted` with a short timeout
+   (2 s is generous — `startForeground` is synchronous-ish). On timeout the page proceeds
+   *without* the service and tells the user voice may not survive the screen going off. It never
+   blocks the user's tap on a native reply that is not coming.
+
+### W4.6 — Room for camera and attachments, without building them
+
+The `attachment` event is shaped now so that adding it later is not a redesign. Two decisions do
+that work:
+
+- **Payloads cross as URLs, not bytes.** Native writes the captured photo or the chosen file
+  wherever it likes and hands the page a URL. On Android that is a `content://` URI exposed
+  through a `FileProvider`, which the WebView can fetch; on desktop it is a local HTTP URL or a
+  custom scheme. The envelope stays small, JSON, and loggable.
+- **The page still does the upload.** It `fetch`es the URL and posts to muxterm's existing files
+  API exactly as a drag-and-drop would. Native never talks to muxterm's server, never holds a
+  credential, and never learns what an attachment is for.
+
+Which means the later work is: one more native→web event, one `FileProvider`, and a web-side
+handler that reuses the upload path that already exists. No new concepts.
