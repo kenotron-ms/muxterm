@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Merged into the generated Info.plist by tauri-build. Tauri picks this up
+    either via bundle.macOS.infoPlist or by finding an Info.plist next to
+    tauri.conf.json.
+
+    NSMicrophoneUsageDescription is not optional and not cosmetic: AVFoundation
+    raises an exception if a capture device is used without it.
+    https://developer.apple.com/documentation/avfoundation/avcapturedevice/requestaccess(for:completionhandler:)
+
+    NSCameraUsageDescription is present because adding it later means a second
+    trip through notarisation; the wrapper does not use the camera today.
+  -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>muxterm uses the microphone for voice conversations with your terminal sessions.</string>
+
+  <key>NSCameraUsageDescription</key>
+  <string>muxterm uses the camera when you attach a photo to a session.</string>
+
+  <!--
+    LSUIElement=false: the app IS a normal app with a Dock icon. Menu-bar-only
+    presentation is applied at runtime with ActivationPolicy::Accessory so that
+    it can be toggled, rather than baked into the bundle.
+  -->
+  <key>LSUIElement</key>
+  <false/>
+</dict>
+</plist>

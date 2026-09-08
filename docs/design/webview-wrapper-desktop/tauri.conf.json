@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.11.5",
+  "productName": "muxterm",
+  "version": "0.1.0",
+  "identifier": "io.ampbox.muxterm.desktop",
+  "build": {
+    "frontendDist": "../shell"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "muxterm",
+        "url": "https://muxterm.ampbox.io/",
+        "width": 1280,
+        "height": 820,
+        "visible": false,
+        "focus": false,
+        "skipTaskbar": false,
+        "backgroundThrottling": "disabled",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"
+      }
+    ],
+    "security": {
+      "capabilities": ["muxterm-remote-bridge"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "nsis", "deb"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "entitlements": "macos/entitlements.plist",
+      "hardenedRuntime": true
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    }
+  }
+}

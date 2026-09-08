@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/remote-schema.json",
+  "identifier": "muxterm-remote-bridge",
+  "description": "The ONLY capability granted to the remote muxterm origin. It grants exactly one application command: the page's declaration that a voice session started or stopped. Nothing else. No core:window, no core:event, no fs, no shell, no process. If a future need seems to require adding a permission here, re-read docs/design/webview-wrapper-desktop.md section D3 first.",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "remote": {
+    "urls": ["https://muxterm.ampbox.io"]
+  },
+  "permissions": ["allow-declare-voice-state"]
+}

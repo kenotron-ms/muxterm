@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Referenced from tauri.conf.json as bundle.macOS.entitlements.
+    bundle.macOS.hardenedRuntime defaults to true, so these are required for a
+    signed build to reach the microphone at all.
+  -->
+
+  <!-- The one capability the wrapper exists to grant. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+
+  <!-- Declared now so enabling camera later is a code change, not a re-notarisation dance. -->
+  <key>com.apple.security.device.camera</key>
+  <true/>
+
+  <!-- The webview loads https://muxterm.ampbox.io and speaks WebRTC to it. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!--
+    Deliberately ABSENT, and each absence is a design decision from D3:
+      com.apple.security.network.server   - the wrapper serves nothing
+      com.apple.security.files.user-selected.read-write - no native file picker
+      com.apple.security.device.usb / bluetooth        - no device access
+      com.apple.security.cs.allow-jit and friends      - the system webview
+                                                         does not need us to
+                                                         weaken hardened runtime
+    Do not add an entitlement here to make a feature work without first
+    establishing that the feature belongs in the wrapper rather than the web app.
+  -->
+</dict>
+</plist>
