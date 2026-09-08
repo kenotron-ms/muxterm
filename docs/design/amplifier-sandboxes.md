@@ -50,6 +50,35 @@ the gap, opened a proof campaign to close it, and the campaign never produced
 live evidence. That gap is precisely the seam muxterm needs, and §2 answers it
 from a different direction than the campaign took.
 
+### 0.1 The reference design's central difficulty — and why muxterm does not have it
+
+`docs/designs/amplifier-sandboxes-design.md` is 275 lines, marked **DESIGN
+APPROVED** as of 2026-08-10, and its §1 names the problem everything else in it
+descends from [READ, `:17-25`]:
+
+> **The central difficulty is three mismatched lifetimes** […] Work: hours to
+> multiple days. Token: ~60–90 minutes. MCP connection: minutes to hours; dies
+> on client sleep, network change, token expiry. […] The load-bearing
+> requirement: **work must survive client disconnect, client sleep, and token
+> expiry.**
+
+Read that against muxterm and the conclusion is immediate: **muxterm already
+solves this, structurally, and did before this feature was conceived.** sessiond
+is a persistent daemon; panes outlive every client. The byte stream is a client
+connection, not the session. So the requirement that forced the reference system
+into a broker, a durable registry, an LRO poller, idempotency keys and
+"transport disconnect never implies cancellation" (`2026-08-25-…-design.md:78`,
+decision D-14) [READ] is satisfied here by construction, with no new machinery.
+
+That is the strongest architectural argument in this document, and I did not
+have it until I read their design. It also **reverses the burden of proof on
+§6.2**: not building a broker is not muxterm being lazy, it is muxterm already
+owning the durability the broker exists to provide.
+
+The same read produced five corrections to what I had written, each marked
+**[correction, from reference design]** at its point of use, and traced in
+Appendix C. Two of them were outright errors on my part (§5.2, §2.4).
+
 Two neighbours worth naming: `kenotron-ms/amplifier-remote-dtu` (private,
 pushed 2026-08-26) and `kenotron-ms/agent-sandbox` (private). Not read; noted
 so nobody thinks they were missed.
@@ -185,8 +214,12 @@ it all rides on `Dial`.
 - **Changing `close_workspace` / `close_pane`.** Unchanged. §5.5.
 - **Changing the ssh transport.** Read as reference; not touched.
 
-**Release 2:** snapshot + `commit`, so a configured lane environment is
-reusable and resume is < 100 ms instead of a cold create.
+**Release 2:** an explicitly **mounted workspace volume**, so a lane's working
+set survives sandbox loss and preview-to-GA recreation. **[correction, from
+reference design]** I originally put snapshots here; volumes come first, because
+a snapshot of a preview-era sandbox is exactly what GA may invalidate, and their
+§7.6 names the mounted volume as the structural hedge for precisely that (§5.7).
+Snapshot and `commit` follow once there is something durable underneath them.
 **Release 3:** declarative egress policy per lane — the actual isolation
 payoff, and the reason §1.1 item 2 is the one worth paying for.
 
@@ -321,6 +354,38 @@ Rejected for the MVP, on three findings:
 Choosing `/exec/stream` over the port therefore also avoids creating any
 inbound ingress at all — see §5.3, where that is the stronger argument.
 
+**The reference design chose the opposite, deliberately, and it was right to.**
+`docs/designs/2026-08-25-amplifier-agent-sandbox-service-design.md:51` states
+[READ]:
+
+> Official Azure Sandboxes documentation and the preview SDK support
+> creation-time and runtime exposure of HTTP and HTTP/2 ports and return an
+> Azure-managed HTTPS endpoint. → Broker-to-sandbox HTTP routing is a supported
+> product capability **rather than an exec or file-transport workaround.**
+
+That sentence calls the exec path a *workaround*. It is worth confronting rather
+than ignoring, and the disagreement resolves cleanly: **same substrate, two
+transports, because the payloads differ.** Their workload is an
+OpenAI-compatible Chat Completions façade — genuinely HTTP-shaped, so HTTP
+ingress is the native fit and exec would indeed be a workaround. muxterm's
+payload is sessiond's binary framing, which is not HTTP-shaped at all; for a
+raw byte stream the port is the workaround and the exec channel is the native
+fit. Neither choice generalises to the other's problem.
+
+Two things from that same document reinforce the choice rather than undercut it:
+
+- Its own evidence row at `:52` concedes the port path's contracts are **"not
+  yet established as durable contracts"** — long-lived SSE behaviour, buffering,
+  idle and absolute timeouts, disconnect propagation, endpoint stability [READ].
+  That was written 2026-08-25; the campaign that was meant to establish them
+  ended BLOCKED with zero live calls the next day.
+- Decision **D-05** (`:69`) is the sharpest security sentence in either repo:
+  *"The sandbox port controls a full agent tool runtime and **must not become an
+  alternate unauthenticated control plane.**"* It also records that
+  **"Port-level Entra service authentication is not relied upon"** [READ] — the
+  design does not trust the port's own auth even when using the port. muxterm
+  creating no port at all is the same instinct taken one step further.
+
 ### S2.4 The remaining four properties
 
 **Peer identity → declare `IdentityPeerCred`, and note the enum is too narrow.**
@@ -406,6 +471,39 @@ Whether a silent open WebSocket counts as activity is **undocumented**
 open connections]. So muxterm must assume the stream can die under it while the
 sandbox and its tmux state survive.
 
+**[correction, from reference design] Redial is not a rare event — it is roughly
+hourly.** I originally wrote this as an auto-suspend edge case. It is not.
+Hard constraint **C4** (`docs/designs/amplifier-sandboxes-design.md:42`) [READ]:
+
+> Entra rejects `resource=` on `refresh_token` grants → connections die at
+> ~60–90 min. **Standing limitation, not fixable here.**
+
+So the stream dies on a timer regardless of activity, suspend, or network. That
+changes redial from an error path to a **normal, expected, frequent
+transition** — and it must be silent, because a user watching a lane should
+never see an hourly blip. Three consequences the original text missed:
+
+1. Redial belongs on the **healthy** path in §2.7, not only on failure edges.
+2. It must be **pre-emptive**: reconnect on the token's refresh margin (the
+   `entraRefreshMargin` pattern already in `internal/voice/credential.go`), not
+   reactively after the far end drops. Reacting means the user sees the drop.
+3. The redial must be **provably lossless** before this ships, and it is the
+   second thing §2.5's probe must measure — hold a stream, force a reconnect,
+   confirm no pane output is lost. A transport that loses a byte an hour is
+   worse than no transport, because the corruption is intermittent.
+
+Also worth carrying: **FM7** in their failure-mode table is *"session suspended
+mid-loop because native idle detection missed genuine internal activity"*
+(`:85`), and their §8 accepts it with an **operational** mitigation rather than
+a heartbeat — clients observing a long session poll status every 15–30 minutes,
+"which resets the native idle clock as a side effect of normal monitoring"
+(`:217`) [READ]. muxterm gets this for free and better: `list_machines` and
+`fleet_status` are exactly such polls, and a human watching a pane generates
+real traffic. Where nobody is watching, the honest statement is that a purely
+internal agent loop **can** be suspended mid-work, the platform will auto-resume
+it on the next touch, and tmux state survives — so the cost is latency, not
+lost work. Say that in the docs rather than claiming it cannot happen.
+
 Consequence: `internal/mcp/machines.go:88-92` caches one `*Client` per machine
 keyed on `HostRef.ID`. That cache must invalidate on stream death and redial,
 transparently. sessiond's framing is stateful *within* a stream but the pane
@@ -428,9 +526,18 @@ Thirty minutes, one disposable sandbox, one number at the end.
    and diff the bytes. **Binary-clean or not — this is the whole answer.**
 4. Hold the stream open, silent, for 6+ minutes past `auto_suspend_seconds=300`
    and record whether it survives.
-5. Destroy the sandbox. Cost of the experiment at $0.1512/h: **under $0.10.**
+5. **Force a reconnect mid-stream and confirm no bytes are lost.** Added after
+   reading constraint C4 (§2.4): the stream dies roughly hourly no matter what,
+   so lossless redial is not a nicety, it is the second load-bearing property
+   after binary cleanliness.
+6. **Read back the auto-delete policy after a stop/resume/stop cycle** and
+   record whether the countdown re-armed. One API read; it closes an item the
+   reference design has carried as unverified since 2026-08-10 (`:190,223`).
+7. Destroy the sandbox, then confirm any volume it created is gone (FM9, §5.7).
+   Cost of the experiment at $0.1512/h: **under $0.10.**
 
-Pass on step 3 → build §2.6. Fail on step 3 → §1.3 says stop, and say so.
+Pass on steps 3 and 5 → build §2.6. Fail on either → §1.3 says stop, and say so.
+Steps 4, 6 and 7 inform the design but do not gate it.
 
 ### S2.6 Components and where they live
 
@@ -590,16 +697,36 @@ nothing. Four mitigations, in order of how much they are worth:
 1. **`auto_suspend_seconds` = 300, always set at create.** The platform's own
    idle suspend is the real protection, and it is the reason §2.4 refuses to
    send keepalives.
-2. **An auto-delete policy at create time.** `AutoDeletePolicy` is a first-class
-   API object [VERIFIED — struct present in the `aca` binary]. Set it to 7 days
-   at creation. A sandbox nobody has touched in a week should not exist.
-   Conservative: 7 days, not 24 hours, because a destroyed lane loses work.
-3. **A startup reconcile.** On daemon start, `Discover` the group. Any sandbox
-   muxterm created and no longer tracks is reported in the sidebar as
-   **orphaned** — visible, never auto-destroyed. This is deliberately the
-   `sandbox_reaper` posture from the reference repo, which states of itself:
+2. **An auto-delete policy at create time — 14 days.** `AutoDeletePolicy` is a
+   first-class API object [VERIFIED — struct present in the `aca` binary].
+   **[correction, from reference design]** I originally picked 7 days by
+   instinct. Align to **14**, which is the reference design's confirmed decision
+   (`amplifier-sandboxes-design.md:106,121,190`) [READ] — matching it costs
+   nothing and diverging would mean two systems in one subscription reaping on
+   different clocks. Carry their open question with it: **it is not verified
+   whether the countdown re-arms on each new Stop transition or is one-shot from
+   the first stop** (`:190,223`) [READ]. If it re-arms, "14 days since last
+   touch" is free; if it does not, a sandbox resumed on day 13 still dies on day
+   14. Add it to §2.5's probe list — it is a one-line API read, not an
+   experiment.
+3. **A startup reconcile, keyed on labels.** On daemon start, `Discover` the
+   group. Any sandbox muxterm created and no longer tracks is reported in the
+   sidebar as **orphaned** — visible, never auto-destroyed. This is deliberately
+   the `sandbox_reaper` posture from the reference repo, which states of itself:
    *"There is no code path in this module to any Azure sandbox deletion API"*
    (`src/sandbox_reaper/reconcile.py:3-6`) [READ]. Report, do not reap.
+
+   **The mechanism for "did this muxterm create it" is label selectors**, which
+   the reference design already identifies as the *"clean reconciliation key
+   (owner `oid`, session id, work type)"* (`amplifier-sandboxes-design.md:123`)
+   [READ]. `create_sandbox` stamps `muxterm=1` and `muxterm-host=<hostname>`;
+   `Discover` filters on them; §5.5's ownership rule reads them. **This is why
+   muxterm needs no registry at all** — and it is worth noting that "name the
+   registry and define broker crash recovery" is still an **OPEN** item in the
+   reference design (`:231,271`), with its current registry an admitted
+   placeholder JSONL (`src/amplifier_sandbox_client/registry.py:1-11`) [READ].
+   Azure's own labels are the state store; a second one would be a second thing
+   that can drift.
 4. **`muxterm sandbox list` shows every sandbox in the group**, including ones
    this muxterm did not create, marked as such. You cannot forget what is on the
    screen.
@@ -756,12 +883,41 @@ falls through to the CLI credential, and the service runs with a *different*
 principal's rights. For a thing that mints billable compute, silent principal
 substitution is not an edge case.
 
+**[correction, from reference design] A service principal is not available here,
+and I was wrong to offer it.** I originally wrote "an explicit
+`ManagedIdentityCredential` (or an explicit service-principal credential)". The
+parenthesis is forbidden by tenant governance. Hard constraint **C2**
+(`docs/designs/amplifier-sandboxes-design.md:40`) [READ]:
+
+> **C2** | Tenant governance: **no client secrets, no client certificates.**
+> Managed Identity + federated identity credential only.
+
+The reference repo enforces this in infrastructure, not just prose — its CI/CD
+uses a **federated identity credential** via GitHub OIDC precisely so no secret
+or cert exists to leak (`infra/resources.bicep:254`) [READ]. The generic
+"use a service principal for long-running services" advice is correct in
+general and inadmissible in this tenant.
+
 **So: MVP = `az` CLI, user-delegated, explicit scope, explicit `auth_mode`,
-refreshed on a margin. Production = an explicit `ManagedIdentityCredential`
-(or an explicit service-principal credential), reused as a singleton, never
-`DefaultAzureCredential`.** Microsoft's own sandbox samples use
-`DefaultAzureCredential()` [READ] — sample-grade code, not guidance, and
-following it here would be a mistake.
+refreshed on a margin. Production = an explicit `ManagedIdentityCredential`,
+or a federated identity credential where no managed identity exists, reused as
+a singleton — never `DefaultAzureCredential`, and never a client secret or
+certificate.** Microsoft's own sandbox samples use `DefaultAzureCredential()`
+[READ] — sample-grade code, not guidance, and following it here would be a
+mistake for the reason §5.2 already gives.
+
+One more hard default worth adopting wholesale, because it was paid for.
+Constraint **C9** (`amplifier-sandboxes-design.md:47`) [READ]:
+
+> Any Storage account this project provisions MUST be created with shared-key
+> (account-key/local) auth disabled (`allowSharedKeyAccess: false`) and accessed
+> only via Entra/managed-identity auth. Learned the hard way on a prior project
+> […] drew an S360 finding for exactly this. This is a hard default, not a
+> per-resource toggle.
+
+The MVP provisions no storage. The moment a workspace volume appears (§5.7),
+this binds — and it is cheaper to write it down now than to draw the same
+finding twice.
 
 ### S5.3 Network posture
 
@@ -806,7 +962,7 @@ that gets destroyed. **That difference — not speed, not elasticity — is what
 7× cost premium in §1.2 buys.**
 
 What stops it doing more: no managed identity; auto-suspend at 300 s;
-auto-delete at 7 days; the platform quota; and `create_sandbox` not being
+auto-delete at 14 days; the platform quota; and `create_sandbox` not being
 registered inside a pane (§4.3), so a lane cannot spawn more lanes.
 
 ### S5.5 The destructive boundary — resolving the tension explicitly
@@ -892,6 +1048,43 @@ dispatch switch is the actual bug**, and it is a bug on both sides. A daemon
 that receives a request it does not understand must say so. That is a separate
 change to a file this lane does not own; it is recorded, not made.
 
+**There is a second skew axis I originally missed: muxterm versus the preview
+API.** The reference design names it **FM8** — *"Preview API changes break the
+adapter or force sandbox recreation at GA"* (`amplifier-sandboxes-design.md:86`)
+— accepts the risk, and names the mounted volume as *"the main structural
+hedge"* (`:220`) [READ]. Its adversarial review also flags *"version skew across
+three adapters sharing one library under preview API churn"* (`:236`) [READ].
+muxterm would be a **fourth** adapter, and unlike the other three it is written
+in Go and would not share that library. Two consequences:
+
+- Pin the API version explicitly (`2026-02-01-preview`, the only one the
+  provider offers today [VERIFIED]) and fail loudly on an unexpected one, rather
+  than floating to whatever is current.
+- **Do not put anything in a sandbox you would mind losing at GA.** §5.7.
+
+### S5.7 Workspace durability and the volume leak
+
+Two items from the reference design that the MVP must not pretend away.
+
+**A snapshot is not the durability story; a mounted volume is.** Their §7.6 puts
+the working set on an *explicitly mounted volume* (Blob for shared, Data Disk
+for single-attach) *"independent of the sandbox's own root-disk snapshot"*, so
+loss or recreation of a sandbox need not lose the workspace — hedging both FM3
+and FM8 (`amplifier-sandboxes-design.md:183`) [READ]. My §1.4 put snapshots in
+release 2 and said nothing about volumes; that ordering is wrong. **A mounted
+volume should come before snapshots**, because a snapshot of a preview-era
+sandbox is exactly what GA may invalidate.
+
+**Volumes leak, and destroy must account for them.** **FM9** —*"Orphaned volumes
+persist after sandbox deletion (silent cost leak)"* (`:87`) — is listed in their
+adversarial review under significant concerns as having **no cleanup policy**
+(`:236`) [READ]. So `destroy_sandbox` (§5.5) must either delete the volume with
+the sandbox or **report by name that it did not**, and `muxterm sandbox list`
+must show volumes that belong to no sandbox. A destroy that silently leaves a
+billing resource behind reintroduces the exact hazard §3.5 exists to close, and
+it is worse than the sandbox case because a volume is invisible in a machine
+list.
+
 ---
 
 ## S6. How it fits muxterm
@@ -962,6 +1155,24 @@ wants a *remote* DTU, `kenotron-ms/amplifier-remote-dtu` exists (private, pushed
 2026-08-26) [VERIFIED, name only — not read] and should be read before anything
 here is generalised in that direction.
 
+**The bridge between them is already a hard constraint, and it should be one
+here too.** Constraint **C6** (`amplifier-sandboxes-design.md:44`) [READ]:
+
+> The sandbox unit must also run as plain Docker locally — **one container
+> definition, two places it runs.**
+
+Their rollout makes it Phase 0: *"Base image runs via plain `docker run`. […]
+No Azure. A dev can submit, observe, steer, and destroy a session entirely on a
+laptop using the same env contract the real broker will use"* (`:244`) [READ].
+
+**Adopt this verbatim for the muxterm image**, for a reason specific to this
+design: it makes §2.5's probe and the whole transport testable against a local
+container first, with no Azure call, no billing, and no preview API. The one
+piece that cannot be tested locally is the `/exec/stream` channel itself — which
+is precisely why that is the *only* thing §2.5 needs a real sandbox for, and
+why the probe costs under $0.10. It also means the same image DTU could run is
+the image a sandbox runs, which is the honest form of "complementary".
+
 ### S6.4 The revisitable refusal, noted and not changed
 
 `internal/mcp/run.go:24-35` already records it precisely: `lane_transcript` was
@@ -1021,3 +1232,77 @@ documentation for a preview feature, not archived or versioned like Learn. It
 already contradicts Learn on at least one number (disk size at the XS/S/M
 tiers). **For anything load-bearing, verify against the live API** — which is
 what §2.5 exists to do.
+
+---
+
+## Appendix C: traceability — what the reference repo drove
+
+The goal condition requires that `kenotron-ms/amplifier-sandboxes` be read
+thoroughly and **drive** this design, not merely be cited by it. This appendix
+exists so that claim is auditable rather than asserted. Every row is a specific
+artifact in that repo, what it says, and the specific thing in this document
+that exists because of it.
+
+Clone used: `gh repo clone kenotron-ms/amplifier-sandboxes` at `/tmp/sbx-ref`,
+`main` @ `888774c`, plus five fetched `goal/gb-agent-sessions-g0*` branches.
+
+**Read in full, directly:**
+`docs/designs/amplifier-sandboxes-design.md` (275 lines) ·
+`docs/designs/2026-08-25-amplifier-agent-sandbox-service-design.md` (206 lines,
+headings + all transport/security-relevant rows) ·
+`.amplifier/goals/gb-agent-sessions-g0-port-proof.md` (117 lines) ·
+`broker/vendor/azure-containerapps-sandbox/.../_operations/_port_ops.py` ·
+`_model_types/_ports.py` · `_operations/_base.py` · `git log` (20 commits) ·
+branch inventory · `docs/evidence/*` verdict extraction (6 files, ~89 KB).
+
+| # | Reference artifact | What it says | What it drove here | Effect |
+|---|---|---|---|---|
+| 1 | design `:17-25` | Three mismatched lifetimes; work must survive disconnect, sleep, token expiry | §0.1 | **New section.** The strongest argument in this doc; reverses the burden of proof on §6.2 |
+| 2 | design `:42` (C4) | Entra rejects `resource=` on refresh grants → connections die at 60–90 min, "not fixable here" | §2.4 | **Correction.** Redial reclassified from rare edge case to hourly normal path; must be pre-emptive and provably lossless |
+| 3 | design `:40` (C2) | No client secrets, no client certificates — MI + federated only | §5.2 | **Correction.** Removed my service-principal recommendation as inadmissible in this tenant |
+| 4 | design `:47` (C9) | Storage must set `allowSharedKeyAccess: false`; prior S360 finding | §5.2 | **New.** Adopted as a hard default ahead of any volume work |
+| 5 | design `:44` (C6) + `:244` | One container definition, Docker-local and ACA; Phase 0 is a no-Azure dev loop | §6.3 | **New.** Makes the transport locally testable; narrows §2.5's Azure dependency to one channel |
+| 6 | design `:87` (FM9), `:236` | Orphaned volumes persist after deletion — no cleanup policy | §5.7 | **New section.** `destroy_sandbox` must delete or name the volume |
+| 7 | design `:183` (§7.6) | Volume is independent of root-disk snapshot; hedges FM3 + FM8 | §5.7, §1.4 | **Reordered.** Volumes before snapshots; my original release-2 ordering was wrong |
+| 8 | design `:106,121,190,223` | Auto-delete 14 days; re-arm behaviour explicitly unverified | §3.5 | **Correction.** 7 days → 14; carried their open verification question into §2.5 |
+| 9 | design `:123` | Label selectors are the clean reconciliation key | §3.5, §5.5 | **New mechanism.** Labels implement "did this muxterm create it" — and are why muxterm needs no registry |
+| 10 | design `:231,271` + `registry.py:1-11` | Registry unnamed, crash recovery undefined, current one a placeholder JSONL — still OPEN | §3.5 | Justifies the no-registry choice against a known-open problem |
+| 11 | design `:85` (FM7), `:215-218` | Internal-only work invisible to idle detection; mitigation is operational polling, not a heartbeat | §2.4 | **Confirmed + adopted.** Same conclusion I reached independently; took their operational mitigation and the honest "latency, not lost work" framing |
+| 12 | design `:86` (FM8), `:220,236` | Preview API churn; volume is the structural hedge; skew across adapters sharing one library | §5.6 | **New.** Second skew axis (muxterm vs preview API); pin the API version |
+| 13 | design `:98` (§3) | "Control plane is thin mechanism. Policy … never in the broker." | §6.2 | Converts my assertion into a citation of their own stated philosophy |
+| 14 | design `:127-129` | Dynamic Sessions and Jobs evaluated and rejected with reasons | §2, substrate | Substrate question settled; not re-litigated |
+| 15 | agent-service `:51` | Port routing is supported capability "rather than an exec or file-transport workaround" | §2.3 | **Confronted.** Their choice is opposite to mine; resolved as same substrate, two transports, because payloads differ |
+| 16 | agent-service `:52` | Port SSE/timeout/stability behaviours "not yet established as durable contracts" | §2.3 | Independent confirmation the port path is unproven, from the design that chose it |
+| 17 | agent-service `:69` (D-05) | Port "must not become an alternate unauthenticated control plane"; port-level Entra auth not relied upon | §5.3 | Sharpened the no-ingress argument; adopted their distrust one step further |
+| 18 | agent-service `:78` (D-14) | Transport disconnect never implies cancellation | §2.4, §0.1 | Confirms redial-not-cancel semantics |
+| 19 | `cli.py:920-926` | "This is not a real pty — broker-mediated equivalent" | §0, §2.3 | The negative that defines the gap muxterm fills |
+| 20 | `evidence/…-g0e.md:9-16,340` + 5 sibling docs | Zero live calls, zero sandboxes, zero ports, verdict BLOCKED; all blockers procedural | §2.3 | Establishes the port question is **open, not answered** — the distinction the whole verdict rests on |
+| 21 | `_port_ops.py:37-56` | `add_port` auth modes: anonymous / entraId+emails / IP ACL; anonymous logged at WARNING | §5.3 | Ordering for any future port work; `--anonymous` never |
+| 22 | `entrypoint.sh:54-117` | Dev-validation Key Vault fetch persists key **plaintext** to `~/.amplifier/keys.env` | §5.1 | The concrete #92 exfiltration example — a real file, not a hypothetical |
+| 23 | `evidence/2026-08-10-key-custody…md` | tmpfs 0400, never env var — PASS; suspend-snapshot scope-limited, standing exposure | §5.1 | The secret-handling pattern the muxterm image must follow |
+| 24 | `infra/resources.bicep:53-54,105-119,254` | Sandbox MI + Key Vault Secrets User; CI/CD via GitHub OIDC federated credential | §5.1, §5.2 | Contrast for "MVP assigns no managed identity"; proof C2 is enforced in infra |
+| 25 | `reconcile.py:3-6` | "No code path in this module to any Azure sandbox deletion API" | §3.5 | Report-don't-reap posture adopted wholesale |
+| 26 | `operator-mcp-tool-namespace-spec.md:43` | "No cost data source exists"; `estimated_cost: null` always | §3.4 | Runtime-not-dollars decision |
+| 27 | design `:7,46` (C8) | ~15 users, single-digit concurrency, elastic scale explicitly out of scope | §1.1 | Kept me from overclaiming elasticity as the payoff; isolation is the real one |
+| 28 | `git log` (20 commits) | Real production bug trail: tmux quoting, exit-code capture, IPv4, empty base URL | §0 | Establishes the repo as live and bug-fixed, not aspirational — which is why its constraints bind |
+
+**Where this design deliberately diverges, and why** — each divergence is
+recorded at its point of use, not buried here:
+
+| Divergence | Their choice | This choice | Reason |
+|---|---|---|---|
+| Transport | Exposed HTTP port + broker proxy | `/exec/stream` WebSocket, no ingress | Payload is a raw byte stream, not HTTP (§2.3) |
+| Control plane | Hosted broker | None — direct data plane, like ssh shelling out to `ssh` | muxterm already owns durability (§0.1, §6.2) |
+| State store | JSONL registry (admitted placeholder, OPEN) | Azure labels only | One less thing that can drift (§3.5) |
+| Durability model | Broker + LRO + idempotency keys | sessiond daemon | Structural, not built (§0.1) |
+| Sandbox identity | User-assigned MI + Key Vault access | **None** in MVP | Smallest secure answer for what muxterm does (§5.1) |
+
+**Honest limits of this read.** I did not read: `broker/app.py`, `broker/auth.py`
+or `broker/operator/*` (whether the operator namespace is live is still open);
+`dcr-shim/` and `identity-binding/` beyond their purpose (DCR is not in
+muxterm's path — muxterm is not an MCP client of that broker); the full text of
+the six evidence documents (I extracted verdicts, blockers and live-call counts,
+which is what the transport question needs); `skills/cloud-amplifier/`;
+`tests/`. None of these bear on the transport verdict or the security posture.
+If any conclusion here is wrong, the most likely source is the operator
+namespace's true status, which affects nothing in §S1–S6.
