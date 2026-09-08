@@ -55,3 +55,6 @@ DONE.json
 
 # Playwright CLI workspace config + session artifacts
 .playwright/
+
+# Machine-local symlink; the node_modules/ rule above matches directories only
+web/node_modules
