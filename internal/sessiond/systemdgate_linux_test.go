@@ -26,6 +26,13 @@ import (
 func TestEnsureDaemon_InheritedInvocationIDDoesNotGate(t *testing.T) {
 	t.Setenv("INVOCATION_ID", "deadbeef")
 	dir := t.TempDir()
+	// acquireSpawnLock resolves its lock file from socketDir(), i.e. from
+	// XDG_RUNTIME_DIR -- NOT from the socketPath argument. Without this the
+	// test creates sessiond.spawn.lock in the developer's REAL runtime
+	// directory, alongside the production daemon's socket. That is the same
+	// class of dev-touches-production leak this change exists to close, and
+	// it is not acceptable in the test suite either.
+	t.Setenv("XDG_RUNTIME_DIR", dir)
 	socketPath := filepath.Join(dir, "missing.sock")
 	logPath := filepath.Join(dir, "sessiond.log")
 
