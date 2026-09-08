@@ -849,3 +849,103 @@ bridge's hard case — foreground service lifecycle — exists only on Android, 
 bridge would be designed against the easy half and would need redesigning. *If the Tauri version
 fact resolves and someone wants a two-day morale win, desktop is that. It is not the first
 slice.*
+
+---
+
+## W3 — What the wrapper must not do
+
+**VERDICT: ANSWERED.** The boundary is one sentence, four rules, and a test that can be run
+against any proposed change in under a minute.
+
+### The boundary
+
+> **The wrapper renders muxterm and grants capability. It does not implement product.**
+
+Everything the user sees, apart from an OS-mandated notification, is the web app. Every
+behaviour, every state machine, every string of product copy, every keybinding, every layout
+decision lives in `web/`. The wrapper's entire native surface is: a window, a webview, a
+permission bridge, a foreground service, and the narrow channel of W4.
+
+The reason to hold this line is not aesthetic. It is that **muxterm already has a shipping voice
+implementation, a composer, an orb, a chief of staff, a fleet view and a mobile navigation
+model**, all in the web app, all under active development by other lanes. Anything the wrapper
+reimplements immediately becomes a second thing to change whenever the first one changes — and
+because the wrapper ships through an app store on someone else's schedule, the two will drift
+and the native one will be the stale one. A wrapper that has drifted is worse than no wrapper,
+because it looks like the product.
+
+### The four rules
+
+**Rule 1 — One URL, one webview.**
+The app loads exactly one URL and hosts exactly one webview. No second webview, no native screen
+that renders content, no in-app browser for links. If a feature needs a new screen, it is a new
+route in the web app.
+
+**Rule 2 — The APK ships no product assets.**
+No HTML, no CSS, no JavaScript, no icons other than the launcher icon, no product copy other than
+the app name and the foreground-service notification's text. If the binary contains a copy of any
+part of the web app, it is no longer a wrapper — it is a hybrid app with a deployment problem.
+This rule is mechanically checkable in CI: assert the asset directory is empty.
+
+**Rule 3 — Every bridge method names an OS capability the web platform cannot reach.**
+This is the test that keeps W4 narrow. For each method, ask: *could this be implemented in the
+page?* If yes, it must be. `startVoiceService()` passes — no web API starts an Android foreground
+service. `saveDraft()` fails — `localStorage` exists. `getSessionList()` fails — that is an HTTP
+request. The rule has teeth because it is answerable from the web platform's own surface, not
+from taste.
+
+**Rule 4 — Native may own a trigger. It may never own a turn.**
+The sharpest case, because W5 makes it real. On-device wake-word detection *must* be native: no
+web API can listen while the page is frozen. That is legitimate under Rule 3. But the wake word's
+only output is an event on the bridge saying "the user said the word." Everything after that —
+opening the microphone, connecting to the realtime endpoint, the conversation, the transcript,
+the tools, hanging up — happens in the page, exactly as it does today. The moment native holds
+audio *for a turn*, native owns voice, and the web app becomes a viewer.
+
+### The specific temptations, and the rule that stops each
+
+| Temptation | Why it will be proposed | Rule | What to do instead |
+| --- | --- | --- | --- |
+| A native title bar or tab strip | "It'll feel like a real app; `title-bar.ts` and `mux-dock.ts` are just HTML" | 1 | Nothing. The web chrome is the chrome. |
+| A native settings screen | "Permissions and notification settings are native concerns" | 1 | Deep-link to the OS settings screen from a web button via the bridge; the button is web. |
+| A native terminal renderer | "xterm in a WebView will be slower than native" | 1 | Measure first. If it is genuinely too slow, that is a web-app performance bug, and fixing it helps every user, not just wrapped ones. |
+| Rich native notifications for lane completion | "muxterm already has completion records and a chief of staff — the phone should buzz" | 3 | Web Push, which is a web capability and works in a browser tab too. If a native notification is genuinely required, it carries **no content and no actions** beyond focusing the app. |
+| Bundling the web assets into the APK | "Offline. Faster cold start. No dependency on the server." | 2 | Nothing. muxterm is a terminal multiplexer front-end; there is no useful offline mode, and the server is the product. |
+| Native credential storage | "The Keystore is more secure than `localStorage`" | 3 | The page already authenticates. If token storage needs hardening, harden it in the web app so every user benefits. |
+| A native "quick capture" overlay window | "Global shortcut → tiny window → speak → done" | 1 + 4 | The global shortcut is legitimate (Rule 3: no web API registers one). What it does is **focus the window and fire a bridge event**; the page decides what that means. |
+| Wrapper-only features | "This one only makes sense on mobile" | 1 | It goes in the web app behind a capability check. The web app already ships mobile-specific navigation. |
+| Native handling of the wake word's *response* | "We already have the audio, may as well stream it" | 4 | Fire `wake` over the bridge, hand the page nothing but the fact that it happened. |
+
+### The deletion test
+
+For any proposed wrapper change, ask:
+
+> **If the wrapper were deleted tomorrow, would a user in a normal browser lose this?**
+
+- *They would lose nothing* → the change belongs in the web app. Reject it.
+- *They would lose screen-off audio, or a tray icon, or a global shortcut* → capability. Accept.
+- *They would lose a feature* → **stop.** The boundary has already been breached; find where.
+
+### The one admitted exception, drawn narrowly
+
+The Android foreground-service notification (W1.2) is native UI with product copy in it, and it
+carries a **Stop voice** action. This is a genuine exception and it is admitted because the OS
+mandates it: an FGS without a notification is not a thing Android permits, and a notification
+below `PRIORITY_LOW` gets narrated by the platform in worse words than ours. The exception is
+bounded to: one notification, one line of text, one action, no state of its own — it reads the
+session state over the bridge and its Stop action writes one event back. It renders nothing the
+page does not already know.
+
+The same exception covers the desktop tray icon and its menu, for the same reason and with the
+same bound: it exists because the window can be hidden, and it does nothing but show and hide
+the window.
+
+### How this is enforced, rather than merely stated
+
+1. **A line budget.** The Android source in W1.5 is six files. If it grows past roughly 500 lines
+   of Kotlin, something has moved that should not have. That is a smell to investigate, not a
+   hard gate.
+2. **The empty-assets assertion**, in CI, per Rule 2.
+3. **The bridge surface is a reviewed interface.** W4 defines it; adding a method is a design
+   change, not an implementation detail. Every addition must state which OS capability it reaches
+   and why the page cannot.
