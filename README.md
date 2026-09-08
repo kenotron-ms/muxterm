@@ -94,7 +94,9 @@ make build
 
 `muxterm mcp` exposes a [Model Context Protocol](https://modelcontextprotocol.io) server that lets any MCP-compatible AI agent drive workspaces, panes, and terminals. The server speaks JSON-RPC 2.0 over stdio and requires a running `muxterm` or `muxterm serve` instance to connect to.
 
-**17 tools** across 5 categories: workspace management, pane layout (with ASCII diagram for spatial awareness), terminal control (OSC 133 shell completion), port tunnels, and server configuration.
+**25 tools** across 7 categories: workspace management, pane layout (with ASCII diagram for spatial awareness), terminal control (OSC 133 shell completion), agent delegation and fleet status, read-only file access across the machine boundary, port tunnels, publishing a file to a public URL, and server configuration.
+
+`publish_file` is the one that reaches the public internet: it serves ONE local file at an unguessable URL that anyone holding the link can read with no muxterm account. The content is **live** -- re-read from disk on every request -- so edits are visible immediately to everyone holding the link, and the link cannot be un-sent. Every publication expires (24h by default, 7 days maximum) and can be revoked, which stops future reads but recalls nothing already read. See `internal/server/publish.go`.
 
 ### Amplifier
 
@@ -152,7 +154,7 @@ Add to `opencode.json` in your project root:
 |-----------|------|
 | `cmd/muxterm/` | CLI — serve, install, uninstall, deploy, sessiond, doctor |
 | `internal/sessiond/` | PTY daemon — workspace/pane registry, VT emulation, reconnect replay |
-| `internal/server/` | HTTP + WebSocket relay, auth, tunnel proxy, static asset serving |
+| `internal/server/` | HTTP + WebSocket relay, auth, tunnel proxy, public file publishing, static asset serving |
 | `internal/service/` | Cross-platform service install (systemd/launchd) |
 | `internal/deploy/` | Push-to-remote via SSH |
 | `web/src/` | Lit web components, xterm.js terminal rendering, dockview split layout |
