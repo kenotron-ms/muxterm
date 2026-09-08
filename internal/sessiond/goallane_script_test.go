@@ -197,6 +197,47 @@ func TestGoalLaneScriptDoesNotResumeARunThatNeverArmedALoop(t *testing.T) {
 	}
 }
 
+// REGRESSION, observed live under SIGKILL against a running goal loop. A killed
+// run leaves a NON-terminal snapshot ("working"), because the hook only writes a
+// verdict from on_session_end -- and amplifier only saves the transcript on that
+// same clean exit. Resuming it printed `verdict: working (exit 137)` followed by
+// `Messages: 0`: a prompt over an empty conversation, under a banner promising
+// the run's full context. The mode check does not catch this one, because a
+// crashed goal run IS autonomous. The verdict check does.
+func TestGoalLaneScriptDoesNotResumeAKilledRun(t *testing.T) {
+	run := runGoalLaneScript(t, "the tests pass", 137, true, "working")
+	if run.err != nil {
+		t.Fatalf("script failed: %v\n%s", run.err, run.stdout)
+	}
+	if strings.Contains(run.stdout, "STUB-RESUMED") {
+		t.Errorf("resumed a killed run, whose transcript was never saved:\n%s", run.stdout)
+	}
+	if strings.Contains(run.stdout, "verdict: working") {
+		t.Errorf("reported a non-terminal state as if it were a verdict:\n%s", run.stdout)
+	}
+	if !strings.Contains(run.stdout, "interrupted") {
+		t.Errorf("did not say the run was interrupted:\n%s", run.stdout)
+	}
+	if !strings.Contains(run.stdout, "exit 137") {
+		t.Errorf("did not report the exit code:\n%s", run.stdout)
+	}
+	if !strings.Contains(run.stdout, "STUB-SHELL") {
+		t.Errorf("expected the shell fallback so the pane and its output stay readable:\n%s", run.stdout)
+	}
+}
+
+// The other half of that rule, and the one the design cares about most: a run
+// that ENDED badly still has a verdict, so it is still resumed with its context.
+func TestGoalLaneScriptStillResumesAnEndedRunThatFailed(t *testing.T) {
+	run := runGoalLaneScript(t, "the tests pass", 3, true, "failed")
+	if run.err != nil {
+		t.Fatalf("script failed: %v\n%s", run.err, run.stdout)
+	}
+	if !strings.Contains(run.stdout, "STUB-RESUMED") {
+		t.Errorf("a run that ended `failed` was not resumed -- that is the case the context is worth most in:\n%s", run.stdout)
+	}
+}
+
 // A snapshot belonging to a DIFFERENT pane must not be adopted: the sid join is
 // the whole reason this is safe to do by scanning a shared directory.
 func TestGoalLaneScriptIgnoresAnotherPanesSnapshot(t *testing.T) {

@@ -174,16 +174,45 @@ if [ -n "$best" ]; then
   verdict=$(sed -n 's/.*"state":"\([a-z]*\)".*/\1/p' "$best" | head -1)
 fi
 
+# AND the run has to have ENDED, not merely existed. Measured with SIGKILL
+# against a live goal loop: the run had read a dozen files, but amplifier saves
+# a session's transcript in execute_single AFTER the run returns, so a killed
+# run saves nothing -- "amplifier resume" on it printed "Messages: 0". The pane
+# would have sat at a prompt over an empty conversation under a banner
+# promising the run's full context, which is the one outcome worse than not
+# resuming, because it looks like a working session.
+#
+# The hook writes a TERMINAL state only from on_session_end, on a clean exit --
+# the same exit that saves the transcript. So "the snapshot carries a verdict"
+# and "there is a conversation to resume" are the same fact, and testing the
+# one that is cheap to read is exact rather than approximate. A run that ended
+# badly still has a verdict (failed/stopped) and is still resumed: that is the
+# case worth resuming, and it keeps working. A run that was killed has no
+# verdict and nothing saved, so it gets the shell and an honest sentence.
+interrupted=""
+case "$verdict" in
+  done|failed|stopped) ;;
+  *) interrupted=$verdict; session=""; verdict="" ;;
+esac
+
 printf '\n'
 printf '\033[2m--------------------------------------------------------------\033[0m\n'
 if [ -n "$verdict" ]; then
   printf '\033[1mGoal run finished\033[0m -- verdict: %s (exit %s)\n' "$verdict" "$rc"
+elif [ -n "$interrupted" ]; then
+  printf '\033[1mGoal run was interrupted\033[0m -- last state: %s (exit %s)\n' "$interrupted" "$rc"
 else
   printf '\033[1mGoal run finished\033[0m -- exit %s\n' "$rc"
 fi
 if [ -z "$session" ]; then
-  printf 'No finished goal run was found for this pane, so there is nothing\n'
-  printf 'to resume. Whatever went wrong is in the scrollback above.\n'
+  if [ -n "$interrupted" ]; then
+    printf 'It was killed before it could record a verdict, and amplifier saves a\n'
+    printf 'session'"'"'s transcript only when it exits cleanly -- so there is no saved\n'
+    printf 'conversation to resume, however much of it you can see above.\n'
+  else
+    printf 'No finished goal run was found for this pane, so there is nothing\n'
+    printf 'to resume. Whatever went wrong is in the scrollback above.\n'
+  fi
   printf 'Leaving a shell so this pane and that scrollback stay put.\n'
   printf '\033[2m--------------------------------------------------------------\033[0m\n'
   exec "${SHELL:-/bin/sh}"
