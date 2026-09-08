@@ -158,6 +158,15 @@ for f in "$spool"/*.json; do
   # "sid":<pid> followed by , or } -- the guard stops "sid":12 matching
   # "sid":123, and keeps working whether or not optional fields follow.
   grep -qE "\"sid\":$$[,}]" "$f" 2>/dev/null || continue
+  # AND it has to be a goal run. Measured, not theoretical: a /goal that
+  # amplifier rejects before arming the loop (a bad --max-turns value) still
+  # creates a session, still leaves a snapshot, and still exits -- and
+  # resuming THAT lands the user at a prompt over an empty conversation,
+  # under a banner promising the run's full context. "Resuming session: ...
+  # Messages: 0" is worse than not resuming at all, because it looks like a
+  # working session. A session that never armed a loop is interactive here,
+  # so requiring autonomous is exactly the "did a goal actually run" test.
+  grep -q '"mode":"autonomous"' "$f" 2>/dev/null || continue
   if [ -z "$best" ] || [ "$f" -nt "$best" ]; then best=$f; fi
 done
 if [ -n "$best" ]; then
@@ -173,8 +182,9 @@ else
   printf '\033[1mGoal run finished\033[0m -- exit %s\n' "$rc"
 fi
 if [ -z "$session" ]; then
-  printf 'Could not determine the session id, so there is nothing to resume.\n'
-  printf 'Leaving a shell so this pane and its scrollback stay put.\n'
+  printf 'No finished goal run was found for this pane, so there is nothing\n'
+  printf 'to resume. Whatever went wrong is in the scrollback above.\n'
+  printf 'Leaving a shell so this pane and that scrollback stay put.\n'
   printf '\033[2m--------------------------------------------------------------\033[0m\n'
   exec "${SHELL:-/bin/sh}"
 fi

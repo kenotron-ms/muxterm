@@ -30,6 +30,11 @@ type goalLaneRun struct {
 // spool dir and the pid the shell will report as its own POSIX session id.
 func runGoalLaneScript(t *testing.T, goal string, exitCode int, writeSnapshot bool, snapshotState string) goalLaneRun {
 	t.Helper()
+	return runGoalLaneScriptMode(t, goal, exitCode, writeSnapshot, snapshotState, "autonomous")
+}
+
+func runGoalLaneScriptMode(t *testing.T, goal string, exitCode int, writeSnapshot bool, snapshotState, snapshotMode string) goalLaneRun {
+	t.Helper()
 
 	dir := t.TempDir()
 	binDir := filepath.Join(dir, "bin")
@@ -50,9 +55,9 @@ func runGoalLaneScript(t *testing.T, goal string, exitCode int, writeSnapshot bo
 		snapshot = fmt.Sprintf(`
 sid=$PPID
 cat > "%s/11111111-2222-3333-4444-555555555555.json" <<EOF
-{"v":1,"pid":$$,"pidStart":1,"sessionId":"11111111-2222-3333-4444-555555555555","harness":"amplifier","mode":"autonomous","state":"%s","updatedAt":1,"sid":$sid,"doneMeans":"whatever"}
+{"v":1,"pid":$$,"pidStart":1,"sessionId":"11111111-2222-3333-4444-555555555555","harness":"amplifier","mode":"%s","state":"%s","updatedAt":1,"sid":$sid,"doneMeans":"whatever"}
 EOF
-`, spool, snapshotState)
+`, spool, snapshotMode, snapshotState)
 	}
 
 	stub := fmt.Sprintf(`#!/bin/sh
@@ -162,8 +167,33 @@ func TestGoalLaneScriptFallsBackToAShellWithNoSessionID(t *testing.T) {
 	if strings.Contains(run.stdout, "STUB-RESUMED") {
 		t.Errorf("resumed something despite having no session id:\n%s", run.stdout)
 	}
-	if !strings.Contains(run.stdout, "Could not determine the session id") {
+	if !strings.Contains(run.stdout, "No finished goal run was found") {
 		t.Errorf("fallback did not say why it fell back:\n%s", run.stdout)
+	}
+}
+
+// REGRESSION, observed live. `/goal --max-turns abc <cond>` is rejected by
+// amplifier BEFORE the loop arms -- but the session is already created, the
+// hook has already written a snapshot for it, and the process then exits 1.
+// Matching that snapshot resumed a session with nothing in it: "Resuming
+// session: ... Messages: 0", a prompt over an empty conversation, under a
+// banner promising the run's full context. That is worse than not resuming,
+// because it looks like a working session. A run that never armed a loop is
+// `interactive`, so requiring `autonomous` is the test for "a goal actually
+// ran here".
+func TestGoalLaneScriptDoesNotResumeARunThatNeverArmedALoop(t *testing.T) {
+	run := runGoalLaneScriptMode(t, "the tests pass", 1, true, "done", "interactive")
+	if run.err != nil {
+		t.Fatalf("script failed: %v\n%s", run.err, run.stdout)
+	}
+	if strings.Contains(run.stdout, "STUB-RESUMED") {
+		t.Errorf("resumed a session that never ran a goal loop:\n%s", run.stdout)
+	}
+	if !strings.Contains(run.stdout, "STUB-SHELL") {
+		t.Errorf("expected the shell fallback so the pane and its error stay readable:\n%s", run.stdout)
+	}
+	if !strings.Contains(run.stdout, "No finished goal run was found") {
+		t.Errorf("fallback did not say what was missing:\n%s", run.stdout)
 	}
 }
 

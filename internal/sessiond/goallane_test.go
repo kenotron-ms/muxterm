@@ -146,4 +146,8 @@ func TestGoalLaneScriptHandlesEveryEnding(t *testing.T) {
 			t.Errorf("handover banner does not mention %q", want)
 		}
 	}
+	// Only a snapshot from a run that actually armed a loop may be resumed.
+	if !strings.Contains(goalLaneScript, `"mode":"autonomous"`) {
+		t.Error("the session match does not require an autonomous run: an empty session would be resumed under a banner promising context")
+	}
 }
