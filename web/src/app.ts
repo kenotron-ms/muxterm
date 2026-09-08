@@ -4,7 +4,7 @@ import { cache } from 'lit/directives/cache.js';
 import { store } from './state.js';
 import { icon } from './lib/icons.js';
 import { MonitorX } from 'lucide';
-import { MuxSocket, buildWsUrl } from './ws.js';
+import { MuxSocket, buildWsUrl, type ReconnectState } from './ws.js';
 import { terminalRegistry, configureTerminals } from './lib/terminal-registry.js';
 import { previewStore } from './lib/preview-store.js';
 import { parseResolvedConfig, patchConfig, configToGoJSON, type ResolvedConfig } from './lib/config.js';
@@ -627,7 +627,15 @@ export class MuxApp extends LitElement {
   _showReconnectOverlay = false;
 
   @state()
-  _reconnectMessage = 'Reconnecting...';
+  _reconnectMessage = '';
+
+  /** The socket's real phase, so the overlay can stop claiming to be busy
+   *  while the client is asleep in a backoff timer. */
+  @state()
+  _reconnectPhase: 'retrying' | 'waiting' | 'offline' = 'retrying';
+
+  @state()
+  _reconnectNextAttemptAt = 0;
 
   @state()
   _reconnectDetail = '';
@@ -1161,14 +1169,26 @@ export class MuxApp extends LitElement {
     this._socket.onControlMessage((msg: Record<string, unknown>) => {
       this._handleControlMessage(msg);
     });
+    // The overlay's honest state comes from the socket itself, not from a
+    // fixed string set once at disconnect: only the socket knows whether an
+    // attempt is in flight or a timer is pending, and when it is due.
+    this._socket.onConnectionState = (state: ReconnectState) => {
+      if (state.phase === 'connected') return;
+      this._reconnectPhase = state.phase;
+      this._reconnectNextAttemptAt = state.phase === 'waiting' ? state.nextAttemptAt : 0;
+    };
     this._socket.onDisconnect = () => {
       this._showReconnectOverlay = true;
-      // Keep a daemon-unreachable diagnosis on screen. The socket closing is
-      // a CONSEQUENCE of that failure, not new information, and overwriting
-      // it here would put the user back in front of a spinner that promises a
-      // reconnection which cannot happen.
+      // Deliberately NOT a message: the overlay derives its headline from the
+      // live phase. A message here is an override, reserved for the server
+      // telling us something we cannot work out ourselves (see `detached`).
+      //
+      // Except when a daemon-unreachable diagnosis is already on screen. The
+      // socket closing is a CONSEQUENCE of that failure, not new information,
+      // and clearing the message here would drop the user back in front of a
+      // countdown promising a reconnection which cannot happen.
       if (!this._daemonUnreachable) {
-        this._reconnectMessage = 'Connection lost. Reconnecting...';
+        this._reconnectMessage = '';
       }
       this._creatingWorkspace = false;
       // The attach this dispatch was waiting on is gone. Reconnect replays its
@@ -1682,10 +1702,18 @@ export class MuxApp extends LitElement {
             message="${this._reconnectMessage}"
             detail="${this._reconnectDetail}"
             ?fatal="${this._daemonUnreachable}"
+            phase="${this._reconnectPhase}"
+            .nextAttemptAt="${this._reconnectNextAttemptAt}"
+            @retry-now="${this._onRetryNow}"
           ></mux-reconnect-overlay>`
         : ''}
     `;
   }
+
+  /** The overlay's "Retry now": cancel the pending timer and dial immediately. */
+  private _onRetryNow = (): void => {
+    this._socket?.retryNow();
+  };
 
   /** Client-local active-pane selection (sessiond has no select-pane message). */
   private _onActivePane = (e: CustomEvent<{ paneId: number }>): void => {

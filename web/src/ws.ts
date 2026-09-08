@@ -18,9 +18,85 @@ import { HOST_STATE, remotesStore } from './lib/remotes-store.js';
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
 export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
 
-const BACKOFF_BASE = 1000;
-const BACKOFF_CAP = 30000;
-const JITTER_MAX = 500;
+/**
+ * What the connection is actually doing right now, for a UI that has to tell
+ * the truth about it.
+ *
+ * The distinction that matters is `retrying` versus `waiting`: an overlay that
+ * says "reconnecting" while the client is asleep in a timer is lying, and it
+ * is the lie that made a returning user stare at a spinner for fifteen
+ * seconds. `waiting` carries the instant the next attempt is actually due, so
+ * the UI can show a countdown it can keep.
+ */
+export type ReconnectState =
+  | { phase: 'connected' }
+  /** A WebSocket handshake is in flight this instant. */
+  | { phase: 'retrying' }
+  /** Asleep in the backoff timer. `nextAttemptAt` is epoch-ms. */
+  | { phase: 'waiting'; nextAttemptAt: number; attempts: number }
+  /** The browser itself says there is no network. */
+  | { phase: 'offline' };
+
+// --- the reconnect ladder ---------------------------------------------------
+//
+// The common failure is a SERVICE RESTART that returns in a few seconds, not a
+// network outage lasting minutes, and the old ladder (1, 2, 4, 8, 16, 30, 30s)
+// was tuned for the wrong one: a restart burned four rungs while the server was
+// down and then parked the client in a 16- or 30-second sleep that nothing woke.
+// Measured on this branch: a 16s outage cost 15.7s of *extra* waiting after the
+// server was already answering, because the fourth attempt missed the server
+// coming up by 325ms.
+//
+// The shape, on continuous failure:
+//
+//   attempt      1     2     3     4     5     6     7     8     9    10 ...
+//   delay (s)  0.3   0.3   0.3   0.5   1.0   2.0   4.0   5.0   5.0   5.0
+//   elapsed(s) 0.3   0.6   0.9   1.4   2.4   4.4   8.4  13.4  18.4  23.4
+//
+//   ...and after 60s of unbroken failure the cap rises from 5s to 30s.
+//
+// Each end protects against something different:
+//
+//   The fast burst (3 x 300ms) is for the restart. A refused TCP connect to an
+//   origin with nothing listening is close to free -- there is no server there
+//   to load -- so the only cost of trying early and often is a few syscalls,
+//   and the payoff is that a plain `systemctl restart` is picked up before the
+//   user finishes noticing.
+//
+//   The 5s cap covers the slow restart: a rebuild, a container start, a proxy
+//   still 502ing while the origin comes up. Worst-case lag inside the first
+//   minute is now one cap plus jitter (~5.2s) instead of 30s.
+//
+//   The 30s tail is for the outage that is not ending: a closed lid, a dead
+//   VPN, a server that crashed and stayed down. Hammering there buys nothing
+//   and costs battery, and if the origin IS reachable but struggling it is the
+//   thundering herd the backoff exists to prevent. Being slow in the tail is
+//   safe precisely because of the wake signals below -- the moment a human
+//   looks at the tab, the ladder is forfeit and an attempt fires immediately.
+//   A long cap only ever delays someone who is not watching.
+//
+// Net cost of the new shape over a one-hour outage: about a dozen extra connect
+// attempts, all inside the first 60 seconds, in exchange for a 6x cut in
+// worst-case reconnect lag.
+const FAST_ATTEMPTS = 3;
+const FAST_DELAY_MS = 300;
+const BACKOFF_BASE_MS = 500;
+const BACKOFF_CAP_MS = 5_000;
+const LONG_OUTAGE_AFTER_MS = 60_000;
+const LONG_OUTAGE_CAP_MS = 30_000;
+const JITTER_MAX_MS = 250;
+
+/**
+ * Floor on the gap between two attempt STARTS.
+ *
+ * Storm guard. A single real tab switch delivers visibilitychange and focus
+ * back to back, a waking laptop can add online on top, and the user may hit
+ * "Retry now" in the middle of all three. Without a floor those collapse into
+ * a burst of simultaneous handshakes -- which is its own bug, and against a
+ * server that is only half up it is the worst possible moment to send one.
+ */
+const WAKE_MIN_INTERVAL_MS = 250;
+
 const CLOSE_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CLOSE_CID = Number.MAX_SAFE_INTEGER;
 const INVALID_CLOSE_TICKET_FAILURE = 'invalid-close-ticket';
@@ -120,9 +196,28 @@ export class MuxSocket {
   private _intentionalClose = false;
   private _nextCloseCid = 1;
   private _pendingCloseRequests = new Map<number, PendingCloseRequest>();
+  /** Epoch-ms an attempt was last STARTED. Feeds the WAKE_MIN_INTERVAL floor. */
+  private _lastAttemptAt = 0;
+  /** Epoch-ms the pending timer is due to fire, or 0 when none is armed. */
+  private _nextAttemptAt = 0;
+  /**
+   * Epoch-ms the current outage began, or 0 when connected.
+   *
+   * Deliberately NOT reset by a wake signal: how old an outage is, is a
+   * property of the outage, not of whether anyone is looking at it. Resetting
+   * it on focus would let a user idly alt-tabbing every half minute hold a
+   * genuinely dead server in the aggressive 5s cap indefinitely.
+   */
+  private _outageStartedAt = 0;
+  private _disposeWakeListeners: (() => void) | null = null;
 
   onDisconnect: (() => void) | null = null;
   onReconnect: (() => void) | null = null;
+  /**
+   * Fires whenever the connection's observable phase changes, so the overlay
+   * can render what is actually happening rather than a fixed "reconnecting".
+   */
+  onConnectionState: ((state: ReconnectState) => void) | null = null;
   onSessiondMessage: ((msg: SessiondMessage) => void) | null = null;
   /**
    * Fires when the daemon broadcasts pane-resized: the canonical PTY size for
@@ -197,22 +292,108 @@ export class MuxSocket {
   connect(): void {
     this._intentionalClose = false;
     this._reconnectAttempts = 0;
+    this._installWakeListeners();
     this._open();
   }
 
   disconnect(): void {
     this._intentionalClose = true;
+    this._disposeWakeListeners?.();
+    this._disposeWakeListeners = null;
     this._rejectPendingCloseRequests(
       new Error('The close outcome could not be confirmed because the connection closed.'),
     );
-    if (this._reconnectTimer !== undefined) {
-      clearTimeout(this._reconnectTimer);
-      this._reconnectTimer = undefined;
-    }
+    this._clearTimer();
     if (this._ws) {
       this._ws.close();
       this._ws = null;
     }
+  }
+
+  // --- waking up ------------------------------------------------------------
+
+  /**
+   * Force an attempt now: the overlay's "Retry now" control.
+   *
+   * Goes through the same path as a wake signal, so it inherits both storm
+   * guards -- a user mashing the button cannot outrun WAKE_MIN_INTERVAL_MS,
+   * and pressing it while a handshake is already in flight does nothing.
+   */
+  retryNow(): void {
+    this._wake();
+  }
+
+  /**
+   * Listen for the user coming back.
+   *
+   * A pending backoff timer is a promise made to a user who was not there.
+   * When they return -- the tab becomes visible, the window regains focus, or
+   * the browser regains the network -- that promise is void: the ladder is
+   * reset and an attempt fires immediately. Nobody should ever watch a
+   * countdown they cannot see and did not cause.
+   *
+   * `offline` is listened for too, but only to repaint: it starts nothing.
+   *
+   * These live on the socket rather than in app.ts because the socket is what
+   * owns the timer being cancelled, and because destroy()/disconnect() then
+   * removes them by construction. PaneFocusCoordinator installs the same two
+   * DOM listeners for an unrelated purpose (claiming PTY-sizing authority);
+   * the duplication is deliberate -- fusing them would couple reconnect
+   * liveness to terminal sizing.
+   */
+  private _installWakeListeners(): void {
+    if (this._disposeWakeListeners) return;
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible') this._wake();
+    };
+    const onFocus = (): void => this._wake();
+    const onOnline = (): void => this._wake();
+    const onOffline = (): void => this._emitState();
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+
+    this._disposeWakeListeners = () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }
+
+  /**
+   * Cancel any pending backoff and attempt now.
+   *
+   * Storm prevention, in the order the guards apply:
+   *
+   *  1. Already OPEN -- nothing to do, and no state to disturb.
+   *  2. Already CONNECTING -- an attempt IS in flight; this wake would only
+   *     add a second racing handshake. _open() assigns this._ws synchronously,
+   *     so every wake after the first in a burst lands here. This is the guard
+   *     that actually absorbs visibilitychange + focus arriving together.
+   *  3. Too soon since the last attempt STARTED -- re-arm the timer for the
+   *     remainder instead of dialling, so a pathological event storm against
+   *     an instantly-refusing port cannot exceed one attempt per 250ms.
+   */
+  private _wake(): void {
+    if (this._intentionalClose) return;
+    const state = this._ws?.readyState;
+    if (state === WebSocket.OPEN) return;
+
+    // The user is back. Whatever rung the ladder had climbed to is forfeit.
+    this._reconnectAttempts = 0;
+    if (state === WebSocket.CONNECTING) return;
+
+    const since = Date.now() - this._lastAttemptAt;
+    if (since < WAKE_MIN_INTERVAL_MS) {
+      this._armTimer(WAKE_MIN_INTERVAL_MS - since);
+      return;
+    }
+    this._open();
   }
 
   /**
@@ -531,13 +712,12 @@ export class MuxSocket {
 
   destroy(): void {
     this._intentionalClose = true;
+    this._disposeWakeListeners?.();
+    this._disposeWakeListeners = null;
     this._rejectPendingCloseRequests(
       new Error('The close outcome could not be confirmed because the connection was destroyed.'),
     );
-    if (this._reconnectTimer !== undefined) {
-      clearTimeout(this._reconnectTimer);
-      this._reconnectTimer = undefined;
-    }
+    this._clearTimer();
     if (this._ws) {
       this._ws.close(1000);
       this._ws = null;
@@ -548,11 +728,64 @@ export class MuxSocket {
     return this._ws?.readyState === WebSocket.OPEN;
   }
 
+  /** What the connection is doing right now. See ReconnectState. */
+  get connectionState(): ReconnectState {
+    const state = this._ws?.readyState;
+    if (state === WebSocket.OPEN) return { phase: 'connected' };
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return { phase: 'offline' };
+    }
+    if (state === WebSocket.CONNECTING) return { phase: 'retrying' };
+    if (this._nextAttemptAt > 0) {
+      return {
+        phase: 'waiting',
+        nextAttemptAt: this._nextAttemptAt,
+        attempts: this._reconnectAttempts,
+      };
+    }
+    return { phase: 'retrying' };
+  }
+
+  private _emitState(): void {
+    this.onConnectionState?.(this.connectionState);
+  }
+
+  private _clearTimer(): void {
+    if (this._reconnectTimer !== undefined) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = undefined;
+    }
+    this._nextAttemptAt = 0;
+  }
+
+  /** Arm exactly one pending attempt, replacing any already armed. */
+  private _armTimer(ms: number): void {
+    this._clearTimer();
+    this._nextAttemptAt = Date.now() + ms;
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = undefined;
+      this._nextAttemptAt = 0;
+      this._open();
+    }, ms);
+    this._emitState();
+  }
+
+  /** The ladder. See the constants block at the top of this file. */
+  private _nextDelayMs(): number {
+    const attempts = this._reconnectAttempts;
+    const outageAge = this._outageStartedAt === 0 ? 0 : Date.now() - this._outageStartedAt;
+    const cap = outageAge >= LONG_OUTAGE_AFTER_MS ? LONG_OUTAGE_CAP_MS : BACKOFF_CAP_MS;
+    const base =
+      attempts < FAST_ATTEMPTS
+        ? FAST_DELAY_MS
+        : BACKOFF_BASE_MS * 2 ** (attempts - FAST_ATTEMPTS);
+    return Math.min(base, cap);
+  }
+
   private _scheduleReconnect(): void {
-    const delay = Math.min(BACKOFF_BASE * 2 ** this._reconnectAttempts, BACKOFF_CAP);
-    const jitter = Math.random() * JITTER_MAX;
+    const delay = this._nextDelayMs() + Math.random() * JITTER_MAX_MS;
     this._reconnectAttempts++;
-    this._reconnectTimer = setTimeout(() => this._open(), delay + jitter);
+    this._armTimer(delay);
   }
 
   private _allocateCloseCid(): number {
@@ -661,13 +894,52 @@ export class MuxSocket {
     this._pendingCloseRequests.clear();
   }
 
+  /**
+   * Make a socket we are walking away from inert.
+   *
+   * This is what keeps the reconnect-time work firing exactly once. An
+   * abandoned socket whose handlers still point at this instance will, when
+   * the browser finally settles it, either fire onclose -- scheduling a SECOND
+   * ladder that then races the first -- or, if it was mid-handshake and the
+   * handshake succeeds, fire onopen. And every onopen runs the full
+   * reconnect-time sequence: the subscription replays and onReconnect, whose
+   * bootstrap() sends an attach. Two of those is two compositions, and the
+   * second one resets the active pane out from under the user (the exact
+   * duplicate-attach hazard WorkspaceController's _attachInFlight guard was
+   * added for). A reconnect path that fires twice is worse than one that fires
+   * slowly.
+   */
+  private _discard(ws: WebSocket | null): void {
+    if (!ws) return;
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+  }
+
   private _open(): void {
+    // Exactly one attempt may be in flight, and exactly one timer armed. Both
+    // are torn down here rather than at each call site, so no future caller of
+    // _open() can reintroduce a second ladder by forgetting.
+    this._clearTimer();
+    this._discard(this._ws);
+    this._lastAttemptAt = Date.now();
+
     const ws = new WebSocket(this._url);
     ws.binaryType = 'arraybuffer';
     this._ws = ws;
+    this._emitState();
 
     ws.onopen = () => {
+      // Belt and braces with _discard(): only the socket this instance is
+      // currently flying may run the reconnect-time work below.
+      if (this._ws !== ws) return;
       this._reconnectAttempts = 0;
+      this._outageStartedAt = 0;
+      this._clearTimer();
       // Re-assert the home view's opt-in. On a FIRST connection this is the
       // only send that ever reaches the daemon: the app subscribes before the
       // socket is open, and that frame is dropped.
@@ -680,6 +952,7 @@ export class MuxSocket {
         this._sendCos({ type: 'cos-subscribe', on: true });
       }
       this.onReconnect?.();
+      this._emitState();
     };
 
     ws.onmessage = (ev: MessageEvent) => {
@@ -731,6 +1004,9 @@ export class MuxSocket {
     };
 
     ws.onclose = () => {
+      // A socket this instance already walked away from. Its close is not our
+      // outage and must not schedule a second ladder.
+      if (this._ws !== ws) return;
       // Intent does not survive the connection that carried it. Leaving the
       // last attach target set would let a reader during the reconnect window
       // believe the connection is still headed somewhere it can no longer go.
@@ -741,6 +1017,9 @@ export class MuxSocket {
       if (this._intentionalClose) {
         return;
       }
+      // First close of this outage starts its clock; later ones must not
+      // restart it, or the ladder never reaches the long-outage cap.
+      if (this._outageStartedAt === 0) this._outageStartedAt = Date.now();
       this.onDisconnect?.();
       this._scheduleReconnect();
     };
