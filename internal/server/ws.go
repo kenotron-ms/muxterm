@@ -316,6 +316,127 @@ func (c *Client) writeBinary(data []byte) error { return c.writeBinaryFn(data) }
 // writeText writes a text frame via the client's text writer.
 func (c *Client) writeText(data []byte) error { return c.writeTextFn(data) }
 
+// --- connection heartbeat --------------------------------------------------
+//
+// Nothing kept a browser's WebSocket warm. A phone with the screen off, silent
+// for a minute in the middle of a voice conversation, sends nothing and is sent
+// nothing -- and an idle TCP connection crossing a carrier NAT, a home router,
+// or a mobile radio that has gone to sleep is a connection that quietly stops
+// existing at one end while both ends still believe in it. The browser then
+// discovers the loss only when it next tries to write, which on a silent link
+// is exactly when the user finally speaks.
+//
+// So the server pings.
+//
+// WHY THE SERVER AND NOT THE BROWSER. Three reasons, in order of weight:
+//
+//  1. The browser CANNOT send a WebSocket ping. The WHATWG WebSocket API
+//     exposes no ping method at all, so a client-initiated heartbeat would have
+//     to be an application-level message -- a new frame type in the frozen
+//     sessiond vocabulary, on both sides, for something RFC 6455 already has.
+//  2. A server ping costs a backgrounded client nothing. The browser answers
+//     ping frames with pongs down in its network stack, below JavaScript, so
+//     the round trip completes even when the page's timers are throttled or
+//     frozen -- which on Android is precisely the state we are trying to
+//     survive. A client-driven timer is the FIRST thing the platform stops.
+//  3. It keeps every NAT binding and idle-timeout clock along the path warm
+//     from the far end, which is the end that actually has to still be there.
+//
+// What server-initiated CANNOT catch, stated plainly: it does not prove the
+// page's own event loop is still running. A WebView whose JavaScript is frozen
+// still answers pings in the network stack, so the server would call that
+// connection healthy while the UI is dead. A client-initiated heartbeat would
+// catch exactly that and nothing else. That failure is the browser's own to
+// notice, and the wake signals added in #94 (visibilitychange / focus / online)
+// are what notice it.
+//
+// THE INTERVAL. 25 seconds. The constraint is that it must be comfortably
+// shorter than the shortest idle timeout anywhere on the path. Measured, not
+// assumed:
+//
+//   - The Caddy in front of this server imposes NO idle timeout on an upgraded
+//     WebSocket. Its reverse_proxy `stream_timeout` defaults to "no timeout"
+//     and is only armed when nonzero, and once the connection is hijacked for
+//     the upgrade net/http's IdleTimeout (Caddy default 5m) no longer applies
+//     to it. So the local proxy is not the clock we are racing.
+//   - The clocks we ARE racing cannot be read from here: the edge proxy, the
+//     carrier or Wi-Fi NAT, and the phone's radio. 25s is comfortably under
+//     every common value in that class (nginx proxy_read_timeout 60s,
+//     Cloudflare 100s, typical NAT UDP/TCP idle 60s+), and cheap: two control
+//     frames per client per 25s is nothing next to terminal output.
+//
+// AN UNANSWERED PING MUST KILL THE CONNECTION. A heartbeat that keeps a dead
+// connection looking alive is worse than no heartbeat, so Ping's pong wait is
+// the liveness test, not a formality: after pingMaxMisses consecutive pings go
+// unanswered the client is closed. c.close() cancels c.ctx, which unblocks
+// readPump's Read, whose deferred hub.Remove performs the ordinary teardown --
+// the SAME death path as any other dropped connection. The browser therefore
+// sees an ordinary onclose and recovers on #94's reconnect ladder; there is no
+// second recovery mechanism to keep in step with the first.
+const (
+	// pingInterval is the gap between heartbeat pings.
+	pingInterval = 25 * time.Second
+	// pingTimeout bounds the wait for one pong. Generous on purpose: a mobile
+	// radio waking from idle can take seconds to deliver the first packet, and
+	// mistaking that for death costs the user a reconnect.
+	pingTimeout = 10 * time.Second
+	// pingMaxMisses is how many CONSECUTIVE unanswered pings mean death.
+	//
+	// Two, not one. One miss would detect a dead link ~35s sooner, and with
+	// #94's ladder re-dialling in 300ms a wrong guess is cheap in wall clock --
+	// but it is not free: a reconnect re-runs attach, re-composes the
+	// workspace, and flashes the overlay over whatever the user is doing. A
+	// single dropped packet on a mobile link is common enough that one miss
+	// would do that regularly. Two consecutive misses across a 35s window is
+	// not a blip. Worst case to notice a genuinely dead connection is
+	// therefore (25+10)*2 = 70s; the ALTERNATIVE, one miss, would make that 35s
+	// at the cost of spurious reconnects, and is a one-constant change.
+	pingMaxMisses = 2
+)
+
+// heartbeat pings the browser every pingInterval and closes the connection when
+// the pongs stop coming. Runs until the client's context is cancelled.
+//
+// Ping must run concurrently with a reader -- it writes the ping frame itself
+// but relies on readPump's Read to deliver the pong -- which is why this is
+// started alongside readPump and not from inside it.
+func (c *Client) heartbeat() {
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
+	misses := 0
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		pctx, pcancel := context.WithTimeout(c.ctx, pingTimeout)
+		err := c.conn.Ping(pctx)
+		pcancel()
+
+		if err == nil {
+			misses = 0
+			continue
+		}
+		// The connection is already being torn down by someone else; the
+		// heartbeat has no verdict to add.
+		if c.ctx.Err() != nil {
+			return
+		}
+
+		misses++
+		if misses < pingMaxMisses {
+			log.Printf("ws heartbeat: ping unanswered (%d/%d): %v", misses, pingMaxMisses, err)
+			continue
+		}
+		log.Printf("ws heartbeat: %d consecutive pings unanswered, closing connection: %v", misses, err)
+		c.close()
+		return
+	}
+}
+
 // readPump loops reading messages from the connection.
 // On exit it removes the client from the hub.
 func (c *Client) readPump() {
@@ -1192,6 +1313,9 @@ func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
 	client := newClient(s.hub, conn)
 	s.hub.Add(client)
 	go client.readPump()
+	// Started beside readPump, not inside it: Ping waits for a pong that only
+	// readPump's Read can deliver, so the two must run concurrently.
+	go client.heartbeat()
 }
 
 // NewServerMsg marshals a single-key JSON object: {msgType: payload}.
