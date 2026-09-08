@@ -713,7 +713,15 @@ func registerAllTools(
 					"type":        "string",
 					"description": "the lane's opening turn, as work to do. It must not begin with '/': the harness would read that as a slash command. Use goal to start a /goal loop",
 				},
-				"goal": map[string]any{"type": "string"},
+				"goal": map[string]any{
+					"type": "string",
+					"description": "stop condition for a /goal loop (amplifier only; prompt is then ignored). " +
+						"The lane loops headlessly until the condition is met, and when the loop ends " +
+						"the pane does NOT close: it resumes that same session interactively, holding " +
+						"the whole run's context, so a lane that got most of the way there can be " +
+						"finished by typing at it. Until a human types, the row reads mode=autonomous " +
+						"with the verdict in state and the condition in done_means",
+				},
 				"placement": map[string]any{
 					"type": "string",
 					"enum": []string{"tab", "split-right", "split-left", "split-above", "split-below"},
