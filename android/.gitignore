@@ -1,0 +1,20 @@
+# Build output - never committed
+build/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Local machine config
+local.properties
+.gradle/
+captures/
+.cxx/
+
+# Signing material - never committed
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
