@@ -89,6 +89,25 @@ export function isKnownHarness(h: string | undefined): h is KnownHarness {
  * distinguish "thinking" from "waiting for you", which is why this declared
  * channel exists.
  */
+/**
+ * A session's progress through its own declared task list.
+ *
+ * Counts, not the items: a card needs a fraction and one line, and shipping
+ * every lane's whole plan to render "3/10" would be paid for on every change.
+ */
+export interface TodoProgress {
+  /** Completed items. */
+  done: number;
+  /** Items in the list. Never 0 in a published record -- see SessionState.todo. */
+  total: number;
+  /**
+   * The in-progress item, present tense ("Cutting the release"). Absent when
+   * nothing is in progress, which is a real state for an all-pending or
+   * all-complete list, not a gap to paper over.
+   */
+  current?: string;
+}
+
 export interface SessionState {
   /** The producer's own session id. */
   sessionId: string;
@@ -119,6 +138,17 @@ export interface SessionState {
   doing?: string;
   /** The session's declared stop condition. Normally only when autonomous. */
   doneMeans?: string;
+  /**
+   * Progress through the session's own task list, when it keeps one.
+   *
+   * ABSENT means it does not keep one -- which is not the same as no progress,
+   * and must never be rendered as 0/0. A card with no `todo` shows `doing`,
+   * exactly as it did before this field existed. See todoFraction().
+   *
+   * Unlike `doing`, which is re-templated on every single tool call, this
+   * changes only when the session revises its plan.
+   */
+  todo?: TodoProgress;
   /** Distinct artifact paths this session has read. */
   knows?: string[];
   /**
@@ -234,6 +264,74 @@ export function shortProject(project: string | undefined): string {
   if (!project) return '';
   const parts = project.replace(/\/+$/, '').split('/');
   return parts[parts.length - 1] ?? '';
+}
+
+/**
+ * The fraction to print for a session's task list, or '' for one that keeps no
+ * list.
+ *
+ * The empty string is the whole point of this function existing rather than
+ * being inlined at three call sites. Every surface must agree on ONE rule for
+ * when there is nothing to say, because the failure mode is not cosmetic: a
+ * card reading "0/0" claims a lane has a plan and has finished none of it,
+ * which is a stalled lane. A lane that simply does not track todos is a
+ * different thing, and showing it as the first is worse than showing nothing.
+ *
+ * So: no `todo` at all, or a total of zero, or a nonsense count -- all yield
+ * '', and every caller falls back to `doing`, which is what it drew before this
+ * field existed.
+ */
+export function todoFraction(s: SessionState): string {
+  const t = countableTodo(s);
+  return t ? `${t.done}/${t.total}` : '';
+}
+
+/**
+ * How far along the bar should be filled, 0-100, for a session that keeps a
+ * list; 0 for one that does not.
+ *
+ * Derived from the SAME normalisation as todoFraction() and never independently
+ * from `s.todo`. A bar that disagreed with the number printed beside it would
+ * be worse than either alone, and two functions each doing their own arithmetic
+ * on the same field is how that happens. The caller draws no bar at all when
+ * todoFraction() is '', so the 0 returned here is never actually painted.
+ */
+export function todoPercent(s: SessionState): number {
+  const t = countableTodo(s);
+  return t ? Math.round((t.done / t.total) * 100) : 0;
+}
+
+/**
+ * The one place `s.todo` is turned into numbers worth drawing, or null.
+ *
+ * null means "this session keeps no usable list": no field at all, a total of
+ * zero, or counts that are not finite integers. Every surface is required to
+ * treat null as "say nothing", never as zero -- see todoFraction's note on why
+ * 0/0 is an active lie rather than a harmless placeholder.
+ */
+function countableTodo(s: SessionState): { done: number; total: number } | null {
+  const t = s.todo;
+  if (!t) return null;
+  const total = Math.trunc(t.total);
+  const done = Math.trunc(t.done);
+  if (!Number.isFinite(total) || total <= 0) return null;
+  if (!Number.isFinite(done) || done < 0) return null;
+  // Clamped rather than dropped: a producer that miscounts should still show a
+  // usable fraction, and a bar that reads 11/10 is a bug report nobody filed.
+  return { done: Math.min(done, total), total };
+}
+
+/**
+ * The line a card should print under its title: the in-progress task if the
+ * session declared one, otherwise `doing`.
+ *
+ * ONE line either way. `doing` is re-templated on every tool call and so says
+ * what was touched a second ago ("Reading a file"); the current task says what
+ * the session is actually trying to accomplish. Where both exist the task wins,
+ * because it is the one the session chose to write down.
+ */
+export function progressLine(s: SessionState): string {
+  return s.todo?.current?.trim() || s.doing?.trim() || '';
 }
 
 /**

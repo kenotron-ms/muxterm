@@ -623,6 +623,20 @@ func sessionStateHash(rows []SessionState) uint64 {
 		writeHashField(h, r.Doing)
 		writeHashField(h, r.DoneMeans)
 		writeHashField(h, strconv.Itoa(r.PR))
+		// Todo is a POINTER, so absence is a distinct value the browser renders
+		// differently (it falls back to Doing). A leading presence flag is what
+		// keeps "no list" from hashing like "an empty list": the two streams
+		// diverge at this field rather than at a field that might be equal
+		// anyway. Every field stays length-delimited, so the differing arity of
+		// the two branches cannot be confused for the next row's fields.
+		if r.Todo == nil {
+			writeHashField(h, "0")
+		} else {
+			writeHashField(h, "1")
+			writeHashField(h, strconv.Itoa(r.Todo.Done))
+			writeHashField(h, strconv.Itoa(r.Todo.Total))
+			writeHashField(h, r.Todo.Current)
+		}
 		// The row's variable-length tail is framed by a LEADING COUNT, not by a
 		// trailing sentinel. A sentinel would itself be just another
 		// length-delimited field, and Knows entries are unvalidated strings

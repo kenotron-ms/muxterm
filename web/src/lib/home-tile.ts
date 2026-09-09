@@ -10,18 +10,18 @@
  *
  * So this module is the stand-in for the missing emit path — and it is
  * deliberately NOT invented terminal output. It renders the session's own
- * DECLARED fields (waitingFor, doing, doneMeans) through the SAME renderer the
- * sidebar uses. A tile therefore says nothing the card doesn't; it just says it
- * in the preview's shape, so the layout, geometry and font contract are all
- * real and the swap to per-pane tiles is a one-line source change in
- * `mux-home`.
+ * DECLARED fields (waitingFor, doing, doneMeans, todo) through the SAME
+ * renderer the sidebar uses. A tile therefore says nothing the card doesn't; it
+ * just says it in the preview's shape, so the layout, geometry and font
+ * contract are all real and the swap to per-pane tiles is a one-line source
+ * change in `mux-home`.
  *
  * ASCII only. The 5x8 bitmap font folds anything it can't draw to '·', so a
  * decorative arrow or check mark would come out as a smudge.
  */
 
 import { tileFromLines, type PreviewTile } from './preview-tile.js';
-import { groupFor, type SessionState } from './session-state.js';
+import { groupFor, progressLine, todoFraction, type SessionState } from './session-state.js';
 
 /**
  * DEFAULT tile geometry, in cells. Both functions below take the real
@@ -101,19 +101,39 @@ export function tileLinesFor(
   const out: string[] = [];
   const group = groupFor(s);
 
+  // TODO PROGRESS IN A TILE: THE FRACTION ONLY, ON THE STATUS LINE THAT ALREADY
+  // EXISTS.
+  //
+  // A tile is 40-44 columns of a 5x8 bitmap font and SIX rows in the dashboard's
+  // thumb strip, and the fields below already fill them. Rows are the scarce
+  // thing here, so progress had to cost none: appending five characters to a
+  // status line that is written anyway costs zero rows, while an ASCII bar
+  // ("[####......]") would cost a whole one and, at a 5px cell, reads as a row
+  // of smudges rather than as a quantity.
+  //
+  // '' for a session that keeps no list, so its tile is byte-identical to what
+  // it drew before -- the same honest fallback the card makes, from the same
+  // function, because two surfaces disagreeing about what "no list" looks like
+  // is exactly the confusion this feature is meant to remove.
+  const frac = todoFraction(s);
+  const tail = frac ? ` ${frac}` : '';
+  // The body line likewise: the in-progress task if the session declared one,
+  // otherwise `doing`, exactly as on the card.
+  const body = progressLine(s);
+
   switch (group) {
     case 'Needs input':
-      out.push(`? ${s.waitingFor ?? 'input needed'}`);
+      out.push(`? ${s.waitingFor ?? 'input needed'}${tail}`);
       out.push('');
-      out.push(...wrap(s.doing ?? 'waiting for a decision', cols, IND));
+      out.push(...wrap(body || 'waiting for a decision', cols, IND));
       out.push('');
       out.push(`${IND}> waiting for you...`);
       break;
 
     case 'Running':
-      out.push('* running');
+      out.push(`* running${tail}`);
       out.push('');
-      out.push(...wrap(s.doing ?? '', cols, IND));
+      out.push(...wrap(body, cols, IND));
       if (s.doneMeans) {
         out.push('');
         out.push(...wrap(`done means: ${s.doneMeans}`, cols, IND));
@@ -123,9 +143,9 @@ export function tileLinesFor(
     case 'Completed': {
       const head = s.state === 'failed' ? 'x failed' : `. ${s.state}`;
       // A PR is a property of a finished session, not a group of its own.
-      out.push(s.pr && s.pr > 0 ? `${head} - PR #${s.pr}` : head);
+      out.push(s.pr && s.pr > 0 ? `${head}${tail} - PR #${s.pr}` : `${head}${tail}`);
       out.push('');
-      out.push(...wrap(s.doing ?? '', cols, IND));
+      out.push(...wrap(body, cols, IND));
       break;
     }
   }
