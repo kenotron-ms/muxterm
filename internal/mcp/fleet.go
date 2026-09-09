@@ -261,7 +261,18 @@ func fleetRowJSON(r sessiond.SessionState, machine string) map[string]any {
 	if knows == nil {
 		knows = []string{}
 	}
-	return map[string]any{
+	// todo is the one row field that is OMITTED rather than zeroed when absent,
+	// against this file's own always-present rule -- because here absence is the
+	// answer. "0/0" would tell a caller a lane had stalled at the start; no key
+	// tells it the lane keeps no list, which is a different and true thing.
+	var todo map[string]any
+	if r.Todo != nil {
+		todo = map[string]any{"done": r.Todo.Done, "total": r.Todo.Total}
+		if r.Todo.Current != "" {
+			todo["current"] = r.Todo.Current
+		}
+	}
+	row := map[string]any{
 		// machine is on EVERY row, not only remote ones. A field that appears
 		// conditionally teaches a caller to infer "local" from its absence,
 		// and that inference is wrong the first time a row is dropped or a
@@ -283,4 +294,8 @@ func fleetRowJSON(r sessiond.SessionState, machine string) map[string]any {
 		"pr":           r.PR,
 		"updated_at":   r.UpdatedAt,
 	}
+	if todo != nil {
+		row["todo"] = todo
+	}
+	return row
 }

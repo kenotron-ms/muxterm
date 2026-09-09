@@ -112,6 +112,26 @@ func ValidWaitingFor(w string) bool {
 	return false
 }
 
+// TodoProgress is a session's progress through its own declared task list.
+//
+// Counts, not the list. The card needs a fraction and one line of text, and
+// carrying fifty items to render "3/10" would put the whole plan of every lane
+// on the wire on every change for nothing. A consumer wanting the items reads
+// the session's own transcript.
+type TodoProgress struct {
+	// Done is how many items are completed; Total is how many exist. Rendered
+	// as "3/10". Total is never 0 in a published record -- a producer that
+	// would emit 0/0 omits the whole object instead.
+	Done  int `json:"done"`
+	Total int `json:"total"`
+
+	// Current is the in-progress item's text, in the producer's present-tense
+	// form ("Cutting the release"). Empty when nothing is in progress, which
+	// is a real state: a list that is all-pending or all-complete has an
+	// honest fraction and no current item.
+	Current string `json:"current,omitempty"`
+}
+
 // SessionState is one row of the home view: everything known about a single
 // agent session running in a muxterm pane.
 //
@@ -173,6 +193,17 @@ type SessionState struct {
 	// stop condition an autonomous loop is running toward. Normally present
 	// only when Mode == ModeAutonomous.
 	DoneMeans string `json:"doneMeans,omitempty"`
+
+	// Todo is structured progress through the session's own task list, when it
+	// keeps one. Nil means it does not, which is NOT the same as "no progress":
+	// consumers must fall back to Doing rather than render an empty 0/0, or a
+	// session that simply does not track todos reads as a stalled one.
+	//
+	// This is the only field on the row that is not a guess. Doing is
+	// re-templated on every tool call and describes the last thing touched;
+	// Todo changes only when the session itself revises its plan, which makes
+	// it both cheaper to carry and far more stable to look at.
+	Todo *TodoProgress `json:"todo,omitempty"`
 
 	// Knows lists distinct artifact paths this session has read. A session
 	// that has read very little and then failed was starved, not merely
