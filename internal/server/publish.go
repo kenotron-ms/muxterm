@@ -264,6 +264,23 @@ type publicationView struct {
 	// time. Folder rows only. It is here so "what did I actually publish"
 	// has a number next to it rather than requiring trust.
 	Excluded int `json:"excluded,omitempty"`
+	// Truncated is true when the folder hit the 5000-file cap, so the link
+	// covers only part of the tree. Folder rows only.
+	//
+	// It was written and never read, which meant a publisher who pointed at a
+	// 6000-file folder got a success, a link covering 5000 of them, and no
+	// indication anywhere that a thousand pages do not exist. This whole
+	// feature rests on the publisher's "I published what I saw" being true.
+	Truncated bool `json:"truncated,omitempty"`
+	// GitStatus says whether .gitignore was actually consulted, and why not
+	// when it was not. Folder rows only.
+	//
+	// Also written and never read. gitignore filtering is BEST-EFFORT -- no
+	// git on PATH, a root outside any worktree, or a failed call silently
+	// leaves the built-in exclusion set as the only filter. A publisher
+	// relying on .gitignore to withhold dump.sql deserves to be told when it
+	// did not run, rather than getting that protection at random.
+	GitStatus string `json:"git_status,omitempty"`
 }
 
 // PublicationRegistry tracks live file publications by id. Safe for concurrent
@@ -482,6 +499,8 @@ func (r *PublicationRegistry) view(p *publication, url string) publicationView {
 	if p.isFolder() {
 		v.FileCount = p.tree.FileCount()
 		v.Excluded = p.tree.excludedN + p.tree.gitIgnoredN + p.tree.symlinkOutN
+		v.Truncated = p.tree.truncated
+		v.GitStatus = p.tree.gitStatus
 		v.Size = p.tree.totalSize
 		status, detail := treeStatus(p)
 		v.Status, v.StatusDetail = status, detail

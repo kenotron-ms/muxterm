@@ -153,7 +153,7 @@ type folderTree struct {
 	excludedN    int    // entries the exclusion policy dropped
 	gitIgnoredN  int    // entries git said were ignored
 	gitStatus    string // one sentence: what gitignore filtering did, or why it did not run
-	truncated    bool   // true when folderMaxFiles stopped the walk
+	truncated    bool   // true when folderMaxFiles stopped the walk (surfaced on the owner row)
 	symlinkFileN int    // symlinks kept because they resolved INSIDE the root
 	symlinkOutN  int    // symlinks dropped because they left the root
 }
@@ -200,6 +200,11 @@ var excludedExactNames = map[string]bool{
 var excludedExtensions = map[string]bool{
 	".pem": true, ".key": true, ".pfx": true, ".p12": true,
 	".jks": true, ".keystore": true, ".ppk": true, ".asc": true,
+	// Same criterion, found missing in review: Apple/APNs auth keys, PKCS
+	// containers, GnuPG material, KeePass databases, OpenVPN profiles (which
+	// embed an inline private key).
+	".p8": true, ".pkcs8": true, ".pkcs12": true,
+	".gpg": true, ".kdbx": true, ".ovpn": true,
 }
 
 // folderExcluded decides whether one directory entry is dropped, and says why.
@@ -232,7 +237,10 @@ func folderExcluded(rel string, isDir bool) (bool, string) {
 			return true, strings.ToLower(name) + " is never served"
 		}
 		if !asDir {
-			if excludedExactNames[name] {
+			// ToLower like the two lookups around it. Without it ID_RSA
+			// served while id_rsa was excluded -- and on a case-insensitive
+			// filesystem (APFS by default) they are the same file.
+			if excludedExactNames[strings.ToLower(name)] {
 				return true, "this name is private key material by convention and is never served"
 			}
 			if excludedExtensions[strings.ToLower(filepath.Ext(name))] {
@@ -630,7 +638,11 @@ func (t *folderTree) applyGitIgnore(ctx context.Context) {
 	}
 	dropped := 0
 	for _, raw := range bytes.Split(stdout.Bytes(), []byte{0}) {
-		rel := string(bytes.TrimSpace(raw))
+		// NOT TrimSpace. -z exists precisely so no trimming is needed:
+		// records are NUL-delimited because a filename may contain spaces or
+		// newlines. Trimming made a gitignored "secret .env.bak" miss the
+		// lookup below and stay PUBLISHED -- a filter that fails open.
+		rel := string(raw)
 		if rel == "" {
 			continue
 		}
@@ -716,6 +728,35 @@ func (t *folderTree) finalize() {
 // Publish-time entry point
 // ---------------------------------------------------------------------------
 
+// rootComponentExcluded applies the exclusion policy to the PUBLISHED ROOT's
+// own path, component by component, and names the offending component.
+//
+// It reuses folderExcluded rather than growing a second list, because two
+// lists is how the two ends drift apart. Every component is treated as a
+// directory, which is what each one is.
+//
+// This refuses more than strictly necessary -- a genuinely intended
+// ~/.local/share/notes is refused too, and that is a real cost. The
+// alternative was testing only the final component, which would still have
+// published /repo/.git/objects and ~/.ssh/keys. When the choice is contested,
+// the option that exposes less wins; the caller is told exactly which
+// component to move out from under.
+func rootComponentExcluded(abs string) (string, string) {
+	rest := strings.Trim(filepath.ToSlash(abs), "/")
+	if rest == "" {
+		return "", ""
+	}
+	for _, name := range strings.Split(rest, "/") {
+		if name == "" {
+			continue
+		}
+		if bad, why := folderExcluded(name, true); bad {
+			return name, why
+		}
+	}
+	return "", ""
+}
+
 // resolvePublishFolder resolves and vets a caller-supplied directory path.
 func resolvePublishFolder(p string) (string, os.FileInfo, error) {
 	resolved, err := resolvePublishPath(p)
@@ -735,6 +776,29 @@ func resolvePublishFolder(p string) (string, os.FileInfo, error) {
 	// meant to, in one call, to the public internet.
 	if resolved == string(os.PathSeparator) {
 		return "", nil, errors.New("refusing to publish the filesystem root")
+	}
+
+	// ⛔ THE EXCLUSION POLICY MUST APPLY TO THE ROOT ITSELF.
+	//
+	// folderExcluded is only ever asked about paths RELATIVE to the root, so
+	// the root's own name was never tested. That made the entire deny-list
+	// bypassable by naming the excluded thing directly:
+	//
+	//	publish_folder /repo/.git   -> config, HEAD, index, every loose object
+	//	                               and pack: the whole history, including
+	//	                               every secret ever committed and later
+	//	                               "removed". excluded=0, status ok.
+	//	publish_folder ~/.aws       -> credentials, served as text/plain
+	//	publish_folder ~/.ssh/keys  -> basename "keys": no dot, no listed name
+	//
+	// The deny-list did not merely fail to fire here; it never ran. And the
+	// tool description promises "NEVER SERVED, WHATEVER THE FOLDER CONTAINS:
+	// any .git directory", which an agent acting for a user is entitled to
+	// believe. So every component of the resolved root is now tested by the
+	// SAME rules, and the refusal names the component so the caller learns
+	// which one, rather than being told a flat no.
+	if bad, why := rootComponentExcluded(resolved); bad != "" {
+		return "", nil, fmt.Errorf("refusing to publish %s: the path goes through %q, and %s. Publish a folder outside it", resolved, bad, why)
 	}
 	if home, herr := os.UserHomeDir(); herr == nil && home != "" {
 		if hres, rerr := filepath.EvalSymlinks(home); rerr == nil && hres == resolved {

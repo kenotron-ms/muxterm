@@ -30,18 +30,24 @@ import (
 // publish_folder.go's header. It lives in publish_folder_api.go.
 //
 // ⛔ THE AUTH BYPASS IS THE FEATURE AND THE RISK. Every other route in this
-// server sits behind AuthMiddleware. These two do not, because a link that
+// server sits behind AuthMiddleware. These three do not, because a link that
 // needs a muxterm account is not a link you can send to anyone. The bypass is
 // scoped by REGISTRATION, not by a conditional inside the middleware: the two
 // public patterns are simply registered without protect(), and no existing
 // pattern changes. There is no flag, no header, and no request-derived
 // condition anywhere that can turn a protected route into an unprotected one.
 //
-// Both public patterns are FIXED SHAPE. /p/{id} has exactly two segments and
-// the id is validated to 22 base64url characters before the registry is
-// consulted; /p/_asset/doc.js is a literal with no wildcard at all. There is no
-// caller-controlled path component anywhere on the public side, so directory
-// traversal is not filtered, it is unrepresentable.
+// TWO OF THE THREE public patterns are FIXED SHAPE. /p/{id} has exactly two
+// segments and the id is validated to 22 base64url characters before the
+// registry is consulted; /p/_asset/doc.js is a literal with no wildcard at
+// all. For those two there is no caller-controlled path component, so
+// directory traversal is not filtered, it is unrepresentable.
+//
+// THAT IS NO LONGER TRUE OF THE SERVER AS A WHOLE. /p/{id}/{rest...} carries a
+// caller-controlled path component, because a browsable published folder
+// cannot exist without one. What replaces the guarantee is in
+// internal/server/publish_folder.go's header. Do not read the paragraph above
+// as covering it.
 
 // publicAssetPath is the built public-document renderer inside PublicDocFS.
 // Its name is pinned in web/vite.public-doc.config.ts precisely so this
