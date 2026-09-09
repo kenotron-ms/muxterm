@@ -205,8 +205,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMCPToolsListReturns28Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 28 tools
+// TestMCPToolsListReturns29Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 29 tools
 // in the expected order — all without a running sessiond daemon.
 //
 // This is the MANAGER surface: what a session that is not running inside a
@@ -222,8 +222,9 @@ func assertToolNames(t *testing.T, got, want []string) {
 // took it to 24. The publishing trio (publish_file, list_publications,
 // revoke_publication), which serves one pinned file to anonymous callers,
 // took it to 27. publish_folder, which serves a whole browsable directory
-// tree to anonymous callers, took it to 28.
-func TestMCPToolsListReturns28Tools(t *testing.T) {
+// tree to anonymous callers, took it to 28. view_file, which shows one local
+// file to the human in the Viewer, took it to 29.
+func TestMCPToolsListReturns29Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 	got := mcpToolNames(t, bin, "")
 
@@ -259,6 +260,8 @@ func TestMCPToolsListReturns28Tools(t *testing.T) {
 		"publish_folder",
 		"list_publications",
 		"revoke_publication",
+		// 1 artifact tool (HTTP REST, registered via registerArtifactTools)
+		"view_file",
 		// 2 config tools (HTTP REST, registered via registerConfigTools)
 		"get_config",
 		"update_config",
@@ -320,6 +323,11 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 		"publish_folder",
 		"list_publications",
 		"revoke_publication",
+		// 1 artifact tool, present in a pane: view_file SHOWS a file to the
+		// human who is already logged in. It publishes nothing, creates no
+		// link and destroys nothing, so it falls on the same side of this
+		// guard's line as read_file and the publishing four.
+		"view_file",
 		// 2 config tools, unchanged.
 		"get_config",
 		"update_config",
