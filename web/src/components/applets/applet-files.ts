@@ -368,6 +368,20 @@ export class AppletFiles extends LitElement implements AppletElement {
       color: var(--ink-2);
       font-size: var(--t-ui);
       line-height: var(--lh-body);
+
+      /* THE TWO STATUS INKS, pulled toward the foreground.
+         --chrome-accent and --fail are chosen to sit on a terminal's
+         background, and at 10.5px bold they measure ~3.3:1 against the light
+         palette's chrome -- readable, but under WCAG AA for small text. Mixing
+         each 78% with --ink-1 keeps the hue (still recognisably accent and
+         still recognisably failure) while borrowing the foreground's contrast,
+         and it does it in BOTH directions for free: --ink-1 is near-black in a
+         light palette and near-white in a dark one.
+         These are DERIVED, not invented: an applet may not define its own
+         colours (applet-registry.ts), and this defines none -- it mixes two
+         tokens it was already given. */
+      --pub-ink: color-mix(in srgb, var(--chrome-accent) 78%, var(--ink-1));
+      --pub-ink-bad: color-mix(in srgb, var(--fail) 78%, var(--ink-1));
     }
 
     /* The icon() helper emits this class; the rule is per-shadow-root. */
@@ -492,6 +506,7 @@ export class AppletFiles extends LitElement implements AppletElement {
     .row {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: var(--s-3);
       width: 100%;
       min-width: 0;
@@ -596,15 +611,15 @@ export class AppletFiles extends LitElement implements AppletElement {
       white-space: nowrap;
     }
     .pubmark {
-      color: var(--chrome-accent);
+      color: var(--pub-ink);
       font-weight: 700;
     }
     .pubmark.bad,
     .publbl.bad {
-      color: var(--fail);
+      color: var(--pub-ink-bad);
     }
     .publbl {
-      color: var(--chrome-accent);
+      color: var(--pub-ink);
       font-weight: 600;
       letter-spacing: 0.04em;
     }
@@ -747,14 +762,14 @@ export class AppletFiles extends LitElement implements AppletElement {
       font-size: 10px;
       font-weight: 700;
       line-height: 1;
-      color: var(--chrome-accent);
+      color: var(--pub-ink);
     }
     .pmark.bad {
-      color: var(--fail);
+      color: var(--pub-ink-bad);
     }
     .ppath {
       min-width: 0;
-      flex: 1 1 22ch;
+      flex: 1 1 12ch;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -780,23 +795,40 @@ export class AppletFiles extends LitElement implements AppletElement {
       text-decoration: line-through;
       text-decoration-color: color-mix(in srgb, var(--fail) 55%, transparent);
     }
+    /* WRAPS, and that is load-bearing. Squeezed to ~170px by the divider, a
+       nowrap trailing zone pushes the link and the revoke button off the right
+       edge of the applet -- the status is still technically rendered and is
+       unreadable, which is the same as absent. Wrapping turns one 500px line
+       into three short ones instead. */
     .pmeta {
-      flex: none;
+      flex: 1 1 auto;
+      min-width: 0;
       display: flex;
       align-items: center;
-      gap: var(--s-3);
+      flex-wrap: wrap;
+      gap: var(--s-2) var(--s-3);
       font-family: var(--mono);
       font-size: 10.5px;
       line-height: 1;
+    }
+    .pmeta > * {
       white-space: nowrap;
     }
+    /* The link id, not the whole absolute URL: at 10.5px mono an origin plus a
+       22-character id is wider than the applet ever is. The full URL is on the
+       title and is what the copy-link button puts on the clipboard. */
+    .pid {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .pword {
-      color: var(--chrome-accent);
+      color: var(--pub-ink);
       font-weight: 600;
       letter-spacing: 0.04em;
     }
     .pword.bad {
-      color: var(--fail);
+      color: var(--pub-ink-bad);
     }
     .pid,
     .pleft {
@@ -1346,6 +1378,14 @@ export class AppletFiles extends LitElement implements AppletElement {
     const dir = cut > 0 ? p.path.slice(0, cut + 1) : '';
     const base = cut >= 0 ? p.path.slice(cut + 1) : p.path;
     const url = absoluteURL(p);
+    // The id-bearing path, whether or not an operator configured a public
+    // origin -- p.url is already "/p/{id}" in the unconfigured case.
+    let short = p.url;
+    try {
+      short = new URL(p.url, location.href).pathname;
+    } catch {
+      /* keep whatever the server said */
+    }
     return html`
       <div class="${bad ? 'prow bad' : 'prow'}">
         <span class="${bad ? 'pmark bad' : 'pmark'}" aria-hidden="true">${bad ? '!' : '\u2197'}</span>
@@ -1355,7 +1395,7 @@ export class AppletFiles extends LitElement implements AppletElement {
         <span class="pmeta">
           <span class="${bad ? 'pword bad' : 'pword'}">${word}</span>
           ${left === '' ? nothing : html`<span class="pleft" title="Time left on this link">${left}</span>`}
-          ${p.url === '' ? nothing : html`<span class="pid" title="${url}">${p.url}</span>`}
+          ${p.url === '' ? nothing : html`<span class="pid" title="${url}">${short}</span>`}
           <button
             type="button"
             class="act"

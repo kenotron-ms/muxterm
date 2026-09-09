@@ -68,6 +68,7 @@ import {
 import './applets/applet-dashboard.js';
 import './applets/applet-files.js';
 import './applets/applet-prs.js';
+import './applets/applet-scratch.js'; // THROWAWAY: the A1 proof. Delete with the file.
 
 /**
  * Which tab is showing. localStorage rather than the server config, for

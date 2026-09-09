@@ -55,7 +55,7 @@
 import type { IconNode } from 'lucide';
 
 /** Stable applet ids. Used for persistence keys and navigation targets. */
-export type AppletId = 'dashboard' | 'files' | 'prs';
+export type AppletId = 'dashboard' | 'files' | 'prs' | 'scratch'; // scratch: THROWAWAY, A1 proof
 
 /**
  * The three reactive properties the host sets on every applet element.
