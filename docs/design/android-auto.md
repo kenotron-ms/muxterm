@@ -223,6 +223,41 @@ cd "$ANDROID_HOME/extras/google/auto" && \
   SDL_AUDIODRIVER=dummy ./desktop-head-unit --adb=5277
 ```
 
+### The phone-side procedure, in the order that matters
+
+Written down so nobody rediscovers it a tap at a time. Verified against
+[the DHU docs](https://developer.android.com/training/cars/testing/dhu) and
+against an actual Pixel 10 Pro on 2026-09-09; the UI labels below are the real
+ones on Android 17 / Android Auto 17.5.
+
+1. Open Android Auto's settings: **Settings → Apps → See all apps → Android Auto
+   → Advanced → Additional settings in the app**. (There is no Android Auto
+   launcher icon to tap; this is the only way in on Android 10+.)
+2. Scroll to **About**, tap **Version**, then tap **Version and permission info**
+   **ten times**, and **OK** on *Allow development settings?*. Once per phone,
+   ever.
+3. **⋮ → Developer settings → Unknown sources** on. See the caveat below.
+4. **Previously connected cars → Add new cars to Android Auto** on. Without this
+   Android Auto declines a new head unit, and the DHU stalls with no explanation.
+5. **⋮ → Start head unit server.** A notification confirms it.
+6. Plug the phone into the machine running the DHU **by USB**. Not optional —
+   see the finding below. Unlock the screen.
+7. `adb forward tcp:5277 tcp:5277`, then run the DHU.
+
+**Ordering that is not obvious and cost several attempts:** if a DHU session has
+already failed once, do step 5 again — **Stop head unit server**, then **Start
+head unit server** — immediately before reconnecting. The service keeps listening
+on 5277 after a failed handshake, so it *looks* healthy, but it will not start
+another car. Restarting it is what moved this investigation from a silent
+"Waiting for phone…" to the diagnosable failure below.
+
+**Caveat on step 3.** Unknown sources is worth turning on for the DHU path, but
+do not expect it to do anything for a real car: per the citation at the top of
+this file it explicitly *"doesn't apply to apps built using the Android for Cars
+App Library"*. We never got far enough to observe whether it changes what appears
+on the head unit, so its effect here is unproven in both directions. It is
+recorded as done, not as load-bearing.
+
 ### How far this actually got, and where it stopped
 
 Against a real Pixel 10 Pro (Android 17, Android Auto 17.5) over wireless adb,
@@ -297,3 +332,35 @@ transport; the screen itself is already proven against the same templates host
 above. And per the blocking finding at the top of this file, the DHU cannot make
 a sideloaded build work in a real vehicle either way — only an Internal App
 Sharing upload does that.
+
+---
+
+## If you pick this up in a month
+
+The state of things, so the first hour is not spent rediscovering it.
+
+**Done and verified.** The launcher icon, on a real Android 14 launcher. The car
+screen's templates, rendering on the real Google templates host with correct
+filtering, ordering and live refresh — on an Automotive OS emulator, which needs
+no phone and is the fastest way to see a change (`system-images;android-33;
+android-automotive;x86_64`, plus `android/tools/fake-fleet-feed.py` for data).
+
+**Known and unresolved.** Projection to a phone-driven head unit has never been
+seen working. The cause is understood and is environmental, not a code defect:
+Android Auto requires a real USB data attachment, and this container has no USB.
+
+**The two ways to close it,** in order of effort:
+
+1. Run the DHU on a machine with the phone physically plugged in — the DHU ships
+   for macOS and Windows too. Install the debug APK there, follow the phone-side
+   procedure above, and the same `desktop-head-unit` binary should project.
+2. Give this container USB passthrough, then repeat here.
+
+**Do not re-test** version skew, TLS, app registration, unknown sources, add-new-
+cars, or a stale head unit server. All six were eliminated; see the table above.
+
+**And the thing that outranks all of it:** none of this gets muxterm onto a real
+car dashboard. That needs the app release-signed and pushed through Play Internal
+App Sharing — no review, no public listing, but a Play Console account and a real
+signing key. Until someone does that, the car screen is a thing that provably
+renders and provably cannot be used while driving.
