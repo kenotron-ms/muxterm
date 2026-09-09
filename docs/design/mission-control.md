@@ -443,24 +443,49 @@ and offering a root we cannot open would be a lie told in a dropdown.
 it. When it lands, the change here is: stop filtering remote sessions out, and
 pass `machine` through to the endpoint. No row shape changes.
 
-### D3.7 — narrow and mobile. **SETTLED as scope, deferred as design.**
+### D3.7 — narrow and mobile. **SETTLED, and now BUILT: the sheet holds the host.**
 
-Today `:host([narrow])` hides `.dash` entirely and the fleet moves to a bottom
-sheet. That behaviour is **preserved exactly**: in portrait the sheet renders
-`<applet-dashboard insheet>` — the same applet, the same code, not a second
-copy of the fleet — and `toggleFleet()`, the `fleet-state` event and the
-title-bar button all still work.
+*Round one deferred this and named the cost; the paragraph below is what
+shipped. The original text is in git history.*
 
-**What is settled:** in portrait the host is inert. Every applet is `active =
-false`, so the contract's one rule holds for free on a phone, and the sheet's
-Dashboard is the only live applet. The narrow title reads Mission Control.
+What was deferred looked like a gap and was a defect. `:host([narrow])` hid the
+host, and the sheet mounted `<applet-dashboard insheet>` **by tag** — so the
+phone had exactly the applet the sheet named in its own source. Files, Pull
+Requests and the Viewer were not merely hidden in portrait; they were
+**unreachable by construction**, and every applet registered afterwards was
+desktop-only for free. That silently negates D1, whose stated test is that a new
+applet costs the host one line.
 
-**What remains, named:** the sheet carries the Dashboard *only*. Three tabs plus
-a rail will not fit a 360px sheet, and round one's recommendation — the sheet
-gets the tab strip, the rail collapses into a `⋯` menu — is still the right
-sketch and still unbuilt. **Files and Pull Requests are unreachable in portrait.**
-That is the honest state; it is not a regression, because they did not exist
-before.
+**What is built:** there is ONE host, in one of two containers — the right-hand
+region in landscape, the bottom sheet in portrait. `mux-cos.ts` names no applet
+at all. The sheet gets the tab strip, exactly as round one sketched; the rail it
+was going to collapse into a `⋯` menu no longer exists (the controls contract
+moved every control into the applet's own body), so the strip is only tabs and
+the sketch got cheaper rather than harder.
+
+**The one rule, generalised.** `_sheetOpen` used to mean "tell the Dashboard in
+the sheet whether it is active, because a closed sheet must not leave a
+subscription running". With four applets behind a strip that has to mean exactly
+one active while the sheet is up and **none** while it is down. It is one
+property on the host — `dormant` — spent in one expression in `_renderApplet`.
+
+**Vertical space, which is the binding constraint.** Chrome is the 34px drag
+handle plus the 34px strip: 68px. On the smallest phone that has to work
+(iPhone SE, 375×667) the half detent is 374px, leaving **306px of applet**. The
+strip **scrolls sideways** rather than squashing, so the fifth applet costs
+width, not height, and no host change.
+
+**`roomy`.** One optional manifest field, set by the Viewer alone: an applet for
+READING opens the sheet at its full detent. An applet that says nothing gets the
+fleet's presentation, which is what keeps "no mobile-specific work" true.
+
+**A navigation that arrives while the sheet is down is parked, not acted on.** A
+closed sheet cannot have been tapped, so it was not the user asking; the target
+is held and the tab is flagged, and their own next tap spends it.
+
+**Voice.** The sheet is pinned to the viewport bottom in the top layer and
+covers the composer — which during a call is the orb, the only control that
+hangs up. Voice going live dismisses the sheet.
 
 ### D3.8 — empty and error states. **ADOPTED.**
 
@@ -508,7 +533,6 @@ D3.10 already rejected.
 
 - **A durable pull-request watchlist.** The applet ships against a real source
   that is not the watchlist. See C4 below.
-- **The narrow-mode tab strip.** D3.7.
 - **Third-party applets.** Still out of scope and still not designed for; the
   registry is a module array, exactly as round one left it.
 

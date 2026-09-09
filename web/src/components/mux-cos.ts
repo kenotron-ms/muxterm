@@ -51,6 +51,7 @@ import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { icon } from '../lib/icons.js';
 import { ArrowUp, Check, ChevronDown, Ellipsis, Mic, Square, TriangleAlert, X } from 'lucide';
+import type { AppletChangedDetail } from '../lib/applet-registry.js';
 import {
   cosStore,
   shortToolName,
@@ -69,11 +70,11 @@ import {
   type VoiceSessionSnapshot,
 } from '../lib/voice-session-controller.js';
 import './mux-voice-orb.js';
+// ONE applet host, in one of two containers: the right-hand region in
+// landscape, the bottom sheet in portrait. This file imports no applet: the
+// host owns the registry and mounts whatever is in it, which is the whole
+// reason a new applet costs the phone nothing.
 import './mux-applets.js';
-// The portrait sheet renders a SECOND instance of the Dashboard applet
-// directly, outside the applet host: in portrait the whole right-hand region
-// is display:none and the fleet is a bottom sheet instead.
-import './applets/applet-dashboard.js';
 import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
 
@@ -194,12 +195,14 @@ export class MuxCos extends LitElement {
   @state() private _textMode = false;
 
   /**
-   * Whether the portrait fleet sheet is open.
+   * Whether the portrait applet sheet is open.
    *
-   * Its ONLY job is to tell the Dashboard applet inside the sheet whether it
-   * is active -- a closed sheet must not leave a subscription running, for
-   * exactly the reason a hidden applet must not. The browser owns open/closed
-   * (see _onSheetToggle); this mirrors it.
+   * Its ONLY job is to tell the applet host inside the sheet whether anyone
+   * can see it -- a closed sheet must not leave a subscription running, for
+   * exactly the reason a hidden applet must not. It used to say that to one
+   * hardcoded Dashboard; it says it to the host now, which spends it on every
+   * applet at once (`dormant`, in mux-applets.ts). The browser owns
+   * open/closed (see _onSheetToggle); this mirrors it.
    */
   @state() private _sheetOpen = false;
 
@@ -356,16 +359,20 @@ export class MuxCos extends LitElement {
 
     /* PORTRAIT. One column: the conversation. The topbar's job is done by
        the app's title bar (which says \"Dashboard\" and carries the fleet
-       button), the divider has nothing to divide, and the fleet lives in the
+       button), the divider has nothing to divide, and the applets live in the
        bottom sheet until asked for. */
     :host([narrow]) {
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: minmax(0, 1fr);
       grid-template-areas: 'chat';
     }
+    /* No .dash here: in portrait that region is not rendered at all, rather
+       than rendered and hidden. The distinction is the applet host's whole
+       subscription rule -- a host inside a display:none region is still a
+       mounted host with an ACTIVE applet in it, polling for a strip of screen
+       nobody can see. Hiding a thing does not stop it working. */
     :host([narrow]) .topbar,
-    :host([narrow]) .grip,
-    :host([narrow]) .dash {
+    :host([narrow]) .grip {
       display: none;
     }
 
@@ -1275,7 +1282,11 @@ export class MuxCos extends LitElement {
       width: auto;
       max-width: none;
       margin: 0;
-      padding: 0;
+      /* The home indicator, once, for every applet -- on the SHEET rather than
+         inside each applet's scroller, so content scrolls up to the bar and
+         stops there instead of under it, and no applet has to know the inset
+         exists. Zero on a browser without one, which is the default's job. */
+      padding: 0 0 env(safe-area-inset-bottom, 0px);
       /* NO display in this rule -- it belongs in :popover-open below.
          A closed popover is display: none by UA rule; an unconditional
          author display here OVERRIDES that, so the sheet is never actually
@@ -1357,23 +1368,22 @@ export class MuxCos extends LitElement {
       background: var(--chrome-hover);
       color: var(--ink-1);
     }
-    .pslist {
+    /* THE HOST FILLS WHAT THE HANDLE LEAVES. There is no scroller here: the
+       applet inside owns its own, the same one it owns on the desktop, and a
+       scroller inside a scroller is how a bottom sheet stops responding to the
+       drag that opened it. */
+    .sheet mux-applets {
       flex: 1;
       /* Load-bearing: without it a flex item refuses to shrink below its
          content and the bounded height this sheet exists to provide
          silently does not happen. */
       min-height: 0;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-      padding: 0 var(--s-5) var(--s-6);
-      padding-bottom: max(var(--s-6), env(safe-area-inset-bottom, 0px));
     }
     /* Portrait is CARDS ONLY -- a tile is a terminal thumbnail and needs
        width to say anything. The rule that enforces it USED to live here, as
        .pslist .thumb; a thumbnail is now inside the applet's shadow root
-       where this selector cannot reach it, so the applet is handed insheet
-       and suppresses its own thumbs. See applet-dashboard's
-       :host([insheet]) .thumb. */
+       where this selector cannot reach it, so the applet keys off the narrow
+       the host already hands it. See applet-dashboard's :host([narrow]) .thumb. */
   `;
 
   // -------------------------------------------------------------------------
@@ -1408,6 +1418,17 @@ export class MuxCos extends LitElement {
       if (!was && now) {
         this._holdComposer();
         this._textMode = false;
+        // THE ORB AND THE SHEET WANT THE SAME THUMB, and on a phone they want
+        // the same pixels: the sheet is pinned to the viewport bottom in the
+        // top layer, so an open one covers the composer -- which during a call
+        // is the orb, and the orb is the only control that hangs up. Voice
+        // going live is unambiguous about which of the two the bottom of the
+        // screen belongs to, so the sheet gets out of the way. It is a
+        // dismissal and not a suppression: the fleet button reopens it
+        // mid-call, over a call the user can still see is running, because
+        // deciding they may not look at their lanes while talking would be
+        // this file inventing a policy nobody asked for.
+        this._hideSheet();
       }
       this._session = s;
       if (was && !now) this._releaseComposer();
@@ -1684,8 +1705,9 @@ export class MuxCos extends LitElement {
         @pointerup="${this._gripUp}"
         @pointercancel="${this._gripUp}"
       ></div>
-      <div class="dash"><mux-applets .narrow="${this.narrow}"></mux-applets></div>
-      ${this.narrow ? this._renderSheet() : nothing}
+      ${this.narrow
+        ? this._renderSheet()
+        : html`<div class="dash"><mux-applets></mux-applets></div>`}
     `;
   }
 
@@ -2231,14 +2253,27 @@ export class MuxCos extends LitElement {
   }
 
   // -------------------------------------------------------------------------
-  // The fleet sheet (portrait)
+  // The applet sheet (portrait)
   // -------------------------------------------------------------------------
 
   /**
-   * A SECOND instance of the Dashboard applet, not the one in the applet
-   * host: in portrait the whole right-hand region is display:none and the
-   * fleet is this sheet instead. `insheet` is what tells it so -- the sheet
-   * owns the scroller and portrait draws no thumbnails.
+   * THE APPLET HOST, in the container a phone has room for.
+   *
+   * Not a second copy of one applet -- the host itself, the same element the
+   * desktop region holds, with the same tab strip over the same registry. It
+   * used to be `<applet-dashboard insheet>`, written here by tag, which is why
+   * three of the four applets could not be reached on a phone at all. Nothing
+   * in this file names an applet now, so the fifth one appears here the day it
+   * registers itself and this method does not change.
+   *
+   * `dormant` is the old `_sheetOpen` rule, generalised: it said "a closed
+   * sheet must not leave a subscription running" about the one applet that was
+   * in here, and it has to mean the same thing about four. The host spends it
+   * on all of them at once.
+   *
+   * The sheet no longer scrolls; each applet owns its own scroller, exactly as
+   * it does on the desktop, so there is one geometry for both containers and
+   * no `insheet` special case to keep in step.
    *
    * `home-open` is caught HERE rather than fired here. Opening a pane used to
    * close the sheet as part of the same method; the applet dispatches the
@@ -2250,9 +2285,10 @@ export class MuxCos extends LitElement {
         class="sheet"
         popover="auto"
         data-state="half"
-        aria-label="Fleet"
+        aria-label="Applets"
         @toggle="${this._onSheetToggle}"
         @home-open="${this._hideSheet}"
+        @applet-changed="${this._onAppletChanged}"
       >
         <div
           class="pshandle"
@@ -2265,16 +2301,30 @@ export class MuxCos extends LitElement {
           <button
             class="psx"
             type="button"
-            aria-label="Close the fleet"
+            aria-label="Close the applets"
             @click="${this._hideSheet}"
           >${icon(X, { size: 14 })}</button>
         </div>
-        <div class="pslist">
-          <applet-dashboard insheet .active="${this._sheetOpen}"></applet-dashboard>
-        </div>
+        <mux-applets narrow .dormant="${!this._sheetOpen}"></mux-applets>
       </div>
     `;
   }
+
+  /**
+   * The applet showing in the sheet changed. The ONE thing the sheet does
+   * about it: an applet that says it is for reading gets the full detent,
+   * because half a phone screen of prose under a tab strip is a preview of
+   * reading rather than reading. See AppletManifest.roomy.
+   *
+   * It does not shrink back for the others. Coming out of the Viewer into
+   * Files and having the surface drop to half under the finger that just
+   * switched tabs is the yank this file spends so much of itself avoiding, and
+   * the drag handle is right there for someone who wants the room back.
+   */
+  private _onAppletChanged = (e: Event): void => {
+    const detail = (e as CustomEvent<AppletChangedDetail>).detail;
+    if (detail?.roomy === true) this._setDetent('full');
+  };
 
   // -------------------------------------------------------------------------
   // Intent

@@ -151,7 +151,7 @@ export class AppletPRs extends LitElement implements AppletElement {
   @property({ type: Boolean }) active = false;
 
   /** Portrait, handed down from the host. */
-  @property({ type: Boolean }) narrow = false;
+  @property({ type: Boolean, reflect: true }) narrow = false;
 
   /** Deep-link target. The form is `pr:<number>`; nothing dispatches one yet. */
   @property({ attribute: false }) target: string | null = null;

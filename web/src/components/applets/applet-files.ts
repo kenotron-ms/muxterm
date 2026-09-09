@@ -255,7 +255,7 @@ export class AppletFiles extends LitElement implements AppletElement {
   @property({ type: Boolean }) active = false;
 
   /** Portrait, handed down from the host. */
-  @property({ type: Boolean }) narrow = false;
+  @property({ type: Boolean, reflect: true }) narrow = false;
 
   /** Deep-link target. Nothing navigates here yet; see updated(). */
   @property({ attribute: false }) target: string | null = null;
