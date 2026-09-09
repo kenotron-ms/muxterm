@@ -563,7 +563,15 @@ export class MuxApp extends LitElement {
       max-height: none;
       margin: 0;
       padding: 0;
-      display: flex;
+      /* NO display in this rule -- it belongs in :popover-open below.
+         A closed popover is display: none by UA rule; an unconditional
+         author display here OVERRIDES that, and then the drawer is never
+         actually hidden, only pushed off-screen by translate. A box-shadow
+         paints OUTSIDE its element's box, so a 24px blur at +8px on a box
+         whose right edge sits at x=0 spills across x=0..32 -- a dark band
+         down the left edge of a screen with no drawer on it. Putting
+         display on the open state is also the only thing that makes the
+         display ... allow-discrete transition below mean anything. */
       flex-direction: column;
       overflow: hidden;
       background: var(--chrome-bar);
@@ -579,6 +587,7 @@ export class MuxApp extends LitElement {
     }
 
     .drawer:popover-open {
+      display: flex;
       translate: 0 0;
     }
 
