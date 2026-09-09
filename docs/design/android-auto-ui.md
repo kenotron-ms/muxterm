@@ -43,6 +43,50 @@ literal top, and the voice control says `LISTENING` in letters rather than turni
 
 ---
 
+## Why Spotify and Audible look richer than this
+
+The first reaction to the draft, and it deserves a straight answer.
+
+**They are not template apps.** They are *media* apps, on a separate API that predates the Car App
+Library: a `MediaBrowserService` serving a tree of `MediaItem`s plus a `MediaSessionCompat` for
+playback. Android Auto calls `onLoadChildren` recursively and renders the browse UI itself. Google
+names the two paths explicitly on the [media apps
+overview](https://developer.android.com/training/cars/media) — `MediaBrowserService` + `MediaSession`,
+*or* Car App Library templates (the latter still beta: "*publishing to open tracks and production
+tracks will be permitted at a later date*").
+
+**And a media app controls its appearance *less* than we do.** From Google's [media design
+guidance](https://developers.google.com/cars/design/create-apps/media-apps/overview): "Because most
+aspects of the media UI are controlled by car makers and Google, the design-related tasks for app
+developers are relatively simple." The app supplies text, art, an app icon and **one** accent colour.
+
+Their richness is **structural**, not visual — and this is the list of what we don't get:
+
+| Media app gets | We have instead |
+|---|---|
+| **No five-template quota** — it sends items, not templates | The quota, and it closes the app when exhausted. Biggest single difference. |
+| **Unbounded tree depth** (`onLoadChildren` recursion; only a "avoid more than three levels" *recommendation*) | Five *templates* per task — a budget, not a depth. |
+| **Top-level tabs** (root children become tabs, typically ≤4, browsable only) | `TabTemplate` exists but costs the action strip and hides blocked behind a tap. |
+| **Grid/list/category style per subtree**, plus group subheaders (content-style hints) | One template, chosen once. |
+| **Real search** — `BROWSER_SERVICE_EXTRAS_KEY_SEARCH_SUPPORTED` + `onSearch`, plus voice `onPlayFromSearch` | Nothing equivalent for a templated list app. |
+| **Custom browse actions on rows** — download, favourite, add-to-queue | A full-list row gets whole-row tap **or** a toggle. Nothing else. |
+
+**Can muxterm just be a media app?** No — that path is defined by serving browsable media and a
+playback session. Lanes are not tracks.
+
+**What *is* ours to close: drill-down.** Full-list rows accept an `OnClickListener`, and
+`ScreenManager.push()` opens another screen with a host-supplied Back button. So "one screen, no
+drill-down" is **a decision, not a constraint** — see decision 5.
+
+**What is genuinely unavailable, so nobody designs around it:** a full-list row has no trailing
+buttons. `ROW_CONSTRAINTS_FULL_LIST` inherits `setMaxActionsExclusive(0)`; its javadoc reads "No
+actions (note: this is different than the click listener which turns the entire row into a clickable
+'action')". The affordances on a lane row are exactly two and they are mutually exclusive: **tap the
+whole row** (optionally with a browsable caret), **or** carry a **toggle**. No per-lane approve
+button — whatever the row does, the whole row does.
+
+---
+
 ## Template: `ListTemplate` with two `SectionedItemList`s
 
 It is the only general-purpose template that gives two labelled groups of rows on one screen with
@@ -138,8 +182,19 @@ type is a free refresh if the previous template was loading, **or** if:
 > template must have the same number of sections with the same headers. Further, the number of rows
 > and the title (not counting spans) of each row must not have changed.
 
+One exception worth exploiting: the same javadoc adds "**For rows that contain a `Toggle`, updates to
+the title are also allowed if the toggle state has changed** between the previous and new templates."
+
 So under this design a lane starting, finishing, or moving from ONGOING to NEEDS MY INPUT changes
 the row count and the row titles, and **costs a step**. Only secondary text is free.
+
+**The quota is not a one-way ratchet.** Popping a screen gives it back — "*the host detects when an
+app is popping a `Screen` … and updates the remaining quota based on the number of templates that the
+app is going backwards by*" — on the condition that a screen returned to sends the *same template
+type* it last sent. Sub-flows are affordable. It is the *self-refreshing single screen* that is
+expensive, which is exactly what this app is. (Also worth precision: the five is a limit on
+**templates**, not on `Screen` instances — "*if each screen is structured to send a single template,
+then the app can push five screen instances*".)
 `ConstraintManager.isAppDrivenRefreshEnabled()` (`@RequiresCarApi(6)`) lifts this — "This enables
 applications to refresh lists content without being counted towards a step" — and is very likely
 true on current hosts, but it is queryable at runtime and returns `false` when the host call fails.
@@ -161,6 +216,10 @@ starting/stopping must be one tap. Three placements exist, and **A and C are mut
 - **B — a pinned voice row.** Title stays the fixed word `Voice`; state lives in the secondary text
   (`LIVE — say "that's all" to end`). Because the title never changes, this is the **only** option
   whose state changes are free under the refresh rule. Costs one of the six rows.
+  **Strongest form: make it a real `Toggle`.** `ROW_CONSTRAINTS_FULL_LIST` sets
+  `setToggleAllowed(true)`, and the refresh rule's toggle exception then lets the *title* change too —
+  so the row can read `Voice` / `Listening` in the title and still cost nothing. Price: a toggle row
+  may not also carry an `OnClickListener`, so the switch is all that row does.
 - **C — floating action button.** `ACTIONS_CONSTRAINTS_FAB` sets `setRequireActionIcons(true)` and
   `setRequireActionBackgroundColor(true)`, and permits zero custom titles: it is icon-only, must
   carry a background colour, and can say nothing. Biggest target, worst at stating its state.
@@ -189,9 +248,13 @@ drawn so the choice can be made on sight.
 4. **What a row title is** — **the lane label** (`mac remote`) · **the workspace name** · **the
    project directory**. Labels are auto-generated today and some are poor; if the title is the label,
    the labels have to be good enough to read at a glance.
-5. **What a tap on a row does** — **nothing**, rows are inert and everything happens by voice ·
-   **starts voice with that lane as the subject** ("about mac remote…") · **speaks the row aloud**.
-   The design guidance discourages information-only rows, which argues against "nothing".
+5. **What a tap on a row does — the Spotify question** — **nothing**, rows are inert and everything
+   happens by voice · **starts voice with that lane as the subject** ("about mac remote…") · **speaks
+   the row aloud** · **opens a lane screen**: the full untruncated `waiting_for` and a couple of stock
+   answers. Drill-down is allowed (`ScreenManager.push()`, host-supplied Back, and popping restores the
+   quota it spent); the draft skipped it because the premise is glance-then-talk, not browse. **If the
+   app feels too flat next to Spotify, this is the lever.** The design guidance also discourages
+   information-only rows, which argues against "nothing".
 6. **What this is for** — **personal, DHU plus your own phone, never published**, in which case the
    app-category problem does not matter · **an internal test track**, in which case it must declare
    one of exactly seven categories (`NAVIGATION`, `POI`, `IOT`, `WEATHER`, `MEDIA`, `MESSAGING`,

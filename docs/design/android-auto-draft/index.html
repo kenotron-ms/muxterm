@@ -135,6 +135,7 @@ on <b>2026-09-09</b>. Full citations: <span class="mono">docs/design/android-aut
   <label><input type="checkbox" id="ctl"> Show what the host controls</label>
   <div class="navlinks">
     <a href="#truth">Read this first</a>
+    <a href="#spotify">Why Spotify looks richer</a>
     <a href="#template">D1 template</a>
     <a href="#states">D2 states</a>
     <a href="#voice">Voice</a>
@@ -172,6 +173,77 @@ Day/night switching. How many rows are actually shown. Whether text is truncated
 Whether your accent colour is used at all &mdash; it is dropped if it fails contrast.</td>
 </tr>
 </table>
+
+<h2 id="spotify">Why Spotify looks richer than this</h2>
+<p>This is the first thing anyone says when they see this draft, and it deserves a straight answer
+rather than a defence. Spotify and Audible <i>are</i> far richer in the car. Here is why, and it is
+not what it looks like.</p>
+
+<div class="callout">
+<p><b>They are not template apps.</b> They are <i>media</i> apps, on a completely separate API that
+predates the Car App Library: a <code>MediaBrowserService</code> that serves a tree of
+<code>MediaItem</code>s, plus a <code>MediaSession</code> for playback. The app hands over a content
+hierarchy; Android Auto walks it and renders the browse UI. There is not a
+<code>ListTemplate</code> anywhere in it.</p>
+<p><b>And they control their appearance <i>less</i> than we do, not more.</b> Google's own media
+design guidance: &ldquo;Because most aspects of the media UI are controlled by car makers and
+Google, the design-related tasks for app developers are relatively simple.&rdquo; A media app supplies
+text, album art, an app icon and <b>one</b> accent colour. That is the whole surface. Spotify in the
+car does not look like Spotify on your phone for exactly the reason this draft keeps insisting on.</p>
+</div>
+
+<p>So their richness is <b>structural</b>, not visual. That is the real list, and it is worth reading
+because it is a list of things we do not get:</p>
+
+<table>
+<tr><th style="width:30%">What a media app gets</th><th>What it means, and what we have instead</th></tr>
+<tr><td><b>No five-template quota</b></td>
+<td>It sends <i>items</i>, not templates, so the counter that closes our app does not exist for it.
+This is the single biggest difference.</td></tr>
+<tr><td><b>Unbounded tree depth</b></td>
+<td>Artist &rarr; album &rarr; track is just recursion on <code>onLoadChildren</code>. The only ceiling
+is advice (&ldquo;avoid browsable content that extends more than three levels deep&rdquo;). We get five
+<i>templates</i> per task, which is a budget, not a depth.</td></tr>
+<tr><td><b>Top-level tabs</b></td>
+<td>The root's children become tabs &mdash; typically up to four, browsable items only. We can have a
+<code>TabTemplate</code>, but it costs us the action strip and hides the blocked lane behind a tap.</td></tr>
+<tr><td><b>Grid or list, per subtree</b></td>
+<td>Content-style hints let each branch declare list vs grid vs category, with group subheaders. We
+choose one template and live in it.</td></tr>
+<tr><td><b>Real search</b></td>
+<td>Declared in <code>onGetRoot</code>, answered by <code>onSearch</code>, plus voice search through
+<code>onPlayFromSearch</code>. Nothing equivalent exists for a templated list app.</td></tr>
+<tr><td><b>Custom browse actions on rows</b></td>
+<td>Download, favourite, add-to-queue &mdash; per-row buttons inside the browse UI. A full-list row in
+our template gets a whole-row tap <b>or</b> a toggle, and nothing else (see below).</td></tr>
+</table>
+
+<p><b>Can we just be a media app?</b> No. That path is defined by serving media: a browsable content
+hierarchy and a playback session. Lanes are not tracks and there is nothing to play. There <i>is</i> a
+newer templated-media path (<code>androidx.car.app.category.MEDIA</code>, Car API 8) that reaches
+<code>SectionedItemTemplate</code> and <code>TabTemplate</code> &mdash; but it is in beta, and Google is
+explicit that &ldquo;publishing to open tracks and production tracks will be permitted at a later
+date.&rdquo;</p>
+
+<h3>The part of the gap that is ours to close</h3>
+<div class="callout">
+<p><b>Drill-down is available to us, and this draft turned it down on purpose.</b> Full-list rows
+accept an <code>OnClickListener</code>, and <code>ScreenManager.push()</code> opens another screen with
+a Back button supplied by the host. The &ldquo;five&rdquo; is a limit on <b>templates</b>, not on screens
+&mdash; and <b>popping a screen gives the quota back</b>: go two templates deep, come back, and the
+host restores two. A sub-flow is genuinely affordable.</p>
+<p>So &ldquo;one screen, no drill-down&rdquo; is <b>a decision, not a constraint</b>. It was chosen
+because the premise is that you glance and then talk &mdash; but if this draft feels thin beside
+Spotify, that decision is the lever, and it is decision 5 at the bottom of this page.</p>
+</div>
+
+<p>One thing that is genuinely not available, before anyone designs around it: <b>a full-list row has
+no trailing buttons.</b> <code>ROW_CONSTRAINTS_FULL_LIST</code> inherits
+<code>setMaxActionsExclusive(0)</code> &mdash; its own javadoc says &ldquo;No actions (note: this is
+different than the click listener which turns the entire row into a clickable &lsquo;action&rsquo;)&rdquo;.
+The affordances on a lane row are exactly two, and they are mutually exclusive: <b>tap the whole
+row</b> (optionally with a browsable caret), <b>or</b> carry a <b>toggle</b>. No per-lane approve
+button. Whatever the row does, the whole row does.</p>
 
 <h2 id="template">D1 &middot; The template</h2>
 <p><b>Chosen: <code>ListTemplate</code> with two <code>SectionedItemList</code>s.</b> It is the only
@@ -463,7 +535,7 @@ app has no use for.</td></tr>
         
       </div>
       <figcaption><b>Empty, voice LIVE</b> You can start a conversation from an empty screen &mdash; that is how work gets started from the car.</figcaption>
-    </figure></div><h2 id='voice'>Voice &mdash; three ways, two of them real</h2><p>Voice is the interaction; the screen is only a glance surface. So the live/not-live state has to be unmistakable, and the control has to be one tap. The template gives three places to put it, and <b>you cannot have the first and the third at the same time</b> &mdash; the design guidance says not to put an action strip and a floating action button on the same template. Mocked all three; pick one.</p><h3>Option A &mdash; action-strip button (drawn above)</h3><ul><li><b>Yes:</b> it is the only control on this template that may carry a <i>word</i>. One label button is allowed per action strip. TALK / LISTENING is unmistakable without colour.</li><li><b>No:</b> it is small, it sits top-right in the header, and it costs a template step to change if the host does not support app-driven refresh &mdash; the action strip is not row content, so it falls outside the refresh rule's list of things you may change for free.</li><li><b>Also:</b> <code>ListTemplate.Builder.setActionStrip()</code> is deprecated as of Car App Library 1.7.0 in favour of <code>Header.Builder.addEndHeaderAction()</code>. Same control, newer spelling &mdash; but it means option A is the one that has already moved once.</li></ul><h3>Option B &mdash; a pinned voice row</h3><p>The row title stays the fixed word <span class='mono'>Voice</span> and the state lives in the secondary text. That makes it the <b>only</b> option whose state changes are free under the refresh rule (D3) &mdash; secondary text is the one thing you may change without spending a step. It costs one of the 6 rows, so the fleet budget drops to 5.</p><div class="grid">
+    </figure></div><h2 id='voice'>Voice &mdash; three ways, two of them real</h2><p>Voice is the interaction; the screen is only a glance surface. So the live/not-live state has to be unmistakable, and the control has to be one tap. The template gives three places to put it, and <b>you cannot have the first and the third at the same time</b> &mdash; the design guidance says not to put an action strip and a floating action button on the same template. Mocked all three; pick one.</p><h3>Option A &mdash; action-strip button (drawn above)</h3><ul><li><b>Yes:</b> it is the only control on this template that may carry a <i>word</i>. One label button is allowed per action strip. TALK / LISTENING is unmistakable without colour.</li><li><b>No:</b> it is small, it sits top-right in the header, and it costs a template step to change if the host does not support app-driven refresh &mdash; the action strip is not row content, so it falls outside the refresh rule's list of things you may change for free.</li><li><b>Also:</b> <code>ListTemplate.Builder.setActionStrip()</code> is deprecated as of Car App Library 1.7.0 in favour of <code>Header.Builder.addEndHeaderAction()</code>. Same control, newer spelling &mdash; but it means option A is the one that has already moved once.</li></ul><h3>Option B &mdash; a pinned voice row</h3><p>The row title stays the fixed word <span class='mono'>Voice</span> and the state lives in the secondary text. That makes it the <b>only</b> option whose state changes are free under the refresh rule (D3) &mdash; secondary text is the one thing you may change without spending a step. It costs one of the 6 rows, so the fleet budget drops to 5.</p><p><b>And it can be a real switch.</b> <code>ROW_CONSTRAINTS_FULL_LIST</code> allows a <code>Toggle</code> on a row, and the refresh rule grants toggle rows an extra freedom: the row <i>title</i> may change too, as long as the toggle state changed with it. So a voice row can be an actual on/off switch that reads <span class='mono'>Voice</span> / <span class='mono'>Listening</span> in the title and still costs nothing. That is the strongest form of option B. The price: a toggle row may not also have an <code>OnClickListener</code>, so the switch is the only thing that row does.</p><div class="grid">
     <figure class="screenwrap">
       <div class="carapp" data-ctl="host">
         <div class="ca-header" data-ctl="host">
@@ -741,7 +813,14 @@ not one of them.</b> So a one-screen list app cannot even spend its fifth step o
 to show. Refresh is not an optimisation here; it is the only way the app works at all.</p>
 <p>The escape is the refresh rule: a new template of the same type is free <i>if the structure has not
 changed</i> &mdash; same title, same number of sections, same section headers, same number of rows, and
-<b>the same row titles</b>. Only the secondary text and toggle state may change for free.</p>
+<b>the same row titles</b>. Only the secondary text and toggle state may change for free. One useful
+exception: <b>on a row that carries a Toggle, the title may change too, provided the toggle state
+changed with it.</b></p>
+<p>And the quota is not a one-way ratchet, which this page originally implied and which is worth
+correcting: <b>popping a screen gives the quota back.</b> Push a screen, spend two templates, go back,
+and the host restores two &mdash; on the condition that a screen you return to sends the <i>same
+template type</i> it last sent. Sub-flows are affordable. It is the <i>self-refreshing single screen</i>
+that is expensive, which is exactly the thing this app is.</p>
 <p>So the design above is fast and honest but not free: a lane starting, finishing, or moving from
 ONGOING to NEEDS MY INPUT changes the row count and the row titles, and costs a step.
 <code>ConstraintManager.isAppDrivenRefreshEnabled()</code> (Car API 6+) turns list refreshes free and is
@@ -806,10 +885,14 @@ which matters at 70mph).</td></tr>
 <b>The project directory</b>. Labels are auto-generated today and some are poor; if the title is the label,
 the labels need to be good enough to read at a glance.</td></tr>
 
-<tr><td><b>5. What a tap on a row does</b></td>
+<tr><td><b>5. What a tap on a row does</b><br><span class="flag">the Spotify question</span></td>
 <td><b>Nothing</b> &mdash; rows are inert, everything happens by voice &nbsp;|&nbsp;
 <b>Starts voice with that lane as the subject</b> (&ldquo;about mac remote&hellip;&rdquo;) &nbsp;|&nbsp;
-<b>Speaks the row aloud</b>. The design guidance says information-only rows are discouraged, which argues
+<b>Speaks the row aloud</b> &nbsp;|&nbsp; <b>Opens a lane screen</b> &mdash; the full
+<span class="mono">waiting_for</span> untruncated, and a couple of stock answers. Drill-down is allowed
+(<code>ScreenManager.push()</code>, Back supplied by the host, and popping restores the quota it spent);
+this draft skipped it because the premise is glance-then-talk, not browse. If the app feels too flat,
+<b>this is the lever</b>. The design guidance also discourages information-only rows, which argues
 against &ldquo;nothing&rdquo;.</td></tr>
 
 <tr><td><b>6. What this is for</b></td>
