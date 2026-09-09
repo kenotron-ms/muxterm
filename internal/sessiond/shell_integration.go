@@ -19,8 +19,16 @@ type paneLaunch struct {
 
 func preparePaneLaunch(argv []string) (paneLaunch, error) {
 	if len(argv) != 0 {
+		// A pane with an explicit argv is the only kind a lane can be. This
+		// is where credential injection belongs, and not in
+		// internal/mcp/tools_lane.go, which builds argv but spawns nothing:
+		// every route that starts a lane -- the MCP spawn_lane tool, the
+		// `muxterm spawn-lane` subcommand, the browser composer, a trigger
+		// firing with nobody attached, and session restore -- arrives here.
+		// Injecting one layer up would have covered one of the five.
 		return paneLaunch{
 			argv:   argv,
+			env:    agentCredentialEnv(argv),
 			source: shellLifecycleCustom,
 		}, nil
 	}

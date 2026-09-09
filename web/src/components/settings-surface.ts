@@ -19,6 +19,17 @@ import {
   pingAI,
   type AIStatus,
 } from '../lib/ai.js';
+import {
+  EMPTY_CREDENTIALS_REPORT,
+  fetchCredentials,
+  saveCredential,
+  clearCredential,
+  checkCredential,
+  credentialMarker,
+  credentialSentence,
+  type CredentialsReport,
+  type ProviderState,
+} from '../lib/credentials.js';
 import { apiPath } from '../lib/base-path.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
@@ -30,6 +41,38 @@ import {
   type VoiceStatus,
   type VoiceMode,
 } from '../lib/voice-settings.js';
+
+/** The sections the settings surface can open on. */
+export type SettingsSection =
+  | 'appearance'
+  | 'notifications'
+  | 'agents'
+  | 'ai'
+  | 'voice'
+  | 'remotes';
+
+/**
+ * The sentence for one check outcome.
+ *
+ * `rejected` and `unreachable` never share wording: the first means the key
+ * is wrong, the second means muxterm never got an answer and knows nothing
+ * about the key. Collapsing them is what sends someone to replace a key that
+ * was fine.
+ */
+function verdictMessage(p: ProviderState, state: string, httpStatus?: number): string {
+  switch (state) {
+    case 'ok':
+      return `${p.label} accepted the credential.`;
+    case 'rejected':
+      return `${p.label} REJECTED the credential${httpStatus ? ` (HTTP ${httpStatus})` : ''}. Lanes using ${p.label} will fail. Replace the key below.`;
+    case 'unreachable':
+      return `Could not reach ${p.label} at ${p.baseURL}. This says nothing about the key — check the network or the endpoint.`;
+    case 'absent':
+      return `There is no ${p.label} credential on this machine to check.`;
+    default:
+      return `${p.baseURL} answered unexpectedly${httpStatus ? ` (HTTP ${httpStatus})` : ''}. That usually means the endpoint, not the key.`;
+  }
+}
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -910,6 +953,67 @@ export class MuxSettingsSurface extends LitElement {
       color: var(--chrome-text-bright);
     }
 
+    /* ── Agent credentials ──────────────────────────────────────────────────
+       Same idiom the voice section above uses, and deliberately so: a
+       typographic marker in a FIXED GUTTER plus the wording of the line
+       beside it. No card, no panel, no bolded edge. Colour lands on the
+       glyph alone and only reinforces what the glyph and the sentence
+       already say, so the meaning survives a monochrome display and both
+       palettes. Single column, wraps, legible at phone width.
+
+       It uses a grid rather than the voice section's flex because these rows
+       have a second line under the sentence that must align to the same text
+       column, not to the gutter. */
+    .cred {
+      display: grid;
+      grid-template-columns: 1.4em 1fr;
+      column-gap: 6px;
+      margin: 0 0 4px;
+      align-items: start;
+    }
+
+    .cred-mark {
+      font-weight: 700;
+      /* Tabular so the glyphs cannot shift the text beside them. */
+      font-variant-numeric: tabular-nums;
+      line-height: 1.5;
+      text-align: center;
+      color: var(--chrome-text-dim);
+    }
+    .cred-mark.ok { color: var(--mux-success, #3d9970); }
+    .cred-mark.warn { color: var(--mux-warn, #d79a2b); }
+    .cred-mark.err { color: var(--mux-error); }
+
+    .cred-line {
+      line-height: 1.5;
+      color: var(--chrome-text-bright);
+    }
+
+    .cred-sub {
+      grid-column: 2;
+      margin: 2px 0 0;
+      font-size: 11px;
+      line-height: 1.6;
+      overflow-wrap: anywhere;
+      color: var(--chrome-text-dim);
+    }
+
+    /* A hairline between providers. A separator, never a status signal --
+       it does not change with state. */
+    .cred-block + .cred-block {
+      margin-top: 26px;
+      padding-top: 22px;
+      border-top: 1px solid var(--chrome-border, #333);
+    }
+
+    .cred-name {
+      margin: 0 0 8px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--chrome-text-bright);
+    }
+
     /* ── Remotes ── */
     .r-row {
       display: flex;
@@ -1024,7 +1128,23 @@ export class MuxSettingsSurface extends LitElement {
   @property({ type: String }) serverAddr = '';
   @property({ attribute: false }) aiStatus: AIStatus = DEFAULT_AI_STATUS;
 
-  @state() private _section: 'appearance' | 'notifications' | 'ai' | 'voice' | 'remotes' = 'appearance';
+  /**
+   * Which section to open on. Set by the host so the app-level "lanes cannot
+   * run" notice can land the user on the thing that fixes it, rather than on
+   * Appearance with a hunt ahead of them.
+   */
+  @property({ type: String }) section: SettingsSection | '' = '';
+
+  @state() private _section: SettingsSection = 'appearance';
+
+  // ── Agent credentials ──
+  @state() private _creds: CredentialsReport = EMPTY_CREDENTIALS_REPORT;
+  /** Typed key per provider. Cleared the instant a save returns. */
+  @state() private _credInput: Record<string, string> = {};
+  /** The provider with a request in flight, or ''. */
+  @state() private _credBusy = '';
+  /** The last outcome message per provider. */
+  @state() private _credMsg: Record<string, string> = {};
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
   @state() private _aiKeyInput = '';
@@ -1078,7 +1198,11 @@ export class MuxSettingsSurface extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    if (this.section) this._section = this.section;
     this._refreshNotifPermission();
+    // Presence and last-known validity, read from disk and memory server-side
+    // -- no provider round trip, so opening Settings costs nothing.
+    void this._loadCredentials();
     // host-state is the only thing that moves a row between sections without
     // this pane asking for it, so it is the only thing that refetches.
     this._unsubRemotes = remotesStore.subscribe(() => {
@@ -1517,7 +1641,7 @@ export class MuxSettingsSurface extends LitElement {
       <p class="section-title">Anthropic API Key</p>
       <p class="ai-status">
         ${st.enabled
-          ? `AI enabled -- key ending ${st.keyHint} (from ${st.source}).`
+          ? `AI enabled -- key ${st.source === 'settings' ? 'stored in muxterm' : 'from the environment'}.`
           : 'AI features are off -- add an Anthropic API key to enable.'}
       </p>
       <input
@@ -1857,6 +1981,209 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
+  // ── Agent credentials ────────────────────────────────────────────────────
+  //
+  // What a lane needs to run, on THIS machine. Separate from the AI section
+  // above, which is muxterm's own Anthropic-powered features -- though the
+  // Anthropic key is the same stored key, because there is one credential
+  // store in the binary and adding a second is how one of them quietly stops
+  // being the one that matters.
+
+  private _emitCredentials(report: CredentialsReport): void {
+    this._creds = report;
+    // The host keeps the app-level notice in step from this one event; it
+    // does not poll and does not have a second opinion about the machine.
+    this.dispatchEvent(new CustomEvent('credentials-change', {
+      detail: { report },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private async _loadCredentials(): Promise<void> {
+    try {
+      this._emitCredentials(await fetchCredentials());
+    } catch {
+      /* An unreadable report leaves the previous one on screen rather than
+         replacing a true picture with a blank one. */
+    }
+  }
+
+  private _setCredMsg(provider: string, msg: string): void {
+    this._credMsg = { ...this._credMsg, [provider]: msg };
+  }
+
+  private async _saveCredential(p: ProviderState): Promise<void> {
+    const key = (this._credInput[p.provider] ?? '').trim();
+    if (!key || this._credBusy) return;
+    this._credBusy = p.provider;
+    this._setCredMsg(p.provider, `Checking the key with ${p.label}…`);
+    try {
+      const res = await saveCredential(p.provider, key);
+      if (res.ok) {
+        this._credInput = { ...this._credInput, [p.provider]: '' };
+        this._emitCredentials(res.report);
+        this._setCredMsg(
+          p.provider,
+          res.verdict.state === 'ok'
+            ? `Saved. ${p.label} accepted it.`
+            : res.verdict.state === 'unreachable'
+              ? `Saved, but NOT verified: muxterm could not reach ${p.label}. Use Check now once you are back online.`
+              : `Saved, but the check got an unexpected answer${res.verdict.httpStatus ? ` (HTTP ${res.verdict.httpStatus})` : ''} from ${p.baseURL}.`,
+        );
+        return;
+      }
+      if (res.error === 'rejected') {
+        // Nothing was written. Say that outright: a user who is told "saved"
+        // and then watches lanes die learns to distrust the whole surface.
+        this._emitCredentials(res.report);
+        this._setCredMsg(
+          p.provider,
+          `${p.label} rejected this key${res.verdict.httpStatus ? ` (HTTP ${res.verdict.httpStatus})` : ''}. It was NOT saved.`,
+        );
+        return;
+      }
+      this._setCredMsg(
+        p.provider,
+        res.error === 'invalid_key'
+          ? 'That does not look like an API key. Nothing was saved.'
+          : 'Could not save the key — it was not stored.',
+      );
+    } catch {
+      this._setCredMsg(p.provider, 'Could not save the key — it was not stored.');
+    } finally {
+      this._credBusy = '';
+    }
+  }
+
+  private async _clearCredential(p: ProviderState): Promise<void> {
+    if (this._credBusy) return;
+    this._credBusy = p.provider;
+    this._setCredMsg(p.provider, '');
+    try {
+      const report = await clearCredential(p.provider);
+      this._emitCredentials(report);
+      const now = report.providers.find((x) => x.provider === p.provider);
+      this._setCredMsg(
+        p.provider,
+        now?.present
+          ? `Removed from muxterm. This machine still has one ${now.origin === 'environment' ? `in ${now.keyEnv}` : "in amplifier's keys.env"}, and lanes will use that.`
+          : 'Removed.',
+      );
+    } catch {
+      this._setCredMsg(p.provider, 'Could not remove the stored key.');
+    } finally {
+      this._credBusy = '';
+    }
+  }
+
+  private async _checkCredential(p: ProviderState): Promise<void> {
+    if (this._credBusy) return;
+    this._credBusy = p.provider;
+    this._setCredMsg(p.provider, `Asking ${p.label}…`);
+    try {
+      const res = await checkCredential(p.provider);
+      this._emitCredentials(res.report);
+      this._setCredMsg(p.provider, verdictMessage(p, res.verdict.state, res.verdict.httpStatus));
+    } catch {
+      this._setCredMsg(p.provider, 'The check could not be run.');
+    } finally {
+      this._credBusy = '';
+    }
+  }
+
+  private _renderCredential(p: ProviderState) {
+    const mark = credentialMarker(p);
+    const busy = this._credBusy === p.provider;
+    const msg = this._credMsg[p.provider] ?? '';
+    return html`
+      <div class="cred-block">
+        <p class="cred-name">${p.label}</p>
+        <div class="cred">
+          <span class="cred-mark ${mark.tone}" aria-hidden="true">${mark.glyph}</span>
+          <span class="cred-line">${credentialSentence(p)}</span>
+          <p class="cred-sub">
+            ${p.inMuxterm ? html`Stored in muxterm. ` : ''}
+            ${p.inEnvironment ? html`${p.keyEnv} is set in muxterm's environment. ` : ''}
+            ${p.inAmplifierFile ? html`Defined in amplifier's keys.env. ` : ''}
+            ${p.present && (Number(p.inMuxterm) + Number(p.inEnvironment) + Number(p.inAmplifierFile)) > 1
+              ? html`<br />More than one source — a lane uses the one named above.`
+              : ''}
+            <br />Endpoint: <code>${p.baseURL}</code>${p.baseURLOrigin === 'none' ? '' : ' (from this machine)'}
+          </p>
+        </div>
+        <input
+          class="ai-input"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="${p.label} API key"
+          placeholder="${p.present ? 'Replace the key…' : 'Paste an API key…'}"
+          .value="${this._credInput[p.provider] ?? ''}"
+          @input="${(e: Event) => {
+            this._credInput = {
+              ...this._credInput,
+              [p.provider]: (e.target as HTMLInputElement).value,
+            };
+          }}"
+        />
+        <div class="ai-actions">
+          <button
+            ?disabled="${busy || (this._credInput[p.provider] ?? '').trim() === ''}"
+            @click="${() => void this._saveCredential(p)}"
+          >Check and save</button>
+          <button
+            ?disabled="${busy || !p.present}"
+            @click="${() => void this._checkCredential(p)}"
+          >Check now</button>
+          ${p.inMuxterm
+            ? html`<button ?disabled="${busy}" @click="${() => void this._clearCredential(p)}">Remove</button>`
+            : ''}
+        </div>
+        ${msg ? html`<p class="ai-message">${msg}</p>` : ''}
+      </div>
+    `;
+  }
+
+  private _renderAgents() {
+    const c = this._creds;
+    return html`
+      <p class="section-title">Agent credentials</p>
+      <div class="cred">
+        <span class="cred-mark ${c.blocked ? 'err' : 'ok'}" aria-hidden="true">${c.blocked ? '!' : '✓'}</span>
+        <span class="cred-line">
+          ${c.blocked
+            ? c.blockedReason
+            : 'Lanes can run on this machine.'}
+        </span>
+      </div>
+      <p class="ai-note">
+        A lane is an <code>amplifier</code> or <code>claude</code> process muxterm starts
+        for you. It needs a provider API key, and without a working one it fails on its
+        first turn with the reason visible only in that pane's scrollback.
+      </p>
+
+      ${c.providers.map((p) => this._renderCredential(p))}
+
+      <p class="ai-note">
+        ${c.remoteGap}
+      </p>
+      <p class="ai-note">
+        A key saved here is written to <code>${c.storeDir || '~/.config/muxterm'}</code> with
+        owner-only permissions and handed to the agent processes muxterm starts, through
+        their environment. muxterm never writes
+        <code>${c.amplifierKeysPath || '~/.amplifier/keys.env'}</code> — that file belongs to
+        amplifier${c.amplifierKeysFound ? ' and is read here only to report what it defines' : ' and was not found on this machine'}.
+        A shell you open by hand does not get muxterm's stored keys; only the agent
+        sessions muxterm launches do.
+      </p>
+      <p class="ai-note">
+        Keys are write-only: once saved, no page and no API call can read one back — not
+        masked, not the last four characters, not its length.
+      </p>
+    `;
+  }
+
   // ── Remotes ───────────────────────────────────────────────────────────────
 
   /** GET /api/remotes — on open, on every host-state, after every mutation. */
@@ -2150,6 +2477,10 @@ export class MuxSettingsSurface extends LitElement {
             @click="${() => { this._section = 'notifications'; }}"
           >Notifications</button>
           <button
+            class="sidebar-item ${this._section === 'agents' ? 'active' : ''}"
+            @click="${() => { this._section = 'agents'; void this._loadCredentials(); }}"
+          >Agents</button>
+          <button
             class="sidebar-item ${this._section === 'ai' ? 'active' : ''}"
             @click="${() => { this._section = 'ai'; }}"
           >AI</button>
@@ -2171,7 +2502,9 @@ export class MuxSettingsSurface extends LitElement {
                 ? this._renderRemotes()
                 : this._section === 'voice'
                   ? this._renderVoice()
-                  : this._renderAI()}
+                  : this._section === 'agents'
+                    ? this._renderAgents()
+                    : this._renderAI()}
         </div>
       </div>
     `;

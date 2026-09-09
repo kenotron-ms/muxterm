@@ -15,12 +15,12 @@ const KeyFileName = "anthropic_key"
 // DefaultKeyPath returns the default location of the Anthropic key file:
 // $XDG_CONFIG_HOME/muxterm/anthropic_key, falling back to
 // $HOME/.config/muxterm/anthropic_key when XDG_CONFIG_HOME is unset.
+//
+// It is KeyPath(ProviderAnthropic) under its historical name, kept because
+// cmd/muxterm passes it in as a flag default. There is ONE credential store
+// in this binary and this is a door into it, not a second one.
 func DefaultKeyPath() string {
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		base = filepath.Join(os.Getenv("HOME"), ".config")
-	}
-	return filepath.Join(base, "muxterm", KeyFileName)
+	return KeyPath(ProviderAnthropic)
 }
 
 // keyStore is a file-backed store for the Anthropic API key, sized for

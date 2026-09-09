@@ -193,6 +193,13 @@ func New(cfg Config) *Server {
 	}
 	s.ai = ai.NewManager(aiKeyPath)
 
+	// Check what this machine has, once, at startup -- one free model-list
+	// GET per provider that has a credential, none at all for a machine that
+	// has none. This is the difference between a stale key being visible on
+	// screen before anyone spawns anything, and being visible only in the
+	// scrollback of a lane that already died.
+	s.ai.VerifyAllInBackground()
+
 	// The collected pull requests, loaded from disk at construction so the
 	// first GET after a restart answers from the store rather than from an
 	// empty list it would then have to rebuild. Both paths are XDG-derived
@@ -267,6 +274,14 @@ func New(cfg Config) *Server {
 	s.mux.Handle("PUT /api/ai/key", protect(http.HandlerFunc(s.handleAIPutKey)))
 	s.mux.Handle("DELETE /api/ai/key", protect(http.HandlerFunc(s.handleAIDeleteKey)))
 	s.mux.Handle("POST /api/ai/ping", protect(http.HandlerFunc(s.handleAIPing)))
+
+	// Model-provider credentials for LANES. Same store as /api/ai above --
+	// there is one credential store in this binary -- and the same write-only
+	// posture: a key goes in, and only whether-it-is-set comes out.
+	s.mux.Handle("GET /api/credentials", protect(http.HandlerFunc(s.handleCredentials)))
+	s.mux.Handle("PUT /api/credentials/{provider}", protect(http.HandlerFunc(s.handleCredentialsPut)))
+	s.mux.Handle("DELETE /api/credentials/{provider}", protect(http.HandlerFunc(s.handleCredentialsDelete)))
+	s.mux.Handle("POST /api/credentials/{provider}/check", protect(http.HandlerFunc(s.handleCredentialsCheck)))
 
 	// Opt-in realtime voice. Registered only when [voice] is enabled and
 	// valid -- see internal/server/voice.go.
