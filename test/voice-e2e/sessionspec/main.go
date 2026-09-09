@@ -1,7 +1,7 @@
 // Command sessionspec prints the EXACT realtime session configuration
 // muxterm mints -- its instructions and its tool list -- as JSON on stdout.
 //
-// WHY IT EXISTS
+// # WHY IT EXISTS
 //
 // The spoken exit is enforced by INSTRUCTIONS, not by branching code. A
 // conversational proof is therefore only worth something if the conversation
