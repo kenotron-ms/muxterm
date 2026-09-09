@@ -292,6 +292,9 @@ func New(cfg Config) *Server {
 	s.mux.Handle("PUT /api/credentials/{provider}", protect(http.HandlerFunc(s.handleCredentialsPut)))
 	s.mux.Handle("DELETE /api/credentials/{provider}", protect(http.HandlerFunc(s.handleCredentialsDelete)))
 	s.mux.Handle("POST /api/credentials/{provider}/check", protect(http.HandlerFunc(s.handleCredentialsCheck)))
+	// Explicit, never implicit: writing another tool's file happens when a
+	// user asks for it. See handleCredentialsWriteAmplifier.
+	s.mux.Handle("POST /api/credentials/{provider}/write-amplifier", protect(http.HandlerFunc(s.handleCredentialsWriteAmplifier)))
 
 	// Opt-in realtime voice. Registered only when [voice] is enabled and
 	// valid -- see internal/server/voice.go.

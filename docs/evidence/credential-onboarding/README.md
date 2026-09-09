@@ -350,47 +350,119 @@ accepted some other one. That is the correct division. Whether a given key is
 valid is the vendor's answer, and `POST /api/credentials/{provider}/check`
 exists precisely to go and ask.
 
-## The seven requested demonstrations: six shown, one obviated
+## The seven requested demonstrations: all seven shown
 
 | # | Demonstration | Status |
 |---|---|---|
-| 1 | Detection reporting missing credentials on a clean machine | **shown** — §1, `blocked: true`, `amplifierHomeFound: false`, nothing created |
-| 2 | Present-but-rejected reported apart from absent, on a fabricated key | **shown** — §2, `verdict: rejected` HTTP 401 with `present: true` |
-| 3 | The full onboarding flow with the chief-of-staff sidecar NOT running | **shown** — §3, twelve threads, zero child processes |
-| 4 | A keys.env **written by muxterm**, gaining only the managed key, everything else byte-identical | **NOT SHOWN — see below** |
-| 5 | Mode 0600 before and after | **partly** — §4 shows `600` unchanged, but across *no rewrite*; 0600 on muxterm's own store is shown in §4 |
-| 6 | The raw HTTP GET proving no secret is returned | **shown** — §5, every surface scanned against the stored fabricated value |
-| 7 | A lane launching successfully after the save | **shown** — §7, `READY` on the stored fabricated credential |
+| 1 | Detection reporting missing credentials on a clean machine | **shown** — §1 |
+| 2 | Present-but-rejected reported apart from absent, on a fabricated key | **shown** — §2 |
+| 3 | The full onboarding flow with the chief-of-staff sidecar NOT running | **shown** — §3 |
+| 4 | A keys.env **written by muxterm**, gaining only the managed key | **shown** — §9 |
+| 5 | Mode 0600 before and after | **shown** — §9 (mode preserved across a real rewrite) and §4 (0600 on muxterm's own store) |
+| 6 | The raw HTTP GET proving no secret is returned | **shown** — §5 |
+| 7 | A lane launching successfully after the save | **shown** — §7 |
 
-### Item 4 is not demonstrated, and cannot be
+## 9. Writing amplifier's keys.env, surgically
 
-It presumes a capability this implementation deliberately does not have.
-muxterm does not write `~/.amplifier/keys.env` at all — the reasoning is in
-`internal/sessiond/lane_env.go`, and it is a decision, not an oversight.
+An earlier version of this file counted item 4 as demonstrated because
+`keys.env` came out byte-identical. That is evidence muxterm *leaves the file
+alone*, not that it *edits it safely* — a different claim — and the surgical
+writer did not exist. It does now
+(`internal/ai/amplifier_write.go`, `POST /api/credentials/{provider}/write-amplifier`).
 
-So the surgical-write guarantees that item 4 and its parent requirement ask for
-are **unverified, because there is nothing to verify**:
+**muxterm's default is still not to touch that file.** This is a separate,
+explicit action, for someone who wants amplifier itself repaired on this
+machine so that `amplifier` at a plain shell prompt works too — not only the
+sessions muxterm launches. Nothing calls it implicitly, and it takes no request
+body, so a credential cannot be smuggled through it: it propagates what muxterm
+has already verified and stored.
+
+It is **stricter than amplifier's own writer**, deliberately.
+`KeyManager.save_key` reads the file into a dict and rewrites it whole behind a
+fixed three-line header, discarding every comment, blank line and bit of
+ordering. Fine for the tool that owns the file; not fine for a second tool
+reaching into it.
+
+### The fixture
+
+Mode deliberately `640`, not `600` — preserving `600` would prove nothing,
+since `600` is also what a careless writer would produce.
 
 ```
-surgical write, other lines byte-identical .... NOT DEMONSTRATED -- no writer exists
-a timestamped .bak before writing ............. NOT DEMONSTRATED -- nothing is rewritten
-0600 preserved ACROSS A REWRITE ............... NOT DEMONSTRATED -- there is no rewrite
-values never readable back .................... shown (§5)
-absent .amplifier reported, not created ....... shown (§1)
+# Amplifier API keys
+# Hand-edited. These comments must survive.
+
+ANTHROPIC_API_KEY="OLD-FABRICATED-VALUE-must-be-replaced-0000"
+
+# A key muxterm knows nothing about.
+export MY_UNRELATED_SERVICE_TOKEN='keep-me-exactly-as-i-am'
+OTHER_SETTING=plain-unquoted-value
+
+# trailing comment
 ```
 
-What §4 *does* show is the file byte-identical after everything — which is
-evidence that muxterm leaves it alone, not evidence that muxterm edits it
-safely. **Those are different claims and the first does not stand in for the
-second.** An earlier version of this table folded item 4 into a "seven of
-seven" count; that was an overclaim and is corrected here.
+### Rule 1 — surgical: exactly one line differs
 
-**If surgical writing is wanted, it is unbuilt work, not undemonstrated work.**
-It would need: a parser that preserves comments, blank lines and quoting
-byte-for-byte; a timestamped `.bak` in the existing
-`keys.env.bak-YYYYMMDDHHMMSS` style; mode preservation across the replace; an
-atomic rename; and a merge that touches only managed variable names. None of
-that exists in this branch.
+```diff
+ # Amplifier API keys
+ # Hand-edited. These comments must survive.
+
+-ANTHROPIC_API_KEY="OLD-FABRICATED-VALUE-must-be-replaced-0000"
++ANTHROPIC_API_KEY="FABRICATED-NEW-VALUE-written-by-muxterm-1111-2222"
+
+ # A key muxterm knows nothing about.
+ export MY_UNRELATED_SERVICE_TOKEN='keep-me-exactly-as-i-am'
+```
+
+`linesChanged: 1`, reported by the writer and confirmed by `diff`. Comments,
+blank lines, ordering, the `export ` prefix, the single-quoted value, the
+unquoted `OTHER_SETTING` and the trailing comment all survive byte-for-byte.
+The replaced line kept its own double-quoted style rather than being
+normalised.
+
+### Rule 2 — a timestamped backup, taken before the original is touched
+
+```
+keys.env.bak-20260909153306      <- the keys.env.bak-YYYYMMDDHHMMSS style already on disk
+mode 640                          <- the original's, so the backup is no more readable
+bytes: identical to the file as it was before the write
+```
+
+### Rule 3 — mode preserved across the rewrite
+
+```
+before 640  ->  after 640
+```
+
+Verified by `stat` after the write rather than assumed from the `chmod`,
+because a umask or a filesystem can disagree with what was asked for.
+
+### Rule 4 — the value is never readable back
+
+```
+GET  /api/credentials              occurrences of the written value: 0
+GET  /api/ai/status                occurrences of the written value: 0
+POST .../write-amplifier (repeat)  occurrences of the written value: 0
+server log                         occurrences of the written value: 0
+```
+
+The file on disk holds it — that is the point of the feature. No API returns it.
+
+### Rule 5 — an absent amplifier home is refused, not created
+
+```
+POST /api/credentials/anthropic/write-amplifier   -> HTTP 409
+{"error":"amplifier_home_absent",
+ "message":"amplifier's home directory does not exist here, so amplifier is
+            probably not installed. muxterm has not created it.",
+ "path":"<sandbox>/.amplifier"}
+
+.amplifier created by that refusal? no -- nothing was created
+```
+
+The write is atomic throughout: a temp file in the same directory, fsynced,
+chmodded before the rename so it is never briefly world-readable at its real
+name, then renamed over the original.
 
 ## Also demonstrated, beyond the seven
 

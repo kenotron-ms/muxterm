@@ -3,6 +3,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 
@@ -171,6 +172,55 @@ func (s *Server) handleCredentialsDelete(w http.ResponseWriter, r *http.Request)
 	s.ai.Verify(r.Context(), provider)
 
 	writeCredJSON(w, http.StatusOK, map[string]any{"report": s.ai.Report()})
+}
+
+// handleCredentialsWriteAmplifier writes muxterm's stored credential into
+// amplifier's own keys.env, surgically.
+//
+// A SEPARATE, EXPLICIT ACTION, and that is the whole design. Saving a
+// credential in muxterm does not touch another tool's file; this route is what
+// a user presses when they want amplifier itself fixed on this machine, so
+// that `amplifier` typed at a plain shell prompt works too and not only the
+// sessions muxterm launches. Nothing calls it implicitly.
+//
+// It writes what muxterm has STORED. There is no request body: a key cannot be
+// smuggled through this route, and the value written is the one already
+// verified and saved through PUT.
+//
+// The five guarantees -- one line changed, a timestamped backup first, mode
+// preserved, the value never readable back, an absent amplifier home refused
+// rather than created -- are enforced in internal/ai/amplifier_write.go and
+// reported here as counts and paths.
+func (s *Server) handleCredentialsWriteAmplifier(w http.ResponseWriter, r *http.Request) {
+	provider, ok := credProvider(w, r)
+	if !ok {
+		return
+	}
+	stored := s.ai.StoredKey(provider)
+	if stored == "" {
+		// Nothing of muxterm's to propagate. Deliberately not a fallback to
+		// whatever is in the environment: copying a credential this server
+		// merely inherited into another tool's file is a decision the user did
+		// not make.
+		writeCredError(w, http.StatusBadRequest, "no_stored_key")
+		return
+	}
+	res, err := s.ai.WriteAmplifierKey(provider, stored)
+	if err != nil {
+		if errors.Is(err, ai.ErrAmplifierHomeAbsent) {
+			writeCredJSON(w, http.StatusConflict, map[string]any{
+				"error":   "amplifier_home_absent",
+				"path":    ai.AmplifierHome(),
+				"message": "amplifier's home directory does not exist here, so amplifier is probably not installed. muxterm has not created it.",
+			})
+			return
+		}
+		// The error carries paths, never the credential.
+		log.Printf("credentials: write amplifier keys.env for %s: %v", provider, err)
+		writeCredError(w, http.StatusInternalServerError, "write_failed")
+		return
+	}
+	writeCredJSON(w, http.StatusOK, map[string]any{"write": res, "report": s.ai.Report()})
 }
 
 // handleCredentialsCheck presents the credential a lane would actually use to

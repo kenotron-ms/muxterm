@@ -83,6 +83,14 @@ func (m *Manager) storePath(p Provider) string {
 
 // stored returns the key muxterm itself holds for p, or "" when it holds
 // none. A read error is logged (path only) and reported as absent.
+// StoredKey returns the credential muxterm itself holds for p, or "".
+//
+// Exported for ONE caller: the explicit "also write this into amplifier's
+// keys.env" action, which propagates what muxterm stored and nothing else. It
+// is deliberately not a general accessor -- no HTTP route returns what it
+// returns, and none may.
+func (m *Manager) StoredKey(p Provider) string { return m.stored(p) }
+
 func (m *Manager) stored(p Provider) string {
 	s, ok := m.stores[p]
 	if !ok {
