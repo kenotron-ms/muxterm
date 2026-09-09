@@ -502,10 +502,18 @@ func paneFinalOutput(pane *Pane) (screen string, scan string) {
 	}
 	screen = vb.ScreenText()
 	history, _, _ := vb.ScrollbackPage(nil, completionScanLines)
-	if len(history) == 0 {
-		return screen, screen
-	}
-	return screen, strings.Join(history, "\n") + "\n" + screen
+
+	// The SCAN is dewrapped; the SCREEN is not. They answer different
+	// questions: the screen is what a human was looking at and must stay
+	// exactly that, while the scan is looking for artifacts and has to see a
+	// hard-wrapped URL as the one string it logically is. Without this a lane
+	// in a pane narrower than its own `gh pr create` URL -- 47 columns, so any
+	// split pane -- loses its pull request permanently. See dewrapGrid.
+	cols, _ := vb.Size()
+	scanLines := make([]string, 0, len(history)+strings.Count(screen, "\n")+1)
+	scanLines = append(scanLines, history...)
+	scanLines = append(scanLines, strings.Split(screen, "\n")...)
+	return screen, dewrapGrid(scanLines, cols)
 }
 
 // completionScanLines bounds the scrollback consulted for artifacts. Deep
