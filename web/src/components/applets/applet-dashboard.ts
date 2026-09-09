@@ -310,6 +310,20 @@ export class AppletDashboard extends LitElement implements AppletElement {
       padding: 0;
       color: var(--ink-2);
       transition: border-color var(--dur) ease, background var(--dur) ease;
+      /* Containing block for .bar, which is absolutely positioned precisely so
+         that it costs no height: --meta-h is a contract, and a card that grew
+         to show progress would make the fleet harder to scan.
+
+         THE CARD, NOT .meta, and that is not arbitrary. The height above is a
+         BORDER-box height, so this card's inner box is 72px while .meta
+         declares 74px -- .meta has always overflowed its parent by exactly the
+         top and bottom borders, invisibly, because the overflowing strip was
+         empty padding. Anchoring the bar to .meta put it entirely inside that
+         strip, and the overflow:hidden on this rule then clipped every pixel
+         of it: the bar was in the DOM, 2px tall, 40% filled, and drawn
+         nowhere. Measured, not guessed -- its bottom edge sat 2px below the
+         card's inner bottom edge, at every width. */
+      position: relative;
     }
     :host([view='tiles']) .card {
       height: calc(var(--meta-h) + var(--thumb-h));
@@ -342,11 +356,6 @@ export class AppletDashboard extends LitElement implements AppletElement {
       gap: var(--s-2);
       min-width: 0;
       overflow: hidden;
-      /* Containing block for .bar, which is absolutely positioned precisely so
-         that it costs no height. --meta-h is the fixed-height contract and a
-         card that grew to show progress would make the fleet harder to scan,
-         which is the opposite of the point. */
-      position: relative;
     }
     /* Every line ellipsises. A line allowed to wrap is a card allowed to
        change height, and that is the one thing this grid must never do. */
@@ -391,8 +400,10 @@ export class AppletDashboard extends LitElement implements AppletElement {
        scanning many lanes at once. It is drawn in ink, not in a state
        colour: colour here would be a second, weaker encoding of what the
        fraction already says exactly, and the standing rule is that colour
-       never carries meaning alone. It is 2px of underline at the foot of
-       the meta block, not a rounded chip and not an accented border. */
+       never carries meaning alone. It is 2px along the card's bottom edge,
+       not a rounded chip and not an accented border -- and it is drawn at a
+       FRACTION of the card's width, which is what stops a partial bar from
+       reading as a border at all. */
     .card .frac {
       font-family: var(--mono);
       font-size: 10.5px;
@@ -407,14 +418,17 @@ export class AppletDashboard extends LitElement implements AppletElement {
       right: 0;
       bottom: 0;
       height: 2px;
-      background: color-mix(in srgb, var(--ink-3) 24%, transparent);
+      background: color-mix(in srgb, var(--ink-3) 28%, transparent);
     }
     .card .bar > i {
       display: block;
       height: 100%;
-      /* No transition: this moves when a lane revises its plan, which is
+      /* Ink at 72%: a confident mark rather than a hint, but still quieter
+         than the text above it, and derived from the theme's own ink so it
+         holds its contrast in a light palette and a dark one alike.
+         No transition: this moves when a lane revises its plan, which is
          news. An animated slide would read as the card doing something. */
-      background: color-mix(in srgb, var(--ink-2) 62%, transparent);
+      background: color-mix(in srgb, var(--ink-2) 72%, transparent);
     }
     .thumb {
       display: none;
@@ -719,8 +733,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
                 ? html`<span class="frac" aria-label="${frac} tasks done">${frac}</span>`
                 : nothing}${line}</div>`
             : nothing}
-          ${frac ? html`<div class="bar"><i style="width:${pct}%"></i></div>` : nothing}
         </div>
+        ${frac ? html`<div class="bar"><i style="width:${pct}%"></i></div>` : nothing}
         ${thumb
           ? html`<pre class="thumb">${tileLinesFor(s, THUMB_COLS, THUMB_ROWS).join('\n')}</pre>`
           : nothing}
