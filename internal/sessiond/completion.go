@@ -45,6 +45,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // completionRecordVersion is the schema version written into every record. A
@@ -255,6 +256,60 @@ func completionPRFrom(text string) (int, string) {
 		return 0, ""
 	}
 	return n, strings.TrimRight(last[0], ".,);")
+}
+
+// dewrapGrid rejoins terminal HARD WRAPS so a URL that spilled onto the next
+// row is one string again.
+//
+// THIS IS WHY A NARROW PANE USED TO LOSE ITS PULL REQUEST. A terminal grid has
+// no concept of a long line: when `gh pr create` prints a 47-character URL into
+// a 40-column pane, the emulator puts 40 characters on one row and the rest on
+// the next. ScreenText renders the grid row by row and joins with "\n", so the
+// scan saw
+//
+//	len=40  "https://github.com/kenotron-ms/muxterm/p"
+//	len=7   "ull/112"
+//
+// and completionPRPattern -- which cannot match across a newline, and must not
+// be loosened to, or it would start stitching unrelated lines into URLs --
+// found nothing. The pull request was lost permanently: the pane closes, the
+// grid goes with it, and no later pass can recover what was never recorded.
+//
+// The rule is the terminal's own: a row that is exactly the grid width was
+// filled, so the next row continues it. A row shorter than the width ended
+// because something printed a newline.
+//
+// It is a HEURISTIC, and the failure it can have is named: a line that happens
+// to be exactly the width and genuinely ended there is joined to its
+// successor. That is why this feeds the artifact SCAN only and never the
+// screen a human is shown -- a wrong join can at worst fail to find a URL that
+// two independent lines never contained, which is the behaviour being fixed,
+// not a regression.
+//
+// cols <= 0 means the width is unknown; the lines are returned unchanged
+// rather than guessed at.
+func dewrapGrid(lines []string, cols int) string {
+	if cols <= 0 || len(lines) == 0 {
+		return strings.Join(lines, "\n")
+	}
+	out := make([]string, 0, len(lines))
+	var cur strings.Builder
+	open := false
+	for _, line := range lines {
+		cur.WriteString(line)
+		if utf8.RuneCountInString(line) == cols {
+			// Filled the row: the next one continues it.
+			open = true
+			continue
+		}
+		out = append(out, cur.String())
+		cur.Reset()
+		open = false
+	}
+	if open {
+		out = append(out, cur.String())
+	}
+	return strings.Join(out, "\n")
 }
 
 // completionFirstLine returns the last non-blank line of captured output --
