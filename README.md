@@ -38,3 +38,11 @@ the shipped code, not a proposal.
 |---|---|
 | `M1-main-applet.png` | three PRs collected from three lanes in two repositories, after every lane's workspace was closed; no directory error anywhere |
 | `M2-main-dismiss-reload.png` | `#112` dismissed, page reloaded, still dismissed — server-side, `dismissed: ['kenotron-ms/muxterm#112']` on disk |
+
+---
+
+## Defect found after shipping: a narrow pane lost its pull request
+
+| file | shows |
+|---|---|
+| `W1-narrow-pane-collected.png` | a lane whose `gh pr create` URL hard-wrapped in a 40-column pane, now collected. On `main` this row does not exist at all. |
