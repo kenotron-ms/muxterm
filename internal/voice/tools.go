@@ -8,7 +8,7 @@ package voice
 //   - dispatch_chief_of_staff -- asynchronous fire-and-forget, for long work
 //   - answer_approval     -- the voice-approval path, two-step by contract
 //   - cancel_chief_of_staff -- stop a turn that is running
-//   - end_voice_session    -- hang up, two-step by contract
+//   - end_voice_session    -- hang up, one call
 //
 // The first four execute in muxterm's own process, over the sideband, and
 // land on the SAME amplifier session the text chat uses. The realtime model
@@ -35,6 +35,25 @@ const (
 // because it is a security surface -- see approvals.go. The third is the
 // ending protocol, which is written as a hard rule because "stop" and "end"
 // are ordinary words in a conversation about terminals -- see endsession.go.
+//
+// ENDING THE CONVERSATION IS SPECIFIED HERE AND NOWHERE ELSE. That is a rule
+// about this file, not a description of it.
+//
+// A conversational confirmation is driven by instructions, not by branching
+// code, so it can be stated twice without anyone noticing -- and each place
+// that states it buys another question. This one used to be written three
+// times in this file alone (here, the tool description, and the parameter
+// description) and twice more in endsession.go's tool results, which is how a
+// design that asks once became a session that asks two or three times before
+// it would hang up. If you find yourself adding "confirm before ending" to a
+// tool description, a parameter description, a tool result, or the browser:
+// don't. Change the numbered steps below instead.
+//
+// The wording of step 2 is the fix and is deliberate. "Confirm before ending"
+// is still true on the turn AFTER the user agrees, so a model that reads it
+// again confirms again; "a yes is the trigger to act" stops being true the
+// moment it is acted on. Instructions that gate behaviour have to terminate,
+// not merely be satisfied.
 func Instructions() string {
 	return `You are the spoken voice of muxterm's chief of staff.
 
@@ -77,20 +96,44 @@ Never call answer_approval with confirm set to true on the first answer.
 Never approve on the user's behalf.
 
 ENDING THE CONVERSATION
-The user cannot hang up by talking to anything except you. When they ask to
-leave -- "end the voice session", "hang up", "I'm done talking", "exit voice
-mode" -- that is end_voice_session, and it works the same way approvals do.
-1. Call end_voice_session with confirm false. You will be given a line to
-   read back. Say it and wait.
-2. Only after they say yes out loud, call it again with confirm true. Then
-   say the goodbye you are asked for, and the connection drops after they
-   have heard it.
-Hear the difference between the two kinds of stopping. "Stop", "cancel" and
-"never mind" while the chief of staff is working mean stop THE WORK: that is
-cancel_chief_of_staff, and the conversation continues. Only words about the
-conversation, the call, or talking itself end the session. If you cannot tell
-which one they meant, ask -- do not guess, and do not reach for the one that
-hangs up.
+The user cannot hang up by talking to anything except you, so end_voice_session
+is how they leave. It costs them exactly ONE question, and then it is done.
+
+1. When they ask to leave -- "end the voice session", "hang up", "I'm done
+   talking", "exit voice mode" -- ask once, in one short sentence: are you
+   sure you want to be done with this? Then stop and listen.
+2. If they say yes, or anything that plainly means yes, CALL
+   end_voice_session IMMEDIATELY, in that same turn, with a short farewell.
+   A yes is the trigger to ACT. It is not something to acknowledge, restate,
+   thank them for, or check a second time. Do not ask again in different
+   words. Do not say "ending now" and then wait. There is nothing left to
+   establish: they answered the only question there was.
+3. If they say no, drop it completely and carry on with whatever you were
+   talking about. Say at most that you are staying, then move on. Do not
+   raise it again, do not offer to end later, do not tell them what to say
+   when they want to leave, and do not treat their next sentence as a second
+   chance to ask. "Just say the word and I'll close it out" is the offer this
+   forbids: they already know how to leave, they just told you they are not
+   leaving. Only a fresh request from them can bring it up again.
+
+That question is for words about the CONVERSATION -- the call, voice mode,
+talking to you -- and nothing else. What decides it is what they say they are
+done WITH. "I'm done with that file", "I'm finished with the refactor",
+"that's done" all NAME A PIECE OF WORK: they end a topic, not the call, so
+respond as you would to any other remark and carry on. So does a phrase that
+points back at work already being discussed -- "all done there", "done with
+that", "finished with it", "that one's done" -- because "there", "that" and
+"it" are naming the task you were just talking about. Never ask about leaving
+on any of these, no matter how many of them have piled up in the conversation
+already: four finished tasks in a row is a productive session, not a hint.
+The question belongs only to a bare "I'm done" or "we're done here" that
+points at NOTHING -- no task, no file, no earlier subject -- because then the
+only thing left for them to be done with is talking to you.
+"Stop", "cancel" and "never mind" while the chief of staff is working mean
+stop THE WORK: that is cancel_chief_of_staff, and the conversation continues.
+If you genuinely cannot tell what they meant, ask what they would like to do
+next -- not whether they want to hang up.
+
 Never call end_voice_session on your own initiative. Not because the
 conversation feels finished, not because they have gone quiet, not because
 you have run out of things to say, and not to tidy up after a long task. A
@@ -184,25 +227,26 @@ func ToolDefinitions() []map[string]any {
 		{
 			"type": "function",
 			"name": ToolEnd,
-			"description": "End the spoken conversation and disconnect. " +
-				"Call it TWICE: first with confirm false, which has you read the decision back " +
-				"to the user, then -- only after they say yes out loud -- with confirm true, " +
-				"which says goodbye and hangs up. A first call with confirm true is refused. " +
-				"Only the user ends the conversation: never call this because the conversation " +
-				"feels finished or because they have gone quiet.",
+			// WHAT IT DOES, NOT WHEN TO CALL IT. When to call it is in
+			// Instructions(), once. A description that also says "confirm
+			// first" gets read at call time and produces a second question
+			// on top of the one the instructions already ran -- which is
+			// the whole bug this wording exists in order not to have.
+			"description": "Hang up: say the farewell out loud, then disconnect the live voice " +
+				"session. The microphone closes and the user stops hearing you. This ends the " +
+				"conversation rather than pausing it, and nothing spoken can reopen it.",
 			"parameters": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"confirm": map[string]any{
-						"type":        "boolean",
-						"description": "False on the first call. True only after the user has confirmed out loud that they want to end the conversation.",
-					},
 					"farewell": map[string]any{
-						"type":        "string",
-						"description": "A short line to say before disconnecting. One sentence.",
+						"type": "string",
+						"description": "One short sentence to say while disconnecting -- a parting " +
+							"STATEMENT, never a question. \"Goodbye.\" or \"Talk to you later.\" " +
+							"Nothing that invites an answer: it goes out as the connection is " +
+							"closing and there is no turn left for the user to reply in.",
 					},
 				},
-				"required":             []string{"confirm"},
+				"required":             []string{"farewell"},
 				"additionalProperties": false,
 			},
 		},
