@@ -60,6 +60,16 @@ export interface CredentialsReport {
   blockedReason: string;
   amplifierKeysPath: string;
   amplifierKeysFound: boolean;
+  /**
+   * amplifier's home directory, and whether it is there at all.
+   *
+   * Separate from the keys file because they answer different questions. No
+   * directory means amplifier is very likely not installed on this machine --
+   * which the UI says, rather than muxterm quietly creating a config tree for
+   * a tool that is not here.
+   */
+  amplifierHomePath: string;
+  amplifierHomeFound: boolean;
   storeDir: string;
   remoteGap: string;
 }
@@ -70,6 +80,8 @@ export const EMPTY_CREDENTIALS_REPORT: CredentialsReport = {
   blockedReason: '',
   amplifierKeysPath: '',
   amplifierKeysFound: false,
+  amplifierHomePath: '',
+  amplifierHomeFound: false,
   storeDir: '',
   remoteGap: '',
 };
@@ -141,6 +153,8 @@ export function parseCredentialsReport(raw: unknown): CredentialsReport {
     blockedReason: str(r, 'blockedReason'),
     amplifierKeysPath: str(r, 'amplifierKeysPath'),
     amplifierKeysFound: r['amplifierKeysFound'] === true,
+    amplifierHomePath: str(r, 'amplifierHomePath'),
+    amplifierHomeFound: r['amplifierHomeFound'] === true,
     storeDir: str(r, 'storeDir'),
     remoteGap: str(r, 'remoteGap'),
   };
@@ -153,10 +167,43 @@ export async function fetchCredentials(): Promise<CredentialsReport> {
   return parseCredentialsReport(await res.json());
 }
 
+/**
+ * What happened to the chief of staff when a credential was saved.
+ *
+ * Mission Control is itself an amplifier session, drawing on this same store,
+ * and a sidecar that is already running holds the environment it was SPAWNED
+ * with -- so a key written a moment ago is invisible to it. Rather than leave
+ * a dead conversation pane with no explanation, the server says which of three
+ * things is true, and `command` is filled in only for the one that genuinely
+ * needs a human to run something.
+ */
+export type CosState = 'not-started' | 'respawning' | 'restart-required';
+
+export interface CosOutcome {
+  state: CosState;
+  message: string;
+  /** Only ever set for 'restart-required'. */
+  command?: string;
+}
+
+const COS_STATES: readonly CosState[] = ['not-started', 'respawning', 'restart-required'];
+
+export function parseCosOutcome(raw: unknown): CosOutcome | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (!COS_STATES.includes(r['state'] as CosState)) return null;
+  const out: CosOutcome = { state: r['state'] as CosState, message: str(r, 'message') };
+  const cmd = str(r, 'command');
+  if (cmd) out.command = cmd;
+  return out;
+}
+
 export interface SaveResult {
   ok: boolean;
   verdict: Verdict;
   report: CredentialsReport;
+  /** What the save did to the chief of staff. Absent on a rejected key. */
+  chiefOfStaff?: CosOutcome;
   /** Set when the request itself failed rather than the credential. */
   error?: string;
 }
@@ -179,6 +226,8 @@ export async function saveCredential(provider: string, key: string): Promise<Sav
     verdict: parseVerdict(body['verdict']),
     report: parseCredentialsReport(body['report']),
   };
+  const cos = parseCosOutcome(body['chiefOfStaff']);
+  if (cos) result.chiefOfStaff = cos;
   if (!res.ok) result.error = typeof body['error'] === 'string' ? body['error'] : `http_${res.status}`;
   return result;
 }

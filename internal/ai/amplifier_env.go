@@ -8,7 +8,75 @@ import (
 	"strings"
 )
 
-// AmplifierKeysPath returns ~/.amplifier/keys.env -- the file the amplifier
+// AmplifierHomeEnv is the variable amplifier resolves its home directory from,
+// ahead of ~/.amplifier.
+//
+// It is honoured here for one reason: to report the truth. amplifier reads its
+// keys from $AMPLIFIER_HOME/keys.env when this is set
+// (amplifier_foundation/paths/resolution.py, get_amplifier_home), so a muxterm
+// that looked only at ~/.amplifier on such a machine would inspect a file
+// nothing reads and then state its findings confidently. Detection that is
+// confidently wrong is worse than detection that is absent -- it is the same
+// failure as calling a stale key "configured".
+const AmplifierHomeEnv = "AMPLIFIER_HOME"
+
+// AmplifierHome returns the directory amplifier keeps its own state in,
+// resolved the way amplifier resolves it: $AMPLIFIER_HOME first, then
+// ~/.amplifier. Empty when neither can be determined.
+func AmplifierHome() string {
+	if v := strings.TrimSpace(os.Getenv(AmplifierHomeEnv)); v != "" {
+		if abs, err := filepath.Abs(expandTilde(v)); err == nil {
+			return abs
+		}
+		return expandTilde(v)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.Getenv("HOME")
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".amplifier")
+}
+
+// expandTilde resolves a leading ~ the way a shell would, because
+// $AMPLIFIER_HOME is set by hand often enough to arrive as "~/somewhere".
+// amplifier itself calls Path.expanduser() on it.
+func expandTilde(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.Getenv("HOME")
+	}
+	if home == "" {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	return filepath.Join(home, p[2:])
+}
+
+// AmplifierHomeExists reports whether amplifier's home directory is there.
+//
+// Reported separately from the keys file because they are different answers to
+// different questions. No directory at all means amplifier is very likely not
+// installed on this machine, and the honest response is to SAY SO rather than
+// to conjure a config tree for a tool that is not there. A directory with no
+// keys.env in it means amplifier is installed and simply has no keys yet.
+func AmplifierHomeExists() bool {
+	dir := AmplifierHome()
+	if dir == "" {
+		return false
+	}
+	st, err := os.Stat(dir)
+	return err == nil && st.IsDir()
+}
+
+// AmplifierKeysPath returns <amplifier home>/keys.env -- the file the amplifier
 // CLI keeps its own provider secrets in.
 //
 // READ ONLY, AND THAT IS A DESIGN DECISION, NOT AN OVERSIGHT. This file
@@ -18,14 +86,11 @@ import (
 // never writes it, never renames it, never rewrites it. Everything muxterm
 // stores goes in ConfigDir() instead.
 func AmplifierKeysPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		home = os.Getenv("HOME")
-	}
-	if home == "" {
+	dir := AmplifierHome()
+	if dir == "" {
 		return ""
 	}
-	return filepath.Join(home, ".amplifier", "keys.env")
+	return filepath.Join(dir, "keys.env")
 }
 
 // amplifierKeys parses ~/.amplifier/keys.env into a name->value map.

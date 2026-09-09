@@ -193,6 +193,16 @@ func New(cfg Config) *Server {
 	}
 	s.ai = ai.NewManager(aiKeyPath)
 
+	// ONE STORE, BOTH CONSUMERS. sessiond injects these into every lane it
+	// spawns (internal/sessiond/lane_env.go); this is the other half -- the
+	// chief-of-staff sidecar, which is an amplifier session exactly like a
+	// lane and was until now the only agent muxterm starts that could not see
+	// its own credentials. Two stores, or one store with one consumer, is how
+	// the copy nobody re-checks goes stale.
+	if s.hub != nil && s.hub.cos != nil {
+		s.hub.cos.setExtraEnv(s.ai.LaneEnv)
+	}
+
 	// Check what this machine has, once, at startup -- one free model-list
 	// GET per provider that has a credential, none at all for a machine that
 	// has none. This is the difference between a stale key being visible on

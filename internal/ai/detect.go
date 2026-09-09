@@ -74,10 +74,23 @@ type Report struct {
 	Blocked       bool   `json:"blocked"`
 	BlockedReason string `json:"blockedReason"`
 
-	// AmplifierKeysPath is ~/.amplifier/keys.env; AmplifierKeysFound reports
-	// whether it exists. muxterm reads this file and never writes it.
+	// AmplifierKeysPath is <amplifier home>/keys.env; AmplifierKeysFound
+	// reports whether it exists. muxterm reads this file and never writes it.
 	AmplifierKeysPath  string `json:"amplifierKeysPath"`
 	AmplifierKeysFound bool   `json:"amplifierKeysFound"`
+
+	// AmplifierHomePath is the directory that file lives in, resolved the way
+	// amplifier resolves it ($AMPLIFIER_HOME, then ~/.amplifier), and
+	// AmplifierHomeFound reports whether the directory is there at all.
+	//
+	// Reported apart from the keys file because they mean different things.
+	// No directory means amplifier is very likely not installed here, and the
+	// only honest move is to say that. muxterm does not create it: conjuring
+	// a config tree for a tool that is not on the machine would make an
+	// unconfigured box look like a configured one, which is the exact
+	// confusion this whole feature exists to end.
+	AmplifierHomePath  string `json:"amplifierHomePath"`
+	AmplifierHomeFound bool   `json:"amplifierHomeFound"`
 
 	// StoreDir is muxterm's own credential directory.
 	StoreDir string `json:"storeDir"`
@@ -110,6 +123,8 @@ func (m *Manager) Report() Report {
 	rep := Report{
 		AmplifierKeysPath:  amplifierPath,
 		AmplifierKeysFound: amplifierPath != "" && statErr == nil,
+		AmplifierHomePath:  AmplifierHome(),
+		AmplifierHomeFound: AmplifierHomeExists(),
 		StoreDir:           ConfigDir(),
 		RemoteGap:          RemoteGapNotice,
 	}

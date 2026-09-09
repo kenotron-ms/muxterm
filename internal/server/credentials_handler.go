@@ -115,9 +115,32 @@ func (s *Server) handleCredentialsPut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeCredJSON(w, http.StatusOK, map[string]any{
-		"verdict": verdict,
-		"report":  s.ai.Report(),
+		"verdict":      verdict,
+		"report":       s.ai.Report(),
+		"chiefOfStaff": s.chiefOfStaffAfterSave(),
+		"lanesFromNow": "Lanes started from now on will use this credential.",
 	})
+}
+
+// chiefOfStaffAfterSave brings the chief of staff into line with a credential
+// that was just saved, and returns what it managed to do.
+//
+// A running sidecar is holding the environment it was SPAWNED with, so a key
+// written to disk a moment ago is invisible to it; without this, a user who
+// onboards in the browser gets working lanes and a chief-of-staff pane that
+// goes on failing every turn with no explanation on screen. Which is precisely
+// the shape of failure this feature exists to end, one layer up.
+//
+// It never starts a sidecar that was not already running -- see
+// cosRelay.credentialsChanged.
+func (s *Server) chiefOfStaffAfterSave() cosCredentialOutcome {
+	if s.hub == nil || s.hub.cos == nil {
+		return cosCredentialOutcome{
+			State:   "not-started",
+			Message: "The chief of staff will use this credential the next time you open it.",
+		}
+	}
+	return s.hub.cos.credentialsChanged()
 }
 
 // handleCredentialsDelete removes muxterm's stored key for one provider.

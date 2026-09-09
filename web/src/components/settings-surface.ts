@@ -29,6 +29,7 @@ import {
   credentialSentence,
   type CredentialsReport,
   type ProviderState,
+  type CosOutcome,
 } from '../lib/credentials.js';
 import { apiPath } from '../lib/base-path.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
@@ -1145,6 +1146,15 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _credBusy = '';
   /** The last outcome message per provider. */
   @state() private _credMsg: Record<string, string> = {};
+  /**
+   * What the last successful save did to the chief of staff, or null.
+   *
+   * Held apart from _credMsg because it is a different subject: _credMsg is
+   * about the key, this is about a process. Null until a save happens, so the
+   * surface says nothing about Mission Control to someone who is only reading
+   * the page.
+   */
+  @state() private _cos: CosOutcome | null = null;
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
   @state() private _aiKeyInput = '';
@@ -2023,6 +2033,11 @@ export class MuxSettingsSurface extends LitElement {
       if (res.ok) {
         this._credInput = { ...this._credInput, [p.provider]: '' };
         this._emitCredentials(res.report);
+        // What the save did to the chief of staff, kept apart from what it
+        // did to the key. Mission Control runs on this same credential, and
+        // a user who fixes their lanes and is left with a silently dead
+        // conversation pane has been told half the truth.
+        this._cos = res.chiefOfStaff ?? null;
         this._setCredMsg(
           p.provider,
           res.verdict.state === 'ok'
@@ -2145,6 +2160,31 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
+  /**
+   * What the save did to the chief of staff.
+   *
+   * Same shape as every other line on this surface: a marker in the fixed
+   * gutter, colour on that one character, the sentence carrying the meaning.
+   * The exact command appears ONLY when a restart is genuinely required —
+   * printing one next to "this is already fixed" would teach people to
+   * restart muxterm for no reason.
+   */
+  private _renderCosOutcome() {
+    const cos = this._cos;
+    if (!cos) return '';
+    const glyph = cos.state === 'restart-required' ? '!' : cos.state === 'respawning' ? '~' : '·';
+    const tone = cos.state === 'restart-required' ? 'err' : cos.state === 'respawning' ? 'warn' : 'off';
+    return html`
+      <div class="cred">
+        <span class="cred-mark ${tone}" aria-hidden="true">${glyph}</span>
+        <span class="cred-line">
+          ${cos.message}
+          ${cos.command ? html`<br /><code>${cos.command}</code>` : ''}
+        </span>
+      </div>
+    `;
+  }
+
   private _renderAgents() {
     const c = this._creds;
     return html`
@@ -2165,18 +2205,30 @@ export class MuxSettingsSurface extends LitElement {
 
       ${c.providers.map((p) => this._renderCredential(p))}
 
+      ${this._renderCosOutcome()}
+
       <p class="ai-note">
         ${c.remoteGap}
       </p>
       <p class="ai-note">
         A key saved here is written to <code>${c.storeDir || '~/.config/muxterm'}</code> with
         owner-only permissions and handed to the agent processes muxterm starts, through
-        their environment. muxterm never writes
+        their environment — every lane, and Mission Control's chief of staff, which is an
+        amplifier session too and draws on this same one credential. muxterm never writes
         <code>${c.amplifierKeysPath || '~/.amplifier/keys.env'}</code> — that file belongs to
         amplifier${c.amplifierKeysFound ? ' and is read here only to report what it defines' : ' and was not found on this machine'}.
         A shell you open by hand does not get muxterm's stored keys; only the agent
         sessions muxterm launches do.
       </p>
+      ${c.amplifierHomeFound
+        ? ''
+        : html`<p class="ai-note">
+            <code>${c.amplifierHomePath || '~/.amplifier'}</code> does not exist, so amplifier
+            is probably not installed on this machine. muxterm has not created it: a config
+            tree conjured for a tool that is not here would make an unconfigured machine
+            look like a configured one. Install amplifier first — a key saved above is
+            still stored and still handed to anything muxterm starts.
+          </p>`}
       <p class="ai-note">
         Keys are write-only: once saved, no page and no API call can read one back — not
         masked, not the last four characters, not its length.

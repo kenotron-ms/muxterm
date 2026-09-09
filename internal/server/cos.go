@@ -173,6 +173,84 @@ type cosRelay struct {
 	subMu    sync.Mutex
 	subs     map[string]cosSubmission
 	subOrder []string
+
+	// extraEnv supplies the sidecar's credentials at every spawn. Guarded by
+	// mu; installed by server.New once the credential store exists. Nil until
+	// then, and nil is harmless -- the sidecar simply starts with the
+	// environment it inherits, exactly as it did before this existed.
+	extraEnv func() []string
+}
+
+// setExtraEnv installs the credential source for the chief-of-staff sidecar.
+//
+// THE POINT OF THIS WIRE, in one sentence: the chief of staff is an amplifier
+// session like every lane, so it must draw on the SAME store -- one credential
+// powering both, rather than two that drift until the one nobody re-checked
+// goes stale. That is also why this is a function and not a captured slice.
+func (r *cosRelay) setExtraEnv(fn func() []string) {
+	r.mu.Lock()
+	r.extraEnv = fn
+	r.mu.Unlock()
+}
+
+// cosCredentialOutcome is what a credential save can honestly say about the
+// chief of staff afterwards. It is a plain fact about a process, reported so
+// the browser never has to guess -- and never has to show a dead conversation
+// pane with no explanation.
+type cosCredentialOutcome struct {
+	// State is one of:
+	//   "not-started" -- no sidecar has been launched; the next one to start
+	//                    will use the new credential. Nothing to do.
+	//   "respawning"  -- a sidecar was running with the old environment and
+	//                    has been asked to exit; the supervisor is replacing
+	//                    it now.
+	//   "restart-required" -- the supervisor gave up permanently and cannot
+	//                    be revived in this process.
+	State string `json:"state"`
+	// Message is the sentence to show the user, already written for them.
+	Message string `json:"message"`
+	// Command is the exact command to run, and is set ONLY for
+	// "restart-required". Empty otherwise, because offering a restart command
+	// for a situation that does not need one teaches people to restart.
+	Command string `json:"command,omitempty"`
+}
+
+// credentialsChanged brings the chief of staff into line with a credential the
+// user just saved, and reports what it was able to do.
+//
+// It never STARTS a sidecar. Someone who has not opened the chief of staff has
+// not asked for one, and a credential form is not consent to spawn an agent
+// session -- doing that here would also break the one rule this whole feature
+// rests on, that onboarding needs no agent anywhere in its path.
+func (r *cosRelay) credentialsChanged() cosCredentialOutcome {
+	sup := r.started()
+	if sup == nil {
+		return cosCredentialOutcome{
+			State:   "not-started",
+			Message: "The chief of staff will use this credential the next time you open it.",
+		}
+	}
+	if sup.Respawn() {
+		return cosCredentialOutcome{
+			State:   "respawning",
+			Message: "The chief of staff is restarting with this credential.",
+		}
+	}
+	if sup.Failed() {
+		return cosCredentialOutcome{
+			State: "restart-required",
+			Message: "The chief of staff stopped earlier and cannot be restarted from here. " +
+				"Restart muxterm to bring it back:",
+			Command: "systemctl --user restart muxterm",
+		}
+	}
+	// Started, not running, not failed: the supervise loop is between
+	// incarnations and about to spawn one, which will read the new credential
+	// on its way up. Saying "restarting" is the truth.
+	return cosCredentialOutcome{
+		State:   "respawning",
+		Message: "The chief of staff is restarting with this credential.",
+	}
 }
 
 func newCosRelay() *cosRelay {
@@ -197,7 +275,16 @@ func newCosRelay() *cosRelay {
 // process that no longer exists.
 func (r *cosRelay) get() (*cos.Supervisor, error) {
 	r.once.Do(func() {
-		sup := cos.New(r.cfg)
+		cfg := r.cfg
+		// Read the credential source now, at first use, rather than at
+		// NewHub: the Hub is built before the server has an ai.Manager, and
+		// on a fresh box the credential does not exist at either moment.
+		// cos.Config.ExtraEnv is itself called per spawn, so this only has to
+		// be installed before the FIRST one.
+		r.mu.Lock()
+		cfg.ExtraEnv = r.extraEnv
+		r.mu.Unlock()
+		sup := cos.New(cfg)
 		if err := sup.Start(context.Background()); err != nil {
 			r.mu.Lock()
 			r.err = err
