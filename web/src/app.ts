@@ -706,6 +706,21 @@ export class MuxApp extends LitElement {
   private _showDashboard = false;
 
   /**
+   * Whether the boot-surface decision has already been made for THIS instance.
+   *
+   * The decision is "once per page load", and connectedCallback is the only
+   * seam that runs once per page load -- but it is not guaranteed to run only
+   * once per instance: a re-inserted <mux-app> runs it again (the _initSplit
+   * note at the end of connectedCallback exists because that has happened).
+   * A re-insertion is not a boot, so it must not re-select anything. This flag
+   * is what makes the difference: a real page load constructs a new instance
+   * with it false; nothing else ever does.
+   *
+   * Deliberately NOT @state: nothing renders it.
+   */
+  private _bootSurfaceApplied = false;
+
+  /**
    * True while the Dashboard's fleet sheet (portrait) is open.
    *
    * Mirrored from the popover's own toggle event, which <mux-cos> re-emits as
@@ -968,6 +983,10 @@ export class MuxApp extends LitElement {
     // overlay is opened: cosStore.open() is what sends the first subscribe,
     // and the sidecar is spawned lazily off that.
     cosStore.attach(this._socket);
+    // A launch lands on the Dashboard, not on whichever pane the composition
+    // happens to make active. Here, immediately after the store the Dashboard
+    // reads is wired -- and NOT on the socket's connect callback. See below.
+    this._applyBootSurface();
     this._socket.onWorkspacePreview = (msg) => {
       previewStore.handleWorkspacePreview(msg);
     };
@@ -2216,6 +2235,57 @@ export class MuxApp extends LitElement {
   // -------------------------------------------------------------------------
   // The Dashboard
   // -------------------------------------------------------------------------
+
+  /**
+   * BOOT SURFACE. Once per page load, land on the Dashboard.
+   *
+   * "What is my fleet doing" is the question a cold start is asking, and the
+   * Dashboard is the surface that answers it. What used to happen instead was
+   * not a choice anyone made: `_showDashboard` is initialised to false, so the
+   * dock showed through, and the dock showed `panes[0]` -- state.ts's
+   * Composition case hard-codes `this._activePaneId = this._panes[0]?.paneId`.
+   * "The first terminal" was the arithmetic, not a decision.
+   *
+   * WHAT THIS DOES NOT TOUCH -- the reconnect path. The only other seam that
+   * looks like a "start" is `_socket.onReconnect`, and putting this there
+   * would be the worse bug: since #94 the socket wakes on visibilitychange,
+   * focus and `online`, so reconnects are routine and happen exactly when the
+   * user switches back to the app. Re-selecting there would yank a reader off
+   * the pane they were reading every single time they returned to the tab. A
+   * reconnect is not a boot; it selects nothing, and neither does a server
+   * restart underneath a live page, which reaches the browser as a reconnect.
+   *
+   * WHAT THIS DOES NOT CHANGE -- which pane is active. The dock is never
+   * unmounted and is not consulted here: it still restores the workspace's
+   * saved layout and its active pane underneath. Dismissing the Dashboard
+   * lands on precisely the pane that would have been on screen without this
+   * change. Only what is on TOP at boot is different.
+   *
+   * NO PERSISTED SURFACE EXISTS to respect. The last workspace is persisted
+   * (workspace-controller's localStorage key) and the active pane within a
+   * workspace rides the saved dockview layout -- both still apply. Which
+   * SURFACE was last on screen is persisted nowhere, so there is no stored
+   * user choice for the Dashboard to override, and this change does not
+   * invent one.
+   *
+   * FALLBACK. If the Dashboard element is not defined -- a build where the
+   * import is gone, or a module that failed to evaluate -- there is nothing
+   * to show and `_showDashboard` stays false, which is exactly today's
+   * behaviour: the dock, with its first terminal. Never nothing selected.
+   *
+   * Unlike _onDashboardShow this does NOT focus the composer: at launch on a
+   * phone that raises the soft keyboard over the fleet the user came to look
+   * at, and no one asked to type yet.
+   */
+  private _applyBootSurface(): void {
+    if (this._bootSurfaceApplied) return;
+    this._bootSurfaceApplied = true;
+    if (!customElements.get('mux-cos')) return;
+    this._showDashboard = true;
+    // Same call _onDashboardShow makes, for the same reason: this is what
+    // sends the first cos-subscribe and spawns the sidecar lazily off it.
+    cosStore.open();
+  }
 
   /**
    * Dashboard card / ctrl+` -- open the Dashboard from anywhere.
