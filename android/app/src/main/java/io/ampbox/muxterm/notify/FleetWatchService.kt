@@ -155,7 +155,16 @@ class FleetWatchService : Service() {
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     backoffMs = INITIAL_BACKOFF_MS
-                    webSocket.send("""{"type":"session-state-subscribe"}""")
+                    // `ok` IS NOT OPTIONAL. session-state-subscribe is a
+                    // two-way switch, not an event: internal/server/ws.go
+                    // does `c.setSessionStateWanted(msg.OK)`, so a frame that
+                    // omits the field unmarshals to OK=false and turns the
+                    // feed OFF. The daemon still replies
+                    // session-state-subscribe-result with OK=true - it
+                    // understood the message - and then never sends a single
+                    // session-state. Verified on a device against a live
+                    // daemon: subscribe acknowledged, zero snapshots.
+                    webSocket.send("""{"type":"session-state-subscribe","ok":true}""")
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
