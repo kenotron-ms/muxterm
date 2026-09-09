@@ -117,6 +117,9 @@ SUBJECT_MAX_CHARS = 60
 DONE_MEANS_MAX_CHARS = 400
 KNOWS_MAX_ENTRIES = 50
 KNOWS_ENTRY_MAX_CHARS = 256
+# The in-progress todo item's own text. It occupies the SAME card line `doing`
+# would have, so it gets the same order of budget rather than a larger one.
+TODO_CURRENT_MAX_CHARS = 100
 
 
 def spool_dir() -> Path:
@@ -217,6 +220,56 @@ def _clip(text: Any, limit: int) -> str:
     return text
 
 
+def _todo_progress(tool_input: Any) -> dict[str, Any] | None:
+    """Project a `todo` tool call's payload into the snapshot's todo field.
+
+    The kernel hands TOOL_PRE the tool's arguments verbatim, so the list arrives
+    here as the same structured array the model sent -- `[{content, activeForm,
+    status}, ...]`. Nothing is parsed out of rendered output; the terminal panel
+    a human sees is drawn from this identical payload by the separate
+    hooks-todo-display module.
+
+    Returns None for anything that is not a list-bearing create/update, which
+    covers `action: "list"` (a read, carrying no todos) and any malformed call.
+    None means "publish nothing", and the consumer renders the row exactly as it
+    did before todos existed -- see to_payload.
+    """
+    if not isinstance(tool_input, dict):
+        return None
+    if tool_input.get("action") not in ("create", "update"):
+        return None
+    todos = tool_input.get("todos")
+    if not isinstance(todos, list) or not todos:
+        # An explicitly EMPTIED list is not progress, and publishing 0/0 for it
+        # would render as a stalled lane. Absent is the honest projection.
+        return None
+
+    done = 0
+    current = ""
+    for item in todos:
+        if not isinstance(item, dict):
+            continue
+        status = item.get("status")
+        if status == "completed":
+            done += 1
+        elif status == "in_progress" and not current:
+            # activeForm first -- "Cutting the release" reads as a state, which
+            # is what a progress line is for; `content` is imperative ("Cut the
+            # release") and reads as an instruction to the reader.
+            current = _clip(
+                item.get("activeForm") or item.get("content") or "",
+                TODO_CURRENT_MAX_CHARS,
+            )
+
+    progress: dict[str, Any] = {"done": done, "total": len(todos)}
+    if current:
+        # Omitted when nothing is in progress -- a list that is all-pending or
+        # all-complete has a truthful fraction and no current item, and inventing
+        # one would be the same lie `doing` already tells.
+        progress["current"] = current
+    return progress
+
+
 def _first_line(text: Any, limit: int) -> str:
     """Take the first meaningful line of a prompt, for use as a session name.
 
@@ -266,6 +319,7 @@ class SessionRecord:
         "waiting_for",
         "doing",
         "done_means",
+        "todo",
         "knows",
         "_knows_seen",
         "goal_finished",
@@ -289,6 +343,10 @@ class SessionRecord:
         self.waiting_for = ""
         self.doing = ""
         self.done_means = ""
+        # Structured progress from this session's own todo list, or None when it
+        # has never called the todo tool. None is load-bearing: it is what tells
+        # the browser to fall back to `doing` rather than draw an empty 0/0.
+        self.todo: dict[str, Any] | None = None
         self.knows: list[str] = []
         self._knows_seen: set[str] = set()
         # goal_finished pins mode=goal across the moment the orchestrator drops
@@ -433,6 +491,11 @@ class SessionRecord:
             payload["doing"] = self.doing
         if self.done_means:
             payload["doneMeans"] = self.done_means
+        if self.todo:
+            # Absent, not zeroed, for a session that tracks no todos. A consumer
+            # reading `"todo": {"done":0,"total":0}` would draw a stalled-looking
+            # 0/0; absence lets it draw what it drew before this field existed.
+            payload["todo"] = self.todo
         if self.knows:
             payload["knows"] = self.knows
         return payload
@@ -844,6 +907,18 @@ class SessionStateTracker:
         if record is None:
             return
         tool = data.get("tool_name")
+        if tool == "todo" and not self._is_child(data):
+            # The todo list is the one field on this row that is not a guess.
+            # `doing` is re-templated on EVERY tool call and so says what the
+            # session touched a second ago; this says how far through its own
+            # plan it is, and only changes when the session says so.
+            #
+            # Root sessions only. A sub-agent keeps its own todo list, and
+            # letting one overwrite the row would make the parent's progress
+            # jump to a stranger's numbers and back.
+            progress = _todo_progress(data.get("tool_input"))
+            if progress is not None:
+                record.todo = progress
         # A tool call that cannot be named specifically -- a shell command
         # whose verb this hook does not recognise -- falls back to what the
         # session is FOR rather than to a generic verb. The record already
