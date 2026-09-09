@@ -139,6 +139,14 @@ func (s *Server) handleCredentialsDelete(w http.ResponseWriter, r *http.Request)
 	if provider == ai.ProviderAnthropic {
 		s.hub.BroadcastAIStatus(s.ai.Status())
 	}
+
+	// Removing muxterm's copy changes WHICH credential a lane gets: an
+	// environment variable or an entry in amplifier's keys.env may now be the
+	// effective one, and the verdict just forgotten belonged to the key that
+	// is gone. Re-check rather than answering "not checked" for a machine
+	// that is one free GET away from a real answer.
+	s.ai.Verify(r.Context(), provider)
+
 	writeCredJSON(w, http.StatusOK, map[string]any{"report": s.ai.Report()})
 }
 
