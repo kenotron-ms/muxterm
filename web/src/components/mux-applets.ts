@@ -414,10 +414,19 @@ export class MuxApplets extends LitElement {
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {
-    // The surface just came up. Say what is on it, so a holder that sizes
-    // itself to the applet (the sheet) sizes itself to the RIGHT one rather
-    // than to whatever was showing the last time it was open.
-    if (changed.has('dormant') && !this.dormant) this._announce(this._current);
+    // The surface just came up.
+    if (changed.has('dormant') && !this.dormant) {
+      // Something arrived for the applet they are now looking at. Spend it
+      // rather than leaving a dot on the tab they are already on: that is the
+      // surface talking to itself, and what it would be pointing at is a
+      // document they can already see is not the new one. Nothing is taken --
+      // they raised this sheet a moment ago.
+      if (this._parked.has(this._current)) this.show(this._current);
+      // Say what is on it, so a holder that sizes itself to the applet (the
+      // sheet) sizes itself to the RIGHT one rather than to whatever was
+      // showing the last time it was open.
+      else this._announce(this._current);
+    }
     // A tab the strip had to scroll to reach is worth nothing off-screen. Only
     // ever runs when the strip actually overflows, which on a phone is the
     // fifth applet and on a desktop is never.
