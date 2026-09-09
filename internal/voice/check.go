@@ -75,6 +75,28 @@ func (c *Client) CheckAuth(ctx context.Context) error {
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return nil
+
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
+		// THE VENDOR BODY IS DROPPED HERE, and only here, because on this
+		// exact status it quotes the credential back. Observed from
+		// OpenAI with a deliberately fake key:
+		//
+		//	Incorrect API key provided: sk-FAKE-***********************0000
+		//
+		// The middle is masked; the PREFIX AND THE LAST FOUR CHARACTERS
+		// are not. Those are precisely what the settings API refuses to
+		// return, so passing this body through to the browser -- or into
+		// the log -- would hand back through the check button what GET
+		// was built never to reveal.
+		//
+		// A literal scrub of the token cannot fix this: the masked form
+		// is not a substring of the key, so there is nothing to search
+		// for. Dropping the body on 401/403 is the only reliable answer,
+		// and it costs little, because on this status muxterm's own
+		// explanation is the useful one anyway.
+		return fmt.Errorf("voice: %s rejected this credential (HTTP %d)%s",
+			c.cfg.Endpoint, resp.StatusCode, c.authHint(resp.StatusCode))
+
 	case resp.StatusCode == http.StatusNotFound:
 		// The credential was accepted well enough to get routed; the
 		// path is what is wrong. Naming the expected shape saves a

@@ -128,20 +128,31 @@ func writeFilePreservingMode(path, content string, mode os.FileMode) error {
 // comments in it, which is precisely the information this function exists to
 // preserve.
 func findVoiceSection(body string) (start, end int, found bool) {
+	lines := splitLinesKeepingEnds(body)
 	offset := 0
-	for _, line := range splitLinesKeepingEnds(body) {
+	// blankRun is how many bytes of trailing blank lines immediately precede
+	// the current position. They sit inside the section's span but belong to
+	// the READER, not to the section: swallowing them would weld the next
+	// header onto the last key every time a setting is saved.
+	blankRun := 0
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !found {
 			if isVoiceHeader(trimmed) {
 				start, found = offset, true
 			}
 		} else if isTableHeader(trimmed) {
-			return start, offset, true
+			return start, offset - blankRun, true
+		}
+		if trimmed == "" {
+			blankRun += len(line)
+		} else {
+			blankRun = 0
 		}
 		offset += len(line)
 	}
 	if found {
-		return start, len(body), true
+		return start, len(body) - blankRun, true
 	}
 	return 0, 0, false
 }

@@ -92,7 +92,7 @@ func (c *Client) MintEphemeral(ctx context.Context) (Ephemeral, error) {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return Ephemeral{}, fmt.Errorf("voice: minting an ephemeral secret returned HTTP %d: %s%s",
-			resp.StatusCode, snippet(raw), c.authHint(resp.StatusCode))
+			resp.StatusCode, authSafeSnippet(raw, resp.StatusCode), c.authHint(resp.StatusCode))
 	}
 
 	var out struct {
@@ -153,7 +153,11 @@ func (c *Client) ExchangeSDP(ctx context.Context, ephemeral, offerSDP string) (A
 
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Answer{}, fmt.Errorf("voice: SDP exchange returned HTTP %d: %s", resp.StatusCode, snippet(raw))
+		// Same withholding rule as the mint path. The bearer here is the
+		// short-lived ephemeral secret rather than the long-lived
+		// credential, but it is still a secret and a 401 body is still
+		// the one place a vendor quotes part of it back.
+		return Answer{}, fmt.Errorf("voice: SDP exchange returned HTTP %d: %s", resp.StatusCode, authSafeSnippet(raw, resp.StatusCode))
 	}
 
 	loc := resp.Header.Get("Location")
@@ -219,9 +223,28 @@ func (c *Client) WebSocketURL(callID string) (string, error) {
 	return u.String(), nil
 }
 
+// authSafeSnippet is snippet() with one exception: on 401 and 403 the body is
+// withheld entirely.
+//
+// The comment on snippet below used to say error bodies from these endpoints
+// are "never credentials". That is true of every status except these two. A
+// real response to a bad key reads:
+//
+//	Incorrect API key provided: sk-FAKE-***********************0000
+//
+// The vendor masks the middle and leaves the prefix and the last four
+// characters, which is exactly what muxterm's own settings API refuses to
+// return -- so quoting it into an error string (which is logged) would leak
+// through the back door what the front door was built to withhold.
+func authSafeSnippet(b []byte, status int) string {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return "(response withheld: it can quote part of the credential)"
+	}
+	return snippet(b)
+}
+
 // snippet bounds an error body so a vendor's HTML error page cannot flood a
-// log line. Error bodies from these endpoints are JSON diagnostics, never
-// credentials.
+// log line. Callers on an auth status must use authSafeSnippet instead.
 func snippet(b []byte) string {
 	s := strings.TrimSpace(string(b))
 	s = strings.ReplaceAll(s, "\n", " ")
