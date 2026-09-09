@@ -148,8 +148,41 @@ export class AppletArtifact extends LitElement implements AppletElement {
    */
   private _docSheet: CSSStyleSheet | null = null;
 
-  static styles = [
-    appletStateStyles,
+  /** Guard for the deferred adoption below: once per class, not per element. */
+  private static _stateStylesAdopted = false;
+
+  /**
+   * THE HOST'S EMPTY/ERROR CSS, ADOPTED LATE ON PURPOSE.
+   *
+   * appletStateStyles lives in the host module, and the host imports this file
+   * for its registerApplet() side effect -- so the two modules are an ES module
+   * CYCLE, and in a cycle the imported module's BODY runs AFTER this one's.
+   * `static styles = [appletStateStyles, ...]` would therefore read a const
+   * still in its temporal dead zone and throw at load, taking the WHOLE APP
+   * with it: ReactiveElement reads `styles` from finalize(), which the
+   * observedAttributes getter calls, which customElements.define() calls --
+   * and @customElement runs define() inside this very module body.
+   *
+   * This is not theoretical here. Writing it the obvious way first produced
+   * exactly that: `ReferenceError: Cannot access 'Oh' before initialization`,
+   * and a blank page. applet-files.ts carries the long version of the
+   * reasoning; this is the same defusing, for the same reason.
+   *
+   * appletEmpty/appletError are function DECLARATIONS, hoisted and initialized
+   * before any module body runs, so calling them from render() needs nothing.
+   * appletControlStyles comes from lib/, which is NOT in the cycle, so it can
+   * stay in the static block below.
+   */
+  protected override createRenderRoot(): HTMLElement | DocumentFragment {
+    const ctor = this.constructor as typeof AppletArtifact;
+    if (!ctor._stateStylesAdopted) {
+      ctor._stateStylesAdopted = true;
+      ctor.elementStyles = [...ctor.elementStyles, appletStateStyles];
+    }
+    return super.createRenderRoot();
+  }
+
+  static override styles = [
     appletControlStyles,
     css`
       *,
