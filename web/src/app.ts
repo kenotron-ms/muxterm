@@ -922,6 +922,8 @@ export class MuxApp extends LitElement {
     // composed event bubbling to here covers them, and any later entry point,
     // without a third binding to keep in step.
     this.addEventListener('connect-machine', this._onConnectMachine);
+    // Escape dismisses the open overlay panel — see _onOverlayPanelEscape.
+    window.addEventListener('keydown', this._onOverlayPanelEscape, true);
     // Update layout mode when the viewport crosses the 768px breakpoint.
     window.addEventListener('resize', this._onViewportResize);
     this._layoutMode = currentLayoutMode();
@@ -1286,6 +1288,7 @@ export class MuxApp extends LitElement {
     this.removeEventListener('pane-close', this._onPaneCloseIntent);
     this.removeEventListener('workspace-close', this._onWorkspaceCloseIntent);
     this.removeEventListener('connect-machine', this._onConnectMachine);
+    window.removeEventListener('keydown', this._onOverlayPanelEscape, true);
     this._disposePaneFocusListeners?.();
     this._disposePaneFocusListeners = null;
     this._paneFocusCoordinator = null;
@@ -1351,6 +1354,29 @@ export class MuxApp extends LitElement {
     // docs/designs/2026-08-01-sidebar-resize-splitjs-design.md Architecture.
     if (changed.has('_layoutMode') && this._layoutMode === 'wide' && !this._split) {
       this._initSplit();
+    }
+    // An overlay panel opening dismisses the drawer.
+    //
+    // The drawer is a popover, so it lives in the browser's TOP LAYER, which
+    // is above EVERY z-index unconditionally — .overlay-backdrop's 3000
+    // included. On a phone the drawer is also where Settings, Shortcuts,
+    // About and Connect are opened from, so all four were being painted
+    // UNDERNEATH the drawer that asked for them. No number fixes that; the
+    // drawer has to leave.
+    //
+    // Keyed on the STATE rather than on the two call sites that open a panel
+    // (_onLauncherAction, _onConnectMachine), because the three sibling
+    // dismissals below — _onOpenCreateModal, _onDashboardShow,
+    // _onWorkspaceSelected — are exactly the pattern this bug escaped from:
+    // a per-call-site `_closeDrawer()` that a fourth surface forgot. Nothing
+    // can show a panel without setting this field, so every door, including
+    // ones added later, is covered by construction.
+    //
+    // ONE-WAY on purpose: closing the panel does not bring the drawer back.
+    // The user's attention has moved on, and a drawer springing back over
+    // the surface they just returned to is worse than the bug being fixed.
+    if (changed.has('_overlayPanel') && this._overlayPanel) {
+      this._closeDrawer();
     }
   }
 
@@ -2496,6 +2522,29 @@ export class MuxApp extends LitElement {
 
   private _closeOverlayPanel = (): void => {
     this._overlayPanel = null;
+  };
+
+  /**
+   * Escape closes the open overlay panel.
+   *
+   * Until the drawer learned to get out of a panel's way, Escape on a phone
+   * always had something to dismiss: the drawer parked on top. With the
+   * drawer gone the panel is the only surface open, and Escape would be a
+   * dead key on a modal-looking box whose other two exits (× and the
+   * backdrop) are both pointer gestures — worse still on desktop, where the
+   * keyboard is how the box is expected to close.
+   *
+   * CAPTURE phase, and the event is consumed: the page underneath is mostly
+   * TERMINALS, and an Escape typed at an open panel must never also reach a
+   * shell, end a voice call, or dismiss the Dashboard behind it. The guard is
+   * the first line, so with no panel open this handler is one comparison and
+   * the drawer's own popover Escape is untouched.
+   */
+  private _onOverlayPanelEscape = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || !this._overlayPanel) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this._closeOverlayPanel();
   };
 
   /**
