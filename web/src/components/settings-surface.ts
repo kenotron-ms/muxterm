@@ -1697,16 +1697,27 @@ export class MuxSettingsSurface extends LitElement {
     const isEntra = this._vMode === 'azure_entra';
     const isOpenAI = this._vMode === 'openai_key';
 
+    /**
+     * A SAVED KEY BELONGS TO THE MODE IT WAS SAVED FOR.
+     *
+     * Without this the form lies as soon as someone switches shape: with an
+     * Entra config saved, picking "Azure — access key" would label an empty
+     * box "Replace key" and offer to keep a key that does not exist. An Azure
+     * resource key is also not an OpenAI key, so moving between the two key
+     * modes has to forget it too.
+     */
+    const savedKeyApplies = st.mode === this._vMode && st.keyConfigured;
+
     // What the CREDENTIAL line says. Entra is the interesting case: it stores
     // no secret at all, so "no key configured" would be a lie about a working
     // setup.
     const credLine = isEntra
       ? this._vLine('ok', 'Entra sign-in uses the identity this machine is signed in as. No key is stored.')
-      : st.keyConfigured && st.keySource === 'env'
+      : savedKeyApplies && st.keySource === 'env'
         ? this._vLine('ok', `A key is configured, from the ${st.keyEnvVar} environment variable.`)
-        : st.keyConfigured
+        : savedKeyApplies
           ? this._vLine('ok', 'A key is configured. It cannot be displayed — replace it or remove it.')
-          : this._vLine('none', 'No key configured.');
+          : this._vLine('none', 'No key configured for this mode.');
 
     return html`
       <p class="section-title">Voice</p>
@@ -1794,14 +1805,14 @@ export class MuxSettingsSurface extends LitElement {
           `
         : html`
             <div class="v-field">
-              <label class="v-label" for="v-key">${st.keyConfigured ? 'Replace key' : 'Key'}</label>
+              <label class="v-label" for="v-key">${savedKeyApplies ? 'Replace key' : 'Key'}</label>
               <input
                 id="v-key"
                 class="ai-input"
                 type="password"
                 autocomplete="off"
                 spellcheck="false"
-                placeholder="${st.keyConfigured ? 'Leave blank to keep the saved key' : 'Paste the key'}"
+                placeholder="${savedKeyApplies ? 'Leave blank to keep the saved key' : 'Paste the key'}"
                 .value="${this._vKeyInput}"
                 @input="${(e: Event) => { this._vKeyInput = (e.target as HTMLInputElement).value; }}"
               />
