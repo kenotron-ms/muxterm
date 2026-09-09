@@ -24,6 +24,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import io.ampbox.muxterm.notify.FleetWatchService
 
 /**
  * A plain WebView that hosts muxterm and grants it capabilities.
@@ -129,14 +130,45 @@ class MainActivity : android.app.Activity() {
         CookieManager.getInstance().flush()
     }
 
+    /**
+     * Two jobs. The service must be started from a visible Activity (Android
+     * 12+ forbids starting a while-in-use foreground service from the
+     * background), and the notifier needs to know the user is looking at the
+     * app so it can stay quiet about changes happening on screen in front of
+     * them.
+     */
+    override fun onResume() {
+        super.onResume()
+        FleetWatchService.appInForeground = true
+        if (FleetWatchService.isEnabled(this)) FleetWatchService.start(this)
+    }
+
     override fun onPause() {
         super.onPause()
+        FleetWatchService.appInForeground = false
         // Deliberately NOT calling webView.onPause() or pauseTimers(): design
         // doc W1.4 calls that "the single most likely way to build the whole
         // thing correctly and still have it fail", because pausing the WebView
         // in onPause is the idiom every tutorial teaches - and it stops exactly
         // what the foreground service exists to keep running.
         flushCookies()
+    }
+
+    /**
+     * Tapping a lane notification lands here, because MainActivity is
+     * `singleTask` and the notification's PendingIntent is SINGLE_TOP: the
+     * existing task is resumed rather than a second copy stacked on top. There
+     * is nothing to navigate to - the muxterm web app is one page with no
+     * per-workspace URL - so bringing the app forward IS the whole action.
+     */
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        intent?.getStringExtra("url")?.let {
+            UrlResolver.saveUrl(this, it)
+            currentUrl = it
+            origin = UrlResolver.originOf(it)
+            webView.loadUrl(it)
+        }
     }
 
     override fun onStop() {
@@ -273,10 +305,15 @@ class MainActivity : android.app.Activity() {
      * If the user declines here, the page's own getUserMedia will ask again at
      * the moment of use, which is the better prompt anyway.
      *
-     * POST_NOTIFICATIONS is Android 13+ and entirely optional: the foreground
-     * service runs whether or not it is granted - "apps don't need to request
-     * the POST_NOTIFICATIONS permission in order to launch a foreground
-     * service" - only the notification is suppressed. Voice is never gated on it.
+     * POST_NOTIFICATIONS is Android 13+ and MUST be asked for at runtime; the
+     * manifest line grants nothing on its own. Voice is not gated on it - "apps
+     * don't need to request the POST_NOTIFICATIONS permission in order to
+     * launch a foreground service", only its notification is suppressed - but
+     * lane status alerts are exactly a notification, so without this grant the
+     * platform drops them and the feature is silently absent. It is asked for
+     * here, in the same single call, rather than at the moment of use, because
+     * the moment of use is by definition when the user is not looking at the
+     * app.
      */
     private fun requestStartupPermissions() {
         val wanted = mutableListOf<String>()
@@ -354,16 +391,46 @@ class MainActivity : android.app.Activity() {
     }
 
     private fun showRootDialog() {
+        // The only in-app control over lane alerts, and deliberately the only
+        // one: everything finer - sound, importance, whether completions show
+        // at all - lives in Android's own notification settings, per channel,
+        // where the user can reach it by long-pressing the notification itself.
+        val alertsOn = FleetWatchService.isEnabled(this)
+        val alertsItem = if (alertsOn) "Lane alerts: on" else "Lane alerts: off"
         AlertDialog.Builder(this)
             .setTitle("muxterm")
-            .setItems(arrayOf("Reload", "Change URL", "Exit")) { _, which ->
+            .setItems(arrayOf("Reload", "Change URL", alertsItem, "Exit")) { _, which ->
                 when (which) {
                     0 -> webView.reload()
                     1 -> showUrlDialog()
-                    2 -> finish()
+                    2 -> toggleLaneAlerts(alertsOn)
+                    3 -> finish()
                 }
             }
             .show()
+    }
+
+    /**
+     * The watcher resolves the server URL when it dials, so pointing the
+     * wrapper somewhere else has to bounce it - otherwise it keeps watching the
+     * old server until that socket happens to drop. The restart also re-adopts
+     * a baseline, so switching servers never announces the new fleet as news.
+     */
+    private fun redialWatch() {
+        if (!FleetWatchService.isEnabled(this)) return
+        FleetWatchService.stop(this)
+        webView.postDelayed({ FleetWatchService.start(this) }, 500)
+    }
+
+    private fun toggleLaneAlerts(wasOn: Boolean) {
+        FleetWatchService.setEnabled(this, !wasOn)
+        if (wasOn) {
+            FleetWatchService.stop(this)
+            Toast.makeText(this, "Lane alerts off", Toast.LENGTH_SHORT).show()
+        } else {
+            FleetWatchService.start(this)
+            Toast.makeText(this, "Lane alerts on", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun showUrlDialog() {
@@ -381,6 +448,7 @@ class MainActivity : android.app.Activity() {
                     currentUrl = url
                     origin = UrlResolver.originOf(url)
                     webView.loadUrl(url)
+                    redialWatch()
                 }
             }
             .setNeutralButton("Reset to default") { _, _ ->
@@ -388,6 +456,7 @@ class MainActivity : android.app.Activity() {
                 currentUrl = BuildConfig.MUXTERM_URL
                 origin = UrlResolver.originOf(currentUrl)
                 webView.loadUrl(currentUrl)
+                redialWatch()
             }
             .setNegativeButton("Cancel", null)
             .show()
