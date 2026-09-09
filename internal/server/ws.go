@@ -1171,6 +1171,59 @@ func (h *Hub) BroadcastVoiceEnded(sessionID, reason string) {
 	}
 }
 
+// sendOpenArtifact writes a request to show one local file as a text frame.
+// Same serve-local envelope as sendAIStatus and sendVoiceEnded
+// ({"openArtifact":...}, no "type" field, for the reason given there).
+func (c *Client) sendOpenArtifact(path string) {
+	data, err := json.Marshal(map[string]any{
+		"openArtifact": map[string]string{"path": path},
+	})
+	if err != nil {
+		log.Printf("sendOpenArtifact: marshal error: %v", err)
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("sendOpenArtifact: write error: %v", err)
+	}
+}
+
+// BroadcastOpenArtifact asks every connected browser to show one local file in
+// the artifact viewer, and returns how many were told.
+//
+// WHY THE SERVER PUSHES A VIEW AT ALL. Everything else on this socket is the
+// server reporting what happened. This is the one thing that is a RELAYED
+// HUMAN REQUEST: somebody asked the chief of staff to show them a document,
+// and the only way to answer that is to put the document on their screen. It
+// reaches here from POST /api/artifact/open, which the `view_file` MCP tool
+// calls -- see internal/server/artifact_api.go.
+//
+// Broadcast rather than addressed, for BroadcastVoiceEnded's reason: a person
+// with three tabs open on one machine is one person, and the server has no way
+// to know which tab their eyes are on. Sending to the one that happens to have
+// asked most recently would be a guess that is wrong whenever they moved.
+//
+// It carries a path and nothing else -- no bytes, no credential. The browser
+// then reads the file through /api/artifact under its own session, which is
+// what keeps this frame from being a way to hand a file to a client that could
+// not already have asked for it.
+//
+// The COUNT is returned because zero is the interesting case: an agent that
+// believes it just showed somebody something, with no browser open, has to be
+// told so.
+func (h *Hub) BroadcastOpenArtifact(path string) int {
+	h.mu.Lock()
+	clients := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.Unlock()
+
+	for _, c := range clients {
+		c.sendOpenArtifact(path)
+	}
+	return len(clients)
+}
+
 // NewHub creates a new Hub that dials a fresh daemon connection per browser via
 // dial. dial may be nil and supplied later via SetDialer. tunnels is nil until
 // set by the caller (server.New sets it via hub.tunnels = tunnels).
