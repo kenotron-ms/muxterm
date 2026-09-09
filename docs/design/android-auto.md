@@ -194,16 +194,72 @@ cp -L extract/usr/lib/llvm-19/lib/libc++abi.so.1.0  lib/libc++abi.so.1
 cp -L extract/usr/lib/llvm-19/lib/libunwind.so.1.0  lib/libunwind.so.1
 ```
 
-The DHU still needs the phone. It is not a standalone emulator: it connects to
-the Android Auto app running on a real device over adb, and the device does the
-projecting. The steps that only a human can perform are in
-[the DHU docs](https://developer.android.com/training/cars/testing/dhu) and are
-reproduced in the handoff.
+There is no display on this box either, and the DHU wants one even under
+`--headless` (`SDL_CreateWindowRenderer failed`). Xvfb is not installed and
+hardcodes `/usr/bin/xkbcomp`, which is not writable without root. The way
+through, which does not install or change anything system-wide:
 
-Once the phone is ready, this side is one command plus one:
+```sh
+# Xvfb, extracted the same way, plus its xkb pieces
+apt-get download xvfb libunwind8 libxfont2 x11-xkb-utils xkb-data
+# ...then run it with an overlayfs over /usr/bin inside a user namespace, so
+# /usr/bin/xkbcomp exists only for that process tree:
+unshare --map-root-user --mount sh -c '
+  mount -t overlay overlay -o lowerdir=/usr/bin,upperdir=$R/upper,workdir=$R/work /usr/bin
+  exec Xvfb :77 -screen 0 1280x800x24 -nolisten tcp -xkbdir .../xkb'
+```
+
+The X socket lands in the shared `/tmp/.X11-unix`, so it is reachable from
+outside the namespace. That matters, because **the DHU refuses to run inside the
+namespace** — as uid 0 it exits 0 with no output at all. So Xvfb runs inside and
+the DHU runs outside against the same `:77`.
+
+Once the phone is ready, this side is two commands:
 
 ```sh
 adb forward tcp:5277 tcp:5277
 cd "$ANDROID_HOME/extras/google/auto" && \
-  LD_LIBRARY_PATH=/home/ken/android-toolchain/dhu-libs/lib ./desktop-head-unit
+  LD_LIBRARY_PATH=/home/ken/android-toolchain/dhu-libs/lib DISPLAY=:77 \
+  SDL_AUDIODRIVER=dummy ./desktop-head-unit --adb=5277
 ```
+
+### How far this actually got, and where it stopped
+
+Against a real Pixel 10 Pro (Android 17, Android Auto 17.5) over wireless adb,
+with the head unit server started and "Add new cars to Android Auto" on:
+
+| Step | Result |
+|---|---|
+| `adb connect` to the phone | ok |
+| app installed on the phone | ok |
+| phone listening on 5277 (`0x149D`) | ok |
+| raw socket through the forward | ok — connects, phone waits for the DHU to speak |
+| phone registers the car app | ok — `MuxtermCarAppService` resolves with the IOT category |
+| DHU links to the head unit server | ok — `Requested protocol version: 1.7 … connected.` |
+| **projection session starts** | **no** |
+
+The DHU window opens and sits on **"Waiting for phone…"** indefinitely. On the
+very first connection only, the phone logged a projection association appearing
+and disappearing 13 ms later, alongside Android Auto's `FirstActivityImpl`:
+
+```
+CDM_AssociationStore: Association{... mDeviceProfile='android.app.role.SYSTEM_AUTOMOTIVE_PROJECTION' ...}
+CDM_DevicePresenceProcessor: ... isAppeared=[true]
+CDM_DevicePresenceProcessor: ... isAppeared=[false]     (+13ms)
+gearhead/...gmscorecompat.FirstActivityImpl
+```
+
+On every subsequent attempt there is no projection attempt in the phone's log at
+all — the TCP link is accepted and nothing else happens.
+
+So the transport is proven and the session is not. The untested hypotheses, in
+order of cheapness: the head unit server needs stopping and restarting after
+that first failed handshake; or DHU 2.0 (build **2022**-03-30, and the only
+version Google ships) no longer completes the handshake with Android Auto 17.5
+on Android 17.
+
+**This is not on the critical path.** What the DHU would add is the projection
+transport; the screen itself is already proven against the same templates host
+above. And per the blocking finding at the top of this file, the DHU cannot make
+a sideloaded build work in a real vehicle either way — only an Internal App
+Sharing upload does that.
