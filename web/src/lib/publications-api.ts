@@ -195,7 +195,7 @@ export function statusWord(p: Publication): string {
     case 'expired':
       return 'expired';
     case 'source_missing':
-      return 'file gone';
+      return 'gone';
     case 'identity_mismatch':
       return 'broken';
     case 'too_large':

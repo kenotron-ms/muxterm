@@ -16,10 +16,13 @@
  *      so an unseen tab can still notice that a lane went blocked. The
  *      argument for it, and its cost, are on _onFleet.
  *
- *   2. IT OWNS ITS OWN CONTROL. cards|tiles used to sit in the surface's
- *      topbar, where it was the only control there and meant nothing to
- *      anything but the fleet. It is now this applet's `rail`, painted by the
- *      host in the host's vocabulary at the end of the tab strip.
+ *   2. IT OWNS ITS OWN CONTROL. cards|tiles has now moved twice, in one
+ *      direction: out of the surface's topbar, where it was the only control
+ *      there and meant nothing to anything but the fleet; then out of the
+ *      applet host's rail, which was the same mistake one row lower. It is
+ *      rendered HERE, above the fleet it reshapes, from this file's styles --
+ *      the applet owns what it shows, the host owns only which applet you are
+ *      looking at (lib/applet-registry.ts).
  *
  *   3. IT KEEPS THE SHEET'S JOB. Portrait renders a SECOND instance of this
  *      element inside <mux-cos>'s bottom sheet, with `insheet` set. That flag
@@ -43,6 +46,7 @@ import {
   type AppletAttentionDetail,
   type AppletElement,
 } from '../../lib/applet-registry.js';
+import { appletControlStyles, appletToggle } from '../../lib/applet-controls.js';
 import { homeSessions } from '../../lib/home-sessions.js';
 import {
   HOME_GROUPS,
@@ -199,7 +203,9 @@ export class AppletDashboard extends LitElement implements AppletElement {
    */
   private _now = Math.floor(Date.now() / 1000);
 
-  static styles = css`
+  static styles = [
+    appletControlStyles,
+    css`
     *,
     *::before,
     *::after {
@@ -393,7 +399,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
       color: var(--ink-3);
       padding: var(--s-4) var(--s-1);
     }
-  `;
+  `,
+  ];
 
   // -------------------------------------------------------------------------
   // The inactive rule, and its one exception
@@ -527,17 +534,17 @@ export class AppletDashboard extends LitElement implements AppletElement {
   // -------------------------------------------------------------------------
 
   /**
-   * Called by the rail, which the HOST renders in the HOST's shadow root --
-   * hence public, and hence the event: the host has no other way to know the
-   * control it painted now says something different.
+   * Switch the grid's shape.
+   *
+   * No event: the control that calls this is rendered by THIS element, in
+   * THIS shadow root, so `view` being a reactive property is the whole of the
+   * update path. Telling the host would be telling it something it has no use
+   * for.
    */
   setView(v: FleetView): void {
     if (this.view === v) return;
     this.view = v;
     saveView(v);
-    this.dispatchEvent(
-      new CustomEvent('applet-rail-changed', { bubbles: true, composed: true }),
-    );
   }
 
   /**
@@ -561,7 +568,34 @@ export class AppletDashboard extends LitElement implements AppletElement {
   // -------------------------------------------------------------------------
 
   override render(): TemplateResult {
-    return html`<div class="body">${this._renderFleet()}</div>`;
+    return html`<div class="body">${this._renderControls()}${this._renderFleet()}</div>`;
+  }
+
+  /**
+   * THIS APPLET'S OWN CONTROLS, in this applet's own body.
+   *
+   * Suppressed in the sheet: portrait is cards, always (see `insheet`), so the
+   * control would offer a choice that portrait does not honour.
+   */
+  private _renderControls(): TemplateResult | typeof nothing {
+    if (this.insheet) return nothing;
+    return html`
+      <div class="controls" role="group" aria-label="Fleet view">
+        ${appletToggle({
+          label: html`${icon(Rows3, { size: 12 })} cards`,
+          on: this.view === 'cards',
+          title: 'One row per session, with what it is doing',
+          onToggle: () => this.setView('cards'),
+        })}
+        ${appletToggle({
+          label: html`${icon(LayoutGrid, { size: 12 })} tiles`,
+          on: this.view === 'tiles',
+          title: 'Add a live thumbnail of each terminal',
+          onToggle: () => this.setView('tiles'),
+        })}
+      </div>
+      <div class="controls-rule"></div>
+    `;
   }
 
   /**
@@ -633,10 +667,8 @@ export class AppletDashboard extends LitElement implements AppletElement {
 }
 
 /**
- * The manifest. `rail` is cards|tiles -- the control that used to sit in the
- * surface's topbar, next to nothing it had anything to do with. It renders
- * into the HOST's shadow root with the HOST's `.seg` styles, and calls back
- * into this element.
+ * The manifest: a tab, and nothing about what is under it. cards|tiles is
+ * rendered by the element itself, in _renderControls().
  */
 registerApplet({
   id: 'dashboard',
@@ -644,25 +676,6 @@ registerApplet({
   icon: LayoutGrid,
   element: 'applet-dashboard',
   order: 10,
-  rail: (el: AppletElement): TemplateResult => {
-    const d = el as AppletDashboard;
-    return html`
-      <div class="seg" role="group" aria-label="Fleet view">
-        <button
-          type="button"
-          class="${d.view === 'cards' ? 'on' : ''}"
-          aria-pressed="${d.view === 'cards' ? 'true' : 'false'}"
-          @click="${() => d.setView('cards')}"
-        >${icon(Rows3, { size: 12 })} cards</button>
-        <button
-          type="button"
-          class="${d.view === 'tiles' ? 'on' : ''}"
-          aria-pressed="${d.view === 'tiles' ? 'true' : 'false'}"
-          @click="${() => d.setView('tiles')}"
-        >${icon(LayoutGrid, { size: 12 })} tiles</button>
-      </div>
-    `;
-  },
 });
 
 declare global {

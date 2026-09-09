@@ -16,9 +16,21 @@
  *      (the AbortController is what makes the second half true rather than
  *      merely intended).
  *
- *   2. IT OWNS ITS OWN CONTROL. `changed only` is this applet's rail, painted
- *      by the HOST in the host's `.toggle` vocabulary at the end of the tab
- *      strip.
+ *   2. IT OWNS ITS OWN CONTROLS, and they are rendered HERE -- in this
+ *      element's own body, from this file's own styles, above the list they
+ *      filter. Not in the tab strip: that row answers "which applet am I
+ *      looking at", and `changed` / `published` answer "what is this applet
+ *      showing me", which is nobody's business but this applet's. The
+ *      contract, and what it used to be, are at the top of
+ *      lib/applet-registry.ts.
+ *
+ *      There are three, and they are ONE choice rather than two switches:
+ *      `all`, `changed`, `published`. Two independent toggles would make a
+ *      fourth state -- changed AND published -- that means nothing, because
+ *      `published` is not a filter over this directory at all. It is a
+ *      different question ("what have I got exposed right now, anywhere"),
+ *      answered as a FLAT list across every directory, which is why it cannot
+ *      compose with a filter over one.
  *
  *   3. IT USES THE HOST'S ONE EMPTY/ERROR IDIOM. appletEmpty/appletError render
  *      into THIS shadow root, where the host's styles are not in scope, which
@@ -34,6 +46,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { CornerLeftUp, File as FileGlyph, Folder } from 'lucide';
 import { icon } from '../../lib/icons.js';
 import { registerApplet, type AppletElement } from '../../lib/applet-registry.js';
+import { appletControlStyles, appletToggle } from '../../lib/applet-controls.js';
 import { appletEmpty, appletError, appletStateStyles } from '../mux-applets.js';
 import {
   fetchFiles,
@@ -86,7 +99,31 @@ export interface FilesRoot {
  * and it is the exact lie a fleet view is there to stop telling.
  */
 const PATH_KEY = 'muxterm.applet.files.path';
-const CHANGED_ONLY_KEY = 'muxterm.applet.files.changedOnly';
+const FILTER_KEY = 'muxterm.applet.files.filter';
+/** The one-toggle predecessor. Read once, on the way to FILTER_KEY. */
+const LEGACY_CHANGED_ONLY_KEY = 'muxterm.applet.files.changedOnly';
+
+/**
+ * What this applet is showing.
+ *
+ *   all        every entry in the current directory
+ *   changed    only what git has something to say about, in this directory
+ *   published  everything with a live public URL, FLAT, across directories
+ *
+ * WHAT `changed` MEANS, exactly, because a filter that is vague about it is
+ * worse than no filter: modified, staged (added), deleted, untracked, renamed
+ * and conflicted -- git's whole `status --porcelain` vocabulary, which is what
+ * internal/server/files_api.go already reports per entry.
+ *
+ * UNTRACKED IS INCLUDED, deliberately. A file you created five minutes ago and
+ * have not added yet is the single most likely thing you are looking for when
+ * you ask "what changed here", and it is the one git itself will happily let
+ * you lose. Excluding it would hide exactly the work the filter exists to
+ * surface.
+ */
+export type FilesFilter = 'all' | 'changed' | 'published';
+
+const FILTERS: readonly string[] = ['all', 'changed', 'published'];
 
 /** The stored directory, or null when nothing has been chosen yet. */
 function loadPath(): string | null {
@@ -107,18 +144,27 @@ function savePath(p: string): void {
   }
 }
 
-function loadChangedOnly(): boolean {
+/**
+ * The stored filter, migrating the boolean this control used to be.
+ *
+ * The legacy key is READ and not deleted: a browser that rolls back to the
+ * previous build should find its `changed only` toggle where it left it, and
+ * one abandoned key costs nothing.
+ */
+function loadFilter(): FilesFilter {
   try {
-    return localStorage.getItem(CHANGED_ONLY_KEY) === '1';
+    const stored = localStorage.getItem(FILTER_KEY);
+    if (stored !== null && FILTERS.includes(stored)) return stored as FilesFilter;
+    if (localStorage.getItem(LEGACY_CHANGED_ONLY_KEY) === '1') return 'changed';
   } catch {
-    /* private mode / storage disabled: the filter starts off */
+    /* private mode / storage disabled: the filter starts at 'all' */
   }
-  return false;
+  return 'all';
 }
 
-function saveChangedOnly(v: boolean): void {
+function saveFilter(v: FilesFilter): void {
   try {
-    localStorage.setItem(CHANGED_ONLY_KEY, v ? '1' : '0');
+    localStorage.setItem(FILTER_KEY, v);
   } catch {
     /* not sticky; not fatal */
   }
@@ -210,11 +256,8 @@ export class AppletFiles extends LitElement implements AppletElement {
   /** Deep-link target. Nothing navigates here yet; see updated(). */
   @property({ attribute: false }) target: string | null = null;
 
-  /**
-   * The rail's filter. Public because the RAIL reads it, and the rail is
-   * rendered by the host in the host's shadow root.
-   */
-  @state() changedOnly = loadChangedOnly();
+  /** What this applet is showing. Rendered, and changed, entirely in here. */
+  @state() filter: FilesFilter = loadFilter();
 
   @state() private _listing: FilesListing | null = null;
   @state() private _error = '';
@@ -229,6 +272,20 @@ export class AppletFiles extends LitElement implements AppletElement {
   // row has to know it is exposed, and the answer to "is this file public"
   // does not live in the directory listing.
   @state() private _pubs: Publication[] = [];
+  /**
+   * Why the publication LIST could not be read.
+   *
+   * Held separately from _pubError (which is about an action) because it is
+   * only ever shown in the `published` view, and there it is not optional: an
+   * empty list that is really a failed fetch says "nothing of yours is
+   * exposed", which is the one wrong answer this view must never give. In the
+   * directory views the same failure stays silent -- there it costs a row its
+   * decoration, not the user their answer.
+   */
+  @state() private _pubsError = '';
+  /** True once a list has actually landed, so 'none' is distinguishable from
+   * 'not asked yet'. */
+  @state() private _pubsLoaded = false;
   /** One sentence from the server when a publish or revoke was refused. */
   @state() private _pubError = '';
   /**
@@ -296,7 +353,9 @@ export class AppletFiles extends LitElement implements AppletElement {
     return super.createRenderRoot();
   }
 
-  static override styles = css`
+  static override styles = [
+    appletControlStyles,
+    css`
     *,
     *::before,
     *::after {
@@ -625,7 +684,138 @@ export class AppletFiles extends LitElement implements AppletElement {
       color: var(--ink-3);
       padding: var(--s-4) var(--s-1);
     }
-  `;
+
+    /* ── THE PUBLISHED LIST ────────────────────────────────────────────────
+       FLAT, and that is the whole design. Publications are scattered across
+       directories by nature -- one note in a worktree, one log in /tmp -- so a
+       tree of them is mostly empty scaffolding drawn to hold four rows. The
+       full path is on the row instead, dimmed except for the basename, which
+       is the only part anyone reads first.
+
+       ⛔ NO CARDS, NO SIDE BORDERS. Status is a letter in a fixed gutter, a
+       word in coloured INK, and at most a whole-row wash. Never colour alone:
+       every row says its status in a word as well as a mark, so it survives a
+       greyscale screenshot and a red-green eye alike. */
+    .pubbar {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: var(--s-2) var(--s-4);
+      padding: 0 var(--s-1) var(--s-4);
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      line-height: 1;
+      color: var(--ink-3);
+    }
+    .pubbar .n {
+      font-variant-numeric: tabular-nums;
+    }
+    .flat {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .prow {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: var(--s-2) var(--s-3);
+      width: 100%;
+      min-width: 0;
+      font-size: 12px;
+      line-height: 1.4;
+      padding: 4px var(--s-4);
+      border-radius: var(--r-ctl);
+    }
+    /* A publication that is not serving. A wash, not a slab with an edge. */
+    .prow.bad {
+      background: color-mix(in srgb, var(--fail) 10%, transparent);
+    }
+    .prow:hover {
+      background: var(--chrome-hover);
+    }
+    .prow.bad:hover {
+      background: color-mix(in srgb, var(--fail) 16%, transparent);
+    }
+    /* The gutter. Same width and idiom as the tree's status column, so the two
+       views read as the same applet. */
+    .pmark {
+      flex: none;
+      width: 14px;
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--chrome-accent);
+    }
+    .pmark.bad {
+      color: var(--fail);
+    }
+    .ppath {
+      min-width: 0;
+      flex: 1 1 22ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      direction: rtl;
+      text-align: left;
+    }
+    /* direction:rtl above keeps the BASENAME when a long path is ellipsised;
+       this puts the characters back in reading order. */
+    .ppath > span {
+      direction: ltr;
+      unicode-bidi: embed;
+    }
+    .ppath .dir {
+      color: var(--ink-3);
+    }
+    .ppath .base {
+      color: var(--ink-1);
+      font-weight: 600;
+    }
+    .prow.bad .ppath .base {
+      color: var(--ink-2);
+      text-decoration: line-through;
+      text-decoration-color: color-mix(in srgb, var(--fail) 55%, transparent);
+    }
+    .pmeta {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: var(--s-3);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .pword {
+      color: var(--chrome-accent);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .pword.bad {
+      color: var(--fail);
+    }
+    .pid,
+    .pleft {
+      color: var(--ink-3);
+    }
+    /* Why it is broken, in the server's own words, under the row it is about.
+       Indented to the gutter so it reads as belonging to the row above. */
+    .pwhy {
+      flex: 1 0 100%;
+      min-width: 0;
+      padding-left: calc(14px + var(--s-3));
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      line-height: var(--lh-tight);
+      color: var(--ink-2);
+      overflow-wrap: anywhere;
+    }
+  `,
+  ];
 
   // -------------------------------------------------------------------------
   // The inactive rule
@@ -805,15 +995,39 @@ export class AppletFiles extends LitElement implements AppletElement {
   };
 
   /**
-   * Called by the rail, which the HOST renders in the HOST's shadow root --
-   * hence public, and hence the event: the host has no other way to know the
-   * control it painted now says something different.
+   * Switch what this applet is showing.
+   *
+   * No event and nothing public to tell: the controls that call this are
+   * rendered by THIS element in THIS shadow root, so a reactive property is
+   * the whole update path.
+   *
+   * Arriving at `published` RE-READS the list, because the question that view
+   * answers -- "is any of it broken right now" -- is about this moment, and
+   * the answer is re-checked against disk by the server on every list.
    */
-  setChangedOnly(v: boolean): void {
-    if (this.changedOnly === v) return;
-    this.changedOnly = v;
-    saveChangedOnly(v);
-    this.dispatchEvent(new CustomEvent('applet-rail-changed', { bubbles: true, composed: true }));
+  setFilter(v: FilesFilter): void {
+    if (this.filter === v) return;
+    this.filter = v;
+    saveFilter(v);
+    if (v === 'published') void this._loadPubs();
+  }
+
+  /**
+   * The filter actually in force.
+   *
+   * `changed` needs git, and git is not always there -- a directory outside
+   * any worktree, a machine with no git, a status that failed. In that state
+   * the stored preference is LEFT ALONE (walk back into a worktree and it is
+   * still selected) but it does not filter, because a filter that hides every
+   * row while git had nothing to say looks broken and is indistinguishable
+   * from a clean tree. The control says so in words instead; see
+   * _renderControls.
+   */
+  private _effectiveFilter(): FilesFilter {
+    if (this.filter === 'changed' && this._listing !== null && !this._listing.gitAvailable) {
+      return 'all';
+    }
+    return this.filter;
   }
 
   private _onPickRoot = (e: Event): void => {
@@ -827,12 +1041,66 @@ export class AppletFiles extends LitElement implements AppletElement {
 
   override render(): TemplateResult {
     const l = this._listing;
+    const f = this._effectiveFilter();
     return html`
       <div class="body">
-        ${l ? this._renderHead(l) : nothing} ${this._renderPicker(l)}
-        ${this._pubError === '' ? nothing : html`<div class="puberr">${this._pubError}</div>`}
-        ${this._renderBody(l)}
+        ${this._renderControls(l)}
+        ${f === 'published'
+          ? html`
+              ${this._pubError === '' ? nothing : html`<div class="puberr">${this._pubError}</div>`}
+              ${this._renderPublished()}
+            `
+          : html`
+              ${l ? this._renderHead(l) : nothing} ${this._renderPicker(l)}
+              ${this._pubError === '' ? nothing : html`<div class="puberr">${this._pubError}</div>`}
+              ${this._renderBody(l, f)}
+            `}
       </div>
+    `;
+  }
+
+  /**
+   * THIS APPLET'S OWN CONTROLS, at the top of this applet's own body -- one
+   * choice over three, not two switches (see the file header).
+   *
+   * THE NON-REPOSITORY CASE IS THE INTERESTING ONE. Outside a worktree
+   * `changed` cannot mean anything, so it is DISABLED and the server's own
+   * sentence sits next to it. It is deliberately not hidden: a control that
+   * disappears looks like a feature that was never there, and a control that
+   * stays and filters to nothing looks broken. Present, off, and explained is
+   * the only one of the three that is informative.
+   */
+  private _renderControls(l: FilesListing | null): TemplateResult {
+    const noGit = l !== null && !l.gitAvailable;
+    const f = this._effectiveFilter();
+    return html`
+      <div class="controls" role="group" aria-label="What to show">
+        ${appletToggle({
+          label: 'all',
+          on: f === 'all',
+          title: 'Every entry in this directory',
+          onToggle: () => this.setFilter('all'),
+        })}
+        ${appletToggle({
+          label: 'changed',
+          on: f === 'changed',
+          disabled: noGit,
+          title: noGit
+            ? 'Needs a git worktree'
+            : 'Only what git has something to say about: modified, staged, deleted, untracked, renamed, conflicted',
+          onToggle: () => this.setFilter('changed'),
+        })}
+        ${appletToggle({
+          label: 'published',
+          on: f === 'published',
+          title: 'Everything with a live public URL right now, across every directory',
+          onToggle: () => this.setFilter('published'),
+        })}
+        ${noGit
+          ? html`<span class="ctl-why">${l?.gitError || 'not a git worktree'}</span>`
+          : nothing}
+      </div>
+      <div class="controls-rule"></div>
     `;
   }
 
@@ -894,11 +1162,11 @@ export class AppletFiles extends LitElement implements AppletElement {
     `;
   }
 
-  private _renderBody(l: FilesListing | null): TemplateResult {
+  private _renderBody(l: FilesListing | null, f: FilesFilter): TemplateResult {
     if (this._error !== '') return appletError(this._error, this._retry);
     if (!l) return html`<div class="hint">Reading&hellip;</div>`;
 
-    const rows = this.changedOnly ? l.entries.filter((e) => e.status !== '') : l.entries;
+    const rows = f === 'changed' ? l.entries.filter((e) => e.status !== '') : l.entries;
     // The ".." row is navigation, not content: it belongs above whatever the
     // directory turned out to hold, including nothing.
     const up =
@@ -926,16 +1194,23 @@ export class AppletFiles extends LitElement implements AppletElement {
   // -------------------------------------------------------------------------
 
   /**
-   * Refresh the publication list. Failure is DELIBERATELY SILENT for the list
-   * (a server too old to know the route, or a transient error, must not cost
-   * the user their file listing) but never for an action -- _publish and
-   * _revoke report in words.
+   * Refresh the publication list.
+   *
+   * Failure is recorded rather than thrown, and then treated differently by
+   * the two views: SILENT in a directory listing (a server too old to know the
+   * route, or a transient error, must not cost the user their files) and LOUD
+   * in the `published` view, where an empty list would otherwise be read as
+   * "nothing is exposed" -- see _pubsError.
    */
   private async _loadPubs(): Promise<void> {
     try {
       this._pubs = await fetchPublications();
-    } catch {
+      this._pubsError = '';
+    } catch (err) {
       this._pubs = [];
+      this._pubsError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this._pubsLoaded = true;
     }
   }
 
@@ -998,6 +1273,109 @@ export class AppletFiles extends LitElement implements AppletElement {
     } catch {
       this._pubError = `could not reach the clipboard from this page. The link is ${url}`;
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // The published view
+  // -------------------------------------------------------------------------
+
+  /**
+   * EVERYTHING EXPOSED RIGHT NOW, AS A FLAT LIST.
+   *
+   * The question this answers is "what have I got exposed right now, and is
+   * any of it broken", and it has to be answerable without leaving the applet.
+   * So a row carries the path, the link (copyable in one action), how long it
+   * keeps working, and its STATUS -- because a publication whose file was
+   * deleted, or replaced by an editor that writes-and-renames, is refusing to
+   * serve, and a row that looked fine would be the lie that matters most here.
+   *
+   * Broken rows sort FIRST. They are the reason to open this view.
+   *
+   * NOTHING HERE ASSUMES A PUBLICATION IS A SINGLE FILE. The server may grow
+   * other kinds; every field used below (path, url, status, seconds) is common
+   * to any of them, and the words avoid the noun entirely.
+   */
+  private _renderPublished(): TemplateResult {
+    if (this._pubsError !== '') {
+      return appletError(
+        `Could not read what is published: ${this._pubsError}`,
+        this._recheckPubs,
+      );
+    }
+    if (!this._pubsLoaded) return html`<div class="hint">Reading&hellip;</div>`;
+    if (this._pubs.length === 0) {
+      return appletEmpty('Nothing is published right now.');
+    }
+
+    // Broken first, then the shortest-lived, then by path so the order is
+    // total and two rows cannot swap places between re-checks.
+    const rows = [...this._pubs].sort((a, b) => {
+      const ab = a.status === 'ok' ? 1 : 0;
+      const bb = b.status === 'ok' ? 1 : 0;
+      if (ab !== bb) return ab - bb;
+      if (a.secondsLeft !== b.secondsLeft) return a.secondsLeft - b.secondsLeft;
+      return a.path.localeCompare(b.path);
+    });
+    const broken = rows.reduce((n, p) => (p.status === 'ok' ? n : n + 1), 0);
+
+    return html`
+      <div class="pubbar">
+        <span class="n">${rows.length} published</span>
+        ${broken > 0 ? html`<span class="n">${broken} not serving</span>` : nothing}
+        <button
+          type="button"
+          class="ctl"
+          title="Re-check every publication against disk"
+          @click="${this._recheckPubs}"
+        >re-check</button>
+      </div>
+      <div class="flat">${rows.map((p) => this._renderPubRow(p))}</div>
+    `;
+  }
+
+  private _recheckPubs = (): void => {
+    void this._loadPubs();
+  };
+
+  private _renderPubRow(p: Publication): TemplateResult {
+    const bad = p.status !== 'ok';
+    const busy = this._busy === p.path;
+    const word = statusWord(p);
+    const left = bad ? '' : formatTimeLeft(p.secondsLeft);
+    const cut = p.path.lastIndexOf('/');
+    const dir = cut > 0 ? p.path.slice(0, cut + 1) : '';
+    const base = cut >= 0 ? p.path.slice(cut + 1) : p.path;
+    const url = absoluteURL(p);
+    return html`
+      <div class="${bad ? 'prow bad' : 'prow'}">
+        <span class="${bad ? 'pmark bad' : 'pmark'}" aria-hidden="true">${bad ? '!' : '\u2197'}</span>
+        <span class="ppath" title="${p.path}"
+          ><span class="dir">${dir}</span><span class="base">${base}</span></span
+        >
+        <span class="pmeta">
+          <span class="${bad ? 'pword bad' : 'pword'}">${word}</span>
+          ${left === '' ? nothing : html`<span class="pleft" title="Time left on this link">${left}</span>`}
+          ${p.url === '' ? nothing : html`<span class="pid" title="${url}">${p.url}</span>`}
+          <button
+            type="button"
+            class="act"
+            ?disabled="${busy || url === ''}"
+            title="Copy the public link"
+            @click="${() => void this._copy(p)}"
+          >${this._copied === p.path ? 'copied' : 'copy link'}</button>
+          <button
+            type="button"
+            class="act warn"
+            ?disabled="${busy}"
+            title="Stop serving this link. It cannot recall anything already read."
+            @click="${() => void this._revoke(p)}"
+          >revoke</button>
+        </span>
+        ${bad && p.statusDetail !== ''
+          ? html`<span class="pwhy">${p.statusDetail}</span>`
+          : nothing}
+      </div>
+    `;
   }
 
   /**
@@ -1112,9 +1490,8 @@ export class AppletFiles extends LitElement implements AppletElement {
 }
 
 /**
- * The manifest. `rail` is one toggle -- `changed only` -- rendered into the
- * HOST's shadow root with the HOST's `.toggle` styles, calling back into this
- * element. Nothing destructive lives here (D3.9).
+ * The manifest: a tab, and nothing about what is under it. all|changed|
+ * published is rendered by the element itself, in _renderControls().
  */
 registerApplet({
   id: 'files',
@@ -1122,18 +1499,6 @@ registerApplet({
   icon: Folder,
   element: 'applet-files',
   order: 20,
-  rail: (el: AppletElement): TemplateResult => {
-    const f = el as AppletFiles;
-    return html`
-      <button
-        type="button"
-        class="${f.changedOnly ? 'toggle on' : 'toggle'}"
-        aria-pressed="${f.changedOnly ? 'true' : 'false'}"
-        title="Show only what git has something to say about"
-        @click="${() => f.setChangedOnly(!f.changedOnly)}"
-      >changed only</button>
-    `;
-  },
 });
 
 declare global {
