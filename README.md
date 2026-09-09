@@ -25,3 +25,16 @@ code; `main` is unaffected.
 | file | verdict it proves |
 |---|---|
 | `F1-two-prs-one-lane.png` | one lane opened two pull requests, in two repositories; both are collected, both name that lane |
+
+---
+
+## Verified against `origin/main` after the merge
+
+Everything above was captured from the PR branch. These two were captured from
+a build of **`origin/main` at `3226495`**, which contains merge `c8097a4` — i.e.
+the shipped code, not a proposal.
+
+| file | shows |
+|---|---|
+| `M1-main-applet.png` | three PRs collected from three lanes in two repositories, after every lane's workspace was closed; no directory error anywhere |
+| `M2-main-dismiss-reload.png` | `#112` dismissed, page reloaded, still dismissed — server-side, `dismissed: ['kenotron-ms/muxterm#112']` on disk |
