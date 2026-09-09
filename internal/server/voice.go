@@ -137,7 +137,7 @@ func (s *Server) registerVoiceRoutes(cfg config.VoiceConfig, protect func(http.H
 		log.Printf("voice: realtime voice is enabled but not usable, so it is switched off: %v", err)
 		return
 	}
-	mgr, err := voice.NewManager(cfg, &voiceBridge{relay: s.hub.cos})
+	mgr, err := voice.NewManager(cfg, &voiceBridge{relay: s.hub.cos}, voice.DefaultKeyPath())
 	if err != nil {
 		log.Printf("voice: realtime voice could not start, so it is switched off: %v", err)
 		return

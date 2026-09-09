@@ -94,6 +94,19 @@ type VoiceConfig struct {
 	// VoiceAuthAPIKey. The key's VALUE is never stored here.
 	APIKeyEnv string `toml:"api_key_env,omitempty" json:"api_key_env"`
 
+	// APIKeyStored says the key for VoiceAuthAPIKey lives in muxterm's
+	// owner-only credential file (internal/secretfile, 0600, alongside
+	// this config) rather than in an environment variable. It is what the
+	// settings UI sets when someone types a key into the browser.
+	//
+	// This is a FLAG, not a key: the value is never in this file. Its
+	// whole job is to answer "where does the key come from" explicitly,
+	// because the alternative -- try the env var, fall back to the file --
+	// is a guess, and this section's one hard rule is that credential
+	// sourcing is never guessed. api_key_env still wins when both are set,
+	// so a config that worked before this field existed still works.
+	APIKeyStored bool `toml:"api_key_stored,omitempty" json:"api_key_stored"`
+
 	// Voice is the spoken voice, e.g. "marin" or "alloy". Empty means the
 	// model's own default.
 	Voice string `toml:"voice,omitempty" json:"voice"`
@@ -139,10 +152,30 @@ func (v VoiceConfig) Validate() error {
 	default:
 		return fmt.Errorf("config: [voice] auth_mode %q is not recognized; use %q or %q", v.AuthMode, VoiceAuthEntra, VoiceAuthAPIKey)
 	}
-	if v.AuthMode == VoiceAuthAPIKey && v.APIKeyEnv == "" {
-		return errors.New(`config: [voice] auth_mode = "api_key" requires api_key_env naming the environment variable that holds the key`)
+	if v.AuthMode == VoiceAuthAPIKey && v.APIKeyEnv == "" && !v.APIKeyStored {
+		return errors.New(`config: [voice] auth_mode = "api_key" requires either api_key_env naming the environment variable that holds the key, or api_key_stored = true to use the key saved through settings`)
 	}
 	return nil
+}
+
+// KeySource names where an api_key-mode credential is read from, for a
+// caller that has to say so out loud. Never returns the key.
+//
+// The precedence encoded here is the one Validate accepts and the one
+// internal/voice.NewCredential implements; they must agree, so it lives in
+// one place.
+func (v VoiceConfig) KeySource() string {
+	if v.AuthMode != VoiceAuthAPIKey {
+		return ""
+	}
+	switch {
+	case v.APIKeyEnv != "":
+		return "env"
+	case v.APIKeyStored:
+		return "stored"
+	default:
+		return "none"
+	}
 }
 
 // Resolved returns v with every optional field filled in. Callers use this

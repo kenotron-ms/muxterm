@@ -42,11 +42,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
+	"github.com/kenotron-ms/muxterm/internal/secretfile"
 )
 
 // A Credential is the long-lived authentication this process holds. It never
@@ -63,20 +65,70 @@ type Credential interface {
 	Mode() string
 }
 
+// DefaultKeyPath is where a key saved through settings lives:
+// $XDG_CONFIG_HOME/muxterm/voice_api_key, falling back to
+// $HOME/.config/muxterm/voice_api_key.
+//
+// A separate file from config.toml, and separate from the Anthropic key, so
+// that its 0600 mode is a property of the credential rather than something
+// the config writer has to remember. Resolved at call time so an isolated
+// XDG_CONFIG_HOME actually isolates it.
+func DefaultKeyPath() string {
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		base = filepath.Join(os.Getenv("HOME"), ".config")
+	}
+	return filepath.Join(base, "muxterm", "voice_api_key")
+}
+
 // NewCredential builds the credential named by cfg.AuthMode.
+//
+// keyPath is the owner-only file a settings-saved key lives in; pass
+// DefaultKeyPath() unless isolating. It is consulted only when the config
+// says to (api_key_stored), never as a silent fallback -- see the precedence
+// note on VoiceConfig.APIKeyStored.
 //
 // cfg must already have passed VoiceConfig.Validate; an unrecognized mode
 // here is a programming error rather than a user error and is reported as
 // such.
-func NewCredential(cfg config.VoiceConfig) (Credential, error) {
+func NewCredential(cfg config.VoiceConfig, keyPath string) (Credential, error) {
 	switch cfg.AuthMode {
 	case config.VoiceAuthEntra:
 		return &entraCredential{scope: cfg.Resolved().EntraScope}, nil
 	case config.VoiceAuthAPIKey:
-		return &envCredential{env: cfg.APIKeyEnv}, nil
+		switch cfg.KeySource() {
+		case "env":
+			return &envCredential{env: cfg.APIKeyEnv}, nil
+		case "stored":
+			return &storedCredential{store: secretfile.New(keyPath)}, nil
+		default:
+			return nil, errors.New(`voice: auth_mode is "api_key" but neither api_key_env nor api_key_stored says where the key comes from`)
+		}
 	default:
 		return nil, fmt.Errorf("voice: unsupported auth_mode %q", cfg.AuthMode)
 	}
+}
+
+// storedCredential reads the key from muxterm's owner-only credential file.
+//
+// Read per call for the same reason envCredential is: a value that is never
+// held in a field is a value that cannot be dumped by a struct printf, and
+// replacing a key through settings takes effect on the next mint with no
+// restart.
+type storedCredential struct{ store *secretfile.Store }
+
+func (c *storedCredential) Mode() string { return config.VoiceAuthAPIKey }
+
+func (c *storedCredential) Token(context.Context) (string, error) {
+	v, err := c.store.Load()
+	if err != nil {
+		// secretfile errors carry the path, never the contents.
+		return "", fmt.Errorf("voice: reading the saved key failed: %w", err)
+	}
+	if v == "" {
+		return "", errors.New("voice: auth_mode is api_key with api_key_stored = true, but no key is saved; add one in Settings > Voice")
+	}
+	return v, nil
 }
 
 // envCredential reads a static key from the environment at every use.

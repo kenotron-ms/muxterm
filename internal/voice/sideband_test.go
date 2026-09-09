@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -155,7 +156,10 @@ func (f *fakeRealtime) client(t *testing.T, syncTimeout time.Duration) *Client {
 		SyncToolTimeout: syncTimeout,
 	}
 	t.Setenv("TEST_VOICE_KEY", "not-a-real-key")
-	cred, err := NewCredential(cfg)
+	// api_key_env mode reads the environment, so the stored-key path is
+	// never touched; it is a temp dir anyway so a bug that DID touch it
+	// cannot reach a real credential file.
+	cred, err := NewCredential(cfg, filepath.Join(t.TempDir(), "voice_api_key"))
 	if err != nil {
 		t.Fatalf("NewCredential: %v", err)
 	}
@@ -1064,7 +1068,7 @@ func TestEndRemovesTheSessionFromTheManagerAndTellsTheBrowser(t *testing.T) {
 	}
 	t.Setenv("TEST_VOICE_KEY", "not-a-real-key")
 
-	mgr, err := NewManager(cfg, &fakeBridge{})
+	mgr, err := NewManager(cfg, &fakeBridge{}, filepath.Join(t.TempDir(), "voice_api_key"))
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
