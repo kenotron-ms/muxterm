@@ -46,3 +46,11 @@ the shipped code, not a proposal.
 | file | shows |
 |---|---|
 | `W1-narrow-pane-collected.png` | a lane whose `gh pr create` URL hard-wrapped in a 40-column pane, now collected. On `main` this row does not exist at all. |
+
+---
+
+## Defect: the applet waited on GitHub before painting anything it already had
+
+| file | shows |
+|---|---|
+| `S1-renders-before-github.png` | twelve collected rows painted in 95 ms with a deliberately slow `gh`. On `main` the same GET takes 36.03 s and the applet shows "Reading..." for all of it. |
