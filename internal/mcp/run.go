@@ -845,6 +845,28 @@ func registerAllTools(
 // require sessiond to be running.
 // registerTriggerTools registers the four trigger tools.
 //
+// THREE OF THE FOUR ARE WITHHELD INSIDE A PANE, on the same principle as
+// close_workspace and close_pane above and for a sharper reason.
+//
+// A lane is an autonomous agent with a shell. A lane that can call
+// create_trigger can arrange for MORE LANES, on a schedule, indefinitely, with
+// no human ever having asked -- which is self-perpetuating unattended work, the
+// exact thing every safeguard in this feature exists to bound. delete_trigger
+// destroys a human's configured automation, and set_trigger_enabled can re-arm
+// one a human deliberately turned off, so neither is a capability a lane should
+// hold either.
+//
+// list_triggers stays. It destroys nothing, creates nothing, and answers a
+// question a lane has a real reason to ask -- "is something else about to fire
+// into this repository while I work in it". The guard withholds REACH THAT
+// STARTS OR STOPS THINGS, not reach.
+//
+// The chief of staff keeps all four, because it is a sidecar of `muxterm serve`
+// rather than a pane process (insidePane() is false for it) -- the same real
+// coupling spawn_lane's registration comment names. Managing the human's
+// automations on their behalf is its job; doing so has a charter rule attached
+// (propose, do not install) rather than a missing tool.
+//
 // LOCAL ONLY, deliberately. Every one of these is registered through
 // localOnly, so `machine: "boxb"` is refused rather than quietly managing
 // triggers on a remote daemon. Remote triggers are a real want and a real
@@ -860,7 +882,16 @@ func registerTriggerTools(
 		"work, and creating it on a machine you are not looking at is a follow-on, not this tool. " +
 		"Run this against that machine's own muxterm"
 
-	srv.Register(
+	// register unless this server runs inside a pane. See the header comment:
+	// a lane may READ the trigger list and may not start, stop or delete one.
+	manager := func(name, desc string, schema map[string]any, fn ToolFunc) {
+		if insidePane() {
+			return
+		}
+		srv.Register(name, desc, schema, fn)
+	}
+
+	manager(
 		"create_trigger",
 		"create an automation that SPAWNS A LANE with no human present -- on a cron schedule, or when a "+
 			"watched path changes. kind is "+triggerKindsDoc+". A schedule trigger needs `schedule`: a standard "+
@@ -936,7 +967,7 @@ func registerTriggerTools(
 		}),
 	)
 
-	srv.Register(
+	manager(
 		"set_trigger_enabled",
 		"THE STOP BUTTON: arm or stop a trigger by id, effective immediately -- a disabled schedule stops "+
 			"being compared against the clock and a disabled watch drops its filesystem watches within a "+
@@ -957,7 +988,7 @@ func registerTriggerTools(
 		}),
 	)
 
-	srv.Register(
+	manager(
 		"delete_trigger",
 		"remove a trigger by id and tear down its watches. Its fire history goes with it, so prefer "+
 			"set_trigger_enabled(false) when you may want to know later what it did. Lanes it already "+
