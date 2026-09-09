@@ -16,6 +16,12 @@ import { voiceInputController } from './lib/voice-input-controller.js';
 import { voiceSessionController } from './lib/voice-session-controller.js';
 import { requestArtifactOpen } from './lib/artifact-open.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
+import {
+  EMPTY_CREDENTIALS_REPORT,
+  fetchCredentials,
+  type CredentialsReport,
+} from './lib/credentials.js';
+import type { SettingsSection } from './components/settings-surface.js';
 import { registerServiceWorker } from './lib/sw.js';
 
 // Inject @font-face for the server-bundled Nerd Font as early as possible so
@@ -511,6 +517,64 @@ export class MuxApp extends LitElement {
       min-height: 0;
     }
 
+    /* ── "lanes cannot run here" ────────────────────────────────────────────
+       One line across the top, in the flow, above everything. NOT a modal:
+       plenty of people install muxterm for terminals and never spawn an
+       agent, and a box in front of the whole app would be a toll gate on
+       their way to a shell.
+
+       No card, no panel, no bolded edge. A marker in a fixed gutter, colour
+       on that one character, and the sentence itself carrying the meaning --
+       so it reads correctly in both palettes, in monochrome, and at phone
+       width, where it wraps into the second column instead of overflowing. */
+    .cred-notice {
+      display: grid;
+      grid-template-columns: 1.4em 1fr auto;
+      column-gap: 6px;
+      align-items: baseline;
+      padding: 7px 12px;
+      background: var(--chrome-bg, transparent);
+      border-bottom: 1px solid var(--chrome-border, #333);
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: var(--mux-fg);
+    }
+
+    .cred-notice-mark {
+      text-align: center;
+      color: var(--mux-error, #e05252);
+    }
+
+    .cred-notice-actions {
+      display: flex;
+      gap: 10px;
+      white-space: nowrap;
+    }
+
+    .cred-notice button {
+      padding: 0;
+      background: none;
+      border: none;
+      font: inherit;
+      color: var(--chrome-text-dim);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    .cred-notice button:hover {
+      color: var(--chrome-text-bright);
+    }
+
+    @media (max-width: 560px) {
+      .cred-notice {
+        grid-template-columns: 1.4em 1fr;
+      }
+      .cred-notice-actions {
+        grid-column: 2;
+        margin-top: 4px;
+      }
+    }
+
     .main-pane {
       flex: 1;
       display: flex;
@@ -685,6 +749,29 @@ export class MuxApp extends LitElement {
 
   @state()
   private _overlayPanel: 'settings' | 'shortcuts' | 'about' | 'connect' | null = null;
+
+  /** Which settings section to open on. Cleared when the overlay closes. */
+  @state()
+  private _settingsSection: SettingsSection | '' = '';
+
+  /**
+   * What this machine can and cannot do with agent credentials.
+   *
+   * Fetched over HTTP for the same reason aiStatus is: the keys behind it
+   * deliberately never enter the config pipeline that is broadcast to every
+   * tab and every MCP agent.
+   */
+  @state()
+  private _credentials: CredentialsReport = EMPTY_CREDENTIALS_REPORT;
+
+  /**
+   * Set once the user dismisses the credential notice. Per TAB and per LOAD,
+   * not persisted: a machine that cannot run lanes is worth mentioning again
+   * next time, and a dismissal that outlives the session is how a real
+   * blocker becomes permanently invisible.
+   */
+  @state()
+  private _credNoticeDismissed = false;
 
   @state()
   private _layoutMode: 'wide' | 'narrow' = currentLayoutMode();
@@ -907,6 +994,10 @@ export class MuxApp extends LitElement {
     // rather than carried on the config frame, because the key that backs it
     // deliberately never enters the config pipeline.
     void fetchAIStatus().then((s) => store.setAIStatus(s));
+    // The same question for LANES: can an agent session actually start on
+    // this machine? Answered before anyone spawns one, not in the scrollback
+    // of one that already died.
+    void fetchCredentials().then((r) => { this._credentials = r; });
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
@@ -1488,6 +1579,30 @@ export class MuxApp extends LitElement {
     this._split = null;
   }
 
+  /**
+   * The one line that would have saved an evening.
+   *
+   * It appears only when a lane launched right now would fail, and it says
+   * WHICH failure it is: no credential at all, or a credential the provider
+   * rejected. "Present but rejected" is never abbreviated to a red dot,
+   * because a red dot is what a person ignores and a sentence is what they
+   * act on.
+   */
+  private _renderCredentialNotice() {
+    const c = this._credentials;
+    if (!c.blocked || this._credNoticeDismissed) return '';
+    return html`
+      <div class="cred-notice" role="status">
+        <span class="cred-notice-mark" aria-hidden="true">!</span>
+        <span>${c.blockedReason}</span>
+        <span class="cred-notice-actions">
+          <button @click="${this._openCredentialSettings}">Set up</button>
+          <button @click="${() => { this._credNoticeDismissed = true; }}">Dismiss</button>
+        </span>
+      </div>
+    `;
+  }
+
   render() {
     // Exclude provisional overlay panes (negative IDs) from layout decisions.
     // They have no terminal and should not render as blank tiles.
@@ -1506,6 +1621,7 @@ export class MuxApp extends LitElement {
         @fleet-toggle="${this._onFleetToggle}"
         @voice-transcript="${this._onVoiceTranscript}"
       ></mux-title-bar>` : ''}
+      ${this._renderCredentialNotice()}
       <div class="content-area">
         ${isWide ? html`
           <mux-sidebar
@@ -1707,10 +1823,12 @@ export class MuxApp extends LitElement {
                 <mux-settings-surface
                   .config="${store.config}"
                   .aiStatus="${store.aiStatus}"
+                  .section="${this._settingsSection}"
                   serverAddr="${window.location.host}"
                   @close="${this._closeOverlayPanel}"
                   @config-change="${this._onConfigChange}"
                   @ai-status-change="${this._onAIStatusChange}"
+                  @credentials-change="${this._onCredentialsChange}"
                 ></mux-settings-surface>
               ` : this._overlayPanel === 'shortcuts' ? html`
                 <div class="info-panel">
@@ -2522,6 +2640,7 @@ export class MuxApp extends LitElement {
 
   private _closeOverlayPanel = (): void => {
     this._overlayPanel = null;
+    this._settingsSection = '';
   };
 
   /**
@@ -2578,6 +2697,19 @@ export class MuxApp extends LitElement {
   private _onAIStatusChange = (e: Event): void => {
     const { status } = (e as CustomEvent<{ status: AIStatus }>).detail;
     store.setAIStatus(status);
+  };
+
+  /** The settings surface is the only thing that changes credentials, so it
+   *  is the only thing that reports them. No polling, no second opinion. */
+  private _onCredentialsChange = (e: Event): void => {
+    const { report } = (e as CustomEvent<{ report: CredentialsReport }>).detail;
+    this._credentials = report;
+    if (!report.blocked) this._credNoticeDismissed = false;
+  };
+
+  private _openCredentialSettings = (): void => {
+    this._settingsSection = 'agents';
+    this._overlayPanel = 'settings';
   };
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {

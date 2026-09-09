@@ -6,6 +6,12 @@
 //
 // The API key is write-only across the wire: it is sent by saveAIKey and never
 // returned by any endpoint, so nothing in this module ever holds or caches it.
+//
+// AIStatus carried a keyHint -- the last four characters of the stored key --
+// until the credential-onboarding change. It was dropped rather than kept for
+// symmetry: the same stored key now backs lane credentials, whose whole
+// contract is that no GET returns any part of a secret, and a last-four hint
+// on one route makes that contract false everywhere.
 
 import { apiPath } from './base-path.js';
 
@@ -14,14 +20,11 @@ export type AISource = 'settings' | 'env' | 'none';
 export interface AIStatus {
   enabled: boolean;
   source: AISource;
-  /** Last 4 characters of the stored key, e.g. "…a1b2". Empty when disabled. */
-  keyHint: string;
 }
 
 export const DEFAULT_AI_STATUS: AIStatus = {
   enabled: false,
   source: 'none',
-  keyHint: '',
 };
 
 /** Narrow untrusted JSON into an AIStatus, defaulting anything unexpected. */
@@ -34,7 +37,6 @@ export function parseAIStatus(raw: unknown): AIStatus {
   return {
     enabled: r['enabled'] === true,
     source: source === 'settings' || source === 'env' ? source : 'none',
-    keyHint: typeof r['keyHint'] === 'string' ? r['keyHint'] : '',
   };
 }
 

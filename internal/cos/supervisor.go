@@ -188,6 +188,20 @@ type Config struct {
 	// SubscriberDepth is the default per-subscriber buffer (0 =
 	// DefaultSubscriberDepth).
 	SubscriberDepth int
+
+	// ExtraEnv contributes additional NAME=value assignments to each sidecar
+	// incarnation, appended after the inherited environment so they win.
+	//
+	// A FUNCTION, CALLED AT EVERY SPAWN, and that is the whole point. The
+	// chief of staff is an amplifier session like any lane, so it needs the
+	// same provider credential; and on a fresh machine the credential does
+	// not exist yet when this supervisor is constructed. Resolving it per
+	// spawn means a key saved in the browser reaches the next incarnation --
+	// including the one the backoff loop was about to start anyway -- with
+	// nothing having to be restarted by hand.
+	//
+	// Values are never logged here or anywhere below; see runOnce.
+	ExtraEnv func() []string
 }
 
 // Supervisor owns the sidecar process: it locates an interpreter, spawns the
@@ -756,6 +770,52 @@ func (s *Supervisor) waitExit(d time.Duration) bool {
 	}
 }
 
+// Respawn asks the CURRENT sidecar incarnation to exit so the supervise loop
+// replaces it, and reports whether there was one to ask.
+//
+// This is how a credential saved in the browser reaches a chief of staff that
+// is ALREADY RUNNING. amplifier reads its key from the environment its process
+// was started with, so a sidecar spawned before the save is holding the old
+// answer -- or none -- and will keep failing every turn no matter what is on
+// disk. Only a new process can pick the new key up.
+//
+// It deliberately does NOT tear the Supervisor down. Close() ends the broker,
+// which would drop every subscribed browser mid-conversation; signalling the
+// child instead lets the existing supervise loop do exactly what it does for
+// any other sidecar exit -- restart it, with the new environment from
+// Config.ExtraEnv -- while every subscription, and the turn queue, stay
+// attached. The user sees the chief of staff reconnect, not the page break.
+//
+// Returns false when nothing is running: either the sidecar was never started
+// (the next spawn picks the credential up on its own, so there is nothing to
+// do) or the supervisor has given up permanently, which is the one case a
+// caller must report to the user instead of fixing.
+func (s *Supervisor) Respawn() bool {
+	s.mu.Lock()
+	running := s.running
+	cmd := s.cmd
+	s.mu.Unlock()
+	if !running || cmd == nil || cmd.Process == nil {
+		return false
+	}
+	s.cfg.Logf("cos: respawning sidecar to pick up new credentials")
+	s.signal(syscall.SIGTERM)
+	return true
+}
+
+// Failed reports whether the supervisor has stopped for good -- it exhausted
+// its early-failure budget, or discovery failed at Start. A caller that wanted
+// a respawn and finds this true must say a restart is needed rather than
+// pretending it fixed something.
+func (s *Supervisor) Failed() bool {
+	select {
+	case <-s.deadCh:
+		return true
+	default:
+		return false
+	}
+}
+
 // signal delivers sig to the sidecar process if one is running.
 func (s *Supervisor) signal(sig os.Signal) {
 	s.mu.Lock()
@@ -883,6 +943,27 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	// whole events in libc until the buffer filled, turning a token stream
 	// into one late burst and making a mid-turn crash lose everything.
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=utf-8")
+	// Credentials for the session this sidecar is about to open, resolved NOW
+	// rather than at construction -- see Config.ExtraEnv. Appended last, so
+	// they beat anything inherited, which is what makes a stored key override
+	// a stale one in the environment this server was started with.
+	//
+	// NAMES are logged, values never. The same rule as
+	// internal/sessiond/lane_env.go, for the same reason: this is the other
+	// consumer of the one store, and a log line is the easiest place for a
+	// secret to escape.
+	if s.cfg.ExtraEnv != nil {
+		if extra := s.cfg.ExtraEnv(); len(extra) > 0 {
+			cmd.Env = append(cmd.Env, extra...)
+			names := make([]string, 0, len(extra))
+			for _, assignment := range extra {
+				if i := strings.IndexByte(assignment, '='); i > 0 {
+					names = append(names, assignment[:i])
+				}
+			}
+			s.cfg.Logf("cos: sidecar starts with muxterm-stored credentials: %v", names)
+		}
+	}
 	// Graceful first: a cancelled context sends SIGTERM, and WaitDelay is what
 	// escalates to SIGKILL five seconds later if the sidecar ignores it.
 	//

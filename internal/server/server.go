@@ -193,6 +193,23 @@ func New(cfg Config) *Server {
 	}
 	s.ai = ai.NewManager(aiKeyPath)
 
+	// ONE STORE, BOTH CONSUMERS. sessiond injects these into every lane it
+	// spawns (internal/sessiond/lane_env.go); this is the other half -- the
+	// chief-of-staff sidecar, which is an amplifier session exactly like a
+	// lane and was until now the only agent muxterm starts that could not see
+	// its own credentials. Two stores, or one store with one consumer, is how
+	// the copy nobody re-checks goes stale.
+	if s.hub != nil && s.hub.cos != nil {
+		s.hub.cos.setExtraEnv(s.ai.LaneEnv)
+	}
+
+	// Check what this machine has, once, at startup -- one free model-list
+	// GET per provider that has a credential, none at all for a machine that
+	// has none. This is the difference between a stale key being visible on
+	// screen before anyone spawns anything, and being visible only in the
+	// scrollback of a lane that already died.
+	s.ai.VerifyAllInBackground()
+
 	// The collected pull requests, loaded from disk at construction so the
 	// first GET after a restart answers from the store rather than from an
 	// empty list it would then have to rebuild. Both paths are XDG-derived
@@ -267,6 +284,17 @@ func New(cfg Config) *Server {
 	s.mux.Handle("PUT /api/ai/key", protect(http.HandlerFunc(s.handleAIPutKey)))
 	s.mux.Handle("DELETE /api/ai/key", protect(http.HandlerFunc(s.handleAIDeleteKey)))
 	s.mux.Handle("POST /api/ai/ping", protect(http.HandlerFunc(s.handleAIPing)))
+
+	// Model-provider credentials for LANES. Same store as /api/ai above --
+	// there is one credential store in this binary -- and the same write-only
+	// posture: a key goes in, and only whether-it-is-set comes out.
+	s.mux.Handle("GET /api/credentials", protect(http.HandlerFunc(s.handleCredentials)))
+	s.mux.Handle("PUT /api/credentials/{provider}", protect(http.HandlerFunc(s.handleCredentialsPut)))
+	s.mux.Handle("DELETE /api/credentials/{provider}", protect(http.HandlerFunc(s.handleCredentialsDelete)))
+	s.mux.Handle("POST /api/credentials/{provider}/check", protect(http.HandlerFunc(s.handleCredentialsCheck)))
+	// Explicit, never implicit: writing another tool's file happens when a
+	// user asks for it. See handleCredentialsWriteAmplifier.
+	s.mux.Handle("POST /api/credentials/{provider}/write-amplifier", protect(http.HandlerFunc(s.handleCredentialsWriteAmplifier)))
 
 	// Opt-in realtime voice. Registered only when [voice] is enabled and
 	// valid -- see internal/server/voice.go.

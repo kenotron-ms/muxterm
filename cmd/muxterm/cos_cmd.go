@@ -17,6 +17,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
+	"github.com/kenotron-ms/muxterm/internal/ai"
 	"github.com/kenotron-ms/muxterm/internal/cos"
 )
 
@@ -136,6 +137,12 @@ func runCos(args []string) error {
 	}
 
 	logger := newCosLogger(*verbose)
+	// The same one credential the server injects (internal/server/server.go)
+	// and sessiond injects into every lane. Without it, `muxterm cos` on a
+	// freshly onboarded machine would be the one chief of staff that could
+	// not see the key the browser just saved -- the same "the copy nobody
+	// re-checked went stale" failure, reached by a different door.
+	credentials := ai.NewManager(ai.DefaultKeyPath())
 	sup := cos.New(cos.Config{
 		SessionID: *sessionID,
 		Bundle:    *bundle,
@@ -144,6 +151,7 @@ func runCos(args []string) error {
 		Python:    *python,
 		Script:    *sidecar,
 		Logf:      logger.Printf,
+		ExtraEnv:  credentials.LaneEnv,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
