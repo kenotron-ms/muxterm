@@ -35,6 +35,11 @@
 
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
+    <!-- Android Auto projection: declared optional so the phone-only APK still
+         installs on devices/emulators with no car service at all. -->
+    <uses-feature android:name="android.hardware.type.automotive" android:required="false" />
+    <uses-feature android:name="android.software.car.templates_host" android:required="false" />
+
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
@@ -43,6 +48,11 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.Muxterm">
+
+        <!-- Android Auto host discovery. -->
+        <meta-data android:name="androidx.car.app.minCarApiLevel" android:value="6" />
+        <meta-data android:name="com.google.android.gms.car.application"
+                   android:resource="@xml/automotive_app_desc" />
 
         <activity
             android:name=".MainActivity"
@@ -64,6 +74,22 @@
             android:name=".VoiceSessionService"
             android:exported="false"
             android:foregroundServiceType="microphone|mediaPlayback" />
+
+        <service
+            android:name=".car.MuxtermCarAppService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <!-- Of the stable, non-experimental Car App Library categories -
+                     NAVIGATION, POI, IOT, WEATHER - IOT is the only one that fits
+                     a status list ("things happening elsewhere"); the others all
+                     assume a map or a forecast. MEDIA/MESSAGING/CALLING exist but
+                     are experimental and restricted to internal/closed test
+                     tracks, so they are not an option here. IOT requires car API
+                     level 6, hence the minCarApiLevel meta-data above. -->
+                <category android:name="androidx.car.app.category.IOT" />
+            </intent-filter>
+        </service>
 
     </application>
 </manifest>

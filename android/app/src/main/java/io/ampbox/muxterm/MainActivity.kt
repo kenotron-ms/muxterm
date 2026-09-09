@@ -2,7 +2,6 @@ package io.ampbox.muxterm
 
 import android.Manifest
 import android.app.AlertDialog
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -38,8 +37,6 @@ class MainActivity : android.app.Activity() {
 
     companion object {
         const val TAG = "muxterm"
-        private const val PREFS = "muxterm_wrapper"
-        private const val KEY_URL = "url"
         private const val REQ_STARTUP_PERMS = 4002
 
         /** Origin the wrapper is currently pointed at, e.g. "https://muxterm.ampbox.io". */
@@ -64,10 +61,10 @@ class MainActivity : android.app.Activity() {
 
         // Allow `adb shell am start -n io.ampbox.muxterm/.MainActivity -e url https://host`
         // to repoint the wrapper without a rebuild.
-        intent?.getStringExtra("url")?.let { saveUrl(it) }
+        intent?.getStringExtra("url")?.let { UrlResolver.saveUrl(this, it) }
 
-        currentUrl = resolveUrl()
-        origin = originOf(currentUrl)
+        currentUrl = UrlResolver.resolveUrl(this)
+        origin = UrlResolver.originOf(currentUrl)
 
         root = FrameLayout(this)
         setContentView(
@@ -213,11 +210,11 @@ class MainActivity : android.app.Activity() {
             }
 
             override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
-                liveOrigin = originOf(url)
+                liveOrigin = UrlResolver.originOf(url)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                liveOrigin = originOf(url)
+                liveOrigin = UrlResolver.originOf(url)
                 // Persist whatever the login flow just set, immediately.
                 flushCookies()
             }
@@ -380,34 +377,19 @@ class MainActivity : android.app.Activity() {
             .setPositiveButton("Load") { _, _ ->
                 val url = input.text.toString().trim()
                 if (url.isNotEmpty()) {
-                    saveUrl(url)
+                    UrlResolver.saveUrl(this, url)
                     currentUrl = url
-                    origin = originOf(url)
+                    origin = UrlResolver.originOf(url)
                     webView.loadUrl(url)
                 }
             }
             .setNeutralButton("Reset to default") { _, _ ->
-                prefs().edit().remove(KEY_URL).apply()
+                UrlResolver.resetUrl(this)
                 currentUrl = BuildConfig.MUXTERM_URL
-                origin = originOf(currentUrl)
+                origin = UrlResolver.originOf(currentUrl)
                 webView.loadUrl(currentUrl)
             }
             .setNegativeButton("Cancel", null)
             .show()
-    }
-
-    private fun prefs() = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-
-    private fun saveUrl(url: String) = prefs().edit().putString(KEY_URL, url.trim()).apply()
-
-    private fun resolveUrl(): String =
-        prefs().getString(KEY_URL, null)?.takeIf { it.isNotBlank() } ?: BuildConfig.MUXTERM_URL
-
-    private fun originOf(url: String): String {
-        val u = Uri.parse(url)
-        val scheme = u.scheme ?: return ""
-        val host = u.host ?: return ""
-        val port = u.port
-        return if (port == -1) "$scheme://$host" else "$scheme://$host:$port"
     }
 }
