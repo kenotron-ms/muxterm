@@ -350,23 +350,47 @@ accepted some other one. That is the correct division. Whether a given key is
 valid is the vendor's answer, and `POST /api/credentials/{provider}/check`
 exists precisely to go and ask.
 
-## All seven requested demonstrations, and where each one is
+## The seven requested demonstrations: six shown, one obviated
 
-| # | Demonstration | Where |
+| # | Demonstration | Status |
 |---|---|---|
-| 1 | Detection reporting missing credentials on a clean machine | §1 — `blocked: true`, `amplifierHomeFound: false`, nothing created |
-| 2 | Present-but-rejected reported apart from absent, using an obviously-fake key | §2 — `verdict: rejected` HTTP 401 with `present: true`; caught at startup |
-| 3 | The full onboarding flow with the chief-of-staff sidecar NOT running | §3 — twelve threads, zero child processes |
-| 4 | A keys.env with an unrelated key and a comment, unchanged but for what muxterm manages | §4 — sha256 identical, and it gained nothing, because muxterm does not write that file |
-| 5 | Mode 0600 before and after | §4 — `600` → `600`, no `.bak`, nothing rewritten |
-| 6 | The raw HTTP GET proving no secret is returned | §5 — every surface scanned against the stored fabricated value |
-| 7 | A lane launching successfully after the save | §7 — Lane B, `READY`, on the stored fabricated credential |
+| 1 | Detection reporting missing credentials on a clean machine | **shown** — §1, `blocked: true`, `amplifierHomeFound: false`, nothing created |
+| 2 | Present-but-rejected reported apart from absent, on a fabricated key | **shown** — §2, `verdict: rejected` HTTP 401 with `present: true` |
+| 3 | The full onboarding flow with the chief-of-staff sidecar NOT running | **shown** — §3, twelve threads, zero child processes |
+| 4 | A keys.env **written by muxterm**, gaining only the managed key, everything else byte-identical | **NOT SHOWN — see below** |
+| 5 | Mode 0600 before and after | **partly** — §4 shows `600` unchanged, but across *no rewrite*; 0600 on muxterm's own store is shown in §4 |
+| 6 | The raw HTTP GET proving no secret is returned | **shown** — §5, every surface scanned against the stored fabricated value |
+| 7 | A lane launching successfully after the save | **shown** — §7, `READY` on the stored fabricated credential |
 
-Item 4 is the one that reads differently from how it was asked. It was framed
-as a keys.env *written by muxterm* gaining only the managed key. muxterm does
-not write that file (see `internal/sessiond/lane_env.go`), so what is shown is
-the stronger version: after two saves, a sidecar respawn and three lane
-launches, the file is byte-identical.
+### Item 4 is not demonstrated, and cannot be
+
+It presumes a capability this implementation deliberately does not have.
+muxterm does not write `~/.amplifier/keys.env` at all — the reasoning is in
+`internal/sessiond/lane_env.go`, and it is a decision, not an oversight.
+
+So the surgical-write guarantees that item 4 and its parent requirement ask for
+are **unverified, because there is nothing to verify**:
+
+```
+surgical write, other lines byte-identical .... NOT DEMONSTRATED -- no writer exists
+a timestamped .bak before writing ............. NOT DEMONSTRATED -- nothing is rewritten
+0600 preserved ACROSS A REWRITE ............... NOT DEMONSTRATED -- there is no rewrite
+values never readable back .................... shown (§5)
+absent .amplifier reported, not created ....... shown (§1)
+```
+
+What §4 *does* show is the file byte-identical after everything — which is
+evidence that muxterm leaves it alone, not evidence that muxterm edits it
+safely. **Those are different claims and the first does not stand in for the
+second.** An earlier version of this table folded item 4 into a "seven of
+seven" count; that was an overclaim and is corrected here.
+
+**If surgical writing is wanted, it is unbuilt work, not undemonstrated work.**
+It would need: a parser that preserves comments, blank lines and quoting
+byte-for-byte; a timestamped `.bak` in the existing
+`keys.env.bak-YYYYMMDDHHMMSS` style; mode preservation across the replace; an
+atomic rename; and a merge that touches only managed variable names. None of
+that exists in this branch.
 
 ## Also demonstrated, beyond the seven
 
