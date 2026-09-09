@@ -33,6 +33,24 @@ jobs:
             - TypeScript/Lit 3 frontend: custom elements, dockview tab layout, xterm.js terminals
             - Communication: binary WebSocket protocol between browser and Go server
 
+            Get the diff from the MERGE BASE, and never from a two-dot
+            comparison against main:
+
+                gh pr diff <number>             # preferred - GitHub computes the base
+                git diff origin/main...HEAD     # three dots, if working locally
+
+            `git diff origin/main HEAD` (two dots) renders commits that exist
+            only on main as deletions in the branch, so a branch cut before a
+            recent merge appears to revert work it never touched. Observed on
+            PR #65: three confident "blocking" findings, each prescribing a
+            revert of an already-merged commit, in three files that PR did not
+            contain.
+
+            Before reporting that this PR removed, reverted, or weakened
+            anything, confirm the file is in `gh pr diff <number> --name-only`.
+            If it is absent, the finding is an artifact of the base and must be
+            dropped. Say nothing about files this PR does not touch.
+
             Review the diff carefully. Pay particular attention to:
             - WebSocket message protocol correctness (new message types, field naming)
             - Go concurrency safety (mutex coverage, goroutine lifecycle, channel usage)
