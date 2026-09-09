@@ -669,6 +669,19 @@ export class AppletPRs extends LitElement implements AppletElement {
     `;
   }
 
+  /**
+   * Whether a row should name its repository.
+   *
+   * Computed over EVERY collected row, dismissed included, so the answer does
+   * not change under the user as they filter or dismiss one. One repository
+   * repeated down twelve rows is noise; two repositories mixed together and
+   * unlabelled is a wrong answer waiting to be read -- and this machine's
+   * sessions have worked in more than one.
+   */
+  private get _multiRepo(): boolean {
+    return new Set(this._listing?.prs.map((p) => p.repo) ?? []).size > 1;
+  }
+
   private _renderRow(p: CollectedPR, dismissed: boolean): TemplateResult {
     const tone = stateTone(p);
     const settled = p.state === 'MERGED' || p.state === 'CLOSED';
@@ -679,10 +692,21 @@ export class AppletPRs extends LitElement implements AppletElement {
     const title = p.title !== '' ? p.title : 'title not known yet';
     const label = `${p.repo !== '' ? p.repo : 'unknown repository'}#${p.number} \u2014 ${title}`;
 
+    // The state word carries the meaning. When a fetch failed, its reason
+    // rides along as the word's tooltip: enough to diagnose, never enough to
+    // push the number, title and link off the row.
     const meta: TemplateResult[] = [
-      html`<span class="${tone === '' ? 'st' : `st ${tone}`}">${stateWord(p)}</span>`,
+      html`<span
+        class="${tone === '' ? 'st' : `st ${tone}`}"
+        title="${p.statusError !== '' ? p.statusError : nothing}"
+        >${stateWord(p)}</span
+      >`,
     ];
-    if (p.repo !== '') meta.push(html`<span>${p.repo}</span>`);
+    // The repository is stated when it is in question -- more than one is
+    // collected, or this row's is unknown -- and stays quiet when every row
+    // would say the same thing.
+    if (p.repo === '') meta.push(html`<span>repository unknown</span>`);
+    else if (this._multiRepo) meta.push(html`<span>${p.repo}</span>`);
     if (p.lane !== '') meta.push(html`<span class="lane" title="${p.lane}">${p.lane}</span>`);
     const a = age(p.collectedAt, this._now);
     if (a !== '') meta.push(html`<span title="when muxterm collected it">${a}</span>`);
