@@ -583,3 +583,58 @@ func spawnIdlePane(t *testing.T, srv *Server, wsID string) int {
 	srv.reg.PutPane(wsID, p)
 	return id
 }
+
+// TestTriggerForgetsLastLaneAcrossRestart is a regression test for a bug found
+// by running the thing, not by reading it.
+//
+// Workspace and pane ids are RECYCLED across a restart. Live: a trigger's lane
+// ran in w3 pane 1, the daemon restarted, the restore pass rebuilt workspaces
+// in a different order, and w3 pane 1 came back as an unrelated lane belonging
+// to a different trigger. The overlap check saw a live pane at those
+// coordinates and skipped every subsequent fire -- wedged indefinitely by a
+// stranger, with a skip reason that read perfectly plausibly.
+func TestTriggerForgetsLastLaneAcrossRestart(t *testing.T) {
+	srv, _, _, cancel := startTestServer(t)
+	defer cancel()
+	e := newTriggerEngine(srv, newTriggerStore(filepath.Join(t.TempDir(), "triggers.json")))
+
+	// A lane that was running when the daemon went down: coordinates recorded,
+	// unsettled, and no completion record will ever arrive for it.
+	stored, err := e.store.Add(Trigger{
+		Name: "survivor", Kind: TriggerKindSchedule, Schedule: "@every 1s",
+		Workspace: "w", Harness: HarnessAmplifier, Prompt: "p", Enabled: true,
+		LastWorkspaceID: "w3", LastPaneID: 1, LastFireAt: time.Now().Unix(), RunCount: 1,
+		ConsecutiveFailures: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A DIFFERENT lane now occupies those exact coordinates.
+	wsID := srv.reg.AddWorkspace("someone else's work", "")
+	if wsID != "w3" {
+		// Not the point of the test, but keep it honest about what it set up.
+		t.Logf("registry handed out %s rather than w3; the pane below is still an unrelated one", wsID)
+	}
+	spawnIdlePane(t, srv, wsID)
+
+	e.reconcileAfterRestart()
+
+	got, _ := e.store.Get(stored.ID)
+	if got.LastWorkspaceID != "" || got.LastPaneID != 0 {
+		t.Fatalf("last-lane coordinates survived the restart (%s pane %d); a stranger at those ids "+
+			"wedges this trigger forever, and no completion record will ever arrive to free it",
+			got.LastWorkspaceID, got.LastPaneID)
+	}
+	if running, why := e.laneRunning(got); running {
+		t.Fatalf("still reads as running after reconcile: %s", why)
+	}
+	if got.ConsecutiveFailures != 1 {
+		t.Fatalf("failure streak changed to %d; an unaccounted run is neither a success nor a "+
+			"failure and the daemon must not invent a verdict in either direction", got.ConsecutiveFailures)
+	}
+	last := got.History[len(got.History)-1]
+	if last.Outcome != FireOrphaned || last.Detail == "" {
+		t.Fatalf("the unaccounted run is not in the fire log (%+v); a run nobody can account for "+
+			"and a run that produced nothing look identical unless one of them says so", last)
+	}
+}

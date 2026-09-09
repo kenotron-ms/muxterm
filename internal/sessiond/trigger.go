@@ -71,6 +71,15 @@ const (
 	// rather than only a field so the REASON sits in the timeline next to the
 	// failures that caused it.
 	FireDisabled = "disabled"
+	// FireOrphaned: the daemon restarted while this trigger's lane was running
+	// and no completion record was ever written for it, so its outcome is
+	// UNKNOWN and will stay unknown.
+	//
+	// Recorded rather than silently dropped because an unaccounted run is
+	// exactly the gap drumbeat learned to be loud about: a run that produced
+	// nothing and a run nobody can account for look identical unless one of
+	// them says so.
+	FireOrphaned = "orphaned"
 )
 
 // Bounds. Every one of these is a number a human may have to justify at 3am,

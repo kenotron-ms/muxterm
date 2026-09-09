@@ -103,6 +103,7 @@ func (e *triggerEngine) Start(ctx context.Context) {
 	e.running = true
 	e.mu.Unlock()
 
+	e.reconcileAfterRestart()
 	e.arm(time.Now())
 	e.syncWatchers()
 
@@ -118,6 +119,56 @@ func (e *triggerEngine) Start(ctx context.Context) {
 		case now := <-ticker.C:
 			e.tick(now)
 		}
+	}
+}
+
+// reconcileAfterRestart forgets last-lane coordinates that no longer mean
+// anything, and says so in the fire log.
+//
+// WORKSPACE AND PANE IDS ARE RECYCLED ACROSS A RESTART. Observed live, and it
+// is not a corner case: a trigger's lane ran in `w3 pane 1`; the daemon
+// restarted; the restore pass rebuilt the workspaces in a different order and
+// `w3 pane 1` came back as a COMPLETELY UNRELATED lane belonging to another
+// trigger. The overlap check then found a live pane at those coordinates and
+// skipped every subsequent fire -- a schedule trigger wedged indefinitely by a
+// stranger, with a skip reason that read perfectly plausibly.
+//
+// completionFor is already safe here: it requires EndedAt >= LastFireAt, which
+// is what mergeCompletionRows' warning about recycled ids demands. The
+// pane-existence half of laneRunning had no such protection, and this is it.
+//
+// The direction is deliberate. A lane whose daemon died before writing a
+// completion record will NEVER get one, so treating it as still-running is not
+// conservative, it is permanent: the trigger never fires again and no amount of
+// waiting fixes it. Forgetting fires at most one extra lane, once, and the
+// overlap check protects everything after that. A recoverable wrong beats an
+// unrecoverable one.
+func (e *triggerEngine) reconcileAfterRestart() {
+	for _, t := range e.store.All() {
+		if t.LastWorkspaceID == "" || t.LastSettled {
+			continue
+		}
+		if _, done := e.completionFor(t); done {
+			// A durable verdict exists and survived the restart. settle() will
+			// count it on the next tick; nothing to forget.
+			continue
+		}
+		detail := fmt.Sprintf("daemon restarted while the lane in %s pane %d was running; "+
+			"its outcome is unknown and those ids may now belong to something else",
+			t.LastWorkspaceID, t.LastPaneID)
+		e.store.RecordFire(t.ID, TriggerFire{
+			At:      time.Now().Unix(),
+			Outcome: FireOrphaned,
+			Detail:  detail,
+		}, func(t *Trigger) {
+			// Neither a success nor a failure: the daemon has no verdict and
+			// must not invent one in either direction. The failure streak is
+			// left exactly as it was.
+			t.LastSettled = true
+			t.LastWorkspaceID = ""
+			t.LastPaneID = 0
+		})
+		log.Printf("sessiond: trigger %q: %s", t.Name, detail)
 	}
 }
 
