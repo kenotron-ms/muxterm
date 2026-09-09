@@ -52,6 +52,9 @@ import {
   HOME_GROUPS,
   groupFor,
   isKnownHarness,
+  progressLine,
+  todoFraction,
+  todoPercent,
   type HomeGroup,
   type SessionState,
 } from '../../lib/session-state.js';
@@ -339,6 +342,11 @@ export class AppletDashboard extends LitElement implements AppletElement {
       gap: var(--s-2);
       min-width: 0;
       overflow: hidden;
+      /* Containing block for .bar, which is absolutely positioned precisely so
+         that it costs no height. --meta-h is the fixed-height contract and a
+         card that grew to show progress would make the fleet harder to scan,
+         which is the opposite of the point. */
+      position: relative;
     }
     /* Every line ellipsises. A line allowed to wrap is a card allowed to
        change height, and that is the one thing this grid must never do. */
@@ -366,6 +374,47 @@ export class AppletDashboard extends LitElement implements AppletElement {
       font-size: 11.5px;
       line-height: 1.35;
       color: var(--ink-2);
+    }
+
+    /* -- TODO PROGRESS ----------------------------------------------------
+       Two marks, both of which cost ZERO height, because --meta-h is a
+       contract and not a starting point.
+
+       The FRACTION is typographic and leads the line it shares with the
+       task text, so it is the part that survives when the text ellipsises
+       -- which on a phone is most of the time. Mono with tabular figures so
+       a column of cards has its slashes in a line rather than dancing by a
+       pixel per digit; that alignment is the whole reason it is not just
+       set in the body face.
+
+       The BAR is the same number for the eye rather than the reader, for
+       scanning many lanes at once. It is drawn in ink, not in a state
+       colour: colour here would be a second, weaker encoding of what the
+       fraction already says exactly, and the standing rule is that colour
+       never carries meaning alone. It is 2px of underline at the foot of
+       the meta block, not a rounded chip and not an accented border. */
+    .card .frac {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.02em;
+      color: var(--ink-1);
+      margin-right: var(--s-3);
+    }
+    .card .bar {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 2px;
+      background: color-mix(in srgb, var(--ink-3) 24%, transparent);
+    }
+    .card .bar > i {
+      display: block;
+      height: 100%;
+      /* No transition: this moves when a lane revises its plan, which is
+         news. An animated slide would read as the card doing something. */
+      background: color-mix(in srgb, var(--ink-2) 62%, transparent);
     }
     .thumb {
       display: none;
@@ -642,7 +691,16 @@ export class AppletDashboard extends LitElement implements AppletElement {
     bits.push(s.workspaceId);
     const a = age(s.updatedAt, this._now);
     if (a) bits.push(a);
-    const doing = s.doing?.trim() ?? '';
+    // THE HONEST FALLBACK, and it is the whole of it: both of these return ''
+    // for a session that keeps no todo list, and '' renders nothing at all.
+    // Such a card shows exactly what it showed before this feature existed --
+    // the `doing` line, no fraction, no bar. Drawing "0/0" or an empty track
+    // instead would claim the lane has a plan and has finished none of it,
+    // which is a STALLED lane; most interactive sessions never call the todo
+    // tool, so that lie would be the common case rather than the rare one.
+    const frac = todoFraction(s);
+    const line = progressLine(s);
+    const pct = todoPercent(s);
     // Portrait is cards only. Gated here as well as in CSS so a phone never
     // even builds the six lines of text it would not draw.
     const thumb = !this.insheet && this.view === 'tiles';
@@ -656,7 +714,12 @@ export class AppletDashboard extends LitElement implements AppletElement {
         <div class="meta">
           <div class="n">${s.label || s.name}</div>
           <div class="m">${bits.join(' \u00b7 ')}</div>
-          ${doing ? html`<div class="g">${doing}</div>` : nothing}
+          ${line
+            ? html`<div class="g">${frac
+                ? html`<span class="frac" aria-label="${frac} tasks done">${frac}</span>`
+                : nothing}${line}</div>`
+            : nothing}
+          ${frac ? html`<div class="bar"><i style="width:${pct}%"></i></div>` : nothing}
         </div>
         ${thumb
           ? html`<pre class="thumb">${tileLinesFor(s, THUMB_COLS, THUMB_ROWS).join('\n')}</pre>`

@@ -282,15 +282,43 @@ export function shortProject(project: string | undefined): string {
  * field existed.
  */
 export function todoFraction(s: SessionState): string {
+  const t = countableTodo(s);
+  return t ? `${t.done}/${t.total}` : '';
+}
+
+/**
+ * How far along the bar should be filled, 0-100, for a session that keeps a
+ * list; 0 for one that does not.
+ *
+ * Derived from the SAME normalisation as todoFraction() and never independently
+ * from `s.todo`. A bar that disagreed with the number printed beside it would
+ * be worse than either alone, and two functions each doing their own arithmetic
+ * on the same field is how that happens. The caller draws no bar at all when
+ * todoFraction() is '', so the 0 returned here is never actually painted.
+ */
+export function todoPercent(s: SessionState): number {
+  const t = countableTodo(s);
+  return t ? Math.round((t.done / t.total) * 100) : 0;
+}
+
+/**
+ * The one place `s.todo` is turned into numbers worth drawing, or null.
+ *
+ * null means "this session keeps no usable list": no field at all, a total of
+ * zero, or counts that are not finite integers. Every surface is required to
+ * treat null as "say nothing", never as zero -- see todoFraction's note on why
+ * 0/0 is an active lie rather than a harmless placeholder.
+ */
+function countableTodo(s: SessionState): { done: number; total: number } | null {
   const t = s.todo;
-  if (!t) return '';
+  if (!t) return null;
   const total = Math.trunc(t.total);
   const done = Math.trunc(t.done);
-  if (!Number.isFinite(total) || total <= 0) return '';
-  if (!Number.isFinite(done) || done < 0) return '';
+  if (!Number.isFinite(total) || total <= 0) return null;
+  if (!Number.isFinite(done) || done < 0) return null;
   // Clamped rather than dropped: a producer that miscounts should still show a
   // usable fraction, and a bar that reads 11/10 is a bug report nobody filed.
-  return `${Math.min(done, total)}/${total}`;
+  return { done: Math.min(done, total), total };
 }
 
 /**
