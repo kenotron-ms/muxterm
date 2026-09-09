@@ -21,8 +21,16 @@
          startForeground() throwing SecurityException on Android 14. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <!-- API 33+ runtime permission. The foreground service runs without it;
-         only the notification is suppressed. Voice is never gated on it. -->
+    <!-- API 34+. FleetWatchService holds the daemon's session-state WebSocket
+         open so lane status changes are noticed while the app is backgrounded.
+         dataSync is the honest type for "keeps a network sync running"; the
+         type-specific permission is what stops startForeground() throwing. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- API 33+ runtime permission, requested in MainActivity - a manifest
+         line alone grants nothing. Voice is never gated on it (the foreground
+         service runs either way, only its notification is suppressed), but
+         lane status notifications ARE: without this grant they are dropped
+         silently by the platform, which is why the app checks for it. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Deliberately NOT declared (design doc W1.2/W1.4):
@@ -74,6 +82,16 @@
             android:name=".VoiceSessionService"
             android:exported="false"
             android:foregroundServiceType="microphone|mediaPlayback" />
+
+        <!-- Watches the fleet for lane status changes. Separate service from
+             VoiceSessionService on purpose: they have different lifetimes (one
+             lasts a conversation, this one lasts until turned off) and
+             different foreground service types, and merging them would make
+             stopping voice stop the notifications. -->
+        <service
+            android:name=".notify.FleetWatchService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".car.MuxtermCarAppService"
