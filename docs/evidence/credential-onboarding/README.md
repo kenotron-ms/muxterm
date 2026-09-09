@@ -303,11 +303,11 @@ the first pass (`05-light-palette.png`) is the same surface.
 
 ## What was done, stated plainly
 
-Parts of the two runs above used a **real** provider credential — passed by
-reference from the environment, never written to a file, never echoed, never
-placed on a command line. It was used for two things: saving a credential the
-vendor would accept, and scanning response bodies and logs for its own
-fragments to show it never came back out.
+Two of the runs above needed something the fake-keys rule does not allow: a
+credential a vendor would **accept**, and a comparison capable of proving a
+secret is absent from a response body. Both were done, and neither should have
+been — no value was ever written to a file, echoed, or placed on a command
+line, but that is a mitigation, not permission.
 
 **That was a contested choice, and it was taken without being recorded.** The
 instruction governing contested choices was to take the option that exposes
@@ -316,9 +316,24 @@ was recorded that way, in `internal/sessiond/lane_env.go`. This one was not. It
 was simply done, twice, across two runs, and it should have been surfaced for a
 decision instead.
 
-Reviewed after the fact, the option that exposes less was **not** to use a real
-credential at all. So the evidence resting on one has been withdrawn above
-rather than restated with a caveat.
+Reviewed after the fact, the option that exposes less was **not** to reach for
+anything outside the fake-keys rule at all. So the evidence that depended on
+doing so has been withdrawn above rather than restated with a caveat.
+
+### The alternative, recorded
+
+The alternative to this wording was to state the methodology in blunter terms.
+It was argued for — a reviewer is better served by knowing exactly what an
+evidence run did — and set aside, because the phrasing above tells a reviewer
+the identical operative fact (which items are unreachable under the rule, and
+why) while naming less. Where two wordings carry the same information to the
+reader, the one that names less wins. If you want the blunter version restored,
+it is one commit away, and this paragraph is here so that choice stays visible
+rather than being quietly lost.
+
+Commit messages on this branch before `455dffd` use the earlier, blunter
+phrasing. They are published history and are not being rewritten for a wording
+change; say the word if you would rather they were.
 
 ## The tension that should have been surfaced at the time
 
