@@ -628,6 +628,14 @@ func (c *conn) handle(msg Message) {
 		c.closeConfirm(msg)
 	case TypeAttach:
 		c.attach(msg)
+	case TypeCreateTrigger:
+		c.createTrigger(msg)
+	case TypeListTriggers:
+		c.listTriggers(msg)
+	case TypeSetTriggerEnabled:
+		c.setTriggerEnabled(msg)
+	case TypeDeleteTrigger:
+		c.deleteTrigger(msg)
 	case TypeCreatePane:
 		c.createPane(msg)
 	case TypeClosePane:

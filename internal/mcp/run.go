@@ -330,6 +330,7 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 	registerPublishTools(srv)
 	registerArtifactTools(srv)
 	registerConfigTools(srv)
+	registerTriggerTools(srv, localOnly)
 
 	// attachOnce guards the one-time workspace attach for resources/list.
 	// Calling c.conn.Attach repeatedly replays the full retained output buffer
@@ -842,6 +843,138 @@ func registerAllTools(
 // without going through the lazyClient. Tunnel tools communicate with the
 // serve-layer HTTP REST API (not the sessiond daemon), so they must not
 // require sessiond to be running.
+// registerTriggerTools registers the four trigger tools.
+//
+// LOCAL ONLY, deliberately. Every one of these is registered through
+// localOnly, so `machine: "boxb"` is refused rather than quietly managing
+// triggers on a remote daemon. Remote triggers are a real want and a real
+// follow-on -- the machine-scoped read tools already show the shape -- but
+// creating unattended work on a machine you are not looking at, through a
+// parameter that is easy to pass by accident, is the wrong thing to ship
+// first. It fires less and it is easier to stop.
+func registerTriggerTools(
+	srv *Server,
+	localOnly func(string, func(*Client, map[string]any) (string, error)) ToolFunc,
+) {
+	const remoteRefusal = "triggers are managed on the local machine only: a trigger creates unattended " +
+		"work, and creating it on a machine you are not looking at is a follow-on, not this tool. " +
+		"Run this against that machine's own muxterm"
+
+	srv.Register(
+		"create_trigger",
+		"create an automation that SPAWNS A LANE with no human present -- on a cron schedule, or when a "+
+			"watched path changes. kind is "+triggerKindsDoc+". A schedule trigger needs `schedule`: a standard "+
+			"five-field cron expression (`0 9 * * 1-5`), or a descriptor (`@every 30m`, `@hourly`, `@daily`), "+
+			"optionally prefixed `CRON_TZ=America/Los_Angeles `. Times are the MACHINE'S LOCAL TIME unless "+
+			"CRON_TZ says otherwise. A watch trigger needs `path`: watched recursively, with .git, node_modules "+
+			"and friends excluded, coalescing a burst of changes into ONE fire after 2s of quiet. "+
+			"workspace/harness/prompt/goal are exactly spawn_lane's -- the trigger's action IS spawn_lane. "+
+			"A FIRE MISSED WHILE MUXTERM WAS DOWN IS MISSED, never run late: the next fire is computed from "+
+			"startup, so a daemon that was off overnight does not owe you a stampede of lanes in the morning. "+
+			"Safety, all automatic: a fire is SKIPPED (and recorded) while this trigger's previous lane is "+
+			"still working, skipped past 3 concurrent trigger lanes machine-wide, and the trigger DISABLES "+
+			"ITSELF after 3 consecutive failed runs. Created enabled. Local machine only",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "what this trigger is for, in one line; also becomes the readable part of its id",
+				},
+				"kind": map[string]any{
+					"type":        "string",
+					"enum":        []string{sessiond.TriggerKindSchedule, sessiond.TriggerKindWatch},
+					"description": "schedule (cron) or watch (a path changed)",
+				},
+				"schedule": map[string]any{
+					"type": "string",
+					"description": "kind=schedule: five-field cron, or @every 30m / @hourly / @daily, " +
+						"optionally prefixed CRON_TZ=<zone>. Local time unless CRON_TZ says otherwise",
+				},
+				"path": map[string]any{
+					"type": "string",
+					"description": "kind=watch: absolute path to watch recursively. Refused, with a count, " +
+						"when the tree has more than 2000 directories after ignores -- watching a tree that " +
+						"large risks exhausting the per-user inotify limit and breaking other software",
+				},
+				"workspace": map[string]any{
+					"type":        "string",
+					"description": "workspace the lane lands in; resolved by exact name, created if absent",
+				},
+				"harness": map[string]any{"type": "string", "enum": Launchable},
+				"prompt": map[string]any{
+					"type":        "string",
+					"description": "the lane's opening turn. Must not begin with '/'",
+				},
+				"goal": map[string]any{
+					"type":        "string",
+					"description": "stop condition for a /goal loop (amplifier only; prompt is then ignored)",
+				},
+				"max_runs": map[string]any{
+					"type":        "integer",
+					"description": "disable the trigger after this many runs; 0 or absent means unlimited",
+				},
+			},
+			"required": []string{"name", "kind", "workspace", "harness"},
+		},
+		localOnly(remoteRefusal, func(c *Client, args map[string]any) (string, error) {
+			return newTriggerTools(c).createTrigger(args)
+		}),
+	)
+
+	srv.Register(
+		"list_triggers",
+		"every trigger on this machine: id, kind, schedule or watched path, enabled, last fire, NEXT fire, "+
+			"run count, why it disabled itself if it did, and its recent fire log. The fire log is the point -- "+
+			"it distinguishes `fired`, `skipped-overlap` (the previous lane was still working), `skipped-cap`, "+
+			"`skipped-max-runs`, `error` and `disabled`, so a trigger that ran three times overnight and "+
+			"produced nothing is not indistinguishable from one that never ran. lane_running on a row means "+
+			"the next fire would be skipped right now. An empty list is a normal answer. Local machine only",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		localOnly(remoteRefusal, func(c *Client, args map[string]any) (string, error) {
+			return newTriggerTools(c).listTriggers(args)
+		}),
+	)
+
+	srv.Register(
+		"set_trigger_enabled",
+		"THE STOP BUTTON: arm or stop a trigger by id, effective immediately -- a disabled schedule stops "+
+			"being compared against the clock and a disabled watch drops its filesystem watches within a "+
+			"second, including an edge already debouncing. It NEVER touches lanes already spawned: stopping "+
+			"a trigger is not killing its work. Re-enabling clears a self-disable reason and its failure "+
+			"streak, and re-arms from now rather than firing for a boundary that passed while it was off. "+
+			"Local machine only",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"trigger_id": map[string]any{"type": "string", "description": "an id from list_triggers"},
+				"enabled":    map[string]any{"type": "boolean", "description": "true to arm, false to stop"},
+			},
+			"required": []string{"trigger_id", "enabled"},
+		},
+		localOnly(remoteRefusal, func(c *Client, args map[string]any) (string, error) {
+			return newTriggerTools(c).setTriggerEnabled(args)
+		}),
+	)
+
+	srv.Register(
+		"delete_trigger",
+		"remove a trigger by id and tear down its watches. Its fire history goes with it, so prefer "+
+			"set_trigger_enabled(false) when you may want to know later what it did. Lanes it already "+
+			"spawned are untouched. Local machine only",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"trigger_id": map[string]any{"type": "string", "description": "an id from list_triggers"},
+			},
+			"required": []string{"trigger_id"},
+		},
+		localOnly(remoteRefusal, func(c *Client, args map[string]any) (string, error) {
+			return newTriggerTools(c).deleteTrigger(args)
+		}),
+	)
+}
+
 func registerTunnelTools(srv *Server) {
 	tt := newTunnelTools()
 
