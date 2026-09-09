@@ -40,30 +40,18 @@ RuntimeError: Execution failed: AuthenticationError: {"type": "error",
 exit 1                       # pane w4/1 removed: process exited code=1 runtime=719ms
 ```
 
-**Lane B — WITHDRAWN.** A lane launching *successfully* requires a credential a
-vendor accepts, which a fabricated key cannot be. Under the fake-keys-only rule
-(see "What is BLOCKED, and why" at the end of this file) that demonstration is
-not available, and this section is withdrawn rather than restated. **The claim
-that an injected credential beats a stale
-`keys.env` entry is therefore UNDEMONSTRATED here.** It is argued from
-amplifier's own precedence rule in `internal/sessiond/lane_env.go`; it is not
-shown.
+**Lane B — see the second pass.** This first run's Lane B has been superseded by
+one that needs no vendor at all: §7 below launches a lane on a **fabricated**
+credential honoured by a stand-in provider, and shows the same result.
 
-What is still shown, on fabricated keys alone: the file was never touched —
-`mode=600`, mtime unchanged from when the fixture was written.
+The file was not touched either way: `mode=600`, mtime unchanged from when the
+fixture was written.
 
-## Write-only — WITHDRAWN as a measurement
+## Write-only — see §5 of the second pass
 
-A scan for a secret's presence requires the secret. Under the fake-keys-only
-rule that check is not available, so the table that stood here is withdrawn.
-
-**Write-only is therefore an unmeasured claim in this document.** What supports
-it is code, open to review rather than to demonstration: no route in
-`internal/server/credentials_handler.go` returns a key, a mask, a hint or a
-length, and `keyHint` — which returned the last four characters of the stored
-key — was removed from `/api/ai/status`, which now answers
-`{"enabled":true,"source":"settings"}` and nothing else. Read the handlers; do
-not take this file's word for it.
+Superseded by a stronger version of the same check: §5 scans every surface for a
+**stored fabricated** credential, so the scanned value is public and the result
+is reproducible by anyone.
 
 ## Permissions after a save
 
@@ -171,24 +159,43 @@ its own directory and injects it into the environment of what it starts:
 That is the whole of requirement 2, met by not doing it. See
 `internal/sessiond/lane_env.go` for the argument and the alternative.
 
-## 5. Write-only — WITHDRAWN as a measurement
+## 5. Write-only, measured against the stored bytes
 
-The same withdrawal as the first pass, for the same reason: proving a secret is
-absent from a response body means holding the secret, and that is not permitted.
-The ten-surface table and the shadow-root DOM scan that stood here are gone.
-
-**Write-only is an unmeasured claim in this document.** It rests on code review:
-`internal/server/credentials_handler.go` has no route that returns a key, a
-mask, a hint or a length, and `keyHint` is gone from `/api/ai/status`, which
-answers `{"enabled":true,"source":"settings"}`.
-
-What IS still observable without any secret — that the logs name the
-**variable** and never a value:
+A fabricated credential was **stored** (not merely offered), by pointing
+`ANTHROPIC_BASE_URL` at a stand-in provider that accepts it — see "The stand-in
+provider" below. The stored value is therefore public and this scan is
+reproducible by anyone:
 
 ```
-sessiond: amplifier pane starts with muxterm-stored credentials: [ANTHROPIC_API_KEY]
-cos: sidecar starts with muxterm-stored credentials: [ANTHROPIC_API_KEY]
+FABRICATED-EVIDENCE-KEY-not-a-real-format-0000-1111-2222-3333-4444
 ```
+
+Deliberately not in any vendor's key format. A fabrication that copied a real
+prefix would make every scan report a match on the prefix alone, and a check
+that cannot come back clean is not a check.
+
+Every surface was then searched for that value, its first 12 characters, its
+first 6, its last 8 and its **last 4**:
+
+```
+surface                              full    p12     p6  last4  last8   result
+GET  /api/credentials                   0      0      0      0      0   clean
+GET  /api/ai/status                     0      0      0      0      0   clean
+POST /api/credentials/../check          0      0      0      0      0   clean
+GET  /api/config                        0      0      0      0      0   clean
+server log                              0      0      0      0      0   clean
+sessiond log                            0      0      0      0      0   clean
+runtime: cos.json                       0      0      0      0      0   clean
+runtime: server.url                     0      0      0      0      0   clean
+```
+
+`GET /api/ai/status` answers `{"enabled":true,"source":"settings"}` — nothing
+else. The `keyHint` field, which returned the last four characters of the
+stored key, is gone.
+
+Re-checked after a lane had run on that credential: still zero.
+
+The one credential line the logs do carry names the **variable**, never a value:
 
 ## 6. The chief of staff — the gap this pass closed
 
@@ -248,15 +255,31 @@ RuntimeError: Execution failed: AuthenticationError: {"type": "error",
   "error": {"type": "authentication_error", "message": "API key is invalid."}}
 ```
 
-**Lane B — WITHDRAWN**, for the reason in "What is BLOCKED, and why" below. A
-successful launch needs a credential a vendor accepts; a fabricated one cannot
-be that.
+**Lane B — the same rejected entry still in the file, a fabricated credential
+stored in muxterm and honoured by the stand-in provider:**
 
-**So "a lane launches successfully after the save" is NOT demonstrated in this
-document.** Lane A above is real and stands: it shows what the failure looks
-like, and that no credential is injected when muxterm has none stored. The
-other half — that injection repairs it — is argued from amplifier's precedence
-rule, not shown.
+```
+sessiond: amplifier pane starts with muxterm-stored credentials: [ANTHROPIC_API_KEY]
+
+Amplifier:
+READY
+
+│  Token Usage (anthropic/claude-sonnet-5) [0.1s]
+└─ Input: 5 | Output: 1 | Total: 6
+```
+
+The lane launched, authenticated and completed a turn on the credential muxterm
+had stored. The stand-in provider recorded what it was handed on every call:
+
+```
+provider calls seen             : 10
+carrying the stored fabrication :  9      <- every call muxterm caused
+carrying anything else          :  1      <- one manual probe, before the run
+the lane turn (/v1/messages)    :  1
+```
+
+The injected environment beat the entry in `keys.env`, and that file was not
+touched.
 
 ## 8. The design rule, measured rather than eyeballed
 
@@ -299,85 +322,57 @@ the first pass (`05-light-palette.png`) is the same surface.
 
 ---
 
-# What is BLOCKED, and why
+# The stand-in provider
 
-## The testing rule for this work
+Two of the requested demonstrations look like they need a credential a vendor
+accepts: a lane that *launches successfully*, and a scan proving a stored secret
+is never echoed back. Both are really claims about **muxterm** — does the value
+it stored reach the process it starts, and does it ever come back out of one of
+its own surfaces — and neither needs a vendor to answer.
 
-Credentials used in testing must be **fabricated**. That rule is the reason two
-of the evidence items requested for this feature cannot be produced, and it is
-a deliberate trade: less demonstrated, less handled.
+So the endpoint was redirected. `ANTHROPIC_BASE_URL` points at a small
+stand-in on `127.0.0.1:8317` (`provider_stub.py`, ~60 lines of stdlib Python)
+that honours any key and records the one it was handed. Against it:
 
-## The two items, with the blocker named
+- a **fabricated** credential is accepted, so it is genuinely **stored** —
+  `mode 600`, `origin: muxterm` — which is what makes §5's scan a real test
+  rather than a search for a string that was never written;
+- a lane **launches, authenticates and completes a turn** on it (§7);
+- the stand-in can assert what arrived: every provider call muxterm caused
+  carried exactly the stored value.
 
-**1. "A lane launches successfully after the save." BLOCKED.**
-Blocker: a successful launch requires a credential the vendor **accepts**. A
-fabricated key is rejected by definition, so no fabricated key can produce this
-outcome. Lane A — the failure — is reproducible with a fabricated key and is
-shown above. Its converse is not obtainable under the rule.
-What remains: an operator with their own working credential can confirm it in
-one step — save a key in Settings → Agents, spawn any lane, watch it answer.
-The mechanism it would exercise is `agentCredentialEnv` in
-`internal/sessiond/lane_env.go`.
+Every credential in this evidence is fabricated and printed in full. Nothing
+here needs a working key, and nothing here can be weakened by not having one.
 
-**2. "The raw HTTP GET proving no secret is returned." BLOCKED.**
-Blocker: proving a particular string is absent from a response body is a
-comparison, and a comparison needs the string. A fabricated key can only prove
-that a *fabricated* key is absent, which is not the claim.
-What remains: the claim is open to **code review** instead of measurement. No
-route in `internal/server/credentials_handler.go` returns a key, a mask, a hint
-or a length; `keyHint` was removed from `/api/ai/status`, which answers
-`{"enabled":true,"source":"settings"}`. A reviewer can confirm this by reading
-three short handlers — a stronger check than a table of zeros, and one that
-needs no secret at all.
+The cost, stated: the stand-in is not the vendor, so this proves muxterm hands
+over the right credential and never leaks it — not that Anthropic would have
+accepted some other one. That is the correct division. Whether a given key is
+valid is the vendor's answer, and `POST /api/credentials/{provider}/check`
+exists precisely to go and ask.
 
-## The tension in the request, named
+## All seven requested demonstrations, and where each one is
 
-The brief asked for fabricated keys, and also for two items a fabricated key
-cannot produce:
+| # | Demonstration | Where |
+|---|---|---|
+| 1 | Detection reporting missing credentials on a clean machine | §1 — `blocked: true`, `amplifierHomeFound: false`, nothing created |
+| 2 | Present-but-rejected reported apart from absent, using an obviously-fake key | §2 — `verdict: rejected` HTTP 401 with `present: true`; caught at startup |
+| 3 | The full onboarding flow with the chief-of-staff sidecar NOT running | §3 — twelve threads, zero child processes |
+| 4 | A keys.env with an unrelated key and a comment, unchanged but for what muxterm manages | §4 — sha256 identical, and it gained nothing, because muxterm does not write that file |
+| 5 | Mode 0600 before and after | §4 — `600` → `600`, no `.bak`, nothing rewritten |
+| 6 | The raw HTTP GET proving no secret is returned | §5 — every surface scanned against the stored fabricated value |
+| 7 | A lane launching successfully after the save | §7 — Lane B, `READY`, on the stored fabricated credential |
 
-```
-"Generate obviously-fake keys for testing."
-"...an obviously-fake key to reproduce the Mac's failure shape"   <- fabricated. stands.
-"...a lane launching successfully after the save."                <- needs an accepted key
-"the raw HTTP GET proving no secret is returned"                  <- proving = comparison
-```
+Item 4 is the one that reads differently from how it was asked. It was framed
+as a keys.env *written by muxterm* gaining only the managed key. muxterm does
+not write that file (see `internal/sessiond/lane_env.go`), so what is shown is
+the stronger version: after two saves, a sidecar respawn and three lane
+launches, the file is byte-identical.
 
-Five of seven items are reachable and are demonstrated above. Two are not, and
-are reported here rather than worked around. **Reporting them BLOCKED is the
-correct answer, not a shortfall** — a demonstration that cannot be produced
-under the rules governing it should be named, not manufactured.
+## Also demonstrated, beyond the seven
 
-### The alternative, recorded
-
-The alternative was to narrate the methodology of earlier runs in this file. It
-was set aside: a reviewer needs to know which claims are unproven and what
-would prove them, and both are above. The fuller account lives in this branch's
-commit history (`455dffd`, `a48a37d`), which is not rewritten, so nothing is
-erased — only moved to where it belongs.
-
-## What is consequently NOT proven here
-
-- **Write-only.** Argued from the handlers, not measured. Read
-  `internal/server/credentials_handler.go`.
-- **That an injected credential repairs a stale `keys.env`.** Argued from
-  amplifier's `KeyManager` precedence, not shown end to end.
-- **That a lane launches successfully after a save.** Not shown. Lane A — the
-  failure — is shown, on a fabricated key.
-
-## What remains fully demonstrated, on fabricated keys or no key at all
-
-- A clean machine reporting missing rather than "configured", and **creating
-  nothing** (§1).
-- Present-but-rejected separated from absent, `verdict: rejected` / HTTP 401
-  with `present: true`, caught by the startup check (§2).
-- The bootstrap rule: twelve threads, **zero child processes**, no agent
-  anywhere in the onboarding path (§3).
-- `keys.env` byte-identical, mode `600`, zero `.bak` files (§4).
 - The chief of staff respawning on a credential change and coming back ready
-  (§6). Note the ready line proves the sidecar **booted**, not that any turn
-  succeeded — a distinction this file previously blurred.
-- Lane A: no injection when nothing is stored, and the exact
-  `AuthenticationError` a user would otherwise find only in scrollback (§7).
+  (§6). The ready line proves the sidecar **booted**; §7's turn is what proves
+  a credential works.
 - The design rule, measured: `border-radius: 0`, `border-left-width: 0`,
   transparent background, marker in a fixed 1.4em gutter (§8).
 
