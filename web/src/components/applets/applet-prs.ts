@@ -14,9 +14,10 @@
  *      inactive Pull Requests must issue ZERO requests -- see _sync(), which
  *      owns both the interval and the in-flight abort.
  *
- *   2. IT OWNS ITS OWN CONTROL. `dismissed (N)` is this applet's rail, painted
- *      by the HOST in the host's `.toggle` vocabulary. The DISMISS control is
- *      deliberately NOT there: it is destructive-ish, and a control that puts
+ *   2. IT OWNS ITS OWN CONTROL. `dismissed (N)` is rendered by THIS element,
+ *      above its own list, from this file's styles -- not by the host, which
+ *      owns only the tab strip (lib/applet-registry.ts). The DISMISS control
+ *      stays where it always was: on the row, because a control that puts
  *      something away belongs next to the thing it puts away (D3.9).
  *
  *   3. IT USES THE HOST'S ONE EMPTY/ERROR IDIOM, including for `gh` not being
@@ -37,6 +38,7 @@ import {
   type AppletAttentionDetail,
   type AppletElement,
 } from '../../lib/applet-registry.js';
+import { appletControlStyles, appletToggle } from '../../lib/applet-controls.js';
 import { appletEmpty, appletError, appletStateStyles } from '../mux-applets.js';
 import { fetchPRs, type PRChecks, type PRListing, type PullRequest } from '../../lib/prs-api.js';
 import { homeSessions } from '../../lib/home-sessions.js';
@@ -224,7 +226,9 @@ export class AppletPRs extends LitElement implements AppletElement {
     return super.createRenderRoot();
   }
 
-  static override styles = css`
+  static override styles = [
+    appletControlStyles,
+    css`
     *,
     *::before,
     *::after {
@@ -473,7 +477,8 @@ export class AppletPRs extends LitElement implements AppletElement {
       color: var(--ink-3);
       padding: var(--s-4) var(--s-1);
     }
-  `;
+  `,
+  ];
 
   // -------------------------------------------------------------------------
   // The inactive rule
@@ -657,19 +662,18 @@ export class AppletPRs extends LitElement implements AppletElement {
   // Intent
   // -------------------------------------------------------------------------
 
-  /** How many dismissed rows the CURRENT listing actually holds. Read by the
-   * rail, so it must count what the panel would show, not what storage holds:
-   * "dismissed (7)" over two rows is a lie about both numbers. */
+  /** How many dismissed rows the CURRENT listing actually holds. It must count
+   * what the panel would show, not what storage holds: "dismissed (7)" over
+   * two rows is a lie about both numbers. */
   get dismissedCount(): number {
     const prs = this._listing?.prs ?? [];
     return prs.reduce((n, p) => (this._dismissed.has(p.key) ? n + 1 : n), 0);
   }
 
-  /** Called by the rail. See setChangedOnly in applet-files for the pattern. */
+  /** Show or hide the panel of pull requests you put down. */
   setShowDismissed(v: boolean): void {
     if (this.showDismissed === v) return;
     this.showDismissed = v;
-    this._railChanged();
   }
 
   /**
@@ -692,8 +696,6 @@ export class AppletPRs extends LitElement implements AppletElement {
     next.add(key);
     this._dismissed = next;
     saveDismissed(next);
-    // The rail's count just changed, and the rail lives in the host.
-    this._railChanged();
   }
 
   /** Pick it back up. The only way a dismissed row returns. */
@@ -703,11 +705,6 @@ export class AppletPRs extends LitElement implements AppletElement {
     next.delete(key);
     this._dismissed = next;
     saveDismissed(next);
-    this._railChanged();
-  }
-
-  private _railChanged(): void {
-    this.dispatchEvent(new CustomEvent('applet-rail-changed', { bubbles: true, composed: true }));
   }
 
   private _retry = (): void => {
@@ -719,7 +716,30 @@ export class AppletPRs extends LitElement implements AppletElement {
   // -------------------------------------------------------------------------
 
   override render(): TemplateResult {
-    return html`<div class="body">${this._renderBody()}</div>`;
+    return html`<div class="body">${this._renderControls()}${this._renderBody()}</div>`;
+  }
+
+  /**
+   * THIS APPLET'S OWN CONTROL, in this applet's own body.
+   *
+   * Absent entirely when nothing is dismissed -- a control for an empty set is
+   * one more thing to read on a surface that should stay quiet -- which is
+   * also why the rule goes with it.
+   */
+  private _renderControls(): TemplateResult | typeof nothing {
+    const n = this.dismissedCount;
+    if (n === 0) return nothing;
+    return html`
+      <div class="controls">
+        ${appletToggle({
+          label: `dismissed (${n})`,
+          on: this.showDismissed,
+          title: 'Show the pull requests you put down',
+          onToggle: () => this.setShowDismissed(!this.showDismissed),
+        })}
+      </div>
+      <div class="controls-rule"></div>
+    `;
   }
 
   private _renderBody(): TemplateResult {
@@ -882,10 +902,8 @@ export class AppletPRs extends LitElement implements AppletElement {
 }
 
 /**
- * The manifest. `rail` is the `dismissed (N)` toggle, and ONLY that: dismissing
- * is destructive-ish and lives on the row it acts on (D3.9). The toggle is
- * absent entirely when nothing is dismissed -- a control for an empty set is
- * one more thing in a strip that should stay quiet.
+ * The manifest: a tab, and nothing about what is under it. `dismissed (N)` is
+ * rendered by the element itself, in _renderControls().
  */
 registerApplet({
   id: 'prs',
@@ -893,20 +911,6 @@ registerApplet({
   icon: GitPullRequest,
   element: 'applet-prs',
   order: 30,
-  rail: (el: AppletElement): TemplateResult => {
-    const p = el as AppletPRs;
-    const n = p.dismissedCount;
-    if (n === 0) return html``;
-    return html`
-      <button
-        type="button"
-        class="${p.showDismissed ? 'toggle on' : 'toggle'}"
-        aria-pressed="${p.showDismissed ? 'true' : 'false'}"
-        title="Show the pull requests you put down"
-        @click="${() => p.setShowDismissed(!p.showDismissed)}"
-      >dismissed (${n})</button>
-    `;
-  },
 });
 
 declare global {

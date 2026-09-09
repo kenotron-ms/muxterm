@@ -21,11 +21,20 @@
  *      obligation the contract puts on an applet, and the Dashboard applet's
  *      _sync() is the reference implementation.
  *
- * The RAIL -- the right-hand end of the tab strip -- is painted here from the
- * active manifest's `rail()`, which returns lit-html rendered into THIS
- * shadow root with THESE styles in scope. An applet fills the rail; it does
- * not get to restyle it. That is why three applets cannot make one strip look
- * like three products.
+ * THE STRIP CARRIES NOTHING APPLET-SPECIFIC. It answers one question --
+ * WHICH APPLET AM I LOOKING AT -- and a filter answers a different one, "what
+ * is this applet showing me", which is the applet's own business and lives in
+ * the applet's own body. The contract is stated in full at the top of
+ * lib/applet-registry.ts; the test it has to pass is that a new applet with
+ * three filters is a zero-line change to this file.
+ *
+ * That is a REVERSAL. This host used to paint a `rail` at the right-hand end
+ * of the strip from the active manifest, in a vocabulary (`.seg`, `.toggle`)
+ * that lived here -- so an applet could only have a control the host already
+ * had a class for, and every new control kind widened this file. Three
+ * built-ins had already spent two classes. The junk drawer was structural, so
+ * there is now no slot at all: see lib/applet-controls.ts for where the
+ * consistency the rail was buying went instead.
  *
  * The ATTENTION POLICY is also the host's, because only the host knows what
  * you are looking at. An applet says "something here wants a human"; the host
@@ -223,16 +232,6 @@ export class MuxApplets extends LitElement {
       align-items: stretch;
       min-width: 0;
     }
-    .spacer {
-      flex: 1;
-      min-width: 0;
-    }
-    .rail {
-      display: flex;
-      align-items: center;
-      gap: var(--s-3);
-      flex: none;
-    }
 
     .tab {
       position: relative;
@@ -293,65 +292,10 @@ export class MuxApplets extends LitElement {
       color: var(--need);
     }
 
-    /* -- THE RAIL'S VOCABULARY -------------------------------------------
-       mux-cos's topbar geometry, verbatim. An applet's rail() fills these
-       classes; it cannot introduce a control kind the host has no style for,
-       and that is the deal (applet-registry.ts:60-66). */
-    .seg {
-      display: flex;
-      gap: 2px;
-      background: var(--surface);
-      padding: 2px;
-      border-radius: var(--r-ctl);
-      border: 1px solid var(--edge);
-      flex: none;
-    }
-    .seg button {
-      display: inline-flex;
-      align-items: center;
-      gap: var(--s-2);
-      font: inherit;
-      font-size: 10.5px;
-      font-weight: 600;
-      line-height: 1;
-      color: var(--ink-3);
-      background: transparent;
-      border: 0;
-      padding: 4px 8px;
-      border-radius: 3px;
-      cursor: pointer;
-    }
-    .seg button:hover {
-      color: var(--ink-1);
-    }
-    .seg button.on {
-      background: color-mix(in srgb, var(--chrome-accent) 22%, var(--surface));
-      color: var(--ink-1);
-    }
-    .toggle {
-      font: inherit;
-      font-size: 10.5px;
-      font-weight: 600;
-      line-height: 1;
-      color: var(--ink-3);
-      background: transparent;
-      border: 1px solid var(--edge);
-      border-radius: var(--r-ctl);
-      padding: 5px 8px;
-      cursor: pointer;
-      flex: none;
-    }
-    .toggle:hover,
-    .toggle.on {
-      color: var(--ink-1);
-      background: var(--chrome-hover);
-    }
+    /* THERE IS NO CONTROL VOCABULARY HERE. The rail's .seg and .toggle rules
+       used to live at this spot, and every applet control the host had no
+       class for was a change to this file. See the header. */
 
-    .seg button:focus-visible,
-    .toggle:focus-visible {
-      outline: 2px solid var(--chrome-accent);
-      outline-offset: 2px;
-    }
     /* Inset, because a full-height tab has no room outside itself. */
     .tab:focus-visible {
       outline: 2px solid var(--chrome-accent);
@@ -379,7 +323,6 @@ export class MuxApplets extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.addEventListener('applet-rail-changed', this._onRailChanged);
     this.addEventListener('applet-navigate', this._onNavigate);
     this.addEventListener('applet-attention', this._onAttention);
     // CAPTURE, on the host itself. Every applet body sits inside this element,
@@ -391,27 +334,11 @@ export class MuxApplets extends LitElement {
   }
 
   override disconnectedCallback(): void {
-    this.removeEventListener('applet-rail-changed', this._onRailChanged);
     this.removeEventListener('applet-navigate', this._onNavigate);
     this.removeEventListener('applet-attention', this._onAttention);
     this.removeEventListener('pointerdown', this._onGesture, { capture: true });
     this.removeEventListener('keydown', this._onGesture, { capture: true });
     super.disconnectedCallback();
-  }
-
-  /**
-   * The rail is read OFF the live applet element, which does not exist until
-   * the first render has committed. One extra render, once, buys a rail that
-   * is populated immediately instead of at the next interaction.
-   *
-   * Queued behind updateComplete rather than requested inline, so it is a NEW
-   * update cycle and not a re-entrant one -- lit warns about the latter, and
-   * the warning would be right.
-   */
-  override firstUpdated(): void {
-    void this.updateComplete.then(() => {
-      this.requestUpdate();
-    });
   }
 
   override updated(): void {
@@ -450,12 +377,6 @@ export class MuxApplets extends LitElement {
   private _appletEl(m: AppletManifest): AppletElement | null {
     return this.renderRoot.querySelector(m.element) as AppletElement | null;
   }
-
-  private _onRailChanged = (): void => {
-    // The rail reads the applet's state directly, so a change there is only
-    // visible after the HOST re-renders.
-    this.requestUpdate();
-  };
 
   /**
    * Navigation, always from a user gesture and never from a data change: an
@@ -553,14 +474,11 @@ export class MuxApplets extends LitElement {
 
   override render(): TemplateResult {
     const list = applets();
-    const active = this.narrow ? undefined : appletById(this._current);
     return html`
       <div class="strip">
         <div class="tabs" role="tablist" aria-label="Applets" @keydown="${this._onTabKey}">
           ${list.map((m) => this._renderTab(m))}
         </div>
-        <span class="spacer"></span>
-        <div class="rail">${active?.rail ? this._renderRail(active) : nothing}</div>
       </div>
       <div class="body">${list.map((m) => this._renderApplet(m))}</div>
     `;
@@ -597,12 +515,6 @@ export class MuxApplets extends LitElement {
     if (count <= 0) return nothing;
     if (count === 1) return html`<span class="flag" aria-hidden="true"></span>`;
     return html`<span class="flag n" aria-hidden="true">${count}</span>`;
-  }
-
-  private _renderRail(m: AppletManifest): TemplateResult | typeof nothing {
-    const el = this._appletEl(m);
-    if (!el || !m.rail) return nothing;
-    return m.rail(el);
   }
 
   /**

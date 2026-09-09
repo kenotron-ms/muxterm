@@ -193,6 +193,7 @@ func readDirEntries(dir string, changed map[string]string) ([]fileEntry, error) 
 		row.Status = statusFor(filepath.Join(dir, de.Name()), row.Dir, changed)
 		out = append(out, row)
 	}
+	out = appendDeleted(dir, changed, out)
 
 	// Directories first, then files, each case-insensitively by name. The
 	// case-sensitive tie-break makes the order total, so two names differing
@@ -208,6 +209,38 @@ func readDirEntries(dir string, changed map[string]string) ([]fileEntry, error) 
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+// appendDeleted adds a row for every path git calls DELETED that is a direct
+// child of dir and is therefore no longer on disk for ReadDir to have found.
+//
+// WHY THIS EXISTS. The listing is built from what the filesystem holds, and a
+// deleted file is precisely the thing that is not there any more -- so without
+// this, a "changed" filter would confidently show a directory with an unstaged
+// `rm` in it as having nothing changed. That is the one failure mode a status
+// filter must not have: silently omitting a change while claiming to show
+// changes. The frontend has always been ready for these rows (a deleted name is
+// struck through); it was the server that never produced one.
+//
+// Only DIRECT children, and only paths that really are absent: a path that
+// still exists was already emitted above with its own status, and emitting it
+// twice would put the same name in the list twice.
+//
+// Size and Modified are zero, honestly: there is no file to measure.
+func appendDeleted(dir string, changed map[string]string, out []fileEntry) []fileEntry {
+	for p, st := range changed {
+		if st != fileStatusDeleted {
+			continue
+		}
+		if filepath.Dir(p) != dir {
+			continue
+		}
+		if _, err := os.Lstat(p); err == nil {
+			continue
+		}
+		out = append(out, fileEntry{Name: filepath.Base(p), Status: fileStatusDeleted})
+	}
+	return out
 }
 
 // statusFor resolves one entry's status against the changed-path map.
