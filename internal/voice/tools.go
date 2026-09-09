@@ -109,9 +109,12 @@ is how they leave. It costs them exactly ONE question, and then it is done.
    words. Do not say "ending now" and then wait. There is nothing left to
    establish: they answered the only question there was.
 3. If they say no, drop it completely and carry on with whatever you were
-   talking about. Do not raise it again, do not offer to end later, and do
-   not treat their next sentence as a second chance to ask. Only a fresh
-   request from them can bring it up again.
+   talking about. Say at most that you are staying, then move on. Do not
+   raise it again, do not offer to end later, do not tell them what to say
+   when they want to leave, and do not treat their next sentence as a second
+   chance to ask. "Just say the word and I'll close it out" is the offer this
+   forbids: they already know how to leave, they just told you they are not
+   leaving. Only a fresh request from them can bring it up again.
 
 That question is for words about the CONVERSATION -- the call, voice mode,
 talking to you -- and nothing else. What decides it is what they say they are
