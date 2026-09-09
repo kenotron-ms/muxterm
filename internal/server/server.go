@@ -310,6 +310,17 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /api/prs", protect(http.HandlerFunc(s.handlePRsList)))
 	s.mux.Handle("POST /api/prs/dismiss", protect(http.HandlerFunc(s.handlePRDismiss)))
 
+	// The artifact viewer: ONE file, shown the way a recipient of a published
+	// link would see it. Its kind, its content type and its size bound all
+	// come from the publishing code rather than from a second table, which is
+	// what makes the local preview and the public page agree by construction.
+	// /open is the one push: it lets the chief of staff put a document on the
+	// user's screen when they ask to be shown one. See artifact_api.go.
+	s.mux.Handle("GET /api/artifact", protect(http.HandlerFunc(s.handleArtifact)))
+	s.mux.Handle("GET /api/artifact/raw", protect(http.HandlerFunc(s.handleArtifactRaw)))
+	s.mux.Handle("GET /api/artifact/doc.css", protect(http.HandlerFunc(s.handleArtifactDocCSS)))
+	s.mux.Handle("POST /api/artifact/open", protect(http.HandlerFunc(s.handleArtifactOpen)))
+
 	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
 
 	if cfg.StaticFS != nil {

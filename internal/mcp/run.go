@@ -328,6 +328,7 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 	registerRemoteReadTools(srv, wrap)
 	registerTunnelTools(srv)
 	registerPublishTools(srv)
+	registerArtifactTools(srv)
 	registerConfigTools(srv)
 
 	// attachOnce guards the one-time workspace attach for resources/list.

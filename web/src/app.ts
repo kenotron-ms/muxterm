@@ -14,6 +14,7 @@ import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './
 import { injectTerminalFont } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
 import { voiceSessionController } from './lib/voice-session-controller.js';
+import { requestArtifactOpen } from './lib/artifact-open.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
 
@@ -1912,6 +1913,16 @@ export class MuxApp extends LitElement {
     if ('voiceEnded' in msg) {
       const ended = msg['voiceEnded'] as { session_id?: string } | null;
       voiceSessionController.endedByServer(ended?.session_id ?? '');
+    }
+    // {"openArtifact":...} envelope (no "type" field, same reason as aiStatus):
+    // somebody asked the chief of staff to show them a file. This is the ONE
+    // server push on this socket that is a relayed human request rather than a
+    // report of something that happened, which is why it is allowed to move
+    // the surface -- see lib/artifact-open.ts. It carries a path and no bytes:
+    // the viewer reads the file itself, under this session.
+    if ('openArtifact' in msg) {
+      const open = msg['openArtifact'] as { path?: string } | null;
+      requestArtifactOpen(open?.path ?? '');
     }
   };
 

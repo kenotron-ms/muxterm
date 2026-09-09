@@ -45,7 +45,11 @@ import { LitElement, html, css, nothing, type PropertyValues, type TemplateResul
 import { customElement, property, state } from 'lit/decorators.js';
 import { CornerLeftUp, File as FileGlyph, Folder } from 'lucide';
 import { icon } from '../../lib/icons.js';
-import { registerApplet, type AppletElement } from '../../lib/applet-registry.js';
+import {
+  registerApplet,
+  type AppletElement,
+  type AppletNavigateDetail,
+} from '../../lib/applet-registry.js';
 import { appletControlStyles, appletToggle } from '../../lib/applet-controls.js';
 import { appletEmpty, appletError, appletStateStyles } from '../mux-applets.js';
 import {
@@ -568,6 +572,34 @@ export class AppletFiles extends LitElement implements AppletElement {
       white-space: nowrap;
       font-family: var(--mono);
     }
+    /* The filename, as the control that opens the Viewer.
+       ⛔ It is a <button> and it must not LOOK like one: same ink, same
+       size, same family as the span it replaced, no slab, no border, no
+       rounded chip. The affordance is the underline on hover and the focus
+       ring -- a filename you can click is still a filename. */
+    button.nm {
+      font: inherit;
+      font-family: var(--mono);
+      font-size: inherit;
+      line-height: inherit;
+      color: inherit;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+    }
+    button.nm:hover {
+      color: var(--ink-1);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    button.nm:focus-visible {
+      outline: 2px solid var(--chrome-accent);
+      outline-offset: 2px;
+      border-radius: 1px;
+    }
     /* A row git has something to say about is BRIGHT; an unchanged one is
        dim. The mark carries which kind of change; this carries that there
        is one, at a glance and from across the room. */
@@ -867,10 +899,26 @@ export class AppletFiles extends LitElement implements AppletElement {
   override updated(changed: PropertyValues<this>): void {
     if (changed.has('active')) this._sync();
     // The contract says an applet consumes its target and clears it back to
-    // null. Nothing dispatches a `path:` target yet, so consuming it IS
-    // clearing it -- but it still has to be cleared, or a stale one fires the
-    // next time this tab is shown.
-    if (changed.has('target') && this.target !== null) this.target = null;
+    // null. `path:<absolute dir>` now HAS a sender -- the Viewer's "in files"
+    // control, which is how you get from a document back to the directory it
+    // came from -- so consuming it means going there. It is still cleared
+    // either way, or a stale one fires the next time this tab is shown.
+    if (changed.has('target') && this.target !== null) {
+      const t = this.target;
+      this.target = null;
+      if (t.startsWith('path:')) {
+        const p = t.slice('path:'.length).trim();
+        // Only an absolute path. A relative one would be resolved against
+        // whatever this applet happens to be showing, which is a different
+        // directory depending on when the target arrived.
+        if (p.startsWith('/')) {
+          // Leaving `all` alone: the caller asked for a place, not a filter,
+          // and silently widening the view would hide that a directory the
+          // user arrived at is being filtered.
+          this._go(p);
+        }
+      }
+    }
   }
 
   /**
@@ -1025,6 +1073,24 @@ export class AppletFiles extends LitElement implements AppletElement {
     this._stale = true;
     this._sync();
   };
+
+  /**
+   * Show one file in the Viewer.
+   *
+   * `applet-navigate` and nothing else: this applet does not know what the
+   * viewer is, only its id, and the host decides what showing it means. That
+   * is the contract working -- one applet reaching another without either of
+   * them, or the host, learning anything about the other's insides.
+   */
+  private _view(path: string): void {
+    this.dispatchEvent(
+      new CustomEvent<AppletNavigateDetail>('applet-navigate', {
+        detail: { applet: 'artifact', target: `path:${path}` },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
 
   /**
    * Switch what this applet is showing.
@@ -1505,9 +1571,14 @@ export class AppletFiles extends LitElement implements AppletElement {
     >`;
     const glyph = html`<span class="ic">${icon(e.dir ? Folder : FileGlyph, { size: 13 })}</span>`;
     const name = html`<span class="nm">${e.name}</span>`;
-    // A directory navigates; a file is a name plus its publishing state. The
-    // name is still not a control -- there is no file viewer this round -- but
-    // the row now carries one, at its trailing edge.
+    // A directory navigates; a file is a name plus its publishing state, and
+    // the NAME IS NOW A CONTROL: it opens the Viewer applet on that file.
+    //
+    // It is a button rather than the whole row for one reason -- the row's
+    // trailing edge already holds publish/copy/revoke, and nesting those
+    // inside a row-sized button is invalid markup that swallows their clicks.
+    // Naming the name is also the truer affordance: the thing you click to
+    // read a file is its name, in every file browser there has ever been.
     if (!e.dir) {
       const path = dir.endsWith('/') ? `${dir}${e.name}` : `${dir}/${e.name}`;
       const pub = this._pubFor(path);
@@ -1519,7 +1590,14 @@ export class AppletFiles extends LitElement implements AppletElement {
         .filter((c) => c !== '')
         .join(' ');
       return html`<div class="${rowCls}" title="${e.name}">
-        ${mark}${glyph}${name}${this._renderPub(path)}
+        ${mark}${glyph}
+        <button
+          type="button"
+          class="nm nmbtn"
+          title="Show this file, the way a published link would show it"
+          @click="${() => this._view(path)}"
+        >${e.name}</button>
+        ${this._renderPub(path)}
       </div>`;
     }
     const path = dir.endsWith('/') ? `${dir}${e.name}` : `${dir}/${e.name}`;
