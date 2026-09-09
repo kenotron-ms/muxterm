@@ -68,6 +68,9 @@ class FleetWatchService : Service() {
     /** Latest snapshot, by sessionId, so a flush can ask "is that still true?". */
     private var latest: Map<String, String> = emptyMap()
 
+    /** Snapshots processed since the last (re)connect. Log evidence only. */
+    private var snapshots: Long = 0
+
     private val flush = Runnable { flushNow() }
 
     override fun onCreate() {
@@ -139,6 +142,7 @@ class FleetWatchService : Service() {
         // guard: the first snapshot of a connection is adopted silently, so
         // coming back from a dead network never replays the fleet as news.
         detector.reset()
+        snapshots = 0
 
         val builder = Request.Builder().url(url)
         // muxterm's /ws is behind AuthMiddleware (internal/server/server.go:
@@ -222,6 +226,14 @@ class FleetWatchService : Service() {
             Log.i(TAG, "baseline adopted: ${rows.size} lane(s), 0 notifications")
             return
         }
+        // One line per snapshot, deliberately. The daemon republishes whenever
+        // any field of any row changes - `doing` most of all - so this is the
+        // line that distinguishes "the feed is dead" from "the feed is busy and
+        // correctly saying nothing", which is otherwise indistinguishable from
+        // outside and is the exact question asked when a notification does not
+        // arrive.
+        snapshots++
+        Log.d(TAG, "snapshot #$snapshots: ${rows.size} lane(s), ${transitions.size} transition(s)")
         if (transitions.isEmpty()) return
 
         for (t in transitions) {
