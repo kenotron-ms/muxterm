@@ -59,6 +59,7 @@
  *   npm install
  *   node exit-conversation.mjs                 # all three
  *   node exit-conversation.mjs --only=yes      # one of yes|no|done-with
+ *   node exit-conversation.mjs --repeat=5      # the same conversations, five times
  *   node exit-conversation.mjs --json=out.json # machine-readable record
  */
 
@@ -80,6 +81,9 @@ const ARGS = process.argv.slice(2);
 const ONLY = (ARGS.find((a) => a.startsWith('--only=')) ?? '').slice(7) || null;
 const JSON_OUT = (ARGS.find((a) => a.startsWith('--json=')) ?? '').slice(7) || null;
 const TRACE = ARGS.includes('--trace');
+// A model is not a function. One green conversation is an anecdote; the same
+// conversation five times running is the claim actually being made.
+const REPEAT = Number((ARGS.find((a) => a.startsWith('--repeat=')) ?? '').slice(9) || 1);
 
 const ENDPOINT =
   process.env.VOICE_EXIT_ENDPOINT ??
@@ -310,27 +314,36 @@ async function main() {
 
   const record = [];
   let failures = 0;
-  for (const sc of chosen) {
-    const result = await runScenario(sc, spec);
-    record.push(result);
-    failures += result.failures.length;
+  for (let run = 1; run <= REPEAT; run++) {
+    for (const sc of chosen) {
+      const result = await runScenario(sc, spec, REPEAT > 1 ? run : 0);
+      record.push(result);
+      failures += result.failures.length;
+    }
   }
 
   console.log('\n\x1b[1m── verdict ─────────────────────────────────────────────────\x1b[0m');
-  for (const r of record) {
-    const bad = r.failures.length;
+  for (const sc of chosen) {
+    const runs = record.filter((r) => r.id === sc.id);
+    const bad = runs.filter((r) => r.failures.length);
     console.log(
-      bad
-        ? `  \x1b[31mFAIL\x1b[0m  ${r.id.padEnd(10)} ${r.title}\n        ${r.failures.join('\n        ')}`
-        : `  \x1b[32mPASS\x1b[0m  ${r.id.padEnd(10)} ${r.title}`,
+      bad.length
+        ? `  \x1b[31mFAIL\x1b[0m  ${sc.id.padEnd(10)} ${runs.length - bad.length}/${runs.length}  ${sc.title}`
+        : `  \x1b[32mPASS\x1b[0m  ${sc.id.padEnd(10)} ${runs.length}/${runs.length}  ${sc.title}`,
     );
-  }
-  const s1 = record.find((r) => r.id === 'yes');
-  if (s1 && !s1.failures.length) {
-    console.log(
-      `\n  \x1b[2mturns between the user's "Yes." and end_voice_session: ${s1.state.turnsBetween}` +
-        `\n  farewell spoken while disconnecting: "${s1.state.farewell}"\x1b[0m`,
-    );
+    for (const r of bad) {
+      for (const f of r.failures) console.log(`        \x1b[31mrun ${r.run}:\x1b[0m ${f}`);
+    }
+    if (sc.id === 'yes') {
+      const counted = runs.filter((r) => r.state.turnsBetween !== undefined);
+      if (counted.length) {
+        console.log(
+          `        \x1b[2mmodel turns between the user's "Yes." and end_voice_session: ` +
+            `${counted.map((r) => r.state.turnsBetween).join(', ')} \u00b7 farewell: ` +
+            `${counted.map((r) => JSON.stringify(r.state.farewell)).join(', ')}\x1b[0m`,
+        );
+      }
+    }
   }
 
   console.log(
@@ -348,13 +361,13 @@ async function main() {
   console.log(
     failures
       ? `\n\x1b[31m\x1b[1mCONVERSATIONAL PROOF FAILED\x1b[0m -- ${failures} broken expectation(s).`
-      : `\n\x1b[32m\x1b[1mCONVERSATIONAL PROOF PASSED\x1b[0m -- ${chosen.length} conversation(s) behaved as specified.`,
+      : `\n\x1b[32m\x1b[1mCONVERSATIONAL PROOF PASSED\x1b[0m -- ${record.length} conversation(s) behaved as specified.`,
   );
   process.exit(failures ? 1 : 0);
 }
 
-async function runScenario(sc, spec) {
-  console.log(`\x1b[1m── ${sc.id}: ${sc.title}\x1b[0m`);
+async function runScenario(sc, spec, run) {
+  console.log(`\x1b[1m── ${sc.id}${run ? ` (run ${run})` : ''}: ${sc.title}\x1b[0m`);
   const ws = await open(spec);
   const state = {};
   const turns = [];
@@ -431,7 +444,7 @@ async function runScenario(sc, spec) {
   }
 
   console.log('');
-  return { id: sc.id, title: sc.title, turns, failures, state };
+  return { id: sc.id, run: run || 1, title: sc.title, turns, failures, state };
 }
 
 function print(turn) {
