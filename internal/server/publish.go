@@ -311,6 +311,16 @@ func (r *PublicationRegistry) Create(path string, ttl time.Duration) (*publicati
 		return nil, err
 	}
 
+	// A directory reaching openPinnedPath produces "is no longer a regular
+	// file. Either the file was replaced deliberately, or it was saved by an
+	// editor that writes a new file and renames it into place" -- a sentence
+	// about an attack, in answer to someone who simply meant the other tool.
+	// Now that folders can be published, say so instead. Behaviour is
+	// unchanged: it still refuses, and still publishes nothing.
+	if fi, lerr := os.Lstat(resolved); lerr == nil && fi.IsDir() {
+		return nil, fmt.Errorf("%s is a directory; use publish_folder to publish a whole folder", resolved)
+	}
+
 	f, fi, err := openPinnedPath(resolved)
 	if err != nil {
 		return nil, err
@@ -587,7 +597,7 @@ func resolvePublishPath(path string) (string, error) {
 func ensureNoSymlinkComponents(abs string) error {
 	rest := strings.TrimPrefix(abs, string(os.PathSeparator))
 	if rest == "" {
-		return fmt.Errorf("%s is the filesystem root, not a file", abs)
+		return fmt.Errorf("%s is the filesystem root", abs)
 	}
 	prefix := string(os.PathSeparator)
 	for _, part := range strings.Split(rest, string(os.PathSeparator)) {
