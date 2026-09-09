@@ -161,14 +161,17 @@ const SCENARIOS = [
       },
       {
         say: 'What was the name of that command for watching a file as it grows?',
+        toolAnswer: 'tail. Use tail -f to watch it as it grows.',
         expect: (t) => reRaised(t),
       },
       {
         say: 'Right, tail. And how do I make it follow a file that gets rotated?',
+        toolAnswer: 'Use tail -F. It follows the NAME, so it reopens the file after a rotation.',
         expect: (t) => reRaised(t),
       },
       {
         say: 'Good. Anything else I should know about it?',
+        toolAnswer: 'Only that -F polls, so a very chatty log costs a little CPU.',
         expect: (t) => reRaised(t),
       },
     ],
@@ -180,6 +183,7 @@ const SCENARIOS = [
     steps: [
       {
         say: 'Can you take a look at the notes file in my home directory and tell me how long it is?',
+        toolAnswer: 'notes.md is 214 lines long.',
         expect: () => null,
       },
       {
@@ -196,6 +200,7 @@ const SCENARIOS = [
       },
       {
         say: "Yep, finished with it. What's the largest file in that directory?",
+        toolAnswer: 'The largest is archive.tar.gz, 1.2 gigabytes.',
         expect: (t) => notAnExitQuestion(t, 'finished with it'),
       },
     ],
@@ -397,7 +402,7 @@ async function runScenario(sc, spec) {
       // Answer whatever it called, the way muxterm answers it, and let it
       // speak the result -- the turn AFTER a hang-up is part of the proof.
       for (const call of turn.calls) {
-        const [status, instruction] = answerFor(call);
+        const [status, instruction] = answerFor(call, step.toolAnswer);
         send(ws, {
           type: 'conversation.item.create',
           item: {
@@ -437,8 +442,16 @@ function print(turn) {
   if (!turn.spoken.length && !turn.calls.length) console.log('  \x1b[2m(said nothing)\x1b[0m');
 }
 
-/** How muxterm answers each tool -- endsession.go's strings, byte for byte. */
-function answerFor(call) {
+/**
+ * How muxterm answers each tool.
+ *
+ * end_voice_session gets endsession.go's strings, byte for byte, because the
+ * turn after the hang-up is part of what is being proven. The four working
+ * tools get whatever short answer the step supplied -- there is no chief of
+ * staff attached in this run, and a canned answer that does not fit the
+ * question leaves the model confabulating in the middle of the evidence.
+ */
+function answerFor(call, stub) {
   switch (call.name) {
     case 'end_voice_session': {
       const line = (call.args?.farewell ?? '').trim() || 'Goodbye.';
@@ -447,14 +460,10 @@ function answerFor(call) {
         'Say this out loud to the user now, and nothing else -- no question, no offer, nothing after it: ' + line,
       ];
     }
-    case 'ask_chief_of_staff':
-      return ['The notes file is 214 lines long.', 'Tell the user the answer.'];
-    case 'dispatch_chief_of_staff':
-      return ['Started. You will be told when it finishes.', 'Tell the user it is under way, then carry on.'];
     case 'cancel_chief_of_staff':
       return ['Stopped.', 'Tell the user it is stopped.'];
     default:
-      return ['Done.', 'Tell the user.'];
+      return [stub ?? 'Done.', 'Tell the user, briefly.'];
   }
 }
 
