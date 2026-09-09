@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug-only overlay: the Android Automotive OS launcher entry.
+
+    The shipped target is Android AUTO (the phone projects to the car screen),
+    which needs no activity at all: the host binds MuxtermCarAppService
+    directly. CarAppActivity below is the Automotive OS entry point, and it
+    exists here for one reason: Android Auto cannot be emulated (the Desktop
+    Head Unit tethers to a real phone), while Automotive OS can. Both run the
+    same templates host, so an AAOS emulator is where this screen gets looked at
+    without a phone in the room.
+
+    Kept out of the main manifest so the released app has exactly ONE launcher
+    icon. If muxterm ever genuinely targets Automotive OS, this becomes a
+    product flavor with its own manifest, not a line moved into main.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        app-automotive declares minSdk 29 and this app is 26. The override is
+        safe here and ONLY here: this manifest is debug-only, the debug variant
+        is only ever installed on an Automotive OS emulator, and every Automotive
+        OS build is API 29 or higher anyway, so the floor it is asking for is
+        already met wherever this code actually runs. Nothing in the released
+        Android Auto build links app-automotive at all.
+    -->
+    <uses-sdk tools:overrideLibrary="androidx.car.app.automotive" />
+
+    <application>
+        <activity
+            android:name="androidx.car.app.activity.CarAppActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:label="@string/app_name"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            tools:node="merge">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Required by Automotive OS: an activity a driver may see while
+                 the vehicle is moving must declare that it is distraction
+                 optimised. The screen is a static two-list glance with no
+                 scrolling task and no drill-down, which is the shape the rule
+                 is asking for. -->
+            <meta-data
+                android:name="distractionOptimized"
+                android:value="true" />
+        </activity>
+    </application>
+</manifest>

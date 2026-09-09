@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Normal (install-time) permission, no runtime prompt. RECORD_AUDIO alone
+         is NOT enough for WebView: Chromium's AudioManagerAndroid needs BOTH.
+         Without it GetCommunicationDevices() returns nullopt
+         ("the process lacks MODIFY_AUDIO_SETTINGS or RECORD_AUDIO permissions",
+         media/audio/android/audio_manager_android.cc), SetCommunicationDevice()
+         fails, MakeLowLatencyInputStream returns nullptr, and getUserMedia
+         rejects with NotReadableError - after the page permission was granted,
+         so every log upstream says the microphone was allowed.
+         Measured on a Pixel 10 Pro / Android 17, 2026-09-07:
+           W/cr_media: Requires MODIFY_AUDIO_SETTINGS and RECORD_AUDIO.
+                       No audio device will be available for recording
+           E/chromium: Unable to select communication device! -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- API 34+. Declaring the type-specific permissions is what stops
+         startForeground() throwing SecurityException on Android 14. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- API 33+ runtime permission. The foreground service runs without it;
+         only the notification is suppressed. Voice is never gated on it. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Deliberately NOT declared (design doc W1.2/W1.4):
+           REQUEST_IGNORE_BATTERY_OPTIMIZATIONS - would help against vendor
+             battery managers, needs a reviewable justification. Add it when a
+             real device shows it is needed.
+           WAKE_LOCK - the foreground service is what keeps the process alive;
+             a partial wake lock on top is cargo cult until proven otherwise.
+           CAMERA / READ_MEDIA_* - not until attachments are actually built. -->
+
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- Android Auto projection: declared optional so the phone-only APK still
+         installs on devices/emulators with no car service at all. -->
+    <uses-feature android:name="android.hardware.type.automotive" android:required="false" />
+    <uses-feature android:name="android.software.car.templates_host" android:required="false" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Muxterm">
+
+        <!-- Android Auto host discovery. -->
+        <meta-data android:name="androidx.car.app.minCarApiLevel" android:value="6" />
+        <meta-data android:name="com.google.android.gms.car.application"
+                   android:resource="@xml/automotive_app_desc" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- foregroundServiceType MUST list every type ever passed to
+             startForeground(). Passing an undeclared type throws
+             IllegalArgumentException; omitting the attribute entirely throws
+             MissingForegroundServiceTypeException on Android 14+. -->
+        <service
+            android:name=".VoiceSessionService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|mediaPlayback" />
+
+        <service
+            android:name=".car.MuxtermCarAppService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <!-- Of the stable, non-experimental Car App Library categories -
+                     NAVIGATION, POI, IOT, WEATHER - IOT is the only one that fits
+                     a status list ("things happening elsewhere"); the others all
+                     assume a map or a forecast. MEDIA/MESSAGING/CALLING exist but
+                     are experimental and restricted to internal/closed test
+                     tracks, so they are not an option here. IOT requires car API
+                     level 6, hence the minCarApiLevel meta-data above. -->
+                <category android:name="androidx.car.app.category.IOT" />
+            </intent-filter>
+        </service>
+
+    </application>
+</manifest>

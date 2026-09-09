@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Release-build host allowlist for MuxtermCarAppService.createHostValidator().
+      Only consulted when BuildConfig.DEBUG is false; debug builds use
+      HostValidator.ALLOW_ALL_HOSTS_VALIDATOR instead (see the comment in
+      MuxtermCarAppService for why that is debug-only).
+
+      Each entry is "packageName,SHA256_signature_digest" for a host allowed to
+      bind this service, per HostValidator.Builder#addAllowedHosts. This ships
+      with the real Android Auto client's package name and a placeholder
+      digest: this app has never been through a release signing/allowlist
+      exercise, so there is no real digest to put here yet. Replace before any
+      release build is distributed.
+    -->
+    <string-array name="hosts_allowlist_sample" translatable="false">
+        <item>com.google.android.projection.gearhead,0000000000000000000000000000000000000000000000000000000000000000</item>
+    </string-array>
+</resources>

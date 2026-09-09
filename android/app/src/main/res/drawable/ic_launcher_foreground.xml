@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive icon foreground: the prompt chevron and the cursor block.
+     Geometry is web/public/icons/icon.svg mapped into the 108dp adaptive canvas
+     by x' = 0.198x + 0.13, y' = 0.198y + 3.24, which centres the ink (not the
+     box) and keeps every painted pixel inside the 66dp safe circle. Regenerate
+     with android/tools/gen-icons.sh; do not hand-edit the numbers. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- prompt chevron -->
+    <path
+        android:pathData="M31,38 L49.6,53.8 L31,69.6"
+        android:strokeColor="#7aa2f7"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- cursor block -->
+    <path
+        android:fillColor="#9ece6a"
+        android:pathData="M59.2,63.7 L78.9,63.7 A2,2 0 0 1 80.9,65.7 L80.9,72 A2,2 0 0 1 78.9,74 L59.2,74 A2,2 0 0 1 57.2,72 L57.2,65.7 A2,2 0 0 1 59.2,63.7 Z" />
+</vector>
