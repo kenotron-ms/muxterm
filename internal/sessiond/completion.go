@@ -134,8 +134,19 @@ type CompletionRecord struct {
 
 	// What it produced. PR is the whole reason the fleet's `pr` field can
 	// finally be non-zero -- see completionPRFrom.
-	PR     int    `json:"pr,omitempty"`
-	PRURL  string `json:"prUrl,omitempty"`
+	PR    int    `json:"pr,omitempty"`
+	PRURL string `json:"prUrl,omitempty"`
+
+	// PRURLs is EVERY pull request this lane opened, in the order printed,
+	// and PRURL is the last of them. Both, because they answer different
+	// questions: a fleet row has one PR column and wants the result, while
+	// the collector wants the whole set.
+	//
+	// ADDITIVE. An older record simply has no prUrls and readers fall back to
+	// PRURL, which is why this is a new field rather than a changed one --
+	// CompletionRecord's JSON names are a persisted format.
+	PRURLs []string `json:"prUrls,omitempty"`
+
 	Output string `json:"output,omitempty"`
 
 	// Acknowledged records that a human has dismissed this completion. The
@@ -239,11 +250,22 @@ func completionOutcome(declared string, exitCode int) string {
 // appears in prose constantly and would attach wrong numbers to lanes.
 var completionPRPattern = regexp.MustCompile(`https?://[A-Za-z0-9.-]*github[A-Za-z0-9.-]*/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/([0-9]+)`)
 
+// completionPRURLLimit bounds how many distinct pull-request URLs one record
+// keeps. A lane that opens two or three is the case this exists for; a pane
+// whose output happens to quote fifty links is not, and an unbounded slice on
+// a persisted record is a disk-growth bug waiting for a chatty session.
+const completionPRURLLimit = 8
+
 // completionPRFrom extracts the pull request a lane produced.
 //
 // The LAST match in the output wins: a lane that discusses an existing PR and
 // then opens its own should be attributed to the one it opened, and output is
 // chronological.
+//
+// This answers "which ONE pull request is this lane's result", which is what
+// the fleet row and the completion summary need -- a row has one PR column.
+// For "every pull request this lane opened", which is what the collector needs,
+// see completionPRURLsFrom.
 func completionPRFrom(text string) (int, string) {
 	matches := completionPRPattern.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
@@ -254,7 +276,46 @@ func completionPRFrom(text string) (int, string) {
 	if err != nil || n <= 0 {
 		return 0, ""
 	}
-	return n, strings.TrimRight(last[0], ".,);")
+	return n, trimPRURL(last[0])
+}
+
+// completionPRURLsFrom returns EVERY distinct pull-request URL in the output,
+// in the order they were printed.
+//
+// completionPRFrom keeps only the last, and for a fleet row that is right: one
+// row, one PR column, and the newest is the result. But it also meant a lane
+// that opened TWO pull requests had one of them silently dropped -- it was
+// never recorded anywhere, so no amount of collecting downstream could find it
+// again. The scan is the only place that ever sees them, so the scan is where
+// they have to be kept.
+//
+// Deduplicated, because `gh pr create` prints its URL and an agent then quotes
+// it back; the same URL twice is one pull request, not two. Order is preserved
+// so the first-printed stays first, and the cap is completionPRURLLimit.
+func completionPRURLsFrom(text string) []string {
+	matches := completionPRPattern.FindAllString(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		u := trimPRURL(m)
+		if u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		out = append(out, u)
+		if len(out) >= completionPRURLLimit {
+			break
+		}
+	}
+	return out
+}
+
+// trimPRURL strips the punctuation a URL picks up from the prose around it.
+func trimPRURL(u string) string {
+	return strings.TrimRight(u, ".,);")
 }
 
 // completionFirstLine returns the last non-blank line of captured output --

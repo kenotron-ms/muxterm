@@ -461,6 +461,10 @@ func (s *Server) recordPaneCompletion(wsID string, pane *Pane, exitCode int, run
 	if record.PR == 0 {
 		record.PR, record.PRURL = completionPRFrom(scanned)
 	}
+	// Every URL the lane printed, not just the one that became this record's
+	// headline PR. A lane that opened two used to have the first one dropped
+	// here, permanently: this scan is the only place either was ever visible.
+	record.PRURLs = completionPRURLsFrom(scanned)
 
 	stored := s.completions.Append(record)
 	if !holdWorkspace {
