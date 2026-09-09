@@ -20,6 +20,18 @@ func startTestServer(t *testing.T) (srv *Server, socketPath string, errCh <-chan
 	// Nest the socket inside a subdir so MkdirAll/Chmod 0700 is exercised and
 	// the permissions test can observe the parent directory mode.
 	socketPath = filepath.Join(t.TempDir(), "run", "sessiond.sock")
+	// ISOLATE THE DURABLE STORES. Both default to $XDG_DATA_HOME/muxterm, so
+	// without this a test that lets a pane exit APPENDS TO THE DEVELOPER'S REAL
+	// completion log -- observed, with junk records carrying 1970 timestamps
+	// landing in a live file and evicting real history through its capacity
+	// trim. The trigger store is worse in kind: a test daemon inheriting real
+	// triggers would spawn real lanes.
+	//
+	// Set here rather than in each test because the hazard belongs to
+	// startTestServer, not to whoever calls it.
+	data := t.TempDir()
+	t.Setenv("MUXTERM_COMPLETIONS_PATH", filepath.Join(data, "completions.json"))
+	t.Setenv("MUXTERM_TRIGGERS_PATH", filepath.Join(data, "triggers.json"))
 	srv, err := NewServer(socketPath)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)

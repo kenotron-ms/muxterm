@@ -205,8 +205,8 @@ func assertToolNames(t *testing.T, got, want []string) {
 	}
 }
 
-// TestMCPToolsListReturns29Tools builds the binary, sends initialize followed
-// by tools/list, and verifies the second stdout line lists exactly 29 tools
+// TestMCPToolsListReturns33Tools builds the binary, sends initialize followed
+// by tools/list, and verifies the second stdout line lists exactly 33 tools
 // in the expected order — all without a running sessiond daemon.
 //
 // This is the MANAGER surface: what a session that is not running inside a
@@ -223,8 +223,11 @@ func assertToolNames(t *testing.T, got, want []string) {
 // revoke_publication), which serves one pinned file to anonymous callers,
 // took it to 27. publish_folder, which serves a whole browsable directory
 // tree to anonymous callers, took it to 28. view_file, which shows one local
-// file to the human in the Viewer, took it to 29.
-func TestMCPToolsListReturns29Tools(t *testing.T) {
+// file to the human in the Viewer, took it to 29. The trigger quartet
+// (create_trigger, list_triggers, set_trigger_enabled, delete_trigger), which
+// starts lanes on a schedule or a file change with no human present, took it
+// to 33.
+func TestMCPToolsListReturns33Tools(t *testing.T) {
 	bin := buildTestBinary(t)
 	got := mcpToolNames(t, bin, "")
 
@@ -265,6 +268,14 @@ func TestMCPToolsListReturns29Tools(t *testing.T) {
 		// 2 config tools (HTTP REST, registered via registerConfigTools)
 		"get_config",
 		"update_config",
+		// 4 trigger tools (registered via registerTriggerTools). LOCAL ONLY:
+		// each one refuses a machine argument rather than ignoring it, because
+		// creating unattended work on a machine you are not looking at is a
+		// follow-on, not this surface.
+		"create_trigger",
+		"list_triggers",
+		"set_trigger_enabled",
+		"delete_trigger",
 	}
 
 	assertToolNames(t, got, wantTools)
@@ -331,6 +342,14 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 		// 2 config tools, unchanged.
 		"get_config",
 		"update_config",
+		// 1 of the 4 trigger tools. create_trigger, set_trigger_enabled and
+		// delete_trigger are WITHHELD here, on the same principle as the two
+		// closers and for a sharper reason: a lane that can create a trigger
+		// can arrange for MORE LANES, on a schedule, indefinitely, with no
+		// human ever having asked. list_triggers destroys nothing and answers
+		// a question a lane has a real reason to ask -- is something else
+		// about to fire into this repository while I work in it.
+		"list_triggers",
 	}
 
 	assertToolNames(t, got, wantTools)
@@ -338,7 +357,8 @@ func TestMCPToolsListInsidePaneWithholdsCloseTools(t *testing.T) {
 	// Stated separately from the ordered comparison above so a failure says
 	// which forbidden tool came back, not merely that a list did not match.
 	for _, name := range got {
-		if name == "close_workspace" || name == "close_pane" {
+		if name == "close_workspace" || name == "close_pane" ||
+			name == "create_trigger" || name == "set_trigger_enabled" || name == "delete_trigger" {
 			t.Errorf("%s is offered to a session inside a pane; it must be withheld", name)
 		}
 	}

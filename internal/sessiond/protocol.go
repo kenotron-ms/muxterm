@@ -191,6 +191,39 @@ const (
 	TypeListDirResult  = "list-dir-result"  // reply:   daemon -> client
 )
 
+// Triggers (ADDITIVE, post-v1). Automations that spawn a lane with no human
+// present: a cron schedule, or a change under a watched path. See
+// docs/designs/2026-09-09-triggers.md.
+//
+// All four requests answer with the SAME reply type carrying the full current
+// set, rather than each returning only what it touched. That is deliberate and
+// it is the cheap version of the visibility requirement: every mutation hands
+// back the whole picture, so a caller that just disabled something sees what
+// else is still armed without having to ask a second question. It also means a
+// client can never hold a stale half-view assembled from single-object replies.
+//
+//	Request (TypeCreateTrigger):      Trigger
+//	Request (TypeListTriggers):       -
+//	Request (TypeSetTriggerEnabled):  TriggerID, TriggerEnabled
+//	Request (TypeDeleteTrigger):      TriggerID
+//	Reply   (TypeTriggerResult):      Triggers
+const (
+	TypeCreateTrigger     = "create-trigger"      // request: client -> daemon
+	TypeListTriggers      = "list-triggers"       // request: client -> daemon
+	TypeSetTriggerEnabled = "set-trigger-enabled" // request: client -> daemon
+	TypeDeleteTrigger     = "delete-trigger"      // request: client -> daemon
+	TypeTriggerResult     = "trigger-result"      // reply:   daemon -> client
+)
+
+// CodeTriggerRejected is returned when a trigger is refused: an unparseable
+// schedule, a watch path that does not exist or is too large to watch, an
+// unlaunchable harness, or an unknown id.
+//
+// Its own code because the caller's next move is always the same and always
+// theirs: fix the request. It is never a plumbing failure, which is why it must
+// not arrive looking like one.
+const CodeTriggerRejected = "trigger-rejected"
+
 // Read-only filesystem error codes (ADDITIVE, post-v1). Every distinguishable
 // failure gets its own code, because the caller's next move differs for each:
 // a missing file is a typo, a directory is a wrong tool, a permission denial
@@ -444,6 +477,18 @@ type Message struct {
 	EOF          bool           `json:"eof,omitempty"`
 	Truncated    bool           `json:"truncated,omitempty"`
 	Entries      []DirEntryInfo `json:"entries,omitempty"`
+
+	// Trigger fields (create-trigger / list-triggers / set-trigger-enabled /
+	// delete-trigger -> trigger-result). See the trigger block below.
+	//
+	// TriggerEnabled is a pointer for the same reason BusyCount and
+	// ProcessExitCode are: false is a meaningful value here -- it is the whole
+	// point of the stop button -- and a plain bool could not tell "turn this
+	// off" from "this field was not sent".
+	Trigger        *Trigger      `json:"trigger,omitempty"`
+	Triggers       []TriggerView `json:"triggers,omitempty"`
+	TriggerID      string        `json:"triggerId,omitempty"`
+	TriggerEnabled *bool         `json:"triggerEnabled,omitempty"`
 }
 
 // CloseOutcomeMessage maps a daemon close transaction result onto the additive

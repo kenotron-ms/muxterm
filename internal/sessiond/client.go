@@ -729,3 +729,44 @@ func (c *Client) dispatchEvent(msg *Message) {
 		}
 	}
 }
+
+// Trigger management. All four return the FULL current set, because every
+// trigger request answers with TypeTriggerResult (protocol.go) -- a mutation
+// hands back the whole picture so a caller never assembles a stale half-view
+// out of single-object replies.
+
+// CreateTrigger stores a new trigger and returns every trigger.
+func (c *Client) CreateTrigger(t Trigger) ([]TriggerView, error) {
+	return c.triggerRequest(&Message{Type: TypeCreateTrigger, Trigger: &t})
+}
+
+// ListTriggers returns every trigger with its next fire time and fire log.
+func (c *Client) ListTriggers() ([]TriggerView, error) {
+	return c.triggerRequest(&Message{Type: TypeListTriggers})
+}
+
+// SetTriggerEnabled turns a trigger on or off, effective immediately.
+func (c *Client) SetTriggerEnabled(id string, enabled bool) ([]TriggerView, error) {
+	return c.triggerRequest(&Message{Type: TypeSetTriggerEnabled, TriggerID: id, TriggerEnabled: &enabled})
+}
+
+// DeleteTrigger removes a trigger and tears down its watches.
+func (c *Client) DeleteTrigger(id string) ([]TriggerView, error) {
+	return c.triggerRequest(&Message{Type: TypeDeleteTrigger, TriggerID: id})
+}
+
+// triggerRequest is the shared round trip. A daemon that predates triggers
+// answers with an unknown-type error rather than TypeTriggerResult, and saying
+// so plainly is better than reporting "no triggers" for a daemon that has never
+// heard of them -- an empty list is a real answer and must not be a synonym for
+// "unsupported".
+func (c *Client) triggerRequest(msg *Message) ([]TriggerView, error) {
+	reply, err := c.request(msg)
+	if err != nil {
+		return nil, err
+	}
+	if reply.Type != TypeTriggerResult {
+		return nil, fmt.Errorf("unexpected reply %q to %q (a daemon without trigger support?)", reply.Type, msg.Type)
+	}
+	return reply.Triggers, nil
+}
