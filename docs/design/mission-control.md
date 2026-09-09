@@ -550,29 +550,56 @@ directory shows `M` when anything beneath it changed.
 No poll: becoming active *is* the refresh. A directory listing that refreshes
 itself while you are not looking is cost with no benefit.
 
-**C4 — the Pull Requests applet.** Shipped against **a real source that is not
-the watchlist**, which is the middle of the three acceptable outcomes, chosen
-deliberately.
+**C4 — the Pull Requests applet.** Shipped first against a repo scan, and
+**replaced**, because the scan answered the wrong question. This section records
+both, because the failure is the argument for what is there now.
 
-The source is `GET /api/prs`, which asks the host's already-authenticated `gh`
-over the repos of every root the browser knows: the live fleet's local project
-paths, **union everything it has ever seen** (`muxterm.applet.prs.roots`, MRU
-capped at 12), falling back to the server's own working directory when it knows
-none. The remembering is the load-bearing part — a lane that exits takes its row
-out of the fleet at exactly the moment you want to know what it opened.
+*What it was.* `GET /api/prs?root=…` resolved each root the browser knew — the
+live fleet's project paths, union a browser-local MRU — to a repository and ran
+`gh pr list` over it. In production it produced, on every poll:
 
-**What this is not, stated plainly.** It is not attribution: no GitHub API can
-say *which lane opened this PR*, and this applet does not claim to. It is not
-durable: a browser-local memory dies with the profile. The durable answer is
-round one's D2 in full — a watchlist owned by sessiond, fed by
-`muxterm session report --pr N` (**which still nothing calls**) plus a repo scan,
-with dismissals in a separate store so a re-scan cannot resurrect them. That is
-the follow-on, and it is named rather than half-built.
+```
+/home/ken -- fatal: not a git repository (or any of the parent directories): .git
+```
 
-`SessionState.PR` is still the right attribution hint and is still dead for want
-of a producer. This round did not add one; it is a small contained change —
-after `gh pr create` succeeds, report the number — and it belongs with the
-watchlist that consumes it.
+Every lane on the machine reports `/home/ken` as its project path (a lane `cd`s
+into its worktree *after* launch), so the applet named a directory that is not a
+checkout and showed an error where a list should have been. **A better directory
+was not the fix.** The lanes span many worktrees, many branches and more than one
+repository, so no single directory's repo is the answer — and a repo scan cannot
+say *which pull requests came out of sessions here*, which is the question
+actually asked: “a lane might have closed out, but I don't know what PRs have
+been opened that we know about”.
+
+*What it is.* A **collector**, server-owned and durable. sessiond already scrapes
+a `gh pr create` URL out of a dying lane's output and writes it to the completion
+log (`completionPRFrom`); `internal/server/prs_store.go` ingests those into
+`collected-prs.json`, beside `completions.json`, with the same atomic tmp+rename
+discipline. Ingest is **additive and never subtractive**, which is the whole
+property: a collected pull request survives its lane's death, its workspace being
+closed, its completion being acknowledged, that log's 200-record trim, and a
+restart of either process. The repository is parsed from the scraped URL, never
+guessed from a path, so a repo nobody has a worktree for still refreshes and two
+repositories never blur together.
+
+Dismissal is a durable server-side flag on the same record, so it survives a
+reload, a second browser and a restart, and re-collecting the same pull request
+tomorrow cannot resurrect it. It is muxterm state and never GitHub state — the
+route shells out to nothing and the applet says so under the list.
+
+Status — open/merged/closed — is a five-minute cached `gh pr view --repo`,
+refreshed on view, batched at 12 per request with a concurrency of 4. A failure
+annotates **one row** and never the applet.
+
+**What is still missing, named rather than half-built.** Collection happens at
+lane EXIT, because that is when sessiond scans. A live lane that opens a pull
+request mid-run has it collected when it finishes, not before; a lane that opens
+two has only the last one scraped (`completionPRFrom` takes the last match); and
+an interactive shell where a human ran `gh pr create` produces no completion
+record at all, so nothing is collected. All three are fixed in the same place —
+the producer calling `muxterm session report --pr N`, which `SessionState.PR`
+has always been waiting for and **which still nothing calls** — plus a scan that
+keeps every match rather than the last. That is the follow-on.
 
 ## Two endpoints, and the authority they do not add
 
@@ -584,6 +611,10 @@ rather than a jail, and it is deliberately not a jail. Inventing a chroot here
 would buy nothing while implying a boundary that the adjacent WebSocket does not
 honour.
 
-`/api/prs` degrades rather than fails: a missing or logged-out `gh` is a `200`
-carrying `available:false` and a sentence a person can act on. Showing "no pull
-requests" when the truth is "I could not ask" would be confidently wrong.
+`/api/prs` degrades rather than fails, and after the C4 replacement it degrades
+**without losing the list**: a missing or logged-out `gh` is a `200` carrying
+`statusAvailable:false`, a sentence a person can act on, and every collected row
+with its number, title, repository, lane and link. Showing "no pull requests"
+when the truth is "I could not ask" would be confidently wrong — and so would
+showing an error page over a status fetch, which is the exact defect the old
+route shipped.

@@ -20,6 +20,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/ai"
 	"github.com/kenotron-ms/muxterm/internal/authserver"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/voice"
 )
 
@@ -137,6 +138,13 @@ type Server struct {
 	// lazily-constructed Anthropic client. Never reachable from cfg.
 	ai *ai.Manager
 
+	// prs is the durable collector behind the Pull Requests applet: the
+	// pull requests muxterm's own sessions opened, kept after those
+	// sessions are gone. Server-owned rather than per-browser, because a
+	// collected pull request belongs to the machine's history and not to
+	// whoever happens to have a tab open. See prs_store.go.
+	prs *prCollector
+
 	// version is the running binary's version string, used by the
 	// /api/update/* routes. updating serializes apply requests so two
 	// concurrent clients cannot both rewrite the binary.
@@ -180,6 +188,13 @@ func New(cfg Config) *Server {
 		aiKeyPath = ai.DefaultKeyPath()
 	}
 	s.ai = ai.NewManager(aiKeyPath)
+
+	// The collected pull requests, loaded from disk at construction so the
+	// first GET after a restart answers from the store rather than from an
+	// empty list it would then have to rebuild. Both paths are XDG-derived
+	// through sessiond's own resolver, so a dev server never reads the real
+	// machine's log or writes the real machine's store.
+	s.prs = newPRCollector(DefaultCollectedPRsPath(), sessiond.CompletionsPath())
 
 	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy, cfg.LocalToken)
 	protect := func(h http.Handler) http.Handler {
@@ -293,6 +308,7 @@ func New(cfg Config) *Server {
 	// internal/server/prs_api.go.
 	s.mux.Handle("GET /api/files", protect(http.HandlerFunc(s.handleFilesList)))
 	s.mux.Handle("GET /api/prs", protect(http.HandlerFunc(s.handlePRsList)))
+	s.mux.Handle("POST /api/prs/dismiss", protect(http.HandlerFunc(s.handlePRDismiss)))
 
 	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
 
