@@ -218,6 +218,24 @@ func (s *Server) serveTreeFile(w http.ResponseWriter, p *publication, base, dirK
 // reachable, which is the difference between publishing a folder and
 // publishing one document that happens to have neighbours.
 func (s *Server) serveTreeDirectory(w http.ResponseWriter, p *publication, base string, d *treeDir) {
+	// ⛔ THE ROOT IS RE-PROVEN HERE TOO, BEFORE A LISTING IS RENDERED.
+	//
+	// A listing is drawn entirely from the manifest, so it leaks no content
+	// when the root has been swapped -- but it would answer 200 and look
+	// healthy for a publication that is broken, while every page linked from
+	// it answers 409. Found exactly that way in verification: the root page
+	// returned 200 with an empty document while its own links refused. A page
+	// of a publication that refuses to serve must itself refuse.
+	if err := verifyTreeRoot(p.tree); err != nil {
+		var fault *pubFault
+		if errors.As(err, &fault) {
+			publicRefusal(w, fault.Status, fault.Public, "")
+			return
+		}
+		publicRefusal(w, http.StatusInternalServerError, "This folder cannot be served right now.", "")
+		return
+	}
+
 	doc := ""
 	docRel := ""
 	if d.indexRel != "" {
