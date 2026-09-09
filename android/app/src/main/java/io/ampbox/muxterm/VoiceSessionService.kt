@@ -150,13 +150,36 @@ class VoiceSessionService : Service() {
         //   IllegalArgumentException              - type not declared in manifest
         //   SecurityException                     - type permission not declared
         // ServiceCompat handles the pre-34 shape difference.
-        ServiceCompat.startForeground(
-            this,
-            NOTIF_ID,
-            buildNotification(state),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
-        )
+        // The comment above lists the manifest-disagreement cases, which are all
+        // build-time mistakes. There is a FOURTH case and it is a RUNTIME one:
+        // RECORD_AUDIO is a foreground-only permission (its appop sits in mode
+        // `foreground`), so when the app is not in an eligible state - the phone
+        // locked, the activity not resumed - the platform treats it as not held
+        // and refuses the microphone FGS type:
+        //
+        //   SecurityException: Starting FGS with type microphone ... requires
+        //   permissions: all of [FOREGROUND_SERVICE_MICROPHONE] and any of
+        //   [... RECORD_AUDIO] and the app must be in the eligible
+        //   state/exemptions to access the foreground only permission
+        //
+        // Measured on a Pixel 10 Pro / Android 17, 2026-09-07, with the phone
+        // locked: this was UNCAUGHT and killed the whole app, repeatedly. Being
+        // refused here is correct platform behaviour; dying is not. Report it to
+        // the page and end the session instead.
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIF_ID,
+                buildNotification(state),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+            )
+        } catch (e: Exception) {
+            Log.w(MainActivity.TAG, "foreground service refused: ${e.javaClass.simpleName}: ${e.message}")
+            events?.invoke("voice.unavailable")
+            stop()
+            return START_NOT_STICKY
+        }
         Log.i(MainActivity.TAG, "foreground service started (microphone|mediaPlayback)")
         setRunning(true)
         watchRecording()
@@ -227,6 +250,24 @@ class VoiceSessionService : Service() {
         }
         am.registerAudioRecordingCallback(cb, handler)
         recordingCallback = cb
+
+        // registerAudioRecordingCallback only fires on CHANGE; it never delivers
+        // the state that is already true at registration time. And capture is
+        // normally already running when we get here: the page calls
+        // getUserMedia, Chromium opens the input, THEN onPermissionRequest ->
+        // onAudioGranted -> start() -> this. So no event ever arrives,
+        // sawRecording stays false, and [neverStarted] tears down a session
+        // whose microphone is live - after which the OS silences the capture
+        // within about five seconds, which is precisely the failure this
+        // service exists to prevent.
+        //
+        // Measured on a Pixel 10 Pro / Android 17, 2026-09-07:
+        //   22:40:23 foreground service started      (capture already live)
+        //   22:41:23 capture never started within 60000ms, ending voice session
+        //   22:41:28 AF::RecordTrack setSilenced: (silenced)
+        //
+        // Priming from the current configuration closes that window.
+        cb.onRecordingConfigChanged(am.activeRecordingConfigurations.toMutableList())
     }
 
     private fun unwatchRecording() {

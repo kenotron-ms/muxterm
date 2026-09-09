@@ -3,6 +3,19 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Normal (install-time) permission, no runtime prompt. RECORD_AUDIO alone
+         is NOT enough for WebView: Chromium's AudioManagerAndroid needs BOTH.
+         Without it GetCommunicationDevices() returns nullopt
+         ("the process lacks MODIFY_AUDIO_SETTINGS or RECORD_AUDIO permissions",
+         media/audio/android/audio_manager_android.cc), SetCommunicationDevice()
+         fails, MakeLowLatencyInputStream returns nullptr, and getUserMedia
+         rejects with NotReadableError - after the page permission was granted,
+         so every log upstream says the microphone was allowed.
+         Measured on a Pixel 10 Pro / Android 17, 2026-09-07:
+           W/cr_media: Requires MODIFY_AUDIO_SETTINGS and RECORD_AUDIO.
+                       No audio device will be available for recording
+           E/chromium: Unable to select communication device! -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- API 34+. Declaring the type-specific permissions is what stops
          startForeground() throwing SecurityException on Android 14. -->
