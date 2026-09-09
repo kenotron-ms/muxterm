@@ -46,15 +46,16 @@ const mintTTL = 10 * time.Minute
 // end-to-end harness; they are not a log and are not durable.
 const maxTraces = 500
 
-// NewManager builds a Manager. cfg must have passed Validate.
-func NewManager(cfg config.VoiceConfig, bridge Bridge) (*Manager, error) {
+// NewManager builds a Manager. cfg must have passed Validate. keyPath is the
+// owner-only file a settings-saved API key lives in (voice.DefaultKeyPath()).
+func NewManager(cfg config.VoiceConfig, bridge Bridge, keyPath string) (*Manager, error) {
 	if !cfg.Enabled {
 		return nil, errors.New("voice: disabled")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	cred, err := NewCredential(cfg)
+	cred, err := NewCredential(cfg, keyPath)
 	if err != nil {
 		return nil, err
 	}

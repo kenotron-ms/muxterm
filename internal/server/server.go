@@ -272,6 +272,16 @@ func New(cfg Config) *Server {
 	// valid -- see internal/server/voice.go.
 	s.registerVoiceRoutes(s.cfg.Voice, protect)
 
+	// Voice CREDENTIALS, registered unconditionally -- unlike the routes
+	// above, whose whole job is to be absent when voice is off. Configuring
+	// voice while it is off is the normal path: save, check, then enable.
+	// The key goes in via PUT and only a boolean comes out; see
+	// internal/server/voice_settings.go.
+	s.mux.Handle("GET /api/voice/settings", protect(http.HandlerFunc(s.handleVoiceSettingsGet)))
+	s.mux.Handle("PUT /api/voice/settings", protect(http.HandlerFunc(s.handleVoiceSettingsPut)))
+	s.mux.Handle("DELETE /api/voice/key", protect(http.HandlerFunc(s.handleVoiceSettingsDeleteKey)))
+	s.mux.Handle("POST /api/voice/check", protect(http.HandlerFunc(s.handleVoiceSettingsCheck)))
+
 	// Self-update. Protected like every other owner surface: applying an
 	// update rewrites the binary this process is running from.
 	s.mux.Handle("GET /api/update/status", protect(http.HandlerFunc(s.handleUpdateStatus)))

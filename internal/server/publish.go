@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
 )
 
 // Publishing one local file to an anonymous, unguessable URL.
@@ -584,7 +586,47 @@ func resolvePublishPath(path string) (string, error) {
 	if err := ensureNoSymlinkComponents(resolved); err != nil {
 		return "", err
 	}
+	if err := refuseMuxtermConfigDir(resolved); err != nil {
+		return "", err
+	}
 	return resolved, nil
+}
+
+// refuseMuxtermConfigDir keeps muxterm's own credential directory off the
+// public internet.
+//
+// This function is here because of what settings can now do. muxterm accepts
+// an API key through the browser and writes it to
+// $XDG_CONFIG_HOME/muxterm/voice_api_key -- a file with a perfectly ordinary
+// name, in a directory whose name starts with a dot only by convention.
+// Neither publish path stops it: the single-file path has no name-based
+// deny-list at all, and the folder path's dotfile rule is applied to CHILDREN
+// of the published root and never to the root itself, so `publish_folder
+// ~/.config/muxterm` would serve config.toml, voice_api_key, anthropic_key
+// and keys.env to anyone holding the link.
+//
+// Placed in resolvePublishPath deliberately: that is the ONE funnel both
+// publish_file and publish_folder go through, so this cannot be bypassed by
+// picking the other route.
+//
+// This is a narrow guard on muxterm's own secrets, NOT a fix for the general
+// problem -- a dot-directory is still publishable as a root, and any other
+// credential file on the machine is still one call away from a public URL.
+// See the PR body.
+func refuseMuxtermConfigDir(resolved string) error {
+	dir := filepath.Dir(muxcfg.DefaultPath())
+	// Compare against the real path: a symlinked config dir must not be a
+	// way around this.
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
+	}
+	if dir == "" {
+		return nil
+	}
+	if resolved == dir || strings.HasPrefix(resolved, dir+string(os.PathSeparator)) {
+		return fmt.Errorf("refusing to publish %s: that is muxterm's own configuration directory, which holds API keys and session tokens", resolved)
+	}
+	return nil
 }
 
 // ensureNoSymlinkComponents walks every component of an absolute path and
