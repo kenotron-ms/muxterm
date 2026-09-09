@@ -53,6 +53,18 @@ type Server struct {
 	// session-state ticker, and a file write must never be able to stall an
 	// attach or a broadcast.
 	completions *completionStore
+
+	// triggers is the durable set of automations that spawn lanes with no
+	// human present, and the engine that fires them. Same ownership shape as
+	// completions and for the same reason: its own lock, written from the
+	// scheduler and watcher goroutines, read from request handlers.
+	//
+	// The ENGINE is here rather than being a free-standing service because
+	// firing is a daemon capability -- it creates workspaces and panes -- and
+	// because overlap prevention has to consult the same registry and
+	// completion log this Server owns. See docs/designs/2026-09-09-triggers.md.
+	triggers *triggerStore
+	engine   *triggerEngine
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -69,7 +81,9 @@ func NewServer(socketPath string) (*Server, error) {
 		preview:     make(map[string]*previewState),
 		sessions:    newSessionStore(),
 		completions: newCompletionStore(CompletionsPath()),
+		triggers:    newTriggerStore(TriggersPath()),
 	}
+	s.engine = newTriggerEngine(s, s.triggers)
 	return s, nil
 }
 
@@ -178,6 +192,16 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if claudeAdapterEnabled() {
 		go s.claudeAdapterLoop(ctx)
 	}
+
+	// Triggers. Unlike the two loops above this is NOT opt-in and does not
+	// wait for a connection: the entire point of a trigger is that it fires
+	// when nobody is watching. The cost with no triggers configured is one map
+	// walk per second over an empty map.
+	//
+	// Started here, after the registry cold-start, because firing creates
+	// workspaces in it. Stopped by the same ctx cancellation, which also tears
+	// down every fsnotify watch.
+	go s.engine.Start(ctx)
 
 	for {
 		nc, err := ln.Accept()

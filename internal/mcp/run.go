@@ -706,7 +706,7 @@ func registerAllTools(
 				// it rather than only afterwards.
 				"workspace": map[string]any{
 					"type":        "string",
-					"maxLength":   maxWorkspaceNameBytes,
+					"maxLength":   sessiond.MaxWorkspaceNameBytes,
 					"description": "workspace name: one line of plain text, no control characters",
 				},
 				"harness": map[string]any{

@@ -3,9 +3,6 @@ package mcp
 import (
 	"fmt"
 	"log"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
@@ -14,8 +11,8 @@ import (
 // internal/sessiond/agent_catalog.go matches by argv basename, so a pane
 // started here is recognised by the daemon as the harness it actually is.
 const (
-	HarnessAmplifier = "amplifier"
-	HarnessClaude    = "claude"
+	HarnessAmplifier = sessiond.HarnessAmplifier
+	HarnessClaude    = sessiond.HarnessClaude
 )
 
 // Launchable lists the harnesses HarnessArgv can start, in schema order.
@@ -23,7 +20,7 @@ const (
 // The daemon's agent catalog also RECOGNISES codex and opencode, but neither
 // is launchable from here: recognising a process that is already running is
 // not the same as knowing the argv that starts one mid-conversation.
-var Launchable = []string{HarnessAmplifier, HarnessClaude}
+var Launchable = sessiond.LaunchableHarnesses
 
 // HarnessArgv returns the argv that starts harness with its opening turn
 // already in hand. There is no window between spawn and first input because
@@ -62,134 +59,23 @@ var Launchable = []string{HarnessAmplifier, HarnessClaude}
 // the absence of `--mode chat`, the session-id join, the resume -- is not
 // guessable from the outside. Call spawn_lane with a goal instead.
 func HarnessArgv(harness, prompt, goal string) ([]string, error) {
-	// A PROMPT IS NOT A COMMAND. Both harnesses read a leading "/" as a slash
-	// command, so a caller-supplied prompt of "/clear" or "/goal ..." would
-	// not be delegated work at all -- it would be an instruction to the
-	// harness, chosen by whoever wrote the prompt. That caller is frequently a
-	// model (spawn_lane is an MCP tool the chief of staff calls), and a model
-	// that can pick the first character of a lane's argv can pick which
-	// command the lane runs.
+	// THE BODY MOVED, THE REASONING DID NOT. Everything above is still the
+	// documentation for this argv; sessiond.LaneArgv is the implementation, and
+	// it repeats the load-bearing facts in short form at each branch.
 	//
-	// It is a refusal, not an escape, because there is no reliable escape:
-	// amplifier's headless /goal detection strips the prompt before testing it
-	// (amplifier_app_cli/main.py: prompt.strip().lower().startswith("/goal ")),
-	// so a leading space does not neutralise it. The goal parameter below is
-	// the supported way to ask for a /goal loop.
-	if err := checkPromptIsNotCommand(prompt); err != nil {
-		return nil, err
-	}
-	switch harness {
-	case HarnessClaude:
-		// Claude Code has no goal mode. Silently dropping the condition would
-		// hand back a lane that looks delegated but declares no intent, and
-		// the caller would only discover it when drift detection never fired.
-		if goal != "" {
-			return nil, fmt.Errorf("harness %q has no goal mode: only %q can run /goal loops (drop goal, or switch harness)",
-				HarnessClaude, HarnessAmplifier)
-		}
-		if prompt == "" {
-			return nil, fmt.Errorf("prompt is required for harness %q", HarnessClaude)
-		}
-		return []string{"claude", prompt}, nil
-
-	case HarnessAmplifier:
-		if goal != "" {
-			// NO `--mode chat` HERE, AND THAT IS THE WHOLE POINT.
-			//
-			// `/goal` is a slash command, and amplifier only honours it on the
-			// HEADLESS path: the single `prompt.strip().lower().startswith(
-			// "/goal ")` test lives in execute_single (main.py:4288). In
-			// `--mode chat` an initial prompt is handed straight to
-			// _execute_with_interrupt (main.py:3992-4005) and never reaches
-			// CommandProcessor, so "/goal <condition>" arrives at the model as
-			// ordinary prompt text: session_state["goal"] is never set, the
-			// orchestrator's auto-continuation never arms, and the lane comes
-			// back mode=interactive with an empty doneMeans -- a lane that
-			// looks delegated and declares no intent, which is precisely what
-			// the goal parameter exists to prevent.
-			//
-			// Adding `--mode chat` back to make this branch match the one below
-			// REINTRODUCES that bug. The two branches differ because the two
-			// lanes are different: an interactive lane must survive its first
-			// turn, and a goal lane must be headless to loop at all.
-			//
-			// A goal lane therefore runs many turns headlessly and then EXITS,
-			// and that exit is the loop finishing, not the pane dying early.
-			// The auto-continuation is driven INSIDE the orchestrator
-			// (loop-streaming's execute(), off session_state["goal"]) -- see
-			// the note at main.py:4000-4004 and amplifier's
-			// docs/GOAL_COMMAND.md -- so nothing on this side needs to keep the
-			// process alive between turns.
-			//
-			// WHAT USED TO HAPPEN WHEN THAT EXIT CAME, and what happens now.
-			// The command was once exactly `amplifier run "/goal <cond>"`, so
-			// the loop finishing exited the pane's only process.
-			// Server.handlePaneExit removed the pane, ReapIfEmpty removed the
-			// workspace when that was its last one, and the session-state row
-			// went with it: a finished goal lane went `autonomous/working` ->
-			// gone from fleet_status with no terminal row observable in between
-			// (polled at 3s: present at T, absent at T+4), and the verdict the
-			// lane existed to produce was not readable afterwards. Worse for
-			// the human than for the tooling: a lane that got 80% of the way
-			// there took its whole context with it, so "now also handle the
-			// empty case" meant writing a fresh goal that re-derives
-			// everything.
-			//
-			// So the loop is still headless -- that part was never negotiable
-			// -- but it is now phase 1 of a two-phase command that resumes the
-			// SAME session interactively in the SAME pane when the loop ends
-			// (sessiond.GoalLaneArgv). The `/goal ` prefix and the absence of
-			// `--mode chat` both still apply, to phase 1, for every reason
-			// above; phase 2 is `amplifier resume <id>`, which is interactive
-			// by construction and takes no mode flag at all.
-			//
-			// Blank-checked for the same reason as ever: a goal of only
-			// whitespace yields "/goal " with nothing after it, which fails
-			// amplifier's startswith test and degrades to exactly the
-			// literal-prompt lane described above, silently. Checked here
-			// rather than only in the builder so the error names the parameter
-			// the caller actually passed.
-			if strings.TrimSpace(goal) == "" {
-				return nil, fmt.Errorf("goal is blank: a /goal loop needs a stop condition to declare (drop goal to start an interactive lane)")
-			}
-			return sessiond.GoalLaneArgv(goal)
-		}
-		if prompt == "" {
-			return nil, fmt.Errorf("prompt is required for harness %q (or pass a goal)", HarnessAmplifier)
-		}
-		// `--mode chat` is load-bearing HERE: without it an interactive lane is
-		// single-shot and the pane dies the moment it answers its first turn,
-		// leaving a Completed row on the home view for a lane that never did
-		// the work. It is exactly wrong in the goal branch above.
-		return []string{"amplifier", "run", prompt, "--mode", "chat"}, nil
-
-	case "":
-		return nil, fmt.Errorf("harness is required (launchable: %s)", strings.Join(Launchable, ", "))
-
-	default:
-		return nil, fmt.Errorf("unknown harness %q (launchable: %s)", harness, strings.Join(Launchable, ", "))
-	}
+	// It moved because a TRIGGER fires inside the daemon at a moment when
+	// nobody is attached and no MCP connection exists, and package mcp imports
+	// sessiond so the call cannot go the other way. See
+	// internal/sessiond/lane_argv.go for why freezing an argv into each trigger
+	// was rejected instead. This is still the ONE place lane argv is built --
+	// it is simply built one package down.
+	return sessiond.LaneArgv(harness, prompt, goal)
 }
-
-// maxWorkspaceNameBytes caps a workspace name. Generous for anything a human
-// or a chief of staff would write ("backend auth refresh"), small enough that
-// a name cannot be used as a payload: it is echoed into the daemon registry,
-// every browser's workspace dock, and this process's logs.
-const maxWorkspaceNameBytes = 128
 
 // checkPromptIsNotCommand rejects a prompt that a harness would read as a
 // slash command rather than as work. See the note in HarnessArgv.
 func checkPromptIsNotCommand(prompt string) error {
-	trimmed := strings.TrimSpace(prompt)
-	if !strings.HasPrefix(trimmed, "/") {
-		return nil
-	}
-	head := trimmed
-	if len(head) > 40 {
-		head = head[:40] + "..."
-	}
-	return fmt.Errorf("prompt starts with %q, which the harness reads as a slash command "+
-		"rather than as work: rephrase it, or pass a goal to start a /goal loop", head)
+	return sessiond.CheckPromptIsNotCommand(prompt)
 }
 
 // checkWorkspaceName rejects a name that is not a single short line of text.
@@ -202,23 +88,7 @@ func checkPromptIsNotCommand(prompt string) error {
 // keeps this name forever, so the check belongs before it is created, not at
 // each place it is later printed.
 func checkWorkspaceName(name string) error {
-	if name == "" {
-		return fmt.Errorf("workspace name is required")
-	}
-	if len(name) > maxWorkspaceNameBytes {
-		return fmt.Errorf("workspace name is %d bytes; the limit is %d",
-			len(name), maxWorkspaceNameBytes)
-	}
-	if !utf8.ValidString(name) {
-		return fmt.Errorf("workspace name is not valid UTF-8")
-	}
-	for _, r := range name {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("workspace name contains a control character (%q); "+
-				"a name is one line of plain text", r)
-		}
-	}
-	return nil
+	return sessiond.CheckWorkspaceName(name)
 }
 
 // ResolveOrCreateWorkspace returns the id of the workspace called name,
