@@ -9,10 +9,26 @@ package server
 // Deliberately plain: this page is somebody's document, seen by somebody who
 // has never heard of muxterm. It carries no app chrome, no branding beyond one
 // grey footer line, and no controls -- there is nothing here to click.
+//
+// ⛔ IT IS ALSO SERVED TO THE ARTIFACT VIEWER, VERBATIM, and that is what the
+// `.doc-body` in the two selectors below is for. GET /api/artifact/doc.css
+// hands these exact bytes to the viewer applet, so the local preview and the
+// published page agree on the PAGE and not merely on the elements. But an
+// applet renders inside a SHADOW ROOT, where `:root` matches nothing and
+// `body` matches nothing -- the two page-level rules would have silently
+// dropped, and the preview would have shown the app's font and background
+// while claiming to show the recipient's.
+//
+// So those two rules name a class as well, and the viewer puts that class on
+// its scroller. Every other rule here is already class-scoped and works
+// unchanged in both places. This is deliberately the SMALLEST possible seam:
+// two extra selectors, no second stylesheet, no build step, and nothing for a
+// future edit to keep in sync -- a rule added below lands in both views on the
+// commit that adds it.
 const publicDocCSS = `
-:root { color-scheme: light dark; }
+:root, .doc-body { color-scheme: light dark; }
 * { box-sizing: border-box; }
-body {
+body, .doc-body {
   margin: 0;
   padding: 2.5rem 1.25rem 4rem;
   font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -54,7 +70,7 @@ body {
   font-size: 0.78rem; color: #8a9099; letter-spacing: 0.01em;
 }
 @media (prefers-color-scheme: dark) {
-  body { color: #dfe3e8; background: #14171a; }
+  body, .doc-body { color: #dfe3e8; background: #14171a; }
   .loading { color: #8a9099; }
   .doc a { color: #7cb0ff; }
   .doc blockquote { border-left-color: #333a42; color: #a8afb8; }

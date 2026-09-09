@@ -103,6 +103,17 @@ func artifactPath(raw string) (string, os.FileInfo, int, error) {
 	if p == "" {
 		return "", nil, http.StatusBadRequest, errors.New(`"path" is required and must be an absolute path`)
 	}
+	// `~/` expands, exactly as it does for publishing (resolvePublishPath):
+	// an agent naming a file in the user's home should not have to know that
+	// server's idea of $HOME, and the two entry points must not disagree
+	// about what a given string means.
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			return "", nil, http.StatusBadRequest, fmt.Errorf("cannot expand %q: %w", raw, herr)
+		}
+		p = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(p, "~"), "/"))
+	}
 	if !filepath.IsAbs(p) {
 		return "", nil, http.StatusBadRequest, fmt.Errorf("%q is not an absolute path", p)
 	}
