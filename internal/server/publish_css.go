@@ -66,3 +66,45 @@ body {
   .pub-footer { border-top-color: #24292f; color: #6f767e; }
 }
 `
+
+// publicTreeCSS is appended to publicDocCSS on the pages of a published
+// FOLDER, and only there. It styles the two things a single published file
+// does not have: a breadcrumb trail and a directory listing.
+//
+// Deliberately typographic. No card, no rounded container, and no bolded
+// side border used as a status signal -- indentation, weight and ink carry
+// the structure, which is what a reader who has never heard of muxterm
+// actually needs from somebody's docs folder.
+const publicTreeCSS = `
+.pub-crumbs {
+  max-width: 46rem; margin: 0 auto 1.75rem; font-size: 0.82rem;
+  color: #6b7280; letter-spacing: 0.01em; overflow-wrap: anywhere;
+}
+.pub-crumbs a { color: #6b7280; text-decoration: none; }
+.pub-crumbs a:hover { color: #0b57d0; text-decoration: underline; }
+.pub-crumbs .sep { padding: 0 0.4em; color: #b9bec6; }
+.pub-crumbs .here { color: #1c1f23; font-weight: 600; }
+.pub-index { max-width: 46rem; margin: 2.5rem auto 0; }
+.pub-index-h {
+  font-size: 0.78rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: #8a9099; margin: 0 0 0.6rem;
+}
+.pub-list { list-style: none; margin: 0; padding: 0; }
+.pub-list li { margin: 0; padding: 0.22rem 0; line-height: 1.5; }
+.pub-list a { color: #0b57d0; text-decoration: none; }
+.pub-list a:hover { text-decoration: underline; }
+.pub-list .dir a { font-weight: 600; }
+.pub-list .file a { color: #4b5058; }
+.pub-list .up a { color: #8a9099; font-size: 0.85rem; }
+.pub-list .empty { color: #8a9099; font-style: italic; }
+@media (prefers-color-scheme: dark) {
+  .pub-crumbs, .pub-crumbs a { color: #8a9099; }
+  .pub-crumbs .sep { color: #4b5058; }
+  .pub-crumbs .here { color: #dfe3e8; }
+  .pub-crumbs a:hover { color: #7cb0ff; }
+  .pub-index-h { color: #6f767e; }
+  .pub-list a { color: #7cb0ff; }
+  .pub-list .file a { color: #a8afb8; }
+  .pub-list .up a, .pub-list .empty { color: #6f767e; }
+}
+`

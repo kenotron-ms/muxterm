@@ -219,7 +219,19 @@ type publication struct {
 	publishedAt   time.Time
 	expiresAt     time.Time
 	sizeAtPublish int64
+
+	// tree is non-nil for exactly one kind of publication: kindFolder. It
+	// carries the manifest enumerated at publish time and the pin for the
+	// root directory. A file publication leaves it nil and every branch
+	// below behaves exactly as it did before folders existed -- see
+	// publish_folder.go.
+	tree *folderTree
 }
+
+// isFolder reports whether this publication is a directory tree rather than a
+// single file. The nil check and the kind are set together at creation and
+// never diverge.
+func (p *publication) isFolder() bool { return p != nil && p.tree != nil }
 
 // publicationView is one row of the owner-facing list.
 type publicationView struct {
@@ -238,6 +250,20 @@ type publicationView struct {
 	IdentityOK    bool   `json:"identity_ok"`
 	Status        string `json:"status"`
 	StatusDetail  string `json:"status_detail,omitempty"`
+
+	// FileCount is set only for kind "folder": how many files the
+	// publication covers, as enumerated at publish time.
+	//
+	// ⛔ ADDED, NOT SUBSTITUTED. A file publication's row is byte-for-byte
+	// what it was before folders existed -- same fields, same values, same
+	// kind vocabulary plus one new member. Anything already reading this
+	// list (the Files applet's published filter, list_publications) keeps
+	// working unchanged and can branch on kind when it wants to.
+	FileCount int `json:"file_count,omitempty"`
+	// Excluded is how many entries the exclusion policy dropped at publish
+	// time. Folder rows only. It is here so "what did I actually publish"
+	// has a number next to it rather than requiring trust.
+	Excluded int `json:"excluded,omitempty"`
 }
 
 // PublicationRegistry tracks live file publications by id. Safe for concurrent
@@ -435,6 +461,26 @@ func (r *PublicationRegistry) view(p *publication, url string) publicationView {
 	}
 	if left := p.expiresAt.Sub(now); left > 0 {
 		v.SecondsLeft = int64(left.Seconds())
+	}
+
+	// A folder is checked by its ROOT, not by re-stat'ing every enumerated
+	// file: for a five-thousand-entry manifest that would be five thousand
+	// syscalls on every list call, and the per-file answer is already given
+	// at read time to the reader who asks for that file. What matters here is
+	// the question a list can answer -- "is the thing I published still the
+	// thing at that path".
+	if p.isFolder() {
+		v.FileCount = p.tree.FileCount()
+		v.Excluded = p.tree.excludedN + p.tree.gitIgnoredN + p.tree.symlinkOutN
+		v.Size = p.tree.totalSize
+		status, detail := treeStatus(p)
+		v.Status, v.StatusDetail = status, detail
+		v.IdentityOK = status == "ok"
+		if v.Expired {
+			v.Status = "expired"
+			v.StatusDetail = "this publication has expired; the link now answers 410 Gone"
+		}
+		return v
 	}
 
 	f, fi, err := openPinned(p)
