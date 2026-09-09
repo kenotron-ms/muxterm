@@ -184,6 +184,15 @@ type prCollector struct {
 	ingestedMod int64
 	ingestedSz  int64
 
+	// statusErr is the last background refresh's FEATURE-level verdict: gh
+	// missing, or gh logged out. "" means the last pass was fine.
+	//
+	// It lives here rather than on the request because the refresh no longer
+	// runs inside one. A GET reports what the most recent pass found, which is
+	// the honest answer to "is status working" -- and never the reason to
+	// withhold a row.
+	statusErr string
+
 	// writeErrLogged suppresses repeat logging of a persistent write failure
 	// (a full disk, a read-only home). The in-memory records stay correct and
 	// the applet keeps working; only durability is lost, and saying so once is
@@ -531,6 +540,22 @@ func (c *prCollector) trimLocked() {
 	if len(c.prs) > collectedPRCapacity {
 		c.prs = c.prs[:collectedPRCapacity]
 	}
+}
+
+// StatusError reports the last background refresh's feature-level verdict.
+func (c *prCollector) StatusError() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.statusErr
+}
+
+// SetStatusError records it. Not persisted: it describes this process's last
+// attempt, and a stale one read off disk at startup would be a claim about a
+// network that is no longer the one we are on.
+func (c *prCollector) SetStatusError(msg string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.statusErr = msg
 }
 
 // persistLocked atomically rewrites the store, following completionStore's

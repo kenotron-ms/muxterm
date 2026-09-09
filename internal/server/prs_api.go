@@ -140,7 +140,22 @@ func writePRsJSON(w http.ResponseWriter, code int, v any) {
 func (s *Server) handlePRsList(w http.ResponseWriter, r *http.Request) {
 	s.prs.Ingest()
 
-	statusErr := s.refreshPRStatuses(r.Context())
+	// THE LIST IS NEVER HELD BEHIND GITHUB. The status refresh is kicked off
+	// and left to run; this request answers from the store, which already has
+	// every number, title, repository, lane and link on disk.
+	//
+	// It used to be `statusErr := s.refreshPRStatuses(r.Context())` -- awaited
+	// -- and that made a cold first load take as long as GitHub felt like
+	// taking. Measured on a congested link with twelve stale rows: 36.03s of
+	// "Reading..." over a list the server could have painted instantly. That is
+	// the exact shape this applet exists to stop being: showing nothing rather
+	// than showing what it knows.
+	//
+	// The freshly fetched states land in the store and reach the browser on its
+	// next poll, which is what "refresh on view" always meant -- the view is
+	// what triggers the refresh, not what waits for it.
+	s.refreshPRStatusesAsync()
+	statusErr := s.prs.StatusError()
 
 	out := prsListResponse{
 		StatusAvailable: statusErr == "",
@@ -208,6 +223,35 @@ func (s *Server) handlePRDismiss(w http.ResponseWriter, r *http.Request) {
 // belong on their row and are stored there by ApplyStatus, because one
 // unreachable repository must not make every other row look broken -- the
 // mistake the route being replaced made at the whole-applet level.
+// prsRefreshBudget bounds one whole background refresh pass. It is the batch's
+// worth of round trips plus slack, not any single call: a pass that outlives it
+// is abandoned so a wedged network cannot leave a goroutine holding the
+// single-flight flag forever.
+const prsRefreshBudget = 2 * time.Minute
+
+// refreshPRStatusesAsync starts a refresh pass and returns immediately.
+//
+// SINGLE FLIGHT, and that is the load-bearing part. The applet polls every
+// minute; a refresh that takes longer than a minute would otherwise have a
+// second one launched on top of it, and a slow link would stack passes until it
+// was hammering GitHub -- the precise thing the cache exists to prevent. The
+// flag is released by the pass that set it, whatever happens to it.
+//
+// context.Background(), NOT the request's: the request returns in milliseconds
+// now, and its context is cancelled the moment it does. A refresh parented to
+// it would be killed before it fetched anything.
+func (s *Server) refreshPRStatusesAsync() {
+	if !s.prsRefreshing.CompareAndSwap(false, true) {
+		return // a pass is already running; it will land the same rows
+	}
+	go func() {
+		defer s.prsRefreshing.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), prsRefreshBudget)
+		defer cancel()
+		s.prs.SetStatusError(s.refreshPRStatuses(ctx))
+	}()
+}
+
 func (s *Server) refreshPRStatuses(ctx context.Context) string {
 	stale := s.prs.NeedStatus(time.Now().Add(-prsStatusTTL).Unix(), prsStatusBatch)
 	if len(stale) == 0 {

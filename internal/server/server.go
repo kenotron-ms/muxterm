@@ -145,6 +145,10 @@ type Server struct {
 	// whoever happens to have a tab open. See prs_store.go.
 	prs *prCollector
 
+	// prsRefreshing is the single-flight guard for the background pull-request
+	// status refresh. See refreshPRStatusesAsync.
+	prsRefreshing atomic.Bool
+
 	// version is the running binary's version string, used by the
 	// /api/update/* routes. updating serializes apply requests so two
 	// concurrent clients cannot both rewrite the binary.
