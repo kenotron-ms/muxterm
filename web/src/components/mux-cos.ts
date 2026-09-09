@@ -303,6 +303,14 @@ export class MuxCos extends LitElement {
       --s-6: 16px;
       --s-7: 24px;
 
+      /* Height of the fade the transcript scrolls under, above the composer.
+         ONE token, for the same reason --mux-titlebar-height is one: the fade
+         is drawn by .comp::before and the transcript has to reserve room for
+         it inside its own scroller, and two literals that must agree are two
+         places to forget. Read by .comp::before (the fade itself) and by
+         .chatbody's padding-bottom (the room under it). */
+      --chat-fade: 22px;
+
       --r-chip: 3px;
       --r-ctl: 5px;
       --r-card: 8px;
@@ -491,18 +499,31 @@ export class MuxCos extends LitElement {
       overflow: hidden;
       min-width: 0;
     }
+    /* THE ROOM UNDER THE LAST LINE. The bottom padding is the ordinary gap
+       (--s-4 / --s-3) PLUS the height of the fade, because the fade is drawn
+       over this scroller's last --chat-fade pixels: without the extra, a
+       reader scrolled all the way down lands the final line UNDER the
+       gradient and reads it at a fraction of its contrast.
+       It has to be padding on the SCROLLER'S OWN CONTENT BOX -- that is what
+       is counted in scrollHeight, so it is what moves where scrollTop bottoms
+       out. Margin on the last child, or padding on .chat, changes nothing
+       about where the content stops relative to the mask. scroll-padding is
+       also the wrong tool: it steers scrollIntoView and snapping, and does
+       not move the end of the scroll range, which is exactly what both the
+       reader's own scroll-to-bottom and the pinned-follow write in updated()
+       (scrollTop = scrollHeight) land on. */
     .chatbody {
       flex: 1;
       min-height: 0;
       overflow-y: auto;
       overflow-x: hidden;
-      padding: var(--s-7) var(--s-7) var(--s-4);
+      padding: var(--s-7) var(--s-7) calc(var(--chat-fade) + var(--s-4));
       display: flex;
       flex-direction: column;
       gap: var(--s-7);
     }
     :host([narrow]) .chatbody {
-      padding: var(--s-6) var(--s-6) var(--s-3);
+      padding: var(--s-6) var(--s-6) calc(var(--chat-fade) + var(--s-3));
       gap: var(--s-6);
     }
 
@@ -955,7 +976,8 @@ export class MuxCos extends LitElement {
       left: 0;
       right: 0;
       bottom: 100%;
-      height: 22px;
+      /* Same token .chatbody reserves room for. Change it in one place. */
+      height: var(--chat-fade);
       pointer-events: none;
       background: linear-gradient(to top, var(--chrome-body), transparent);
     }
@@ -1254,7 +1276,13 @@ export class MuxCos extends LitElement {
       max-width: none;
       margin: 0;
       padding: 0;
-      display: flex;
+      /* NO display in this rule -- it belongs in :popover-open below.
+         A closed popover is display: none by UA rule; an unconditional
+         author display here OVERRIDES that, so the sheet is never actually
+         hidden, only pushed off-screen by translate. A box-shadow paints
+         OUTSIDE its element's box, so a 34px blur at -12px on a box whose top
+         edge sits at the viewport bottom spills 46px UP -- a dark band along
+         the bottom of a screen with no sheet on it. */
       flex-direction: column;
       overflow: hidden;
       height: 56dvh;
@@ -1275,6 +1303,7 @@ export class MuxCos extends LitElement {
       height: calc(100dvh - ${SHEET_FULL_INSET}px);
     }
     .sheet:popover-open {
+      display: flex;
       translate: 0 0;
     }
     @starting-style {

@@ -149,7 +149,12 @@ export class MuxPanePicker extends LitElement {
       max-width: none;
       margin: 0;
       padding: 0;
-      display: flex;
+      /* NO display in this rule -- it belongs in :popover-open below.
+         A closed popover is display: none by UA rule; an unconditional
+         author display here OVERRIDES that, so the sheet is never actually
+         hidden, only pushed off-screen by translate -- and its box-shadow,
+         which paints OUTSIDE the box, stays on the bottom edge of a screen
+         with no pane sheet on it. */
       flex-direction: column;
       overflow: hidden;
       max-height: 60dvh;
@@ -169,6 +174,7 @@ export class MuxPanePicker extends LitElement {
     }
 
     .sheet:popover-open {
+      display: flex;
       translate: 0 0;
     }
 

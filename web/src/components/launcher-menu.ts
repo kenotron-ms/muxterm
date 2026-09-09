@@ -94,6 +94,17 @@ export class MuxLauncherMenu extends LitElement {
         overlay var(--sheet-dur) allow-discrete;
     }
 
+    /* A closed popover is display: none by UA rule, but the display: block
+       on :host above -- which the ANCHORED dropdown form of this menu needs --
+       overrides it. Without this the closed sheet stays laid out, hidden only
+       by translate, and its box-shadow (which paints OUTSIDE the box) keeps
+       sitting on the bottom edge of a screen with no sheet on it. Scoped to
+       [sheet] so the dropdown form is untouched; the display ... allow-discrete
+       transition above still defers the flip until the slide-out has finished. */
+    :host([sheet]:not(:popover-open)) {
+      display: none;
+    }
+
     :host([sheet]:popover-open) {
       translate: 0 0;
     }
