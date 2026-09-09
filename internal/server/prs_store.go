@@ -279,45 +279,11 @@ func (c *prCollector) Ingest() bool {
 
 	changed := false
 	for _, r := range doc.Records {
-		if r.PR <= 0 {
-			continue
-		}
-		repo, number, ok := prRepoFromURL(r.PRURL)
-		if !ok {
-			// A PR number with no URL: `muxterm session report --pr N`
-			// declared it and nothing printed a link. The number is still
-			// worth keeping -- it is what the lane said it produced -- but the
-			// repository is genuinely unknown and guessing one from the
-			// session's working directory is how you attribute a pull request
-			// to the wrong project.
-			repo, number = "", r.PR
-		}
-		key := prKey(repo, number)
-		if i := c.indexOfLocked(key); i >= 0 {
-			if c.prs[i].URL == "" && r.PRURL != "" {
-				c.prs[i].URL = r.PRURL
+		for _, cand := range completionPRCandidates(r) {
+			if c.upsertLocked(r, cand) {
 				changed = true
 			}
-			if c.prs[i].Lane == "" {
-				if lane := completionLaneName(r); lane != "" {
-					c.prs[i].Lane = lane
-					changed = true
-				}
-			}
-			continue
 		}
-		c.prs = append(c.prs, CollectedPR{
-			V:           collectedPRVersion,
-			Key:         key,
-			Repo:        repo,
-			Number:      number,
-			URL:         strings.TrimSpace(r.PRURL),
-			Lane:        completionLaneName(r),
-			WorkspaceID: r.WorkspaceID,
-			SessionID:   r.SessionID,
-			CollectedAt: r.EndedAt,
-		})
-		changed = true
 	}
 	if !changed {
 		return false
@@ -325,6 +291,96 @@ func (c *prCollector) Ingest() bool {
 	c.sortLocked()
 	c.trimLocked()
 	c.persistLocked()
+	return true
+}
+
+// prCandidate is one pull request a completion record names.
+type prCandidate struct {
+	repo   string
+	number int
+	url    string
+}
+
+// completionPRCandidates lists every pull request one record names.
+//
+// A LANE CAN OPEN MORE THAN ONE, and until sessiond kept them all this loop had
+// only the record's headline PR to work with -- so the second pull request a
+// lane opened was invisible to every reader, forever. PRURLs is the full set in
+// print order; PRURL is the last of them and is still honoured on its own for
+// records written before PRURLs existed.
+//
+// The declared number (`muxterm session report --pr N`) is included even when
+// nothing printed a link, because it is the lane's own claim about what it
+// produced. Its repository is genuinely unknown and is left so: guessing one
+// from the session's working directory is how a pull request gets attributed to
+// the wrong project.
+func completionPRCandidates(r sessiond.CompletionRecord) []prCandidate {
+	urls := r.PRURLs
+	if len(urls) == 0 && strings.TrimSpace(r.PRURL) != "" {
+		urls = []string{r.PRURL}
+	}
+
+	out := make([]prCandidate, 0, len(urls)+1)
+	seen := make(map[string]bool, len(urls)+1)
+	for _, u := range urls {
+		repo, number, ok := prRepoFromURL(u)
+		if !ok {
+			continue
+		}
+		key := prKey(repo, number)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, prCandidate{repo: repo, number: number, url: strings.TrimSpace(u)})
+	}
+
+	if r.PR > 0 {
+		// The headline number, when no URL accounted for it -- a declared PR
+		// with no link printed.
+		accounted := false
+		for _, cand := range out {
+			if cand.number == r.PR {
+				accounted = true
+				break
+			}
+		}
+		if !accounted && !seen[prKey("", r.PR)] {
+			out = append(out, prCandidate{number: r.PR})
+		}
+	}
+	return out
+}
+
+// upsertLocked records one candidate, or fills in what an existing row was
+// missing. It reports whether anything changed.
+func (c *prCollector) upsertLocked(r sessiond.CompletionRecord, cand prCandidate) bool {
+	key := prKey(cand.repo, cand.number)
+	if i := c.indexOfLocked(key); i >= 0 {
+		changed := false
+		if c.prs[i].URL == "" && cand.url != "" {
+			c.prs[i].URL = cand.url
+			changed = true
+		}
+		if c.prs[i].Lane == "" {
+			if lane := completionLaneName(r); lane != "" {
+				c.prs[i].Lane = lane
+				changed = true
+			}
+		}
+		return changed
+	}
+	c.prs = append(c.prs, CollectedPR{
+		V:           collectedPRVersion,
+		Key:         key,
+		Repo:        cand.repo,
+		Number:      cand.number,
+		URL:         cand.url,
+		Lane:        completionLaneName(r),
+		WorkspaceID: r.WorkspaceID,
+		SessionID:   r.SessionID,
+		CollectedAt: r.EndedAt,
+	})
 	return true
 }
 
