@@ -17,3 +17,11 @@ code; `main` is unaffected.
 | `C4-dismiss-persists.png` | C4 — dismissal after a reload |
 | `C5-degraded.png` | C5 — `gh` off `PATH`, list intact |
 | `C6-controls.png` | C6 — the applet's controls below the host's tab strip |
+
+---
+
+## Follow-on: `fix/collect-every-pr-a-lane-opens`
+
+| file | verdict it proves |
+|---|---|
+| `F1-two-prs-one-lane.png` | one lane opened two pull requests, in two repositories; both are collected, both name that lane |
