@@ -24,10 +24,13 @@
  *      the applet owns what it shows, the host owns only which applet you are
  *      looking at (lib/applet-registry.ts).
  *
- *   3. IT KEEPS THE SHEET'S JOB. Portrait renders a SECOND instance of this
- *      element inside <mux-cos>'s bottom sheet, with `insheet` set. That flag
- *      is what suppresses terminal thumbnails (a tile needs width to say
- *      anything) and hands the scroller back to the sheet.
+ *   3. IT KEEPS THE SHEET'S JOB. Portrait puts the applet HOST inside
+ *      <mux-cos>'s bottom sheet, so this element is the same one the desktop
+ *      mounts, in a shorter container, told `narrow`. That is what suppresses
+ *      terminal thumbnails -- a tile needs width to say anything. It used to
+ *      be a separate `insheet` flag on a SECOND instance of this element that
+ *      the sheet mounted by tag; the flag went when the second instance did,
+ *      because "I am in the sheet" and "I am on a phone" were never two facts.
  *
  * TOKENS ARE NOT RE-DECLARED. --ink-*, --edge, --surface, --need/--work/--ok/
  * --fail, --mono and the --r/--s/--t/--lh scales are all declared on
@@ -165,18 +168,14 @@ export class AppletDashboard extends LitElement implements AppletElement {
    */
   @property({ type: Boolean }) active = false;
 
-  /** Portrait, handed down from the host. */
-  @property({ type: Boolean }) narrow = false;
+  /**
+   * Portrait, handed down from the host. Reflected, per the contract, so the
+   * thumbnail rule below is one CSS selector rather than a branch.
+   */
+  @property({ type: Boolean, reflect: true }) narrow = false;
 
   /** Deep-link target. Nothing in the fleet defines one yet; see updated(). */
   @property({ attribute: false }) target: string | null = null;
-
-  /**
-   * Rendered inside <mux-cos>'s portrait sheet rather than in the applet
-   * host. Reflected so the CSS can key on it. The sheet owns the scroller and
-   * portrait shows no thumbnails, and both of those are this flag.
-   */
-  @property({ type: Boolean, reflect: true }) insheet = false;
 
   /**
    * Cards or tiles. Reflected to the host so the grid's minmax and the thumb
@@ -251,12 +250,10 @@ export class AppletDashboard extends LitElement implements AppletElement {
       overflow-y: auto;
       padding: var(--s-6);
     }
-    /* In the sheet the SHEET scrolls. A scroller inside a scroller is how a
-       bottom sheet stops responding to the drag that opened it. */
-    :host([insheet]) .body {
-      height: auto;
-      overflow: visible;
-      padding: 0;
+    /* A phone is narrower than the padding was designed for: --s-6 on both
+       sides of a 393px screen is 8% of it spent on nothing. */
+    :host([narrow]) .body {
+      padding: var(--s-5) var(--s-4);
     }
     .grp {
       font-family: var(--mono);
@@ -452,7 +449,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
        width to say anything. Belt and braces with the render side, and the
        reason this lives HERE rather than on the sheet: the sheet's rule is in
        another shadow root now and cannot reach in. */
-    :host([insheet]) .thumb {
+    :host([narrow]) .thumb {
       display: none;
     }
 
@@ -637,11 +634,11 @@ export class AppletDashboard extends LitElement implements AppletElement {
   /**
    * THIS APPLET'S OWN CONTROLS, in this applet's own body.
    *
-   * Suppressed in the sheet: portrait is cards, always (see `insheet`), so the
+   * Suppressed on a phone: portrait is cards, always (see `narrow`), so the
    * control would offer a choice that portrait does not honour.
    */
   private _renderControls(): TemplateResult | typeof nothing {
-    if (this.insheet) return nothing;
+    if (this.narrow) return nothing;
     return html`
       <div class="controls" role="group" aria-label="Fleet view">
         ${appletToggle({
@@ -717,7 +714,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const pct = todoPercent(s);
     // Portrait is cards only. Gated here as well as in CSS so a phone never
     // even builds the six lines of text it would not draw.
-    const thumb = !this.insheet && this.view === 'tiles';
+    const thumb = !this.narrow && this.view === 'tiles';
     return html`
       <button
         type="button"

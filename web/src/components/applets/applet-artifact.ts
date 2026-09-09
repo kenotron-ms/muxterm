@@ -121,7 +121,7 @@ export class AppletArtifact extends LitElement implements AppletElement {
   /** Host contract: an inactive applet goes quiet. */
   @property({ type: Boolean }) active = false;
 
-  @property({ type: Boolean }) narrow = false;
+  @property({ type: Boolean, reflect: true }) narrow = false;
 
   /** Host contract: `path:/abs/file`. Consumed and cleared back to null. */
   @property({ attribute: false }) target: string | null = null;
@@ -672,6 +672,10 @@ registerApplet({
   icon: Eye,
   element: 'applet-artifact',
   order: 25,
+  // The only applet that sets it, and the reason the field exists. A fleet, a
+  // file list and a PR list are glance-and-tap and are right at half a phone
+  // screen; a DOCUMENT is not. See AppletManifest.roomy.
+  roomy: true,
 });
 
 declare global {

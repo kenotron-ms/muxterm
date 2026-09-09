@@ -64,6 +64,14 @@ export type AppletId = 'dashboard' | 'files' | 'prs' | 'artifact';
  * stop animating, and hold no open connection. The host keeps inactive applets
  * MOUNTED (so scroll position and navigation survive a tab switch) and hidden,
  * which is exactly why the applet -- not the host -- has to honour it.
+ *
+ * `active` is FALSE FOR EVERY APPLET when the surface the host sits on is not
+ * on screen -- on a phone, a closed bottom sheet. One rule, one place: see
+ * <mux-applets>'s `dormant`.
+ *
+ * `narrow` is REFLECTED by every applet, so an applet can key CSS off
+ * `:host([narrow])` rather than branching in render(). The Dashboard does
+ * exactly that to suppress terminal thumbnails on a phone.
  */
 export interface AppletElement extends HTMLElement {
   active: boolean;
@@ -87,15 +95,37 @@ export interface AppletManifest {
   element: string;
   /** Built-in ordering; ties broken by registration order. */
   order?: number;
+  /**
+   * THIS APPLET IS FOR READING, NOT GLANCING.
+   *
+   * A surface with resting sizes -- the phone's bottom sheet, which rests at
+   * half the screen -- opens at its LARGEST one for an applet that says this.
+   * A surface without them (the desktop region, which is simply as tall as the
+   * window) ignores it entirely, which is why the word is about the APPLET and
+   * not about a detent: the registry does not get to learn sheet vocabulary.
+   *
+   * Exactly one built-in sets it, and the reason is the whole justification
+   * for the field existing: the Viewer renders a DOCUMENT. Half a phone screen
+   * of prose, under a tab strip, is not reading -- it is a preview of reading.
+   * The fleet, the file list and the PR list are all glance-and-tap and are
+   * correct at half.
+   *
+   * OPTIONAL, and the default is the fleet's. An applet that says nothing gets
+   * the ordinary presentation, which is what keeps "adding an applet costs no
+   * mobile-specific work" true: this is a hint you may give, never a question
+   * you must answer.
+   */
+  roomy?: boolean;
 }
 
 /*
  * THERE IS NO CONTROL FIELD HERE, AND THAT IS THE POINT.
  *
- * The four fields above are everything the host needs to draw a tab and mount
- * an element: an id to remember, a word and a glyph to put in the strip, a tag
- * to create, a place in the order. None of them describes what the applet
- * SHOWS, because the host does not decide that and must not learn to.
+ * The fields above are everything the host needs to draw a tab and mount an
+ * element: an id to remember, a word and a glyph to put in the strip, a tag to
+ * create, a place in the order, and how much room the thing wants. None of
+ * them describes what the applet SHOWS, because the host does not decide that
+ * and must not learn to.
  *
  * An applet with filters renders them in its own render(), above its own list.
  * lib/applet-controls.ts has the house style for them if it wants it.
@@ -116,6 +146,20 @@ export interface AppletNavigateDetail {
 export interface AppletAttentionDetail {
   applet: AppletId;
   count?: number;
+}
+
+/**
+ * Detail of `applet-changed` -- the host announcing which applet is now
+ * showing, to whatever is holding it.
+ *
+ * It carries `roomy` rather than the id alone so the holder never has to look
+ * a manifest up, and therefore never has to know that ids exist. The bottom
+ * sheet reads one boolean and picks a detent; that is the entire coupling
+ * between the sheet and the registry.
+ */
+export interface AppletChangedDetail {
+  applet: AppletId;
+  roomy: boolean;
 }
 
 const registry: AppletManifest[] = [];

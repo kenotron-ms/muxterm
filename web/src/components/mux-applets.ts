@@ -5,6 +5,23 @@
  * now a strip of tabs over a stack of APPLETS, each a custom element plus a
  * manifest (see lib/applet-registry.ts, which is the contract).
  *
+ * ONE HOST, TWO CONTAINERS. On a desktop it fills <mux-cos>'s right-hand
+ * region; on a phone that region does not exist and the same element fills the
+ * bottom sheet instead. It is not told which -- it is told `narrow` (lay out
+ * for a phone) and `dormant` (nobody can see you), and those two facts are all
+ * the difference there is.
+ *
+ * THE PHONE USED TO GET A COPY INSTEAD OF THE HOST, and that is worth naming
+ * because the arrangement looked reasonable and quietly negated the contract:
+ * this host was `display: none` when narrow, and the sheet mounted
+ * <applet-dashboard> DIRECTLY, by tag. So the phone had exactly
+ * the applet the sheet named in its own source, Files, Pull Requests and the
+ * Viewer were unreachable by construction rather than merely hidden, and every
+ * applet added afterwards was desktop-only for free -- while the contract's
+ * stated test was that a new applet costs the host one line. A surface that
+ * hardcodes one applet is not a host, and the fix is that the phone gets the
+ * host rather than a hand-copied piece of it.
+ *
  * TWO RULES CARRY THE WHOLE DESIGN, and both are here rather than in the
  * applets on purpose:
  *
@@ -56,6 +73,7 @@ import {
   appletById,
   applets,
   type AppletAttentionDetail,
+  type AppletChangedDetail,
   type AppletElement,
   type AppletId,
   type AppletManifest,
@@ -155,11 +173,33 @@ export function appletError(message: string, retry?: () => void): TemplateResult
 @customElement('mux-applets')
 export class MuxApplets extends LitElement {
   /**
-   * Portrait, handed down from <mux-cos> which had it handed down from the
-   * app's own breakpoint. In portrait the whole region is `display: none` and
-   * the fleet lives in the bottom sheet, so every applet here is inactive.
+   * Portrait, handed down from whatever is holding this host, which had it
+   * from the app's own breakpoint.
+   *
+   * IT NO LONGER MEANS "I AM NOT ON SCREEN". It used to: this host was the
+   * desktop region and nothing else, so `narrow` was `display: none` here and
+   * `active = false` on every applet -- and the phone got a hardcoded second
+   * copy of ONE applet in the bottom sheet, with the other three unreachable
+   * by construction. There is one host now and the sheet holds it, so `narrow`
+   * means what it says: lay out for a phone, and tell the applets.
    */
   @property({ type: Boolean, reflect: true }) narrow = false;
+
+  /**
+   * THE SURFACE THIS HOST IS ON IS NOT IN FRONT OF ANYONE.
+   *
+   * On a phone that is a closed bottom sheet. It generalises the rule that
+   * used to be spelled `_sheetOpen` in <mux-cos>, whose only job was telling
+   * the one applet in the sheet whether it was active, "because a closed sheet
+   * must not leave a subscription running".
+   *
+   * That reasoning was never about the Dashboard. With several applets behind
+   * a tab strip it becomes two obligations, and both are enforced in ONE line
+   * in _renderApplet: exactly one applet is active when the surface is up, and
+   * NONE are when it is down. A phone holding four subscriptions to display
+   * one list is a battery defect that appears in no screenshot.
+   */
+  @property({ type: Boolean, reflect: true }) dormant = false;
 
   /** The selected tab. Persisted; falls back to the Dashboard. */
   @state() private _current: AppletId = loadTab();
@@ -189,6 +229,22 @@ export class MuxApplets extends LitElement {
    */
   private _pending: { id: AppletId; target: string } | null = null;
 
+  /**
+   * A navigation that arrived while NOBODY WAS LOOKING, held until they are.
+   *
+   * A dormant host is inside a closed sheet, so it cannot have been tapped:
+   * every navigation that reaches show() while dormant came from something
+   * other than the person -- the chief of staff raising a document, in
+   * practice. Opening the sheet over whatever they were reading to answer a
+   * request they did not make is precisely the yank a phone must not do.
+   *
+   * So the target is parked, the tab is flagged, and the sheet stays down. The
+   * person's own next tap on that tab spends it. Keyed by applet, whole-state:
+   * a second document to show replaces the first, because it is the one being
+   * asked for now.
+   */
+  private _parked = new Map<AppletId, string>();
+
   static styles = css`
     *,
     *::before,
@@ -203,9 +259,6 @@ export class MuxApplets extends LitElement {
       min-height: 0;
       overflow: hidden;
       background: var(--chrome-bar);
-    }
-    :host([narrow]) {
-      display: none;
     }
 
     /* The icon() helper emits this class; the rule is per-shadow-root. */
@@ -228,15 +281,33 @@ export class MuxApplets extends LitElement {
       background: var(--chrome-bar);
       border-bottom: 1px solid var(--edge);
     }
+    /* THE STRIP SCROLLS SIDEWAYS RATHER THAN SQUASHING.
+       Four tabs are 385px of text and glyph; a phone is 393 and the small one
+       is 375, so the count at which this stops fitting is already reached and
+       the fifth applet is somebody else's afternoon. Shrinking tabs to fit
+       would truncate the labels, and equalising them would make "Pull
+       Requests" the width of "Files"; both trade a legible strip for a tidy
+       one. Off-screen is recoverable -- a flick, or the arrow keys, and
+       updated() scrolls the selected tab back into view. Costs no height,
+       which is the only budget that is actually tight here. */
     .tabs {
       display: flex;
       align-items: stretch;
       min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+      /* Vertical drags belong to whatever is holding this host -- on a phone,
+         the sheet. This strip only ever wants the horizontal axis. */
+      touch-action: pan-x;
+    }
+    .tabs::-webkit-scrollbar {
+      display: none;
     }
 
     .tab {
       position: relative;
       display: inline-flex;
+      flex: none;
       align-items: center;
       gap: var(--s-2);
       font: inherit;
@@ -342,7 +413,19 @@ export class MuxApplets extends LitElement {
     super.disconnectedCallback();
   }
 
-  override updated(): void {
+  override updated(changed: Map<PropertyKey, unknown>): void {
+    // The surface just came up. Say what is on it, so a holder that sizes
+    // itself to the applet (the sheet) sizes itself to the RIGHT one rather
+    // than to whatever was showing the last time it was open.
+    if (changed.has('dormant') && !this.dormant) this._announce(this._current);
+    // A tab the strip had to scroll to reach is worth nothing off-screen. Only
+    // ever runs when the strip actually overflows, which on a phone is the
+    // fifth applet and on a desktop is never.
+    if (changed.has('_current')) {
+      this.renderRoot
+        .querySelector<HTMLElement>('.tab.on')
+        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
     const pending = this._pending;
     if (!pending) return;
     this._pending = null;
@@ -361,6 +444,20 @@ export class MuxApplets extends LitElement {
    */
   show(id: AppletId, target?: string): void {
     if (!appletById(id)) return;
+
+    // NOBODY IS LOOKING AT THIS. See _parked: a dormant host is behind a closed
+    // sheet and cannot have been tapped, so this is not the user asking. Hold
+    // the target, flag the tab, and leave the screen exactly as they left it.
+    if (this.dormant) {
+      if (target !== undefined) {
+        const next = new Map(this._parked);
+        next.set(id, target);
+        this._parked = next;
+      }
+      this._flag(id, 1);
+      return;
+    }
+
     // A tab switch counts as touching this surface however it was caused --
     // including the promotion test below, which switches on your behalf. That
     // it counts its own jump is deliberate: the surface never yanks twice in
@@ -371,8 +468,36 @@ export class MuxApplets extends LitElement {
     saveTab(id);
     // You have seen it, which is the whole of what a flag ever claimed.
     this._clearFlag(id);
+    // An explicit target wins; otherwise spend anything parked for this applet
+    // while the surface was down, so the tap that carries the flag away lands
+    // on the document the flag was about.
+    const parked = this._parked.get(id);
     if (target !== undefined) this._pending = { id, target };
+    else if (parked !== undefined) this._pending = { id, target: parked };
+    if (parked !== undefined) {
+      const next = new Map(this._parked);
+      next.delete(id);
+      this._parked = next;
+    }
+    this._announce(id);
     this.requestUpdate();
+  }
+
+  /**
+   * Which applet is showing, for whatever is holding this host.
+   *
+   * The sheet needs it to choose a resting size; the desktop region has one
+   * size and ignores it. Fired from show() only -- the one place the current
+   * applet ever changes -- so there is no second path to keep in step.
+   */
+  private _announce(id: AppletId): void {
+    this.dispatchEvent(
+      new CustomEvent<AppletChangedDetail>('applet-changed', {
+        detail: { applet: id, roomy: appletById(id)?.roomy === true },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   private _appletEl(m: AppletManifest): AppletElement | null {
@@ -436,17 +561,24 @@ export class MuxApplets extends LitElement {
     }
 
     // Somebody is here. Flag it and do not move.
-    const raw = detail.count ?? 1;
+    this._flag(detail.applet, detail.count ?? 1);
+  };
+
+  /**
+   * Raise the flag on a tab.
+   *
+   * WHOLE-STATE, IDEMPOTENT -- the count replaces whatever was there rather
+   * than adding to it, the same contract the fleet's session snapshots use.
+   * Two reports of "three lanes want you" mean three, not six.
+   */
+  private _flag(id: AppletId, raw: number): void {
     // A count that is not a whole number of things is a caller bug, not a
     // state to draw: a flag reading "0 needing attention" is worse than none.
     const count = Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
-    // WHOLE-STATE, IDEMPOTENT -- the count replaces whatever was there rather
-    // than adding to it, the same contract the fleet's session snapshots use.
-    // Two reports of "three lanes want you" mean three, not six.
     const next = new Map(this._flags);
-    next.set(detail.applet, count);
+    next.set(id, count);
     this._flags = next;
-  };
+  }
 
   private _clearFlag(id: AppletId): void {
     if (!this._flags.has(id)) return;
@@ -529,7 +661,9 @@ export class MuxApplets extends LitElement {
    * URL.
    */
   private _renderApplet(m: AppletManifest): TemplateResult {
-    const on = m.id === this._current && !this.narrow;
+    // THE WHOLE SUBSCRIPTION RULE, IN ONE EXPRESSION. Exactly one applet is
+    // active while the surface is up; none are while it is down. See `dormant`.
+    const on = m.id === this._current && !this.dormant;
     const tag = unsafeStatic(m.element);
     return staticHtml`
       <${tag}
