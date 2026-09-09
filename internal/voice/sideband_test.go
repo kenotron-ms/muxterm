@@ -745,54 +745,80 @@ func TestToolSurfaceCarriesTheSpokenExit(t *testing.T) {
 	}
 	params, _ := last["parameters"].(map[string]any)
 	props, _ := params["properties"].(map[string]any)
-	if _, ok := props["confirm"]; !ok {
-		t.Fatal("end_voice_session has no confirm parameter; the two-step gate has nothing to read")
-	}
 	if _, ok := props["farewell"]; !ok {
 		t.Fatal("end_voice_session has no farewell parameter")
 	}
+	// ONE parameter, and specifically no confirm. A boolean called confirm
+	// cannot be described without describing when to set it, and that
+	// description is a second statement of a confirmation the instructions
+	// already own -- which is the whole defect. Its absence is the fix, so
+	// it is asserted rather than left to be quietly re-added.
+	if _, ok := props["confirm"]; ok {
+		t.Fatal("end_voice_session grew a confirm parameter back; the confirmation lives in Instructions() only")
+	}
+	if len(props) != 1 {
+		t.Fatalf("end_voice_session takes %d parameters, want 1 (farewell)", len(props))
+	}
 	req, _ := params["required"].([]string)
-	if len(req) != 1 || req[0] != "confirm" {
-		t.Fatalf("required = %v, want [confirm] only -- a farewell the model omits must not fail the call", req)
+	if len(req) != 1 || req[0] != "farewell" {
+		t.Fatalf("required = %v, want [farewell] -- the goodbye is not optional", req)
 	}
 	if params["additionalProperties"] != false {
 		t.Fatal("end_voice_session accepts additional properties")
 	}
+	// The description says what the tool DOES. If it tells the model to
+	// confirm, it will confirm again at call time on top of the question
+	// the instructions already ran.
+	desc := strings.ToLower(str(last["description"]))
+	for _, banned := range []string{"confirm", "twice", "ask the user", "make sure", "are you sure"} {
+		if strings.Contains(desc, banned) {
+			t.Fatalf("the end_voice_session description contains %q, so it re-imposes a confirmation at call time: %q", banned, desc)
+		}
+	}
+
+	// And the confirmation is stated in exactly ONE model-facing place --
+	// the instructions. This is the regression the change exists to
+	// prevent and the one part of it a diff cannot catch: the instruction
+	// is prose, so a second copy of it reads as documentation rather than
+	// as a second question being asked.
+	if n := strings.Count(Instructions(), "ENDING THE CONVERSATION"); n != 1 {
+		t.Fatalf("Instructions() states the ending protocol %d times, want exactly 1", n)
+	}
+	if !strings.Contains(Instructions(), "A yes is the trigger to ACT") {
+		t.Fatal("the ending protocol no longer says a yes is the trigger to act, so it does not terminate")
+	}
 }
 
-// C2, the gate: a FIRST call with confirm true is refused. Not dropped --
-// refused, as a function call output the model can act on -- and the session
-// is still live afterwards.
-func TestEndRefusesAFirstCallWithConfirmTrue(t *testing.T) {
+// C2: ONE call ends the conversation, and what comes back leaves the model
+// nothing to decide.
+//
+// This replaces a test of the old two-call gate. The gate is gone on purpose
+// -- see endsession.go -- and what matters now is the property that took its
+// place: the tool result is a single imperative carrying the goodbye, with no
+// question in it and no instruction to go and get one. A tool result that
+// asks the model to confirm produces exactly the second question this change
+// exists to remove, and it would produce it AFTER the user has already said
+// yes.
+func TestOneEndCallEndsTheConversation(t *testing.T) {
 	f := newFakeRealtime(t)
 	sb, w := attachEnding(t, f, &fakeBridge{})
 
-	f.push(t, endCall("call_end_1", map[string]any{"confirm": true, "farewell": "bye"}))
+	f.push(t, endCall("call_end_1", map[string]any{"farewell": "Talk to you later."}))
 
-	msgs := f.waitFor(t, "the refusal", func(m []map[string]any) bool { return len(outputs(m)) > 0 })
+	msgs := f.waitFor(t, "the tool result", func(m []map[string]any) bool { return len(outputs(m)) > 0 })
 	got := outputs(msgs)[0]
-	if !strings.Contains(strings.ToLower(got), "nothing was ended") {
-		t.Fatalf("refusal = %q, want it to say plainly that nothing was ended", got)
+	if !strings.Contains(strings.ToLower(got), "ending now") {
+		t.Fatalf("tool result = %q, want it to say plainly that the session is ending", got)
 	}
-	// The way back is named in the response instructions, exactly as
-	// approvals.go names answer_approval: the output says what happened,
-	// the instructions say what to do next.
-	f.waitFor(t, "the read-back instruction", func(m []map[string]any) bool {
-		for _, x := range m {
-			if x["type"] != "response.create" {
-				continue
-			}
-			r, _ := x["response"].(map[string]any)
-			if strings.Contains(str(r["instructions"]), ToolEnd) {
-				return true
-			}
+	for _, banned := range []string{"nothing was ended", "confirm", "read this back", "ask them"} {
+		if strings.Contains(strings.ToLower(got), banned) {
+			t.Fatalf("the tool result contains %q, which sends the model back to ask a second time: %q", banned, got)
 		}
-		return false
-	})
+	}
 
-	// The refusal is a function_call_output correlated to the call, which
-	// is what makes it something the model can act on rather than a
-	// silence it has to guess about.
+	// It comes back as a function_call_output correlated to the call, so
+	// it is something the model acts on rather than a silence it guesses
+	// about.
 	var sawOutput bool
 	for _, m := range msgs {
 		if m["type"] != "conversation.item.create" {
@@ -804,69 +830,87 @@ func TestEndRefusesAFirstCallWithConfirmTrue(t *testing.T) {
 		}
 	}
 	if !sawOutput {
-		t.Fatal("the refusal did not come back as a function_call_output for the call")
+		t.Fatal("the result did not come back as a function_call_output for the call")
 	}
 
-	// Still live: not ending, not torn down, and still able to run a tool.
-	if sb.isEnding() {
-		t.Fatal("a first call with confirm true put the session into ending; it must refuse instead")
-	}
-	if w.endCount() != 0 {
-		t.Fatalf("teardown ran %d times on a first call; want 0", w.endCount())
-	}
-	if !sb.hasEndIntent() {
-		t.Fatal("no intent was recorded, so the confirmation step has nothing to confirm")
-	}
-	if sb.isClosed() {
-		t.Fatal("the sideband closed on a first call")
+	// The single call put the session into ending, on its own.
+	if !sb.isEnding() {
+		t.Fatal("one call did not start the ending; it must not need a second")
 	}
 
-	// And it can still run one, which is the real claim: the refusal cost
-	// the user a beat of confirmation, not their session.
-	f.push(t, toolCall(ToolCancel, "call_still_alive", nil))
-	f.waitFor(t, "a tool still running after the refusal", func(m []map[string]any) bool {
-		for _, o := range outputs(m) {
-			if strings.Contains(o, "Stopped.") {
+	// The response instructions carry the farewell and forbid anything
+	// after it. Nothing in them may send the model back to the user with
+	// another question.
+	f.waitFor(t, "the farewell instruction", func(m []map[string]any) bool {
+		for _, x := range m {
+			if x["type"] != "response.create" {
+				continue
+			}
+			r, _ := x["response"].(map[string]any)
+			ins := str(r["instructions"])
+			if strings.Contains(ins, "Talk to you later.") &&
+				!strings.Contains(strings.ToLower(ins), "confirm") &&
+				strings.Contains(strings.ToLower(ins), "no question") {
 				return true
 			}
 		}
 		return false
 	})
-}
 
-// C2: a second call that is not a confirmation ends nothing either.
-func TestEndDoesNotHangUpWithoutAConfirmation(t *testing.T) {
-	f := newFakeRealtime(t)
-	sb, w := attachEnding(t, f, &fakeBridge{})
-
-	f.push(t, endCall("call_end_1", map[string]any{"confirm": false}))
-	f.waitFor(t, "the read-back", func(m []map[string]any) bool { return len(outputs(m)) > 0 })
-
-	f.push(t, endCall("call_end_2", map[string]any{"confirm": false}))
-	f.waitFor(t, "the second read-back", func(m []map[string]any) bool { return len(outputs(m)) > 1 })
-
-	if sb.isEnding() || w.endCount() != 0 {
-		t.Fatal("two unconfirmed calls ended the session")
+	// Teardown has NOT happened yet: that waits for the goodbye, which is
+	// C3 below.
+	if w.endCount() != 0 {
+		t.Fatalf("teardown ran %d times before the goodbye was heard; want 0", w.endCount())
 	}
 }
 
-// C3, the ordering, which is the whole point: a CONFIRMED call does not tear
-// the session down when it returns. It says goodbye, and teardown happens
-// only once the audio for that goodbye has finished reaching the user.
-func TestConfirmedEndWaitsForTheGoodbyeToBeHeard(t *testing.T) {
+// C2: a second call, arriving while the goodbye is already going out, does
+// not restart anything.
+//
+// A model that has just been told to say a farewell sometimes calls again
+// anyway. The answer has to be terminal -- say nothing further -- because the
+// one thing that must not happen at this point is another question landing on
+// a user who is already being disconnected.
+func TestASecondEndCallWhileEndingChangesNothing(t *testing.T) {
 	f := newFakeRealtime(t)
 	sb, w := attachEnding(t, f, &fakeBridge{})
 
-	f.push(t, endCall("call_end_1", map[string]any{"confirm": false}))
-	w.waitTrace(t, TraceEnding, "intent recorded")
+	f.push(t, endCall("call_end_1", map[string]any{"farewell": "Bye."}))
+	f.waitFor(t, "the first result", func(m []map[string]any) bool { return len(outputs(m)) > 0 })
 
-	f.push(t, endCall("call_end_2", map[string]any{"confirm": true, "farewell": "Talk to you later."}))
-	w.waitTrace(t, TraceEnding, "confirmed; farewell requested")
+	f.push(t, endCall("call_end_2", map[string]any{"farewell": "Bye again."}))
+	msgs := f.waitFor(t, "the second result", func(m []map[string]any) bool { return len(outputs(m)) > 1 })
 
-	// The confirmed call has RETURNED. If teardown happened here the
-	// goodbye would be cut off before a word of it was generated.
+	second := outputs(msgs)[1]
+	if !strings.Contains(strings.ToLower(second), "already ending") {
+		t.Fatalf("second result = %q, want it to say the ending is already under way", second)
+	}
+	if !sb.isEnding() {
+		t.Fatal("the second call cleared the ending state")
+	}
 	if w.endCount() != 0 {
-		t.Fatal("the session was torn down when the confirmed call returned, before any goodbye could be spoken")
+		t.Fatalf("the second call tore the session down early (%d)", w.endCount())
+	}
+}
+
+// C3, the ordering, which is the whole point: the call does not tear the
+// session down when it returns. It says goodbye, and teardown happens only
+// once the audio for that goodbye has finished reaching the user.
+//
+// The goodbye is the ONLY thing between the call and the disconnect. There is
+// no model turn in there asking anything, which is what makes "one question"
+// true end to end rather than only up to the tool call.
+func TestEndWaitsForTheGoodbyeToBeHeard(t *testing.T) {
+	f := newFakeRealtime(t)
+	sb, w := attachEnding(t, f, &fakeBridge{})
+
+	f.push(t, endCall("call_end_1", map[string]any{"farewell": "Talk to you later."}))
+	w.waitTrace(t, TraceEnding, "ending; farewell requested")
+
+	// The call has RETURNED. If teardown happened here the goodbye would
+	// be cut off before a word of it was generated.
+	if w.endCount() != 0 {
+		t.Fatal("the session was torn down when the call returned, before any goodbye could be spoken")
 	}
 
 	// The model is asked to speak the farewell it supplied.
@@ -918,9 +962,9 @@ func TestConfirmedEndWaitsForTheGoodbyeToBeHeard(t *testing.T) {
 	// And the trace ring says the same story in order, which is what the
 	// evidence for this component is read from.
 	tr := w.waitTrace(t, TraceEnded, "heard in full")
-	confirmed := w.waitTrace(t, TraceEnding, "confirmed; farewell requested")
-	if !tr.At.After(confirmed.At) {
-		t.Fatalf("the ended trace (%v) does not follow the confirmed trace (%v)", tr.At, confirmed.At)
+	started := w.waitTrace(t, TraceEnding, "ending; farewell requested")
+	if !tr.At.After(started.At) {
+		t.Fatalf("the ended trace (%v) does not follow the ending trace (%v)", tr.At, started.At)
 	}
 	t.Logf("the spoken exit, in order:\n%s", w.dump())
 }
@@ -931,13 +975,16 @@ func TestAnInterruptedGoodbyeLeavesTheSessionOpen(t *testing.T) {
 	f := newFakeRealtime(t)
 	sb, w := attachEnding(t, f, &fakeBridge{})
 
-	f.push(t, endCall("call_end_1", map[string]any{"confirm": false}))
-	w.waitTrace(t, TraceEnding, "intent recorded")
-	f.push(t, endCall("call_end_2", map[string]any{"confirm": true}))
-	w.waitTrace(t, TraceEnding, "confirmed; farewell requested")
+	f.push(t, endCall("call_end_1", map[string]any{"farewell": "Goodbye."}))
+	w.waitTrace(t, TraceEnding, "ending; farewell requested")
 
 	f.push(t, map[string]any{"type": "output_audio_buffer.started"})
 	f.push(t, map[string]any{"type": "output_audio_buffer.cleared"})
+	// Barge-in on a session carrying interrupt_response cancels the
+	// response the user talked over. Pushed here because it is what the
+	// vendor really sends, and because it is what releases the held
+	// response.create the abort queues behind the speaking turn.
+	f.push(t, map[string]any{"type": "response.cancelled"})
 
 	w.waitTrace(t, TraceEnding, "aborted")
 	if w.endCount() != 0 {
@@ -946,26 +993,55 @@ func TestAnInterruptedGoodbyeLeavesTheSessionOpen(t *testing.T) {
 	if sb.isEnding() {
 		t.Fatal("the session is still marked as ending after an interrupted goodbye")
 	}
-	if sb.hasEndIntent() {
-		t.Fatal("an interrupted goodbye left a confirmable intent behind; it must start again from the top")
-	}
 	if sb.isClosed() {
 		t.Fatal("the sideband closed on an interrupted goodbye")
 	}
+
+	// NO RESIDUE. What is injected must not leave the model holding a
+	// half-finished exit that it can complete on its own two turns later,
+	// and must not tell it to go and ask about leaving again.
+	msgs := f.waitFor(t, "the abort injection", func(m []map[string]any) bool {
+		for _, x := range m {
+			if x["type"] != "response.create" {
+				continue
+			}
+			r, _ := x["response"].(map[string]any)
+			if strings.Contains(str(r["instructions"]), "Stop saying goodbye") {
+				return true
+			}
+		}
+		return false
+	})
+	for _, x := range msgs {
+		if x["type"] != "response.create" {
+			continue
+		}
+		r, _ := x["response"].(map[string]any)
+		ins := strings.ToLower(str(r["instructions"]))
+		if !strings.Contains(ins, "stop saying goodbye") {
+			continue
+		}
+		for _, banned := range []string{"confirm", "start again with", "ask them again", "ask once more"} {
+			if strings.Contains(ins, banned) {
+				t.Fatalf("the abort instruction contains %q, which is residue that raises leaving again: %q", banned, ins)
+			}
+		}
+		if !strings.Contains(ins, "do not ask whether they still want to leave") {
+			t.Fatalf("the abort instruction does not forbid re-raising the exit: %q", ins)
+		}
+	}
 }
 
-// C3: audio that was already in flight when the user confirmed is not the
+// C3: audio that was already in flight when the call landed is not the
 // goodbye, and its ending must not be read as the goodbye's.
-func TestAudioFinishingFromBeforeTheConfirmationDoesNotHangUp(t *testing.T) {
+func TestAudioFinishingFromBeforeTheCallDoesNotHangUp(t *testing.T) {
 	f := newFakeRealtime(t)
 	_, w := attachEnding(t, f, &fakeBridge{})
 
-	f.push(t, endCall("call_end_1", map[string]any{"confirm": false}))
-	w.waitTrace(t, TraceEnding, "intent recorded")
-	f.push(t, endCall("call_end_2", map[string]any{"confirm": true}))
-	w.waitTrace(t, TraceEnding, "confirmed; farewell requested")
+	f.push(t, endCall("call_end_1", map[string]any{"farewell": "Bye."}))
+	w.waitTrace(t, TraceEnding, "ending; farewell requested")
 
-	// The read-back the user just said yes to, finishing now.
+	// The question the user just said yes to, finishing now.
 	f.push(t, map[string]any{"type": "output_audio_buffer.stopped"})
 	time.Sleep(300 * time.Millisecond)
 	if w.endCount() != 0 {
@@ -973,9 +1049,9 @@ func TestAudioFinishingFromBeforeTheConfirmationDoesNotHangUp(t *testing.T) {
 	}
 }
 
-// C4: a confirmed exit tears the session down through the MANAGER -- the same
+// C4: a spoken exit tears the session down through the MANAGER -- the same
 // End the browser's POST reaches -- and the browser is told.
-func TestConfirmedEndRemovesTheSessionFromTheManagerAndTellsTheBrowser(t *testing.T) {
+func TestEndRemovesTheSessionFromTheManagerAndTellsTheBrowser(t *testing.T) {
 	f := newFakeRealtime(t)
 
 	cfg := config.VoiceConfig{
@@ -1015,10 +1091,8 @@ func TestConfirmedEndRemovesTheSessionFromTheManagerAndTellsTheBrowser(t *testin
 		t.Fatal("no live session after Connect")
 	}
 
-	f.push(t, endCall("call_end_1", map[string]any{"confirm": false}))
-	waitUntil(t, "the read-back", func() bool { return len(outputsOf(f)) > 0 })
-	f.push(t, endCall("call_end_2", map[string]any{"confirm": true, "farewell": "Bye."}))
-	waitUntil(t, "the farewell request", func() bool { return len(outputsOf(f)) > 1 })
+	f.push(t, endCall("call_end_1", map[string]any{"farewell": "Bye."}))
+	waitUntil(t, "the farewell request", func() bool { return len(outputsOf(f)) > 0 })
 
 	f.push(t, map[string]any{"type": "output_audio_buffer.started"})
 	f.push(t, map[string]any{"type": "output_audio_buffer.stopped"})

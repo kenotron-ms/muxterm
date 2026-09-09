@@ -15,43 +15,43 @@ import (
 // approving the wrong thing runs a command, but ending the wrong thing takes
 // away the microphone that would have said "no, wait".
 //
-// Three rules make that survivable, and all three are enforced HERE rather
-// than in the prompt, because a prompt is guidance and this is a gate:
+// The confirmation the user gets before this happens is REAL, and it is
+// specified in exactly one place: the ENDING THE CONVERSATION section of
+// Instructions(). It is not restated here, and this file must not add a
+// second one.
 //
-//  1. TWO STEPS, ALWAYS. The first call ends nothing. It records an intent
-//     and sends back a line for the model to read aloud. Only a second call,
-//     with confirm true, ends anything. A model that tries to do it in one
-//     call is refused -- including when it sets confirm true on the first
-//     call, which is the shape a model reaches for when it is being
-//     agreeable rather than careful.
-//  2. THE GOODBYE IS HEARD BEFORE THE LINE DROPS. A session that ends must
+// It used to. This tool was built the way answer_approval is built -- a
+// server-side two-call gate, where the first call ends nothing and hands
+// back a line for the model to read aloud. That is the right shape for
+// approvals, where the gate protects a command that runs on the user's
+// machine and the model's own prompt cannot be trusted to hold the line. It
+// was the wrong shape here, for a reason specific to conversation: the model
+// had ALREADY asked, because the instructions told it to, so the gate's
+// read-back was a SECOND question, and the "ask them once more" branch below
+// it was a third. The user asked to leave and got interrogated. A gate that
+// costs one command is cheap; a gate that costs the user their exit is the
+// failure it was supposed to prevent.
+//
+// So the gate is gone and one call hangs up. Two rules survive, and they are
+// enforced HERE rather than in the prompt, because a prompt is guidance and
+// these are mechanism:
+//
+//  1. THE GOODBYE IS HEARD BEFORE THE LINE DROPS. A session that ends must
 //     be audibly different from one that fell over. Teardown waits for the
 //     farewell audio to finish reaching the user -- observed, not assumed.
-//  3. AN INTERRUPTED GOODBYE IS NOT A GOODBYE. If the user talks over the
+//  2. AN INTERRUPTED GOODBYE IS NOT A GOODBYE. If the user talks over the
 //     farewell, the ending is abandoned and the conversation stays open.
 //
-// The asymmetry is the whole design, and it runs the opposite way from
-// approvals.go. There, ambiguity denies. Here, ambiguity KEEPS THE SESSION
-// OPEN: "stop", "end", "exit" and "quit" are ordinary words in a
-// conversation about terminals, processes and commands, and a false positive
-// that silently cuts a live session is worse than one extra beat of
-// confirmation. Staying connected by mistake costs a sentence. Hanging up by
-// mistake costs the user the only channel they had.
-
-// endIntent is a request to hang up that has been read back to the user but
-// not yet acted on.
-type endIntent struct{ at time.Time }
-
-// endIntentTTL is how long a read-back ending stays confirmable.
-//
-// Shorter than approvals.go's ninety seconds, deliberately. Both windows
-// exist so an intent cannot be confirmed by an unrelated later utterance,
-// but the damage differs: a stale approval that gets confirmed runs one
-// command the user can see and undo, while a stale ending that gets
-// confirmed takes the microphone away mid-sentence. A person who means to
-// hang up says so within a few seconds, so nothing is lost by closing the
-// window early, and one accidental ending is avoided by it.
-const endIntentTTL = 60 * time.Second
+// Rule 2 is what makes a single call safe, and it is worth being explicit
+// about why, because it is the safety property the deleted gate was carrying.
+// The asymmetry still runs the opposite way from approvals.go: there,
+// ambiguity denies; here, ambiguity KEEPS THE SESSION OPEN. "stop", "end",
+// "exit" and "quit" are ordinary words in a conversation about terminals, so
+// a wrongly-started ending has to be survivable. It is -- the user hears a
+// goodbye they did not ask for and simply talks, and abortEnd puts the
+// conversation back. That costs them one sentence, the same as the old
+// read-back did, but it is only spent when something has actually gone
+// wrong, instead of on every single exit.
 
 // What the read loop tells a farewell that is waiting to be heard.
 const (
@@ -81,25 +81,23 @@ const farewellDeadline = 25 * time.Second
 // the read-back the user just confirmed.
 const farewellDrainGrace = 5 * time.Second
 
-// runEnd is the gate. It never ends a session on a first call, and it never
-// ends one before the goodbye has been heard.
+// runEnd hangs up. One call, no second question -- and no teardown until the
+// goodbye has been heard.
+//
+// The tool result deliberately carries no decision for the model to make.
+// Every earlier version of this function answered with something the model
+// had to weigh -- get their confirmation first, ask them once more, wait for
+// a clear yes -- and each of those sentences was another turn spent with the
+// user waiting to be let go. What comes back now is a single imperative with
+// one line in it, so the only thing the model can do next is say it.
 func (s *Sideband) runEnd(callID string, args map[string]any) {
-	// Mirrors approvals.go: a confirm that is not a JSON boolean is not a
-	// confirmation. The zero value is false, which routes to the
-	// read-back step -- the safe arm.
-	confirm, _ := args["confirm"].(bool)
 	farewell := strings.TrimSpace(str(args["farewell"]))
 
 	s.mu.Lock()
 	alreadyEnding := s.ending
-	intent := s.endIntent
-	if intent != nil && time.Since(intent.at) > endIntentTTL {
-		s.endIntent = nil
-		intent = nil
-	}
 	s.mu.Unlock()
 
-	// A second confirmed call while the goodbye is going out. Answering it
+	// A second call while the goodbye is already going out. Answering it
 	// rather than dropping it keeps the model from trying again harder.
 	if alreadyEnding {
 		s.answer(callID, "The conversation is already ending; the goodbye is going out now.",
@@ -107,37 +105,7 @@ func (s *Sideband) runEnd(callID string, args map[string]any) {
 		return
 	}
 
-	// STEP ONE: record and read back. This branch also covers the model
-	// that jumps straight to confirm true, which is refused rather than
-	// honoured -- the confirmation has to be something the USER said, and
-	// on a first call there is nothing they could have been confirming.
-	if intent == nil {
-		s.mu.Lock()
-		s.endIntent = &endIntent{at: time.Now()}
-		s.mu.Unlock()
-		s.emit(Trace{Kind: TraceEnding, Name: ToolEnd, Detail: "intent recorded; session still live"})
-		s.answer(callID,
-			"Nothing was ended. The conversation is still live. Read this back to the user and get their confirmation first.",
-			"Say: you want to end the conversation -- confirm? Then wait. Only if they clearly agree, call "+
-				ToolEnd+" again with confirm true. If they say no, change their mind, are unclear, or "+
-				"turn out to have meant stopping a task rather than the conversation, do not call it again.")
-		return
-	}
-
-	// A second call that is not a confirmation. Treated as a fresh intent,
-	// not as a confirmation of the old one.
-	if !confirm {
-		s.mu.Lock()
-		s.endIntent = &endIntent{at: time.Now()}
-		s.mu.Unlock()
-		s.answer(callID, "Still nothing ended. Confirm with the user first.",
-			"Ask them once more, plainly, whether they want to end the conversation, and wait for a clear yes.")
-		return
-	}
-
-	// CONFIRMED. From here the session is ending -- but not yet.
 	s.mu.Lock()
-	s.endIntent = nil
 	s.ending = true
 	ch := make(chan string, 8)
 	s.farewellCh = ch
@@ -148,10 +116,10 @@ func (s *Sideband) runEnd(callID string, args map[string]any) {
 		// The model may omit the farewell; the goodbye is not optional.
 		line = "Goodbye."
 	}
-	s.emit(Trace{Kind: TraceEnding, Name: ToolEnd, Detail: "confirmed; farewell requested"})
+	s.emit(Trace{Kind: TraceEnding, Name: ToolEnd, Detail: "ending; farewell requested"})
 	s.answer(callID,
-		"Confirmed. Say the goodbye now. The connection stays open until the user has heard it, then drops on its own.",
-		"Say this out loud to the user now, and nothing else: "+line)
+		"Ending now. Say the goodbye. The connection stays open until the user has heard it, then drops on its own.",
+		"Say this out loud to the user now, and nothing else -- no question, no offer, nothing after it: "+line)
 
 	go s.awaitFarewell(ch)
 }
@@ -252,20 +220,20 @@ func (s *Sideband) finishEnd(why string) {
 
 // abortEnd puts the conversation back the way it was.
 //
-// The intent is cleared, not kept: a user who interrupts their own goodbye
-// has to ask again from the top, which is one extra sentence and removes any
-// chance of a half-confirmed ending completing later on its own.
+// Nothing about the ending is kept. A user who talks over their own goodbye
+// gets a session with no memory of having been on the way out, which is the
+// point: a half-finished ending left lying around is exactly the residue that
+// makes a model bring hanging up back up on its own two turns later.
 func (s *Sideband) abortEnd() {
 	s.mu.Lock()
 	s.ending = false
 	s.farewellCh = nil
-	s.endIntent = nil
 	s.mu.Unlock()
 
 	s.emit(Trace{Kind: TraceEnding, Name: ToolEnd, Detail: "aborted: the user spoke over the goodbye"})
 	s.inject("The user interrupted the goodbye, so the conversation is STILL OPEN and nothing was ended.",
-		"Stop saying goodbye. Listen to what the user just said and carry on with it. If they do still "+
-			"want to end the conversation, start again with "+ToolEnd+" and confirm false.")
+		"Stop saying goodbye. Listen to what the user just said and carry on with it. Do not ask whether "+
+			"they still want to leave -- if they do, they will say so, and that is a fresh request.")
 }
 
 // signalFarewell hands the read loop's view of the audio to a farewell that
@@ -285,18 +253,9 @@ func (s *Sideband) signalFarewell(sig string) {
 	}
 }
 
-// isEnding is test-facing: it reports whether a confirmed goodbye is in
-// flight.
+// isEnding is test-facing: it reports whether a goodbye is in flight.
 func (s *Sideband) isEnding() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ending
-}
-
-// hasEndIntent is test-facing: it reports whether an ending has been read
-// back and is waiting on a confirmation.
-func (s *Sideband) hasEndIntent() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.endIntent != nil
 }

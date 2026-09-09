@@ -53,11 +53,16 @@ type Sideband struct {
 	closed  bool
 	pending map[string]*approvalIntent
 
-	// The spoken exit, all of it guarded by mu. endIntent is a hangup that
-	// has been read back and not yet confirmed; ending means a confirmed
-	// goodbye is on its way out; farewellCh carries the read loop's view
-	// of that goodbye's audio to the goroutine waiting to hang up.
-	endIntent  *endIntent
+	// The spoken exit, guarded by mu. ending means a goodbye is on its way
+	// out; farewellCh carries the read loop's view of that goodbye's audio
+	// to the goroutine waiting to hang up.
+	//
+	// TWO fields, and there is deliberately no third holding a hangup that
+	// has been asked about but not yet acted on. Ending is asked about once,
+	// in the conversation, and the next thing that happens is this tool
+	// being called -- so between the question and the answer there is no
+	// pending-exit state to keep, and after a "no" there is none to leave
+	// behind. See endsession.go.
 	ending     bool
 	farewellCh chan string
 
