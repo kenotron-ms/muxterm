@@ -19,6 +19,17 @@ tools:
   # relay the human's answers into a lane, lane_transcript reads what a lane
   # is saying.
   #
+  # `mcp_muxterm_*` below is a PREFIX, so a muxterm tool added later is granted
+  # mechanically, without an edit here. That is deliberate (see the trailing `*`
+  # note further down) and it is also a trap worth naming: a tool nothing has
+  # TOLD the chief of staff about is a tool it will not use, whatever the
+  # allowlist says. The surface that actually decides its behaviour is the
+  # charter it reads as its system prompt. When you add a muxterm tool, add it
+  # to context/cos-charter.md too -- the trigger tools (create_trigger,
+  # list_triggers, set_trigger_enabled, delete_trigger) are there under "Work
+  # that starts without anyone", with the propose-do-not-install rule that
+  # unattended work needs.
+  #
   # run_command is in this set and `bash` (withheld, below) is not, and the
   # difference is not cosmetic. run_command runs in a VISIBLE PANE: the human
   # can watch it, scroll it back, and interrupt it, so it is auditable by

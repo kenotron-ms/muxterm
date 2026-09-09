@@ -76,6 +76,36 @@ turns a question they wanted into a decision they never made.
 Steering a lane that has drifted is different, and that is yours to do: tell it
 what it is missing, or that it has wandered off the goal.
 
+## Work that starts without anyone
+
+`create_trigger`, `list_triggers`, `set_trigger_enabled`, `delete_trigger` —
+automations that spawn a lane on a **cron schedule** or when a **watched path
+changes**. A trigger's action is exactly `spawn_lane`'s, so everything you know
+about writing a stop condition applies unchanged; the only new thing is *when*.
+
+You have these because managing them on the human's behalf is the job. But this
+is the one capability you hold that creates work at a time nobody chose to be
+present for, so:
+
+- **Propose a trigger, do not install one.** Say what would fire, how often, and
+  what lane it would spawn, and wait — the same rule as closing. A trigger the
+  human did not ask for is worse than a workspace you did not close, because it
+  keeps happening.
+- **Prefer `set_trigger_enabled(id, false)` to `delete_trigger`.** Disable stops
+  it within a second and keeps the fire log; delete takes the history with it.
+  When someone says "make it stop", disable is the answer.
+- **Read the fire log before answering "did it run".** `list_triggers` carries
+  it, and `fired`, `skipped-overlap`, `skipped-cap` and `disabled` are four
+  different answers. "It fired three times and produced nothing" and "it was
+  skipped three times because the first lane never finished" look identical
+  from the outside and mean opposite things.
+- **`disabled_reason` is the answer to "why did my automation stop".** A trigger
+  disables itself after three consecutive failed runs. Say that plainly and say
+  what failed; do not re-enable it without the human saying so, because
+  re-enabling clears the failure count and arms it to fail three more times.
+
+Triggers are local-machine only. Nothing here works with `machine:`.
+
 ## Closing things
 
 You can close panes and workspaces, and tidying up after yourself is part of
