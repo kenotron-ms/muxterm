@@ -740,11 +740,45 @@ class CosStore {
    * arrives more than once per page and appending would double the visible
    * transcript every time.
    *
-   * Turns still IN FLIGHT in this browser are always carried across. They are
-   * not in the server's transcript yet -- it is written at turn end -- so
-   * dropping them would erase a question whose answer is still streaming.
-   * Replayed ids are `h-*` and live ids are `t-*`, so the two sets can never
-   * collide.
+   * A turn still IN FLIGHT in this browser is RECONCILED against the replay
+   * rather than carried past it. Replayed ids are `h-*` and live ids are
+   * `t-*`, so the two can never be matched by id -- the prompt is the only
+   * key both sides carry.
+   *
+   * The reconciliation is not optional, because a turn is only live ON THE
+   * CONNECTION STREAMING IT. When that socket dies mid-answer -- a phone's
+   * radio sleeping, a NAT dropping an idle flow, the heartbeat giving up on a
+   * page Blink froze in the background -- `turn_end` is delivered to a
+   * connection that is gone, and this browser is left holding a turn stuck in
+   * `streaming` that nothing can ever finish. #94 then reconnects the moment
+   * the tab becomes visible again, the replay arrives with that same turn in
+   * it complete, and carrying the local copy unconditionally rendered BOTH:
+   * the finished answer from the transcript, and below it a second copy of
+   * the question under a "working..." that spins forever. The reader sees
+   * their last question unanswered at the bottom of the conversation with the
+   * real answer scrolled off above it -- reported as "the last line gets lost
+   * when I switch back to this app after it going to the background".
+   *
+   * WHICH COPY WINS IS DECIDED BY WHICH ONE HAS THE ANSWER, and that is a
+   * question about the replay, not about the local status. The sidecar builds
+   * its history from the LIVE transcript (sidecar/main.py _handle_history),
+   * and the user message is in that transcript from the moment the turn is
+   * submitted -- so a replay taken mid-turn contains the turn ALREADY, as a
+   * prompt with no reply under it. Assuming the transcript only gains a turn
+   * at turn end is what made the first version of this fix drop a turn that
+   * was genuinely still running.
+   *
+   *   replayed copy HAS reply text   it finished while we were disconnected.
+   *                                  Keep it, drop the local one: the local
+   *                                  one is the orphan that can never finish.
+   *   replayed copy has NO reply     it is the transcript's placeholder for a
+   *                                  turn still running. Keep the LOCAL one,
+   *                                  which holds what has streamed so far and
+   *                                  is the only copy the remaining events can
+   *                                  still reach; drop the placeholder, which
+   *                                  would otherwise render as a second copy
+   *                                  of the question reading "ended without a
+   *                                  reply".
    *
    * A FINISHED turn missing from the replay is the hard case, because absence
    * has two opposite meanings and the frame's reason is the only thing that
@@ -765,6 +799,14 @@ class CosStore {
    * before the snapshot -- so present in BOTH -- is recognised by its prompt
    * and left to the replay, rather than rendered twice.
    *
+   * Prompts are claimed from a QUEUE per prompt, oldest-first, not looked up
+   * in a set. The same question asked twice is two turns in the replay and
+   * must account for two local turns, not one: with a plain set, a reconnect
+   * landing while a repeated question was in flight would match the live turn
+   * against the OLDER answer. Claiming in order gives each replayed copy to
+   * the oldest local turn that can explain it, so a live turn is only ever
+   * matched by a replayed turn that nothing else accounts for.
+   *
    * Replayed turns are ordinary CosTurns: same fields, same blocks, same
    * render path. Nothing downstream can tell a replayed turn from a live one,
    * which is the point -- a reloaded tab has to look like the tab it replaced.
@@ -775,14 +817,39 @@ class CosStore {
       const turn = this._fromHistory(item);
       if (turn) replayed.push(turn);
     }
-    const replayedPrompts = new Set(replayed.map((t) => t.prompt).filter((p) => p !== ''));
+    const unclaimed = new Map<string, CosTurn[]>();
+    for (const t of replayed) {
+      if (t.prompt === '') continue;
+      const queue = unclaimed.get(t.prompt);
+      if (queue) queue.push(t);
+      else unclaimed.set(t.prompt, [t]);
+    }
+    const claim = (prompt: string): CosTurn | null => {
+      if (prompt === '') return null;
+      const queue = unclaimed.get(prompt);
+      return queue && queue.length > 0 ? (queue.shift() as CosTurn) : null;
+    };
+    /** Does this turn actually carry a reply, as opposed to a bare prompt? */
+    const answered = (t: CosTurn): boolean => t.blocks.some((b) => b.kind === 'text');
+
+    // Placeholders the local copy supersedes. Held by identity, so a repeated
+    // prompt only ever removes the one replayed copy that was claimed.
+    const superseded = new Set<CosTurn>();
+    // _turns is oldest-first and filter walks it in that order, which is what
+    // makes the claim oldest-first.
     const carried = this._turns.filter((t) => {
-      if (t.status === 'pending' || t.status === 'streaming') return true;
+      const live = t.status === 'pending' || t.status === 'streaming';
+      const match = claim(t.prompt);
+      if (match) {
+        if (!live || answered(match)) return false;
+        superseded.add(match);
+        return true;
+      }
+      if (live) return true;
       if (authoritative) return false;
-      if (t.endedAt < this._replayRequestedAt) return false;
-      return !(t.prompt !== '' && replayedPrompts.has(t.prompt));
+      return t.endedAt >= this._replayRequestedAt;
     });
-    this._turns = [...replayed, ...carried];
+    this._turns = [...replayed.filter((t) => !superseded.has(t)), ...carried];
     this._byId = new Map(this._turns.map((t) => [t.id, t]));
   }
 
