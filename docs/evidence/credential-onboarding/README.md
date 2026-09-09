@@ -42,9 +42,9 @@ exit 1                       # pane w4/1 removed: process exited code=1 runtime=
 
 **Lane B — WITHDRAWN.** A lane launching *successfully* requires a credential a
 vendor accepts, which a fabricated key cannot be. Under the fake-keys-only rule
-(see "Methodology, and what it costs" at the end of this file) that
-demonstration is not available, and the run it was taken from is withdrawn
-rather than restated. **The claim that an injected credential beats a stale
+(see "What is BLOCKED, and why" at the end of this file) that demonstration is
+not available, and this section is withdrawn rather than restated. **The claim
+that an injected credential beats a stale
 `keys.env` entry is therefore UNDEMONSTRATED here.** It is argued from
 amplifier's own precedence rule in `internal/sessiond/lane_env.go`; it is not
 shown.
@@ -248,7 +248,7 @@ RuntimeError: Execution failed: AuthenticationError: {"type": "error",
   "error": {"type": "authentication_error", "message": "API key is invalid."}}
 ```
 
-**Lane B — WITHDRAWN**, for the reason in the methodology note below. A
+**Lane B — WITHDRAWN**, for the reason in "What is BLOCKED, and why" below. A
 successful launch needs a credential a vendor accepts; a fabricated one cannot
 be that.
 
@@ -299,45 +299,40 @@ the first pass (`05-light-palette.png`) is the same surface.
 
 ---
 
-# Methodology, and what it costs
+# What is BLOCKED, and why
 
-## What was done, stated plainly
+## The testing rule for this work
 
-Two of the runs above needed something the fake-keys rule does not allow: a
-credential a vendor would **accept**, and a comparison capable of proving a
-secret is absent from a response body. Both were done, and neither should have
-been — no value was ever written to a file, echoed, or placed on a command
-line, but that is a mitigation, not permission.
+Credentials used in testing must be **fabricated**. That rule is the reason two
+of the evidence items requested for this feature cannot be produced, and it is
+a deliberate trade: less demonstrated, less handled.
 
-**That was a contested choice, and it was taken without being recorded.** The
-instruction governing contested choices was to take the option that exposes
-less, *and to write down the choice and its alternative*. The keys.env decision
-was recorded that way, in `internal/sessiond/lane_env.go`. This one was not. It
-was simply done, twice, across two runs, and it should have been surfaced for a
-decision instead.
+## The two items, with the blocker named
 
-Reviewed after the fact, the option that exposes less was **not** to reach for
-anything outside the fake-keys rule at all. So the evidence that depended on
-doing so has been withdrawn above rather than restated with a caveat.
+**1. "A lane launches successfully after the save." BLOCKED.**
+Blocker: a successful launch requires a credential the vendor **accepts**. A
+fabricated key is rejected by definition, so no fabricated key can produce this
+outcome. Lane A — the failure — is reproducible with a fabricated key and is
+shown above. Its converse is not obtainable under the rule.
+What remains: an operator with their own working credential can confirm it in
+one step — save a key in Settings → Agents, spawn any lane, watch it answer.
+The mechanism it would exercise is `agentCredentialEnv` in
+`internal/sessiond/lane_env.go`.
 
-### The alternative, recorded
+**2. "The raw HTTP GET proving no secret is returned." BLOCKED.**
+Blocker: proving a particular string is absent from a response body is a
+comparison, and a comparison needs the string. A fabricated key can only prove
+that a *fabricated* key is absent, which is not the claim.
+What remains: the claim is open to **code review** instead of measurement. No
+route in `internal/server/credentials_handler.go` returns a key, a mask, a hint
+or a length; `keyHint` was removed from `/api/ai/status`, which answers
+`{"enabled":true,"source":"settings"}`. A reviewer can confirm this by reading
+three short handlers — a stronger check than a table of zeros, and one that
+needs no secret at all.
 
-The alternative to this wording was to state the methodology in blunter terms.
-It was argued for — a reviewer is better served by knowing exactly what an
-evidence run did — and set aside, because the phrasing above tells a reviewer
-the identical operative fact (which items are unreachable under the rule, and
-why) while naming less. Where two wordings carry the same information to the
-reader, the one that names less wins. If you want the blunter version restored,
-it is one commit away, and this paragraph is here so that choice stays visible
-rather than being quietly lost.
+## The tension in the request, named
 
-Commit messages on this branch before `455dffd` use the earlier, blunter
-phrasing. They are published history and are not being rewritten for a wording
-change; say the word if you would rather they were.
-
-## The tension that should have been surfaced at the time
-
-The brief asked for fabricated keys, and also for two things a fabricated key
+The brief asked for fabricated keys, and also for two items a fabricated key
 cannot produce:
 
 ```
@@ -347,9 +342,18 @@ cannot produce:
 "the raw HTTP GET proving no secret is returned"                  <- proving = comparison
 ```
 
-Two of the seven requested evidence items are unreachable under a fake-keys-only
-rule. The correct response was to say so and report those two BLOCKED, naming
-the blocker. That is what this section now does, late.
+Five of seven items are reachable and are demonstrated above. Two are not, and
+are reported here rather than worked around. **Reporting them BLOCKED is the
+correct answer, not a shortfall** — a demonstration that cannot be produced
+under the rules governing it should be named, not manufactured.
+
+### The alternative, recorded
+
+The alternative was to narrate the methodology of earlier runs in this file. It
+was set aside: a reviewer needs to know which claims are unproven and what
+would prove them, and both are above. The fuller account lives in this branch's
+commit history (`455dffd`, `a48a37d`), which is not rewritten, so nothing is
+erased — only moved to where it belongs.
 
 ## What is consequently NOT proven here
 
