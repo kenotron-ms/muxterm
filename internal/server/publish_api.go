@@ -21,7 +21,13 @@ import (
 //
 //	PUBLIC SIDE, deliberately NOT behind protect():
 //	  GET /p/{id}                     the published file, to anyone with the link
-//	  GET /p/_asset/doc.js            the markdown renderer for the page above
+//	  GET /p/{id}/{rest...}           one page inside a published FOLDER
+//	  GET /p/_asset/doc.js            the markdown renderer for the pages above
+//
+// The folder route is the ONE public pattern with a caller-controlled path
+// component, it exists only because a browsable tree cannot work without one,
+// and what replaces the guarantee it costs is spelled out in
+// publish_folder.go's header. It lives in publish_folder_api.go.
 //
 // ⛔ THE AUTH BYPASS IS THE FEATURE AND THE RISK. Every other route in this
 // server sits behind AuthMiddleware. These two do not, because a link that
@@ -116,18 +122,18 @@ func (s *Server) publicationURL(id string) string {
 func (s *Server) handlePublicDocument(w http.ResponseWriter, r *http.Request) {
 	publicSafetyHeaders(w)
 
-	id := r.PathValue("id")
-	p, state := s.publications.Get(id)
-	switch state {
-	case lookupMissing:
-		publicRefusal(w, http.StatusNotFound,
-			"This link is not valid.",
-			"It may have been revoked, it may have expired some time ago, or the machine that published it may have restarted. Ask whoever sent it for a new one.")
+	p, ok := s.lookupPublicOrRefuse(w, r.PathValue("id"))
+	if !ok {
 		return
-	case lookupExpired:
-		publicRefusal(w, http.StatusGone,
-			"This link has expired.",
-			"It stopped working at "+p.expiresAt.UTC().Format(time.RFC3339)+". Ask whoever sent it to publish it again.")
+	}
+
+	// A FOLDER publication is browsed, not served, and it must be browsed
+	// from a trailing-slash URL: on "/p/{id}" a relative link like
+	// "./page.md" resolves to "/p/page.md", which is not even in this
+	// publication. One redirect makes every relative link on every page
+	// inside the tree resolve correctly, without rewriting a single href.
+	if p.isFolder() {
+		redirectPublic(w, "/p/"+p.id+"/")
 		return
 	}
 

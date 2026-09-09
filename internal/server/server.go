@@ -213,13 +213,21 @@ func New(cfg Config) *Server {
 	// about any other route: no flag, no header, and no request-derived
 	// condition can promote a protected pattern into an unprotected one.
 	//
-	// Both are fixed-shape. "/p/{id}" is two segments and the id must be 22
-	// base64url characters before the registry is even consulted;
-	// "/p/_asset/doc.js" is a literal. Nothing a caller writes reaches the
-	// filesystem, so traversal here is not filtered -- it is unrepresentable.
-	// See internal/server/publish_api.go.
+	// "/p/{id}" is two segments and the id must be 22 base64url characters
+	// before the registry is even consulted; "/p/_asset/doc.js" is a literal
+	// (and wins over the wildcard below, because Go's ServeMux prefers the
+	// more specific pattern). For those two, nothing a caller writes reaches
+	// the filesystem: traversal is not filtered, it is unrepresentable.
+	//
+	// ⛔ "/p/{id}/{rest...}" IS DIFFERENT AND THE DIFFERENCE MATTERS. It is
+	// the one public pattern with a caller-controlled path component, which a
+	// BROWSABLE published folder cannot exist without: a reader has to be
+	// able to say which page they want. {rest...} is used as a key into a
+	// manifest fixed at publish time and never as a path -- read the header
+	// of internal/server/publish_folder.go before touching it.
 	s.mux.HandleFunc("GET /p/_asset/doc.js", s.handlePublicAsset)
 	s.mux.HandleFunc("GET /p/{id}", s.handlePublicDocument)
+	s.mux.HandleFunc("GET /p/{id}/{rest...}", s.handlePublicTree)
 	if s.authSrv != nil {
 		s.mux.HandleFunc("GET /authorize", s.authSrv.ServeAuthorize)
 		s.mux.HandleFunc("POST /authorize", s.authSrv.ServeAuthorize)
@@ -259,6 +267,12 @@ func New(cfg Config) *Server {
 	// only the /p/ reader routes above are anonymous. See publish_api.go.
 	s.mux.Handle("GET /api/publications", protect(http.HandlerFunc(s.handlePublicationsList)))
 	s.mux.Handle("POST /api/publications", protect(http.HandlerFunc(s.handlePublicationCreate)))
+	// A folder gets its OWN create route rather than a flag on the one above:
+	// publishing a whole tree is a materially bigger act than publishing a
+	// file, and a caller should have to name it. List and revoke are shared --
+	// a folder is a row in the same registry, and revoking its id kills the
+	// whole tree at once. See internal/server/publish_folder_api.go.
+	s.mux.Handle("POST /api/publications/folder", protect(http.HandlerFunc(s.handlePublicationCreateFolder)))
 	s.mux.Handle("DELETE /api/publications", protect(http.HandlerFunc(s.handlePublicationRevoke)))
 	s.mux.Handle("DELETE /api/publications/{id}", protect(http.HandlerFunc(s.handlePublicationRevoke)))
 
