@@ -21,6 +21,15 @@ import {
 } from '../lib/ai.js';
 import { apiPath } from '../lib/base-path.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
+import {
+  DEFAULT_VOICE_STATUS,
+  fetchVoiceStatus,
+  saveVoiceSettings,
+  clearVoiceKey,
+  checkVoice,
+  type VoiceStatus,
+  type VoiceMode,
+} from '../lib/voice-settings.js';
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -44,6 +53,25 @@ const LIGHT_THEMES: ThemeCard[] = [
 ];
 
 // ── Remotes ──────────────────────────────────────────────────────────────────
+
+/**
+ * OpenAI's one and only v1 base URL. The server pins this regardless of what
+ * the form sends; the constant exists so the field can SHOW what will be saved
+ * rather than sitting empty or, worse, editable and ignored.
+ */
+const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
+
+/**
+ * The status markers. A glyph in a fixed gutter, not a coloured slab: colour
+ * only ever reinforces what the glyph and the sentence beside it already say,
+ * so nothing here depends on colour vision, a particular palette, or a width
+ * wide enough for chrome.
+ */
+const VOICE_GLYPH: Record<'ok' | 'bad' | 'none', string> = {
+  ok: '✓',
+  bad: '!',
+  none: '·',
+};
 
 /** One row of GET /api/remotes, in all three arrays (plan C.0). */
 interface RemoteRow {
@@ -720,6 +748,168 @@ export class MuxSettingsSurface extends LitElement {
       color: var(--chrome-text-dim);
     }
 
+    /* ── Voice section ──────────────────────────────────────────────────
+     *
+     * Status is carried by a TYPOGRAPHIC MARKER in a fixed gutter plus the
+     * wording of the line itself — never by a rounded card with one bold
+     * edge, and never by colour alone. Colour lands on the marker glyph and
+     * only reinforces what the glyph and the sentence already say, so the
+     * meaning survives a monochrome display, a light palette, and a dark one.
+     *
+     * Everything below is single-column and wraps. This form is configured
+     * from a phone.
+     */
+    .v-line {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin: 0 0 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--chrome-text-bright);
+    }
+
+    /* The fixed gutter. Fixed width so every marker aligns down the column
+     * and the text starts at the same x whatever the glyph is. */
+    .v-mark {
+      flex: none;
+      width: 1.1em;
+      text-align: center;
+      font-weight: 700;
+      /* Tabular so the glyphs cannot shift the text beside them. */
+      font-variant-numeric: tabular-nums;
+    }
+
+    .v-mark.ok   { color: var(--mux-success, #3d9970); }
+    .v-mark.bad  { color: var(--mux-error); }
+    .v-mark.none { color: var(--chrome-text-dim); }
+
+    .v-field {
+      margin-top: 14px;
+    }
+
+    .v-label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--chrome-text-dim);
+    }
+
+    .v-hint {
+      margin: 4px 0 0;
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--chrome-text-dim);
+    }
+
+    /* Mode chooser: stacked rows, each a whole tap target. No cards. */
+    .v-modes {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-bottom: 4px;
+    }
+
+    .v-mode {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 7px 4px;
+      font-size: 13px;
+      color: var(--chrome-text-bright);
+      background: none;
+      border: none;
+      border-radius: 0;
+      text-align: left;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    /* Selection is a marker and weight, not a slab. */
+    .v-mode[aria-checked='true'] {
+      font-weight: 700;
+    }
+
+    .v-mode:focus-visible {
+      outline: 2px solid var(--chrome-text-bright);
+      outline-offset: -2px;
+    }
+
+    .v-mode-sub {
+      display: block;
+      margin-top: 2px;
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--chrome-text-dim);
+    }
+
+    .v-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .v-actions button {
+      padding: 6px 12px;
+      font-family: inherit;
+      font-size: 12px;
+      color: var(--chrome-text-bright);
+      background: var(--chrome-body);
+      border: 1px solid var(--chrome-border, #444);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .v-actions button[disabled] {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    /* The enable toggle reads as a sentence, not a switch in a box. */
+    .v-toggle {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin: 0 0 18px;
+      font-size: 13px;
+      color: var(--chrome-text-bright);
+      cursor: pointer;
+    }
+
+    .v-toggle input {
+      margin: 0;
+      flex: none;
+    }
+
+    .v-note {
+      margin-top: 18px;
+      font-size: 11px;
+      line-height: 1.55;
+      color: var(--chrome-text-dim);
+    }
+
+    .v-note code {
+      font-size: 10.5px;
+      word-break: break-all;
+    }
+
+    /* A refusal or a check result. Same gutter as .v-line so the marker
+     * column is continuous down the pane. */
+    .v-message {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-top: 14px;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      color: var(--chrome-text-bright);
+    }
+
     /* ── Remotes ── */
     .r-row {
       display: flex;
@@ -834,12 +1024,35 @@ export class MuxSettingsSurface extends LitElement {
   @property({ type: String }) serverAddr = '';
   @property({ attribute: false }) aiStatus: AIStatus = DEFAULT_AI_STATUS;
 
-  @state() private _section: 'appearance' | 'notifications' | 'ai' | 'remotes' = 'appearance';
+  @state() private _section: 'appearance' | 'notifications' | 'ai' | 'voice' | 'remotes' = 'appearance';
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
   @state() private _aiKeyInput = '';
   @state() private _aiBusy = false;
   @state() private _aiMessage = '';
+
+  // ── Voice credentials ──────────────────────────────────────────────────
+  // _voice is what the SERVER says. The _v* fields are the form's own edits,
+  // seeded from it on load and after every save. They are kept separate so a
+  // save that the server refuses leaves the user's typing on screen to fix,
+  // rather than snapping back to the last accepted state.
+  //
+  // There is no _voiceKeyStored mirror of the key: the key exists in the form
+  // input until it is sent, and nowhere else in this component. `keyConfigured`
+  // on the server status is a boolean and is all that is ever known about a
+  // saved one.
+  @state() private _voice: VoiceStatus = DEFAULT_VOICE_STATUS;
+  @state() private _voiceLoaded = false;
+  @state() private _vMode: VoiceMode = 'azure_entra';
+  @state() private _vEnabled = false;
+  @state() private _vEndpoint = '';
+  @state() private _vModel = '';
+  @state() private _vScope = '';
+  @state() private _vKeyInput = '';
+  @state() private _voiceBusy = false;
+  @state() private _voiceMessage = '';
+  /** 'ok' | 'bad' | '' — drives the typographic marker, never colour alone. */
+  @state() private _voiceMessageKind: 'ok' | 'bad' | '' = '';
   // Per-browser (localStorage), not server config — distinguishes this
   // machine's window/PWA from other muxterm instances. See instance-identity.ts.
   @state() private _titlebarColor: string | null = restoreTitlebarColor();
@@ -1335,6 +1548,304 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
+  // ── Voice ───────────────────────────────────────────────────────────────────
+
+  /** GET /api/voice/settings, then seed the form from what the server said. */
+  private async _loadVoice(): Promise<void> {
+    try {
+      this._applyVoiceStatus(await fetchVoiceStatus());
+    } catch {
+      this._voiceMessage = 'Could not read the voice settings from the server.';
+      this._voiceMessageKind = 'bad';
+    } finally {
+      this._voiceLoaded = true;
+    }
+  }
+
+  /**
+   * Adopt a server status as the new truth and reseed the form from it.
+   *
+   * The key input is cleared unconditionally: whatever was typed has either
+   * been saved or refused, and leaving a secret sitting in a DOM input after
+   * either outcome is a live credential in a page that may stay open for days.
+   */
+  private _applyVoiceStatus(st: VoiceStatus): void {
+    this._voice = st;
+    this._vMode = st.mode;
+    this._vEnabled = st.enabled;
+    this._vEndpoint = st.endpoint;
+    this._vModel = st.model;
+    this._vScope = st.entraScope || (st.allowedScopes[0] ?? '');
+    this._vKeyInput = '';
+  }
+
+  private _setVoiceMode(mode: VoiceMode): void {
+    if (this._vMode === mode) return;
+    this._vMode = mode;
+    // Moving between shapes must not carry a key across. Entra has nowhere to
+    // put one, and a key typed for OpenAI is not the key for an Azure resource.
+    this._vKeyInput = '';
+    this._voiceMessage = '';
+    this._voiceMessageKind = '';
+    // OpenAI has exactly one endpoint and the server pins it regardless of what
+    // is sent; showing it keeps the form honest about what will be saved.
+    if (mode === 'openai_key') {
+      this._vEndpoint = OPENAI_ENDPOINT;
+    } else if (this._vEndpoint === OPENAI_ENDPOINT) {
+      this._vEndpoint = '';
+    }
+  }
+
+  private async _saveVoice(): Promise<void> {
+    if (this._voiceBusy) return;
+    this._voiceBusy = true;
+    this._voiceMessage = '';
+    this._voiceMessageKind = '';
+    try {
+      const key = this._vKeyInput.trim();
+      const st = await saveVoiceSettings({
+        enabled: this._vEnabled,
+        mode: this._vMode,
+        endpoint: this._vEndpoint.trim(),
+        model: this._vModel.trim(),
+        entraScope: this._vScope,
+        ...(key === '' ? {} : { apiKey: key }),
+      });
+      this._applyVoiceStatus(st);
+      this._voiceMessage = 'Saved.';
+      this._voiceMessageKind = 'ok';
+    } catch (e) {
+      // The server's own words. They name the missing field, which is the
+      // entire reason this is validated here and not at startup.
+      this._voiceMessage = e instanceof Error ? e.message : String(e);
+      this._voiceMessageKind = 'bad';
+      // A refusal means nothing was written, so a retry needs the key typed
+      // again — but a secret must not linger in a page that may stay open for
+      // days. Clearing costs a re-type and closes that window.
+      this._vKeyInput = '';
+    } finally {
+      this._voiceBusy = false;
+    }
+  }
+
+  private async _clearVoiceKey(): Promise<void> {
+    if (this._voiceBusy) return;
+    this._voiceBusy = true;
+    this._voiceMessage = '';
+    this._voiceMessageKind = '';
+    try {
+      this._applyVoiceStatus(await clearVoiceKey());
+      this._voiceMessage = 'The saved key was removed.';
+      this._voiceMessageKind = 'ok';
+    } catch (e) {
+      this._voiceMessage = e instanceof Error ? e.message : String(e);
+      this._voiceMessageKind = 'bad';
+    } finally {
+      this._voiceBusy = false;
+    }
+  }
+
+  private async _checkVoice(): Promise<void> {
+    if (this._voiceBusy) return;
+    this._voiceBusy = true;
+    this._voiceMessage = 'Checking…';
+    this._voiceMessageKind = '';
+    try {
+      const res = await checkVoice();
+      this._voiceMessage = res.detail;
+      this._voiceMessageKind = res.ok ? 'ok' : 'bad';
+    } catch {
+      this._voiceMessage = 'The check could not run — check your connection.';
+      this._voiceMessageKind = 'bad';
+    } finally {
+      this._voiceBusy = false;
+    }
+  }
+
+  /** One status line: marker in the gutter, meaning in the words. */
+  private _vLine(kind: 'ok' | 'bad' | 'none', text: string) {
+    return html`
+      <p class="v-line">
+        <span class="v-mark ${kind}" aria-hidden="true">${VOICE_GLYPH[kind]}</span>
+        <span>${text}</span>
+      </p>
+    `;
+  }
+
+  private _vModeButton(mode: VoiceMode, label: string, sub: string) {
+    const selected = this._vMode === mode;
+    return html`
+      <button
+        class="v-mode"
+        role="radio"
+        aria-checked="${selected ? 'true' : 'false'}"
+        @click="${() => this._setVoiceMode(mode)}"
+      >
+        <span class="v-mark ${selected ? 'ok' : 'none'}" aria-hidden="true"
+          >${selected ? '●' : '○'}</span
+        >
+        <span>
+          ${label}
+          <span class="v-mode-sub">${sub}</span>
+        </span>
+      </button>
+    `;
+  }
+
+  private _renderVoice() {
+    const st = this._voice;
+    const isEntra = this._vMode === 'azure_entra';
+    const isOpenAI = this._vMode === 'openai_key';
+
+    // What the CREDENTIAL line says. Entra is the interesting case: it stores
+    // no secret at all, so "no key configured" would be a lie about a working
+    // setup.
+    const credLine = isEntra
+      ? this._vLine('ok', 'Entra sign-in uses the identity this machine is signed in as. No key is stored.')
+      : st.keyConfigured && st.keySource === 'env'
+        ? this._vLine('ok', `A key is configured, from the ${st.keyEnvVar} environment variable.`)
+        : st.keyConfigured
+          ? this._vLine('ok', 'A key is configured. It cannot be displayed — replace it or remove it.')
+          : this._vLine('none', 'No key configured.');
+
+    return html`
+      <p class="section-title">Voice</p>
+
+      ${this._voiceLoaded ? '' : this._vLine('none', 'Loading…')}
+      ${st.enabled ? this._vLine('ok', 'Voice is on.') : this._vLine('none', 'Voice is off.')}
+      ${credLine}
+      ${st.restartRequired
+        ? this._vLine('bad', 'Voice starts with muxterm, so restart it for the saved change to take effect.')
+        : ''}
+
+      <label class="v-toggle">
+        <input
+          type="checkbox"
+          .checked="${this._vEnabled}"
+          @change="${(e: Event) => { this._vEnabled = (e.target as HTMLInputElement).checked; }}"
+        />
+        <span>Enable voice</span>
+      </label>
+
+      <p class="v-label">How voice signs in</p>
+      <div class="v-modes" role="radiogroup" aria-label="How voice signs in">
+        ${this._vModeButton('azure_entra', 'Azure OpenAI — Entra sign-in', 'Uses your signed-in identity. No key to store.')}
+        ${this._vModeButton('azure_key', 'Azure OpenAI — access key', 'A key from your Azure OpenAI resource.')}
+        ${this._vModeButton('openai_key', 'OpenAI — API key', 'A key from platform.openai.com.')}
+      </div>
+
+      ${isOpenAI
+        ? html`
+            <div class="v-field">
+              <span class="v-label">Endpoint</span>
+              <input class="ai-input" type="text" readonly .value="${OPENAI_ENDPOINT}" />
+              <p class="v-hint">OpenAI has one endpoint, so it is fixed.</p>
+            </div>
+          `
+        : html`
+            <div class="v-field">
+              <label class="v-label" for="v-endpoint">Endpoint</label>
+              <input
+                id="v-endpoint"
+                class="ai-input"
+                type="url"
+                inputmode="url"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="https://NAME.openai.azure.com/openai/v1"
+                .value="${this._vEndpoint}"
+                @input="${(e: Event) => { this._vEndpoint = (e.target as HTMLInputElement).value; }}"
+              />
+            </div>
+          `}
+
+      <div class="v-field">
+        <label class="v-label" for="v-model">Model</label>
+        <input
+          id="v-model"
+          class="ai-input"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="gpt-realtime-2.1-mini"
+          .value="${this._vModel}"
+          @input="${(e: Event) => { this._vModel = (e.target as HTMLInputElement).value; }}"
+        />
+      </div>
+
+      ${isEntra
+        ? html`
+            <div class="v-field">
+              <label class="v-label" for="v-scope">Entra scope</label>
+              <select
+                id="v-scope"
+                class="ai-input"
+                @change="${(e: Event) => { this._vScope = (e.target as HTMLSelectElement).value; }}"
+              >
+                ${(st.allowedScopes.length ? st.allowedScopes : [this._vScope]).map(
+                  (s) => html`<option value="${s}" ?selected="${s === this._vScope}">${s}</option>`,
+                )}
+              </select>
+              <p class="v-hint">
+                The token audience. AI Foundry resources take the first; Cognitive
+                Services resources take the second.
+              </p>
+            </div>
+          `
+        : html`
+            <div class="v-field">
+              <label class="v-label" for="v-key">${st.keyConfigured ? 'Replace key' : 'Key'}</label>
+              <input
+                id="v-key"
+                class="ai-input"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="${st.keyConfigured ? 'Leave blank to keep the saved key' : 'Paste the key'}"
+                .value="${this._vKeyInput}"
+                @input="${(e: Event) => { this._vKeyInput = (e.target as HTMLInputElement).value; }}"
+              />
+              <p class="v-hint">
+                Write-only. Once saved it is never sent back to this page, so it can
+                be replaced or removed but not read.
+              </p>
+            </div>
+          `}
+
+      <div class="v-actions">
+        <button ?disabled="${this._voiceBusy}" @click="${this._saveVoice}">Save</button>
+        <button ?disabled="${this._voiceBusy}" @click="${this._checkVoice}">Check sign-in</button>
+        ${st.keySource === 'stored' && st.keyConfigured
+          ? html`<button ?disabled="${this._voiceBusy}" @click="${this._clearVoiceKey}">Remove key</button>`
+          : ''}
+      </div>
+
+      ${this._voiceMessage
+        ? html`
+            <p class="v-message">
+              <span class="v-mark ${this._voiceMessageKind || 'none'}" aria-hidden="true"
+                >${VOICE_GLYPH[this._voiceMessageKind || 'none']}</span
+              >
+              <span>${this._voiceMessage}</span>
+            </p>
+          `
+        : ''}
+
+      <p class="v-note">
+        “Check sign-in” authenticates for real against the saved settings and lists
+        the models — it never starts a session, so it costs nothing.
+        <br /><br />
+        A key is stored at
+        <code>${st.keyPath || '$XDG_CONFIG_HOME/muxterm/voice_api_key'}</code> with
+        owner-only permissions, never in the config file. Saving rewrites only the
+        <code>[voice]</code> section of
+        <code>${st.configPath || '~/.config/muxterm/config.toml'}</code>; the rest of
+        that file, including your comments, is left exactly as it is. Comments inside
+        <code>[voice]</code> itself are replaced.
+      </p>
+    `;
+  }
+
   // ── Remotes ───────────────────────────────────────────────────────────────
 
   /** GET /api/remotes — on open, on every host-state, after every mutation. */
@@ -1632,6 +2143,10 @@ export class MuxSettingsSurface extends LitElement {
             @click="${() => { this._section = 'ai'; }}"
           >AI</button>
           <button
+            class="sidebar-item ${this._section === 'voice' ? 'active' : ''}"
+            @click="${() => { this._section = 'voice'; void this._loadVoice(); }}"
+          >Voice</button>
+          <button
             class="sidebar-item ${this._section === 'remotes' ? 'active' : ''}"
             @click="${() => { this._section = 'remotes'; void this._loadRemotes(); }}"
           >Remotes</button>
@@ -1643,7 +2158,9 @@ export class MuxSettingsSurface extends LitElement {
               ? this._renderNotifications()
               : this._section === 'remotes'
                 ? this._renderRemotes()
-                : this._renderAI()}
+                : this._section === 'voice'
+                  ? this._renderVoice()
+                  : this._renderAI()}
         </div>
       </div>
     `;
