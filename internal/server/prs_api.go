@@ -3,120 +3,126 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// The /api/prs route: every open pull request across the worktrees Mission
-// Control is showing, for its Pull Requests applet.
+// The /api/prs routes: the pull requests muxterm's own sessions opened.
 //
-//	GET /api/prs?root=<abs>&root=<abs>...   one flat list across those roots
+//	GET  /api/prs           the collected list, newest first
+//	POST /api/prs/dismiss   {"key":"owner/name#123"} -- stop showing one
 //
-// AuthMiddleware protects this route at mux registration, exactly like the
-// config, AI, tunnel and remotes routes.
+// AuthMiddleware protects both at mux registration, exactly like the config,
+// AI, tunnel, files and remotes routes.
 //
-// This route ALWAYS answers 200. Every way it can fall short -- no gh, no
-// login, a root that is not a GitHub repo -- is a fact about the environment
-// rather than a fault in the request, and each one is reported in the body
-// (available/error, or a per-root error row) so the applet can render "here is
-// what is wrong and what to do about it" instead of an HTTP failure with no
-// explanation. That is also why there is no writePRsError here to pair with
-// writePRsJSON: this family has no error status to write.
+// ── WHAT CHANGED, AND WHY IT IS A DIFFERENT MODEL AND NOT A BUG FIX ────────
 //
-// It owns no state and caches nothing. gh is the source of truth and the poll
-// interval belongs to the caller.
+// This route used to take `?root=<abs>` worktree paths, resolve each to a
+// GitHub repository with `git rev-parse --show-toplevel` + `gh repo view`, and
+// `gh pr list` those repositories. With no roots it fell back to the SERVER's
+// own working directory. That produced, on every poll:
+//
+//	{"root":"/home/ken","repo":"","error":
+//	 "fatal: not a git repository (or any of the parent directories): .git"}
+//
+// -- because the browser derived roots from each session's `project` path, and
+// every lane on this machine reports /home/ken (a lane cds into its worktree
+// after launch, so the recorded path names no repository).
+//
+// Pointing it at a better directory would have been the wrong fix. The user's
+// lanes work in many worktrees across many branches and some touch other
+// repositories entirely, so there is no single directory whose repository is
+// the answer -- and a repo scan cannot say which pull requests came out of
+// sessions here, which was the actual question.
+//
+// So discovery is gone. The list is COLLECTED from what sessions declared:
+// sessiond already scrapes a `gh pr create` URL out of a dying lane's output
+// and writes it to the durable completion log, and prs_store.go turns that into
+// a record that outlives the lane. See prs_store.go's header for the whole
+// argument.
+//
+// gh is still used, for ONE thing: the current state of a pull request we have
+// already collected. It is never how one is found, and it is never allowed to
+// fail the request -- see the degradation rule below.
+//
+// ── THIS ROUTE ALWAYS ANSWERS 200 WITH THE LIST IT HAS ─────────────────────
+//
+// No gh, no login, no network: those are facts about the environment, reported
+// alongside a list that still renders every number, title and link. The bug
+// being replaced showed an error INSTEAD of what it knew; repeating that shape
+// with a different error would be the same defect. A row that says "status
+// unavailable" is fine. An applet that errors out is not.
 
 const (
+	// prsStatusTTL is how long a cached pull-request state is trusted. A
+	// merge is not urgent news and the applet polls once a minute, so a
+	// minute-by-minute GitHub call per pull request would be cost with no
+	// reader. Five minutes with refresh-on-view is the cheap end of "updates".
+	prsStatusTTL = 5 * time.Minute
+	// prsStatusBatch caps how many statuses ONE request may refresh. A first
+	// load holding 200 collected pull requests must not spend 200 API calls
+	// before the browser sees a row: the batch refreshes the newest stale ones
+	// and the next poll takes the next batch, so the list renders immediately
+	// and converges.
+	prsStatusBatch = 12
+	// prsStatusConcurrency bounds gh processes in flight. These are
+	// independent network round trips, so some parallelism is the difference
+	// between one slow call and twelve; more than this is just load.
+	prsStatusConcurrency = 4
+	// prsViewDeadline bounds ONE `gh pr view`. A real API round trip.
+	prsViewDeadline = 15 * time.Second
 	// prsAuthDeadline bounds the one-shot `gh auth status` check.
 	prsAuthDeadline = 5 * time.Second
-	// prsRepoDeadline bounds resolving ONE root to owner/repo (a git toplevel
-	// lookup plus a gh repo view, which may hit the network).
-	prsRepoDeadline = 10 * time.Second
-	// prsListDeadline bounds ONE `gh pr list`. Generous because it is a real
-	// API round trip that also fetches the check rollup for 50 PRs.
-	prsListDeadline = 20 * time.Second
-	// prsMaxRoots caps the roots one request may name. It is what bounds the
-	// whole fan-out: at most this many gh processes are ever in flight, so no
-	// semaphore is needed on top of it.
-	prsMaxRoots = 12
 )
 
-// The check-rollup vocabulary on the wire. A PR with no checks at all carries
-// "", which is why there is no constant for it.
-const (
-	prChecksPending = "pending"
-	prChecksPassing = "passing"
-	prChecksFailing = "failing"
-)
-
-// prRepoRow reports what one requested root resolved to. There is one row per
-// ROOT, not per repo: two worktrees of the same repository are two rows, which
-// is what lets the applet say which of the user's directories is which.
-type prRepoRow struct {
-	Root  string `json:"root"`
-	Repo  string `json:"repo"`  // "" when resolution failed
-	Error string `json:"error"` // "" when it succeeded
-}
-
-// prRow is one pull request. Key is repo#number -- unique across repos, which
-// the number alone is not.
+// prRow is one collected pull request on the wire.
+//
+// Everything a row needs to be meaningful after its lane is gone is here and
+// none of it is looked up at render time: the number, the repository, the
+// title, which lane opened it, and when it was collected.
 type prRow struct {
-	Key            string `json:"key"`
-	Repo           string `json:"repo"`
-	Number         int    `json:"number"`
-	Title          string `json:"title"`
-	State          string `json:"state"`
-	IsDraft        bool   `json:"isDraft"`
-	Checks         string `json:"checks"` // "" | pending | passing | failing
-	ReviewDecision string `json:"reviewDecision"`
-	HeadRefName    string `json:"headRefName"`
-	Author         string `json:"author"`
-	URL            string `json:"url"`
-	UpdatedAt      string `json:"updatedAt"`
+	Key    string `json:"key"`
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	URL    string `json:"url"`
+
+	// State is GitHub's own word -- OPEN, MERGED, CLOSED -- or "" when no
+	// status fetch has ever succeeded for this row. StatusError says why the
+	// last attempt failed and may be set ALONGSIDE a state, which is the
+	// "showing what we last knew" case.
+	State       string `json:"state"`
+	IsDraft     bool   `json:"isDraft"`
+	StatusError string `json:"statusError"`
+
+	Lane        string `json:"lane"`
+	WorkspaceID string `json:"workspaceId"`
+	CollectedAt int64  `json:"collectedAt"`
+	Dismissed   bool   `json:"dismissed"`
 }
 
-// prsListResponse is GET /api/prs. Repos and PRs are ALWAYS present and never
-// null: the browser iterates them unconditionally.
+// prsListResponse is GET /api/prs. PRs is ALWAYS present and never null: the
+// browser iterates it unconditionally.
+//
+// StatusAvailable/StatusError describe the STATUS FETCH only. They never gate
+// the list -- available:false ships a full list of rows whose states are stale
+// or unknown, which is exactly what should happen when gh is logged out.
 type prsListResponse struct {
-	Available bool        `json:"available"`
-	Error     string      `json:"error"`
-	Repos     []prRepoRow `json:"repos"`
-	PRs       []prRow     `json:"prs"`
+	StatusAvailable bool    `json:"statusAvailable"`
+	StatusError     string  `json:"statusError"`
+	PRs             []prRow `json:"prs"`
 }
 
-// ghPullRequest is the subset of `gh pr list --json` this route reads.
-type ghPullRequest struct {
-	Number            int             `json:"number"`
-	Title             string          `json:"title"`
-	State             string          `json:"state"`
-	IsDraft           bool            `json:"isDraft"`
-	StatusCheckRollup []ghStatusCheck `json:"statusCheckRollup"`
-	ReviewDecision    string          `json:"reviewDecision"`
-	HeadRefName       string          `json:"headRefName"`
-	UpdatedAt         string          `json:"updatedAt"`
-	URL               string          `json:"url"`
-	Author            struct {
-		Login string `json:"login"`
-	} `json:"author"`
-}
-
-// ghStatusCheck is ONE entry of a heterogeneous array: GitHub returns CheckRun
-// objects (name/status/conclusion) and StatusContext objects (context/state)
-// side by side in the same rollup. Decoding both into one permissive struct of
-// four strings means a check of either kind lands in the fields it has and
-// leaves the others empty, instead of failing the decode for the whole PR.
-type ghStatusCheck struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	State      string `json:"state"`
+// ghPRView is the subset of `gh pr view --json` this route reads.
+type ghPRView struct {
+	State   string `json:"state"`
+	Title   string `json:"title"`
+	IsDraft bool   `json:"isDraft"`
 }
 
 func writePRsJSON(w http.ResponseWriter, code int, v any) {
@@ -125,91 +131,120 @@ func writePRsJSON(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v) //nolint:errcheck
 }
 
-// handlePRsList answers GET /api/prs?root=<abs>&root=<abs>...
+// handlePRsList answers GET /api/prs.
 //
-// ?root repeats, one per worktree the applet is showing. Zero roots falls back
-// to the server's OWN working directory, silently: a browser attached to an
-// empty fleet has no root to name, and answering "no repositories" when muxterm
-// is itself running inside one would be the applet's least useful moment. The
-// fallback is silent -- if the cwd is not a checkout it contributes no repos[]
-// row, because nobody asked about it and an error the user did not cause is
-// noise. A root the caller NAMED always gets its row, error and all.
-//
-// A root that cannot be resolved becomes a repos[] row carrying its error and
-// is skipped for listing. It must never fail the request: one directory that is
-// not a GitHub checkout would otherwise hide every PR from the ones that are.
-//
-// AuthMiddleware protects this route at mux registration.
+// Three steps, in an order that matters: INGEST what sessiond has recorded
+// since last time, REFRESH the statuses that have gone stale, then answer with
+// everything stored. The answer is built from the store rather than from this
+// pass's work, so a refresh that fetched nothing still returns the full list.
 func (s *Server) handlePRsList(w http.ResponseWriter, r *http.Request) {
-	// Never null. Zero roots is two empty arrays.
+	s.prs.Ingest()
+
+	statusErr := s.refreshPRStatuses(r.Context())
+
 	out := prsListResponse{
-		Repos: []prRepoRow{},
-		PRs:   []prRow{},
+		StatusAvailable: statusErr == "",
+		StatusError:     statusErr,
+		PRs:             []prRow{},
+	}
+	for _, p := range s.prs.All() {
+		out.PRs = append(out.PRs, prRow{
+			Key:         p.Key,
+			Repo:        p.Repo,
+			Number:      p.Number,
+			Title:       p.Title,
+			URL:         p.URL,
+			State:       p.State,
+			IsDraft:     p.IsDraft,
+			StatusError: p.StatusError,
+			Lane:        p.Lane,
+			WorkspaceID: p.WorkspaceID,
+			CollectedAt: p.CollectedAt,
+			Dismissed:   p.Dismissed,
+		})
+	}
+	writePRsJSON(w, http.StatusOK, out)
+}
+
+// prDismissRequest is the POST /api/prs/dismiss body.
+type prDismissRequest struct {
+	Key string `json:"key"`
+}
+
+// handlePRDismiss answers POST /api/prs/dismiss.
+//
+// It removes a row from THIS LIST and does nothing else, anywhere. The pull
+// request is not closed, not merged, not commented on; muxterm holds no write
+// credential for GitHub and this handler shells out to nothing. The applet's
+// wording says so next to the control, because a dismiss button that reads like
+// it might close a pull request is a trap.
+//
+// 404 for a key that is not collected, so a stale browser gets a real answer
+// instead of a silent success it would render as a vanished row.
+func (s *Server) handlePRDismiss(w http.ResponseWriter, r *http.Request) {
+	var req prDismissRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+		writePRsJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	key := strings.TrimSpace(req.Key)
+	if key == "" {
+		writePRsJSON(w, http.StatusBadRequest, map[string]string{"error": "key is required"})
+		return
+	}
+	if !s.prs.Dismiss(key) {
+		writePRsJSON(w, http.StatusNotFound, map[string]string{"error": "no collected pull request with that key"})
+		return
+	}
+	writePRsJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// refreshPRStatuses updates the stale cached states, and returns ONE human
+// sentence when the status feature as a whole is unavailable ("" when it is
+// fine).
+//
+// The sentence is about the FEATURE, not about a row: gh missing, or gh logged
+// out. Per-row failures (a deleted repository, a permissions error, a timeout)
+// belong on their row and are stored there by ApplyStatus, because one
+// unreachable repository must not make every other row look broken -- the
+// mistake the route being replaced made at the whole-applet level.
+func (s *Server) refreshPRStatuses(ctx context.Context) string {
+	stale := s.prs.NeedStatus(time.Now().Add(-prsStatusTTL).Unix(), prsStatusBatch)
+	if len(stale) == 0 {
+		// Nothing to do. Deliberately NOT reported as unavailable: with every
+		// status fresh, whether gh works right now is not a question anyone
+		// asked, and probing it to answer would be a subprocess per poll for
+		// a sentence nobody reads.
+		return ""
 	}
 
-	// LookPath first, so a machine without the GitHub CLI is a clean degraded
-	// state with a sentence naming the missing binary.
 	bin, err := exec.LookPath("gh")
 	if err != nil {
-		out.Error = "the GitHub CLI (gh) is not on PATH"
-		writePRsJSON(w, http.StatusOK, out)
-		return
+		return "the GitHub CLI (gh) is not on PATH -- pull request status cannot be updated"
 	}
-	if err := ghAuthOK(r.Context(), bin); err != nil {
-		out.Error = "the GitHub CLI is not authenticated (run: gh auth login)"
-		writePRsJSON(w, http.StatusOK, out)
-		return
-	}
-	out.Available = true
-
-	roots := r.URL.Query()["root"]
-	if len(roots) > prsMaxRoots {
-		roots = roots[:prsMaxRoots]
-	}
-	// Named roots are reported on; the implicit cwd fallback is not.
-	named := len(roots) > 0
-	if !named {
-		if cwd, err := os.Getwd(); err == nil {
-			roots = []string{cwd}
-		}
+	if err := ghAuthOK(ctx, bin); err != nil {
+		return "the GitHub CLI is not authenticated (run: gh auth login) -- pull request status cannot be updated"
 	}
 
-	// Resolve first, sequentially: it is a cheap local git call plus a gh call
-	// that is usually served from gh's own config, and doing it in order keeps
-	// repos[] in the order the caller asked for.
-	seen := map[string]bool{}
-	distinct := make([]string, 0, len(roots))
-	for _, root := range roots {
-		row := prRepoRow{Root: root}
-		repo, err := resolveGHRepo(r.Context(), bin, root)
-		if err != nil {
-			if !named {
-				// The silent fallback. Nobody asked about this directory.
-				continue
+	now := time.Now().Unix()
+	sem := make(chan struct{}, prsStatusConcurrency)
+	var wg sync.WaitGroup
+	for _, p := range stale {
+		wg.Add(1)
+		go func(p CollectedPR) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			view, err := ghPRStatus(ctx, bin, p.Repo, p.Number)
+			if err != nil {
+				s.prs.ApplyStatus(p.Key, "", "", false, now, ghErrText(err))
+				return
 			}
-			row.Error = gitErrText(err)
-		} else {
-			row.Repo = repo
-			if !seen[repo] {
-				seen[repo] = true
-				distinct = append(distinct, repo)
-			}
-		}
-		out.Repos = append(out.Repos, row)
+			s.prs.ApplyStatus(p.Key, strings.ToUpper(view.State), view.Title, view.IsDraft, now, "")
+		}(p)
 	}
-
-	out.PRs = listPRs(r.Context(), bin, distinct)
-
-	// Newest first. Numbers are unique per repo, so the repo tie-break keeps
-	// the order total and stops two repos' #91 from swapping between polls.
-	sort.Slice(out.PRs, func(i, j int) bool {
-		if out.PRs[i].Number != out.PRs[j].Number {
-			return out.PRs[i].Number > out.PRs[j].Number
-		}
-		return out.PRs[i].Repo < out.PRs[j].Repo
-	})
-
-	writePRsJSON(w, http.StatusOK, out)
+	wg.Wait()
+	return ""
 }
 
 // ghAuthOK reports whether gh has a usable login.
@@ -225,152 +260,57 @@ func ghAuthOK(ctx context.Context, bin string) error {
 	return cmd.Run()
 }
 
-// resolveGHRepo turns a worktree path into "owner/repo".
+// ghPRStatus reads one pull request's current state.
 //
-// Two steps, because a root is a directory and gh answers about repositories:
-// git names the toplevel (so a subdirectory of a checkout resolves like the
-// checkout itself), then gh reads the remote from THERE via cmd.Dir. gh has no
-// -C flag, so cmd.Dir is the only way to ask it about a directory other than
-// this server process's own.
-func resolveGHRepo(ctx context.Context, bin, root string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, prsRepoDeadline)
-	defer cancel()
-
-	git, err := exec.LookPath("git")
-	if err != nil {
-		return "", err
-	}
-	top, err := runGit(ctx, git, "-C", root, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return "", err
-	}
-
-	cmd := exec.CommandContext(ctx, bin, "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner")
-	cmd.Dir = filepath.Clean(top)
-	cmd.Stdin = nil
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// listPRs fans out one `gh pr list` per distinct repo and merges the results.
-//
-// Concurrent because these are independent network round trips and the applet
-// polls: N repos serially would make the slowest one everybody's latency. The
-// fan-out needs no semaphore -- prsMaxRoots already caps it at 12 -- and each
-// call carries its own deadline, so one slow repo cannot hold the others.
-//
-// A repo whose listing fails contributes nothing and is not reported: its
-// repos[] row already resolved successfully, so the honest thing to show is the
-// PRs that did come back rather than an error over the whole applet.
-func listPRs(ctx context.Context, bin string, repos []string) []prRow {
-	// Never null.
-	out := []prRow{}
-	if len(repos) == 0 {
-		return out
-	}
-
-	var (
-		mu sync.Mutex
-		wg sync.WaitGroup
-	)
-	for _, repo := range repos {
-		wg.Add(1)
-		go func(repo string) {
-			defer wg.Done()
-			rows, err := ghPRList(ctx, bin, repo)
-			if err != nil {
-				return
-			}
-			mu.Lock()
-			out = append(out, rows...)
-			mu.Unlock()
-		}(repo)
-	}
-	wg.Wait()
-	return out
-}
-
-// ghPRList runs `gh pr list` for one repo and maps its rows.
-func ghPRList(ctx context.Context, bin, repo string) ([]prRow, error) {
-	ctx, cancel := context.WithTimeout(ctx, prsListDeadline)
+// --repo is explicit, so this runs correctly from ANY working directory --
+// which is the property the old root-scanning route did not have and could not
+// be given. The repository comes from the URL sessiond scraped when the lane
+// opened the pull request, so a repo nobody has a worktree for any more still
+// refreshes.
+func ghPRStatus(ctx context.Context, bin, repo string, number int) (ghPRView, error) {
+	ctx, cancel := context.WithTimeout(ctx, prsViewDeadline)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin,
-		"pr", "list",
+		"pr", "view", strconv.Itoa(number),
 		"--repo", repo,
-		"--state", "open",
-		"--limit", "50",
-		"--json", "number,title,state,isDraft,statusCheckRollup,reviewDecision,headRefName,updatedAt,url,author",
+		"--json", "state,title,isDraft",
 	)
 	// stdin is nil so a gh that decides to prompt (an expired token, say) hits
 	// EOF immediately instead of hanging until the deadline. Output(), not
-	// CombinedOutput(): gh writes its warnings to stderr and mixing them into
-	// the JSON would make it unparseable.
+	// CombinedOutput(): gh writes warnings to stderr and mixing them into the
+	// JSON would make it unparseable.
 	cmd.Stdin = nil
 	data, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		return ghPRView{}, err
 	}
-
-	var prs []ghPullRequest
-	if err := json.Unmarshal(data, &prs); err != nil {
-		return nil, err
+	var view ghPRView
+	if err := json.Unmarshal(data, &view); err != nil {
+		return ghPRView{}, err
 	}
-
-	rows := make([]prRow, 0, len(prs))
-	for _, pr := range prs {
-		rows = append(rows, prRow{
-			Key:            repo + "#" + strconv.Itoa(pr.Number),
-			Repo:           repo,
-			Number:         pr.Number,
-			Title:          pr.Title,
-			State:          pr.State,
-			IsDraft:        pr.IsDraft,
-			Checks:         rollupChecks(pr.StatusCheckRollup),
-			ReviewDecision: pr.ReviewDecision,
-			HeadRefName:    pr.HeadRefName,
-			Author:         pr.Author.Login,
-			URL:            pr.URL,
-			UpdatedAt:      pr.UpdatedAt,
-		})
+	if view.State == "" {
+		return ghPRView{}, errors.New("gh reported no state")
 	}
-	return rows, nil
+	return view, nil
 }
 
-// rollupChecks collapses a heterogeneous check rollup into one word.
-//
-// Worst news wins, and the order is the whole algorithm: a run that has already
-// failed is reported as failing even while ten others are still queued, because
-// the queued ones cannot un-fail it. Only when nothing has failed does a
-// pending run outrank a passing one, and "passing" is reserved for the case
-// where every entry has landed green. A rollup with no entries is "" -- no
-// checks configured is not the same claim as "passing".
-func rollupChecks(checks []ghStatusCheck) string {
-	if len(checks) == 0 {
-		return ""
-	}
-	pending := false
-	for _, c := range checks {
-		switch strings.ToUpper(c.Conclusion) {
-		case "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED":
-			return prChecksFailing
-		}
-		switch strings.ToUpper(c.State) {
-		case "FAILURE", "ERROR":
-			return prChecksFailing
-		case "PENDING":
-			pending = true
-		}
-		switch strings.ToUpper(c.Status) {
-		case "QUEUED", "IN_PROGRESS", "PENDING", "WAITING":
-			pending = true
+// ghErrText renders a gh failure as one short human sentence, preferring gh's
+// own words on stderr to Go's "exit status 1". It is gitErrText's sibling in
+// files_api.go, kept separate because it also clips: this string goes on a row
+// in a narrow column, not into a footnote.
+func ghErrText(err error) string {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
+			if i := strings.IndexByte(msg, '\n'); i >= 0 {
+				msg = msg[:i]
+			}
+			return truncatePRTitle(msg)
 		}
 	}
-	if pending {
-		return prChecksPending
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timed out asking GitHub"
 	}
-	return prChecksPassing
+	return truncatePRTitle(err.Error())
 }
