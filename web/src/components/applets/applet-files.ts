@@ -899,10 +899,26 @@ export class AppletFiles extends LitElement implements AppletElement {
   override updated(changed: PropertyValues<this>): void {
     if (changed.has('active')) this._sync();
     // The contract says an applet consumes its target and clears it back to
-    // null. Nothing dispatches a `path:` target yet, so consuming it IS
-    // clearing it -- but it still has to be cleared, or a stale one fires the
-    // next time this tab is shown.
-    if (changed.has('target') && this.target !== null) this.target = null;
+    // null. `path:<absolute dir>` now HAS a sender -- the Viewer's "in files"
+    // control, which is how you get from a document back to the directory it
+    // came from -- so consuming it means going there. It is still cleared
+    // either way, or a stale one fires the next time this tab is shown.
+    if (changed.has('target') && this.target !== null) {
+      const t = this.target;
+      this.target = null;
+      if (t.startsWith('path:')) {
+        const p = t.slice('path:'.length).trim();
+        // Only an absolute path. A relative one would be resolved against
+        // whatever this applet happens to be showing, which is a different
+        // directory depending on when the target arrived.
+        if (p.startsWith('/')) {
+          // Leaving `all` alone: the caller asked for a place, not a filter,
+          // and silently widening the view would hide that a directory the
+          // user arrived at is being filtered.
+          this._go(p);
+        }
+      }
+    }
   }
 
   /**

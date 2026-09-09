@@ -236,22 +236,27 @@ func isProbablyUTF8Text(buf []byte) bool {
 // X-Content-Type-Options: nosniff is what makes the second bullet true rather
 // than merely intended: without it a browser may sniff an attachment's bytes,
 // decide they are HTML, and act on that decision.
+//
+// ⛔ THE SIZE BOUND DELIBERATELY DOES NOT APPLY HERE, and that is not a hole.
+// publicationMaxBytes bounds what is RENDERED, because rendering means holding
+// the whole thing in memory and handing it to a parser. Saving a file means
+// neither: the bytes are streamed straight to the socket. Bounding a download
+// too would have made the viewer's own refusal message a lie -- it tells the
+// user a file is too large to show and offers to save it instead, and that
+// offer has to work. A shell in the pane next door can already cat the file.
 func (s *Server) handleArtifactRaw(w http.ResponseWriter, r *http.Request) {
 	p, fi, code, err := artifactPath(r.URL.Query().Get("path"))
 	if err != nil {
 		writeArtifactError(w, code, err)
 		return
 	}
-	if fi.Size() > publicationMaxBytes {
-		writeArtifactError(w, http.StatusRequestEntityTooLarge, fmt.Errorf(
-			"%s is %d bytes, past the %d MB a viewer will read", p, fi.Size(), publicationMaxBytes>>20))
-		return
-	}
-	buf, err := readArtifactBytes(p)
+
+	f, err := os.Open(p)
 	if err != nil {
 		writeArtifactError(w, http.StatusInternalServerError, err)
 		return
 	}
+	defer f.Close() //nolint:errcheck
 
 	kind, ctype := publicationKindFor(p)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -266,7 +271,10 @@ func (s *Server) handleArtifactRaw(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", "attachment; filename=\""+safeAttachmentName(filepath.Base(p))+"\"")
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(buf)
+	// ServeContent rather than io.Copy: it answers a Range request, which is
+	// what makes a large download resumable instead of all-or-nothing. The
+	// content type is already set above, so its sniffing never runs.
+	http.ServeContent(w, r, "", fi.ModTime(), f)
 }
 
 // handleArtifactDocCSS answers GET /api/artifact/doc.css with publicDocCSS --
