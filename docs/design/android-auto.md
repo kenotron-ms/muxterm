@@ -235,28 +235,62 @@ with the head unit server started and "Add new cars to Android Auto" on:
 | phone listening on 5277 (`0x149D`) | ok |
 | raw socket through the forward | ok — connects, phone waits for the DHU to speak |
 | phone registers the car app | ok — `MuxtermCarAppService` resolves with the IOT category |
-| DHU links to the head unit server | ok — `Requested protocol version: 1.7 … connected.` |
-| **projection session starts** | **no** |
+| DHU links to the head unit server | ok — `connected.` |
+| protocol negotiated | ok — `Phone reported protocol version 1.7` |
+| TLS established and certificate verified | ok — `SSL negotiation finished successfully`, `Verify returned: ok` |
+| **projection session starts** | **no — `PROJECTION_NOT_STARTED`** |
 
-The DHU window opens and sits on **"Waiting for phone…"** indefinitely. On the
-very first connection only, the phone logged a projection association appearing
-and disappearing 13 ms later, alongside Android Auto's `FirstActivityImpl`:
+Every software precondition is met. Unknown sources on, "Add new cars to Android
+Auto" on, head unit server restarted immediately before connecting, protocol
+versions agreeing, TLS verified. It still does not project, and the phone says
+why in its own words:
 
 ```
-CDM_AssociationStore: Association{... mDeviceProfile='android.app.role.SYSTEM_AUTOMOTIVE_PROJECTION' ...}
-CDM_DevicePresenceProcessor: ... isAppeared=[true]
-CDM_DevicePresenceProcessor: ... isAppeared=[false]     (+13ms)
-gearhead/...gmscorecompat.FirstActivityImpl
+CAR.SERVICE.LITE:      Car connection state changed: DISCONNECTING->DISCONNECTED
+CAR.SERVICE.LITE:      stopped foreground service
+CAR.SERVICE.LITE:      Detected charge only
+CAR.SERVICE.FCD.LITE:  timed out at stage FIRST_ACTIVITY_LAUNCHED after 5000
+                       milliseconds, publishing PROJECTION_NOT_STARTED
+CAR.SERVICE.USBMON.LITE: Stopped USB monitor
 ```
 
-On every subsequent attempt there is no projection attempt in the phone's log at
-all — the TCP link is accepted and nothing else happens.
+and the DHU's side of the same second:
 
-So the transport is proven and the session is not. The untested hypotheses, in
-order of cheapness: the head unit server needs stopping and restarting after
-that first failed handshake; or DHU 2.0 (build **2022**-03-30, and the only
-version Google ships) no longer completes the handshake with Android Auto 17.5
-on Android 17.
+```
+Starting link. Requested protocol version: 1.7
+[I]: Connecting over ADB to localhost:5277...
+[I]: connected.
+Phone reported protocol version 1.7
+ssl state=SSL negotiation finished successfully 1
+SSL version=TLSv1.2 Cipher name=ECDHE-RSA-AES128-GCM-SHA256
+Verify returned: ok
+[E]: Failed to read from transport - disconnect. Exiting...
+```
+
+**"Detected charge only" is the answer.** Android Auto runs a USB monitor
+(`CAR.SERVICE.USBMON.LITE`) and gates projection on a real USB *data* attachment,
+independently of which transport carries the protocol. The adb tunnel carries it
+fine — protocol agreed, TLS verified — and then the phone tears the session down
+because, as far as its USB monitor is concerned, nothing is plugged in. Which is
+true: this was wireless adb, over Tailscale, with the phone never physically
+connected to this machine.
+
+That is exactly what step 5 of the DHU procedure has been saying all along, and
+it is not optional: *"Connect the mobile device to the development machine using
+USB."*
+
+**This machine cannot satisfy that.** It is an LXC container with no USB
+subsystem exposed — `/dev/bus/usb` does not exist, and the only device visible in
+sysfs is a YubiKey with no accessible device node. No cable changes that. Running
+the DHU here needs either USB passthrough into the container, or the DHU run on a
+machine that has the phone physically attached.
+
+Ruled OUT along the way, so nobody re-tests them: version skew (both ends
+negotiated 1.7), TLS or certificate trust (verified ok), the app not being
+registered (`MuxtermCarAppService` resolves on the phone with the IOT category),
+unknown sources, "add new cars", and a stale head unit server. The server restart
+is what moved the failure from a silent "Waiting for phone…" to this precise,
+diagnosable one — worth doing before any future attempt.
 
 **This is not on the critical path.** What the DHU would add is the projection
 transport; the screen itself is already proven against the same templates host
