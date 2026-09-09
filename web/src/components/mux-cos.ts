@@ -510,8 +510,8 @@ export class MuxCos extends LitElement {
        about where the content stops relative to the mask. scroll-padding is
        also the wrong tool: it steers scrollIntoView and snapping, and does
        not move the end of the scroll range, which is exactly what both the
-       reader's own scroll-to-bottom and _scrollToBottom()'s
-       scrollTop = scrollHeight land on. */
+       reader's own scroll-to-bottom and the pinned-follow write in updated()
+       (scrollTop = scrollHeight) land on. */
     .chatbody {
       flex: 1;
       min-height: 0;
