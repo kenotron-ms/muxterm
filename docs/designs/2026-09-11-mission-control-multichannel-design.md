@@ -1,6 +1,7 @@
 # Mission Control: multi-channel conversations
 
-**Status:** design and staged PR plan, not an implementation or migration.  
+**Status:** design and staged PR plan, not an implementation or migration.
+
 **Source baseline:** `origin/main` at `aa6b581bd8d8ba5537d794c33beed00e5755d2b8`, inspected 2026-09-11. File/line references below use that commit unless marked otherwise; [browse the pinned tree](https://github.com/kenotron-ms/muxterm/tree/aa6b581bd8d8ba5537d794c33beed00e5755d2b8).
 
 ## 1. Decision summary
