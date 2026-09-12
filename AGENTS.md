@@ -148,6 +148,13 @@ immutable validated thread/runtime identity. App voice tools reuse authenticated
 app controls without expanding rights. Missing local SpeechSynthesis voices is
 not proof that provider audio is unavailable. Live mic access remains opt-in.
 
+App voice activation belongs in shared title actions immediately before the
+ellipsis menu, not in a channel composer. One app-root floating voice control
+survives navigation; its position is presentation state, never a work target.
+Keep Stop reachable during connection setup and errors. Public component
+snapshot inputs are rendering-only: labelled visual fixtures do not establish
+live microphone, provider, session-lifetime, or acoustic verification.
+
 ### Terminal query ownership (CSI 6n, OSC 11;?)
 
 sessiond's `VTBuffer` is authoritative for replying to `CSI 6n` (cursor

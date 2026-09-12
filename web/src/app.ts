@@ -45,6 +45,7 @@ import type { CloseConfirmationModal } from './components/close-confirmation-mod
 import './components/reconnect-overlay.js';
 import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
+import './components/voice-mode-bubble.js';
 // <mux-home> is deliberately NOT imported. The Dashboard IS home now (see
 // <mux-cos>), and the two were never meant to be alternatives you could be
 // looking at one of. The component and its standalone demo are untouched.
@@ -1565,6 +1566,7 @@ export class MuxApp extends LitElement {
           <mux-sidebar
             .homeActive="${this._showDashboard}"
             .homeKey="${store.config.keys.toggleHome}"
+            .showLauncher="${this._showDashboard}"
             @workspace-switch="${this._onWorkspaceSelected}"
             @workspace-create="${this._onOpenCreateModal}"
             @workspace-rename="${this._onWorkspaceRename}"
@@ -1573,6 +1575,14 @@ export class MuxApp extends LitElement {
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
+          ${isWide && !this._showDashboard
+            ? html`<mux-title-bar
+                desktop
+                @launcher-action="${this._onLauncherAction}"
+                @pane-select="${this._onActivePane}"
+                @pane-create-request="${this._createPaneOptimistic}"
+              ></mux-title-bar>`
+            : ''}
           ${panes.length === 0
             ? html`
                 <div class="empty-workspace">
@@ -1643,6 +1653,8 @@ export class MuxApp extends LitElement {
         </div>
 
       </div>
+
+      <mux-voice-mode-bubble></mux-voice-mode-bubble>
 
       ${!isWide
         ? html`

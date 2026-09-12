@@ -42,10 +42,11 @@ type call struct {
 }
 
 type command struct {
-	Type         string            `json:"type"`
-	MetadataKeys []string          `json:"metadata_keys,omitempty"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
-	Output       map[string]any    `json:"output,omitempty"`
+	Type           string            `json:"type"`
+	MetadataKeys   []string          `json:"metadata_keys,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	Output         map[string]any    `json:"output,omitempty"`
+	FunctionCallID string            `json:"function_call_id,omitempty"`
 }
 
 type fixture struct {
@@ -135,6 +136,9 @@ func fixtureOutput(value map[string]any) map[string]any {
 	}
 	var decoded any
 	if json.Unmarshal([]byte(raw), &decoded) != nil {
+		if strings.HasPrefix(raw, "Refused:") {
+			return map[string]any{"status": "refused"}
+		}
 		return nil
 	}
 	safe := map[string]any{}
@@ -182,6 +186,14 @@ func fixtureOutput(value map[string]any) map[string]any {
 				switch child.(type) {
 				case string, float64, bool:
 					safe[key] = child
+				}
+			case "machines", "workspaces", "threads", "fleet":
+				if rows, ok := child.([]any); ok {
+					safe[key+"_count"] = len(rows)
+				}
+			case "truncated":
+				if encoded, err := json.Marshal(child); err == nil && len(encoded) <= 16<<10 {
+					safe[key] = json.RawMessage(encoded)
 				}
 			case "selected_target", "active":
 				if encoded, err := json.Marshal(child); err == nil && len(encoded) <= 16<<10 {
@@ -316,9 +328,11 @@ func (f *fixture) realtime(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		kind, _ := message["type"].(string)
+		item, _ := message["item"].(map[string]any)
+		functionCallID, _ := item["call_id"].(string)
 		f.mu.Lock()
 		meta, keys := metadata(message)
-		c.commands = append(c.commands, command{Type: kind, MetadataKeys: keys, Metadata: meta, Output: fixtureOutput(message)})
+		c.commands = append(c.commands, command{Type: kind, MetadataKeys: keys, Metadata: meta, Output: fixtureOutput(message), FunctionCallID: functionCallID})
 		f.mu.Unlock()
 		f.writeEvidence()
 	}

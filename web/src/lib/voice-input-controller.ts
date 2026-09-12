@@ -326,17 +326,18 @@ function stop(): void {
 }
 
 function invalidate(session: Session): void {
-  try {
-    session.recognition.abort();
-  } catch {
-    // Already stopping/stopped. The old identity is still invalidated below.
-  }
-  // Invalidate before returning. Any delayed partial/final now fails both the
-  // controller token gate and the composer's immutable capture comparison.
+  // Fence before invoking a browser API: abort may synchronously deliver its
+  // final/end callbacks in an implementation or a recognition API fixture.
   sttEventGeneration++;
   tokenCounter++;
   releasing.set(session.token, session);
   current = null;
+  try {
+    session.recognition.abort();
+  } catch {
+    // No end acknowledgement: retain arbitration rather than guessing that
+    // another capture may start. Transcript authority is already invalid.
+  }
   setState('idle');
 }
 

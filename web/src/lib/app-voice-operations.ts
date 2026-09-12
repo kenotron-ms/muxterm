@@ -453,11 +453,13 @@ class AppVoiceOperations {
   private _claim:
     | {
         readonly takeover: boolean;
+        cancelled: boolean;
         readonly resolve: (lease: AppVoiceLease) => void;
         readonly reject: (error: Error) => void;
         readonly timer: ReturnType<typeof setTimeout>;
       }
     | null = null;
+  private _releasingEpoch = 0;
   private _revision = 0;
   private _observation: AppVoiceObservation | null = null;
   private _pending = new Map<string, PendingOperation>();
@@ -484,8 +486,14 @@ class AppVoiceOperations {
   }
 
   async claim(takeover = false): Promise<AppVoiceLease> {
+    if (this._releasingEpoch !== 0) {
+      throw new AppVoiceOperationRefusal('release_pending', 'The previous app voice session is still releasing.');
+    }
     if (this._lease) return this._lease;
     if (this._claim) {
+      if (this._claim.cancelled) {
+        throw new AppVoiceOperationRefusal('claim_cancelled', 'The app voice claim was cancelled.');
+      }
       if (this._claim.takeover === takeover) {
         return new Promise<AppVoiceLease>((resolve, reject) => {
           const current = this._claim;
@@ -517,7 +525,7 @@ class AppVoiceOperations {
       const timer = setTimeout(() => {
         this._rejectClaim(new AppVoiceOperationRefusal('claim_timeout', 'The app voice lease was not confirmed.'));
       }, OPERATION_TTL_MS);
-      this._claim = { takeover, resolve, reject, timer };
+      this._claim = { takeover, cancelled: false, resolve, reject, timer };
       if (
         !this._socket?.appVoice({
           type: 'app-voice-claim',
@@ -572,6 +580,36 @@ class AppVoiceOperations {
     if (!this._lease || this._lease.lease_epoch !== leaseEpoch) return;
     this._finishAll('owner_disconnected', 'The app voice lease ended before this operation completed.');
     this._clearLease(reason);
+  }
+
+  /**
+   * Hold a pending claim's intent until its result arrives. The result path
+   * then releases the exact returned epoch rather than allowing a stopped
+   * start to leave an unbound owner lease behind.
+   */
+  cancelClaim(): void {
+    if (this._claim) this._claim.cancelled = true;
+  }
+
+  /**
+   * Release only the exact current owner epoch over the owner-bound socket.
+   * This deliberately works before a provider session is minted, where the
+   * HTTP end endpoint has no session identifier to authorize.
+   */
+  releaseLease(lease: AppVoiceLease): boolean {
+    if (!this._lease || this._lease.lease_epoch !== lease.lease_epoch) return false;
+    if (this._releasingEpoch === lease.lease_epoch) return true;
+    if (
+      this._socket?.appVoice({
+        type: 'app-voice-release',
+        protocol_version: APP_VOICE_PROTOCOL_VERSION,
+        lease_epoch: lease.lease_epoch,
+      }) !== true
+    ) {
+      return false;
+    }
+    this._releasingEpoch = lease.lease_epoch;
+    return true;
   }
 
   acknowledgeDrain(leaseEpoch: number, drainNonce: string): boolean {
@@ -642,6 +680,7 @@ class AppVoiceOperations {
     this.observe(this._handlers?.getObservation() ?? this._observation ?? emptyObservation(), true);
     for (const listener of this._leaseListeners) listener(lease, 'claimed');
     claim.resolve(lease);
+    if (claim.cancelled) this.releaseLease(lease);
   }
 
   private _handleDrainRequest(frame: Record<string, unknown>): void {
@@ -857,6 +896,7 @@ class AppVoiceOperations {
 
   private _clearLease(reason: string): void {
     if (!this._lease) return;
+    if (this._releasingEpoch === this._lease.lease_epoch) this._releasingEpoch = 0;
     this._lease = null;
     for (const listener of this._leaseListeners) listener(null, reason);
   }

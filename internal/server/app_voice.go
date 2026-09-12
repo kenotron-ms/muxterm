@@ -7,6 +7,7 @@ package server
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -33,6 +34,11 @@ const (
 	appVoiceOfferMax     = 256 << 10
 	appVoiceOperationTTL = 10 * time.Second
 	appVoiceOperationCap = 8
+	appVoiceCaptureCap   = 8
+	// A fixed two-bit digest tombstone never re-admits a retired input ID.
+	// Collisions refuse a new input safely rather than reusing old authority.
+	appVoiceInputReplayWords = 8192
+	appVoiceFunctionMapCap   = 8
 )
 
 type appVoiceObservation struct {
@@ -69,16 +75,33 @@ type appVoiceService struct {
 	captures                       map[string]*appVoiceCapture
 	responses                      map[string]string
 	inputs                         map[string]string
+	retiredInputBits               [appVoiceInputReplayWords]uint64
 	bridge                         *appVoiceBridge
+	providerGeneration             uint64
+	minting                        bool
 }
 type appVoiceCapture struct {
-	inputItemID, responseID, responseNonce string
-	terminal                               bool
-	calls                                  map[string]bool
-	expires                                time.Time
+	inputItemID, responseID, responseNonce, continuationNonce string
+	terminal, continuationPending                             bool
+	calls                                                     map[string]bool
+	outputCalls                                               map[string]string
+	dispatchItem                                              string
 }
 
-type appVoiceBridge struct{ service *appVoiceService }
+// appVoiceBridge is minted once for one exact owner, lease epoch, and provider
+// generation. It must never consult a later owner as authority for a late
+// sideband callback.
+type appVoiceBridge struct {
+	service           *appVoiceService
+	owner             *Client
+	epoch, generation uint64
+}
+
+func (b *appVoiceBridge) activeLocked() bool {
+	s := b.service
+	return b.owner != nil && s.owner == b.owner && s.epoch == b.epoch &&
+		s.providerGeneration == b.generation && s.sessionID != ""
+}
 
 // These satisfy Manager's storage shape only. Sideband dispatch recognises
 // AppOperationBridge first, so app voice can never reach the legacy bridge.
@@ -91,6 +114,15 @@ func (b *appVoiceBridge) Approve(string, bool, string) error {
 func (b *appVoiceBridge) Cancel(string) error {
 	return errors.New("app voice has no legacy bridge")
 }
+func (b *appVoiceBridge) SidebandTerminal(reason string) {
+	b.service.mu.Lock()
+	current := b.activeLocked()
+	session := b.service.sessionID
+	b.service.mu.Unlock()
+	if current {
+		b.service.end(b.owner, b.epoch, session, "provider_ended")
+	}
+}
 
 func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 	// Provider identity is only meaningful on the server-observed call. Reject
@@ -100,15 +132,44 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 	}
 	b.service.mu.Lock()
 	defer b.service.mu.Unlock()
+	if !b.activeLocked() {
+		return errors.New("app voice bridge lease is no longer current")
+	}
 	if event.Type == "response.created" && event.ResponseID != "" {
 		capture := event.Metadata["app_voice_capture_id"]
 		nonce := event.Metadata["app_voice_response_nonce"]
 		record := b.service.captures[capture]
-		if capture == "" || record == nil || nonce == "" || nonce != record.responseNonce || record.responseID != "" {
+		if capture == "" || record == nil || nonce == "" {
 			return errors.New("provider response has no committed app capture")
+		}
+		if record.responseID == "" {
+			if nonce != record.responseNonce {
+				return errors.New("provider response nonce does not match committed capture")
+			}
+		} else if !record.terminal || !record.continuationPending || nonce != record.continuationNonce {
+			return errors.New("provider response is not the queued continuation")
+		} else {
+			delete(b.service.responses, record.responseID)
+			record.continuationPending = false
+			record.continuationNonce = ""
+			record.terminal = false
+			record.responseNonce = nonce
 		}
 		record.responseID = event.ResponseID
 		b.service.responses[event.ResponseID] = capture
+	}
+	if (event.Type == "response.output_item.added" || event.Type == "response.output_item.done") && event.ResponseID != "" {
+		capture := b.service.responses[event.ResponseID]
+		record := b.service.captures[capture]
+		if record == nil || record.responseID != event.ResponseID {
+			return errors.New("provider output item has no current app response")
+		}
+		if event.OutputID != "" && event.CallRef != "" {
+			if _, known := record.outputCalls[event.OutputID]; !known && len(record.outputCalls) >= appVoiceFunctionMapCap {
+				return errors.New("too many provider function items for app capture")
+			}
+			record.outputCalls[event.OutputID] = event.CallRef
+		}
 	}
 	if (event.Type == "response.done" || event.Type == "response.cancelled") && event.ResponseID != "" {
 		if capture := b.service.responses[event.ResponseID]; capture != "" {
@@ -125,43 +186,58 @@ func (b *appVoiceBridge) ReserveToolCall(event voice.ProviderEvent) (voice.Corre
 		return voice.Correlation{}, errors.New("unmapped provider function call")
 	}
 	b.service.mu.Lock()
+	defer b.service.mu.Unlock()
+	if !b.activeLocked() {
+		return voice.Correlation{}, errors.New("app voice bridge lease is no longer current")
+	}
 	id := b.service.responses[event.ResponseID]
 	record := b.service.captures[id]
-	if record != nil && event.ItemID != "" {
-		record.calls[event.ItemID] = false
-	}
-	b.service.mu.Unlock()
-	if id == "" || record == nil {
+	if id == "" || record == nil || record.responseID != event.ResponseID || record.terminal {
 		return voice.Correlation{}, errors.New("provider capture is unmapped")
 	}
-	return voice.Correlation{ProviderCallID: event.CallID, ProviderItemID: event.ItemID, ProviderResponseID: event.ResponseID, CaptureID: id}, nil
+	callID := record.outputCalls[event.ItemID]
+	if callID == "" || (event.CallRef != "" && event.CallRef != callID) {
+		return voice.Correlation{}, errors.New("provider function call has no verified output-item mapping")
+	}
+	if record.dispatchItem != "" && record.dispatchItem != event.ItemID {
+		// A capture admits one finite browser operation. Return the verified
+		// provider function reference so Sideband can explicitly answer this
+		// extra call without replacing the first call's continuation nonce.
+		record.calls[event.ItemID] = true
+		return voice.Correlation{ProviderCallID: callID, ProviderItemID: event.ItemID, ProviderResponseID: event.ResponseID, CaptureID: id}, errors.New("second provider function call for app capture is refused")
+	}
+	record.dispatchItem = event.ItemID
+	record.calls[event.ItemID] = false
+	return voice.Correlation{ProviderCallID: callID, ProviderItemID: event.ItemID, ProviderResponseID: event.ResponseID, CaptureID: id}, nil
 }
 func (b *appVoiceBridge) ResolveToolCall(event voice.ProviderEvent) (voice.Correlation, error) {
 	return b.ReserveToolCall(event)
 }
 func (b *appVoiceBridge) ExecuteAppTool(c voice.Correlation, name string, args map[string]any) (string, error) {
-	return b.service.execute(c, name, args)
+	return b.service.execute(b, c, name, args)
 }
 func (b *appVoiceBridge) CompleteAppTool(c voice.Correlation) (map[string]string, error) {
 	b.service.mu.Lock()
 	defer b.service.mu.Unlock()
+	if !b.activeLocked() {
+		return nil, errors.New("app voice bridge lease is no longer current")
+	}
 	captureID := b.service.responses[c.ProviderResponseID]
 	record := b.service.captures[captureID]
-	if record == nil || record.responseID != c.ProviderResponseID || record.calls[c.ProviderItemID] {
+	if record == nil || record.responseID != c.ProviderResponseID || record.calls[c.ProviderItemID] ||
+		record.outputCalls[c.ProviderItemID] != c.ProviderCallID || record.continuationPending {
 		return nil, errors.New("app provider call mapping is stale")
 	}
 	record.calls[c.ProviderItemID] = true
-	// The sideband queues response.create until the current response finishes.
-	// Reserve the next response now so that its response.created can only bind
-	// this exact capture/nonce, never a retained prior response.
-	delete(b.service.responses, record.responseID)
-	record.responseID = ""
-	record.terminal = false
 	nonce, err := appVoiceRandom()
 	if err != nil {
 		return nil, err
 	}
-	record.responseNonce = nonce
+	// Keep the old response authority until its response.done arrives. The
+	// sideband queues this continuation behind that response; only then may a
+	// response.created replace the mapping.
+	record.continuationNonce = nonce
+	record.continuationPending = true
 	return map[string]string{"app_voice_capture_id": captureID, "app_voice_response_nonce": nonce}, nil
 }
 func (b *appVoiceBridge) CommitAppInput(event voice.ProviderEvent) (map[string]string, bool, error) {
@@ -174,14 +250,19 @@ func (b *appVoiceBridge) CommitAppInput(event voice.ProviderEvent) (map[string]s
 	}
 	b.service.mu.Lock()
 	defer b.service.mu.Unlock()
-	b.service.expireCapturesLocked()
+	if !b.activeLocked() {
+		return nil, false, errors.New("app voice bridge lease is no longer current")
+	}
 	if _, exists := b.service.inputs[event.ItemID]; exists {
 		return nil, false, nil
 	}
-	if len(b.service.captures) >= 64 {
-		return nil, false, errors.New("app capture ledger is full")
+	if b.service.retiredInputSeenLocked(event.ItemID) {
+		return nil, false, nil
 	}
-	b.service.captures[id] = &appVoiceCapture{inputItemID: event.ItemID, calls: make(map[string]bool), expires: time.Now().Add(appVoiceOperationTTL)}
+	if len(b.service.captures) >= appVoiceCaptureCap {
+		return nil, false, errors.New("app_capture_busy")
+	}
+	b.service.captures[id] = &appVoiceCapture{inputItemID: event.ItemID, calls: make(map[string]bool), outputCalls: make(map[string]string)}
 	nonce, err := appVoiceRandom()
 	if err != nil {
 		delete(b.service.captures, id)
@@ -193,7 +274,7 @@ func (b *appVoiceBridge) CommitAppInput(event voice.ProviderEvent) (map[string]s
 }
 func (s *appVoiceService) releaseCaptureLocked(captureID string) {
 	record := s.captures[captureID]
-	if record == nil || !record.terminal {
+	if record == nil || !record.terminal || record.continuationPending {
 		return
 	}
 	for _, done := range record.calls {
@@ -204,16 +285,27 @@ func (s *appVoiceService) releaseCaptureLocked(captureID string) {
 	delete(s.responses, record.responseID)
 	delete(s.inputs, record.inputItemID)
 	delete(s.captures, captureID)
+	s.retireInputLocked(record.inputItemID)
 }
-func (s *appVoiceService) expireCapturesLocked() {
-	now := time.Now()
-	for id, record := range s.captures {
-		if now.After(record.expires) {
-			delete(s.responses, record.responseID)
-			delete(s.inputs, record.inputItemID)
-			delete(s.captures, id)
-		}
+func (s *appVoiceService) retireInputLocked(inputID string) {
+	if inputID == "" {
+		return
 	}
+	first, second := appVoiceInputReplaySlots(inputID)
+	s.retiredInputBits[first/64] |= uint64(1) << (first % 64)
+	s.retiredInputBits[second/64] |= uint64(1) << (second % 64)
+}
+func (s *appVoiceService) retiredInputSeenLocked(inputID string) bool {
+	first, second := appVoiceInputReplaySlots(inputID)
+	return s.retiredInputBits[first/64]&(uint64(1)<<(first%64)) != 0 &&
+		s.retiredInputBits[second/64]&(uint64(1)<<(second%64)) != 0
+}
+func appVoiceInputReplaySlots(inputID string) (int, int) {
+	digest := sha256.Sum256([]byte(inputID))
+	const slots = appVoiceInputReplayWords * 64
+	first := (int(digest[0])<<16 | int(digest[1])<<8 | int(digest[2])) % slots
+	second := (int(digest[3])<<16 | int(digest[4])<<8 | int(digest[5])) % slots
+	return first, second
 }
 
 func (s *Server) registerAppVoiceRoutes(cfg config.VoiceConfig, protect func(http.Handler) http.Handler) {
@@ -226,7 +318,6 @@ func (s *Server) registerAppVoiceRoutes(cfg config.VoiceConfig, protect func(htt
 		return
 	}
 	service := &appVoiceService{hub: s.hub, provider: mgr, operations: make(map[string]*appVoiceOperation), captures: make(map[string]*appVoiceCapture), responses: make(map[string]string), inputs: make(map[string]string)}
-	service.bridge = &appVoiceBridge{service: service}
 	s.appVoice = service
 	s.hub.appVoice = service
 	mgr.SetOnEnded(func(sessionID, reason string) { service.end(nil, 0, sessionID, reason) })
@@ -267,6 +358,8 @@ func (s *appVoiceService) handleFrame(c *Client, raw []byte) {
 	switch f.Type {
 	case "app-voice-claim":
 		s.claim(c, f.Takeover)
+	case "app-voice-release":
+		s.release(c, f.Epoch)
 	case "app-voice-drain-ack":
 		s.drainAck(c, f.Epoch, f.DrainNonce)
 	case "app-voice-observation":
@@ -308,6 +401,9 @@ func (s *appVoiceService) claim(c *Client, takeover bool) {
 	s.captures = make(map[string]*appVoiceCapture)
 	s.responses = make(map[string]string)
 	s.inputs = make(map[string]string)
+	s.retiredInputBits = [appVoiceInputReplayWords]uint64{}
+	s.bridge = nil
+	s.minting = false
 	c.sendAppVoice(s.claimResultLocked())
 }
 func (s *appVoiceService) claimResultLocked() map[string]any {
@@ -329,6 +425,25 @@ func (s *appVoiceService) drainAck(c *Client, epoch uint64, nonce string) {
 		s.provider.End(session)
 	}
 	s.end(c, epoch, session, "takeover")
+}
+
+// release is the owner-socket explicit-stop path. Unlike HTTP end it also
+// fences a claimed lease whose provider mint has not yet produced a session.
+func (s *appVoiceService) release(c *Client, epoch uint64) {
+	s.mu.Lock()
+	if c != s.owner || epoch == 0 || epoch != s.epoch {
+		s.mu.Unlock()
+		return
+	}
+	session := s.sessionID
+	owner, endedEpoch := s.endLocked()
+	s.mu.Unlock()
+	if session != "" {
+		s.provider.End(session)
+	}
+	if owner != nil {
+		owner.sendAppVoice(map[string]any{"type": "app-voice-lease-ended", "protocol_version": 1, "lease_epoch": endedEpoch, "reason": "explicit_end"})
+	}
 }
 func (s *appVoiceService) observe(c *Client, epoch, revision uint64, active map[string]any) {
 	if !c.appVoiceAllowed || !validAppObservation(c, active) {
@@ -396,11 +511,11 @@ func validAppObservation(c *Client, active map[string]any) bool {
 	return true
 }
 
-func (s *appVoiceService) execute(correlation voice.Correlation, name string, args map[string]any) (string, error) {
+func (s *appVoiceService) execute(bridge *appVoiceBridge, correlation voice.Correlation, name string, args map[string]any) (string, error) {
 	s.mu.Lock()
-	if s.owner == nil || s.sessionID == "" {
+	if !bridge.activeLocked() {
 		s.mu.Unlock()
-		return "", errors.New("app voice owner or provider session is unavailable")
+		return "", errors.New("app voice bridge lease is no longer current")
 	}
 	if name == voice.AppToolObserve {
 		owner := s.owner
@@ -437,13 +552,13 @@ func (s *appVoiceService) execute(correlation voice.Correlation, name string, ar
 		return "", errors.New("stale_observation")
 	}
 	target, ok := args["target"].(map[string]any)
-	owner, active := s.owner, cloneAppTarget(s.observation.Active)
+	owner, active := bridge.owner, cloneAppTarget(s.observation.Active)
 	s.mu.Unlock()
 	if !ok || !validAppTarget(name, target) || !s.validTarget(owner, active, name, target) {
 		return "", errors.New("target_mismatch")
 	}
 	s.mu.Lock()
-	if s.owner != owner || s.sessionID == "" || s.observation.Revision != expected {
+	if !bridge.activeLocked() || s.owner != owner || s.observation.Revision != expected {
 		s.mu.Unlock()
 		return "", errors.New("stale_observation")
 	}
@@ -737,24 +852,30 @@ func appTargetsEqual(a, b map[string]any) bool {
 }
 func (s *appVoiceService) end(c *Client, epoch uint64, session, reason string) {
 	s.mu.Lock()
-	if s.owner == nil || (c != nil && (c != s.owner || epoch != s.epoch)) || (session != "" && s.sessionID != "" && session != s.sessionID) {
+	if s.owner == nil || (c != nil && (c != s.owner || epoch != s.epoch)) || (session != "" && session != s.sessionID) {
 		s.mu.Unlock()
 		return
 	}
+	owner, endedEpoch := s.endLocked()
+	s.mu.Unlock()
+	if owner != nil {
+		owner.sendAppVoice(map[string]any{"type": "app-voice-lease-ended", "protocol_version": 1, "lease_epoch": endedEpoch, "reason": reason})
+	}
+}
+func (s *appVoiceService) endLocked() (*Client, uint64) {
 	owner := s.owner
 	endedEpoch := s.epoch
 	s.owner = nil
 	s.sessionID = ""
 	s.control = ""
 	s.drainNonce = ""
+	s.bridge = nil
+	s.minting = false
 	s.refuseOperationsLocked("lease_ended")
 	s.captures = make(map[string]*appVoiceCapture)
 	s.responses = make(map[string]string)
 	s.inputs = make(map[string]string)
-	s.mu.Unlock()
-	if owner != nil {
-		owner.sendAppVoice(map[string]any{"type": "app-voice-lease-ended", "protocol_version": 1, "lease_epoch": endedEpoch, "reason": reason})
-	}
+	return owner, endedEpoch
 }
 func (s *appVoiceService) refuseOperationsLocked(code string) {
 	for id, op := range s.operations {
@@ -779,7 +900,7 @@ func (s *appVoiceService) disconnect(c *Client) {
 
 func isAppVoiceMessage(typ string) bool {
 	switch typ {
-	case "app-voice-claim", "app-voice-drain-ack", "app-voice-observation", "app-voice-operation-ack":
+	case "app-voice-claim", "app-voice-release", "app-voice-drain-ack", "app-voice-observation", "app-voice-operation-ack":
 		return true
 	}
 	return false
@@ -833,25 +954,38 @@ func (s *Server) handleAppVoiceToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.Lock()
-	if a.sessionID != "" {
+	if a.sessionID != "" || a.minting || a.owner == nil {
 		a.mu.Unlock()
 		writeAppVoiceFailure(w, http.StatusConflict, "provider session already minted")
 		return
 	}
+	bridge := &appVoiceBridge{service: a, owner: a.owner, epoch: epoch, generation: a.providerGeneration + 1}
+	a.minting = true
 	a.mu.Unlock()
-	eph, err := a.provider.MintApp(r.Context(), a.bridge)
+	eph, err := a.provider.MintApp(r.Context(), bridge)
 	if err != nil {
+		a.mu.Lock()
+		if a.owner == bridge.owner && a.epoch == bridge.epoch && a.minting {
+			a.minting = false
+		}
+		a.mu.Unlock()
 		writeAppVoiceFailure(w, http.StatusBadGateway, "provider mint failed")
 		return
 	}
 	a.mu.Lock()
-	if a.owner == nil || a.epoch != epoch || a.sessionID != "" {
+	if a.owner != bridge.owner || a.epoch != bridge.epoch || a.sessionID != "" || !a.minting {
+		if a.owner == bridge.owner && a.epoch == bridge.epoch {
+			a.minting = false
+		}
 		a.mu.Unlock()
 		a.provider.End(eph.SessionID)
 		writeAppVoiceFailure(w, http.StatusConflict, "lease changed during mint")
 		return
 	}
 	a.sessionID = eph.SessionID
+	a.providerGeneration = bridge.generation
+	a.bridge = bridge
+	a.minting = false
 	a.mu.Unlock()
 	writeAppVoiceJSON(w, http.StatusOK, map[string]any{"session_id": eph.SessionID, "expires_at": eph.ExpiresAt, "model": a.provider.Config().Model})
 }

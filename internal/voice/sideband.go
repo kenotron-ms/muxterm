@@ -58,6 +58,13 @@ type Sideband struct {
 	// capture advances to a prefix phase. Retain only bounded identity/digests;
 	// an unknown or changed call must still pass the scoped reservation gate.
 	scopedFinalCalls map[string]scopedFinalCall
+	// Completed responses move their exact calls into a bounded replay window.
+	// The retired response IDs remain authoritative during that window: a new
+	// call item for one is ambiguous and must fence, never be admitted again.
+	scopedRetiredCalls     map[string]scopedFinalCall
+	scopedRetiredOrder     []string
+	scopedRetiredResponses map[string]struct{}
+	scopedRetiredRespOrder []string
 
 	// The spoken exit, guarded by mu. ending means a goodbye is on its way
 	// out; farewellCh carries the read loop's view of that goodbye's audio
@@ -113,6 +120,8 @@ type scopedFinalCall struct {
 	name       string
 	arguments  [sha256.Size]byte
 }
+
+const scopedReplayLimit = 64
 
 // Trace is one observable moment in the sideband's life. Deliberately
 // coarse: a type, a name, and a short detail. No arguments, no results, no
@@ -170,16 +179,18 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 	}
 
 	sb := &Sideband{
-		callID:           callID,
-		url:              u,
-		secret:           ephemeral,
-		bridge:           bridge,
-		cfg:              sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
-		events:           events,
-		endSession:       endSession,
-		pending:          map[string]*approvalIntent{},
-		scopedFinalCalls: map[string]scopedFinalCall{},
-		done:             make(chan struct{}),
+		callID:                 callID,
+		url:                    u,
+		secret:                 ephemeral,
+		bridge:                 bridge,
+		cfg:                    sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
+		events:                 events,
+		endSession:             endSession,
+		pending:                map[string]*approvalIntent{},
+		scopedFinalCalls:       map[string]scopedFinalCall{},
+		scopedRetiredCalls:     map[string]scopedFinalCall{},
+		scopedRetiredResponses: map[string]struct{}{},
+		done:                   make(chan struct{}),
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -349,14 +360,6 @@ func (s *Sideband) handle(data []byte) {
 		return
 	}
 	s.seen(ev.Type)
-	if ev.CallID != "" && ev.CallID != s.callID {
-		s.Fence("provider event call ID does not match attached call")
-		return
-	}
-	if ev.Item.CallID != "" && ev.Item.CallID != s.callID {
-		s.Fence("provider item call ID does not match attached call")
-		return
-	}
 	if scoped, ok := s.bridge.(ProviderEventBridge); ok {
 		event := ProviderEvent{
 			Type: ev.Type, CallID: s.callID, ItemID: ev.ItemID, ResponseID: ev.ResponseID,
@@ -389,6 +392,13 @@ func (s *Sideband) handle(data []byte) {
 				return
 			}
 		}
+		// The app bridge has a persistent conversation, so it retires calls
+		// response-by-response. Keep legacy/threaded-v3's existing permanent
+		// scoped ledger semantics unchanged.
+		if _, app := s.bridge.(AppOperationBridge); app &&
+			(ev.Type == "response.done" || ev.Type == "response.cancelled") {
+			s.retireScopedResponse(event.ResponseID)
+		}
 	}
 	switch {
 	case ev.Type == "response.function_call_arguments.done":
@@ -410,6 +420,13 @@ func (s *Sideband) handle(data []byte) {
 				return
 			}
 			prior, replay := s.scopedFinalCalls[event.ItemID]
+			if !replay {
+				prior, replay = s.scopedRetiredCalls[event.ItemID]
+			}
+			retiredResponse := false
+			if !replay {
+				_, retiredResponse = s.scopedRetiredResponses[event.ResponseID]
+			}
 			s.mu.Unlock()
 			if replay {
 				if prior.responseID == event.ResponseID && prior.name == ev.Name &&
@@ -420,8 +437,30 @@ func (s *Sideband) handle(data []byte) {
 				s.Fence("conflicting replay of a scoped provider call")
 				return
 			}
+			if retiredResponse {
+				s.Fence("unknown provider call for a retired response")
+				return
+			}
 			correlation, err := bridge.ReserveToolCall(event)
 			if err != nil {
+				// An app bridge may explicitly refuse a second, already
+				// verified function item for a capture. It is not
+				// authority to start another operation, but it is safe to
+				// return one bounded tool result and remember its exact
+				// digest so a replay cannot produce another output.
+				if correlation.ProviderCallID != "" {
+					s.mu.Lock()
+					if !s.closed && !s.fenced && len(s.scopedFinalCalls) < scopedReplayLimit {
+						s.scopedFinalCalls[event.ItemID] = scopedFinalCall{
+							responseID: event.ResponseID, callID: correlation.ProviderCallID,
+							name: ev.Name, arguments: digest,
+						}
+						s.mu.Unlock()
+						_ = s.SendScopedFunctionOutput(correlation.ProviderCallID, "Refused: only one app operation may be requested for this response.")
+						return
+					}
+					s.mu.Unlock()
+				}
 				s.Fence("scoped tool reservation rejected")
 				return
 			}
@@ -430,9 +469,9 @@ func (s *Sideband) handle(data []byte) {
 				s.mu.Unlock()
 				return
 			}
-			if len(s.scopedFinalCalls) >= 64 {
+			if len(s.scopedFinalCalls) >= scopedReplayLimit {
 				s.mu.Unlock()
-				s.Fence("scoped provider call replay ledger is full")
+				s.Fence("too many active scoped provider calls")
 				return
 			}
 			if s.scopedFinalCalls == nil {
@@ -517,11 +556,7 @@ func (s *Sideband) dispatchAppReserved(bridge AppOperationBridge, ev realtimeEve
 	if len(output) > 32768 {
 		output = output[:32768]
 	}
-	callID := ev.Item.CallID
-	if callID == "" {
-		callID = ev.CallID
-	}
-	if !s.SendScopedFunctionOutput(callID, output) {
+	if !s.SendScopedFunctionOutput(correlation.ProviderCallID, output) {
 		return
 	}
 	metadata, err := bridge.CompleteAppTool(correlation)
@@ -786,11 +821,53 @@ func (s *Sideband) RequestScopedResponse(metadata map[string]string) error {
 		s.mu.Unlock()
 		return errors.New("voice: sideband is closed or fenced")
 	}
+	if s.respActive && time.Since(s.respStarted) < responseStalePeriod {
+		s.respQueued = append(s.respQueued, map[string]any{"type": "response.create", "response": map[string]any{"metadata": metadata}})
+		s.mu.Unlock()
+		return nil
+	}
 	s.mu.Unlock()
 	if !s.write(map[string]any{"type": "response.create", "response": map[string]any{"metadata": metadata}}) {
 		return errors.New("voice: could not request scoped response")
 	}
 	return nil
+}
+
+// retireScopedResponse retains exact completed calls just long enough to
+// reject delayed/replayed provider events without permanently filling the
+// active-call ledger during a long app conversation.
+func (s *Sideband) retireScopedResponse(responseID string) {
+	if responseID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.scopedRetiredCalls == nil {
+		s.scopedRetiredCalls = make(map[string]scopedFinalCall)
+		s.scopedRetiredResponses = make(map[string]struct{})
+	}
+	for itemID, call := range s.scopedFinalCalls {
+		if call.responseID != responseID {
+			continue
+		}
+		delete(s.scopedFinalCalls, itemID)
+		s.scopedRetiredCalls[itemID] = call
+		s.scopedRetiredOrder = append(s.scopedRetiredOrder, itemID)
+	}
+	if _, seen := s.scopedRetiredResponses[responseID]; !seen {
+		s.scopedRetiredResponses[responseID] = struct{}{}
+		s.scopedRetiredRespOrder = append(s.scopedRetiredRespOrder, responseID)
+	}
+	for len(s.scopedRetiredOrder) > scopedReplayLimit {
+		itemID := s.scopedRetiredOrder[0]
+		s.scopedRetiredOrder = s.scopedRetiredOrder[1:]
+		delete(s.scopedRetiredCalls, itemID)
+	}
+	for len(s.scopedRetiredRespOrder) > scopedReplayLimit {
+		id := s.scopedRetiredRespOrder[0]
+		s.scopedRetiredRespOrder = s.scopedRetiredRespOrder[1:]
+		delete(s.scopedRetiredResponses, id)
+	}
 }
 
 // RequestDrain asks the same provider sideband to cancel its known response

@@ -1132,6 +1132,8 @@ export class MuxSidebar extends LitElement {
    * Defaults to true: the desktop column is always on screen.
    */
   @property({ type: Boolean }) previewsVisible = true;
+  /** Wide workspace chrome provides the launcher in its top title bar. */
+  @property({ type: Boolean }) showLauncher = true;
 
   @state() private _version = 0;
   @state() private _renaming: string | null = null;
@@ -2146,12 +2148,14 @@ export class MuxSidebar extends LitElement {
     return html`
       <div class="header">
         <span title="${window.location.hostname}">${instanceLabel()}</span>
-        <button
-          class="launcher-btn"
-          title="Open menu"
-          @click="${() => { this._menuOpen = !this._menuOpen; }}"
-        >${icon(Ellipsis, { size: 15 })}</button>
-        ${this._menuOpen
+        ${this.showLauncher
+          ? html`<button
+              class="launcher-btn"
+              title="Open menu"
+              @click="${() => { this._menuOpen = !this._menuOpen; }}"
+            >${icon(Ellipsis, { size: 15 })}</button>`
+          : ''}
+        ${this.showLauncher && this._menuOpen
           ? html`<div class="menu-anchor">
               <mux-launcher-menu
                 @launcher-action="${(e: Event) => this._onLauncherAction(e)}"

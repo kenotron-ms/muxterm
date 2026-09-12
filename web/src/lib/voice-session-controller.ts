@@ -23,6 +23,14 @@ export interface VoiceSessionSnapshot {
   readonly heard: string;
   readonly spoken: string;
   readonly error: string;
+  /** True only while every live input track is disabled. */
+  readonly muted: boolean;
+  /** A live browser input track can be muted without ending the session. */
+  readonly canMute: boolean;
+  /** The running server explicitly exposed app-voice capability. */
+  readonly available: boolean;
+  /** This browser can create the required WebRTC/media objects. */
+  readonly supported: boolean;
 }
 
 interface TokenResponse {
@@ -42,9 +50,12 @@ let peer: RTCPeerConnection | null = null;
 let dataChannel: RTCDataChannel | null = null;
 let microphone: MediaStream | null = null;
 let sink: HTMLAudioElement | null = null;
-let context: AudioContext | null = null;
-let analyser: AnalyserNode | null = null;
-let levelRaf: number | null = null;
+let meterContext: AudioContext | null = null;
+let meterSource: MediaStreamAudioSourceNode | null = null;
+let meterAnalyser: AnalyserNode | null = null;
+let levelTimer: ReturnType<typeof setInterval> | null = null;
+let inputActive = false;
+let muted = false;
 let sessionId = '';
 let lease: AppVoiceLease | null = null;
 let generation = 0;
@@ -61,7 +72,17 @@ export function isSupported(): boolean {
 }
 
 export function snapshot(): VoiceSessionSnapshot {
-  return Object.freeze({ state, level, heard, spoken, error });
+  return Object.freeze({
+    state,
+    level,
+    heard,
+    spoken,
+    error,
+    muted,
+    canMute: liveInputTracks().length > 0,
+    available: candidateAvailable,
+    supported: isSupported(),
+  });
 }
 
 export function subscribe(listener: Listener): () => void {
@@ -124,6 +145,107 @@ async function waitForIce(connection: RTCPeerConnection): Promise<void> {
   });
 }
 
+function liveInputTracks(): MediaStreamTrack[] {
+  return microphone?.getAudioTracks().filter((track) => track.readyState === 'live') ?? [];
+}
+
+function tracksAreMuted(): boolean {
+  const tracks = liveInputTracks();
+  return tracks.length > 0 && tracks.every((track) => !track.enabled);
+}
+
+function syncMuted(): boolean {
+  const next = tracksAreMuted();
+  if (muted === next) return false;
+  muted = next;
+  return true;
+}
+
+function shouldMeasureInput(): boolean {
+  return inputActive && state === 'listening' && !muted && liveInputTracks().length > 0;
+}
+
+function stopInputLevelMeter(publishChange = true): void {
+  if (levelTimer !== null) clearInterval(levelTimer);
+  levelTimer = null;
+  if (level === 0) return;
+  level = 0;
+  if (publishChange) publish();
+}
+
+function onInputTrackEnded(stream: MediaStream, trackGeneration: number): void {
+  // A stopped generation must never release or overwrite a newer capture.
+  if (generation !== trackGeneration || microphone !== stream) return;
+  if (liveInputTracks().length > 0) {
+    syncMuted();
+    publish();
+    return;
+  }
+  inputActive = false;
+  stopInputLevelMeter(false);
+  syncMuted();
+  if (isActive()) fail('Microphone disconnected. Start voice mode to reconnect.', true, trackGeneration);
+}
+
+function attachInputMeter(stream: MediaStream, trackGeneration: number): void {
+  stopInputLevelMeter(false);
+  meterSource?.disconnect();
+  meterSource = null;
+  meterAnalyser?.disconnect();
+  meterAnalyser = null;
+  void meterContext?.close().catch(() => {});
+  meterContext = null;
+  for (const track of stream.getAudioTracks()) {
+    track.addEventListener('ended', () => onInputTrackEnded(stream, trackGeneration));
+  }
+  try {
+    const nextContext = new AudioContext();
+    const nextSource = nextContext.createMediaStreamSource(stream);
+    const nextAnalyser = nextContext.createAnalyser();
+    nextAnalyser.fftSize = 512;
+    nextAnalyser.smoothingTimeConstant = 0.6;
+    nextSource.connect(nextAnalyser);
+    meterContext = nextContext;
+    meterSource = nextSource;
+    meterAnalyser = nextAnalyser;
+    void nextContext.resume().catch(() => {});
+  } catch {
+    meterAnalyser = null;
+  }
+}
+
+function detachInputMeter(): void {
+  stopInputLevelMeter(false);
+  meterSource?.disconnect();
+  meterSource = null;
+  meterAnalyser?.disconnect();
+  meterAnalyser = null;
+}
+
+function startInputLevelMeter(): void {
+  if (levelTimer !== null || !meterAnalyser || !shouldMeasureInput()) return;
+  const values = new Uint8Array(meterAnalyser.frequencyBinCount);
+  const sample = (): void => {
+    if (!meterAnalyser || !shouldMeasureInput()) {
+      stopInputLevelMeter();
+      return;
+    }
+    meterAnalyser.getByteTimeDomainData(values);
+    let sum = 0;
+    for (const value of values) {
+      const sampleValue = (value - 128) / 128;
+      sum += sampleValue * sampleValue;
+    }
+    const next = Math.min(1, Math.sqrt(sum / Math.max(1, values.length)) * 3.2);
+    if (Math.abs(next - level) > 0.01) {
+      level = next;
+      publish();
+    }
+  };
+  levelTimer = setInterval(sample, 100);
+  sample();
+}
+
 function attachSink(stream: MediaStream): void {
   sink?.pause();
   const audio = new Audio();
@@ -131,42 +253,6 @@ function attachSink(stream: MediaStream): void {
   audio.autoplay = true;
   audio.play().catch(() => {});
   sink = audio;
-  try {
-    void context?.close();
-    context = new AudioContext();
-    const source = context.createMediaStreamSource(stream);
-    analyser = context.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.6;
-    source.connect(analyser);
-    startLevelLoop();
-  } catch {
-    analyser = null;
-  }
-}
-
-function startLevelLoop(): void {
-  if (levelRaf !== null) return;
-  const values = new Uint8Array(analyser?.frequencyBinCount ?? 0);
-  const loop = (): void => {
-    if (!analyser || !isActive()) {
-      levelRaf = null;
-      return;
-    }
-    analyser.getByteTimeDomainData(values);
-    let sum = 0;
-    for (const value of values) {
-      const sample = (value - 128) / 128;
-      sum += sample * sample;
-    }
-    const next = Math.min(1, Math.sqrt(sum / Math.max(1, values.length)) * 3.2);
-    if (Math.abs(next - level) > 0.01) {
-      level = next;
-      publish();
-    }
-    levelRaf = requestAnimationFrame(loop);
-  };
-  levelRaf = requestAnimationFrame(loop);
 }
 
 function onRealtimeEvent(raw: unknown): void {
@@ -179,8 +265,15 @@ function onRealtimeEvent(raw: unknown): void {
   }
   switch (String(event.type ?? '')) {
     case 'input_audio_buffer.speech_started':
+      if (!peer || !dataChannel || !canPublishListening(peer, dataChannel)) return;
       spoken = '';
+      inputActive = !muted;
       publish('listening');
+      startInputLevelMeter();
+      break;
+    case 'input_audio_buffer.speech_stopped':
+      inputActive = false;
+      stopInputLevelMeter();
       break;
     case 'conversation.item.input_audio_transcription.completed':
       heard = String(event.transcript ?? '').trim();
@@ -188,16 +281,22 @@ function onRealtimeEvent(raw: unknown): void {
       break;
     case 'response.created':
       spoken = '';
+      inputActive = false;
+      stopInputLevelMeter(false);
       publish('thinking');
       break;
     case 'response.output_audio_transcript.delta':
     case 'response.audio_transcript.delta':
       spoken += String(event.delta ?? '');
+      inputActive = false;
+      stopInputLevelMeter(false);
       publish('speaking');
       break;
     case 'response.done':
     case 'response.cancelled':
-      if (isActive()) publish('listening');
+      inputActive = false;
+      stopInputLevelMeter(false);
+      if (isActive() && peer && dataChannel && canPublishListening(peer, dataChannel)) publish('listening');
       break;
     case 'error': {
       const detail = event.error as { message?: unknown } | undefined;
@@ -214,6 +313,16 @@ function configureSession(): void {
       type: 'session.update',
       session: { type: 'realtime', audio: { input: { transcription: { model: 'whisper-1' } } } },
     }),
+  );
+}
+
+function canPublishListening(connection: RTCPeerConnection, channel: RTCDataChannel): boolean {
+  return (
+    connection === peer &&
+    channel === dataChannel &&
+    channel.readyState === 'open' &&
+    connection.currentRemoteDescription !== null &&
+    liveInputTracks().length > 0
   );
 }
 
@@ -250,20 +359,31 @@ export async function start(): Promise<void> {
   error = '';
   heard = '';
   spoken = '';
+  muted = false;
+  inputActive = false;
+  stopInputLevelMeter(false);
   publish('connecting');
   try {
-    lease = await appVoiceOperations.claim(false);
-    if (generation !== current) return;
+    const claimedLease = await appVoiceOperations.claim(false);
+    if (generation !== current) {
+      appVoiceOperations.releaseLease(claimedLease);
+      return;
+    }
+    lease = claimedLease;
     const tokenResponse = await fetch(apiPath('/api/app/voice/token'), {
       method: 'POST',
       credentials: 'include',
       cache: 'no-store',
-      headers: headers(lease.control_token),
-      body: JSON.stringify({ protocol_version: APP_VOICE_PROTOCOL_VERSION, lease_epoch: lease.lease_epoch }),
+      headers: headers(claimedLease.control_token),
+      body: JSON.stringify({ protocol_version: APP_VOICE_PROTOCOL_VERSION, lease_epoch: claimedLease.lease_epoch }),
     });
     if (!tokenResponse.ok) throw new Error(await errorText(tokenResponse, 'Could not mint the app voice session'));
     const token = (await tokenResponse.json()) as TokenResponse;
-    if (!token.session_id || generation !== current) return;
+    if (!token.session_id) throw new Error('The app voice provider returned no session.');
+    if (generation !== current) {
+      appVoiceOperations.releaseLease(claimedLease);
+      return;
+    }
     sessionId = token.session_id;
 
     const acquiredMicrophone = await navigator.mediaDevices.getUserMedia({
@@ -276,6 +396,8 @@ export async function start(): Promise<void> {
       return;
     }
     microphone = acquiredMicrophone;
+    attachInputMeter(acquiredMicrophone, current);
+    syncMuted();
     const connection = new RTCPeerConnection();
     peer = connection;
     for (const track of microphone.getTracks()) connection.addTrack(track, microphone);
@@ -291,18 +413,24 @@ export async function start(): Promise<void> {
       }
     };
     dataChannel = connection.createDataChannel('oai-events');
+    let remoteDescriptionAccepted = false;
     dataChannel.onmessage = (event) => {
       if (generation === current) onRealtimeEvent(event.data);
     };
     dataChannel.onopen = () => {
       if (generation !== current) return;
       configureSession();
-      publish('listening');
+      if (remoteDescriptionAccepted && canPublishListening(connection, dataChannel!)) {
+        publish('listening');
+      }
     };
     const offer = await connection.createOffer();
     await connection.setLocalDescription(offer);
     await waitForIce(connection);
-    if (generation !== current || !lease) return;
+    if (generation !== current) {
+      appVoiceOperations.releaseLease(claimedLease);
+      return;
+    }
     const response = await fetch(apiPath('/api/app/voice/sdp'), {
       method: 'POST',
       credentials: 'include',
@@ -310,17 +438,25 @@ export async function start(): Promise<void> {
       headers: {
         'Content-Type': 'application/sdp',
         'X-App-Voice-Protocol': String(APP_VOICE_PROTOCOL_VERSION),
-        'X-App-Voice-Control': lease.control_token,
-        'X-App-Voice-Lease-Epoch': String(lease.lease_epoch),
+        'X-App-Voice-Control': claimedLease.control_token,
+        'X-App-Voice-Lease-Epoch': String(claimedLease.lease_epoch),
         'X-App-Voice-Session': sessionId,
       },
       body: connection.localDescription?.sdp ?? offer.sdp ?? '',
     });
+    if (generation !== current) {
+      appVoiceOperations.releaseLease(claimedLease);
+      return;
+    }
     if (!response.ok) throw new Error(await errorText(response, 'The app voice provider refused the connection'));
     if (response.headers.get('X-App-Voice-Session') !== sessionId) {
       throw new Error('The app voice provider returned a different session.');
     }
     await connection.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+    remoteDescriptionAccepted = true;
+    if (generation === current && dataChannel && canPublishListening(connection, dataChannel)) {
+      publish('listening');
+    }
   } catch (cause) {
     if (generation === current) fail(cause instanceof Error ? cause.message : String(cause));
   }
@@ -332,11 +468,10 @@ export async function start(): Promise<void> {
  * truthfully proves local resource release, not acoustic playback proof.
  */
 async function releaseBrowserMedia(): Promise<void> {
-  if (levelRaf !== null) cancelAnimationFrame(levelRaf);
-  levelRaf = null;
-  analyser = null;
-  if (context) await context.close().catch(() => {});
-  context = null;
+  inputActive = false;
+  detachInputMeter();
+  const closingMeterContext = meterContext;
+  meterContext = null;
   if (sink) {
     sink.pause();
     sink.srcObject = null;
@@ -344,6 +479,7 @@ async function releaseBrowserMedia(): Promise<void> {
   }
   microphone?.getTracks().forEach((track) => track.stop());
   microphone = null;
+  muted = false;
   try {
     dataChannel?.close();
   } catch {}
@@ -353,30 +489,51 @@ async function releaseBrowserMedia(): Promise<void> {
   } catch {}
   peer = null;
   level = 0;
+  // Sources are disconnected and tracks stopped above; do not let a browser
+  // AudioContext close hang the explicit-stop release deadline.
+  void closingMeterContext?.close().catch(() => {});
+}
+
+async function endProviderSession(previousLease: AppVoiceLease, previousSession: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3_000);
+  try {
+    const response = await fetch(apiPath('/api/app/voice/end'), {
+      method: 'POST',
+      credentials: 'include',
+      cache: 'no-store',
+      headers: headers(previousLease.control_token),
+      body: JSON.stringify({
+        protocol_version: APP_VOICE_PROTOCOL_VERSION,
+        lease_epoch: previousLease.lease_epoch,
+        session_id: previousSession,
+      }),
+      keepalive: true,
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch {
+    // The exact owner-epoch WebSocket release below is the bounded fallback.
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function beginRelease(sendEnd: boolean): Promise<void> {
   if (releasing) return releasing;
   const previousLease = lease;
   const previousSession = sessionId;
+  lease = null;
   sessionId = '';
   generation++;
+  if (!previousLease) appVoiceOperations.cancelClaim();
   releasing = releaseBrowserMedia()
     .then(async () => {
-      if (sendEnd && previousLease && previousSession) {
-        await fetch(apiPath('/api/app/voice/end'), {
-          method: 'POST',
-          credentials: 'include',
-          cache: 'no-store',
-          headers: headers(previousLease.control_token),
-          body: JSON.stringify({
-            protocol_version: APP_VOICE_PROTOCOL_VERSION,
-            lease_epoch: previousLease.lease_epoch,
-            session_id: previousSession,
-          }),
-          keepalive: true,
-        }).catch(() => {});
-      }
+      if (!sendEnd || !previousLease) return;
+      const ended = previousSession !== '' && (await endProviderSession(previousLease, previousSession));
+      if (ended) appVoiceOperations.endLease(previousLease.lease_epoch);
+      else appVoiceOperations.releaseLease(previousLease);
     })
     .finally(() => {
       releasing = null;
@@ -386,12 +543,37 @@ function beginRelease(sendEnd: boolean): Promise<void> {
 }
 
 export function stop(): void {
-  void beginRelease(true).finally(() => publish('idle'));
+  void beginRelease(true);
+  publish('idle');
 }
 
-function fail(message: string): void {
+/**
+ * Toggle only the actual browser input tracks. The peer connection, provider
+ * session, data channel and output sink remain in place while muted.
+ */
+export function setMuted(next: boolean): void {
+  const tracks = liveInputTracks();
+  if (tracks.length === 0) return;
+  for (const track of tracks) track.enabled = !next;
+  inputActive = false;
+  const levelChanged = level !== 0;
+  stopInputLevelMeter(false);
+  const mutedChanged = syncMuted();
+  if (levelChanged || mutedChanged) publish();
+}
+
+/** An idle error is presentational and may be dismissed without starting media. */
+export function dismissError(): void {
+  if (state !== 'error') return;
+  error = '';
+  publish('idle');
+}
+
+function fail(message: string, sendEnd = true, expectedGeneration = generation): void {
+  if (generation !== expectedGeneration) return;
   error = message;
-  void beginRelease(true).finally(() => publish('error'));
+  publish('error');
+  void beginRelease(sendEnd);
 }
 
 /** Legacy server notices do not control an app v1 lease. */
@@ -400,8 +582,10 @@ export function endedByServer(_sessionId: string): void {}
 appVoiceOperations.onLeaseChange((next, reason) => {
   lease = next;
   if (next === null && isActive()) {
-    error = reason === 'takeover' ? 'App voice was released for an explicit takeover.' : 'The app voice lease ended.';
-    void beginRelease(false).finally(() => publish('error'));
+    fail(
+      reason === 'takeover' ? 'App voice was released for an explicit takeover.' : 'The app voice lease ended.',
+      false,
+    );
   }
 });
 
@@ -421,6 +605,8 @@ export const voiceSessionController = {
   subscribe,
   start,
   stop,
+  setMuted,
+  dismissError,
   toggle,
   endedByServer,
 };
