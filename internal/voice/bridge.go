@@ -68,7 +68,10 @@ type ProviderEventBridge interface {
 type AppOperationBridge interface {
 	Bridge
 	ProviderEventBridge
-	ExecuteAppTool(Correlation, string, map[string]any) (string, error)
+	// ExecuteAppTool may wait for an authenticated browser acknowledgement.
+	// ctx cancels only that delivery wait; it never cancels an operation the
+	// browser has already admitted.
+	ExecuteAppTool(context.Context, Correlation, string, map[string]any) (string, error)
 	CompleteAppTool(Correlation) (map[string]string, error)
 }
 
@@ -92,6 +95,13 @@ type ScopedReplyBridge interface {
 
 type SidebandTerminalBridge interface {
 	SidebandTerminal(reason string)
+}
+
+// SidebandClosedBridge observes a local Manager.End/Close after task admission
+// has been closed. It is separate from SidebandTerminalBridge: an intentional
+// owner stop is not a provider failure.
+type SidebandClosedBridge interface {
+	SidebandClosed()
 }
 
 // TurnHandle is one in-flight chief-of-staff turn.

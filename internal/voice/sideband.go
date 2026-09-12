@@ -106,8 +106,16 @@ type Sideband struct {
 
 	writeMu       sync.Mutex
 	scopedWriteMu sync.Mutex
-	done          chan struct{}
-	wg            sync.WaitGroup
+	// admissionMu closes task admission before Close waits.  A WaitGroup Add
+	// concurrent with Wait is otherwise a lifecycle race, even if every task
+	// eventually calls Done.
+	admissionMu     sync.Mutex
+	admissionClosed bool
+	ctx             context.Context
+	cancel          context.CancelFunc
+	closeOnce       sync.Once
+	done            chan struct{}
+	wg              sync.WaitGroup
 }
 
 type sidebandConfig struct {
@@ -178,6 +186,7 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 		return nil, err
 	}
 
+	sbCtx, sbCancel := context.WithCancel(context.Background())
 	sb := &Sideband{
 		callID:                 callID,
 		url:                    u,
@@ -190,6 +199,8 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 		scopedFinalCalls:       map[string]scopedFinalCall{},
 		scopedRetiredCalls:     map[string]scopedFinalCall{},
 		scopedRetiredResponses: map[string]struct{}{},
+		ctx:                    sbCtx,
+		cancel:                 sbCancel,
 		done:                   make(chan struct{}),
 	}
 
@@ -220,21 +231,52 @@ func (s *Sideband) CallID() string { return s.callID }
 
 // Close tears the sideband down. Idempotent.
 func (s *Sideband) Close() {
+	s.closeOnce.Do(s.close)
+}
+
+func (s *Sideband) close() {
 	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return
-	}
 	s.closed = true
 	s.mu.Unlock()
 
+	// Close admissions and cancel blocked delivery waits before joining workers.
+	// No task callback can call Manager.End synchronously: the one callback
+	// that can do so remains deliberately detached in listen below.
+	s.admissionMu.Lock()
+	s.admissionClosed = true
+	s.cancel()
+	s.admissionMu.Unlock()
 	close(s.done)
 	s.writeMu.Lock()
 	conn := s.conn
 	s.writeMu.Unlock()
 	_ = conn.Close(websocket.StatusNormalClosure, "")
+	if bridge, ok := s.bridge.(SidebandClosedBridge); ok {
+		// This is a local delivery-lifetime notification, not the reconnect
+		// exhaustion callback in listen. It must not call Manager.End.
+		bridge.SidebandClosed()
+	}
 	s.wg.Wait()
 	s.emit(Trace{Kind: TraceClosed, Detail: s.callID})
+}
+
+// startTask admits a sideband-owned asynchronous delivery task.  Add happens
+// while Close is excluded, so Close can cancel and then safely join every
+// admitted task without racing a later Add.
+func (s *Sideband) startTask(work func(context.Context)) bool {
+	s.admissionMu.Lock()
+	if s.admissionClosed {
+		s.admissionMu.Unlock()
+		return false
+	}
+	s.wg.Add(1)
+	ctx := s.ctx
+	s.admissionMu.Unlock()
+	go func() {
+		defer s.wg.Done()
+		work(ctx)
+	}()
+	return true
 }
 
 func (s *Sideband) isClosed() bool {
@@ -279,6 +321,9 @@ func (s *Sideband) listen() {
 			s.closed = true
 			s.mu.Unlock()
 			if bridge, ok := s.bridge.(SidebandTerminalBridge); ok {
+				// This callback may synchronously reach Manager.End, which
+				// closes this Sideband and joins s.wg.  Do not make it a
+				// joined task or listen would wait for itself.
 				go bridge.SidebandTerminal("provider sideband reconnect exhausted")
 			}
 			return
@@ -483,13 +528,13 @@ func (s *Sideband) handle(data []byte) {
 			}
 			s.mu.Unlock()
 			if app, ok := s.bridge.(AppOperationBridge); ok {
-				go s.dispatchAppReserved(app, ev, correlation)
+				s.startTask(func(ctx context.Context) { s.dispatchAppReserved(ctx, app, ev, correlation) })
 				return
 			}
-			go s.dispatchScopedReserved(ev, correlation)
+			s.startTask(func(ctx context.Context) { s.dispatchScopedReserved(ctx, ev, correlation) })
 			return
 		}
-		go s.dispatch(ev)
+		s.startTask(func(ctx context.Context) { s.dispatch(ctx, ev) })
 	case ev.Type == "response.created":
 		s.mu.Lock()
 		s.respActive = true
@@ -538,7 +583,10 @@ func (s *Sideband) handle(data []byte) {
 	}
 }
 
-func (s *Sideband) dispatchAppReserved(bridge AppOperationBridge, ev realtimeEvent, correlation Correlation) {
+func (s *Sideband) dispatchAppReserved(ctx context.Context, bridge AppOperationBridge, ev realtimeEvent, correlation Correlation) {
+	if ctx.Err() != nil {
+		return
+	}
 	args := map[string]any{}
 	if len(ev.Arguments) > 0 {
 		var raw string
@@ -549,7 +597,10 @@ func (s *Sideband) dispatchAppReserved(bridge AppOperationBridge, ev realtimeEve
 		}
 	}
 	s.emit(Trace{Kind: TraceToolCall, Name: ev.Name})
-	output, err := bridge.ExecuteAppTool(correlation, ev.Name, args)
+	output, err := bridge.ExecuteAppTool(ctx, correlation, ev.Name, args)
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		output = "Refused: " + trimErr(err)
 	}
@@ -565,7 +616,10 @@ func (s *Sideband) dispatchAppReserved(bridge AppOperationBridge, ev realtimeEve
 	}
 }
 
-func (s *Sideband) dispatchScopedReserved(ev realtimeEvent, correlation Correlation) {
+func (s *Sideband) dispatchScopedReserved(ctx context.Context, ev realtimeEvent, correlation Correlation) {
+	if ctx.Err() != nil {
+		return
+	}
 	args := map[string]any{}
 	if len(ev.Arguments) > 0 {
 		var raw string
@@ -576,7 +630,7 @@ func (s *Sideband) dispatchScopedReserved(ev realtimeEvent, correlation Correlat
 		}
 	}
 	bridge, _ := s.bridge.(CorrelatedBridge)
-	s.dispatchScoped(bridge, ev, args, correlation)
+	s.dispatchScoped(ctx, bridge, ev, args, correlation)
 }
 
 // seen records each event type once, so a run can be diagnosed without
@@ -613,14 +667,14 @@ func (s *Sideband) retryLastResponse() {
 	if last == nil || attempt >= 6 {
 		return
 	}
-	go func() {
+	s.startTask(func(ctx context.Context) {
 		select {
 		case <-time.After(time.Duration(attempt+1) * 2 * time.Second):
-		case <-s.done:
+		case <-ctx.Done():
 			return
 		}
 		s.send(last)
-	}()
+	})
 }
 
 // sweep releases a response that has gone stale.
@@ -693,7 +747,10 @@ const responseStalePeriod = 30 * time.Second
 // read loop is also how a barge-in or a second call arrives, and a bridge
 // that stops reading during a tool call is a bridge that cannot be
 // interrupted.
-func (s *Sideband) dispatch(ev realtimeEvent) {
+func (s *Sideband) dispatch(ctx context.Context, ev realtimeEvent) {
+	if ctx.Err() != nil {
+		return
+	}
 	args := map[string]any{}
 	if len(ev.Arguments) > 0 {
 		var raw string
@@ -722,7 +779,7 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 			s.Fence("scoped tool event rejected")
 			return
 		}
-		s.dispatchScoped(bridge, ev, args, correlation)
+		s.dispatchScoped(ctx, bridge, ev, args, correlation)
 		return
 	}
 
@@ -743,7 +800,10 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 	}
 }
 
-func (s *Sideband) dispatchScoped(bridge CorrelatedBridge, ev realtimeEvent, args map[string]any, correlation Correlation) {
+func (s *Sideband) dispatchScoped(ctx context.Context, bridge CorrelatedBridge, ev realtimeEvent, args map[string]any, correlation Correlation) {
+	if ctx.Err() != nil {
+		return
+	}
 	replies, ok := s.bridge.(ScopedReplyBridge)
 	if !ok {
 		s.Fence("scoped bridge lacks prefix-gated reply controller")
@@ -760,33 +820,44 @@ func (s *Sideband) dispatchScoped(bridge CorrelatedBridge, ev realtimeEvent, arg
 	}
 	turn, err := bridge.SubmitCorrelated(correlation, request)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation rejected this request: "+trimErr(err), true)
+		return
+	}
+	// The turn is now admitted work and deliberately continues after a voice
+	// stop.  ctx only suppresses its sideband delivery and completion wait.
+	if ctx.Err() != nil {
 		return
 	}
 	if ev.Name == ToolDispatch {
 		_ = replies.QueueScopedReply(correlation, ev.CallID, "Started in the selected Mission Control conversation.", false)
-		go s.awaitScopedLate(bridge, correlation, turn)
+		s.startTask(func(ctx context.Context) { s.awaitScopedLate(ctx, bridge, correlation, turn) })
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.syncTimeout)
+	waitCtx, cancel := context.WithTimeout(ctx, s.cfg.syncTimeout)
 	defer cancel()
-	text, err := turn.Wait(ctx)
+	text, err := turn.Wait(waitCtx)
+	if ctx.Err() != nil {
+		return
+	}
 	if err == nil {
 		_ = replies.QueueScopedReply(correlation, ev.CallID, text, true)
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation is working on this.", false)
-		go s.awaitScopedLate(bridge, correlation, turn)
+		s.startTask(func(ctx context.Context) { s.awaitScopedLate(ctx, bridge, correlation, turn) })
 		return
 	}
 	_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation could not complete this request: "+trimErr(err), true)
 }
 
-func (s *Sideband) awaitScopedLate(bridge CorrelatedBridge, correlation Correlation, turn TurnHandle) {
-	text, err := turn.Wait(context.Background())
+func (s *Sideband) awaitScopedLate(ctx context.Context, bridge CorrelatedBridge, correlation Correlation, turn TurnHandle) {
+	text, err := turn.Wait(ctx)
 	replies, ok := bridge.(ScopedReplyBridge)
-	if !ok || s.isClosed() {
+	if !ok || ctx.Err() != nil || s.isClosed() {
 		return
 	}
 	if err != nil {
@@ -926,7 +997,7 @@ func (s *Sideband) runAsk(callID, request string) {
 		s.answer(callID, "The chief of staff is working on this now. The answer will follow shortly.",
 			"Say, in one short line, that it is being looked into and you will have the answer in a moment. "+
 				"Do NOT call the tool again -- the answer arrives on its own. Then carry on talking to the user.")
-		go s.awaitLate(turn)
+		s.startTask(func(ctx context.Context) { s.awaitLate(ctx, turn) })
 	default:
 		s.answer(callID, "That did not work: "+trimErr(err),
 			"Tell the user it did not work, briefly.")
@@ -948,7 +1019,7 @@ func (s *Sideband) runDispatch(callID, request string) {
 	}
 	s.answer(callID, "Started. You will be told when it is done.",
 		"Tell the user you have set it going, in one short line, and carry on.")
-	go s.awaitLate(turn)
+	s.startTask(func(ctx context.Context) { s.awaitLate(ctx, turn) })
 }
 
 // awaitLate waits for a turn that outlived its tool call and injects the
@@ -958,19 +1029,9 @@ func (s *Sideband) runDispatch(callID, request string) {
 // once no matter what -- including when the sidecar dies, which synthesizes
 // a terminal event -- so this goroutine cannot leak on a hung turn. It exits
 // early if the sideband closes underneath it.
-func (s *Sideband) awaitLate(turn TurnHandle) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		select {
-		case <-s.done:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-
+func (s *Sideband) awaitLate(ctx context.Context, turn TurnHandle) {
 	text, err := turn.Wait(ctx)
-	if s.isClosed() {
+	if ctx.Err() != nil || s.isClosed() {
 		return
 	}
 	if err != nil {
@@ -1038,10 +1099,10 @@ func (s *Sideband) answer(callID, output, instructions string) {
 // silent. That is the right trade against losing the connection.
 func (s *Sideband) requestResponse(instructions string) {
 	marker := time.Now()
-	go func() {
+	s.startTask(func(ctx context.Context) {
 		select {
 		case <-time.After(responseGrace):
-		case <-s.done:
+		case <-ctx.Done():
 			return
 		}
 		s.mu.Lock()
@@ -1055,7 +1116,7 @@ func (s *Sideband) requestResponse(instructions string) {
 			"type":     "response.create",
 			"response": map[string]any{"instructions": instructions},
 		})
-	}()
+	})
 }
 
 // responseGrace is how long the model is given to start speaking on its own
@@ -1133,7 +1194,7 @@ func (s *Sideband) write(msg map[string]any) bool {
 	s.writeMu.Lock()
 	conn := s.conn
 	defer s.writeMu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 	if err := conn.Write(ctx, websocket.MessageText, b); err != nil {
 		s.emit(Trace{Kind: TraceError, Detail: "write: " + trimErr(err)})

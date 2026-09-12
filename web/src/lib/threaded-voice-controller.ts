@@ -103,6 +103,8 @@ interface Attachment {
   draining: boolean;
   drainNonce: string;
   drainAcknowledged: boolean;
+  /** One browser drain acknowledgement request at a time for drainNonce. */
+  drainAcknowledging: Promise<void> | null;
   routeAfterDrain: ThreadVoiceTarget | null;
   muting: Promise<void> | null;
   /** Invalidates a pending getUserMedia/replaceTrack continuation on every mute. */
@@ -666,6 +668,7 @@ async function start(target: ThreadVoiceTarget | null): Promise<void> {
       draining: false,
       drainNonce: '',
       drainAcknowledged: false,
+      drainAcknowledging: null,
       routeAfterDrain: null,
       muting: null,
       captureOperation: 0,
@@ -1325,6 +1328,18 @@ async function muteLocally(current: Attachment): Promise<void> {
   await detachSink(current);
 }
 
+/** Browser teardown only; server-side drain remains authoritative. */
+function closePeerLocally(current: Attachment): void {
+  try {
+    current.peer?.close();
+  } catch {
+    /* already closed */
+  }
+  current.peer = null;
+  current.sender = null;
+  current.remoteStream = null;
+}
+
 async function beginDrain(
   current: Attachment,
   routeAfterDrain: ThreadVoiceTarget | null,
@@ -1351,15 +1366,92 @@ async function beginDrain(
     startEventPoll(current);
   } catch (error) {
     if (currentAttachment(current)) {
+      // The browser peer is no longer useful after a failed stop request, but
+      // this is not a server drain acknowledgement. Keep the attachment and
+      // its control token so the visible Stop action can retry this exact
+      // request; do not mint a replacement or record a drained token.
+      closePeerLocally(current);
       current.draining = false;
       setState(
         'error',
-        requestFailureMessage(
+        `${requestFailureMessage(
           error,
-          'The experimental voice attachment could not enter a safe drain. It remains muted; no replacement was attempted.',
-        ),
+          'The experimental voice attachment could not enter a safe drain.',
+        )} It remains muted; use Stop to retry the server drain. No replacement was attempted.`,
       );
     }
+  }
+}
+
+/**
+ * Acknowledge exactly the outstanding server-issued drain nonce only after the
+ * current local release routine has stopped every capture track it observed.
+ * This is browser-local evidence, not a claim that the server/provider drain
+ * completed; only drain_complete may finish the attachment.
+ */
+async function acknowledgePendingDrain(current: Attachment): Promise<void> {
+  if (
+    !currentAttachment(current) ||
+    !current.draining ||
+    current.drainNonce === '' ||
+    current.drainAcknowledged
+  ) {
+    return;
+  }
+  if (current.drainAcknowledging) {
+    await current.drainAcknowledging;
+    return;
+  }
+  const nonce = current.drainNonce;
+  const tracks = current.capture?.stream?.getTracks() ?? [];
+  const acknowledgement = (async () => {
+    await muteLocally(current);
+    if (
+      !currentAttachment(current) ||
+      !current.draining ||
+      current.drainNonce !== nonce ||
+      current.drainAcknowledged
+    ) {
+      return;
+    }
+    if (
+      (current.capture !== null && current.capture.stream !== null) ||
+      tracks.some((track) => track.readyState !== 'ended') ||
+      current.sink !== null ||
+      current.audioContext !== null
+    ) {
+      setState(
+        'error',
+        'Browser media release could not be verified. Voice remains muted; use Stop to retry this exact drain acknowledgement.',
+      );
+      return;
+    }
+    try {
+      await postVoice(
+        '/api/missioncontrol/voice/drain/ack',
+        { ...attachmentPayload(current), drain_nonce: nonce },
+        current.controlToken,
+      );
+      if (!currentAttachment(current) || current.drainNonce !== nonce) return;
+      current.drainAcknowledged = true;
+      setState('draining', 'Browser audio is detached; waiting for the server’s provider drain completion.');
+    } catch (error) {
+      if (currentAttachment(current) && current.draining && current.drainNonce === nonce) {
+        setState(
+          'error',
+          `${requestFailureMessage(
+            error,
+            'The browser drain acknowledgement was refused.',
+          )} Voice remains muted; use Stop to retry this exact acknowledgement. No replacement was attempted.`,
+        );
+      }
+    }
+  })();
+  current.drainAcknowledging = acknowledgement;
+  try {
+    await acknowledgement;
+  } finally {
+    if (current.drainAcknowledging === acknowledgement) current.drainAcknowledging = null;
   }
 }
 
@@ -1375,28 +1467,7 @@ async function handleDrainRequest(current: Attachment, event: VoiceEvent): Promi
   if (current.drainAcknowledged && current.drainNonce === event.nonce) return;
   current.drainNonce = event.nonce;
   setState('draining', 'Experimental voice is waiting for provider and browser drain confirmation…');
-  await muteLocally(current);
-  if (!currentAttachment(current) || !current.draining || current.drainNonce !== event.nonce) return;
-  try {
-    await postVoice(
-      '/api/missioncontrol/voice/drain/ack',
-      { ...attachmentPayload(current), drain_nonce: event.nonce },
-      current.controlToken,
-    );
-    if (!currentAttachment(current) || current.drainNonce !== event.nonce) return;
-    current.drainAcknowledged = true;
-    setState('draining', 'Browser audio is detached; waiting for the server’s provider drain completion.');
-  } catch (error) {
-    if (currentAttachment(current)) {
-      setState(
-        'error',
-        requestFailureMessage(
-          error,
-          'The browser drain acknowledgement was refused. Voice remains muted and no replacement was attempted.',
-        ),
-      );
-    }
-  }
+  await acknowledgePendingDrain(current);
 }
 
 async function handleDrainComplete(current: Attachment, event: VoiceEvent): Promise<void> {
@@ -1414,11 +1485,7 @@ async function handleDrainComplete(current: Attachment, event: VoiceEvent): Prom
   current.pollAbort = null;
   clearHeartbeat(current);
   await muteLocally(current);
-  try {
-    current.peer?.close();
-  } catch {
-    /* already closed */
-  }
+  closePeerLocally(current);
   if (!currentAttachment(current)) return;
   attachment = null;
   drainedControlToken = current.controlToken;
@@ -1434,6 +1501,13 @@ async function localFailure(current: Attachment, detail: string): Promise<void> 
   current.pollAbort = null;
   clearHeartbeat(current);
   await muteLocally(current);
+  closePeerLocally(current);
+  if (!currentAttachment(current)) return;
+  // This releases browser-local ownership only. Without a server drain ACK we
+  // deliberately retain no drainedControlToken and never auto-attach again.
+  attachment = null;
+  activePrefix = null;
+  level = 0;
   setState('error', detail);
 }
 
@@ -1448,6 +1522,13 @@ async function stop(): Promise<void> {
       'error',
       'The scoped attachment candidate was not committed. It remains muted; wait for the server candidate to expire before trying again.',
     );
+    return;
+  }
+  if (current.draining) {
+    // A /stop that succeeded is awaiting its server drain event. Once that
+    // event carries a nonce, Stop retries only that exact acknowledgement;
+    // it never mixes a fresh /stop with a pending server drain.
+    await acknowledgePendingDrain(current);
     return;
   }
   await beginDrain(
@@ -1577,6 +1658,13 @@ async function markTextDisconnected(): Promise<void> {
   current.pollAbort = null;
   clearHeartbeat(current);
   await muteLocally(current);
+  closePeerLocally(current);
+  if (!currentAttachment(current)) return;
+  // Text loss is not confirmation that the server drained its lease. Drop the
+  // local peer without a takeover token and require an explicit later action.
+  attachment = null;
+  activePrefix = null;
+  level = 0;
   setState(
     'error',
     'Text connection lost. Experimental voice is muted; no lease, capture, or context was automatically resumed.',

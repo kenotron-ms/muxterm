@@ -187,6 +187,8 @@ export class MuxCos extends LitElement {
   @state() private _confirm: Housekeeping | null = null;
   /** Scoped reset/archive confirmation with its immutable selected target. */
   @state() private _threadConfirm: ThreadControlConfirmation | null = null;
+  /** The exact scoped request in flight; also closes the pre-render double-click gap. */
+  @state() private _threadControlPending: ThreadControlConfirmation | null = null;
   @state() private _voice: VoiceState = voiceInputController.getState();
   @state() private _dictationNotice = '';
   @state() private _appVoiceConfirmation: AppVoiceSubmitConfirmation | null = null;
@@ -1433,8 +1435,10 @@ export class MuxCos extends LitElement {
     super.connectedCallback();
     document.addEventListener('mousedown', this._onOutsideClick);
     this._unsub = threadStore.subscribe(() => {
+      this._settleThreadControlPending();
       this._version++;
     });
+    this._settleThreadControlPending();
     // Session state is the Dashboard APPLET's subscription now. It is held
     // while that applet is CONNECTED rather than while it is on screen, so an
     // unseen tab can still notice a lane going blocked; the argument for that
@@ -2321,6 +2325,7 @@ export class MuxCos extends LitElement {
 
   /** One scoped destructive control, shown with the exact target before send. */
   private _renderThreadConfirm(confirm: ThreadControlConfirmation): TemplateResult {
+    const pending = this._threadControlPending !== null;
     const resetting = confirm.action === 'reset';
     const head = resetting
       ? `Reset ${confirm.target.label}?`
@@ -2340,6 +2345,7 @@ export class MuxCos extends LitElement {
                 class="btn danger"
                 type="button"
                 data-thread-confirm="${confirm.action}:${confirm.target.threadId}:${confirm.target.generation}"
+                ?disabled="${pending}"
                 @click="${() => this._doThreadControl(confirm)}"
               >${resetting ? 'Reset this context' : 'Archive this context'}</button>
               <button
@@ -2708,10 +2714,24 @@ export class MuxCos extends LitElement {
   }
 
   private _doThreadControl = (confirm: ThreadControlConfirmation): void => {
+    if (this._threadControlPending !== null) return;
+    this._threadControlPending = confirm;
     this._threadConfirm = null;
-    if (confirm.action === 'reset') threadStore.reset(confirm.target);
-    else threadStore.archive(confirm.target);
+    const sent = confirm.action === 'reset'
+      ? threadStore.reset(confirm.target)
+      : threadStore.archive(confirm.target);
+    // A synchronous transmit/validation rejection creates no store pending
+    // record, so only this exact rejected attempt may clear the local guard.
+    if (!sent) this._threadControlPending = null;
   };
+
+  private _settleThreadControlPending(): void {
+    const pending = this._threadControlPending;
+    if (!pending || threadStore.isThreadControlPending(pending.action, pending.target)) return;
+    // The store removed this exact request only after its matching result (or
+    // disconnect cleanup), never because another context's control settled.
+    this._threadControlPending = null;
+  }
 
   /** Explicit context switch from a queued record; no attention event calls this. */
   private _talkAttention = (attention: ThreadAttention): void => {

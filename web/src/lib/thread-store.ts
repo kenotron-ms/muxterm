@@ -1288,6 +1288,20 @@ class ThreadStore {
     return target !== null && this._hasPendingControl(kind, target.threadId, id);
   }
 
+  /** Whether this exact confirmation target still owns its reset/archive request. */
+  isThreadControlPending(action: 'reset' | 'archive', target: ThreadControlTarget): boolean {
+    for (const pending of this._pendingControls.values()) {
+      if (
+        pending.kind === action &&
+        pending.threadId === target.threadId &&
+        pending.generation === target.generation
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   get contexts(): readonly ThreadContextOption[] {
     if (!this.threaded) return [];
     const options: ThreadContextOption[] = [];

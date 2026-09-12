@@ -6,6 +6,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -213,8 +214,8 @@ func (b *appVoiceBridge) ReserveToolCall(event voice.ProviderEvent) (voice.Corre
 func (b *appVoiceBridge) ResolveToolCall(event voice.ProviderEvent) (voice.Correlation, error) {
 	return b.ReserveToolCall(event)
 }
-func (b *appVoiceBridge) ExecuteAppTool(c voice.Correlation, name string, args map[string]any) (string, error) {
-	return b.service.execute(b, c, name, args)
+func (b *appVoiceBridge) ExecuteAppTool(ctx context.Context, c voice.Correlation, name string, args map[string]any) (string, error) {
+	return b.service.execute(ctx, b, c, name, args)
 }
 func (b *appVoiceBridge) CompleteAppTool(c voice.Correlation) (map[string]string, error) {
 	b.service.mu.Lock()
@@ -515,7 +516,7 @@ func validAppObservation(c *Client, active map[string]any) bool {
 	return true
 }
 
-func (s *appVoiceService) execute(bridge *appVoiceBridge, correlation voice.Correlation, name string, args map[string]any) (string, error) {
+func (s *appVoiceService) execute(ctx context.Context, bridge *appVoiceBridge, correlation voice.Correlation, name string, args map[string]any) (string, error) {
 	s.mu.Lock()
 	if !bridge.activeLocked() {
 		s.mu.Unlock()
@@ -598,6 +599,15 @@ func (s *appVoiceService) execute(bridge *appVoiceBridge, correlation voice.Corr
 			return "", result.err
 		}
 		return result.output, nil
+	case <-ctx.Done():
+		// The owner may still complete a browser operation already delivered;
+		// only this provider-side wait is cancelled.
+		s.mu.Lock()
+		if s.operations[id] == op {
+			delete(s.operations, id)
+		}
+		s.mu.Unlock()
+		return "", ctx.Err()
 	case <-time.After(appVoiceOperationTTL):
 		s.mu.Lock()
 		delete(s.operations, id)

@@ -332,7 +332,21 @@ async function main() {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     page = await context.newPage();
     const sockets = [];
-    page.on('websocket', (socket) => sockets.push(socket));
+    const scopedControlFrames = [];
+    page.on('websocket', (socket) => {
+      sockets.push(socket);
+      socket.on('framesent', (frame) => {
+        try {
+          const payload = typeof frame.payload === 'function' ? frame.payload() : '';
+          const message = JSON.parse(payload);
+          if (message?.type === 'missioncontrol-reset' || message?.type === 'missioncontrol-archive') {
+            scopedControlFrames.push(message);
+          }
+        } catch {
+          // Non-JSON frames are expected for terminal data.
+        }
+      });
+    });
     page.on('pageerror', (error) => report.errors.push({ stage: 'pageerror', ...safeError(error) }));
     await page.goto(base.href, { waitUntil: 'domcontentloaded' });
     await eventually(() => page.locator('mux-app').count(), 'real_mux_app');
@@ -454,6 +468,7 @@ async function main() {
       blocked('active_visual_bubble_and_menu', 'requires a public bubble snapshot property');
       blocked('mouse_drag_snap_clamp', 'requires a visible active visual bubble');
       blocked('fixture_state_variants', 'requires a public bubble snapshot property');
+      blocked('error_stop_visible_with_public_snapshot', 'requires a public bubble snapshot property');
       blocked('fixture_navigation_identity_and_normalized_position', 'requires a visible active visual bubble');
     }
     blocked('software_keyboard_visualviewport', 'A physical software keyboard cannot be invoked or mocked as real visualViewport evidence.');
@@ -549,6 +564,47 @@ async function main() {
       };
     });
 
+    await tryCheck('real_ui_thread_control_double_click_guard', async () => {
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await openMissionControl();
+      const cos = page.locator('mux-cos:visible');
+      const selector = cos.locator('[data-thread-context-selector]:visible');
+      if (await selector.count() !== 1) throw new Error('threaded_context_selector_unavailable');
+      await selector.click();
+      const workspaceOption = cos.locator('[data-thread-context-option]')
+        .filter({ hasText: `voice ui fixture A ${nonce}` }).first();
+      await workspaceOption.waitFor({ state: 'visible', timeout: 10_000 });
+      await workspaceOption.click();
+      const talkHere = cos.locator('[data-thread-talk-here]');
+      await talkHere.waitFor({ state: 'visible', timeout: 10_000 });
+      if (await talkHere.isDisabled()) throw new Error('fixture_workspace_context_not_selectable');
+      await talkHere.click();
+      const menu = cos.getByRole('button', { name: 'Conversation options', exact: true });
+      await menu.click();
+      const reset = cos.locator('[data-thread-reset]');
+      await reset.waitFor({ state: 'visible', timeout: 10_000 });
+      await reset.click();
+      const confirm = cos.locator('[data-thread-confirm^="reset:"]');
+      await confirm.waitFor({ state: 'visible', timeout: 10_000 });
+      const before = scopedControlFrames.length;
+      await confirm.dblclick();
+      await eventually(
+        () => scopedControlFrames.length >= before + 1,
+        'real_reset_control_frame',
+        10_000,
+      );
+      await delay(100);
+      const sent = scopedControlFrames.slice(before);
+      if (sent.length !== 1 || sent[0]?.type !== 'missioncontrol-reset') {
+        throw new Error('thread_control_double_submit_detected');
+      }
+      return {
+        interaction: 'real_workspace_context_menu_and_confirm',
+        request_frames: sent.length,
+        operation: 'reset_only_no_workspace_delete',
+      };
+    }, { blocked: 'requires an enabled real threaded Mission Control context with reset control' });
+
     if (fixtureReady) {
       const bubbleMain = page.locator('mux-voice-mode-bubble').locator('mux-voice-mode-button.bubble-main');
       const bubbleButton = bubbleMain.locator('[data-voice-mode-button]');
@@ -629,6 +685,23 @@ async function main() {
         }
         await page.evaluate(componentFixture, activeSnapshot);
         return { states: ['connecting', 'error', 'muted'] };
+      });
+      await tryCheck('error_stop_visible_with_public_snapshot', async () => {
+        const errorSnapshot = { ...activeSnapshot, state: 'error', error: 'fixture error' };
+        const applied = await page.evaluate(componentFixture, errorSnapshot);
+        if (!applied.ready) throw new Error('fixture_error_state_apply_failed');
+        await bubbleButton.click();
+        const dialog = page.getByRole('dialog', { name: 'Voice mode controls', exact: true });
+        await dialog.waitFor({ state: 'visible', timeout: 10_000 });
+        const stop = dialog.locator('[data-voice-mode-stop]');
+        const dismiss = dialog.locator('[data-voice-mode-dismiss]');
+        if (await stop.count() !== 1 || await dismiss.count() !== 1) {
+          throw new Error('error_stop_or_dismiss_not_rendered');
+        }
+        await dialog.locator('[data-voice-mode-close]').click();
+        await dialog.waitFor({ state: 'hidden', timeout: 10_000 });
+        await page.evaluate(componentFixture, activeSnapshot);
+        return { snapshot_state: 'error', stop: 'visible', dismiss: 'visible', control_opened_by_real_ui_click: true };
       });
       await tryCheck('inactive_unavailable_header_control_is_visible_and_explained', async () => {
         const unavailable = {

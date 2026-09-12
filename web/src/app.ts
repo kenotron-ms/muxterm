@@ -1347,6 +1347,8 @@ export class MuxApp extends LitElement {
     this._paneFocusCoordinator = null;
     disposeAppShortcuts?.();
     disposeAppShortcuts = undefined;
+    disposeKeys?.();
+    disposeKeys = undefined;
     disposeHomeToggle?.();
     disposeHomeToggle = undefined;
     this._unsubHomeSessions?.();

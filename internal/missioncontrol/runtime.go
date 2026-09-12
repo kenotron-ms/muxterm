@@ -34,7 +34,11 @@ type Runtime struct {
 	store      *Store
 
 	opMu sync.Mutex // serializes sidecar snapshot/control against new admission
-	mu   sync.Mutex
+	// eventMu preserves sidecar-reader order while catalog writes happen
+	// without mu. A later event must never reserve/publish a sequence ahead of
+	// an earlier event whose durable bookkeeping is still in progress.
+	eventMu sync.Mutex
+	mu      sync.Mutex
 
 	listeners       map[uint64]chan RuntimeEvent
 	listenerID      uint64
@@ -107,8 +111,18 @@ type Router struct {
 	contextMaxTokens int
 	mu               sync.Mutex
 	runtimes         map[string]*Runtime
+	starting         map[string]*runtimeStart
 	closing          map[string]struct{}
 	closed           bool
+}
+
+// runtimeStart is a per-thread startup reservation. It is intentionally only
+// a completion signal: callers re-check Router state after it closes, which
+// keeps errors and Close races on the normal Ensure path.
+type runtimeStart struct {
+	done    chan struct{}
+	runtime *Runtime
+	err     error
 }
 
 func NewRouter(store *Store, cap int, contextMaxTokens int) *Router {
@@ -116,7 +130,7 @@ func NewRouter(store *Store, cap int, contextMaxTokens int) *Router {
 		cap = defaultTextWorkerCap
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Router{store: store, ctx: ctx, cancel: cancel, cap: cap, contextMaxTokens: contextMaxTokens, runtimes: make(map[string]*Runtime), closing: make(map[string]struct{})}
+	return &Router{store: store, ctx: ctx, cancel: cancel, cap: cap, contextMaxTokens: contextMaxTokens, runtimes: make(map[string]*Runtime), starting: make(map[string]*runtimeStart), closing: make(map[string]struct{})}
 }
 
 func runtimeDirectory(sessionID string) string {
@@ -152,6 +166,18 @@ func (r *Router) Ensure(threadID string) (*Runtime, error) {
 			r.mu.Unlock()
 			return nil, errors.New("missioncontrol: runtime is closing")
 		}
+		if start := r.starting[threadID]; start != nil {
+			done := start.done
+			r.mu.Unlock()
+			<-done
+			if start.err != nil {
+				return nil, start.err
+			}
+			if start.runtime != nil {
+				return start.runtime, nil
+			}
+			continue
+		}
 		if runtime := r.runtimes[threadID]; runtime != nil {
 			if runtime.Supervisor.Status().LastError == "" {
 				r.mu.Unlock()
@@ -167,71 +193,97 @@ func (r *Router) Ensure(threadID string) (*Runtime, error) {
 			r.finishClose(threadID)
 			continue
 		}
-		if len(r.runtimes) >= r.cap {
-			candidate := r.evictOneLocked()
+		if len(r.runtimes)+len(r.starting) >= r.cap {
+			r.mu.Unlock()
+			candidate := r.evictOne()
 			if candidate == nil {
-				r.mu.Unlock()
 				return nil, ErrWorkerCap
 			}
-			r.mu.Unlock()
 			r.closeRuntime(candidate)
 			r.finishClose(candidate.Identity().ID)
 			continue
 		}
-		cwd, err := storageCWD()
-		if err != nil {
-			r.mu.Unlock()
-			return nil, err
-		}
-		thread, err := r.store.EnsureRuntime(threadID, cwd)
-		if err != nil {
-			r.mu.Unlock()
-			return nil, err
-		}
-		thread, err = r.store.BeginRuntime(threadID)
-		if err != nil {
-			r.mu.Unlock()
-			return nil, err
-		}
-		if err := os.MkdirAll(filepath.Dir(thread.StatusPath), 0o700); err != nil {
-			r.mu.Unlock()
-			return nil, fmt.Errorf("missioncontrol: create runtime directory: %w", err)
-		}
-		ownerLock, err := os.OpenFile(RuntimeOwnerLockPath(thread.RuntimeSessionID), os.O_RDWR|os.O_CREATE, 0o600)
-		if err != nil {
-			r.mu.Unlock()
-			return nil, fmt.Errorf("missioncontrol: open runtime owner lock: %w", err)
-		}
-		if err := syscall.Flock(int(ownerLock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			_ = ownerLock.Close()
-			r.mu.Unlock()
-			return nil, fmt.Errorf("missioncontrol: runtime %s already has an owner: %w", thread.RuntimeSessionID, err)
-		}
-		runtime := &Runtime{
-			Thread: thread, ownerLock: ownerLock, store: r.store, lastUsed: time.Now(),
-				lastEventSeq: thread.LastEventSeq,
-			listeners: make(map[uint64]chan RuntimeEvent), submissions: make(map[string]submission),
-			approvals: make(map[string]string), replyBoundaries: make(map[string]snapshotBoundary),
-		}
-		runtime.Supervisor = cos.New(cos.Config{
-			SessionID: thread.RuntimeSessionID, Cwd: thread.StorageCWD,
-			StatePath: thread.StatusPath, InstructionPath: thread.InstructionPath,
-			ThreadedTextPreview: true, ThreadKind: thread.Kind, OwnerLockFile: ownerLock,
-			ThreadJournalPath:      thread.JournalPath,
-			ThreadContextMaxTokens: r.contextMaxTokens,
-			EventObserver:          runtime.onSidecarEvent,
-			BeforeReply:            runtime.captureReplyBoundary,
-		})
-		if err := runtime.Supervisor.Start(r.ctx); err != nil {
-			_ = syscall.Flock(int(ownerLock.Fd()), syscall.LOCK_UN)
-			_ = ownerLock.Close()
-			r.mu.Unlock()
-			return nil, err
-		}
-		r.runtimes[threadID] = runtime
+		start := &runtimeStart{done: make(chan struct{})}
+		r.starting[threadID] = start
 		r.mu.Unlock()
+
+		// Startup does filesystem, catalog, process, and sidecar work. The
+		// reservation above holds capacity for this root without parking every
+		// unrelated Router operation on Router.mu.
+		runtime, err := r.startRuntime(threadID)
+
+		r.mu.Lock()
+		if err == nil && r.closed {
+			err = errors.New("missioncontrol: runtime router is closed")
+		}
+		if err == nil {
+			r.runtimes[threadID] = runtime
+		}
+		r.mu.Unlock()
+		if err != nil {
+			if runtime != nil {
+				r.closeRuntime(runtime)
+			}
+		}
+		r.mu.Lock()
+		delete(r.starting, threadID)
+		start.runtime, start.err = runtime, err
+		close(start.done)
+		r.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return runtime, nil
 	}
+}
+
+func (r *Router) startRuntime(threadID string) (*Runtime, error) {
+	cwd, err := storageCWD()
+	if err != nil {
+		return nil, err
+	}
+	thread, err := r.store.EnsureRuntime(threadID, cwd)
+	if err != nil {
+		return nil, err
+	}
+	thread, err = r.store.BeginRuntime(threadID)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(thread.StatusPath), 0o700); err != nil {
+		return nil, fmt.Errorf("missioncontrol: create runtime directory: %w", err)
+	}
+	ownerLock, err := os.OpenFile(RuntimeOwnerLockPath(thread.RuntimeSessionID), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("missioncontrol: open runtime owner lock: %w", err)
+	}
+	if err := syscall.Flock(int(ownerLock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = ownerLock.Close()
+		return nil, fmt.Errorf("missioncontrol: runtime %s already has an owner: %w", thread.RuntimeSessionID, err)
+	}
+	runtime := &Runtime{
+		Thread: thread, ownerLock: ownerLock, store: r.store, lastUsed: time.Now(),
+		// LastEventSeq is the durable sequence fence created by earlier
+		// incarnations. Never restart a live root at sequence zero.
+		lastEventSeq: thread.LastEventSeq,
+		listeners:    make(map[uint64]chan RuntimeEvent), submissions: make(map[string]submission),
+		approvals: make(map[string]string), replyBoundaries: make(map[string]snapshotBoundary),
+	}
+	runtime.Supervisor = cos.New(cos.Config{
+		SessionID: thread.RuntimeSessionID, Cwd: thread.StorageCWD,
+		StatePath: thread.StatusPath, InstructionPath: thread.InstructionPath,
+		ThreadedTextPreview: true, ThreadKind: thread.Kind, OwnerLockFile: ownerLock,
+		ThreadJournalPath:      thread.JournalPath,
+		ThreadContextMaxTokens: r.contextMaxTokens,
+		EventObserver:          runtime.onSidecarEvent,
+		BeforeReply:            runtime.captureReplyBoundary,
+	})
+	if err := runtime.Supervisor.Start(r.ctx); err != nil {
+		_ = syscall.Flock(int(ownerLock.Fd()), syscall.LOCK_UN)
+		_ = ownerLock.Close()
+		return nil, err
+	}
+	return runtime, nil
 }
 
 func (r *Router) Runtime(threadID string) *Runtime {
@@ -244,6 +296,10 @@ func (r *Router) Runtime(threadID string) *Runtime {
 // session/transcript references in the catalog.
 func (r *Router) Archive(threadID string) (Thread, error) {
 	r.mu.Lock()
+	if r.starting[threadID] != nil {
+		r.mu.Unlock()
+		return Thread{}, errors.New("missioncontrol: runtime is starting")
+	}
 	thread, _, found, err := r.store.Thread(threadID)
 	if err != nil || !found {
 		r.mu.Unlock()
@@ -275,6 +331,10 @@ func (r *Router) Archive(threadID string) (Thread, error) {
 // Reset closes only an idle safe root then rotates to a fresh session UUID.
 func (r *Router) Reset(threadID string) (Thread, error) {
 	r.mu.Lock()
+	if r.starting[threadID] != nil {
+		r.mu.Unlock()
+		return Thread{}, errors.New("missioncontrol: runtime is starting")
+	}
 	runtime := r.runtimes[threadID]
 	if runtime == nil || !runtime.closeIfSafe() {
 		r.mu.Unlock()
@@ -287,23 +347,35 @@ func (r *Router) Reset(threadID string) (Thread, error) {
 	return r.store.ResetRuntime(threadID)
 }
 
-func (r *Router) evictOneLocked() *Runtime {
-	for {
-		var candidate *Runtime
-		for _, runtime := range r.runtimes {
-			if runtime.SafeEvict() && (candidate == nil || runtime.lastUse().Before(candidate.lastUse())) {
-				candidate = runtime
-			}
-		}
-		if candidate == nil {
-			return nil
-		}
+func (r *Router) evictOne() *Runtime {
+	// Snapshot only pointers while Router.mu is held. Safety checking takes
+	// Runtime.opMu -> Runtime.mu/Store.mu and may write during close; holding
+	// Router.mu through that chain turns one slow root into a global stall.
+	r.mu.Lock()
+	candidates := make([]*Runtime, 0, len(r.runtimes))
+	for _, runtime := range r.runtimes {
+		candidates = append(candidates, runtime)
+	}
+	r.mu.Unlock()
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].lastUse().Before(candidates[j].lastUse())
+	})
+	for _, candidate := range candidates {
 		if !candidate.closeIfSafe() {
 			continue
 		}
-		r.detachRuntimeLocked(candidate.Identity().ID)
+		threadID := candidate.Identity().ID
+		r.mu.Lock()
+		if r.runtimes[threadID] != candidate {
+			r.mu.Unlock()
+			continue
+		}
+		r.detachRuntimeLocked(threadID)
+		r.mu.Unlock()
 		return candidate
 	}
+	return nil
 }
 
 func (r *Router) detachRuntimeLocked(threadID string) {
@@ -329,17 +401,27 @@ func (r *Router) Close() {
 	r.closed = true
 	r.cancel()
 	runtimes := r.runtimes
+	starting := make([]*runtimeStart, 0, len(r.starting))
+	for _, start := range r.starting {
+		starting = append(starting, start)
+	}
 	r.runtimes = map[string]*Runtime{}
 	r.mu.Unlock()
 	for _, runtime := range runtimes {
 		r.closeRuntime(runtime)
+	}
+	// A starter that races Close observes r.closed before publishing and
+	// closes the partially-created runtime itself. Waiting keeps owner-lock
+	// and sidecar lifetime balanced when Close returns.
+	for _, start := range starting {
+		<-start.done
 	}
 }
 
 func (r *Router) closeRuntime(runtime *Runtime) {
 	runtime.closeOnce.Do(func() {
 		// Block new controls and detach every browser stream before Supervisor.Close
-		// can synchronously publish queue-failure callbacks. publishLocked and
+		// can synchronously publish queue-failure callbacks. publishSequencedLocked and
 		// unsubscribe both hold mu, so no sender can race a closed listener.
 		runtime.beginClose()
 
@@ -475,17 +557,19 @@ func (r *Runtime) Approve(turnID, approvalID string, approved bool) error {
 	r.opMu.Lock()
 	defer r.opMu.Unlock()
 	r.mu.Lock()
-	closed := r.closed
-	r.mu.Unlock()
-	if closed {
+	defer r.mu.Unlock()
+	if r.closed {
 		return errors.New("missioncontrol: runtime is closed")
 	}
-	r.mu.Lock()
 	boundTurn, ok := r.approvals[approvalID]
-	r.mu.Unlock()
 	if !ok || boundTurn != turnID {
 		return errors.New("missioncontrol: approval is not pending for this turn")
 	}
+	// Supervisor.Approve only calls sendOp: it copies its channel under the
+	// supervisor mutex and performs a nonblocking enqueue (supervisor.go).
+	// It does not invoke EventObserver synchronously, so keeping Runtime.mu
+	// through validation and enqueue closes the terminal-event TOCTOU without
+	// introducing an observer callback deadlock.
 	return r.Supervisor.Approve(approvalID, approved, "answered in Mission Control text preview")
 }
 
@@ -618,14 +702,19 @@ func (r *Runtime) onSidecarEvent(event cos.Event) {
 	if len(raw) == 0 {
 		raw, _ = json.Marshal(event)
 	}
+	r.eventMu.Lock()
+	defer r.eventMu.Unlock()
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if event.TurnID != "" && (event.Ev == cos.EvTurnStart || event.Ev == cos.EvError) {
 		raw = r.decorateLocked(raw, event.TurnID)
 	}
+	thread := r.Thread
+	recordApproval := false
+	recordTerminal := false
+	summaryExtract := ""
 	if event.Ev == cos.EvApprovalRequest && event.RequestID != "" && event.TurnID != "" {
 		r.approvals[event.RequestID] = event.TurnID
-		_, _ = r.store.RecordAttention("approval:"+r.Thread.ID+":"+fmt.Sprint(r.Thread.RuntimeGeneration)+":"+event.RequestID, r.Thread.ID, r.Thread.RuntimeGeneration, event.TurnID, "approval")
+		recordApproval = true
 	}
 	if event.IsTerminal() {
 		for approvalID, boundTurnID := range r.approvals {
@@ -633,20 +722,38 @@ func (r *Runtime) onSidecarEvent(event cos.Event) {
 				delete(r.approvals, approvalID)
 			}
 		}
-		_ = r.store.MarkTerminal(r.Thread.ID, r.Thread.RuntimeGeneration, event.TurnID, event.Persisted)
+		recordTerminal = true
+		if event.Persisted && event.Ev == cos.EvTurnEnd {
+			summaryExtract = boundedTerminalExtract(event.Response)
+		}
+		delete(r.submissions, event.TurnID)
+	}
+	r.mu.Unlock()
+
+	// The event mutex, not Runtime.mu, owns event ordering across these disk
+	// writes. Subscribers and controls can continue to take Runtime.mu while
+	// the catalog does its atomic replacements.
+	if recordApproval {
+		_, _ = r.store.RecordAttention("approval:"+thread.ID+":"+fmt.Sprint(thread.RuntimeGeneration)+":"+event.RequestID, thread.ID, thread.RuntimeGeneration, event.TurnID, "approval")
+	}
+	if recordTerminal {
+		_ = r.store.MarkTerminal(thread.ID, thread.RuntimeGeneration, event.TurnID, event.Persisted)
 		kind := "terminal"
 		if event.Ev == cos.EvError || event.Code != "" {
 			kind = "error"
 		}
-		_, _ = r.store.RecordAttention(kind+":"+r.Thread.ID+":"+fmt.Sprint(r.Thread.RuntimeGeneration)+":"+event.TurnID, r.Thread.ID, r.Thread.RuntimeGeneration, event.TurnID, kind)
-		if event.Persisted && event.Ev == cos.EvTurnEnd {
-			if extract := boundedTerminalExtract(event.Response); extract != "" {
-				_ = r.store.RecordSummary(r.Thread.ID, r.Thread.RuntimeSessionID, r.Thread.RuntimeGeneration, event.TurnID, extract)
-			}
+		_, _ = r.store.RecordAttention(kind+":"+thread.ID+":"+fmt.Sprint(thread.RuntimeGeneration)+":"+event.TurnID, thread.ID, thread.RuntimeGeneration, event.TurnID, kind)
+		if summaryExtract != "" {
+			_ = r.store.RecordSummary(thread.ID, thread.RuntimeSessionID, thread.RuntimeGeneration, event.TurnID, summaryExtract)
 		}
-		delete(r.submissions, event.TurnID)
 	}
-	r.publishLocked(raw)
+	seq, err := r.store.NextEventSeq(thread.ID)
+	if err != nil {
+		return
+	}
+	r.mu.Lock()
+	r.publishSequencedLocked(raw, seq)
+	r.mu.Unlock()
 }
 
 func boundedTerminalExtract(value string) string {
@@ -707,11 +814,7 @@ func (r *Runtime) pruneSnapshotJournalLocked(covered, suppressed []string) {
 	r.journalSize = size
 }
 
-func (r *Runtime) publishLocked(raw json.RawMessage) {
-	seq, err := r.store.NextEventSeq(r.Thread.ID)
-	if err != nil {
-		return
-	}
+func (r *Runtime) publishSequencedLocked(raw json.RawMessage, seq uint64) {
 	out := RuntimeEvent{EventID: uuid.New().String(), ThreadSeq: seq, Raw: raw}
 	r.lastEventSeq = seq
 	if r.journalGap || len(r.journal) >= maxJournalEvents || r.journalSize+len(raw) > maxJournalBytes {

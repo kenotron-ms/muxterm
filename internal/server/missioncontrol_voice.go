@@ -78,6 +78,13 @@ type missionControlVoiceAttachment struct {
 	prefixNonce      string
 	prefixKind       string
 	prefixCaptureID  string
+	// deliveryCtx bounds provider-side waits only. Cancelling it never cancels
+	// the Mission Control turn that was already admitted.
+	deliveryMu     sync.Mutex
+	deliveryClosed bool
+	deliveryCtx    context.Context
+	deliveryCancel context.CancelFunc
+	deliveryWG     sync.WaitGroup
 }
 
 type missionControlCapture struct {
@@ -151,6 +158,14 @@ func (b *missionControlScopedBridge) SidebandTerminal(reason string) {
 	b.attachment.routeAnnounced = false
 	b.attachment.emitLocked("attachment_failed", "", "provider", "", boundedVoiceLabel(reason))
 	b.mu.Unlock()
+	b.attachment.stopDeliveryWaits()
+}
+
+// SidebandClosed is called by Sideband.Close for a local owner stop or server
+// shutdown. A drain's intentional close is not a provider failure, but it must
+// stop attachment-owned delivery waits.
+func (b *missionControlScopedBridge) SidebandClosed() {
+	b.attachment.stopDeliveryWaits()
 }
 
 func (b *missionControlScopedBridge) QueueScopedReply(c voice.Correlation, callID, output string, terminal bool) error {
@@ -294,7 +309,9 @@ func (b *missionControlScopedBridge) SubmitCorrelated(c voice.Correlation, promp
 		return nil, errors.New("voice: capture changed while dispatching")
 	}
 	capture.turn, capture.dispatching = handle, false
-	go b.awaitCaptureTurn(capture, handle)
+	b.attachment.startDeliveryWait(func(ctx context.Context) {
+		b.awaitCaptureTurn(ctx, capture, handle)
+	})
 	b.mu.Unlock()
 	return handle, nil
 }
@@ -377,8 +394,11 @@ func (b *missionControlScopedBridge) ObserveProviderEvent(event voice.ProviderEv
 	return nil
 }
 
-func (b *missionControlScopedBridge) awaitCaptureTurn(capture *missionControlCapture, turn voice.TurnHandle) {
-	_, _ = turn.Wait(context.Background())
+func (b *missionControlScopedBridge) awaitCaptureTurn(ctx context.Context, capture *missionControlCapture, turn voice.TurnHandle) {
+	_, _ = turn.Wait(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	b.mu.Lock()
 	if b.attachment.capture != capture || capture.turn != turn {
 		b.mu.Unlock()
@@ -602,6 +622,37 @@ func (a *missionControlVoiceAttachment) settleCapture(grant voice.CaptureGrant) 
 	}
 }
 
+// startDeliveryWait admits attachment-owned delivery observation before
+// shutdown can join it. TurnHandle.Wait cancellation stops only the wait, not
+// the admitted Mission Control work.
+func (a *missionControlVoiceAttachment) startDeliveryWait(work func(context.Context)) bool {
+	a.deliveryMu.Lock()
+	if a.deliveryClosed {
+		a.deliveryMu.Unlock()
+		return false
+	}
+	a.deliveryWG.Add(1)
+	ctx := a.deliveryCtx
+	a.deliveryMu.Unlock()
+	go func() {
+		defer a.deliveryWG.Done()
+		work(ctx)
+	}()
+	return true
+}
+
+func (a *missionControlVoiceAttachment) stopDeliveryWaits() {
+	a.deliveryMu.Lock()
+	if a.deliveryClosed {
+		a.deliveryMu.Unlock()
+		return
+	}
+	a.deliveryClosed = true
+	a.deliveryCancel()
+	a.deliveryMu.Unlock()
+	a.deliveryWG.Wait()
+}
+
 type voiceTurnHandle struct{ turn *cos.Turn }
 
 func (t *voiceTurnHandle) ID() string { return t.turn.ID }
@@ -813,11 +864,13 @@ func (s *Server) handleMissionControlVoiceAttachmentToken(w http.ResponseWriter,
 		writeMissionControlVoiceFailure(w, http.StatusConflict, "attachment_candidate_active", "a Mission Control provider attachment candidate already exists")
 		return
 	}
+	deliveryCtx, deliveryCancel := context.WithCancel(context.Background())
 	s.missionControlVoiceAttachment = &missionControlVoiceAttachment{
 		correlation: c, leaseEpoch: req.LeaseEpoch, focusEpoch: req.FocusEpoch,
 		attachmentEpoch: attachmentEpoch, bridgeID: bridgeID, controlToken: controlToken,
 		sessionID: eph.SessionID, bridge: bridge,
 		eventWake: make(chan struct{}, 1), inputIDs: make(map[string]struct{}),
+		deliveryCtx: deliveryCtx, deliveryCancel: deliveryCancel,
 	}
 	bridge.attachment = s.missionControlVoiceAttachment
 	s.missionControlVoiceAttachment.onCaptureSettled = func(grant voice.CaptureGrant) {
@@ -840,9 +893,10 @@ func (s *Server) handleMissionControlVoiceAttachmentToken(w http.ResponseWriter,
 			kind, captureID = "answer", candidate.capture.grant.CaptureID
 		}
 		candidate.emitLocked("prefix_timeout", nonce, kind, captureID, "Prefix acknowledgement timed out; attachment remains muted.")
+		sideband := candidate.sideband
 		candidate.bridge.mu.Unlock()
-		if candidate.sideband != nil {
-			candidate.sideband.Fence("prefix acknowledgement timed out")
+		if sideband != nil {
+			sideband.Fence("prefix acknowledgement timed out")
 		}
 	}
 	s.missionControlVoiceAttachmentMu.Unlock()
@@ -967,6 +1021,7 @@ func (s *Server) handleMissionControlVoiceAttachmentAbort(w http.ResponseWriter,
 	}
 	s.missionControlVoiceAttachment = nil
 	s.missionControlVoiceAttachmentMu.Unlock()
+	candidate.stopDeliveryWaits()
 	if s.missionControlVoiceProvider != nil {
 		s.missionControlVoiceProvider.End(candidate.sessionID)
 	}
@@ -983,6 +1038,7 @@ func (s *Server) clearMissionControlVoiceCandidate(candidate *missionControlVoic
 		s.missionControlVoiceAttachment = nil
 	}
 	s.missionControlVoiceAttachmentMu.Unlock()
+	candidate.stopDeliveryWaits()
 	s.missionControlVoiceManager().AbortAttachment(candidate.correlation, candidate.bridgeID, candidate.controlToken, candidate.leaseEpoch, candidate.attachmentEpoch)
 }
 
@@ -1029,6 +1085,7 @@ func (s *Server) completeMissionControlVoiceDrain(attachment *missionControlVoic
 		s.missionControlVoiceAttachment = nil
 	}
 	s.missionControlVoiceAttachmentMu.Unlock()
+	attachment.stopDeliveryWaits()
 	if s.missionControlVoiceProvider != nil {
 		s.missionControlVoiceProvider.End(attachment.sessionID)
 	}
@@ -1045,6 +1102,7 @@ func (s *Server) expireMissionControlVoiceCandidate(candidate *missionControlVoi
 	}
 	s.missionControlVoiceAttachment = nil
 	s.missionControlVoiceAttachmentMu.Unlock()
+	candidate.stopDeliveryWaits()
 	if s.missionControlVoiceProvider != nil {
 		s.missionControlVoiceProvider.End(candidate.sessionID)
 	}
@@ -1105,6 +1163,7 @@ func (s *Server) handleMissionControlVoiceCapture(w http.ResponseWriter, r *http
 		writeMissionControlVoiceLeaseError(w, err)
 		return
 	}
+	writeMissionControlVoiceJSON(w, http.StatusOK, map[string]any{"ok": true, "media_admission": false})
 }
 
 func (s *Server) handleMissionControlVoiceCaptureBegin(w http.ResponseWriter, r *http.Request) {
@@ -1123,16 +1182,29 @@ func (s *Server) handleMissionControlVoiceCaptureBegin(w http.ResponseWriter, r 
 		writeMissionControlVoiceFailure(w, http.StatusConflict, "route_prefix_required", "capture remains muted until the route prefix is acknowledged and the attachment sideband is usable")
 		return
 	}
-	attachment.bridge.mu.Unlock()
-	grant, err := s.missionControlVoiceManager().BeginCapture(c, bridgeID, controlToken, req.LeaseEpoch, req.FocusEpoch, req.AttachmentEpoch)
-	if err != nil {
-		writeMissionControlVoiceLeaseError(w, err)
-		return
-	}
-	attachment.bridge.mu.Lock()
 	if attachment.capture != nil {
+		// A retry that carries the exact server-issued capture identity is
+		// idempotent. A different/empty identity never replaces the winner.
+		capture := attachment.capture
+		if req.CaptureID == capture.grant.CaptureID && req.CaptureEpoch == capture.grant.CaptureEpoch {
+			attachment.bridge.mu.Unlock()
+			writeMissionControlVoiceJSON(w, http.StatusCreated, map[string]any{
+				"ok": true, "capture_id": capture.grant.CaptureID, "capture_epoch": capture.grant.CaptureEpoch,
+				"attachment_epoch": req.AttachmentEpoch, "media_enabled": false, "media_admission": true,
+				"message": "Capture is already reserved for this announced attachment.",
+			})
+			return
+		}
 		attachment.bridge.mu.Unlock()
 		writeMissionControlVoiceFailure(w, http.StatusConflict, "capture_active", "an attachment capture is already unsettled")
+		return
+	}
+	// Make lease grant and attachment publication indivisible. Thus no
+	// post-grant conflict path can accidentally settle the winning capture.
+	grant, err := s.missionControlVoiceManager().BeginCapture(c, bridgeID, controlToken, req.LeaseEpoch, req.FocusEpoch, req.AttachmentEpoch)
+	if err != nil {
+		attachment.bridge.mu.Unlock()
+		writeMissionControlVoiceLeaseError(w, err)
 		return
 	}
 	attachment.capture = &missionControlCapture{grant: grant, phase: "reserved", outputCalls: make(map[string]string)}
@@ -1279,12 +1351,16 @@ func (s *Server) handleMissionControlVoiceStop(w http.ResponseWriter, r *http.Re
 	attachment.providerTerminal = attachment.capture == nil || attachment.capture.responseID == ""
 	attachment.drainNonce = uuid.New().String()
 	attachment.emitLocked("drain_request", attachment.drainNonce, "route", "", "Stop local tracks and audio graph, then acknowledge this drain nonce. Provider cancellation and output clear are also required.")
+	sideband := attachment.sideband
 	attachment.bridge.mu.Unlock()
-	if attachment.sideband != nil {
+	// Stop ends delivery observation, never the text turn that may already
+	// have been admitted through SubmitCorrelated.
+	attachment.stopDeliveryWaits()
+	if sideband != nil {
 		// Fence linearizes prefix ACK response.create against drain: an ACK that
 		// acquired the scoped write gate first sends before this cancel/clear;
 		// an ACK after this fence observes it and is refused.
-		attachment.sideband.Fence("owner requested attachment drain")
+		sideband.Fence("owner requested attachment drain")
 	}
 	writeMissionControlVoiceJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "work_cancelled": false, "state": "draining",

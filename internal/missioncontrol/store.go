@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1106,6 +1107,9 @@ func (s *Store) NextEventSeq(threadID string) (uint64, error) {
 	thread, ok := s.data.Threads[threadID]
 	if !ok {
 		return 0, errors.New("missioncontrol: unknown thread")
+	}
+	if thread.LastEventSeq == math.MaxUint64 {
+		return 0, errors.New("missioncontrol: event sequence exhausted")
 	}
 	thread.LastEventSeq++
 	next := s.cloneLocked()

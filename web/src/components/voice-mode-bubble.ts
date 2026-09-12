@@ -675,7 +675,9 @@ export class MuxVoiceModeBubble extends LitElement {
 
   private _renderMenu() {
     const snapshot = this._session;
-    const active = snapshot.state !== 'idle' && snapshot.state !== 'error';
+    // Error can still mean a partially allocated backend attachment. Stop is
+    // the explicit cleanup/retry path; dismiss only clears the presentation.
+    const active = snapshot.state !== 'idle';
     return html`
       <div
         class="menu"

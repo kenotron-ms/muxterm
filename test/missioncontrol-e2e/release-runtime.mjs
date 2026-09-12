@@ -49,7 +49,7 @@ fs.mkdirSync(output, { recursive: true, mode: 0o700 });
 const sourceReference = /^[0-9a-f]{40}$/i.test(opt['source-ref'])
   ? { type: 'git_commit_sha', value: opt['source-ref'].toLowerCase() }
   : { type: 'source_archive_sha256', value: opt['source-ref'].toLowerCase() };
-const report = { format: 'missioncontrol-release-runtime-race-v1', status: 'FAIL', source_reference: sourceReference, expected_active_subscriptions: 1, admitted_cycles: 0, checks: {}, errors: [] };
+const report = { format: 'missioncontrol-release-runtime-race-v1', status: 'FAIL', source_reference: sourceReference, expected_active_subscriptions: 1, admitted_cycles: 0, checks: {}, diagnostics: { console: [], page_errors: [], websocket: [], protocol: [], controls: [] }, errors: [] };
 const sha = (v) => createHash('sha256').update(String(v)).digest('hex');
 const pause = (n) => new Promise((resolve) => setTimeout(resolve, n));
 async function eventually(fn, label, timeout = 60_000) {
@@ -69,14 +69,113 @@ try {
   browser = await chromium.launch({ channel: opt['browser-channel'] ?? 'chrome', headless: !opt.headed, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const frames = [];
-  page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => { try { const frame = JSON.parse(String(payload)); if (frame.type === 'missioncontrol-result' || frame.type === 'missioncontrol-event') frames.push(frame); } catch {} }));
+  const frameTimes = new WeakMap();
+  page.on('console', (message) => report.diagnostics.console.push({ type: message.type(), text: message.text(), at_ms: Date.now() }));
+  page.on('pageerror', (error) => report.diagnostics.page_errors.push({ message: String(error?.stack ?? error), at_ms: Date.now() }));
+  function protocolFrame(direction, frame) {
+    if (frame?.type !== 'missioncontrol-result' && frame?.type !== 'missioncontrol-event' && !String(frame?.type ?? '').startsWith('missioncontrol-')) return;
+    const capabilities = frame.capabilities && typeof frame.capabilities === 'object'
+      ? { text_threads: frame.capabilities.text_threads === true, approval: frame.capabilities.approval === true, cancel: frame.capabilities.cancel === true, reset: frame.capabilities.reset === true, archive: frame.capabilities.archive === true }
+      : undefined;
+    const selectionShape = frame.op === 'select' || frame.type === 'missioncontrol-select'
+      ? {
+          history_array: Array.isArray(frame.history),
+          thread_seq_numeric: Number.isSafeInteger(frame.thread_seq) && frame.thread_seq >= 0,
+          replay_events_array: Array.isArray(frame.replay_events),
+          gap_boolean: typeof frame.gap === 'boolean',
+          draft_ref_present: typeof frame.draft_ref === 'string' && frame.draft_ref.length > 0,
+        }
+      : undefined;
+    report.diagnostics.protocol.push({
+      direction,
+      at_ms: Date.now(),
+      type: frame.type,
+      op: frame.op,
+      request_id_sha256: typeof frame.request_id === 'string' ? sha(frame.request_id).slice(0, 16) : undefined,
+      ok: frame.ok === true,
+      enabled: frame.enabled === true,
+      code: frame.code,
+      thread_kind: frame.thread?.kind,
+      runtime_generation: frame.thread?.runtime_generation ?? frame.runtime_generation,
+      thread_seq: frame.thread_seq,
+      capabilities,
+      selection_shape: selectionShape,
+    });
+  }
+  page.on('websocket', (socket) => {
+    const entry = { url: socket.url(), opened_at_ms: Date.now(), closed_at_ms: null };
+    report.diagnostics.websocket.push(entry);
+    socket.on('close', () => { entry.closed_at_ms = Date.now(); });
+    socket.on('framereceived', ({ payload }) => {
+      try {
+        const frame = JSON.parse(String(payload));
+        if (frame.type !== 'missioncontrol-result' && frame.type !== 'missioncontrol-event') return;
+        // Keep only control-plane transition fields. History, event payloads,
+        // provider requests, and prompt text are deliberately excluded.
+        frameTimes.set(frame, Date.now());
+        frames.push(frame);
+        protocolFrame('received', frame);
+      } catch {}
+    });
+    socket.on('framesent', ({ payload }) => {
+      try { protocolFrame('sent', JSON.parse(String(payload))); } catch {}
+    });
+  });
+  async function captureControls(phase) {
+    const controls = await page.evaluate(() => {
+      const findAll = (root, selector, found = []) => {
+        if (root instanceof Element && root.matches(selector)) found.push(root);
+        for (const child of root.children ?? []) findAll(child, selector, found);
+        if (root instanceof Element && root.shadowRoot) findAll(root.shadowRoot, selector, found);
+        if (root instanceof ShadowRoot) for (const child of root.children) findAll(child, selector, found);
+        return found;
+      };
+      const all = (selector) => findAll(document.documentElement, selector);
+      const composer = all('[data-thread-composer]')[0];
+      const selector = all('[data-thread-context-selector]')[0];
+      const app = all('mux-app')[0];
+      const cos = all('mux-cos')[0];
+      return {
+        selector_count: all('[data-thread-context-selector]').length,
+        selector_visible: selector instanceof HTMLElement && !!(selector.offsetWidth || selector.offsetHeight || selector.getClientRects().length),
+        composer_count: all('[data-thread-composer]').length,
+        composer_enabled: composer instanceof HTMLTextAreaElement ? !composer.disabled : null,
+        mux_app_present: app !== null,
+        mux_cos_present: cos !== null,
+      };
+    });
+    const controlsFrames = frames.map((frame) => {
+      const capabilities = frame.type === 'missioncontrol-result' && frame.op === 'capabilities' && frame.capabilities && typeof frame.capabilities === 'object'
+        ? { text_threads: frame.capabilities.text_threads === true, approval: frame.capabilities.approval === true, cancel: frame.capabilities.cancel === true, reset: frame.capabilities.reset === true, archive: frame.capabilities.archive === true }
+        : undefined;
+      return {
+        received_at_ms: frameTimes.get(frame) ?? null,
+        type: frame.type,
+        op: frame.type === 'missioncontrol-result' ? frame.op : undefined,
+        ok: frame.type === 'missioncontrol-result' ? frame.ok === true : undefined,
+        enabled: frame.type === 'missioncontrol-result' ? frame.enabled === true : undefined,
+        code: frame.type === 'missioncontrol-result' ? frame.code : undefined,
+        thread_kind: frame.type === 'missioncontrol-result' && frame.thread ? frame.thread.kind : undefined,
+        runtime_generation: frame.type === 'missioncontrol-result' && frame.thread ? frame.thread.runtime_generation : frame.runtime_generation,
+        thread_seq: frame.thread_seq,
+        capabilities,
+      };
+    });
+    report.diagnostics.controls.push({ phase, at_ms: Date.now(), ...controls, frames: controlsFrames });
+  }
   await page.goto(opt['base-url'], { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: /Mission Control/ }).first().click();
   await page.locator('[data-thread-context-selector]').waitFor({ state: 'visible' });
   async function settleSelected(label) {
     const composer = page.locator('[data-thread-composer]');
-    await eventually(async () => (await composer.isVisible()) && (await composer.isEnabled()) && (await page.locator('[data-thread-context-selector]').innerText()).includes(label), `rendered selected composer for ${label}`);
+    try {
+      await eventually(async () => (await composer.isVisible()) && (await composer.isEnabled()) && (await page.locator('[data-thread-context-selector]').innerText()).includes(label), `rendered selected composer for ${label}`);
+    } catch (error) {
+      await captureControls(`selected_composer_unsettled:${label}`);
+      throw error;
+    }
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await captureControls(`selected_composer_settled:${label}`);
   }
   function highestObservedThreadSeq(threadID) {
     const sequences = frames.filter((f) => f.type === 'missioncontrol-event' && f.thread_id === threadID && Number.isSafeInteger(f.thread_seq)).map((f) => f.thread_seq);

@@ -577,6 +577,15 @@ func (c *Client) handleTextInput(data []byte) {
 			c.hub.mu.RUnlock()
 			if appVoice != nil {
 				appVoice.handleFrame(c, data)
+			} else if probe.Type == "app-voice-claim" {
+				// A disabled server still speaks the v1 claim protocol.
+				// Epoch zero explicitly means no lease was granted; never
+				// echo an untrusted requested epoch as a valid lease.
+				c.sendAppVoice(map[string]any{
+					"type": "app-voice-claim-result", "protocol_version": 1,
+					"ok": false, "lease_epoch": 0, "code": "app_voice_disabled",
+					"error": "app voice is disabled or unavailable on this server",
+				})
 			}
 			return
 		}

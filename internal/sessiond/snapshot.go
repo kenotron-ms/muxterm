@@ -226,26 +226,20 @@ func BuildSnapshot(reg *Registry, reason string) Snapshot {
 // for amplifier specifically, a resumable session id when one is
 // discoverable (see the SessionID field's doc comment for the two tiers).
 func capturePaneSnapshot(p *Pane) PaneSnapshot {
-	info := p.Info()
 	// Captured once, full and uncapped: scrapeAmplifierSessionID (tier 2)
 	// needs the FULL replay, not the budget-capped version stored below.
 	// amplifier's "Session ID: ..." banner prints once, at the very start
 	// of a session -- exactly what capReplay's trailing-bytes-only cap
 	// would discard first in any sufficiently long conversation.
-	fullReplay := p.Replay()
-	// Title and provenance come from one locked read, deliberately NOT from
-	// info.Title above -- info was captured before the replay copy, and a
-	// rename landing in between would pair that stale title with the fresh
-	// "explicit" tag, freezing a name nobody chose. See
-	// titleAndOriginSnapshot. Provenance is read here rather than carried on
-	// PaneInfo because it is daemon-internal bookkeeping with no business on
-	// the wire type the browser and MCP both read.
-	title, titleOrigin := p.titleAndOriginSnapshot()
+	// snapshotState takes one authoritative pane/VT capture boundary. In
+	// particular, it cannot pair dimensions from one resize with a replay
+	// serialized before or after that resize.
+	title, titleOrigin, cols, rows, fullReplay := p.snapshotState()
 	out := PaneSnapshot{
 		Title:       title,
 		TitleOrigin: string(titleOrigin),
-		Cols:        info.Cols,
-		Rows:        info.Rows,
+		Cols:        cols,
+		Rows:        rows,
 		Replay:      capReplay(fullReplay),
 		CapturedAt:  time.Now(),
 	}
