@@ -244,7 +244,13 @@ export class MuxCos extends LitElement {
   private _activeApplet: AppletId | '' = '';
   private _voiceAppletOperationId = '';
   private _appletOperationWaiter:
-    | { readonly operationId: string; readonly applet: AppletId; readonly resolve: (ok: boolean) => void }
+    | {
+        readonly operationId: string;
+        readonly applet: AppletId;
+        readonly resolve: (ok: boolean) => void;
+        readonly signal: AbortSignal;
+        readonly onAbort: () => void;
+      }
     | null = null;
 
   static styles = css`
@@ -1502,6 +1508,7 @@ export class MuxCos extends LitElement {
     this._chatDictationCapture = null;
     this._userSelectionPending = false;
     this._settleAppVoiceConfirmation('unavailable');
+    this._settleAppletOperationWaiter(false);
     // NO DRAG MAY OUTLIVE THE DETACH. This element is parked by cache(), not
     // destroyed, so a _drag left non-null is still non-null when the Dashboard
     // reopens -- and _gripMove checks nothing else. Moving the mouse across
@@ -1554,21 +1561,18 @@ export class MuxCos extends LitElement {
     if (!host || signal.aborted) return Promise.resolve(false);
     this._voiceAppletOperationId = operationId;
     return new Promise<boolean>((resolve) => {
-      this._appletOperationWaiter = { operationId, applet, resolve };
-      signal.addEventListener(
-        'abort',
-        () => this.cancelAppVoiceNavigation(operationId),
-        { once: true },
-      );
+      this._settleAppletOperationWaiter(false);
+      const onAbort = () => this.cancelAppVoiceNavigation(operationId);
+      const waiter = { operationId, applet, resolve, signal, onAbort };
+      this._appletOperationWaiter = waiter;
+      signal.addEventListener('abort', onAbort, { once: true });
       if (signal.aborted) {
         this.cancelAppVoiceNavigation(operationId);
         return;
       }
       host.show(applet, target, operationId);
       if (this._activeApplet === applet) {
-        this._appletOperationWaiter = null;
-        this._voiceAppletOperationId = '';
-        resolve(true);
+        this._settleAppletOperationWaiter(true, waiter);
       }
     });
   }
@@ -1576,9 +1580,19 @@ export class MuxCos extends LitElement {
   cancelAppVoiceNavigation(operationId: string): void {
     const waiter = this._appletOperationWaiter;
     if (!waiter || waiter.operationId !== operationId) return;
+    this._settleAppletOperationWaiter(false, waiter);
+  }
+
+  private _settleAppletOperationWaiter(
+    ok: boolean,
+    expected?: NonNullable<MuxCos['_appletOperationWaiter']>,
+  ): void {
+    const waiter = this._appletOperationWaiter;
+    if (!waiter || (expected && waiter !== expected)) return;
     this._appletOperationWaiter = null;
-    if (this._voiceAppletOperationId === operationId) this._voiceAppletOperationId = '';
-    waiter.resolve(false);
+    waiter.signal.removeEventListener('abort', waiter.onAbort);
+    if (this._voiceAppletOperationId === waiter.operationId) this._voiceAppletOperationId = '';
+    waiter.resolve(ok);
   }
 
   override updated(): void {
@@ -2553,9 +2567,7 @@ export class MuxCos extends LitElement {
     if (detail?.applet) {
       this._activeApplet = detail.applet;
       if (this._voiceAppletOperationId && this._appletOperationWaiter?.applet === detail.applet) {
-        this._appletOperationWaiter.resolve(true);
-        this._appletOperationWaiter = null;
-        this._voiceAppletOperationId = '';
+        this._settleAppletOperationWaiter(true);
       } else {
         this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
         this.dispatchEvent(new CustomEvent('app-voice-observation', { bubbles: true, composed: true }));

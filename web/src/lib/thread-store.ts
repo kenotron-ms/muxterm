@@ -167,6 +167,8 @@ interface PendingSelection {
   readonly appVoiceOperationId: string;
   readonly persistLastSelection: boolean;
   readonly restorePreviousSelection: boolean;
+  /** App-voice selection promise cleanup; idempotent and optional for UI selects. */
+  readonly settle?: (receipt: ThreadSelectionReceipt) => void;
   /**
    * A fresh workspace selection cannot know its catalog UUID until the select
    * reply. If candidate buffering itself reaches the global bound, that reply
@@ -1385,7 +1387,18 @@ class ThreadStore {
     this._attentionRequestId = '';
     this._summariesRequestId = '';
     this._migrationPreviewRequestId = '';
-    this._pendingSelection = null;
+    this._connectionReady = false;
+    const pendingSelection = this._pendingSelection;
+    if (pendingSelection) {
+      pendingSelection.settle?.({
+        ok: false,
+        requested: pendingSelection.target,
+        selected: this.composerIdentity,
+        code: 'operation_cancelled',
+        error: 'The app voice selection was cancelled because the text connection closed.',
+      });
+      this._pendingSelection = null;
+    }
     this._pendingHistories.clear();
     this._pendingControls.clear();
     for (const [requestId, pending] of this._pendingDetails) {
@@ -1405,7 +1418,6 @@ class ThreadStore {
       cosStore.markDisconnected();
       return;
     }
-    this._connectionReady = false;
     if (this._pendingTurn?.phase === 'awaiting-receipt') {
       this._pendingTurn.phase = 'uncertain';
       this._clearTurnReceiptTimer();
@@ -2030,15 +2042,21 @@ class ThreadStore {
     signal?: AbortSignal,
   ): Promise<ThreadSelectionReceipt> {
     return new Promise<ThreadSelectionReceipt>((resolve) => {
+      let settled = false;
+      const settle = (receipt: ThreadSelectionReceipt): void => {
+        if (settled) return;
+        settled = true;
+        unsubscribe();
+        signal?.removeEventListener('abort', cancelled);
+        resolve(receipt);
+      };
       const unsubscribe = this.onSelectionSettled((receipt) => {
         if (!this._sameContextTarget(receipt.requested, target)) return;
-        unsubscribe();
-        resolve(receipt);
+        settle(receipt);
       });
       const cancelled = (): void => {
-        unsubscribe();
         this.cancelSelectionForAppVoice(operationId);
-        resolve({
+        settle({
           ok: false,
           requested: target,
           selected: this.composerIdentity,
@@ -2047,10 +2065,12 @@ class ThreadStore {
         });
       };
       signal?.addEventListener('abort', cancelled, { once: true });
-      if (signal?.aborted || !this._requestSelection(target, true, false, operationId)) {
-        unsubscribe();
-        signal?.removeEventListener('abort', cancelled);
-        resolve({
+      if (signal?.aborted) {
+        cancelled();
+        return;
+      }
+      if (!this._requestSelection(target, true, false, operationId, settle)) {
+        settle({
           ok: false,
           requested: target,
           selected: this.composerIdentity,
@@ -2064,8 +2084,17 @@ class ThreadStore {
   cancelSelectionForAppVoice(operationId: string): void {
     const pending = this._pendingSelection;
     if (!pending || pending.appVoiceOperationId !== operationId) return;
+    pending.settle?.({
+      ok: false,
+      requested: pending.target,
+      selected: this.composerIdentity,
+      code: 'operation_cancelled',
+      error: 'The app voice selection was cancelled.',
+    });
     this._pendingSelection = null;
-    this._connectionReady = pending.restorePreviousSelection;
+    // A cancelled operation may restore an already-live local selection, but a
+    // closed WebSocket is never evidence that that selection is connection-ready.
+    this._connectionReady = this._socket?.connected === true && pending.restorePreviousSelection;
     this._discardUnclaimedPreAckBuffers();
     this._notify();
   }
@@ -2652,6 +2681,7 @@ class ThreadStore {
     persistLastSelection: boolean,
     allowUncertainTurn = false,
     appVoiceOperationId = '',
+    settle?: (receipt: ThreadSelectionReceipt) => void,
   ): boolean {
     const socket = this._socket;
     if (
@@ -2688,13 +2718,22 @@ class ThreadStore {
       appVoiceOperationId,
       persistLastSelection,
       restorePreviousSelection,
+      settle,
       unknownBufferOverflow: false,
     };
     this._connectionReady = false;
     this._problem = null;
     if (!socket.missionControl(frame)) {
+      const pending = this._pendingSelection;
+      pending?.settle?.({
+        ok: false,
+        requested: target,
+        selected: this.composerIdentity,
+        code: 'selection_unavailable',
+        error: 'The requested conversation context cannot be selected right now.',
+      });
       this._pendingSelection = null;
-      this._connectionReady = restorePreviousSelection;
+      this._connectionReady = this._socket?.connected === true && restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
       this._setProblem('select_transmit_failed', 'The context selection could not be transmitted.');
       if (persistLastSelection) this._publishExplicitSelection(target, null);
@@ -2709,7 +2748,7 @@ class ThreadStore {
     if (!pending) return;
     this._pendingSelection = null;
     if (frame.ok !== true) {
-      this._connectionReady = pending.restorePreviousSelection;
+      this._connectionReady = this._socket?.connected === true && pending.restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
       const error = snapshotUnavailableMessage(frame, 'The server refused this context.');
       this._setProblem('select_refused', error);
@@ -2726,7 +2765,7 @@ class ThreadStore {
     const snapshot = parseSnapshot(frame);
     const draftRef = uuidValue(frame.draft_ref);
     if (!snapshot || !draftRef) {
-      this._connectionReady = pending.restorePreviousSelection;
+      this._connectionReady = this._socket?.connected === true && pending.restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
       const error = snapshotFailureMessage(frame, 'The context was not changed.');
       this._setProblem('invalid_selection', error);
@@ -2745,7 +2784,7 @@ class ThreadStore {
       (pending.target.kind === 'workspace' && snapshot.thread.kind !== 'workspace') ||
       (pending.target.kind === 'thread' && snapshot.thread.id !== pending.target.threadId)
     ) {
-      this._connectionReady = pending.restorePreviousSelection;
+      this._connectionReady = this._socket?.connected === true && pending.restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
       const error = 'The server returned a different context than the one requested.';
       this._setProblem('mismatched_selection', error);

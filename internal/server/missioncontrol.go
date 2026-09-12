@@ -160,15 +160,82 @@ func isMissionControlMessage(typ string) bool {
 	return strings.HasPrefix(typ, "missioncontrol-")
 }
 
+// missionControlOperation is the browser-visible operation vocabulary. Do not
+// derive it by trimming an arbitrary wire type: refusals must still identify a
+// valid operation for the request waiter that owns the request ID.
+func missionControlOperation(typ string) (string, bool) {
+	switch typ {
+	case "missioncontrol-capabilities":
+		return "capabilities", true
+	case "missioncontrol-list":
+		return "list", true
+	case "missioncontrol-select":
+		return "select", true
+	case "missioncontrol-turn":
+		return "turn", true
+	case "missioncontrol-history":
+		return "history", true
+	case "missioncontrol-summaries":
+		return "summaries", true
+	case "missioncontrol-detail":
+		return "detail", true
+	case "missioncontrol-attention":
+		return "attention", true
+	case "missioncontrol-attention-ack":
+		return "attention-ack", true
+	case "missioncontrol-migration-preview":
+		return "migration-preview", true
+	case "missioncontrol-approval":
+		return "approval", true
+	case "missioncontrol-cancel":
+		return "cancel", true
+	case "missioncontrol-reset":
+		return "reset", true
+	case "missioncontrol-archive":
+		return "archive", true
+	case "missioncontrol-voice":
+		return "voice", true
+	default:
+		return "", false
+	}
+}
+
 func (c *Client) enqueueMissionControlMessage(data []byte) {
 	request := append([]byte(nil), data...)
+	select {
+	case <-c.ctx.Done():
+		return
+	default:
+	}
 	select {
 	case c.missionControlRequests <- request:
 	case <-c.ctx.Done():
 	default:
+		var msg missionControlClientMessage
+		if err := json.Unmarshal(request, &msg); err != nil {
+			c.sendMissionControlResult(missionControlFailure(msg, "bad_request", "invalid mission control request"))
+			return
+		}
+		if msg.ProtocolVersion == 0 {
+			c.sendLegacyMissionControlResult(false, "busy", "mission control request queue is full", nil, nil)
+			return
+		}
+		if msg.ProtocolVersion != missionControlProtocolVersion {
+			c.sendMissionControlResult(missionControlFailure(msg, "protocol_version_required", "Mission Control text requests require protocol_version=2"))
+			return
+		}
+		if !validMissionControlRequestID(msg.RequestID) {
+			c.sendMissionControlResult(missionControlFailure(msg, "invalid_request_id", "request_id must be a UUID"))
+			return
+		}
+		op, ok := missionControlOperation(msg.Type)
+		if !ok {
+			c.sendMissionControlResult(missionControlFailure(msg, "unsupported_operation", "unsupported Mission Control operation"))
+			return
+		}
 		c.sendMissionControlResult(missionControlResult{
-			Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion,
-			Code: "busy", Error: "mission control request queue is full",
+			Type: missionControlResultType, ProtocolVersion: msg.ProtocolVersion,
+			Op: op, RequestID: msg.RequestID, Code: "busy", Error: "mission control request queue is full",
 		})
 	}
 }
@@ -1023,6 +1090,10 @@ func (c *Client) missionControlValidateLive(thread missioncontrol.Thread) error 
 func (c *Client) ensureMissionControlSubscription(runtime *missioncontrol.Runtime) {
 	thread := runtime.Identity()
 	c.missionControlMu.Lock()
+	if c.missionControlStopped {
+		c.missionControlMu.Unlock()
+		return
+	}
 	if c.missionControlSubscriptions == nil {
 		c.missionControlSubscriptions = make(map[string]missionControlSubscription)
 	}
@@ -1039,8 +1110,15 @@ func (c *Client) attachMissionControlSubscription(runtime *missioncontrol.Runtim
 	identity := runtime.Identity()
 	threadID, generation := identity.ID, identity.RuntimeGeneration
 	c.missionControlMu.Lock()
-	if c.missionControlSubscriptions == nil {
-		c.missionControlSubscriptions = make(map[string]missionControlSubscription)
+	if c.missionControlStopped || c.ctx.Err() != nil {
+		c.missionControlMu.Unlock()
+		// Subscribe may have raced Hub.Remove after ensure released the
+		// mutex, or Client.close before its read loop reaches Hub.Remove.
+		// Cancel under Runtime's listener ownership immediately; do not
+		// recreate the lazily initialized client map after shutdown.
+		log.Printf("missioncontrol: refusing subscription add after client shutdown")
+		cancel()
+		return
 	}
 	old, exists := c.missionControlSubscriptions[threadID]
 	if exists && old.runtime == runtime {
@@ -1054,9 +1132,22 @@ func (c *Client) attachMissionControlSubscription(runtime *missioncontrol.Runtim
 		old.cancel()
 	}
 	go func() {
+		// Client.close can cancel c.ctx before the read loop reaches
+		// Hub.Remove. In that interval this relay must release its own
+		// Runtime listener rather than leaving it to backpressure later
+		// subscribers.
+		defer cancel()
 		defer c.detachMissionControlSubscription(threadID, runtime)
-		for event := range events {
-			c.sendMissionControlEvent(threadID, generation, event)
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
+				c.sendMissionControlEvent(threadID, generation, event)
+			}
 		}
 	}()
 }
@@ -1081,6 +1172,10 @@ func (c *Client) hasMissionControlSubscription(threadID string) bool {
 
 func (c *Client) stopMissionControl() {
 	c.missionControlMu.Lock()
+	// Hub.Remove is the only caller. Mark the client lifetime as stopped
+	// before taking the map, so an in-flight Subscribe cannot install a
+	// listener after this teardown has already taken its cancellation set.
+	c.missionControlStopped = true
 	subs := c.missionControlSubscriptions
 	c.missionControlSubscriptions = nil
 	c.missionControlMu.Unlock()

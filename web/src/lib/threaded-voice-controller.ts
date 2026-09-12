@@ -599,7 +599,8 @@ async function start(target: ThreadVoiceTarget | null): Promise<void> {
   const stableTarget = frozenTarget(target);
   const oldControlToken = drainedControlToken;
   startingEpoch = started;
-  startAbort = new AbortController();
+  const startController = new AbortController();
+  startAbort = startController;
   setState('attaching', 'Experimental threaded voice is attaching muted…');
 
   let current: Attachment | null = null;
@@ -608,7 +609,7 @@ async function start(target: ThreadVoiceTarget | null): Promise<void> {
       '/api/missioncontrol/voice/lease',
       { ...correlationPayload(stableTarget), takeover: oldControlToken !== '' },
       oldControlToken,
-      startAbort.signal,
+      startController.signal,
     );
     if (startingEpoch !== started) return;
     const lease = parseLease(leaseResponse.lease, stableTarget);
@@ -628,7 +629,7 @@ async function start(target: ThreadVoiceTarget | null): Promise<void> {
         focus_epoch: lease.focusEpoch,
       },
       controlToken,
-      startAbort.signal,
+      startController.signal,
     );
     if (startingEpoch !== started) return;
     const sessionId = bounded(tokenResponse.session_id, 256);
@@ -717,7 +718,7 @@ async function start(target: ThreadVoiceTarget | null): Promise<void> {
         sdp,
       },
       attached.controlToken,
-      startAbort.signal,
+      startController.signal,
     );
     if (!currentAttachment(attached)) return;
     const answer = bounded(sdpResponse.sdp, MAX_SDP_CHARS);
@@ -736,18 +737,23 @@ async function start(target: ThreadVoiceTarget | null): Promise<void> {
     await peer.setRemoteDescription({ type: 'answer', sdp: answer });
     if (!currentAttachment(attached)) return;
     attached.committed = true;
-    startAbort = null;
+    if (startAbort === startController) startAbort = null;
     setState('awaiting-route-prefix', 'Experimental voice is muted while the context announcement is spoken.');
     startHeartbeat(attached);
     startEventPoll(attached);
   } catch (error) {
-    if (startingEpoch !== started && current === null) return;
+    // An explicitly stopped or re-routed candidate loses its local attachment
+    // identity before this continuation resumes. It must not clear a newer
+    // start controller or overwrite that newer lifetime's state.
+    if (!current || !currentAttachment(current)) {
+      if (startingEpoch === started) startingEpoch = 0;
+      if (startAbort === startController) startAbort = null;
+      return;
+    }
     if (startingEpoch === started) startingEpoch = 0;
-    startAbort = null;
+    if (startAbort === startController) startAbort = null;
     if (current && currentAttachment(current)) {
       await localFailure(current, requestFailureMessage(error, 'Experimental threaded voice attachment failed.'));
-    } else if (startingEpoch === 0) {
-      setState('error', requestFailureMessage(error, 'Experimental threaded voice attachment failed.'));
     }
   }
 }
@@ -1517,11 +1523,36 @@ async function stop(): Promise<void> {
   const current = attachment;
   if (!current) return;
   if (!current.committed) {
+    // A candidate is local browser state until its SDP path commits. Invalidate
+    // this exact start before releasing its peer/media, so no late offer, SDP,
+    // heartbeat, or prefix continuation can revive it or affect a newer epoch.
+    if (startAbort) {
+      startAbort.abort();
+      startAbort = null;
+    }
+    if (startingEpoch === current.epoch) startingEpoch = 0;
+    if (nextEpoch === current.epoch) nextEpoch++;
+    current.pollAbort?.abort();
+    current.pollAbort = null;
+    clearHeartbeat(current);
     await muteLocally(current);
+    closePeerLocally(current);
+    if (!currentAttachment(current)) return;
+    attachment = null;
+    activePrefix = null;
+    level = 0;
     setState(
       'error',
-      'The scoped attachment candidate was not committed. It remains muted; wait for the server candidate to expire before trying again.',
+      'The scoped attachment candidate was stopped locally before it committed. The server cleanup was requested; wait for server authority before retrying.',
     );
+    // A pre-commit candidate must be aborted, not moved into the committed
+    // drain protocol: its event poll is not running and cannot acknowledge a
+    // drain nonce. This request names only the exact old provider session.
+    void postVoice(
+      '/api/missioncontrol/voice/attachment/abort',
+      { ...attachmentPayload(current), session_id: current.sessionId },
+      current.controlToken,
+    ).catch(() => {});
     return;
   }
   if (current.draining) {

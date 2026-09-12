@@ -328,6 +328,18 @@ type RuntimeReference struct {
 	JournalPath        string `json:"journal_path"`
 }
 
+// snapshotThread copies the mutable members of a Thread before catalog state
+// crosses the Store mutex boundary. Catalog updates are copy-on-write, and a
+// caller must not retain a slice that a later reset appends into.
+func snapshotThread(thread Thread) Thread {
+	if thread.ArchivedAt != nil {
+		archivedAt := *thread.ArchivedAt
+		thread.ArchivedAt = &archivedAt
+	}
+	thread.RetiredRuntimes = append([]RuntimeReference(nil), thread.RetiredRuntimes...)
+	return thread
+}
+
 // Admission is the durable request receipt. A persisted request without a
 // dispatch receipt is intentionally uncertain after restart and is never
 // replayed automatically.
@@ -745,7 +757,7 @@ func (s *Store) Lobby() (Thread, error) {
 	}
 	for _, thread := range s.data.Threads {
 		if thread.Kind == "lobby" {
-			return thread, nil
+			return snapshotThread(thread), nil
 		}
 	}
 	return Thread{}, errors.New("missioncontrol: catalog has no Lobby")
@@ -761,7 +773,7 @@ func (s *Store) List() ([]Thread, error) {
 	}
 	out := make([]Thread, 0, len(s.data.Threads))
 	for _, thread := range s.data.Threads {
-		out = append(out, thread)
+		out = append(out, snapshotThread(thread))
 	}
 	return out, nil
 }
@@ -778,10 +790,10 @@ func (s *Store) Thread(threadID string) (Thread, Binding, bool, error) {
 	}
 	for _, binding := range s.data.Bindings {
 		if binding.ThreadID == threadID {
-			return thread, binding, true, nil
+			return snapshotThread(thread), binding, true, nil
 		}
 	}
-	return thread, Binding{}, true, nil
+	return snapshotThread(thread), Binding{}, true, nil
 }
 
 // EnsureRuntime persists immutable root identity before a sidecar is started.
@@ -807,7 +819,7 @@ func (s *Store) EnsureRuntime(threadID, storageCWD string) (Thread, error) {
 		if !validUUID(thread.RuntimeSessionID) || thread.RuntimeGeneration == 0 {
 			return Thread{}, errors.New("missioncontrol: invalid persisted runtime")
 		}
-		return thread, nil
+		return snapshotThread(thread), nil
 	}
 	thread.RuntimeSessionID = uuid.New().String()
 	thread.RuntimeGeneration = 1
@@ -824,7 +836,7 @@ func (s *Store) EnsureRuntime(threadID, storageCWD string) (Thread, error) {
 		return Thread{}, err
 	}
 	s.data = next
-	return thread, nil
+	return snapshotThread(thread), nil
 }
 
 // RotateRuntimeGeneration is called only after an explicit reselect finds a
@@ -849,7 +861,7 @@ func (s *Store) RotateRuntimeGeneration(threadID string) (Thread, error) {
 		return Thread{}, err
 	}
 	s.data = next
-	return thread, nil
+	return snapshotThread(thread), nil
 }
 
 // BeginRuntime records a real new Python process incarnation. A process after
@@ -876,7 +888,7 @@ func (s *Store) BeginRuntime(threadID string) (Thread, error) {
 		return Thread{}, err
 	}
 	s.data = next
-	return thread, nil
+	return snapshotThread(thread), nil
 }
 
 // ResetRuntime retires the old canonical root reference and creates a fresh
@@ -892,7 +904,9 @@ func (s *Store) ResetRuntime(threadID string) (Thread, error) {
 	if !ok || !validUUID(thread.RuntimeSessionID) || thread.RuntimeGeneration == 0 {
 		return Thread{}, errors.New("missioncontrol: thread has no valid runtime to reset")
 	}
-	thread.RetiredRuntimes = append(thread.RetiredRuntimes, RuntimeReference{
+	retired := make([]RuntimeReference, len(thread.RetiredRuntimes), len(thread.RetiredRuntimes)+1)
+	copy(retired, thread.RetiredRuntimes)
+	thread.RetiredRuntimes = append(retired, RuntimeReference{
 		RuntimeSessionID: thread.RuntimeSessionID, RuntimeGeneration: thread.RuntimeGeneration,
 		RuntimeIncarnation: thread.RuntimeIncarnation,
 		TranscriptRef:      thread.TranscriptRef, StorageCWD: thread.StorageCWD,
@@ -913,7 +927,7 @@ func (s *Store) ResetRuntime(threadID string) (Thread, error) {
 		return Thread{}, err
 	}
 	s.data = next
-	return thread, nil
+	return snapshotThread(thread), nil
 }
 
 // Admit persists an immutable request receipt before it is handed to a live
@@ -1073,6 +1087,11 @@ func (s *Store) MarkUncertain(threadID string, runtimeGeneration uint64, turnID 
 func (s *Store) HasNonterminalAdmission(threadID string, runtimeGeneration uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		// This method guards destructive runtime closure. A closed catalog
+		// cannot establish that no admission remains, so fail closed.
+		return true
+	}
 	for _, admission := range s.data.Admissions {
 		if admission.ThreadID == threadID && admission.RuntimeGeneration == runtimeGeneration &&
 			admission.DispatchState != "terminal" && admission.DispatchState != "not_dispatched" {
@@ -1147,7 +1166,7 @@ func (s *Store) Lookup(machineID, hostID, workspaceUUID string) (Thread, Binding
 	if !ok {
 		return Thread{}, Binding{}, false, errors.New("missioncontrol: catalog has a dangling binding")
 	}
-	return thread, binding, true, nil
+	return snapshotThread(thread), binding, true, nil
 }
 
 // Archive changes only catalog metadata. It neither opens transcript references
@@ -1166,7 +1185,7 @@ func (s *Store) Archive(threadID string) (Thread, error) {
 		return Thread{}, errors.New("missioncontrol: the Lobby cannot be archived")
 	}
 	if thread.Lifecycle == "archived" {
-		return thread, nil
+		return snapshotThread(thread), nil
 	}
 	now := time.Now().UTC()
 	thread.Lifecycle = "archived"
@@ -1177,7 +1196,7 @@ func (s *Store) Archive(threadID string) (Thread, error) {
 		return Thread{}, err
 	}
 	s.data = next
-	return thread, nil
+	return snapshotThread(thread), nil
 }
 
 // BindWorkspace creates a workspace thread only after an explicit, validated
@@ -1205,7 +1224,7 @@ func (s *Store) BindWorkspace(machineID, daemonIncarnation, hostID, liveWorkspac
 		if binding.DaemonIncarnation == daemonIncarnation &&
 			binding.LiveWorkspaceID == liveWorkspaceID &&
 			thread.Lifecycle == "active" && thread.DisplayName == displayName {
-			return thread, binding, nil
+			return snapshotThread(thread), binding, nil
 		}
 		next := s.cloneLocked()
 		thread = next.Threads[binding.ThreadID]
@@ -1223,7 +1242,7 @@ func (s *Store) BindWorkspace(machineID, daemonIncarnation, hostID, liveWorkspac
 			return Thread{}, Binding{}, err
 		}
 		s.data = next
-		return thread, binding, nil
+		return snapshotThread(thread), binding, nil
 	}
 	now := time.Now().UTC()
 	thread := Thread{ID: uuid.New().String(), Kind: "workspace", MachineID: machineID, WorkspaceUUID: workspaceUUID, DisplayName: displayName, Lifecycle: "active", CreatedAt: now}
@@ -1235,7 +1254,7 @@ func (s *Store) BindWorkspace(machineID, daemonIncarnation, hostID, liveWorkspac
 		return Thread{}, Binding{}, err
 	}
 	s.data = next
-	return thread, binding, nil
+	return snapshotThread(thread), binding, nil
 }
 
 func (s *Store) cloneLocked() catalog {
@@ -1243,7 +1262,7 @@ func (s *Store) cloneLocked() catalog {
 	next.Migrations = append([]json.RawMessage(nil), s.data.Migrations...)
 	next.Threads = make(map[string]Thread, len(s.data.Threads))
 	for key, thread := range s.data.Threads {
-		next.Threads[key] = thread
+		next.Threads[key] = snapshotThread(thread)
 	}
 	next.Bindings = make(map[string]Binding, len(s.data.Bindings))
 	for key, binding := range s.data.Bindings {

@@ -346,6 +346,7 @@ export class MuxVoiceModeBubble extends LitElement {
     this._positionFrame = null;
     if (this._snapTimer !== undefined) clearTimeout(this._snapTimer);
     this._snapTimer = undefined;
+    this._endDragOnDisconnect();
   }
 
   override updated(changed: Map<string, unknown>): void {
@@ -471,6 +472,20 @@ export class MuxVoiceModeBubble extends LitElement {
   private _finishSnap(): void {
     this._snapping = false;
     this._snapTimer = undefined;
+  }
+
+  /** A cached/re-attached bubble must never inherit a stale pointer gesture. */
+  private _endDragOnDisconnect(): void {
+    const drag = this._drag;
+    this._drag = null;
+    this._suppressMenuRequest = false;
+    if (!drag) return;
+    const trigger = this.renderRoot.querySelector<HTMLElement>('mux-voice-mode-button');
+    try {
+      if (trigger?.hasPointerCapture(drag.pointerId)) trigger.releasePointerCapture(drag.pointerId);
+    } catch {
+      // Detach may already have released capture.
+    }
   }
 
   private _commitDragPosition(animate: boolean): void {

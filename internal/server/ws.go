@@ -43,6 +43,10 @@ type Client struct {
 	missionControlMu            sync.Mutex
 	missionControlSelection     missionControlSelection
 	missionControlSubscriptions map[string]missionControlSubscription
+	// missionControlStopped is set only during Hub.Remove. The subscriptions
+	// map is intentionally nil until the first subscription, so map nil cannot
+	// represent the disconnected-client lifetime.
+	missionControlStopped bool
 
 	// sessMu guards sessions and unsubscribeRemotes. sessions holds this
 	// browser's daemon links keyed by transport.HostRef.ID; the empty key is
@@ -330,10 +334,24 @@ func newClient(hub *Hub, conn *websocket.Conn) *Client {
 }
 
 // writeBinary writes a binary frame via the client's binary writer.
-func (c *Client) writeBinary(data []byte) error { return c.writeBinaryFn(data) }
+func (c *Client) writeBinary(data []byte) error {
+	select {
+	case <-c.ctx.Done():
+		return context.Canceled
+	default:
+		return c.writeBinaryFn(data)
+	}
+}
 
 // writeText writes a text frame via the client's text writer.
-func (c *Client) writeText(data []byte) error { return c.writeTextFn(data) }
+func (c *Client) writeText(data []byte) error {
+	select {
+	case <-c.ctx.Done():
+		return context.Canceled
+	default:
+		return c.writeTextFn(data)
+	}
+}
 
 // --- connection heartbeat --------------------------------------------------
 //

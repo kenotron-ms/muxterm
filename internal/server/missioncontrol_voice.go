@@ -102,6 +102,7 @@ type missionControlCapture struct {
 	replyTerminal     bool
 	queuedTerminal    bool
 	replyInFlight     bool
+	replySending      bool
 	terminalReplyDone bool
 	turnDone          bool
 	dispatchCall      string
@@ -109,6 +110,16 @@ type missionControlCapture struct {
 	responseDone      bool
 	audioStopped      bool
 	hadAudio          bool
+}
+
+// missionControlScopedReply is captured under bridge.mu and written only after
+// releasing it, because a Sideband write can block while teardown needs the
+// bridge state.
+type missionControlScopedReply struct {
+	sideband *voice.Sideband
+	callID   string
+	output   string
+	terminal bool
 }
 
 type missionControlVoiceEvent struct {
@@ -170,36 +181,33 @@ func (b *missionControlScopedBridge) SidebandClosed() {
 
 func (b *missionControlScopedBridge) QueueScopedReply(c voice.Correlation, callID, output string, terminal bool) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	capture := b.attachment.capture
 	if b.attachment.failed || b.attachment.draining || b.attachment.sideband == nil ||
 		capture == nil || capture.grant.CaptureID != c.CaptureID ||
 		(capture.phase != "response" && capture.phase != "prefix" && capture.phase != "response_request") {
+		b.mu.Unlock()
 		return errors.New("voice: scoped reply has no immutable capture response")
 	}
 	if (terminal && capture.terminalReplyDone) ||
 		(output == capture.replyText && terminal == capture.replyTerminal) ||
 		(output == capture.queuedReply && terminal == capture.queuedTerminal) {
+		b.mu.Unlock()
 		return nil
 	}
 	capture.dispatching = false
-	if capture.replyText != "" || capture.replyInFlight || capture.phase != "response" {
+	if capture.replyText != "" || capture.replyInFlight || capture.replySending || capture.phase != "response" {
 		if capture.queuedReply != "" {
+			b.mu.Unlock()
 			return errors.New("voice: scoped reply queue is full")
 		}
 		capture.queuedReply, capture.queuedCallID, capture.queuedTerminal = output, callID, terminal
+		b.mu.Unlock()
 		return nil
 	}
-	if callID != "" {
-		if !b.attachment.sideband.SendScopedFunctionOutput(callID, output) {
-			return errors.New("voice: could not deliver scoped tool result")
-		}
-	} else if !b.attachment.sideband.SendScopedCompletion(output) {
-		return errors.New("voice: could not deliver scoped completion")
-	}
-	capture.replyCallID, capture.replyText, capture.replyTerminal = callID, output, terminal
-	b.advanceCaptureLocked(capture)
-	return nil
+	capture.replySending = true
+	reply := missionControlScopedReply{sideband: b.attachment.sideband, callID: callID, output: output, terminal: terminal}
+	b.mu.Unlock()
+	return b.deliverScopedReply(capture, reply)
 }
 
 func (b *missionControlScopedBridge) ReserveToolCall(event voice.ProviderEvent) (voice.Correlation, error) {
@@ -316,10 +324,16 @@ func (b *missionControlScopedBridge) SubmitCorrelated(c voice.Correlation, promp
 	return handle, nil
 }
 
-func (b *missionControlScopedBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
+func (b *missionControlScopedBridge) ObserveProviderEvent(event voice.ProviderEvent) (err error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	capture := b.attachment.capture
+	var reply *missionControlScopedReply
+	defer func() {
+		b.mu.Unlock()
+		if err == nil && reply != nil {
+			err = b.deliverScopedReply(capture, *reply)
+		}
+	}()
 	switch event.Type {
 	case "input_audio_buffer.committed":
 		if capture == nil || capture.phase != "reserved" && capture.phase != "ended" || event.ItemID == "" {
@@ -364,7 +378,7 @@ func (b *missionControlScopedBridge) ObserveProviderEvent(event voice.ProviderEv
 				capture.replyText, capture.replyCallID = "", ""
 				capture.replyInFlight, capture.replyTerminal = false, false
 			}
-			b.advanceCaptureLocked(capture)
+			reply = b.advanceCaptureLocked(capture)
 		}
 		if b.attachment.draining && (capture == nil || event.ResponseID == capture.responseID) {
 			b.attachment.providerTerminal = true
@@ -379,7 +393,7 @@ func (b *missionControlScopedBridge) ObserveProviderEvent(event voice.ProviderEv
 	case "output_audio_buffer.cleared", "output_audio_buffer.stopped":
 		if capture != nil && event.ResponseID == capture.responseID {
 			capture.audioStopped = true
-			b.advanceCaptureLocked(capture)
+			reply = b.advanceCaptureLocked(capture)
 			if capture.responseDone && capture.replyText != "" {
 				b.emitPrefixLocked(capture, "answer")
 			}
@@ -405,42 +419,76 @@ func (b *missionControlScopedBridge) awaitCaptureTurn(ctx context.Context, captu
 		return
 	}
 	capture.turnDone = true
-	b.advanceCaptureLocked(capture)
+	reply := b.advanceCaptureLocked(capture)
 	b.mu.Unlock()
+	if reply != nil {
+		_ = b.deliverScopedReply(capture, *reply)
+	}
 }
 
 // Work completion and narration completion are separate boundaries. In
 // particular, a finished root must not discard an outstanding prefix nonce.
-func (b *missionControlScopedBridge) advanceCaptureLocked(capture *missionControlCapture) {
+func (b *missionControlScopedBridge) advanceCaptureLocked(capture *missionControlCapture) *missionControlScopedReply {
 	if b.attachment.capture != capture || b.attachment.failed || b.attachment.draining ||
-		capture.phase != "response" || !capture.responseDone || capture.dispatching ||
+		capture.phase != "response" || !capture.responseDone || capture.dispatching || capture.replySending ||
 		(capture.hadAudio && !capture.audioStopped) {
-		return
+		return nil
 	}
 	if capture.replyText == "" && capture.queuedReply != "" {
-		var sent bool
-		if capture.queuedCallID != "" {
-			sent = b.attachment.sideband.SendScopedFunctionOutput(capture.queuedCallID, capture.queuedReply)
-		} else {
-			sent = b.attachment.sideband.SendScopedCompletion(capture.queuedReply)
+		capture.replySending = true
+		return &missionControlScopedReply{
+			sideband: b.attachment.sideband, callID: capture.queuedCallID,
+			output: capture.queuedReply, terminal: capture.queuedTerminal,
 		}
-		if !sent {
-			b.attachment.failed = true
-			b.attachment.emitLocked("attachment_failed", "", "provider", "", "Queued completion could not be delivered.")
-			return
-		}
-		capture.replyText, capture.replyCallID, capture.replyTerminal = capture.queuedReply, capture.queuedCallID, capture.queuedTerminal
-		capture.queuedReply, capture.queuedCallID, capture.queuedTerminal = "", "", false
 	}
 	if capture.replyText != "" {
 		b.emitPrefixLocked(capture, "answer")
-		return
+		return nil
 	}
 	if capture.dispatchCall != "" && (!capture.terminalReplyDone || (capture.turn != nil && !capture.turnDone)) {
-		return
+		return nil
 	}
 	capture.phase = "settled"
 	go b.attachment.settleCapture(capture.grant)
+	return nil
+}
+
+// deliverScopedReply does its potentially blocking provider write outside
+// bridge.mu. It then confirms the exact capture and Sideband still own that
+// write before publishing it into the capture state.
+func (b *missionControlScopedBridge) deliverScopedReply(capture *missionControlCapture, reply missionControlScopedReply) error {
+	for {
+		sent := false
+		if reply.callID != "" {
+			sent = reply.sideband.SendScopedFunctionOutput(reply.callID, reply.output)
+		} else {
+			sent = reply.sideband.SendScopedCompletion(reply.output)
+		}
+
+		b.mu.Lock()
+		if b.attachment.capture != capture || !capture.replySending || b.attachment.sideband != reply.sideband ||
+			b.attachment.failed || b.attachment.draining {
+			b.mu.Unlock()
+			return errors.New("voice: scoped reply became stale while sending")
+		}
+		capture.replySending = false
+		if !sent {
+			b.attachment.failed = true
+			b.attachment.emitLocked("attachment_failed", "", "provider", "", "Scoped completion could not be delivered.")
+			b.mu.Unlock()
+			return errors.New("voice: could not deliver scoped completion")
+		}
+		capture.replyCallID, capture.replyText, capture.replyTerminal = reply.callID, reply.output, reply.terminal
+		if capture.queuedReply == reply.output && capture.queuedCallID == reply.callID && capture.queuedTerminal == reply.terminal {
+			capture.queuedReply, capture.queuedCallID, capture.queuedTerminal = "", "", false
+		}
+		next := b.advanceCaptureLocked(capture)
+		b.mu.Unlock()
+		if next == nil {
+			return nil
+		}
+		reply = *next
+	}
 }
 
 func (b *missionControlScopedBridge) ResolveToolCall(event voice.ProviderEvent) (voice.Correlation, error) {
@@ -517,14 +565,17 @@ func (b *missionControlScopedBridge) emitPrefixLocked(capture *missionControlCap
 	capture.phase = "prefix"
 	b.attachment.emitLocked("prefix_request", capture.prefixNonce, kind, capture.grant.CaptureID,
 		"About "+boundedThreadVoiceLabel(b.runtime.Thread)+".")
-	if b.attachment.onPrefixTimeout != nil {
+	if onPrefixTimeout := b.attachment.onPrefixTimeout; onPrefixTimeout != nil {
 		nonce := capture.prefixNonce
-		go func() {
+		b.attachment.startDeliveryWait(func(ctx context.Context) {
 			timer := time.NewTimer(30 * time.Second)
 			defer timer.Stop()
-			<-timer.C
-			b.attachment.onPrefixTimeout(nonce)
-		}()
+			select {
+			case <-timer.C:
+				onPrefixTimeout(nonce)
+			case <-ctx.Done():
+			}
+		})
 	}
 }
 
@@ -533,14 +584,17 @@ func (b *missionControlScopedBridge) emitRoutePrefixLocked() {
 	b.attachment.prefixKind, b.attachment.prefixCaptureID = "route", ""
 	b.attachment.emitLocked("prefix_request", b.attachment.prefixNonce, "route", "",
 		"Operator, now talking in "+boundedThreadVoiceLabel(b.runtime.Thread)+".")
-	if b.attachment.onPrefixTimeout != nil {
+	if onPrefixTimeout := b.attachment.onPrefixTimeout; onPrefixTimeout != nil {
 		nonce := b.attachment.prefixNonce
-		go func() {
+		b.attachment.startDeliveryWait(func(ctx context.Context) {
 			timer := time.NewTimer(30 * time.Second)
 			defer timer.Stop()
-			<-timer.C
-			b.attachment.onPrefixTimeout(nonce)
-		}()
+			select {
+			case <-timer.C:
+				onPrefixTimeout(nonce)
+			case <-ctx.Done():
+			}
+		})
 	}
 }
 
@@ -616,9 +670,10 @@ func (a *missionControlVoiceAttachment) settleCapture(grant voice.CaptureGrant) 
 	}
 	a.capture.phase = "settled"
 	a.capture = nil
+	onCaptureSettled := a.onCaptureSettled
 	a.bridge.mu.Unlock()
-	if a.onCaptureSettled != nil {
-		a.onCaptureSettled(grant)
+	if onCaptureSettled != nil {
+		onCaptureSettled(grant)
 	}
 }
 
@@ -848,35 +903,21 @@ func (s *Server) handleMissionControlVoiceAttachmentToken(w http.ResponseWriter,
 		correlation: c, attachmentEpoch: attachmentEpoch, catalog: catalog, runtime: runtime,
 		validate: func() error { return s.validateMissionControlVoiceCorrelation(c) },
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
-	defer cancel()
-	eph, err := s.missionControlVoiceProvider.MintScoped(ctx, bridge)
-	if err != nil {
-		s.missionControlVoiceManager().AbortAttachment(c, bridgeID, controlToken, req.LeaseEpoch, attachmentEpoch)
-		writeMissionControlVoiceFailure(w, http.StatusBadGateway, "provider_mint_failed", err.Error())
-		return
-	}
-	s.missionControlVoiceAttachmentMu.Lock()
-	if s.missionControlVoiceAttachment != nil {
-		s.missionControlVoiceAttachmentMu.Unlock()
-		s.missionControlVoiceProvider.End(eph.SessionID)
-		s.missionControlVoiceManager().AbortAttachment(c, bridgeID, controlToken, req.LeaseEpoch, attachmentEpoch)
-		writeMissionControlVoiceFailure(w, http.StatusConflict, "attachment_candidate_active", "a Mission Control provider attachment candidate already exists")
-		return
-	}
 	deliveryCtx, deliveryCancel := context.WithCancel(context.Background())
-	s.missionControlVoiceAttachment = &missionControlVoiceAttachment{
+	candidate := &missionControlVoiceAttachment{
 		correlation: c, leaseEpoch: req.LeaseEpoch, focusEpoch: req.FocusEpoch,
 		attachmentEpoch: attachmentEpoch, bridgeID: bridgeID, controlToken: controlToken,
-		sessionID: eph.SessionID, bridge: bridge,
-		eventWake: make(chan struct{}, 1), inputIDs: make(map[string]struct{}),
+		bridge: bridge, eventWake: make(chan struct{}, 1), inputIDs: make(map[string]struct{}),
 		deliveryCtx: deliveryCtx, deliveryCancel: deliveryCancel,
 	}
-	bridge.attachment = s.missionControlVoiceAttachment
-	s.missionControlVoiceAttachment.onCaptureSettled = func(grant voice.CaptureGrant) {
+	// MintScoped stores this bridge in the provider before returning. Publish its
+	// complete attachment state under the bridge lock first, so every callback
+	// has a nil-safe, consistently protected target from the first instant.
+	bridge.mu.Lock()
+	bridge.attachment = candidate
+	candidate.onCaptureSettled = func(grant voice.CaptureGrant) {
 		s.missionControlVoiceManager().SettleCapture(c, bridgeID, controlToken, req.LeaseEpoch, attachmentEpoch, grant)
 	}
-	candidate := s.missionControlVoiceAttachment
 	candidate.onDrainReady = func() {
 		s.completeMissionControlVoiceDrain(candidate)
 	}
@@ -899,6 +940,27 @@ func (s *Server) handleMissionControlVoiceAttachmentToken(w http.ResponseWriter,
 			sideband.Fence("prefix acknowledgement timed out")
 		}
 	}
+	bridge.mu.Unlock()
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	defer cancel()
+	eph, err := s.missionControlVoiceProvider.MintScoped(ctx, bridge)
+	if err != nil {
+		candidate.stopDeliveryWaits()
+		s.missionControlVoiceManager().AbortAttachment(c, bridgeID, controlToken, req.LeaseEpoch, attachmentEpoch)
+		writeMissionControlVoiceFailure(w, http.StatusBadGateway, "provider_mint_failed", err.Error())
+		return
+	}
+	s.missionControlVoiceAttachmentMu.Lock()
+	if s.missionControlVoiceAttachment != nil {
+		s.missionControlVoiceAttachmentMu.Unlock()
+		candidate.stopDeliveryWaits()
+		s.missionControlVoiceProvider.End(eph.SessionID)
+		s.missionControlVoiceManager().AbortAttachment(c, bridgeID, controlToken, req.LeaseEpoch, attachmentEpoch)
+		writeMissionControlVoiceFailure(w, http.StatusConflict, "attachment_candidate_active", "a Mission Control provider attachment candidate already exists")
+		return
+	}
+	candidate.sessionID = eph.SessionID
+	s.missionControlVoiceAttachment = candidate
 	s.missionControlVoiceAttachmentMu.Unlock()
 	go s.expireMissionControlVoiceCandidate(candidate)
 	writeMissionControlVoiceJSON(w, http.StatusCreated, map[string]any{

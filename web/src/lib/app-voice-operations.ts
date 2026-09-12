@@ -460,6 +460,7 @@ class AppVoiceOperations {
       }
     | null = null;
   private _releasingEpoch = 0;
+  private _releaseTimer: ReturnType<typeof setTimeout> | null = null;
   private _revision = 0;
   private _observation: AppVoiceObservation | null = null;
   private _pending = new Map<string, PendingOperation>();
@@ -597,18 +598,23 @@ class AppVoiceOperations {
    * HTTP end endpoint has no session identifier to authorize.
    */
   releaseLease(lease: AppVoiceLease): boolean {
-    if (!this._lease || this._lease.lease_epoch !== lease.lease_epoch) return false;
-    if (this._releasingEpoch === lease.lease_epoch) return true;
-    if (
-      this._socket?.appVoice({
-        type: 'app-voice-release',
-        protocol_version: APP_VOICE_PROTOCOL_VERSION,
-        lease_epoch: lease.lease_epoch,
-      }) !== true
-    ) {
-      return false;
+    if (!this._lease || this._lease.lease_epoch !== lease.lease_epoch) {
+      return this._releasingEpoch === lease.lease_epoch;
     }
-    this._releasingEpoch = lease.lease_epoch;
+    if (this._releasingEpoch === lease.lease_epoch) return true;
+
+    // Releasing is an explicit local authority boundary. Do not wait for a
+    // best-effort WebSocket notice before cancelling provider-originated work:
+    // socket loss can lose that notice, but it cannot retain browser authority.
+    this._finishAll('owner_disconnected', 'The app voice lease was explicitly released.');
+    this._lease = null;
+    for (const listener of this._leaseListeners) listener(null, 'explicit_end');
+    this._rememberReleasingEpoch(lease.lease_epoch);
+    this._socket?.appVoice({
+      type: 'app-voice-release',
+      protocol_version: APP_VOICE_PROTOCOL_VERSION,
+      lease_epoch: lease.lease_epoch,
+    });
     return true;
   }
 
@@ -702,18 +708,29 @@ class AppVoiceOperations {
     const epoch = positiveInteger(frame.lease_epoch);
     const reason = boundedString(frame.reason, 64);
     if (
-      !this._lease ||
       frame.protocol_version !== APP_VOICE_PROTOCOL_VERSION ||
-      epoch !== this._lease.lease_epoch ||
       !['explicit_end', 'logout', 'revoked', 'owner_disconnected', 'takeover', 'provider_ended'].includes(reason)
     ) {
       return;
     }
+    // A release has already revoked local authority. Its terminal receipt only
+    // clears release correlation; an old receipt must never tear down a newer
+    // owner epoch that the server subsequently granted on this same socket.
+    if (!this._lease) {
+      if (epoch === this._releasingEpoch) this._clearReleasingEpoch(epoch);
+      return;
+    }
+    if (epoch !== this._lease.lease_epoch) return;
     this._finishAll('owner_disconnected', 'The app voice lease ended before this operation completed.');
     this._clearLease(reason);
   }
 
   private _acceptOperation(operation: AppVoiceOperation): void {
+    if (operation.lease_epoch === this._releasingEpoch) {
+      // This can arrive after local Stop when the release notice or its
+      // terminal receipt was lost. Local authority is already gone.
+      return;
+    }
     if (!this._lease || operation.lease_epoch !== this._lease.lease_epoch) return;
     if (this._pending.has(operation.operation_id)) return;
     if (operation.expected_revision !== this._revision) {
@@ -896,9 +913,29 @@ class AppVoiceOperations {
 
   private _clearLease(reason: string): void {
     if (!this._lease) return;
-    if (this._releasingEpoch === this._lease.lease_epoch) this._releasingEpoch = 0;
+    this._clearReleasingEpoch(this._lease.lease_epoch);
     this._lease = null;
     for (const listener of this._leaseListeners) listener(null, reason);
+  }
+
+  /**
+   * Keep only the released epoch long enough to correlate its terminal notice.
+   * The deadline is intentionally not permission to reuse the epoch: a later
+   * claim is still ordered through server authority on this owner socket.
+   */
+  private _rememberReleasingEpoch(epoch: number): void {
+    this._clearReleasingEpoch();
+    this._releasingEpoch = epoch;
+    this._releaseTimer = setTimeout(() => {
+      if (this._releasingEpoch === epoch) this._clearReleasingEpoch(epoch);
+    }, OPERATION_TTL_MS);
+  }
+
+  private _clearReleasingEpoch(expectedEpoch = 0): void {
+    if (expectedEpoch !== 0 && this._releasingEpoch !== expectedEpoch) return;
+    if (this._releaseTimer !== null) clearTimeout(this._releaseTimer);
+    this._releaseTimer = null;
+    this._releasingEpoch = 0;
   }
 }
 

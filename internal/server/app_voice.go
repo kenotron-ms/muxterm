@@ -325,7 +325,10 @@ func (s *Server) registerAppVoiceRoutes(cfg config.VoiceConfig, protect func(htt
 	service := &appVoiceService{hub: s.hub, provider: mgr, operations: make(map[string]*appVoiceOperation), captures: make(map[string]*appVoiceCapture), responses: make(map[string]string), inputs: make(map[string]string)}
 	s.appVoice = service
 	s.hub.appVoice = service
-	mgr.SetOnEnded(func(sessionID, reason string) { service.end(nil, 0, sessionID, reason) })
+	// Provider reasons are descriptive prose, not client protocol values.
+	// Explicit local paths end service state before Manager.End and retain
+	// their specific reason; every provider callback uses the fixed enum.
+	mgr.SetOnEnded(func(sessionID, _ string) { service.end(nil, 0, sessionID, "provider_ended") })
 	s.mux.Handle("POST /api/app/voice/token", protect(http.HandlerFunc(s.handleAppVoiceToken)))
 	s.mux.Handle("POST /api/app/voice/sdp", protect(http.HandlerFunc(s.handleAppVoiceSDP)))
 	s.mux.Handle("POST /api/app/voice/end", protect(http.HandlerFunc(s.handleAppVoiceEnd)))
@@ -426,10 +429,10 @@ func (s *appVoiceService) drainAck(c *Client, epoch uint64, nonce string) {
 	session := s.sessionID
 	s.drainNonce = ""
 	s.mu.Unlock()
+	s.end(c, epoch, session, "takeover")
 	if session != "" {
 		s.provider.End(session)
 	}
-	s.end(c, epoch, session, "takeover")
 }
 
 // release is the owner-socket explicit-stop path. Unlike HTTP end it also
@@ -909,10 +912,10 @@ func (s *appVoiceService) disconnect(c *Client) {
 	session := s.sessionID
 	epoch := s.epoch
 	s.mu.Unlock()
+	s.end(c, epoch, session, "owner_disconnected")
 	if session != "" {
 		s.provider.End(session)
 	}
-	s.end(c, epoch, session, "owner_disconnected")
 }
 
 func isAppVoiceMessage(typ string) bool {
@@ -1057,8 +1060,8 @@ func (s *Server) handleAppVoiceEnd(w http.ResponseWriter, r *http.Request) {
 		writeAppVoiceFailure(w, http.StatusConflict, "provider session mismatch")
 		return
 	}
-	a.provider.End(session)
 	a.end(nil, epoch, session, "explicit_end")
+	a.provider.End(session)
 	writeAppVoiceJSON(w, http.StatusOK, map[string]any{"ok": true, "lease_epoch": epoch, "state": "ended"})
 }
 func writeAppVoiceFailure(w http.ResponseWriter, status int, detail string) {

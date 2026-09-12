@@ -313,18 +313,26 @@ func (r *Router) Archive(threadID string) (Thread, error) {
 		r.mu.Unlock()
 		return Thread{}, errors.New("missioncontrol: runtime is closing")
 	}
-	if runtime := r.runtimes[threadID]; runtime != nil {
-		if !runtime.closeIfSafe() {
-			r.mu.Unlock()
-			return Thread{}, errors.New("missioncontrol: archive requires an idle persisted runtime with no approvals")
-		}
-		r.detachRuntimeLocked(threadID)
-		r.mu.Unlock()
-		r.closeRuntime(runtime)
-		defer r.finishClose(threadID)
+	runtime := r.runtimes[threadID]
+	r.mu.Unlock()
+	if runtime == nil {
 		return r.store.Archive(threadID)
 	}
+	// closeIfSafe takes Runtime.opMu and may take Store.mu. Keep Router.mu
+	// available while a slow root drains, then reserve removal only after the
+	// runtime has atomically claimed its closed state.
+	if !runtime.closeIfSafe() {
+		return Thread{}, errors.New("missioncontrol: archive requires an idle persisted runtime with no approvals")
+	}
+	r.mu.Lock()
+	if r.runtimes[threadID] != runtime {
+		r.mu.Unlock()
+		return Thread{}, errors.New("missioncontrol: runtime is closing")
+	}
+	r.detachRuntimeLocked(threadID)
 	r.mu.Unlock()
+	r.closeRuntime(runtime)
+	defer r.finishClose(threadID)
 	return r.store.Archive(threadID)
 }
 
@@ -336,9 +344,14 @@ func (r *Router) Reset(threadID string) (Thread, error) {
 		return Thread{}, errors.New("missioncontrol: runtime is starting")
 	}
 	runtime := r.runtimes[threadID]
+	r.mu.Unlock()
 	if runtime == nil || !runtime.closeIfSafe() {
-		r.mu.Unlock()
 		return Thread{}, errors.New("missioncontrol: reset requires an idle persisted runtime with no approvals")
+	}
+	r.mu.Lock()
+	if r.runtimes[threadID] != runtime {
+		r.mu.Unlock()
+		return Thread{}, errors.New("missioncontrol: runtime is closing")
 	}
 	r.detachRuntimeLocked(threadID)
 	r.mu.Unlock()
@@ -749,6 +762,12 @@ func (r *Runtime) onSidecarEvent(event cos.Event) {
 	}
 	seq, err := r.store.NextEventSeq(thread.ID)
 	if err != nil {
+		// A durable sequence failure means the browser cannot prove it saw a
+		// complete journal. Preserve that fact for the next snapshot rather
+		// than silently creating a sequence hole.
+		r.mu.Lock()
+		r.journalGap = true
+		r.mu.Unlock()
 		return
 	}
 	r.mu.Lock()

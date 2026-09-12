@@ -528,17 +528,24 @@ function beginRelease(sendEnd: boolean): Promise<void> {
   sessionId = '';
   generation++;
   if (!previousLease) appVoiceOperations.cancelClaim();
-  releasing = releaseBrowserMedia()
+  // Install the release barrier before notifying lease listeners. A local
+  // release notifies synchronously; without this ordering its listener would
+  // recursively start a second browser-media cleanup.
+  const browserRelease = releaseBrowserMedia();
+  releasing = browserRelease
     .then(async () => {
       if (!sendEnd || !previousLease) return;
       const ended = previousSession !== '' && (await endProviderSession(previousLease, previousSession));
       if (ended) appVoiceOperations.endLease(previousLease.lease_epoch);
-      else appVoiceOperations.releaseLease(previousLease);
     })
     .finally(() => {
       releasing = null;
       void voiceCaptureArbiter.release('app_conversation');
     });
+  // Stop withdraws the old owner epoch before awaiting browser/media cleanup.
+  // `previousLease` remains an immutable correlation for the bounded provider
+  // end request below; no cleanup path reads the mutable current lease.
+  if (previousLease) appVoiceOperations.releaseLease(previousLease);
   return releasing;
 }
 
