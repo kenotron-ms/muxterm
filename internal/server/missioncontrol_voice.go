@@ -17,6 +17,8 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/cos"
 	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/transport"
 	"github.com/kenotron-ms/muxterm/internal/voice"
 )
 
@@ -56,7 +58,9 @@ type missionControlVoiceAttachment struct {
 	sessionID        string
 	bridge           *missionControlScopedBridge
 	sideband         *voice.Sideband
+	failed           bool // protected by bridge.mu, including before publication
 	committed        bool
+	connecting       bool // protected by missionControlVoiceAttachmentMu
 	draining         bool
 	providerCleared  bool
 	providerTerminal bool
@@ -77,21 +81,27 @@ type missionControlVoiceAttachment struct {
 }
 
 type missionControlCapture struct {
-	grant        voice.CaptureGrant
-	phase        string // reserved|ended|committed|prefix|response|settled
-	inputItem    string
-	responseID   string
-	prefixNonce  string
-	outputCalls  map[string]string // output item -> provider call id
-	turn         voice.TurnHandle
-	replyCallID  string
-	replyText    string
-	queuedReply  string
-	dispatchCall string
-	dispatching  bool
-	responseDone bool
-	audioStopped bool
-	hadAudio     bool
+	grant             voice.CaptureGrant
+	phase             string // reserved|ended|committed|prefix|response|settled
+	inputItem         string
+	responseID        string
+	prefixNonce       string
+	outputCalls       map[string]string // output item -> provider call id
+	turn              voice.TurnHandle
+	replyCallID       string
+	replyText         string
+	queuedReply       string
+	queuedCallID      string
+	replyTerminal     bool
+	queuedTerminal    bool
+	replyInFlight     bool
+	terminalReplyDone bool
+	turnDone          bool
+	dispatchCall      string
+	dispatching       bool
+	responseDone      bool
+	audioStopped      bool
+	hadAudio          bool
 }
 
 type missionControlVoiceEvent struct {
@@ -130,30 +140,69 @@ func (b *missionControlScopedBridge) Cancel(string) error {
 	return errors.New("voice: cancellation requires an explicit Mission Control text control")
 }
 
-func (b *missionControlScopedBridge) QueueScopedReply(c voice.Correlation, callID, output string) error {
+func (b *missionControlScopedBridge) SidebandTerminal(reason string) {
+	b.mu.Lock()
+	if b.attachment.failed {
+		b.mu.Unlock()
+		return
+	}
+	b.attachment.failed = true
+	b.attachment.sideband = nil
+	b.attachment.routeAnnounced = false
+	b.attachment.emitLocked("attachment_failed", "", "provider", "", boundedVoiceLabel(reason))
+	b.mu.Unlock()
+}
+
+func (b *missionControlScopedBridge) QueueScopedReply(c voice.Correlation, callID, output string, terminal bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	capture := b.attachment.capture
-	if capture == nil || capture.grant.CaptureID != c.CaptureID || capture.phase != "response" {
+	if b.attachment.failed || b.attachment.draining || b.attachment.sideband == nil ||
+		capture == nil || capture.grant.CaptureID != c.CaptureID ||
+		(capture.phase != "response" && capture.phase != "prefix" && capture.phase != "response_request") {
 		return errors.New("voice: scoped reply has no immutable capture response")
 	}
-	if capture.replyText != "" {
-		if output == capture.replyText || output == capture.queuedReply {
-			return nil
-		}
-		// Dispatch acknowledgement and terminal completion are distinct
-		// phases. Retain one completion behind the acknowledged reply.
-		capture.queuedReply = output
+	if (terminal && capture.terminalReplyDone) ||
+		(output == capture.replyText && terminal == capture.replyTerminal) ||
+		(output == capture.queuedReply && terminal == capture.queuedTerminal) {
 		return nil
 	}
-	if callID != "" && !b.attachment.sideband.SendScopedFunctionOutput(callID, output) {
-		return errors.New("voice: could not deliver scoped tool result")
+	capture.dispatching = false
+	if capture.replyText != "" || capture.replyInFlight || capture.phase != "response" {
+		if capture.queuedReply != "" {
+			return errors.New("voice: scoped reply queue is full")
+		}
+		capture.queuedReply, capture.queuedCallID, capture.queuedTerminal = output, callID, terminal
+		return nil
 	}
-	capture.replyCallID, capture.replyText = callID, output
-	if capture.responseDone && (!capture.hadAudio || capture.audioStopped) {
-		b.emitPrefixLocked(capture, "answer")
+	if callID != "" {
+		if !b.attachment.sideband.SendScopedFunctionOutput(callID, output) {
+			return errors.New("voice: could not deliver scoped tool result")
+		}
+	} else if !b.attachment.sideband.SendScopedCompletion(output) {
+		return errors.New("voice: could not deliver scoped completion")
 	}
+	capture.replyCallID, capture.replyText, capture.replyTerminal = callID, output, terminal
+	b.advanceCaptureLocked(capture)
 	return nil
+}
+
+func (b *missionControlScopedBridge) ReserveToolCall(event voice.ProviderEvent) (voice.Correlation, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	capture := b.attachment.capture
+	if capture == nil || capture.phase != "response" || event.ResponseID != capture.responseID {
+		return voice.Correlation{}, errors.New("voice: tool call has no active scoped response")
+	}
+	callID := capture.outputCalls[event.ItemID]
+	if callID == "" || (event.CallRef != "" && event.CallRef != callID) {
+		return voice.Correlation{}, errors.New("voice: tool call has no verified output-item mapping")
+	}
+	if capture.dispatchCall != "" && capture.dispatchCall != callID {
+		return voice.Correlation{}, errors.New("voice: second work call for capture is refused")
+	}
+	capture.dispatchCall, capture.dispatching = callID, true
+	return voice.Correlation{ProviderCallID: callID, ProviderItemID: capture.inputItem, ProviderResponseID: capture.responseID, CaptureID: capture.grant.CaptureID, AttachmentEpoch: b.attachmentEpoch}, nil
 }
 
 func (b *missionControlScopedBridge) SubmitCorrelated(c voice.Correlation, prompt string) (voice.TurnHandle, error) {
@@ -186,11 +235,15 @@ func (b *missionControlScopedBridge) SubmitCorrelated(c voice.Correlation, promp
 		b.mu.Unlock()
 		return nil, errors.New("voice: a second work call for this capture is refused")
 	}
-	if capture.dispatching || capture.dispatchCall != "" {
+	if capture.dispatchCall != c.ProviderCallID {
 		b.mu.Unlock()
-		return nil, errors.New("voice: work dispatch is already in progress for this capture")
+		return nil, errors.New("voice: work dispatch was not reader-reserved for this capture")
 	}
-	capture.dispatching, capture.dispatchCall = true, c.ProviderCallID
+	if capture.turn != nil {
+		turn := capture.turn
+		b.mu.Unlock()
+		return turn, nil
+	}
 	b.mu.Unlock()
 	requestID := uuid.New().String()
 	payload, err := json.Marshal(struct {
@@ -241,6 +294,7 @@ func (b *missionControlScopedBridge) SubmitCorrelated(c voice.Correlation, promp
 		return nil, errors.New("voice: capture changed while dispatching")
 	}
 	capture.turn, capture.dispatching = handle, false
+	go b.awaitCaptureTurn(capture, handle)
 	b.mu.Unlock()
 	return handle, nil
 }
@@ -277,6 +331,7 @@ func (b *missionControlScopedBridge) ObserveProviderEvent(event voice.ProviderEv
 		}
 		capture.responseID = event.ResponseID
 		capture.phase = "response"
+		capture.responseDone, capture.audioStopped, capture.hadAudio = false, false, false
 	case "response.output_item.added", "response.output_item.done":
 		if capture == nil || capture.phase != "response" || event.ResponseID != capture.responseID {
 			return errors.New("voice: output item is not bound to current response")
@@ -285,30 +340,19 @@ func (b *missionControlScopedBridge) ObserveProviderEvent(event voice.ProviderEv
 			capture.outputCalls[event.OutputID] = event.CallRef
 		}
 	case "response.done", "response.cancelled":
-		if capture != nil && event.ResponseID == capture.responseID {
-			if capture.turn == nil && capture.replyText == "" {
-				capture.phase = "settled"
-				go b.attachment.settleCapture(capture.grant)
-			} else {
-				go b.awaitCaptureTurn(capture, capture.turn)
+		if capture != nil && event.ResponseID == capture.responseID && !capture.responseDone {
+			capture.responseDone = true
+			if capture.replyInFlight {
+				capture.terminalReplyDone = capture.terminalReplyDone || capture.replyTerminal
+				capture.replyText, capture.replyCallID = "", ""
+				capture.replyInFlight, capture.replyTerminal = false, false
 			}
+			b.advanceCaptureLocked(capture)
 		}
-		if b.attachment.draining {
+		if b.attachment.draining && (capture == nil || event.ResponseID == capture.responseID) {
 			b.attachment.providerTerminal = true
 			if b.attachment.providerCleared && b.attachment.clientDrained && b.attachment.onDrainReady != nil {
 				go b.attachment.onDrainReady()
-			}
-		}
-		if capture != nil && event.ResponseID == capture.responseID {
-			capture.responseDone = true
-			if capture.replyText != "" && (!capture.hadAudio || capture.audioStopped) {
-				if capture.queuedReply != "" {
-					capture.replyText, capture.queuedReply = capture.queuedReply, ""
-					capture.responseDone, capture.audioStopped, capture.hadAudio = true, true, false
-					b.emitPrefixLocked(capture, "answer")
-				} else {
-					b.emitPrefixLocked(capture, "answer")
-				}
 			}
 		}
 	case "output_audio_buffer.started":
@@ -318,6 +362,7 @@ func (b *missionControlScopedBridge) ObserveProviderEvent(event voice.ProviderEv
 	case "output_audio_buffer.cleared", "output_audio_buffer.stopped":
 		if capture != nil && event.ResponseID == capture.responseID {
 			capture.audioStopped = true
+			b.advanceCaptureLocked(capture)
 			if capture.responseDone && capture.replyText != "" {
 				b.emitPrefixLocked(capture, "answer")
 			}
@@ -339,10 +384,43 @@ func (b *missionControlScopedBridge) awaitCaptureTurn(capture *missionControlCap
 		b.mu.Unlock()
 		return
 	}
-	capture.phase = "settled"
-	grant := capture.grant
+	capture.turnDone = true
+	b.advanceCaptureLocked(capture)
 	b.mu.Unlock()
-	b.attachment.settleCapture(grant)
+}
+
+// Work completion and narration completion are separate boundaries. In
+// particular, a finished root must not discard an outstanding prefix nonce.
+func (b *missionControlScopedBridge) advanceCaptureLocked(capture *missionControlCapture) {
+	if b.attachment.capture != capture || b.attachment.failed || b.attachment.draining ||
+		capture.phase != "response" || !capture.responseDone || capture.dispatching ||
+		(capture.hadAudio && !capture.audioStopped) {
+		return
+	}
+	if capture.replyText == "" && capture.queuedReply != "" {
+		var sent bool
+		if capture.queuedCallID != "" {
+			sent = b.attachment.sideband.SendScopedFunctionOutput(capture.queuedCallID, capture.queuedReply)
+		} else {
+			sent = b.attachment.sideband.SendScopedCompletion(capture.queuedReply)
+		}
+		if !sent {
+			b.attachment.failed = true
+			b.attachment.emitLocked("attachment_failed", "", "provider", "", "Queued completion could not be delivered.")
+			return
+		}
+		capture.replyText, capture.replyCallID, capture.replyTerminal = capture.queuedReply, capture.queuedCallID, capture.queuedTerminal
+		capture.queuedReply, capture.queuedCallID, capture.queuedTerminal = "", "", false
+	}
+	if capture.replyText != "" {
+		b.emitPrefixLocked(capture, "answer")
+		return
+	}
+	if capture.dispatchCall != "" && (!capture.terminalReplyDone || (capture.turn != nil && !capture.turnDone)) {
+		return
+	}
+	capture.phase = "settled"
+	go b.attachment.settleCapture(capture.grant)
 }
 
 func (b *missionControlScopedBridge) ResolveToolCall(event voice.ProviderEvent) (voice.Correlation, error) {
@@ -365,6 +443,10 @@ func (b *missionControlScopedBridge) ResolveToolCall(event voice.ProviderEvent) 
 
 func (b *missionControlScopedBridge) PrefixAcknowledged(nonce string) error {
 	b.mu.Lock()
+	if b.attachment.failed || b.attachment.draining || b.attachment.sideband == nil {
+		b.mu.Unlock()
+		return errors.New("voice: attachment cannot acknowledge a prefix after failure or drain")
+	}
 	capture := b.attachment.capture
 	if b.attachment.prefixNonce == nonce && b.attachment.prefixKind == "route" && !b.attachment.routeAnnounced {
 		b.attachment.routeAnnounced = true
@@ -381,8 +463,10 @@ func (b *missionControlScopedBridge) PrefixAcknowledged(nonce string) error {
 		"muxterm_attachment_epoch": fmt.Sprint(b.attachment.attachmentEpoch),
 	}
 	capture.phase = "response_request"
+	capture.replyInFlight = capture.replyText != ""
+	sideband := b.attachment.sideband
 	b.mu.Unlock()
-	if err := b.attachment.sideband.RequestScopedResponse(metadata); err != nil {
+	if err := sideband.RequestScopedResponse(metadata); err != nil {
 		b.mu.Lock()
 		if b.attachment.capture == capture && capture.phase == "response_request" {
 			capture.phase = "settled"
@@ -412,7 +496,7 @@ func (b *missionControlScopedBridge) emitPrefixLocked(capture *missionControlCap
 	capture.prefixNonce = uuid.New().String()
 	capture.phase = "prefix"
 	b.attachment.emitLocked("prefix_request", capture.prefixNonce, kind, capture.grant.CaptureID,
-		"Speak the deterministic local prefix, then acknowledge this nonce before the server requests provider response audio.")
+		"About "+boundedThreadVoiceLabel(b.runtime.Thread)+".")
 	if b.attachment.onPrefixTimeout != nil {
 		nonce := capture.prefixNonce
 		go func() {
@@ -764,7 +848,7 @@ func (s *Server) handleMissionControlVoiceAttachmentToken(w http.ResponseWriter,
 	s.missionControlVoiceAttachmentMu.Unlock()
 	go s.expireMissionControlVoiceCandidate(candidate)
 	writeMissionControlVoiceJSON(w, http.StatusCreated, map[string]any{
-		"ok": true, "session_id": eph.SessionID, "value": eph.Value,
+		"ok": true, "session_id": eph.SessionID,
 		"expires_at": eph.ExpiresAt, "attachment_epoch": attachmentEpoch,
 		"microphone_admission": false,
 		"message":              "Provider attachment candidate created; microphone and response admission remain muted pending deterministic local prefix and drain acknowledgements.",
@@ -809,6 +893,14 @@ func (s *Server) handleMissionControlVoiceAttachmentSDP(w http.ResponseWriter, r
 	matches := attachment != nil && attachment.correlation == c && attachment.leaseEpoch == req.LeaseEpoch &&
 		attachment.attachmentEpoch == req.AttachmentEpoch && attachment.sessionID == req.SessionID &&
 		attachment.bridgeID == bridgeID && attachment.controlToken == controlToken
+	if matches && (attachment.connecting || attachment.committed) {
+		s.missionControlVoiceAttachmentMu.Unlock()
+		writeMissionControlVoiceFailure(w, http.StatusConflict, "attachment_already_used", "this candidate already owns an SDP exchange")
+		return
+	}
+	if matches {
+		attachment.connecting = true
+	}
 	s.missionControlVoiceAttachmentMu.Unlock()
 	if !matches {
 		writeMissionControlVoiceFailure(w, http.StatusConflict, "stale_attachment", "attachment SDP does not name the current immutable candidate")
@@ -822,21 +914,35 @@ func (s *Server) handleMissionControlVoiceAttachmentSDP(w http.ResponseWriter, r
 		writeMissionControlVoiceFailure(w, http.StatusBadGateway, "provider_sdp_failed", err.Error())
 		return
 	}
+	s.missionControlVoiceAttachmentMu.Lock()
+	if s.missionControlVoiceAttachment != attachment || !attachment.connecting || attachment.committed {
+		s.missionControlVoiceAttachmentMu.Unlock()
+		s.missionControlVoiceProvider.End(req.SessionID)
+		writeMissionControlVoiceFailure(w, http.StatusConflict, "stale_attachment", "candidate ownership ended during SDP exchange")
+		return
+	}
+	attachment.bridge.mu.Lock()
+	if attachment.failed {
+		attachment.bridge.mu.Unlock()
+		s.missionControlVoiceAttachmentMu.Unlock()
+		s.missionControlVoiceProvider.End(req.SessionID)
+		s.clearMissionControlVoiceCandidate(attachment)
+		writeMissionControlVoiceFailure(w, http.StatusConflict, "attachment_failed", "provider sideband ended before attachment publication")
+		return
+	}
 	lease, err := s.missionControlVoiceManager().CommitAttachment(c, bridgeID, controlToken, req.LeaseEpoch, req.AttachmentEpoch)
 	if err != nil {
+		attachment.bridge.mu.Unlock()
+		s.missionControlVoiceAttachmentMu.Unlock()
 		s.missionControlVoiceProvider.End(req.SessionID)
 		s.clearMissionControlVoiceCandidate(attachment)
 		writeMissionControlVoiceLeaseError(w, err)
 		return
 	}
-	s.missionControlVoiceAttachmentMu.Lock()
-	if s.missionControlVoiceAttachment == attachment {
-		s.missionControlVoiceAttachment.committed = true
-		s.missionControlVoiceAttachment.sideband = sideband
-		s.missionControlVoiceAttachment.bridge.mu.Lock()
-		s.missionControlVoiceAttachment.bridge.emitRoutePrefixLocked()
-		s.missionControlVoiceAttachment.bridge.mu.Unlock()
-	}
+	attachment.committed = true
+	attachment.sideband = sideband
+	attachment.bridge.emitRoutePrefixLocked()
+	attachment.bridge.mu.Unlock()
 	s.missionControlVoiceAttachmentMu.Unlock()
 	writeMissionControlVoiceJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "sdp": answer.SDP, "attachment_epoch": lease.AttachmentEpoch,
@@ -1012,9 +1118,9 @@ func (s *Server) handleMissionControlVoiceCaptureBegin(w http.ResponseWriter, r 
 		return
 	}
 	attachment.bridge.mu.Lock()
-	if !attachment.routeAnnounced {
+	if !attachment.routeAnnounced || attachment.sideband == nil {
 		attachment.bridge.mu.Unlock()
-		writeMissionControlVoiceFailure(w, http.StatusConflict, "route_prefix_required", "capture remains muted until the authenticated route prefix acknowledgement arrives")
+		writeMissionControlVoiceFailure(w, http.StatusConflict, "route_prefix_required", "capture remains muted until the route prefix is acknowledged and the attachment sideband is usable")
 		return
 	}
 	attachment.bridge.mu.Unlock()
@@ -1077,11 +1183,20 @@ func (s *Server) handleMissionControlVoicePrefixAck(w http.ResponseWriter, r *ht
 		return
 	}
 	attachment, ok := s.missionControlVoiceAttachmentFor(c, req.LeaseEpoch, req.AttachmentEpoch, bridgeID, controlToken)
-	if !ok || req.PrefixNonce == "" || req.FocusEpoch != attachment.focusEpoch {
+	if !ok || req.PrefixNonce == "" {
 		writeMissionControlVoiceFailure(w, http.StatusConflict, "stale_prefix", "prefix acknowledgement does not name the current attachment focus and nonce")
 		return
 	}
+	if err := s.missionControlVoiceManager().ValidateAttachment(c, bridgeID, controlToken, req.LeaseEpoch, req.FocusEpoch, req.AttachmentEpoch); err != nil {
+		writeMissionControlVoiceLeaseError(w, err)
+		return
+	}
 	attachment.bridge.mu.Lock()
+	if req.FocusEpoch != attachment.focusEpoch {
+		attachment.bridge.mu.Unlock()
+		writeMissionControlVoiceFailure(w, http.StatusConflict, "stale_prefix", "attachment focus changed")
+		return
+	}
 	routePrefix := attachment.prefixNonce == req.PrefixNonce && attachment.prefixKind == "route"
 	attachment.bridge.mu.Unlock()
 	if err := attachment.bridge.PrefixAcknowledged(req.PrefixNonce); err != nil {
@@ -1092,7 +1207,10 @@ func (s *Server) handleMissionControlVoicePrefixAck(w http.ResponseWriter, r *ht
 		writeMissionControlVoiceJSON(w, http.StatusOK, map[string]any{"ok": true, "state": "route_announced", "media_admission": true})
 		return
 	}
-	writeMissionControlVoiceJSON(w, http.StatusOK, map[string]any{"ok": true, "state": "response_requested", "media_admission": attachment.routeAnnounced})
+	attachment.bridge.mu.Lock()
+	mediaAdmission := attachment.routeAnnounced && !attachment.failed && !attachment.draining
+	attachment.bridge.mu.Unlock()
+	writeMissionControlVoiceJSON(w, http.StatusOK, map[string]any{"ok": true, "state": "response_requested", "media_admission": mediaAdmission})
 }
 
 // handleMissionControlVoiceEvents is a bounded owner-only long poll. It gives
@@ -1163,7 +1281,10 @@ func (s *Server) handleMissionControlVoiceStop(w http.ResponseWriter, r *http.Re
 	attachment.emitLocked("drain_request", attachment.drainNonce, "route", "", "Stop local tracks and audio graph, then acknowledge this drain nonce. Provider cancellation and output clear are also required.")
 	attachment.bridge.mu.Unlock()
 	if attachment.sideband != nil {
-		attachment.sideband.RequestDrain()
+		// Fence linearizes prefix ACK response.create against drain: an ACK that
+		// acquired the scoped write gate first sends before this cancel/clear;
+		// an ACK after this fence observes it and is refused.
+		attachment.sideband.Fence("owner requested attachment drain")
 	}
 	writeMissionControlVoiceJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "work_cancelled": false, "state": "draining",
@@ -1275,6 +1396,53 @@ func (s *Server) validateMissionControlVoiceCorrelation(c voice.VoiceCorrelation
 	if thread.Lifecycle != "active" || thread.RuntimeSessionID != c.RuntimeSessionID ||
 		thread.RuntimeGeneration != c.RuntimeGeneration || thread.RuntimeIncarnation != c.RuntimeIncarnation {
 		return errors.New("Mission Control thread runtime is stale")
+	}
+	if thread.Kind != "lobby" {
+		_, binding, bound, bindingErr := catalog.Thread(thread.ID)
+		if bindingErr != nil || !bound || binding.ThreadID != thread.ID {
+			return errors.New("voice target has no unambiguous workspace binding")
+		}
+		// Remote daemon sessions are browser-owned. This HTTP boundary must
+		// not borrow another browser's transport or reinterpret it as local.
+		if binding.HostID != "" {
+			return errors.New("remote voice requires an authenticated remote identity seam; no local fallback was attempted")
+		}
+		if s.hub.dial == nil {
+			return errors.New("local voice identity attestation is unavailable")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), sessiond.MissionControlReplyTimeout)
+		defer cancel()
+		daemon, dialErr := s.hub.dial(ctx, transport.HostRef{})
+		if dialErr != nil {
+			return errors.New("bound local daemon is unavailable")
+		}
+		defer func() { _ = daemon.Close() }()
+		stopDeadline := context.AfterFunc(ctx, func() { _ = daemon.Close() })
+		defer stopDeadline()
+		identityClient, supported := daemon.(missionControlIdentityDaemon)
+		if !supported {
+			return errors.New("local daemon does not support voice identity attestation")
+		}
+		go func() { _ = daemon.Run() }()
+		identity, identityErr := identityClient.MissionControlIdentity()
+		if identityErr != nil || identity.MachineID != thread.MachineID ||
+			identity.DaemonIncarnation != binding.DaemonIncarnation {
+			return errors.New("bound local daemon identity or incarnation changed")
+		}
+		workspaces, listErr := identityClient.ListWorkspacesWithin(sessiond.MissionControlReplyTimeout)
+		if listErr != nil {
+			return errors.New("bound local workspace roster is unavailable")
+		}
+		live := false
+		for _, workspace := range workspaces {
+			if workspace.WorkspaceID == binding.LiveWorkspaceID && workspace.WorkspaceUUID == thread.WorkspaceUUID {
+				live = true
+				break
+			}
+		}
+		if !live {
+			return errors.New("bound workspace UUID is no longer live")
+		}
 	}
 	router, err := s.hub.missionControlRouterForText()
 	if err != nil {

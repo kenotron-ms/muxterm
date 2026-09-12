@@ -58,6 +58,7 @@ type ProviderEvent struct {
 // fallback.
 type ProviderEventBridge interface {
 	ObserveProviderEvent(ProviderEvent) error
+	ReserveToolCall(ProviderEvent) (Correlation, error)
 	ResolveToolCall(ProviderEvent) (Correlation, error)
 }
 
@@ -65,7 +66,13 @@ type ProviderEventBridge interface {
 // Sideband may deliver a function result into the provider conversation, but
 // it must delegate response creation to this prefix-gated controller.
 type ScopedReplyBridge interface {
-	QueueScopedReply(Correlation, string, string) error
+	// terminal distinguishes the final turn result from a started/working
+	// acknowledgement. Completing work alone does not complete its narration.
+	QueueScopedReply(Correlation, string, string, bool) error
+}
+
+type SidebandTerminalBridge interface {
+	SidebandTerminal(reason string)
 }
 
 // TurnHandle is one in-flight chief-of-staff turn.

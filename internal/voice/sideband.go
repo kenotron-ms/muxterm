@@ -3,6 +3,7 @@ package voice
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,6 +54,10 @@ type Sideband struct {
 	closed  bool
 	fenced  bool
 	pending map[string]*approvalIntent
+	// Exact, already-authorized provider calls may be replayed after their
+	// capture advances to a prefix phase. Retain only bounded identity/digests;
+	// an unknown or changed call must still pass the scoped reservation gate.
+	scopedFinalCalls map[string]scopedFinalCall
 
 	// The spoken exit, guarded by mu. ending means a goodbye is on its way
 	// out; farewellCh carries the read loop's view of that goodbye's audio
@@ -92,13 +97,21 @@ type Sideband struct {
 	retryCount          int
 	eventKinds          map[string]int
 
-	writeMu sync.Mutex
-	done    chan struct{}
-	wg      sync.WaitGroup
+	writeMu       sync.Mutex
+	scopedWriteMu sync.Mutex
+	done          chan struct{}
+	wg            sync.WaitGroup
 }
 
 type sidebandConfig struct {
 	syncTimeout time.Duration
+}
+
+type scopedFinalCall struct {
+	responseID string
+	callID     string
+	name       string
+	arguments  [sha256.Size]byte
 }
 
 // Trace is one observable moment in the sideband's life. Deliberately
@@ -253,6 +266,9 @@ func (s *Sideband) listen() {
 			s.mu.Lock()
 			s.closed = true
 			s.mu.Unlock()
+			if bridge, ok := s.bridge.(SidebandTerminalBridge); ok {
+				go bridge.SidebandTerminal("provider sideband reconnect exhausted")
+			}
 			return
 		}
 		if typ != websocket.MessageText {
@@ -335,7 +351,14 @@ func (s *Sideband) handle(data []byte) {
 	if scoped, ok := s.bridge.(ProviderEventBridge); ok {
 		event := ProviderEvent{
 			Type: ev.Type, CallID: s.callID, ItemID: ev.ItemID, ResponseID: ev.ResponseID,
-			OutputID: ev.Item.ID, CallRef: ev.CallID, Metadata: ev.Response.Metadata,
+			OutputID: ev.Item.ID, CallRef: ev.Item.CallID, Metadata: ev.Response.Metadata,
+		}
+		if ev.CallID != "" && ev.Item.CallID != "" && ev.CallID != ev.Item.CallID {
+			s.Fence("conflicting provider call IDs")
+			return
+		}
+		if event.CallRef == "" {
+			event.CallRef = ev.CallID
 		}
 		if event.ResponseID == "" {
 			event.ResponseID = ev.Response.ID
@@ -350,6 +373,60 @@ func (s *Sideband) handle(data []byte) {
 	}
 	switch {
 	case ev.Type == "response.function_call_arguments.done":
+		if bridge, ok := s.bridge.(ProviderEventBridge); ok {
+			event := ProviderEvent{Type: ev.Type, CallID: s.callID, ItemID: ev.ItemID, ResponseID: ev.ResponseID, OutputID: ev.Item.ID, CallRef: ev.Item.CallID}
+			if event.CallRef == "" {
+				event.CallRef = ev.CallID
+			}
+			if event.ItemID == "" {
+				event.ItemID = event.OutputID
+			}
+			if event.ResponseID == "" {
+				event.ResponseID = ev.Response.ID
+			}
+			digest := sha256.Sum256([]byte(ev.Arguments))
+			s.mu.Lock()
+			if s.closed || s.fenced {
+				s.mu.Unlock()
+				return
+			}
+			prior, replay := s.scopedFinalCalls[event.ItemID]
+			s.mu.Unlock()
+			if replay {
+				if prior.responseID == event.ResponseID && prior.name == ev.Name &&
+					prior.arguments == digest && (event.CallRef == "" || event.CallRef == prior.callID) {
+					// No second goroutine, work admission, result or speech.
+					return
+				}
+				s.Fence("conflicting replay of a scoped provider call")
+				return
+			}
+			correlation, err := bridge.ReserveToolCall(event)
+			if err != nil {
+				s.Fence("scoped tool reservation rejected")
+				return
+			}
+			s.mu.Lock()
+			if s.closed || s.fenced {
+				s.mu.Unlock()
+				return
+			}
+			if len(s.scopedFinalCalls) >= 64 {
+				s.mu.Unlock()
+				s.Fence("scoped provider call replay ledger is full")
+				return
+			}
+			if s.scopedFinalCalls == nil {
+				s.scopedFinalCalls = make(map[string]scopedFinalCall)
+			}
+			s.scopedFinalCalls[event.ItemID] = scopedFinalCall{
+				responseID: event.ResponseID, callID: correlation.ProviderCallID,
+				name: ev.Name, arguments: digest,
+			}
+			s.mu.Unlock()
+			go s.dispatchScopedReserved(ev, correlation)
+			return
+		}
 		go s.dispatch(ev)
 	case ev.Type == "response.created":
 		s.mu.Lock()
@@ -397,6 +474,20 @@ func (s *Sideband) handle(data []byte) {
 		s.emit(Trace{Kind: TraceError, Detail: snippet(ev.Error)})
 		log.Printf("voice: sideband error event: %s", snippet(ev.Error))
 	}
+}
+
+func (s *Sideband) dispatchScopedReserved(ev realtimeEvent, correlation Correlation) {
+	args := map[string]any{}
+	if len(ev.Arguments) > 0 {
+		var raw string
+		if json.Unmarshal(ev.Arguments, &raw) == nil {
+			_ = json.Unmarshal([]byte(raw), &args)
+		} else {
+			_ = json.Unmarshal(ev.Arguments, &args)
+		}
+	}
+	bridge, _ := s.bridge.(CorrelatedBridge)
+	s.dispatchScoped(bridge, ev, args, correlation)
 }
 
 // seen records each event type once, so a run can be diagnosed without
@@ -536,7 +627,7 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 		}
 		correlation, err := events.ResolveToolCall(ProviderEvent{
 			Type: ev.Type, CallID: s.callID, ItemID: ev.ItemID, ResponseID: ev.ResponseID,
-			OutputID: ev.Item.ID, CallRef: ev.CallID,
+			OutputID: ev.Item.ID, CallRef: ev.Item.CallID,
 		})
 		if err != nil {
 			s.Fence("scoped tool event rejected")
@@ -570,21 +661,21 @@ func (s *Sideband) dispatchScoped(bridge CorrelatedBridge, ev realtimeEvent, arg
 		return
 	}
 	if ev.Name != ToolAsk && ev.Name != ToolDispatch {
-		_ = replies.QueueScopedReply(correlation, ev.CallID, "This scoped voice attachment requires explicit text controls for approval, cancellation, reset, and archive.")
+		_ = replies.QueueScopedReply(correlation, ev.CallID, "This scoped voice attachment requires explicit text controls for approval, cancellation, reset, and archive.", true)
 		return
 	}
 	request := strings.TrimSpace(str(args["request"]))
 	if request == "" {
-		_ = replies.QueueScopedReply(correlation, ev.CallID, "No request was given.")
+		_ = replies.QueueScopedReply(correlation, ev.CallID, "No request was given.", true)
 		return
 	}
 	turn, err := bridge.SubmitCorrelated(correlation, request)
 	if err != nil {
-		_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation rejected this request: "+trimErr(err))
+		_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation rejected this request: "+trimErr(err), true)
 		return
 	}
 	if ev.Name == ToolDispatch {
-		_ = replies.QueueScopedReply(correlation, ev.CallID, "Started in the selected Mission Control conversation.")
+		_ = replies.QueueScopedReply(correlation, ev.CallID, "Started in the selected Mission Control conversation.", false)
 		go s.awaitScopedLate(bridge, correlation, turn)
 		return
 	}
@@ -592,15 +683,15 @@ func (s *Sideband) dispatchScoped(bridge CorrelatedBridge, ev realtimeEvent, arg
 	defer cancel()
 	text, err := turn.Wait(ctx)
 	if err == nil {
-		_ = replies.QueueScopedReply(correlation, ev.CallID, text)
+		_ = replies.QueueScopedReply(correlation, ev.CallID, text, true)
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation is working on this.")
+		_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation is working on this.", false)
 		go s.awaitScopedLate(bridge, correlation, turn)
 		return
 	}
-	_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation could not complete this request: "+trimErr(err))
+	_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation could not complete this request: "+trimErr(err), true)
 }
 
 func (s *Sideband) awaitScopedLate(bridge CorrelatedBridge, correlation Correlation, turn TurnHandle) {
@@ -610,10 +701,10 @@ func (s *Sideband) awaitScopedLate(bridge CorrelatedBridge, correlation Correlat
 		return
 	}
 	if err != nil {
-		_ = replies.QueueScopedReply(correlation, "", "The selected Mission Control conversation stopped early: "+trimErr(err))
+		_ = replies.QueueScopedReply(correlation, "", "The selected Mission Control conversation stopped early: "+trimErr(err), true)
 		return
 	}
-	_ = replies.QueueScopedReply(correlation, "", text)
+	_ = replies.QueueScopedReply(correlation, "", text, true)
 }
 
 // SendScopedFunctionOutput deliberately writes only the tool result item.
@@ -624,10 +715,18 @@ func (s *Sideband) SendScopedFunctionOutput(callID, output string) bool {
 	}})
 }
 
+func (s *Sideband) SendScopedCompletion(output string) bool {
+	return s.write(map[string]any{"type": "conversation.item.create", "item": map[string]any{
+		"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "[Mission Control completion] " + output}},
+	}})
+}
+
 // RequestScopedResponse is called only after the attachment controller has
 // observed its deterministic local-prefix acknowledgement. Metadata binds the
 // provider response.created event to that exact prefix/capture request.
 func (s *Sideband) RequestScopedResponse(metadata map[string]string) error {
+	s.scopedWriteMu.Lock()
+	defer s.scopedWriteMu.Unlock()
 	s.mu.Lock()
 	if s.closed || s.fenced {
 		s.mu.Unlock()
@@ -643,6 +742,8 @@ func (s *Sideband) RequestScopedResponse(metadata map[string]string) error {
 // RequestDrain asks the same provider sideband to cancel its known response
 // and discard queued output. Browser drain remains separately acknowledged.
 func (s *Sideband) RequestDrain() {
+	s.scopedWriteMu.Lock()
+	defer s.scopedWriteMu.Unlock()
 	_ = s.write(map[string]any{"type": "response.cancel"})
 	_ = s.write(map[string]any{"type": "output_audio_buffer.clear"})
 }

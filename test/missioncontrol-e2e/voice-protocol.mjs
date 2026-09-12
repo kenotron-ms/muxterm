@@ -273,13 +273,15 @@ try {
   await fixtureControl('inject', callA, finalCall);
   await sleep(300);
   check('repeat_final_call_no_duplicate_root', readRecords().length === beforeRecords + 1, 'same mapped provider call did not create another text-provider root turn');
+  const afterReplay = await commands(callA);
+  check('exact_replay_does_not_fence_attachment', !afterReplay.some((item) => item.type === 'response.cancel' || item.type === 'output_audio_buffer.clear'), 'identical replay must not cancel or drain a healthy attachment');
 
   const functionOutput = await command(callA, 'conversation.item.create');
   check('scoped_function_output_before_continuation', functionOutput.type === 'conversation.item.create', 'tool result emitted before continuation request');
   const continuationPrefix = (await eventsA()).find((e) => e.type === 'prefix_request' && e.kind === 'answer');
   check('continuation_prefix_after_tool_response_done', Boolean(continuationPrefix?.nonce), 'initial tool-only provider response produced continuation prefix');
   const continuationAck = await voice('/api/missioncontrol/voice/prefix/ack', a, { lease_epoch: lease.lease_epoch, focus_epoch: lease.focus_epoch, attachment_epoch: mintA.body.attachment_epoch, prefix_nonce: continuationPrefix.nonce }, tokenA);
-  check('continuation_prefix_ack', continuationAck.body.state === 'response_requested', 'continuation remains gated by a second protocol-only prefix ACK');
+  check('continuation_prefix_ack', continuationAck.body.state === 'response_requested', `continuation protocol ACK: HTTP ${continuationAck.response.status}, code=${continuationAck.body.code ?? 'none'}, state=${continuationAck.body.state ?? 'none'}`);
   const creates = await eventually(async () => {
     const found = (await commands(callA)).filter((item) => item.type === 'response.create');
     return found.length >= 2 ? found : null;

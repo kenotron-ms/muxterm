@@ -146,6 +146,24 @@ func (m *LeaseManager) CommitAttachment(c VoiceCorrelation, bridgeID, controlTok
 	return lease.VoiceLease, nil
 }
 
+// ValidateAttachment checks authority without extending the lease or reserving
+// a capture. Prefix delivery must not revive an expired or draining owner.
+func (m *LeaseManager) ValidateAttachment(c VoiceCorrelation, bridgeID, controlToken string, leaseEpoch, focusEpoch, attachmentEpoch uint64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lease, err := m.authorizeLocked(c, bridgeID, controlToken, leaseEpoch)
+	if err != nil {
+		return err
+	}
+	if lease.FocusEpoch != focusEpoch {
+		return ErrFocusEpoch
+	}
+	if lease.State != "attached" || lease.AttachmentEpoch != attachmentEpoch {
+		return ErrAttachmentEpoch
+	}
+	return nil
+}
+
 func (m *LeaseManager) BeginCapture(c VoiceCorrelation, bridgeID, controlToken string, leaseEpoch, focusEpoch, attachmentEpoch uint64) (CaptureGrant, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

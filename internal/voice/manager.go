@@ -31,12 +31,13 @@ type Manager struct {
 
 // handle is one browser's voice session, from mint to teardown.
 type handle struct {
-	id        string
-	secret    string
-	expiresAt int64
-	minted    time.Time
-	sideband  *Sideband
-	bridge    Bridge
+	id         string
+	secret     string
+	expiresAt  int64
+	minted     time.Time
+	sideband   *Sideband
+	bridge     Bridge
+	connecting bool
 }
 
 // mintTTL bounds how long an unused minted secret is kept. A browser that
@@ -147,6 +148,13 @@ func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string) (Answ
 	m.mu.Lock()
 	m.sweepLocked()
 	h, ok := m.handles[sessionID]
+	if ok && h.connecting {
+		m.mu.Unlock()
+		return Answer{}, nil, errors.New("voice: session SDP exchange is already in progress")
+	}
+	if ok {
+		h.connecting = true
+	}
 	m.mu.Unlock()
 	if !ok {
 		return Answer{}, nil, errors.New("voice: unknown or expired voice session; mint a new one")
@@ -154,6 +162,11 @@ func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string) (Answ
 
 	answer, err := m.client.ExchangeSDP(ctx, h.secret, offerSDP)
 	if err != nil {
+		m.mu.Lock()
+		if m.handles[sessionID] == h {
+			h.connecting = false
+		}
+		m.mu.Unlock()
 		return Answer{}, nil, err
 	}
 
@@ -166,12 +179,23 @@ func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string) (Answ
 		// Audio would still work, but a chief of staff that cannot act
 		// is not the feature. Fail the connection rather than hand back
 		// a session that can only chat.
+		m.mu.Lock()
+		if m.handles[sessionID] == h {
+			h.connecting = false
+		}
+		m.mu.Unlock()
 		return Answer{}, nil, err
 	}
 
 	m.mu.Lock()
+	if m.handles[sessionID] != h || !h.connecting {
+		m.mu.Unlock()
+		sb.Close()
+		return Answer{}, nil, errors.New("voice: session was ended while SDP exchange completed")
+	}
 	prev := m.live
 	h.sideband = sb
+	h.connecting = false
 	m.live = h
 	m.mu.Unlock()
 

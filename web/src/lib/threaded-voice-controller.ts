@@ -124,7 +124,7 @@ interface PrefixRecord {
 
 interface VoiceEvent {
   readonly cursor: number;
-  readonly type: 'prefix_request' | 'prefix_timeout' | 'drain_request' | 'drain_complete';
+  readonly type: 'prefix_request' | 'prefix_timeout' | 'drain_request' | 'drain_complete' | 'attachment_failed';
   readonly nonce: string;
   readonly kind: '' | 'route' | 'answer';
   readonly attachmentEpoch: number;
@@ -630,11 +630,9 @@ async function start(target: ThreadVoiceTarget | null): Promise<void> {
     );
     if (startingEpoch !== started) return;
     const sessionId = bounded(tokenResponse.session_id, 256);
-    const mintedValue = bounded(tokenResponse.value, 16 * 1024);
     const attachmentEpoch = positiveInteger(tokenResponse.attachment_epoch);
     if (
       sessionId === '' ||
-      mintedValue === '' ||
       attachmentEpoch === null ||
       tokenResponse.microphone_admission !== false
     ) {
@@ -643,10 +641,6 @@ async function start(target: ThreadVoiceTarget | null): Promise<void> {
         'The experimental voice server did not return a muted scoped attachment candidate.',
       );
     }
-    // `value` is intentionally not retained: the server owns the scoped
-    // provider session and the browser only correlates the opaque session id.
-    void mintedValue;
-
     current = {
       epoch: started,
       target: stableTarget,
@@ -1047,6 +1041,9 @@ async function handleVoiceEvent(current: Attachment, event: VoiceEvent): Promise
       return;
     case 'drain_complete':
       await handleDrainComplete(current, event);
+      return;
+    case 'attachment_failed':
+      await localFailure(current, event.message || 'The scoped provider attachment failed. Voice has been muted.');
       return;
   }
 }
