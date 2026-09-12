@@ -17,9 +17,11 @@ import (
 // boot-time restore from the most recent snapshot. This is muxterm's
 // equivalent of tmux-resurrect + tmux-continuum: it does NOT re-adopt or
 // resume the original OS process (there is none to resume -- the daemon
-// restarted). It restores pane cwd, relaunches a recognized coding agent's
-// exact argv verbatim (see agent_catalog.go), and seeds the last-seen output
-// back into the pane as inert historical text above a fresh, live prompt.
+// restarted). It restores pane cwd, relaunches selected recognized coding
+// agents' exact argv verbatim (see agent_catalog.go), and seeds the last-seen
+// output back into the pane as inert historical text above a fresh, live
+// prompt. Claude Code is deliberately excluded from argv replay: see
+// claude_recovery.go.
 const (
 	snapshotVersion = 1
 
@@ -240,6 +242,17 @@ func capturePaneSnapshot(p *Pane) PaneSnapshot {
 	}
 	out.Cwd = cwd
 	out.Argv = argv
+
+	// Claude Code's captured argv may include the original opening work
+	// request. It must be classified before the Amplifier title and replay
+	// paths so prompt text cannot supply an Amplifier banner identity.
+	// The current shipped build
+	// has no verified Claude conversation-resume path, so restore opens a
+	// safe shell instead; see claude_recovery.go.
+	if isClaudeArgv(argv) {
+		out.Agent = HarnessClaude
+		return out
+	}
 
 	if id, matched := matchAmplifierSessionID(argv); matched {
 		// Tier 1: the hooks-muxterm-session hook stamped the real session
@@ -554,27 +567,28 @@ func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) error {
 	}
 	cols, rows := sizeOrDefault(paneSnap.Cols, paneSnap.Rows)
 
+	// Claude Code is a special fail-closed case. Its observed argv can carry
+	// the opening work request, which must never be replayed after a daemon
+	// restart. Classification deliberately considers both persisted Agent and
+	// argv, because snapshots can be old or contradictory.
+	claude := isClaudePaneSnapshot(paneSnap)
+	cwd := paneSnap.Cwd
+
 	// resuming is computed once and shared by both the seed text (below)
 	// and the argv choice, so the divider's wording and what actually gets
 	// executed can never disagree with each other.
-	resuming := paneSnap.SessionID != "" && amplifierSessionLive(paneSnap.Cwd, paneSnap.SessionID)
-
-	// Pre-seed the buffer BEFORE NewPane is called at all: this happens
-	// before the pty is even started, let alone before the read-loop
-	// goroutine that copies live PTY output into it, so there is no
-	// possible ordering in which a live byte could interleave with the seed.
-	buf := NewVTBuffer(cols, rows)
-	_, _ = buf.Write(buildRestoreSeed(paneSnap, resuming))
+	resuming := !claude && paneSnap.SessionID != "" && amplifierSessionLive(cwd, paneSnap.SessionID)
 
 	// Three-way argv choice, in priority order:
 	//  1. A live, resumable session id -- construct a fresh "amplifier
 	//     resume <id>" invocation. The captured Argv is NEVER used here:
 	//     for tier 1 it is a cosmetic setproctitle string, not a real
 	//     executable path.
-	//  2. A catalog match whose Argv is a real invocation (ArgvIsCosmetic
-	//     false) -- relaunch it verbatim, exactly like today's existing
-	//     behaviour for claude/codex/opencode, and for amplifier when no
-	//     session id was discoverable at all.
+	//  2. A non-Claude catalog match whose Argv is a real invocation
+	//     (ArgvIsCosmetic false) -- relaunch it verbatim, preserving today's
+	//     behavior for codex/opencode and for amplifier when no session id was
+	//     discoverable at all. Claude intentionally falls through to a shell:
+	//     no shipped path has verified an exact supported conversation restore.
 	//  3. Neither -- nil argv, default shell resolution. This is also
 	//     where a tier-1-matched-but-no-longer-live pane lands: its Argv
 	//     is cosmetic (ArgvIsCosmetic true), so it is never falsely
@@ -583,7 +597,7 @@ func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) error {
 	switch {
 	case resuming:
 		argv = []string{"amplifier", "resume", paneSnap.SessionID}
-	case paneSnap.Agent != "" && !paneSnap.ArgvIsCosmetic:
+	case !claude && paneSnap.Agent != "" && !paneSnap.ArgvIsCosmetic:
 		argv = paneSnap.Argv
 	}
 
@@ -592,16 +606,38 @@ func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) error {
 		m.PaneID = id
 		s.broadcast(wsID, m)
 	}
-	p, err := NewPane(
-		localID,
-		argv,
-		cols, rows,
-		buf,
-		func(id int, data []byte) { s.broadcastPaneData(wsID, id, data) },
-		func(id int, exitCode int, runtimeMs int64) { s.handlePaneExit(wsID, id, exitCode, runtimeMs) },
-		onPromptFn,
-		paneSnap.Cwd,
-	)
+
+	// Pre-seed a fresh buffer before each attempted PTY start. This preserves
+	// the no-interleaving guarantee, and lets a Claude pane whose captured CWD
+	// vanished since capture fall back to NewPane's ordinary home-directory
+	// shell without leaving the divider claiming the stale CWD was used.
+	newRestoreBuffer := func(cwd string) *VTBuffer {
+		seedSnap := paneSnap
+		seedSnap.Cwd = cwd
+		buf := NewVTBuffer(cols, rows)
+		_, _ = buf.Write(buildRestoreSeed(seedSnap, resuming))
+		return buf
+	}
+	start := func(cwd string, buf *VTBuffer) (*Pane, error) {
+		return NewPane(
+			localID,
+			argv,
+			cols, rows,
+			buf,
+			func(id int, data []byte) { s.broadcastPaneData(wsID, id, data) },
+			func(id int, exitCode int, runtimeMs int64) { s.handlePaneExit(wsID, id, exitCode, runtimeMs) },
+			onPromptFn,
+			cwd,
+		)
+	}
+
+	p, err := start(cwd, newRestoreBuffer(cwd))
+	if err != nil && claude && cwd != "" {
+		// NewPane returns errors before a successful process start. Retry only
+		// the default shell in HOME, never the captured Claude command or task.
+		cwd = ""
+		p, err = start(cwd, newRestoreBuffer(cwd))
+	}
 	if err != nil {
 		return err
 	}
@@ -623,8 +659,9 @@ func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) error {
 // mid-alt-screen, e.g. a TUI was open when the snapshot was taken), and one
 // printed, dim, inert divider line documenting what this pane was running
 // and when -- worded differently depending on whether restorePane is about
-// to actually resume the conversation (resuming) or just relaunch/fall
-// back, so the divider never claims more than what actually happens next.
+// to actually resume an Amplifier conversation, open a safe Claude shell, or
+// just relaunch/fall back, so the divider never claims more than what actually
+// happens next.
 // The fresh shell/agent's own prompt (or resumed conversation) lands right
 // after this, live, on the clean main screen.
 func buildRestoreSeed(paneSnap PaneSnapshot, resuming bool) []byte {
@@ -639,7 +676,12 @@ func buildRestoreSeed(paneSnap PaneSnapshot, resuming bool) []byte {
 	when := paneSnap.CapturedAt.Local().Format("2006-01-02 15:04:05")
 
 	var divider string
-	if resuming {
+	if isClaudePaneSnapshot(paneSnap) {
+		divider = fmt.Sprintf(
+			"\r\n\x1b[2m── muxterm: restored · was running Claude Code · conversation recovery is disabled; opened a shell and did not replay the original request · last seen %s · cwd %s ──\x1b[0m\r\n\r\n",
+			when, cwd,
+		)
+	} else if resuming {
 		// Discloses HOW the session id was found, not just that a resume
 		// is happening: a hook-stamped id (tier 1) is deliberately placed
 		// for exactly this purpose, while a scanned id (tier 2) is a
