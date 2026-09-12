@@ -209,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def send_sse(self, value: dict[str, Any]) -> None:
+    def send_sse(self, value: dict[str, Any], request: dict[str, Any]) -> None:
         item = value["output"][0]
         events: list[tuple[str, dict[str, Any]]] = [
             ("response.created", {"type": "response.created", "response": value}),
@@ -242,6 +242,11 @@ class Handler(BaseHTTPRequestHandler):
         for event, data in events:
             self.wfile.write(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode("utf-8"))
             self.wfile.flush()
+            if event in {"response.output_text.delta", "response.function_call_arguments.delta"}:
+                # Hold a real open stream after a delivered delta, not an
+                # unanswered HTTP request. The operator releases only this
+                # explicitly marked disposable fixture turn.
+                self.fixture.wait_for_barrier(request)
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
@@ -297,16 +302,14 @@ class Handler(BaseHTTPRequestHandler):
             }]
         value = response(response_id, str(body.get("model", "fixture-model")), output)
         self.fixture.record({"method": "POST", "path": self.path, "request": body, "response": value})
-        try:
-            # Record the accepted request before exposing the test-only barrier:
-            # the harness can prove the held request reached this provider.
-            self.fixture.wait_for_barrier(body)
-        except ValueError as error:
-            self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": str(error)}})
-            return
         if body.get("stream") is True or "text/event-stream" in self.headers.get("accept", ""):
-            self.send_sse(value)
+            self.send_sse(value, body)
         else:
+            try:
+                self.fixture.wait_for_barrier(body)
+            except ValueError as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": str(error)}})
+                return
             self.send_json(HTTPStatus.OK, value)
 
 
