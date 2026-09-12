@@ -101,6 +101,11 @@ try {
       thread_kind: frame.thread?.kind,
       runtime_generation: frame.thread?.runtime_generation ?? frame.runtime_generation,
       thread_seq: frame.thread_seq,
+      event_name: frame.event?.ev,
+      turn_id_sha256: typeof (frame.turn_id ?? frame.event?.turn_id) === 'string'
+        ? sha(frame.turn_id ?? frame.event.turn_id).slice(0, 16) : undefined,
+      persisted: typeof frame.event?.persisted === 'boolean' ? frame.event.persisted : undefined,
+      event_error_present: typeof frame.event?.error === 'string' && frame.event.error.length > 0,
       capabilities,
       selection_shape: selectionShape,
     });
@@ -238,11 +243,14 @@ try {
   await page.locator(`[data-thread-cancel="${held.receipt.turn_id}"]`).click();
   await eventually(() => frames.slice(cancelStart).find((f) =>
     f.op === 'cancel' && f.ok === true && f.turn_id === held.receipt.turn_id), 'scoped cancel receipt');
+  // The first native cancellation request is cooperative. Release the
+  // fixture stream only after the exact cancel receipt, then require its
+  // genuine persisted cancelled event; do not wait on our own barrier.
+  put(path.join(opt['barrier-dir'], `${cancelToken}.release`), 'release\n');
   await eventually(() => frames.slice(cancelStart).find((f) =>
     f.type === 'missioncontrol-event' && f.thread_id === finalA.thread.id &&
     f.event?.turn_id === held.receipt.turn_id && f.event?.ev === 'cancelled' &&
     f.event?.persisted === true), 'persisted cancelled stream terminal');
-  put(path.join(opt['barrier-dir'], `${cancelToken}.release`), 'release\n');
   pass('held_stream_cancel_uses_exact_selected_turn', { scoped_receipt: true, terminal_observed: true });
   const composer = page.locator('[data-thread-composer]');
   if (!await page.getByText(aSeedText, { exact: true }).count()) throw new Error('A_canary_not_retained_after_evictions');

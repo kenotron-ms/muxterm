@@ -339,7 +339,7 @@ async function main() {
       sockets.push(socket);
       socket.on('framesent', (frame) => {
         try {
-          const payload = typeof frame.payload === 'function' ? frame.payload() : '';
+          const payload = String(frame.payload);
           const message = JSON.parse(payload);
           if (message?.type === 'missioncontrol-select') sentSelectionFrames.push(message);
           if (message?.type === 'missioncontrol-reset' || message?.type === 'missioncontrol-archive') {
@@ -351,7 +351,7 @@ async function main() {
       });
       socket.on('framereceived', (frame) => {
         try {
-          const payload = typeof frame.payload === 'function' ? frame.payload() : '';
+          const payload = String(frame.payload);
           const message = JSON.parse(payload);
           if (message?.type === 'missioncontrol-result') receivedMissionControlFrames.push(message);
         } catch {
