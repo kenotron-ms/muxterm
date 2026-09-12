@@ -45,7 +45,7 @@ export interface Artifact {
   contentType: string;
   /** Populated for markdown and text only; '' for everything else. */
   text: string;
-  /** Past the size bound. The metadata is real; the bytes were never read. */
+  /** Past the response read bound, so no text was returned. */
   tooLarge: boolean;
   /** The bound itself, so the viewer states the server's number, not a copy. */
   maxBytes: number;
@@ -94,11 +94,21 @@ export function parseArtifact(raw: unknown): Artifact {
  * inactive mid-flight aborts, and an aborted fetch rejects with an AbortError
  * the caller is expected to ignore rather than render.
  *
+ * `maxBytes`, when supplied, asks the server for a smaller read bound. The
+ * Viewer omits it and therefore keeps the server's normal publication bound;
+ * a small transient preview can ask for metadata-only beyond its own bound.
+ *
  * Throws the server's own `error` sentence on any non-2xx, so the applet shows
  * "/gone does not exist" rather than "HTTP 404".
  */
-export async function fetchArtifact(path: string, signal?: AbortSignal): Promise<Artifact> {
-  const url = `${apiPath('/api/artifact')}?${new URLSearchParams({ path }).toString()}`;
+export async function fetchArtifact(
+  path: string,
+  signal?: AbortSignal,
+  maxBytes?: number,
+): Promise<Artifact> {
+  const query = new URLSearchParams({ path });
+  if (maxBytes !== undefined) query.set('max_bytes', String(maxBytes));
+  const url = `${apiPath('/api/artifact')}?${query.toString()}`;
   const res = await fetch(url, signal ? { signal } : undefined);
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -15,7 +16,7 @@ import (
 // The /api/artifact routes: ONE LOCAL FILE, SHOWN THE WAY A RECIPIENT WOULD
 // SEE IT.
 //
-//	GET  /api/artifact?path=<absolute path>   metadata + text, for the viewer
+//	GET  /api/artifact?path=<absolute path>[&max_bytes=<smaller bound>] metadata + text, for the viewer
 //	GET  /api/artifact/raw?path=<abs>         the bytes (images; downloads)
 //	GET  /api/artifact/doc.css                the published-document stylesheet
 //	POST /api/artifact/open {"path":"..."}    tell every open browser to show it
@@ -66,9 +67,9 @@ type artifactResponse struct {
 	Kind        string `json:"kind"`     // markdown | text | image | download
 	ContentType string `json:"contentType"`
 	Text        string `json:"text"`
-	// TooLarge is the honest answer for a file past the bound: the metadata
-	// is real, the bytes were never read, and the viewer says so by name
-	// instead of hanging the browser on 200MB of anything.
+	// TooLarge means no text was returned because the file is beyond the read
+	// bound. It is normally known before a read; a bounded read that catches a
+	// file growing after its stat reports the same metadata-only response.
 	TooLarge bool `json:"tooLarge"`
 	// MaxBytes is the bound itself, on the wire, so the viewer can state the
 	// number it was measured against rather than hard-coding a copy of it.
@@ -78,6 +79,12 @@ type artifactResponse struct {
 	// rather than an unsuitable file.
 	Binary bool `json:"binary"`
 }
+
+// errArtifactReadPastLimit is distinguished from an I/O failure because an
+// explicitly limited transient preview can report honest metadata when a file
+// grows between its Lstat and bounded read. The ordinary Viewer keeps its
+// established 500 response for that race.
+var errArtifactReadPastLimit = errors.New("artifact exceeded its read limit")
 
 func writeArtifactJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -99,6 +106,24 @@ func writeArtifactError(w http.ResponseWriter, code int, err error) {
 // what every other reader of this path does. What the symlink cannot do is
 // make a directory look like a file -- IsDir() is checked after resolution.
 func artifactPath(raw string) (string, os.FileInfo, int, error) {
+	return artifactPathWithStat(raw, os.Stat)
+}
+
+// artifactLimitedPath does not follow a final symlink. A bounded preview is
+// asked for merely by hovering or focusing a name in a listing, so it must not
+// traverse an unrelated symlink target. Lstat reports that final symlink as
+// non-regular, and artifactPathWithStat declines it before any read.
+func artifactLimitedPath(raw string) (string, os.FileInfo, int, error) {
+	return artifactPathWithStat(raw, os.Lstat)
+}
+
+// artifactPathWithStat validates a path and checks it with the caller's chosen
+// final-component inspection rule. Normal Viewer requests use Stat; explicitly
+// bounded previews use Lstat via artifactLimitedPath.
+func artifactPathWithStat(
+	raw string,
+	stat func(string) (os.FileInfo, error),
+) (string, os.FileInfo, int, error) {
 	p := strings.TrimSpace(raw)
 	if p == "" {
 		return "", nil, http.StatusBadRequest, errors.New(`"path" is required and must be an absolute path`)
@@ -119,7 +144,7 @@ func artifactPath(raw string) (string, os.FileInfo, int, error) {
 	}
 	p = filepath.Clean(p)
 
-	fi, err := os.Stat(p)
+	fi, err := stat(p)
 	switch {
 	case os.IsNotExist(err):
 		return "", nil, http.StatusNotFound, fmt.Errorf("%s does not exist", p)
@@ -130,16 +155,50 @@ func artifactPath(raw string) (string, os.FileInfo, int, error) {
 	case fi.IsDir():
 		return "", nil, http.StatusBadRequest, fmt.Errorf("%s is a directory, not a file", p)
 	case !fi.Mode().IsRegular():
-		// A fifo, a device or a socket. Reading one can block forever, which
-		// is a hung viewer rather than an error the user can act on.
+		// A final symlink under Lstat, or a fifo, device or socket. Reading
+		// one can block forever or traverse an unrelated target.
 		return "", nil, http.StatusBadRequest, fmt.Errorf("%s is not a regular file", p)
 	}
 	return p, fi, http.StatusOK, nil
 }
 
+// artifactReadLimit returns the requested read bound without ever allowing a
+// caller to widen the Viewer's established publicationMaxBytes limit. Omitting
+// max_bytes preserves the Viewer contract; a smaller value lets a transient
+// preview ask for metadata instead of reading a whole otherwise-viewable file.
+//
+// The second result records an explicit bound. Its caller uses that fact to
+// choose Lstat validation and to distinguish the preview's race-safe response
+// from the ordinary Viewer's existing behavior.
+func artifactReadLimit(r *http.Request) (int64, bool, error) {
+	q := r.URL.Query()
+	if !q.Has("max_bytes") {
+		return publicationMaxBytes, false, nil
+	}
+	maxBytes, err := strconv.ParseInt(q.Get("max_bytes"), 10, 64)
+	if err != nil || maxBytes <= 0 || maxBytes > publicationMaxBytes {
+		return 0, true, fmt.Errorf(`"max_bytes" must be a positive integer no greater than %d`, publicationMaxBytes)
+	}
+	return maxBytes, true, nil
+}
+
 // handleArtifact answers GET /api/artifact?path=<absolute path>.
 func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
-	p, fi, code, err := artifactPath(r.URL.Query().Get("path"))
+	maxBytes, limited, err := artifactReadLimit(r)
+	if err != nil {
+		writeArtifactError(w, http.StatusBadRequest, err)
+		return
+	}
+	var (
+		p    string
+		fi   os.FileInfo
+		code int
+	)
+	if limited {
+		p, fi, code, err = artifactLimitedPath(r.URL.Query().Get("path"))
+	} else {
+		p, fi, code, err = artifactPath(r.URL.Query().Get("path"))
+	}
 	if err != nil {
 		writeArtifactError(w, code, err)
 		return
@@ -155,15 +214,14 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 		Modified:    fi.ModTime().Unix(),
 		Kind:        string(kind),
 		ContentType: ctype,
-		MaxBytes:    publicationMaxBytes,
+		MaxBytes:    maxBytes,
 	}
 
-	// THE SAME BOUND, CHECKED BEFORE ANY READ. A file past it is described,
-	// never read: the whole point of a bound is that the expensive thing does
-	// not happen. Applies to every kind, including the ones whose bytes this
-	// handler would not have returned anyway, so the answer a user gets for a
-	// 200MB file is the same sentence whatever its extension is.
-	if fi.Size() > publicationMaxBytes {
+	// THE REQUESTED BOUND, defaulting to the Viewer's established publication
+	// bound, is checked before any read. A file past it is described instead of
+	// read. This applies to every kind, including ones whose bytes this handler
+	// would not have returned anyway.
+	if fi.Size() > maxBytes {
 		resp.TooLarge = true
 		writeArtifactJSON(w, http.StatusOK, resp)
 		return
@@ -172,8 +230,22 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	// Only text-shaped kinds are read here. An image is bytes the browser
 	// fetches itself; a download is bytes nobody has asked for yet.
 	if kind == kindMarkdown || kind == kindText {
-		buf, rerr := readArtifactBytes(p)
+		buf, rerr := readArtifactBytes(p, maxBytes)
 		if rerr != nil {
+			if limited && errors.Is(rerr, errArtifactReadPastLimit) {
+				// The file fit at Lstat but grew before or while the bounded
+				// read. It is still an ordinary "too large for this preview"
+				// result, not a server failure.
+				resp.TooLarge = true
+				writeArtifactJSON(w, http.StatusOK, resp)
+				return
+			}
+			if errors.Is(rerr, errArtifactReadPastLimit) {
+				// Keep the ordinary Viewer response exactly as it was before
+				// explicitly bounded preview reads existed.
+				writeArtifactError(w, http.StatusInternalServerError, fmt.Errorf("this file is larger than the %d MB a viewer will read", publicationMaxBytes>>20))
+				return
+			}
 			writeArtifactError(w, http.StatusInternalServerError, rerr)
 			return
 		}
@@ -190,20 +262,20 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	writeArtifactJSON(w, http.StatusOK, resp)
 }
 
-// readArtifactBytes reads at most publicationMaxBytes+1 and refuses the file
-// if it reached that, catching a file that grew between the stat and the read.
-func readArtifactBytes(p string) ([]byte, error) {
+// readArtifactBytes reads at most maxBytes+1 and refuses the file if it reached
+// that, catching a file that grew between the stat and the read.
+func readArtifactBytes(p string, maxBytes int64) ([]byte, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close() //nolint:errcheck
-	buf, err := io.ReadAll(io.LimitReader(f, publicationMaxBytes+1))
+	buf, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(buf)) > publicationMaxBytes {
-		return nil, fmt.Errorf("this file is larger than the %d MB a viewer will read", publicationMaxBytes>>20)
+	if int64(len(buf)) > maxBytes {
+		return nil, errArtifactReadPastLimit
 	}
 	return buf, nil
 }

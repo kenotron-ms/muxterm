@@ -41,7 +41,7 @@
  * <mux-cos>'s :host (theme.ts:349). Nothing here invents a colour.
  */
 
-import { LitElement, html, css, nothing, type PropertyValues, type TemplateResult } from 'lit';
+import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { CornerLeftUp, File as FileGlyph, Folder } from 'lucide';
 import { icon } from '../../lib/icons.js';
@@ -69,6 +69,24 @@ import {
   statusWord,
   type Publication,
 } from '../../lib/publications-api.js';
+import { fetchArtifact, type Artifact } from '../../lib/artifact-api.js';
+
+/** Bytes as a person reads them. Mirrors applet-artifact.ts's own helper --
+ * each applet reads its own tokens and helpers rather than reaching into a
+ * sibling's module. */
+function humanSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+/** A bounded excerpt for the hover/focus preview -- never the whole read. */
+const PREVIEW_MAX_CHARS = 320;
+/** The peek reads only this much; the Viewer keeps its normal server bound. */
+const PREVIEW_READ_MAX_BYTES = 4 * 1024;
+const PREVIEW_OPEN_DELAY_MS = 300;
+const PREVIEW_MAX_HEIGHT_PX = 260;
+const PREVIEW_GAP_PX = 4;
 
 /**
  * A place this applet can be rooted at.
@@ -308,6 +326,26 @@ export class AppletFiles extends LitElement implements AppletElement {
   /** Path whose link was just copied; clears itself after a moment. */
   @state() private _copied = '';
 
+  // ── Hover/focus preview ──────────────────────────────────────────────────
+  //
+  // A bounded, read-only peek at one file -- NOT the Viewer (which is a full
+  // navigation, see _view()) and not a persistent panel. Opens after a short
+  // hover/focus delay, closes on leave/blur/Escape/row-change, and every
+  // request is aborted the moment it stops being the one the pointer or focus
+  // is actually on -- so moving quickly down a long listing never leaves a
+  // stale fetch to land late over the row you meant to read.
+  @state() private _previewPath: string | null = null;
+  @state() private _previewLoading = false;
+  @state() private _previewArtifact: Artifact | null = null;
+  @state() private _previewError = '';
+  @state() private _previewAbove = false;
+  private _previewPendingPath: string | null = null;
+  private _previewTimer: ReturnType<typeof setTimeout> | null = null;
+  private _previewAbort: AbortController | null = null;
+  private _previewListening = false;
+  private _previewResize: ResizeObserver | null = null;
+  private _previewPlacementFrame: number | null = null;
+
   /** Where we are, or want to be. null means "the server's cwd". */
   private _path: string | null = loadPath();
 
@@ -399,6 +437,7 @@ export class AppletFiles extends LitElement implements AppletElement {
     .body {
       height: 100%;
       overflow-y: auto;
+      container-type: inline-size;
       padding: var(--s-6);
     }
 
@@ -508,6 +547,7 @@ export class AppletFiles extends LitElement implements AppletElement {
       gap: 1px;
     }
     .row {
+      position: relative;
       display: flex;
       align-items: center;
       flex-wrap: wrap;
@@ -523,6 +563,17 @@ export class AppletFiles extends LitElement implements AppletElement {
       border: 0;
       border-radius: var(--r-ctl);
       padding: 3px var(--s-4);
+    }
+    /* Keep the 1px gap as the breathing seam, then make the actual boundary
+       legible as well. The divider is horizontal; .trail's vertical edge is
+       a different job. */
+    .tree > .row + .row {
+      border-top: 1px solid var(--edge);
+    }
+    /* A file row has a flexible name and a dedicated trailing action space.
+       The name yields first, rather than pushing its metadata below the row. */
+    .row.file {
+      flex-wrap: nowrap;
     }
     /* Only directories navigate, so only directories look pressable. A
        file row is quiet, NOT disabled: it is not a broken control, it is
@@ -566,6 +617,7 @@ export class AppletFiles extends LitElement implements AppletElement {
       color: var(--ink-3);
     }
     .nm {
+      flex: 1 1 0;
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -632,7 +684,6 @@ export class AppletFiles extends LitElement implements AppletElement {
     }
 
     .pub {
-      margin-left: auto;
       flex: none;
       display: flex;
       align-items: center;
@@ -641,6 +692,90 @@ export class AppletFiles extends LitElement implements AppletElement {
       font-size: 10.5px;
       line-height: 1;
       white-space: nowrap;
+    }
+
+    /* ── THE TRAILING ZONE: size, the peek toggle, and publish state ────────
+       A single divider marks where "which file" ends and "what about it"
+       starts, so the eye has one line to find instead of guessing from
+       whitespace -- and every row's trailing zone lines up on it, whatever
+       the filename's length. */
+    .trail {
+      margin-left: 0;
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: var(--s-3);
+      padding-left: var(--s-3);
+      border-left: 1px solid var(--edge);
+    }
+    .size {
+      flex: none;
+      min-width: 6ch;
+      text-align: right;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--ink-3);
+    }
+    .act.peekbtn {
+      color: var(--ink-3);
+    }
+
+    /* ── THE PEEK: a bounded, read-only excerpt, not the Viewer ──────────── */
+    .peek {
+      position: absolute;
+      top: calc(100% + var(--s-2));
+      left: var(--s-4);
+      z-index: 5;
+      width: min(360px, calc(100% - var(--s-4) - var(--s-4)));
+      min-width: 0;
+      max-height: min(260px, var(--preview-room, 260px));
+      overflow: auto;
+      padding: var(--s-3) var(--s-4);
+      background: var(--surface);
+      border: 1px solid var(--edge);
+      border-radius: var(--r-ctl);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+      font-size: var(--t-meta);
+      color: var(--ink-2);
+    }
+    .row.peek-above .peek {
+      top: auto;
+      bottom: calc(100% + var(--s-2));
+    }
+    .peek.err {
+      color: var(--fail);
+    }
+    .peek.err .peekmeta,
+    .peek.err .peeknote {
+      color: inherit;
+    }
+    .peekname {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.3;
+      color: var(--ink-1);
+      overflow-wrap: anywhere;
+    }
+    .peekmeta {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--ink-3);
+      margin-bottom: var(--s-2);
+    }
+    .peektext {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      max-height: none;
+      overflow: visible;
+      color: var(--ink-1);
+    }
+    .peeknote {
+      color: var(--ink-3);
     }
     .pubmark {
       color: var(--pub-ink);
@@ -708,6 +843,53 @@ export class AppletFiles extends LitElement implements AppletElement {
       /* No pointer to hover with: the offer is simply always visible. */
       .act.quiet {
         opacity: 1;
+      }
+    }
+    /* A desktop right pane can be deliberately squeezed by the resizer. Keep
+       file actions on one line, make the name yield, and leave every action
+       reachable by scrolling its own trailing strip instead of overlapping it. */
+    @container (max-width: 540px) {
+      .row.file {
+        gap: var(--s-2);
+      }
+      .row.file .ic,
+      .row.file .size {
+        display: none;
+      }
+      .row.file .nm {
+        min-width: 4ch;
+      }
+      .row.file .trail {
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: calc(100% - 4ch - 14px - var(--s-2) - var(--s-2));
+        gap: var(--s-2);
+        padding-left: var(--s-2);
+        overflow-x: auto;
+      }
+      .row.file .pub {
+        gap: var(--s-1);
+      }
+    }
+    @media (pointer: coarse) {
+      button.row {
+        min-height: 44px;
+      }
+      .ctl,
+      .crumb,
+      .pick select,
+      button.nm,
+      .act {
+        min-width: 44px;
+        min-height: 44px;
+      }
+      .ctl,
+      .act {
+        justify-content: center;
+      }
+      .act {
+        display: inline-flex;
+        align-items: center;
       }
     }
 
@@ -896,7 +1078,7 @@ export class AppletFiles extends LitElement implements AppletElement {
     super.disconnectedCallback();
   }
 
-  override updated(changed: PropertyValues<this>): void {
+  override updated(changed: Map<PropertyKey, unknown>): void {
     if (changed.has('active')) this._sync();
     // The contract says an applet consumes its target and clears it back to
     // null. `path:<absolute dir>` now HAS a sender -- the Viewer's "in files"
@@ -919,6 +1101,14 @@ export class AppletFiles extends LitElement implements AppletElement {
         }
       }
     }
+    if (
+      changed.has('_previewPath') ||
+      changed.has('_previewLoading') ||
+      changed.has('_previewArtifact') ||
+      changed.has('_previewError')
+    ) {
+      this._queuePreviewPlacement();
+    }
   }
 
   /**
@@ -936,6 +1126,7 @@ export class AppletFiles extends LitElement implements AppletElement {
    */
   private _sync(): void {
     const want = this.active && this.isConnected;
+    this._syncPreviewLifecycle(want);
     if (want) {
       // The fleet is where the candidate roots come from, so the picker has to
       // hear about a lane that starts while this tab is open.
@@ -951,6 +1142,53 @@ export class AppletFiles extends LitElement implements AppletElement {
     this._abort = null;
     this._loading = false;
     this._stale = true;
+    this._previewClose();
+  }
+
+  /** Escape and geometry watchers exist only while this applet is on screen. */
+  private _syncPreviewLifecycle(want: boolean): void {
+    if (want) {
+      if (this._previewListening) return;
+      this._previewListening = true;
+      document.addEventListener('keydown', this._onPreviewEscape, { capture: true });
+      window.addEventListener('resize', this._queuePreviewPlacement);
+      void this.updateComplete.then(() => {
+        if (!this._previewListening || this._previewResize !== null) return;
+        const body = this.renderRoot.querySelector<HTMLElement>('.body');
+        if (!body) return;
+        this._previewResize = new ResizeObserver(this._queuePreviewPlacement);
+        this._previewResize.observe(body);
+      });
+      return;
+    }
+    if (!this._previewListening) return;
+    this._previewListening = false;
+    document.removeEventListener('keydown', this._onPreviewEscape, true);
+    window.removeEventListener('resize', this._queuePreviewPlacement);
+    this._previewResize?.disconnect();
+    this._previewResize = null;
+  }
+
+  /** The current applet gets the first Escape, even for a hover-only peek. */
+  private _onPreviewEscape = (event: KeyboardEvent): void => {
+    if (
+      event.key !== 'Escape' ||
+      !this._previewListening ||
+      !this.active ||
+      !this.isConnected ||
+      !this._previewHasActivity()
+    ) {
+      return;
+    }
+    // The preview is the topmost transient layer. Consume this Escape so it
+    // cannot also close a parent menu or end an unrelated voice interaction.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this._previewClose();
+  };
+
+  private _previewHasActivity(): boolean {
+    return this._previewPath !== null || this._previewPendingPath !== null || this._previewAbort !== null;
   }
 
   private _onFleet = (): void => {
@@ -1013,6 +1251,7 @@ export class AppletFiles extends LitElement implements AppletElement {
    * always the server's cwd, so the retry terminates.
    */
   private async _load(path: string | null, fallback: boolean): Promise<void> {
+    this._previewClose();
     const ctrl = new AbortController();
     this._abort?.abort();
     this._abort = ctrl;
@@ -1062,6 +1301,7 @@ export class AppletFiles extends LitElement implements AppletElement {
 
   /** Go somewhere. The fetch is the navigation; there is nothing else to do. */
   private _go(path: string): void {
+    this._previewClose();
     if (path === '' || path === this._path) return;
     this._path = path;
     this._stale = true;
@@ -1083,6 +1323,7 @@ export class AppletFiles extends LitElement implements AppletElement {
    * them, or the host, learning anything about the other's insides.
    */
   private _view(path: string): void {
+    this._previewClose();
     this.dispatchEvent(
       new CustomEvent<AppletNavigateDetail>('applet-navigate', {
         detail: { applet: 'artifact', target: `path:${path}` },
@@ -1090,6 +1331,130 @@ export class AppletFiles extends LitElement implements AppletElement {
         composed: true,
       }),
     );
+  }
+
+  /**
+   * Hover or keyboard focus arrived on `path`. Debounced so sweeping the
+   * pointer down a listing does not fire a request per row it passes over --
+   * only the row it actually stops on.
+   */
+  private _previewSchedule(path: string): void {
+    if (this._previewPath === path || this._previewPendingPath === path) return;
+    // A new hover/focus replaces the old peek immediately, not after its own
+    // debounce has expired. That also aborts its read before another starts.
+    this._previewClose();
+    this._previewPendingPath = path;
+    this._previewTimer = setTimeout(() => {
+      this._previewTimer = null;
+      if (this._previewPendingPath !== path || !this.active || !this.isConnected) return;
+      this._previewPendingPath = null;
+      void this._previewOpen(path);
+    }, PREVIEW_OPEN_DELAY_MS);
+  }
+
+  /** Pointer left, focus left, Escape was pressed, or the row changed. */
+  private _previewClose(): void {
+    if (this._previewTimer !== null) {
+      clearTimeout(this._previewTimer);
+      this._previewTimer = null;
+    }
+    if (this._previewPlacementFrame !== null) {
+      cancelAnimationFrame(this._previewPlacementFrame);
+      this._previewPlacementFrame = null;
+    }
+    this._previewPendingPath = null;
+    this._previewAbort?.abort();
+    this._previewAbort = null;
+    this._previewPath = null;
+    this._previewLoading = false;
+    this._previewArtifact = null;
+    this._previewError = '';
+    this._previewAbove = false;
+  }
+
+  /** The touch/keyboard explicit toggle -- opens now, no delay. */
+  private _previewToggle(path: string): void {
+    if (this._previewPath === path) {
+      this._previewClose();
+      return;
+    }
+    this._previewClose();
+    void this._previewOpen(path);
+  }
+
+  private async _previewOpen(path: string): Promise<void> {
+    if (!this.active || !this.isConnected) return;
+    this._previewAbort?.abort();
+    const ac = new AbortController();
+    this._previewAbort = ac;
+    this._previewPendingPath = null;
+    this._previewPath = path;
+    this._previewLoading = true;
+    this._previewArtifact = null;
+    this._previewError = '';
+    this._previewAbove = false;
+    try {
+      const a = await fetchArtifact(path, ac.signal, PREVIEW_READ_MAX_BYTES);
+      if (ac.signal.aborted || this._previewPath !== path) return;
+      this._previewArtifact = a;
+    } catch (err) {
+      if (ac.signal.aborted || this._previewPath !== path) return;
+      this._previewError = err instanceof Error ? err.message : 'could not be read';
+    } finally {
+      if (this._previewAbort === ac) {
+        this._previewAbort = null;
+        if (!ac.signal.aborted && this._previewPath === path) this._previewLoading = false;
+      }
+    }
+  }
+
+  /** Keep an open peek inside the applet body as it scrolls or is resized. */
+  private _queuePreviewPlacement = (): void => {
+    if (this._previewPath === null || this._previewPlacementFrame !== null) return;
+    this._previewPlacementFrame = requestAnimationFrame(() => {
+      this._previewPlacementFrame = null;
+      this._placePreview();
+    });
+  };
+
+  private _placePreview(): void {
+    if (!this.active || this._previewPath === null) return;
+    const body = this.renderRoot.querySelector<HTMLElement>('.body');
+    const peek = this.renderRoot.querySelector<HTMLElement>('.peek');
+    const row = peek?.parentElement;
+    if (!body || !peek || !row) return;
+
+    const bodyBox = body.getBoundingClientRect();
+    const rowBox = row.getBoundingClientRect();
+    const below = Math.max(0, bodyBox.bottom - rowBox.bottom - PREVIEW_GAP_PX);
+    const above = Math.max(0, rowBox.top - bodyBox.top - PREVIEW_GAP_PX);
+    const wanted = Math.min(peek.scrollHeight, PREVIEW_MAX_HEIGHT_PX);
+    const placeAbove = below < wanted && above > below;
+    peek.style.setProperty('--preview-room', `${Math.floor(placeAbove ? above : below)}px`);
+    if (this._previewAbove !== placeAbove) this._previewAbove = placeAbove;
+  }
+
+  private _previewIsFor(path: string): boolean {
+    return this._previewPath === path || this._previewPendingPath === path;
+  }
+
+  private _previewPointerLeave(event: PointerEvent, path: string): void {
+    if (event.pointerType === 'touch' || !this._previewIsFor(path)) return;
+    const row = event.currentTarget as HTMLElement;
+    const next = event.relatedTarget;
+    // An absolutely-positioned preview is still this row's child. Honour that
+    // relation so the pointer can move from the name into the preview itself.
+    if (next instanceof Node && row.contains(next)) return;
+    if (row.contains(this.shadowRoot?.activeElement ?? null)) return;
+    this._previewClose();
+  }
+
+  private _previewFocusOut(event: FocusEvent, path: string): void {
+    if (!this._previewIsFor(path)) return;
+    const row = event.currentTarget as HTMLElement;
+    const next = event.relatedTarget;
+    if (next instanceof Node && row.contains(next)) return;
+    this._previewClose();
   }
 
   /**
@@ -1104,6 +1469,7 @@ export class AppletFiles extends LitElement implements AppletElement {
    * the answer is re-checked against disk by the server on every list.
    */
   setFilter(v: FilesFilter): void {
+    this._previewClose();
     if (this.filter === v) return;
     this.filter = v;
     saveFilter(v);
@@ -1141,7 +1507,7 @@ export class AppletFiles extends LitElement implements AppletElement {
     const l = this._listing;
     const f = this._effectiveFilter();
     return html`
-      <div class="body">
+      <div class="body" @scroll="${this._queuePreviewPlacement}">
         ${this._renderControls(l)}
         ${f === 'published'
           ? html`
@@ -1555,6 +1921,74 @@ export class AppletFiles extends LitElement implements AppletElement {
     </span>`;
   }
 
+  /**
+   * The bounded peek. Rendered only while `_previewPath` names this row (see
+   * caller), so there is never more than one on screen. Plain escaped text
+   * and metadata only -- never `unsafeHTML`, never an <img>/<iframe> built
+   * from server bytes -- a hover target is not a place to run a file.
+   */
+  private _renderPreview(name: string, path: string): TemplateResult {
+    const target = html`<div class="peekname" title="${path}">${name}</div>`;
+    if (this._previewLoading) {
+      return html`<div class="peek" role="status">
+        ${target}
+        <div class="peekmeta">Reading up to ${humanSize(PREVIEW_READ_MAX_BYTES)}…</div>
+      </div>`;
+    }
+    if (this._previewError !== '') {
+      return html`<div class="peek err" role="status">
+        ${target}
+        <div class="peekmeta">Could not preview</div>
+        <div class="peeknote">${this._previewError}</div>
+      </div>`;
+    }
+    const a = this._previewArtifact;
+    if (!a) {
+      return html`<div class="peek" role="status">
+        ${target}
+        <div class="peekmeta">Reading up to ${humanSize(PREVIEW_READ_MAX_BYTES)}…</div>
+      </div>`;
+    }
+    const meta = `${humanSize(a.size)} · ${a.kind}`;
+    if (a.tooLarge) {
+      return html`<div class="peek" role="status">
+        ${target}
+        <div class="peekmeta">${meta}</div>
+        <div class="peeknote">
+          The ${humanSize(a.maxBytes)} preview limit was exceeded. Open in Viewer.
+        </div>
+      </div>`;
+    }
+    if (a.binary) {
+      return html`<div class="peek" role="status">
+        ${target}
+        <div class="peekmeta">${meta}</div>
+        <div class="peeknote">Not readable as text.</div>
+      </div>`;
+    }
+    if (a.kind === 'text' || a.kind === 'markdown') {
+      if (a.text === '') {
+        return html`<div class="peek" role="status">
+          ${target}
+          <div class="peekmeta">${meta}</div>
+          <div class="peeknote">Empty file.</div>
+        </div>`;
+      }
+      const excerpt = a.text.slice(0, PREVIEW_MAX_CHARS);
+      const truncated = a.text.length > PREVIEW_MAX_CHARS;
+      return html`<div class="peek" role="status">
+        ${target}
+        <div class="peekmeta">${meta}</div>
+        <pre class="peektext">${excerpt}${truncated ? '…' : ''}</pre>
+      </div>`;
+    }
+    return html`<div class="peek" role="status">
+      ${target}
+      <div class="peekmeta">${meta}</div>
+      <div class="peeknote">Not previewable inline — open in Viewer to download.</div>
+    </div>`;
+  }
+
   private _renderEntry(e: FileEntry, dir: string): TemplateResult {
     const cls = [
       'row',
@@ -1582,22 +2016,48 @@ export class AppletFiles extends LitElement implements AppletElement {
     if (!e.dir) {
       const path = dir.endsWith('/') ? `${dir}${e.name}` : `${dir}/${e.name}`;
       const pub = this._pubFor(path);
+      const peeking = this._previewPath === path;
       const rowCls = [
         cls,
         pub ? (pub.status === 'ok' ? 'published' : 'pubbroken') : '',
         this._confirming === path ? 'confirm' : '',
+        peeking && this._previewAbove ? 'peek-above' : '',
       ]
         .filter((c) => c !== '')
         .join(' ');
-      return html`<div class="${rowCls}" title="${e.name}">
+      return html`<div
+        class="${rowCls}"
+        title="${e.name}"
+        @pointerleave="${(ev: PointerEvent) => this._previewPointerLeave(ev, path)}"
+        @focusout="${(ev: FocusEvent) => this._previewFocusOut(ev, path)}"
+      >
         ${mark}${glyph}
         <button
           type="button"
           class="nm nmbtn"
           title="Show this file, the way a published link would show it"
           @click="${() => this._view(path)}"
+          @pointerenter="${(ev: PointerEvent) => {
+            if (ev.pointerType !== 'touch') this._previewSchedule(path);
+          }}"
+          @focus="${() => this._previewSchedule(path)}"
         >${e.name}</button>
-        ${this._renderPub(path)}
+        <span class="trail">
+          <span class="size" title="${e.size} bytes">${humanSize(e.size)}</span>
+          <button
+            type="button"
+            class="act quiet peekbtn"
+            aria-expanded="${peeking ? 'true' : 'false'}"
+            aria-label="Preview ${e.name} without opening it"
+            title="Preview this file without opening it"
+            @click="${(ev: Event) => {
+              ev.stopPropagation();
+              this._previewToggle(path);
+            }}"
+          >preview</button>
+          ${this._renderPub(path)}
+        </span>
+        ${peeking ? this._renderPreview(e.name, path) : nothing}
       </div>`;
     }
     const path = dir.endsWith('/') ? `${dir}${e.name}` : `${dir}/${e.name}`;
