@@ -240,7 +240,8 @@ try {
     f.op === 'cancel' && f.ok === true && f.turn_id === held.receipt.turn_id), 'scoped cancel receipt');
   await eventually(() => frames.slice(cancelStart).find((f) =>
     f.type === 'missioncontrol-event' && f.thread_id === finalA.thread.id &&
-    f.event?.turn_id === held.receipt.turn_id && f.event?.ev === 'turn_end'), 'cancelled stream terminal');
+    f.event?.turn_id === held.receipt.turn_id && f.event?.ev === 'cancelled' &&
+    f.event?.persisted === true), 'persisted cancelled stream terminal');
   put(path.join(opt['barrier-dir'], `${cancelToken}.release`), 'release\n');
   pass('held_stream_cancel_uses_exact_selected_turn', { scoped_receipt: true, terminal_observed: true });
   const composer = page.locator('[data-thread-composer]');

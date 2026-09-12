@@ -333,15 +333,27 @@ async function main() {
     page = await context.newPage();
     const sockets = [];
     const scopedControlFrames = [];
+    const sentSelectionFrames = [];
+    const receivedMissionControlFrames = [];
     page.on('websocket', (socket) => {
       sockets.push(socket);
       socket.on('framesent', (frame) => {
         try {
           const payload = typeof frame.payload === 'function' ? frame.payload() : '';
           const message = JSON.parse(payload);
+          if (message?.type === 'missioncontrol-select') sentSelectionFrames.push(message);
           if (message?.type === 'missioncontrol-reset' || message?.type === 'missioncontrol-archive') {
             scopedControlFrames.push(message);
           }
+        } catch {
+          // Non-JSON frames are expected for terminal data.
+        }
+      });
+      socket.on('framereceived', (frame) => {
+        try {
+          const payload = typeof frame.payload === 'function' ? frame.payload() : '';
+          const message = JSON.parse(payload);
+          if (message?.type === 'missioncontrol-result') receivedMissionControlFrames.push(message);
         } catch {
           // Non-JSON frames are expected for terminal data.
         }
@@ -414,13 +426,13 @@ async function main() {
       const sidebar = await activeSidebar();
       const target = sidebar.getByRole('button', { name: /Go to Mission Control|Mission Control, current view/i }).first();
       await target.waitFor({ state: 'visible', timeout: 8_000 });
-      const label = await target.getAttribute('aria-label');
-      if (!label?.includes('current view')) await target.click();
+      const alreadyCurrent = (await target.getAttribute('aria-label'))?.includes('current view') ?? false;
+      if (!alreadyCurrent) await target.click();
       if (await isMobile()) {
         // Opening the drawer while already in Mission Control performs no
         // navigation. Close that drawer explicitly rather than waiting for a
         // navigation side effect which this branch deliberately did not invoke.
-        if (label?.includes('current view')) await page.keyboard.press('Escape');
+        if (alreadyCurrent) await page.keyboard.press('Escape');
         await page.locator('.drawer:popover-open').waitFor({ state: 'hidden', timeout: 8_000 });
       }
       await page.locator('mux-cos:visible').waitFor({ state: 'visible', timeout: 8_000 });
@@ -431,6 +443,65 @@ async function main() {
         await page.locator('mux-cos:visible').getByRole('heading', { name: 'Mission Control', exact: true })
           .waitFor({ state: 'visible', timeout: 8_000 });
       }
+    };
+    const ensureContextMenuOpen = async (cos) => {
+      const selector = cos.locator('[data-thread-context-selector]:visible');
+      await eventually(async () => await selector.count() === 1, 'threaded_context_selector_available', 30_000);
+      if (await selector.getAttribute('aria-expanded') !== 'true') {
+        await selector.click({ timeout: 10_000 });
+      }
+      const menu = cos.locator('[data-thread-context-menu]:visible');
+      await eventually(async () =>
+        await selector.getAttribute('aria-expanded') === 'true' &&
+        await menu.count() === 1,
+      'threaded_context_menu_open', 30_000);
+      return { selector, menu };
+    };
+    const selectFixtureA = async () => {
+      const fixtureLabel = `voice ui fixture A ${nonce}`;
+      const cos = page.locator('mux-cos:visible');
+      await cos.waitFor({ state: 'visible', timeout: 30_000 });
+      const { selector } = await ensureContextMenuOpen(cos);
+      const option = cos.locator('[data-thread-context-option]').filter({ hasText: fixtureLabel });
+      const talkHere = cos.locator('[data-thread-talk-here]');
+      // The selector becoming visible only proves the threaded UI exists. Its
+      // initial catalog and automatic Lobby selection are still in flight until
+      // the list exposes this known fixture and Talk here is enabled.
+      await eventually(async () =>
+        await option.count() === 1 &&
+        await talkHere.isVisible() &&
+        await talkHere.isEnabled(),
+      'thread_capability_catalog_and_initial_selection_settled', 30_000);
+      if (!await talkHere.isEnabled()) throw new Error('real_thread_context_not_selectable_before_fixture_selection');
+      const receivedBefore = receivedMissionControlFrames.length;
+      const sentBefore = sentSelectionFrames.length;
+      await option.click({ timeout: 10_000 });
+      await eventually(async () => await option.getAttribute('aria-pressed') === 'true',
+        'fixture_a_context_candidate_selected', 30_000);
+      if (!await talkHere.isEnabled()) throw new Error('real_thread_context_not_selectable_after_candidate_selection');
+      await talkHere.click({ timeout: 10_000 });
+      const receipt = await eventually(() =>
+        receivedMissionControlFrames.slice(receivedBefore).find((frame) =>
+          frame.op === 'select' &&
+          frame.ok === true &&
+          frame.thread?.display_name === fixtureLabel),
+      'fixture_a_authoritative_select_receipt', 30_000);
+      const sent = sentSelectionFrames.slice(sentBefore);
+      if (sent.length !== 1) throw new Error(`fixture_a_selection_request_count_${sent.length}`);
+      await eventually(async () =>
+        (await selector.innerText()).includes(fixtureLabel) &&
+        await cos.locator('[data-thread-composer]').isVisible() &&
+        await cos.locator('[data-thread-composer]').isEnabled(),
+      'fixture_a_selection_rendered', 30_000);
+      await ensureContextMenuOpen(cos);
+      const enabledAfterReceipt = await cos.locator('[data-thread-talk-here]').isEnabled();
+      if (!enabledAfterReceipt) throw new Error('real_thread_context_not_selectable_after_authoritative_selection');
+      return {
+        receipt: 'authoritative_missioncontrol_select',
+        selection_requests: sent.length,
+        talk_here_enabled_before: true,
+        talk_here_enabled_after: enabledAfterReceipt,
+      };
     };
     const applyFixture = async () => {
       const applied = await page.evaluate(componentFixture, activeSnapshot);
@@ -556,17 +627,7 @@ async function main() {
       // before verifying the mobile composer.
       await page.setViewportSize({ width: 1280, height: 900 });
       await openMissionControl();
-      const contextSelector = page.locator('mux-cos:visible').locator('[data-thread-context-selector]:visible');
-      if (await contextSelector.count()) {
-        await contextSelector.click();
-        const option = page.locator('mux-cos:visible').locator('[data-thread-context-option]').first();
-        await option.waitFor({ state: 'visible', timeout: 10_000 });
-        await option.click();
-        const talkHere = page.locator('mux-cos:visible').locator('[data-thread-talk-here]');
-        await talkHere.waitFor({ state: 'visible', timeout: 10_000 });
-        if (await talkHere.isDisabled()) throw new Error('real_thread_context_not_selectable');
-        await talkHere.click();
-      }
+      const selection = await selectFixtureA();
       await page.setViewportSize({ width: 390, height: 844 });
       await openMissionControl();
       if (await page.locator('mux-cos:visible').locator('[data-thread-context-selector]:visible').count()) {
@@ -588,6 +649,7 @@ async function main() {
         composer_channel: 'real_selected_context_or_default',
         context_selection: 'wide_topbar_only',
         composer_layout: 'narrow',
+        ...selection,
       };
     });
 
@@ -595,21 +657,7 @@ async function main() {
       await page.setViewportSize({ width: 1280, height: 900 });
       await openMissionControl();
       const cos = page.locator('mux-cos:visible');
-      const selector = cos.locator('[data-thread-context-selector]:visible');
-      if (await selector.count() !== 1) throw new Error('threaded_context_selector_unavailable');
-      await selector.click();
-      const workspaceOption = cos.locator('[data-thread-context-option]')
-        .filter({ hasText: `voice ui fixture A ${nonce}` }).first();
-      await workspaceOption.waitFor({ state: 'visible', timeout: 10_000 });
-      await workspaceOption.click();
-      const talkHere = cos.locator('[data-thread-talk-here]');
-      await talkHere.waitFor({ state: 'visible', timeout: 10_000 });
-      if (await talkHere.isDisabled()) throw new Error('fixture_workspace_context_not_selectable');
-      await talkHere.click();
-      await eventually(async () =>
-        (await selector.innerText()).includes(`voice ui fixture A ${nonce}`) &&
-        await cos.locator('[data-thread-composer]').isEnabled(),
-      'selected_workspace_ready_for_reset', 30_000);
+      const selection = await selectFixtureA();
       const menu = cos.getByRole('button', { name: 'Conversation options', exact: true });
       await menu.click();
       const reset = cos.locator('[data-thread-reset]');
@@ -624,7 +672,6 @@ async function main() {
         'real_reset_control_frame',
         10_000,
       );
-      await delay(100);
       const sent = scopedControlFrames.slice(before);
       if (sent.length !== 1 || sent[0]?.type !== 'missioncontrol-reset') {
         throw new Error('thread_control_double_submit_detected');
@@ -633,6 +680,7 @@ async function main() {
         interaction: 'real_workspace_context_menu_and_confirm',
         request_frames: sent.length,
         operation: 'reset_only_no_workspace_delete',
+        ...selection,
       };
     });
 
