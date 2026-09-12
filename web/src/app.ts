@@ -14,6 +14,7 @@ import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './
 import { injectTerminalFont } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
 import { voiceSessionController } from './lib/voice-session-controller.js';
+import { threadedVoiceController } from './lib/threaded-voice-controller.js';
 import { requestArtifactOpen } from './lib/artifact-open.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
 import { registerServiceWorker } from './lib/sw.js';
@@ -1230,6 +1231,10 @@ export class MuxApp extends LitElement {
       // The coordinator retains drafts/history but drops connection-scoped
       // selection authority and any unconfirmed receipt claim.
       threadStore.markDisconnected();
+      // An experimental scoped attachment may outlive the WebSocket transport,
+      // but it must never retain a browser microphone through text reconnect.
+      // This only mutes; it does not reclaim, reattach, or resubmit anything.
+      void threadedVoiceController.markTextDisconnected();
       const interruptedTargets = new Map<string, CloseTarget>();
       for (const [key, request] of this._closeRequests) {
         interruptedTargets.set(key, request.target);
@@ -1265,6 +1270,9 @@ export class MuxApp extends LitElement {
       // Re-negotiate first; this never replays a pending turn. The coordinator
       // explicitly chooses v2 selection or the unscoped legacy fallback.
       threadStore.markReconnected();
+      // Informational only. Reconnect never takes over a voice lease or opens
+      // a microphone; the user must explicitly stop/drain or attach again.
+      threadedVoiceController.markTextReconnected();
     };
     this._socket.connect();
     this._connectionStatus = 'reconnecting';

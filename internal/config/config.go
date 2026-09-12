@@ -35,8 +35,12 @@ type Config struct {
 // MissionControlConfig holds opt-in Mission Control gates. Both switches must
 // be true before the text-thread preview can start an isolated sidecar.
 type MissionControlConfig struct {
-	ThreadsV2            bool `toml:"threads_v2" json:"threads_v2"`
-	TextPreview          bool `toml:"text_preview" json:"text_preview"`
+	ThreadsV2   bool `toml:"threads_v2" json:"threads_v2"`
+	TextPreview bool `toml:"text_preview" json:"text_preview"`
+	// VoicePreview is an independent, default-off candidate gate. It never
+	// inherits either legacy [voice].enabled or text_preview: a configured
+	// threaded text preview must not open a microphone by accident.
+	VoicePreview         bool `toml:"voice_preview" json:"voice_preview"`
 	TextWorkerCap        int  `toml:"text_worker_cap" json:"text_worker_cap"`
 	TextContextMaxTokens int  `toml:"text_context_max_tokens" json:"text_context_max_tokens"`
 }

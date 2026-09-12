@@ -138,6 +138,11 @@ type Server struct {
 	// missionControlVoice owns the one bounded safety-only bridge lease for
 	// this Server. It never owns a provider or microphone session.
 	missionControlVoice *voice.LeaseManager
+	// missionControlVoiceProvider is constructed only behind the independent
+	// Mission Control candidate gate. It is never the legacy global bridge.
+	missionControlVoiceProvider     *voice.Manager
+	missionControlVoiceAttachmentMu sync.Mutex
+	missionControlVoiceAttachment   *missionControlVoiceAttachment
 
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
@@ -408,6 +413,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	if s.missionControlVoice != nil {
 		defer s.missionControlVoice.Close()
+	}
+	if s.missionControlVoiceProvider != nil {
+		defer s.missionControlVoiceProvider.Close()
 	}
 
 	// Expired publications linger briefly as tombstones so a reader who is

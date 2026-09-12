@@ -52,6 +52,17 @@ type Ephemeral struct {
 // time. That is deliberate: the tool list is the bridge's authority surface,
 // and a browser that could name its own tools would be naming shell commands.
 func (c *Client) MintEphemeral(ctx context.Context) (Ephemeral, error) {
+	return c.mintEphemeral(ctx, false)
+}
+
+// MintEphemeralScoped uses server_vad with create_response:false. The
+// attachment must therefore wait for a server-owned capture/item mapping and
+// deterministic prefix acknowledgement before asking the provider to respond.
+func (c *Client) MintEphemeralScoped(ctx context.Context) (Ephemeral, error) {
+	return c.mintEphemeral(ctx, true)
+}
+
+func (c *Client) mintEphemeral(ctx context.Context, scoped bool) (Ephemeral, error) {
 	tok, err := c.cred.Token(ctx)
 	if err != nil {
 		return Ephemeral{}, err
@@ -65,6 +76,14 @@ func (c *Client) MintEphemeral(ctx context.Context) (Ephemeral, error) {
 	}
 	if c.cfg.Voice != "" {
 		session["audio"] = map[string]any{
+			"output": map[string]any{"voice": c.cfg.Voice},
+		}
+	}
+	if scoped {
+		session["audio"] = map[string]any{
+			"input": map[string]any{
+				"turn_detection": map[string]any{"type": "server_vad", "create_response": false},
+			},
 			"output": map[string]any{"voice": c.cfg.Voice},
 		}
 	}

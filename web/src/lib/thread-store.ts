@@ -48,12 +48,28 @@ export interface CatalogThread {
   readonly workspaceUuid: string;
   readonly runtimeSessionId: string;
   readonly runtimeGeneration: number;
+  readonly runtimeIncarnation: string;
+}
+
+/** Immutable runtime address accepted by the experimental scoped voice API. */
+export interface ThreadVoiceTarget {
+  readonly threadId: string;
+  readonly runtimeSessionId: string;
+  readonly runtimeGeneration: number;
+  readonly runtimeIncarnation: string;
+  readonly label: string;
 }
 
 export type ThreadContextTarget =
   | { readonly kind: 'lobby' }
   | { readonly kind: 'workspace'; readonly workspaceId: string }
   | { readonly kind: 'thread'; readonly threadId: string };
+
+/** Emitted only for an explicit user context/Talk-here selection settlement. */
+export interface ExplicitThreadSelection {
+  readonly requested: ThreadContextTarget;
+  readonly selected: ThreadVoiceTarget | null;
+}
 
 export interface ThreadContextOption {
   readonly key: string;
@@ -383,11 +399,15 @@ function parseCatalogThread(value: unknown): CatalogThread | null {
     workspaceUuid: stringValue(raw.workspace_uuid),
     runtimeSessionId: stringValue(raw.runtime_session_id),
     runtimeGeneration,
+    runtimeIncarnation: stringValue(raw.runtime_incarnation),
   };
 }
 
 function parseRuntimeThread(value: unknown): CatalogThread | null {
   const thread = parseCatalogThread(value);
+  // Text preview remains compatible with a server predating voice incarnation
+  // attestation. The separate voiceTarget getter fails closed until that field
+  // is present and valid, so an old text server never gains voice authority.
   if (!thread || !uuidValue(thread.runtimeSessionId) || thread.runtimeGeneration === 0) return null;
   return thread;
 }
@@ -807,6 +827,7 @@ function storageKey(): string {
 class ThreadStore {
   private _socket: MuxSocket | null = null;
   private _listeners = new Set<() => void>();
+  private _explicitSelectionListeners = new Set<(selection: ExplicitThreadSelection) => void>();
   private _notifyPending = false;
   private _wanted = false;
   private _mode: ThreadMode = 'unknown';
@@ -983,6 +1004,38 @@ class ThreadStore {
 
   get selectedThreadId(): string {
     return this._selected?.thread.id ?? '';
+  }
+
+  /**
+   * The only frontend source for a voice attachment address. It is produced
+   * from the committed thread snapshot rather than terminal/app focus and
+   * excludes stale, syncing, archived, or connection-unready roots.
+   */
+  get voiceTarget(): ThreadVoiceTarget | null {
+    const state = this._selected;
+    const thread = state?.thread;
+    if (
+      !this.threaded ||
+      !this._connectionReady ||
+      !state ||
+      state.runtimeStale ||
+      state.syncing ||
+      state.archived ||
+      !thread ||
+      !uuidValue(thread.id) ||
+      !uuidValue(thread.runtimeSessionId) ||
+      !uuidValue(thread.runtimeIncarnation) ||
+      thread.runtimeGeneration === 0
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      threadId: thread.id,
+      runtimeSessionId: thread.runtimeSessionId,
+      runtimeGeneration: thread.runtimeGeneration,
+      runtimeIncarnation: thread.runtimeIncarnation,
+      label: this.contextLabel,
+    });
   }
 
   /** Durable unacknowledged work, in catalog observation order. */
@@ -1523,6 +1576,18 @@ class ThreadStore {
     return () => this._listeners.delete(callback);
   }
 
+  /**
+   * A narrow intent seam for the voice adapter. Catalog refresh/reconnect
+   * selection deliberately does not publish here, so a background update can
+   * never route an active microphone.
+   */
+  onExplicitSelectionSettled(
+    callback: (selection: ExplicitThreadSelection) => void,
+  ): () => void {
+    this._explicitSelectionListeners.add(callback);
+    return () => this._explicitSelectionListeners.delete(callback);
+  }
+
   private _activeStore(): CosStore {
     if (this._mode === 'threaded') return this._selected?.store ?? this._emptyStore;
     return cosStore;
@@ -2050,6 +2115,7 @@ class ThreadStore {
       this._connectionReady = restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
       this._setProblem('select_transmit_failed', 'The context selection could not be transmitted.');
+      if (persistLastSelection) this._publishExplicitSelection(target, null);
       return false;
     }
     this._notify();
@@ -2064,6 +2130,7 @@ class ThreadStore {
       this._connectionReady = pending.restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
       this._setProblem('select_refused', snapshotUnavailableMessage(frame, 'The server refused this context.'));
+      if (pending.persistLastSelection) this._publishExplicitSelection(pending.target, null);
       return;
     }
     const snapshot = parseSnapshot(frame);
@@ -2072,6 +2139,7 @@ class ThreadStore {
       this._connectionReady = pending.restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
       this._setProblem('invalid_selection', snapshotFailureMessage(frame, 'The context was not changed.'));
+      if (pending.persistLastSelection) this._publishExplicitSelection(pending.target, null);
       return;
     }
     if (
@@ -2082,6 +2150,7 @@ class ThreadStore {
       this._connectionReady = pending.restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
       this._setProblem('mismatched_selection', 'The server returned a different context than the one requested.');
+      if (pending.persistLastSelection) this._publishExplicitSelection(pending.target, null);
       return;
     }
     const state = this._stateFor(snapshot.thread);
@@ -2104,6 +2173,7 @@ class ThreadStore {
     if (pending.persistLastSelection) {
       this._lastExplicitThreadId = snapshot.thread.id;
       this._persistState();
+      this._publishExplicitSelection(pending.target, this.voiceTarget);
     }
     this._discardUnclaimedPreAckBuffers();
     this._notify();
@@ -2731,6 +2801,14 @@ class ThreadStore {
   private _setProblem(code: string, message: string): void {
     this._problem = { code, message, fatal: false };
     this._notify();
+  }
+
+  private _publishExplicitSelection(
+    requested: ThreadContextTarget,
+    selected: ThreadVoiceTarget | null,
+  ): void {
+    const event: ExplicitThreadSelection = Object.freeze({ requested, selected });
+    for (const listener of this._explicitSelectionListeners) listener(event);
   }
 
   private _clearCapabilityTimer(): void {

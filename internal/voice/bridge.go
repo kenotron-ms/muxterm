@@ -21,6 +21,53 @@ type Bridge interface {
 	Cancel(turnID string) error
 }
 
+// CorrelatedBridge is the only bridge shape a thread-scoped realtime
+// attachment may use. The values are copied from provider events observed by
+// the server; neither focus nor an HTTP client can choose a target for them.
+// Legacy Bridge.Submit is deliberately unavailable on a ScopedBridge.
+type CorrelatedBridge interface {
+	Bridge
+	SubmitCorrelated(Correlation, string) (TurnHandle, error)
+}
+
+// Correlation identifies the provider event that requested work, as observed
+// on one immutable provider attachment.
+type Correlation struct {
+	ProviderCallID     string
+	ProviderItemID     string
+	ProviderResponseID string
+	CaptureID          string
+	AttachmentEpoch    uint64
+}
+
+// ProviderEvent is an event observed on one Sideband connection. CallID is
+// always the sideband's server-observed call identity, never a client value.
+type ProviderEvent struct {
+	Type       string
+	CallID     string
+	ItemID     string
+	ResponseID string
+	OutputID   string
+	CallRef    string
+	Metadata   map[string]string
+}
+
+// ProviderEventBridge verifies provider event ordering before Sideband may
+// dispatch a tool. ResolveToolCall returns the one immutable capture
+// correlation for a final function-call event; it never has a "latest"
+// fallback.
+type ProviderEventBridge interface {
+	ObserveProviderEvent(ProviderEvent) error
+	ResolveToolCall(ProviderEvent) (Correlation, error)
+}
+
+// ScopedReplyBridge owns every audible response for a scoped attachment.
+// Sideband may deliver a function result into the provider conversation, but
+// it must delegate response creation to this prefix-gated controller.
+type ScopedReplyBridge interface {
+	QueueScopedReply(Correlation, string, string) error
+}
+
 // TurnHandle is one in-flight chief-of-staff turn.
 type TurnHandle interface {
 	// ID is the turn_id every event of this turn carries.

@@ -36,6 +36,7 @@ type handle struct {
 	expiresAt int64
 	minted    time.Time
 	sideband  *Sideband
+	bridge    Bridge
 }
 
 // mintTTL bounds how long an unused minted secret is kept. A browser that
@@ -78,10 +79,36 @@ func (m *Manager) Config() config.VoiceConfig { return m.client.Config() }
 // carries no authority over anything but that session. The credential that
 // minted it never leaves this process.
 func (m *Manager) Mint(ctx context.Context) (Ephemeral, error) {
+	return m.mint(ctx, m.bridge)
+}
+
+// MintScoped creates a provider session whose bridge is permanently attached
+// to one immutable text-thread target. It never swaps Manager.bridge on an
+// existing conversation.
+func (m *Manager) MintScoped(ctx context.Context, bridge CorrelatedBridge) (Ephemeral, error) {
+	if bridge == nil {
+		return Ephemeral{}, errors.New("voice: scoped attachment requires a correlated bridge")
+	}
+	return m.mintScoped(ctx, bridge)
+}
+
+func (m *Manager) mint(ctx context.Context, bridge Bridge) (Ephemeral, error) {
 	eph, err := m.client.MintEphemeral(ctx)
 	if err != nil {
 		return Ephemeral{}, err
 	}
+	return m.rememberMint(eph, bridge)
+}
+
+func (m *Manager) mintScoped(ctx context.Context, bridge Bridge) (Ephemeral, error) {
+	eph, err := m.client.MintEphemeralScoped(ctx)
+	if err != nil {
+		return Ephemeral{}, err
+	}
+	return m.rememberMint(eph, bridge)
+}
+
+func (m *Manager) rememberMint(eph Ephemeral, bridge Bridge) (Ephemeral, error) {
 	id, err := newID()
 	if err != nil {
 		return Ephemeral{}, err
@@ -89,7 +116,7 @@ func (m *Manager) Mint(ctx context.Context) (Ephemeral, error) {
 
 	m.mu.Lock()
 	m.sweepLocked()
-	m.handles[id] = &handle{id: id, secret: eph.Value, expiresAt: eph.ExpiresAt, minted: time.Now()}
+	m.handles[id] = &handle{id: id, secret: eph.Value, expiresAt: eph.ExpiresAt, minted: time.Now(), bridge: bridge}
 	m.mu.Unlock()
 
 	eph.SessionID = id
@@ -104,29 +131,42 @@ func (m *Manager) Mint(ctx context.Context) (Ephemeral, error) {
 // header on the exchange muxterm performed, because the sideband keyed to it
 // executes shell tools.
 func (m *Manager) Connect(ctx context.Context, sessionID, offerSDP string) (Answer, error) {
+	answer, _, err := m.connect(ctx, sessionID, offerSDP)
+	return answer, err
+}
+
+// ConnectScoped is the attachment-only counterpart to Connect. It returns the
+// exact Sideband so the owning controller can issue a response only after its
+// local deterministic-prefix acknowledgement. The request context bounds only
+// setup; the Sideband's lifetime is owned by Manager.End/Close.
+func (m *Manager) ConnectScoped(ctx context.Context, sessionID, offerSDP string) (Answer, *Sideband, error) {
+	return m.connect(ctx, sessionID, offerSDP)
+}
+
+func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string) (Answer, *Sideband, error) {
 	m.mu.Lock()
 	m.sweepLocked()
 	h, ok := m.handles[sessionID]
 	m.mu.Unlock()
 	if !ok {
-		return Answer{}, errors.New("voice: unknown or expired voice session; mint a new one")
+		return Answer{}, nil, errors.New("voice: unknown or expired voice session; mint a new one")
 	}
 
 	answer, err := m.client.ExchangeSDP(ctx, h.secret, offerSDP)
 	if err != nil {
-		return Answer{}, err
+		return Answer{}, nil, err
 	}
 
 	// The teardown callback closes over THIS session's id, so a spoken
 	// exit lands on the same Manager.End the browser's POST reaches
 	// instead of inventing a second way to tear a session down.
-	sb, err := Dial(ctx, m.client, answer.CallID, h.secret, m.bridge, m.record,
+	sb, err := Dial(ctx, m.client, answer.CallID, h.secret, h.bridge, m.record,
 		func(reason string) { m.endWithReason(sessionID, reason) })
 	if err != nil {
 		// Audio would still work, but a chief of staff that cannot act
 		// is not the feature. Fail the connection rather than hand back
 		// a session that can only chat.
-		return Answer{}, err
+		return Answer{}, nil, err
 	}
 
 	m.mu.Lock()
@@ -138,7 +178,7 @@ func (m *Manager) Connect(ctx context.Context, sessionID, offerSDP string) (Answ
 	if prev != nil && prev != h && prev.sideband != nil {
 		prev.sideband.Close()
 	}
-	return answer, nil
+	return answer, sb, nil
 }
 
 // SetOnEnded installs the hook called after a session is torn down.

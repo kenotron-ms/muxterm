@@ -826,6 +826,13 @@ func (c *Client) missionControlReset(msg missionControlClientMessage) {
 		c.sendMissionControlResult(missionControlFailure(msg, "control_refused", err.Error()))
 		return
 	}
+	c.hub.mu.RLock()
+	voiceBusy := c.hub.missionControlVoiceBusy
+	c.hub.mu.RUnlock()
+	if voiceBusy != nil && voiceBusy(runtime.Thread.ID) {
+		c.sendMissionControlResult(missionControlFailure(msg, "reset_refused", "reset requires a drained Mission Control voice attachment"))
+		return
+	}
 	thread, err := router.Reset(runtime.Thread.ID)
 	if err != nil {
 		c.sendMissionControlResult(missionControlFailure(msg, "reset_refused", err.Error()))
@@ -854,6 +861,13 @@ func (c *Client) missionControlArchive(msg missionControlClientMessage) {
 			}
 		}
 		c.sendMissionControlResult(missionControlFailure(msg, "control_refused", err.Error()))
+		return
+	}
+	c.hub.mu.RLock()
+	voiceBusy := c.hub.missionControlVoiceBusy
+	c.hub.mu.RUnlock()
+	if voiceBusy != nil && voiceBusy(runtime.Thread.ID) {
+		c.sendMissionControlResult(missionControlFailure(msg, "archive_refused", "archive requires a drained Mission Control voice attachment"))
 		return
 	}
 	thread, err := router.Archive(runtime.Thread.ID)

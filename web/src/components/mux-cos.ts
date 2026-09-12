@@ -77,6 +77,10 @@ import {
   voiceSessionController,
   type VoiceSessionSnapshot,
 } from '../lib/voice-session-controller.js';
+import {
+  threadedVoiceController,
+  type ThreadedVoiceCapability,
+} from '../lib/threaded-voice-controller.js';
 import './mux-voice-orb.js';
 // ONE applet host, in one of two containers: the right-hand region in
 // landscape, the bottom sheet in portrait. This file imports no applet: the
@@ -197,6 +201,7 @@ export class MuxCos extends LitElement {
    * neither one drives the other.
    */
   @state() private _session: VoiceSessionSnapshot = voiceSessionController.snapshot();
+  @state() private _threadedVoice: ThreadedVoiceCapability = threadedVoiceController.snapshot();
 
   /**
    * What the composer looked like the instant a live session took it over,
@@ -261,6 +266,8 @@ export class MuxCos extends LitElement {
   private _unsubVoice: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
   private _unsubSession: (() => void) | null = null;
+  private _unsubThreadedVoice: (() => void) | null = null;
+  private _unsubThreadedVoiceRoute: (() => void) | null = null;
   private _ticker: ReturnType<typeof setInterval> | undefined;
 
   /** False once the reader scrolls up: streaming must not yank them back down. */
@@ -1668,6 +1675,13 @@ export class MuxCos extends LitElement {
       this._session = s;
       if (was && !now) this._releaseComposer();
     });
+    this._unsubThreadedVoice = threadedVoiceController.subscribe((capability) => {
+      this._threadedVoice = capability;
+    });
+    this._unsubThreadedVoiceRoute = threadStore.onExplicitSelectionSettled((selection) => {
+      void threadedVoiceController.onExplicitSelectionSettled(selection);
+    });
+    void threadedVoiceController.refresh();
     this._session = voiceSessionController.snapshot();
     document.addEventListener('keydown', this._onDocKey);
     // One second is the whole resolution of an mm:ss countdown, and the
@@ -1690,6 +1704,10 @@ export class MuxCos extends LitElement {
     this._unsubTranscript = null;
     this._unsubSession?.();
     this._unsubSession = null;
+    this._unsubThreadedVoice?.();
+    this._unsubThreadedVoice = null;
+    this._unsubThreadedVoiceRoute?.();
+    this._unsubThreadedVoiceRoute = null;
     // The live session is NOT stopped here. This element is parked by
     // cache() when the Dashboard closes, and hanging up a conversation
     // because a panel was collapsed would be the wrong reading of that
@@ -2573,6 +2591,63 @@ export class MuxCos extends LitElement {
   };
 
   /**
+   * Threaded voice occupies the existing composer control slot only. It has no
+   * relationship to legacy dictation, global COS narration, terminal focus, or
+   * the ordinary live-session orb.
+   */
+  private _renderThreadedVoiceControl(): TemplateResult {
+    const voice = this._threadedVoice;
+    const canStartHere = voice.canStart && threadStore.voiceTarget !== null;
+    return html`
+      <span
+        class="threaded-voice"
+        data-threaded-voice-status
+        data-threaded-voice-state="${voice.state}"
+        ?data-threaded-voice-unavailable="${!voice.experimentalReady && !voice.canStop}"
+        role="status"
+      >${voice.status}</span>
+      ${voice.prefixPending
+        ? html`<span class="threaded-status" data-threaded-voice-prefix role="status"
+            >Local prefix in progress…</span
+          >`
+        : nothing}
+      ${voice.canStart
+        ? html`<button
+            class="cbtn"
+            type="button"
+            data-threaded-voice-start
+            title="Start experimental threaded voice for the selected context"
+            aria-label="Start experimental threaded voice for the selected context"
+            ?disabled="${!canStartHere}"
+            @click="${this._startThreadedVoice}"
+          >${icon(Mic, { size: 16 })}</button>`
+        : nothing}
+      ${voice.canCapture || voice.canEndCapture
+        ? html`<button
+            class="cbtn ${voice.canEndCapture ? 'rec' : ''}"
+            type="button"
+            data-threaded-voice-capture
+            data-threaded-voice-ptt
+            title="${voice.canEndCapture ? 'Stop speaking' : 'Start speaking in this context'}"
+            aria-label="${voice.canEndCapture ? 'Stop speaking' : 'Start speaking in this context'}"
+            aria-pressed="${voice.canEndCapture ? 'true' : 'false'}"
+            @click="${this._toggleThreadedCapture}"
+          >${voice.canEndCapture ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
+        : nothing}
+      ${voice.canStop
+        ? html`<button
+            class="cbtn"
+            type="button"
+            data-threaded-voice-stop
+            title="Stop experimental threaded voice and safely drain scoped audio"
+            aria-label="Stop experimental threaded voice and safely drain scoped audio"
+            @click="${this._stopThreadedVoice}"
+          >${icon(Square, { size: 13 })}</button>`
+        : nothing}
+    `;
+  }
+
+  /**
    * Remember the composer, then let the orb have it.
    *
    * Starting a conversation must never cost the user a sentence they typed.
@@ -2820,9 +2895,7 @@ export class MuxCos extends LitElement {
           ></textarea>
           <div class="crow">
             ${threaded
-              ? html`<span class="threaded-voice" data-threaded-voice-unavailable role="status"
-                  >Threaded voice not available yet</span
-                >`
+              ? this._renderThreadedVoiceControl()
               : nothing}
             ${notice
               ? html`<span class="threaded-status" data-thread-composer-status role="status">${notice}</span>`
@@ -2981,6 +3054,10 @@ export class MuxCos extends LitElement {
     const option = threadStore.contexts.find((item) => item.key === this._contextCandidate);
     if (!option) return;
     if (!threadStore.select(option.target)) return;
+    // This is explicit user intent, not a terminal/app focus side effect. The
+    // adapter mutes any owning A capture until the selection callback confirms
+    // exactly which runtime B became.
+    threadedVoiceController.prepareRouteForExplicitSelection();
     this._contextOpen = false;
     this._threadConfirm = null;
     this._pinned = true;
@@ -3085,6 +3162,7 @@ export class MuxCos extends LitElement {
   /** Explicit context switch from a queued record; no attention event calls this. */
   private _talkAttention = (attention: ThreadAttention): void => {
     if (!threadStore.select({ kind: 'thread', threadId: attention.threadId })) return;
+    threadedVoiceController.prepareRouteForExplicitSelection();
     this._threadConfirm = null;
     this._pinned = true;
   };
@@ -3177,6 +3255,24 @@ export class MuxCos extends LitElement {
     void this.updateComplete.then(() => {
       this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext')?.focus();
     });
+  };
+
+  private _startThreadedVoice = (): void => {
+    // `voiceTarget` is a fresh immutable copy of the committed text selection.
+    // Terminal/app focus is never read by the experimental voice adapter.
+    void threadedVoiceController.start(threadStore.voiceTarget);
+  };
+
+  private _toggleThreadedCapture = (): void => {
+    if (this._threadedVoice.canEndCapture) {
+      void threadedVoiceController.endCapture();
+      return;
+    }
+    if (this._threadedVoice.canCapture) void threadedVoiceController.beginCapture();
+  };
+
+  private _stopThreadedVoice = (): void => {
+    void threadedVoiceController.stop();
   };
 
   private _toggleVoice = (): void => {

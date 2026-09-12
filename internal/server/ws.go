@@ -1058,6 +1058,10 @@ type Hub struct {
 	missionControlRouter      *missioncontrol.Router
 	missionControlTextPreview bool
 	missionControlErr         error
+	// missionControlVoiceBusy is installed by the server-owned voice
+	// attachment controller. Reset/archive must not retire a runtime while it
+	// still owns an immutable audio attachment.
+	missionControlVoiceBusy func(threadID string) bool
 
 	// attachFailures counts CONSECUTIVE attachClient failures across all
 	// browsers, reset by the first success. Guarded by mu.
