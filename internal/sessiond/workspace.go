@@ -1,6 +1,10 @@
 package sessiond
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/google/uuid"
+)
 
 // EnsureDefault guarantees that at least one workspace exists and returns it.
 //
@@ -12,7 +16,7 @@ func (r *Registry) EnsureDefault() *Workspace {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.workspaces) == 0 {
-		id := r.addWorkspaceLocked("", "")
+		id := r.addWorkspaceLocked("", "", uuid.New().String())
 		return r.workspaces[id]
 	}
 	return r.workspaces[r.lowestIDLocked()]
@@ -170,6 +174,6 @@ func (r *Registry) recreateDefaultIfEmptyLocked() *Workspace {
 	if len(r.workspaces) != 0 {
 		return nil
 	}
-	id := r.addWorkspaceLocked("", "")
+	id := r.addWorkspaceLocked("", "", uuid.New().String())
 	return r.workspaces[id]
 }

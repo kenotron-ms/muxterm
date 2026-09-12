@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Client is the serve-side handle to a single sessiond Unix-socket connection.
@@ -58,6 +60,8 @@ const closeRequestReplyTimeout = 2 * time.Second
 // of blocking its caller forever. The browser then simply stays on its
 // non-preview cards.
 const previewSubscribeReplyTimeout = 2 * time.Second
+
+const MissionControlReplyTimeout = 2 * time.Second
 
 // Handlers holds callbacks for unsolicited events (Messages with CID == 0)
 // pushed by the daemon. It is guarded by Client.hmu. Every callback runs on the
@@ -326,11 +330,35 @@ func (c *Client) requestWithin(msg *Message, timeout time.Duration) (*Message, e
 
 // ListWorkspaces requests the daemon's current workspace list.
 func (c *Client) ListWorkspaces() ([]WorkspaceInfo, error) {
-	reply, err := c.request(&Message{Type: TypeListWorkspaces})
+	return c.ListWorkspacesWithin(0)
+}
+
+// ListWorkspacesWithin requests the daemon's current workspace list, bounding
+// the reply wait when callers are serving latency-sensitive browser traffic.
+func (c *Client) ListWorkspacesWithin(timeout time.Duration) ([]WorkspaceInfo, error) {
+	reply, err := c.requestWithin(&Message{Type: TypeListWorkspaces}, timeout)
 	if err != nil {
 		return nil, err
 	}
 	return reply.Workspaces, nil
+}
+
+// MissionControlIdentity queries the daemon's explicit identity capability.
+// Unsupported daemons return an error; callers must keep them unbound rather
+// than substituting the local daemon or a transport/display name.
+func (c *Client) MissionControlIdentity() (MissionControlIdentity, error) {
+	reply, err := c.requestWithin(&Message{Type: TypeMissionControlIdentity}, MissionControlReplyTimeout)
+	if err != nil {
+		return MissionControlIdentity{}, err
+	}
+	machineID, machineErr := uuid.Parse(reply.MachineID)
+	incarnation, incarnationErr := uuid.Parse(reply.DaemonIncarnation)
+	if reply.Type != TypeMissionControlIdentityResult || reply.MissionControlProtocolVersion != MissionControlIdentityProtocolVersion ||
+		reply.MachineID == "" || reply.DaemonIncarnation == "" || machineErr != nil || incarnationErr != nil ||
+		machineID == uuid.Nil || incarnation == uuid.Nil {
+		return MissionControlIdentity{}, fmt.Errorf("sessiond: invalid mission control identity reply")
+	}
+	return MissionControlIdentity{ProtocolVersion: reply.MissionControlProtocolVersion, MachineID: reply.MachineID, DaemonIncarnation: reply.DaemonIncarnation}, nil
 }
 
 // CreateWorkspace asks the daemon to create a new workspace named name and

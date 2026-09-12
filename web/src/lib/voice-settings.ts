@@ -26,6 +26,8 @@ export type VoiceKeySource = 'stored' | 'env' | 'none' | '';
 
 export interface VoiceStatus {
   enabled: boolean;
+  /** True only when this running server registered the app-voice candidate. */
+  appVoiceCandidateAvailable: boolean;
   mode: VoiceMode;
   endpoint: string;
   model: string;
@@ -45,6 +47,7 @@ export interface VoiceStatus {
 
 export const DEFAULT_VOICE_STATUS: VoiceStatus = {
   enabled: false,
+  appVoiceCandidateAvailable: false,
   mode: 'azure_entra',
   endpoint: '',
   model: '',
@@ -73,6 +76,7 @@ export function parseVoiceStatus(raw: unknown): VoiceStatus {
   const source = r['keySource'];
   return {
     enabled: r['enabled'] === true,
+    appVoiceCandidateAvailable: r['appVoiceCandidateAvailable'] === true,
     mode: mode === 'openai_key' || mode === 'azure_key' || mode === 'azure_entra'
       ? mode
       : 'azure_entra',

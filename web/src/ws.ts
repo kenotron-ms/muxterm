@@ -17,6 +17,7 @@ import { HOST_STATE, remotesStore } from './lib/remotes-store.js';
 
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
 export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
+export type AppVoiceFrameCallback = (frame: Record<string, unknown>) => void;
 
 /**
  * What the connection is actually doing right now, for a UI that has to tell
@@ -191,6 +192,8 @@ export class MuxSocket {
   private _ws: WebSocket | null = null;
   private _paneOutputCb: PaneOutputCallback | null = null;
   private _controlMessageCb: ControlMessageCallback | null = null;
+  /** Owner-only app-voice frames stay off the generic control/sessiond paths. */
+  private _appVoiceFrameListeners = new Set<AppVoiceFrameCallback>();
   private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private _reconnectAttempts = 0;
   private _intentionalClose = false;
@@ -263,6 +266,12 @@ export class MuxSocket {
    */
   onCosFrame?: (frame: Record<string, unknown>) => void;
   /**
+   * Versioned Mission Control text-thread frames. These are serve-local like
+   * COS frames, but deliberately have their own route so raw `cos-*` frames
+   * can never be mistaken for an attributed thread event.
+   */
+  onMissionControlFrame?: (frame: Record<string, unknown>) => void;
+  /**
    * Fires on a host-state frame: one remote host's connection state changed
    * (or the server is describing the registry to a freshly attached tab).
    *
@@ -287,6 +296,16 @@ export class MuxSocket {
 
   onControlMessage(cb: ControlMessageCallback): void {
     this._controlMessageCb = cb;
+  }
+
+  /**
+   * Subscribe to owner-targeted app-voice frames on this existing authenticated
+   * WebSocket. The transport intentionally does not create a second socket or
+   * relay these capability-bearing frames through a window event.
+   */
+  onAppVoiceFrame(cb: AppVoiceFrameCallback): () => void {
+    this._appVoiceFrameListeners.add(cb);
+    return () => this._appVoiceFrameListeners.delete(cb);
   }
 
   connect(): void {
@@ -535,17 +554,23 @@ export class MuxSocket {
   // sendSessiond's frozen SessiondMessage type and go out as plain objects.
 
   /**
-   * Remembered like _sessionStateWanted, and for the same reason: the overlay
-   * can be opened before a reconnect completes, and a subscription lives on
-   * the connection that carried it. Without the replay a reconnect would leave
-   * the chat rendering a conversation it is no longer being told about.
+   * The thread capability handshake owns whether raw COS frames are allowed to
+   * reach the legacy store. It is true by default to retain the old wire path
+   * until a genuine v2 text capability says otherwise.
    */
-  private _cosWanted = false;
+  private _legacyCosFramesEnabled = true;
 
   private _sendCos(frame: Record<string, unknown>): boolean {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      this._ws.send(JSON.stringify(frame));
-      return true;
+      try {
+        this._ws.send(JSON.stringify(frame));
+        return true;
+      } catch {
+        // A socket can close between readyState and send(). Callers that hold
+        // a draft/receipt state need a truthful false rather than a phantom
+        // transmission.
+        return false;
+      }
     }
     return false;
   }
@@ -557,8 +582,27 @@ export class MuxSocket {
    * lazily, so muxterm pays nothing for a feature nobody opened.
    */
   cosSubscribe(on: boolean): void {
-    this._cosWanted = on;
     this._sendCos({ type: 'cos-subscribe', on });
+  }
+
+  /**
+   * Gate raw legacy COS frame dispatch without changing the socket's ordinary
+   * terminal/sessiond routes. Threaded text preview uses this before it makes
+   * a v2 request, so a stray legacy event cannot reach either a per-thread
+   * renderer or the legacy voice bridge.
+   */
+  setLegacyCosFramesEnabled(enabled: boolean): void {
+    this._legacyCosFramesEnabled = enabled;
+  }
+
+  /** Send one versioned Mission Control frame if the socket is open. */
+  missionControl(frame: Record<string, unknown>): boolean {
+    return this._sendCos(frame);
+  }
+
+  /** Send one app-voice v1 frame on the existing authenticated WebSocket. */
+  appVoice(frame: Record<string, unknown>): boolean {
+    return this._sendCos(frame);
   }
 
   /** Submit one turn. Returns whether it actually went out (see sendSessiond). */
@@ -946,11 +990,11 @@ export class MuxSocket {
       if (this._sessionStateWanted) {
         this.sendSessiond({ type: SessiondType.SessionStateSubscribe, ok: true });
       }
-      // Same first-connection race as session state: the overlay may have
-      // subscribed before this socket was open, and that frame was dropped.
-      if (this._cosWanted) {
-        this._sendCos({ type: 'cos-subscribe', on: true });
-      }
+      // Chief-of-staff replay is intentionally NOT automatic here. The
+      // conversation coordinator negotiates Mission Control capability first,
+      // then either explicitly re-subscribes to unscoped legacy COS or keeps
+      // that path gated for threaded text. Replaying `_cosWanted` before that
+      // decision would leak a raw global event into a selected thread.
       this.onReconnect?.();
       this._emitState();
     };
@@ -967,6 +1011,13 @@ export class MuxSocket {
       // Text frame — JSON control message
       if (typeof ev.data === 'string') {
         const raw = JSON.parse(ev.data) as Record<string, unknown>;
+        // App voice has a separate owner-only protocol. In particular, the
+        // server-issued control capability never reaches generic control hooks
+        // or the frozen sessiond state projection.
+        if (typeof raw.type === 'string' && raw.type.startsWith('app-voice-')) {
+          for (const listener of this._appVoiceFrameListeners) listener(raw);
+          return;
+        }
         this._resolveCloseOutcome(raw);
         // Pass the raw message to control handlers (e.g. for detached/session-picker).
         // Non-typed envelopes (e.g. serve config) still flow through here.
@@ -978,8 +1029,12 @@ export class MuxSocket {
           // Serve-local chief-of-staff frames are answered by the server, not
           // the daemon. Routed off BEFORE onSessiondMessage so the frozen
           // wire-state store never sees a type it has no projection for.
+          if (raw.type === 'missioncontrol-result' || raw.type === 'missioncontrol-event') {
+            this.onMissionControlFrame?.(raw);
+            return;
+          }
           if (raw.type.startsWith('cos-')) {
-            this.onCosFrame?.(raw);
+            if (this._legacyCosFramesEnabled) this.onCosFrame?.(raw);
             return;
           }
           this.onSessiondMessage?.(raw as unknown as SessiondMessage);

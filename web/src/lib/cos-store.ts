@@ -135,6 +135,35 @@ export interface CosFault {
   fatal: boolean;
 }
 
+/**
+ * A text-thread event after the Mission Control transport has attributed it.
+ *
+ * The existing COS renderer still consumes the raw COS event payload, but the
+ * threaded transport never hands that payload around without its originating
+ * thread, runtime generation, sequence fence, and immutable event id.
+ */
+export interface ThreadedCosEvent {
+  readonly thread_id: string;
+  readonly runtime_generation: number;
+  readonly thread_seq: number;
+  readonly event_id: string;
+  readonly event: Readonly<Record<string, unknown>>;
+}
+
+/** Explicit runtime state accompanying an ordered Mission Control snapshot. */
+export interface ThreadedSnapshotState {
+  readonly coveredTurnIds: readonly string[];
+  /**
+   * Persisted terminal turns at the snapshot's event cut which canonical
+   * history already represents but cannot safely identity-bind (for example
+   * duplicate structural transcript groups). This is render-only suppression;
+   * the transport still consumes their event ids and sequences.
+   */
+  readonly replaySuppressedTurnIds: readonly string[];
+  readonly activeTurnId: string;
+  readonly pendingTurnIds: readonly string[];
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -188,7 +217,7 @@ export function shortToolName(name: string): string {
 // Store
 // ---------------------------------------------------------------------------
 
-class CosStore {
+export class CosStore {
   private _socket: MuxSocket | null = null;
   private _listeners = new Set<() => void>();
 
@@ -209,6 +238,14 @@ class CosStore {
    * entitled to erase.
    */
   private _replayRequestedAt = 0;
+  /**
+   * Immutable runtime turn ids represented by the latest threaded snapshot.
+   * The v2 coordinator consumes a late event's sequence fence regardless, but
+   * this renderer must never materialize a second copy of a covered turn.
+   */
+  private _threadCoveredTurnIds = new Set<string>();
+  /** See ThreadedSnapshotState.replaySuppressedTurnIds. */
+  private _threadReplaySuppressedTurnIds = new Set<string>();
 
   get status(): CosStatus {
     return this._status;
@@ -369,14 +406,169 @@ class CosStore {
     this._notify();
   }
 
-  /** Re-assert after a reconnect; ws.ts replays the subscribe frame itself. */
+  /** Re-assert after a reconnect once capability negotiation chose legacy COS. */
   markReconnected(): void {
     if (this._status === 'idle') return;
     this._subscribed = true;
-    // ws.ts replays the subscribe frame, so a replay is on its way and the
-    // window it covers starts now.
+    // The socket deliberately does not replay raw COS on open: the
+    // conversation coordinator must negotiate v2 capability before allowing
+    // unscoped legacy traffic. Once it has explicitly selected legacy, this is
+    // the one safe place to re-subscribe.
     this._replayRequestedAt = Date.now();
     this._setStatus('starting');
+    this._socket?.cosSubscribe(true);
+    this._notify();
+  }
+
+  /**
+   * Adopt one authoritative Mission Control selection result.
+   *
+   * This deliberately reuses the exact history renderer used by the legacy
+   * stream. The transport owns thread attribution and generation fencing;
+   * CosStore remains the single turn/block projection.
+   */
+  adoptThreadSnapshot(
+    sessionId: string,
+    history: readonly unknown[],
+    snapshot: ThreadedSnapshotState,
+  ): void {
+    this._sessionId = sessionId;
+    this._fault = null;
+    this._approvals = [];
+    this._threadCoveredTurnIds = new Set(snapshot.coveredTurnIds);
+    this._threadReplaySuppressedTurnIds = new Set(snapshot.replaySuppressedTurnIds);
+    this._replayRequestedAt = Date.now();
+    this._replaceThreadHistoryCanonical(history, snapshot);
+    this._setStatus('ready');
+    this._notify();
+  }
+
+  /**
+   * Adopt an authoritative history repair for an already-selected thread.
+   * Unlike a selection, this does not alter connection-scoped readiness data.
+   */
+  adoptThreadHistory(history: readonly unknown[], snapshot: ThreadedSnapshotState): void {
+    this._fault = null;
+    this._approvals = [];
+    this._threadCoveredTurnIds = new Set(snapshot.coveredTurnIds);
+    this._threadReplaySuppressedTurnIds = new Set(snapshot.replaySuppressedTurnIds);
+    this._replayRequestedAt = Date.now();
+    this._replaceThreadHistoryCanonical(history, snapshot);
+    this._notify();
+  }
+
+  /**
+   * Render one event that was already fenced and attributed by the threaded
+   * transport. It intentionally does not emit through `onEvent`: that raw
+   * event stream belongs to the legacy global voice bridge, which threaded
+   * text preview must never drive.
+   */
+  receiveThreadEvent(envelope: ThreadedCosEvent): void {
+    // No content/prompt heuristic is permitted here. The immutable identity
+    // sets are supplied with this snapshot. Suppressing at the adapter also
+    // keeps these events off the raw voice stream (receiveThreadEvent never
+    // emits through onEvent).
+    const turnId = str(envelope.event.turn_id);
+    if (
+      this._threadCoveredTurnIds.has(turnId) ||
+      this._threadReplaySuppressedTurnIds.has(turnId)
+    ) {
+      this._notify();
+      return;
+    }
+    this._event(envelope.event, false);
+    this._notify();
+  }
+
+  /**
+   * The v2 transport received a scoped approval receipt. This remains a
+   * renderer-local state change; unlike the legacy answer path it never emits
+   * a global COS command or guesses a terminal turn result.
+   */
+  settleThreadApproval(approvalId: string, approved: boolean): void {
+    const approval = this._approvals.find((item) => item.requestId === approvalId);
+    if (!approval) return;
+    approval.answered = approved ? 'approved' : 'denied';
+    setTimeout(() => {
+      this._approvals = this._approvals.filter((item) => item.requestId !== approvalId);
+      this._notify();
+    }, 900);
+    this._notify();
+  }
+
+  /**
+   * Replace this threaded renderer with exactly one canonical server history,
+   * then materialize the separately authoritative active/queued identities.
+   * These are queue-local ids, never inferred from prompts or prose.
+   */
+  private _replaceThreadHistoryCanonical(
+    raw: readonly unknown[],
+    snapshot: ThreadedSnapshotState,
+  ): void {
+    const turns: CosTurn[] = [];
+    const byId = new Map<string, CosTurn>();
+    for (let index = 0; index < raw.length; index++) {
+      const item = raw[index];
+      const turn = this._fromHistory(item);
+      if (!turn || byId.has(turn.id)) continue;
+      const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : null;
+      // The sidecar's ordered snapshot reads the live transcript before it
+      // reports its sole active queue-local id. A currently active turn is the
+      // final un-attributed transcript group; adopt that *structural* identity
+      // instead of matching its prompt or response content.
+      if (
+        snapshot.activeTurnId &&
+        index === raw.length - 1 &&
+        str(record?.turn_id) === ''
+      ) {
+        turn.id = snapshot.activeTurnId;
+        turn.status = 'streaming';
+        turn.endedAt = 0;
+      }
+      turns.push(turn);
+      byId.set(turn.id, turn);
+    }
+    this._ensureThreadSnapshotTurn(turns, byId, snapshot.activeTurnId, 'streaming');
+    for (const turnId of snapshot.pendingTurnIds) {
+      this._ensureThreadSnapshotTurn(turns, byId, turnId, 'pending');
+    }
+    this._turns = turns;
+    this._byId = byId;
+  }
+
+  private _ensureThreadSnapshotTurn(
+    turns: CosTurn[],
+    byId: Map<string, CosTurn>,
+    turnId: string,
+    status: 'pending' | 'streaming',
+  ): void {
+    if (!turnId) return;
+    const existing = byId.get(turnId);
+    if (existing) {
+      existing.status = status;
+      existing.endedAt = 0;
+      return;
+    }
+    const turn: CosTurn = {
+      id: turnId,
+      prompt: '',
+      clientRef: '',
+      blocks: [],
+      status,
+      notices: [],
+      costUsd: '',
+      ms: 0,
+      error: '',
+      createdAt: Date.now(),
+      endedAt: 0,
+    };
+    turns.push(turn);
+    byId.set(turnId, turn);
+  }
+
+  /** Surface a transport refusal without pretending it was a COS event. */
+  setThreadFault(code: string, message: string, fatal = false): void {
+    this._fault = { code, message, fatal };
     this._notify();
   }
 
@@ -858,7 +1050,10 @@ class CosStore {
   private _fromHistory(raw: unknown): CosTurn | null {
     if (!raw || typeof raw !== 'object') return null;
     const rec = raw as Record<string, unknown>;
-    const id = str(rec.id);
+    // Threaded snapshots add `turn_id` once the per-root attribution journal
+    // has durably recorded it. Legacy summaries retain their display-only
+    // `id`, so accept that as the compatibility fallback.
+    const id = str(rec.turn_id) || str(rec.id);
     if (!id) return null;
 
     const blocks: CosBlock[] = [];
@@ -898,7 +1093,16 @@ class CosStore {
       prompt: str(rec.prompt),
       clientRef: '',
       blocks,
-      status: 'done',
+      status:
+        str(rec.status) === 'active'
+          ? 'streaming'
+          : str(rec.status) === 'queued'
+            ? 'pending'
+            : str(rec.status) === 'failed'
+              ? 'failed'
+              : str(rec.status) === 'cancelled'
+                ? 'cancelled'
+                : 'done',
       notices: [],
       // No cost: the transcript does not record one per turn, and the footer
       // is built to omit what it was not given rather than show "$0.00",

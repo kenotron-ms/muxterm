@@ -116,6 +116,7 @@ export class MuxMicButton extends LitElement {
       this._voiceState = s;
     });
     this._unsubscribeTranscript = voiceInputController.onTranscript((payload) => {
+      if (payload.target !== 'terminal' || payload.kind !== 'final') return;
       this.dispatchEvent(
         new CustomEvent('voice-transcript', {
           bubbles: true,

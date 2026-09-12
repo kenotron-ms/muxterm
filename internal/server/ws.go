@@ -15,6 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/kenotron-ms/muxterm/internal/cos"
+	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
 )
@@ -33,6 +34,19 @@ type Client struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	writeMu sync.Mutex
+	// missionControlRequests isolates metadata lookups from terminal input while
+	// retaining a bounded, per-client ordering for slow sidecar/identity work.
+	missionControlRequests chan []byte
+	// Mission Control selection belongs to this authenticated connection, never
+	// to terminal navigation. Subscriptions deliberately outlive selection so a
+	// late result remains visible in its originating thread.
+	missionControlMu            sync.Mutex
+	missionControlSelection     missionControlSelection
+	missionControlSubscriptions map[string]missionControlSubscription
+	// missionControlStopped is set only during Hub.Remove. The subscriptions
+	// map is intentionally nil until the first subscription, so map nil cannot
+	// represent the disconnected-client lifetime.
+	missionControlStopped bool
 
 	// sessMu guards sessions and unsubscribeRemotes. sessions holds this
 	// browser's daemon links keyed by transport.HostRef.ID; the empty key is
@@ -120,6 +134,12 @@ type Client struct {
 	// and by OnPaneOutput around every binary relay, so pane-data can never be
 	// written to the WebSocket while a composition send is in flight.
 	attachSeq sync.Mutex
+
+	// appVoiceAllowed is derived from the original authenticated WebSocket
+	// upgrade request. App voice claims never accept a later frame as proof that
+	// this socket was opened by the same origin.
+	appVoiceAllowed bool
+	appVoicePanes   map[string]map[int]bool
 }
 
 const (
@@ -284,14 +304,16 @@ func closeRelayFailure(target sessiond.CloseTarget) sessiond.CloseOutcome {
 func newClient(hub *Hub, conn *websocket.Conn) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		hub:          hub,
-		conn:         conn,
-		ctx:          ctx,
-		cancel:       cancel,
-		sessions:     make(map[string]*hostSession),
-		closeTickets: make(map[string]closeTicket),
-		wsByHost:     make(map[string][]sessiond.WorkspaceInfo),
-		ssByHost:     make(map[string][]sessiond.SessionState),
+		hub:                    hub,
+		conn:                   conn,
+		ctx:                    ctx,
+		cancel:                 cancel,
+		sessions:               make(map[string]*hostSession),
+		closeTickets:           make(map[string]closeTicket),
+		missionControlRequests: make(chan []byte, missionControlRequestQueueSize),
+		wsByHost:               make(map[string][]sessiond.WorkspaceInfo),
+		ssByHost:               make(map[string][]sessiond.SessionState),
+		appVoicePanes:          make(map[string]map[int]bool),
 	}
 	c.writeTextFn = func(data []byte) error {
 		c.writeMu.Lock()
@@ -307,14 +329,29 @@ func newClient(hub *Hub, conn *websocket.Conn) *Client {
 		defer wcancel()
 		return c.conn.Write(wctx, websocket.MessageBinary, data)
 	}
+	go c.missionControlWorker()
 	return c
 }
 
 // writeBinary writes a binary frame via the client's binary writer.
-func (c *Client) writeBinary(data []byte) error { return c.writeBinaryFn(data) }
+func (c *Client) writeBinary(data []byte) error {
+	select {
+	case <-c.ctx.Done():
+		return context.Canceled
+	default:
+		return c.writeBinaryFn(data)
+	}
+}
 
 // writeText writes a text frame via the client's text writer.
-func (c *Client) writeText(data []byte) error { return c.writeTextFn(data) }
+func (c *Client) writeText(data []byte) error {
+	select {
+	case <-c.ctx.Done():
+		return context.Canceled
+	default:
+		return c.writeTextFn(data)
+	}
+}
 
 // --- connection heartbeat --------------------------------------------------
 //
@@ -551,9 +588,33 @@ func (c *Client) handleTextInput(data []byte) {
 	var probe struct {
 		Type string `json:"type"`
 	}
-	if err := json.Unmarshal(data, &probe); err == nil && isCosMessage(probe.Type) {
-		c.handleCosMessage(data)
-		return
+	if err := json.Unmarshal(data, &probe); err == nil {
+		if isAppVoiceMessage(probe.Type) {
+			c.hub.mu.RLock()
+			appVoice := c.hub.appVoice
+			c.hub.mu.RUnlock()
+			if appVoice != nil {
+				appVoice.handleFrame(c, data)
+			} else if probe.Type == "app-voice-claim" {
+				// A disabled server still speaks the v1 claim protocol.
+				// Epoch zero explicitly means no lease was granted; never
+				// echo an untrusted requested epoch as a valid lease.
+				c.sendAppVoice(map[string]any{
+					"type": "app-voice-claim-result", "protocol_version": 1,
+					"ok": false, "lease_epoch": 0, "code": "app_voice_disabled",
+					"error": "app voice is disabled or unavailable on this server",
+				})
+			}
+			return
+		}
+		if isCosMessage(probe.Type) {
+			c.handleCosMessage(data)
+			return
+		}
+		if isMissionControlMessage(probe.Type) {
+			c.enqueueMissionControlMessage(data)
+			return
+		}
 	}
 
 	var msg sessiond.Message
@@ -594,6 +655,7 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 		attachedID := nsID(host, comp.WorkspaceID)
 		c.setAttached(host, attachedID, msg.Breakpoint)
+		c.rememberAppVoicePanes(attachedID, comp.Panes)
 		c.sendMessage(&sessiond.Message{
 			Type:        sessiond.TypeComposition,
 			CID:         msg.CID,
@@ -1034,6 +1096,20 @@ type Hub struct {
 	// until a browser sends cos-subscribe or cos-turn.
 	cos *cosRelay
 
+	// missionControl owns durable thread metadata. Router is present only when
+	// both explicit text-preview gates are enabled.
+	missionControl            *missioncontrol.Store
+	missionControlRouter      *missioncontrol.Router
+	missionControlTextPreview bool
+	missionControlErr         error
+	// missionControlVoiceBusy is installed by the server-owned voice
+	// attachment controller. Reset/archive must not retire a runtime while it
+	// still owns an immutable audio attachment.
+	missionControlVoiceBusy func(threadID string) bool
+	// appVoice owns the one browser-bound app voice lease. It must be fenced
+	// from Hub.Remove before this connection can be replaced.
+	appVoice *appVoiceService
+
 	// attachFailures counts CONSECUTIVE attachClient failures across all
 	// browsers, reset by the first success. Guarded by mu.
 	//
@@ -1422,19 +1498,51 @@ func daemonUnreachableDetail(cause error) string {
 // (closing each daemon connection), and closes the client.
 func (h *Hub) Remove(c *Client) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if _, ok := h.clients[c]; ok {
-		delete(h.clients, c)
-		c.stopCos()
-		c.teardownSessions()
-		c.close()
+	if _, ok := h.clients[c]; !ok {
+		h.mu.Unlock()
+		return
 	}
+	delete(h.clients, c)
+	appVoice := h.appVoice
+	h.mu.Unlock()
+	// Do not call into the app service under Hub.mu: app operations also read
+	// the catalog and client inventories.
+	if appVoice != nil {
+		appVoice.disconnect(c)
+	}
+	c.stopCos()
+	c.stopMissionControl()
+	c.teardownSessions()
+	c.close()
 }
 
 // CloseCos shuts the chief-of-staff sidecar down if one was ever started, so
 // muxterm does not orphan a python process on exit. Safe to call when no
 // sidecar was launched.
 func (h *Hub) CloseCos() { h.cos.close() }
+
+// CloseMissionControl releases the catalog's process lock on every server exit.
+// A request that had already obtained the store observes its closed state rather
+// than writing concurrently with a later server instance.
+func (h *Hub) CloseMissionControl() {
+	h.mu.Lock()
+	catalog := h.missionControl
+	router := h.missionControlRouter
+	h.missionControl = nil
+	h.missionControlRouter = nil
+	h.missionControlTextPreview = false
+	h.missionControlErr = errors.New("mission control catalog is closed")
+	h.mu.Unlock()
+	if router != nil {
+		router.Close()
+	}
+	if catalog == nil {
+		return
+	}
+	if err := catalog.Close(); err != nil {
+		log.Printf("missioncontrol: close catalog: %v", err)
+	}
+}
 
 // ClientCount returns the number of connected clients.
 func (h *Hub) ClientCount() int {
@@ -1458,6 +1566,9 @@ func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(1 << 20) // 1MB
 
 	client := newClient(s.hub, conn)
+	// Preserve legacy WebSocket acceptance. This flag gates only the new app
+	// voice frame family and is computed before accepting untrusted frames.
+	client.appVoiceAllowed = s.appVoiceSameOrigin(r)
 	s.hub.Add(client)
 	go client.readPump()
 	// Started beside readPump, not inside it: Ping waits for a pong that only

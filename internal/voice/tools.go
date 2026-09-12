@@ -26,6 +26,56 @@ const (
 	ToolEnd      = "end_voice_session"
 )
 
+const (
+	AppToolObserve          = "app_observe"
+	AppToolNavigate         = "navigate_app"
+	AppToolTranscript       = "read_lane_transcript"
+	AppToolComposerDraft    = "composer_draft"
+	AppToolSubmitThreadTurn = "submit_thread_turn"
+)
+
+func AppInstructions() string {
+	return `You are muxterm's app voice. Use only the five app tools. Observe before selecting or acting. Navigation and draft edits require the owning browser's authoritative acknowledgement. A draft never submits work. Work submission always requires visible human confirmation in the browser; never claim it was submitted until the tool result carries the normal receipt. Never use legacy chief-of-staff tools, shell instructions, paths, approvals, or inferred focus.`
+}
+
+// AppToolDefinitions is standalone JSON Schema: provider tool schemas cannot
+// refer to the design artifact's definitions.
+func AppToolDefinitions() []map[string]any {
+	target := map[string]any{"type": "object", "properties": map[string]any{
+		"kind":               map[string]any{"type": "string", "enum": []string{"workspace", "thread", "pane", "applet", "detail"}},
+		"workspace_id":       map[string]any{"type": "string", "maxLength": 256},
+		"thread_id":          map[string]any{"type": "string", "format": "uuid"},
+		"runtime_generation": map[string]any{"type": "integer", "minimum": 1},
+		"pane_id":            map[string]any{"type": "integer", "minimum": 1},
+		"applet_id":          map[string]any{"type": "string", "enum": []string{"dashboard", "files", "prs", "artifact"}},
+		"detail_id":          map[string]any{"type": "string", "maxLength": 256},
+	}, "required": []string{"kind"}, "additionalProperties": false}
+	composer := map[string]any{"type": "object", "properties": map[string]any{
+		"kind":               map[string]any{"type": "string", "enum": []string{"composer"}},
+		"channel_id":         map[string]any{"type": "string", "maxLength": 256},
+		"thread_id":          map[string]any{"type": "string", "format": "uuid"},
+		"runtime_generation": map[string]any{"type": "integer", "minimum": 0},
+		"draft_ref":          map[string]any{"type": "string", "format": "uuid"},
+	}, "required": []string{"kind", "channel_id"}, "additionalProperties": false}
+	threadTurn := map[string]any{"type": "object", "properties": map[string]any{
+		"kind":                map[string]any{"type": "string", "enum": []string{"thread_turn"}},
+		"channel_id":          map[string]any{"type": "string", "maxLength": 256},
+		"thread_id":           map[string]any{"type": "string", "format": "uuid"},
+		"machine_id":          map[string]any{"type": "string", "format": "uuid"},
+		"runtime_session_id":  map[string]any{"type": "string", "format": "uuid"},
+		"runtime_generation":  map[string]any{"type": "integer", "minimum": 1},
+		"runtime_incarnation": map[string]any{"type": "string", "format": "uuid"},
+		"draft_ref":           map[string]any{"type": "string", "format": "uuid"},
+	}, "required": []string{"kind", "channel_id", "thread_id", "machine_id", "runtime_session_id", "runtime_generation", "runtime_incarnation", "draft_ref"}, "additionalProperties": false}
+	return []map[string]any{
+		{"type": "function", "name": AppToolObserve, "description": "Read only the bounded owner observation and inventory.", "parameters": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
+		{"type": "function", "name": AppToolNavigate, "description": "Request one known app navigation.", "parameters": map[string]any{"type": "object", "properties": map[string]any{"expected_revision": map[string]any{"type": "integer", "minimum": 1}, "target": target}, "required": []string{"expected_revision", "target"}, "additionalProperties": false}},
+		{"type": "function", "name": AppToolTranscript, "description": "Read a bounded transcript tail for an exact current fleet session.", "parameters": map[string]any{"type": "object", "properties": map[string]any{"machine": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "session_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "last_n": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}}, "required": []string{"machine", "session_id"}, "additionalProperties": false}},
+		{"type": "function", "name": AppToolComposerDraft, "description": "Inspect or set exactly the active composer draft. Setting never submits.", "parameters": map[string]any{"type": "object", "properties": map[string]any{"expected_revision": map[string]any{"type": "integer", "minimum": 1}, "mode": map[string]any{"type": "string", "enum": []string{"inspect", "set"}}, "target": composer, "text": map[string]any{"type": "string", "maxLength": 131072}}, "required": []string{"expected_revision", "mode", "target"}, "additionalProperties": false}},
+		{"type": "function", "name": AppToolSubmitThreadTurn, "description": "Request visible human confirmation and an exact normal Mission Control turn receipt.", "parameters": map[string]any{"type": "object", "properties": map[string]any{"expected_revision": map[string]any{"type": "integer", "minimum": 1}, "target": threadTurn, "text": map[string]any{"type": "string", "minLength": 1, "maxLength": 131072}}, "required": []string{"expected_revision", "target", "text"}, "additionalProperties": false}},
+	}
+}
+
 // Instructions is the realtime session's system prompt.
 //
 // Three things in it are load-bearing rather than stylistic. The first is the

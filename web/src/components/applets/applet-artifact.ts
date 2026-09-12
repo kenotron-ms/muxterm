@@ -60,7 +60,11 @@ import {
   fetchDocCSS,
   type Artifact,
 } from '../../lib/artifact-api.js';
-import { onArtifactOpen } from '../../lib/artifact-open.js';
+import {
+  onArtifactOpen,
+  type ViewerDocument,
+  type ViewerOpenRequest,
+} from '../../lib/artifact-open.js';
 import { parseMarkdown } from '../../lib/markdown-stream.js';
 import { renderSegments } from '../../lib/markdown-view.js';
 
@@ -127,6 +131,8 @@ export class AppletArtifact extends LitElement implements AppletElement {
   @property({ attribute: false }) target: string | null = null;
 
   @state() private _artifact: Artifact | null = null;
+  /** A browser-memory-only Mission Control detail/preview document. */
+  @state() private _document: ViewerDocument | null = null;
   @state() private _error = '';
   @state() private _loading = false;
 
@@ -419,10 +425,21 @@ export class AppletArtifact extends LitElement implements AppletElement {
    * `applet-navigate` from itself. The event bubbles up through the host's
    * existing listener; nothing in <mux-applets> knows this entrance exists.
    */
-  private _onOpenRequest = (path: string): void => {
+  private _onOpenRequest = (request: ViewerOpenRequest): void => {
+    if (request.kind === 'document') {
+      this._openDocument(request.document);
+      this.dispatchEvent(
+        new CustomEvent<AppletNavigateDetail>('applet-navigate', {
+          detail: { applet: 'artifact', appVoiceOperationId: request.appVoiceOperationId },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      return;
+    }
     this.dispatchEvent(
       new CustomEvent<AppletNavigateDetail>('applet-navigate', {
-        detail: { applet: 'artifact', target: `${TARGET_PREFIX}${path}` },
+        detail: { applet: 'artifact', target: `${TARGET_PREFIX}${request.path}` },
         bubbles: true,
         composed: true,
       }),
@@ -432,7 +449,19 @@ export class AppletArtifact extends LitElement implements AppletElement {
   /** Show a file. Public so a caller holding the element can drive it. */
   private _open(path: string): void {
     this._path = path;
+    this._document = null;
     void this._load(path);
+  }
+
+  /** Adopt a response already received through the scoped MC WebSocket path. */
+  private _openDocument(document: ViewerDocument): void {
+    this._abort?.abort();
+    this._abort = null;
+    this._path = '';
+    this._artifact = null;
+    this._document = document;
+    this._error = '';
+    this._loading = false;
   }
 
   private async _load(path: string): Promise<void> {
@@ -513,6 +542,15 @@ export class AppletArtifact extends LitElement implements AppletElement {
    */
   private _renderControls(): TemplateResult {
     const a = this._artifact;
+    const document = this._document;
+    if (document) {
+      return html`
+        <div class="controls" role="group" aria-label="Mission Control detail">
+          <span class="ctl-why">read-only browser detail; no file was created or published</span>
+        </div>
+        <div class="controls-rule"></div>
+      `;
+    }
     const has = a !== null;
     return html`
       <div class="controls" role="group" aria-label="This file">
@@ -562,6 +600,20 @@ export class AppletArtifact extends LitElement implements AppletElement {
 
   private _renderHead(): TemplateResult | typeof nothing {
     const a = this._artifact;
+    const document = this._document;
+    if (document) {
+      return html`
+        <div class="head">
+          <span class="name"><span class="base">${document.title}</span></span>
+          <div class="meta">
+            <span>read-only detail</span>
+            ${document.subtitle
+              ? html`<span class="sep" aria-hidden="true">·</span><span>${document.subtitle}</span>`
+              : nothing}
+          </div>
+        </div>
+      `;
+    }
     if (!a) return nothing;
     const { dir, base } = splitPath(a.path);
     const when = a.modified > 0 ? new Date(a.modified * 1000).toLocaleString() : '';
@@ -586,6 +638,8 @@ export class AppletArtifact extends LitElement implements AppletElement {
 
   private _renderContent(): TemplateResult {
     if (this._error !== '') return appletError(this._error, this._retry);
+    const document = this._document;
+    if (document) return html`<pre class="text" data-viewer-document>${document.text}</pre>`;
     if (this._path === '') {
       return appletEmpty('Open a file from the Files tab to see it here, exactly as a published link would show it.');
     }

@@ -12,23 +12,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Op names (spec 2.2). Anything else is an unknown op the sidecar must ignore
 // rather than fault on (2.4 law 5).
 const (
-	opTurn     = "turn"
-	opApproval = "approval"
-	opCancel   = "cancel"
-	opShutdown = "shutdown"
-	opPing     = "ping"
-	opClear    = "clear"
-	opHistory  = "history"
+	opTurn      = "turn"
+	opApproval  = "approval"
+	opCancel    = "cancel"
+	opShutdown  = "shutdown"
+	opPing      = "ping"
+	opClear     = "clear"
+	opHistory   = "history"
+	opSnapshot  = "snapshot"
+	opSummaries = "summaries"
 	// opReconfigure carries the user's tuning (tuning.go) into the live
 	// session. Fire-and-forget: it is pushed immediately ahead of each turn
 	// on the same ordered pipe, so the turn it precedes is the first to run
@@ -185,6 +190,33 @@ type Config struct {
 	// StatePath overrides where the status file is written. "-" disables the
 	// status file entirely; empty uses StatePath().
 	StatePath string
+	// InstructionPath overrides where the effective instruction is written.
+	// It is paired with StatePath for an isolated threaded runtime.
+	InstructionPath string
+	// ThreadedTextPreview creates a constrained, independently rooted
+	// Mission Control text worker. It is deliberately opt-in so legacy COS
+	// behavior and its environment remain unchanged.
+	ThreadedTextPreview bool
+	// ThreadKind is lobby or workspace when ThreadedTextPreview is enabled.
+	ThreadKind string
+	// OwnerLockFile stays open across the child process lifetime. The child
+	// inherits the descriptor so a crashed supervisor cannot release the
+	// writer lock before its PDEATHSIG child exits.
+	OwnerLockFile *os.File
+	// EventObserver runs on the ordered stdout reader before a normal event
+	// enters the droppable broker. Mission Control uses it for its event cut.
+	EventObserver func(Event)
+	// BeforeReply runs on the ordered stdout reader immediately before a
+	// req_id-bearing reply wakes its synchronous requester. QueueState is
+	// captured before handleEvent can advance queue state for another event.
+	// Callers must not block or issue supervisor operations from this callback.
+	BeforeReply func(Event, QueueState)
+	// ThreadJournalPath is the per-root attribution journal used only by a
+	// threaded text worker; it never shares SessionStore files.
+	ThreadJournalPath string
+	// ThreadContextMaxTokens is the validated context-simple max_tokens
+	// override for this one threaded root; zero preserves shipped defaults.
+	ThreadContextMaxTokens int
 	// SubscriberDepth is the default per-subscriber buffer (0 =
 	// DefaultSubscriberDepth).
 	SubscriberDepth int
@@ -276,9 +308,23 @@ func New(cfg Config) *Supervisor {
 	// The queue publishes the terminal events it synthesizes, so a turn that
 	// fails BEFORE it reaches the sidecar is visible to subscribers and not
 	// only to whoever holds its handle (queue.fail).
-	s.q = newQueue(s.sendOp, s.broker.Publish, cfg.Logf)
+	var newTurnID func() string
+	if cfg.ThreadedTextPreview {
+		newTurnID = func() string { return uuid.New().String() }
+	}
+	s.q = newQueue(s.sendOp, s.publishSynthEvent, cfg.Logf, newTurnID)
 	s.q.beforeDispatch = s.pushTuning
 	return s
+}
+
+// publishSynthEvent is the queue-only terminal path. Normal sidecar events
+// are observed in handleEvent; queue-synthesized failures must take the same
+// Mission Control attribution path before reaching the broker.
+func (s *Supervisor) publishSynthEvent(ev Event) {
+	if s.cfg.EventObserver != nil {
+		s.cfg.EventObserver(ev)
+	}
+	s.broker.Publish(ev)
 }
 
 // pushTuning re-reads the user's tuning files and hands them to the sidecar.
@@ -294,6 +340,12 @@ func New(cfg Config) *Supervisor {
 // were delivered. Re-sending is a few kilobytes down a pipe already carrying
 // the prompt; the sidecar diffs and only acts when something actually changed.
 func (s *Supervisor) pushTuning() {
+	if s.cfg.ThreadedTextPreview {
+		// Threaded roots snapshot a fixed read-only policy at creation. Do not
+		// read global personal tuning here: it may reintroduce tools or context
+		// contributions into a different thread on a later turn.
+		return
+	}
 	dir, dirSrc := ConfigDir()
 	t := LoadTuning(dir)
 
@@ -347,7 +399,7 @@ func (s *Supervisor) publishEffective() {
 		ToolsKnown:       ev.ToolsKnown,
 		At:               time.Now(),
 	}
-	if path, perr := InstructionPath(); perr == nil {
+	if path, perr := s.instructionPath(); perr == nil {
 		if werr := writeInstructionFile(path, ev.Instruction); werr != nil {
 			s.cfg.Logf("cos: could not publish the effective instruction: %v", werr)
 		} else {
@@ -470,6 +522,15 @@ func (s *Supervisor) Subscribe(depth int) *Subscription {
 // once is safe and produces ten turns in submission order.
 func (s *Supervisor) Submit(prompt string) *Turn { return s.q.submit(prompt) }
 
+// ReserveTurnID produces the exact ID a threaded caller must persist before
+// exposing the turn to queue dispatch. Legacy callers continue using Submit.
+func (s *Supervisor) ReserveTurnID() string { return s.q.reserveTurnID() }
+
+// SubmitWithID enqueues a previously reserved threaded turn ID.
+func (s *Supervisor) SubmitWithID(prompt, turnID string) *Turn {
+	return s.q.submitWithID(prompt, turnID)
+}
+
 // Approve answers an approval_request. The turn stays blocked inside the
 // sidecar until this arrives (2.4 law 3), so a caller that never answers hangs
 // the session - answer, even if the answer is "no".
@@ -483,6 +544,18 @@ func (s *Supervisor) Approve(requestID string, approved bool, reason string) err
 func (s *Supervisor) Cancel(turnID string) error {
 	return s.sendOp(op{Op: opCancel, TurnID: turnID})
 }
+
+// CancelSpecific never substitutes a global/last turn. Queued work is removed
+// before dispatch; active work receives the exact sidecar cancel operation.
+func (s *Supervisor) CancelSpecific(turnID string) error {
+	active, err := s.q.cancelSpecific(turnID)
+	if err != nil || !active {
+		return err
+	}
+	return s.sendOp(op{Op: opCancel, TurnID: turnID})
+}
+
+func (s *Supervisor) QueueState() QueueState { return s.q.state() }
 
 // Ping sends a liveness probe; the reply arrives as a pong event.
 func (s *Supervisor) Ping() error { return s.sendOp(op{Op: opPing}) }
@@ -534,6 +607,25 @@ func (s *Supervisor) History(limit int) (json.RawMessage, error) {
 		return json.RawMessage("[]"), nil
 	}
 	return ev.Turns, nil
+}
+
+// Snapshot asks the sidecar for one ordered history/current-turn cut.
+func (s *Supervisor) Snapshot(limit int) (Event, error) {
+	if limit <= 0 {
+		limit = DefaultHistoryLimit
+	}
+	return s.request(op{Op: opSnapshot, Limit: limit})
+}
+
+// SetLobbySummaries replaces the bounded, server-provided data exposed by the
+// Lobby-only summary tool. It is ordered on the sidecar pipe before the next
+// submitted Lobby turn and never changes user prompt text.
+func (s *Supervisor) SetLobbySummaries(records any) error {
+	body, err := json.Marshal(records)
+	if err != nil {
+		return fmt.Errorf("cos: encode lobby summaries: %w", err)
+	}
+	return s.sendOp(op{Op: opSummaries, Summaries: body})
 }
 
 // request sends one op and waits for the reply carrying its req_id.
@@ -694,6 +786,14 @@ func (s *Supervisor) Status() Status {
 	return st
 }
 
+// Idle reports a read-only queue snapshot. It is used by Mission Control's
+// conservative history cut: snapshotting an active or queued root is refused
+// rather than pretending a transcript replay covers an in-flight turn.
+func (s *Supervisor) Idle() bool {
+	active, pending, _ := s.q.stats()
+	return active == "" && pending == 0
+}
+
 // RecentStderr returns the retained tail of the sidecar's stderr, which per
 // 2.1 is its log channel. This is what to print when boot fails: the Go side
 // sees only "process exited", while the reason is always down there.
@@ -729,7 +829,7 @@ func (s *Supervisor) Close() error {
 		}
 
 		for _, ev := range s.q.close(ErrQueueClosed) {
-			s.broker.Publish(ev)
+			s.publishSynthEvent(ev)
 		}
 		s.broker.Close()
 		s.removeState()
@@ -780,7 +880,7 @@ func (s *Supervisor) supervise(ctx context.Context) {
 	// the FIRST cause recorded wins.
 	defer func() {
 		for _, ev := range s.q.close(ErrQueueClosed) {
-			s.broker.Publish(ev)
+			s.publishSynthEvent(ev)
 		}
 	}()
 	// deadCh is the "this supervisor will never be ready" signal, and every
@@ -816,6 +916,10 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		}
 		s.cfg.Logf("cos: %s after %s (ready=%v)", reason, uptime.Round(time.Millisecond), reachedReady)
 		s.handleExit(reason)
+		if s.cfg.ThreadedTextPreview {
+			s.fail(errors.New("threaded text sidecar exited; explicit reselection is required"))
+			return
+		}
 
 		if reachedReady {
 			earlyFailures = 0
@@ -876,13 +980,34 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	if cwd != "" {
 		args = append(args, "--cwd", cwd)
 	}
+	if s.cfg.ThreadedTextPreview {
+		args = append(args, "--threaded-text-preview", "--thread-kind", s.cfg.ThreadKind)
+		if s.cfg.ThreadJournalPath != "" {
+			args = append(args, "--thread-journal", s.cfg.ThreadJournalPath)
+		}
+		if s.cfg.ThreadContextMaxTokens > 0 {
+			args = append(args, "--thread-context-max-tokens", strconv.Itoa(s.cfg.ThreadContextMaxTokens))
+		}
+	}
 
 	cmd := exec.CommandContext(ctx, s.python, args...) //nolint:gosec // interpreter and script are resolved, not user text
 	cmd.Dir = cwd
+	if s.cfg.OwnerLockFile != nil {
+		cmd.ExtraFiles = append(cmd.ExtraFiles, s.cfg.OwnerLockFile)
+	}
 	// PYTHONUNBUFFERED is load-bearing: a block-buffered child would hold
 	// whole events in libc until the buffer filled, turning a token stream
 	// into one late burst and making a mid-turn crash lose everything.
-	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=utf-8")
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, item := range os.Environ() {
+		key, _, _ := strings.Cut(item, "=")
+		// A worker root must never inherit a parent lane/root attribution.
+		if strings.HasPrefix(key, "MUXTERM_LANE_") || strings.HasPrefix(key, "MUXTERM_ROOT_") {
+			continue
+		}
+		env = append(env, item)
+	}
+	cmd.Env = append(env, "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=utf-8")
 	// Graceful first: a cancelled context sends SIGTERM, and WaitDelay is what
 	// escalates to SIGKILL five seconds later if the sidecar ignores it.
 	//
@@ -1063,8 +1188,16 @@ func (s *Supervisor) handleEvent(ev Event) {
 	// A req_id-bearing event is an ANSWER to one caller, not news for
 	// everybody: routing it to the waiter and stopping keeps a history
 	// payload off every subscribed browser's socket.
-	if ev.ReqID != "" && s.deliver(ev) {
-		return
+	if ev.ReqID != "" {
+		// This happens before deliver wakes Snapshot's caller. It is also
+		// before q.observe below, so it never asks for q.mu while queue
+		// handling holds it.
+		if s.cfg.BeforeReply != nil {
+			s.cfg.BeforeReply(ev, s.q.state())
+		}
+		if s.deliver(ev) {
+			return
+		}
 	}
 	// An older sidecar refuses clear/history with unknown_op and no req_id.
 	// Only this build's request ops can produce one, so it is safe - and much
@@ -1075,6 +1208,9 @@ func (s *Supervisor) handleEvent(ev Event) {
 		s.failPending(CodeUnknownOp, firstNonEmpty(ev.Message, "this sidecar does not support that operation"))
 	}
 	s.q.observe(ev)
+	if s.cfg.EventObserver != nil {
+		s.cfg.EventObserver(ev)
+	}
 	s.broker.Publish(ev)
 }
 
@@ -1094,6 +1230,11 @@ func (s *Supervisor) markReady(ev Event) {
 
 	s.cfg.Logf("cos: %s", ev)
 	s.writeState(st)
+	if s.cfg.ThreadedTextPreview {
+		// A threaded runtime must publish its own immutable effective policy
+		// even though it deliberately never receives a reconfigure op.
+		go s.publishEffective()
+	}
 	s.readyOnce.Do(func() { close(s.readyCh) })
 }
 
@@ -1187,6 +1328,8 @@ type op struct {
 	Mode        string   `json:"instruction_mode,omitempty"`
 	ToolsAllow  []string `json:"tools_allow,omitempty"`
 	ToolsDeny   []string `json:"tools_deny,omitempty"`
+	// Summaries is typed server-owned data for the Lobby summary tool.
+	Summaries json.RawMessage `json:"summaries,omitempty"`
 }
 
 // sendOp encodes and queues one op for the writer goroutine. It never blocks.
@@ -1219,6 +1362,9 @@ func (s *Supervisor) handleExit(reason string) {
 	if !hadTurn {
 		ev = synthEvent(Event{Ev: EvError, Code: CodeSidecarExit, Message: reason, Fatal: true})
 	}
+	if s.cfg.EventObserver != nil {
+		s.cfg.EventObserver(ev)
+	}
 	s.broker.Publish(ev)
 }
 
@@ -1230,10 +1376,17 @@ func (s *Supervisor) fail(err error) {
 	s.mu.Unlock()
 	s.cfg.Logf("cos: %v", err)
 	s.failPending(CodeSidecarUnavailable, err.Error())
-	s.broker.Publish(synthEvent(Event{
+	fatalEvent := synthEvent(Event{
 		Ev: EvError, Code: CodeSidecarUnavailable, Message: err.Error(), Fatal: true,
-	}))
+	})
+	if s.cfg.EventObserver != nil {
+		s.cfg.EventObserver(fatalEvent)
+	}
+	s.broker.Publish(fatalEvent)
 	for _, ev := range s.q.close(err) {
+		if s.cfg.EventObserver != nil {
+			s.cfg.EventObserver(ev)
+		}
 		s.broker.Publish(ev)
 	}
 	s.deadOnce.Do(func() { close(s.deadCh) })

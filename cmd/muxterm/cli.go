@@ -12,7 +12,7 @@ import (
 
 // Config holds the parsed CLI configuration.
 type Config struct {
-	Mode string // local, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, cos, spawn-lane, fleet, amplifier-install, help
+	Mode string // local, serve, sessiond, deploy, install, uninstall, doctor, version, mcp, cos, missioncontrol-preview, spawn-lane, fleet, amplifier-install, help
 	Addr string // listen address
 	// Secret is accepted and ignored. It exists only so an installed unit
 	// that still passes --secret keeps parsing: the documented upgrade
@@ -83,6 +83,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm layout get          Print the workspace layout diagram")
 	fmt.Fprintln(w, "  muxterm mcp [flags]         Start MCP server (stdio transport)")
 	fmt.Fprintln(w, "  muxterm cos <message>       Ask the chief-of-staff sidecar (--status for state)")
+	fmt.Fprintln(w, "  muxterm missioncontrol-preview  Print a non-mutating migration or rollback preview")
 	fmt.Fprintln(w, "  muxterm amplifier install   Install muxterm bundle into Amplifier")
 	fmt.Fprintln(w, "  muxterm version             Print version")
 	fmt.Fprintln(w, "")
@@ -223,6 +224,8 @@ func parseCommand(args []string) (Config, error) {
 		return Config{Mode: "remote", Args: args[1:]}, nil
 	case "cos":
 		return Config{Mode: "cos", Args: args[1:]}, nil
+	case "missioncontrol-preview":
+		return Config{Mode: "missioncontrol-preview", Args: args[1:]}, nil
 	default:
 		return Config{}, fmt.Errorf("unknown command %q\n\nRun 'muxterm --help' for usage.", args[0])
 	}

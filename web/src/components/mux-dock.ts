@@ -1454,6 +1454,32 @@ export class MuxDock extends LitElement {
     sameGroup[next]?.api.setActive();
   }
 
+  /** Select a known panel through Dockview; never synthesizes a pane identity. */
+  selectKnownPane(paneId: number, appVoiceOperationId = ''): boolean {
+    if (this.workspaceKey !== store.attached || !store.panes.some((pane) => pane.paneId === paneId)) return false;
+    const panel = this._panels.get(paneId);
+    if (!panel) return false;
+    if (!panel.api.isActive) {
+      this._settingActive = true;
+      try {
+        panel.api.setActive();
+      } finally {
+        this._settingActive = false;
+      }
+    }
+    store.ackPane(paneId);
+    this.dispatchEvent(
+      new CustomEvent('pane-select', {
+        detail: { paneId, appVoiceOperationId },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    requestAnimationFrame(() => terminalRegistry.focus(paneId));
+    this._scheduleLayoutSave();
+    return true;
+  }
+
   /** Emit a close intent for the active panel without removing it. */
   closeActivePanel(): void {
     if (!this._dv) return;

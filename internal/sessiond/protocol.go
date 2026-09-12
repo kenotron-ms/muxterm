@@ -35,6 +35,11 @@ const (
 	TypeSaveLayout      = "save-layout"
 	TypeScreenSnapshot  = "screen-snapshot" // request: MCP → daemon, VT grid for a pane
 	TypeGetLayout       = "get-layout"      // request: MCP → daemon, ASCII layout diagram
+	// TypeMissionControlIdentity is a read-only capability handshake. It has
+	// no turn, voice, or focus operation, and older daemons reject it rather
+	// than causing callers to guess a local identity.
+	TypeMissionControlIdentity       = "missioncontrol-identity"
+	TypeMissionControlIdentityResult = "missioncontrol-identity-result"
 
 	// Replies (daemon -> client, echo request cid).
 	TypeWorkspaceCreated     = "workspace-created"
@@ -489,6 +494,13 @@ type Message struct {
 	Triggers       []TriggerView `json:"triggers,omitempty"`
 	TriggerID      string        `json:"triggerId,omitempty"`
 	TriggerEnabled *bool         `json:"triggerEnabled,omitempty"`
+
+	// Mission Control identity fields are additive. A live address is useful
+	// only together with MachineID, DaemonIncarnation, and WorkspaceUUID; none
+	// is derived from a display name, CWD, pane id, or wN workspace id.
+	MachineID                     string `json:"machineId,omitempty"`
+	DaemonIncarnation             string `json:"daemonIncarnation,omitempty"`
+	MissionControlProtocolVersion int    `json:"missioncontrolProtocolVersion,omitempty"`
 }
 
 // CloseOutcomeMessage maps a daemon close transaction result onto the additive
@@ -603,10 +615,11 @@ type CursorPos struct {
 
 // WorkspaceInfo is one entry in a workspace-list reply.
 type WorkspaceInfo struct {
-	WorkspaceID string `json:"workspaceId"`
-	Name        string `json:"name,omitempty"`
-	ClientRef   string `json:"clientRef,omitempty"`
-	PaneCount   int    `json:"paneCount"`
+	WorkspaceID   string `json:"workspaceId"`
+	WorkspaceUUID string `json:"workspaceUuid,omitempty"`
+	Name          string `json:"name,omitempty"`
+	ClientRef     string `json:"clientRef,omitempty"`
+	PaneCount     int    `json:"paneCount"`
 
 	// Completion is present (ADDITIVE, post-v1) only on a workspace whose
 	// lane has finished and has not yet been dismissed. Its presence is what

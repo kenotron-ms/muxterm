@@ -95,12 +95,13 @@ var allowedVoiceEndpointSuffixes = []string{
 // voiceStatus is everything the browser is allowed to know. Note what is
 // absent: any field derived from a secret's value.
 type voiceStatus struct {
-	Enabled    bool   `json:"enabled"`
-	Mode       string `json:"mode"`
-	Endpoint   string `json:"endpoint"`
-	Model      string `json:"model"`
-	AuthMode   string `json:"authMode"`
-	EntraScope string `json:"entraScope"`
+	Enabled                    bool   `json:"enabled"`
+	AppVoiceCandidateAvailable bool   `json:"appVoiceCandidateAvailable"`
+	Mode                       string `json:"mode"`
+	Endpoint                   string `json:"endpoint"`
+	Model                      string `json:"model"`
+	AuthMode                   string `json:"authMode"`
+	EntraScope                 string `json:"entraScope"`
 	// KeySource is "stored", "env", "none" or "" (not a key mode). It says
 	// WHERE the key comes from, never what it is.
 	KeySource string `json:"keySource"`
@@ -144,17 +145,18 @@ func (s *Server) voiceConfigOnDisk() muxcfg.VoiceConfig {
 func (s *Server) buildVoiceStatus() voiceStatus {
 	v := s.voiceConfigOnDisk()
 	st := voiceStatus{
-		Enabled:       v.Enabled,
-		Mode:          voiceModeOf(v),
-		Endpoint:      v.Endpoint,
-		Model:         v.Model,
-		AuthMode:      v.AuthMode,
-		EntraScope:    v.Resolved().EntraScope,
-		KeySource:     v.KeySource(),
-		KeyEnvVar:     v.APIKeyEnv,
-		AllowedScopes: allowedEntraScopes,
-		ConfigPath:    s.configPath,
-		KeyPath:       voice.DefaultKeyPath(),
+		Enabled:                    v.Enabled,
+		AppVoiceCandidateAvailable: s.appVoice != nil,
+		Mode:                       voiceModeOf(v),
+		Endpoint:                   v.Endpoint,
+		Model:                      v.Model,
+		AuthMode:                   v.AuthMode,
+		EntraScope:                 v.Resolved().EntraScope,
+		KeySource:                  v.KeySource(),
+		KeyEnvVar:                  v.APIKeyEnv,
+		AllowedScopes:              allowedEntraScopes,
+		ConfigPath:                 s.configPath,
+		KeyPath:                    voice.DefaultKeyPath(),
 	}
 	switch st.KeySource {
 	case "stored":

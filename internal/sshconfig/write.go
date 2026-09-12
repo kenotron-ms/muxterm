@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/kenotron-ms/muxterm/internal/atomicfile"
 )
 
 // configMode is the permission an ssh client config must have. 0600 is not
@@ -84,40 +86,13 @@ func (m *Manager) ensureBackup(original string, existed bool) error {
 // The temp file is a SIBLING so the rename stays within one filesystem, and it
 // is created 0600 before it holds anything, so the contents are never briefly
 // readable by others.
-func atomicWrite(path, content string) (err error) {
+func atomicWrite(path, content string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, sshDirMode); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
-
-	f, err := os.CreateTemp(dir, ".muxterm-ssh-config-*")
-	if err != nil {
-		return fmt.Errorf("create temp file in %s: %w", dir, err)
-	}
-	tmp := f.Name()
-	defer func() {
-		// A no-op once the rename has succeeded; on any failure path this is
-		// what stops a half-written temp file from being left behind.
-		if err != nil {
-			_ = os.Remove(tmp)
-		}
-	}()
-
-	if err = f.Chmod(configMode); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-	if err = writeSyncClose(f, content); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err = os.Rename(tmp, path); err != nil {
+	if err := atomicfile.Write(path, []byte(content), configMode); err != nil {
 		return fmt.Errorf("replace %s: %w", path, err)
-	}
-	// fsync the directory so the rename itself survives a crash, not just the
-	// bytes it points at.
-	if d, derr := os.Open(dir); derr == nil {
-		_ = d.Sync()
-		_ = d.Close()
 	}
 	return nil
 }

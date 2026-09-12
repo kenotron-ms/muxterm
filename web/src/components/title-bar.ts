@@ -40,6 +40,7 @@ import './launcher-menu.js';
 import './mux-pane-picker.js';
 import './mic-button.js';
 import './mux-start-card.js';
+import './voice-mode-button.js';
 import { icon } from '../lib/icons.js';
 import { Ellipsis, LayoutGrid, Menu } from 'lucide';
 import { instanceLabel } from '../lib/instance-identity.js';
@@ -236,6 +237,9 @@ export class MuxTitleBar extends LitElement {
    */
   @property({ type: Boolean }) fleetOpen = false;
 
+  /** Wide workspace chrome reuses this title bar without a drawer control. */
+  @property({ type: Boolean, reflect: true }) desktop = false;
+
   /** Bumped when the session list changes, so the badge re-derives. */
   @state() private _sessionVersion = 0;
 
@@ -352,19 +356,21 @@ export class MuxTitleBar extends LitElement {
     const needs = this._needs;
 
     return html`
-      <button
-        class="drawer-btn"
-        type="button"
-        title="Workspaces"
-        aria-label="${needs
-          ? 'Sessions need input. Open workspaces.'
-          : 'Open workspaces'}"
-        aria-expanded="${this.drawerOpen ? 'true' : 'false'}"
-        @click="${this._toggleDrawer}"
-      >
-        ${icon(Menu, { size: 20 })}
-        ${needs ? html`<span class="needs-dot"></span>` : ''}
-      </button>
+      ${this.desktop
+        ? ''
+        : html`<button
+            class="drawer-btn"
+            type="button"
+            title="Workspaces"
+            aria-label="${needs
+              ? 'Sessions need input. Open workspaces.'
+              : 'Open workspaces'}"
+            aria-expanded="${this.drawerOpen ? 'true' : 'false'}"
+            @click="${this._toggleDrawer}"
+          >
+            ${icon(Menu, { size: 20 })}
+            ${needs ? html`<span class="needs-dot"></span>` : ''}
+          </button>`}
       ${this.dashboardActive
         ? html`<span class="title">Mission Control</span>`
         : html`
@@ -376,7 +382,9 @@ export class MuxTitleBar extends LitElement {
             <mux-pane-picker></mux-pane-picker>
           `}
       <div class="right">
-        ${this.dashboardActive
+        ${this.desktop
+          ? ''
+          : this.dashboardActive
           ? html`<button
               class="fleet-btn"
               type="button"
@@ -389,6 +397,7 @@ export class MuxTitleBar extends LitElement {
               ${needs ? html`<span class="needs-dot"></span>` : ''}
             </button>`
           : html`<mux-mic-button></mux-mic-button>`}
+        <mux-voice-mode-button></mux-voice-mode-button>
         <button
           class="launcher-btn"
           type="button"

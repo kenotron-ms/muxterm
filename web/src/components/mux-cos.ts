@@ -33,8 +33,9 @@
  * neighbours on every pointermove, and the whole right column jitters under
  * the hand that is dragging.
  *
- * PRESENTATIONAL over one store, read-only here: cosStore for the
- * conversation. Session state belongs to the Dashboard applet now, which
+ * PRESENTATIONAL over the conversation coordinator, read-only here: it picks
+ * a legacy CosStore or the committed catalog thread. Session state belongs to
+ * the Dashboard applet now, which
  * subscribes to homeSessions itself and only while it is on screen. This file
  * imports no socket and parses no wire frame, and reports intent through
  * events only: `home-dismiss` (Esc) and `fleet-state` (the mobile sheet opened
@@ -51,26 +52,34 @@ import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { icon } from '../lib/icons.js';
 import { ArrowUp, Check, ChevronDown, Ellipsis, Mic, Square, TriangleAlert, X } from 'lucide';
-import type { AppletChangedDetail } from '../lib/applet-registry.js';
+import type { AppletChangedDetail, AppletId } from '../lib/applet-registry.js';
 import {
-  cosStore,
   shortToolName,
   type CosApproval,
   type CosBlock,
   type CosTurn,
 } from '../lib/cos-store.js';
+import {
+  threadStore,
+  type ThreadAttention,
+  type ThreadContextOption,
+  type ThreadControlTarget,
+  type ThreadSummary,
+} from '../lib/thread-store.js';
 import { ASSISTANT_ALIAS, ASSISTANT_NAME } from '../lib/assistant-identity.js';
 import {
   clampDashboardSplit,
   persistDashboardSplit,
   restoreDashboardSplit,
 } from '../lib/dashboard-split.js';
-import { voiceInputController, type VoiceState } from '../lib/voice-input-controller.js';
 import {
-  voiceSessionController,
-  type VoiceSessionSnapshot,
-} from '../lib/voice-session-controller.js';
-import './mux-voice-orb.js';
+  voiceInputController,
+  type ComposerDictationCapture,
+  type VoiceState,
+  type VoiceTranscriptPayload,
+} from '../lib/voice-input-controller.js';
+import type { MuxApplets } from './mux-applets.js';
+import './voice-mode-button.js';
 // ONE applet host, in one of two containers: the right-hand region in
 // landscape, the bottom sheet in portrait. This file imports no applet: the
 // host owns the registry and mounts whatever is in it, which is the whole
@@ -107,20 +116,31 @@ function clock(msLeft: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/**
- * Is this snapshot a session the user is actually in?
- *
- * ONE definition, read by the render, by the composer takeover and by the
- * Escape route. `connecting` counts: the microphone is already open and the
- * only control that hangs it up is the orb, so the takeover has to happen
- * then rather than a beat later when the first word is heard.
- */
-function isSessionLive(s: VoiceSessionSnapshot): boolean {
-  return s.state !== 'idle' && s.state !== 'error';
+/** A catalog observation timestamp, never a claim that remote work is fresh. */
+function observedAt(iso: string): string {
+  const value = Date.parse(iso);
+  return Number.isFinite(value) ? new Date(value).toLocaleString() : iso;
+}
+
+function compactText(text: string, limit = 280): string {
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
 /** What the housekeeping menu offers. `days` is the cut, or 'all'. */
 type Housekeeping = 7 | 30 | 'all';
+type ThreadControlConfirmation = Readonly<{
+  action: 'reset' | 'archive';
+  target: ThreadControlTarget;
+}>;
+
+export type AppVoiceSubmitConfirmationOutcome = 'confirmed' | 'declined' | 'unavailable';
+
+interface AppVoiceSubmitConfirmation {
+  readonly operationId: string;
+  readonly label: string;
+  readonly text: string;
+  readonly resolve: (outcome: AppVoiceSubmitConfirmationOutcome) => void;
+}
 
 /** The sheet's resting sizes. Continuous while dragging; these on release. */
 type SheetDetent = 'half' | 'full';
@@ -144,56 +164,34 @@ export class MuxCos extends LitElement {
    */
   @property({ type: Boolean, reflect: true }) narrow = false;
 
-  /** Bumped by the cosStore subscription and by the approval ticker. */
+  /** Bumped by the conversation coordinator and by the approval ticker. */
   @state() private _version = 0;
 
-  @state() private _draft = '';
+  /**
+   * Draft ownership lives in threadStore so switching A -> B -> A restores
+   * the thread's own sentence rather than one component-global value.
+   */
+  private get _draft(): string {
+    return threadStore.draft;
+  }
+
+  private set _draft(value: string) {
+    threadStore.setDraft(value);
+  }
+
   @state() private _showThinking = new Set<string>();
   @state() private _menuOpen = false;
+  @state() private _contextOpen = false;
+  @state() private _contextCandidate = '';
   /** Which housekeeping action is awaiting a yes. null = none pending. */
   @state() private _confirm: Housekeeping | null = null;
+  /** Scoped reset/archive confirmation with its immutable selected target. */
+  @state() private _threadConfirm: ThreadControlConfirmation | null = null;
+  /** The exact scoped request in flight; also closes the pre-render double-click gap. */
+  @state() private _threadControlPending: ThreadControlConfirmation | null = null;
   @state() private _voice: VoiceState = voiceInputController.getState();
-  /**
-   * The LIVE session, which is a different thing from _voice above.
-   *
-   * _voice is dictation: free, one utterance, fills the box. This is a
-   * metered two-way conversation. They are separate controls on purpose and
-   * neither one drives the other.
-   */
-  @state() private _session: VoiceSessionSnapshot = voiceSessionController.snapshot();
-
-  /**
-   * What the composer looked like the instant a live session took it over,
-   * so ending the session can put it back exactly as it was.
-   *
-   * `h` is the .cbox height in px. The live composer is pinned to it, which
-   * is what keeps the CONVERSATION from reflowing: .comp is `flex: none` in
-   * a column flex, so any height it gains comes straight out of .chatbody's
-   * -- the log would shrink, re-wrap and move the reader's scroll position,
-   * for a change that is supposed to be confined to the composer.
-   *
-   * null means no idle composer was ever measured: the element was parked by
-   * cache() while the session was already live, so there is no prior height
-   * to hold and nothing on screen to disturb.
-   */
-  private _held: { h: number; start: number; end: number; focused: boolean } | null = null;
-
-  /**
-   * The user asked for the keyboard back WITHOUT hanging up.
-   *
-   * Only ever true while a session is live, and reset on every start and
-   * every end -- a call always begins with the orb, and the composer that
-   * comes back afterwards is the ordinary one, not a mode.
-   *
-   * Switching does NOT end the session. That is the whole point of it: the
-   * orb's own press already ends the call, so a switch that also ended it
-   * would be a second hang-up button wearing a different label rather than a
-   * way to type mid-conversation. The cost of keeping it running is that the
-   * microphone is open while a text box is on screen, which is why the live
-   * composer says "microphone open" in words and keeps the orb -- the one
-   * control that hangs up -- in the row.
-   */
-  @state() private _textMode = false;
+  @state() private _dictationNotice = '';
+  @state() private _appVoiceConfirmation: AppVoiceSubmitConfirmation | null = null;
 
   /**
    * Whether the portrait applet sheet is open.
@@ -224,7 +222,9 @@ export class MuxCos extends LitElement {
   private _unsub: (() => void) | null = null;
   private _unsubVoice: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
-  private _unsubSession: (() => void) | null = null;
+  private _unsubVoiceError: (() => void) | null = null;
+  private _unsubSelectionWillChange: (() => void) | null = null;
+  private _unsubSelectionSettled: (() => void) | null = null;
   private _ticker: ReturnType<typeof setInterval> | undefined;
 
   /** False once the reader scrolls up: streaming must not yank them back down. */
@@ -236,6 +236,22 @@ export class MuxCos extends LitElement {
   /** Live sheet drag. `moved` separates a drag from a tap on the handle. */
   private _sheetDrag: { pointerId: number; moved: boolean } | null = null;
   private _detent: SheetDetent = 'half';
+  /** True only for a dictation session this chat composer itself started. */
+  private _chatDictationActive = false;
+  /** Immutable capture identity used to reject late A results while B is visible. */
+  private _chatDictationCapture: ComposerDictationCapture | null = null;
+  private _userSelectionPending = false;
+  private _activeApplet: AppletId | '' = '';
+  private _voiceAppletOperationId = '';
+  private _appletOperationWaiter:
+    | {
+        readonly operationId: string;
+        readonly applet: AppletId;
+        readonly resolve: (ok: boolean) => void;
+        readonly signal: AbortSignal;
+        readonly onAbort: () => void;
+      }
+    | null = null;
 
   static styles = css`
     *,
@@ -415,6 +431,151 @@ export class MuxCos extends LitElement {
       color: var(--ink-1);
       flex: none;
     }
+    .context {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: var(--s-3);
+      min-width: 0;
+      flex: 0 1 auto;
+    }
+    .context-trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-2);
+      min-width: 0;
+      max-width: min(42vw, 390px);
+      font: inherit;
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      line-height: 1;
+      color: var(--ink-2);
+      background: var(--surface);
+      border: 1px solid var(--edge);
+      border-radius: var(--r-ctl);
+      padding: 6px var(--s-3);
+      cursor: pointer;
+    }
+    .context-trigger:hover,
+    .context-trigger[aria-expanded='true'] {
+      color: var(--ink-1);
+      border-color: var(--chrome-accent);
+    }
+    .context-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .context-badge,
+    .context-row-badge {
+      flex: none;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--need);
+    }
+    .context-status {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      color: var(--ink-3);
+    }
+    .context-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      z-index: 31;
+      width: min(360px, calc(100vw - var(--s-7) - var(--s-6)));
+      padding: var(--s-3);
+      background: var(--surface);
+      border: 1px solid var(--edge);
+      border-radius: var(--r-card);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    }
+    .context-heading,
+    .context-empty {
+      padding: var(--s-3) var(--s-4);
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      line-height: var(--lh-tight);
+      color: var(--ink-3);
+    }
+    .context-list {
+      max-height: min(48vh, 320px);
+      margin: 0;
+      padding: 0;
+      overflow-y: auto;
+      list-style: none;
+    }
+    .context-option {
+      display: flex;
+      width: 100%;
+      align-items: flex-start;
+      gap: var(--s-3);
+      padding: 8px var(--s-4);
+      color: var(--ink-2);
+      background: transparent;
+      border: 0;
+      border-radius: var(--r-ctl);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .context-option:hover,
+    .context-option[aria-pressed='true'] {
+      color: var(--ink-1);
+      background: var(--chrome-hover);
+    }
+    .context-option-main {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-2);
+    }
+    .context-option-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: var(--t-ui);
+    }
+    .context-option-detail {
+      font-size: var(--t-meta);
+      line-height: var(--lh-tight);
+      color: var(--ink-3);
+      overflow-wrap: anywhere;
+    }
+    .context-option-detail.refused {
+      color: var(--fail);
+    }
+    .context-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: var(--s-3);
+      margin-top: var(--s-3);
+      padding: var(--s-3) var(--s-1) 0;
+      border-top: 1px solid var(--edge);
+    }
+    .context-talk {
+      font: inherit;
+      font-size: var(--t-ui);
+      font-weight: 600;
+      line-height: 1;
+      padding: 7px 11px;
+      border: 1px solid color-mix(in srgb, var(--ok) 55%, transparent);
+      border-radius: var(--r-ctl);
+      color: var(--ink-1);
+      background: color-mix(in srgb, var(--ok) 20%, var(--surface));
+      cursor: pointer;
+    }
+    .context-talk[disabled] {
+      opacity: 0.5;
+      cursor: default;
+    }
     .spacer {
       flex: 1;
       min-width: 0;
@@ -440,10 +601,11 @@ export class MuxCos extends LitElement {
     }
 
     .dots:focus-visible,
+    .context-trigger:focus-visible,
+    .context-option:focus-visible,
+    .context-talk:focus-visible,
     .btn:focus-visible,
-    .cbtn:focus-visible,
-    .tomode:focus-visible,
-    .micback:focus-visible {
+    .cbtn:focus-visible {
       outline: 2px solid var(--chrome-accent);
       outline-offset: 2px;
     }
@@ -933,6 +1095,17 @@ export class MuxCos extends LitElement {
       border-left: 2px solid var(--edge);
       padding-left: var(--s-5);
     }
+    .thread-unread {
+      display: flex;
+      align-items: center;
+      gap: var(--s-3);
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      line-height: var(--lh-tight);
+      color: var(--ink-3);
+      border-left: 2px solid var(--need);
+      padding-left: var(--s-5);
+    }
     .fatal {
       font-size: var(--t-ui);
       color: var(--fail);
@@ -1000,137 +1173,8 @@ export class MuxCos extends LitElement {
       gap: var(--s-3);
     }
     .cbox:focus-within,
-    .cbox.live,
-    .cbox.solo {
+    .cbox.live {
       border-color: color-mix(in srgb, var(--chrome-accent) 55%, transparent);
-    }
-    /* THE COMPOSER, DURING A CALL. One control, centred, and exactly as tall
-       as the composer it replaced -- the height is written inline from the
-       measured box (see _renderVoiceComposer), so the conversation above
-       never gives up a pixel and the reader's scroll position does not move. */
-    .cbox.solo {
-      position: relative;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-    }
-    /* THE WAY BACK TO THE KEYBOARD, without hanging up.
-       A NAVIGATION control, and built to read as one: no fill, no ring, no
-       30px slot -- a plain word, dim, parked at the edge. The orb keeps the
-       centre and every pixel of visual weight. Absolutely positioned so it
-       takes NO layout space: the box stays pinned to the height the log gave
-       up, and the orb stays centred on both axes exactly as it was before
-       this existed. */
-    .tomode {
-      position: absolute;
-      right: var(--s-5);
-      top: 50%;
-      transform: translateY(-50%);
-      border: 0;
-      background: transparent;
-      color: var(--ink-3);
-      font: inherit;
-      font-size: var(--t-meta);
-      line-height: 1;
-      padding: var(--s-2) var(--s-3);
-      border-radius: 8px;
-      cursor: pointer;
-      /* Never reaches the orb. Half the box, less the orb's own half-width
-         and a gap -- so on a composer too narrow to hold both, the WORD
-         gives way and the orb keeps its centre. The accessible name is on
-         the button, not in the visible text, so a clipped label is still a
-         labelled control. */
-      max-width: calc(50% - 48px);
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-    }
-    .tomode:hover {
-      color: var(--ink-1);
-      background: var(--chrome-hover);
-    }
-    /* MICROPHONE OPEN, said in words. The orb beside it animates, but an
-       animation is not a statement -- a text box on screen with a live
-       microphone behind it has to SAY so. Takes the crow's spare width, so
-       it adds no row and no height. */
-    .micon {
-      display: flex;
-      align-items: center;
-      gap: var(--s-2);
-      margin-right: auto;
-      /* LAST to give up room, not first -- see .micback's shrink weight. A
-         row too tight for everything drops the convenience, never the
-         warning: a text box with a live microphone behind it and no notice
-         saying so is the one state this control exists to prevent. */
-      flex: 0 1 auto;
-      min-width: 0;
-      color: var(--chrome-accent);
-      font-size: var(--t-meta);
-      white-space: nowrap;
-      /* A CHIP, not a word. Accent text alone measured as ordinary metadata
-         at a glance -- the same weight as the link beside it -- and "there is
-         a microphone open behind this text box" is not metadata. The tinted
-         ground and the ring make it read as a live status at a glance while
-         staying small enough to sit inside the button row, so it still costs
-         the log nothing. */
-      padding: 2px var(--s-3) 2px var(--s-2);
-      border-radius: 999px;
-      background: color-mix(in srgb, var(--chrome-accent) 16%, transparent);
-      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chrome-accent) 40%, transparent);
-    }
-    .micword {
-      min-width: 0;
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-    }
-    .micdot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--chrome-accent);
-      flex: none;
-      /* Breathing, because "open" is a thing happening rather than a label.
-         Opacity only -- no size, no layout, nothing the row's height can
-         notice. */
-      animation: micbreath 2s ease-in-out infinite;
-    }
-    @keyframes micbreath {
-      0%,
-      100% {
-        opacity: 1;
-      }
-      50% {
-        opacity: 0.35;
-      }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .micdot {
-        animation: none;
-      }
-    }
-    .micback {
-      border: 0;
-      background: transparent;
-      color: var(--ink-3);
-      font: inherit;
-      font-size: var(--t-meta);
-      line-height: 1;
-      padding: var(--s-2) var(--s-3);
-      border-radius: 8px;
-      cursor: pointer;
-      /* Shrinks FOUR TIMES faster than the notice beside it, and clips
-         rather than wraps: a second line here would grow the row, and the
-         row's height is the log's. */
-      flex: 0 4 auto;
-      min-width: 0;
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-    }
-    .micback:hover {
-      color: var(--ink-1);
-      background: var(--chrome-hover);
     }
     .ctext {
       width: 100%;
@@ -1150,11 +1194,46 @@ export class MuxCos extends LitElement {
     .ctext::placeholder {
       color: var(--ink-3);
     }
+    .ctext:disabled {
+      cursor: not-allowed;
+      opacity: 0.62;
+    }
     .crow {
       display: flex;
       align-items: center;
       gap: var(--s-3);
       justify-content: flex-end;
+    }
+    .threaded-voice,
+    .threaded-status {
+      min-width: 0;
+      margin-right: auto;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      line-height: 1.3;
+      color: var(--ink-3);
+    }
+    .threaded-voice {
+      color: var(--need);
+    }
+    .threaded-release {
+      font: inherit;
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      line-height: 1;
+      color: var(--ink-2);
+      background: transparent;
+      border: 0;
+      padding: var(--s-2) var(--s-3);
+      border-radius: var(--r-chip);
+      cursor: pointer;
+    }
+    .threaded-release:hover {
+      color: var(--ink-1);
+      background: var(--chrome-hover);
     }
     .cbtn {
       width: 30px;
@@ -1176,39 +1255,6 @@ export class MuxCos extends LitElement {
     .cbtn.send {
       background: var(--ink-1);
       color: var(--chrome-body);
-    }
-    /* The voice control occupies the same 30px slot the send arrow does, so
-       swapping between them does not reflow the composer row. The orb is
-       sized to the slot; its halos overflow it, which is the intended look. */
-    .cbtn.voice {
-      background: transparent;
-      overflow: visible;
-    }
-    .cbtn.voice mux-voice-orb {
-      --orb-box: 30px;
-      --orb-d: 22px;
-      pointer-events: none;
-    }
-    .cbtn.voice:hover {
-      background: transparent;
-    }
-    .cbtn.voice.live mux-voice-orb {
-      --orb-d: 24px;
-    }
-    /* SOLE CONTROL, so no longer slot-sized. Not a taste decision: 64px is
-       the largest layout box that fits inside the composer's own resting
-       height, which is all the room C5's no-reflow rule leaves. The disc is
-       52px because 52/64 is the SAME proportion the live slot orb already
-       uses (24/30) -- this is the identical orb, scaled up. Nothing about
-       its visuals or its states is touched; only the two size variables it
-       already exposes are turned up. */
-    .cbtn.voice.solo {
-      width: 64px;
-      height: 64px;
-    }
-    .cbtn.voice.solo mux-voice-orb {
-      --orb-box: 64px;
-      --orb-d: 52px;
     }
     .cbtn.send:hover:not([disabled]) {
       background: var(--chrome-text-bright);
@@ -1394,9 +1440,11 @@ export class MuxCos extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener('mousedown', this._onOutsideClick);
-    this._unsub = cosStore.subscribe(() => {
+    this._unsub = threadStore.subscribe(() => {
+      this._settleThreadControlPending();
       this._version++;
     });
+    this._settleThreadControlPending();
     // Session state is the Dashboard APPLET's subscription now. It is held
     // while that applet is CONNECTED rather than while it is on screen, so an
     // unseen tab can still notice a lane going blocked; the argument for that
@@ -1404,68 +1452,63 @@ export class MuxCos extends LitElement {
     // it to applet-dashboard's _onFleet() and _sync().
     this._unsubVoice = voiceInputController.onStateChange((s) => {
       this._voice = s;
+      if (s !== 'listening') {
+        this._chatDictationActive = false;
+        this._chatDictationCapture = null;
+      }
     });
     this._unsubTranscript = voiceInputController.onTranscript((p) => {
-      this._takeTranscript(p.text);
+      this._takeTranscript(p);
     });
-    this._unsubSession = voiceSessionController.subscribe((s) => {
-      // Measured BEFORE the assignment, while the composer on screen is still
-      // the one being taken over. Lit batches its update to a microtask, so
-      // the DOM read here is of the idle composer, not the live one.
-      const was = this._live;
-      const now = isSessionLive(s);
-      // Every call opens with the orb. Text mode is a thing the user asks
-      // for during one, never a state a new call inherits.
-      if (!was && now) {
-        this._holdComposer();
-        this._textMode = false;
-        // THE ORB AND THE SHEET WANT THE SAME THUMB, and on a phone they want
-        // the same pixels: the sheet is pinned to the viewport bottom in the
-        // top layer, so an open one covers the composer -- which during a call
-        // is the orb, and the orb is the only control that hangs up. Voice
-        // going live is unambiguous about which of the two the bottom of the
-        // screen belongs to, so the sheet gets out of the way. It is a
-        // dismissal and not a suppression: the fleet button reopens it
-        // mid-call, over a call the user can still see is running, because
-        // deciding they may not look at their lanes while talking would be
-        // this file inventing a policy nobody asked for.
-        this._hideSheet();
+    this._unsubVoiceError = voiceInputController.onError((message) => {
+      this._dictationNotice = message;
+    });
+    this._unsubSelectionWillChange = threadStore.onSelectionWillChange((from, to) => {
+      const capture = this._chatDictationCapture;
+      if (capture && capture.channelId === from && from !== to) {
+        voiceInputController.invalidateComposerChannel(from);
       }
-      this._session = s;
-      if (was && !now) this._releaseComposer();
     });
-    this._session = voiceSessionController.snapshot();
-    document.addEventListener('keydown', this._onDocKey);
+    this._unsubSelectionSettled = threadStore.onSelectionSettled(() => {
+      if (!this._userSelectionPending) return;
+      this._userSelectionPending = false;
+      this.dispatchEvent(new CustomEvent('app-voice-observation', { bubbles: true, composed: true }));
+    });
     // One second is the whole resolution of an mm:ss countdown, and the
     // ticker only runs while something is counting: an idle Dashboard costs
     // no timer.
     this._ticker = setInterval(() => {
-      if (cosStore.approvals.length > 0) this._version++;
+      if (threadStore.approvals.length > 0) this._version++;
     }, 1000);
     this.style.setProperty('--chat-w', `${this._split}%`);
   }
 
   override disconnectedCallback(): void {
     document.removeEventListener('mousedown', this._onOutsideClick);
-    document.removeEventListener('keydown', this._onDocKey);
     this._unsub?.();
     this._unsub = null;
     this._unsubVoice?.();
     this._unsubVoice = null;
     this._unsubTranscript?.();
     this._unsubTranscript = null;
-    this._unsubSession?.();
-    this._unsubSession = null;
-    // The live session is NOT stopped here. This element is parked by
-    // cache() when the Dashboard closes, and hanging up a conversation
-    // because a panel was collapsed would be the wrong reading of that
-    // entirely -- the microphone stays live and the orb reappears in the
-    // state the conversation is actually in when the panel reopens.
+    this._unsubVoiceError?.();
+    this._unsubVoiceError = null;
+    this._unsubSelectionWillChange?.();
+    this._unsubSelectionWillChange = null;
+    this._unsubSelectionSettled?.();
+    this._unsubSelectionSettled = null;
     if (this._ticker !== undefined) clearInterval(this._ticker);
     this._ticker = undefined;
     // Only OUR session. An unconditional abort here would kill a dictation
     // the title bar's mic started against a terminal pane.
-    if (this._voice === 'listening') voiceInputController.invalidateIfActive();
+    if (this._chatDictationActive && this._voice === 'listening') {
+      voiceInputController.invalidateComposerChannel(this._chatDictationCapture?.channelId ?? '');
+    }
+    this._chatDictationActive = false;
+    this._chatDictationCapture = null;
+    this._userSelectionPending = false;
+    this._settleAppVoiceConfirmation('unavailable');
+    this._settleAppletOperationWaiter(false);
     // NO DRAG MAY OUTLIVE THE DETACH. This element is parked by cache(), not
     // destroyed, so a _drag left non-null is still non-null when the Dashboard
     // reopens -- and _gripMove checks nothing else. Moving the mouse across
@@ -1501,6 +1544,55 @@ export class MuxCos extends LitElement {
   /** Put the caret in the box. Called by the app when the Dashboard opens. */
   focusComposer(): void {
     this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext')?.focus();
+  }
+
+  get activeApplet(): AppletId | '' {
+    return this._activeApplet;
+  }
+
+  /** Resolves only a registered applet through its existing host. */
+  navigateAppletForAppVoice(
+    applet: AppletId,
+    target: string | undefined,
+    operationId: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const host = this.renderRoot.querySelector<MuxApplets>('mux-applets');
+    if (!host || signal.aborted) return Promise.resolve(false);
+    this._voiceAppletOperationId = operationId;
+    return new Promise<boolean>((resolve) => {
+      this._settleAppletOperationWaiter(false);
+      const onAbort = () => this.cancelAppVoiceNavigation(operationId);
+      const waiter = { operationId, applet, resolve, signal, onAbort };
+      this._appletOperationWaiter = waiter;
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) {
+        this.cancelAppVoiceNavigation(operationId);
+        return;
+      }
+      host.show(applet, target, operationId);
+      if (this._activeApplet === applet) {
+        this._settleAppletOperationWaiter(true, waiter);
+      }
+    });
+  }
+
+  cancelAppVoiceNavigation(operationId: string): void {
+    const waiter = this._appletOperationWaiter;
+    if (!waiter || waiter.operationId !== operationId) return;
+    this._settleAppletOperationWaiter(false, waiter);
+  }
+
+  private _settleAppletOperationWaiter(
+    ok: boolean,
+    expected?: NonNullable<MuxCos['_appletOperationWaiter']>,
+  ): void {
+    const waiter = this._appletOperationWaiter;
+    if (!waiter || (expected && waiter !== expected)) return;
+    this._appletOperationWaiter = null;
+    waiter.signal.removeEventListener('abort', waiter.onAbort);
+    if (this._voiceAppletOperationId === waiter.operationId) this._voiceAppletOperationId = '';
+    waiter.resolve(ok);
   }
 
   override updated(): void {
@@ -1708,7 +1800,7 @@ export class MuxCos extends LitElement {
       ></div>
       ${this.narrow
         ? this._renderSheet()
-        : html`<div class="dash"><mux-applets></mux-applets></div>`}
+        : html`<div class="dash" @applet-changed="${this._onAppletChanged}"><mux-applets></mux-applets></div>`}
     `;
   }
 
@@ -1718,7 +1810,9 @@ export class MuxCos extends LitElement {
         <h1
           title="Mission Control — you're talking with ${ASSISTANT_NAME}. Nickname: ${ASSISTANT_ALIAS}."
         >Mission Control</h1>
+        ${threadStore.threaded ? this._renderContextSelector() : nothing}
         <span class="spacer"></span>
+        <mux-voice-mode-button></mux-voice-mode-button>
         <button
           class="dots ${this._menuOpen ? 'on' : ''}"
           type="button"
@@ -1732,12 +1826,154 @@ export class MuxCos extends LitElement {
   }
 
   /**
+   * The only thread switcher. It lives beside the shared surface title and
+   * asks for a second, explicit Talk here action before it transmits a select
+   * request; terminal/workspace navigation never reaches this path.
+   */
+  private _renderContextSelector(): TemplateResult {
+    const options = threadStore.contexts;
+    const candidate = options.find((option) => option.key === this._contextCandidate);
+    const status = threadStore.contextStatus;
+    return html`
+      <div class="context">
+        <button
+          class="context-trigger"
+          type="button"
+          data-thread-context-selector
+          aria-label="Conversation context: ${threadStore.contextLabel}${threadStore.hasUnread ? ', unread updates' : ''}"
+          aria-expanded="${this._contextOpen ? 'true' : 'false'}"
+          aria-controls="thread-context-menu"
+          @click="${this._toggleContext}"
+        >
+          <span class="context-label">Context: ${threadStore.contextLabel}</span>
+          ${threadStore.hasUnread
+            ? html`<span class="context-badge" aria-hidden="true"></span>`
+            : nothing}
+          ${icon(ChevronDown, { size: 12 })}
+        </button>
+        ${status
+          ? html`<span class="context-status" data-thread-context-status role="status">${status}</span>`
+          : nothing}
+        ${this._contextOpen
+          ? html`
+              <div
+                class="context-menu"
+                id="thread-context-menu"
+                data-thread-context-menu
+                role="dialog"
+                aria-label="Choose conversation context"
+                @keydown="${this._onContextListKey}"
+              >
+                <div class="context-heading">Choose a context, then talk there.</div>
+                ${options.length > 0
+                  ? html`
+                      <ul class="context-list" aria-label="Conversation contexts">
+                        ${options.map((option) => this._renderContextOption(option))}
+                      </ul>
+                    `
+                  : html`<div class="context-empty" role="status">Loading real contexts…</div>`}
+                <div class="context-actions">
+                  <button
+                    class="context-talk"
+                    type="button"
+                    data-thread-talk-here
+                    ?disabled="${!candidate || !threadStore.canSelect}"
+                    @click="${this._talkHere}"
+                  >Talk here</button>
+                </div>
+              </div>
+            `
+          : nothing}
+      </div>
+    `;
+  }
+
+  private _renderContextOption(option: ThreadContextOption): TemplateResult {
+    const selected = option.key === this._contextCandidate;
+    const detail = option.detail;
+    return html`
+      <li>
+        <button
+          class="context-option"
+          type="button"
+          data-thread-context-option="${option.key}"
+          aria-pressed="${selected ? 'true' : 'false'}"
+          aria-current="${option.threadId !== '' && option.threadId === threadStore.selectedThreadId ? 'true' : 'false'}"
+          aria-label="${option.unread ? `${option.label}, unread updates` : option.label}"
+          @click="${() => {
+            this._contextCandidate = option.key;
+          }}"
+        >
+          <span class="context-option-main">
+            <span class="context-option-name">${option.label}</span>
+            ${detail
+              ? html`<span class="context-option-detail ${option.refused ? 'refused' : ''}">${detail}</span>`
+              : nothing}
+          </span>
+          ${option.unread ? html`<span class="context-row-badge" aria-hidden="true"></span>` : nothing}
+        </button>
+      </li>
+    `;
+  }
+
+  /**
    * Housekeeping. No counts -- see the file header -- so the items say what
    * they will do and the confirm says what it costs, and neither offers a
    * number to weigh the decision against.
    */
   private _renderMenu(): TemplateResult {
-    const any = cosStore.hasMessages;
+    if (threadStore.threaded) {
+      const noScopedControls =
+        !threadStore.resetAvailable &&
+        !threadStore.archiveAvailable &&
+        !(threadStore.archiveSupported && threadStore.controlTarget?.kind === 'lobby');
+      return html`
+        <div class="menu" role="menu">
+          ${threadStore.resetAvailable
+            ? html`
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-thread-reset
+                  @click="${() => this._askThreadControl('reset')}"
+                >Reset this context</button>
+              `
+            : nothing}
+          ${threadStore.archiveAvailable
+            ? html`
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="danger"
+                  data-thread-archive
+                  @click="${() => this._askThreadControl('archive')}"
+                >Archive this context</button>
+              `
+            : nothing}
+          ${threadStore.archiveSupported && threadStore.controlTarget?.kind === 'lobby'
+            ? html`<button type="button" role="menuitem" disabled>Lobby cannot be archived</button>`
+            : nothing}
+          ${noScopedControls
+            ? html`<button type="button" role="menuitem" disabled>
+                Thread controls are unavailable in text preview
+              </button>`
+            : nothing}
+          <button
+            type="button"
+            role="menuitem"
+            data-thread-migration-preview
+            ?disabled="${threadStore.migrationPreviewPending}"
+            @click="${this._previewMigration}"
+          >${threadStore.migrationPreviewPending
+            ? 'Opening migration preview…'
+            : 'Preview catalog migration / rollback'}</button>
+          <button type="button" role="menuitem" disabled>
+            Clear messages is unavailable in text preview
+          </button>
+        </div>
+      `;
+    }
+    const any = threadStore.hasMessages;
     return html`
       <div class="menu" role="menu">
         <button
@@ -1765,20 +2001,151 @@ export class MuxCos extends LitElement {
   }
 
   private _renderThread(): TemplateResult {
-    const turns = cosStore.turns;
-    const fault = cosStore.fault;
+    const turns = threadStore.turns;
+    const fault = threadStore.fault;
     return html`
-      ${turns.length === 0 && !this._confirm ? this._renderZero() : nothing}
+      ${this._renderAttentionNotice()}
+      ${this._renderLobbySummaries()}
+      ${turns.length === 0 && !this._confirm && !this._threadConfirm ? this._renderZero() : nothing}
       ${turns.map((t) => this._renderTurn(t))}
+      ${this._renderRootState()}
+      ${threadStore.threaded && threadStore.hasUnread
+        ? html`
+            <div class="thread-unread" data-thread-unread role="status">
+              Updates are waiting in another context. Open Context to choose where to talk.
+            </div>
+          `
+        : nothing}
       ${fault && fault.fatal
         ? html`<div class="fatal" role="alert">${fault.message}</div>`
         : nothing}
       ${fault && !fault.fatal ? html`<div class="notice">${fault.message}</div>` : nothing}
-      ${this._confirm !== null ? this._renderConfirm(this._confirm) : nothing}
+      ${threadStore.threaded && this._threadConfirm !== null
+        ? this._renderThreadConfirm(this._threadConfirm)
+        : nothing}
+      ${this._appVoiceConfirmation ? this._renderAppVoiceConfirmation(this._appVoiceConfirmation) : nothing}
+      ${!threadStore.threaded && this._confirm !== null ? this._renderConfirm(this._confirm) : nothing}
+    `;
+  }
+
+  /**
+   * One durable item at a time: dismissal reveals the next catalog item. No
+   * incoming record opens a context, Viewer, microphone, or approval prompt.
+   */
+  private _renderAttentionNotice(): TemplateResult | typeof nothing {
+    const attention = threadStore.attention[0];
+    if (!attention) return nothing;
+    return html`
+      <div class="notice" data-thread-attention="${attention.id}" aria-label="Queued attention">
+        <div><strong>Attention queued</strong></div>
+        <div>
+          From ${attention.label} · observed
+          <time datetime="${attention.observedAt}" title="${attention.observedAt}"
+            >${observedAt(attention.observedAt)}</time
+          >
+        </div>
+        <div>${attention.reason}</div>
+        ${attention.canViewDetail
+          ? nothing
+          : html`<div>${attention.detailUnavailable}</div>`}
+        <div class="row">
+          <button
+            class="btn pri"
+            type="button"
+            data-thread-attention-view="${attention.id}"
+            title="${attention.canViewDetail ? 'Open a read-only Viewer detail for this context' : attention.detailUnavailable}"
+            ?disabled="${!attention.canViewDetail || attention.detailPending}"
+            @click="${() => threadStore.viewAttentionDetail(attention.id)}"
+          >${attention.detailPending ? 'opening detail…' : 'View detail'}</button>
+          <button
+            class="btn no"
+            type="button"
+            data-thread-attention-talk="${attention.id}"
+            ?disabled="${!threadStore.canSelect}"
+            @click="${() => this._talkAttention(attention)}"
+          >Talk here</button>
+          <button
+            class="btn no"
+            type="button"
+            data-thread-attention-dismiss="${attention.id}"
+            ?disabled="${attention.acknowledging}"
+            @click="${() => threadStore.acknowledgeAttention(attention.id)}"
+          >${attention.acknowledging ? 'dismissing…' : 'Dismiss'}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  /** Bounded terminal extracts are context, not a claim that remote work is current. */
+  private _renderLobbySummaries(): TemplateResult | typeof nothing {
+    const summaries = threadStore.lobbySummaries;
+    if (summaries.length === 0) return nothing;
+    return html`
+      <div class="notice" data-thread-summaries aria-label="Completed work extracts">
+        <div><strong>Completed-work extracts</strong></div>
+        <div>Bounded provenance records; observed time is not a freshness claim.</div>
+        ${summaries.map((summary) => this._renderSummary(summary))}
+      </div>
+    `;
+  }
+
+  private _renderSummary(summary: ThreadSummary): TemplateResult {
+    return html`
+      <div data-thread-summary="${summary.id}">
+        <div>
+          ${summary.label} · observed
+          <time datetime="${summary.observedAt}" title="${summary.observedAt}"
+            >${observedAt(summary.observedAt)}</time
+          >
+          · extract${summary.truncated ? ' (display truncated)' : ''}
+        </div>
+        <div>${summary.text}</div>
+      </div>
+    `;
+  }
+
+  /** Per-root tool snapshots stay inside the transcript; they are not a dashboard. */
+  private _renderRootState(): TemplateResult | typeof nothing {
+    const root = threadStore.rootState;
+    if (!root) return nothing;
+    return html`
+      <div class="notice" data-thread-root-state aria-label="Context tracking state">
+        <div><strong>Context tracking</strong></div>
+        ${root.goal
+          ? html`<div title="${root.goal}">Goal: ${compactText(root.goal)}</div>`
+          : nothing}
+        ${root.goal ? html`<div>Goal tracking only; autonomous scheduling is unavailable.</div>` : nothing}
+        ${root.todos.length > 0
+          ? html`
+              <div>Todo:</div>
+              ${root.todos.map(
+                (todo) => html`<div data-thread-todo-status="${todo.status}">
+                  [${todo.status}] ${compactText(todo.activeForm || todo.content, 200)}
+                </div>`,
+              )}
+            `
+          : nothing}
+      </div>
     `;
   }
 
   private _renderZero(): TemplateResult {
+    if (threadStore.negotiating) {
+      return html`
+        <div class="zero">
+          <div class="lede">Connecting to ${ASSISTANT_NAME}…</div>
+          <p class="sub">Checking whether this server offers real text-thread contexts.</p>
+        </div>
+      `;
+    }
+    if (threadStore.threaded && threadStore.selectionPending) {
+      return html`
+        <div class="zero">
+          <div class="lede">Opening context…</div>
+          <p class="sub">Waiting for the server's authoritative history and draft reference.</p>
+        </div>
+      `;
+    }
     return html`
       <div class="zero">
         <div class="lede">What needs you?</div>
@@ -1791,8 +2158,9 @@ export class MuxCos extends LitElement {
   }
 
   private _renderTurn(t: CosTurn): TemplateResult {
-    const asks = cosStore.approvals.filter((a) => a.turnId === t.id);
+    const asks = threadStore.approvals.filter((a) => a.turnId === t.id);
     const live = t.status === 'pending' || t.status === 'streaming';
+    const cancelling = threadStore.threaded && threadStore.isControlPending('cancel', t.id);
     return html`
       ${t.prompt
         ? html`<div class="turn you">
@@ -1807,6 +2175,17 @@ export class MuxCos extends LitElement {
           ${live && t.blocks.length === 0
             ? html`<div class="waiting">working...</div>`
             : nothing}
+          ${threadStore.threaded && (threadStore.canCancel(t.id) || cancelling)
+            ? html`
+                <button
+                  class="btn no"
+                  type="button"
+                  data-thread-cancel="${t.id}"
+                  ?disabled="${cancelling}"
+                  @click="${() => threadStore.cancel(t.id)}"
+                >${cancelling ? 'stopping…' : 'stop this turn'}</button>
+              `
+            : nothing}
           <!--
             A turn CAN legitimately end with no reply: the loop stops after a
             tool result and the model never speaks again, so turn_end carries
@@ -1819,7 +2198,9 @@ export class MuxCos extends LitElement {
           ${!live && t.status === 'done' && !t.blocks.some((b) => b.kind === 'text')
             ? html`<div class="waiting">ended without a reply</div>`
             : nothing}
-          ${asks.map((a) => this._renderAsk(a))}
+          ${threadStore.threaded && asks.length > 0 && !threadStore.approvalAvailable
+            ? html`<div class="notice">Approvals are unavailable in text preview.</div>`
+            : asks.map((a) => this._renderAsk(a))}
           ${t.notices.map((n) => html`<div class="notice">${n}</div>`)}
           ${this._renderFoot(t)}
         </div>
@@ -1867,6 +2248,8 @@ export class MuxCos extends LitElement {
   private _renderAsk(a: CosApproval): TemplateResult {
     const left = a.deadline - Date.now();
     const settled = a.answered !== '';
+    const pending = threadStore.threaded && threadStore.isControlPending('approval', a.requestId);
+    const enabled = !threadStore.threaded || threadStore.canAnswer(a.turnId, a.requestId);
     return html`
       <div class="ask ${settled ? 'settled' : ''}" role="alertdialog" aria-label="Approval requested">
         <div class="h">
@@ -1881,12 +2264,16 @@ export class MuxCos extends LitElement {
                 <button
                   class="btn pri"
                   type="button"
-                  @click="${() => cosStore.answer(a.requestId, true)}"
-                >approve</button>
+                  data-thread-approval="approve:${a.turnId}:${a.requestId}"
+                  ?disabled="${pending || !enabled}"
+                  @click="${() => threadStore.answer(a.turnId, a.requestId, true)}"
+                >${pending ? 'sending…' : 'approve'}</button>
                 <button
                   class="btn no"
                   type="button"
-                  @click="${() => cosStore.answer(a.requestId, false)}"
+                  data-thread-approval="deny:${a.turnId}:${a.requestId}"
+                  ?disabled="${pending || !enabled}"
+                  @click="${() => threadStore.answer(a.turnId, a.requestId, false)}"
                 >deny</button>
                 <span class="clock ${left < 30000 ? 'soon' : ''}">${clock(left)} left</span>
               `}
@@ -1950,287 +2337,138 @@ export class MuxCos extends LitElement {
     `;
   }
 
-  /**
-   * The composer's send slot, when there is nothing to send.
-   *
-   * `ready` is false whenever the box is empty, and the send button was
-   * already `?disabled` in exactly that case -- a DEAD AFFORDANCE sitting in
-   * the most reachable position on the surface. So the slot is swapped
-   * rather than greyed out: text present, send arrow; box empty, the voice
-   * control. No new chrome is added anywhere, and a control that did nothing
-   * becomes the front door to the feature.
-   *
-   * The mic button to its left is untouched. Dictation and a live session
-   * are different jobs -- one is free and fills the box for you to check,
-   * the other is metered and acts -- and they must not share a control.
-   */
-  private _renderVoiceControl(solo = false): TemplateResult {
-    const s = this._session;
-    const active = isSessionLive(s);
-    const orbState =
-      s.state === 'idle' || s.state === 'error' ? 'asleep' : s.state;
-    const label = active ? 'End the spoken conversation' : `Talk to ${ASSISTANT_NAME}`;
+  /** One scoped destructive control, shown with the exact target before send. */
+  private _renderThreadConfirm(confirm: ThreadControlConfirmation): TemplateResult {
+    const pending = this._threadControlPending !== null;
+    const resetting = confirm.action === 'reset';
+    const head = resetting
+      ? `Reset ${confirm.target.label}?`
+      : `Archive ${confirm.target.label}?`;
+    const detail = resetting
+      ? 'This resets only this conversation context. It does not change terminals, workspaces, lanes, or applets. Its current draft binding is cleared and you must explicitly select the new generation.'
+      : 'This archives only this conversation context. It does not change terminals, workspaces, lanes, or applets. Its history remains an immutable reference.';
     return html`
-      <button
-        class="cbtn voice ${active ? 'live' : ''} ${solo ? 'solo' : ''}"
-        type="button"
-        title="${s.state === 'error' && s.error ? s.error : label}"
-        aria-label="${label}"
-        aria-pressed="${active ? 'true' : 'false'}"
-        data-voice-state="${s.state}"
-        @click="${this._toggleSession}"
-      >
-        <mux-voice-orb .state="${orbState}" .level="${s.level}"></mux-voice-orb>
-      </button>
+      <div class="turn">
+        <div class="who"></div>
+        <div class="bd">
+          <div class="confirm" role="alertdialog" aria-label="${head}">
+            <div class="h">${icon(TriangleAlert, { size: 13 })} ${head}</div>
+            <p class="d">${detail}</p>
+            <div class="row">
+              <button
+                class="btn danger"
+                type="button"
+                data-thread-confirm="${confirm.action}:${confirm.target.threadId}:${confirm.target.generation}"
+                ?disabled="${pending}"
+                @click="${() => this._doThreadControl(confirm)}"
+              >${resetting ? 'Reset this context' : 'Archive this context'}</button>
+              <button
+                class="btn no"
+                type="button"
+                @click="${() => {
+                  this._threadConfirm = null;
+                }}"
+              >Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
     `;
   }
 
-  private _toggleSession = (): void => {
-    void voiceSessionController.toggle();
-  };
-
-  /**
-   * Remember the composer, then let the orb have it.
-   *
-   * Starting a conversation must never cost the user a sentence they typed.
-   * The draft itself is safe for free -- _draft is component state and the
-   * live render simply does not read it -- but the things that live on the
-   * ELEMENT die with it: the autosized height, the caret, the focus. Those
-   * are what this captures, along with the height the log is entitled to
-   * keep.
-   */
-  private _holdComposer(): void {
-    const box = this.renderRoot.querySelector<HTMLElement>('.cbox');
-    const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
-    if (!box) return;
-    this._held = {
-      h: box.getBoundingClientRect().height,
-      start: el?.selectionStart ?? 0,
-      end: el?.selectionEnd ?? 0,
-      focused: this.shadowRoot?.activeElement === el,
-    };
-  }
-
-  /**
-   * Give it back, exactly as it was.
-   *
-   * Focus is restored when the composer had it before the session OR when
-   * the orb has it now -- the second case being the user pressing the orb to
-   * hang up, where the focused element is about to be removed and focus would
-   * otherwise fall to <body> and leave the keyboard nowhere.
-   */
-  private _releaseComposer(): void {
-    const held = this._held;
-    const wasSolo = !this._textMode;
-    this._held = null;
-    this._textMode = false;
-    // Ending a call the user was already typing through restores nothing:
-    // the real composer never left the screen, so its height, caret and
-    // focus are the ones the user has been using. Re-applying the snapshot
-    // here would drag the caret back to where it was before the call.
-    if (!held || !wasSolo) return;
-    const wasOnOrb = this.shadowRoot?.activeElement?.classList.contains('voice') === true;
-    this._restoreComposer(held, held.focused || wasOnOrb);
-  }
-
-  /** Put the textarea back: its autosized height, its caret, and if asked, focus. */
-  private _restoreComposer(held: { start: number; end: number }, focus: boolean): void {
-    void this.updateComplete.then(() => {
-      const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
-      if (!el) return;
-      this._fit(el);
-      el.setSelectionRange(held.start, held.end);
-      if (focus) el.focus();
-    });
-  }
-
-  /**
-   * The keyboard back, WITHOUT hanging up. (The way out that is not an exit.)
-   *
-   * Escape and the orb both end the call; this is the third way out of the
-   * takeover and the only one that leaves the conversation running -- for the
-   * path you have to paste or the name you have to spell, which is not worth
-   * dropping a call over. Focus goes to the textarea unconditionally: the
-   * user just asked for the keyboard, and the button they asked with is about
-   * to stop existing.
-   */
-  private _toText = (): void => {
-    const held = this._held;
-    this._textMode = true;
-    this._restoreComposer(held ?? { start: 0, end: 0 }, true);
-  };
-
-  /**
-   * Back to the orb, still without hanging up.
-   *
-   * Re-measures on the way in rather than reusing the height captured when
-   * the call started: the draft may have grown while the user was typing, and
-   * the pinned height has to match the composer that is on screen NOW or the
-   * log gives up pixels on the way back.
-   */
-  private _toVoice = (): void => {
-    this._holdComposer();
-    this._textMode = false;
-    void this.updateComplete.then(() => {
-      this.renderRoot.querySelector<HTMLButtonElement>('.cbtn.voice.solo')?.focus();
-    });
-  };
-
-  /**
-   * Escape, when there is no text box to receive it.
-   *
-   * _onKey is bound to the textarea, and while a session is live there is no
-   * textarea -- so the surface's one keyboard exit would simply stop
-   * existing at the exact moment the composer is gone and the orb is the only
-   * thing on screen. This is that exit, and ONLY that: it does nothing unless
-   * a session is live, and it defers to the layers _onKey unwinds first, so
-   * a menu or a pending confirmation still closes before the call ends.
-   */
-  private _onDocKey = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape' || !this._live) return;
-    // WHOSE Escape is this? A document listener hears the whole page, and the
-    // page is mostly TERMINALS. xterm.js calls preventDefault() on the keys it
-    // consumes but never stopPropagation(), so an Escape typed at vim arrives
-    // here exactly like one typed at the Dashboard -- and ending a call
-    // because someone left insert mode is far worse than not offering the
-    // shortcut at all. <mux-dock> and <mux-cos> are siblings, so no shadow
-    // boundary separates them; the origin has to be checked.
-    //
-    // Two origins qualify: this component's own subtree, and NO focused
-    // element at all. The second is the whole reason this handler exists --
-    // the composer removed the textarea that used to receive Escape, so
-    // during a call the keystroke lands on <body> with nowhere else to go.
-    const from = e.composedPath()[0];
-    const mine = e.composedPath().includes(this);
-    const nowhere =
-      from === document.body || from === document.documentElement || from === document;
-    if (!mine && !nowhere) return;
-    // The same layers _onKey unwinds, DISMISSED and not merely deferred.
-    // _onKey is bound to the textarea, which solo mode does not render -- so
-    // deferring here without closing anything left Escape a dead key for
-    // exactly as long as the menu stayed open, which is the opposite of
-    // unwinding one layer at a time.
-    if (this._menuOpen || this._confirm !== null) {
-      e.preventDefault();
-      this._menuOpen = false;
-      this._confirm = null;
-      return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    voiceSessionController.stop();
-  };
-
-  /** The one reading of "the user is in a session", from the rendered state. */
-  private get _live(): boolean {
-    return isSessionLive(this._session);
-  }
-
-  /**
-   * The composer, WHILE A SESSION IS LIVE: the orb and nothing else.
-   *
-   * The orb was built as the doorway INTO voice, sized to the send slot it
-   * borrowed. Once you are through the door it is the only control that
-   * matters, and leaving the text box, the send arrow and the dictation mic
-   * standing behind it presented two inputs for one conversation -- the user
-   * looking at a box they are meant to be talking to instead of typing in.
-   * So the whole row goes and the orb is promoted to primary.
-   *
-   * Removed, not disabled or greyed: a control you can see but must not use
-   * is worse than one that is not there, and every one of them comes back
-   * untouched the moment the session ends.
-   *
-   * The height is PINNED to whatever the composer measured the instant it
-   * was taken over (see _held). That is what confines the change to the
-   * composer -- the conversation above keeps its height and the reader keeps
-   * their scroll position, and the size the orb may grow to is whatever fits
-   * inside that (see .cbtn.voice.solo).
-   */
-  private _renderVoiceComposer(): TemplateResult {
-    const h = this._held?.h;
-    // An EXACT height, not a minimum: a minimum would still let the padding
-    // and the orb push the box past what the log gave up.
-    const size = h ? `height:${h}px` : 'min-height:72px';
+  private _renderAppVoiceConfirmation(confirm: AppVoiceSubmitConfirmation): TemplateResult {
     return html`
-      <div class="comp">
-        <div class="cbox solo" style="${size}">
-          ${this._renderVoiceControl(true)}
-          <button
-            class="tomode"
-            type="button"
-            title="Type instead, without ending the conversation"
-            aria-label="Type instead, without ending the spoken conversation"
-            @click="${this._toText}"
-          >type instead</button>
+      <div class="turn" data-app-voice-submit-confirmation>
+        <div class="who"></div>
+        <div class="bd">
+          <div class="confirm" role="alertdialog" aria-label="Confirm voice-requested work">
+            <div class="h">${icon(TriangleAlert, { size: 13 })} Send voice-requested work?</div>
+            <p class="d">Target: ${confirm.label}</p>
+            <p class="d">${confirm.text}</p>
+            <p class="d">Voice-requested work is never autonomous. Confirming sends this exact text only to this exact visible conversation.</p>
+            <div class="row">
+              <button
+                class="btn pri"
+                type="button"
+                data-testid="app-voice-submit-confirm"
+                @click="${() => this._settleAppVoiceConfirmation('confirmed')}"
+              >Send</button>
+              <button
+                class="btn no"
+                type="button"
+                data-testid="app-voice-submit-decline"
+                @click="${() => this._settleAppVoiceConfirmation('declined')}"
+              >Cancel</button>
+            </div>
+          </div>
         </div>
       </div>
     `;
   }
 
   /**
-   * The composer, in whichever of its three states applies.
-   *
-   * Live and voice mode  -- the orb and nothing else (the takeover).
-   * Live and text mode   -- the ordinary composer, plus the words
-   *                         "microphone open" and the orb, which still ends
-   *                         the call in one press.
-   * Not live             -- exactly what it always was.
-   *
-   * The live text row adds NO row and NO height: the notice and the way back
-   * take the crow's spare width, which the buttons were never using. That is
-   * what lets the mode switch cost the conversation nothing -- the box is the
-   * same height it would be with the same draft and no session at all, so
-   * switching in either direction moves neither the log nor its scroll.
-   *
-   * The dictation mic is not offered here. It belongs to a different
-   * controller with a different job, and two microphone affordances at once,
-   * one of them already open, is the confusion this whole change is against.
+   * App voice is controlled by the persistent root bubble. The text composer
+   * and its context selector stay mounted for every app voice state.
    */
   private _renderComposer(): TemplateResult {
-    if (this._live && !this._textMode) return this._renderVoiceComposer();
-    const call = this._live;
-    const ready = this._draft.trim().length > 0;
-    const listening = !call && this._voice === 'listening';
-    const busy = cosStore.busy;
-    const last = cosStore.turns[cosStore.turns.length - 1];
+    const threaded = threadStore.threaded;
+    const negotiating = threadStore.negotiating;
+    const ready = this._draft.trim().length > 0 && (!threaded || threadStore.inputEnabled);
+    const locked = negotiating || (threaded && !threadStore.inputEnabled);
+    const listening = !negotiating && this._voice === 'listening';
+    const busy = threadStore.busy;
+    const last = threadStore.turns[threadStore.turns.length - 1];
+    const notice = threadStore.composerNotice;
+    const storageNotice = threadStore.storageNotice;
+    const placeholder = threaded
+      ? threadStore.selectionPending
+        ? 'waiting for context…'
+        : 'message this context…'
+      : negotiating
+        ? 'checking text threads…'
+        : 'describe a problem…';
     return html`
       <div class="comp">
-        <div class="cbox ${listening || call ? 'live' : ''}">
+        <div class="cbox ${listening ? 'live' : ''}">
           <textarea
             class="ctext"
+            data-thread-composer
             rows="1"
             autocomplete="off"
             spellcheck="false"
-            placeholder="describe a problem\u2026"
-            aria-label="Describe a problem"
+            placeholder="${placeholder}"
+            aria-label="${threaded ? 'Message the selected conversation context' : 'Describe a problem'}"
+            ?disabled="${locked}"
             .value="${this._draft}"
             @input="${this._onDraft}"
             @keydown="${this._onKey}"
           ></textarea>
           <div class="crow">
-            ${call
+            ${notice
+              ? html`<span class="threaded-status" data-thread-composer-status role="status">${notice}</span>`
+              : nothing}
+            ${this._dictationNotice
+              ? html`<span class="threaded-status" data-voice-dictation-status role="status">${this._dictationNotice}</span>`
+              : nothing}
+            ${storageNotice ? html`<span class="threaded-status" role="status">${storageNotice}</span>` : nothing}
+            ${threaded && threadStore.hasUncertainTurn
               ? html`
-                  <span class="micon" role="status">
-                    <span class="micdot"></span><span class="micword">microphone open</span>
-                  </span>
                   <button
-                    class="micback"
+                    class="threaded-release"
                     type="button"
-                    title="Back to the orb, without ending the conversation"
-                    aria-label="Back to the orb, without ending the spoken conversation"
-                    @click="${this._toVoice}"
-                  >back to the orb</button>
+                    data-thread-release-uncertain
+                    @click="${this._releaseUncertainDraft}"
+                  >Enable a new send</button>
                 `
               : nothing}
-            ${busy && last
+            ${!threaded && !negotiating && busy && last
               ? html`<button
                   class="btn no"
                   type="button"
-                  @click="${() => cosStore.cancel(last.id)}"
+                  @click="${() => threadStore.cancel(last.id)}"
                 >stop</button>`
               : nothing}
-            ${call ? this._renderVoiceControl() : nothing}
-            ${!call && voiceInputController.isSupported()
+            ${!negotiating && threadStore.composerIdentity.channelId !== 'none' && voiceInputController.isSupported()
               ? html`<button
                   class="cbtn ${listening ? 'rec' : ''}"
                   type="button"
@@ -2240,7 +2478,7 @@ export class MuxCos extends LitElement {
                   @click="${this._toggleVoice}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
-            ${call || ready || !voiceSessionController.isSupported()
+            ${negotiating || ready
               ? html`<button
                   class="cbtn send"
                   type="button"
@@ -2248,7 +2486,7 @@ export class MuxCos extends LitElement {
                   ?disabled="${!ready}"
                   @click="${this._submit}"
                 >${icon(ArrowUp, { size: 15 })}</button>`
-              : this._renderVoiceControl()}
+              : nothing}
           </div>
         </div>
       </div>
@@ -2326,16 +2564,106 @@ export class MuxCos extends LitElement {
    */
   private _onAppletChanged = (e: Event): void => {
     const detail = (e as CustomEvent<AppletChangedDetail>).detail;
+    if (detail?.applet) {
+      this._activeApplet = detail.applet;
+      if (this._voiceAppletOperationId && this._appletOperationWaiter?.applet === detail.applet) {
+        this._settleAppletOperationWaiter(true);
+      } else {
+        this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
+        this.dispatchEvent(new CustomEvent('app-voice-observation', { bubbles: true, composed: true }));
+      }
+    }
     if (detail?.roomy === true) this._setDetent('full');
   };
+
+  /** Visible, human-only confirmation for a provider-requested work turn. */
+  requestAppVoiceSubmitConfirmation(
+    operationId: string,
+    label: string,
+    text: string,
+  ): Promise<AppVoiceSubmitConfirmationOutcome> {
+    if (this._appVoiceConfirmation !== null || !operationId || !text.trim()) {
+      return Promise.resolve('unavailable');
+    }
+    return new Promise<AppVoiceSubmitConfirmationOutcome>((resolve) => {
+      this._appVoiceConfirmation = { operationId, label, text, resolve };
+      this._pinned = true;
+    });
+  }
+
+  cancelAppVoiceSubmitConfirmation(operationId: string): void {
+    if (this._appVoiceConfirmation?.operationId !== operationId) return;
+    this._settleAppVoiceConfirmation('unavailable');
+  }
+
+  private _settleAppVoiceConfirmation(outcome: AppVoiceSubmitConfirmationOutcome): void {
+    const confirmation = this._appVoiceConfirmation;
+    if (!confirmation) return;
+    this._appVoiceConfirmation = null;
+    confirmation.resolve(outcome);
+  }
 
   // -------------------------------------------------------------------------
   // Intent
   // -------------------------------------------------------------------------
 
+  private _toggleContext = (e: Event): void => {
+    e.stopPropagation();
+    if (!threadStore.threaded) return;
+    this._contextOpen = !this._contextOpen;
+    this._menuOpen = false;
+    if (!this._contextOpen) return;
+    const options = threadStore.contexts;
+    const current = options.find((option) => option.threadId === threadStore.selectedThreadId);
+    this._contextCandidate = current?.key ?? options[0]?.key ?? '';
+    void this.updateComplete.then(() => {
+      this.renderRoot.querySelector<HTMLButtonElement>('.context-option')?.focus();
+    });
+  };
+
+  private _talkHere = (): void => {
+    const option = threadStore.contexts.find((item) => item.key === this._contextCandidate);
+    if (!option) return;
+    this._userSelectionPending = true;
+    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
+    if (!threadStore.select(option.target)) {
+      this._userSelectionPending = false;
+      return;
+    }
+    this._contextOpen = false;
+    this._threadConfirm = null;
+    this._pinned = true;
+  };
+
+  private _onContextListKey = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      this._contextOpen = false;
+      this.renderRoot.querySelector<HTMLButtonElement>('.context-trigger')?.focus();
+      return;
+    }
+    let delta = 0;
+    if (e.key === 'ArrowDown') delta = 1;
+    else if (e.key === 'ArrowUp') delta = -1;
+    else if (e.key === 'Home') delta = -Infinity;
+    else if (e.key === 'End') delta = Infinity;
+    else return;
+    const choices = [
+      ...this.renderRoot.querySelectorAll<HTMLButtonElement>('.context-option'),
+    ];
+    if (choices.length === 0) return;
+    e.preventDefault();
+    const from = e.target instanceof Element ? e.target.closest<HTMLButtonElement>('.context-option') : null;
+    const at = from ? choices.indexOf(from) : 0;
+    const next =
+      delta === -Infinity ? 0 : delta === Infinity ? choices.length - 1 : (at + delta + choices.length) % choices.length;
+    choices[next]?.focus();
+  };
+
   private _toggleMenu = (e: Event): void => {
     e.stopPropagation();
     this._menuOpen = !this._menuOpen;
+    this._contextOpen = false;
   };
 
   /**
@@ -2355,17 +2683,26 @@ export class MuxCos extends LitElement {
    * of re-opening what this had just closed.
    */
   private _onOutsideClick = (e: MouseEvent): void => {
-    if (!this._menuOpen) return;
+    if (!this._menuOpen && !this._contextOpen) return;
     const path = e.composedPath();
     const pressed = (sel: string): boolean => {
       const el = this.renderRoot.querySelector(sel);
       return el !== null && path.includes(el);
     };
-    if (pressed('.menu') || pressed('.dots')) return;
+    if (
+      pressed('.menu') ||
+      pressed('.dots') ||
+      pressed('.context-menu') ||
+      pressed('.context-trigger')
+    ) {
+      return;
+    }
     this._menuOpen = false;
+    this._contextOpen = false;
   };
 
   private _ask(which: Housekeeping): void {
+    if (threadStore.threaded) return;
     this._menuOpen = false;
     this._confirm = which;
     this._pinned = true;
@@ -2375,7 +2712,55 @@ export class MuxCos extends LitElement {
     const which = this._confirm;
     this._confirm = null;
     if (which === null) return;
-    cosStore.clear(which);
+    threadStore.clear(which);
+  };
+
+  private _askThreadControl(action: 'reset' | 'archive'): void {
+    const target = threadStore.controlTarget;
+    if (!target) return;
+    if (action === 'reset' && !threadStore.resetAvailable) return;
+    if (action === 'archive' && !threadStore.archiveAvailable) return;
+    this._menuOpen = false;
+    this._threadConfirm = { action, target };
+    this._pinned = true;
+  }
+
+  private _doThreadControl = (confirm: ThreadControlConfirmation): void => {
+    if (this._threadControlPending !== null) return;
+    this._threadControlPending = confirm;
+    this._threadConfirm = null;
+    const sent = confirm.action === 'reset'
+      ? threadStore.reset(confirm.target)
+      : threadStore.archive(confirm.target);
+    // A synchronous transmit/validation rejection creates no store pending
+    // record, so only this exact rejected attempt may clear the local guard.
+    if (!sent) this._threadControlPending = null;
+  };
+
+  private _settleThreadControlPending(): void {
+    const pending = this._threadControlPending;
+    if (!pending || threadStore.isThreadControlPending(pending.action, pending.target)) return;
+    // The store removed this exact request only after its matching result (or
+    // disconnect cleanup), never because another context's control settled.
+    this._threadControlPending = null;
+  }
+
+  /** Explicit context switch from a queued record; no attention event calls this. */
+  private _talkAttention = (attention: ThreadAttention): void => {
+    this._userSelectionPending = true;
+    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
+    if (!threadStore.select({ kind: 'thread', threadId: attention.threadId })) {
+      this._userSelectionPending = false;
+      return;
+    }
+    this._threadConfirm = null;
+    this._pinned = true;
+  };
+
+  /** The backend endpoint is metadata-only; Viewer opens only after this click. */
+  private _previewMigration = (): void => {
+    this._menuOpen = false;
+    if (threadStore.migrationPreview()) this._pinned = true;
   };
 
   private _onThink(key: string, e: Event): void {
@@ -2415,19 +2800,17 @@ export class MuxCos extends LitElement {
     if (e.key === 'Escape') {
       // Escape unwinds one layer at a time. Only a composer with nothing
       // pending in front of it leaves the surface.
-      if (this._menuOpen || this._confirm !== null) {
+      if (
+        this._menuOpen ||
+        this._contextOpen ||
+        this._confirm !== null ||
+        this._threadConfirm !== null
+      ) {
         e.preventDefault();
         this._menuOpen = false;
+        this._contextOpen = false;
         this._confirm = null;
-        return;
-      }
-      // A live call is a layer too, and in text mode the keystroke never
-      // reaches _onDocKey -- this handler stops propagation at the top. So
-      // Escape ends the call from the text box exactly as it does from the
-      // orb, rather than walking off the surface with the microphone open.
-      if (this._live) {
-        e.preventDefault();
-        voiceSessionController.stop();
+        this._threadConfirm = null;
         return;
       }
       this.dispatchEvent(new CustomEvent('home-dismiss', { bubbles: true, composed: true }));
@@ -2437,11 +2820,10 @@ export class MuxCos extends LitElement {
   private _submit = (): void => {
     const prompt = this._draft.trim();
     if (!prompt) return;
-    // The store refuses when the socket is not open. Clearing the box anyway
-    // would take the sentence away on exactly the occasion nothing was sent
-    // with it, which is when the user most needs it back.
-    if (!cosStore.send(prompt)) return;
-    this._draft = '';
+    // In threaded mode the coordinator retains this draft until the server
+    // sends a real turn receipt. A missing receipt is uncertainty, not proof
+    // that the user's words were sent.
+    if (!threadStore.send(prompt)) return;
     this._pinned = true;
     void this.updateComplete.then(() => {
       const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
@@ -2449,9 +2831,26 @@ export class MuxCos extends LitElement {
     });
   };
 
+  private _releaseUncertainDraft = (): void => {
+    threadStore.releaseUncertainDraft();
+    void this.updateComplete.then(() => {
+      this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext')?.focus();
+    });
+  };
+
   private _toggleVoice = (): void => {
-    if (this._voice === 'listening') voiceInputController.stop();
-    else voiceInputController.start();
+    if (threadStore.negotiating) return;
+    if (this._voice === 'listening') {
+      if (this._chatDictationActive) voiceInputController.stop();
+      return;
+    }
+    const composer = threadStore.composerIdentity;
+    if (composer.channelId === 'none') return;
+    const capture = voiceInputController.startComposer(composer.channelId);
+    if (!capture) return;
+    this._dictationNotice = '';
+    this._chatDictationActive = true;
+    this._chatDictationCapture = capture;
   };
 
   /**
@@ -2462,8 +2861,20 @@ export class MuxCos extends LitElement {
    * acts on things you did not say -- and the box is right there to fix a
    * word in before pressing send.
    */
-  private _takeTranscript(text: string): void {
-    const t = text.trim();
+  private _takeTranscript(payload: VoiceTranscriptPayload): void {
+    if (payload.target !== 'composer' || payload.kind !== 'final') return;
+    const capture = this._chatDictationCapture;
+    const composer = threadStore.composerIdentity;
+    if (
+      !capture ||
+      composer.channelId !== capture.channelId ||
+      payload.channelId !== capture.channelId ||
+      payload.captureId !== capture.captureId ||
+      payload.sttEventGeneration !== capture.sttEventGeneration
+    ) {
+      return;
+    }
+    const t = payload.text.trim();
     if (!t) return;
     this._draft = this._draft.trim() === '' ? t : `${this._draft.trimEnd()} ${t}`;
     void this.updateComplete.then(() => {

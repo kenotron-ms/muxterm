@@ -3,6 +3,7 @@ package voice
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,7 +52,19 @@ type Sideband struct {
 
 	mu      sync.Mutex
 	closed  bool
+	fenced  bool
 	pending map[string]*approvalIntent
+	// Exact, already-authorized provider calls may be replayed after their
+	// capture advances to a prefix phase. Retain only bounded identity/digests;
+	// an unknown or changed call must still pass the scoped reservation gate.
+	scopedFinalCalls map[string]scopedFinalCall
+	// Completed responses move their exact calls into a bounded replay window.
+	// The retired response IDs remain authoritative during that window: a new
+	// call item for one is ambiguous and must fence, never be admitted again.
+	scopedRetiredCalls     map[string]scopedFinalCall
+	scopedRetiredOrder     []string
+	scopedRetiredResponses map[string]struct{}
+	scopedRetiredRespOrder []string
 
 	// The spoken exit, guarded by mu. ending means a goodbye is on its way
 	// out; farewellCh carries the read loop's view of that goodbye's audio
@@ -91,14 +104,32 @@ type Sideband struct {
 	retryCount          int
 	eventKinds          map[string]int
 
-	writeMu sync.Mutex
-	done    chan struct{}
-	wg      sync.WaitGroup
+	writeMu       sync.Mutex
+	scopedWriteMu sync.Mutex
+	// admissionMu closes task admission before Close waits.  A WaitGroup Add
+	// concurrent with Wait is otherwise a lifecycle race, even if every task
+	// eventually calls Done.
+	admissionMu     sync.Mutex
+	admissionClosed bool
+	ctx             context.Context
+	cancel          context.CancelFunc
+	closeOnce       sync.Once
+	done            chan struct{}
+	wg              sync.WaitGroup
 }
 
 type sidebandConfig struct {
 	syncTimeout time.Duration
 }
+
+type scopedFinalCall struct {
+	responseID string
+	callID     string
+	name       string
+	arguments  [sha256.Size]byte
+}
+
+const scopedReplayLimit = 64
 
 // Trace is one observable moment in the sideband's life. Deliberately
 // coarse: a type, a name, and a short detail. No arguments, no results, no
@@ -155,16 +186,22 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 		return nil, err
 	}
 
+	sbCtx, sbCancel := context.WithCancel(context.Background())
 	sb := &Sideband{
-		callID:     callID,
-		url:        u,
-		secret:     ephemeral,
-		bridge:     bridge,
-		cfg:        sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
-		events:     events,
-		endSession: endSession,
-		pending:    map[string]*approvalIntent{},
-		done:       make(chan struct{}),
+		callID:                 callID,
+		url:                    u,
+		secret:                 ephemeral,
+		bridge:                 bridge,
+		cfg:                    sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
+		events:                 events,
+		endSession:             endSession,
+		pending:                map[string]*approvalIntent{},
+		scopedFinalCalls:       map[string]scopedFinalCall{},
+		scopedRetiredCalls:     map[string]scopedFinalCall{},
+		scopedRetiredResponses: map[string]struct{}{},
+		ctx:                    sbCtx,
+		cancel:                 sbCancel,
+		done:                   make(chan struct{}),
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -194,21 +231,52 @@ func (s *Sideband) CallID() string { return s.callID }
 
 // Close tears the sideband down. Idempotent.
 func (s *Sideband) Close() {
+	s.closeOnce.Do(s.close)
+}
+
+func (s *Sideband) close() {
 	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return
-	}
 	s.closed = true
 	s.mu.Unlock()
 
+	// Close admissions and cancel blocked delivery waits before joining workers.
+	// No task callback can call Manager.End synchronously: the one callback
+	// that can do so remains deliberately detached in listen below.
+	s.admissionMu.Lock()
+	s.admissionClosed = true
+	s.cancel()
+	s.admissionMu.Unlock()
 	close(s.done)
 	s.writeMu.Lock()
 	conn := s.conn
 	s.writeMu.Unlock()
 	_ = conn.Close(websocket.StatusNormalClosure, "")
+	if bridge, ok := s.bridge.(SidebandClosedBridge); ok {
+		// This is a local delivery-lifetime notification, not the reconnect
+		// exhaustion callback in listen. It must not call Manager.End.
+		bridge.SidebandClosed()
+	}
 	s.wg.Wait()
 	s.emit(Trace{Kind: TraceClosed, Detail: s.callID})
+}
+
+// startTask admits a sideband-owned asynchronous delivery task.  Add happens
+// while Close is excluded, so Close can cancel and then safely join every
+// admitted task without racing a later Add.
+func (s *Sideband) startTask(work func(context.Context)) bool {
+	s.admissionMu.Lock()
+	if s.admissionClosed {
+		s.admissionMu.Unlock()
+		return false
+	}
+	s.wg.Add(1)
+	ctx := s.ctx
+	s.admissionMu.Unlock()
+	go func() {
+		defer s.wg.Done()
+		work(ctx)
+	}()
+	return true
 }
 
 func (s *Sideband) isClosed() bool {
@@ -252,6 +320,12 @@ func (s *Sideband) listen() {
 			s.mu.Lock()
 			s.closed = true
 			s.mu.Unlock()
+			if bridge, ok := s.bridge.(SidebandTerminalBridge); ok {
+				// This callback may synchronously reach Manager.End, which
+				// closes this Sideband and joins s.wg.  Do not make it a
+				// joined task or listen would wait for itself.
+				go bridge.SidebandTerminal("provider sideband reconnect exhausted")
+			}
 			return
 		}
 		if typ != websocket.MessageText {
@@ -307,11 +381,22 @@ func (s *Sideband) reattach() bool {
 // acts on. Everything else is ignored by design: the protocol evolves
 // additively, and an unknown event must never be fatal.
 type realtimeEvent struct {
-	Type      string          `json:"type"`
-	CallID    string          `json:"call_id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
-	Error     json.RawMessage `json:"error"`
+	Type       string          `json:"type"`
+	CallID     string          `json:"call_id"`
+	ItemID     string          `json:"item_id"`
+	ResponseID string          `json:"response_id"`
+	Name       string          `json:"name"`
+	Arguments  json.RawMessage `json:"arguments"`
+	Error      json.RawMessage `json:"error"`
+	Response   struct {
+		ID       string            `json:"id"`
+		Metadata map[string]string `json:"metadata"`
+	} `json:"response"`
+	Item struct {
+		ID     string `json:"id"`
+		Type   string `json:"type"`
+		CallID string `json:"call_id"`
+	} `json:"item"`
 }
 
 func (s *Sideband) handle(data []byte) {
@@ -320,9 +405,136 @@ func (s *Sideband) handle(data []byte) {
 		return
 	}
 	s.seen(ev.Type)
+	if scoped, ok := s.bridge.(ProviderEventBridge); ok {
+		event := ProviderEvent{
+			Type: ev.Type, CallID: s.callID, ItemID: ev.ItemID, ResponseID: ev.ResponseID,
+			OutputID: ev.Item.ID, CallRef: ev.Item.CallID, Metadata: ev.Response.Metadata,
+		}
+		if ev.CallID != "" && ev.Item.CallID != "" && ev.CallID != ev.Item.CallID {
+			s.Fence("conflicting provider call IDs")
+			return
+		}
+		if event.CallRef == "" {
+			event.CallRef = ev.CallID
+		}
+		if event.ResponseID == "" {
+			event.ResponseID = ev.Response.ID
+		}
+		if event.ItemID == "" {
+			event.ItemID = ev.Item.ID
+		}
+		if err := scoped.ObserveProviderEvent(event); err != nil {
+			s.Fence("scoped provider event rejected")
+			return
+		}
+		if app, ok := s.bridge.(AppCaptureBridge); ok && ev.Type == "input_audio_buffer.committed" {
+			metadata, created, err := app.CommitAppInput(event)
+			if err == nil && !created {
+				return
+			}
+			if err != nil || s.RequestScopedResponse(metadata) != nil {
+				s.Fence("app provider input commit rejected")
+				return
+			}
+		}
+		// The app bridge has a persistent conversation, so it retires calls
+		// response-by-response. Keep legacy/threaded-v3's existing permanent
+		// scoped ledger semantics unchanged.
+		if _, app := s.bridge.(AppOperationBridge); app &&
+			(ev.Type == "response.done" || ev.Type == "response.cancelled") {
+			s.retireScopedResponse(event.ResponseID)
+		}
+	}
 	switch {
 	case ev.Type == "response.function_call_arguments.done":
-		go s.dispatch(ev)
+		if bridge, ok := s.bridge.(ProviderEventBridge); ok {
+			event := ProviderEvent{Type: ev.Type, CallID: s.callID, ItemID: ev.ItemID, ResponseID: ev.ResponseID, OutputID: ev.Item.ID, CallRef: ev.Item.CallID}
+			if event.CallRef == "" {
+				event.CallRef = ev.CallID
+			}
+			if event.ItemID == "" {
+				event.ItemID = event.OutputID
+			}
+			if event.ResponseID == "" {
+				event.ResponseID = ev.Response.ID
+			}
+			digest := sha256.Sum256([]byte(ev.Arguments))
+			s.mu.Lock()
+			if s.closed || s.fenced {
+				s.mu.Unlock()
+				return
+			}
+			prior, replay := s.scopedFinalCalls[event.ItemID]
+			if !replay {
+				prior, replay = s.scopedRetiredCalls[event.ItemID]
+			}
+			retiredResponse := false
+			if !replay {
+				_, retiredResponse = s.scopedRetiredResponses[event.ResponseID]
+			}
+			s.mu.Unlock()
+			if replay {
+				if prior.responseID == event.ResponseID && prior.name == ev.Name &&
+					prior.arguments == digest && (event.CallRef == "" || event.CallRef == prior.callID) {
+					// No second goroutine, work admission, result or speech.
+					return
+				}
+				s.Fence("conflicting replay of a scoped provider call")
+				return
+			}
+			if retiredResponse {
+				s.Fence("unknown provider call for a retired response")
+				return
+			}
+			correlation, err := bridge.ReserveToolCall(event)
+			if err != nil {
+				// An app bridge may explicitly refuse a second, already
+				// verified function item for a capture. It is not
+				// authority to start another operation, but it is safe to
+				// return one bounded tool result and remember its exact
+				// digest so a replay cannot produce another output.
+				if correlation.ProviderCallID != "" {
+					s.mu.Lock()
+					if !s.closed && !s.fenced && len(s.scopedFinalCalls) < scopedReplayLimit {
+						s.scopedFinalCalls[event.ItemID] = scopedFinalCall{
+							responseID: event.ResponseID, callID: correlation.ProviderCallID,
+							name: ev.Name, arguments: digest,
+						}
+						s.mu.Unlock()
+						_ = s.SendScopedFunctionOutput(correlation.ProviderCallID, "Refused: only one app operation may be requested for this response.")
+						return
+					}
+					s.mu.Unlock()
+				}
+				s.Fence("scoped tool reservation rejected")
+				return
+			}
+			s.mu.Lock()
+			if s.closed || s.fenced {
+				s.mu.Unlock()
+				return
+			}
+			if len(s.scopedFinalCalls) >= scopedReplayLimit {
+				s.mu.Unlock()
+				s.Fence("too many active scoped provider calls")
+				return
+			}
+			if s.scopedFinalCalls == nil {
+				s.scopedFinalCalls = make(map[string]scopedFinalCall)
+			}
+			s.scopedFinalCalls[event.ItemID] = scopedFinalCall{
+				responseID: event.ResponseID, callID: correlation.ProviderCallID,
+				name: ev.Name, arguments: digest,
+			}
+			s.mu.Unlock()
+			if app, ok := s.bridge.(AppOperationBridge); ok {
+				s.startTask(func(ctx context.Context) { s.dispatchAppReserved(ctx, app, ev, correlation) })
+				return
+			}
+			s.startTask(func(ctx context.Context) { s.dispatchScopedReserved(ctx, ev, correlation) })
+			return
+		}
+		s.startTask(func(ctx context.Context) { s.dispatch(ctx, ev) })
 	case ev.Type == "response.created":
 		s.mu.Lock()
 		s.respActive = true
@@ -371,6 +583,56 @@ func (s *Sideband) handle(data []byte) {
 	}
 }
 
+func (s *Sideband) dispatchAppReserved(ctx context.Context, bridge AppOperationBridge, ev realtimeEvent, correlation Correlation) {
+	if ctx.Err() != nil {
+		return
+	}
+	args := map[string]any{}
+	if len(ev.Arguments) > 0 {
+		var raw string
+		if json.Unmarshal(ev.Arguments, &raw) == nil {
+			_ = json.Unmarshal([]byte(raw), &args)
+		} else {
+			_ = json.Unmarshal(ev.Arguments, &args)
+		}
+	}
+	s.emit(Trace{Kind: TraceToolCall, Name: ev.Name})
+	output, err := bridge.ExecuteAppTool(ctx, correlation, ev.Name, args)
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		output = "Refused: " + trimErr(err)
+	}
+	if len(output) > 32768 {
+		output = output[:32768]
+	}
+	if !s.SendScopedFunctionOutput(correlation.ProviderCallID, output) {
+		return
+	}
+	metadata, err := bridge.CompleteAppTool(correlation)
+	if err != nil || s.RequestScopedResponse(metadata) != nil {
+		s.Fence("app tool continuation rejected")
+	}
+}
+
+func (s *Sideband) dispatchScopedReserved(ctx context.Context, ev realtimeEvent, correlation Correlation) {
+	if ctx.Err() != nil {
+		return
+	}
+	args := map[string]any{}
+	if len(ev.Arguments) > 0 {
+		var raw string
+		if json.Unmarshal(ev.Arguments, &raw) == nil {
+			_ = json.Unmarshal([]byte(raw), &args)
+		} else {
+			_ = json.Unmarshal(ev.Arguments, &args)
+		}
+	}
+	bridge, _ := s.bridge.(CorrelatedBridge)
+	s.dispatchScoped(ctx, bridge, ev, args, correlation)
+}
+
 // seen records each event type once, so a run can be diagnosed without
 // logging a conversation. Types only -- no content, ever.
 func (s *Sideband) seen(t string) {
@@ -405,14 +667,14 @@ func (s *Sideband) retryLastResponse() {
 	if last == nil || attempt >= 6 {
 		return
 	}
-	go func() {
+	s.startTask(func(ctx context.Context) {
 		select {
 		case <-time.After(time.Duration(attempt+1) * 2 * time.Second):
-		case <-s.done:
+		case <-ctx.Done():
 			return
 		}
 		s.send(last)
-	}()
+	})
 }
 
 // sweep releases a response that has gone stale.
@@ -485,7 +747,10 @@ const responseStalePeriod = 30 * time.Second
 // read loop is also how a barge-in or a second call arrives, and a bridge
 // that stops reading during a tool call is a bridge that cannot be
 // interrupted.
-func (s *Sideband) dispatch(ev realtimeEvent) {
+func (s *Sideband) dispatch(ctx context.Context, ev realtimeEvent) {
+	if ctx.Err() != nil {
+		return
+	}
 	args := map[string]any{}
 	if len(ev.Arguments) > 0 {
 		var raw string
@@ -496,6 +761,27 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 		}
 	}
 	s.emit(Trace{Kind: TraceToolCall, Name: ev.Name})
+
+	// A scoped sideband cannot infer capture or response ownership from event
+	// arrival. Require the provider's IDs to be carried by its final tool-call
+	// event and let the immutable scoped bridge reject unmapped values.
+	if bridge, ok := s.bridge.(CorrelatedBridge); ok {
+		events, scoped := s.bridge.(ProviderEventBridge)
+		if !scoped {
+			s.Fence("scoped bridge lacks provider event verifier")
+			return
+		}
+		correlation, err := events.ResolveToolCall(ProviderEvent{
+			Type: ev.Type, CallID: s.callID, ItemID: ev.ItemID, ResponseID: ev.ResponseID,
+			OutputID: ev.Item.ID, CallRef: ev.Item.CallID,
+		})
+		if err != nil {
+			s.Fence("scoped tool event rejected")
+			return
+		}
+		s.dispatchScoped(ctx, bridge, ev, args, correlation)
+		return
+	}
 
 	switch ev.Name {
 	case ToolAsk:
@@ -512,6 +798,170 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 		s.answer(ev.CallID, fmt.Sprintf("There is no tool called %q.", ev.Name),
 			"Tell the user you tried to do something you have no way to do, and ask what they want instead.")
 	}
+}
+
+func (s *Sideband) dispatchScoped(ctx context.Context, bridge CorrelatedBridge, ev realtimeEvent, args map[string]any, correlation Correlation) {
+	if ctx.Err() != nil {
+		return
+	}
+	replies, ok := s.bridge.(ScopedReplyBridge)
+	if !ok {
+		s.Fence("scoped bridge lacks prefix-gated reply controller")
+		return
+	}
+	if ev.Name != ToolAsk && ev.Name != ToolDispatch {
+		_ = replies.QueueScopedReply(correlation, ev.CallID, "This scoped voice attachment requires explicit text controls for approval, cancellation, reset, and archive.", true)
+		return
+	}
+	request := strings.TrimSpace(str(args["request"]))
+	if request == "" {
+		_ = replies.QueueScopedReply(correlation, ev.CallID, "No request was given.", true)
+		return
+	}
+	turn, err := bridge.SubmitCorrelated(correlation, request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation rejected this request: "+trimErr(err), true)
+		return
+	}
+	// The turn is now admitted work and deliberately continues after a voice
+	// stop.  ctx only suppresses its sideband delivery and completion wait.
+	if ctx.Err() != nil {
+		return
+	}
+	if ev.Name == ToolDispatch {
+		_ = replies.QueueScopedReply(correlation, ev.CallID, "Started in the selected Mission Control conversation.", false)
+		s.startTask(func(ctx context.Context) { s.awaitScopedLate(ctx, bridge, correlation, turn) })
+		return
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, s.cfg.syncTimeout)
+	defer cancel()
+	text, err := turn.Wait(waitCtx)
+	if ctx.Err() != nil {
+		return
+	}
+	if err == nil {
+		_ = replies.QueueScopedReply(correlation, ev.CallID, text, true)
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation is working on this.", false)
+		s.startTask(func(ctx context.Context) { s.awaitScopedLate(ctx, bridge, correlation, turn) })
+		return
+	}
+	_ = replies.QueueScopedReply(correlation, ev.CallID, "The selected Mission Control conversation could not complete this request: "+trimErr(err), true)
+}
+
+func (s *Sideband) awaitScopedLate(ctx context.Context, bridge CorrelatedBridge, correlation Correlation, turn TurnHandle) {
+	text, err := turn.Wait(ctx)
+	replies, ok := bridge.(ScopedReplyBridge)
+	if !ok || ctx.Err() != nil || s.isClosed() {
+		return
+	}
+	if err != nil {
+		_ = replies.QueueScopedReply(correlation, "", "The selected Mission Control conversation stopped early: "+trimErr(err), true)
+		return
+	}
+	_ = replies.QueueScopedReply(correlation, "", text, true)
+}
+
+// SendScopedFunctionOutput deliberately writes only the tool result item.
+// ScopedReplyBridge controls every later response.create behind a prefix ACK.
+func (s *Sideband) SendScopedFunctionOutput(callID, output string) bool {
+	return s.write(map[string]any{"type": "conversation.item.create", "item": map[string]any{
+		"type": "function_call_output", "call_id": callID, "output": output,
+	}})
+}
+
+func (s *Sideband) SendScopedCompletion(output string) bool {
+	return s.write(map[string]any{"type": "conversation.item.create", "item": map[string]any{
+		"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "[Mission Control completion] " + output}},
+	}})
+}
+
+// RequestScopedResponse is called only after the attachment controller has
+// observed its deterministic local-prefix acknowledgement. Metadata binds the
+// provider response.created event to that exact prefix/capture request.
+func (s *Sideband) RequestScopedResponse(metadata map[string]string) error {
+	s.scopedWriteMu.Lock()
+	defer s.scopedWriteMu.Unlock()
+	s.mu.Lock()
+	if s.closed || s.fenced {
+		s.mu.Unlock()
+		return errors.New("voice: sideband is closed or fenced")
+	}
+	if s.respActive && time.Since(s.respStarted) < responseStalePeriod {
+		s.respQueued = append(s.respQueued, map[string]any{"type": "response.create", "response": map[string]any{"metadata": metadata}})
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	if !s.write(map[string]any{"type": "response.create", "response": map[string]any{"metadata": metadata}}) {
+		return errors.New("voice: could not request scoped response")
+	}
+	return nil
+}
+
+// retireScopedResponse retains exact completed calls just long enough to
+// reject delayed/replayed provider events without permanently filling the
+// active-call ledger during a long app conversation.
+func (s *Sideband) retireScopedResponse(responseID string) {
+	if responseID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.scopedRetiredCalls == nil {
+		s.scopedRetiredCalls = make(map[string]scopedFinalCall)
+		s.scopedRetiredResponses = make(map[string]struct{})
+	}
+	for itemID, call := range s.scopedFinalCalls {
+		if call.responseID != responseID {
+			continue
+		}
+		delete(s.scopedFinalCalls, itemID)
+		s.scopedRetiredCalls[itemID] = call
+		s.scopedRetiredOrder = append(s.scopedRetiredOrder, itemID)
+	}
+	if _, seen := s.scopedRetiredResponses[responseID]; !seen {
+		s.scopedRetiredResponses[responseID] = struct{}{}
+		s.scopedRetiredRespOrder = append(s.scopedRetiredRespOrder, responseID)
+	}
+	for len(s.scopedRetiredOrder) > scopedReplayLimit {
+		itemID := s.scopedRetiredOrder[0]
+		s.scopedRetiredOrder = s.scopedRetiredOrder[1:]
+		delete(s.scopedRetiredCalls, itemID)
+	}
+	for len(s.scopedRetiredRespOrder) > scopedReplayLimit {
+		id := s.scopedRetiredRespOrder[0]
+		s.scopedRetiredRespOrder = s.scopedRetiredRespOrder[1:]
+		delete(s.scopedRetiredResponses, id)
+	}
+}
+
+// RequestDrain asks the same provider sideband to cancel its known response
+// and discard queued output. Browser drain remains separately acknowledged.
+func (s *Sideband) RequestDrain() {
+	s.scopedWriteMu.Lock()
+	defer s.scopedWriteMu.Unlock()
+	_ = s.write(map[string]any{"type": "response.cancel"})
+	_ = s.write(map[string]any{"type": "output_audio_buffer.clear"})
+}
+
+// Fence mutes a scoped attachment after unsolicited or ambiguous provider
+// events. It never routes a late event to another bridge.
+func (s *Sideband) Fence(detail string) {
+	s.mu.Lock()
+	if s.closed || s.fenced {
+		s.mu.Unlock()
+		return
+	}
+	s.fenced = true
+	s.mu.Unlock()
+	s.emit(Trace{Kind: TraceError, Detail: detail})
+	s.RequestDrain()
 }
 
 // runAsk is the SYNCHRONOUS path -- bounded, never blocking until done.
@@ -547,7 +997,7 @@ func (s *Sideband) runAsk(callID, request string) {
 		s.answer(callID, "The chief of staff is working on this now. The answer will follow shortly.",
 			"Say, in one short line, that it is being looked into and you will have the answer in a moment. "+
 				"Do NOT call the tool again -- the answer arrives on its own. Then carry on talking to the user.")
-		go s.awaitLate(turn)
+		s.startTask(func(ctx context.Context) { s.awaitLate(ctx, turn) })
 	default:
 		s.answer(callID, "That did not work: "+trimErr(err),
 			"Tell the user it did not work, briefly.")
@@ -569,7 +1019,7 @@ func (s *Sideband) runDispatch(callID, request string) {
 	}
 	s.answer(callID, "Started. You will be told when it is done.",
 		"Tell the user you have set it going, in one short line, and carry on.")
-	go s.awaitLate(turn)
+	s.startTask(func(ctx context.Context) { s.awaitLate(ctx, turn) })
 }
 
 // awaitLate waits for a turn that outlived its tool call and injects the
@@ -579,19 +1029,9 @@ func (s *Sideband) runDispatch(callID, request string) {
 // once no matter what -- including when the sidecar dies, which synthesizes
 // a terminal event -- so this goroutine cannot leak on a hung turn. It exits
 // early if the sideband closes underneath it.
-func (s *Sideband) awaitLate(turn TurnHandle) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		select {
-		case <-s.done:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-
+func (s *Sideband) awaitLate(ctx context.Context, turn TurnHandle) {
 	text, err := turn.Wait(ctx)
-	if s.isClosed() {
+	if ctx.Err() != nil || s.isClosed() {
 		return
 	}
 	if err != nil {
@@ -659,10 +1099,10 @@ func (s *Sideband) answer(callID, output, instructions string) {
 // silent. That is the right trade against losing the connection.
 func (s *Sideband) requestResponse(instructions string) {
 	marker := time.Now()
-	go func() {
+	s.startTask(func(ctx context.Context) {
 		select {
 		case <-time.After(responseGrace):
-		case <-s.done:
+		case <-ctx.Done():
 			return
 		}
 		s.mu.Lock()
@@ -676,7 +1116,7 @@ func (s *Sideband) requestResponse(instructions string) {
 			"type":     "response.create",
 			"response": map[string]any{"instructions": instructions},
 		})
-	}()
+	})
 }
 
 // responseGrace is how long the model is given to start speaking on its own
@@ -740,9 +1180,13 @@ func (s *Sideband) send(msg map[string]any) {
 		s.lastResponseReq = msg
 		s.mu.Unlock()
 	}
+	_ = s.write(msg)
+}
+
+func (s *Sideband) write(msg map[string]any) bool {
 	b, err := json.Marshal(msg)
 	if err != nil {
-		return
+		return false
 	}
 	// Serialized: two writers interleaving frames on one WebSocket is a
 	// corrupt stream, and answer() always writes a pair that must not be
@@ -750,11 +1194,13 @@ func (s *Sideband) send(msg map[string]any) {
 	s.writeMu.Lock()
 	conn := s.conn
 	defer s.writeMu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 	if err := conn.Write(ctx, websocket.MessageText, b); err != nil {
 		s.emit(Trace{Kind: TraceError, Detail: "write: " + trimErr(err)})
+		return false
 	}
+	return true
 }
 
 func str(v any) string {

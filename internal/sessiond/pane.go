@@ -55,7 +55,7 @@ type Pane struct {
 	// held and binds close tickets independently of the root-process generation.
 	targetGeneration uint64
 
-	mu   sync.Mutex // guards cols/rows/authorityConn/authorityAt
+	mu   sync.Mutex // guards title/titleOrigin, cols/rows, and authorityConn/authorityAt
 	cols int
 	rows int
 
@@ -438,6 +438,7 @@ func (p *Pane) Write(input []byte) (int, error) {
 // internal cell grid to match.
 func (p *Pane) Resize(cols, rows int) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	// Idempotent: if the dimensions are unchanged, skip pty.Setsize entirely.
 	// Setsize delivers SIGWINCH, which makes the shell redraw its prompt; those
 	// redraw bytes are appended to the scrollback buffer. A client re-attaching
@@ -445,12 +446,10 @@ func (p *Pane) Resize(cols, rows int) error {
 	// this guard every attach injects a redundant prompt redraw that accumulates
 	// in the buffer (one stray prompt fragment per refresh).
 	if cols == p.cols && rows == p.rows {
-		p.mu.Unlock()
 		return nil
 	}
 	p.cols = cols
 	p.rows = rows
-	p.mu.Unlock()
 	if p.ptmx == nil {
 		return nil // no PTY to resize
 	}
@@ -571,30 +570,21 @@ func (p *Pane) setTitle(name string, origin nameOrigin) {
 	p.mu.Unlock()
 }
 
-// titleAndOriginSnapshot returns the current title together with who chose it,
-// read in ONE acquisition of the lock that owns both.
+// snapshotState returns the geometry and replay that must be restored together,
+// plus the title and provenance that describe the same pane state. Resize holds
+// p.mu through the matching buffer resize, so this takes the established
+// pane-before-buffer lock order and cannot pair an old grid with new dimensions.
 //
-// The pairing is the whole point, and reading them separately is a real bug
-// rather than a tidiness question. setTitle writes the two fields as one
-// transaction, so a rename landing between two separate reads yields the title
-// from before it and the provenance from after: a derived name tagged
-// "explicit". restorePane then writes that pair back faithfully, and from then
-// on acceptsRefinedDerivedName declines forever -- the deriver is locked out of
-// a name no person ever chose, permanently, with nothing on screen to say why.
-//
-// Note this got worse when provenance arrived. Before, a torn read cost a stale
-// title that the next labelling tick simply overwrote; the pane self-corrected
-// within a second. Now the same tear is preserved across restarts and disables
-// the mechanism that used to repair it. The window is not as narrow as it
-// looks, either -- capturePaneSnapshot copies a full replay buffer between the
-// two reads.
-//
-// The workspace side already gets this right: snapshotView copies Name and
-// NameOrigin together under the registry lock. This is the pane equivalent.
-func (p *Pane) titleAndOriginSnapshot() (string, nameOrigin) {
+// Do not compose Info or Replay here: both are public helpers with their own
+// locking contracts, and calling them while p.mu is held would obscure the
+// authoritative capture boundary.
+func (p *Pane) snapshotState() (title string, origin nameOrigin, cols, rows int, replay []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.Title, p.titleOrigin
+	if p.buf != nil {
+		replay = p.buf.Replay()
+	}
+	return p.Title, p.titleOrigin, p.cols, p.rows, replay
 }
 
 // Info returns a frozen snapshot of this pane's identity and dimensions.

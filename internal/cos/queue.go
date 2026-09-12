@@ -132,10 +132,18 @@ type queue struct {
 	// makes "takes effect for the NEXT turn" true rather than approximately
 	// true -- both ops travel the same single ordered pipe, in this order.
 	beforeDispatch func()
+	newTurnID      func() string
 }
 
-func newQueue(send func(op) error, publish func(Event), logf func(string, ...any)) *queue {
-	return &queue{send: send, publish: publish, logf: logf}
+// QueueState is a read-only point-in-time projection. IDs are local to this
+// supervisor and must be scoped by the Mission Control runtime generation.
+type QueueState struct {
+	ActiveTurnID   string
+	PendingTurnIDs []string
+}
+
+func newQueue(send func(op) error, publish func(Event), logf func(string, ...any), newTurnID func() string) *queue {
+	return &queue{send: send, publish: publish, logf: logf, newTurnID: newTurnID}
 }
 
 // fail resolves a turn on its handle AND announces it on the event stream.
@@ -161,13 +169,32 @@ func (q *queue) fail(t *Turn, code string, cause error) {
 	}
 }
 
-// submit enqueues a prompt and returns its handle immediately. Dispatch
-// happens as soon as the sidecar is ready and no other turn is in flight.
-func (q *queue) submit(prompt string) *Turn {
+// reserveTurnID reserves an identifier before a turn enters the queue. Threaded
+// callers persist their admission receipt against this ID before SubmitWithID;
+// legacy callers retain the historical t-N sequence.
+func (q *queue) reserveTurnID() string {
 	q.mu.Lock()
+	defer q.mu.Unlock()
 	q.seq++
+	id := fmt.Sprintf("t-%d", q.seq)
+	if q.newTurnID != nil {
+		id = q.newTurnID()
+	}
+	return id
+}
+
+// submit enqueues a legacy/generated prompt and returns its handle immediately.
+func (q *queue) submit(prompt string) *Turn {
+	return q.submitWithID(prompt, q.reserveTurnID())
+}
+
+// submitWithID enqueues a turn against an already-reserved ID. It is the
+// threaded admission seam: no eligible queue/send exists before that ID is
+// durably associated with the request receipt.
+func (q *queue) submitWithID(prompt, id string) *Turn {
+	q.mu.Lock()
 	t := &Turn{
-		ID:          fmt.Sprintf("t-%d", q.seq),
+		ID:          id,
 		Prompt:      prompt,
 		SubmittedAt: time.Now(),
 		done:        make(chan struct{}),
@@ -377,4 +404,41 @@ func (q *queue) stats() (activeID string, pending int, ready bool) {
 		activeID = q.active.ID
 	}
 	return activeID, len(q.pending), q.ready
+}
+
+func (q *queue) state() QueueState {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	state := QueueState{PendingTurnIDs: make([]string, 0, len(q.pending))}
+	if q.active != nil {
+		state.ActiveTurnID = q.active.ID
+	}
+	for _, pending := range q.pending {
+		state.PendingTurnIDs = append(state.PendingTurnIDs, pending.ID)
+	}
+	return state
+}
+
+// cancelSpecific cancels a queued turn locally or reports that the named turn
+// is currently active, in which case Supervisor sends the exact sidecar op.
+func (q *queue) cancelSpecific(turnID string) (active bool, err error) {
+	if turnID == "" {
+		return false, errors.New("cos: cancel requires a turn id")
+	}
+	q.mu.Lock()
+	if q.active != nil && q.active.ID == turnID {
+		q.mu.Unlock()
+		return true, nil
+	}
+	for i, pending := range q.pending {
+		if pending.ID != turnID {
+			continue
+		}
+		q.pending = append(q.pending[:i], q.pending[i+1:]...)
+		q.mu.Unlock()
+		q.fail(pending, CodeCancelled, fmt.Errorf("%w: cancelled before dispatch", ErrTurnFailed))
+		return false, nil
+	}
+	q.mu.Unlock()
+	return false, errors.New("cos: turn is not active or queued")
 }

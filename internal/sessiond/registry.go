@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 // Workspace is one daemon-managed workspace. Its panes use workspace-local ids
 // allocated by the Registry, independent of any other workspace.
 type Workspace struct {
 	ID         string            // daemon-allocated, e.g. "w1"
+	UUID       string            // durable UUID; empty only for an unbound legacy snapshot
 	Name       string            // optional label; "" means unnamed
 	ClientRef  string            // client-minted optimistic-create correlation id; "" when none
 	Panes      map[int]*Pane     // keyed by workspace-local pane id
@@ -50,6 +53,10 @@ type Registry struct {
 	nextWSID                int
 	nextWorkspaceGeneration uint64
 	nextPaneGeneration      uint64
+	// unboundSnapshotUUIDs records ambiguous duplicate identities encountered
+	// during one restore pass. Every holder stays unbound, including later
+	// duplicates, rather than allowing the last duplicate to win.
+	unboundSnapshotUUIDs map[string]bool
 
 	// Active and retired close tickets are protected by the same mutex as the
 	// registry so target assessment, ticket validation, and registry mutation
@@ -65,9 +72,10 @@ type Registry struct {
 // NewRegistry returns an empty Registry ready for use.
 func NewRegistry() *Registry {
 	return &Registry{
-		workspaces:          make(map[string]*Workspace),
-		closeTickets:        make(map[string]closeTicket),
-		retiredCloseTickets: make(map[string]retiredCloseTicket),
+		workspaces:           make(map[string]*Workspace),
+		unboundSnapshotUUIDs: make(map[string]bool),
+		closeTickets:         make(map[string]closeTicket),
+		retiredCloseTickets:  make(map[string]retiredCloseTicket),
 	}
 }
 
@@ -79,12 +87,13 @@ func NewRegistry() *Registry {
 // non-empty one is a client acting on somebody's create-workspace request, and
 // the cold-start/reap defaults pass "" -- which the deriver may fill in later
 // precisely because it is empty, whatever its provenance says.
-func (r *Registry) addWorkspaceLocked(name, clientRef string) string {
+func (r *Registry) addWorkspaceLocked(name, clientRef, workspaceUUID string) string {
 	r.nextWSID++
 	r.nextWorkspaceGeneration++
 	id := fmt.Sprintf("w%d", r.nextWSID)
 	r.workspaces[id] = &Workspace{
 		ID:         id,
+		UUID:       workspaceUUID,
 		Name:       name,
 		nameOrigin: originExplicit,
 		ClientRef:  clientRef,
@@ -100,7 +109,36 @@ func (r *Registry) addWorkspaceLocked(name, clientRef string) string {
 func (r *Registry) AddWorkspace(name, clientRef string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.addWorkspaceLocked(name, clientRef)
+	return r.addWorkspaceLocked(name, clientRef, uuid.New().String())
+}
+
+// RestoreWorkspace recreates a workspace from a snapshot. A valid UUID is
+// preserved; an absent or malformed legacy UUID remains unbound rather than
+// being guessed from the workspace name, CWD, pane ids, or list position.
+func (r *Registry) RestoreWorkspace(name, clientRef, workspaceUUID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if parsed, err := uuid.Parse(workspaceUUID); err != nil || parsed == uuid.Nil {
+		workspaceUUID = ""
+	} else {
+		workspaceUUID = parsed.String()
+		if r.unboundSnapshotUUIDs[workspaceUUID] {
+			workspaceUUID = ""
+		}
+		if workspaceUUID != "" {
+			for _, existing := range r.workspaces {
+				if existing.UUID == workspaceUUID {
+					// Duplicate snapshot identity is ambiguous. Keep both restored
+					// workspaces unbound rather than attaching either to history.
+					existing.UUID = ""
+					r.unboundSnapshotUUIDs[workspaceUUID] = true
+					workspaceUUID = ""
+					break
+				}
+			}
+		}
+	}
+	return r.addWorkspaceLocked(name, clientRef, workspaceUUID)
 }
 
 // Get returns the workspace for id and whether it exists.
@@ -127,11 +165,12 @@ func (r *Registry) List() []WorkspaceInfo {
 	out := make([]WorkspaceInfo, 0, len(r.workspaces))
 	for _, ws := range r.workspaces {
 		out = append(out, WorkspaceInfo{
-			WorkspaceID: ws.ID,
-			Name:        ws.Name,
-			ClientRef:   ws.ClientRef,
-			PaneCount:   len(ws.Panes),
-			Completion:  ws.completion,
+			WorkspaceID:   ws.ID,
+			WorkspaceUUID: ws.UUID,
+			Name:          ws.Name,
+			ClientRef:     ws.ClientRef,
+			PaneCount:     len(ws.Panes),
+			Completion:    ws.completion,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -375,6 +414,7 @@ func (r *Registry) removePaneLocked(wsID string, paneID int) (*Pane, int, bool) 
 // session-restore snapshot writer (see snapshot.go).
 type workspaceLiveView struct {
 	ID   string
+	UUID string
 	Name string
 	// NameOrigin travels with Name because the snapshot writer persists both:
 	// a name restored without its provenance is a name the deriver is free to
@@ -420,7 +460,7 @@ func (r *Registry) snapshotView() []workspaceLiveView {
 			layout[k] = v
 		}
 
-		out = append(out, workspaceLiveView{ID: id, Name: ws.Name, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes})
+		out = append(out, workspaceLiveView{ID: id, UUID: ws.UUID, Name: ws.Name, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes})
 	}
 	return out
 }

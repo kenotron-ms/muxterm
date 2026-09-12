@@ -19,16 +19,43 @@ import (
 
 // Config is the top-level configuration for muxterm.
 type Config struct {
-	Theme     ThemeConfig     `toml:"theme"      json:"theme"`
-	Font      FontConfig      `toml:"font"       json:"font"`
-	Terminal  TerminalConfig  `toml:"terminal"   json:"terminal"`
-	Sidebar   SidebarConfig   `toml:"sidebar"    json:"sidebar"`
-	Keys      KeysConfig      `toml:"keys"       json:"keys"`
-	Workspace WorkspaceConfig `toml:"workspace"  json:"workspace"`
-	Driver    DriverConfig    `toml:"driver"     json:"driver"`
-	Server    ServerConfig    `toml:"server"     json:"server"`
-	Restore   RestoreConfig   `toml:"restore"    json:"restore"`
-	Voice     VoiceConfig     `toml:"voice"      json:"voice"`
+	Theme          ThemeConfig          `toml:"theme"      json:"theme"`
+	Font           FontConfig           `toml:"font"       json:"font"`
+	Terminal       TerminalConfig       `toml:"terminal"   json:"terminal"`
+	Sidebar        SidebarConfig        `toml:"sidebar"    json:"sidebar"`
+	Keys           KeysConfig           `toml:"keys"       json:"keys"`
+	Workspace      WorkspaceConfig      `toml:"workspace"  json:"workspace"`
+	Driver         DriverConfig         `toml:"driver"     json:"driver"`
+	Server         ServerConfig         `toml:"server"     json:"server"`
+	Restore        RestoreConfig        `toml:"restore"    json:"restore"`
+	Voice          VoiceConfig          `toml:"voice"      json:"voice"`
+	MissionControl MissionControlConfig `toml:"missioncontrol" json:"missioncontrol"`
+}
+
+// MissionControlConfig holds opt-in Mission Control gates. Both switches must
+// be true before the text-thread preview can start an isolated sidecar.
+type MissionControlConfig struct {
+	ThreadsV2   bool `toml:"threads_v2" json:"threads_v2"`
+	TextPreview bool `toml:"text_preview" json:"text_preview"`
+	// VoicePreview is an independent, default-off candidate gate. It never
+	// inherits either legacy [voice].enabled or text_preview: a configured
+	// threaded text preview must not open a microphone by accident.
+	VoicePreview         bool `toml:"voice_preview" json:"voice_preview"`
+	TextWorkerCap        int  `toml:"text_worker_cap" json:"text_worker_cap"`
+	TextContextMaxTokens int  `toml:"text_context_max_tokens" json:"text_context_max_tokens"`
+}
+
+// ValidateTextContextMaxTokens accepts zero to retain context-simple's shipped
+// budget. A configured value is deliberately bounded rather than becoming an
+// arbitrary provider/module override.
+func (m MissionControlConfig) ValidateTextContextMaxTokens() error {
+	if m.TextContextMaxTokens == 0 {
+		return nil
+	}
+	if m.TextContextMaxTokens < 256 || m.TextContextMaxTokens > 200_000 {
+		return fmt.Errorf("config: [missioncontrol] text_context_max_tokens must be 0 or between 256 and 200000")
+	}
+	return nil
 }
 
 // Auth modes for VoiceConfig.AuthMode. These are the ONLY accepted values.
@@ -671,5 +698,10 @@ func Defaults() Config {
 			EntraScope:      DefaultVoiceEntraScope,
 			SyncToolTimeout: DefaultVoiceSyncToolTimeout,
 		},
+		// All four release gates default off: missioncontrol.threads_v2,
+		// missioncontrol.text_preview, missioncontrol.voice_preview, and
+		// voice.enabled. No candidate registers until each applicable gate
+		// is deliberately enabled.
+		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false, VoicePreview: false, TextWorkerCap: 4},
 	}
 }

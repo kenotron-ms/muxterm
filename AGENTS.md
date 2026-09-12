@@ -120,6 +120,41 @@ that breaks a test literal builds green. Run `go vet ./...` to catch it.
 
 ## Architectural invariants
 
+### Mission Control conversation ownership
+
+`missioncontrol.threads_v2` and `missioncontrol.text_preview` default off.
+Threaded roots belong to the server router, not a browser connection. Each root
+has its own immutable session/storage identity, queue, approval broker, and
+persisted todo/goal state. Never replace one root's messages to simulate another
+thread, infer history identity from `wN`/names, or route a missing target to the
+current focus. Reset/archive control only that conversation; they never close
+sessiond panes or stop unrelated lanes. Goal changes require the originating
+thread/turn/generation's confirmation.
+
+Verify changes with real browser/server/sessiond/sidecar fixtures in the approved
+isolated environment. Provider-edge fixtures may supply deterministic API
+responses, but never substitute fake context modules or injected browser history
+for isolation evidence. The voice lease safety API does not enable audio:
+threaded microphone/provider attachment remains disabled pending its separate
+correlation, drain, spoken-prefix, and live-microphone gates.
+
+The 2026-09-12 correction in
+`docs/designs/2026-09-12-app-voice-two-lifetimes.md` supersedes per-channel
+conversational voice ownership. Composer dictation cancels and invalidates late
+transcription on channel departure, preserving accepted draft text. App voice
+belongs to the authenticated browser session and persists across navigation;
+view observation never silently retargets work. Each submission still uses an
+immutable validated thread/runtime identity. App voice tools reuse authenticated
+app controls without expanding rights. Missing local SpeechSynthesis voices is
+not proof that provider audio is unavailable. Live mic access remains opt-in.
+
+App voice activation belongs in shared title actions immediately before the
+ellipsis menu, not in a channel composer. One app-root floating voice control
+survives navigation; its position is presentation state, never a work target.
+Keep Stop reachable during connection setup and errors. Public component
+snapshot inputs are rendering-only: labelled visual fixtures do not establish
+live microphone, provider, session-lifetime, or acoustic verification.
+
 ### Terminal query ownership (CSI 6n, OSC 11;?)
 
 sessiond's `VTBuffer` is authoritative for replying to `CSI 6n` (cursor

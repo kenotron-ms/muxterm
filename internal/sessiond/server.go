@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Connection kinds carried by Message.ClientKind on attach and recorded in
@@ -30,8 +32,10 @@ const (
 // dispatches frozen-protocol requests, and fans out replay-before-live data on
 // attach.
 type Server struct {
-	reg    *Registry
-	socket string
+	reg               *Registry
+	socket            string
+	machineIdentity   machineIdentity
+	daemonIncarnation string
 
 	mu    sync.Mutex
 	subs  map[string]map[*conn]bool // workspaceId -> set of attached connections
@@ -73,18 +77,35 @@ func NewServer(socketPath string) (*Server, error) {
 	if socketPath == "" {
 		return nil, errors.New("sessiond: empty socket path")
 	}
+	identity, err := loadOrCreateMachineIdentity()
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
-		reg:         NewRegistry(),
-		socket:      socketPath,
-		subs:        make(map[string]map[*conn]bool),
-		conns:       make(map[*conn]bool),
-		preview:     make(map[string]*previewState),
-		sessions:    newSessionStore(),
-		completions: newCompletionStore(CompletionsPath()),
-		triggers:    newTriggerStore(TriggersPath()),
+		reg:               NewRegistry(),
+		socket:            socketPath,
+		machineIdentity:   identity,
+		daemonIncarnation: uuid.New().String(),
+		subs:              make(map[string]map[*conn]bool),
+		conns:             make(map[*conn]bool),
+		preview:           make(map[string]*previewState),
+		sessions:          newSessionStore(),
+		completions:       newCompletionStore(CompletionsPath()),
+		triggers:          newTriggerStore(TriggersPath()),
 	}
 	s.engine = newTriggerEngine(s, s.triggers)
 	return s, nil
+}
+
+// MissionControlIdentity returns sessiond's durable machine identity and this
+// daemon process incarnation. It is safe to expose only through the local
+// authenticated control protocol.
+func (s *Server) MissionControlIdentity() MissionControlIdentity {
+	return MissionControlIdentity{
+		ProtocolVersion:   MissionControlIdentityProtocolVersion,
+		MachineID:         s.machineIdentity.MachineID,
+		DaemonIncarnation: s.daemonIncarnation,
+	}
 }
 
 // CompletionsPath returns the durable completion log's location.
@@ -625,6 +646,9 @@ func (c *conn) handle(msg Message) {
 		c.srv.broadcastWorkspaceList()
 	case TypeListWorkspaces:
 		c.srv.replyWorkspaceList(c, msg.CID)
+	case TypeMissionControlIdentity:
+		identity := c.srv.MissionControlIdentity()
+		c.reply(&Message{Type: TypeMissionControlIdentityResult, CID: msg.CID, MissionControlProtocolVersion: identity.ProtocolVersion, MachineID: identity.MachineID, DaemonIncarnation: identity.DaemonIncarnation})
 	case TypeRenameWorkspace:
 		if c.srv.reg.RenameWorkspace(msg.WorkspaceID, msg.Name) {
 			c.reply(&Message{Type: TypeOK, CID: msg.CID})

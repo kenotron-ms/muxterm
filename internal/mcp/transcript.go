@@ -100,6 +100,24 @@ type transcriptFS interface {
 	listNames(dir string) []string
 }
 
+// TranscriptReader is the narrow daemon filesystem capability required by the
+// bounded transcript reader. It is intentionally optional at callers: adding
+// it to server.DaemonConn would break existing daemon fakes.
+type TranscriptReader interface {
+	ReadFile(path string, offset *int64, limit int) (*sessiond.Message, error)
+	ListDir(path string, limit int) (*sessiond.Message, error)
+}
+
+// ReadTranscriptVia applies the native bounded transcript algorithm through an
+// already-authenticated daemon connection. Callers must validate machine and
+// session attribution before invoking it.
+func ReadTranscriptVia(reader TranscriptReader, row sessiond.SessionState, n int) (Transcript, error) {
+	if reader == nil {
+		return Transcript{}, errors.New("daemon does not support bounded transcript reads")
+	}
+	return readTranscriptOn(readerTranscriptFS{reader: reader}, row, n)
+}
+
 // ReadTranscript returns the last n turns of the session described by row,
 // reading from THIS machine's filesystem. Used by the CLI, which is always on
 // the same machine as the session it is reading.
@@ -319,6 +337,29 @@ func (d daemonTranscriptFS) tail(p string, window int64) ([]byte, bool, error) {
 	// Offset > 0 means the daemon started partway into the file, which is
 	// exactly what "you are looking at a tail" means to the caller.
 	return []byte(reply.Content), derefOffset(reply.Offset) > 0, nil
+}
+
+type readerTranscriptFS struct{ reader TranscriptReader }
+
+func (d readerTranscriptFS) tail(p string, window int64) ([]byte, bool, error) {
+	from := -window
+	reply, err := d.reader.ReadFile(p, &from, int(window))
+	if err != nil {
+		return nil, false, err
+	}
+	return []byte(reply.Content), derefOffset(reply.Offset) > 0, nil
+}
+
+func (d readerTranscriptFS) listNames(dir string) []string {
+	reply, err := d.reader.ListDir(dir, 0)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(reply.Entries))
+	for _, e := range reply.Entries {
+		out = append(out, e.Name)
+	}
+	return out
 }
 
 func (d daemonTranscriptFS) listNames(dir string) []string {
