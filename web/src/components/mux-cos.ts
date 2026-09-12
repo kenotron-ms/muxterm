@@ -59,6 +59,7 @@ import {
   type CosBlock,
   type CosTurn,
 } from '../lib/cos-store.js';
+import { ASSISTANT_ALIAS, ASSISTANT_NAME } from '../lib/assistant-identity.js';
 import {
   clampDashboardSplit,
   persistDashboardSplit,
@@ -1714,7 +1715,9 @@ export class MuxCos extends LitElement {
   private _renderTopbar(): TemplateResult {
     return html`
       <div class="topbar">
-        <h1>Mission Control</h1>
+        <h1
+          title="Mission Control — you're talking with ${ASSISTANT_NAME}. Nickname: ${ASSISTANT_ALIAS}."
+        >Mission Control</h1>
         <span class="spacer"></span>
         <button
           class="dots ${this._menuOpen ? 'on' : ''}"
@@ -1780,7 +1783,7 @@ export class MuxCos extends LitElement {
       <div class="zero">
         <div class="lede">What needs you?</div>
         <p class="sub">
-          Describe a problem and your chief of staff splits it, routes it, and
+          Describe a problem and ${ASSISTANT_NAME} splits it, routes it, and
           starts the lanes. What it starts shows up on the right.
         </p>
       </div>
@@ -1798,7 +1801,7 @@ export class MuxCos extends LitElement {
           </div>`
         : nothing}
       <div class="turn cos">
-        <div class="who">cos</div>
+        <div class="who">${ASSISTANT_NAME.toLowerCase()}</div>
         <div class="bd">
           ${t.blocks.map((b, i) => this._renderBlock(t, b, i))}
           ${live && t.blocks.length === 0
@@ -1920,7 +1923,7 @@ export class MuxCos extends LitElement {
       ? 'Clear all messages?'
       : `Clear messages older than ${which} days?`;
     const detail = all
-      ? 'Your chief of staff forgets this conversation entirely. Running lanes are unaffected \u2014 no session is stopped, closed or altered \u2014 and it will not drop a message about a lane that is still alive.'
+      ? `${ASSISTANT_NAME} forgets this conversation entirely. Running lanes are unaffected \u2014 no session is stopped, closed or altered \u2014 and it will not drop a message about a lane that is still alive.`
       : 'Anything older goes. Running lanes are unaffected \u2014 no session is stopped, closed or altered \u2014 and it will not drop a message about a lane that is still alive.';
     return html`
       <div class="turn">
@@ -1966,7 +1969,7 @@ export class MuxCos extends LitElement {
     const active = isSessionLive(s);
     const orbState =
       s.state === 'idle' || s.state === 'error' ? 'asleep' : s.state;
-    const label = active ? 'End the spoken conversation' : 'Talk to the chief of staff';
+    const label = active ? 'End the spoken conversation' : `Talk to ${ASSISTANT_NAME}`;
     return html`
       <button
         class="cbtn voice ${active ? 'live' : ''} ${solo ? 'solo' : ''}"
