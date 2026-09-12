@@ -40,6 +40,8 @@ sys.stdout = sys.stderr
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
 import copy  # noqa: E402
+import hashlib  # noqa: E402
+import inspect  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 import signal  # noqa: E402
@@ -98,6 +100,144 @@ class _BoundedFleetStatusTool:
             })
         return ToolResult(success=True, output={"observed_at": datetime.now(timezone.utc).isoformat(), "sessions": bounded, "truncated": len(rows) > len(bounded)})
 
+
+class _LobbySummariesTool:
+    """Returns only typed, bounded records supplied by the host control plane."""
+
+    name = "missioncontrol_summaries"
+    description = "Return bounded completed-work extracts with immutable provenance and observation timestamps."
+    input_schema = {"type": "object", "properties": {}, "additionalProperties": False}
+
+    def __init__(self) -> None:
+        self._records: list[dict] = []
+
+    def replace(self, records: Any) -> None:
+        if not isinstance(records, list):
+            raise ValueError("summary records must be a list")
+        bounded: list[dict] = []
+        for record in records[:20]:
+            if not isinstance(record, dict):
+                raise ValueError("summary record must be an object")
+            required = ("id", "thread_id", "runtime_session_id", "runtime_generation", "turn_id", "observed_at", "kind", "text")
+            if any(key not in record for key in required) or record.get("kind") != "extract":
+                raise ValueError("summary record lacks immutable provenance")
+            text = record.get("text")
+            if not isinstance(text, str) or len(text) > 1200:
+                raise ValueError("summary extract exceeds its bounded typed shape")
+            bounded.append({key: record[key] for key in required})
+        self._records = bounded
+
+    async def execute(self, input: dict) -> Any:
+        from amplifier_core.models import ToolResult
+        return ToolResult(success=True, output={"records": self._records, "source": "missioncontrol_host_summary_registry"})
+
+
+class _PersistentTodoTool:
+    """Persists the real tool-todo coordinator state in this root namespace."""
+
+    def __init__(self, inner: Any, state_path: Path) -> None:
+        self._inner = inner
+        self._path = state_path
+        self.name = "todo"
+        self.description = inner.description
+        self.input_schema = inner.input_schema
+
+    async def execute(self, input: dict) -> Any:
+        result = await self._inner.execute(input)
+        if getattr(result, "success", False) and input.get("action") in ("create", "update"):
+            todos = getattr(self._inner.coordinator, "todo_state", None)
+            if not isinstance(todos, list):
+                from amplifier_core.models import ToolResult
+                return ToolResult(success=False, error={"message": "thread todo state is unavailable"})
+            try:
+                _atomic_json_write(self._path, {"version": 1, "todos": todos})
+            except Exception as exc:  # noqa: BLE001
+                from amplifier_core.models import ToolResult
+                return ToolResult(success=False, error={"message": f"thread todo persistence failed: {type(exc).__name__}"})
+        return result
+
+
+class _ThreadGoalTool:
+    """Explicit state tracking only; it is not an autonomous /goal scheduler."""
+
+    name = "thread_goal"
+    description = (
+        "Persist one scoped Mission Control goal. This tracks state only and "
+        "does not start agents, shell commands, delegation, or an autonomous scheduler. "
+        "Setting or clearing the goal requires confirmation in this conversation."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["get", "set", "clear"]},
+            "goal": {"type": "string", "maxLength": 1200},
+        },
+        "required": ["action"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self, state_path: Path, broker: Any) -> None:
+        self._path = state_path
+        self._broker = broker
+
+    async def execute(self, input: dict) -> Any:
+        from amplifier_core.models import ToolResult
+
+        action = input.get("action")
+        current = _read_json_object(self._path)
+        if action == "get":
+            return ToolResult(success=True, output={"goal": current.get("goal"), "autonomous": False})
+        if action not in {"set", "clear"}:
+            return ToolResult(success=False, error={"message": "unsupported goal action"})
+        if action == "set" and (not isinstance(input.get("goal"), str) or not input["goal"].strip()):
+            return ToolResult(success=False, error={"message": "set requires a non-empty bounded goal"})
+        goal = input["goal"].strip()[:1200] if action == "set" else None
+        approved, reason, _ = await self._broker.ask(
+            tool=self.name,
+            detail=("Set this conversation's tracked goal to: " + goal) if goal is not None
+            else "Clear this conversation's tracked goal. This does not stop any work.",
+        )
+        if not approved:
+            return ToolResult(success=False, error={"message": "Goal change denied: " + reason})
+        _atomic_json_write(self._path, {"version": 1, "goal": goal, "autonomous": False})
+        return ToolResult(success=True, output={"goal": goal, "autonomous": False})
+
+
+def _read_json_object(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict) or value.get("version") != 1:
+            raise RuntimeError("unsupported thread state schema; original preserved")
+        return value
+    except FileNotFoundError:
+        return {}
+
+
+def _atomic_json_write(path: Path, value: dict) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(value, stream, separators=(",", ":"), ensure_ascii=False)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _turn_fingerprint(messages: list) -> str:
+    """Stable structural identity of a persisted turn group.
+
+    The journal stores only this digest and a UUID turn ID.  It never uses a
+    mutable group index or prompt/content equivalence to attach a turn ID.
+    """
+    canonical = json.dumps(messages, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
 # The chief-of-staff bundle, shipped beside this script.
 #
 # A PATH, not a bundle name, and that is the whole distribution story: muxterm
@@ -135,6 +275,16 @@ def _default_bundle() -> str:
 
 
 DEFAULT_BUNDLE = _default_bundle()
+THREADED_TEXT_INSTRUCTION = (
+    "Mission Control is the surface; Operator, also called Tank, is one assistant. "
+    "Each conversation has an independent root. Use only the tools mounted here. "
+    "Lobby is read-only: report bounded fresh fleet facts and attributed completed-work "
+    "extracts; an extract's observation time is not proof of current activity. "
+    "Workspace todo and goal state belongs only to this root. Changing a tracked goal "
+    "requires explicit human confirmation in this conversation. "
+    "Do not delegate, run shell commands, mutate a workspace, read other transcripts, "
+    "or approve, cancel, reset, or control another thread. Voice is unavailable."
+)
 
 # Where a bundle declares the tool surface it wants, by NAME.  See
 # internal/cos/sidecar/bundle/behaviors/muxterm-cos.yaml for the full rationale
@@ -773,12 +923,17 @@ class Sidecar:
         self._tool_registry: dict = {}
         self._tuning: dict = {}
         self._threaded_allowed_tools: set[str] | None = None
+        self._lobby_summaries: "_LobbySummariesTool | None" = None
         # Sidecar-local immutable turn IDs are not part of SessionStore's
         # transcript schema. They are attached to history summaries only for
         # turns this process durably saved, so browser reconciliation never
         # falls back to matching prompt text.
-        self._completed_turn_ids: list[str] = []
-        self._history_group_base = 0
+        # Structural group fingerprints—not mutable group indexes—map a
+        # persisted transcript turn to its immutable UUID. Context compaction
+        # can drop/reorder group indexes; a changed group then remains safely
+        # unmapped instead of inheriting another turn's identity.
+        self._journal_by_fingerprint: dict[str, list[str]] = {}
+        self._context_max_tokens = 0
         # Set by serve(); read by _on_signal to wake the loop.  Both stay None
         # until then, so a signal before serve() has nothing to poke and
         # nothing to crash on.
@@ -844,7 +999,7 @@ class Sidecar:
             raise RuntimeError(f"threaded preview refuses unsafe resume: {resume_error}")
         self.resumed = resume_exists and transcript is not None
         if self.args.threaded_text_preview:
-            self._history_group_base = len(_group_turns(transcript or []))
+            self._load_thread_journal()
 
         cwd = str(Path.cwd().resolve())
         root_meta = {
@@ -856,6 +1011,21 @@ class Sidecar:
             "project_dir": cwd,
             "project_name": Path(cwd).name,
         }
+        # prepared.create_session() intentionally bypasses the app CLI's
+        # initialized-session wrapper for threaded roots. That wrapper is
+        # normally what creates the SessionStore directory/metadata before a
+        # later save reads it. Use SessionStore's public save API to establish
+        # the empty root record now; failure is boot-fatal rather than a later
+        # terminal event that incorrectly looks persisted.
+        if self.args.threaded_text_preview and not resume_exists:
+            self.store.save(self.session_id, [], {
+                **root_meta,
+                "session_id": self.session_id,
+                "created": datetime.now(timezone.utc).isoformat(),
+                "bundle": self.bundle,
+                "model": "unknown",
+                "turn_count": 0,
+            })
         # Mirrors create_initialized_session: stamp before creation so hooks
         # mounted during create_session see the values.
         cfg["working_dir"] = cwd
@@ -893,6 +1063,21 @@ class Sidecar:
             register_mention_handling(session)
             register_session_spawning(session)
         self.session = session
+        if self.args.threaded_text_preview and self.args.thread_context_max_tokens:
+            # context-simple treats max_tokens as a fallback: a provider's
+            # advertised context window otherwise wins. Use its public request
+            # budget argument to enforce this explicitly configured root limit.
+            context = session.coordinator.get("context")
+            request_messages = getattr(context, "get_messages_for_request", None)
+            if request_messages is None or "token_budget" not in inspect.signature(request_messages).parameters:
+                raise RuntimeError("thread context does not support an explicit request token budget")
+            budget = self.args.thread_context_max_tokens
+
+            async def bounded_request_messages(token_budget=None, provider=None):
+                effective = min(budget, token_budget) if token_budget is not None and token_budget > 0 else budget
+                return await request_messages(token_budget=effective, provider=provider)
+
+            context.get_messages_for_request = bounded_request_messages
 
         # session.config is not guaranteed to be the same dict object as cfg.
         session.config["working_dir"] = cwd
@@ -1017,12 +1202,19 @@ class Sidecar:
         if self.args.thread_kind == "lobby" and len(tools) != 1:
             raise RuntimeError("threaded Lobby requires exactly the shipped muxterm MCP module")
         if self.args.thread_kind != "lobby":
-            tools = []
+            tools = [{"module": "tool-todo"}]
         safe_session = {
             key: copy.deepcopy(session[key])
             for key in ("raw", "context", "orchestrator")
             if key in session
         }
+        context_config = safe_session["context"].get("config")
+        if not isinstance(context_config, dict):
+            raise RuntimeError("threaded preview context-simple config is unsupported")
+        if self.args.thread_context_max_tokens:
+            context_config["max_tokens"] = self.args.thread_context_max_tokens
+            context_config["auto_compact"] = True
+            self._context_max_tokens = self.args.thread_context_max_tokens
         prepared.mount_plan = expand_env_vars({
             "session": safe_session,
             "providers": providers if providers else copy.deepcopy(plan.get("providers") or []),
@@ -1030,12 +1222,7 @@ class Sidecar:
         })
         # Replace any composed/product prose before create_session registers its
         # prompt factory. This root has no app bundle instruction contribution.
-        prepared.bundle.instruction = (
-            "Mission Control text preview. Read-only scoped conversation. "
-            "Refuse approvals, delegation, shell commands, mutations, cancellation, "
-            "reset, voice, cross-thread access, and transcript reads. "
-            "Lobby may report only bounded current fleet facts."
-        )
+        prepared.bundle.instruction = THREADED_TEXT_INSTRUCTION
         return prepared.mount_plan, prepared
 
     async def _enforce_threaded_preview_policy(self, session: Any) -> None:
@@ -1043,8 +1230,8 @@ class Sidecar:
 
         This cannot rely on the prompt: configured bundles are additive and
         may mount tools the Mission Control bundle did not name.  Lobby needs
-        only fresh fleet facts; workspace threads intentionally get no tools
-        until a scoped action boundary exists.
+        only bounded facts and summaries; workspace threads get only their own
+        todo/goal state tools, never workspace mutation or delegation.
         """
         bundle = getattr(self._prepared, "bundle", None) if self._prepared else None
         if bundle is None:
@@ -1052,13 +1239,8 @@ class Sidecar:
         # Do not inherit user-authored instruction additions, memories, or
         # bundle prose into a new root. This fixed policy is immutable for the
         # runtime because the Go supervisor never sends reconfigure in preview.
-        bundle.instruction = (
-            "Mission Control text preview. This is a read-only, independently "
-            "scoped conversation. Do not request or imply approvals, delegation, "
-            "shell commands, mutations, cancellation, reset, voice, or cross-thread "
-            "transcripts. Lobby may report only current bounded fleet facts."
-        )
-        allowed = {"mcp_muxterm_fleet_status"} if self.args.thread_kind == "lobby" else set()
+        bundle.instruction = THREADED_TEXT_INSTRUCTION
+        allowed = {"mcp_muxterm_fleet_status", "missioncontrol_summaries"} if self.args.thread_kind == "lobby" else {"todo", "thread_goal"}
         mounted = sorted(session.coordinator.get("tools") or {})
         unsafe = [name for name in mounted if name not in allowed]
         failed = []
@@ -1074,6 +1256,20 @@ class Sidecar:
             if original is None:
                 raise RuntimeError("threaded Lobby requires the fleet-status tool")
             await session.coordinator.mount("tools", _BoundedFleetStatusTool(original), "mcp_muxterm_fleet_status")
+            self._lobby_summaries = _LobbySummariesTool()
+            await session.coordinator.mount("tools", self._lobby_summaries, "missioncontrol_summaries")
+        else:
+            todo = self._tool_registry.get("todo")
+            if todo is None:
+                raise RuntimeError("threaded workspace requires repository-compatible tool-todo")
+            state_dir = Path(self.args.thread_journal).parent
+            todo_state = _read_json_object(state_dir / "todo.json")
+            restored = todo_state.get("todos", [])
+            if not isinstance(restored, list):
+                raise RuntimeError("threaded workspace todo namespace is invalid")
+            todo.coordinator.todo_state = restored
+            await session.coordinator.mount("tools", _PersistentTodoTool(todo, state_dir / "todo.json"), "todo")
+            await session.coordinator.mount("tools", _ThreadGoalTool(state_dir / "goal.json", self.broker), "thread_goal")
         if session.coordinator.get("hooks") is None:
             raise RuntimeError("threaded preview requires a hook registry for dispatch fencing")
         self._threaded_allowed_tools = allowed
@@ -1593,6 +1789,9 @@ class Sidecar:
         messages = await self._messages()
         if not messages:
             return False
+        # Threaded boot creates this root record with SessionStore.save before
+        # the first turn. Keep strict metadata lookup here: unexpected removal
+        # is a real persistence failure and must yield persisted:false.
         existing = self.store.get_metadata(self.session_id) or {}
         metadata = {
             **existing,
@@ -1693,7 +1892,7 @@ class Sidecar:
                 # terminal event. A history request received immediately after
                 # that event can then cover the exact turn without prompt
                 # matching.
-                self._completed_turn_ids.append(turn.id)
+                persisted = await self._record_persisted_turn(turn.id)
 
             if cancelled or turn.cancel_requests:
                 self._emit_terminal(turn, ev="cancelled", response=response, ms=ms,
@@ -1786,6 +1985,18 @@ class Sidecar:
         except Exception:
             logger.debug("on-disk transcript unavailable", exc_info=True)
             return []
+
+    def _persisted_transcript(self) -> list:
+        """Read the canonical SessionStore transcript after a successful save.
+
+        This is intentionally distinct from _transcript(): the latter is a
+        live accessor for history; attribution must fingerprint the exact
+        on-disk representation that SessionStore just committed.
+        """
+        transcript, _metadata = self.store.load(self.session_id)
+        if not isinstance(transcript, list):
+            raise RuntimeError("persisted transcript is not a message list")
+        return transcript
 
     async def _handle_clear(self, msg: dict) -> None:
         """Prune the persisted transcript.  older_than_days 0/absent = all.
@@ -2034,34 +2245,59 @@ class Sidecar:
             payload["req_id"] = req_id
         self.proto.emit(**payload)
 
-    async def _handle_history(self, msg: dict) -> None:
-        """Answer with the newest N turns, summarized.
+    async def _history_turns(self, limit: int) -> list:
+        """Build newest N canonical summaries without emitting a protocol frame.
 
         Summarized is the whole point: role, text, thinking, and a one-line
         tool summary.  Never a raw tool result, never an llm payload -- the
         events log for this session is megabytes with 90KB single lines, and a
         replay that carried that would be worse than no replay at all.
         """
+        limit = max(1, min(limit, HISTORY_MAX_LIMIT))
+        turns: list = []
+        # Attribution was recorded from SessionStore's canonical representation
+        # (including persisted timestamps), not the live context's dictionaries.
+        # Comparing the two representations loses otherwise valid turn IDs.
+        messages = self._persisted_transcript() if self.args.threaded_text_preview else await self._transcript()
+        groups = _group_turns(messages)
+        fingerprints = [_turn_fingerprint([messages[i] for i in group]) for group in groups]
+        occurrences: dict[str, int] = {}
+        for fingerprint in fingerprints:
+            occurrences[fingerprint] = occurrences.get(fingerprint, 0) + 1
+        first = max(0, len(groups) - limit)
+        for n, group in enumerate(groups[-limit:], start=first):
+            turn = _summarize_turn(n, [messages[i] for i in group])
+            if turn is not None:
+                if self.args.threaded_text_preview:
+                    fingerprint = fingerprints[n]
+                    journal_ids = self._journal_by_fingerprint.get(fingerprint, [])
+                    # Identical structural groups are ambiguous. Do not attach
+                    # an ID unless that exact group occurs once in persisted
+                    # history and was journaled exactly once.
+                    if occurrences[fingerprint] == 1 and len(journal_ids) == 1:
+                        turn["turn_id"] = journal_ids[0]
+                turns.append(turn)
+        if self.args.threaded_text_preview and self._turn is not None and not self._turn.terminal_sent:
+            # The ordered runtime replay owns the active turn's partial output.
+            # Seed only its identity/prompt here; including live text as well
+            # would append the same deltas twice when replay is applied.
+            turns.append({
+                "id": "active-" + self._turn.id,
+                "prompt": self._turn.prompt,
+                "blocks": [],
+                "status": "streaming",
+            })
+        return turns
+
+    async def _handle_history(self, msg: dict) -> None:
+        """Answer with the newest N turns, summarized."""
         req_id = msg.get("req_id") if isinstance(msg.get("req_id"), str) else None
         try:
             limit = int(msg.get("limit") or HISTORY_DEFAULT_LIMIT)
         except (TypeError, ValueError):
             limit = HISTORY_DEFAULT_LIMIT
-        limit = max(1, min(limit, HISTORY_MAX_LIMIT))
-
-        turns: list = []
         try:
-            messages = await self._transcript()
-            groups = _group_turns(messages)
-            first = max(0, len(groups) - limit)
-            for n, group in enumerate(groups[-limit:], start=first):
-                turn = _summarize_turn(n, [messages[i] for i in group])
-                if turn is not None:
-                    if self.args.threaded_text_preview:
-                        local_index = n - self._history_group_base
-                        if 0 <= local_index < len(self._completed_turn_ids):
-                            turn["turn_id"] = self._completed_turn_ids[local_index]
-                    turns.append(turn)
+            turns = await self._history_turns(limit)
         except Exception as exc:  # noqa: BLE001
             logger.exception("history: could not build the replay")
             payload = {"ev": "error", "code": "history_failed",
@@ -2072,6 +2308,86 @@ class Sidecar:
             return
 
         payload = {"ev": "history", "turns": turns, "session_id": self.session_id}
+        if req_id:
+            payload["req_id"] = req_id
+        self.proto.emit(**payload)
+
+    def _load_thread_journal(self) -> None:
+        path = self.args.thread_journal
+        if not path:
+            raise RuntimeError("threaded preview requires a runtime journal path")
+        try:
+            with open(path, "r", encoding="utf-8") as journal:
+                for line in journal:
+                    entry = json.loads(line)
+                    if isinstance(entry, dict) and isinstance(entry.get("fingerprint"), str) and isinstance(entry.get("turn_id"), str):
+                        self._journal_by_fingerprint.setdefault(entry["fingerprint"], []).append(entry["turn_id"])
+        except FileNotFoundError:
+            return
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("threaded preview refuses unreadable turn attribution journal") from exc
+
+    async def _record_persisted_turn(self, turn_id: str) -> bool:
+        """Atomically acknowledge save attribution after SessionStore.save."""
+        try:
+            messages = self._persisted_transcript()
+        except Exception:
+            return False
+        groups = _group_turns(messages)
+        if not groups:
+            return False
+        members = [messages[i] for i in groups[-1]]
+        return self._append_thread_journal(_turn_fingerprint(members), turn_id)
+
+    def _append_thread_journal(self, fingerprint: str, turn_id: str) -> bool:
+        try:
+            path = self.args.thread_journal
+            Path(path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as journal:
+                journal.write(json.dumps({"fingerprint": fingerprint, "turn_id": turn_id}, separators=(",", ":")) + "\n")
+                journal.flush()
+                os.fsync(journal.fileno())
+            self._journal_by_fingerprint.setdefault(fingerprint, []).append(turn_id)
+            return True
+        except Exception:
+            logger.warning("thread attribution journal save failed for %s", turn_id, exc_info=True)
+            return False
+
+    async def _handle_snapshot(self, msg: dict) -> None:
+        """Return an ordered canonical-history/current-turn cut.
+
+        dispatch() processes stdin serially. This reply sits after all preceding
+        turn/control ops and is emitted after their preceding output, which is
+        the barrier the Go runtime uses for its event-journal watermark.
+        """
+        req_id = msg.get("req_id") if isinstance(msg.get("req_id"), str) else None
+        try:
+            limit = int(msg.get("limit") or HISTORY_DEFAULT_LIMIT)
+        except (TypeError, ValueError):
+            limit = HISTORY_DEFAULT_LIMIT
+        try:
+            turns = await self._history_turns(limit)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("snapshot: could not build history")
+            payload = {"ev": "error", "code": "snapshot_failed",
+                       "message": f"{type(exc).__name__}: {exc}", "fatal": False}
+            if req_id:
+                payload["req_id"] = req_id
+            self.proto.emit(**payload)
+            return
+        active = self._turn.id if self._turn is not None else ""
+        todo_state = getattr(self.session.coordinator, "todo_state", [])
+        if not isinstance(todo_state, list):
+            todo_state = []
+        goal_state = _read_json_object(Path(self.args.thread_journal).parent / "goal.json") if self.args.threaded_text_preview else {}
+        context = self.session.coordinator.get("context")
+        actual_context_budget = getattr(context, "max_tokens", None)
+        payload = {"ev": "snapshot", "snapshot": {
+            "history": turns, "active_turn_id": active,
+            "todo": todo_state, "goal": goal_state,
+            "context": {"configured_max_tokens": self._context_max_tokens, "effective_max_tokens": actual_context_budget},
+        },
+                   "session_id": self.session_id}
         if req_id:
             payload["req_id"] = req_id
         self.proto.emit(**payload)
@@ -2137,6 +2453,17 @@ class Sidecar:
             self.proto.emit(ev="error", code="unknown_approval",
                             message=f"no pending approval {request_id}", fatal=False)
 
+    def _handle_summaries(self, msg: dict) -> None:
+        if not self.args.threaded_text_preview or self.args.thread_kind != "lobby" or self._lobby_summaries is None:
+            self.proto.emit(ev="error", code="unsupported_op",
+                            message="summary data is only available to the threaded Lobby", fatal=False)
+            return
+        try:
+            self._lobby_summaries.replace(msg.get("summaries"))
+        except Exception as exc:  # noqa: BLE001
+            self.proto.emit(ev="error", code="invalid_summaries",
+                            message=f"{type(exc).__name__}: {exc}", fatal=False)
+
     async def dispatch(self, line: str) -> None:
         line = line.strip()
         if not line:
@@ -2160,6 +2487,10 @@ class Sidecar:
             await self._handle_clear(msg)
         elif op == "history":
             await self._handle_history(msg)
+        elif op == "snapshot":
+            await self._handle_snapshot(msg)
+        elif op == "summaries":
+            self._handle_summaries(msg)
         elif op == "reconfigure":
             await self._handle_reconfigure(msg)
         elif op == "config":
@@ -2279,9 +2610,17 @@ def parse_args(argv: list) -> argparse.Namespace:
                    help="run as an isolated, read-only Mission Control text worker")
     p.add_argument("--thread-kind", choices=["lobby", "workspace"], default=None,
                    help="required with --threaded-text-preview")
+    p.add_argument("--thread-journal", default=None,
+                   help="per-thread durable turn attribution journal")
+    p.add_argument("--thread-context-max-tokens", type=int, default=0,
+                   help="validated context-simple max_tokens override for this threaded root")
     args = p.parse_args(argv)
     if args.threaded_text_preview != (args.thread_kind is not None):
         p.error("--threaded-text-preview and --thread-kind must be used together")
+    if args.threaded_text_preview and not args.thread_journal:
+        p.error("--threaded-text-preview requires --thread-journal")
+    if args.thread_context_max_tokens and (args.thread_context_max_tokens < 256 or args.thread_context_max_tokens > 200_000):
+        p.error("--thread-context-max-tokens must be between 256 and 200000")
     return args
 
 

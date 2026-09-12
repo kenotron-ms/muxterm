@@ -34,7 +34,23 @@
  * API anything can fire, and this is a two-callsite seam.
  */
 
-type Listener = (path: string) => void;
+/**
+ * One ephemeral, read-only document held only in this browser. It is used for
+ * safe Mission Control protocol detail/preview results when there is no file
+ * path to hand to the existing Viewer. It is never published, persisted, or
+ * sent back to a server.
+ */
+export interface ViewerDocument {
+  readonly title: string;
+  readonly text: string;
+  readonly subtitle: string;
+}
+
+export type ViewerOpenRequest =
+  | Readonly<{ readonly kind: 'artifact'; readonly path: string }>
+  | Readonly<{ readonly kind: 'document'; readonly document: ViewerDocument }>;
+
+type Listener = (request: ViewerOpenRequest) => void;
 
 const listeners = new Set<Listener>();
 
@@ -52,7 +68,23 @@ export function requestArtifactOpen(path: string): void {
   if (p === '') return;
   // Iterated directly: JS Set iteration tolerates a listener unsubscribing
   // itself mid-pass, which is the only re-entrancy this seam can have.
-  for (const fn of listeners) fn(p);
+  for (const fn of listeners) fn({ kind: 'artifact', path: p });
+}
+
+/**
+ * Present an already-received read-only document in the existing Viewer.
+ * This is intentionally a one-process handoff rather than a generated file:
+ * no filesystem write, URL, publication, or second applet is involved.
+ */
+export function requestViewerDocument(document: ViewerDocument): void {
+  const title = document.title.trim();
+  if (title === '' || document.text === '') return;
+  const safe: ViewerDocument = Object.freeze({
+    title,
+    text: document.text,
+    subtitle: document.subtitle.trim(),
+  });
+  for (const fn of listeners) fn({ kind: 'document', document: safe });
 }
 
 /** Listen for open requests. Returns the unsubscribe. */

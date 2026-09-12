@@ -120,6 +120,24 @@ that breaks a test literal builds green. Run `go vet ./...` to catch it.
 
 ## Architectural invariants
 
+### Mission Control conversation ownership
+
+`missioncontrol.threads_v2` and `missioncontrol.text_preview` default off.
+Threaded roots belong to the server router, not a browser connection. Each root
+has its own immutable session/storage identity, queue, approval broker, and
+persisted todo/goal state. Never replace one root's messages to simulate another
+thread, infer history identity from `wN`/names, or route a missing target to the
+current focus. Reset/archive control only that conversation; they never close
+sessiond panes or stop unrelated lanes. Goal changes require the originating
+thread/turn/generation's confirmation.
+
+Verify changes with real browser/server/sessiond/sidecar fixtures in the approved
+isolated environment. Provider-edge fixtures may supply deterministic API
+responses, but never substitute fake context modules or injected browser history
+for isolation evidence. The voice lease safety API does not enable audio:
+threaded microphone/provider attachment remains disabled pending its separate
+correlation, drain, spoken-prefix, and live-microphone gates.
+
 ### Terminal query ownership (CSI 6n, OSC 11;?)
 
 sessiond's `VTBuffer` is authoritative for replying to `CSI 6n` (cursor

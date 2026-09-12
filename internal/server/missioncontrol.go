@@ -35,6 +35,10 @@ type missionControlClientMessage struct {
 	DraftRef                  string `json:"draft_ref"`
 	Text                      string `json:"text"`
 	ClientRef                 string `json:"client_ref"`
+	TurnID                    string `json:"turn_id"`
+	ApprovalID                string `json:"approval_id"`
+	Approved                  *bool  `json:"approved"`
+	AttentionID               string `json:"attention_id"`
 }
 
 type missionControlIdentityDaemon interface {
@@ -49,28 +53,38 @@ type missionControlSelection struct {
 }
 
 type missionControlSubscription struct {
-	cancel func()
+	cancel  func()
+	runtime *missioncontrol.Runtime
 }
 
 type missionControlResult struct {
-	Type            string                    `json:"type"`
-	ProtocolVersion int                       `json:"protocol_version"`
-	Op              string                    `json:"op"`
-	RequestID       string                    `json:"request_id,omitempty"`
-	OK              bool                      `json:"ok"`
-	Code            string                    `json:"code,omitempty"`
-	Error           string                    `json:"error,omitempty"`
-	Enabled         bool                      `json:"enabled"`
-	Capabilities    any                       `json:"capabilities,omitempty"`
-	Threads         []missioncontrol.Thread   `json:"threads,omitempty"`
-	Workspaces      []missionControlWorkspace `json:"workspaces,omitempty"`
-	Thread          *missioncontrol.Thread    `json:"thread,omitempty"`
-	DraftRef        string                    `json:"draft_ref,omitempty"`
-	History         json.RawMessage           `json:"history,omitempty"`
-	ThreadSeq       uint64                    `json:"thread_seq,omitempty"`
-	ReplayEvents    []missionControlEvent     `json:"replay_events"`
-	CoveredTurnIDs  []string                  `json:"covered_turn_ids"`
-	TurnID          string                    `json:"turn_id,omitempty"`
+	Type                    string                     `json:"type"`
+	ProtocolVersion         int                        `json:"protocol_version"`
+	Op                      string                     `json:"op"`
+	RequestID               string                     `json:"request_id,omitempty"`
+	OK                      bool                       `json:"ok"`
+	Code                    string                     `json:"code,omitempty"`
+	Error                   string                     `json:"error,omitempty"`
+	Enabled                 bool                       `json:"enabled"`
+	Capabilities            any                        `json:"capabilities,omitempty"`
+	Threads                 []missioncontrol.Thread    `json:"threads,omitempty"`
+	Workspaces              []missionControlWorkspace  `json:"workspaces,omitempty"`
+	Thread                  *missioncontrol.Thread     `json:"thread,omitempty"`
+	DraftRef                string                     `json:"draft_ref,omitempty"`
+	History                 json.RawMessage            `json:"history,omitempty"`
+	ThreadSeq               uint64                     `json:"thread_seq"`
+	ReplayEvents            []missionControlEvent      `json:"replay_events"`
+	CoveredTurnIDs          []string                   `json:"covered_turn_ids"`
+	ReplaySuppressedTurnIDs []string                   `json:"replay_suppressed_turn_ids,omitempty"`
+	Active                  *missioncontrol.TurnState  `json:"active,omitempty"`
+	Pending                 []missioncontrol.TurnState `json:"pending"`
+	Gap                     bool                       `json:"gap"`
+	Todo                    json.RawMessage            `json:"todo,omitempty"`
+	Goal                    json.RawMessage            `json:"goal,omitempty"`
+	Context                 json.RawMessage            `json:"context,omitempty"`
+	Summaries               []missioncontrol.Summary   `json:"summaries,omitempty"`
+	Attention               []missioncontrol.Attention `json:"attention,omitempty"`
+	TurnID                  string                     `json:"turn_id,omitempty"`
 }
 
 type missionControlWorkspace struct {
@@ -127,7 +141,10 @@ func (h *Hub) missionControlCatalog() (*missioncontrol.Store, error) {
 func (h *Hub) missionControlTextEnabled() bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.missionControlTextPreview && h.missionControlRouter != nil
+	// This answers whether the v2 text-preview gate was configured, rather
+	// than whether the catalog happened to open.  Callers use it to deny
+	// legacy/voice fallbacks when initialization failed closed.
+	return h.missionControlTextPreview
 }
 
 func (h *Hub) missionControlRouterForText() (*missioncontrol.Router, error) {
@@ -199,8 +216,26 @@ func (c *Client) handleMissionControlMessage(data []byte) {
 		c.missionControlTurn(msg)
 	case "missioncontrol-history":
 		c.missionControlHistory(msg)
-	case "missioncontrol-approval", "missioncontrol-cancel", "missioncontrol-reset", "missioncontrol-voice":
-		c.sendMissionControlResult(missionControlFailure(msg, "unsupported_operation", "approval, cancel, reset, and voice are unavailable in text preview"))
+	case "missioncontrol-summaries":
+		c.missionControlSummaries(msg)
+	case "missioncontrol-detail":
+		c.missionControlDetail(msg)
+	case "missioncontrol-attention":
+		c.missionControlAttention(msg)
+	case "missioncontrol-attention-ack":
+		c.missionControlAttentionAck(msg)
+	case "missioncontrol-migration-preview":
+		c.missionControlMigrationPreview(msg)
+	case "missioncontrol-approval":
+		c.missionControlApproval(msg)
+	case "missioncontrol-cancel":
+		c.missionControlCancel(msg)
+	case "missioncontrol-reset":
+		c.missionControlReset(msg)
+	case "missioncontrol-archive":
+		c.missionControlArchive(msg)
+	case "missioncontrol-voice":
+		c.sendMissionControlResult(missionControlFailure(msg, "unsupported_operation", "voice is unavailable in text preview"))
 	default:
 		c.sendMissionControlResult(missionControlFailure(msg, "unsupported_operation", "unsupported Mission Control operation"))
 	}
@@ -296,12 +331,30 @@ func validMissionControlRequestID(value string) bool {
 }
 
 func (c *Client) missionControlCapabilities(msg missionControlClientMessage) {
-	enabled := c.hub.missionControlTextEnabled()
+	if !c.hub.missionControlTextEnabled() {
+		// Disabled is a successful capability negotiation, not a failed
+		// configured preview. The browser must retain the legacy conversation.
+		c.sendMissionControlResult(missionControlResult{
+			Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion,
+			Op: "capabilities", RequestID: msg.RequestID, OK: true, Enabled: false,
+			Capabilities: map[string]bool{"text_threads": false, "voice": false, "approval": false},
+		})
+		return
+	}
+	if _, err := c.hub.missionControlCatalog(); err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "catalog_unavailable", err.Error()))
+		return
+	}
+	if _, err := c.hub.missionControlRouterForText(); err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "runtime_unavailable", err.Error()))
+		return
+	}
 	c.sendMissionControlResult(missionControlResult{
 		Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion,
-		Op: "capabilities", RequestID: msg.RequestID, OK: true, Enabled: enabled,
+		Op: "capabilities", RequestID: msg.RequestID, OK: true, Enabled: true,
 		Capabilities: map[string]bool{
-			"text_threads": enabled, "voice": false, "approval": false, "cancel": false, "reset": false,
+			"text_threads": true, "voice": false, "approval": true,
+			"cancel": true, "reset": true, "archive": true, "detail_read_only": true,
 		},
 	})
 }
@@ -324,6 +377,153 @@ func (c *Client) missionControlList(msg missionControlClientMessage) {
 	c.sendMissionControlResult(missionControlResult{
 		Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "list",
 		RequestID: msg.RequestID, OK: true, Threads: threads, Workspaces: c.missionControlWorkspaces(catalog),
+	})
+}
+
+// missionControlSummaries is a read-only provenance query. It never changes
+// selection, starts a root, or places the summaries into an unrelated root.
+func (c *Client) missionControlSummaries(msg missionControlClientMessage) {
+	catalog, err := c.hub.missionControlCatalog()
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "catalog_unavailable", err.Error()))
+		return
+	}
+	summaries, err := catalog.Summaries(20)
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "summary_unavailable", err.Error()))
+		return
+	}
+	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "summaries", RequestID: msg.RequestID, OK: true, Summaries: summaries})
+}
+
+// missionControlDetail is an explicit browser read request, not a model tool.
+// It does not require selection and cannot alter selection, draft state,
+// subscriptions, or root lifecycle. It only reads an already-live, current
+// runtime after exact generation and live identity attestation.
+func (c *Client) missionControlDetail(msg missionControlClientMessage) {
+	router, err := c.hub.missionControlRouterForText()
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "missioncontrol_disabled", err.Error()))
+		return
+	}
+	if !validMissionControlRequestID(msg.ThreadID) || msg.ExpectedRuntimeGeneration == 0 {
+		c.sendMissionControlResult(missionControlFailure(msg, "detail_refused", "detail requires UUID thread_id and expected_runtime_generation"))
+		return
+	}
+	catalog, err := c.hub.missionControlCatalog()
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "detail_unavailable", err.Error()))
+		return
+	}
+	thread, _, found, err := catalog.Thread(msg.ThreadID)
+	if err != nil || !found || thread.Lifecycle != "active" || thread.RuntimeGeneration != msg.ExpectedRuntimeGeneration {
+		c.sendMissionControlResult(missionControlFailure(msg, "detail_stale", "thread is unknown, inactive, or has a different runtime generation"))
+		return
+	}
+	if err := c.missionControlAttestDetailLive(catalog, thread); err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "detail_stale", err.Error()))
+		return
+	}
+	runtime := router.Runtime(msg.ThreadID)
+	if runtime == nil || runtime.Thread.RuntimeGeneration != msg.ExpectedRuntimeGeneration {
+		c.sendMissionControlResult(missionControlFailure(msg, "detail_unavailable", "thread runtime is not live; detail never starts an evicted root"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, missionControlBootWait)
+	defer cancel()
+	snapshot, err := runtime.Snapshot(ctx, missionControlHistoryTurns)
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "detail_unavailable", err.Error()))
+		return
+	}
+	thread = runtime.Thread
+	c.sendMissionControlResult(missionControlResult{
+		Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "detail",
+		RequestID: msg.RequestID, OK: true, Thread: &thread, History: snapshot.History,
+		ThreadSeq: snapshot.ThreadSeq, ReplayEvents: missionControlReplayEvents(thread, snapshot.ReplayEvents),
+		CoveredTurnIDs: snapshot.CoveredTurnIDs, Active: snapshot.Active, Pending: snapshot.Pending,
+		ReplaySuppressedTurnIDs: snapshot.ReplaySuppressedTurnIDs,
+		Gap:                     snapshot.Gap, Todo: snapshot.Todo, Goal: snapshot.Goal, Context: snapshot.Context,
+	})
+}
+
+// missionControlAttestDetailLive is deliberately read-only. Unlike selection
+// and turn admission, it never rebinds a workspace or updates catalog
+// observation metadata while verifying an explicit Viewer detail request.
+func (c *Client) missionControlAttestDetailLive(catalog *missioncontrol.Store, thread missioncontrol.Thread) error {
+	if thread.Kind == "lobby" {
+		return nil
+	}
+	_, binding, found, err := catalog.Thread(thread.ID)
+	if err != nil || !found || binding.ThreadID != thread.ID {
+		return errors.New("thread binding is unavailable or ambiguous")
+	}
+	sess, ok := c.session(binding.HostID)
+	if !ok || sess.daemon() == nil {
+		return errors.New("bound daemon is unavailable; no local fallback was attempted")
+	}
+	identityClient, ok := sess.daemon().(missionControlIdentityDaemon)
+	if !ok {
+		return errors.New("bound daemon does not support stable identity")
+	}
+	identity, err := identityClient.MissionControlIdentity()
+	if err != nil || identity.MachineID != thread.MachineID || identity.DaemonIncarnation != binding.DaemonIncarnation {
+		return errors.New("bound daemon incarnation is stale or unavailable")
+	}
+	workspaces, err := identityClient.ListWorkspacesWithin(sessiond.MissionControlReplyTimeout)
+	if err != nil {
+		return errors.New("bound workspace list is unavailable")
+	}
+	for _, workspace := range workspaces {
+		if workspace.WorkspaceID == binding.LiveWorkspaceID && workspace.WorkspaceUUID == thread.WorkspaceUUID {
+			return nil
+		}
+	}
+	return errors.New("bound workspace UUID is no longer live")
+}
+
+func (c *Client) missionControlAttention(msg missionControlClientMessage) {
+	catalog, err := c.hub.missionControlCatalog()
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "catalog_unavailable", err.Error()))
+		return
+	}
+	attention, err := catalog.Attention()
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "attention_unavailable", err.Error()))
+		return
+	}
+	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "attention", RequestID: msg.RequestID, OK: true, Attention: attention})
+}
+
+func (c *Client) missionControlAttentionAck(msg missionControlClientMessage) {
+	catalog, err := c.hub.missionControlCatalog()
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "catalog_unavailable", err.Error()))
+		return
+	}
+	record, err := catalog.AcknowledgeAttention(msg.AttentionID)
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "attention_refused", err.Error()))
+		return
+	}
+	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "attention-ack", RequestID: msg.RequestID, OK: true, Attention: []missioncontrol.Attention{record}})
+}
+
+// Migration preview over the WebSocket remains catalog-only inventory. Full
+// migration/rollback source-binding preview requires explicit CLI flags, so
+// this route never guesses a legacy store directory or session ID.
+func (c *Client) missionControlMigrationPreview(msg missionControlClientMessage) {
+	preview, err := missioncontrol.PreviewMigration(missioncontrol.PreviewOptions{
+		Operation: "migration", CatalogPath: missioncontrol.DefaultPath(),
+	})
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "preview_unavailable", err.Error()))
+		return
+	}
+	c.sendMissionControlResult(missionControlResult{
+		Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "migration-preview",
+		RequestID: msg.RequestID, OK: true, Capabilities: preview,
 	})
 }
 
@@ -407,24 +607,24 @@ func (c *Client) missionControlSelect(msg missionControlClientMessage) {
 		c.sendMissionControlResult(missionControlFailure(msg, "target_unavailable", err.Error()))
 		return
 	}
-	runtime, err := router.Ensure(c.ctx, thread.ID)
+	runtime, err := router.Ensure(thread.ID)
 	if err != nil {
-		c.sendMissionControlResult(missionControlFailure(msg, "runtime_unavailable", err.Error()))
+		code := "runtime_unavailable"
+		if errors.Is(err, missioncontrol.ErrWorkerCap) {
+			code = "worker_capacity"
+		}
+		c.sendMissionControlResult(missionControlFailure(msg, code, err.Error()))
 		return
 	}
 	thread = runtime.Thread
 	ctx, cancel := context.WithTimeout(c.ctx, missionControlBootWait)
 	defer cancel()
-	snapshot, events, stop, err := runtime.SubscribeSnapshot(ctx, missionControlHistoryTurns)
+	c.ensureMissionControlSubscription(runtime)
+	snapshot, err := runtime.Snapshot(ctx, missionControlHistoryTurns)
 	if err != nil {
-		code := "history_unavailable"
-		if errors.Is(err, missioncontrol.ErrThreadBusySnapshot) {
-			code = "thread_busy_snapshot"
-		}
-		c.sendMissionControlResult(missionControlFailure(msg, code, err.Error()))
+		c.sendMissionControlResult(missionControlFailure(msg, "history_unavailable", err.Error()))
 		return
 	}
-	c.attachMissionControlSubscription(runtime, events, stop)
 	draftRef := uuid.New().String()
 	c.missionControlMu.Lock()
 	c.missionControlSelection = missionControlSelection{threadID: thread.ID, generation: thread.RuntimeGeneration, draftRef: draftRef}
@@ -433,7 +633,10 @@ func (c *Client) missionControlSelect(msg missionControlClientMessage) {
 		Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "select",
 		RequestID: msg.RequestID, OK: true, Thread: &thread, DraftRef: draftRef,
 		History: snapshot.History, ThreadSeq: snapshot.ThreadSeq,
-		ReplayEvents: []missionControlEvent{}, CoveredTurnIDs: snapshot.CoveredTurnIDs,
+		ReplayEvents:   missionControlReplayEvents(thread, snapshot.ReplayEvents),
+		CoveredTurnIDs: snapshot.CoveredTurnIDs, Active: snapshot.Active, Pending: snapshot.Pending, Gap: snapshot.Gap,
+		ReplaySuppressedTurnIDs: snapshot.ReplaySuppressedTurnIDs,
+		Todo:                    snapshot.Todo, Goal: snapshot.Goal, Context: snapshot.Context,
 	})
 }
 
@@ -464,11 +667,7 @@ func (c *Client) missionControlHistory(msg missionControlClientMessage) {
 	defer cancel()
 	snapshot, err := runtime.Snapshot(ctx, missionControlHistoryTurns)
 	if err != nil {
-		code := "history_unavailable"
-		if errors.Is(err, missioncontrol.ErrThreadBusySnapshot) {
-			code = "thread_busy_snapshot"
-		}
-		c.sendMissionControlResult(missionControlFailure(msg, code, err.Error()))
+		c.sendMissionControlResult(missionControlFailure(msg, "history_unavailable", err.Error()))
 		return
 	}
 	thread := runtime.Thread
@@ -476,7 +675,10 @@ func (c *Client) missionControlHistory(msg missionControlClientMessage) {
 		Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "history",
 		RequestID: msg.RequestID, OK: true, Thread: &thread,
 		History: snapshot.History, ThreadSeq: snapshot.ThreadSeq,
-		ReplayEvents: []missionControlEvent{}, CoveredTurnIDs: snapshot.CoveredTurnIDs,
+		ReplayEvents:   missionControlReplayEvents(thread, snapshot.ReplayEvents),
+		CoveredTurnIDs: snapshot.CoveredTurnIDs, Active: snapshot.Active, Pending: snapshot.Pending, Gap: snapshot.Gap,
+		ReplaySuppressedTurnIDs: snapshot.ReplaySuppressedTurnIDs,
+		Todo:                    snapshot.Todo, Goal: snapshot.Goal, Context: snapshot.Context,
 	})
 }
 
@@ -524,6 +726,10 @@ func (c *Client) missionControlTurn(msg missionControlClientMessage) {
 		return
 	}
 	if duplicate {
+		if admission.DispatchState == "not_dispatched" {
+			c.sendMissionControlResult(missionControlFailure(msg, "dispatch_refused", admission.Refusal))
+			return
+		}
 		if admission.DispatchState == "admitted" || admission.DispatchState == "unknown" {
 			c.sendMissionControlResult(missionControlFailure(msg, "admission_unknown", "request was durably admitted before restart or interruption and will not be replayed automatically"))
 			return
@@ -534,7 +740,11 @@ func (c *Client) missionControlTurn(msg missionControlClientMessage) {
 	// A second address validation fences a race between durable admission and
 	// tool-capable dispatch. This preview has no mutating tools either way.
 	if err := c.missionControlValidateLive(runtime.Thread); err != nil {
-		c.sendMissionControlResult(missionControlFailure(msg, "stale_live_incarnation", err.Error()))
+		if _, markErr := catalog.MarkNotDispatched(msg.RequestID, msg.ThreadID, msg.ExpectedRuntimeGeneration, err.Error()); markErr != nil {
+			c.sendMissionControlResult(missionControlFailure(msg, "dispatch_uncertain", markErr.Error()))
+			return
+		}
+		c.sendMissionControlResult(missionControlFailure(msg, "dispatch_refused", err.Error()))
 		return
 	}
 	turn, err := runtime.Submit(msg.RequestID, text, msg.ClientRef)
@@ -543,6 +753,115 @@ func (c *Client) missionControlTurn(msg missionControlClientMessage) {
 		return
 	}
 	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "turn", RequestID: msg.RequestID, OK: true, TurnID: turn.ID})
+}
+
+func (c *Client) selectedRuntime(router *missioncontrol.Router, msg missionControlClientMessage, requireTurn bool) (*missioncontrol.Runtime, error) {
+	if !validMissionControlRequestID(msg.ThreadID) || msg.ExpectedRuntimeGeneration == 0 || (requireTurn && msg.TurnID == "") {
+		return nil, errors.New("thread_id, expected_runtime_generation, and exact control target are required")
+	}
+	c.missionControlMu.Lock()
+	selection := c.missionControlSelection
+	c.missionControlMu.Unlock()
+	if selection.threadID != msg.ThreadID || selection.generation != msg.ExpectedRuntimeGeneration {
+		return nil, errors.New("control target is not selected on this connection")
+	}
+	runtime := router.Runtime(msg.ThreadID)
+	if runtime == nil || runtime.Thread.RuntimeGeneration != msg.ExpectedRuntimeGeneration {
+		return nil, errors.New("thread runtime is stale")
+	}
+	if err := c.missionControlValidateLive(runtime.Thread); err != nil {
+		return nil, err
+	}
+	return runtime, nil
+}
+
+func (c *Client) missionControlCancel(msg missionControlClientMessage) {
+	router, err := c.hub.missionControlRouterForText()
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "missioncontrol_disabled", err.Error()))
+		return
+	}
+	runtime, err := c.selectedRuntime(router, msg, true)
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "control_refused", err.Error()))
+		return
+	}
+	if err := runtime.Cancel(msg.TurnID); err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "cancel_refused", err.Error()))
+		return
+	}
+	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "cancel", RequestID: msg.RequestID, OK: true, Thread: &runtime.Thread, TurnID: msg.TurnID})
+}
+
+func (c *Client) missionControlApproval(msg missionControlClientMessage) {
+	router, err := c.hub.missionControlRouterForText()
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "missioncontrol_disabled", err.Error()))
+		return
+	}
+	if msg.Approved == nil || msg.ApprovalID == "" {
+		c.sendMissionControlResult(missionControlFailure(msg, "bad_request", "approval requires exact approval_id and approved decision"))
+		return
+	}
+	runtime, err := c.selectedRuntime(router, msg, true)
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "control_refused", err.Error()))
+		return
+	}
+	if err := runtime.Approve(msg.TurnID, msg.ApprovalID, *msg.Approved); err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "approval_refused", err.Error()))
+		return
+	}
+	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "approval", RequestID: msg.RequestID, OK: true, Thread: &runtime.Thread, TurnID: msg.TurnID})
+}
+
+func (c *Client) missionControlReset(msg missionControlClientMessage) {
+	router, err := c.hub.missionControlRouterForText()
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "missioncontrol_disabled", err.Error()))
+		return
+	}
+	runtime, err := c.selectedRuntime(router, msg, false)
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "control_refused", err.Error()))
+		return
+	}
+	thread, err := router.Reset(runtime.Thread.ID)
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "reset_refused", err.Error()))
+		return
+	}
+	// Existing selection remains deliberately stale; reset never silently
+	// creates/chooses a replacement root or retargets a draft.
+	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "reset", RequestID: msg.RequestID, OK: true, Thread: &thread})
+}
+
+func (c *Client) missionControlArchive(msg missionControlClientMessage) {
+	router, err := c.hub.missionControlRouterForText()
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "missioncontrol_disabled", err.Error()))
+		return
+	}
+	runtime, err := c.selectedRuntime(router, msg, false)
+	if err != nil {
+		// Archive is idempotent metadata. A repeat after the first archive has
+		// no live root to select, but must not pretend a different target.
+		if catalog, catalogErr := c.hub.missionControlCatalog(); catalogErr == nil {
+			if thread, _, found, threadErr := catalog.Thread(msg.ThreadID); threadErr == nil && found &&
+				thread.RuntimeGeneration == msg.ExpectedRuntimeGeneration && thread.Lifecycle == "archived" {
+				c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "archive", RequestID: msg.RequestID, OK: true, Thread: &thread})
+				return
+			}
+		}
+		c.sendMissionControlResult(missionControlFailure(msg, "control_refused", err.Error()))
+		return
+	}
+	thread, err := router.Archive(runtime.Thread.ID)
+	if err != nil {
+		c.sendMissionControlResult(missionControlFailure(msg, "archive_refused", err.Error()))
+		return
+	}
+	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "archive", RequestID: msg.RequestID, OK: true, Thread: &thread})
 }
 
 func (c *Client) missionControlBindLive(catalog *missioncontrol.Store, workspaceID string) (missioncontrol.Thread, error) {
@@ -673,7 +992,7 @@ func (c *Client) ensureMissionControlSubscription(runtime *missioncontrol.Runtim
 	if c.missionControlSubscriptions == nil {
 		c.missionControlSubscriptions = make(map[string]missionControlSubscription)
 	}
-	if _, ok := c.missionControlSubscriptions[runtime.Thread.ID]; ok {
+	if sub, ok := c.missionControlSubscriptions[runtime.Thread.ID]; ok && sub.runtime == runtime {
 		c.missionControlMu.Unlock()
 		return
 	}
@@ -687,13 +1006,17 @@ func (c *Client) attachMissionControlSubscription(runtime *missioncontrol.Runtim
 	if c.missionControlSubscriptions == nil {
 		c.missionControlSubscriptions = make(map[string]missionControlSubscription)
 	}
-	if _, ok := c.missionControlSubscriptions[runtime.Thread.ID]; ok {
+	old, exists := c.missionControlSubscriptions[runtime.Thread.ID]
+	if exists && old.runtime == runtime {
 		c.missionControlMu.Unlock()
 		cancel()
 		return
 	}
-	c.missionControlSubscriptions[runtime.Thread.ID] = missionControlSubscription{cancel: cancel}
+	c.missionControlSubscriptions[runtime.Thread.ID] = missionControlSubscription{cancel: cancel, runtime: runtime}
 	c.missionControlMu.Unlock()
+	if exists {
+		old.cancel()
+	}
 	go func() {
 		for event := range events {
 			c.sendMissionControlEvent(runtime.Thread, event)
@@ -732,6 +1055,18 @@ func (c *Client) sendMissionControlEvent(thread missioncontrol.Thread, event mis
 	if err := c.writeText(data); err != nil {
 		log.Printf("missioncontrol: event write: %v", err)
 	}
+}
+
+func missionControlReplayEvents(thread missioncontrol.Thread, events []missioncontrol.RuntimeEvent) []missionControlEvent {
+	out := make([]missionControlEvent, 0, len(events))
+	for _, event := range events {
+		out = append(out, missionControlEvent{
+			Type: missionControlEventType, ProtocolVersion: missionControlProtocolVersion,
+			ThreadID: thread.ID, RuntimeGeneration: thread.RuntimeGeneration,
+			EventID: event.EventID, ThreadSeq: event.ThreadSeq, Event: event.Raw,
+		})
+	}
+	return out
 }
 
 func (c *Client) sendMissionControlResult(result missionControlResult) {

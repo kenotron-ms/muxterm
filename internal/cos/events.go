@@ -55,6 +55,8 @@ const (
 	// reply whose caller has already given up still has to decode cleanly.
 	EvCleared = "cleared"
 	EvHistory = "history"
+	// EvSnapshot is an ordered sidecar cut used by Mission Control reconnect.
+	EvSnapshot = "snapshot"
 	// EvConfig is the same shape of reply, answering the config op.
 	EvConfig = "config"
 	// EvReconfigured is a genuine broadcast, and is emitted ONLY when a
@@ -160,6 +162,9 @@ type Event struct {
 	// replayed turn looks like, and re-typing it here would mean a sidecar
 	// that adds a field to a turn silently loses it on the way to the browser.
 	Turns json.RawMessage `json:"turns,omitempty"`
+	// Snapshot is the sidecar's ordered snapshot reply. Like Turns, it stays
+	// raw so the Mission Control router can validate the exact payload.
+	Snapshot json.RawMessage `json:"snapshot,omitempty"`
 
 	// config -- the sidecar's answer to "what are you ACTUALLY running with?"
 	//

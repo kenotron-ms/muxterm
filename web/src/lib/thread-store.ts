@@ -15,7 +15,9 @@ import {
   type CosFault,
   type CosTurn,
   type ThreadedCosEvent,
+  type ThreadedSnapshotState,
 } from './cos-store.js';
+import { requestViewerDocument } from './artifact-open.js';
 
 const PROTOCOL_VERSION = 2;
 const CAPABILITY_TIMEOUT_MS = 2_500;
@@ -28,6 +30,13 @@ const MAX_PRE_ACK_THREAD_BUFFERS = 16;
 const STORAGE_VERSION = 1;
 const LEGACY_DRAFT_KEY = 'legacy';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const NO_THREAD_CONTROLS: ThreadCapabilities = Object.freeze({
+  approval: false,
+  cancel: false,
+  reset: false,
+  archive: false,
+  detailReadOnly: false,
+});
 
 export type ThreadMode = 'unknown' | 'negotiating' | 'legacy' | 'threaded';
 
@@ -72,11 +81,18 @@ interface ThreadState {
   draftRef: string;
   store: CosStore;
   lastSequence: number | null;
-  seenEventIds: Map<string, true>;
+  /** Stable v2 event identity -> its immutable thread-local sequence. */
+  seenEventIds: Map<string, number>;
   historyRequestId: string;
   runtimeStale: boolean;
   /** A snapshot repair is in flight; no new turn may enter during the cut. */
   syncing: boolean;
+  /** One automatic repair per generation prevents a persistent gap loop. */
+  repairAttempted: boolean;
+  /** An archive has invalidated this local selection until an explicit bind/select. */
+  archived: boolean;
+  /** Per-root durable tool tracking returned only by an authoritative snapshot. */
+  rootState: ThreadRootState | null;
 }
 
 interface PendingSelection {
@@ -106,6 +122,115 @@ interface PendingHistory {
   readonly generation: number;
 }
 
+type ThreadControlKind = 'cancel' | 'approval' | 'reset' | 'archive';
+
+interface ThreadCapabilities {
+  readonly approval: boolean;
+  readonly cancel: boolean;
+  readonly reset: boolean;
+  readonly archive: boolean;
+  /** Explicitly gates cross-context read-only detail requests. */
+  readonly detailReadOnly: boolean;
+}
+
+interface PendingControl {
+  readonly requestId: string;
+  readonly kind: ThreadControlKind;
+  readonly threadId: string;
+  readonly generation: number;
+  readonly turnId: string;
+  readonly approvalId: string;
+  readonly approved: boolean;
+}
+
+export interface ThreadControlTarget {
+  readonly threadId: string;
+  readonly generation: number;
+  readonly label: string;
+  readonly kind: 'lobby' | 'workspace';
+}
+
+interface AttentionRecord {
+  readonly id: string;
+  readonly threadId: string;
+  readonly runtimeGeneration: number;
+  readonly turnId: string;
+  readonly kind: 'terminal' | 'error' | 'approval' | 'pending';
+  readonly observedAt: string;
+  readonly observedAtMs: number;
+  readonly acknowledgedAt: string;
+}
+
+/** A durable attention item annotated only with local display/read state. */
+export interface ThreadAttention {
+  readonly id: string;
+  readonly threadId: string;
+  readonly runtimeGeneration: number;
+  readonly turnId: string;
+  readonly label: string;
+  readonly reason: string;
+  /** This is an observation timestamp, never a claim that the work is fresh. */
+  readonly observedAt: string;
+  readonly canViewDetail: boolean;
+  readonly detailUnavailable: string;
+  readonly detailPending: boolean;
+  readonly acknowledging: boolean;
+}
+
+interface SummaryRecord {
+  readonly id: string;
+  readonly threadId: string;
+  readonly runtimeSessionId: string;
+  readonly runtimeGeneration: number;
+  readonly turnId: string;
+  readonly observedAt: string;
+  readonly observedAtMs: number;
+  readonly text: string;
+}
+
+interface MigrationPreview {
+  readonly path: string;
+  readonly exists: boolean;
+  readonly checksum: string;
+  readonly catalogSchema: number | null;
+  readonly threadCount: number;
+  readonly runtimeRefCount: number;
+  readonly legacySessionId: string;
+  readonly legacyWorkingDir: string;
+  readonly disposition: string;
+}
+
+/** A small, provenance-bearing terminal extract for the selected Lobby only. */
+export interface ThreadSummary {
+  readonly id: string;
+  readonly threadId: string;
+  readonly label: string;
+  readonly turnId: string;
+  readonly observedAt: string;
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+export interface ThreadTodoItem {
+  readonly content: string;
+  readonly activeForm: string;
+  readonly status: 'pending' | 'in_progress' | 'completed';
+}
+
+export interface ThreadRootState {
+  readonly todos: readonly ThreadTodoItem[];
+  readonly goal: string;
+  /** Always false when provided: tracking state, not an autonomous scheduler. */
+  readonly autonomous: false;
+}
+
+interface PendingDetail {
+  readonly requestId: string;
+  readonly attentionId: string;
+  readonly threadId: string;
+  readonly generation: number;
+}
+
 interface BufferedThreadEvent {
   readonly envelope: ThreadedCosEvent;
 }
@@ -117,16 +242,45 @@ interface PreAckBuffer {
   overflow: boolean;
 }
 
-interface SnapshotPayload {
-  readonly thread: CatalogThread;
+interface SnapshotFields {
   readonly history: readonly unknown[];
   /** Snapshot cut supplied by the server, including zero. */
   readonly watermark: number;
+  /** Event journal entries at or before `watermark`, in full v2 envelopes. */
+  readonly replayEvents: readonly ThreadedCosEvent[];
   /**
    * Immutable runtime turn ids already materialized in `history`. Late events
    * for these ids still consume sequence space but must not render again.
    */
   readonly coveredTurnIds: readonly string[];
+  /**
+   * Persisted completed turn IDs from the snapshot boundary which must not be
+   * replay-rendered when canonical history already contains an ambiguous,
+   * intentionally unbound transcript group.
+   */
+  readonly replaySuppressedTurnIds: readonly string[];
+  readonly activeTurnId: string;
+  readonly pendingTurnIds: readonly string[];
+  /**
+   * The server's bounded journal or client broker lost data. The snapshot is
+   * still a useful canonical cut, but only one follow-up repair is automatic.
+   */
+  readonly gap: boolean;
+  /** Optional before increment 2; no absent value is rendered as state. */
+  readonly rootState: ThreadRootState | null;
+}
+
+interface SnapshotPayload extends SnapshotFields {
+  readonly thread: CatalogThread;
+}
+
+/**
+ * Detail uses the same wire cut shape as select/history, but it is intentionally
+ * a separate parsed value: it is rendered in Viewer only and is never adopted
+ * into a thread renderer, draft binding, or selection.
+ */
+interface DetailPayload extends SnapshotFields {
+  readonly thread: CatalogThread;
 }
 
 interface PersistedState {
@@ -165,6 +319,19 @@ function protocolFailure(frame: Record<string, unknown>, fallback: string): stri
   if (detail) return detail;
   if (code) return code;
   return fallback;
+}
+
+function attentionReason(kind: AttentionRecord['kind']): string {
+  switch (kind) {
+    case 'pending':
+      return 'A submitted turn is queued';
+    case 'approval':
+      return 'A scoped approval is waiting';
+    case 'error':
+      return 'A turn reported an error';
+    case 'terminal':
+      return 'A turn reached a terminal result';
+  }
 }
 
 function snapshotUnavailableMessage(frame: Record<string, unknown>, fallback: string): string {
@@ -264,6 +431,10 @@ function parseThreadedEvent(value: unknown): ThreadedCosEvent | null {
 }
 
 function parseCoveredTurnIds(value: unknown): readonly string[] | null {
+  // Go's zero-value slice serializes as null. It means the exact same empty
+  // immutable set as [], and occurs for a newly opened root with no persisted
+  // canonical turns yet.
+  if (value === null) return [];
   if (!Array.isArray(value)) return null;
   const ids: string[] = [];
   const seen = new Set<string>();
@@ -275,25 +446,324 @@ function parseCoveredTurnIds(value: unknown): readonly string[] | null {
   return ids;
 }
 
-function parseSnapshot(frame: Record<string, unknown>): SnapshotPayload | null {
-  const thread = parseRuntimeThread(frame.thread);
+/** Optional additive v2 field: old servers omit it, which means no suppression. */
+function parseReplaySuppressedTurnIds(value: unknown): readonly string[] | null {
+  if (value === undefined || value === null) return [];
+  return parseCoveredTurnIds(value);
+}
+
+function parseSnapshotTurn(value: unknown, expectedStatus: 'active' | 'queued'): string | null {
+  const raw = recordValue(value);
+  const turnId = raw ? stringValue(raw.turn_id) : '';
+  return raw && raw.status === expectedStatus && turnId !== '' ? turnId : null;
+}
+
+function parseActiveTurn(value: unknown): string | null {
+  if (value === undefined || value === null) return '';
+  return parseSnapshotTurn(value, 'active');
+}
+
+function parsePendingTurns(value: unknown, activeTurnId: string): readonly string[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids: string[] = [];
+  const seen = new Set<string>(activeTurnId ? [activeTurnId] : []);
+  for (const entry of value) {
+    const turnId = parseSnapshotTurn(entry, 'queued');
+    if (!turnId || seen.has(turnId)) return null;
+    seen.add(turnId);
+    ids.push(turnId);
+  }
+  return ids;
+}
+
+function parseTodoState(value: unknown): readonly ThreadTodoItem[] | null {
+  if (!Array.isArray(value)) return null;
+  const todos: ThreadTodoItem[] = [];
+  for (const entry of value.slice(0, 20)) {
+    const raw = recordValue(entry);
+    if (!raw) continue;
+    const content = stringValue(raw.content);
+    const activeForm = stringValue(raw.activeForm) || stringValue(raw.active_form);
+    const status = stringValue(raw.status);
+    if (
+      !content ||
+      (status !== 'pending' && status !== 'in_progress' && status !== 'completed')
+    ) {
+      continue;
+    }
+    todos.push({ content, activeForm, status });
+  }
+  return todos;
+}
+
+function parseGoalState(value: unknown): { goal: string; autonomous: false } | null {
+  const raw = recordValue(value);
+  if (!raw) return null;
+  if (raw.autonomous !== false) return null;
+  const suppliedGoal = raw.goal;
+  if (suppliedGoal !== null && suppliedGoal !== undefined && typeof suppliedGoal !== 'string') {
+    return null;
+  }
+  return { goal: stringValue(suppliedGoal), autonomous: false };
+}
+
+function parseRootState(todo: unknown, goal: unknown): ThreadRootState | null {
+  const todoState = todo === undefined ? null : parseTodoState(todo);
+  const goalState = goal === undefined ? null : parseGoalState(goal);
+  if (todoState === null && goalState === null) return null;
+  return {
+    todos: todoState ?? [],
+    goal: goalState?.goal ?? '',
+    autonomous: false,
+  };
+}
+
+function parseTimestamp(value: unknown): { text: string; ms: number } | null {
+  const text = stringValue(value);
+  const ms = Date.parse(text);
+  return text !== '' && Number.isFinite(ms) ? { text, ms } : null;
+}
+
+function parseAttention(value: unknown): AttentionRecord | null {
+  const raw = recordValue(value);
+  if (!raw) return null;
+  const id = uuidValue(raw.id);
+  const threadId = uuidValue(raw.thread_id);
+  const runtimeGeneration = positiveSafeInteger(raw.runtime_generation);
+  const kind = stringValue(raw.kind);
+  const observedAt = parseTimestamp(raw.observed_at);
+  const acknowledged = raw.acknowledged_at;
+  const acknowledgedAt =
+    acknowledged === undefined || acknowledged === null ? '' : stringValue(acknowledged);
+  if (
+    !id ||
+    !threadId ||
+    runtimeGeneration === 0 ||
+    (kind !== 'terminal' && kind !== 'error' && kind !== 'approval' && kind !== 'pending') ||
+    !observedAt ||
+    (acknowledgedAt !== '' && !parseTimestamp(acknowledgedAt))
+  ) {
+    return null;
+  }
+  return {
+    id,
+    threadId,
+    runtimeGeneration,
+    turnId: stringValue(raw.turn_id),
+    kind,
+    observedAt: observedAt.text,
+    observedAtMs: observedAt.ms,
+    acknowledgedAt,
+  };
+}
+
+function parseSummary(value: unknown): SummaryRecord | null {
+  const raw = recordValue(value);
+  if (!raw) return null;
+  const id = uuidValue(raw.id);
+  const threadId = uuidValue(raw.thread_id);
+  const runtimeSessionId = uuidValue(raw.runtime_session_id);
+  const runtimeGeneration = positiveSafeInteger(raw.runtime_generation);
+  const turnId = stringValue(raw.turn_id);
+  const observedAt = parseTimestamp(raw.observed_at);
+  const text = stringValue(raw.text);
+  if (
+    !id ||
+    !threadId ||
+    !runtimeSessionId ||
+    runtimeGeneration === 0 ||
+    !turnId ||
+    raw.kind !== 'extract' ||
+    !observedAt ||
+    text === '' ||
+    text.length > 1200
+  ) {
+    return null;
+  }
+  return {
+    id,
+    threadId,
+    runtimeSessionId,
+    runtimeGeneration,
+    turnId,
+    observedAt: observedAt.text,
+    observedAtMs: observedAt.ms,
+    text,
+  };
+}
+
+function parseMigrationPreview(value: unknown): MigrationPreview | null {
+  const raw = recordValue(value);
+  if (!raw || typeof raw.exists !== 'boolean') return null;
+  const threadCount = nonNegativeSafeInteger(raw.thread_count);
+  const runtimeRefCount = nonNegativeSafeInteger(raw.runtime_ref_count);
+  const catalogSchema =
+    raw.catalog_schema === undefined ? null : nonNegativeSafeInteger(raw.catalog_schema);
+  const path = stringValue(raw.path);
+  const disposition = stringValue(raw.disposition);
+  if (
+    path === '' ||
+    disposition === '' ||
+    threadCount === null ||
+    runtimeRefCount === null ||
+    (raw.catalog_schema !== undefined && catalogSchema === null)
+  ) {
+    return null;
+  }
+  return {
+    path,
+    exists: raw.exists,
+    checksum: stringValue(raw.checksum_sha256),
+    catalogSchema,
+    threadCount,
+    runtimeRefCount,
+    legacySessionId: stringValue(raw.legacy_session_id),
+    legacyWorkingDir: stringValue(raw.legacy_working_dir),
+    disposition,
+  };
+}
+
+function prettyValue(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? '';
+  } catch {
+    return '[unrenderable response value]';
+  }
+}
+
+function describeRootState(rootState: ThreadRootState | null): string[] {
+  if (!rootState) return ['Tracking snapshot: not provided'];
+  const lines = ['Tracking snapshot (state only; no autonomous scheduler):'];
+  if (rootState.goal !== '') {
+    lines.push(`Goal: ${rootState.goal}`, 'Goal mode: tracking only (autonomous: false)');
+  } else {
+    lines.push('Goal: none');
+  }
+  if (rootState.todos.length === 0) {
+    lines.push('Todo: none');
+  } else {
+    lines.push('Todo:');
+    for (const todo of rootState.todos) {
+      lines.push(`- [${todo.status}] ${todo.activeForm || todo.content}`);
+    }
+  }
+  return lines;
+}
+
+function formatDetailDocument(threadLabel: string, snapshot: DetailPayload): string {
+  const replay = snapshot.replayEvents.map((event) => ({
+    thread_seq: event.thread_seq,
+    event_id: event.event_id,
+    turn_id: stringValue(event.event.turn_id),
+    ev: stringValue(event.event.ev),
+  }));
+  return [
+    'Mission Control context detail',
+    'Read-only browser view. This did not switch the conversation, submit a turn, or copy history into Lobby.',
+    '',
+    `Context: ${threadLabel}`,
+    `Thread ID: ${snapshot.thread.id}`,
+    `Runtime session: ${snapshot.thread.runtimeSessionId}`,
+    `Runtime generation: ${snapshot.thread.runtimeGeneration}`,
+    `Snapshot watermark: ${snapshot.watermark}`,
+    `Event journal gap: ${snapshot.gap ? 'reported — missing content was not inferred' : 'not reported'}`,
+    `Active turn: ${snapshot.activeTurnId || 'none'}`,
+    `Queued turns: ${snapshot.pendingTurnIds.length > 0 ? snapshot.pendingTurnIds.join(', ') : 'none'}`,
+    `Covered canonical turn IDs: ${snapshot.coveredTurnIds.length > 0 ? snapshot.coveredTurnIds.join(', ') : 'none'}`,
+    ...describeRootState(snapshot.rootState),
+    '',
+    'Canonical history (bounded server snapshot):',
+    prettyValue(snapshot.history),
+    '',
+    'Replay envelope metadata (bounded ordered journal):',
+    prettyValue(replay),
+  ].join('\n');
+}
+
+function formatMigrationPreview(preview: MigrationPreview): string {
+  return [
+    'Mission Control catalog migration / rollback preview',
+    'Preview only; no history moved. No migration, rollback, reset, rename, or configuration action was executed.',
+    '',
+    `Catalog path: ${preview.path}`,
+    `Catalog exists: ${preview.exists ? 'yes' : 'no'}`,
+    `Checksum SHA-256: ${preview.checksum || 'not applicable'}`,
+    `Catalog schema: ${preview.catalogSchema === null ? 'not present' : preview.catalogSchema}`,
+    `Thread records: ${preview.threadCount}`,
+    `Runtime references: ${preview.runtimeRefCount}`,
+    `Legacy session ID: ${preview.legacySessionId || 'not available'}`,
+    `Legacy working directory: ${preview.legacyWorkingDir || 'not available'}`,
+    '',
+    `Disposition: ${preview.disposition}`,
+  ].join('\n');
+}
+
+function parseSnapshotFields(
+  frame: Record<string, unknown>,
+  thread: CatalogThread,
+): SnapshotFields | null {
   const watermark = nonNegativeSafeInteger(frame.thread_seq);
   const coveredTurnIds = parseCoveredTurnIds(frame.covered_turn_ids);
-  if (!thread || watermark === null || !Array.isArray(frame.history) || coveredTurnIds === null) {
+  const replaySuppressedTurnIds = parseReplaySuppressedTurnIds(frame.replay_suppressed_turn_ids);
+  const activeTurnId = parseActiveTurn(frame.active);
+  const pendingTurnIds = parsePendingTurns(frame.pending, activeTurnId ?? '');
+  if (
+    watermark === null ||
+    !Array.isArray(frame.history) ||
+    coveredTurnIds === null ||
+    replaySuppressedTurnIds === null ||
+    activeTurnId === null ||
+    pendingTurnIds === null ||
+    typeof frame.gap !== 'boolean'
+  ) {
     return null;
   }
 
   const rawReplay = frame.replay_events;
-  // This preview deliberately has no proof for safely merging an active
-  // snapshot tail. The server refuses active roots instead; accepting even a
-  // syntactically valid tail here would recreate the ambiguous replay path.
-  if (rawReplay !== undefined && (!Array.isArray(rawReplay) || rawReplay.length !== 0)) return null;
+  if (!Array.isArray(rawReplay)) return null;
+  const replayEvents: ThreadedCosEvent[] = [];
+  for (const rawEvent of rawReplay) {
+    const event = parseThreadedEvent(rawEvent);
+    if (
+      !event ||
+      event.thread_id !== thread.id ||
+      event.runtime_generation !== thread.runtimeGeneration ||
+      event.thread_seq > watermark
+    ) {
+      return null;
+    }
+    replayEvents.push(event);
+  }
   return {
-    thread,
     history: frame.history,
     watermark,
+    replayEvents,
     coveredTurnIds,
+    replaySuppressedTurnIds,
+    activeTurnId,
+    pendingTurnIds,
+    gap: frame.gap,
+    rootState: parseRootState(frame.todo, frame.goal),
   };
+}
+
+function parseSnapshot(frame: Record<string, unknown>): SnapshotPayload | null {
+  const thread = parseRuntimeThread(frame.thread);
+  if (!thread) return null;
+  const fields = parseSnapshotFields(frame, thread);
+  return fields ? { thread, ...fields } : null;
+}
+
+/**
+ * Detail is parsed as a read-only payload rather than a selectable snapshot.
+ * Keeping this function apart makes it impossible for detail handling to
+ * accidentally enter the renderer/draft/selection adoption path.
+ */
+function parseDetailPayload(frame: Record<string, unknown>): DetailPayload | null {
+  const thread = parseRuntimeThread(frame.thread);
+  if (!thread) return null;
+  const fields = parseSnapshotFields(frame, thread);
+  return fields ? { thread, ...fields } : null;
 }
 
 function snapshotFailureMessage(frame: Record<string, unknown>, fallback: string): string {
@@ -303,9 +773,19 @@ function snapshotFailureMessage(frame: Record<string, unknown>, fallback: string
   if (parseCoveredTurnIds(frame.covered_turn_ids) === null) {
     return `The server did not provide well-formed required covered_turn_ids. ${fallback}`;
   }
+  if (parseReplaySuppressedTurnIds(frame.replay_suppressed_turn_ids) === null) {
+    return `The server provided malformed replay_suppressed_turn_ids. ${fallback}`;
+  }
+  const activeTurnId = parseActiveTurn(frame.active);
+  if (activeTurnId === null || parsePendingTurns(frame.pending, activeTurnId ?? '') === null) {
+    return `The server did not provide valid active/pending turn state. ${fallback}`;
+  }
   const rawReplay = frame.replay_events;
-  if (rawReplay !== undefined && (!Array.isArray(rawReplay) || rawReplay.length !== 0)) {
-    return `This text preview does not support non-empty replay_events. ${fallback}`;
+  if (!Array.isArray(rawReplay)) {
+    return `The server did not provide the required replay_events array. ${fallback}`;
+  }
+  if (typeof frame.gap !== 'boolean') {
+    return `The server did not provide the required gap flag. ${fallback}`;
   }
   return fallback;
 }
@@ -331,6 +811,8 @@ class ThreadStore {
   private _wanted = false;
   private _mode: ThreadMode = 'unknown';
   private _threads: CatalogThread[] = [];
+  /** The live catalog response for this socket epoch has been validated. */
+  private _catalogReady = false;
   private _workspaces: WorkspaceContext[] = [];
   private _states = new Map<string, ThreadState>();
   private _emptyStore = new CosStore();
@@ -338,6 +820,13 @@ class ThreadStore {
   private _pendingSelection: PendingSelection | null = null;
   private _pendingTurn: PendingTurn | null = null;
   private _pendingHistories = new Map<string, PendingHistory>();
+  private _pendingControls = new Map<string, PendingControl>();
+  private _pendingDetails = new Map<string, PendingDetail>();
+  private _pendingAttentionAcks = new Map<string, string>();
+  private _capabilities: ThreadCapabilities = NO_THREAD_CONTROLS;
+  /** Durable catalog metadata; it never selects or focuses a conversation. */
+  private _attention: AttentionRecord[] = [];
+  private _summaries: SummaryRecord[] = [];
   /**
    * Live v2 events can arrive between subscription and the select/history
    * snapshot reply. Retain them by immutable source identity, never by visible
@@ -348,6 +837,9 @@ class ThreadStore {
   private _capabilityTimer: ReturnType<typeof setTimeout> | undefined;
   private _turnReceiptTimer: ReturnType<typeof setTimeout> | undefined;
   private _listRequestId = '';
+  private _attentionRequestId = '';
+  private _summariesRequestId = '';
+  private _migrationPreviewRequestId = '';
   private _connectionReady = false;
   private _problem: CosFault | null = null;
   private _drafts = new Map<string, string>();
@@ -436,7 +928,12 @@ class ThreadStore {
       return this._problem.message;
     }
     if (this._pendingSelection) return 'Switching context…';
-    if (this._selected?.runtimeStale) return 'Context runtime changed; select it again.';
+    if (this._selected?.archived) {
+      return this._selected.store.fault?.message ?? 'This context was archived. Select a live context.';
+    }
+    if (this._selected?.runtimeStale) {
+      return this._selected.store.fault?.message ?? 'Context runtime changed; select it again.';
+    }
     if (this._selected?.syncing) {
       return this._selected.store.fault?.message ?? 'Reconciling authoritative thread history.';
     }
@@ -453,8 +950,11 @@ class ThreadStore {
       return this._problem?.message ?? 'Context switch pending. Sending is disabled.';
     }
     if (!this._selected) return 'Choose a context before sending.';
-    if (this._selected.runtimeStale) {
-      return 'This context runtime changed. Select Talk here again before sending.';
+    if (this._selected.archived || this._selected.runtimeStale) {
+      return (
+        this._selected.store.fault?.message ??
+        'This context runtime changed. Select Talk here again before sending.'
+      );
     }
     if (this._selected.syncing) {
       return (
@@ -483,6 +983,129 @@ class ThreadStore {
 
   get selectedThreadId(): string {
     return this._selected?.thread.id ?? '';
+  }
+
+  /** Durable unacknowledged work, in catalog observation order. */
+  get attention(): readonly ThreadAttention[] {
+    return this._attention
+      .filter((item) => item.acknowledgedAt === '')
+      .map((item) => {
+        const detailUnavailable = this._detailUnavailable(item);
+        return {
+          id: item.id,
+          threadId: item.threadId,
+          runtimeGeneration: item.runtimeGeneration,
+          turnId: item.turnId,
+          label: this._threadLabel(item.threadId),
+          reason: attentionReason(item.kind),
+          observedAt: item.observedAt,
+          canViewDetail: detailUnavailable === '',
+          detailUnavailable,
+          detailPending: this._hasPendingDetail(item.id),
+          acknowledging: this._hasPendingAttentionAck(item.id),
+        };
+      });
+  }
+
+  /**
+   * Completed-work extracts appear only while Lobby is selected. `observedAt`
+   * is provenance, not an assertion the remote work is currently fresh.
+   */
+  get lobbySummaries(): readonly ThreadSummary[] {
+    if (this._selected?.thread.kind !== 'lobby') return [];
+    return this._summaries.slice(-3).reverse().map((summary) => ({
+      id: summary.id,
+      threadId: summary.threadId,
+      label: this._threadLabel(summary.threadId),
+      turnId: summary.turnId,
+      observedAt: summary.observedAt,
+      text: summary.text.length > 280 ? `${summary.text.slice(0, 279)}…` : summary.text,
+      truncated: summary.text.length > 280 || summary.text.length === 1200,
+    }));
+  }
+
+  /** Durable todo/goal tracking only for the committed visible root. */
+  get rootState(): ThreadRootState | null {
+    const state = this._selected;
+    if (!this.threaded || !state || state.rootState === null) return null;
+    return state.rootState.todos.length > 0 || state.rootState.goal !== '' ? state.rootState : null;
+  }
+
+  get migrationPreviewPending(): boolean {
+    return this._migrationPreviewRequestId !== '';
+  }
+
+  /** Capability-gated exact target captured by a reset/archive confirmation. */
+  get controlTarget(): ThreadControlTarget | null {
+    const state = this._selected;
+    if (
+      !this.threaded ||
+      !this._connectionReady ||
+      !state ||
+      state.runtimeStale ||
+      state.syncing ||
+      state.archived
+    ) {
+      return null;
+    }
+    return {
+      threadId: state.thread.id,
+      generation: state.thread.runtimeGeneration,
+      label: this.contextLabel,
+      kind: state.thread.kind,
+    };
+  }
+
+  get resetAvailable(): boolean {
+    const target = this.controlTarget;
+    return (
+      this._capabilities.reset &&
+      target !== null &&
+      !this._hasPendingControl('reset', target.threadId, '')
+    );
+  }
+
+  get archiveAvailable(): boolean {
+    const target = this.controlTarget;
+    return (
+      this._capabilities.archive &&
+      target?.kind === 'workspace' &&
+      !this._hasPendingControl('archive', target.threadId, '')
+    );
+  }
+
+  get archiveSupported(): boolean {
+    return this._capabilities.archive;
+  }
+
+  get approvalAvailable(): boolean {
+    return this._capabilities.approval && this.controlTarget !== null;
+  }
+
+  canCancel(turnId: string): boolean {
+    const target = this.controlTarget;
+    return (
+      this._capabilities.cancel &&
+      target !== null &&
+      turnId !== '' &&
+      !this._hasPendingControl('cancel', target.threadId, turnId)
+    );
+  }
+
+  canAnswer(turnId: string, approvalId: string): boolean {
+    const target = this.controlTarget;
+    return (
+      this._capabilities.approval &&
+      target !== null &&
+      turnId !== '' &&
+      approvalId !== '' &&
+      !this._hasPendingControl('approval', target.threadId, approvalId)
+    );
+  }
+
+  isControlPending(kind: ThreadControlKind, id = ''): boolean {
+    const target = this.controlTarget;
+    return target !== null && this._hasPendingControl(kind, target.threadId, id);
   }
 
   get contexts(): readonly ThreadContextOption[] {
@@ -558,8 +1181,16 @@ class ThreadStore {
     this._clearCapabilityTimer();
     this._capabilityRequestId = '';
     this._listRequestId = '';
+    this._catalogReady = false;
+    this._attentionRequestId = '';
+    this._summariesRequestId = '';
+    this._migrationPreviewRequestId = '';
     this._pendingSelection = null;
     this._pendingHistories.clear();
+    this._pendingControls.clear();
+    this._pendingDetails.clear();
+    this._pendingAttentionAcks.clear();
+    this._preAckBuffers.clear();
     if (this._mode === 'legacy') {
       cosStore.markDisconnected();
       return;
@@ -571,6 +1202,8 @@ class ThreadStore {
     }
     for (const state of this._states.values()) {
       state.historyRequestId = '';
+      state.syncing = false;
+      state.repairAttempted = false;
       state.store.markDisconnected();
     }
     this._notify();
@@ -673,20 +1306,216 @@ class ThreadStore {
     cosStore.clear(olderThanDays);
   }
 
-  answer(requestId: string, approved: boolean): boolean {
-    if (this._mode !== 'legacy') {
-      this._refusePreviewAction('Approvals are unavailable in text preview.');
+  /**
+   * Metadata-only acknowledgement. This never changes selection, a turn,
+   * microphone state, or an approval decision.
+   */
+  acknowledgeAttention(attentionId: string): boolean {
+    const record = this._attention.find(
+      (item) => item.id === attentionId && item.acknowledgedAt === '',
+    );
+    if (!this.threaded || !record || this._hasPendingAttentionAck(attentionId)) return false;
+    const requestId = makeRequestId();
+    if (!requestId) {
+      this._setProblem('request_id_unavailable', 'A secure request ID could not be created.');
       return false;
     }
-    return cosStore.answer(requestId, approved);
+    this._pendingAttentionAcks.set(requestId, attentionId);
+    if (
+      !this._socket?.missionControl({
+        type: 'missioncontrol-attention-ack',
+        protocol_version: PROTOCOL_VERSION,
+        request_id: requestId,
+        attention_id: attentionId,
+      })
+    ) {
+      this._pendingAttentionAcks.delete(requestId);
+      this._setProblem(
+        'attention_ack_transmit_failed',
+        'The attention acknowledgement could not be transmitted. The notice was kept.',
+      );
+      return false;
+    }
+    this._notify();
+    return true;
   }
 
-  cancel(turnId: string): void {
-    if (this._mode !== 'legacy') {
-      this._refusePreviewAction('Cancelling turns is unavailable in text preview.');
-      return;
+  /**
+   * Detail is an explicit read-only request against the attention source's
+   * immutable thread/generation pair. It does not select that source.
+   */
+  viewAttentionDetail(attentionId: string): boolean {
+    const record = this._attention.find((item) => item.id === attentionId);
+    if (!record || !this.threaded || this._hasPendingDetail(attentionId)) return false;
+    const unavailable = this._detailUnavailable(record);
+    if (unavailable !== '') {
+      this._setProblem('detail_unavailable', unavailable);
+      return false;
     }
-    cosStore.cancel(turnId);
+    const requestId = makeRequestId();
+    if (!requestId) {
+      this._setProblem('request_id_unavailable', 'A secure request ID could not be created.');
+      return false;
+    }
+    const pending: PendingDetail = {
+      requestId,
+      attentionId,
+      threadId: record.threadId,
+      generation: record.runtimeGeneration,
+    };
+    this._pendingDetails.set(requestId, pending);
+    if (
+      !this._socket?.missionControl({
+        type: 'missioncontrol-detail',
+        protocol_version: PROTOCOL_VERSION,
+        request_id: requestId,
+        thread_id: pending.threadId,
+        expected_runtime_generation: pending.generation,
+      })
+    ) {
+      this._pendingDetails.delete(requestId);
+      this._setProblem(
+        'detail_transmit_failed',
+        'The read-only detail request could not be transmitted. The conversation was not changed.',
+      );
+      return false;
+    }
+    this._notify();
+    return true;
+  }
+
+  /** Inspect migration/rollback metadata only; this endpoint has no apply verb. */
+  migrationPreview(): boolean {
+    if (!this.threaded || this._migrationPreviewRequestId !== '') return false;
+    const requestId = makeRequestId();
+    if (!requestId) {
+      this._setProblem('request_id_unavailable', 'A secure request ID could not be created.');
+      return false;
+    }
+    this._migrationPreviewRequestId = requestId;
+    if (
+      !this._socket?.missionControl({
+        type: 'missioncontrol-migration-preview',
+        protocol_version: PROTOCOL_VERSION,
+        request_id: requestId,
+      })
+    ) {
+      this._migrationPreviewRequestId = '';
+      this._setProblem(
+        'migration_preview_transmit_failed',
+        'The metadata-only migration preview could not be transmitted. Nothing changed.',
+      );
+      return false;
+    }
+    this._notify();
+    return true;
+  }
+
+  /**
+   * Send an approval only against the exact turn/approval pair rendered by the
+   * current selected thread. Legacy keeps its existing request-id-only wire.
+   */
+  answer(turnId: string, approvalId: string, approved: boolean): boolean {
+    if (this._mode === 'legacy') return cosStore.answer(approvalId, approved);
+    const target = this.controlTarget;
+    if (!target || !this.canAnswer(turnId, approvalId)) return false;
+    return this._sendThreadControl('approval', target, {
+      turn_id: turnId,
+      approval_id: approvalId,
+      approved,
+    });
+  }
+
+  /** Cancel exactly the live/queued turn whose control was pressed. */
+  cancel(turnId: string): boolean {
+    if (this._mode === 'legacy') {
+      cosStore.cancel(turnId);
+      return true;
+    }
+    const target = this.controlTarget;
+    if (!target || !this.canCancel(turnId)) return false;
+    return this._sendThreadControl('cancel', target, { turn_id: turnId });
+  }
+
+  /** Reset requires a confirmation-captured selected thread/generation. */
+  reset(target: ThreadControlTarget): boolean {
+    if (!this.resetAvailable || !this._sameControlTarget(target)) return false;
+    return this._sendThreadControl('reset', target);
+  }
+
+  /** Archive is unavailable for Lobby even if a server accidentally advertises it. */
+  archive(target: ThreadControlTarget): boolean {
+    if (!this.archiveAvailable || target.kind === 'lobby' || !this._sameControlTarget(target)) {
+      return false;
+    }
+    return this._sendThreadControl('archive', target);
+  }
+
+  private _sameControlTarget(target: ThreadControlTarget): boolean {
+    const current = this.controlTarget;
+    return (
+      current !== null &&
+      current.threadId === target.threadId &&
+      current.generation === target.generation &&
+      current.kind === target.kind
+    );
+  }
+
+  private _hasPendingControl(kind: ThreadControlKind, threadId: string, id: string): boolean {
+    for (const pending of this._pendingControls.values()) {
+      if (pending.kind !== kind || pending.threadId !== threadId) continue;
+      if (id === '' || pending.turnId === id || pending.approvalId === id) return true;
+    }
+    return false;
+  }
+
+  private _sendThreadControl(
+    kind: ThreadControlKind,
+    target: ThreadControlTarget,
+    fields: Readonly<{ turn_id?: string; approval_id?: string; approved?: boolean }> = {},
+  ): boolean {
+    if (!this._sameControlTarget(target)) return false;
+    const requestId = makeRequestId();
+    if (!requestId) {
+      this._setProblem('request_id_unavailable', 'A secure request ID could not be created.');
+      return false;
+    }
+    const pending: PendingControl = {
+      requestId,
+      kind,
+      threadId: target.threadId,
+      generation: target.generation,
+      turnId: fields.turn_id ?? '',
+      approvalId: fields.approval_id ?? '',
+      approved: fields.approved === true,
+    };
+    const frame: Record<string, unknown> = {
+      type: `missioncontrol-${kind}`,
+      protocol_version: PROTOCOL_VERSION,
+      request_id: requestId,
+      thread_id: pending.threadId,
+      expected_runtime_generation: pending.generation,
+    };
+    if (pending.turnId) frame.turn_id = pending.turnId;
+    if (pending.approvalId) frame.approval_id = pending.approvalId;
+    if (kind === 'approval') frame.approved = pending.approved;
+    this._pendingControls.set(requestId, pending);
+    if (!this._socket?.missionControl(frame)) {
+      this._pendingControls.delete(requestId);
+      const state = this._states.get(pending.threadId);
+      if (state) {
+        this._setThreadFault(
+          state,
+          `${kind}_transmit_failed`,
+          `The scoped ${kind} request could not be transmitted. Nothing changed.`,
+        );
+      } else {
+        this._setProblem(`${kind}_transmit_failed`, `The scoped ${kind} request could not be transmitted.`);
+      }
+      return false;
+    }
+    this._notify();
+    return true;
   }
 
   subscribe(callback: () => void): () => void {
@@ -707,6 +1536,71 @@ class ThreadStore {
     return threadId !== '' && this._unreadThreadIds.has(threadId);
   }
 
+  private _threadLabel(threadId: string): string {
+    const thread = this._states.get(threadId)?.thread ?? this._threads.find((item) => item.id === threadId);
+    if (!thread) return `Context · ${shortUuid(threadId)}`;
+    if (thread.kind === 'lobby') return 'Lobby';
+    return `${thread.displayName} · ${shortUuid(thread.workspaceUuid || thread.id)}`;
+  }
+
+  /**
+   * Read-only detail is allowed only after this socket has received a valid
+   * live catalog record for the exact attention thread/generation. It remains
+   * independent of browser selection, drafts, and thread subscriptions.
+   */
+  private _detailUnavailable(record: AttentionRecord): string {
+    if (!this._capabilities.detailReadOnly) {
+      return 'This server does not advertise read-only context detail.';
+    }
+    if (!this._socket?.connected) {
+      return 'Detail is unavailable while this browser reconnects.';
+    }
+    if (!this._catalogReady) {
+      return 'Detail is unavailable until this connection confirms the live context catalog.';
+    }
+    const known = this._threads.find((thread) => thread.id === record.threadId);
+    if (
+      !known ||
+      known.runtimeGeneration !== record.runtimeGeneration ||
+      !uuidValue(known.runtimeSessionId)
+    ) {
+      return 'This attention refers to a context generation that is no longer available for read-only detail.';
+    }
+    return '';
+  }
+
+  private _hasPendingDetail(attentionId: string): boolean {
+    for (const pending of this._pendingDetails.values()) {
+      if (pending.attentionId === attentionId) return true;
+    }
+    return false;
+  }
+
+  private _hasPendingAttentionAck(attentionId: string): boolean {
+    for (const pendingId of this._pendingAttentionAcks.values()) {
+      if (pendingId === attentionId) return true;
+    }
+    return false;
+  }
+
+  /** No polling: refresh durable catalog facts after an attention-producing event only. */
+  private _refreshCatalogMetadataForEvent(envelope: ThreadedCosEvent): void {
+    const event = stringValue(envelope.event.ev);
+    if (
+      event === 'turn_start' ||
+      event === 'turn_end' ||
+      event === 'cancelled' ||
+      event === 'turn_cancelled' ||
+      event === 'error' ||
+      event === 'approval_request'
+    ) {
+      this._requestAttention();
+    }
+    if (event === 'turn_end' || event === 'cancelled' || event === 'turn_cancelled') {
+      this._requestSummaries();
+    }
+  }
+
   private _unreadThreadIds = new Set<string>();
 
   private _beginNegotiation(): void {
@@ -715,6 +1609,7 @@ class ThreadStore {
     this._clearCapabilityTimer();
     this._capabilityRequestId = '';
     this._listRequestId = '';
+    this._catalogReady = false;
     this._pendingSelection = null;
     this._connectionReady = false;
     this._mode = this._mode === 'threaded' ? 'threaded' : 'negotiating';
@@ -776,6 +1671,27 @@ class ThreadStore {
       case 'history':
         if (this._pendingHistories.has(requestId)) this._handleHistory(frame, requestId);
         break;
+      case 'summaries':
+        if (requestId === this._summariesRequestId) this._handleSummaries(frame);
+        break;
+      case 'attention':
+        if (requestId === this._attentionRequestId) this._handleAttention(frame);
+        break;
+      case 'attention-ack':
+        if (this._pendingAttentionAcks.has(requestId)) this._handleAttentionAck(frame, requestId);
+        break;
+      case 'detail':
+        if (this._pendingDetails.has(requestId)) this._handleDetail(frame, requestId);
+        break;
+      case 'migration-preview':
+        if (requestId === this._migrationPreviewRequestId) this._handleMigrationPreview(frame);
+        break;
+      case 'cancel':
+      case 'approval':
+      case 'reset':
+      case 'archive':
+        if (this._pendingControls.has(requestId)) this._handleControlResult(frame, requestId);
+        break;
     }
   }
 
@@ -783,17 +1699,30 @@ class ThreadStore {
     this._clearCapabilityTimer();
     this._capabilityRequestId = '';
     const capabilities = recordValue(frame.capabilities);
-    const textOnly =
-      capabilities?.text_threads === true &&
-      capabilities.voice === false &&
-      capabilities.approval === false &&
-      capabilities.cancel === false &&
-      capabilities.reset === false;
-    const enabled = frame.ok === true && frame.enabled === true && textOnly;
+    if (frame.ok !== true) {
+      this._setProblem(
+        stringValue(frame.code) || 'capabilities_unavailable',
+        stringValue(frame.error) || 'Text-thread capability was refused by the server.'
+      );
+      return;
+    }
+    const enabled =
+      frame.enabled === true &&
+      capabilities?.text_threads === true;
     if (!enabled) {
       this._enterLegacy();
       return;
     }
+    // Voice remains deliberately unavailable in this preview even if a future
+    // server advertises it. The scoped mutation controls below are separately
+    // capability-gated and never use legacy COS fallbacks.
+    this._capabilities = Object.freeze({
+      approval: capabilities?.approval === true,
+      cancel: capabilities?.cancel === true,
+      reset: capabilities?.reset === true,
+      archive: capabilities?.archive === true,
+      detailReadOnly: capabilities?.detail_read_only === true,
+    });
     this._mode = 'threaded';
     this._problem = null;
     this._socket?.setLegacyCosFramesEnabled(false);
@@ -801,20 +1730,32 @@ class ThreadStore {
     // a v2 thread. A selected/threaded request never falls back through it.
     this._socket?.cosSubscribe(false);
     this._requestList();
+    // Catalog metadata is explicitly read-only: loading it cannot start a
+    // root, change selection, or move the reader to another conversation.
+    this._requestAttention();
+    this._requestSummaries();
   }
 
   private _enterLegacy(): void {
     this._clearCapabilityTimer();
+    this._capabilities = NO_THREAD_CONTROLS;
+    this._catalogReady = false;
     this._mode = 'legacy';
     this._connectionReady = true;
     this._pendingSelection = null;
     this._pendingHistories.clear();
+    this._pendingControls.clear();
+    this._pendingDetails.clear();
+    this._pendingAttentionAcks.clear();
     this._preAckBuffers.clear();
     for (const state of this._states.values()) {
       state.historyRequestId = '';
       state.syncing = false;
     }
     this._listRequestId = '';
+    this._attentionRequestId = '';
+    this._summariesRequestId = '';
+    this._migrationPreviewRequestId = '';
     this._problem = null;
     this._socket?.setLegacyCosFramesEnabled(true);
     if (cosStore.status === 'idle') cosStore.open();
@@ -845,6 +1786,189 @@ class ThreadStore {
     this._notify();
   }
 
+  /** Fetch durable read-only attention; no root is selected or started. */
+  private _requestAttention(): void {
+    const socket = this._socket;
+    if (!socket || !socket.connected || !this.threaded || this._attentionRequestId !== '') return;
+    const requestId = makeRequestId();
+    if (!requestId) {
+      this._setProblem('request_id_unavailable', 'A secure request ID could not be created.');
+      return;
+    }
+    this._attentionRequestId = requestId;
+    if (
+      !socket.missionControl({
+        type: 'missioncontrol-attention',
+        protocol_version: PROTOCOL_VERSION,
+        request_id: requestId,
+      })
+    ) {
+      this._attentionRequestId = '';
+      this._setProblem('attention_transmit_failed', 'Queued attention could not be refreshed.');
+      return;
+    }
+  }
+
+  /** Fetch bounded catalog extracts for the Lobby-only provenance display. */
+  private _requestSummaries(): void {
+    const socket = this._socket;
+    if (!socket || !socket.connected || !this.threaded || this._summariesRequestId !== '') return;
+    const requestId = makeRequestId();
+    if (!requestId) {
+      this._setProblem('request_id_unavailable', 'A secure request ID could not be created.');
+      return;
+    }
+    this._summariesRequestId = requestId;
+    if (
+      !socket.missionControl({
+        type: 'missioncontrol-summaries',
+        protocol_version: PROTOCOL_VERSION,
+        request_id: requestId,
+      })
+    ) {
+      this._summariesRequestId = '';
+      this._setProblem('summaries_transmit_failed', 'Completed-work extracts could not be refreshed.');
+    }
+  }
+
+  private _handleSummaries(frame: Record<string, unknown>): void {
+    this._summariesRequestId = '';
+    if (frame.ok !== true) {
+      this._setProblem('summaries_refused', protocolFailure(frame, 'Completed-work extracts could not be read.'));
+      return;
+    }
+    const raw = frame.summaries === undefined ? [] : frame.summaries;
+    if (!Array.isArray(raw)) {
+      this._setProblem('invalid_summaries', 'The server returned invalid completed-work extracts.');
+      return;
+    }
+    const summaries: SummaryRecord[] = [];
+    const ids = new Set<string>();
+    for (const entry of raw) {
+      const summary = parseSummary(entry);
+      if (!summary || ids.has(summary.id)) {
+        this._setProblem('invalid_summaries', 'The server returned invalid completed-work extracts.');
+        return;
+      }
+      ids.add(summary.id);
+      summaries.push(summary);
+    }
+    this._summaries = summaries.sort(
+      (left, right) => left.observedAtMs - right.observedAtMs,
+    );
+    this._notify();
+  }
+
+  private _handleAttention(frame: Record<string, unknown>): void {
+    this._attentionRequestId = '';
+    if (frame.ok !== true) {
+      this._setProblem('attention_refused', protocolFailure(frame, 'Queued attention could not be read.'));
+      return;
+    }
+    const raw = frame.attention === undefined ? [] : frame.attention;
+    if (!Array.isArray(raw)) {
+      this._setProblem('invalid_attention', 'The server returned invalid queued attention.');
+      return;
+    }
+    const attention: AttentionRecord[] = [];
+    const ids = new Set<string>();
+    for (const entry of raw) {
+      const item = parseAttention(entry);
+      if (!item || ids.has(item.id)) {
+        this._setProblem('invalid_attention', 'The server returned invalid queued attention.');
+        return;
+      }
+      ids.add(item.id);
+      attention.push(item);
+    }
+    this._attention = attention.sort(
+      (left, right) => left.observedAtMs - right.observedAtMs,
+    );
+    this._notify();
+  }
+
+  private _handleAttentionAck(frame: Record<string, unknown>, requestId: string): void {
+    const attentionId = this._pendingAttentionAcks.get(requestId);
+    this._pendingAttentionAcks.delete(requestId);
+    if (!attentionId) return;
+    if (frame.ok !== true) {
+      this._setProblem(
+        'attention_ack_refused',
+        protocolFailure(frame, 'The attention acknowledgement was refused. The notice was kept.'),
+      );
+      return;
+    }
+    const raw = frame.attention;
+    const record =
+      Array.isArray(raw) && raw.length === 1 ? parseAttention(raw[0]) : null;
+    if (!record || record.id !== attentionId || record.acknowledgedAt === '') {
+      this._setProblem(
+        'invalid_attention_ack',
+        'The server did not confirm this attention acknowledgement. The notice was kept.',
+      );
+      return;
+    }
+    this._attention = this._attention.map((item) => (item.id === record.id ? record : item));
+    this._notify();
+  }
+
+  private _handleDetail(frame: Record<string, unknown>, requestId: string): void {
+    const pending = this._pendingDetails.get(requestId);
+    this._pendingDetails.delete(requestId);
+    if (!pending) return;
+    if (frame.ok !== true) {
+      this._setProblem(
+        'detail_refused',
+        protocolFailure(frame, 'The read-only context detail was refused. The conversation was not changed.'),
+      );
+      return;
+    }
+    const detail = parseDetailPayload(frame);
+    if (
+      !detail ||
+      detail.thread.id !== pending.threadId ||
+      detail.thread.runtimeGeneration !== pending.generation
+    ) {
+      this._setProblem(
+        'invalid_detail',
+        'The server returned detail for a different context. The conversation was not changed.',
+      );
+      return;
+    }
+    requestViewerDocument({
+      title: `Context detail — ${this._threadLabel(pending.threadId)}`,
+      subtitle: `generation ${pending.generation}; read-only`,
+      text: formatDetailDocument(this._threadLabel(pending.threadId), detail),
+    });
+    this._notify();
+  }
+
+  private _handleMigrationPreview(frame: Record<string, unknown>): void {
+    this._migrationPreviewRequestId = '';
+    if (frame.ok !== true) {
+      this._setProblem(
+        'migration_preview_refused',
+        protocolFailure(frame, 'The metadata-only migration preview was refused. Nothing changed.'),
+      );
+      return;
+    }
+    // The current backend carries this read-only payload in capabilities.
+    const preview = parseMigrationPreview(frame.capabilities);
+    if (!preview) {
+      this._setProblem(
+        'invalid_migration_preview',
+        'The server returned an invalid metadata-only migration preview. Nothing changed.',
+      );
+      return;
+    }
+    requestViewerDocument({
+      title: 'Catalog migration / rollback preview',
+      subtitle: 'Preview only; no history moved',
+      text: formatMigrationPreview(preview),
+    });
+    this._notify();
+  }
+
   private _handleList(frame: Record<string, unknown>): void {
     this._listRequestId = '';
     if (frame.ok !== true || !Array.isArray(frame.threads)) {
@@ -870,6 +1994,7 @@ class ThreadStore {
     }
     this._threads = parsedThreads;
     this._workspaces = workspaces as WorkspaceContext[];
+    this._catalogReady = true;
     for (const thread of parsedThreads) {
       const existing = this._states.get(thread.id);
       if (existing) existing.thread = { ...existing.thread, ...thread };
@@ -1004,7 +2129,109 @@ class ThreadStore {
       this._persistState();
     }
     this._problem = null;
+    // Runtime.Submit durably records the pending attention before this receipt.
+    // Refresh only metadata; this never changes the selected conversation.
+    this._requestAttention();
     this._notify();
+  }
+
+  private _handleControlResult(frame: Record<string, unknown>, requestId: string): void {
+    const pending = this._pendingControls.get(requestId);
+    this._pendingControls.delete(requestId);
+    if (!pending) return;
+    const state = this._states.get(pending.threadId);
+    if (!state || state.thread.runtimeGeneration !== pending.generation) {
+      this._notify();
+      return;
+    }
+    if (frame.ok !== true) {
+      this._setThreadFault(
+        state,
+        `${pending.kind}_refused`,
+        protocolFailure(frame, `The scoped ${pending.kind} request was refused. Nothing changed.`),
+      );
+      return;
+    }
+
+    if (pending.kind === 'approval') {
+      state.store.settleThreadApproval(pending.approvalId, pending.approved);
+      this._notify();
+      return;
+    }
+    if (pending.kind === 'reset') {
+      const replacement = parseRuntimeThread(frame.thread);
+      if (
+        !replacement ||
+        replacement.id !== pending.threadId ||
+        replacement.runtimeGeneration <= pending.generation
+      ) {
+        this._setThreadFault(
+          state,
+          'invalid_reset',
+          'The server did not confirm a new runtime generation. The existing context was kept.',
+        );
+        return;
+      }
+      this._completeReset(state, replacement);
+      return;
+    }
+    if (pending.kind === 'archive') {
+      const archived = parseCatalogThread(frame.thread);
+      if (!archived || archived.id !== pending.threadId) {
+        this._setThreadFault(
+          state,
+          'invalid_archive',
+          'The server did not confirm the archived context identity. The existing context was kept.',
+        );
+        return;
+      }
+      state.thread = { ...state.thread, ...archived };
+      state.archived = true;
+      state.runtimeStale = true;
+      state.draftRef = '';
+      state.rootState = null;
+      if (this._lastExplicitThreadId === pending.threadId) {
+        this._lastExplicitThreadId = '';
+        this._persistState();
+      }
+      this._setThreadFault(
+        state,
+        'archived',
+        'This context was archived. Select a live context before sending.',
+      );
+      return;
+    }
+    // cancel acknowledges dispatch only; the exact terminal event remains the
+    // authoritative turn state and is intentionally not manufactured here.
+    this._notify();
+  }
+
+  private _completeReset(state: ThreadState, replacement: CatalogThread): void {
+    const oldThreadId = state.thread.id;
+    const oldGeneration = state.thread.runtimeGeneration;
+    state.thread = replacement;
+    state.draftRef = '';
+    state.runtimeStale = true;
+    state.archived = false;
+    state.syncing = false;
+    state.repairAttempted = false;
+    state.lastSequence = null;
+    state.seenEventIds.clear();
+    state.rootState = null;
+    this._preAckBuffers.delete(preAckKey(oldThreadId, oldGeneration));
+    this._drafts.delete(oldThreadId);
+    if (this._lastExplicitThreadId === oldThreadId) this._lastExplicitThreadId = '';
+    this._threads = this._threads.map((thread) =>
+      thread.id === replacement.id ? { ...thread, ...replacement } : thread,
+    );
+    this._persistState();
+    // Preserve the old authoritative transcript as the visible immutable
+    // reference until a person explicitly selects the new generation.
+    this._setThreadFault(
+      state,
+      'reset_complete',
+      'This context was reset. Select Talk here again to open the new generation.',
+    );
   }
 
   private _handleHistory(frame: Record<string, unknown>, requestId: string): void {
@@ -1015,10 +2242,10 @@ class ThreadStore {
     if (state?.historyRequestId === requestId) state.historyRequestId = '';
     if (frame.ok !== true) {
       if (state) {
-        // A refused repair means the server still has active or queued work.
-        // Keep this thread fenced and its draft untouched; a later explicit
-        // selection is the retry, never a fall back to global COS.
-        state.syncing = true;
+        // The request is no longer pending. Keep history/drafts intact and
+        // surface the refusal; another incoming event must not spin a repair
+        // loop while this snapshot remains unavailable.
+        state.syncing = false;
         this._setThreadFault(
           state,
           'history_refused',
@@ -1040,7 +2267,7 @@ class ThreadStore {
       snapshot.thread.runtimeGeneration !== pending.generation
     ) {
       if (state) {
-        state.syncing = true;
+        state.syncing = false;
         this._setThreadFault(
           state,
           'invalid_history',
@@ -1070,18 +2297,15 @@ class ThreadStore {
           );
         }
         if (state && state.thread.runtimeGeneration === envelope.runtime_generation) {
-          state.syncing = true;
-          this._setThreadFault(
+          this._startAuthoritativeRepair(
             state,
             'pre_ack_buffer_overflow',
             'Too many early thread updates arrived. An authoritative history repair is required.',
           );
-          this._requestHistory(state);
         }
       } else if (buffer.overflow) {
         if (state) {
-          state.syncing = true;
-          this._setThreadFault(
+          this._startAuthoritativeRepair(
             state,
             'pre_ack_buffer_overflow',
             'Too many early thread updates arrived. Reconciling authoritative history.',
@@ -1093,9 +2317,6 @@ class ThreadStore {
             'Early thread updates exceeded the safety buffer. Waiting for authoritative history.',
           );
         }
-      }
-      if (state?.syncing && !state.historyRequestId && !state.runtimeStale) {
-        this._requestHistory(state);
       }
       return;
     }
@@ -1248,79 +2469,101 @@ class ThreadStore {
     state.seenEventIds.clear();
     state.runtimeStale = false;
     state.syncing = false;
+    state.archived = false;
+    state.rootState = snapshot.rootState;
+    if (source === 'selection') state.repairAttempted = false;
+    const snapshotState: ThreadedSnapshotState = {
+      coveredTurnIds: snapshot.coveredTurnIds,
+      replaySuppressedTurnIds: snapshot.replaySuppressedTurnIds,
+      activeTurnId: snapshot.activeTurnId,
+      pendingTurnIds: snapshot.pendingTurnIds,
+    };
     if (source === 'selection') {
       state.store.adoptThreadSnapshot(
         snapshot.thread.runtimeSessionId,
         snapshot.history,
-        snapshot.coveredTurnIds,
+        snapshotState,
       );
     } else {
-      state.store.adoptThreadHistory(snapshot.history, snapshot.coveredTurnIds);
+      state.store.adoptThreadHistory(snapshot.history, snapshotState);
     }
 
-    const tailGap = this._flushSnapshotTail(state, snapshot, buffer);
-    if (!forceRepair && !buffer.overflow && !tailGap) return;
-
-    state.syncing = true;
-    const reason = forceRepair || buffer.overflow
-      ? 'Early thread updates exceeded the browser buffer. Reconciling authoritative history.'
-      : 'Thread updates crossed the snapshot boundary out of order. Reconciling authoritative history.';
-    this._setThreadFault(state, 'snapshot_tail_repair', reason);
-    this._requestHistory(state);
+    const replayGap = this._applySnapshotReplay(state, snapshot, buffer);
+    const needsRepair = forceRepair || buffer.overflow || snapshot.gap || replayGap;
+    if (!needsRepair) {
+      state.repairAttempted = false;
+      return;
+    }
+    const reason = snapshot.gap
+      ? 'A bounded thread event gap was reported. Rechecking authoritative history once.'
+      : forceRepair || buffer.overflow
+        ? 'Early thread updates exceeded the browser buffer. Rechecking authoritative history once.'
+        : 'Thread updates crossed the snapshot boundary out of order. Rechecking authoritative history once.';
+    this._startAuthoritativeRepair(state, 'snapshot_gap', reason);
   }
 
   /**
-   * Apply retained pre-ack frames in sequence order from the server watermark.
-   * Entries at or before the watermark are already represented by canonical
-   * history and therefore ignored; a non-contiguous or conflicting tail is
-   * repaired before it can render unrelated or duplicated text.
+   * Fold both sides of the ordered snapshot cut. `replay_events` are at or
+   * below the inclusive barrier and may be necessary for active/queued turns
+   * absent from canonical history. Buffered events above the barrier are
+   * admitted only in contiguous sequence order. Covered ids suppress rendering
+   * in CosStore but still enter this immutable sequence ledger.
    */
-  private _flushSnapshotTail(
+  private _applySnapshotReplay(
     state: ThreadState,
     snapshot: SnapshotPayload,
     buffer: PreAckBuffer,
   ): boolean {
-    const pending = buffer.events
-      .filter((item) => item.envelope.thread_seq > snapshot.watermark)
-      .sort((left, right) => left.envelope.thread_seq - right.envelope.thread_seq);
-
-    let index = 0;
-    let gap = false;
-    const idSequences = new Map<string, number>();
-    while (index < pending.length) {
-      const first = pending[index];
-      if (!first) break;
-      const sequence = first.envelope.thread_seq;
-      const group: BufferedThreadEvent[] = [];
-      while (index < pending.length && pending[index]?.envelope.thread_seq === sequence) {
-        const item = pending[index];
-        if (item) group.push(item);
-        index++;
-      }
-      const ids = new Set(group.map((item) => item.envelope.event_id));
-      for (const item of group) {
-        const prior = idSequences.get(item.envelope.event_id);
-        if (prior !== undefined && prior !== sequence) gap = true;
-        idSequences.set(item.envelope.event_id, sequence);
-      }
-      if (gap || ids.size !== 1) {
-        gap = true;
-        break;
-      }
-      const chosen = group[0];
-      if (!chosen) break;
-      const expected = (state.lastSequence ?? snapshot.watermark) + 1;
+    const bySequence = new Map<number, ThreadedCosEvent>();
+    const sequenceById = new Map<string, number>();
+    let invalid = false;
+    const add = (event: ThreadedCosEvent): void => {
+      const seenSequence = sequenceById.get(event.event_id);
+      const existing = bySequence.get(event.thread_seq);
       if (
-        sequence !== expected ||
-        state.seenEventIds.has(chosen.envelope.event_id)
+        (seenSequence !== undefined && seenSequence !== event.thread_seq) ||
+        (existing !== undefined && existing.event_id !== event.event_id)
       ) {
-        gap = true;
-        break;
+        invalid = true;
+        return;
       }
-      this._applyEvent(state, chosen.envelope);
+      sequenceById.set(event.event_id, event.thread_seq);
+      if (!existing) bySequence.set(event.thread_seq, event);
+    };
+    for (const event of snapshot.replayEvents) add(event);
+    for (const item of buffer.events) add(item.envelope);
+    if (invalid) {
+      this._restoreBufferedTail(state, buffer);
+      return true;
     }
-    if (gap) this._restoreBufferedTail(state, buffer);
-    return gap;
+
+    const events = [...bySequence.values()].sort((left, right) => left.thread_seq - right.thread_seq);
+    for (const event of events) {
+      if (event.thread_seq > snapshot.watermark) break;
+      this._recordSnapshotEvent(state, event);
+    }
+
+    let expected = snapshot.watermark + 1;
+    for (const event of events) {
+      if (event.thread_seq <= snapshot.watermark) continue;
+      if (event.thread_seq !== expected || state.seenEventIds.has(event.event_id)) {
+        this._restoreBufferedTail(state, buffer);
+        return true;
+      }
+      this._applyEvent(state, event);
+      expected++;
+    }
+    return false;
+  }
+
+  /** Record a pre-barrier event without moving the authoritative watermark. */
+  private _recordSnapshotEvent(state: ThreadState, envelope: ThreadedCosEvent): void {
+    const seenSequence = state.seenEventIds.get(envelope.event_id);
+    if (seenSequence === envelope.thread_seq) return;
+    if (seenSequence !== undefined) return;
+    state.store.receiveThreadEvent(envelope);
+    this._rememberEvent(state, envelope.event_id, envelope.thread_seq);
+    this._markUnread(envelope.thread_id);
   }
 
   /**
@@ -1332,35 +2575,31 @@ class ThreadStore {
     const last = state.lastSequence;
     if (last === null) {
       this._bufferPreAck(envelope);
-      state.syncing = true;
-      this._setThreadFault(
+      this._startAuthoritativeRepair(
         state,
         'missing_snapshot_fence',
         'Thread update arrived without an authoritative snapshot fence. Reconciling history.',
       );
-      this._requestHistory(state);
       return;
     }
-    if (
-      envelope.thread_seq <= last ||
-      state.seenEventIds.has(envelope.event_id)
-    ) {
-      // A duplicate never appends locally. The v2 protocol still asks us to
-      // validate it through authoritative history, rather than assuming a
-      // reconnect replay is harmless.
-      state.syncing = true;
-      this._setThreadFault(
-        state,
-        'thread_event_duplicate',
-        'A duplicate thread update was received. Reconciling authoritative history.',
-      );
-      this._requestHistory(state);
+    const seenSequence = state.seenEventIds.get(envelope.event_id);
+    if (seenSequence !== undefined) {
+      if (seenSequence !== envelope.thread_seq) {
+        this._startAuthoritativeRepair(
+          state,
+          'thread_event_identity_conflict',
+          'A thread event identity changed sequence. Reconciling authoritative history.',
+        );
+      }
+      return;
+    }
+    if (envelope.thread_seq <= last) {
+      // It predates the authoritative fence. Do not re-render an old delta.
       return;
     }
     if (envelope.thread_seq !== last + 1) {
       const buffer = this._bufferPreAck(envelope);
-      state.syncing = true;
-      this._setThreadFault(
+      this._startAuthoritativeRepair(
         state,
         buffer?.overflow || buffer === null
           ? 'pre_ack_buffer_overflow'
@@ -1369,7 +2608,6 @@ class ThreadStore {
           ? 'Thread update buffering overflowed. Reconciling authoritative history.'
           : 'Thread updates arrived out of order. Reconciling authoritative history.',
       );
-      this._requestHistory(state);
       return;
     }
     this._applyEvent(state, envelope);
@@ -1378,14 +2616,43 @@ class ThreadStore {
   private _applyEvent(state: ThreadState, envelope: ThreadedCosEvent): void {
     state.store.receiveThreadEvent(envelope);
     state.lastSequence = envelope.thread_seq;
-    this._rememberEvent(state, envelope.event_id);
+    this._rememberEvent(state, envelope.event_id, envelope.thread_seq);
     this._markUnread(envelope.thread_id);
+    this._refreshCatalogMetadataForEvent(envelope);
+  }
+
+  /**
+   * A reported journal/delivery gap gets one authoritative history attempt per
+   * generation. If that cut still reports a gap, leave the visible warning in
+   * place rather than recursively issuing history requests forever.
+   */
+  private _startAuthoritativeRepair(state: ThreadState, code: string, message: string): void {
+    if (state.historyRequestId !== '') return;
+    if (state.repairAttempted) {
+      state.syncing = false;
+      this._setThreadFault(state, code, message);
+      return;
+    }
+    state.repairAttempted = true;
+    state.syncing = true;
+    this._setThreadFault(state, code, message);
+    this._requestHistory(state);
   }
 
   private _requestHistory(state: ThreadState): void {
-    if (state.historyRequestId || !this._socket?.connected) return;
+    if (state.historyRequestId) return;
+    if (!this._socket?.connected) {
+      state.syncing = false;
+      this._setThreadFault(
+        state,
+        'history_transmit_failed',
+        'An authoritative history repair could not be requested while disconnected.',
+      );
+      return;
+    }
     const requestId = makeRequestId();
     if (!requestId) {
+      state.syncing = false;
       this._setThreadFault(state, 'request_id_unavailable', 'A secure request ID could not be created.');
       return;
     }
@@ -1406,6 +2673,7 @@ class ThreadStore {
     ) {
       this._pendingHistories.delete(requestId);
       state.historyRequestId = '';
+      state.syncing = false;
       this._setThreadFault(
         state,
         'history_transmit_failed',
@@ -1429,14 +2697,17 @@ class ThreadStore {
       historyRequestId: '',
       runtimeStale: false,
       syncing: false,
+      repairAttempted: false,
+      archived: false,
+      rootState: null,
     };
     store.subscribe(() => this._notify());
     this._states.set(thread.id, state);
     return state;
   }
 
-  private _rememberEvent(state: ThreadState, eventId: string): void {
-    state.seenEventIds.set(eventId, true);
+  private _rememberEvent(state: ThreadState, eventId: string, sequence: number): void {
+    state.seenEventIds.set(eventId, sequence);
     if (state.seenEventIds.size <= MAX_SEEN_EVENT_IDS) return;
     const oldest = state.seenEventIds.keys().next().value;
     if (typeof oldest === 'string') state.seenEventIds.delete(oldest);

@@ -35,8 +35,23 @@ type Config struct {
 // MissionControlConfig holds opt-in Mission Control gates. Both switches must
 // be true before the text-thread preview can start an isolated sidecar.
 type MissionControlConfig struct {
-	ThreadsV2   bool `toml:"threads_v2" json:"threads_v2"`
-	TextPreview bool `toml:"text_preview" json:"text_preview"`
+	ThreadsV2            bool `toml:"threads_v2" json:"threads_v2"`
+	TextPreview          bool `toml:"text_preview" json:"text_preview"`
+	TextWorkerCap        int  `toml:"text_worker_cap" json:"text_worker_cap"`
+	TextContextMaxTokens int  `toml:"text_context_max_tokens" json:"text_context_max_tokens"`
+}
+
+// ValidateTextContextMaxTokens accepts zero to retain context-simple's shipped
+// budget. A configured value is deliberately bounded rather than becoming an
+// arbitrary provider/module override.
+func (m MissionControlConfig) ValidateTextContextMaxTokens() error {
+	if m.TextContextMaxTokens == 0 {
+		return nil
+	}
+	if m.TextContextMaxTokens < 256 || m.TextContextMaxTokens > 200_000 {
+		return fmt.Errorf("config: [missioncontrol] text_context_max_tokens must be 0 or between 256 and 200000")
+	}
+	return nil
 }
 
 // Auth modes for VoiceConfig.AuthMode. These are the ONLY accepted values.
@@ -681,6 +696,6 @@ func Defaults() Config {
 		},
 		// Mission Control remains disabled unless both gates are explicitly
 		// enabled. Voice is always unavailable during the text preview.
-		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false},
+		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false, TextWorkerCap: 4},
 	}
 }

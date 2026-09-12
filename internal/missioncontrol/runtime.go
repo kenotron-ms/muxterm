@@ -7,26 +7,56 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kenotron-ms/muxterm/internal/cos"
 )
 
-// Runtime is one independent sidecar root and its supervisor. It owns no
-// browser selection state; callers may subscribe after they select another
-// thread so late results keep their originating identity.
+const (
+	defaultTextWorkerCap = 4
+	maxJournalEvents     = 512
+	maxJournalBytes      = 2 << 20
+)
+
+var ErrWorkerCap = errors.New("missioncontrol: text worker capacity reached")
+
+// Runtime is one independently rooted sidecar. Browser contexts are never
+// parents of it: Router owns the process lifetime until safe eviction/Close.
 type Runtime struct {
 	Thread     Thread
 	Supervisor *cos.Supervisor
 	ownerLock  *os.File
 	store      *Store
 
-	mu          sync.Mutex
-	listeners   map[uint64]chan RuntimeEvent
-	listenerID  uint64
-	submissions map[string]submission
+	opMu sync.Mutex // serializes sidecar snapshot/control against new admission
+	mu   sync.Mutex
+
+	listeners       map[uint64]chan RuntimeEvent
+	listenerID      uint64
+	submissions     map[string]submission
+	approvals       map[string]string // approval id -> originating turn id
+	journal         []RuntimeEvent
+	journalSize     int
+	journalGap      bool
+	replyBoundaries map[string]snapshotBoundary
+	lastUsed        time.Time
+}
+
+// snapshotBoundary is copied on the ordered sidecar reader immediately before
+// the snapshot reply wakes Runtime.Snapshot. It is deliberately independent of
+// later reader events: the caller must never use a post-reply journal/sequence
+// with pre-reply canonical history.
+type snapshotBoundary struct {
+	threadSeq               uint64
+	journal                 []RuntimeEvent
+	replaySuppressedTurnIDs []string
+	gap                     bool
+	queue                   cos.QueueState
 }
 
 type submission struct {
@@ -35,26 +65,54 @@ type submission struct {
 	requestID string
 }
 
-// RuntimeEvent is sequenced once at the originating root and then fanned out
-// to all late subscribers. It is never attributed from terminal navigation.
+// RuntimeEvent is assigned before the sidecar broker fan-out. It has a
+// thread-local durable sequence and cannot be reattributed from focus.
 type RuntimeEvent struct {
-	EventID   string
-	ThreadSeq uint64
-	Raw       json.RawMessage
+	EventID   string          `json:"event_id"`
+	ThreadSeq uint64          `json:"thread_seq"`
+	Raw       json.RawMessage `json:"event"`
 }
 
-// Router owns all in-process threaded roots. The catalog lock makes another
-// server fail closed, while unique persisted session IDs prevent roots from
-// sharing a SessionStore transcript.
+type TurnState struct {
+	TurnID string `json:"turn_id"`
+	Status string `json:"status"` // active|queued
+}
+
+type Snapshot struct {
+	History        json.RawMessage `json:"history"`
+	Active         *TurnState      `json:"active,omitempty"`
+	Pending        []TurnState     `json:"pending"`
+	ThreadSeq      uint64          `json:"thread_seq"`
+	CoveredTurnIDs []string        `json:"covered_turn_ids"`
+	// ReplaySuppressedTurnIDs identifies persisted terminal turns present in
+	// the ordered event cut but not necessarily identity-bound in history
+	// (for example structurally ambiguous canonical groups). Consumers must
+	// consume their event identity/sequence but not render them again.
+	ReplaySuppressedTurnIDs []string        `json:"replay_suppressed_turn_ids,omitempty"`
+	ReplayEvents            []RuntimeEvent  `json:"replay_events"`
+	Gap                     bool            `json:"gap"`
+	Todo                    json.RawMessage `json:"todo,omitempty"`
+	Goal                    json.RawMessage `json:"goal,omitempty"`
+	Context                 json.RawMessage `json:"context,omitempty"`
+}
+
 type Router struct {
-	store    *Store
-	mu       sync.Mutex
-	runtimes map[string]*Runtime
-	closed   bool
+	store            *Store
+	ctx              context.Context
+	cancel           context.CancelFunc
+	cap              int
+	contextMaxTokens int
+	mu               sync.Mutex
+	runtimes         map[string]*Runtime
+	closed           bool
 }
 
-func NewRouter(store *Store) *Router {
-	return &Router{store: store, runtimes: make(map[string]*Runtime)}
+func NewRouter(store *Store, cap int, contextMaxTokens int) *Router {
+	if cap <= 0 {
+		cap = defaultTextWorkerCap
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Router{store: store, ctx: ctx, cancel: cancel, cap: cap, contextMaxTokens: contextMaxTokens, runtimes: make(map[string]*Runtime)}
 }
 
 func runtimeDirectory(sessionID string) string {
@@ -65,8 +123,6 @@ func runtimeDirectory(sessionID string) string {
 	return filepath.Join(base, "muxterm", "missioncontrol", "runtimes", sessionID)
 }
 
-// RuntimeOwnerLockPath is keyed by the persisted runtime UUID and shared with
-// the CLI second-writer guard.
 func RuntimeOwnerLockPath(sessionID string) string {
 	return filepath.Join(runtimeDirectory(sessionID), "owner.lock")
 }
@@ -79,8 +135,9 @@ func storageCWD() (string, error) {
 	return filepath.Abs(cwd)
 }
 
-// Ensure starts the particular thread's root, never a shared COS root.
-func (r *Router) Ensure(ctx context.Context, threadID string) (*Runtime, error) {
+// Ensure deliberately accepts no browser context. A disconnect only cancels
+// the caller's wait; admitted queue work remains attached to Router.ctx.
+func (r *Router) Ensure(threadID string) (*Runtime, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -88,23 +145,27 @@ func (r *Router) Ensure(ctx context.Context, threadID string) (*Runtime, error) 
 	}
 	if runtime := r.runtimes[threadID]; runtime != nil {
 		if runtime.Supervisor.Status().LastError == "" {
+			runtime.touch()
 			return runtime, nil
 		}
-		// A threaded supervisor never auto-restarts. This explicit Ensure is
-		// reached only by a new select, so rotate before recreating a root and
-		// make old connection drafts fail their generation fence.
+		// A fatal threaded supervisor cannot continue any queued work. Its
+		// admissions remain unknown, but explicit reselection is permitted to
+		// create a new generation; it never replays the old queue.
 		r.closeRuntime(runtime)
 		delete(r.runtimes, threadID)
-		if _, err := r.store.RotateRuntimeGeneration(threadID); err != nil {
-			return nil, err
-		}
+	}
+	if len(r.runtimes) >= r.cap && !r.evictOneLocked() {
+		return nil, ErrWorkerCap
 	}
 	cwd, err := storageCWD()
 	if err != nil {
 		return nil, err
 	}
-	// Paths are persisted with the UUID root before it starts and then held fixed.
 	thread, err := r.store.EnsureRuntime(threadID, cwd)
+	if err != nil {
+		return nil, err
+	}
+	thread, err = r.store.BeginRuntime(threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,27 +180,26 @@ func (r *Router) Ensure(ctx context.Context, threadID string) (*Runtime, error) 
 		_ = ownerLock.Close()
 		return nil, fmt.Errorf("missioncontrol: runtime %s already has an owner: %w", thread.RuntimeSessionID, err)
 	}
-	sup := cos.New(cos.Config{
-		SessionID:           thread.RuntimeSessionID,
-		Cwd:                 thread.StorageCWD,
-		StatePath:           thread.StatusPath,
-		InstructionPath:     thread.InstructionPath,
-		ThreadedTextPreview: true,
-		ThreadKind:          thread.Kind,
-		OwnerLockFile:       ownerLock,
+	runtime := &Runtime{
+		Thread: thread, ownerLock: ownerLock, store: r.store, lastUsed: time.Now(),
+		listeners: make(map[uint64]chan RuntimeEvent), submissions: make(map[string]submission),
+		approvals: make(map[string]string), replyBoundaries: make(map[string]snapshotBoundary),
+	}
+	runtime.Supervisor = cos.New(cos.Config{
+		SessionID: thread.RuntimeSessionID, Cwd: thread.StorageCWD,
+		StatePath: thread.StatusPath, InstructionPath: thread.InstructionPath,
+		ThreadedTextPreview: true, ThreadKind: thread.Kind, OwnerLockFile: ownerLock,
+		ThreadJournalPath:      thread.JournalPath,
+		ThreadContextMaxTokens: r.contextMaxTokens,
+		EventObserver:          runtime.onSidecarEvent,
+		BeforeReply:            runtime.captureReplyBoundary,
 	})
-	if err := sup.Start(ctx); err != nil {
+	if err := runtime.Supervisor.Start(r.ctx); err != nil {
 		_ = syscall.Flock(int(ownerLock.Fd()), syscall.LOCK_UN)
 		_ = ownerLock.Close()
 		return nil, err
 	}
-	runtime := &Runtime{
-		Thread: thread, Supervisor: sup, ownerLock: ownerLock, store: r.store,
-		listeners:   make(map[uint64]chan RuntimeEvent),
-		submissions: make(map[string]submission),
-	}
 	r.runtimes[threadID] = runtime
-	go runtime.pump()
 	return runtime, nil
 }
 
@@ -147,6 +207,56 @@ func (r *Router) Runtime(threadID string) *Runtime {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.runtimes[threadID]
+}
+
+// Archive closes only this router's idle root and retains all immutable
+// session/transcript references in the catalog.
+func (r *Router) Archive(threadID string) (Thread, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	thread, _, found, err := r.store.Thread(threadID)
+	if err != nil || !found {
+		return Thread{}, errors.New("missioncontrol: unknown thread")
+	}
+	if thread.Kind == "lobby" {
+		return Thread{}, errors.New("missioncontrol: the Lobby cannot be archived")
+	}
+	if runtime := r.runtimes[threadID]; runtime != nil {
+		if !runtime.SafeEvict() {
+			return Thread{}, errors.New("missioncontrol: archive requires an idle persisted runtime with no approvals")
+		}
+		r.closeRuntime(runtime)
+		delete(r.runtimes, threadID)
+	}
+	return r.store.Archive(threadID)
+}
+
+// Reset closes only an idle safe root then rotates to a fresh session UUID.
+func (r *Router) Reset(threadID string) (Thread, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	runtime := r.runtimes[threadID]
+	if runtime == nil || !runtime.SafeEvict() {
+		return Thread{}, errors.New("missioncontrol: reset requires an idle persisted runtime with no approvals")
+	}
+	r.closeRuntime(runtime)
+	delete(r.runtimes, threadID)
+	return r.store.ResetRuntime(threadID)
+}
+
+func (r *Router) evictOneLocked() bool {
+	var candidate *Runtime
+	for _, runtime := range r.runtimes {
+		if runtime.SafeEvict() && (candidate == nil || runtime.lastUsed.Before(candidate.lastUsed)) {
+			candidate = runtime
+		}
+	}
+	if candidate == nil {
+		return false
+	}
+	r.closeRuntime(candidate)
+	delete(r.runtimes, candidate.Thread.ID)
+	return true
 }
 
 func (r *Router) Close() {
@@ -159,6 +269,7 @@ func (r *Router) Close() {
 		return
 	}
 	r.closed = true
+	r.cancel()
 	runtimes := r.runtimes
 	r.runtimes = map[string]*Runtime{}
 	r.mu.Unlock()
@@ -175,116 +286,67 @@ func (r *Router) closeRuntime(runtime *Runtime) {
 	}
 }
 
-// History comes from the sidecar SessionStore through its authenticated
-// sidecar protocol; the catalog never copies transcript contents.
-func (r *Runtime) History(ctx context.Context, limit int) (json.RawMessage, error) {
-	if _, err := r.Supervisor.WaitReady(ctx); err != nil {
+func (r *Runtime) touch() {
+	r.mu.Lock()
+	r.lastUsed = time.Now()
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SafeEvict() bool {
+	if !r.Supervisor.Idle() || r.store.HasNonterminalAdmission(r.Thread.ID, r.Thread.RuntimeGeneration) {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.approvals) == 0
+}
+
+func (r *Runtime) Submit(requestID, prompt, clientRef string) (*cos.Turn, error) {
+	r.opMu.Lock()
+	defer r.opMu.Unlock()
+	if r.Thread.Kind == "lobby" {
+		records, err := r.store.Summaries(maxSummaries)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.Supervisor.SetLobbySummaries(records); err != nil {
+			return nil, err
+		}
+	}
+	turnID := r.Supervisor.ReserveTurnID()
+	if _, err := r.store.MarkDispatched(requestID, r.Thread.ID, r.Thread.RuntimeGeneration, turnID); err != nil {
 		return nil, err
 	}
-	return r.Supervisor.History(limit)
-}
-
-// Snapshot is an idle-only cut of canonical sidecar history. It carries the
-// immutable local turn IDs known to be covered by the response; no prompt or
-// content matching is used for attribution.
-type Snapshot struct {
-	History        json.RawMessage
-	ThreadSeq      uint64
-	CoveredTurnIDs []string
-}
-
-func (r *Runtime) SubscribeSnapshot(ctx context.Context, limit int) (Snapshot, <-chan RuntimeEvent, func(), error) {
+	turn := r.Supervisor.SubmitWithID(prompt, turnID)
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.Supervisor.Idle() {
-		return Snapshot{}, nil, nil, ErrThreadBusySnapshot
-	}
-	history, err := r.History(ctx, limit)
-	if err != nil {
-		return Snapshot{}, nil, nil, err
-	}
-	if !r.Supervisor.Idle() {
-		return Snapshot{}, nil, nil, ErrThreadBusySnapshot
-	}
-	snapshot, err := r.snapshotLocked(history)
-	if err != nil {
-		return Snapshot{}, nil, nil, err
-	}
-	r.listenerID++
-	id := r.listenerID
-	events := make(chan RuntimeEvent, 512)
-	r.listeners[id] = events
-	cancel := func() {
-		r.mu.Lock()
-		if current, ok := r.listeners[id]; ok {
-			delete(r.listeners, id)
-			close(current)
-		}
-		r.mu.Unlock()
-	}
-	return snapshot, events, cancel, nil
-}
-
-// Snapshot does not alter subscription authority. It is refused while the
-// root has active or queued work, so historical results are never reconciled
-// with an active event stream in this initial preview.
-func (r *Runtime) Snapshot(ctx context.Context, limit int) (Snapshot, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.Supervisor.Idle() {
-		return Snapshot{}, ErrThreadBusySnapshot
-	}
-	history, err := r.History(ctx, limit)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	if !r.Supervisor.Idle() {
-		return Snapshot{}, ErrThreadBusySnapshot
-	}
-	return r.snapshotLocked(history)
-}
-
-var ErrThreadBusySnapshot = errors.New("missioncontrol: thread_busy_snapshot")
-
-func (r *Runtime) snapshotLocked(history json.RawMessage) (Snapshot, error) {
-	var turns []struct {
-		TurnID string `json:"turn_id"`
-	}
-	if err := json.Unmarshal(history, &turns); err != nil {
-		// The sidecar promised a history array. Refuse this snapshot rather
-		// than issuing a watermark whose coverage cannot be established.
-		return Snapshot{}, fmt.Errorf("missioncontrol: invalid sidecar history: %w", err)
-	}
-	covered := make([]string, 0, len(turns))
-	for _, turn := range turns {
-		if turn.TurnID != "" {
-			covered = append(covered, turn.TurnID)
-		}
-	}
-	return Snapshot{History: history, ThreadSeq: r.Thread.LastEventSeq, CoveredTurnIDs: covered}, nil
-}
-
-// Submit records rendering correlation before the sidecar can emit turn_start.
-func (r *Runtime) Submit(requestID, prompt, clientRef string) (*cos.Turn, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	turn := r.Supervisor.Submit(prompt)
-	if _, err := r.store.MarkDispatched(requestID, r.Thread.ID, r.Thread.RuntimeGeneration, turn.ID); err != nil {
-		return turn, err
-	}
 	r.submissions[turn.ID] = submission{clientRef: clientRef, prompt: prompt, requestID: requestID}
-	raw, err := json.Marshal(map[string]string{
-		"ev": "turn_submitted", "turn_id": turn.ID, "prompt": prompt, "client_ref": clientRef,
-	})
-	if err == nil {
-		r.publishLocked(raw)
-	}
+	r.lastUsed = time.Now()
+	r.mu.Unlock()
+	_, _ = r.store.RecordAttention("pending:"+r.Thread.ID+":"+fmt.Sprint(r.Thread.RuntimeGeneration)+":"+turn.ID, r.Thread.ID, r.Thread.RuntimeGeneration, turn.ID, "pending")
 	return turn, nil
 }
 
-// Subscribe remains valid when this connection selects another thread. A
-// bounded slow listener loses only its own progress frames; it cannot block
-// the sidecar reader or another thread.
+func (r *Runtime) Cancel(turnID string) error {
+	r.opMu.Lock()
+	defer r.opMu.Unlock()
+	if turnID == "" {
+		return errors.New("missioncontrol: cancel requires an exact turn ID")
+	}
+	return r.Supervisor.CancelSpecific(turnID)
+}
+
+func (r *Runtime) Approve(turnID, approvalID string, approved bool) error {
+	r.opMu.Lock()
+	defer r.opMu.Unlock()
+	r.mu.Lock()
+	boundTurn, ok := r.approvals[approvalID]
+	r.mu.Unlock()
+	if !ok || boundTurn != turnID {
+		return errors.New("missioncontrol: approval is not pending for this turn")
+	}
+	return r.Supervisor.Approve(approvalID, approved, "answered in Mission Control text preview")
+}
+
 func (r *Runtime) Subscribe(depth int) (<-chan RuntimeEvent, func()) {
 	if depth <= 0 {
 		depth = 512
@@ -305,24 +367,188 @@ func (r *Runtime) Subscribe(depth int) (<-chan RuntimeEvent, func()) {
 	}
 }
 
-func (r *Runtime) pump() {
-	sub := r.Supervisor.Subscribe(512)
-	defer sub.Close()
-	for event := range sub.C() {
-		raw := event.Raw
-		if len(raw) == 0 {
-			raw, _ = json.Marshal(event)
-		}
-		if event.TurnID != "" && (event.Ev == cos.EvTurnStart || event.Ev == cos.EvError) {
-			raw = r.decorate(raw, event.TurnID)
-		}
-		r.mu.Lock()
-		r.publishLocked(raw)
-		if event.Ev == cos.EvTurnEnd || event.Ev == cos.EvCancelled || event.Ev == cos.EvTurnCancelled {
-			_ = r.store.MarkTerminal(r.Thread.ID, r.Thread.RuntimeGeneration, event.TurnID, event.Persisted)
-		}
-		r.mu.Unlock()
+// Snapshot is an ordered sidecar emission cut: the sidecar answers snapshot on
+// its ordered stdin/stdout protocol; EventObserver journals every preceding
+// event before that reply is delivered. New Submit calls hold opMu behind it.
+func (r *Runtime) Snapshot(ctx context.Context, limit int) (Snapshot, error) {
+	// A cold root is still preparing real modules. Bound only this caller's
+	// wait by the browser context; the router retains ownership of the process.
+	if _, err := r.Supervisor.WaitReady(ctx); err != nil {
+		return Snapshot{}, err
 	}
+	r.opMu.Lock()
+	defer r.opMu.Unlock()
+	ev, err := r.Supervisor.Snapshot(limit)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	r.mu.Lock()
+	boundary, ok := r.replyBoundaries[ev.ReqID]
+	delete(r.replyBoundaries, ev.ReqID)
+	r.mu.Unlock()
+	if !ok {
+		return Snapshot{}, errors.New("missioncontrol: snapshot reply has no ordered runtime boundary")
+	}
+	var sidecar struct {
+		History      json.RawMessage `json:"history"`
+		ActiveTurnID string          `json:"active_turn_id"`
+		Todo         json.RawMessage `json:"todo"`
+		Goal         json.RawMessage `json:"goal"`
+		Context      json.RawMessage `json:"context"`
+	}
+	if err := json.Unmarshal(ev.Snapshot, &sidecar); err != nil {
+		return Snapshot{}, fmt.Errorf("missioncontrol: invalid sidecar snapshot: %w", err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastUsed = time.Now()
+	snapshot := Snapshot{
+		History: sidecar.History, ThreadSeq: boundary.threadSeq,
+		ReplayEvents: append([]RuntimeEvent(nil), boundary.journal...), Gap: boundary.gap,
+		Todo: sidecar.Todo, Goal: sidecar.Goal,
+		Context:                 sidecar.Context,
+		Pending:                 make([]TurnState, 0, len(boundary.queue.PendingTurnIDs)),
+		CoveredTurnIDs:          make([]string, 0),
+		ReplaySuppressedTurnIDs: append([]string(nil), boundary.replaySuppressedTurnIDs...),
+	}
+	if sidecar.ActiveTurnID != "" {
+		snapshot.Active = &TurnState{TurnID: sidecar.ActiveTurnID, Status: "active"}
+	}
+	for _, turnID := range boundary.queue.PendingTurnIDs {
+		snapshot.Pending = append(snapshot.Pending, TurnState{TurnID: turnID, Status: "queued"})
+	}
+	if boundary.queue.ActiveTurnID != "" && sidecar.ActiveTurnID != "" && boundary.queue.ActiveTurnID != sidecar.ActiveTurnID {
+		snapshot.Gap = true
+	}
+	var historyTurns []struct {
+		TurnID string `json:"turn_id"`
+	}
+	if err := json.Unmarshal(sidecar.History, &historyTurns); err != nil {
+		return Snapshot{}, fmt.Errorf("missioncontrol: invalid sidecar snapshot history: %w", err)
+	}
+	for _, turn := range historyTurns {
+		if turn.TurnID != "" {
+			snapshot.CoveredTurnIDs = append(snapshot.CoveredTurnIDs, turn.TurnID)
+		}
+	}
+	r.pruneSnapshotJournalLocked(snapshot.CoveredTurnIDs, snapshot.ReplaySuppressedTurnIDs)
+	return snapshot, nil
+}
+
+// captureReplyBoundary runs on Supervisor's single stdout reader. It must
+// remain short and must not call back into Supervisor: QueueState was already
+// copied before the callback. Snapshot's opMu makes at most one matching
+// snapshot requester per runtime.
+func (r *Runtime) captureReplyBoundary(event cos.Event, queue cos.QueueState) {
+	if event.Ev != cos.EvSnapshot || event.ReqID == "" {
+		return
+	}
+	r.mu.Lock()
+	r.replyBoundaries[event.ReqID] = snapshotBoundary{
+		threadSeq:               r.Thread.LastEventSeq,
+		journal:                 append([]RuntimeEvent(nil), r.journal...),
+		replaySuppressedTurnIDs: persistedTerminalTurnIDs(r.journal),
+		gap:                     r.journalGap,
+		queue:                   queue,
+	}
+	r.mu.Unlock()
+}
+
+func (r *Runtime) onSidecarEvent(event cos.Event) {
+	if event.Ev == cos.EvHistory || event.Ev == cos.EvSnapshot || event.Ev == cos.EvConfig || event.Ev == cos.EvCleared {
+		return
+	}
+	raw := event.Raw
+	if len(raw) == 0 {
+		raw, _ = json.Marshal(event)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if event.TurnID != "" && (event.Ev == cos.EvTurnStart || event.Ev == cos.EvError) {
+		raw = r.decorateLocked(raw, event.TurnID)
+	}
+	if event.Ev == cos.EvApprovalRequest && event.RequestID != "" && event.TurnID != "" {
+		r.approvals[event.RequestID] = event.TurnID
+		_, _ = r.store.RecordAttention("approval:"+r.Thread.ID+":"+fmt.Sprint(r.Thread.RuntimeGeneration)+":"+event.RequestID, r.Thread.ID, r.Thread.RuntimeGeneration, event.TurnID, "approval")
+	}
+	if event.IsTerminal() {
+		for approvalID, boundTurnID := range r.approvals {
+			if boundTurnID == event.TurnID {
+				delete(r.approvals, approvalID)
+			}
+		}
+		_ = r.store.MarkTerminal(r.Thread.ID, r.Thread.RuntimeGeneration, event.TurnID, event.Persisted)
+		kind := "terminal"
+		if event.Ev == cos.EvError || event.Code != "" {
+			kind = "error"
+		}
+		_, _ = r.store.RecordAttention(kind+":"+r.Thread.ID+":"+fmt.Sprint(r.Thread.RuntimeGeneration)+":"+event.TurnID, r.Thread.ID, r.Thread.RuntimeGeneration, event.TurnID, kind)
+		if event.Persisted && event.Ev == cos.EvTurnEnd {
+			if extract := boundedTerminalExtract(event.Response); extract != "" {
+				_ = r.store.RecordSummary(r.Thread.ID, r.Thread.RuntimeSessionID, r.Thread.RuntimeGeneration, event.TurnID, extract)
+			}
+		}
+		delete(r.submissions, event.TurnID)
+	}
+	r.publishLocked(raw)
+}
+
+func boundedTerminalExtract(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > maxSummaryChars {
+		value = value[:maxSummaryChars]
+	}
+	return value
+}
+
+func persistedTerminalTurnIDs(events []RuntimeEvent) []string {
+	ids := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, runtimeEvent := range events {
+		event, err := cos.ParseEvent(runtimeEvent.Raw)
+		if err != nil || !event.IsTerminal() || !event.Persisted || event.TurnID == "" {
+			continue
+		}
+		if _, duplicate := seen[event.TurnID]; duplicate {
+			continue
+		}
+		seen[event.TurnID] = struct{}{}
+		ids = append(ids, event.TurnID)
+	}
+	return ids
+}
+
+// pruneSnapshotJournalLocked reclaims only terminal turn events whose
+// canonical/replay treatment was established by this completed snapshot cut.
+// A completed-but-identity-ambiguous canonical group is deliberately
+// suppressed rather than falsely added to covered_turn_ids.
+func (r *Runtime) pruneSnapshotJournalLocked(covered, suppressed []string) {
+	if len(covered) == 0 && len(suppressed) == 0 {
+		return
+	}
+	coveredSet := make(map[string]struct{}, len(covered)+len(suppressed))
+	for _, turnID := range covered {
+		coveredSet[turnID] = struct{}{}
+	}
+	for _, turnID := range suppressed {
+		coveredSet[turnID] = struct{}{}
+	}
+	kept := r.journal[:0]
+	size := 0
+	for _, event := range r.journal {
+		var fields struct {
+			TurnID string `json:"turn_id"`
+		}
+		if json.Unmarshal(event.Raw, &fields) == nil {
+			if _, ok := coveredSet[fields.TurnID]; ok {
+				continue
+			}
+		}
+		kept = append(kept, event)
+		size += len(event.Raw)
+	}
+	r.journal = kept
+	r.journalSize = size
 }
 
 func (r *Runtime) publishLocked(raw json.RawMessage) {
@@ -330,20 +556,25 @@ func (r *Runtime) publishLocked(raw json.RawMessage) {
 	if err != nil {
 		return
 	}
-	out := RuntimeEvent{EventID: uuidString(), ThreadSeq: seq, Raw: raw}
+	out := RuntimeEvent{EventID: uuid.New().String(), ThreadSeq: seq, Raw: raw}
 	r.Thread.LastEventSeq = seq
+	if r.journalGap || len(r.journal) >= maxJournalEvents || r.journalSize+len(raw) > maxJournalBytes {
+		r.journalGap = true
+	} else {
+		r.journal = append(r.journal, out)
+		r.journalSize += len(raw)
+	}
 	for _, listener := range r.listeners {
 		select {
 		case listener <- out:
 		default:
+			r.journalGap = true
 		}
 	}
 }
 
-func (r *Runtime) decorate(raw json.RawMessage, turnID string) json.RawMessage {
-	r.mu.Lock()
+func (r *Runtime) decorateLocked(raw json.RawMessage, turnID string) json.RawMessage {
 	sub, ok := r.submissions[turnID]
-	r.mu.Unlock()
 	if !ok {
 		return raw
 	}
@@ -352,14 +583,10 @@ func (r *Runtime) decorate(raw json.RawMessage, turnID string) json.RawMessage {
 		return raw
 	}
 	if sub.clientRef != "" {
-		if encoded, err := json.Marshal(sub.clientRef); err == nil {
-			fields["client_ref"] = encoded
-		}
+		fields["client_ref"], _ = json.Marshal(sub.clientRef)
 	}
 	if sub.prompt != "" {
-		if encoded, err := json.Marshal(sub.prompt); err == nil {
-			fields["prompt"] = encoded
-		}
+		fields["prompt"], _ = json.Marshal(sub.prompt)
 	}
 	out, err := json.Marshal(fields)
 	if err != nil {
@@ -368,6 +595,11 @@ func (r *Runtime) decorate(raw json.RawMessage, turnID string) json.RawMessage {
 	return out
 }
 
-func uuidString() string {
-	return uuid.New().String()
+func sortedTurnIDs(values map[string]submission) []string {
+	out := make([]string, 0, len(values))
+	for id := range values {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }

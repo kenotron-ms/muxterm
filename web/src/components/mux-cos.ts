@@ -61,7 +61,10 @@ import {
 } from '../lib/cos-store.js';
 import {
   threadStore,
+  type ThreadAttention,
   type ThreadContextOption,
+  type ThreadControlTarget,
+  type ThreadSummary,
 } from '../lib/thread-store.js';
 import { ASSISTANT_ALIAS, ASSISTANT_NAME } from '../lib/assistant-identity.js';
 import {
@@ -111,6 +114,16 @@ function clock(msLeft: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/** A catalog observation timestamp, never a claim that remote work is fresh. */
+function observedAt(iso: string): string {
+  const value = Date.parse(iso);
+  return Number.isFinite(value) ? new Date(value).toLocaleString() : iso;
+}
+
+function compactText(text: string, limit = 280): string {
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
 /**
  * Is this snapshot a session the user is actually in?
  *
@@ -125,6 +138,10 @@ function isSessionLive(s: VoiceSessionSnapshot): boolean {
 
 /** What the housekeeping menu offers. `days` is the cut, or 'all'. */
 type Housekeeping = 7 | 30 | 'all';
+type ThreadControlConfirmation = Readonly<{
+  action: 'reset' | 'archive';
+  target: ThreadControlTarget;
+}>;
 
 /** The sheet's resting sizes. Continuous while dragging; these on release. */
 type SheetDetent = 'half' | 'full';
@@ -169,6 +186,8 @@ export class MuxCos extends LitElement {
   @state() private _contextCandidate = '';
   /** Which housekeeping action is awaiting a yes. null = none pending. */
   @state() private _confirm: Housekeeping | null = null;
+  /** Scoped reset/archive confirmation with its immutable selected target. */
+  @state() private _threadConfirm: ThreadControlConfirmation | null = null;
   @state() private _voice: VoiceState = voiceInputController.getState();
   /**
    * The LIVE session, which is a different thing from _voice above.
@@ -2063,8 +2082,50 @@ export class MuxCos extends LitElement {
    */
   private _renderMenu(): TemplateResult {
     if (threadStore.threaded) {
+      const noScopedControls =
+        !threadStore.resetAvailable &&
+        !threadStore.archiveAvailable &&
+        !(threadStore.archiveSupported && threadStore.controlTarget?.kind === 'lobby');
       return html`
         <div class="menu" role="menu">
+          ${threadStore.resetAvailable
+            ? html`
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-thread-reset
+                  @click="${() => this._askThreadControl('reset')}"
+                >Reset this context</button>
+              `
+            : nothing}
+          ${threadStore.archiveAvailable
+            ? html`
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="danger"
+                  data-thread-archive
+                  @click="${() => this._askThreadControl('archive')}"
+                >Archive this context</button>
+              `
+            : nothing}
+          ${threadStore.archiveSupported && threadStore.controlTarget?.kind === 'lobby'
+            ? html`<button type="button" role="menuitem" disabled>Lobby cannot be archived</button>`
+            : nothing}
+          ${noScopedControls
+            ? html`<button type="button" role="menuitem" disabled>
+                Thread controls are unavailable in text preview
+              </button>`
+            : nothing}
+          <button
+            type="button"
+            role="menuitem"
+            data-thread-migration-preview
+            ?disabled="${threadStore.migrationPreviewPending}"
+            @click="${this._previewMigration}"
+          >${threadStore.migrationPreviewPending
+            ? 'Opening migration preview…'
+            : 'Preview catalog migration / rollback'}</button>
           <button type="button" role="menuitem" disabled>
             Clear messages is unavailable in text preview
           </button>
@@ -2102,8 +2163,11 @@ export class MuxCos extends LitElement {
     const turns = threadStore.turns;
     const fault = threadStore.fault;
     return html`
-      ${turns.length === 0 && !this._confirm ? this._renderZero() : nothing}
+      ${this._renderAttentionNotice()}
+      ${this._renderLobbySummaries()}
+      ${turns.length === 0 && !this._confirm && !this._threadConfirm ? this._renderZero() : nothing}
       ${turns.map((t) => this._renderTurn(t))}
+      ${this._renderRootState()}
       ${threadStore.threaded && threadStore.hasUnread
         ? html`
             <div class="thread-unread" data-thread-unread role="status">
@@ -2115,7 +2179,111 @@ export class MuxCos extends LitElement {
         ? html`<div class="fatal" role="alert">${fault.message}</div>`
         : nothing}
       ${fault && !fault.fatal ? html`<div class="notice">${fault.message}</div>` : nothing}
+      ${threadStore.threaded && this._threadConfirm !== null
+        ? this._renderThreadConfirm(this._threadConfirm)
+        : nothing}
       ${!threadStore.threaded && this._confirm !== null ? this._renderConfirm(this._confirm) : nothing}
+    `;
+  }
+
+  /**
+   * One durable item at a time: dismissal reveals the next catalog item. No
+   * incoming record opens a context, Viewer, microphone, or approval prompt.
+   */
+  private _renderAttentionNotice(): TemplateResult | typeof nothing {
+    const attention = threadStore.attention[0];
+    if (!attention) return nothing;
+    return html`
+      <div class="notice" data-thread-attention="${attention.id}" aria-label="Queued attention">
+        <div><strong>Attention queued</strong></div>
+        <div>
+          From ${attention.label} · observed
+          <time datetime="${attention.observedAt}" title="${attention.observedAt}"
+            >${observedAt(attention.observedAt)}</time
+          >
+        </div>
+        <div>${attention.reason}</div>
+        ${attention.canViewDetail
+          ? nothing
+          : html`<div>${attention.detailUnavailable}</div>`}
+        <div class="row">
+          <button
+            class="btn pri"
+            type="button"
+            data-thread-attention-view="${attention.id}"
+            title="${attention.canViewDetail ? 'Open a read-only Viewer detail for this context' : attention.detailUnavailable}"
+            ?disabled="${!attention.canViewDetail || attention.detailPending}"
+            @click="${() => threadStore.viewAttentionDetail(attention.id)}"
+          >${attention.detailPending ? 'opening detail…' : 'View detail'}</button>
+          <button
+            class="btn no"
+            type="button"
+            data-thread-attention-talk="${attention.id}"
+            ?disabled="${!threadStore.canSelect}"
+            @click="${() => this._talkAttention(attention)}"
+          >Talk here</button>
+          <button
+            class="btn no"
+            type="button"
+            data-thread-attention-dismiss="${attention.id}"
+            ?disabled="${attention.acknowledging}"
+            @click="${() => threadStore.acknowledgeAttention(attention.id)}"
+          >${attention.acknowledging ? 'dismissing…' : 'Dismiss'}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  /** Bounded terminal extracts are context, not a claim that remote work is current. */
+  private _renderLobbySummaries(): TemplateResult | typeof nothing {
+    const summaries = threadStore.lobbySummaries;
+    if (summaries.length === 0) return nothing;
+    return html`
+      <div class="notice" data-thread-summaries aria-label="Completed work extracts">
+        <div><strong>Completed-work extracts</strong></div>
+        <div>Bounded provenance records; observed time is not a freshness claim.</div>
+        ${summaries.map((summary) => this._renderSummary(summary))}
+      </div>
+    `;
+  }
+
+  private _renderSummary(summary: ThreadSummary): TemplateResult {
+    return html`
+      <div data-thread-summary="${summary.id}">
+        <div>
+          ${summary.label} · observed
+          <time datetime="${summary.observedAt}" title="${summary.observedAt}"
+            >${observedAt(summary.observedAt)}</time
+          >
+          · extract${summary.truncated ? ' (display truncated)' : ''}
+        </div>
+        <div>${summary.text}</div>
+      </div>
+    `;
+  }
+
+  /** Per-root tool snapshots stay inside the transcript; they are not a dashboard. */
+  private _renderRootState(): TemplateResult | typeof nothing {
+    const root = threadStore.rootState;
+    if (!root) return nothing;
+    return html`
+      <div class="notice" data-thread-root-state aria-label="Context tracking state">
+        <div><strong>Context tracking</strong></div>
+        ${root.goal
+          ? html`<div title="${root.goal}">Goal: ${compactText(root.goal)}</div>`
+          : nothing}
+        ${root.goal ? html`<div>Goal tracking only; autonomous scheduling is unavailable.</div>` : nothing}
+        ${root.todos.length > 0
+          ? html`
+              <div>Todo:</div>
+              ${root.todos.map(
+                (todo) => html`<div data-thread-todo-status="${todo.status}">
+                  [${todo.status}] ${compactText(todo.activeForm || todo.content, 200)}
+                </div>`,
+              )}
+            `
+          : nothing}
+      </div>
     `;
   }
 
@@ -2150,6 +2318,7 @@ export class MuxCos extends LitElement {
   private _renderTurn(t: CosTurn): TemplateResult {
     const asks = threadStore.approvals.filter((a) => a.turnId === t.id);
     const live = t.status === 'pending' || t.status === 'streaming';
+    const cancelling = threadStore.threaded && threadStore.isControlPending('cancel', t.id);
     return html`
       ${t.prompt
         ? html`<div class="turn you">
@@ -2164,6 +2333,17 @@ export class MuxCos extends LitElement {
           ${live && t.blocks.length === 0
             ? html`<div class="waiting">working...</div>`
             : nothing}
+          ${threadStore.threaded && (threadStore.canCancel(t.id) || cancelling)
+            ? html`
+                <button
+                  class="btn no"
+                  type="button"
+                  data-thread-cancel="${t.id}"
+                  ?disabled="${cancelling}"
+                  @click="${() => threadStore.cancel(t.id)}"
+                >${cancelling ? 'stopping…' : 'stop this turn'}</button>
+              `
+            : nothing}
           <!--
             A turn CAN legitimately end with no reply: the loop stops after a
             tool result and the model never speaks again, so turn_end carries
@@ -2176,7 +2356,7 @@ export class MuxCos extends LitElement {
           ${!live && t.status === 'done' && !t.blocks.some((b) => b.kind === 'text')
             ? html`<div class="waiting">ended without a reply</div>`
             : nothing}
-          ${threadStore.threaded && asks.length > 0
+          ${threadStore.threaded && asks.length > 0 && !threadStore.approvalAvailable
             ? html`<div class="notice">Approvals are unavailable in text preview.</div>`
             : asks.map((a) => this._renderAsk(a))}
           ${t.notices.map((n) => html`<div class="notice">${n}</div>`)}
@@ -2226,6 +2406,8 @@ export class MuxCos extends LitElement {
   private _renderAsk(a: CosApproval): TemplateResult {
     const left = a.deadline - Date.now();
     const settled = a.answered !== '';
+    const pending = threadStore.threaded && threadStore.isControlPending('approval', a.requestId);
+    const enabled = !threadStore.threaded || threadStore.canAnswer(a.turnId, a.requestId);
     return html`
       <div class="ask ${settled ? 'settled' : ''}" role="alertdialog" aria-label="Approval requested">
         <div class="h">
@@ -2240,12 +2422,16 @@ export class MuxCos extends LitElement {
                 <button
                   class="btn pri"
                   type="button"
-                  @click="${() => threadStore.answer(a.requestId, true)}"
-                >approve</button>
+                  data-thread-approval="approve:${a.turnId}:${a.requestId}"
+                  ?disabled="${pending || !enabled}"
+                  @click="${() => threadStore.answer(a.turnId, a.requestId, true)}"
+                >${pending ? 'sending…' : 'approve'}</button>
                 <button
                   class="btn no"
                   type="button"
-                  @click="${() => threadStore.answer(a.requestId, false)}"
+                  data-thread-approval="deny:${a.turnId}:${a.requestId}"
+                  ?disabled="${pending || !enabled}"
+                  @click="${() => threadStore.answer(a.turnId, a.requestId, false)}"
                 >deny</button>
                 <span class="clock ${left < 30000 ? 'soon' : ''}">${clock(left)} left</span>
               `}
@@ -2300,6 +2486,43 @@ export class MuxCos extends LitElement {
                 type="button"
                 @click="${() => {
                   this._confirm = null;
+                }}"
+              >Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  /** One scoped destructive control, shown with the exact target before send. */
+  private _renderThreadConfirm(confirm: ThreadControlConfirmation): TemplateResult {
+    const resetting = confirm.action === 'reset';
+    const head = resetting
+      ? `Reset ${confirm.target.label}?`
+      : `Archive ${confirm.target.label}?`;
+    const detail = resetting
+      ? 'This resets only this conversation context. It does not change terminals, workspaces, lanes, or applets. Its current draft binding is cleared and you must explicitly select the new generation.'
+      : 'This archives only this conversation context. It does not change terminals, workspaces, lanes, or applets. Its history remains an immutable reference.';
+    return html`
+      <div class="turn">
+        <div class="who"></div>
+        <div class="bd">
+          <div class="confirm" role="alertdialog" aria-label="${head}">
+            <div class="h">${icon(TriangleAlert, { size: 13 })} ${head}</div>
+            <p class="d">${detail}</p>
+            <div class="row">
+              <button
+                class="btn danger"
+                type="button"
+                data-thread-confirm="${confirm.action}:${confirm.target.threadId}:${confirm.target.generation}"
+                @click="${() => this._doThreadControl(confirm)}"
+              >${resetting ? 'Reset this context' : 'Archive this context'}</button>
+              <button
+                class="btn no"
+                type="button"
+                @click="${() => {
+                  this._threadConfirm = null;
                 }}"
               >Cancel</button>
             </div>
@@ -2471,17 +2694,23 @@ export class MuxCos extends LitElement {
       this.renderRoot.querySelector<HTMLButtonElement>('.context-trigger')?.focus();
       return;
     }
+    if (this._threadConfirm !== null) {
+      e.preventDefault();
+      this._threadConfirm = null;
+      return;
+    }
     if (!this._live || threadStore.threaded) return;
     // The same layers _onKey unwinds, DISMISSED and not merely deferred.
     // _onKey is bound to the textarea, which solo mode does not render -- so
     // deferring here without closing anything left Escape a dead key for
     // exactly as long as the menu stayed open, which is the opposite of
     // unwinding one layer at a time.
-    if (this._menuOpen || this._contextOpen || this._confirm !== null) {
+    if (this._menuOpen || this._contextOpen || this._confirm !== null || this._threadConfirm !== null) {
       e.preventDefault();
       this._menuOpen = false;
       this._contextOpen = false;
       this._confirm = null;
+      this._threadConfirm = null;
       return;
     }
     e.preventDefault();
@@ -2753,6 +2982,7 @@ export class MuxCos extends LitElement {
     if (!option) return;
     if (!threadStore.select(option.target)) return;
     this._contextOpen = false;
+    this._threadConfirm = null;
     this._pinned = true;
   };
 
@@ -2836,6 +3066,35 @@ export class MuxCos extends LitElement {
     threadStore.clear(which);
   };
 
+  private _askThreadControl(action: 'reset' | 'archive'): void {
+    const target = threadStore.controlTarget;
+    if (!target) return;
+    if (action === 'reset' && !threadStore.resetAvailable) return;
+    if (action === 'archive' && !threadStore.archiveAvailable) return;
+    this._menuOpen = false;
+    this._threadConfirm = { action, target };
+    this._pinned = true;
+  }
+
+  private _doThreadControl = (confirm: ThreadControlConfirmation): void => {
+    this._threadConfirm = null;
+    if (confirm.action === 'reset') threadStore.reset(confirm.target);
+    else threadStore.archive(confirm.target);
+  };
+
+  /** Explicit context switch from a queued record; no attention event calls this. */
+  private _talkAttention = (attention: ThreadAttention): void => {
+    if (!threadStore.select({ kind: 'thread', threadId: attention.threadId })) return;
+    this._threadConfirm = null;
+    this._pinned = true;
+  };
+
+  /** The backend endpoint is metadata-only; Viewer opens only after this click. */
+  private _previewMigration = (): void => {
+    this._menuOpen = false;
+    if (threadStore.migrationPreview()) this._pinned = true;
+  };
+
   private _onThink(key: string, e: Event): void {
     const open = (e.target as HTMLDetailsElement).open;
     const next = new Set(this._showThinking);
@@ -2873,11 +3132,17 @@ export class MuxCos extends LitElement {
     if (e.key === 'Escape') {
       // Escape unwinds one layer at a time. Only a composer with nothing
       // pending in front of it leaves the surface.
-      if (this._menuOpen || this._contextOpen || this._confirm !== null) {
+      if (
+        this._menuOpen ||
+        this._contextOpen ||
+        this._confirm !== null ||
+        this._threadConfirm !== null
+      ) {
         e.preventDefault();
         this._menuOpen = false;
         this._contextOpen = false;
         this._confirm = null;
+        this._threadConfirm = null;
         return;
       }
       // A live call is a layer too, and in text mode the keystroke never

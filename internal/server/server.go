@@ -135,6 +135,10 @@ type Server struct {
 	// alongside it, so a nil here means the paths do not exist.
 	voice *voice.Manager
 
+	// missionControlVoice owns the one bounded safety-only bridge lease for
+	// this Server. It never owns a provider or microphone session.
+	missionControlVoice *voice.LeaseManager
+
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
 	ai *ai.Manager
@@ -196,13 +200,23 @@ func New(cfg Config) *Server {
 	if s.cfg.MissionControl.ThreadsV2 {
 		catalog, err := missioncontrol.Open(missioncontrol.DefaultPath())
 		if err != nil {
-			hub.setMissionControl(nil, nil, false, err)
+			// Keep the configured v2/text-preview state visible even when an
+			// existing catalog cannot be opened.  Falling back to legacy COS
+			// here silently starts the unrelated global sidecar after a
+			// protocol-aware client explicitly requested the constrained path.
+			hub.setMissionControl(nil, nil, s.cfg.MissionControl.TextPreview, err)
 		} else {
 			var router *missioncontrol.Router
 			if s.cfg.MissionControl.TextPreview {
-				router = missioncontrol.NewRouter(catalog)
+				if err := s.cfg.MissionControl.ValidateTextContextMaxTokens(); err != nil {
+					hub.setMissionControl(nil, nil, true, err)
+				} else {
+					router = missioncontrol.NewRouter(catalog, s.cfg.MissionControl.TextWorkerCap, s.cfg.MissionControl.TextContextMaxTokens)
+				}
 			}
-			hub.setMissionControl(catalog, router, s.cfg.MissionControl.TextPreview, nil)
+			if router != nil || !s.cfg.MissionControl.TextPreview {
+				hub.setMissionControl(catalog, router, s.cfg.MissionControl.TextPreview, nil)
+			}
 		}
 	}
 
@@ -391,6 +405,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// so it goes down on every return path, exactly as the sidecar does.
 	if s.voice != nil {
 		defer s.voice.Close()
+	}
+	if s.missionControlVoice != nil {
+		defer s.missionControlVoice.Close()
 	}
 
 	// Expired publications linger briefly as tombstones so a reader who is

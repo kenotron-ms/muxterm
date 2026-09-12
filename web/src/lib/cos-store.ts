@@ -150,6 +150,20 @@ export interface ThreadedCosEvent {
   readonly event: Readonly<Record<string, unknown>>;
 }
 
+/** Explicit runtime state accompanying an ordered Mission Control snapshot. */
+export interface ThreadedSnapshotState {
+  readonly coveredTurnIds: readonly string[];
+  /**
+   * Persisted terminal turns at the snapshot's event cut which canonical
+   * history already represents but cannot safely identity-bind (for example
+   * duplicate structural transcript groups). This is render-only suppression;
+   * the transport still consumes their event ids and sequences.
+   */
+  readonly replaySuppressedTurnIds: readonly string[];
+  readonly activeTurnId: string;
+  readonly pendingTurnIds: readonly string[];
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -230,6 +244,8 @@ export class CosStore {
    * this renderer must never materialize a second copy of a covered turn.
    */
   private _threadCoveredTurnIds = new Set<string>();
+  /** See ThreadedSnapshotState.replaySuppressedTurnIds. */
+  private _threadReplaySuppressedTurnIds = new Set<string>();
 
   get status(): CosStatus {
     return this._status;
@@ -414,14 +430,15 @@ export class CosStore {
   adoptThreadSnapshot(
     sessionId: string,
     history: readonly unknown[],
-    coveredTurnIds: readonly string[],
+    snapshot: ThreadedSnapshotState,
   ): void {
     this._sessionId = sessionId;
     this._fault = null;
     this._approvals = [];
-    this._threadCoveredTurnIds = new Set(coveredTurnIds);
+    this._threadCoveredTurnIds = new Set(snapshot.coveredTurnIds);
+    this._threadReplaySuppressedTurnIds = new Set(snapshot.replaySuppressedTurnIds);
     this._replayRequestedAt = Date.now();
-    this._replaceThreadHistoryCanonical(history);
+    this._replaceThreadHistoryCanonical(history, snapshot);
     this._setStatus('ready');
     this._notify();
   }
@@ -430,12 +447,13 @@ export class CosStore {
    * Adopt an authoritative history repair for an already-selected thread.
    * Unlike a selection, this does not alter connection-scoped readiness data.
    */
-  adoptThreadHistory(history: readonly unknown[], coveredTurnIds: readonly string[]): void {
+  adoptThreadHistory(history: readonly unknown[], snapshot: ThreadedSnapshotState): void {
     this._fault = null;
     this._approvals = [];
-    this._threadCoveredTurnIds = new Set(coveredTurnIds);
+    this._threadCoveredTurnIds = new Set(snapshot.coveredTurnIds);
+    this._threadReplaySuppressedTurnIds = new Set(snapshot.replaySuppressedTurnIds);
     this._replayRequestedAt = Date.now();
-    this._replaceThreadHistoryCanonical(history);
+    this._replaceThreadHistoryCanonical(history, snapshot);
     this._notify();
   }
 
@@ -446,11 +464,15 @@ export class CosStore {
    * text preview must never drive.
    */
   receiveThreadEvent(envelope: ThreadedCosEvent): void {
-    // No content/prompt heuristic is permitted here. covered_turn_ids is the
-    // authoritative immutable identity boundary supplied with this snapshot.
-    // Suppressing at the adapter also keeps these events off the raw voice
-    // stream (receiveThreadEvent never emits through onEvent).
-    if (this._threadCoveredTurnIds.has(str(envelope.event.turn_id))) {
+    // No content/prompt heuristic is permitted here. The immutable identity
+    // sets are supplied with this snapshot. Suppressing at the adapter also
+    // keeps these events off the raw voice stream (receiveThreadEvent never
+    // emits through onEvent).
+    const turnId = str(envelope.event.turn_id);
+    if (
+      this._threadCoveredTurnIds.has(turnId) ||
+      this._threadReplaySuppressedTurnIds.has(turnId)
+    ) {
       this._notify();
       return;
     }
@@ -458,15 +480,90 @@ export class CosStore {
     this._notify();
   }
 
-  /** Replace this threaded renderer with exactly one canonical server history. */
-  private _replaceThreadHistoryCanonical(raw: readonly unknown[]): void {
+  /**
+   * The v2 transport received a scoped approval receipt. This remains a
+   * renderer-local state change; unlike the legacy answer path it never emits
+   * a global COS command or guesses a terminal turn result.
+   */
+  settleThreadApproval(approvalId: string, approved: boolean): void {
+    const approval = this._approvals.find((item) => item.requestId === approvalId);
+    if (!approval) return;
+    approval.answered = approved ? 'approved' : 'denied';
+    setTimeout(() => {
+      this._approvals = this._approvals.filter((item) => item.requestId !== approvalId);
+      this._notify();
+    }, 900);
+    this._notify();
+  }
+
+  /**
+   * Replace this threaded renderer with exactly one canonical server history,
+   * then materialize the separately authoritative active/queued identities.
+   * These are queue-local ids, never inferred from prompts or prose.
+   */
+  private _replaceThreadHistoryCanonical(
+    raw: readonly unknown[],
+    snapshot: ThreadedSnapshotState,
+  ): void {
     const turns: CosTurn[] = [];
-    for (const item of raw) {
+    const byId = new Map<string, CosTurn>();
+    for (let index = 0; index < raw.length; index++) {
+      const item = raw[index];
       const turn = this._fromHistory(item);
-      if (turn) turns.push(turn);
+      if (!turn || byId.has(turn.id)) continue;
+      const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : null;
+      // The sidecar's ordered snapshot reads the live transcript before it
+      // reports its sole active queue-local id. A currently active turn is the
+      // final un-attributed transcript group; adopt that *structural* identity
+      // instead of matching its prompt or response content.
+      if (
+        snapshot.activeTurnId &&
+        index === raw.length - 1 &&
+        str(record?.turn_id) === ''
+      ) {
+        turn.id = snapshot.activeTurnId;
+        turn.status = 'streaming';
+        turn.endedAt = 0;
+      }
+      turns.push(turn);
+      byId.set(turn.id, turn);
+    }
+    this._ensureThreadSnapshotTurn(turns, byId, snapshot.activeTurnId, 'streaming');
+    for (const turnId of snapshot.pendingTurnIds) {
+      this._ensureThreadSnapshotTurn(turns, byId, turnId, 'pending');
     }
     this._turns = turns;
-    this._byId = new Map(turns.map((turn) => [turn.id, turn]));
+    this._byId = byId;
+  }
+
+  private _ensureThreadSnapshotTurn(
+    turns: CosTurn[],
+    byId: Map<string, CosTurn>,
+    turnId: string,
+    status: 'pending' | 'streaming',
+  ): void {
+    if (!turnId) return;
+    const existing = byId.get(turnId);
+    if (existing) {
+      existing.status = status;
+      existing.endedAt = 0;
+      return;
+    }
+    const turn: CosTurn = {
+      id: turnId,
+      prompt: '',
+      clientRef: '',
+      blocks: [],
+      status,
+      notices: [],
+      costUsd: '',
+      ms: 0,
+      error: '',
+      createdAt: Date.now(),
+      endedAt: 0,
+    };
+    turns.push(turn);
+    byId.set(turnId, turn);
   }
 
   /** Surface a transport refusal without pretending it was a COS event. */
@@ -953,7 +1050,10 @@ export class CosStore {
   private _fromHistory(raw: unknown): CosTurn | null {
     if (!raw || typeof raw !== 'object') return null;
     const rec = raw as Record<string, unknown>;
-    const id = str(rec.id);
+    // Threaded snapshots add `turn_id` once the per-root attribution journal
+    // has durably recorded it. Legacy summaries retain their display-only
+    // `id`, so accept that as the compatibility fallback.
+    const id = str(rec.turn_id) || str(rec.id);
     if (!id) return null;
 
     const blocks: CosBlock[] = [];
@@ -993,7 +1093,16 @@ export class CosStore {
       prompt: str(rec.prompt),
       clientRef: '',
       blocks,
-      status: 'done',
+      status:
+        str(rec.status) === 'active'
+          ? 'streaming'
+          : str(rec.status) === 'queued'
+            ? 'pending'
+            : str(rec.status) === 'failed'
+              ? 'failed'
+              : str(rec.status) === 'cancelled'
+                ? 'cancelled'
+                : 'done',
       notices: [],
       // No cost: the transcript does not record one per turn, and the footer
       // is built to omit what it was not given rather than show "$0.00",
