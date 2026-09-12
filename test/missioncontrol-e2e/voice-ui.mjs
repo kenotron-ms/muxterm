@@ -166,7 +166,7 @@ const report = {
   screenshots: {},
   errors: [],
 };
-const pass = (name, evidence = {}) => { report.checks[name] = { status: 'PASS', ...evidence }; };
+const pass = (name, evidence = {}) => { report.checks[name] = { ...evidence, status: 'PASS' }; };
 const fail = (name, evidence = {}) => { report.checks[name] = { status: 'FAIL', ...evidence }; };
 const blocked = (name, reason) => {
   if (!report.checks[name]) report.checks[name] = { status: 'BLOCKED', reason };
@@ -376,6 +376,10 @@ async function main() {
       const label = await target.getAttribute('aria-label');
       if (!label?.includes('current view')) await target.click();
       if (await isMobile()) {
+        // Opening the drawer while already in Mission Control performs no
+        // navigation. Close that drawer explicitly rather than waiting for a
+        // navigation side effect which this branch deliberately did not invoke.
+        if (label?.includes('current view')) await page.keyboard.press('Escape');
         await page.locator('.drawer:popover-open').waitFor({ state: 'hidden', timeout: 8_000 });
       }
       await page.locator('mux-cos:visible').waitFor({ state: 'visible', timeout: 8_000 });
@@ -566,7 +570,7 @@ async function main() {
         return {
           main: `${main.width}x${main.height}px circular outer target`,
           bubble: `${bubble.width}x${bubble.height}`,
-          status: 'below_main',
+          label_position: 'below_main',
         };
       });
       await tryCheck('mouse_drag_snap_clamp', async () => {

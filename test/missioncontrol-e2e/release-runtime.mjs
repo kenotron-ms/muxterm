@@ -101,7 +101,10 @@ try {
   async function send(selection, text, terminal = true) {
     const start = frames.length, composer = page.locator('[data-thread-composer]'); await composer.fill(text); await composer.press('Enter');
     const receipt = await eventually(() => frames.slice(start).find((f) => f.op === 'turn' && f.ok && f.turn_id), 'turn receipt');
-    if (terminal) await eventually(() => frames.slice(start).find((f) => f.type === 'missioncontrol-event' && f.thread_id === selection.thread.id && f.event?.turn_id === receipt.turn_id && f.event?.ev === 'turn_end' && f.event?.persisted === true), 'persisted terminal turn');
+    if (terminal) {
+      const ended = await eventually(() => frames.slice(start).find((f) => f.type === 'missioncontrol-event' && f.thread_id === selection.thread.id && f.event?.turn_id === receipt.turn_id && f.event?.ev === 'turn_end'), 'terminal turn');
+      if (ended.event.persisted !== true || ended.event.error) throw new Error('turn_not_successfully_persisted');
+    }
     return { start, receipt };
   }
   const a = await select(labelA);
@@ -133,7 +136,9 @@ try {
   if (!await composer.isEnabled()) throw new Error('final_A_composer_not_enabled');
   const added = records().slice(startRecords);
   const streaming = added.filter((row) => row?.request?.stream === true).length;
-  if (added.length < 9 || streaming !== added.length) throw new Error(`provider_records_insufficient_or_nonstreaming:${added.length}/${streaming}`);
+  // Two seed turns plus one turn per completed eviction cycle. Selection
+  // itself does not call the provider and must not be counted as a ninth turn.
+  if (added.length < 2 + report.admitted_cycles || streaming !== added.length) throw new Error(`provider_records_insufficient_or_nonstreaming:${added.length}/${streaming}`);
   for (let cycle = 0; cycle < 6; cycle += 1) {
     const own = cycle % 2 ? 'A_CANARY=cobalt-otter' : 'B_CANARY=amber-kite';
     const other = cycle % 2 ? 'B_CANARY=amber-kite' : 'A_CANARY=cobalt-otter';
