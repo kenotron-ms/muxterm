@@ -353,6 +353,33 @@ async function main() {
     await eventually(() => sockets.length > 0, 'real_sessiond_websocket', 8_000);
     await eventually(() => page.locator('mux-sidebar:visible .ws-card').count(), 'workspace_composition_render', 8_000);
     pass('real_browser_app_and_sessiond_connected', { websocket: 'observed', render: 'workspace_composition' });
+    await tryCheck('real_disabled_app_voice_claim_refuses_promptly', async () => {
+      const result = await page.evaluate(async () => {
+        const status = await fetch('/api/voice/settings').then((response) => response.json());
+        if (status.appVoiceCandidateAvailable !== false) throw new Error('app_voice_gate_not_disabled');
+        return new Promise((resolve, reject) => {
+          const url = new URL('/ws', location.href);
+          url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const socket = new WebSocket(url);
+          const started = performance.now();
+          const timer = setTimeout(() => { socket.close(); reject(new Error('disabled_claim_timeout')); }, 2_000);
+          socket.onopen = () => socket.send(JSON.stringify({ type: 'app-voice-claim', protocol_version: 1, takeover: false }));
+          socket.onmessage = ({ data }) => {
+            let frame;
+            try { frame = JSON.parse(data); } catch { return; }
+            if (frame.type !== 'app-voice-claim-result') return;
+            clearTimeout(timer);
+            socket.close();
+            resolve({ ok: frame.ok, code: frame.code, elapsed_ms: performance.now() - started });
+          };
+          socket.onerror = () => { clearTimeout(timer); socket.close(); reject(new Error('disabled_claim_socket_error')); };
+        });
+      });
+      if (result.ok !== false || result.code !== 'app_voice_disabled' || result.elapsed_ms >= 2_000) {
+        throw new Error('disabled_claim_not_refused');
+      }
+      return { code: result.code, elapsed_ms: result.elapsed_ms, microphone_requested: false };
+    });
 
     const isMobile = async () => page.evaluate(() => window.innerWidth < 768);
     const openMobileDrawer = async () => {
@@ -579,6 +606,10 @@ async function main() {
       await talkHere.waitFor({ state: 'visible', timeout: 10_000 });
       if (await talkHere.isDisabled()) throw new Error('fixture_workspace_context_not_selectable');
       await talkHere.click();
+      await eventually(async () =>
+        (await selector.innerText()).includes(`voice ui fixture A ${nonce}`) &&
+        await cos.locator('[data-thread-composer]').isEnabled(),
+      'selected_workspace_ready_for_reset', 30_000);
       const menu = cos.getByRole('button', { name: 'Conversation options', exact: true });
       await menu.click();
       const reset = cos.locator('[data-thread-reset]');
@@ -603,7 +634,7 @@ async function main() {
         request_frames: sent.length,
         operation: 'reset_only_no_workspace_delete',
       };
-    }, { blocked: 'requires an enabled real threaded Mission Control context with reset control' });
+    });
 
     if (fixtureReady) {
       const bubbleMain = page.locator('mux-voice-mode-bubble').locator('mux-voice-mode-button.bubble-main');
@@ -755,8 +786,14 @@ async function main() {
         const sameAfterWorkspace = await page.evaluate((original) => original === document.querySelector('mux-app')?.shadowRoot?.querySelector('mux-voice-mode-bubble'), bubbleHandle);
         if (!sameAfterMissionControl || !sameAfterWorkspace) throw new Error('bubble_dom_identity_changed');
         await page.setViewportSize({ width: 844, height: 390 });
-        const box = await bubbleBox();
-        if (box.x < 0 || box.y < 0 || box.x + box.width > 844 || box.y + box.height > 390) throw new Error('landscape_clamp_failed');
+        // Resize/visualViewport events schedule position work on the next
+        // frame. Require the final bounds; do not inspect the old frame or
+        // relax the clamp condition to hide a real positioning failure.
+        await eventually(async () => {
+          const box = await bubbleBox();
+          return box.x >= 0 && box.y >= 0 &&
+            box.x + box.width <= 844 && box.y + box.height <= 390;
+        }, 'landscape_clamp', 2_000);
         return { dom_ref_identity: 'preserved', mobile_navigation: 'workspace_mission_control_applets_workspace', landscape: '844x390' };
       });
 

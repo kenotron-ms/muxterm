@@ -2,7 +2,7 @@
 /*
  * Private prepared-environment race driver.  It controls only browser UI and
  * the provider-edge fixture's file barrier; an operator, not this process,
- * may capture SIGQUIT stacks while --hold-open-file is present.
+ * captures a nonfatal SIGUSR1 profile in a tagged integration candidate.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -15,7 +15,8 @@ const usage = `Usage:
     --base-url <URL> --muxterm-bin <path> --provider-records <private JSON> \\
     --barrier-dir <private directory> --output <private directory> \\
     --source-ref <40-git-sha|64-source-archive-sha256> --accept-disposable-fixtures \\
-    [--hold-open-file <private release file>] [--playwright-module <absolute path>]
+    [--hold-open-file <private release file> --goroutine-profile <private profile file>]
+    [--playwright-module <absolute path>]
 
 Start provider_fixture.py with --barrier-dir matching this driver and configure
 the already-running candidate with missioncontrol.text_worker_cap=1.  This
@@ -40,6 +41,8 @@ opt['source-ref'] ??= opt['source-sha'];
 for (const name of ['base-url', 'muxterm-bin', 'provider-records', 'barrier-dir', 'output', 'source-ref']) if (!opt[name]) throw new Error(`--${name} is required\n${usage}`);
 if (!opt['accept-disposable-fixtures']) throw new Error('--accept-disposable-fixtures is required');
 if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(opt['source-ref'])) throw new Error('invalid_source_reference');
+if (opt['hold-open-file'] && (!opt['goroutine-profile'] || !path.isAbsolute(opt['goroutine-profile']))) throw new Error('hold_requires_absolute_goroutine_profile');
+if (opt['goroutine-profile'] && fs.existsSync(opt['goroutine-profile'])) throw new Error('goroutine_profile_must_be_fresh');
 for (const name of ['muxterm-bin', 'provider-records', 'barrier-dir']) if (!fs.existsSync(opt[name])) throw new Error(`missing prepared ${name}`);
 const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
 const output = path.resolve(opt.output);
@@ -227,16 +230,27 @@ try {
     await send(active, `${cycle % 2 ? 'A' : 'B'}_RACE_CANARY_${cycle} FIXTURE_CANARY_${cycle % 2 ? 'A' : 'B'}`);
     report.admitted_cycles += 1;
   }
-  await select(labelA);
+  const finalA = await select(labelA);
+  const cancelToken = `cancel-${randomUUID().slice(0, 12)}`;
+  const held = await send(finalA, `FIXTURE_LATE_TURN=${cancelToken} FIXTURE_CANCEL_STREAM`, false);
+  await eventually(() => fs.existsSync(path.join(opt['barrier-dir'], `${cancelToken}.ready`)), 'cancellable streamed delta');
+  const cancelStart = frames.length;
+  await page.locator(`[data-thread-cancel="${held.receipt.turn_id}"]`).click();
+  await eventually(() => frames.slice(cancelStart).find((f) =>
+    f.op === 'cancel' && f.ok === true && f.turn_id === held.receipt.turn_id), 'scoped cancel receipt');
+  await eventually(() => frames.slice(cancelStart).find((f) =>
+    f.type === 'missioncontrol-event' && f.thread_id === finalA.thread.id &&
+    f.event?.turn_id === held.receipt.turn_id && f.event?.ev === 'turn_end'), 'cancelled stream terminal');
+  put(path.join(opt['barrier-dir'], `${cancelToken}.release`), 'release\n');
+  pass('held_stream_cancel_uses_exact_selected_turn', { scoped_receipt: true, terminal_observed: true });
   const composer = page.locator('[data-thread-composer]');
   if (!await page.getByText(aSeedText, { exact: true }).count()) throw new Error('A_canary_not_retained_after_evictions');
   if (await page.getByText(/B_RACE_CANARY_/).count()) throw new Error('B_history_rendered_while_A_selected');
   if (!await composer.isEnabled()) throw new Error('final_A_composer_not_enabled');
   const added = records().slice(startRecords);
   const streaming = added.filter((row) => row?.request?.stream === true).length;
-  // Two seed turns plus one turn per completed eviction cycle. Selection
-  // itself does not call the provider and must not be counted as a ninth turn.
-  if (added.length < 2 + report.admitted_cycles || streaming !== added.length) throw new Error(`provider_records_insufficient_or_nonstreaming:${added.length}/${streaming}`);
+  // Two seeds, one request per completed cycle, and the explicit cancel turn.
+  if (added.length < 3 + report.admitted_cycles || streaming !== added.length) throw new Error(`provider_records_insufficient_or_nonstreaming:${added.length}/${streaming}`);
   for (let cycle = 0; cycle < 6; cycle += 1) {
     const own = cycle % 2 ? 'A_CANARY=cobalt-otter' : 'B_CANARY=amber-kite';
     const other = cycle % 2 ? 'B_CANARY=amber-kite' : 'A_CANARY=cobalt-otter';
@@ -249,7 +263,24 @@ try {
   if (opt['hold-open-file']) {
     const marker = path.join(output, 'settled.json');
     put(marker, `${JSON.stringify({ status: 'SETTLED', expected_active_subscriptions: 1, admitted_cycles: report.admitted_cycles })}\n`);
-    pass('operator_stack_capture_window', { settled_marker: marker, release_file: path.resolve(opt['hold-open-file']), timeout_seconds: 60, operator_action: 'capture candidate SIGQUIT stacks now; driver sends no signals' });
+    await eventually(() => fs.existsSync(opt['goroutine-profile']), 'nonfatal candidate SIGUSR1 profile', 60_000);
+    const profileStat = fs.statSync(opt['goroutine-profile']);
+    if (profileStat.size > 16 * 1024 * 1024 || profileStat.mtimeMs < fs.statSync(marker).mtimeMs) throw new Error('invalid_or_stale_goroutine_profile');
+    const profile = fs.readFileSync(opt['goroutine-profile'], 'utf8');
+    const stacks = profile.split(/^goroutine \d+ /m).slice(1);
+    const forwarders = stacks.filter((stack) =>
+      /\.attachMissionControlSubscription\.func\d+\(/.test(stack.split('\ncreated by ')[0])).length;
+    const openSockets = report.diagnostics.websocket.filter((socket) => socket.closed_at_ms === null).length;
+    if (openSockets !== 1 || forwarders !== 1) throw new Error(`subscription_profile_mismatch:${openSockets}/${forwarders}`);
+    pass('nonfatal_subscription_profile_after_evictions', {
+      profile_sha256: createHash('sha256').update(profile).digest('hex'),
+      goroutine_count: stacks.length,
+      active_browser_sockets: openSockets,
+      subscription_forwarders: forwarders,
+      admitted_cycles: report.admitted_cycles,
+      observer: 'SIGUSR1_integration_verification_build_only',
+    });
+    pass('operator_stack_capture_window', { settled_marker: marker, release_file: path.resolve(opt['hold-open-file']), timeout_seconds: 60, operator_action: 'nonfatal SIGUSR1 profile collected; driver sends no signals' });
     await eventually(() => fs.existsSync(path.resolve(opt['hold-open-file'])), 'operator hold-open release', 60_000);
   }
   report.status = 'PASS';

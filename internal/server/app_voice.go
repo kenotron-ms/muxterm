@@ -795,11 +795,14 @@ func (s *appVoiceService) ack(c *Client, f struct {
 	s.mu.Unlock()
 	if op.Action == "navigate" && (!validAppObservation(c, active) || !appActiveMatchesTarget(active, op.Target)) {
 		s.mu.Lock()
-		if s.operations[op.ID] == op {
+		won := s.operations[op.ID] == op
+		if won {
 			delete(s.operations, op.ID)
 		}
 		s.mu.Unlock()
-		op.done <- appVoiceOperationResult{err: errors.New("navigation acknowledgement active observation is invalid")}
+		if won {
+			op.done <- appVoiceOperationResult{err: errors.New("navigation acknowledgement active observation is invalid")}
+		}
 		return
 	}
 	s.mu.Lock()
