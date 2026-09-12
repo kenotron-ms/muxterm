@@ -430,7 +430,7 @@ export class AppletArtifact extends LitElement implements AppletElement {
       this._openDocument(request.document);
       this.dispatchEvent(
         new CustomEvent<AppletNavigateDetail>('applet-navigate', {
-          detail: { applet: 'artifact' },
+          detail: { applet: 'artifact', appVoiceOperationId: request.appVoiceOperationId },
           bubbles: true,
           composed: true,
         }),

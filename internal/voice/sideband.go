@@ -170,15 +170,16 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 	}
 
 	sb := &Sideband{
-		callID:     callID,
-		url:        u,
-		secret:     ephemeral,
-		bridge:     bridge,
-		cfg:        sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
-		events:     events,
-		endSession: endSession,
-		pending:    map[string]*approvalIntent{},
-		done:       make(chan struct{}),
+		callID:           callID,
+		url:              u,
+		secret:           ephemeral,
+		bridge:           bridge,
+		cfg:              sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
+		events:           events,
+		endSession:       endSession,
+		pending:          map[string]*approvalIntent{},
+		scopedFinalCalls: map[string]scopedFinalCall{},
+		done:             make(chan struct{}),
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -348,6 +349,14 @@ func (s *Sideband) handle(data []byte) {
 		return
 	}
 	s.seen(ev.Type)
+	if ev.CallID != "" && ev.CallID != s.callID {
+		s.Fence("provider event call ID does not match attached call")
+		return
+	}
+	if ev.Item.CallID != "" && ev.Item.CallID != s.callID {
+		s.Fence("provider item call ID does not match attached call")
+		return
+	}
 	if scoped, ok := s.bridge.(ProviderEventBridge); ok {
 		event := ProviderEvent{
 			Type: ev.Type, CallID: s.callID, ItemID: ev.ItemID, ResponseID: ev.ResponseID,
@@ -369,6 +378,16 @@ func (s *Sideband) handle(data []byte) {
 		if err := scoped.ObserveProviderEvent(event); err != nil {
 			s.Fence("scoped provider event rejected")
 			return
+		}
+		if app, ok := s.bridge.(AppCaptureBridge); ok && ev.Type == "input_audio_buffer.committed" {
+			metadata, created, err := app.CommitAppInput(event)
+			if err == nil && !created {
+				return
+			}
+			if err != nil || s.RequestScopedResponse(metadata) != nil {
+				s.Fence("app provider input commit rejected")
+				return
+			}
 		}
 	}
 	switch {
@@ -424,6 +443,10 @@ func (s *Sideband) handle(data []byte) {
 				name: ev.Name, arguments: digest,
 			}
 			s.mu.Unlock()
+			if app, ok := s.bridge.(AppOperationBridge); ok {
+				go s.dispatchAppReserved(app, ev, correlation)
+				return
+			}
 			go s.dispatchScopedReserved(ev, correlation)
 			return
 		}
@@ -473,6 +496,37 @@ func (s *Sideband) handle(data []byte) {
 		}
 		s.emit(Trace{Kind: TraceError, Detail: snippet(ev.Error)})
 		log.Printf("voice: sideband error event: %s", snippet(ev.Error))
+	}
+}
+
+func (s *Sideband) dispatchAppReserved(bridge AppOperationBridge, ev realtimeEvent, correlation Correlation) {
+	args := map[string]any{}
+	if len(ev.Arguments) > 0 {
+		var raw string
+		if json.Unmarshal(ev.Arguments, &raw) == nil {
+			_ = json.Unmarshal([]byte(raw), &args)
+		} else {
+			_ = json.Unmarshal(ev.Arguments, &args)
+		}
+	}
+	s.emit(Trace{Kind: TraceToolCall, Name: ev.Name})
+	output, err := bridge.ExecuteAppTool(correlation, ev.Name, args)
+	if err != nil {
+		output = "Refused: " + trimErr(err)
+	}
+	if len(output) > 32768 {
+		output = output[:32768]
+	}
+	callID := ev.Item.CallID
+	if callID == "" {
+		callID = ev.CallID
+	}
+	if !s.SendScopedFunctionOutput(callID, output) {
+		return
+	}
+	metadata, err := bridge.CompleteAppTool(correlation)
+	if err != nil || s.RequestScopedResponse(metadata) != nil {
+		s.Fence("app tool continuation rejected")
 	}
 }
 

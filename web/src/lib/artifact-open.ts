@@ -48,7 +48,11 @@ export interface ViewerDocument {
 
 export type ViewerOpenRequest =
   | Readonly<{ readonly kind: 'artifact'; readonly path: string }>
-  | Readonly<{ readonly kind: 'document'; readonly document: ViewerDocument }>;
+  | Readonly<{
+      readonly kind: 'document';
+      readonly document: ViewerDocument;
+      readonly appVoiceOperationId: string;
+    }>;
 
 type Listener = (request: ViewerOpenRequest) => void;
 
@@ -76,7 +80,7 @@ export function requestArtifactOpen(path: string): void {
  * This is intentionally a one-process handoff rather than a generated file:
  * no filesystem write, URL, publication, or second applet is involved.
  */
-export function requestViewerDocument(document: ViewerDocument): void {
+export function requestViewerDocument(document: ViewerDocument, appVoiceOperationId = ''): void {
   const title = document.title.trim();
   if (title === '' || document.text === '') return;
   const safe: ViewerDocument = Object.freeze({
@@ -84,7 +88,7 @@ export function requestViewerDocument(document: ViewerDocument): void {
     text: document.text,
     subtitle: document.subtitle.trim(),
   });
-  for (const fn of listeners) fn({ kind: 'document', document: safe });
+  for (const fn of listeners) fn({ kind: 'document', document: safe, appVoiceOperationId });
 }
 
 /** Listen for open requests. Returns the unsubscribe. */

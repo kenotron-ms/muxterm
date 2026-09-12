@@ -60,6 +60,56 @@ export interface ThreadVoiceTarget {
   readonly label: string;
 }
 
+/**
+ * The bounded composer identity observed by app voice. It carries no draft
+ * text or history and is valid only for the currently committed selection.
+ */
+export interface ThreadComposerIdentity {
+  readonly channelId: string;
+  readonly threadId: string;
+  readonly runtimeSessionId: string;
+  readonly runtimeGeneration: number;
+  readonly runtimeIncarnation: string;
+  readonly draftRef: string;
+  readonly label: string;
+}
+
+export interface AppVoiceThreadTurnTarget extends ThreadComposerIdentity {
+  readonly machineId: string;
+}
+
+export interface ThreadSelectionReceipt {
+  readonly ok: boolean;
+  readonly requested: ThreadContextTarget;
+  readonly selected: ThreadComposerIdentity;
+  readonly code: string;
+  readonly error: string;
+}
+
+export interface ThreadTurnReceipt {
+  readonly ok: boolean;
+  readonly appVoiceOperationId: string;
+  readonly threadId: string;
+  readonly runtimeGeneration: number;
+  readonly turnId: string;
+  readonly code: string;
+  readonly error: string;
+}
+
+export interface ThreadDetailReceipt {
+  readonly ok: boolean;
+  readonly detailId: string;
+  readonly threadId: string;
+  readonly runtimeGeneration: number;
+  readonly code: string;
+  readonly error: string;
+}
+
+export interface ThreadSendOptions {
+  readonly appVoiceOperationId?: string;
+  readonly clientRef?: string;
+}
+
 export type ThreadContextTarget =
   | { readonly kind: 'lobby' }
   | { readonly kind: 'workspace'; readonly workspaceId: string }
@@ -114,6 +164,7 @@ interface ThreadState {
 interface PendingSelection {
   readonly requestId: string;
   readonly target: ThreadContextTarget;
+  readonly appVoiceOperationId: string;
   readonly persistLastSelection: boolean;
   readonly restorePreviousSelection: boolean;
   /**
@@ -130,6 +181,8 @@ interface PendingTurn {
   readonly generation: number;
   readonly draftRef: string;
   readonly text: string;
+  readonly appVoiceOperationId: string;
+  readonly clientRef: string;
   phase: 'awaiting-receipt' | 'uncertain';
 }
 
@@ -242,9 +295,10 @@ export interface ThreadRootState {
 
 interface PendingDetail {
   readonly requestId: string;
-  readonly attentionId: string;
+  readonly detailId: string;
   readonly threadId: string;
   readonly generation: number;
+  readonly appVoiceOperationId: string;
 }
 
 interface BufferedThreadEvent {
@@ -828,6 +882,10 @@ class ThreadStore {
   private _socket: MuxSocket | null = null;
   private _listeners = new Set<() => void>();
   private _explicitSelectionListeners = new Set<(selection: ExplicitThreadSelection) => void>();
+  private _selectionWillChangeListeners = new Set<(from: string, to: string) => void>();
+  private _selectionReceiptListeners = new Set<(receipt: ThreadSelectionReceipt) => void>();
+  private _turnReceiptListeners = new Set<(receipt: ThreadTurnReceipt) => void>();
+  private _detailReceiptListeners = new Set<(receipt: ThreadDetailReceipt) => void>();
   private _notifyPending = false;
   private _wanted = false;
   private _mode: ThreadMode = 'unknown';
@@ -1036,6 +1094,75 @@ class ThreadStore {
       runtimeIncarnation: thread.runtimeIncarnation,
       label: this.contextLabel,
     });
+  }
+
+  /**
+   * The active composer address for bounded app observation and operation
+   * validation. A stale/hidden root loses target authority rather than being
+   * silently reused for a different view.
+   */
+  get composerIdentity(): ThreadComposerIdentity {
+    if (this._mode === 'legacy') {
+      return Object.freeze({
+        channelId: 'legacy-cos',
+        threadId: '',
+        runtimeSessionId: '',
+        runtimeGeneration: 0,
+        runtimeIncarnation: '',
+        draftRef: '',
+        label: 'Lobby',
+      });
+    }
+    const state = this._selected;
+    const thread = state?.thread;
+    if (
+      !this.threaded ||
+      !this._connectionReady ||
+      !state ||
+      !thread ||
+      state.runtimeStale ||
+      state.syncing ||
+      state.archived ||
+      !uuidValue(thread.id) ||
+      !uuidValue(thread.runtimeSessionId) ||
+      !uuidValue(thread.runtimeIncarnation) ||
+      thread.runtimeGeneration === 0 ||
+      !uuidValue(state.draftRef)
+    ) {
+      return Object.freeze({
+        channelId: 'none',
+        threadId: '',
+        runtimeSessionId: '',
+        runtimeGeneration: 0,
+        runtimeIncarnation: '',
+        draftRef: '',
+        label: '',
+      });
+    }
+    return Object.freeze({
+      channelId: `thread:${thread.id}`,
+      threadId: thread.id,
+      runtimeSessionId: thread.runtimeSessionId,
+      runtimeGeneration: thread.runtimeGeneration,
+      runtimeIncarnation: thread.runtimeIncarnation,
+      draftRef: state.draftRef,
+      label: this.contextLabel,
+    });
+  }
+
+  /** Exact immutable submit target; no current-focus fallback is available. */
+  get appVoiceThreadTurnTarget(): AppVoiceThreadTurnTarget | null {
+    const composer = this.composerIdentity;
+    const thread = this._selected?.thread;
+    if (
+      composer.channelId === 'none' ||
+      !thread ||
+      !uuidValue(thread.machineId) ||
+      composer.channelId !== `thread:${thread.id}`
+    ) {
+      return null;
+    }
+    return Object.freeze({ ...composer, machineId: thread.machineId });
   }
 
   /** Durable unacknowledged work, in catalog observation order. */
@@ -1276,12 +1403,129 @@ class ThreadStore {
     this._notify();
   }
 
+  /** Set only the exact currently accepted composer; this never submits. */
+  setDraftForAppVoice(target: ThreadComposerIdentity, value: string): boolean {
+    if (!this._sameComposer(target, this.composerIdentity)) return false;
+    this.setDraft(value);
+    return true;
+  }
+
+  /** Read only the exact currently accepted composer draft. */
+  inspectDraftForAppVoice(
+    target: ThreadComposerIdentity,
+  ): { readonly text: string; readonly truncated: boolean } | null {
+    if (!this._sameComposer(target, this.composerIdentity)) return null;
+    const draft = this.draft;
+    const bytes = new TextEncoder().encode(draft);
+    if (bytes.byteLength <= 8_192) return { text: draft, truncated: false };
+    return { text: new TextDecoder().decode(bytes.slice(0, 8_192)), truncated: true };
+  }
+
   select(target: ThreadContextTarget): boolean {
     if (!this.canSelect) return false;
     return this._requestSelection(target, true);
   }
 
-  send(text: string): boolean {
+  /**
+   * Await the normal authoritative selection result. The public select() path
+   * remains unchanged for existing UI; voice uses this only to avoid treating a
+   * WebSocket send as a selected context.
+   */
+  selectForAppVoice(
+    threadId: string,
+    runtimeGeneration: number,
+    operationId: string,
+    signal: AbortSignal,
+  ): Promise<ThreadSelectionReceipt> {
+    const known = this._threads.find(
+      (thread) => thread.id === threadId && thread.runtimeGeneration === runtimeGeneration,
+    );
+    if (!known) {
+      return Promise.resolve({
+        ok: false,
+        requested: { kind: 'thread', threadId },
+        selected: this.composerIdentity,
+        code: 'target_mismatch',
+        error: 'That conversation context is no longer in the live catalog.',
+      });
+    }
+    return this._selectWithReceipt({ kind: 'thread', threadId }, operationId, signal);
+  }
+
+  /**
+   * Submit through the existing missioncontrol-turn path only after a caller
+   * has rendered an explicit human confirmation. It preserves the normal turn
+   * receipt fence and adds the app operation correlation fields verbatim.
+   */
+  sendForAppVoice(
+    target: AppVoiceThreadTurnTarget,
+    text: string,
+    operationId: string,
+    signal?: AbortSignal,
+  ): Promise<ThreadTurnReceipt> {
+    if (signal?.aborted) {
+      return Promise.resolve({
+        ok: false,
+        appVoiceOperationId: operationId,
+        threadId: target.threadId,
+        runtimeGeneration: target.runtimeGeneration,
+        turnId: '',
+        code: 'operation_cancelled',
+        error: 'The app voice operation was cancelled before the turn was sent.',
+      });
+    }
+    if (!this._sameThreadTurnTarget(target, this.appVoiceThreadTurnTarget)) {
+      return Promise.resolve({
+        ok: false,
+        appVoiceOperationId: operationId,
+        threadId: target.threadId,
+        runtimeGeneration: target.runtimeGeneration,
+        turnId: '',
+        code: 'target_mismatch',
+        error: 'The selected conversation no longer matches the requested voice target.',
+      });
+    }
+    return new Promise<ThreadTurnReceipt>((resolve) => {
+      const cancelled = (): void => {
+        unsubscribe();
+        resolve({
+          ok: false,
+          appVoiceOperationId: operationId,
+          threadId: target.threadId,
+          runtimeGeneration: target.runtimeGeneration,
+          turnId: '',
+          code: 'operation_cancelled',
+          error: 'The app voice operation was cancelled after turn submission.',
+        });
+      };
+      const unsubscribe = this.onTurnReceipt((receipt) => {
+        if (receipt.appVoiceOperationId !== operationId) return;
+        unsubscribe();
+        signal?.removeEventListener('abort', cancelled);
+        resolve(receipt);
+      });
+      signal?.addEventListener('abort', cancelled, { once: true });
+      if (signal?.aborted) {
+        cancelled();
+        return;
+      }
+      if (!this.send(text, { appVoiceOperationId: operationId, clientRef: `app_voice:${operationId}` })) {
+        unsubscribe();
+        signal?.removeEventListener('abort', cancelled);
+        resolve({
+          ok: false,
+          appVoiceOperationId: operationId,
+          threadId: target.threadId,
+          runtimeGeneration: target.runtimeGeneration,
+          turnId: '',
+          code: 'turn_transmit_unconfirmed',
+          error: 'The requested turn could not be sent through the existing conversation path.',
+        });
+      }
+    });
+  }
+
+  send(text: string, options: ThreadSendOptions = {}): boolean {
     const prompt = text.trim();
     if (!prompt) return false;
     if (this._mode === 'legacy') {
@@ -1303,11 +1547,13 @@ class ThreadStore {
       generation: state.thread.runtimeGeneration,
       draftRef: state.draftRef,
       text: prompt,
+      appVoiceOperationId: options.appVoiceOperationId ?? '',
+      clientRef: options.clientRef ?? '',
       phase: 'awaiting-receipt',
     };
     this._pendingTurn = pending;
     this._problem = null;
-    const sent = socket.missionControl({
+    const frame: Record<string, unknown> = {
       type: 'missioncontrol-turn',
       protocol_version: PROTOCOL_VERSION,
       request_id: requestId,
@@ -1315,7 +1561,12 @@ class ThreadStore {
       expected_runtime_generation: pending.generation,
       draft_ref: pending.draftRef,
       text: pending.text,
-    });
+    };
+    if (pending.appVoiceOperationId) {
+      frame.app_voice_operation_id = pending.appVoiceOperationId;
+      frame.client_ref = pending.clientRef;
+    }
+    const sent = socket.missionControl(frame);
     if (!sent) {
       pending.phase = 'uncertain';
       this._setProblem(
@@ -1412,9 +1663,10 @@ class ThreadStore {
     }
     const pending: PendingDetail = {
       requestId,
-      attentionId,
+      detailId: attentionId,
       threadId: record.threadId,
       generation: record.runtimeGeneration,
+      appVoiceOperationId: '',
     };
     this._pendingDetails.set(requestId, pending);
     if (
@@ -1435,6 +1687,85 @@ class ThreadStore {
     }
     this._notify();
     return true;
+  }
+
+  /** Request read-only detail for an exact, already observed catalog thread. */
+  viewDetailForAppVoice(
+    threadId: string,
+    runtimeGeneration: number,
+    operationId: string,
+  ): Promise<ThreadDetailReceipt> {
+    if (this._detailUnavailableFor(threadId, runtimeGeneration) !== '' || this._hasPendingDetail(threadId)) {
+      return Promise.resolve({
+        ok: false,
+        detailId: threadId,
+        threadId,
+        runtimeGeneration,
+        code: 'target_mismatch',
+        error: 'That context is no longer available for read-only detail.',
+      });
+    }
+    return new Promise<ThreadDetailReceipt>((resolve) => {
+      const unsubscribe = this.onDetailReceipt((receipt) => {
+        if (
+          receipt.detailId !== threadId ||
+          receipt.threadId !== threadId ||
+          receipt.runtimeGeneration !== runtimeGeneration
+        ) {
+          return;
+        }
+        unsubscribe();
+        resolve(receipt);
+      });
+      const requestId = makeRequestId();
+      if (!requestId) {
+        unsubscribe();
+        resolve({
+          ok: false,
+          detailId: threadId,
+          threadId,
+          runtimeGeneration,
+          code: 'request_id_unavailable',
+          error: 'A secure detail request ID could not be created.',
+        });
+        return;
+      }
+      const pending: PendingDetail = {
+        requestId,
+        detailId: threadId,
+        threadId,
+        generation: runtimeGeneration,
+        appVoiceOperationId: operationId,
+      };
+      this._pendingDetails.set(requestId, pending);
+      if (
+        !this._socket?.missionControl({
+          type: 'missioncontrol-detail',
+          protocol_version: PROTOCOL_VERSION,
+          request_id: requestId,
+          thread_id: threadId,
+          expected_runtime_generation: runtimeGeneration,
+        })
+      ) {
+        this._pendingDetails.delete(requestId);
+        unsubscribe();
+        resolve({
+          ok: false,
+          detailId: threadId,
+          threadId,
+          runtimeGeneration,
+          code: 'detail_transmit_failed',
+          error: 'The read-only detail request could not be transmitted.',
+        });
+      }
+    });
+  }
+
+  /** A late server response must not navigate after its operation was fenced. */
+  cancelDetailForAppVoice(operationId: string): void {
+    for (const [requestId, pending] of this._pendingDetails) {
+      if (pending.appVoiceOperationId === operationId) this._pendingDetails.delete(requestId);
+    }
   }
 
   /** Inspect migration/rollback metadata only; this endpoint has no apply verb. */
@@ -1588,9 +1919,138 @@ class ThreadStore {
     return () => this._explicitSelectionListeners.delete(callback);
   }
 
+  /**
+   * Fired synchronously after a selection has been admitted locally but before
+   * its request can leave the browser. Composer dictation uses this to fence
+   * the departing channel before any late STT can target the next one.
+   */
+  onSelectionWillChange(callback: (from: string, to: string) => void): () => void {
+    this._selectionWillChangeListeners.add(callback);
+    return () => this._selectionWillChangeListeners.delete(callback);
+  }
+
+  onSelectionSettled(callback: (receipt: ThreadSelectionReceipt) => void): () => void {
+    this._selectionReceiptListeners.add(callback);
+    return () => this._selectionReceiptListeners.delete(callback);
+  }
+
+  onTurnReceipt(callback: (receipt: ThreadTurnReceipt) => void): () => void {
+    this._turnReceiptListeners.add(callback);
+    return () => this._turnReceiptListeners.delete(callback);
+  }
+
+  onDetailReceipt(callback: (receipt: ThreadDetailReceipt) => void): () => void {
+    this._detailReceiptListeners.add(callback);
+    return () => this._detailReceiptListeners.delete(callback);
+  }
+
   private _activeStore(): CosStore {
     if (this._mode === 'threaded') return this._selected?.store ?? this._emptyStore;
     return cosStore;
+  }
+
+  private _selectWithReceipt(
+    target: ThreadContextTarget,
+    operationId = '',
+    signal?: AbortSignal,
+  ): Promise<ThreadSelectionReceipt> {
+    return new Promise<ThreadSelectionReceipt>((resolve) => {
+      const unsubscribe = this.onSelectionSettled((receipt) => {
+        if (!this._sameContextTarget(receipt.requested, target)) return;
+        unsubscribe();
+        resolve(receipt);
+      });
+      const cancelled = (): void => {
+        unsubscribe();
+        this.cancelSelectionForAppVoice(operationId);
+        resolve({
+          ok: false,
+          requested: target,
+          selected: this.composerIdentity,
+          code: 'operation_cancelled',
+          error: 'The app voice selection was cancelled.',
+        });
+      };
+      signal?.addEventListener('abort', cancelled, { once: true });
+      if (signal?.aborted || !this._requestSelection(target, true, false, operationId)) {
+        unsubscribe();
+        signal?.removeEventListener('abort', cancelled);
+        resolve({
+          ok: false,
+          requested: target,
+          selected: this.composerIdentity,
+          code: 'selection_unavailable',
+          error: 'The requested conversation context cannot be selected right now.',
+        });
+      }
+    });
+  }
+
+  cancelSelectionForAppVoice(operationId: string): void {
+    const pending = this._pendingSelection;
+    if (!pending || pending.appVoiceOperationId !== operationId) return;
+    this._pendingSelection = null;
+    this._connectionReady = pending.restorePreviousSelection;
+    this._discardUnclaimedPreAckBuffers();
+    this._notify();
+  }
+
+  private _sameContextTarget(left: ThreadContextTarget, right: ThreadContextTarget): boolean {
+    return (
+      left.kind === right.kind &&
+      (left.kind === 'lobby' ||
+        (left.kind === 'workspace' &&
+          right.kind === 'workspace' &&
+          left.workspaceId === right.workspaceId) ||
+        (left.kind === 'thread' && right.kind === 'thread' && left.threadId === right.threadId))
+    );
+  }
+
+  private _sameComposer(left: ThreadComposerIdentity, right: ThreadComposerIdentity): boolean {
+    return (
+      left.channelId === right.channelId &&
+      left.threadId === right.threadId &&
+      left.runtimeSessionId === right.runtimeSessionId &&
+      left.runtimeGeneration === right.runtimeGeneration &&
+      left.runtimeIncarnation === right.runtimeIncarnation &&
+      left.draftRef === right.draftRef
+    );
+  }
+
+  private _sameThreadTurnTarget(
+    left: AppVoiceThreadTurnTarget,
+    right: AppVoiceThreadTurnTarget | null,
+  ): boolean {
+    return (
+      right !== null &&
+      this._sameComposer(left, right) &&
+      left.machineId === right.machineId
+    );
+  }
+
+  private _channelForSelection(target: ThreadContextTarget): string {
+    const thread =
+      target.kind === 'lobby'
+        ? this._threads.find((item) => item.kind === 'lobby')
+        : target.kind === 'workspace'
+          ? this._threads.find(
+              (item) =>
+                item.id === this._workspaces.find((workspace) => workspace.workspaceId === target.workspaceId)?.boundThreadId,
+            )
+          : this._threads.find((item) => item.id === target.threadId);
+    return thread ? `thread:${thread.id}` : 'none';
+  }
+
+  private _publishSelectionReceipt(receipt: ThreadSelectionReceipt): void {
+    for (const listener of this._selectionReceiptListeners) listener(Object.freeze(receipt));
+  }
+
+  private _publishTurnReceipt(receipt: ThreadTurnReceipt): void {
+    for (const listener of this._turnReceiptListeners) listener(Object.freeze(receipt));
+  }
+
+  private _publishDetailReceipt(receipt: ThreadDetailReceipt): void {
+    for (const listener of this._detailReceiptListeners) listener(Object.freeze(receipt));
   }
 
   private _draftKey(): string {
@@ -1614,6 +2074,10 @@ class ThreadStore {
    * independent of browser selection, drafts, and thread subscriptions.
    */
   private _detailUnavailable(record: AttentionRecord): string {
+    return this._detailUnavailableFor(record.threadId, record.runtimeGeneration);
+  }
+
+  private _detailUnavailableFor(threadId: string, runtimeGeneration: number): string {
     if (!this._capabilities.detailReadOnly) {
       return 'This server does not advertise read-only context detail.';
     }
@@ -1623,10 +2087,10 @@ class ThreadStore {
     if (!this._catalogReady) {
       return 'Detail is unavailable until this connection confirms the live context catalog.';
     }
-    const known = this._threads.find((thread) => thread.id === record.threadId);
+    const known = this._threads.find((thread) => thread.id === threadId);
     if (
       !known ||
-      known.runtimeGeneration !== record.runtimeGeneration ||
+      known.runtimeGeneration !== runtimeGeneration ||
       !uuidValue(known.runtimeSessionId)
     ) {
       return 'This attention refers to a context generation that is no longer available for read-only detail.';
@@ -1636,7 +2100,7 @@ class ThreadStore {
 
   private _hasPendingDetail(attentionId: string): boolean {
     for (const pending of this._pendingDetails.values()) {
-      if (pending.attentionId === attentionId) return true;
+      if (pending.detailId === attentionId) return true;
     }
     return false;
   }
@@ -1982,10 +2446,19 @@ class ThreadStore {
     this._pendingDetails.delete(requestId);
     if (!pending) return;
     if (frame.ok !== true) {
+      const error = protocolFailure(frame, 'The read-only context detail was refused. The conversation was not changed.');
       this._setProblem(
         'detail_refused',
-        protocolFailure(frame, 'The read-only context detail was refused. The conversation was not changed.'),
+        error,
       );
+      this._publishDetailReceipt({
+        ok: false,
+        detailId: pending.detailId,
+        threadId: pending.threadId,
+        runtimeGeneration: pending.generation,
+        code: 'detail_refused',
+        error,
+      });
       return;
     }
     const detail = parseDetailPayload(frame);
@@ -1994,16 +2467,36 @@ class ThreadStore {
       detail.thread.id !== pending.threadId ||
       detail.thread.runtimeGeneration !== pending.generation
     ) {
+      const error = 'The server returned detail for a different context. The conversation was not changed.';
       this._setProblem(
         'invalid_detail',
-        'The server returned detail for a different context. The conversation was not changed.',
+        error,
       );
+      this._publishDetailReceipt({
+        ok: false,
+        detailId: pending.detailId,
+        threadId: pending.threadId,
+        runtimeGeneration: pending.generation,
+        code: 'invalid_detail',
+        error,
+      });
       return;
     }
-    requestViewerDocument({
-      title: `Context detail — ${this._threadLabel(pending.threadId)}`,
-      subtitle: `generation ${pending.generation}; read-only`,
-      text: formatDetailDocument(this._threadLabel(pending.threadId), detail),
+    requestViewerDocument(
+      {
+        title: `Context detail — ${this._threadLabel(pending.threadId)}`,
+        subtitle: `generation ${pending.generation}; read-only`,
+        text: formatDetailDocument(this._threadLabel(pending.threadId), detail),
+      },
+      pending.appVoiceOperationId,
+    );
+    this._publishDetailReceipt({
+      ok: true,
+      detailId: pending.detailId,
+      threadId: pending.threadId,
+      runtimeGeneration: pending.generation,
+      code: '',
+      error: '',
     });
     this._notify();
   }
@@ -2076,6 +2569,7 @@ class ThreadStore {
     target: ThreadContextTarget,
     persistLastSelection: boolean,
     allowUncertainTurn = false,
+    appVoiceOperationId = '',
   ): boolean {
     const socket = this._socket;
     if (
@@ -2092,6 +2586,11 @@ class ThreadStore {
       this._setProblem('request_id_unavailable', 'A secure request ID could not be created.');
       return false;
     }
+    const fromChannel = this.composerIdentity.channelId;
+    const toChannel = this._channelForSelection(target);
+    if (fromChannel !== 'none' && fromChannel !== toChannel) {
+      for (const listener of this._selectionWillChangeListeners) listener(fromChannel, toChannel);
+    }
     const frame: Record<string, unknown> = {
       type: 'missioncontrol-select',
       protocol_version: PROTOCOL_VERSION,
@@ -2104,6 +2603,7 @@ class ThreadStore {
     this._pendingSelection = {
       requestId,
       target,
+      appVoiceOperationId,
       persistLastSelection,
       restorePreviousSelection,
       unknownBufferOverflow: false,
@@ -2129,7 +2629,15 @@ class ThreadStore {
     if (frame.ok !== true) {
       this._connectionReady = pending.restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
-      this._setProblem('select_refused', snapshotUnavailableMessage(frame, 'The server refused this context.'));
+      const error = snapshotUnavailableMessage(frame, 'The server refused this context.');
+      this._setProblem('select_refused', error);
+      this._publishSelectionReceipt({
+        ok: false,
+        requested: pending.target,
+        selected: this.composerIdentity,
+        code: 'select_refused',
+        error,
+      });
       if (pending.persistLastSelection) this._publishExplicitSelection(pending.target, null);
       return;
     }
@@ -2138,7 +2646,15 @@ class ThreadStore {
     if (!snapshot || !draftRef) {
       this._connectionReady = pending.restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
-      this._setProblem('invalid_selection', snapshotFailureMessage(frame, 'The context was not changed.'));
+      const error = snapshotFailureMessage(frame, 'The context was not changed.');
+      this._setProblem('invalid_selection', error);
+      this._publishSelectionReceipt({
+        ok: false,
+        requested: pending.target,
+        selected: this.composerIdentity,
+        code: 'invalid_selection',
+        error,
+      });
       if (pending.persistLastSelection) this._publishExplicitSelection(pending.target, null);
       return;
     }
@@ -2149,7 +2665,15 @@ class ThreadStore {
     ) {
       this._connectionReady = pending.restorePreviousSelection;
       this._discardUnclaimedPreAckBuffers();
-      this._setProblem('mismatched_selection', 'The server returned a different context than the one requested.');
+      const error = 'The server returned a different context than the one requested.';
+      this._setProblem('mismatched_selection', error);
+      this._publishSelectionReceipt({
+        ok: false,
+        requested: pending.target,
+        selected: this.composerIdentity,
+        code: 'mismatched_selection',
+        error,
+      });
       if (pending.persistLastSelection) this._publishExplicitSelection(pending.target, null);
       return;
     }
@@ -2170,6 +2694,13 @@ class ThreadStore {
     this._unreadThreadIds.delete(snapshot.thread.id);
     this._connectionReady = true;
     this._problem = null;
+    this._publishSelectionReceipt({
+      ok: true,
+      requested: pending.target,
+      selected: this.composerIdentity,
+      code: '',
+      error: '',
+    });
     if (pending.persistLastSelection) {
       this._lastExplicitThreadId = snapshot.thread.id;
       this._persistState();
@@ -2185,12 +2716,23 @@ class ThreadStore {
     if (frame.ok !== true || !stringValue(frame.turn_id)) {
       this._clearTurnReceiptTimer();
       pending.phase = 'uncertain';
+      const error = protocolFailure(frame, 'The server did not confirm this turn. Your draft was kept.');
       this._setProblem(
         'turn_receipt_unconfirmed',
-        protocolFailure(frame, 'The server did not confirm this turn. Your draft was kept.'),
+        error,
       );
+      this._publishTurnReceipt({
+        ok: false,
+        appVoiceOperationId: pending.appVoiceOperationId,
+        threadId: pending.threadId,
+        runtimeGeneration: pending.generation,
+        turnId: '',
+        code: 'turn_receipt_unconfirmed',
+        error,
+      });
       return;
     }
+    const turnId = stringValue(frame.turn_id);
     this._clearTurnReceiptTimer();
     this._pendingTurn = null;
     const current = this._drafts.get(pending.threadId) ?? '';
@@ -2202,6 +2744,15 @@ class ThreadStore {
     // Runtime.Submit durably records the pending attention before this receipt.
     // Refresh only metadata; this never changes the selected conversation.
     this._requestAttention();
+    this._publishTurnReceipt({
+      ok: true,
+      appVoiceOperationId: pending.appVoiceOperationId,
+      threadId: pending.threadId,
+      runtimeGeneration: pending.generation,
+      turnId,
+      code: '',
+      error: '',
+    });
     this._notify();
   }
 

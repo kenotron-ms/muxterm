@@ -136,6 +136,7 @@ func (s *Server) registerVoiceRoutes(cfg config.VoiceConfig, protect func(http.H
 		// provider attachment; that seam cannot mint a token, connect SDP, or
 		// submit work.  Legacy global voice routes remain explicit refusals.
 		s.registerMissionControlVoiceRoutes(cfg, protect)
+		s.registerAppVoiceRoutes(cfg, protect)
 		refuse := protect(http.HandlerFunc(s.handleThreadedTextVoiceRefusal))
 		s.mux.Handle("POST /api/cos/voice/token", refuse)
 		s.mux.Handle("POST /api/cos/voice/sdp", refuse)

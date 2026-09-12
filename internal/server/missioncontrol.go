@@ -710,6 +710,15 @@ func (c *Client) missionControlTurn(msg missionControlClientMessage) {
 		c.sendMissionControlResult(missionControlFailure(msg, "stale_live_incarnation", err.Error()))
 		return
 	}
+	c.hub.mu.RLock()
+	appVoice := c.hub.appVoice
+	c.hub.mu.RUnlock()
+	if appVoice != nil {
+		if err := appVoice.appVoiceTurnReservation(c, msg, runtime.Thread); err != nil {
+			c.sendMissionControlResult(missionControlFailure(msg, "app_voice_reservation_required", err.Error()))
+			return
+		}
+	}
 	payload, _ := json.Marshal(struct {
 		Thread     string `json:"thread_id"`
 		Generation uint64 `json:"generation"`
@@ -734,6 +743,9 @@ func (c *Client) missionControlTurn(msg missionControlClientMessage) {
 			c.sendMissionControlResult(missionControlFailure(msg, "admission_unknown", "request was durably admitted before restart or interruption and will not be replayed automatically"))
 			return
 		}
+		if appVoice != nil {
+			appVoice.recordTurnReceipt(c, msg, admission.TurnID, admission.DispatchState)
+		}
 		c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "turn", RequestID: msg.RequestID, OK: true, TurnID: admission.TurnID})
 		return
 	}
@@ -751,6 +763,9 @@ func (c *Client) missionControlTurn(msg missionControlClientMessage) {
 	if err != nil {
 		c.sendMissionControlResult(missionControlFailure(msg, "dispatch_uncertain", err.Error()))
 		return
+	}
+	if appVoice != nil {
+		appVoice.recordTurnReceipt(c, msg, turn.ID, "dispatched")
 	}
 	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "turn", RequestID: msg.RequestID, OK: true, TurnID: turn.ID})
 }

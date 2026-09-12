@@ -451,8 +451,14 @@ export class MuxApplets extends LitElement {
    * gesture -- a tab click, an arrow key, or an `applet-navigate` that D3.4
    * only ever fires from a user gesture and never from a data change.
    */
-  show(id: AppletId, target?: string): void {
+  show(id: AppletId, target?: string, appVoiceOperationId = ''): void {
     if (!appletById(id)) return;
+    // A human-requested navigation fences provider work before this host
+    // changes view. An operation's own acknowledged routing carries its id and
+    // must not cancel itself.
+    if (!appVoiceOperationId) {
+      this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
+    }
 
     // NOBODY IS LOOKING AT THIS. See _parked: a dormant host is behind a closed
     // sheet and cannot have been tapped, so this is not the user asking. Hold
@@ -526,7 +532,7 @@ export class MuxApplets extends LitElement {
   private _onNavigate = (e: Event): void => {
     const detail = (e as CustomEvent<AppletNavigateDetail>).detail;
     if (!detail?.applet) return;
-    this.show(detail.applet, detail.target);
+    this.show(detail.applet, detail.target, detail.appVoiceOperationId ?? '');
   };
 
   /** A person touched this surface. The only thing that resets the clock. */

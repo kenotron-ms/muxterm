@@ -62,6 +62,25 @@ type ProviderEventBridge interface {
 	ResolveToolCall(ProviderEvent) (Correlation, error)
 }
 
+// AppOperationBridge is the deliberately small app-wide voice surface. Unlike
+// Bridge, it cannot reach the legacy COS. Every mutating operation is
+// represented by an owner-browser acknowledgement before this method returns.
+type AppOperationBridge interface {
+	Bridge
+	ProviderEventBridge
+	ExecuteAppTool(Correlation, string, map[string]any) (string, error)
+	CompleteAppTool(Correlation) (map[string]string, error)
+}
+
+// AppCaptureBridge commits a provider-originated input item before the server
+// asks the manual-response profile to respond. The capture identifier is never
+// supplied by a browser or model.
+type AppCaptureBridge interface {
+	AppOperationBridge
+	// created is false for an exact replay; it must not create another response.
+	CommitAppInput(ProviderEvent) (metadata map[string]string, created bool, err error)
+}
+
 // ScopedReplyBridge owns every audible response for a scoped attachment.
 // Sideband may deliver a function result into the provider conversation, but
 // it must delegate response creation to this prefix-gated controller.

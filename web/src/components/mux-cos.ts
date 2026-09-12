@@ -52,7 +52,7 @@ import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { icon } from '../lib/icons.js';
 import { ArrowUp, Check, ChevronDown, Ellipsis, Mic, Square, TriangleAlert, X } from 'lucide';
-import type { AppletChangedDetail } from '../lib/applet-registry.js';
+import type { AppletChangedDetail, AppletId } from '../lib/applet-registry.js';
 import {
   shortToolName,
   type CosApproval,
@@ -72,15 +72,17 @@ import {
   persistDashboardSplit,
   restoreDashboardSplit,
 } from '../lib/dashboard-split.js';
-import { voiceInputController, type VoiceState } from '../lib/voice-input-controller.js';
+import {
+  voiceInputController,
+  type ComposerDictationCapture,
+  type VoiceState,
+  type VoiceTranscriptPayload,
+} from '../lib/voice-input-controller.js';
 import {
   voiceSessionController,
   type VoiceSessionSnapshot,
 } from '../lib/voice-session-controller.js';
-import {
-  threadedVoiceController,
-  type ThreadedVoiceCapability,
-} from '../lib/threaded-voice-controller.js';
+import type { MuxApplets } from './mux-applets.js';
 import './mux-voice-orb.js';
 // ONE applet host, in one of two containers: the right-hand region in
 // landscape, the bottom sheet in portrait. This file imports no applet: the
@@ -147,6 +149,15 @@ type ThreadControlConfirmation = Readonly<{
   target: ThreadControlTarget;
 }>;
 
+export type AppVoiceSubmitConfirmationOutcome = 'confirmed' | 'declined' | 'unavailable';
+
+interface AppVoiceSubmitConfirmation {
+  readonly operationId: string;
+  readonly label: string;
+  readonly text: string;
+  readonly resolve: (outcome: AppVoiceSubmitConfirmationOutcome) => void;
+}
+
 /** The sheet's resting sizes. Continuous while dragging; these on release. */
 type SheetDetent = 'half' | 'full';
 
@@ -193,6 +204,7 @@ export class MuxCos extends LitElement {
   /** Scoped reset/archive confirmation with its immutable selected target. */
   @state() private _threadConfirm: ThreadControlConfirmation | null = null;
   @state() private _voice: VoiceState = voiceInputController.getState();
+  @state() private _dictationNotice = '';
   /**
    * The LIVE session, which is a different thing from _voice above.
    *
@@ -201,7 +213,7 @@ export class MuxCos extends LitElement {
    * neither one drives the other.
    */
   @state() private _session: VoiceSessionSnapshot = voiceSessionController.snapshot();
-  @state() private _threadedVoice: ThreadedVoiceCapability = threadedVoiceController.snapshot();
+  @state() private _appVoiceConfirmation: AppVoiceSubmitConfirmation | null = null;
 
   /**
    * What the composer looked like the instant a live session took it over,
@@ -265,9 +277,10 @@ export class MuxCos extends LitElement {
   private _unsub: (() => void) | null = null;
   private _unsubVoice: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
+  private _unsubVoiceError: (() => void) | null = null;
   private _unsubSession: (() => void) | null = null;
-  private _unsubThreadedVoice: (() => void) | null = null;
-  private _unsubThreadedVoiceRoute: (() => void) | null = null;
+  private _unsubSelectionWillChange: (() => void) | null = null;
+  private _unsubSelectionSettled: (() => void) | null = null;
   private _ticker: ReturnType<typeof setInterval> | undefined;
 
   /** False once the reader scrolls up: streaming must not yank them back down. */
@@ -279,9 +292,16 @@ export class MuxCos extends LitElement {
   /** Live sheet drag. `moved` separates a drag from a tap on the handle. */
   private _sheetDrag: { pointerId: number; moved: boolean } | null = null;
   private _detent: SheetDetent = 'half';
-  private _threadedLast = false;
   /** True only for a dictation session this chat composer itself started. */
   private _chatDictationActive = false;
+  /** Immutable capture identity used to reject late A results while B is visible. */
+  private _chatDictationCapture: ComposerDictationCapture | null = null;
+  private _userSelectionPending = false;
+  private _activeApplet: AppletId | '' = '';
+  private _voiceAppletOperationId = '';
+  private _appletOperationWaiter:
+    | { readonly operationId: string; readonly applet: AppletId; readonly resolve: (ok: boolean) => void }
+    | null = null;
 
   static styles = css`
     *,
@@ -1644,10 +1664,27 @@ export class MuxCos extends LitElement {
     // it to applet-dashboard's _onFleet() and _sync().
     this._unsubVoice = voiceInputController.onStateChange((s) => {
       this._voice = s;
-      if (s !== 'listening') this._chatDictationActive = false;
+      if (s !== 'listening') {
+        this._chatDictationActive = false;
+        this._chatDictationCapture = null;
+      }
     });
     this._unsubTranscript = voiceInputController.onTranscript((p) => {
-      this._takeTranscript(p.text);
+      this._takeTranscript(p);
+    });
+    this._unsubVoiceError = voiceInputController.onError((message) => {
+      this._dictationNotice = message;
+    });
+    this._unsubSelectionWillChange = threadStore.onSelectionWillChange((from, to) => {
+      const capture = this._chatDictationCapture;
+      if (capture && capture.channelId === from && from !== to) {
+        voiceInputController.invalidateComposerChannel(from);
+      }
+    });
+    this._unsubSelectionSettled = threadStore.onSelectionSettled(() => {
+      if (!this._userSelectionPending) return;
+      this._userSelectionPending = false;
+      this.dispatchEvent(new CustomEvent('app-voice-observation', { bubbles: true, composed: true }));
     });
     this._unsubSession = voiceSessionController.subscribe((s) => {
       // Measured BEFORE the assignment, while the composer on screen is still
@@ -1675,13 +1712,6 @@ export class MuxCos extends LitElement {
       this._session = s;
       if (was && !now) this._releaseComposer();
     });
-    this._unsubThreadedVoice = threadedVoiceController.subscribe((capability) => {
-      this._threadedVoice = capability;
-    });
-    this._unsubThreadedVoiceRoute = threadStore.onExplicitSelectionSettled((selection) => {
-      void threadedVoiceController.onExplicitSelectionSettled(selection);
-    });
-    void threadedVoiceController.refresh();
     this._session = voiceSessionController.snapshot();
     document.addEventListener('keydown', this._onDocKey);
     // One second is the whole resolution of an mm:ss countdown, and the
@@ -1702,12 +1732,14 @@ export class MuxCos extends LitElement {
     this._unsubVoice = null;
     this._unsubTranscript?.();
     this._unsubTranscript = null;
+    this._unsubVoiceError?.();
+    this._unsubVoiceError = null;
     this._unsubSession?.();
     this._unsubSession = null;
-    this._unsubThreadedVoice?.();
-    this._unsubThreadedVoice = null;
-    this._unsubThreadedVoiceRoute?.();
-    this._unsubThreadedVoiceRoute = null;
+    this._unsubSelectionWillChange?.();
+    this._unsubSelectionWillChange = null;
+    this._unsubSelectionSettled?.();
+    this._unsubSelectionSettled = null;
     // The live session is NOT stopped here. This element is parked by
     // cache() when the Dashboard closes, and hanging up a conversation
     // because a panel was collapsed would be the wrong reading of that
@@ -1718,9 +1750,12 @@ export class MuxCos extends LitElement {
     // Only OUR session. An unconditional abort here would kill a dictation
     // the title bar's mic started against a terminal pane.
     if (this._chatDictationActive && this._voice === 'listening') {
-      voiceInputController.invalidateIfActive();
+      voiceInputController.invalidateComposerChannel(this._chatDictationCapture?.channelId ?? '');
     }
     this._chatDictationActive = false;
+    this._chatDictationCapture = null;
+    this._userSelectionPending = false;
+    this._settleAppVoiceConfirmation('unavailable');
     // NO DRAG MAY OUTLIVE THE DETACH. This element is parked by cache(), not
     // destroyed, so a _drag left non-null is still non-null when the Dashboard
     // reopens -- and _gripMove checks nothing else. Moving the mouse across
@@ -1758,22 +1793,49 @@ export class MuxCos extends LitElement {
     this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext')?.focus();
   }
 
-  override updated(): void {
-    const threaded = threadStore.threaded;
-    if (threaded && !this._threadedLast) {
-      // A text thread has no scoped voice transport yet. Stop both legacy
-      // chat voice paths before this component can render a threaded
-      // composer; raw legacy COS frames are gated in the socket at the same
-      // capability boundary.
-      this._menuOpen = false;
-      this._confirm = null;
-      if (this._chatDictationActive) {
-        voiceInputController.invalidateIfActive();
-        this._chatDictationActive = false;
+  get activeApplet(): AppletId | '' {
+    return this._activeApplet;
+  }
+
+  /** Resolves only a registered applet through its existing host. */
+  navigateAppletForAppVoice(
+    applet: AppletId,
+    target: string | undefined,
+    operationId: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const host = this.renderRoot.querySelector<MuxApplets>('mux-applets');
+    if (!host || signal.aborted) return Promise.resolve(false);
+    this._voiceAppletOperationId = operationId;
+    return new Promise<boolean>((resolve) => {
+      this._appletOperationWaiter = { operationId, applet, resolve };
+      signal.addEventListener(
+        'abort',
+        () => this.cancelAppVoiceNavigation(operationId),
+        { once: true },
+      );
+      if (signal.aborted) {
+        this.cancelAppVoiceNavigation(operationId);
+        return;
       }
-      if (voiceSessionController.isActive()) voiceSessionController.stop();
-    }
-    this._threadedLast = threaded;
+      host.show(applet, target, operationId);
+      if (this._activeApplet === applet) {
+        this._appletOperationWaiter = null;
+        this._voiceAppletOperationId = '';
+        resolve(true);
+      }
+    });
+  }
+
+  cancelAppVoiceNavigation(operationId: string): void {
+    const waiter = this._appletOperationWaiter;
+    if (!waiter || waiter.operationId !== operationId) return;
+    this._appletOperationWaiter = null;
+    if (this._voiceAppletOperationId === operationId) this._voiceAppletOperationId = '';
+    waiter.resolve(false);
+  }
+
+  override updated(): void {
     // Follow the stream only while the reader is at the bottom. Yanking the
     // scroller down under someone who deliberately scrolled up to re-read a
     // tool line is the fastest way to make a streaming surface unusable.
@@ -1978,7 +2040,7 @@ export class MuxCos extends LitElement {
       ></div>
       ${this.narrow
         ? this._renderSheet()
-        : html`<div class="dash"><mux-applets></mux-applets></div>`}
+        : html`<div class="dash" @applet-changed="${this._onAppletChanged}"><mux-applets></mux-applets></div>`}
     `;
   }
 
@@ -2200,6 +2262,7 @@ export class MuxCos extends LitElement {
       ${threadStore.threaded && this._threadConfirm !== null
         ? this._renderThreadConfirm(this._threadConfirm)
         : nothing}
+      ${this._appVoiceConfirmation ? this._renderAppVoiceConfirmation(this._appVoiceConfirmation) : nothing}
       ${!threadStore.threaded && this._confirm !== null ? this._renderConfirm(this._confirm) : nothing}
     `;
   }
@@ -2550,6 +2613,36 @@ export class MuxCos extends LitElement {
     `;
   }
 
+  private _renderAppVoiceConfirmation(confirm: AppVoiceSubmitConfirmation): TemplateResult {
+    return html`
+      <div class="turn" data-app-voice-submit-confirmation>
+        <div class="who"></div>
+        <div class="bd">
+          <div class="confirm" role="alertdialog" aria-label="Confirm voice-requested work">
+            <div class="h">${icon(TriangleAlert, { size: 13 })} Send voice-requested work?</div>
+            <p class="d">Target: ${confirm.label}</p>
+            <p class="d">${confirm.text}</p>
+            <p class="d">Voice-requested work is never autonomous. Confirming sends this exact text only to this exact visible conversation.</p>
+            <div class="row">
+              <button
+                class="btn pri"
+                type="button"
+                data-testid="app-voice-submit-confirm"
+                @click="${() => this._settleAppVoiceConfirmation('confirmed')}"
+              >Send</button>
+              <button
+                class="btn no"
+                type="button"
+                data-testid="app-voice-submit-decline"
+                @click="${() => this._settleAppVoiceConfirmation('declined')}"
+              >Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   /**
    * The composer's send slot, when there is nothing to send.
    *
@@ -2567,6 +2660,7 @@ export class MuxCos extends LitElement {
   private _renderVoiceControl(solo = false): TemplateResult {
     const s = this._session;
     const active = isSessionLive(s);
+    const candidate = voiceSessionController.isCandidateAvailable();
     const orbState =
       s.state === 'idle' || s.state === 'error' ? 'asleep' : s.state;
     const label = active ? 'End the spoken conversation' : `Talk to ${ASSISTANT_NAME}`;
@@ -2578,6 +2672,7 @@ export class MuxCos extends LitElement {
         aria-label="${label}"
         aria-pressed="${active ? 'true' : 'false'}"
         data-voice-state="${s.state}"
+        ?disabled="${!active && !candidate}"
         @click="${this._toggleSession}"
       >
         <mux-voice-orb .state="${orbState}" .level="${s.level}"></mux-voice-orb>
@@ -2586,66 +2681,9 @@ export class MuxCos extends LitElement {
   }
 
   private _toggleSession = (): void => {
-    if (threadStore.threaded || threadStore.negotiating) return;
+    if (threadStore.negotiating) return;
     void voiceSessionController.toggle();
   };
-
-  /**
-   * Threaded voice occupies the existing composer control slot only. It has no
-   * relationship to legacy dictation, global COS narration, terminal focus, or
-   * the ordinary live-session orb.
-   */
-  private _renderThreadedVoiceControl(): TemplateResult {
-    const voice = this._threadedVoice;
-    const canStartHere = voice.canStart && threadStore.voiceTarget !== null;
-    return html`
-      <span
-        class="threaded-voice"
-        data-threaded-voice-status
-        data-threaded-voice-state="${voice.state}"
-        ?data-threaded-voice-unavailable="${!voice.experimentalReady && !voice.canStop}"
-        role="status"
-      >${voice.status}</span>
-      ${voice.prefixPending
-        ? html`<span class="threaded-status" data-threaded-voice-prefix role="status"
-            >Local prefix in progress…</span
-          >`
-        : nothing}
-      ${voice.canStart
-        ? html`<button
-            class="cbtn"
-            type="button"
-            data-threaded-voice-start
-            title="Start experimental threaded voice for the selected context"
-            aria-label="Start experimental threaded voice for the selected context"
-            ?disabled="${!canStartHere}"
-            @click="${this._startThreadedVoice}"
-          >${icon(Mic, { size: 16 })}</button>`
-        : nothing}
-      ${voice.canCapture || voice.canEndCapture
-        ? html`<button
-            class="cbtn ${voice.canEndCapture ? 'rec' : ''}"
-            type="button"
-            data-threaded-voice-capture
-            data-threaded-voice-ptt
-            title="${voice.canEndCapture ? 'Stop speaking' : 'Start speaking in this context'}"
-            aria-label="${voice.canEndCapture ? 'Stop speaking' : 'Start speaking in this context'}"
-            aria-pressed="${voice.canEndCapture ? 'true' : 'false'}"
-            @click="${this._toggleThreadedCapture}"
-          >${voice.canEndCapture ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
-        : nothing}
-      ${voice.canStop
-        ? html`<button
-            class="cbtn"
-            type="button"
-            data-threaded-voice-stop
-            title="Stop experimental threaded voice and safely drain scoped audio"
-            aria-label="Stop experimental threaded voice and safely drain scoped audio"
-            @click="${this._stopThreadedVoice}"
-          >${icon(Square, { size: 13 })}</button>`
-        : nothing}
-    `;
-  }
 
   /**
    * Remember the composer, then let the orb have it.
@@ -2774,7 +2812,7 @@ export class MuxCos extends LitElement {
       this._threadConfirm = null;
       return;
     }
-    if (!this._live || threadStore.threaded) return;
+    if (!this._live) return;
     // The same layers _onKey unwinds, DISMISSED and not merely deferred.
     // _onKey is bound to the textarea, which solo mode does not render -- so
     // deferring here without closing anything left Escape a dead key for
@@ -2861,11 +2899,11 @@ export class MuxCos extends LitElement {
   private _renderComposer(): TemplateResult {
     const threaded = threadStore.threaded;
     const negotiating = threadStore.negotiating;
-    if (!threaded && !negotiating && this._live && !this._textMode) return this._renderVoiceComposer();
-    const call = !threaded && !negotiating && this._live;
+    if (!negotiating && this._live && !this._textMode) return this._renderVoiceComposer();
+    const call = !negotiating && this._live;
     const ready = this._draft.trim().length > 0 && (!threaded || threadStore.inputEnabled);
     const locked = negotiating || (threaded && !threadStore.inputEnabled);
-    const listening = !call && !threaded && !negotiating && this._voice === 'listening';
+    const listening = !call && !negotiating && this._voice === 'listening';
     const busy = threadStore.busy;
     const last = threadStore.turns[threadStore.turns.length - 1];
     const notice = threadStore.composerNotice;
@@ -2894,11 +2932,14 @@ export class MuxCos extends LitElement {
             @keydown="${this._onKey}"
           ></textarea>
           <div class="crow">
-            ${threaded
-              ? this._renderThreadedVoiceControl()
-              : nothing}
             ${notice
               ? html`<span class="threaded-status" data-thread-composer-status role="status">${notice}</span>`
+              : nothing}
+            ${this._dictationNotice
+              ? html`<span class="threaded-status" data-voice-dictation-status role="status">${this._dictationNotice}</span>`
+              : nothing}
+            ${this._session.state === 'error' && this._session.error
+              ? html`<span class="threaded-status" data-app-voice-status role="status">${this._session.error}</span>`
               : nothing}
             ${storageNotice ? html`<span class="threaded-status" role="status">${storageNotice}</span>` : nothing}
             ${threaded && threadStore.hasUncertainTurn
@@ -2933,7 +2974,7 @@ export class MuxCos extends LitElement {
                 >stop</button>`
               : nothing}
             ${call ? this._renderVoiceControl() : nothing}
-            ${!threaded && !negotiating && !call && voiceInputController.isSupported()
+            ${!negotiating && !call && threadStore.composerIdentity.channelId !== 'none' && voiceInputController.isSupported()
               ? html`<button
                   class="cbtn ${listening ? 'rec' : ''}"
                   type="button"
@@ -2943,7 +2984,7 @@ export class MuxCos extends LitElement {
                   @click="${this._toggleVoice}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
-            ${threaded || negotiating || call || ready || !voiceSessionController.isSupported()
+            ${negotiating || call || ready
               ? html`<button
                   class="cbtn send"
                   type="button"
@@ -3029,8 +3070,46 @@ export class MuxCos extends LitElement {
    */
   private _onAppletChanged = (e: Event): void => {
     const detail = (e as CustomEvent<AppletChangedDetail>).detail;
+    if (detail?.applet) {
+      this._activeApplet = detail.applet;
+      if (this._voiceAppletOperationId && this._appletOperationWaiter?.applet === detail.applet) {
+        this._appletOperationWaiter.resolve(true);
+        this._appletOperationWaiter = null;
+        this._voiceAppletOperationId = '';
+      } else {
+        this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
+        this.dispatchEvent(new CustomEvent('app-voice-observation', { bubbles: true, composed: true }));
+      }
+    }
     if (detail?.roomy === true) this._setDetent('full');
   };
+
+  /** Visible, human-only confirmation for a provider-requested work turn. */
+  requestAppVoiceSubmitConfirmation(
+    operationId: string,
+    label: string,
+    text: string,
+  ): Promise<AppVoiceSubmitConfirmationOutcome> {
+    if (this._appVoiceConfirmation !== null || !operationId || !text.trim()) {
+      return Promise.resolve('unavailable');
+    }
+    return new Promise<AppVoiceSubmitConfirmationOutcome>((resolve) => {
+      this._appVoiceConfirmation = { operationId, label, text, resolve };
+      this._pinned = true;
+    });
+  }
+
+  cancelAppVoiceSubmitConfirmation(operationId: string): void {
+    if (this._appVoiceConfirmation?.operationId !== operationId) return;
+    this._settleAppVoiceConfirmation('unavailable');
+  }
+
+  private _settleAppVoiceConfirmation(outcome: AppVoiceSubmitConfirmationOutcome): void {
+    const confirmation = this._appVoiceConfirmation;
+    if (!confirmation) return;
+    this._appVoiceConfirmation = null;
+    confirmation.resolve(outcome);
+  }
 
   // -------------------------------------------------------------------------
   // Intent
@@ -3053,11 +3132,12 @@ export class MuxCos extends LitElement {
   private _talkHere = (): void => {
     const option = threadStore.contexts.find((item) => item.key === this._contextCandidate);
     if (!option) return;
-    if (!threadStore.select(option.target)) return;
-    // This is explicit user intent, not a terminal/app focus side effect. The
-    // adapter mutes any owning A capture until the selection callback confirms
-    // exactly which runtime B became.
-    threadedVoiceController.prepareRouteForExplicitSelection();
+    this._userSelectionPending = true;
+    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
+    if (!threadStore.select(option.target)) {
+      this._userSelectionPending = false;
+      return;
+    }
     this._contextOpen = false;
     this._threadConfirm = null;
     this._pinned = true;
@@ -3161,8 +3241,12 @@ export class MuxCos extends LitElement {
 
   /** Explicit context switch from a queued record; no attention event calls this. */
   private _talkAttention = (attention: ThreadAttention): void => {
-    if (!threadStore.select({ kind: 'thread', threadId: attention.threadId })) return;
-    threadedVoiceController.prepareRouteForExplicitSelection();
+    this._userSelectionPending = true;
+    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
+    if (!threadStore.select({ kind: 'thread', threadId: attention.threadId })) {
+      this._userSelectionPending = false;
+      return;
+    }
     this._threadConfirm = null;
     this._pinned = true;
   };
@@ -3227,7 +3311,7 @@ export class MuxCos extends LitElement {
       // reaches _onDocKey -- this handler stops propagation at the top. So
       // Escape ends the call from the text box exactly as it does from the
       // orb, rather than walking off the surface with the microphone open.
-      if (this._live && !threadStore.threaded) {
+      if (this._live) {
         e.preventDefault();
         voiceSessionController.stop();
         return;
@@ -3257,32 +3341,19 @@ export class MuxCos extends LitElement {
     });
   };
 
-  private _startThreadedVoice = (): void => {
-    // `voiceTarget` is a fresh immutable copy of the committed text selection.
-    // Terminal/app focus is never read by the experimental voice adapter.
-    void threadedVoiceController.start(threadStore.voiceTarget);
-  };
-
-  private _toggleThreadedCapture = (): void => {
-    if (this._threadedVoice.canEndCapture) {
-      void threadedVoiceController.endCapture();
-      return;
-    }
-    if (this._threadedVoice.canCapture) void threadedVoiceController.beginCapture();
-  };
-
-  private _stopThreadedVoice = (): void => {
-    void threadedVoiceController.stop();
-  };
-
   private _toggleVoice = (): void => {
-    if (threadStore.threaded || threadStore.negotiating) return;
+    if (threadStore.negotiating) return;
     if (this._voice === 'listening') {
       if (this._chatDictationActive) voiceInputController.stop();
       return;
     }
+    const composer = threadStore.composerIdentity;
+    if (composer.channelId === 'none') return;
+    const capture = voiceInputController.startComposer(composer.channelId);
+    if (!capture) return;
+    this._dictationNotice = '';
     this._chatDictationActive = true;
-    voiceInputController.start();
+    this._chatDictationCapture = capture;
   };
 
   /**
@@ -3293,9 +3364,20 @@ export class MuxCos extends LitElement {
    * acts on things you did not say -- and the box is right there to fix a
    * word in before pressing send.
    */
-  private _takeTranscript(text: string): void {
-    if (threadStore.threaded || threadStore.negotiating) return;
-    const t = text.trim();
+  private _takeTranscript(payload: VoiceTranscriptPayload): void {
+    if (payload.target !== 'composer' || payload.kind !== 'final') return;
+    const capture = this._chatDictationCapture;
+    const composer = threadStore.composerIdentity;
+    if (
+      !capture ||
+      composer.channelId !== capture.channelId ||
+      payload.channelId !== capture.channelId ||
+      payload.captureId !== capture.captureId ||
+      payload.sttEventGeneration !== capture.sttEventGeneration
+    ) {
+      return;
+    }
+    const t = payload.text.trim();
     if (!t) return;
     this._draft = this._draft.trim() === '' ? t : `${this._draft.trimEnd()} ${t}`;
     void this.updateComplete.then(() => {

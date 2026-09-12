@@ -17,6 +17,7 @@ import { HOST_STATE, remotesStore } from './lib/remotes-store.js';
 
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
 export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
+export type AppVoiceFrameCallback = (frame: Record<string, unknown>) => void;
 
 /**
  * What the connection is actually doing right now, for a UI that has to tell
@@ -191,6 +192,8 @@ export class MuxSocket {
   private _ws: WebSocket | null = null;
   private _paneOutputCb: PaneOutputCallback | null = null;
   private _controlMessageCb: ControlMessageCallback | null = null;
+  /** Owner-only app-voice frames stay off the generic control/sessiond paths. */
+  private _appVoiceFrameListeners = new Set<AppVoiceFrameCallback>();
   private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private _reconnectAttempts = 0;
   private _intentionalClose = false;
@@ -293,6 +296,16 @@ export class MuxSocket {
 
   onControlMessage(cb: ControlMessageCallback): void {
     this._controlMessageCb = cb;
+  }
+
+  /**
+   * Subscribe to owner-targeted app-voice frames on this existing authenticated
+   * WebSocket. The transport intentionally does not create a second socket or
+   * relay these capability-bearing frames through a window event.
+   */
+  onAppVoiceFrame(cb: AppVoiceFrameCallback): () => void {
+    this._appVoiceFrameListeners.add(cb);
+    return () => this._appVoiceFrameListeners.delete(cb);
   }
 
   connect(): void {
@@ -584,6 +597,11 @@ export class MuxSocket {
 
   /** Send one versioned Mission Control frame if the socket is open. */
   missionControl(frame: Record<string, unknown>): boolean {
+    return this._sendCos(frame);
+  }
+
+  /** Send one app-voice v1 frame on the existing authenticated WebSocket. */
+  appVoice(frame: Record<string, unknown>): boolean {
     return this._sendCos(frame);
   }
 
@@ -993,6 +1011,13 @@ export class MuxSocket {
       // Text frame — JSON control message
       if (typeof ev.data === 'string') {
         const raw = JSON.parse(ev.data) as Record<string, unknown>;
+        // App voice has a separate owner-only protocol. In particular, the
+        // server-issued control capability never reaches generic control hooks
+        // or the frozen sessiond state projection.
+        if (typeof raw.type === 'string' && raw.type.startsWith('app-voice-')) {
+          for (const listener of this._appVoiceFrameListeners) listener(raw);
+          return;
+        }
         this._resolveCloseOutcome(raw);
         // Pass the raw message to control handlers (e.g. for detached/session-picker).
         // Non-typed envelopes (e.g. serve config) still flow through here.

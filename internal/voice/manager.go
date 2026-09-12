@@ -38,6 +38,10 @@ type handle struct {
 	sideband   *Sideband
 	bridge     Bridge
 	connecting bool
+	// appExchangeUsed is stricter than legacy Connect: one app provider bridge
+	// may complete SDP exactly once, even after a successful exchange clears
+	// connecting.
+	appExchangeUsed bool
 }
 
 // mintTTL bounds how long an unused minted secret is kept. A browser that
@@ -91,6 +95,37 @@ func (m *Manager) MintScoped(ctx context.Context, bridge CorrelatedBridge) (Ephe
 		return Ephemeral{}, errors.New("voice: scoped attachment requires a correlated bridge")
 	}
 	return m.mintScoped(ctx, bridge)
+}
+
+// MintApp creates a profile whose authority is AppOperationBridge only. It
+// intentionally does not expose the ephemeral bearer in the returned value.
+func (m *Manager) MintApp(ctx context.Context, bridge AppOperationBridge) (Ephemeral, error) {
+	if bridge == nil {
+		return Ephemeral{}, errors.New("voice: app bridge requires an operation bridge")
+	}
+	eph, err := m.client.MintEphemeralApp(ctx)
+	if err != nil {
+		return Ephemeral{}, err
+	}
+	eph, err = m.rememberMint(eph, bridge)
+	if err != nil {
+		return Ephemeral{}, err
+	}
+	eph.Value = ""
+	return eph, nil
+}
+
+// ConnectApp completes the server-proxied SDP exchange for an app bridge.
+func (m *Manager) ConnectApp(ctx context.Context, sessionID, offerSDP string) (Answer, *Sideband, error) {
+	m.mu.Lock()
+	h := m.handles[sessionID]
+	if h == nil || h.appExchangeUsed {
+		m.mu.Unlock()
+		return Answer{}, nil, errors.New("voice: app session SDP exchange was already used or expired")
+	}
+	h.appExchangeUsed = true
+	m.mu.Unlock()
+	return m.connect(ctx, sessionID, offerSDP)
 }
 
 func (m *Manager) mint(ctx context.Context, bridge Bridge) (Ephemeral, error) {

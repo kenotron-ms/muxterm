@@ -138,6 +138,16 @@ for isolation evidence. The voice lease safety API does not enable audio:
 threaded microphone/provider attachment remains disabled pending its separate
 correlation, drain, spoken-prefix, and live-microphone gates.
 
+The 2026-09-12 correction in
+`docs/designs/2026-09-12-app-voice-two-lifetimes.md` supersedes per-channel
+conversational voice ownership. Composer dictation cancels and invalidates late
+transcription on channel departure, preserving accepted draft text. App voice
+belongs to the authenticated browser session and persists across navigation;
+view observation never silently retargets work. Each submission still uses an
+immutable validated thread/runtime identity. App voice tools reuse authenticated
+app controls without expanding rights. Missing local SpeechSynthesis voices is
+not proof that provider audio is unavailable. Live mic access remains opt-in.
+
 ### Terminal query ownership (CSI 6n, OSC 11;?)
 
 sessiond's `VTBuffer` is authoritative for replying to `CSI 6n` (cursor

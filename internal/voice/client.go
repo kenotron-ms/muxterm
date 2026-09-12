@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,6 +61,61 @@ func (c *Client) MintEphemeral(ctx context.Context) (Ephemeral, error) {
 // deterministic prefix acknowledgement before asking the provider to respond.
 func (c *Client) MintEphemeralScoped(ctx context.Context) (Ephemeral, error) {
 	return c.mintEphemeral(ctx, true)
+}
+
+// MintEphemeralApp creates the persistent app bridge profile.  The browser
+// never receives its bearer: SDP is proxied by the server.
+func (c *Client) MintEphemeralApp(ctx context.Context) (Ephemeral, error) {
+	return c.mintApp(ctx)
+}
+
+func (c *Client) mintApp(ctx context.Context) (Ephemeral, error) {
+	tok, err := c.cred.Token(ctx)
+	if err != nil {
+		return Ephemeral{}, err
+	}
+	session := map[string]any{
+		"type": "realtime", "model": c.cfg.Model, "instructions": AppInstructions(),
+		"tools": AppToolDefinitions(),
+		"audio": map[string]any{
+			"input":  map[string]any{"turn_detection": map[string]any{"type": "server_vad", "create_response": false}},
+			"output": map[string]any{"voice": c.cfg.Voice},
+		},
+	}
+	body, err := json.Marshal(map[string]any{"session": session})
+	if err != nil {
+		return Ephemeral{}, fmt.Errorf("voice: encode app mint request: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.Endpoint+"/realtime/client_secrets", bytes.NewReader(body))
+	if err != nil {
+		return Ephemeral{}, fmt.Errorf("voice: build app mint request: %w", err)
+	}
+	c.authorize(req, tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return Ephemeral{}, fmt.Errorf("voice: app mint request to the realtime endpoint failed: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Ephemeral{}, fmt.Errorf("voice: app minting returned HTTP %d: %s%s", resp.StatusCode, authSafeSnippet(raw, resp.StatusCode), c.authHint(resp.StatusCode))
+	}
+	var out struct {
+		Value     string          `json:"value"`
+		ExpiresAt int64           `json:"expires_at"`
+		Session   json.RawMessage `json:"session"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil || out.Value == "" {
+		return Ephemeral{}, errors.New("voice: the realtime endpoint returned an unusable app mint response")
+	}
+	var sess struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(out.Session, &sess)
+	return Ephemeral{Value: out.Value, ExpiresAt: out.ExpiresAt, SessionID: sess.ID}, nil
 }
 
 func (c *Client) mintEphemeral(ctx context.Context, scoped bool) (Ephemeral, error) {

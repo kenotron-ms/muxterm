@@ -1,37 +1,14 @@
 /**
- * voice-input-controller — singleton controller for the Web Speech API-backed
- * dictation button (<mux-mic-button> in the mobile title bar).
+ * Browser dictation for terminal input and Mission Control composers.
  *
- * Mirrors the module-level-singleton convention used by terminal-registry.ts
- * and pane-focus-coordinator.ts: this file owns all SpeechRecognition state
- * (feature detection, the session-token/generation-counter scheme, and the
- * idle/listening/error state machine); <mux-mic-button> only renders UI and
- * subscribes to this module's pub/sub API.
- *
- * See docs/designs/2026-07-31-voice-input-design.md ("Architecture" section)
- * for the full session-token rationale. Summary: every start() increments a
- * monotonic counter and captures the result as that session's token, stored
- * together with the exact { workspaceId, paneId } target being dictated into.
- * Every recognition event (real, or DEV-accessor-injected — see the bottom of
- * this file) is gated on "does my token still equal the current counter?" — a
- * mismatch means the session was invalidated (pane switch, workspace switch,
- * or component unmount) and the event is a guaranteed no-op even if it
- * arrives late. A second guard (`!_current`) additionally makes a SECOND
- * terminal event for an already-finished session a no-op even when the token
- * still matches (e.g. a real browser 'end' event arriving after this module's
- * own synthetic-result injection already finished that same session) — this
- * is what makes DEV-accessor-driven tests deterministic regardless of
- * whatever the real underlying SpeechRecognition object does in the
- * background.
+ * A composer capture is explicitly owned by an immutable channel/capture/
+ * generation triple. Leaving that channel invalidates the triple before the
+ * selection can change, so delayed Web Speech partials/finals cannot land in
+ * either the old or the newly selected composer.
  */
 
 import { store } from '../state.js';
-
-// ---------------------------------------------------------------------------
-// Minimal Web Speech API surface. TypeScript's bundled DOM lib does not
-// declare SpeechRecognition (still non-standard/experimental), so the exact
-// shape this module depends on is declared locally.
-// ---------------------------------------------------------------------------
+import { voiceCaptureArbiter } from './voice-capture-arbiter.js';
 
 interface SpeechRecognitionAlternativeLike {
   readonly transcript: string;
@@ -40,6 +17,7 @@ interface SpeechRecognitionAlternativeLike {
 interface SpeechRecognitionResultLike {
   readonly length: number;
   readonly [index: number]: SpeechRecognitionAlternativeLike;
+  readonly isFinal?: boolean;
 }
 
 interface SpeechRecognitionResultListLike {
@@ -49,6 +27,7 @@ interface SpeechRecognitionResultListLike {
 
 interface SpeechRecognitionEventLike extends Event {
   readonly results: SpeechRecognitionResultListLike;
+  readonly resultIndex?: number;
 }
 
 interface SpeechRecognitionErrorEventLike extends Event {
@@ -61,76 +40,108 @@ interface SpeechRecognitionLike extends EventTarget {
   start(): void;
   stop(): void;
   abort(): void;
-  onresult: ((ev: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((ev: SpeechRecognitionErrorEventLike) => void) | null;
-  onend: ((ev: Event) => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: ((event: Event) => void) | null;
 }
 
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
-function _resolveCtor(): SpeechRecognitionCtor | null {
+function resolveCtor(): SpeechRecognitionCtor | null {
   if (typeof window === 'undefined') return null;
-  const w = window as unknown as {
+  const browser = window as unknown as {
     SpeechRecognition?: SpeechRecognitionCtor;
     webkitSpeechRecognition?: SpeechRecognitionCtor;
   };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+  return browser.SpeechRecognition ?? browser.webkitSpeechRecognition ?? null;
 }
 
-/**
- * Feature availability is captured ONCE at module load, so a stub applied
- * afterward has no effect; Task 7's unsupported-browser check relies on it.
- * Android is deliberately excluded because native keyboard dictation makes
- * the custom button redundant; this is a product decision, not a workaround.
- */
-const _isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
-const _ctor: SpeechRecognitionCtor | null = _isAndroid ? null : _resolveCtor();
-
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
+const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+const ctor: SpeechRecognitionCtor | null = isAndroid ? null : resolveCtor();
 
 export type VoiceState = 'idle' | 'listening' | 'error';
 
-export interface VoiceTarget {
-  workspaceId: string;
-  paneId: number;
+export interface TerminalVoiceTarget {
+  readonly kind: 'terminal';
+  readonly workspaceId: string;
+  readonly paneId: number;
 }
 
-export interface VoiceTranscriptPayload extends VoiceTarget {
-  text: string;
+export interface ComposerVoiceTarget {
+  readonly kind: 'composer';
+  readonly channelId: string;
+}
+
+export type VoiceTarget = TerminalVoiceTarget | ComposerVoiceTarget;
+
+export interface ComposerDictationCapture {
+  readonly channelId: string;
+  readonly captureId: string;
+  readonly sttEventGeneration: number;
+}
+
+export type VoiceTranscriptPayload =
+  | Readonly<{
+      readonly target: 'terminal';
+      readonly kind: 'partial' | 'final';
+      readonly text: string;
+      readonly workspaceId: string;
+      readonly paneId: number;
+      readonly channelId: '';
+      readonly captureId: string;
+      readonly sttEventGeneration: number;
+    }>
+  | Readonly<{
+      readonly target: 'composer';
+      readonly kind: 'partial' | 'final';
+      readonly text: string;
+      readonly workspaceId: '';
+      readonly paneId: 0;
+      readonly channelId: string;
+      readonly captureId: string;
+      readonly sttEventGeneration: number;
+    }>;
+
+interface CaptureIdentity {
+  readonly captureId: string;
+  readonly sttEventGeneration: number;
+}
+
+interface Session {
+  readonly token: number;
+  readonly target: VoiceTarget;
+  readonly capture: CaptureIdentity;
+  readonly recognition: SpeechRecognitionLike;
 }
 
 type StateListener = (state: VoiceState) => void;
 type TranscriptListener = (payload: VoiceTranscriptPayload) => void;
 type ErrorListener = (message: string) => void;
 
-interface Session {
-  token: number;
-  target: VoiceTarget;
-  recognition: SpeechRecognitionLike;
+let tokenCounter = 0;
+let sttEventGeneration = 0;
+let current: Session | null = null;
+let state: VoiceState = 'idle';
+/** Invalidated/final sessions retain ownership until their browser end event. */
+const releasing = new Map<number, Session>();
+
+const stateListeners = new Set<StateListener>();
+const transcriptListeners = new Set<TranscriptListener>();
+const errorListeners = new Set<ErrorListener>();
+
+function setState(next: VoiceState): void {
+  if (state === next) return;
+  state = next;
+  for (const listener of stateListeners) listener(next);
 }
 
-// ---------------------------------------------------------------------------
-// Module-level state — one session at a time, singleton across the app.
-// ---------------------------------------------------------------------------
-
-let _tokenCounter = 0;
-let _current: Session | null = null;
-let _state: VoiceState = 'idle';
-
-const _stateListeners = new Set<StateListener>();
-const _transcriptListeners = new Set<TranscriptListener>();
-const _errorListeners = new Set<ErrorListener>();
-
-function _setState(next: VoiceState): void {
-  if (_state === next) return;
-  _state = next;
-  for (const cb of _stateListeners) cb(next);
+function emitError(message: string): void {
+  setState('error');
+  for (const listener of errorListeners) listener(message);
+  setState('idle');
 }
 
-/** Human-readable message for a SpeechRecognition error code. */
-function _messageForError(code: string): string {
+function messageForError(code: string): string {
   switch (code) {
     case 'not-allowed':
     case 'service-not-allowed':
@@ -146,213 +157,251 @@ function _messageForError(code: string): string {
   }
 }
 
-/**
- * Ends the session for `token` and returns the controller to idle — but ONLY
- * if `token` is still the current session. A stale token here means a newer
- * start() or an invalidateIfActive() already advanced the counter, and that
- * newer transition already owns idle/listening — this call is a no-op.
- */
-function _finishSession(token: number): void {
-  if (token !== _tokenCounter) return;
-  _current = null;
-  _setState('idle');
+function releaseCapture(session: Session): void {
+  releasing.delete(session.token);
+  void voiceCaptureArbiter.release('composer_dictation');
 }
 
 /**
- * Routes a finalized transcript through the token gate. Called by the real
- * recognition.onresult handler AND by the DEV accessor's inject('result').
+ * A final/error fences transcript delivery now, but keeps arbiter ownership
+ * until SpeechRecognition's own end event confirms the browser capture ended.
  */
-function _handleResult(token: number, text: string): void {
-  if (token !== _tokenCounter || !_current) return;
-  const { workspaceId, paneId } = _current.target;
-  for (const cb of _transcriptListeners) cb({ text, workspaceId, paneId });
-  _finishSession(token);
+function finishSession(token: number, waitForEnd = true): void {
+  if (token !== tokenCounter || !current) return;
+  const session = current;
+  current = null;
+  if (waitForEnd) releasing.set(session.token, session);
+  else releaseCapture(session);
+  setState('idle');
 }
 
-/**
- * Routes a SpeechRecognition error through the token gate. Called by the real
- * recognition.onerror handler AND by the DEV accessor's inject('error') —
- * both paths pass a raw error CODE (e.g. 'not-allowed'), mapped to a message
- * by _messageForError so both paths exercise identical logic.
- */
-function _handleError(token: number, message: string): void {
-  if (token !== _tokenCounter || !_current) return;
-  _setState('error');
-  for (const cb of _errorListeners) cb(message);
-  _finishSession(token);
+function transcriptPayload(
+  session: Session,
+  kind: 'partial' | 'final',
+  text: string,
+): VoiceTranscriptPayload {
+  if (session.target.kind === 'terminal') {
+    return Object.freeze({
+      target: 'terminal',
+      kind,
+      text,
+      workspaceId: session.target.workspaceId,
+      paneId: session.target.paneId,
+      channelId: '',
+      captureId: session.capture.captureId,
+      sttEventGeneration: session.capture.sttEventGeneration,
+    });
+  }
+  return Object.freeze({
+    target: 'composer',
+    kind,
+    text,
+    workspaceId: '',
+    paneId: 0,
+    channelId: session.target.channelId,
+    captureId: session.capture.captureId,
+    sttEventGeneration: session.capture.sttEventGeneration,
+  });
 }
 
-/**
- * Routes a plain `end` event through the token gate. `hadTerminalEvent` is
- * true when this session's onresult/onerror already fired (in which case
- * this is a redundant tail event and must be a strict no-op — do not even
- * re-check the token/`_current`, since a NEWER session may already be active
- * by the time this fires and this must never touch it). `hadTerminalEvent`
- * is false only for the rare iOS Safari quiet-end quirk — the ONLY case that
- * reaches the body of this function.
- */
-function _handleEnd(token: number, hadTerminalEvent: boolean): void {
-  if (hadTerminalEvent) return;
-  if (token !== _tokenCounter || !_current) return;
-  _finishSession(token);
+function handleResult(token: number, kind: 'partial' | 'final', text: string): void {
+  if (token !== tokenCounter || !current) return;
+  const session = current;
+  for (const listener of transcriptListeners) listener(transcriptPayload(session, kind, text));
+  if (kind === 'final') finishSession(token);
 }
 
-/**
- * Start a new dictation session against the currently-focused workspace+pane
- * (read directly from the store — the same wire-state truth app.ts renders
- * from, not duplicated). No-ops if unsupported or a session is already active.
- */
-function start(): void {
-  if (!_ctor || _current) return;
-  const workspaceId = store.attached ?? '';
-  const paneId = store.activePaneId;
-  const token = ++_tokenCounter;
-  const recognition = new _ctor();
+function handleError(token: number, message: string): void {
+  if (token !== tokenCounter || !current) return;
+  emitError(message);
+  finishSession(token);
+}
+
+function handleEnd(token: number, hadTerminalEvent: boolean): void {
+  const waiting = releasing.get(token);
+  if (waiting) {
+    releaseCapture(waiting);
+    return;
+  }
+  if (hadTerminalEvent || token !== tokenCounter || !current) return;
+  // This event itself is the browser's hardware-release acknowledgement.
+  finishSession(token, false);
+}
+
+function newCaptureId(): string | null {
+  if (typeof crypto === 'undefined') return null;
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  if (typeof crypto.getRandomValues !== 'function') return null;
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function startFor(target: VoiceTarget): ComposerDictationCapture | null {
+  if (!ctor || current || releasing.size > 0) return null;
+  const acquired = voiceCaptureArbiter.acquire('composer_dictation');
+  if (!acquired.ok) {
+    emitError(
+      acquired.owner === 'app_conversation'
+        ? 'Stop the spoken conversation before dictating'
+        : 'Another dictation capture is still releasing',
+    );
+    return null;
+  }
+  const captureId = newCaptureId();
+  if (!captureId) {
+    void voiceCaptureArbiter.release('composer_dictation');
+    emitError('A secure dictation capture ID could not be created');
+    return null;
+  }
+
+  const token = ++tokenCounter;
+  const capture: CaptureIdentity = Object.freeze({
+    captureId,
+    sttEventGeneration: ++sttEventGeneration,
+  });
+  const recognition = new ctor();
   recognition.continuous = false;
-  recognition.interimResults = false;
-  let _terminalFired = false;
-  recognition.onresult = (ev) => {
-    _terminalFired = true;
-    const transcript = ev.results[0][0].transcript;
-    _handleResult(token, transcript);
+  recognition.interimResults = true;
+  let terminalFired = false;
+  recognition.onresult = (event) => {
+    const from = event.resultIndex ?? 0;
+    for (let index = from; index < event.results.length; index++) {
+      const result = event.results[index];
+      if (!result || result.length === 0) continue;
+      const kind = result.isFinal === false ? 'partial' : 'final';
+      if (kind === 'final') terminalFired = true;
+      handleResult(token, kind, result[0]?.transcript ?? '');
+      if (kind === 'final') break;
+    }
   };
-  recognition.onerror = (ev) => {
-    _terminalFired = true;
-    _handleError(token, _messageForError(ev.error));
+  recognition.onerror = (event) => {
+    terminalFired = true;
+    handleError(token, messageForError(event.error));
   };
-  recognition.onend = () => {
-    _handleEnd(token, _terminalFired);
-  };
-  _current = { token, target: { workspaceId, paneId }, recognition };
-  _setState('listening');
+  recognition.onend = () => handleEnd(token, terminalFired);
+
+  current = { token, target, capture, recognition };
+  setState('listening');
   try {
     recognition.start();
   } catch {
-    _handleError(token, 'Microphone unavailable');
+    handleError(token, 'Microphone unavailable');
+    const waiting = releasing.get(token);
+    if (waiting) releaseCapture(waiting);
   }
+
+  return target.kind === 'composer'
+    ? Object.freeze({
+        channelId: target.channelId,
+        captureId: capture.captureId,
+        sttEventGeneration: capture.sttEventGeneration,
+      })
+    : null;
 }
 
-/** Manual stop — converges on the same result/error/end path as auto-stop
- *  (continuous:false means the browser's own silence-detection auto-stop
- *  fires the identical events). */
+/** Existing terminal dictation entry point. */
+function start(): void {
+  startFor({
+    kind: 'terminal',
+    workspaceId: store.attached ?? '',
+    paneId: store.activePaneId,
+  });
+}
+
+/** Explicit composer dictation entry point; it never selects or submits. */
+function startComposer(channelId: string): ComposerDictationCapture | null {
+  if (!channelId || channelId.length > 128) return null;
+  return startFor(Object.freeze({ kind: 'composer', channelId }));
+}
+
 function stop(): void {
-  if (!_current) return;
+  const session = current;
+  if (!session) return;
+  // A manual stop is also a transcript fence: do not accept an event emitted
+  // between stop() and the browser's asynchronous end notification.
+  invalidate(session);
+}
+
+function invalidate(session: Session): void {
   try {
-    _current.recognition.stop();
+    session.recognition.abort();
   } catch {
-    // Already stopping/stopped — ignore.
+    // Already stopping/stopped. The old identity is still invalidated below.
   }
+  // Invalidate before returning. Any delayed partial/final now fails both the
+  // controller token gate and the composer's immutable capture comparison.
+  sttEventGeneration++;
+  tokenCounter++;
+  releasing.set(session.token, session);
+  current = null;
+  setState('idle');
 }
 
 /**
- * Invalidate the in-flight session, if any.
- *
- * - With a `target`: only invalidates if the in-flight session's stored
- *   target does NOT match it (in-workspace pane switch — the new pane's
- *   identity is synchronously known).
- * - With no `target` at all: invalidates unconditionally (workspace switch,
- *   attachWithBreakpoint bootstrap/recovery, or component unmount — none of
- *   these have a comparable new-pane identity available yet).
- *
- * Either way, invalidation stops the underlying recognition immediately AND
- * bumps the token counter synchronously before returning, so any event the
- * old session still fires afterward is a guaranteed no-op.
+ * Existing terminal navigation seam. A composer has separate channel
+ * ownership, so pane/applet navigation cannot cancel it.
  */
 function invalidateIfActive(target?: VoiceTarget): void {
-  if (!_current) return;
-  if (target) {
-    const t = _current.target;
-    if (t.workspaceId === target.workspaceId && t.paneId === target.paneId) return;
+  const session = current;
+  if (!session) return;
+  if (session.target.kind === 'composer') {
+    if (target?.kind === 'composer' && target.channelId !== session.target.channelId) invalidate(session);
+    return;
   }
-  try {
-    _current.recognition.abort();
-  } catch {
-    // Already stopped — ignore.
+  if (
+    target?.kind === 'terminal' &&
+    target.workspaceId === session.target.workspaceId &&
+    target.paneId === session.target.paneId
+  ) {
+    return;
   }
-  _tokenCounter++;
-  _current = null;
-  _setState('idle');
+  invalidate(session);
+}
+
+/**
+ * Call synchronously before a Mission Control composer channel is left.
+ * Already accepted draft text and submitted turns live outside this controller.
+ */
+function invalidateComposerChannel(channelId: string): void {
+  const session = current;
+  if (!session || session.target.kind !== 'composer' || session.target.channelId !== channelId) return;
+  invalidate(session);
 }
 
 export const voiceInputController = {
   isSupported(): boolean {
-    return _ctor !== null;
+    return ctor !== null;
   },
   start,
+  startComposer,
   stop,
   invalidateIfActive,
+  invalidateComposerChannel,
+  activeComposerCapture(): ComposerDictationCapture | null {
+    const session = current;
+    if (!session || session.target.kind !== 'composer') return null;
+    return Object.freeze({
+      channelId: session.target.channelId,
+      captureId: session.capture.captureId,
+      sttEventGeneration: session.capture.sttEventGeneration,
+    });
+  },
   getState(): VoiceState {
-    return _state;
+    return state;
   },
-  onStateChange(cb: StateListener): () => void {
-    _stateListeners.add(cb);
-    return () => _stateListeners.delete(cb);
+  onStateChange(listener: StateListener): () => void {
+    stateListeners.add(listener);
+    return () => stateListeners.delete(listener);
   },
-  onTranscript(cb: TranscriptListener): () => void {
-    _transcriptListeners.add(cb);
-    return () => _transcriptListeners.delete(cb);
+  onTranscript(listener: TranscriptListener): () => void {
+    transcriptListeners.add(listener);
+    return () => transcriptListeners.delete(listener);
   },
-  onError(cb: ErrorListener): () => void {
-    _errorListeners.add(cb);
-    return () => _errorListeners.delete(cb);
+  onError(listener: ErrorListener): () => void {
+    errorListeners.add(listener);
+    return () => errorListeners.delete(listener);
   },
 };
-
-// ---------------------------------------------------------------------------
-// DEV verification accessor — extends the SAME window.__muxterm object
-// terminal-registry.ts already installs (see terminal-registry.ts:1051-1056),
-// using the IDENTICAL spread pattern so neither module clobbers the other's
-// keys regardless of module evaluation order. Deliberately NOT gated behind
-// import.meta.env.DEV: this repo's `make dev-local` builds with plain
-// `vite build --watch` (no --mode development), so import.meta.env.DEV is
-// false there and a DEV-gated block would never run against it. This mirrors
-// terminal-registry.ts's own accessor, which is likewise ungated.
-// ---------------------------------------------------------------------------
-
-if (typeof window !== 'undefined') {
-  (window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm = {
-    ...(window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm,
-    voiceInput: {
-      /** Starts a session (same code path as a real button click) and
-       *  returns its session token, so a test can capture it for later
-       *  staleness checks. Returns -1 only when unsupported (no ctor).
-       *  If a session is already active, this is a no-op and the EXISTING
-       *  session's token is returned unchanged (not -1) — do not assert
-       *  === -1 to detect "was already listening". */
-      start: (): number => {
-        start();
-        return _current?.token ?? -1;
-      },
-      /** Unconditionally invalidates the in-flight session, exactly as a
-       *  workspace-switch/unmount would (no target argument). */
-      invalidate: (): void => {
-        invalidateIfActive();
-      },
-      /**
-       * Injects a synthetic terminal event tagged with an EXPLICIT `token`
-       * (which may be stale/previously-captured), routed through the exact
-       * same token-gated handlers real recognition events use.
-       *   - kind 'result': `payload` is the raw transcript text.
-       *   - kind 'error':  `payload` is the raw SpeechRecognition error CODE
-       *     (e.g. 'not-allowed', 'no-speech') — mapped via the same
-       *     _messageForError() real errors use, not a pre-formatted message.
-       *   - kind 'end': `payload` is ignored (plain quiet-end case).
-       */
-      inject: (kind: 'result' | 'error' | 'end', token: number, payload?: string): void => {
-        if (kind === 'result') _handleResult(token, payload ?? '');
-        else if (kind === 'error') _handleError(token, _messageForError(payload ?? ''));
-        else _handleEnd(token, false);
-      },
-      /** Current state, the in-flight session's target identity (or null),
-       *  and its token (or null) — the token is what makes it possible to
-       *  test a REAL button-click-initiated session (not just accessor
-       *  .start()-initiated ones), since a real click never returns a token
-       *  any other way. */
-      state: (): { state: VoiceState; target: VoiceTarget | null; token: number | null } => ({
-        state: _state,
-        target: _current?.target ?? null,
-        token: _current?.token ?? null,
-      }),
-    },
-  };
-}

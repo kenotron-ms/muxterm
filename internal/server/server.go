@@ -144,6 +144,10 @@ type Server struct {
 	missionControlVoiceAttachmentMu sync.Mutex
 	missionControlVoiceAttachment   *missionControlVoiceAttachment
 
+	// appVoice is the owner-WebSocket-bound conversational bridge. It is
+	// intentionally unrelated to the scoped Mission Control attachment above.
+	appVoice *appVoiceService
+
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
 	ai *ai.Manager
@@ -416,6 +420,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	if s.missionControlVoiceProvider != nil {
 		defer s.missionControlVoiceProvider.Close()
+	}
+	if s.appVoice != nil {
+		defer s.appVoice.provider.Close()
 	}
 
 	// Expired publications linger briefly as tombstones so a reader who is

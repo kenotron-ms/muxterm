@@ -130,6 +130,12 @@ type Client struct {
 	// and by OnPaneOutput around every binary relay, so pane-data can never be
 	// written to the WebSocket while a composition send is in flight.
 	attachSeq sync.Mutex
+
+	// appVoiceAllowed is derived from the original authenticated WebSocket
+	// upgrade request. App voice claims never accept a later frame as proof that
+	// this socket was opened by the same origin.
+	appVoiceAllowed bool
+	appVoicePanes   map[string]map[int]bool
 }
 
 const (
@@ -303,6 +309,7 @@ func newClient(hub *Hub, conn *websocket.Conn) *Client {
 		missionControlRequests: make(chan []byte, missionControlRequestQueueSize),
 		wsByHost:               make(map[string][]sessiond.WorkspaceInfo),
 		ssByHost:               make(map[string][]sessiond.SessionState),
+		appVoicePanes:          make(map[string]map[int]bool),
 	}
 	c.writeTextFn = func(data []byte) error {
 		c.writeMu.Lock()
@@ -564,6 +571,15 @@ func (c *Client) handleTextInput(data []byte) {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err == nil {
+		if isAppVoiceMessage(probe.Type) {
+			c.hub.mu.RLock()
+			appVoice := c.hub.appVoice
+			c.hub.mu.RUnlock()
+			if appVoice != nil {
+				appVoice.handleFrame(c, data)
+			}
+			return
+		}
 		if isCosMessage(probe.Type) {
 			c.handleCosMessage(data)
 			return
@@ -612,6 +628,7 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 		attachedID := nsID(host, comp.WorkspaceID)
 		c.setAttached(host, attachedID, msg.Breakpoint)
+		c.rememberAppVoicePanes(attachedID, comp.Panes)
 		c.sendMessage(&sessiond.Message{
 			Type:        sessiond.TypeComposition,
 			CID:         msg.CID,
@@ -1062,6 +1079,9 @@ type Hub struct {
 	// attachment controller. Reset/archive must not retire a runtime while it
 	// still owns an immutable audio attachment.
 	missionControlVoiceBusy func(threadID string) bool
+	// appVoice owns the one browser-bound app voice lease. It must be fenced
+	// from Hub.Remove before this connection can be replaced.
+	appVoice *appVoiceService
 
 	// attachFailures counts CONSECUTIVE attachClient failures across all
 	// browsers, reset by the first success. Guarded by mu.
@@ -1451,14 +1471,22 @@ func daemonUnreachableDetail(cause error) string {
 // (closing each daemon connection), and closes the client.
 func (h *Hub) Remove(c *Client) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if _, ok := h.clients[c]; ok {
-		delete(h.clients, c)
-		c.stopCos()
-		c.stopMissionControl()
-		c.teardownSessions()
-		c.close()
+	if _, ok := h.clients[c]; !ok {
+		h.mu.Unlock()
+		return
 	}
+	delete(h.clients, c)
+	appVoice := h.appVoice
+	h.mu.Unlock()
+	// Do not call into the app service under Hub.mu: app operations also read
+	// the catalog and client inventories.
+	if appVoice != nil {
+		appVoice.disconnect(c)
+	}
+	c.stopCos()
+	c.stopMissionControl()
+	c.teardownSessions()
+	c.close()
 }
 
 // CloseCos shuts the chief-of-staff sidecar down if one was ever started, so
@@ -1511,6 +1539,9 @@ func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(1 << 20) // 1MB
 
 	client := newClient(s.hub, conn)
+	// Preserve legacy WebSocket acceptance. This flag gates only the new app
+	// voice frame family and is computed before accepting untrusted frames.
+	client.appVoiceAllowed = s.appVoiceSameOrigin(r)
 	s.hub.Add(client)
 	go client.readPump()
 	// Started beside readPump, not inside it: Ping waits for a pong that only
