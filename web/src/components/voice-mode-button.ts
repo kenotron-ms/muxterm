@@ -46,14 +46,19 @@ export class MuxVoiceModeButton extends LitElement {
     :host {
       --voice-mode-target: 44px;
       display: inline-flex;
-      flex: none;
-    }
-
-    .control {
       width: var(--voice-mode-target);
+      flex: none;
       min-width: 44px;
       height: var(--voice-mode-target);
       min-height: 44px;
+      box-sizing: border-box;
+    }
+
+    .control {
+      width: 100%;
+      min-width: 0;
+      height: 100%;
+      min-height: 0;
       display: grid;
       place-items: center;
       padding: 0;

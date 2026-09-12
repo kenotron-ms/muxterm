@@ -425,7 +425,7 @@ func (c *Client) missionControlDetail(msg missionControlClientMessage) {
 		return
 	}
 	runtime := router.Runtime(msg.ThreadID)
-	if runtime == nil || runtime.Thread.RuntimeGeneration != msg.ExpectedRuntimeGeneration {
+	if runtime == nil || runtime.Identity().RuntimeGeneration != msg.ExpectedRuntimeGeneration {
 		c.sendMissionControlResult(missionControlFailure(msg, "detail_unavailable", "thread runtime is not live; detail never starts an evicted root"))
 		return
 	}
@@ -436,7 +436,7 @@ func (c *Client) missionControlDetail(msg missionControlClientMessage) {
 		c.sendMissionControlResult(missionControlFailure(msg, "detail_unavailable", err.Error()))
 		return
 	}
-	thread = runtime.Thread
+	thread = runtime.Identity()
 	c.sendMissionControlResult(missionControlResult{
 		Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "detail",
 		RequestID: msg.RequestID, OK: true, Thread: &thread, History: snapshot.History,
@@ -616,7 +616,7 @@ func (c *Client) missionControlSelect(msg missionControlClientMessage) {
 		c.sendMissionControlResult(missionControlFailure(msg, code, err.Error()))
 		return
 	}
-	thread = runtime.Thread
+	thread = runtime.Identity()
 	ctx, cancel := context.WithTimeout(c.ctx, missionControlBootWait)
 	defer cancel()
 	c.ensureMissionControlSubscription(runtime)
@@ -651,7 +651,7 @@ func (c *Client) missionControlHistory(msg missionControlClientMessage) {
 		return
 	}
 	runtime := router.Runtime(msg.ThreadID)
-	if runtime == nil || runtime.Thread.RuntimeGeneration != msg.ExpectedRuntimeGeneration {
+	if runtime == nil || runtime.Identity().RuntimeGeneration != msg.ExpectedRuntimeGeneration {
 		c.sendMissionControlResult(missionControlFailure(msg, "stale_runtime", "select the thread again before reading its history"))
 		return
 	}
@@ -659,7 +659,7 @@ func (c *Client) missionControlHistory(msg missionControlClientMessage) {
 		c.sendMissionControlResult(missionControlFailure(msg, "selection_required", "history requires prior select/subscription authority on this connection"))
 		return
 	}
-	if err := c.missionControlValidateLive(runtime.Thread); err != nil {
+	if err := c.missionControlValidateLive(runtime.Identity()); err != nil {
 		c.sendMissionControlResult(missionControlFailure(msg, "stale_live_incarnation", err.Error()))
 		return
 	}
@@ -670,7 +670,7 @@ func (c *Client) missionControlHistory(msg missionControlClientMessage) {
 		c.sendMissionControlResult(missionControlFailure(msg, "history_unavailable", err.Error()))
 		return
 	}
-	thread := runtime.Thread
+	thread := runtime.Identity()
 	c.sendMissionControlResult(missionControlResult{
 		Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "history",
 		RequestID: msg.RequestID, OK: true, Thread: &thread,
@@ -701,12 +701,12 @@ func (c *Client) missionControlTurn(msg missionControlClientMessage) {
 		return
 	}
 	runtime := router.Runtime(msg.ThreadID)
-	if runtime == nil || runtime.Thread.RuntimeGeneration != msg.ExpectedRuntimeGeneration {
+	if runtime == nil || runtime.Identity().RuntimeGeneration != msg.ExpectedRuntimeGeneration {
 		c.sendMissionControlResult(missionControlFailure(msg, "stale_runtime", "select the thread again before submitting"))
 		return
 	}
 	// Revalidate the live workspace immediately before durable admission.
-	if err := c.missionControlValidateLive(runtime.Thread); err != nil {
+	if err := c.missionControlValidateLive(runtime.Identity()); err != nil {
 		c.sendMissionControlResult(missionControlFailure(msg, "stale_live_incarnation", err.Error()))
 		return
 	}
@@ -714,7 +714,7 @@ func (c *Client) missionControlTurn(msg missionControlClientMessage) {
 	appVoice := c.hub.appVoice
 	c.hub.mu.RUnlock()
 	if appVoice != nil {
-		if err := appVoice.appVoiceTurnReservation(c, msg, runtime.Thread); err != nil {
+		if err := appVoice.appVoiceTurnReservation(c, msg, runtime.Identity()); err != nil {
 			c.sendMissionControlResult(missionControlFailure(msg, "app_voice_reservation_required", err.Error()))
 			return
 		}
@@ -751,7 +751,7 @@ func (c *Client) missionControlTurn(msg missionControlClientMessage) {
 	}
 	// A second address validation fences a race between durable admission and
 	// tool-capable dispatch. This preview has no mutating tools either way.
-	if err := c.missionControlValidateLive(runtime.Thread); err != nil {
+	if err := c.missionControlValidateLive(runtime.Identity()); err != nil {
 		if _, markErr := catalog.MarkNotDispatched(msg.RequestID, msg.ThreadID, msg.ExpectedRuntimeGeneration, err.Error()); markErr != nil {
 			c.sendMissionControlResult(missionControlFailure(msg, "dispatch_uncertain", markErr.Error()))
 			return
@@ -781,10 +781,10 @@ func (c *Client) selectedRuntime(router *missioncontrol.Router, msg missionContr
 		return nil, errors.New("control target is not selected on this connection")
 	}
 	runtime := router.Runtime(msg.ThreadID)
-	if runtime == nil || runtime.Thread.RuntimeGeneration != msg.ExpectedRuntimeGeneration {
+	if runtime == nil || runtime.Identity().RuntimeGeneration != msg.ExpectedRuntimeGeneration {
 		return nil, errors.New("thread runtime is stale")
 	}
-	if err := c.missionControlValidateLive(runtime.Thread); err != nil {
+	if err := c.missionControlValidateLive(runtime.Identity()); err != nil {
 		return nil, err
 	}
 	return runtime, nil
@@ -805,7 +805,8 @@ func (c *Client) missionControlCancel(msg missionControlClientMessage) {
 		c.sendMissionControlResult(missionControlFailure(msg, "cancel_refused", err.Error()))
 		return
 	}
-	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "cancel", RequestID: msg.RequestID, OK: true, Thread: &runtime.Thread, TurnID: msg.TurnID})
+	thread := runtime.Identity()
+	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "cancel", RequestID: msg.RequestID, OK: true, Thread: &thread, TurnID: msg.TurnID})
 }
 
 func (c *Client) missionControlApproval(msg missionControlClientMessage) {
@@ -827,7 +828,8 @@ func (c *Client) missionControlApproval(msg missionControlClientMessage) {
 		c.sendMissionControlResult(missionControlFailure(msg, "approval_refused", err.Error()))
 		return
 	}
-	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "approval", RequestID: msg.RequestID, OK: true, Thread: &runtime.Thread, TurnID: msg.TurnID})
+	thread := runtime.Identity()
+	c.sendMissionControlResult(missionControlResult{Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion, Op: "approval", RequestID: msg.RequestID, OK: true, Thread: &thread, TurnID: msg.TurnID})
 }
 
 func (c *Client) missionControlReset(msg missionControlClientMessage) {
@@ -844,11 +846,12 @@ func (c *Client) missionControlReset(msg missionControlClientMessage) {
 	c.hub.mu.RLock()
 	voiceBusy := c.hub.missionControlVoiceBusy
 	c.hub.mu.RUnlock()
-	if voiceBusy != nil && voiceBusy(runtime.Thread.ID) {
+	thread := runtime.Identity()
+	if voiceBusy != nil && voiceBusy(thread.ID) {
 		c.sendMissionControlResult(missionControlFailure(msg, "reset_refused", "reset requires a drained Mission Control voice attachment"))
 		return
 	}
-	thread, err := router.Reset(runtime.Thread.ID)
+	thread, err = router.Reset(thread.ID)
 	if err != nil {
 		c.sendMissionControlResult(missionControlFailure(msg, "reset_refused", err.Error()))
 		return
@@ -881,11 +884,12 @@ func (c *Client) missionControlArchive(msg missionControlClientMessage) {
 	c.hub.mu.RLock()
 	voiceBusy := c.hub.missionControlVoiceBusy
 	c.hub.mu.RUnlock()
-	if voiceBusy != nil && voiceBusy(runtime.Thread.ID) {
+	thread := runtime.Identity()
+	if voiceBusy != nil && voiceBusy(thread.ID) {
 		c.sendMissionControlResult(missionControlFailure(msg, "archive_refused", "archive requires a drained Mission Control voice attachment"))
 		return
 	}
-	thread, err := router.Archive(runtime.Thread.ID)
+	thread, err = router.Archive(thread.ID)
 	if err != nil {
 		c.sendMissionControlResult(missionControlFailure(msg, "archive_refused", err.Error()))
 		return
@@ -1017,11 +1021,12 @@ func (c *Client) missionControlValidateLive(thread missioncontrol.Thread) error 
 }
 
 func (c *Client) ensureMissionControlSubscription(runtime *missioncontrol.Runtime) {
+	thread := runtime.Identity()
 	c.missionControlMu.Lock()
 	if c.missionControlSubscriptions == nil {
 		c.missionControlSubscriptions = make(map[string]missionControlSubscription)
 	}
-	if sub, ok := c.missionControlSubscriptions[runtime.Thread.ID]; ok && sub.runtime == runtime {
+	if sub, ok := c.missionControlSubscriptions[thread.ID]; ok && sub.runtime == runtime {
 		c.missionControlMu.Unlock()
 		return
 	}
@@ -1031,26 +1036,40 @@ func (c *Client) ensureMissionControlSubscription(runtime *missioncontrol.Runtim
 }
 
 func (c *Client) attachMissionControlSubscription(runtime *missioncontrol.Runtime, events <-chan missioncontrol.RuntimeEvent, cancel func()) {
+	identity := runtime.Identity()
+	threadID, generation := identity.ID, identity.RuntimeGeneration
 	c.missionControlMu.Lock()
 	if c.missionControlSubscriptions == nil {
 		c.missionControlSubscriptions = make(map[string]missionControlSubscription)
 	}
-	old, exists := c.missionControlSubscriptions[runtime.Thread.ID]
+	old, exists := c.missionControlSubscriptions[threadID]
 	if exists && old.runtime == runtime {
 		c.missionControlMu.Unlock()
 		cancel()
 		return
 	}
-	c.missionControlSubscriptions[runtime.Thread.ID] = missionControlSubscription{cancel: cancel, runtime: runtime}
+	c.missionControlSubscriptions[threadID] = missionControlSubscription{cancel: cancel, runtime: runtime}
 	c.missionControlMu.Unlock()
 	if exists {
 		old.cancel()
 	}
 	go func() {
+		defer c.detachMissionControlSubscription(threadID, runtime)
 		for event := range events {
-			c.sendMissionControlEvent(runtime.Thread, event)
+			c.sendMissionControlEvent(threadID, generation, event)
 		}
 	}()
+}
+
+// detachMissionControlSubscription releases a closed runtime from the client
+// map. A replacement for the same thread must remain subscribed, so removal
+// is conditional on the exact runtime that owned this event channel.
+func (c *Client) detachMissionControlSubscription(threadID string, runtime *missioncontrol.Runtime) {
+	c.missionControlMu.Lock()
+	defer c.missionControlMu.Unlock()
+	if sub, ok := c.missionControlSubscriptions[threadID]; ok && sub.runtime == runtime {
+		delete(c.missionControlSubscriptions, threadID)
+	}
 }
 
 func (c *Client) hasMissionControlSubscription(threadID string) bool {
@@ -1070,10 +1089,10 @@ func (c *Client) stopMissionControl() {
 	}
 }
 
-func (c *Client) sendMissionControlEvent(thread missioncontrol.Thread, event missioncontrol.RuntimeEvent) {
+func (c *Client) sendMissionControlEvent(threadID string, generation uint64, event missioncontrol.RuntimeEvent) {
 	frame := missionControlEvent{
 		Type: missionControlEventType, ProtocolVersion: missionControlProtocolVersion,
-		ThreadID: thread.ID, RuntimeGeneration: thread.RuntimeGeneration,
+		ThreadID: threadID, RuntimeGeneration: generation,
 		EventID: event.EventID, ThreadSeq: event.ThreadSeq, Event: event.Raw,
 	}
 	data, err := json.Marshal(frame)

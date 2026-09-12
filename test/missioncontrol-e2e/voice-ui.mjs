@@ -233,8 +233,14 @@ async function componentFixture(snapshot) {
   bubble.snapshot = snapshot;
   for (const button of buttons) button.snapshot = snapshot;
   await Promise.all([...bubbles, ...buttons].map((element) => element.updateComplete ?? Promise.resolve()));
+  // An idle snapshot intentionally removes the bubble's nested menu trigger.
+  // Re-scan after the bubble update so restoring an active snapshot also
+  // supplies its newly rendered public presentation input.
+  const currentButtons = findAll(root, 'mux-voice-mode-button');
+  for (const button of currentButtons) button.snapshot = snapshot;
+  await Promise.all(currentButtons.map((element) => element.updateComplete ?? Promise.resolve()));
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  return { ready: true, bubble_count: bubbles.length, button_count: buttons.length };
+  return { ready: true, bubble_count: bubbles.length, button_count: currentButtons.length };
 }
 
 async function main() {
@@ -491,12 +497,20 @@ async function main() {
         }
       }
       await page.keyboard.press('Escape');
+      // This is an app-root overlay, not a native popover. Await its removal
+      // before continuing so a stale modal cannot intercept later controls.
+      await page.locator('mux-app').locator('.overlay-backdrop').waitFor({ state: 'detached', timeout: 10_000 });
       return { interaction: 'open_and_escape_only', visual_modal_layer: fixtureReady ? 'checked' : 'fixture_unavailable' };
     });
 
     await tryCheck('composer_keeps_dictation_without_mode_control', async () => {
+      // The context selector deliberately lives in the wide Mission Control
+      // topbar. In narrow layout that topbar is display:none and the title
+      // bar owns navigation, so select a real context while it is actionable
+      // before verifying the mobile composer.
+      await page.setViewportSize({ width: 1280, height: 900 });
       await openMissionControl();
-      const contextSelector = page.locator('mux-cos:visible').locator('[data-thread-context-selector]');
+      const contextSelector = page.locator('mux-cos:visible').locator('[data-thread-context-selector]:visible');
       if (await contextSelector.count()) {
         await contextSelector.click();
         const option = page.locator('mux-cos:visible').locator('[data-thread-context-option]').first();
@@ -507,6 +521,11 @@ async function main() {
         if (await talkHere.isDisabled()) throw new Error('real_thread_context_not_selectable');
         await talkHere.click();
       }
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openMissionControl();
+      if (await page.locator('mux-cos:visible').locator('[data-thread-context-selector]:visible').count()) {
+        throw new Error('narrow_context_selector_should_be_owned_by_titlebar');
+      }
       const composer = page.locator('mux-cos:visible').locator('[data-thread-composer]');
       await composer.waitFor({ state: 'visible', timeout: 10_000 });
       await composer.waitFor({ state: 'attached', timeout: 10_000 });
@@ -516,9 +535,14 @@ async function main() {
       // This is the actual composer container, identified from its semantic
       // textarea; no retired voice class selector is used.
       const modeInsideComposer = await composer.evaluate((node) =>
-        node.parentElement?.parentElement?.querySelectorAll('mux-voice-mode-button').length ?? 0);
+        node.closest('.comp')?.querySelectorAll('mux-voice-mode-button').length ?? 0);
       if (modeInsideComposer !== 0) throw new Error('voice_mode_present_in_composer');
-      return { dictation_controls: 1, composer_channel: 'real_selected_context_or_default' };
+      return {
+        dictation_controls: 1,
+        composer_channel: 'real_selected_context_or_default',
+        context_selection: 'wide_topbar_only',
+        composer_layout: 'narrow',
+      };
     });
 
     if (fixtureReady) {
@@ -539,7 +563,11 @@ async function main() {
           Math.abs(bubble.width - 84) > 0.5 || bubble.height < 88 || status.y < main.y + main.height) {
           throw new Error('public_snapshot_bubble_60_84x88_geometry_invalid');
         }
-        return { main: '60px circular', bubble: `${bubble.width}x${bubble.height}`, status: 'below_main' };
+        return {
+          main: `${main.width}x${main.height}px circular outer target`,
+          bubble: `${bubble.width}x${bubble.height}`,
+          status: 'below_main',
+        };
       });
       await tryCheck('mouse_drag_snap_clamp', async () => {
         await openWorkspace(`voice ui fixture A ${nonce}`);
@@ -597,6 +625,42 @@ async function main() {
         }
         await page.evaluate(componentFixture, activeSnapshot);
         return { states: ['connecting', 'error', 'muted'] };
+      });
+      await tryCheck('inactive_unavailable_header_control_is_visible_and_explained', async () => {
+        const unavailable = {
+          ...activeSnapshot,
+          state: 'idle',
+          available: false,
+          canMute: false,
+        };
+        const applied = await page.evaluate(componentFixture, unavailable);
+        if (!applied.ready) throw new Error('fixture_unavailable_state_apply_failed');
+        const header = page.locator('mux-title-bar:visible');
+        const control = header.locator('mux-voice-mode-button [data-voice-mode-button]');
+        const explanation = header.locator('mux-voice-mode-button #voice-mode-unavailable');
+        if (await control.count() !== 1 || await explanation.count() !== 1) {
+          throw new Error('inactive_unavailable_header_voice_not_rendered');
+        }
+        const [disabled, label, title, state, describedby, explanationText] = await Promise.all([
+          control.isDisabled(),
+          control.getAttribute('aria-label'),
+          control.getAttribute('title'),
+          control.getAttribute('data-state'),
+          control.getAttribute('aria-describedby'),
+          explanation.textContent(),
+        ]);
+        if (
+          !disabled ||
+          label !== 'Start voice mode' ||
+          state !== 'idle' ||
+          title !== 'App voice is not enabled for this running server.' ||
+          describedby !== 'voice-mode-unavailable' ||
+          explanationText !== 'App voice is not enabled for this running server.'
+        ) {
+          throw new Error('inactive_unavailable_header_voice_accessibility_invalid');
+        }
+        await page.evaluate(componentFixture, activeSnapshot);
+        return { visible: true, disabled: true, state: 'idle', description: 'present' };
       });
 
       await tryCheck('fixture_navigation_identity_and_normalized_position', async () => {

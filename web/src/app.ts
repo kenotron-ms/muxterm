@@ -923,7 +923,7 @@ export class MuxApp extends LitElement {
     // The server's runtime voice candidate is false until this explicit status
     // check says otherwise. Browser TTS voice enumeration is intentionally not
     // part of this provider-WebRTC capability decision.
-    void fetchVoiceStatus().then((status) => voiceSessionController.setCandidateAvailable(status.enabled));
+    void fetchVoiceStatus().then((status) => voiceSessionController.setCandidateAvailable(status.appVoiceCandidateAvailable));
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
@@ -1286,7 +1286,7 @@ export class MuxApp extends LitElement {
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
-      void fetchVoiceStatus().then((status) => voiceSessionController.setCandidateAvailable(status.enabled));
+      void fetchVoiceStatus().then((status) => voiceSessionController.setCandidateAvailable(status.appVoiceCandidateAvailable));
       // A successful attach is the only thing that disproves the diagnosis.
       this._daemonUnreachable = false;
       this._reconnectDetail = '';

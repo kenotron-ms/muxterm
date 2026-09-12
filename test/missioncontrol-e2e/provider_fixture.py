@@ -158,12 +158,32 @@ def response(response_id: str, model: str, output: list[dict[str, Any]]) -> dict
 
 
 class Fixture:
-    def __init__(self, records_path: Path) -> None:
+    def __init__(self, records_path: Path, barrier_dir: Path | None) -> None:
         self.lock = threading.Lock()
         self.records_path = records_path
         self.records: list[dict[str, Any]] = []
+        self.barrier_dir = barrier_dir
         self.records_path.parent.mkdir(parents=True, exist_ok=True)
         write_records(self.records_path, self.records)
+
+    def wait_for_barrier(self, body: dict[str, Any]) -> None:
+        """Block only an explicit test turn until its external release file exists."""
+        prompt = "\n".join(text_fragments(latest_user_input(body)))
+        marker = next((part for part in prompt.split() if part.startswith("FIXTURE_LATE_TURN=")), "")
+        token = marker.removeprefix("FIXTURE_LATE_TURN=")
+        if not token:
+            return
+        if self.barrier_dir is None or not token.isascii() or not token.replace("-", "").isalnum():
+            raise ValueError("late turn requires configured safe barrier directory")
+        self.barrier_dir.mkdir(parents=True, exist_ok=True)
+        ready = self.barrier_dir / f"{token}.ready"
+        release = self.barrier_dir / f"{token}.release"
+        ready.write_text("ready\n", encoding="ascii")
+        deadline = time.monotonic() + 60
+        while not release.exists():
+            if time.monotonic() >= deadline:
+                raise ValueError("late turn barrier timed out")
+            time.sleep(0.02)
 
     def record(self, value: dict[str, Any]) -> None:
         with self.lock:
@@ -277,6 +297,13 @@ class Handler(BaseHTTPRequestHandler):
             }]
         value = response(response_id, str(body.get("model", "fixture-model")), output)
         self.fixture.record({"method": "POST", "path": self.path, "request": body, "response": value})
+        try:
+            # Record the accepted request before exposing the test-only barrier:
+            # the harness can prove the held request reached this provider.
+            self.fixture.wait_for_barrier(body)
+        except ValueError as error:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": {"message": str(error)}})
+            return
         if body.get("stream") is True or "text/event-stream" in self.headers.get("accept", ""):
             self.send_sse(value)
         else:
@@ -288,11 +315,12 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--records", required=True, type=Path)
+    parser.add_argument("--barrier-dir", type=Path, help="private directory for explicit FIXTURE_LATE_TURN release files")
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "::1", "localhost"}:
         parser.error("--host must be a loopback address")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    server.fixture = Fixture(args.records)  # type: ignore[attr-defined]
+    server.fixture = Fixture(args.records, args.barrier_dir)  # type: ignore[attr-defined]
     print(json.dumps({"event": "listening", "port": args.port}), flush=True)
     try:
         server.serve_forever()

@@ -698,8 +698,10 @@ func Defaults() Config {
 			EntraScope:      DefaultVoiceEntraScope,
 			SyncToolTimeout: DefaultVoiceSyncToolTimeout,
 		},
-		// Mission Control remains disabled unless both gates are explicitly
-		// enabled. Voice is always unavailable during the text preview.
-		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false, TextWorkerCap: 4},
+		// All four release gates default off: missioncontrol.threads_v2,
+		// missioncontrol.text_preview, missioncontrol.voice_preview, and
+		// voice.enabled. No candidate registers until each applicable gate
+		// is deliberately enabled.
+		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false, VoicePreview: false, TextWorkerCap: 4},
 	}
 }

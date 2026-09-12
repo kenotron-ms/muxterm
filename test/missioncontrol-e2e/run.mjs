@@ -13,11 +13,11 @@ import { createRequire } from 'node:module';
 const usage = `Usage:
   node test/missioncontrol-e2e/run.mjs \\
     --base-url <URL> --muxterm-bin <path> --provider-records <path> \\
-    --output <directory> --source-sha <40-hex> --accept-disposable-fixtures
+    --output <directory> --source-ref <40-git-sha|64-source-archive-sha256> --accept-disposable-fixtures
 
 The runner creates two harmless disposable workspaces. It never starts or
 stops a server, session daemon, sidecar, browser-owned workspace, or lane.
-Playwright must already be installed; use --playwright-module <module-or-path>
+Playwright must already be installed; use --playwright-module <absolute path>
 when it is not resolvable from this script.`;
 
 function parseArgs(argv) {
@@ -98,15 +98,18 @@ if (args.help) {
   console.log(usage);
   process.exit(0);
 }
-for (const required of ['base-url', 'muxterm-bin', 'provider-records', 'output', 'source-sha']) {
+if (args['source-sha'] && args['source-ref']) fail('supply only --source-ref (not --source-sha)');
+args['source-ref'] ??= args['source-sha']; // compatibility with recorded prepared runs
+for (const required of ['base-url', 'muxterm-bin', 'provider-records', 'output', 'source-ref']) {
   if (!args[required]) fail(`--${required} is required\n${usage}`);
 }
 if (!args['accept-disposable-fixtures']) fail(`--accept-disposable-fixtures is required\n${usage}`);
-if (!/^[0-9a-f]{40}$/i.test(args['source-sha'])) fail('--source-sha must be a 40-character hexadecimal commit SHA');
+if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(args['source-ref'])) fail('--source-ref must be a 40-character commit SHA or 64-character source archive SHA-256');
 if (!fs.existsSync(args['muxterm-bin'])) fail('--muxterm-bin does not exist');
 if (!fs.existsSync(args['provider-records'])) fail('--provider-records must be created by provider_fixture.py before running');
 
 const output = path.resolve(args.output);
+if (args['playwright-module'] && !path.isAbsolute(args['playwright-module'])) fail('--playwright-module must be an absolute path');
 const providerStart = JSON.parse(fs.readFileSync(args['provider-records'], 'utf8'));
 if (!Array.isArray(providerStart)) fail('--provider-records is not a JSON array');
 const require = createRequire(import.meta.url);
@@ -120,7 +123,9 @@ try {
 const run = {
   format: 'missioncontrol-text-e2e-v1',
   status: 'FAIL',
-  source_sha: args['source-sha'].toLowerCase(),
+  source_reference: /^[0-9a-f]{40}$/i.test(args['source-ref'])
+    ? { type: 'git_commit_sha', value: args['source-ref'].toLowerCase() }
+    : { type: 'source_archive_sha256', value: args['source-ref'].toLowerCase() },
   checks: {},
   identities: {},
   errors: [],
@@ -161,9 +166,10 @@ try {
   async function select(label) {
     const start = frames.length;
     await page.locator('[data-thread-context-selector]').click();
-    const option = page.locator('button.context-option', { hasText: label });
+    const option = page.locator('[data-thread-context-option]', { hasText: label });
     await option.waitFor({ state: 'visible', timeout: 30_000 });
     await option.click();
+    await page.locator('[data-thread-talk-here]').waitFor({ state: 'visible', timeout: 30_000 });
     await page.locator('[data-thread-talk-here]').click();
     const acknowledgement = await eventually(
       () => frames.slice(start).find((frame) =>

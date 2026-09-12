@@ -17,6 +17,10 @@ Authoritative user correction to the multichannel voice design. This addendum su
 
 One explicit microphone arbiter prevents simultaneous hidden dictation and conversational capture. Switching modes requires visible user intent and completion of the previous capture's release; navigation never starts capture.
 
+## Candidate release gate
+
+App voice is candidate-only, not a production live-permission grant. Registration requires valid enabled legacy `[voice]` configuration and the independent `missioncontrol.voice_preview` gate; `missioncontrol.threads_v2`, `missioncontrol.text_preview`, `missioncontrol.voice_preview`, and `voice.enabled` all default off. Runtime status reports registration rather than on-disk `voice.enabled`, so a completed UI may be released disabled and cannot start the candidate without the server-side gate.
+
 ## App operations and authorization
 
 Reuse existing authenticated app handlers and native validation. A finite provider tool schema can expose:

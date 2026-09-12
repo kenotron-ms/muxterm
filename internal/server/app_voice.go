@@ -309,7 +309,11 @@ func appVoiceInputReplaySlots(inputID string) (int, int) {
 }
 
 func (s *Server) registerAppVoiceRoutes(cfg config.VoiceConfig, protect func(http.Handler) http.Handler) {
-	if !cfg.Enabled || cfg.Validate() != nil {
+	// This runs during Server construction, before the status route is
+	// registered and before the Server is available to concurrent requests.
+	// Publish s.appVoice only after every candidate gate and provider setup
+	// succeeds; buildVoiceStatus reports that runtime fact, never disk intent.
+	if !s.cfg.MissionControl.VoicePreview || !cfg.Enabled || cfg.Validate() != nil {
 		return
 	}
 	mgr, err := voice.NewManager(cfg, appVoiceDisabledBridge{}, voice.DefaultKeyPath())
