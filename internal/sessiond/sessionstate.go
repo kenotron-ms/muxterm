@@ -31,6 +31,21 @@ const (
 	SessionStateStopped = "stopped"
 )
 
+// Lifecycle values identify the producer transition that produced a
+// declaration. Unlike State, this is optional provenance: State remains the
+// durable five-value wire enum.
+const (
+	LifecycleInitialized  = "initialized"
+	LifecycleRunning      = "running"
+	LifecycleResumed      = "resumed"
+	LifecycleTurnComplete = "turn-complete"
+	LifecycleCompleted    = "completed"
+	LifecycleFailed       = "failed"
+	LifecycleCancelled    = "cancelled"
+	LifecycleUnknown      = "unknown"
+	LifecycleLost         = "lost"
+)
+
 // Reasons a session is blocked. Only meaningful when State == blocked.
 // Also adopted from Claude Code's waitingFor enum.
 const (
@@ -90,6 +105,19 @@ func ValidState(s string) bool {
 	switch s {
 	case SessionStateWorking, SessionStateBlocked, SessionStateDone,
 		SessionStateFailed, SessionStateStopped:
+		return true
+	}
+	return false
+}
+
+// ValidLifecycle reports whether l is an optional producer lifecycle
+// provenance value. LifecycleLost is collector-generated when a proven pane
+// generation outlives a non-terminal producer report.
+func ValidLifecycle(l string) bool {
+	switch l {
+	case "", LifecycleInitialized, LifecycleRunning, LifecycleResumed,
+		LifecycleTurnComplete, LifecycleCompleted, LifecycleFailed,
+		LifecycleCancelled, LifecycleUnknown, LifecycleLost:
 		return true
 	}
 	return false
@@ -181,6 +209,11 @@ type SessionState struct {
 
 	// State is one of the SessionState* constants.
 	State string `json:"state"`
+
+	// Lifecycle is optional producer provenance for this declaration. It does
+	// not replace State's pinned five-value contract. LifecycleLost is only
+	// synthesized by the collector for a proven orphaned generation.
+	Lifecycle string `json:"lifecycle,omitempty"`
 
 	// WaitingFor is one of the WaitingFor* constants. Empty unless blocked.
 	WaitingFor string `json:"waitingFor,omitempty"`

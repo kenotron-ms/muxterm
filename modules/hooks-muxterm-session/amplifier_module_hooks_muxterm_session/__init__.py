@@ -1,49 +1,16 @@
-"""Amplifier hook: stamp the session id into this process's title on
-session:start, so muxterm's crash-recovery snapshot can discover and resume
-the exact session after sessiond restarts.
+"""Publish declared Amplifier session state for muxterm.
 
-Mechanism (why setproctitle, not a file or an env var):
-
-setproctitle rewrites the process's argv[0] in-place in the original memory
-block, making the new title visible in /proc/<pid>/cmdline (Linux) and via
-KERN_PROCARGS2 sysctl (macOS) -- i.e. visible to any OTHER process (such as
-muxterm's sessiond) that inspects this pane's foreground process, with no
-IPC, no sidecar file, and no per-pane path to keep straight or invalidate.
-
-os.environ["KEY"] = value does NOT work for this: the kernel's
-/proc/<pid>/environ reflects only the initial environment at exec time, not
-runtime modifications made after the process starts. setproctitle is the
-correct mechanism because it modifies the same memory region
-/proc/<pid>/cmdline reads.
-
-The title is set to "amplifier resume <session-id>" -- muxterm's
-foregroundCwdArgv() (internal/sessiond/foreground_cwd_argv_linux.go) already
-reads this via the existing /proc/<pid>/cmdline capture performed for every
-pane; a small matcher (internal/sessiond/agent_catalog.go) recognizes this
-exact shape and extracts the id from it, so no new capture path is needed on
-muxterm's side -- only a new pattern to recognize.
-
-Why this hook exists at all (rather than amplifier-app-cli doing this
-itself): amplifier-app-cli does not yet stamp its own process title -- see
-branch feat/stamp-session-id-env-var in that repo, which implements this
-identical mechanism but is unmerged. Doing it here, as an Amplifier hook
-shipped with muxterm's own bundle, means muxterm does not have to wait on
-that landing upstream: any session started with this bundle installed
-(`muxterm amplifier install`) gets the stamp regardless of what
-amplifier-app-cli's own main branch does or doesn't do. Without this hook
-installed, muxterm's restore path falls back to best-effort scraping the
-session id out of the pane's captured output instead (see snapshot.go) --
-strictly weaker, but the hook needs zero cooperation from anyone to exist.
-
-This module also publishes the session's DECLARED state -- what it is doing,
-and in particular whether it is working or waiting on a human -- to a spool
-directory the daemon reads. See state.py for why that channel has to exist:
-sessiond's PTY-based activity classifier cannot tell thinking from waiting,
-because both own the terminal.
+Core 1.6.1 calls :func:`on_session_ready` after successful mounts and before a
+prompt. `session:start`/`session:resume` happen only on the first execute.
+`execution:start` is the installed core's actual turn-start event; this module
+does not invent an ``orchestrator:start`` event.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from amplifier_core import HookResult
 from amplifier_core.events import (
@@ -51,12 +18,16 @@ from amplifier_core.events import (
     APPROVAL_GRANTED,
     APPROVAL_REQUIRED,
     ARTIFACT_READ,
+    CANCEL_COMPLETED,
+    CANCEL_REQUESTED,
+    EXECUTION_START,
     ORCHESTRATOR_COMPLETE,
     PROMPT_COMPLETE,
     PROMPT_SUBMIT,
     PROVIDER_ERROR,
     SESSION_END,
     SESSION_FORK,
+    SESSION_RESUME,
     SESSION_START,
     TOOL_ERROR,
     TOOL_POST,
@@ -64,229 +35,288 @@ from amplifier_core.events import (
     USER_NOTIFICATION,
 )
 
-from .state import SessionStateTracker, spool_dir
+from .state import SessionStateTracker, _valid_session_id, spool_dir, write_diagnostic
 
-# The /goal loop's own progress event. Not a kernel constant -- it is emitted by
-# the loop-streaming orchestrator, which is a module rather than the kernel, so
-# there is nothing in amplifier_core.events to import. Spelled out here with its
-# origin named so a future reader does not go looking for a constant that was
-# never there.
 ORCHESTRATOR_GOAL_PROGRESS = "orchestrator:goal_progress"
-
+_STATE_HOOK_PRIORITY = 100
+_CAPABILITY = "hooks-muxterm-session/0.7.0"
+_DIAGNOSTIC_CAPABILITY = "hooks-muxterm-session/0.7.0/diagnostic"
 logger = logging.getLogger(__name__)
 
 __amplifier_module_type__ = "hook"
 
-# Registered below the redaction hook (priority 10) so payloads reaching these
-# handlers have already been scrubbed -- this hook writes prompt text and file
-# paths to disk, so it should never see raw secrets in the first place.
-_STATE_HOOK_PRIORITY = 100
+
+@dataclass(slots=True)
+class _Mounted:
+    """Per-coordinator capability; duplicate mounts retain its generation."""
+
+    tracker: SessionStateTracker | None
+    only_root: bool
+    publish_state: bool
+    setproctitle: Any
+    cleanup: Callable[[], None]
+    diagnostic: dict[str, Any]
+    ready_observed: bool = False
+
+
+def _identity(coordinator: Any) -> tuple[str | None, str | None]:
+    """Use coordinator identity before an event payload exists."""
+    try:
+        session_id = getattr(coordinator, "session_id", None)
+        parent_id = getattr(coordinator, "parent_id", "__unattributed__")
+    except Exception:
+        return None, None
+    return (
+        session_id if isinstance(session_id, str) and session_id else None,
+        parent_id if isinstance(parent_id, str) and parent_id else
+        None if parent_id is None else "__unattributed__",
+    )
+
+
+def _existing(coordinator: Any) -> _Mounted | None:
+    try:
+        mounted = coordinator.get_capability(_CAPABILITY)
+    except Exception:
+        return None
+    return mounted if isinstance(mounted, _Mounted) else None
+
+
+def _diagnostic_code(diagnostic: dict[str, Any], code: str) -> None:
+    codes = diagnostic.setdefault("codes", [])
+    if isinstance(codes, list) and code not in codes and len(codes) < 16:
+        codes.append(code)
+
+
+async def on_session_ready(coordinator: Any) -> None:
+    """Create the initialized root row and stamp its recoverable title."""
+    mounted = _existing(coordinator)
+    if mounted is None:
+        return
+    session_id, parent_id = _identity(coordinator)
+    if (
+        session_id is None
+        or not _valid_session_id(session_id)
+    ):
+        return
+    mounted.ready_observed = True
+    mounted.diagnostic["readyCallback"] = "observed"
+    # A child must establish its lineage before its later events are folded into
+    # the root, but it never owns a title stamp or a card.
+    if mounted.tracker is not None:
+        await mounted.tracker.on_session_ready(session_id, parent_id)
+        if mounted.diagnostic["status"] == "failed":
+            write_diagnostic(
+                spool_dir(), session_id, status="failed", code="hook-registration-failed"
+            )
+    else:
+        write_diagnostic(
+            spool_dir(),
+            session_id,
+            status="failed" if mounted.diagnostic["status"] == "failed" else "disabled",
+            code=(
+                "tracker-init-failed"
+                if mounted.diagnostic["status"] == "failed"
+                else "publish-disabled"
+            ),
+        )
+    if mounted.only_root and parent_id is not None:
+        return
+    if mounted.setproctitle is not None:
+        try:
+            mounted.setproctitle.setproctitle(f"amplifier resume {session_id}")
+        except Exception:
+            logger.debug("hooks-muxterm-session: title stamp failed")
 
 
 async def mount(
     coordinator: Any, config: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    """Register the process-title stamp and the session-state publisher.
+) -> Callable[[], None]:
+    """Register this coordinator once and return its unregistration cleanup."""
+    prior = _existing(coordinator)
+    if prior is not None:
+        return prior.cleanup
 
-    Config keys:
-      only_root_sessions (bool): Skip child/sub-agent sessions (default:
-        true). A sub-agent's session:start would otherwise overwrite the
-        title with its own internal, transient session id, clobbering the
-        user-visible root session's id that muxterm actually needs for
-        recovery. This must stay true for correct behavior in the normal
-        case -- it is exposed as a config knob only for advanced/test use.
-      classify_end_of_turn (bool): At end of turn, ask a cheap model whether
-        the assistant's closing message was actually a question for the human,
-        and if so surface the session as "needs input" with the ask summarised
-        (default: true). Turning it off leaves the structural verdict alone:
-        a finished turn simply reports `stopped`, which is what it did before
-        this existed. Every failure path already degrades to that, so this
-        knob is for cost control, not correctness.
-      classify_model (str): Model id for that classification. Defaults to
-        whatever the session's provider resolves on its own. An id the
-        provider rejects is not fatal: the call is retried once without the
-        override, so a wrong model costs the session's own model rates rather
-        than silently disabling classification.
-      label_first_prompt (bool): At the FIRST prompt of a session, ask a cheap
-        model for a 1-3 word label naming what the session is about, for
-        muxterm's pane tab (default: true). One call per session, not per
-        turn. Turning it off leaves the deterministic label the daemon derives
-        from the launch argv at spawn (internal/sessiond/autolabel.go), which
-        is also where every failure path already lands -- so this knob is for
-        cost control, not correctness.
-      label_model (str): Model id for that labelling. Defaults to whatever the
-        session's provider resolves on its own, and falls back to it the same
-        way classify_model does when the id is rejected.
-      publish_state (bool): Publish session-state snapshots for muxterm's
-        home view (default: true). Turning it off leaves the title stamp,
-        and therefore crash recovery, fully intact -- the two capabilities
-        share a module but not a dependency.
-    """
     config = config or {}
-    only_root = config.get("only_root_sessions", True)
-    publish_state = config.get("publish_state", True)
-    classify_end_of_turn = config.get("classify_end_of_turn", True)
-    classify_model = config.get("classify_model") or None
-    label_first_prompt = config.get("label_first_prompt", True)
-    label_model = config.get("label_model") or None
-
+    only_root = bool(config.get("only_root_sessions", True))
+    publish_state = bool(config.get("publish_state", True))
+    diagnostic: dict[str, Any] = {
+        "v": 1,
+        "publisher": "hooks-muxterm-session/0.7.0",
+        "status": "initialized",
+        "codes": [],
+        "readyCallback": "pending",
+        # Optional kernel/module sources, deliberately kept off snapshot data.
+        "optionalSourceEvents": [
+            SESSION_RESUME,
+            EXECUTION_START,
+            CANCEL_REQUESTED,
+            CANCEL_COMPLETED,
+            ORCHESTRATOR_GOAL_PROGRESS,
+        ],
+    }
     try:
         import setproctitle as setproctitle_module
     except ImportError:
-        logger.warning(
-            "hooks-muxterm-session: setproctitle not installed; session-id "
-            "stamping disabled (muxterm's crash recovery will fall back to "
-            "best-effort output scraping for panes running amplifier)"
-        )
         setproctitle_module = None
+        logger.warning("hooks-muxterm-session: setproctitle unavailable")
 
-    async def on_session_start(event: str, data: dict[str, Any]) -> HookResult:
-        if setproctitle_module is None:
-            return HookResult(action="continue")
-
-        session_id: str = data["session_id"]
-        parent_id: str | None = data.get("parent_id")
-
-        if only_root and parent_id is not None:
-            return HookResult(action="continue")
-
+    tracker: SessionStateTracker | None = None
+    if publish_state:
         try:
-            setproctitle_module.setproctitle(f"amplifier resume {session_id}")
-            logger.debug(
-                "hooks-muxterm-session: stamped process title for session %s",
-                session_id,
+            tracker = SessionStateTracker(
+                coordinator,
+                spool_dir(),
+                classify_enabled=bool(config.get("classify_end_of_turn", True)),
+                classify_model=config.get("classify_model") or None,
+                label_enabled=bool(config.get("label_first_prompt", True)),
+                label_model=config.get("label_model") or None,
             )
-        except Exception as exc:  # setproctitle can fail on unsupported platforms
-            logger.warning(
-                "hooks-muxterm-session: could not stamp process title: %s", exc
-            )
+        except Exception:
+            diagnostic["status"] = "failed"
+            _diagnostic_code(diagnostic, "tracker-init-failed")
+            logger.warning("hooks-muxterm-session: tracker-init-failed")
+    else:
+        diagnostic["status"] = "disabled"
+        _diagnostic_code(diagnostic, "publish-disabled")
 
-        return HookResult(action="continue")
+    unregisters: list[Callable[[], Any]] = []
 
-    coordinator.hooks.register(
-        SESSION_START,
-        on_session_start,
-        priority=0,
-        name="hooks-muxterm-session",
-    )
-
-    published = (
-        _register_state_publisher(
-            coordinator,
-            classify_enabled=classify_end_of_turn,
-            classify_model=classify_model,
-            label_enabled=label_first_prompt,
-            label_model=label_model,
-        )
-        if publish_state
-        else False
-    )
-
-    logger.info(
-        "hooks-muxterm-session mounted (only_root=%s, publish_state=%s)",
-        only_root,
-        published,
-    )
-
-    return {
-        "name": "hooks-muxterm-session",
-        "version": "0.4.0",
-        "description": (
-            "Stamp session id into process title for muxterm crash recovery, "
-            "and publish declared session state for muxterm's home view"
-        ),
-    }
-
-
-def _register_state_publisher(
-    coordinator: Any,
-    *,
-    classify_enabled: bool = True,
-    classify_model: str | None = None,
-    label_enabled: bool = True,
-    label_model: str | None = None,
-) -> bool:
-    """Wire the session-state tracker onto the kernel event stream.
-
-    Returns whether publishing was armed. A failure here is logged and
-    swallowed: a session must start and run normally even if muxterm's home
-    view learns nothing about it.
-    """
-    try:
-        tracker = SessionStateTracker(
-            coordinator,
-            spool_dir(),
-            classify_enabled=classify_enabled,
-            classify_model=classify_model,
-            label_enabled=label_enabled,
-            label_model=label_model,
-        )
-    except Exception as exc:
-        logger.warning(
-            "hooks-muxterm-session: session-state publishing disabled (%s)", exc
-        )
-        return False
-
-    def guarded(handler: Any, label: str) -> Any:
-        """Make a handler structurally incapable of harming the session.
-
-        The kernel already logs-and-skips a raising handler, so this is the
-        second of two independent guarantees rather than the only one. It is
-        worth having anyway: the cost of a bug in an advisory sidebar feed must
-        never be a broken user session, and `continue` is returned on every
-        path so nothing downstream is altered either.
-        """
-
+    def guarded(handler: Any) -> Any:
         async def wrapper(event: str, data: dict[str, Any]) -> HookResult:
             try:
-                await handler(event, data)
-            except Exception as exc:
-                logger.debug(
-                    "hooks-muxterm-session: %s handler failed: %s", label, exc
-                )
+                await handler(event, data if isinstance(data, dict) else {})
+            except Exception:
+                diagnostic["status"] = "failed"
+                _diagnostic_code(diagnostic, "event-handler-failed")
+            # A later successful write must not erase a failed registration or
+            # handler from the commissioning result.
+            if diagnostic["status"] == "failed":
+                session_id, parent_id = _identity(coordinator)
+                if parent_id is None:
+                    write_diagnostic(
+                        spool_dir(), session_id, status="failed",
+                        code="hook-reporting-failed",
+                    )
             return HookResult(action="continue")
 
         return wrapper
 
-    # Event -> projection. Ordered as the session lives, not alphabetically.
-    #
-    # PROVIDER_ERROR shares TOOL_ERROR's handler deliberately: both mean "a call
-    # failed and the agent will probably recover", and neither is a reason to
-    # mark a session failed.
-    #
-    # USER_NOTIFICATION is registered even though nothing in the current kernel
-    # emits it -- it is named in the contract, and an empty subscription costs
-    # nothing. It is emphatically NOT how a resting plain session is detected;
-    # see on_orchestrator_complete for the rule that actually decides that.
-    handlers: list[tuple[str, Any]] = [
-        (SESSION_START, tracker.on_session_start),
-        (SESSION_FORK, tracker.on_session_fork),
-        (PROMPT_SUBMIT, tracker.on_prompt_submit),
-        (TOOL_PRE, tracker.on_tool_pre),
-        (TOOL_POST, tracker.on_tool_post),
-        (TOOL_ERROR, tracker.on_tool_error),
-        (PROVIDER_ERROR, tracker.on_tool_error),
-        (ARTIFACT_READ, tracker.on_artifact_read),
-        (APPROVAL_REQUIRED, tracker.on_approval_required),
-        (APPROVAL_GRANTED, tracker.on_approval_resolved),
-        (APPROVAL_DENIED, tracker.on_approval_resolved),
-        (USER_NOTIFICATION, tracker.on_user_notification),
-        (ORCHESTRATOR_GOAL_PROGRESS, tracker.on_goal_progress),
-        (ORCHESTRATOR_COMPLETE, tracker.on_orchestrator_complete),
-        (PROMPT_COMPLETE, tracker.on_prompt_complete),
-        (SESSION_END, tracker.on_session_end),
-    ]
+    async def title_fallback(event: str, data: dict[str, Any]) -> None:
+        """Stamp on start/resume when an old core never invokes ready."""
+        session_id = data.get("session_id")
+        parent_id = data.get("parent_id", data.get("parent"))
+        if not _valid_session_id(session_id):
+            session_id, parent_id = _identity(coordinator)
+        elif not _valid_session_id(parent_id):
+            coordinator_session_id, coordinator_parent_id = _identity(coordinator)
+            parent_id = (
+                coordinator_parent_id
+                if session_id == coordinator_session_id
+                else "__unattributed__"
+            )
+        if not _valid_session_id(session_id) or (only_root and parent_id is not None):
+            return
+        if not mounted.ready_observed:
+            mounted.diagnostic["readyCallback"] = "unobserved"
+            _diagnostic_code(mounted.diagnostic, "ready-callback-unobserved")
+            write_diagnostic(
+                spool_dir(),
+                session_id,
+                status=(
+                    "failed"
+                    if mounted.diagnostic["status"] == "failed"
+                    else "disabled"
+                    if not mounted.publish_state
+                    else "unobserved"
+                ),
+                code="ready-callback-unobserved",
+            )
+        if setproctitle_module is not None:
+            try:
+                setproctitle_module.setproctitle(f"amplifier resume {session_id}")
+            except Exception:
+                logger.debug("hooks-muxterm-session: title stamp failed")
 
-    for event, handler in handlers:
+    # Preserve recovery stamping for older cores that lack on_session_ready.
+    for event in (SESSION_START, SESSION_RESUME):
         try:
-            coordinator.hooks.register(
+            unregister = coordinator.hooks.register(
                 event,
-                guarded(handler, event),
-                priority=_STATE_HOOK_PRIORITY,
-                name=f"hooks-muxterm-session-state:{event}",
+                guarded(title_fallback),
+                priority=0,
+                name=f"hooks-muxterm-session-title:{event}",
             )
-        except Exception as exc:
-            logger.debug(
-                "hooks-muxterm-session: could not register %s: %s", event, exc
-            )
-    return True
+            if callable(unregister):
+                unregisters.append(unregister)
+        except Exception:
+            _diagnostic_code(diagnostic, f"registration-{event}")
+            diagnostic["status"] = "failed"
+            logger.warning("hooks-muxterm-session: title-registration-failed")
+
+    if tracker is not None:
+        handlers: list[tuple[str, Any]] = [
+            (SESSION_START, tracker.on_session_start),
+            (SESSION_RESUME, tracker.on_session_resume),
+            (SESSION_FORK, tracker.on_session_fork),
+            (PROMPT_SUBMIT, tracker.on_prompt_submit),
+            (EXECUTION_START, tracker.on_orchestrator_start),
+            (TOOL_PRE, tracker.on_tool_pre),
+            (TOOL_POST, tracker.on_tool_post),
+            (TOOL_ERROR, tracker.on_tool_error),
+            (PROVIDER_ERROR, tracker.on_tool_error),
+            (ARTIFACT_READ, tracker.on_artifact_read),
+            (APPROVAL_REQUIRED, tracker.on_approval_required),
+            (APPROVAL_GRANTED, tracker.on_approval_resolved),
+            (APPROVAL_DENIED, tracker.on_approval_resolved),
+            (CANCEL_REQUESTED, tracker.on_cancel_requested),
+            (CANCEL_COMPLETED, tracker.on_cancel_completed),
+            (USER_NOTIFICATION, tracker.on_user_notification),
+            (ORCHESTRATOR_GOAL_PROGRESS, tracker.on_goal_progress),
+            (ORCHESTRATOR_COMPLETE, tracker.on_orchestrator_complete),
+            (PROMPT_COMPLETE, tracker.on_prompt_complete),
+            (SESSION_END, tracker.on_session_end),
+        ]
+        for event, handler in handlers:
+            try:
+                unregister = coordinator.hooks.register(
+                    event,
+                    guarded(handler),
+                    priority=_STATE_HOOK_PRIORITY,
+                    name=f"hooks-muxterm-session-state:{event}",
+                )
+                if callable(unregister):
+                    unregisters.append(unregister)
+            except Exception:
+                _diagnostic_code(diagnostic, f"registration-{event}")
+                diagnostic["status"] = "failed"
+                logger.warning("hooks-muxterm-session: event-registration-failed")
+
+    cleaned = False
+
+    def cleanup() -> None:
+        nonlocal cleaned
+        if cleaned:
+            return
+        cleaned = True
+        for unregister in reversed(unregisters):
+            try:
+                unregister()
+            except Exception:
+                pass
+        if tracker is not None:
+            tracker.cleanup()
+        try:
+            coordinator.register_capability(_CAPABILITY, None)
+            coordinator.register_capability(_DIAGNOSTIC_CAPABILITY, None)
+        except Exception:
+            pass
+
+    mounted = _Mounted(
+        tracker, only_root, publish_state, setproctitle_module, cleanup, diagnostic
+    )
+    try:
+        coordinator.register_capability(_CAPABILITY, mounted)
+        coordinator.register_capability(_DIAGNOSTIC_CAPABILITY, diagnostic)
+    except Exception:
+        cleanup()
+    return cleanup

@@ -45,11 +45,9 @@ export function harnessLabel(h: HarnessName): string {
  * the composer cannot ask for because it has no goal control. Everything the
  * two both build is identical.
  *
- * If a goal control is ever added to the composer, copy that branch WHOLE. Its
- * argv is not this one plus a prefix -- `/goal` is only honoured on amplifier's
- * headless path, so `--mode chat` would turn the stop condition into ordinary
- * prompt text and the loop would never arm. The Go comment carries the full
- * reasoning; do not re-derive it here.
+ * If a goal control is added, call the server's LaneArgv path rather than
+ * copying the goal wrapper. Its headless run plus same-session interactive
+ * resume is not this argv with a prefix. The Go builder owns that sequence.
  */
 export function harnessArgv(harness: HarnessName, prompt: string): string[] {
   switch (harness) {
