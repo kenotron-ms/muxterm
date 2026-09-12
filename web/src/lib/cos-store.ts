@@ -135,6 +135,21 @@ export interface CosFault {
   fatal: boolean;
 }
 
+/**
+ * A text-thread event after the Mission Control transport has attributed it.
+ *
+ * The existing COS renderer still consumes the raw COS event payload, but the
+ * threaded transport never hands that payload around without its originating
+ * thread, runtime generation, sequence fence, and immutable event id.
+ */
+export interface ThreadedCosEvent {
+  readonly thread_id: string;
+  readonly runtime_generation: number;
+  readonly thread_seq: number;
+  readonly event_id: string;
+  readonly event: Readonly<Record<string, unknown>>;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -188,7 +203,7 @@ export function shortToolName(name: string): string {
 // Store
 // ---------------------------------------------------------------------------
 
-class CosStore {
+export class CosStore {
   private _socket: MuxSocket | null = null;
   private _listeners = new Set<() => void>();
 
@@ -209,6 +224,12 @@ class CosStore {
    * entitled to erase.
    */
   private _replayRequestedAt = 0;
+  /**
+   * Immutable runtime turn ids represented by the latest threaded snapshot.
+   * The v2 coordinator consumes a late event's sequence fence regardless, but
+   * this renderer must never materialize a second copy of a covered turn.
+   */
+  private _threadCoveredTurnIds = new Set<string>();
 
   get status(): CosStatus {
     return this._status;
@@ -369,14 +390,88 @@ class CosStore {
     this._notify();
   }
 
-  /** Re-assert after a reconnect; ws.ts replays the subscribe frame itself. */
+  /** Re-assert after a reconnect once capability negotiation chose legacy COS. */
   markReconnected(): void {
     if (this._status === 'idle') return;
     this._subscribed = true;
-    // ws.ts replays the subscribe frame, so a replay is on its way and the
-    // window it covers starts now.
+    // The socket deliberately does not replay raw COS on open: the
+    // conversation coordinator must negotiate v2 capability before allowing
+    // unscoped legacy traffic. Once it has explicitly selected legacy, this is
+    // the one safe place to re-subscribe.
     this._replayRequestedAt = Date.now();
     this._setStatus('starting');
+    this._socket?.cosSubscribe(true);
+    this._notify();
+  }
+
+  /**
+   * Adopt one authoritative Mission Control selection result.
+   *
+   * This deliberately reuses the exact history renderer used by the legacy
+   * stream. The transport owns thread attribution and generation fencing;
+   * CosStore remains the single turn/block projection.
+   */
+  adoptThreadSnapshot(
+    sessionId: string,
+    history: readonly unknown[],
+    coveredTurnIds: readonly string[],
+  ): void {
+    this._sessionId = sessionId;
+    this._fault = null;
+    this._approvals = [];
+    this._threadCoveredTurnIds = new Set(coveredTurnIds);
+    this._replayRequestedAt = Date.now();
+    this._replaceThreadHistoryCanonical(history);
+    this._setStatus('ready');
+    this._notify();
+  }
+
+  /**
+   * Adopt an authoritative history repair for an already-selected thread.
+   * Unlike a selection, this does not alter connection-scoped readiness data.
+   */
+  adoptThreadHistory(history: readonly unknown[], coveredTurnIds: readonly string[]): void {
+    this._fault = null;
+    this._approvals = [];
+    this._threadCoveredTurnIds = new Set(coveredTurnIds);
+    this._replayRequestedAt = Date.now();
+    this._replaceThreadHistoryCanonical(history);
+    this._notify();
+  }
+
+  /**
+   * Render one event that was already fenced and attributed by the threaded
+   * transport. It intentionally does not emit through `onEvent`: that raw
+   * event stream belongs to the legacy global voice bridge, which threaded
+   * text preview must never drive.
+   */
+  receiveThreadEvent(envelope: ThreadedCosEvent): void {
+    // No content/prompt heuristic is permitted here. covered_turn_ids is the
+    // authoritative immutable identity boundary supplied with this snapshot.
+    // Suppressing at the adapter also keeps these events off the raw voice
+    // stream (receiveThreadEvent never emits through onEvent).
+    if (this._threadCoveredTurnIds.has(str(envelope.event.turn_id))) {
+      this._notify();
+      return;
+    }
+    this._event(envelope.event, false);
+    this._notify();
+  }
+
+  /** Replace this threaded renderer with exactly one canonical server history. */
+  private _replaceThreadHistoryCanonical(raw: readonly unknown[]): void {
+    const turns: CosTurn[] = [];
+    for (const item of raw) {
+      const turn = this._fromHistory(item);
+      if (turn) turns.push(turn);
+    }
+    this._turns = turns;
+    this._byId = new Map(turns.map((turn) => [turn.id, turn]));
+  }
+
+  /** Surface a transport refusal without pretending it was a COS event. */
+  setThreadFault(code: string, message: string, fatal = false): void {
+    this._fault = { code, message, fatal };
     this._notify();
   }
 

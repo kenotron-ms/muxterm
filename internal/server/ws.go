@@ -15,6 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/kenotron-ms/muxterm/internal/cos"
+	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
 )
@@ -33,6 +34,15 @@ type Client struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	writeMu sync.Mutex
+	// missionControlRequests isolates metadata lookups from terminal input while
+	// retaining a bounded, per-client ordering for slow sidecar/identity work.
+	missionControlRequests chan []byte
+	// Mission Control selection belongs to this authenticated connection, never
+	// to terminal navigation. Subscriptions deliberately outlive selection so a
+	// late result remains visible in its originating thread.
+	missionControlMu            sync.Mutex
+	missionControlSelection     missionControlSelection
+	missionControlSubscriptions map[string]missionControlSubscription
 
 	// sessMu guards sessions and unsubscribeRemotes. sessions holds this
 	// browser's daemon links keyed by transport.HostRef.ID; the empty key is
@@ -284,14 +294,15 @@ func closeRelayFailure(target sessiond.CloseTarget) sessiond.CloseOutcome {
 func newClient(hub *Hub, conn *websocket.Conn) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		hub:          hub,
-		conn:         conn,
-		ctx:          ctx,
-		cancel:       cancel,
-		sessions:     make(map[string]*hostSession),
-		closeTickets: make(map[string]closeTicket),
-		wsByHost:     make(map[string][]sessiond.WorkspaceInfo),
-		ssByHost:     make(map[string][]sessiond.SessionState),
+		hub:                    hub,
+		conn:                   conn,
+		ctx:                    ctx,
+		cancel:                 cancel,
+		sessions:               make(map[string]*hostSession),
+		closeTickets:           make(map[string]closeTicket),
+		missionControlRequests: make(chan []byte, missionControlRequestQueueSize),
+		wsByHost:               make(map[string][]sessiond.WorkspaceInfo),
+		ssByHost:               make(map[string][]sessiond.SessionState),
 	}
 	c.writeTextFn = func(data []byte) error {
 		c.writeMu.Lock()
@@ -307,6 +318,7 @@ func newClient(hub *Hub, conn *websocket.Conn) *Client {
 		defer wcancel()
 		return c.conn.Write(wctx, websocket.MessageBinary, data)
 	}
+	go c.missionControlWorker()
 	return c
 }
 
@@ -551,9 +563,15 @@ func (c *Client) handleTextInput(data []byte) {
 	var probe struct {
 		Type string `json:"type"`
 	}
-	if err := json.Unmarshal(data, &probe); err == nil && isCosMessage(probe.Type) {
-		c.handleCosMessage(data)
-		return
+	if err := json.Unmarshal(data, &probe); err == nil {
+		if isCosMessage(probe.Type) {
+			c.handleCosMessage(data)
+			return
+		}
+		if isMissionControlMessage(probe.Type) {
+			c.enqueueMissionControlMessage(data)
+			return
+		}
 	}
 
 	var msg sessiond.Message
@@ -1034,6 +1052,13 @@ type Hub struct {
 	// until a browser sends cos-subscribe or cos-turn.
 	cos *cosRelay
 
+	// missionControl owns durable thread metadata. Router is present only when
+	// both explicit text-preview gates are enabled.
+	missionControl            *missioncontrol.Store
+	missionControlRouter      *missioncontrol.Router
+	missionControlTextPreview bool
+	missionControlErr         error
+
 	// attachFailures counts CONSECUTIVE attachClient failures across all
 	// browsers, reset by the first success. Guarded by mu.
 	//
@@ -1426,6 +1451,7 @@ func (h *Hub) Remove(c *Client) {
 	if _, ok := h.clients[c]; ok {
 		delete(h.clients, c)
 		c.stopCos()
+		c.stopMissionControl()
 		c.teardownSessions()
 		c.close()
 	}
@@ -1435,6 +1461,29 @@ func (h *Hub) Remove(c *Client) {
 // muxterm does not orphan a python process on exit. Safe to call when no
 // sidecar was launched.
 func (h *Hub) CloseCos() { h.cos.close() }
+
+// CloseMissionControl releases the catalog's process lock on every server exit.
+// A request that had already obtained the store observes its closed state rather
+// than writing concurrently with a later server instance.
+func (h *Hub) CloseMissionControl() {
+	h.mu.Lock()
+	catalog := h.missionControl
+	router := h.missionControlRouter
+	h.missionControl = nil
+	h.missionControlRouter = nil
+	h.missionControlTextPreview = false
+	h.missionControlErr = errors.New("mission control catalog is closed")
+	h.mu.Unlock()
+	if router != nil {
+		router.Close()
+	}
+	if catalog == nil {
+		return
+	}
+	if err := catalog.Close(); err != nil {
+		log.Printf("missioncontrol: close catalog: %v", err)
+	}
+}
 
 // ClientCount returns the number of connected clients.
 func (h *Hub) ClientCount() int {

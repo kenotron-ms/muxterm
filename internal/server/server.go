@@ -20,6 +20,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/ai"
 	"github.com/kenotron-ms/muxterm/internal/authserver"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
+	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/voice"
 )
@@ -192,6 +193,18 @@ func New(cfg Config) *Server {
 		aiKeyPath = ai.DefaultKeyPath()
 	}
 	s.ai = ai.NewManager(aiKeyPath)
+	if s.cfg.MissionControl.ThreadsV2 {
+		catalog, err := missioncontrol.Open(missioncontrol.DefaultPath())
+		if err != nil {
+			hub.setMissionControl(nil, nil, false, err)
+		} else {
+			var router *missioncontrol.Router
+			if s.cfg.MissionControl.TextPreview {
+				router = missioncontrol.NewRouter(catalog)
+			}
+			hub.setMissionControl(catalog, router, s.cfg.MissionControl.TextPreview, nil)
+		}
+	}
 
 	// The collected pull requests, loaded from disk at construction so the
 	// first GET after a restart answers from the store rather than from an
@@ -371,6 +384,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// It does NOT cover a panic-free-fall past this frame or a SIGKILL; that is
 	// what the child's Pdeathsig is for (internal/cos/pdeathsig_linux.go).
 	defer s.hub.CloseCos()
+	defer s.hub.CloseMissionControl()
 
 	// A voice sideband is a live outbound WebSocket to the realtime
 	// vendor. Left open it keeps billing a session nobody is listening to,

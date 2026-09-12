@@ -397,6 +397,29 @@ func (c *Client) handleCosMessage(data []byte) {
 		log.Printf("cos: ignoring malformed frame: %v", err)
 		return
 	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) == nil {
+		for _, reserved := range []string{"thread_id", "expected_runtime_generation", "protocol_version", "draft_ref"} {
+			if _, present := fields[reserved]; present {
+				c.sendCosError("", "threaded_routing_required", "legacy COS frames may not carry Mission Control routing fields")
+				return
+			}
+		}
+	}
+	if c.hub.missionControlTextEnabled() {
+		switch msg.Type {
+		case cosTypeTurn, cosTypeApproval, cosTypeCancel, cosTypeClear:
+			c.sendCosError("", "legacy_mutation_disabled", "legacy COS mutation is unavailable while Mission Control text preview is enabled")
+			return
+		case cosTypeSubscribe:
+			// A legacy replay is safe only if its already-running legacy root
+			// exists; subscribing must not start a parallel mutable root.
+			if msg.On && (c.hub.cos == nil || c.hub.cos.started() == nil) {
+				c.sendCosSubscribeResult(false, "legacy history is unavailable; Mission Control text preview does not start legacy COS", "", false)
+				return
+			}
+		}
+	}
 
 	switch msg.Type {
 	case cosTypeSubscribe:

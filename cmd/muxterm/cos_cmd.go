@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/term"
+	"github.com/google/uuid"
 
 	"github.com/kenotron-ms/muxterm/internal/cos"
+	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
 )
 
 // cosDefaultTurnTimeout bounds one turn end to end. Generous: a chief-of-staff
@@ -133,6 +135,21 @@ func runCos(args []string) error {
 		return fmt.Errorf("a sidecar already owns session %s (pid %d, supervised by pid %d) \u2014 "+
 			"talk to it in the browser, or pass --session-id for a separate conversation",
 			st.SessionID, st.PID, owner)
+	}
+	// Threaded roots use UUID session IDs and a separate owner lock, so they
+	// never publish to legacy cos.json. Refuse a CLI writer that points at a
+	// live threaded root as well; no display name or workspace address is used
+	// as a substitute for this runtime key.
+	if parsed, err := uuid.Parse(*sessionID); err == nil && parsed != uuid.Nil {
+		lockPath := missioncontrol.RuntimeOwnerLockPath(parsed.String())
+		if lock, err := os.OpenFile(lockPath, os.O_RDWR, 0o600); err == nil {
+			if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+				_ = lock.Close()
+				return fmt.Errorf("a Mission Control threaded runtime already owns session %s; use its selected thread instead", *sessionID)
+			}
+			_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+			_ = lock.Close()
+		}
 	}
 
 	logger := newCosLogger(*verbose)

@@ -47,6 +47,10 @@ type Snapshot struct {
 // WorkspaceSnapshot is one workspace's captured name, layout, and panes.
 type WorkspaceSnapshot struct {
 	Name string `json:"name"`
+	// WorkspaceUUID is the durable workspace identity. It is absent in legacy
+	// snapshots. Restore leaves that legacy workspace unbound instead of
+	// inferring an identity or rewriting the source snapshot.
+	WorkspaceUUID string `json:"workspace_uuid,omitempty"`
 
 	// NameOrigin is "derived" or "explicit" -- who chose Name (autoname.go).
 	// Stored as a plain string, like SessionIDSource below, so the file stays
@@ -142,6 +146,19 @@ func DefaultSnapshotPath() string {
 // concurrent reader (the next boot's restore) never observes a
 // partially-written file.
 func WriteSnapshot(path string, snap Snapshot) error {
+	// Never overwrite a snapshot from a future/unknown schema. Periodic and
+	// shutdown writers both pass through here, so an older daemon cannot erase
+	// recovery evidence it does not understand.
+	if existing, err := os.ReadFile(path); err == nil {
+		var header struct {
+			Version int `json:"version"`
+		}
+		if json.Unmarshal(existing, &header) == nil && header.Version != snapshotVersion {
+			return fmt.Errorf("sessiond: snapshot schema %d is unsupported; refusing to overwrite", header.Version)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("sessiond: read existing snapshot %s: %w", path, err)
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("sessiond: create snapshot dir %s: %w", dir, err)
@@ -173,6 +190,9 @@ func LoadSnapshot(path string) (*Snapshot, error) {
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, fmt.Errorf("sessiond: parse snapshot %s: %w", path, err)
 	}
+	if snap.Version != snapshotVersion {
+		return nil, fmt.Errorf("sessiond: snapshot schema %d is unsupported", snap.Version)
+	}
 	return &snap, nil
 }
 
@@ -191,7 +211,7 @@ func BuildSnapshot(reg *Registry, reason string) Snapshot {
 		Reason:    reason,
 	}
 	for _, view := range views {
-		wsSnap := WorkspaceSnapshot{Name: view.Name, NameOrigin: string(view.NameOrigin), Layout: view.Layout}
+		wsSnap := WorkspaceSnapshot{WorkspaceUUID: view.UUID, Name: view.Name, NameOrigin: string(view.NameOrigin), Layout: view.Layout}
 		for _, p := range view.Panes {
 			wsSnap.Panes = append(wsSnap.Panes, capturePaneSnapshot(p))
 		}
@@ -506,7 +526,7 @@ func (s *Server) RestoreFromSnapshot(enabled bool, path string) int {
 
 	restored := 0
 	for _, wsSnap := range snap.Workspaces {
-		wsID := s.reg.AddWorkspace(wsSnap.Name, "")
+		wsID := s.reg.RestoreWorkspace(wsSnap.Name, "", wsSnap.WorkspaceUUID)
 		// AddWorkspace records every creation as explicit, which is right for
 		// every live caller and wrong for exactly this one: a name this daemon
 		// derived last run must come back derived, or it freezes at whatever

@@ -19,16 +19,24 @@ import (
 
 // Config is the top-level configuration for muxterm.
 type Config struct {
-	Theme     ThemeConfig     `toml:"theme"      json:"theme"`
-	Font      FontConfig      `toml:"font"       json:"font"`
-	Terminal  TerminalConfig  `toml:"terminal"   json:"terminal"`
-	Sidebar   SidebarConfig   `toml:"sidebar"    json:"sidebar"`
-	Keys      KeysConfig      `toml:"keys"       json:"keys"`
-	Workspace WorkspaceConfig `toml:"workspace"  json:"workspace"`
-	Driver    DriverConfig    `toml:"driver"     json:"driver"`
-	Server    ServerConfig    `toml:"server"     json:"server"`
-	Restore   RestoreConfig   `toml:"restore"    json:"restore"`
-	Voice     VoiceConfig     `toml:"voice"      json:"voice"`
+	Theme          ThemeConfig          `toml:"theme"      json:"theme"`
+	Font           FontConfig           `toml:"font"       json:"font"`
+	Terminal       TerminalConfig       `toml:"terminal"   json:"terminal"`
+	Sidebar        SidebarConfig        `toml:"sidebar"    json:"sidebar"`
+	Keys           KeysConfig           `toml:"keys"       json:"keys"`
+	Workspace      WorkspaceConfig      `toml:"workspace"  json:"workspace"`
+	Driver         DriverConfig         `toml:"driver"     json:"driver"`
+	Server         ServerConfig         `toml:"server"     json:"server"`
+	Restore        RestoreConfig        `toml:"restore"    json:"restore"`
+	Voice          VoiceConfig          `toml:"voice"      json:"voice"`
+	MissionControl MissionControlConfig `toml:"missioncontrol" json:"missioncontrol"`
+}
+
+// MissionControlConfig holds opt-in Mission Control gates. Both switches must
+// be true before the text-thread preview can start an isolated sidecar.
+type MissionControlConfig struct {
+	ThreadsV2   bool `toml:"threads_v2" json:"threads_v2"`
+	TextPreview bool `toml:"text_preview" json:"text_preview"`
 }
 
 // Auth modes for VoiceConfig.AuthMode. These are the ONLY accepted values.
@@ -671,5 +679,8 @@ func Defaults() Config {
 			EntraScope:      DefaultVoiceEntraScope,
 			SyncToolTimeout: DefaultVoiceSyncToolTimeout,
 		},
+		// Mission Control remains disabled unless both gates are explicitly
+		// enabled. Voice is always unavailable during the text preview.
+		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false},
 	}
 }

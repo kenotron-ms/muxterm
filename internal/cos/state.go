@@ -169,6 +169,13 @@ func (s *Supervisor) statePath() string {
 	return p
 }
 
+func (s *Supervisor) instructionPath() (string, error) {
+	if s.cfg.InstructionPath != "" {
+		return s.cfg.InstructionPath, nil
+	}
+	return InstructionPath()
+}
+
 // foreignOwner reports the pid of a LIVE process, other than this one, that
 // already published the status file at path.
 //

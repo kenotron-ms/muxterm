@@ -39,6 +39,7 @@ sys.stdout = sys.stderr
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
+import copy  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 import signal  # noqa: E402
@@ -53,6 +54,49 @@ from typing import Any  # noqa: E402
 _BOOT_T0 = time.monotonic()
 
 logger = logging.getLogger("cos")
+
+
+class _BoundedFleetStatusTool:
+    """A non-bypassable, bounded projection of the live fleet MCP tool."""
+
+    _FIELDS = (
+        "session_id", "pane_id", "workspace_id", "harness", "project", "name",
+        "label", "mode", "state", "waiting_for", "doing", "done_means", "pr",
+        "updated_at",
+    )
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.name = "mcp_muxterm_fleet_status"
+        self.description = "Return up to 20 current fleet status records with bounded fields."
+        self.input_schema = {"type": "object", "properties": {}, "additionalProperties": False}
+
+    async def execute(self, input: dict) -> Any:
+        from amplifier_core.models import ToolResult
+
+        try:
+            result = await self._inner.execute({})
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult(success=False, error={"message": f"fleet status unavailable: {type(exc).__name__}"})
+        payload = getattr(result, "output", None)
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError):
+                payload = {}
+        rows = payload.get("sessions", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            rows = []
+        bounded = []
+        for row in rows[:20]:
+            if not isinstance(row, dict):
+                continue
+            bounded.append({
+                key: str(row[key])[:256]
+                for key in self._FIELDS
+                if row.get(key) is not None
+            })
+        return ToolResult(success=True, output={"observed_at": datetime.now(timezone.utc).isoformat(), "sessions": bounded, "truncated": len(rows) > len(bounded)})
 
 # The chief-of-staff bundle, shipped beside this script.
 #
@@ -728,6 +772,13 @@ class Sidecar:
         self._base_surface: "list | None" = None
         self._tool_registry: dict = {}
         self._tuning: dict = {}
+        self._threaded_allowed_tools: set[str] | None = None
+        # Sidecar-local immutable turn IDs are not part of SessionStore's
+        # transcript schema. They are attached to history summaries only for
+        # turns this process durably saved, so browser reconciliation never
+        # falls back to matching prompt text.
+        self._completed_turn_ids: list[str] = []
+        self._history_group_base = 0
         # Set by serve(); read by _on_signal to wake the loop.  Both stay None
         # until then, so a signal before serve() has nothing to poke and
         # nothing to crash on.
@@ -757,13 +808,16 @@ class Sidecar:
         # Provider auto-install after an amplifier update; without this a
         # resumed session can come up with zero providers.  Never interactive.
         try:
-            if check_first_run():
+            if not self.args.threaded_text_preview and check_first_run():
                 auto_init_from_env(console)
         except Exception:
             logger.debug("first-run check skipped", exc_info=True)
 
         settings = AppSettings()
-        cfg, prepared = await resolve_bundle_config(self.bundle, settings, None)
+        if self.args.threaded_text_preview:
+            cfg, prepared = await self._resolve_threaded_preview(settings)
+        else:
+            cfg, prepared = await resolve_bundle_config(self.bundle, settings, None)
         self._prepared = prepared
         # MANDATORY: without this hook-context-intelligence dies validating
         # "Unknown level: '${AMPLIFIER_CONTEXT_INTELLIGENCE_LOG_LEVEL:INFO}'".
@@ -774,14 +828,23 @@ class Sidecar:
         # project slug, so `amplifier resume <id>` in a terminal still works.
         self.store = SessionStore()
         transcript = None
-        if self.store.exists(self.session_id):
+        resume_exists = self.store.exists(self.session_id)
+        resume_error = None
+        if resume_exists:
             try:
                 loaded, _meta = self.store.load(self.session_id)
-                if loaded:
+                if isinstance(loaded, list):
                     transcript = loaded
+                else:
+                    resume_error = "stored transcript is not a message list"
             except Exception:
                 logger.warning("could not load transcript for %s", self.session_id, exc_info=True)
-        self.resumed = transcript is not None
+                resume_error = "stored transcript could not be loaded"
+        if self.args.threaded_text_preview and resume_error:
+            raise RuntimeError(f"threaded preview refuses unsafe resume: {resume_error}")
+        self.resumed = resume_exists and transcript is not None
+        if self.args.threaded_text_preview:
+            self._history_group_base = len(_group_turns(transcript or []))
 
         cwd = str(Path.cwd().resolve())
         root_meta = {
@@ -797,38 +860,63 @@ class Sidecar:
         # mounted during create_session see the values.
         cfg["working_dir"] = cwd
         for key, value in root_meta.items():
-            cfg.setdefault(key, value)
+            if self.args.threaded_text_preview:
+                cfg[key] = value
+            else:
+                cfg.setdefault(key, value)
 
-        sc = SessionConfig(
-            config=cfg,
-            search_paths=get_bundle_search_paths(),
-            verbose=False,
-            session_id=self.session_id,
-            bundle_name=self.bundle,
-            prepared_bundle=prepared,
-            initial_transcript=transcript,
-        )
-        session = await _create_bundle_session(
-            sc, self.session_id, HostApprovalSystem(self.broker), self.display, console
-        )
-        # _create_bundle_session already performs both registrations; repeated
-        # here for parity with the spec's recipe (both are delegating wrappers,
-        # so a second call changes no behaviour).
-        register_mention_handling(session)
-        register_session_spawning(session)
+        if self.args.threaded_text_preview:
+            # Do not use app-cli's _create_bundle_session: it wraps the
+            # resolver, injects app overlays, and registers mention/delegate
+            # behavior. _resolve_threaded_preview has reduced mount_plan before
+            # this actual session creation call.
+            session = await prepared.create_session(
+                session_id=self.session_id,
+                approval_system=HostApprovalSystem(self.broker),
+                display_system=self.display,
+                session_cwd=Path.cwd(),
+                is_resumed=transcript is not None,
+            )
+        else:
+            sc = SessionConfig(
+                config=cfg,
+                search_paths=get_bundle_search_paths(),
+                verbose=False,
+                session_id=self.session_id,
+                bundle_name=self.bundle,
+                prepared_bundle=prepared,
+                initial_transcript=transcript,
+            )
+            session = await _create_bundle_session(
+                sc, self.session_id, HostApprovalSystem(self.broker), self.display, console
+            )
+            register_mention_handling(session)
+            register_session_spawning(session)
         self.session = session
 
         # session.config is not guaranteed to be the same dict object as cfg.
         session.config["working_dir"] = cwd
         for key, value in root_meta.items():
-            session.config.setdefault(key, value)
+            if self.args.threaded_text_preview:
+                session.config[key] = value
+            else:
+                session.config.setdefault(key, value)
 
-        if transcript:
+        if transcript is not None:
             context = session.coordinator.get("context")
             if context is not None and hasattr(context, "set_messages"):
-                await context.set_messages(transcript)
-                logger.info("restored %d messages from transcript", len(transcript))
+                try:
+                    await context.set_messages(transcript)
+                except Exception as exc:  # noqa: BLE001
+                    if self.args.threaded_text_preview:
+                        raise RuntimeError("threaded preview refuses transcript restore failure") from exc
+                    logger.warning("context transcript restore failed", exc_info=True)
+                    self.resumed = False
+                else:
+                    logger.info("restored %d messages from transcript", len(transcript))
             else:
+                if self.args.threaded_text_preview:
+                    raise RuntimeError("threaded preview refuses resume without context.set_messages")
                 logger.warning("context module lacks set_messages -- transcript NOT restored")
                 self.resumed = False
 
@@ -853,7 +941,7 @@ class Sidecar:
         # an approval on its own).
         # Comma separated tool names.  Applied per tool:pre -- see
         # _register_hooks() for why a one-shot seed does not survive.
-        forced = os.environ.get("MUXTERM_COS_REQUIRE_APPROVAL", "").strip()
+        forced = "" if self.args.threaded_text_preview else os.environ.get("MUXTERM_COS_REQUIRE_APPROVAL", "").strip()
         self._forced_approval = set(n.strip() for n in forced.split(",") if n.strip())
         if self._forced_approval:
             logger.info("host approval forced for tools: %s", sorted(self._forced_approval))
@@ -877,6 +965,8 @@ class Sidecar:
                     else f"{len(self._base_surface)} names")
 
         await self._enforce_tool_surface(session, cfg)
+        if self.args.threaded_text_preview:
+            await self._enforce_threaded_preview_policy(session)
 
         tools = session.coordinator.get("tools") or {}
         self.tool_count = len(tools)
@@ -885,6 +975,108 @@ class Sidecar:
 
         self._register_hooks()
         return session
+
+    async def _resolve_threaded_preview(self, settings: Any) -> tuple[dict, Any]:
+        """Prepare a product-only root before a session can mount anything.
+
+        This intentionally bypasses resolve_bundle_config's universal modes,
+        skills, routing, notification, and bundle.app composition. It keeps
+        the configured provider entries (credentials/settings) and the shipped
+        bundle's real context-simple/loop-streaming modules, but admits no
+        user app hooks, memory, tools, agents, or source overlays.
+        """
+        from amplifier_app_cli.lib.bundle_loader import AppBundleDiscovery
+        from amplifier_app_cli.lib.bundle_loader.prepare import load_and_prepare_bundle
+        from amplifier_app_cli.paths import get_bundle_search_paths
+        from amplifier_app_cli.runtime.config import expand_env_vars
+
+        if self.bundle != DEFAULT_BUNDLE:
+            raise RuntimeError("threaded preview requires the muxterm-shipped product bundle")
+        providers = copy.deepcopy(settings.get_provider_overrides() or [])
+        provider_sources = {
+            provider["module"]: provider["source"]
+            for provider in providers
+            if isinstance(provider, dict) and isinstance(provider.get("module"), str)
+            and isinstance(provider.get("source"), str)
+        }
+        prepared = await load_and_prepare_bundle(
+            self.bundle,
+            AppBundleDiscovery(search_paths=get_bundle_search_paths()),
+            compose_behaviors=None,
+            source_overrides=provider_sources or None,
+            bundle_source_overrides=None,
+        )
+        plan = copy.deepcopy(prepared.mount_plan)
+        session = plan.get("session")
+        if not isinstance(session, dict) or not isinstance(session.get("context"), dict) or not isinstance(session.get("orchestrator"), dict):
+            raise RuntimeError("threaded preview requires the shipped real context and orchestrator modules")
+        tools = [
+            entry for entry in (plan.get("tools") or [])
+            if isinstance(entry, dict) and entry.get("module") == "tool-mcp"
+        ]
+        if self.args.thread_kind == "lobby" and len(tools) != 1:
+            raise RuntimeError("threaded Lobby requires exactly the shipped muxterm MCP module")
+        if self.args.thread_kind != "lobby":
+            tools = []
+        safe_session = {
+            key: copy.deepcopy(session[key])
+            for key in ("raw", "context", "orchestrator")
+            if key in session
+        }
+        prepared.mount_plan = expand_env_vars({
+            "session": safe_session,
+            "providers": providers if providers else copy.deepcopy(plan.get("providers") or []),
+            "tools": tools,
+        })
+        # Replace any composed/product prose before create_session registers its
+        # prompt factory. This root has no app bundle instruction contribution.
+        prepared.bundle.instruction = (
+            "Mission Control text preview. Read-only scoped conversation. "
+            "Refuse approvals, delegation, shell commands, mutations, cancellation, "
+            "reset, voice, cross-thread access, and transcript reads. "
+            "Lobby may report only bounded current fleet facts."
+        )
+        return prepared.mount_plan, prepared
+
+    async def _enforce_threaded_preview_policy(self, session: Any) -> None:
+        """Make the preview's actual dispatch surface read-only before turns.
+
+        This cannot rely on the prompt: configured bundles are additive and
+        may mount tools the Mission Control bundle did not name.  Lobby needs
+        only fresh fleet facts; workspace threads intentionally get no tools
+        until a scoped action boundary exists.
+        """
+        bundle = getattr(self._prepared, "bundle", None) if self._prepared else None
+        if bundle is None:
+            raise RuntimeError("threaded preview has no prepared bundle")
+        # Do not inherit user-authored instruction additions, memories, or
+        # bundle prose into a new root. This fixed policy is immutable for the
+        # runtime because the Go supervisor never sends reconfigure in preview.
+        bundle.instruction = (
+            "Mission Control text preview. This is a read-only, independently "
+            "scoped conversation. Do not request or imply approvals, delegation, "
+            "shell commands, mutations, cancellation, reset, voice, or cross-thread "
+            "transcripts. Lobby may report only current bounded fleet facts."
+        )
+        allowed = {"mcp_muxterm_fleet_status"} if self.args.thread_kind == "lobby" else set()
+        mounted = sorted(session.coordinator.get("tools") or {})
+        unsafe = [name for name in mounted if name not in allowed]
+        failed = []
+        for name in unsafe:
+            try:
+                await session.coordinator.unmount("tools", name)
+            except Exception as exc:  # noqa: BLE001
+                failed.append(f"{name} ({type(exc).__name__}: {exc})")
+        if failed:
+            raise RuntimeError("threaded preview could not remove unsafe tools: " + "; ".join(failed))
+        if self.args.thread_kind == "lobby":
+            original = self._tool_registry.get("mcp_muxterm_fleet_status")
+            if original is None:
+                raise RuntimeError("threaded Lobby requires the fleet-status tool")
+            await session.coordinator.mount("tools", _BoundedFleetStatusTool(original), "mcp_muxterm_fleet_status")
+        if session.coordinator.get("hooks") is None:
+            raise RuntimeError("threaded preview requires a hook registry for dispatch fencing")
+        self._threaded_allowed_tools = allowed
 
     # -- tool surface -------------------------------------------------------
     @staticmethod
@@ -1199,6 +1391,25 @@ class Sidecar:
         cont = HookResult(action="continue")
         root = self.session_id
 
+        if self._threaded_allowed_tools is not None:
+            allowed_tools = frozenset(self._threaded_allowed_tools)
+
+            async def enforce_threaded_tool_allowlist(event: str, data: dict) -> Any:
+                # This executes at tool dispatch, not only at boot. It fences a
+                # tool a module or callback adds after the initial unmount.
+                name = str(data.get("tool_name") or "")
+                if name not in allowed_tools:
+                    return HookResult(
+                        action="deny",
+                        reason="Mission Control text preview permits no such tool in this thread",
+                    )
+                return cont
+
+            hooks.register(
+                "tool:pre", enforce_threaded_tool_allowlist,
+                priority=-1000, name="missioncontrol-threaded-tool-fence",
+            )
+
         def trace(event: str, data: dict) -> None:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("hook %s keys=%s", event, sorted(data.keys()))
@@ -1378,10 +1589,10 @@ class Sidecar:
                 return f"{name}/{model}"
         return "unknown"
 
-    async def _save_session(self) -> None:
+    async def _save_session(self) -> bool:
         messages = await self._messages()
         if not messages:
-            return
+            return False
         existing = self.store.get_metadata(self.session_id) or {}
         metadata = {
             **existing,
@@ -1393,6 +1604,7 @@ class Sidecar:
             "working_dir": str(Path.cwd().resolve()),
         }
         self.store.save(self.session_id, messages, metadata)
+        return True
 
     async def _repair_transcript(self) -> None:
         """Pre-turn repair of orphaned tool calls left behind by a cancelled turn."""
@@ -1445,10 +1657,15 @@ class Sidecar:
         response = ""
         error_msg = None
         cancelled = False
+        persisted = False
         try:
             await self._repair_transcript()
             self.session.coordinator.cancellation.reset()
-            prompt = await self._expand_mentions(turn.prompt)
+            # Runtime mentions can resolve arbitrary configured context,
+            # including material outside this thread. Preview roots accept
+            # literal text only; their fixed tool surface is the sole source
+            # of bounded live facts.
+            prompt = turn.prompt if self.args.threaded_text_preview else await self._expand_mentions(turn.prompt)
             response = await self.session.execute(prompt)
             if self.session.coordinator.cancellation.is_cancelled:
                 cancelled = True
@@ -1468,22 +1685,28 @@ class Sidecar:
             except BaseException:
                 logger.debug("cost lookup failed during teardown", exc_info=True)
             try:
-                await self._save_session()
+                persisted = await self._save_session()
             except BaseException:
                 logger.warning("session save failed for turn %s", turn.id, exc_info=True)
+            if persisted and self.args.threaded_text_preview:
+                # Attach immutable runtime correlation before emitting the
+                # terminal event. A history request received immediately after
+                # that event can then cover the exact turn without prompt
+                # matching.
+                self._completed_turn_ids.append(turn.id)
 
             if cancelled or turn.cancel_requests:
                 self._emit_terminal(turn, ev="cancelled", response=response, ms=ms,
-                                    turn_cost=turn_cost, session_cost=session_cost)
+                                    turn_cost=turn_cost, session_cost=session_cost, persisted=persisted)
             elif error_msg is not None:
                 self.proto.emit(ev="error", turn_id=turn.id, code="turn_failed",
                                 message=error_msg, fatal=False)
                 self._emit_terminal(turn, ev="turn_end", response=response, ms=ms,
                                     turn_cost=turn_cost, session_cost=session_cost,
-                                    error=error_msg)
+                                    error=error_msg, persisted=persisted)
             else:
                 self._emit_terminal(turn, ev="turn_end", response=response, ms=ms,
-                                    turn_cost=turn_cost, session_cost=session_cost)
+                                    turn_cost=turn_cost, session_cost=session_cost, persisted=persisted)
             logger.info("turn %s: %d deltas emitted, %d dropped (background llm calls)",
                         turn.id, turn.deltas_emitted, turn.deltas_dropped)
             if not turn.saw_provider_request:
@@ -1496,12 +1719,13 @@ class Sidecar:
                 self._turn = None
 
     def _emit_terminal(self, turn: Turn, *, ev: str, response: str, ms: int,
-                       turn_cost, session_cost, error=None) -> None:
+                       turn_cost, session_cost, error=None, persisted=False) -> None:
         if turn.terminal_sent:
             logger.error("second terminal event suppressed for turn %s", turn.id)
             return
         turn.terminal_sent = True
-        payload = {"ev": ev, "turn_id": turn.id, "response": response or "", "ms": ms}
+        payload = {"ev": ev, "turn_id": turn.id, "response": response or "", "ms": ms,
+                   "persisted": bool(persisted)}
         if turn_cost is not None:
             payload["cost_usd"] = turn_cost
         if session_cost is not None:
@@ -1829,9 +2053,14 @@ class Sidecar:
         try:
             messages = await self._transcript()
             groups = _group_turns(messages)
-            for n, group in enumerate(groups[-limit:], start=max(0, len(groups) - limit)):
+            first = max(0, len(groups) - limit)
+            for n, group in enumerate(groups[-limit:], start=first):
                 turn = _summarize_turn(n, [messages[i] for i in group])
                 if turn is not None:
+                    if self.args.threaded_text_preview:
+                        local_index = n - self._history_group_base
+                        if 0 <= local_index < len(self._completed_turn_ids):
+                            turn["turn_id"] = self._completed_turn_ids[local_index]
                     turns.append(turn)
         except Exception as exc:  # noqa: BLE001
             logger.exception("history: could not build the replay")
@@ -2046,7 +2275,14 @@ def parse_args(argv: list) -> argparse.Namespace:
                    choices=["debug", "info", "warning", "error", "critical"])
     p.add_argument("--approval-timeout", type=float, default=DEFAULT_APPROVAL_TIMEOUT,
                    help="seconds before an unanswered approval is DENIED (default: 300)")
-    return p.parse_args(argv)
+    p.add_argument("--threaded-text-preview", action="store_true",
+                   help="run as an isolated, read-only Mission Control text worker")
+    p.add_argument("--thread-kind", choices=["lobby", "workspace"], default=None,
+                   help="required with --threaded-text-preview")
+    args = p.parse_args(argv)
+    if args.threaded_text_preview != (args.thread_kind is not None):
+        p.error("--threaded-text-preview and --thread-kind must be used together")
+    return args
 
 
 async def run(args: argparse.Namespace, proto: Proto) -> int:

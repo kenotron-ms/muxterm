@@ -42,7 +42,7 @@ import './components/mux-sidebar.js';
 // looking at one of. The component and its standalone demo are untouched.
 import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
-import { cosStore } from './lib/cos-store.js';
+import { threadStore } from './lib/thread-store.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
 
@@ -952,9 +952,10 @@ export class MuxApp extends LitElement {
     this._unsubHomeSessions = homeSessions.subscribe(() => {
       this._version++;
     });
-    // The chief-of-staff chat's one seam. Subscribed here (not in <mux-cos>)
-    // so the entry control can show readiness without the overlay being open.
-    this._unsubCos = cosStore.subscribe(() => {
+    // The conversation coordinator owns capability negotiation and selects
+    // either the legacy unscoped store or one attributed v2 thread. Subscribe
+    // here so the shell observes that state without parsing its wire frames.
+    this._unsubCos = threadStore.subscribe(() => {
       this._version++;
     });
     // Install fixed app-level shortcuts (Cmd+W close, Cmd+T new pane). These
@@ -991,10 +992,10 @@ export class MuxApp extends LitElement {
     // Sidebar live previews: the store owns the opt-in and both data sources
     // (local xterm buffer for the attached workspace, daemon push for the rest).
     previewStore.attach(this._socket);
-    // Serve-local cos-* frames. Nothing is asked of the server until the
-    // overlay is opened: cosStore.open() is what sends the first subscribe,
-    // and the sidecar is spawned lazily off that.
-    cosStore.attach(this._socket);
+    // Serve-local conversation frames. Nothing is asked of the server until
+    // the overlay opens: threadStore negotiates capability before it either
+    // subscribes to explicit unscoped legacy COS or selects one v2 thread.
+    threadStore.attach(this._socket);
     // A launch lands on the Dashboard, not on whichever pane the composition
     // happens to make active. Here, immediately after the store the Dashboard
     // reads is wired -- and NOT on the socket's connect callback. See below.
@@ -1226,10 +1227,9 @@ export class MuxApp extends LitElement {
       // own bootstrap attach; letting the argv survive would spawn the prompt
       // into whatever that lands on, minutes later and unasked.
       this._dropPendingDispatch('the connection was lost');
-      // The transcript survives a reconnect; the claim that a sidecar is
-      // listening does not. A chat still reading "ready" over a dead socket
-      // would take a turn nobody will ever answer.
-      cosStore.markDisconnected();
+      // The coordinator retains drafts/history but drops connection-scoped
+      // selection authority and any unconfirmed receipt claim.
+      threadStore.markDisconnected();
       const interruptedTargets = new Map<string, CloseTarget>();
       for (const [key, request] of this._closeRequests) {
         interruptedTargets.set(key, request.target);
@@ -1262,9 +1262,9 @@ export class MuxApp extends LitElement {
       // daemon restart underneath us) silently loses it and tiles would just
       // stop arriving. Re-send it here, alongside the composition re-sync.
       previewStore.resubscribe();
-      // ws.ts replays the cos-subscribe frame itself (the flag lives on the
-      // socket); this only re-arms the header while the replay lands.
-      cosStore.markReconnected();
+      // Re-negotiate first; this never replays a pending turn. The coordinator
+      // explicitly chooses v2 selection or the unscoped legacy fallback.
+      threadStore.markReconnected();
     };
     this._socket.connect();
     this._connectionStatus = 'reconnecting';
@@ -1305,6 +1305,7 @@ export class MuxApp extends LitElement {
       this._unsubscribe = null;
     }
     if (this._socket) {
+      threadStore.markDisconnected();
       this._socket.disconnect();
       this._socket = null;
     }
@@ -2328,24 +2329,24 @@ export class MuxApp extends LitElement {
     this._bootSurfaceApplied = true;
     if (!customElements.get('mux-cos')) return;
     this._showDashboard = true;
-    // Same call _onDashboardShow makes, for the same reason: this is what
-    // sends the first cos-subscribe and spawns the sidecar lazily off it.
-    cosStore.open();
+    // Same call _onDashboardShow makes. It negotiates before any legacy
+    // subscribe, then selects an explicit v2 context when text preview is on.
+    threadStore.open();
   }
 
   /**
    * Dashboard card / ctrl+` -- open the Dashboard from anywhere.
    *
-   * This is also what STARTS the sidecar: cosStore.open() sends the first
-   * cos-subscribe and the server spawns the amplifier session lazily off it,
-   * so muxterm pays nothing at all for a surface nobody opened.
+   * This is also what starts conversation setup: threadStore negotiates
+   * capability before it can select a thread or explicitly opt into legacy
+   * COS, so muxterm pays nothing at all for a surface nobody opened.
    */
   private _onDashboardShow = (): void => {
     this._showDashboard = true;
     // On a phone the Dashboard card IS the drawer's top row, so the Dashboard
     // would open underneath the drawer that asked for it.
     this._closeDrawer();
-    cosStore.open();
+    threadStore.open();
     void this.updateComplete.then(() => {
       this.renderRoot.querySelector('mux-cos')?.focusComposer();
     });

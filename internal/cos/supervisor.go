@@ -185,6 +185,19 @@ type Config struct {
 	// StatePath overrides where the status file is written. "-" disables the
 	// status file entirely; empty uses StatePath().
 	StatePath string
+	// InstructionPath overrides where the effective instruction is written.
+	// It is paired with StatePath for an isolated threaded runtime.
+	InstructionPath string
+	// ThreadedTextPreview creates a constrained, independently rooted
+	// Mission Control text worker. It is deliberately opt-in so legacy COS
+	// behavior and its environment remain unchanged.
+	ThreadedTextPreview bool
+	// ThreadKind is lobby or workspace when ThreadedTextPreview is enabled.
+	ThreadKind string
+	// OwnerLockFile stays open across the child process lifetime. The child
+	// inherits the descriptor so a crashed supervisor cannot release the
+	// writer lock before its PDEATHSIG child exits.
+	OwnerLockFile *os.File
 	// SubscriberDepth is the default per-subscriber buffer (0 =
 	// DefaultSubscriberDepth).
 	SubscriberDepth int
@@ -294,6 +307,12 @@ func New(cfg Config) *Supervisor {
 // were delivered. Re-sending is a few kilobytes down a pipe already carrying
 // the prompt; the sidecar diffs and only acts when something actually changed.
 func (s *Supervisor) pushTuning() {
+	if s.cfg.ThreadedTextPreview {
+		// Threaded roots snapshot a fixed read-only policy at creation. Do not
+		// read global personal tuning here: it may reintroduce tools or context
+		// contributions into a different thread on a later turn.
+		return
+	}
 	dir, dirSrc := ConfigDir()
 	t := LoadTuning(dir)
 
@@ -347,7 +366,7 @@ func (s *Supervisor) publishEffective() {
 		ToolsKnown:       ev.ToolsKnown,
 		At:               time.Now(),
 	}
-	if path, perr := InstructionPath(); perr == nil {
+	if path, perr := s.instructionPath(); perr == nil {
 		if werr := writeInstructionFile(path, ev.Instruction); werr != nil {
 			s.cfg.Logf("cos: could not publish the effective instruction: %v", werr)
 		} else {
@@ -694,6 +713,14 @@ func (s *Supervisor) Status() Status {
 	return st
 }
 
+// Idle reports a read-only queue snapshot. It is used by Mission Control's
+// conservative history cut: snapshotting an active or queued root is refused
+// rather than pretending a transcript replay covers an in-flight turn.
+func (s *Supervisor) Idle() bool {
+	active, pending, _ := s.q.stats()
+	return active == "" && pending == 0
+}
+
 // RecentStderr returns the retained tail of the sidecar's stderr, which per
 // 2.1 is its log channel. This is what to print when boot fails: the Go side
 // sees only "process exited", while the reason is always down there.
@@ -816,6 +843,10 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		}
 		s.cfg.Logf("cos: %s after %s (ready=%v)", reason, uptime.Round(time.Millisecond), reachedReady)
 		s.handleExit(reason)
+		if s.cfg.ThreadedTextPreview {
+			s.fail(errors.New("threaded text sidecar exited; explicit reselection is required"))
+			return
+		}
 
 		if reachedReady {
 			earlyFailures = 0
@@ -876,13 +907,28 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	if cwd != "" {
 		args = append(args, "--cwd", cwd)
 	}
+	if s.cfg.ThreadedTextPreview {
+		args = append(args, "--threaded-text-preview", "--thread-kind", s.cfg.ThreadKind)
+	}
 
 	cmd := exec.CommandContext(ctx, s.python, args...) //nolint:gosec // interpreter and script are resolved, not user text
 	cmd.Dir = cwd
+	if s.cfg.OwnerLockFile != nil {
+		cmd.ExtraFiles = append(cmd.ExtraFiles, s.cfg.OwnerLockFile)
+	}
 	// PYTHONUNBUFFERED is load-bearing: a block-buffered child would hold
 	// whole events in libc until the buffer filled, turning a token stream
 	// into one late burst and making a mid-turn crash lose everything.
-	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=utf-8")
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, item := range os.Environ() {
+		key, _, _ := strings.Cut(item, "=")
+		// A worker root must never inherit a parent lane/root attribution.
+		if strings.HasPrefix(key, "MUXTERM_LANE_") || strings.HasPrefix(key, "MUXTERM_ROOT_") {
+			continue
+		}
+		env = append(env, item)
+	}
+	cmd.Env = append(env, "PYTHONUNBUFFERED=1", "PYTHONIOENCODING=utf-8")
 	// Graceful first: a cancelled context sends SIGTERM, and WaitDelay is what
 	// escalates to SIGKILL five seconds later if the sidecar ignores it.
 	//
@@ -1094,6 +1140,11 @@ func (s *Supervisor) markReady(ev Event) {
 
 	s.cfg.Logf("cos: %s", ev)
 	s.writeState(st)
+	if s.cfg.ThreadedTextPreview {
+		// A threaded runtime must publish its own immutable effective policy
+		// even though it deliberately never receives a reconfigure op.
+		go s.publishEffective()
+	}
 	s.readyOnce.Do(func() { close(s.readyCh) })
 }
 
