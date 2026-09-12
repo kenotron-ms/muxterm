@@ -127,7 +127,6 @@ try {
         if (root instanceof Element && root.matches(selector)) found.push(root);
         for (const child of root.children ?? []) findAll(child, selector, found);
         if (root instanceof Element && root.shadowRoot) findAll(root.shadowRoot, selector, found);
-        if (root instanceof ShadowRoot) for (const child of root.children) findAll(child, selector, found);
         return found;
       };
       const all = (selector) => findAll(document.documentElement, selector);
@@ -140,8 +139,8 @@ try {
         selector_visible: selector instanceof HTMLElement && !!(selector.offsetWidth || selector.offsetHeight || selector.getClientRects().length),
         composer_count: all('[data-thread-composer]').length,
         composer_enabled: composer instanceof HTMLTextAreaElement ? !composer.disabled : null,
-        mux_app_present: app !== null,
-        mux_cos_present: cos !== null,
+        mux_app_present: app !== undefined,
+        mux_cos_present: cos !== undefined,
       };
     });
     const controlsFrames = frames.map((frame) => {

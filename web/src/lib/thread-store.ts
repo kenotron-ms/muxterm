@@ -299,6 +299,8 @@ interface PendingDetail {
   readonly threadId: string;
   readonly generation: number;
   readonly appVoiceOperationId: string;
+  /** Present only for the app-voice awaiter; idempotently removes its listener. */
+  readonly settle?: (receipt: ThreadDetailReceipt) => void;
 }
 
 interface BufferedThreadEvent {
@@ -1368,6 +1370,10 @@ class ThreadStore {
       return;
     }
     if (this._mode === 'legacy' || (this.threaded && this._connectionReady)) return;
+    // Opening the same surface while the initial catalog/selection is still
+    // loading must not restart negotiation. A queued capability request can
+    // sit behind a slow root start and discard that in-flight selection.
+    if (this._capabilityRequestId || this._listRequestId || this._pendingSelection) return;
     this._beginNegotiation();
   }
 
@@ -1382,7 +1388,17 @@ class ThreadStore {
     this._pendingSelection = null;
     this._pendingHistories.clear();
     this._pendingControls.clear();
-    this._pendingDetails.clear();
+    for (const [requestId, pending] of this._pendingDetails) {
+      this._pendingDetails.delete(requestId);
+      pending.settle?.({
+        ok: false,
+        detailId: pending.detailId,
+        threadId: pending.threadId,
+        runtimeGeneration: pending.generation,
+        code: 'operation_cancelled',
+        error: 'The app voice detail request was cancelled because the text connection closed.',
+      });
+    }
     this._pendingAttentionAcks.clear();
     this._preAckBuffers.clear();
     if (this._mode === 'legacy') {
@@ -1708,7 +1724,18 @@ class ThreadStore {
     threadId: string,
     runtimeGeneration: number,
     operationId: string,
+    signal: AbortSignal,
   ): Promise<ThreadDetailReceipt> {
+    if (signal.aborted) {
+      return Promise.resolve({
+        ok: false,
+        detailId: threadId,
+        threadId,
+        runtimeGeneration,
+        code: 'operation_cancelled',
+        error: 'The app voice detail request was cancelled before it was sent.',
+      });
+    }
     if (this._detailUnavailableFor(threadId, runtimeGeneration) !== '' || this._hasPendingDetail(threadId)) {
       return Promise.resolve({
         ok: false,
@@ -1719,8 +1746,42 @@ class ThreadStore {
         error: 'That context is no longer available for read-only detail.',
       });
     }
+    const requestId = makeRequestId();
+    if (!requestId) {
+      return Promise.resolve({
+        ok: false,
+        detailId: threadId,
+        threadId,
+        runtimeGeneration,
+        code: 'request_id_unavailable',
+        error: 'A secure detail request ID could not be created.',
+      });
+    }
     return new Promise<ThreadDetailReceipt>((resolve) => {
-      const unsubscribe = this.onDetailReceipt((receipt) => {
+      let settled = false;
+      let unsubscribe: () => void = () => {};
+      const settle = (receipt: ThreadDetailReceipt): void => {
+        if (settled) return;
+        settled = true;
+        unsubscribe();
+        signal.removeEventListener('abort', cancelled);
+        resolve(receipt);
+      };
+      const cancelled = (): void => {
+        const pending = this._pendingDetails.get(requestId);
+        if (pending?.settle !== settle) return;
+        this._pendingDetails.delete(requestId);
+        settle({
+          ok: false,
+          detailId: threadId,
+          threadId,
+          runtimeGeneration,
+          code: 'operation_cancelled',
+          error: 'The app voice detail request was cancelled.',
+        });
+        this._notify();
+      };
+      unsubscribe = this.onDetailReceipt((receipt) => {
         if (
           receipt.detailId !== threadId ||
           receipt.threadId !== threadId ||
@@ -1728,30 +1789,22 @@ class ThreadStore {
         ) {
           return;
         }
-        unsubscribe();
-        resolve(receipt);
+        settle(receipt);
       });
-      const requestId = makeRequestId();
-      if (!requestId) {
-        unsubscribe();
-        resolve({
-          ok: false,
-          detailId: threadId,
-          threadId,
-          runtimeGeneration,
-          code: 'request_id_unavailable',
-          error: 'A secure detail request ID could not be created.',
-        });
-        return;
-      }
       const pending: PendingDetail = {
         requestId,
         detailId: threadId,
         threadId,
         generation: runtimeGeneration,
         appVoiceOperationId: operationId,
+        settle,
       };
       this._pendingDetails.set(requestId, pending);
+      signal.addEventListener('abort', cancelled, { once: true });
+      if (signal.aborted) {
+        cancelled();
+        return;
+      }
       if (
         !this._socket?.missionControl({
           type: 'missioncontrol-detail',
@@ -1762,8 +1815,7 @@ class ThreadStore {
         })
       ) {
         this._pendingDetails.delete(requestId);
-        unsubscribe();
-        resolve({
+        settle({
           ok: false,
           detailId: threadId,
           threadId,
@@ -1778,7 +1830,16 @@ class ThreadStore {
   /** A late server response must not navigate after its operation was fenced. */
   cancelDetailForAppVoice(operationId: string): void {
     for (const [requestId, pending] of this._pendingDetails) {
-      if (pending.appVoiceOperationId === operationId) this._pendingDetails.delete(requestId);
+      if (pending.appVoiceOperationId !== operationId) continue;
+      this._pendingDetails.delete(requestId);
+      pending.settle?.({
+        ok: false,
+        detailId: pending.detailId,
+        threadId: pending.threadId,
+        runtimeGeneration: pending.generation,
+        code: 'operation_cancelled',
+        error: 'The app voice detail request was cancelled.',
+      });
     }
   }
 
@@ -2177,6 +2238,13 @@ class ThreadStore {
     }
     this._capabilityTimer = setTimeout(() => {
       if (this._capabilityRequestId !== requestId) return;
+      if (this.threaded) {
+        // A timeout is not an authoritative revocation of an already proven
+        // protocol. Keep the request ID so a delayed reply can still recover;
+        // never route existing scoped drafts/work through legacy COS.
+        this._setProblem('capabilities_delayed', 'Waiting for the server to confirm text-thread capability.');
+        return;
+      }
       this._capabilityRequestId = '';
       // An old server cannot identify a v2 request. The only fallback is the
       // explicit, unscoped legacy subscription below.

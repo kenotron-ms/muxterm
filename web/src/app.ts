@@ -2801,6 +2801,7 @@ export class MuxApp extends LitElement {
           target.thread_id,
           target.runtime_generation,
           operationId,
+          signal,
         );
         this._assertAppVoiceOperationCurrent(operationId, signal);
         if (!receipt.ok) throw new Error(receipt.error);
