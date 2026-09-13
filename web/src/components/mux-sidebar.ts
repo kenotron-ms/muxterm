@@ -1250,6 +1250,8 @@ export class MuxSidebar extends LitElement {
   private _previewGeneration = 0;
   private _previewTooltipHovered = false;
   private _previewVisualViewport: VisualViewport | null = null;
+  /** Touch activation focuses the row before its click; do not treat that as keyboard intent. */
+  private _touchFocusGuard = false;
 
   private _onOutsideClick = (e: MouseEvent): void => {
     if (this._menuOpen && !e.composedPath().includes(this)) {
@@ -1790,12 +1792,21 @@ export class MuxSidebar extends LitElement {
     this._beginPreview(workspaceId);
   };
 
+  private _onPreviewPointerDown = (event: PointerEvent): void => {
+    this._touchFocusGuard = event.pointerType === 'touch';
+  };
+
+  private _onPreviewPointerCancel = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') this._touchFocusGuard = false;
+  };
+
   private _onPreviewPointerLeave = (event: PointerEvent): void => {
     if (event.pointerType === 'touch') return;
     this._schedulePreviewDismiss();
   };
 
   private _onPreviewFocusIn = (_event: FocusEvent, workspaceId: string): void => {
+    if (this._touchFocusGuard) return;
     this._beginPreview(workspaceId);
   };
 
@@ -1806,6 +1817,10 @@ export class MuxSidebar extends LitElement {
   };
 
   private _onPreviewKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Tab') {
+      this._touchFocusGuard = false;
+      return;
+    }
     if (event.key === 'Escape' && this._previewState !== 'hidden') {
       event.preventDefault();
       event.stopPropagation();
@@ -1834,6 +1849,18 @@ export class MuxSidebar extends LitElement {
     const entry = this._previewEntry;
     const canvas = this.shadowRoot?.querySelector<HTMLCanvasElement>('[data-workspace-preview-canvas]');
     if (!entry || !canvas) return;
+    const naturalW = entry.tile.cols * PREVIEW_CELL.w;
+    const naturalH = entry.tile.rows * PREVIEW_CELL.h;
+    const viewport = window.visualViewport;
+    const maxOuterW = Math.max(80, (viewport?.width ?? window.innerWidth) - 24);
+    const maxOuterH = Math.max(48, (viewport?.height ?? window.innerHeight) - 24);
+    // The tooltip contributes 16px of padding; calculate the fit before
+    // rendering so renderTile bounds the native backing grid as well as CSS.
+    const scale = Math.min(
+      1,
+      Math.max(1 / naturalW, (maxOuterW - 16) / naturalW),
+      Math.max(1 / naturalH, (maxOuterH - 16) / naturalH),
+    );
     const palette = resolvePalette(store.config.theme.palette);
     renderTile(canvas, entry.tile, {
       palette: paletteAnsiArray(palette),
@@ -1841,15 +1868,8 @@ export class MuxSidebar extends LitElement {
       bg: palette.background,
       contrastFloor: 0,
       mono: false,
+      scale,
     });
-    const naturalW = entry.tile.cols * PREVIEW_CELL.w;
-    const naturalH = entry.tile.rows * PREVIEW_CELL.h;
-    const viewport = window.visualViewport;
-    const maxW = Math.max(80, (viewport?.width ?? window.innerWidth) - 24);
-    const maxH = Math.max(48, (viewport?.height ?? window.innerHeight) - 24);
-    const scale = Math.min(1, maxW / (naturalW + 16), maxH / (naturalH + 16));
-    canvas.style.width = `${Math.max(1, Math.floor(naturalW * scale))}px`;
-    canvas.style.height = `${Math.max(1, Math.floor(naturalH * scale))}px`;
   }
 
   private _positionPreviewTooltip(): void {
@@ -1914,6 +1934,8 @@ export class MuxSidebar extends LitElement {
   }
 
   private _onWsClick(wsId: string): void {
+    this._touchFocusGuard = false;
+    this._dismissPreview(true);
     store.ackWorkspace(wsId);
     this.dispatchEvent(
       new CustomEvent('workspace-switch', {
@@ -1995,6 +2017,8 @@ export class MuxSidebar extends LitElement {
 
   private _onWsRemove(e: Event, wsId: string, name: string): void {
     e.stopPropagation();
+    this._touchFocusGuard = false;
+    this._dismissPreview(true);
     this.dispatchEvent(
       new CustomEvent('workspace-close', {
         detail: { workspaceId: wsId, name },
@@ -2158,6 +2182,8 @@ export class MuxSidebar extends LitElement {
         aria-describedby="${this._previewWorkspaceId === card.id && this._previewState !== 'hidden'
           ? 'workspace-preview-tooltip'
           : ''}"
+        @pointerdown="${this._onPreviewPointerDown}"
+        @pointercancel="${this._onPreviewPointerCancel}"
         @pointerenter="${(e: PointerEvent) => this._onPreviewPointerEnter(e, card.id)}"
         @pointerleave="${this._onPreviewPointerLeave}"
         @focusin="${(e: FocusEvent) => this._onPreviewFocusIn(e, card.id)}"
