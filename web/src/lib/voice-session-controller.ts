@@ -176,18 +176,27 @@ async function errorText(response: Response, fallback: string): Promise<string> 
   return `${fallback} (HTTP ${response.status})`;
 }
 
-function startErrorMessage(cause: unknown): string {
+type StartPhase = 'claim' | 'session_setup' | 'microphone' | 'connection';
+
+function startErrorMessage(cause: unknown, phase: StartPhase): string {
   const name =
     typeof cause === 'object' && cause !== null && 'name' in cause && typeof cause.name === 'string'
       ? cause.name
       : '';
-  if (name === 'NotAllowedError' || name === 'SecurityError') {
-    return 'Microphone permission was denied. Allow microphone access, then Start voice mode.';
+  if (phase === 'microphone') {
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      return 'Microphone permission was denied. Allow microphone access, then Start voice mode.';
+    }
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      return 'No microphone is available. Connect one, then Start voice mode.';
+    }
+    return 'Microphone setup failed. Check microphone access, then Start voice mode.';
   }
-  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-    return 'No microphone is available. Connect one, then Start voice mode.';
-  }
-  return cause instanceof Error ? cause.message : String(cause);
+  if (phase === 'claim') return 'Could not claim app voice control. Try again.';
+  const detail = cause instanceof Error && cause.message ? ` ${cause.message}` : '';
+  return phase === 'session_setup'
+    ? `Voice session setup failed.${detail}`
+    : `Voice connection failed.${detail}`;
 }
 
 async function waitForIce(connection: RTCPeerConnection): Promise<void> {
@@ -363,8 +372,15 @@ function onRealtimeEvent(raw: unknown): void {
       if (appIsActive() && peer && dataChannel && canPublishListening(peer, dataChannel)) publish('listening');
       break;
     case 'error': {
-      const detail = event.error as { message?: unknown } | undefined;
-      fail(typeof detail?.message === 'string' ? detail.message : 'The voice provider reported an error.');
+      // Provider messages may echo credentials or arbitrary request data.
+      // Keep the visible mobile error bounded to fixed, actionable copy.
+      const detail = event.error as { code?: unknown } | undefined;
+      const message = detail?.code === 'rate_limit_exceeded'
+        ? 'Voice provider is temporarily busy. Try again shortly.'
+        : detail?.code === 'session_expired'
+          ? 'The voice session expired. Start voice mode again.'
+          : 'The voice provider reported a session error. Start voice mode again.';
+      fail(message);
       break;
     }
   }
@@ -462,6 +478,7 @@ async function appStart(): Promise<void> {
   inputActive = false;
   stopInputLevelMeter(false);
   publish('connecting');
+  let phase: StartPhase = 'claim';
   try {
     const claimedLease = await appVoiceOperations.claim(false);
     if (generation !== current) {
@@ -469,6 +486,7 @@ async function appStart(): Promise<void> {
       return;
     }
     lease = claimedLease;
+    phase = 'session_setup';
     const tokenResponse = await fetch(apiPath('/api/app/voice/token'), {
       method: 'POST',
       credentials: 'include',
@@ -485,6 +503,7 @@ async function appStart(): Promise<void> {
     }
     sessionId = token.session_id;
 
+    phase = 'microphone';
     const acquiredMicrophone = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
@@ -504,6 +523,7 @@ async function appStart(): Promise<void> {
       void meterContext?.suspend().catch(() => {});
     }
     syncMuted();
+    phase = 'connection';
     const connection = new RTCPeerConnection();
     peer = connection;
     inputSenders = [];
@@ -573,7 +593,7 @@ async function appStart(): Promise<void> {
       publish('listening');
     }
   } catch (cause) {
-    if (generation === current) fail(startErrorMessage(cause));
+    if (generation === current) fail(startErrorMessage(cause, phase));
   }
 }
 

@@ -178,6 +178,27 @@ export class MuxVoiceModeBubble extends LitElement {
       color: var(--mux-warn, var(--chrome-text-bright, currentColor));
     }
 
+    .error {
+      width: min(180px, calc(100vw - 24px));
+      padding: 4px 6px;
+      border-radius: 4px;
+      background: var(--chrome-bar, #202124);
+      color: var(--mux-error, var(--chrome-danger, currentColor));
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+      text-align: center;
+    }
+
+    .bubble[data-edge='left'] .error {
+      transform: translateX(calc((min(180px, 100vw - 24px) - 84px) / 2));
+    }
+
+    .bubble[data-edge='right'] .error {
+      transform: translateX(calc((84px - min(180px, 100vw - 24px)) / 2));
+    }
+
     .bubble[data-paused='true'] .status {
       color: var(--mux-ok, #22c55e);
     }
@@ -683,6 +704,9 @@ export class MuxVoiceModeBubble extends LitElement {
                 @voice-mode-bubble-activate="${this._onBubbleActivate}"
               ></mux-voice-mode-button>
               <span class="status" role="status" aria-live="polite">${statusLabel(snapshot)}</span>
+              ${snapshot.state === 'error' && snapshot.error
+                ? html`<span class="error" role="alert">${snapshot.error}</span>`
+                : nothing}
             </div>
           `
         : nothing}

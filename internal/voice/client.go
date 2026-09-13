@@ -46,6 +46,84 @@ type Ephemeral struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
+// StartupError is the safe public classification for app-voice startup
+// failures. Cause remains available to trusted callers through Unwrap, but
+// must never be serialized or logged.
+type StartupError struct {
+	Stage      string
+	HTTPStatus int
+	Code       string
+	Parameter  string
+	cause      error
+	class      startupErrorClass
+}
+
+type startupErrorClass uint8
+
+const (
+	startupErrorUnknown startupErrorClass = iota
+	startupErrorCredential
+	startupErrorDeadline
+	startupErrorTransport
+)
+
+func (e *StartupError) Error() string { return e.Message() }
+
+func (e *StartupError) Unwrap() error { return e.cause }
+
+// Message returns a fixed safe message. No provider body, endpoint,
+// credential, session ID, or wrapped error is included.
+func (e *StartupError) Message() string {
+	if e.Parameter == "session.audio.output.voice" {
+		return "Voice provider rejected the session voice setting. Leave Voice empty for the provider default or select a supported voice."
+	}
+	switch e.Parameter {
+	case "session.model":
+		return "Voice provider rejected the session model setting. Select a supported voice model."
+	case "session.tools":
+		return "Voice provider rejected the session tools setting. Check provider support for voice mode."
+	}
+	switch e.HTTPStatus {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "Voice provider authentication failed. Check the configured voice credential."
+	case http.StatusTooManyRequests:
+		return "Voice provider is temporarily busy. Try again shortly."
+	}
+	if e.Stage == "sideband" {
+		return "Voice provider session started, but its tool connection could not be established. Try again."
+	}
+	switch e.class {
+	case startupErrorCredential:
+		return "Voice provider credentials are unavailable. Check the configured voice credential."
+	case startupErrorDeadline:
+		return "Voice provider did not respond before setup timed out. Try again."
+	case startupErrorTransport:
+		return "Voice provider connection could not be established. Try again."
+	}
+	switch e.Stage {
+	case "sdp_exchange":
+		return "Voice provider could not establish the voice connection. Try again."
+	default:
+		return "Voice provider could not start a session. Try again."
+	}
+}
+
+// SafeStartupFailure extracts only the safe fields intended for app-voice
+// diagnostics and responses. Untyped failures receive a fixed stage message.
+func SafeStartupFailure(err error) StartupError {
+	var startup *StartupError
+	if errors.As(err, &startup) {
+		return StartupError{
+			Stage:      startup.Stage,
+			HTTPStatus: startup.HTTPStatus,
+			Code:       startup.Code,
+			Parameter:  startup.Parameter,
+			class:      startup.class,
+		}
+	}
+	return StartupError{Stage: "session_mint"}
+}
+
 // MintEphemeral creates a realtime session and returns its ephemeral client
 // secret.
 //
@@ -72,36 +150,38 @@ func (c *Client) MintEphemeralApp(ctx context.Context) (Ephemeral, error) {
 func (c *Client) mintApp(ctx context.Context) (Ephemeral, error) {
 	tok, err := c.cred.Token(ctx)
 	if err != nil {
-		return Ephemeral{}, err
+		return Ephemeral{}, startupFailure("credential", 0, err)
 	}
 	session := map[string]any{
 		"type": "realtime", "model": c.cfg.Model, "instructions": AppInstructions(),
 		"tools": AppToolDefinitions(),
 		"audio": map[string]any{
-			"input":  map[string]any{"turn_detection": map[string]any{"type": "server_vad", "create_response": false}},
-			"output": map[string]any{"voice": c.cfg.Voice},
+			"input": map[string]any{"turn_detection": map[string]any{"type": "server_vad", "create_response": false}},
 		},
+	}
+	if c.cfg.Voice != "" {
+		session["audio"].(map[string]any)["output"] = map[string]any{"voice": c.cfg.Voice}
 	}
 	body, err := json.Marshal(map[string]any{"session": session})
 	if err != nil {
-		return Ephemeral{}, fmt.Errorf("voice: encode app mint request: %w", err)
+		return Ephemeral{}, startupFailure("session_mint", 0, err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.Endpoint+"/realtime/client_secrets", bytes.NewReader(body))
 	if err != nil {
-		return Ephemeral{}, fmt.Errorf("voice: build app mint request: %w", err)
+		return Ephemeral{}, startupFailure("session_mint", 0, err)
 	}
 	c.authorize(req, tok)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return Ephemeral{}, fmt.Errorf("voice: app mint request to the realtime endpoint failed: %w", err)
+		return Ephemeral{}, startupFailure("session_mint", 0, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Ephemeral{}, fmt.Errorf("voice: app minting returned HTTP %d: %s%s", resp.StatusCode, authSafeSnippet(raw, resp.StatusCode), c.authHint(resp.StatusCode))
+		return Ephemeral{}, startupProviderFailure("session_mint", resp.StatusCode, raw)
 	}
 	var out struct {
 		Value     string          `json:"value"`
@@ -109,13 +189,72 @@ func (c *Client) mintApp(ctx context.Context) (Ephemeral, error) {
 		Session   json.RawMessage `json:"session"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil || out.Value == "" {
-		return Ephemeral{}, errors.New("voice: the realtime endpoint returned an unusable app mint response")
+		return Ephemeral{}, startupFailure("session_mint", 0, err)
 	}
 	var sess struct {
 		ID string `json:"id"`
 	}
 	_ = json.Unmarshal(out.Session, &sess)
 	return Ephemeral{Value: out.Value, ExpiresAt: out.ExpiresAt, SessionID: sess.ID}, nil
+}
+
+// ExchangeSDPApp is the app-voice variant of ExchangeSDP. It preserves the
+// transport and call-ID policy while returning only safe startup errors.
+func (c *Client) ExchangeSDPApp(ctx context.Context, ephemeral, offerSDP string) (Answer, error) {
+	return c.exchangeSDP(ctx, ephemeral, offerSDP, true)
+}
+
+func (c *Client) exchangeSDP(ctx context.Context, ephemeral, offerSDP string, app bool) (Answer, error) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	u := c.cfg.Endpoint + "/realtime/calls?model=" + url.QueryEscape(c.cfg.Model)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(offerSDP))
+	if err != nil {
+		if !app {
+			return Answer{}, fmt.Errorf("voice: build SDP request: %w", err)
+		}
+		return Answer{}, startupFailure("sdp_exchange", 0, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+ephemeral)
+	req.Header.Set("Content-Type", "application/sdp")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		if !app {
+			return Answer{}, fmt.Errorf("voice: SDP exchange with the realtime endpoint failed: %w", err)
+		}
+		return Answer{}, startupFailure("sdp_exchange", 0, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if !app {
+			// Same withholding rule as the mint path. The bearer here is the
+			// short-lived ephemeral secret rather than the long-lived
+			// credential, but it is still a secret and a 401 body is still
+			// the one place a vendor quotes part of it back.
+			return Answer{}, fmt.Errorf("voice: SDP exchange returned HTTP %d: %s", resp.StatusCode, authSafeSnippet(raw, resp.StatusCode))
+		}
+		return Answer{}, startupProviderFailure("sdp_exchange", resp.StatusCode, raw)
+	}
+	loc := resp.Header.Get("Location")
+	callID := ""
+	if i := strings.LastIndex(loc, "/"); i >= 0 && i+1 < len(loc) {
+		callID = loc[i+1:]
+	}
+	if callID == "" {
+		if !app {
+			// Not fatal for audio -- the browser can still talk to the
+			// model -- but it IS fatal for tools, and a voice assistant
+			// that cannot act is not the thing being built. Say so here
+			// rather than let the sideband fail obscurely later.
+			return Answer{SDP: string(raw)}, fmt.Errorf("voice: the realtime endpoint returned no Location header, so there is no call id to attach the tool sideband to")
+		}
+		return Answer{}, &StartupError{Stage: "sdp_exchange"}
+	}
+	return Answer{SDP: string(raw), CallID: callID}, nil
 }
 
 func (c *Client) mintEphemeral(ctx context.Context, scoped bool) (Ephemeral, error) {
@@ -136,12 +275,15 @@ func (c *Client) mintEphemeral(ctx context.Context, scoped bool) (Ephemeral, err
 		}
 	}
 	if scoped {
-		session["audio"] = map[string]any{
+		audio := map[string]any{
 			"input": map[string]any{
 				"turn_detection": map[string]any{"type": "server_vad", "create_response": false},
 			},
-			"output": map[string]any{"voice": c.cfg.Voice},
 		}
+		if c.cfg.Voice != "" {
+			audio["output"] = map[string]any{"voice": c.cfg.Voice}
+		}
+		session["audio"] = audio
 	}
 	body, err := json.Marshal(map[string]any{"session": session})
 	if err != nil {
@@ -209,45 +351,67 @@ type Answer struct {
 // refused outright with "This operation requires ephemeral tokens for
 // authentication".
 func (c *Client) ExchangeSDP(ctx context.Context, ephemeral, offerSDP string) (Answer, error) {
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
+	return c.exchangeSDP(ctx, ephemeral, offerSDP, false)
+}
 
-	u := c.cfg.Endpoint + "/realtime/calls?model=" + url.QueryEscape(c.cfg.Model)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(offerSDP))
-	if err != nil {
-		return Answer{}, fmt.Errorf("voice: build SDP request: %w", err)
+func startupFailure(stage string, status int, cause error) *StartupError {
+	class := startupErrorUnknown
+	if stage == "credential" {
+		class = startupErrorCredential
+	} else if errors.Is(cause, context.DeadlineExceeded) {
+		class = startupErrorDeadline
+	} else {
+		var transport *url.Error
+		if errors.As(cause, &transport) {
+			class = startupErrorTransport
+		}
 	}
-	req.Header.Set("Authorization", "Bearer "+ephemeral)
-	req.Header.Set("Content-Type", "application/sdp")
+	return &StartupError{Stage: stage, HTTPStatus: status, cause: cause, class: class}
+}
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return Answer{}, fmt.Errorf("voice: SDP exchange with the realtime endpoint failed: %w", err)
+func startupProviderFailure(stage string, status int, body []byte) *StartupError {
+	failure := &StartupError{Stage: stage, HTTPStatus: status}
+	// Authentication responses can quote credentials. Their body is never
+	// parsed, even for otherwise allowlisted fields.
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return failure
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	var response struct {
+		Error struct {
+			Code  string `json:"code"`
+			Type  string `json:"type"`
+			Param string `json:"param"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return failure
+	}
+	failure.Code = allowedStartupCode(response.Error.Code)
+	if failure.Code == "" {
+		failure.Code = allowedStartupCode(response.Error.Type)
+	}
+	failure.Parameter = allowedStartupParameter(response.Error.Param)
+	return failure
+}
 
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Same withholding rule as the mint path. The bearer here is the
-		// short-lived ephemeral secret rather than the long-lived
-		// credential, but it is still a secret and a 401 body is still
-		// the one place a vendor quotes part of it back.
-		return Answer{}, fmt.Errorf("voice: SDP exchange returned HTTP %d: %s", resp.StatusCode, authSafeSnippet(raw, resp.StatusCode))
+func allowedStartupCode(value string) string {
+	switch value {
+	case "invalid_value", "invalid_request_error", "model_not_found",
+		"unsupported_value", "unsupported_model", "quota_exceeded",
+		"insufficient_quota", "rate_limit", "rate_limit_exceeded":
+		return value
+	default:
+		return ""
 	}
+}
 
-	loc := resp.Header.Get("Location")
-	callID := ""
-	if i := strings.LastIndex(loc, "/"); i >= 0 && i+1 < len(loc) {
-		callID = loc[i+1:]
+func allowedStartupParameter(value string) string {
+	switch value {
+	case "session.audio.output.voice", "session.model", "session.tools":
+		return value
+	default:
+		return ""
 	}
-	if callID == "" {
-		// Not fatal for audio -- the browser can still talk to the
-		// model -- but it IS fatal for tools, and a voice assistant
-		// that cannot act is not the thing being built. Say so here
-		// rather than let the sideband fail obscurely later.
-		return Answer{SDP: string(raw)}, fmt.Errorf("voice: the realtime endpoint returned no Location header, so there is no call id to attach the tool sideband to")
-	}
-	return Answer{SDP: string(raw), CallID: callID}, nil
 }
 
 // authorize applies the credential in the form its mode requires.
