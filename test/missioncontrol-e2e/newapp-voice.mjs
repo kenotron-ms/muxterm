@@ -172,6 +172,36 @@ let stage = 'setup';
 let firstFailure = '';
 let browser;
 let peerPage;
+const protocolEvents = [];
+function recordProtocol(direction, payload) {
+  try {
+    const frame = JSON.parse(String(payload));
+    if (typeof frame.type !== 'string' || !(
+      frame.type.startsWith('app-voice-') ||
+      ['pane-added', 'pane-created', 'pane-closed', 'composition'].includes(frame.type)
+    )) return;
+    const row = { direction, type: frame.type };
+    for (const key of ['status', 'code', 'action']) {
+      if (typeof frame[key] === 'string' && /^[a-z0-9_-]{1,96}$/i.test(frame[key])) row[key] = frame[key];
+    }
+    for (const key of ['revision', 'expected_revision', 'observation_revision', 'paneId', 'pane_id']) {
+      if (Number.isSafeInteger(frame[key])) row[key] = frame[key];
+    }
+    const active = frame.active ?? frame.observation?.active;
+    if (active && ['dock', 'mission_control'].includes(active.surface)) {
+      row.surface = active.surface;
+      row.active_pane = active.pane_id;
+    }
+    if (frame.target && ['pane', 'thread', 'workspace', 'applet'].includes(frame.target.kind)) {
+      row.target_kind = frame.target.kind;
+      if (Number.isSafeInteger(frame.target.pane_id)) row.target_pane = frame.target.pane_id;
+    }
+    if (typeof frame.error === 'string') row.error_sha256 = sha(frame.error);
+    if (Array.isArray(frame.panes)) row.pane_count = frame.panes.length;
+    if (protocolEvents.length === 256) protocolEvents.shift();
+    protocolEvents.push(row);
+  } catch { /* only bounded protocol metadata belongs in diagnostic evidence */ }
+}
 const pass = (name, evidence = {}) => { run.checks[name] = { status: 'PASS', ...evidence }; };
 const blocked = (name, reason) => { if (!run.checks[name]) run.checks[name] = { status: 'BLOCKED', reason }; };
 function gate(name, condition, evidence = {}) {
@@ -258,12 +288,16 @@ try {
   const voiceResponses = [];
   const postPaths = [];
   const browserErrors = [];
-  page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
-    try {
-      const frame = JSON.parse(String(payload));
-      if (frame.type === 'missioncontrol-result' || frame.type === 'missioncontrol-event') frames.push(frame);
-    } catch { /* unrelated transport */ }
-  }));
+  page.on('websocket', (socket) => {
+    socket.on('framesent', ({ payload }) => recordProtocol('sent', payload));
+    socket.on('framereceived', ({ payload }) => {
+      recordProtocol('received', payload);
+      try {
+        const frame = JSON.parse(String(payload));
+        if (frame.type === 'missioncontrol-result' || frame.type === 'missioncontrol-event') frames.push(frame);
+      } catch { /* unrelated transport */ }
+    });
+  });
   page.on('response', (response) => {
     const url = new URL(response.url());
     if (url.pathname.startsWith('/api/app/voice/')) voiceResponses.push({ path: url.pathname, status: response.status() });
@@ -677,6 +711,7 @@ try {
   }).catch(() => {});
   await browser?.close();
   if (firstFailure) run.first_failure = firstFailure;
+  run.protocol_events = protocolEvents;
   writePrivate('results.json', run);
 }
 console.log(JSON.stringify({ status: run.status, source_reference: run.source_reference.type }));

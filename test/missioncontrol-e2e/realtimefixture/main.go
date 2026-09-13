@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -137,7 +138,17 @@ func fixtureOutput(value map[string]any) map[string]any {
 	var decoded any
 	if json.Unmarshal([]byte(raw), &decoded) != nil {
 		if strings.HasPrefix(raw, "Refused:") {
-			return map[string]any{"status": "refused"}
+			out := map[string]any{
+				"status":         "refused",
+				"refusal_sha256": fmt.Sprintf("%x", sha256.Sum256([]byte(raw))),
+			}
+			// Retain only fixed protocol codes, never arbitrary error text.
+			switch reason := strings.TrimSpace(strings.TrimPrefix(raw, "Refused:")); reason {
+			case "stale_observation", "target_mismatch", "operation_expired",
+				"operation_refused", "user_navigation", "state_changed":
+				out["refusal_code"] = reason
+			}
+			return out
 		}
 		return nil
 	}
