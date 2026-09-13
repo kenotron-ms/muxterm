@@ -1,8 +1,8 @@
 package server
 
-// App-global voice owns a provider bridge, never a Mission Control thread.
-// Browser operations are reservations: the browser's existing handler remains
-// the authority that commits navigation, drafts, and visible turn submission.
+// App-global voice owns the provider bridge and relays ordinary spoken work
+// directly to the canonical Mission Control root. Browser operations remain
+// restricted to their own owner-acknowledged navigation and draft work.
 
 import (
 	"bytes"
@@ -56,10 +56,6 @@ type appVoiceOperation struct {
 	Text, DraftMode string
 	Correlation     voice.Correlation
 	Expires         time.Time
-	requestID       string
-	turnID          string
-	dispatchState   string
-	turn            *cos.Turn
 	done            chan appVoiceOperationResult
 }
 type appVoiceOperationResult struct {
@@ -83,7 +79,6 @@ type appVoiceService struct {
 	bridge                         *appVoiceBridge
 	operatorTurns                  map[string]*cos.Turn
 	operatorApprovals              map[string]string
-	operatorRequestCaptures        map[string]bool
 	operatorSub                    *cos.Subscription
 	playbackPaused                 bool
 	userTurnActive                 bool
@@ -137,40 +132,71 @@ func (b *appVoiceBridge) Approve(string, bool, string) error {
 func (b *appVoiceBridge) Cancel(string) error {
 	return errors.New("app voice has no legacy bridge")
 }
-func (b *appVoiceBridge) SubmitOperator(ctx context.Context, c voice.Correlation, request string) (voice.TurnHandle, error) {
+func (b *appVoiceBridge) SubmitOperator(_ context.Context, c voice.Correlation, request string) (voice.TurnHandle, error) {
 	s := b.service
 	s.mu.Lock()
-	if !b.activeLocked() {
+	if !b.activeLocked() || !s.validOperatorCorrelationLocked(b, c) {
 		s.mu.Unlock()
-		return nil, errors.New("app voice bridge lease is no longer current")
+		return nil, errors.New("app voice request is no longer current")
 	}
-	revision := s.observation.Revision
-	target := appThreadTurnTarget(s.observation.Active)
+	owner, epoch, generation := b.owner, b.epoch, b.generation
+	relay := s.hub.cos
 	s.mu.Unlock()
-	if revision == 0 || target == nil {
-		return nil, errors.New("Operator requires an observed Mission Control composer")
+	if relay == nil {
+		return nil, errors.New("Operator is unavailable")
 	}
-	s.observeOperatorApprovals()
-	s.mu.Lock()
-	if !b.activeLocked() {
-		s.mu.Unlock()
-		return nil, errors.New("app voice bridge lease is no longer current")
-	}
-	s.operatorRequestCaptures[c.CaptureID] = true
-	s.mu.Unlock()
-	if _, err := s.execute(ctx, b, c, voice.AppToolSubmitThreadTurn, map[string]any{
-		"expected_revision": float64(revision), "target": target, "text": request,
-	}); err != nil {
+	// Relay calls occur outside service.mu: they take independent relay locks.
+	sup, err := relay.get()
+	if err != nil {
 		return nil, err
 	}
-	key := appOperatorKey(c)
-	s.mu.Lock()
-	turn := s.operatorTurns[key]
-	s.mu.Unlock()
-	if turn == nil {
-		return nil, errors.New("Operator submission was acknowledged without an admitted turn")
+	root, active := relay.rootIdentity()
+	if !active || root.ID == "" || root.SessionID == "" ||
+		root.StorageCWD == "" || !sup.Status().Ready {
+		return nil, errors.New("canonical Operator conversation is unavailable")
 	}
+	s.observeOperatorApprovals(sup, owner, epoch, b)
+	clientRef := appVoiceOperatorClientRef(epoch, c)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !b.activeLocked() || s.owner != owner || s.epoch != epoch ||
+		s.providerGeneration != generation || !s.validOperatorCorrelationLocked(b, c) {
+		return nil, errors.New("app voice request is no longer current")
+	}
+	key := appOperatorKey(c)
+	if turn := s.operatorTurns[key]; turn != nil {
+		return &appVoiceTurn{turn: turn, service: s, key: key}, nil
+	}
+	// submit is nonblocking while its submission lock is held. Holding
+	// service.mu here prevents a fast turn_start from outrunning registration.
+	turn, duplicate := relay.submit(sup, request, appVoiceOwnerKey(owner, epoch), clientRef)
+	if turn == nil {
+		return nil, errors.New("Operator refused the request")
+	}
+	record := s.captures[c.CaptureID]
+	if !duplicate {
+		record.operatorPending = true
+		record.operatorCorrelation = c
+		s.operatorSequence++
+		record.operatorSequence = s.operatorSequence
+	}
+	s.operatorTurns[key] = turn
 	return &appVoiceTurn{turn: turn, service: s, key: key}, nil
+}
+func (s *appVoiceService) validOperatorCorrelationLocked(b *appVoiceBridge, c voice.Correlation) bool {
+	record := s.captures[c.CaptureID]
+	return c.AttachmentEpoch == b.generation && c.ProviderCallID != "" &&
+		c.ProviderItemID != "" && c.ProviderResponseID != "" && record != nil &&
+		record.responseID == c.ProviderResponseID && !record.terminal &&
+		record.dispatchItem == c.ProviderItemID && !record.calls[c.ProviderItemID] &&
+		record.outputCalls[c.ProviderItemID] == c.ProviderCallID
+}
+func appVoiceOperatorClientRef(epoch uint64, c voice.Correlation) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s\x00%s", epoch, c.CaptureID, c.ProviderItemID, c.ProviderCallID)))
+	return "app_voice:" + base64.RawURLEncoding.EncodeToString(sum[:])
+}
+func appVoiceOwnerKey(owner *Client, epoch uint64) string {
+	return fmt.Sprintf("app_voice:%p:%d", owner, epoch)
 }
 func (b *appVoiceBridge) ApproveOperator(c voice.Correlation, requestID string, approved bool, reason string) error {
 	s := b.service
@@ -224,7 +250,7 @@ func (b *appVoiceBridge) CancelOperator(c voice.Correlation, turnID string) erro
 	if sup == nil {
 		return errors.New("Operator is not running")
 	}
-	return sup.Cancel(turn.ID)
+	return sup.CancelSpecific(turn.ID)
 }
 func (b *appVoiceBridge) PrepareOperatorReply(c voice.Correlation, output string, terminal bool) (map[string]string, error) {
 	s := b.service
@@ -544,11 +570,11 @@ func (b *appVoiceBridge) ReserveToolCall(event voice.ProviderEvent) (voice.Corre
 		// provider function reference so Sideband can explicitly answer this
 		// extra call without replacing the first call's continuation nonce.
 		record.calls[event.ItemID] = true
-		return voice.Correlation{ProviderCallID: callID, ProviderItemID: event.ItemID, ProviderResponseID: event.ResponseID, CaptureID: id}, errors.New("second provider function call for app capture is refused")
+		return voice.Correlation{ProviderCallID: callID, ProviderItemID: event.ItemID, ProviderResponseID: event.ResponseID, CaptureID: id, AttachmentEpoch: b.generation}, errors.New("second provider function call for app capture is refused")
 	}
 	record.dispatchItem = event.ItemID
 	record.calls[event.ItemID] = false
-	return voice.Correlation{ProviderCallID: callID, ProviderItemID: event.ItemID, ProviderResponseID: event.ResponseID, CaptureID: id}, nil
+	return voice.Correlation{ProviderCallID: callID, ProviderItemID: event.ItemID, ProviderResponseID: event.ResponseID, CaptureID: id, AttachmentEpoch: b.generation}, nil
 }
 func (b *appVoiceBridge) ResolveToolCall(event voice.ProviderEvent) (voice.Correlation, error) {
 	return b.ReserveToolCall(event)
@@ -669,7 +695,7 @@ func (s *Server) registerAppVoiceRoutes(cfg config.VoiceConfig, protect func(htt
 		log.Printf("app voice: provider unavailable: %v", err)
 		return
 	}
-	service := &appVoiceService{hub: s.hub, provider: mgr, operations: make(map[string]*appVoiceOperation), captures: make(map[string]*appVoiceCapture), responses: make(map[string]string), inputs: make(map[string]string), operatorTurns: make(map[string]*cos.Turn), operatorApprovals: make(map[string]string), operatorRequestCaptures: make(map[string]bool)}
+	service := &appVoiceService{hub: s.hub, provider: mgr, operations: make(map[string]*appVoiceOperation), captures: make(map[string]*appVoiceCapture), responses: make(map[string]string), inputs: make(map[string]string), operatorTurns: make(map[string]*cos.Turn), operatorApprovals: make(map[string]string)}
 	s.appVoice = service
 	s.hub.appVoice = service
 	// Provider reasons are descriptive prose, not client protocol values.
@@ -810,7 +836,6 @@ func (s *appVoiceService) claim(c *Client, takeover bool) {
 	s.inputs = make(map[string]string)
 	s.operatorTurns = make(map[string]*cos.Turn)
 	s.operatorApprovals = make(map[string]string)
-	s.operatorRequestCaptures = make(map[string]bool)
 	s.retiredInputBits = [appVoiceInputReplayWords]uint64{}
 	s.bridge = nil
 	s.userTurnActive = false
@@ -958,7 +983,7 @@ func (s *appVoiceService) execute(ctx context.Context, bridge *appVoiceBridge, c
 		}
 		return s.readTranscript(machine, sessionID, n)
 	}
-	if name != voice.AppToolNavigate && name != voice.AppToolComposerDraft && name != voice.AppToolSubmitThreadTurn {
+	if name != voice.AppToolNavigate && name != voice.AppToolComposerDraft {
 		s.mu.Unlock()
 		return "", errors.New("unknown app tool")
 	}
@@ -989,10 +1014,6 @@ func (s *appVoiceService) execute(ctx context.Context, bridge *appVoiceBridge, c
 		return "", errors.New("text_too_large")
 	} else {
 		op.Text = text
-	}
-	if name == voice.AppToolSubmitThreadTurn && strings.TrimSpace(op.Text) == "" {
-		s.mu.Unlock()
-		return "", errors.New("submit text is required")
 	}
 	if mode, _ := args["mode"].(string); name == voice.AppToolComposerDraft && mode != "inspect" && mode != "set" {
 		s.mu.Unlock()
@@ -1044,7 +1065,7 @@ func appAction(tool string) string {
 	if tool == voice.AppToolComposerDraft {
 		return "composer_draft"
 	}
-	return "submit_thread_turn"
+	return ""
 }
 func appVoiceUint(v any) (uint64, bool) {
 	n, ok := v.(float64)
@@ -1057,8 +1078,6 @@ func validAppTarget(tool string, t map[string]any) bool {
 		return k == "workspace" || k == "thread" || k == "pane" || k == "applet" || k == "detail"
 	case voice.AppToolComposerDraft:
 		return k == "composer"
-	case voice.AppToolSubmitThreadTurn:
-		return k == "thread_turn"
 	}
 	return false
 }
@@ -1093,18 +1112,6 @@ func (s *appVoiceService) validTarget(owner *Client, active map[string]any, tool
 		}
 	case voice.AppToolComposerDraft:
 		return appTargetsEqual(target, appComposerTarget(active))
-	case voice.AppToolSubmitThreadTurn:
-		if !appTargetsEqual(target, appThreadTurnTarget(active)) {
-			return false
-		}
-		threadID, _ := target["thread_id"].(string)
-		generation, _ := appVoiceUint(target["runtime_generation"])
-		sessionID, _ := target["runtime_session_id"].(string)
-		incarnation, _ := target["runtime_incarnation"].(string)
-		if !owner.appVoiceThreadKnown(threadID, generation, sessionID, incarnation) {
-			return false
-		}
-		return owner.appVoiceThreadKnown(threadID, generation, sessionID, incarnation)
 	}
 	return false
 }
@@ -1121,17 +1128,6 @@ func appComposerTarget(active map[string]any) map[string]any {
 		return nil
 	}
 	return map[string]any{"kind": "composer", "channel_id": composer["channel_id"], "thread_id": composer["thread_id"], "runtime_session_id": composer["runtime_session_id"], "runtime_generation": composer["runtime_generation"], "runtime_incarnation": composer["runtime_incarnation"], "draft_ref": composer["draft_ref"]}
-}
-func appThreadTurnTarget(active map[string]any) map[string]any {
-	composer, _ := active["composer"].(map[string]any)
-	if composer == nil {
-		return nil
-	}
-	threadID, _ := composer["thread_id"].(string)
-	if threadID == "" {
-		return nil
-	}
-	return map[string]any{"kind": "thread_turn", "channel_id": composer["channel_id"], "thread_id": threadID, "runtime_session_id": composer["runtime_session_id"], "runtime_generation": composer["runtime_generation"], "runtime_incarnation": composer["runtime_incarnation"], "draft_ref": composer["draft_ref"]}
 }
 func validAppUUID(value string) bool {
 	parsed, err := uuid.Parse(value)
@@ -1217,11 +1213,7 @@ func validAppAck(op *appVoiceOperation, result map[string]any) bool {
 		want, _ := op.Target["channel_id"].(string)
 		return channel != "" && channel == want
 	}
-	turn, _ := result["turn_id"].(string)
-	thread, _ := result["thread_id"].(string)
-	want, _ := op.Target["thread_id"].(string)
-	return turn != "" && thread == want && turn == op.turnID &&
-		(op.dispatchState == "dispatched" || op.dispatchState == "terminal")
+	return false
 }
 func appActiveMatchesTarget(active, target map[string]any) bool {
 	kind, _ := target["kind"].(string)
@@ -1278,7 +1270,6 @@ func (s *appVoiceService) endLocked() (*Client, uint64) {
 	s.inputs = make(map[string]string)
 	s.operatorTurns = make(map[string]*cos.Turn)
 	s.operatorApprovals = make(map[string]string)
-	s.operatorRequestCaptures = make(map[string]bool)
 	return owner, endedEpoch
 }
 func (s *appVoiceService) refuseOperationsLocked(code string) {
@@ -1422,7 +1413,6 @@ func (s *Server) handleAppVoiceSDP(w http.ResponseWriter, r *http.Request) {
 		writeAppVoiceStartupFailure(w, err)
 		return
 	}
-	a.observeOperatorApprovals()
 	w.Header().Set("Content-Type", "application/sdp")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-App-Voice-Session", session)
@@ -1432,23 +1422,17 @@ func (s *Server) handleAppVoiceSDP(w http.ResponseWriter, r *http.Request) {
 // observeOperatorApprovals is the one app-voice listener on the shared COS
 // broker. It records only approval IDs whose turn was admitted by this lease;
 // a voice tool can therefore never answer another tab's pending approval.
-func (s *appVoiceService) observeOperatorApprovals() {
-	if s.hub == nil || s.hub.cos == nil {
+func (s *appVoiceService) observeOperatorApprovals(sup *cos.Supervisor, owner *Client, epoch uint64, bridge *appVoiceBridge) {
+	if sup == nil {
 		return
 	}
 	s.mu.Lock()
-	if s.operatorSub != nil || s.owner == nil {
-		s.mu.Unlock()
-		return
-	}
-	sup := s.hub.cos.started()
-	if sup == nil {
+	if s.operatorSub != nil || s.owner != owner || s.epoch != epoch || s.bridge != bridge || !bridge.activeLocked() {
 		s.mu.Unlock()
 		return
 	}
 	sub := sup.Subscribe(cosSubscriberDepth)
 	s.operatorSub = sub
-	owner, epoch, bridge := s.owner, s.epoch, s.bridge
 	s.mu.Unlock()
 	go func() {
 		for event := range sub.C() {
@@ -1779,37 +1763,4 @@ func (c *Client) appVoiceMachines() []string {
 		}
 	}
 	return out
-}
-
-// appVoiceCosTurnReservation binds an app-voice operation to the only live
-// Mission Control root before the ordinary COS queue accepts it. Browser
-// annotations alone are never authority: owner, lease epoch, operation ID,
-// exact root identity, and exact text must all still match server state.
-func (s *appVoiceService) submitReservedCosTurn(c *Client, msg cosClientMessage, root missioncontrol.SingleConversationOrigin, relay *cosRelay, sup *cos.Supervisor) (*cos.Turn, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	op := s.operations[msg.AppVoiceOperationID]
-	if c != s.owner || op == nil || op.Action != "submit_thread_turn" || op.Epoch != s.epoch || time.Now().After(op.Expires) {
-		return nil, false, errors.New("app voice work operation is missing or expired")
-	}
-	if msg.ClientRef != "app_voice:"+op.ID || op.Text != msg.Prompt ||
-		op.Target["thread_id"] != root.ID || op.Target["runtime_session_id"] != root.SessionID ||
-		op.Target["runtime_generation"] != float64(1) || op.Target["runtime_incarnation"] != c.hub.cos.incarnation {
-		return nil, false, errors.New("app voice work operation target does not match Mission Control")
-	}
-	if op.requestID != "" && op.requestID != msg.ClientRef {
-		return nil, false, errors.New("app voice work operation was already consumed")
-	}
-	turn, duplicate := relay.submit(sup, msg.Prompt, fmt.Sprintf("%p", c), msg.ClientRef)
-	op.requestID, op.turnID, op.dispatchState, op.turn = msg.ClientRef, turn.ID, "dispatched", turn
-	if !duplicate && s.operatorRequestCaptures[op.Correlation.CaptureID] {
-		if capture := s.captures[op.Correlation.CaptureID]; capture != nil {
-			capture.operatorPending = true
-			capture.operatorCorrelation = op.Correlation
-			s.operatorSequence++
-			capture.operatorSequence = s.operatorSequence
-		}
-		s.operatorTurns[appOperatorKey(op.Correlation)] = turn
-	}
-	return turn, duplicate, nil
 }

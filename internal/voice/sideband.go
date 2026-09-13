@@ -78,6 +78,11 @@ type Sideband struct {
 	// behind. See endsession.go.
 	ending     bool
 	farewellCh chan string
+	// App-profile endings use a correlated function output and response.  Its
+	// audio alone is allowed to complete the farewell drain.
+	endingScoped       bool
+	farewellMetadata   map[string]string
+	farewellResponseID string
 
 	// A realtime session runs ONE response at a time. Asking for another
 	// while one is in flight is refused outright:
@@ -427,6 +432,9 @@ func (s *Sideband) handle(data []byte) {
 			s.Fence("scoped provider event rejected")
 			return
 		}
+		if ev.Type == "response.created" {
+			s.bindScopedFarewell(event.ResponseID, ev.Response.Metadata)
+		}
 		if app, ok := s.bridge.(AppCaptureBridge); ok && ev.Type == "input_audio_buffer.committed" {
 			metadata, created, err := app.CommitAppInput(event)
 			if err == nil && !created {
@@ -551,25 +559,25 @@ func (s *Sideband) handle(data []byte) {
 		s.respStarted = time.Now()
 		s.lastResponseCreated = time.Now()
 		s.mu.Unlock()
-		s.signalFarewell(sigAudioStarted)
+		s.signalFarewellForResponse(sigAudioStarted, ev.ResponseID)
 	case ev.Type == "output_audio_buffer.stopped":
 		// The buffer drained: the user has HEARD what was in it. This is
 		// the only event on this wire that describes delivery rather than
 		// generation, which is why the spoken exit waits for it.
-		s.signalFarewell(sigAudioStopped)
+		s.signalFarewellForResponse(sigAudioStopped, ev.ResponseID)
 		if operator, ok := s.bridge.(AppOperatorBridge); ok {
 			operator.OperatorPlaybackFinished(ev.ResponseID, false)
 		}
 	case ev.Type == "output_audio_buffer.cleared":
 		// Audio thrown away mid-play -- a barge-in, on a session whose
 		// turn detection carries interrupt_response.
-		s.signalFarewell(sigAudioCleared)
+		s.signalFarewellForResponse(sigAudioCleared, ev.ResponseID)
 		if operator, ok := s.bridge.(AppOperatorBridge); ok {
 			operator.OperatorPlaybackFinished(ev.ResponseID, true)
 		}
 	case ev.Type == "response.done" || ev.Type == "response.cancelled":
 		s.releaseResponse()
-		s.signalFarewell(sigResponseDone)
+		s.signalFarewellForResponse(sigResponseDone, ev.ResponseID)
 	case strings.HasPrefix(ev.Type, "error"):
 		// The one error worth acting on rather than reporting.
 		//
@@ -619,7 +627,15 @@ func (s *Sideband) dispatchAppReserved(ctx context.Context, bridge AppOperationB
 			}
 			return
 		case ToolEnd:
-			s.runEnd(ev.CallID, args)
+			s.runAppEnd(operator, correlation, ev.CallID, args)
+			return
+		default:
+			// The app profile advertises only the conversational Operator
+			// surface. A model-originated name that is not advertised must
+			// never regain the retired browser-operation authority merely by
+			// reaching this generic dispatch fallback.
+			_ = s.queueAppReply(operator, correlation, ev.CallID,
+				"That action is not available in this voice conversation.", true)
 			return
 		}
 	}

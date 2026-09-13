@@ -137,16 +137,15 @@ const (
 // Unknown fields are dropped by encoding/json for free, which is the additive
 // half of the compatibility contract.
 type cosClientMessage struct {
-	Type                string `json:"type"`
-	On                  bool   `json:"on"`
-	Prompt              string `json:"prompt"`
-	ClientRef           string `json:"client_ref"`
-	RequestID           string `json:"request_id"`
-	Approved            *bool  `json:"approved"`
-	Reason              string `json:"reason"`
-	TurnID              string `json:"turn_id"`
-	OlderThanDays       int    `json:"older_than_days"`
-	AppVoiceOperationID string `json:"app_voice_operation_id"`
+	Type          string `json:"type"`
+	On            bool   `json:"on"`
+	Prompt        string `json:"prompt"`
+	ClientRef     string `json:"client_ref"`
+	RequestID     string `json:"request_id"`
+	Approved      *bool  `json:"approved"`
+	Reason        string `json:"reason"`
+	TurnID        string `json:"turn_id"`
+	OlderThanDays int    `json:"older_than_days"`
 }
 
 // --- relay -----------------------------------------------------------------
@@ -874,7 +873,7 @@ func (c *Client) cosTurn(msg cosClientMessage) {
 	// The turn's visible existence is its turn_start, which reaches EVERY
 	// subscriber through the shared broker -- including tabs that did not ask
 	// for it, because the conversation is shared. Nothing is fanned out here.
-	root, active := relay.rootIdentity()
+	_, active := relay.rootIdentity()
 	if !active {
 		c.cosTurnFailure(msg, cos.CodeSidecarUnavailable, "Mission Control is starting; try again")
 		return
@@ -882,20 +881,7 @@ func (c *Client) cosTurn(msg cosClientMessage) {
 	c.hub.mu.RLock()
 	appVoice := c.hub.appVoice
 	c.hub.mu.RUnlock()
-	if appVoice != nil && msg.AppVoiceOperationID != "" {
-		turn, duplicate, err := appVoice.submitReservedCosTurn(c, msg, root, relay, sup)
-		if err != nil {
-			c.cosTurnFailure(msg, "app_voice_reservation_required", "voice submission was not accepted")
-			log.Printf("app voice: reject Mission Control turn: %v", err)
-			return
-		}
-		c.sendCosTurnResult(msg.ClientRef, true, turn.ID, "")
-		if duplicate {
-			log.Printf("cos: duplicate app voice client_ref %q returned turn %s", msg.ClientRef, turn.ID)
-		}
-		return
-	}
-	if msg.AppVoiceOperationID == "" && strings.HasPrefix(msg.ClientRef, "app_voice:") {
+	if appVoice != nil && strings.HasPrefix(msg.ClientRef, "app_voice:") {
 		c.cosTurnFailure(msg, "app_voice_reservation_required", "voice submission was not accepted")
 		return
 	}

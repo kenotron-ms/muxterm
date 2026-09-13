@@ -32,16 +32,6 @@ export interface AppVoiceComposerTarget {
   readonly draft_ref: string;
 }
 
-export interface AppVoiceThreadTurnTarget {
-  readonly kind: 'thread_turn';
-  readonly channel_id: string;
-  readonly thread_id: string;
-  readonly runtime_session_id: string;
-  readonly runtime_generation: number;
-  readonly runtime_incarnation: string;
-  readonly draft_ref: string;
-}
-
 export type AppVoiceNavigateTarget =
   | Readonly<{ readonly kind: 'workspace'; readonly workspace_id: string }>
   | Readonly<{ readonly kind: 'thread'; readonly thread_id: string; readonly runtime_generation: number }>
@@ -54,7 +44,7 @@ export type AppVoiceNavigateTarget =
       readonly detail_id: string;
     }>;
 
-export type AppVoiceTarget = AppVoiceNavigateTarget | AppVoiceComposerTarget | AppVoiceThreadTurnTarget;
+export type AppVoiceTarget = AppVoiceNavigateTarget | AppVoiceComposerTarget;
 
 export interface AppVoiceObservation {
   readonly surface: AppVoiceSurface;
@@ -81,7 +71,7 @@ export interface AppVoiceOperation {
   readonly operation_id: string;
   readonly lease_epoch: number;
   readonly expected_revision: number;
-  readonly action: 'navigate' | 'composer_draft' | 'submit_thread_turn';
+  readonly action: 'navigate' | 'composer_draft';
   readonly target: AppVoiceTarget;
   readonly text?: string;
   readonly draft_mode?: 'inspect' | 'set';
@@ -104,13 +94,6 @@ export interface AppVoiceOperationHandlers {
     | Readonly<{ readonly target: AppVoiceComposerTarget; readonly text: string; readonly truncated: boolean }>
     | Readonly<{ readonly target: AppVoiceComposerTarget }>
   >;
-  readonly submitThreadTurn: (
-    target: AppVoiceThreadTurnTarget,
-    text: string,
-    operationId: string,
-    signal: AbortSignal,
-  ) => Promise<Readonly<{ readonly thread_id: string; readonly runtime_generation: number; readonly turn_id: string }>>;
-  readonly cancelSubmitConfirmation?: (operationId: string) => void;
   readonly cancelNavigation?: (operationId: string) => void;
 }
 
@@ -274,51 +257,6 @@ function parseComposerTarget(value: unknown): AppVoiceComposerTarget | null {
   });
 }
 
-function parseThreadTurnTarget(value: unknown): AppVoiceThreadTurnTarget | null {
-  const target = recordValue(value);
-  if (
-    !target ||
-    !exactKeys(target, [
-      'kind',
-      'channel_id',
-      'thread_id',
-      'runtime_session_id',
-      'runtime_generation',
-      'runtime_incarnation',
-      'draft_ref',
-    ])
-  ) {
-    return null;
-  }
-  const channel = validChannel(target.channel_id);
-  const threadId = boundedOpaque(target.thread_id);
-  const sessionId = boundedOpaque(target.runtime_session_id);
-  const generation = positiveInteger(target.runtime_generation);
-  const incarnation = boundedString(target.runtime_incarnation, 36);
-  const draftRef = boundedString(target.draft_ref, 36);
-  if (
-    target.kind !== 'thread_turn' ||
-    channel !== APP_VOICE_CHANNEL ||
-    !threadId ||
-    !sessionId ||
-    !generation ||
-    !UUID_RE.test(incarnation) ||
-    !UUID_RE.test(draftRef) ||
-    !cosStore.matchesRuntimeIdentity(threadId, generation, sessionId, incarnation)
-  ) {
-    return null;
-  }
-  return Object.freeze({
-    kind: 'thread_turn',
-    channel_id: channel,
-    thread_id: threadId,
-    runtime_session_id: sessionId,
-    runtime_generation: generation,
-    runtime_incarnation: incarnation,
-    draft_ref: draftRef,
-  });
-}
-
 function parseOperation(value: unknown): AppVoiceOperation | null {
   const raw = recordValue(value);
   if (!raw || raw.type !== 'app-voice-operation' || raw.protocol_version !== APP_VOICE_PROTOCOL_VERSION) {
@@ -410,34 +348,6 @@ function parseOperation(value: unknown): AppVoiceOperation | null {
     });
   }
 
-  if (action === 'submit_thread_turn') {
-    const target = parseThreadTurnTarget(frame.target);
-    const text = boundedText(frame.text, 1);
-    if (
-      !target ||
-      text === null ||
-      !exactKeys(frame, [
-        'type',
-        'protocol_version',
-        'operation_id',
-        'lease_epoch',
-        'expected_revision',
-        'action',
-        'target',
-        'text',
-      ])
-    ) {
-      return null;
-    }
-    return Object.freeze({
-      operation_id: operationId,
-      lease_epoch: leaseEpoch,
-      expected_revision: expectedRevision,
-      action,
-      target,
-      text,
-    });
-  }
   return null;
 }
 
@@ -787,8 +697,8 @@ class AppVoiceOperations {
     const timer = setTimeout(() => {
       this._finishRefusal(
         operation.operation_id,
-        'confirmation_timeout',
-        'The requested voice action was not completed before its confirmation window expired.',
+        'operation_timeout',
+        'The requested voice action was not completed before its action window expired.',
       );
     }, OPERATION_TTL_MS);
     this._pending.set(operation.operation_id, { operation, timer, controller });
@@ -849,17 +759,7 @@ class AppVoiceOperations {
         return;
       }
 
-      const result = await handlers.submitThreadTurn(
-        operation.target as AppVoiceThreadTurnTarget,
-        operation.text ?? '',
-        operation.operation_id,
-        signal,
-      );
-      if (signal.aborted || !this._pending.has(operation.operation_id)) return;
-      this._finishOk(operation.operation_id, {
-        ...result,
-        observation_revision: this._revision,
-      });
+      throw new AppVoiceOperationRefusal('invalid_operation', 'The requested app voice action is unavailable.');
     } catch (error) {
       const refusal =
         error instanceof AppVoiceOperationRefusal
@@ -895,7 +795,6 @@ class AppVoiceOperations {
   private _finishRefusal(operationId: string, code: string, error: string): void {
     const pending = this._takePending(operationId, true);
     if (!pending) return;
-    this._handlers?.cancelSubmitConfirmation?.(operationId);
     this._handlers?.cancelNavigation?.(operationId);
     this._sendRefusal(pending.operation, code, error);
   }

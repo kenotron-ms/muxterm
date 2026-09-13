@@ -156,7 +156,10 @@ func (c *Client) mintApp(ctx context.Context) (Ephemeral, error) {
 		"type": "realtime", "model": c.cfg.Model, "instructions": AppInstructions(),
 		"tools": AppToolDefinitions(),
 		"audio": map[string]any{
-			"input": map[string]any{"turn_detection": map[string]any{"type": "server_vad", "create_response": false}},
+			"input": map[string]any{
+				"turn_detection": map[string]any{"type": "server_vad", "create_response": false},
+				"transcription":  map[string]any{"model": "whisper-1"},
+			},
 		},
 	}
 	if c.cfg.Voice != "" {

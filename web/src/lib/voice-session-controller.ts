@@ -386,16 +386,6 @@ function onRealtimeEvent(raw: unknown): void {
   }
 }
 
-function configureSession(): void {
-  if (dataChannel?.readyState !== 'open') return;
-  dataChannel.send(
-    JSON.stringify({
-      type: 'session.update',
-      session: { type: 'realtime', audio: { input: { transcription: { model: 'whisper-1' } } } },
-    }),
-  );
-}
-
 function canPublishListening(connection: RTCPeerConnection, channel: RTCDataChannel): boolean {
   return (
     !paused &&
@@ -553,7 +543,6 @@ async function appStart(): Promise<void> {
     };
     dataChannel.onopen = () => {
       if (generation !== current) return;
-      configureSession();
       if (paused || pendingPause) cancelProviderOutput();
       if (remoteDescriptionAccepted && canPublishListening(connection, dataChannel!)) {
         publish('listening');

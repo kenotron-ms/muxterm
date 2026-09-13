@@ -1,5 +1,7 @@
 package voice
 
+import "strings"
+
 // The realtime model's tool surface.
 //
 // FIVE tools, and the shape of the list is the design:
@@ -27,53 +29,52 @@ const (
 )
 
 const (
-	AppToolObserve          = "app_observe"
-	AppToolNavigate         = "navigate_app"
-	AppToolTranscript       = "read_lane_transcript"
-	AppToolComposerDraft    = "composer_draft"
-	AppToolSubmitThreadTurn = "submit_thread_turn"
+	AppToolObserve       = "app_observe"
+	AppToolNavigate      = "navigate_app"
+	AppToolTranscript    = "read_lane_transcript"
+	AppToolComposerDraft = "composer_draft"
 )
 
 func AppInstructions() string {
-	return `You are the realtime ears and mouth of Operator, muxterm's Mission Control assistant.
-
-Operator, not you, has the user's real terminal tools and the persistent Mission Control history. Faithfully pass the user's request to Operator. Do not invent details, run shell commands, claim privileged access, or answer questions about the user's environment from your own knowledge.
-
-For a short question use ask_chief_of_staff. For work that may take longer, use dispatch_chief_of_staff. Before either call, give one short acknowledgement of what you are doing. A receipt or "started" result only means Operator accepted the request; it is never proof that work completed. The final result arrives separately and must be spoken as Operator's result.
-
-Use answer_approval only for an approval request belonging to work admitted by this voice session. Read the decision back first, then require a clear second confirmation. Use cancel_chief_of_staff only to cancel work admitted by this voice session. end_voice_session ends voice only; it never cancels admitted Operator work.
-
-The bounded app tools observe or operate the owning browser. Observe before navigation or draft changes. A draft never submits work. Use the Operator tools whenever the user expects an answer or work to continue.`
+	return operatorWording(Instructions())
 }
 
-// AppToolDefinitions is standalone JSON Schema: provider tool schemas cannot
-// refer to the design artifact's definitions.
+// AppToolDefinitions retains the app-profile entry point without introducing
+// a second conversational policy or an app-operation tool surface.
 func AppToolDefinitions() []map[string]any {
-	target := map[string]any{"type": "object", "properties": map[string]any{
-		"kind":               map[string]any{"type": "string", "enum": []string{"workspace", "thread", "pane", "applet", "detail"}},
-		"workspace_id":       map[string]any{"type": "string", "maxLength": 256},
-		"thread_id":          map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
-		"runtime_generation": map[string]any{"type": "integer", "minimum": 1},
-		"pane_id":            map[string]any{"type": "integer", "minimum": 1},
-		"applet_id":          map[string]any{"type": "string", "enum": []string{"dashboard", "files", "prs", "artifact"}},
-		"detail_id":          map[string]any{"type": "string", "maxLength": 256},
-	}, "required": []string{"kind"}, "additionalProperties": false}
-	composer := map[string]any{"type": "object", "properties": map[string]any{
-		"kind":                map[string]any{"type": "string", "enum": []string{"composer"}},
-		"channel_id":          map[string]any{"type": "string", "enum": []string{"legacy-cos", "none"}},
-		"thread_id":           map[string]any{"type": "string", "maxLength": 256},
-		"runtime_session_id":  map[string]any{"type": "string", "maxLength": 256},
-		"runtime_generation":  map[string]any{"type": "integer", "minimum": 0},
-		"runtime_incarnation": map[string]any{"anyOf": []any{map[string]any{"type": "string", "format": "uuid"}, map[string]any{"const": ""}}},
-		"draft_ref":           map[string]any{"anyOf": []any{map[string]any{"type": "string", "format": "uuid"}, map[string]any{"const": ""}}},
-	}, "required": []string{"kind", "channel_id", "thread_id", "runtime_session_id", "runtime_generation", "runtime_incarnation", "draft_ref"}, "additionalProperties": false}
-	tools := append(ToolDefinitions(), []map[string]any{
-		{"type": "function", "name": AppToolObserve, "description": "Read only the bounded owner observation and inventory.", "parameters": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
-		{"type": "function", "name": AppToolNavigate, "description": "Request one known app navigation.", "parameters": map[string]any{"type": "object", "properties": map[string]any{"expected_revision": map[string]any{"type": "integer", "minimum": 1}, "target": target}, "required": []string{"expected_revision", "target"}, "additionalProperties": false}},
-		{"type": "function", "name": AppToolTranscript, "description": "Read a bounded transcript tail for an exact current fleet session.", "parameters": map[string]any{"type": "object", "properties": map[string]any{"machine": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "session_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "last_n": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}}, "required": []string{"machine", "session_id"}, "additionalProperties": false}},
-		{"type": "function", "name": AppToolComposerDraft, "description": "Inspect or set exactly the active composer draft. Setting never submits.", "parameters": map[string]any{"type": "object", "properties": map[string]any{"expected_revision": map[string]any{"type": "integer", "minimum": 1}, "mode": map[string]any{"type": "string", "enum": []string{"inspect", "set"}}, "target": composer, "text": map[string]any{"type": "string", "maxLength": 131072}}, "required": []string{"expected_revision", "mode", "target"}, "additionalProperties": false}},
-	}...)
-	return tools
+	definitions := ToolDefinitions()
+	for _, definition := range definitions {
+		operatorWordingIn(definition)
+	}
+	return definitions
+}
+
+// operatorWording changes only the spoken product name. The stable wire tool
+// names intentionally retain their historical chief-of-staff spelling.
+func operatorWording(value string) string {
+	value = strings.ReplaceAll(value, "Chief of Staff", "Operator")
+	return strings.ReplaceAll(value, "chief of staff", "Operator")
+}
+
+func operatorWordingIn(value any) {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, nested := range value {
+			if text, ok := nested.(string); ok {
+				value[key] = operatorWording(text)
+				continue
+			}
+			operatorWordingIn(nested)
+		}
+	case []map[string]any:
+		for _, nested := range value {
+			operatorWordingIn(nested)
+		}
+	case []any:
+		for _, nested := range value {
+			operatorWordingIn(nested)
+		}
+	}
 }
 
 // Instructions is the realtime session's system prompt.
@@ -269,10 +270,8 @@ func ToolDefinitions() []map[string]any {
 			"name":        ToolCancel,
 			"description": "Stop whatever the chief of staff is currently doing. Use it when the user says stop, cancel, or never mind.",
 			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"turn_id": map[string]any{"type": "string", "maxLength": 256},
-				},
+				"type":                 "object",
+				"properties":           map[string]any{},
 				"additionalProperties": false,
 			},
 		},

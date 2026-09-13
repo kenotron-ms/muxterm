@@ -20,7 +20,6 @@ import {
   type AppVoiceComposerTarget,
   type AppVoiceNavigateTarget,
   type AppVoiceObservation,
-  type AppVoiceThreadTurnTarget,
 } from './lib/app-voice-operations.js';
 import { requestArtifactOpen } from './lib/artifact-open.js';
 import { fetchAIStatus, parseAIStatus, type AIStatus } from './lib/ai.js';
@@ -1024,10 +1023,6 @@ export class MuxApp extends LitElement {
       navigate: (target, operationId, signal) => this._navigateForAppVoice(target, operationId, signal),
       composerDraft: (target, mode, text, operationId, signal) =>
         this._composerDraftForAppVoice(target, mode, text, operationId, signal),
-      submitThreadTurn: (target, text, operationId, signal) =>
-        this._submitForAppVoice(target, text, operationId, signal),
-      cancelSubmitConfirmation: (operationId) =>
-        this.renderRoot.querySelector('mux-cos')?.cancelAppVoiceSubmitConfirmation(operationId),
       cancelNavigation: (operationId) => {
         this.renderRoot.querySelector('mux-cos')?.cancelAppVoiceNavigation(operationId);
       },
@@ -1306,10 +1301,6 @@ export class MuxApp extends LitElement {
         navigate: (target, operationId, signal) => this._navigateForAppVoice(target, operationId, signal),
         composerDraft: (target, mode, text, operationId, signal) =>
           this._composerDraftForAppVoice(target, mode, text, operationId, signal),
-        submitThreadTurn: (target, text, operationId, signal) =>
-          this._submitForAppVoice(target, text, operationId, signal),
-        cancelSubmitConfirmation: (operationId) =>
-          this.renderRoot.querySelector('mux-cos')?.cancelAppVoiceSubmitConfirmation(operationId),
         cancelNavigation: (operationId) => {
           this.renderRoot.querySelector('mux-cos')?.cancelAppVoiceNavigation(operationId);
         },
@@ -2854,53 +2845,6 @@ export class MuxApp extends LitElement {
     }
     this._assertAppVoiceOperationCurrent(operationId, signal);
     return { target };
-  }
-
-  private async _submitForAppVoice(
-    target: AppVoiceThreadTurnTarget,
-    text: string,
-    operationId: string,
-    signal: AbortSignal,
-  ): Promise<Readonly<{ readonly thread_id: string; readonly runtime_generation: number; readonly turn_id: string }>> {
-    this._assertAppVoiceOperationCurrent(operationId, signal);
-    const current = cosStore.appVoiceThreadTurnTarget;
-    if (
-      !current ||
-      current.channelId !== target.channel_id ||
-      current.threadId !== target.thread_id ||
-      current.runtimeSessionId !== target.runtime_session_id ||
-      current.runtimeGeneration !== target.runtime_generation ||
-      current.runtimeIncarnation !== target.runtime_incarnation ||
-      current.draftRef !== target.draft_ref
-    ) {
-      throw new Error('The requested work target is no longer the active immutable conversation.');
-    }
-    const confirmation = await this.renderRoot
-      .querySelector('mux-cos')
-      ?.requestAppVoiceSubmitConfirmation(operationId, cosStore.composerIdentity.label, text);
-    this._assertAppVoiceOperationCurrent(operationId, signal);
-    if (confirmation !== 'confirmed') throw new Error('Explicit human confirmation is required before sending work.');
-    this._assertAppVoiceOperationCurrent(operationId, signal);
-    const confirmedCurrent = cosStore.appVoiceThreadTurnTarget;
-    if (
-      !confirmedCurrent ||
-      confirmedCurrent.channelId !== target.channel_id ||
-      confirmedCurrent.threadId !== target.thread_id ||
-      confirmedCurrent.runtimeSessionId !== target.runtime_session_id ||
-      confirmedCurrent.runtimeGeneration !== target.runtime_generation ||
-      confirmedCurrent.runtimeIncarnation !== target.runtime_incarnation ||
-      confirmedCurrent.draftRef !== target.draft_ref
-    ) {
-      throw new Error('The requested work target changed before confirmation was sent.');
-    }
-    const receipt = await cosStore.sendForAppVoice(text, operationId, signal);
-    this._assertAppVoiceOperationCurrent(operationId, signal);
-    if (
-      !receipt.turn_id ||
-      receipt.thread_id !== target.thread_id ||
-      receipt.runtime_generation !== target.runtime_generation
-    ) throw new Error('The turn receipt was not confirmed.');
-    return receipt;
   }
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {
