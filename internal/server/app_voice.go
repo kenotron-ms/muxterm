@@ -87,6 +87,10 @@ type appVoiceService struct {
 	operatorSub                    *cos.Subscription
 	playbackPaused                 bool
 	userTurnActive                 bool
+	postBargeGeneration            uint64
+	postBargeInputItemID           string
+	postBargeCaptureID             string
+	postBargeResponseID            string
 	operatorCompletionSink         func(voice.Correlation, string, bool)
 	operatorSequence               uint64
 	providerGeneration             uint64
@@ -410,6 +414,10 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 	}
 	if event.Type == "input_audio_buffer.speech_started" {
 		b.service.userTurnActive = true
+		b.service.postBargeGeneration++
+		b.service.postBargeInputItemID = event.ItemID
+		b.service.postBargeCaptureID = ""
+		b.service.postBargeResponseID = ""
 	}
 	if event.Type == "response.created" && event.ResponseID != "" {
 		capture := event.Metadata["app_voice_capture_id"]
@@ -433,6 +441,9 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 		}
 		record.responseID = event.ResponseID
 		b.service.responses[event.ResponseID] = capture
+		if capture == b.service.postBargeCaptureID {
+			b.service.postBargeResponseID = event.ResponseID
+		}
 	}
 	if (event.Type == "response.output_item.added" || event.Type == "response.output_item.done") && event.ResponseID != "" {
 		capture := b.service.responses[event.ResponseID]
@@ -451,8 +462,12 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 		if capture := b.service.responses[event.ResponseID]; capture != "" {
 			if record := b.service.captures[capture]; record != nil {
 				record.terminal = true
-				if event.Type == "response.done" && !record.operatorDelivery {
+				if event.Type == "response.done" && event.ResponseID == b.service.postBargeResponseID &&
+					capture == b.service.postBargeCaptureID && b.service.postBargeResponseID != "" {
 					b.service.userTurnActive = false
+					b.service.postBargeInputItemID = ""
+					b.service.postBargeCaptureID = ""
+					b.service.postBargeResponseID = ""
 					for _, deferred := range b.service.captures {
 						if sink := b.service.readyOperatorCompletionLocked(deferred.operatorCorrelation, deferred); sink != nil {
 							go sink(deferred.operatorCorrelation, deferred.operatorResult, true)
@@ -555,6 +570,10 @@ func (b *appVoiceBridge) CommitAppInput(event voice.ProviderEvent) (map[string]s
 		return nil, false, errors.New("app_capture_busy")
 	}
 	b.service.captures[id] = &appVoiceCapture{inputItemID: event.ItemID, calls: make(map[string]bool), outputCalls: make(map[string]string)}
+	if b.service.userTurnActive && (b.service.postBargeInputItemID == "" || b.service.postBargeInputItemID == event.ItemID) {
+		b.service.postBargeInputItemID = event.ItemID
+		b.service.postBargeCaptureID = id
+	}
 	nonce, err := appVoiceRandom()
 	if err != nil {
 		delete(b.service.captures, id)
@@ -748,6 +767,11 @@ func (s *appVoiceService) claim(c *Client, takeover bool) {
 	s.sessionID = ""
 	s.drainNonce = ""
 	s.observation = appVoiceObservation{}
+	s.userTurnActive = false
+	s.postBargeGeneration = 0
+	s.postBargeInputItemID = ""
+	s.postBargeCaptureID = ""
+	s.postBargeResponseID = ""
 	s.captures = make(map[string]*appVoiceCapture)
 	s.responses = make(map[string]string)
 	s.inputs = make(map[string]string)
@@ -756,6 +780,11 @@ func (s *appVoiceService) claim(c *Client, takeover bool) {
 	s.operatorRequestCaptures = make(map[string]bool)
 	s.retiredInputBits = [appVoiceInputReplayWords]uint64{}
 	s.bridge = nil
+	s.userTurnActive = false
+	s.postBargeGeneration = 0
+	s.postBargeInputItemID = ""
+	s.postBargeCaptureID = ""
+	s.postBargeResponseID = ""
 	s.playbackPaused = false
 	s.minting = false
 	c.sendAppVoice(s.claimResultLocked())
