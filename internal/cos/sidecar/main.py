@@ -713,6 +713,10 @@ class Sidecar:
         self.session: Any = None
         self.store: Any = None
         self.resumed = False
+        # A native SessionStore root is either verified at boot or created by
+        # the first successful user-turn save. Once established, disappearance
+        # is a persistence failure, never permission to recreate history.
+        self._session_root_established = False
         self.tool_count = 0
         self.muxterm_tool_count = 0
         self._turn: "Turn | None" = None
@@ -771,7 +775,8 @@ class Sidecar:
         # Provider auto-install after an amplifier update; without this a
         # resumed session can come up with zero providers.  Never interactive.
         try:
-            auto_init_from_env(console)
+            if check_first_run():
+                auto_init_from_env(console)
         except Exception:
             logger.debug("first-run check skipped", exc_info=True)
 
@@ -799,6 +804,9 @@ class Sidecar:
             except Exception:
                 logger.warning("could not load transcript for %s", self.session_id, exc_info=True)
                 resume_error = "stored transcript could not be loaded"
+        if resume_error is not None:
+            raise RuntimeError(f"refusing to overwrite existing session history: {resume_error}")
+        self._session_root_established = resume_exists
         self.resumed = resume_exists and transcript is not None
 
         cwd = str(Path.cwd().resolve())
@@ -811,12 +819,6 @@ class Sidecar:
             "project_dir": cwd,
             "project_name": Path(cwd).name,
         }
-        # prepared.create_session() intentionally bypasses the app CLI's
-        # initialized-session wrapper for threaded roots. That wrapper is
-        # normally what creates the SessionStore directory/metadata before a
-        # later save reads it. Use SessionStore's public save API to establish
-        # the empty root record now; failure is boot-fatal rather than a later
-        # terminal event that incorrectly looks persisted.
         # Mirrors create_initialized_session: stamp before creation so hooks
         # mounted during create_session see the values.
         cfg["working_dir"] = cwd
@@ -1410,10 +1412,12 @@ class Sidecar:
         messages = await self._messages()
         if not messages:
             return False
-        # Threaded boot creates this root record with SessionStore.save before
-        # the first turn. Keep strict metadata lookup here: unexpected removal
-        # is a real persistence failure and must yield persisted:false.
-        existing = self.store.get_metadata(self.session_id) or {}
+        try:
+            existing = self.store.get_metadata(self.session_id) or {}
+        except FileNotFoundError:
+            if self._session_root_established:
+                raise RuntimeError("native session root disappeared after startup")
+            existing = {}
         metadata = {
             **existing,
             "session_id": self.session_id,
@@ -1424,6 +1428,7 @@ class Sidecar:
             "working_dir": str(Path.cwd().resolve()),
         }
         self.store.save(self.session_id, messages, metadata)
+        self._session_root_established = True
         return True
 
     async def _costs(self):

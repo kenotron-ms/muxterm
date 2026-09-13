@@ -182,16 +182,22 @@ try {
     return performance.now();
   });
   await composer.fill(canary); await page.locator('mux-cos button[aria-label="Send"]').click();
-  await eventually(() => frames.find((f) => f.type === 'cos-turn-result' && f.ok === true), 'cos_turn_receipt');
-  await eventually(() => frames.find((f) => f.type === 'cos-event' && f.event?.ev === 'turn_end'), 'cos_turn_end');
+  const turnReceipt = await eventually(() => frames.find((f) => f.type === 'cos-turn-result' && f.ok === true && typeof f.turn_id === 'string' && f.turn_id), 'cos_turn_receipt');
+  const terminalTurn = await eventually(() => frames.find((f) =>
+    f.type === 'cos-event' && f.event?.turn_id === turnReceipt.turn_id && f.event?.ev === 'turn_end' &&
+    f.event?.persisted === true), 'persisted_cos_turn_end');
   const providerText = providerRecords().slice(providerStart).map((record) => inputText(record.request?.input)).join('\n');
-  gate('native_cos_turn_receipt_and_terminal_event', providerText.includes(canary) && await page.locator('mux-cos').getByText(canary).count() > 0);
+  gate('native_cos_turn_receipt_and_persisted_terminal_event', providerText.includes(canary) &&
+    await page.locator('mux-cos').getByText(canary).count() > 0 && terminalTurn.event.persisted === true, {
+    turn_id_sha256: sha(turnReceipt.turn_id), persisted: terminalTurn.event.persisted === true,
+  });
   const beforeIdleFrames = frames.length; const beforeIdleMutations = await page.evaluate(() => window.__mcMutationCount ?? 0); await wait(2000);
   gate('idle_single_cos_has_no_periodic_traffic_or_rerender_loop', frames.length === beforeIdleFrames && (await page.evaluate(() => window.__mcMutationCount ?? 0)) === beforeIdleMutations, { observation_started_ms: Math.round(mutationStart) });
   gate('no_multichannel_frames_sent', !protocolEvents.some((x) => x.direction === 'sent' && x.type.startsWith('missioncontrol-')));
 
   stage = 'refresh_persistence';
   const beforeReload = frames.length;
+  const sentBeforeReload = protocolEvents.length;
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
     const label = document.createElement('div');
@@ -208,15 +214,24 @@ try {
     f.conversation?.session_id === identity.session_id), 'refresh_same_cos_identity');
   const history = await eventually(() => frames.slice(beforeReload).find((f) =>
     f.type === 'cos-history' && JSON.stringify(f.turns ?? []).includes(canary)), 'refresh_cos_history_canary');
-  gate('refresh_preserves_native_cos_identity_and_history', Boolean(refreshed && history), {
+  const reloadSubscribes = protocolEvents.slice(sentBeforeReload).filter((frame) =>
+    frame.direction === 'sent' && frame.type === 'cos-subscribe').length;
+  gate('refresh_preserves_native_cos_identity_and_history', Boolean(refreshed && history) && reloadSubscribes === 1, {
     conversation_id_sha256: sha(identity.id), session_id_sha256: sha(identity.session_id),
+    cos_subscribe_count: reloadSubscribes,
   });
 
   stage = 'responsive_and_workspace_navigation';
   await composer.fill('DRAFT_SURVIVES_NAVIGATION');
-  await page.getByText(`single cos fixture B ${stamp}`, { exact: true }).first().click();
-  await eventually(() => page.locator('mux-dock').count().then(Boolean), 'workspace_b_visible');
-  await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('button', { name: /Mission Control/ }).first().click();
+  stage = 'workspace_navigation_desktop_click';
+  await page.locator(`mux-sidebar .ws-card[data-workspace-id="${workspaceB}"]`).click();
+  await page.locator('mux-dock:not([aria-hidden])').waitFor({ state: 'visible', timeout: 30_000 });
+  stage = 'workspace_navigation_portrait_drawer';
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: /Open workspaces/ }).click();
+  await page.locator('mux-sidebar:visible').waitFor({ state: 'visible', timeout: 10_000 });
+  stage = 'workspace_navigation_portrait_mission_control';
+  await page.locator('mux-sidebar mux-start-card button').click();
   await composer.waitFor({ state: 'visible' });
   gate('workspace_navigation_does_not_rebind_single_conversation_or_draft', await composer.inputValue() === 'DRAFT_SURVIVES_NAVIGATION' && frames.filter((f) => f.type === 'cos-subscribe-result').at(-1)?.conversation?.id === identity.id);
   await page.screenshot({ path: path.join(output, 'mission-control-portrait.png') });
