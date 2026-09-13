@@ -825,8 +825,8 @@ func (c *conn) workspaceScreen(msg Message) {
 		c.replyError(msg.CID, CodePaneNotFound, "user-active screen is unavailable")
 		return
 	}
-	current, currentRevision, unchanged := c.srv.reg.UserActivePane(msg.WorkspaceID)
-	if !unchanged || current != pane || currentRevision != revision {
+	current, currentRevision, ok := c.srv.reg.UserActivePane(msg.WorkspaceID)
+	if !ok || current != pane || currentRevision != revision {
 		c.replyError(msg.CID, CodePaneNotFound, "user-active pane changed during screen read")
 		return
 	}

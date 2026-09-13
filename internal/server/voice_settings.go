@@ -140,20 +140,25 @@ func (s *Server) voiceKeyStore() *secretfile.Store {
 // this process booted with: someone may have hand-edited it since, and the
 // settings form should show what is actually there.
 func (s *Server) voiceConfigOnDisk() muxcfg.VoiceConfig {
+	s.cfgMu.RLock()
+	fallback := s.cfg.Voice
+	s.cfgMu.RUnlock()
 	if s.configPath == "" {
-		return s.cfg.Voice
+		return fallback
 	}
 	cfg, err := muxcfg.Load(s.configPath)
 	if err != nil {
 		log.Printf("voice_settings: load %s: %v", s.configPath, err)
-		return s.cfg.Voice
+		return fallback
 	}
 	return cfg.Voice
 }
 
 func (s *Server) buildVoiceStatus() voiceStatus {
-	v := s.voiceConfigOnDisk()
+	s.cfgMu.RLock()
 	runtime := s.cfg.Voice
+	s.cfgMu.RUnlock()
+	v := s.voiceConfigOnDisk()
 	st := voiceStatus{
 		Enabled:                    v.Enabled,
 		AppVoiceCandidateAvailable: s.appVoice != nil,
@@ -180,7 +185,7 @@ func (s *Server) buildVoiceStatus() voiceStatus {
 		// the scope is set, which it always is after Resolved().
 		st.KeyConfigured = v.AuthMode == muxcfg.VoiceAuthEntra
 	}
-	st.RestartRequired = voiceRuntimeDiffers(s.cfg.Voice, v)
+	st.RestartRequired = voiceRuntimeDiffers(runtime, v)
 	return st
 }
 
