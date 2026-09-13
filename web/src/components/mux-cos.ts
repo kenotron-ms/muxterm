@@ -419,7 +419,7 @@ export class MuxCos extends LitElement {
       align-items: center;
       gap: var(--s-5);
       position: relative;
-      padding: 0 var(--s-6) 0 var(--s-7);
+      padding: 0 var(--s-6) 0 var(--main-header-inline-padding, var(--s-7));
       border-bottom: 1px solid var(--chrome-border);
       background: var(--chrome-body);
     }
@@ -581,13 +581,20 @@ export class MuxCos extends LitElement {
       min-width: 0;
     }
 
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: none;
+    }
+
     .dots {
       font: inherit;
       color: var(--ink-3);
       background: transparent;
       border: 0;
-      width: var(--ctl);
-      height: var(--ctl);
+      width: 44px;
+      height: 44px;
       display: grid;
       place-items: center;
       border-radius: var(--r-ctl);
@@ -698,18 +705,14 @@ export class MuxCos extends LitElement {
     }
 
     .turn {
-      display: grid;
-      grid-template-columns: 42px minmax(0, 1fr);
-      gap: var(--s-5);
-      align-items: start;
-    }
-    /* Portrait has no 42px to spare for a gutter, so the speaker label goes
-       above its own words instead of beside them. */
-    :host([narrow]) .turn {
-      grid-template-columns: minmax(0, 1fr);
-      gap: var(--s-2);
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-3);
+      min-width: 0;
     }
     .who {
+      display: block;
+      flex: none;
       font-family: var(--mono);
       font-size: 10.5px;
       line-height: 1.8;
@@ -725,6 +728,7 @@ export class MuxCos extends LitElement {
       display: flex;
       flex-direction: column;
       gap: var(--s-5);
+      width: 100%;
       min-width: 0;
     }
     .say {
@@ -864,10 +868,12 @@ export class MuxCos extends LitElement {
       margin: 0 0 var(--s-4);
       overflow-x: auto;
       max-width: 100%;
+      min-width: 0;
     }
     .md .md-table {
       border-collapse: collapse;
       font-size: 0.94em;
+      max-width: none;
     }
     .md .md-th,
     .md .md-td {
@@ -1812,14 +1818,16 @@ export class MuxCos extends LitElement {
         >Mission Control</h1>
         ${threadStore.threaded ? this._renderContextSelector() : nothing}
         <span class="spacer"></span>
-        <mux-voice-mode-button></mux-voice-mode-button>
-        <button
-          class="dots ${this._menuOpen ? 'on' : ''}"
-          type="button"
-          aria-label="Conversation options"
-          aria-expanded="${this._menuOpen ? 'true' : 'false'}"
-          @click="${this._toggleMenu}"
-        >${icon(Ellipsis, { size: 16 })}</button>
+        <div class="topbar-actions">
+          <mux-voice-mode-button></mux-voice-mode-button>
+          <button
+            class="dots ${this._menuOpen ? 'on' : ''}"
+            type="button"
+            aria-label="Conversation options"
+            aria-expanded="${this._menuOpen ? 'true' : 'false'}"
+            @click="${this._toggleMenu}"
+          >${icon(Ellipsis, { size: 16 })}</button>
+        </div>
         ${this._menuOpen ? this._renderMenu() : nothing}
       </div>
     `;
@@ -2164,12 +2172,12 @@ export class MuxCos extends LitElement {
     return html`
       ${t.prompt
         ? html`<div class="turn you">
-            <div class="who">you</div>
+            <div class="who">YOU</div>
             <div class="bd"><p class="say">${t.prompt}</p></div>
           </div>`
         : nothing}
       <div class="turn cos">
-        <div class="who">${ASSISTANT_NAME.toLowerCase()}</div>
+        <div class="who">OPERATOR</div>
         <div class="bd">
           ${t.blocks.map((b, i) => this._renderBlock(t, b, i))}
           ${live && t.blocks.length === 0

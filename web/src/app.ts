@@ -181,6 +181,7 @@ export function installKeybindings(actions: UIActions): () => void {
 export class MuxApp extends LitElement {
   static styles = css`
     :host {
+      --main-header-inline-padding: 24px;
       display: flex;
       flex-direction: column;
       width: 100vw;
@@ -923,7 +924,7 @@ export class MuxApp extends LitElement {
     // The server's runtime voice candidate is false until this explicit status
     // check says otherwise. Browser TTS voice enumeration is intentionally not
     // part of this provider-WebRTC capability decision.
-    void fetchVoiceStatus().then((status) => voiceSessionController.setCandidateAvailable(status.appVoiceCandidateAvailable));
+    void fetchVoiceStatus().then((status) => voiceSessionController.setAvailability(status));
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
@@ -1286,7 +1287,7 @@ export class MuxApp extends LitElement {
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
-      void fetchVoiceStatus().then((status) => voiceSessionController.setCandidateAvailable(status.appVoiceCandidateAvailable));
+      void fetchVoiceStatus().then((status) => voiceSessionController.setAvailability(status));
       // A successful attach is the only thing that disproves the diagnosis.
       this._daemonUnreachable = false;
       this._reconnectDetail = '';
@@ -1577,9 +1578,10 @@ export class MuxApp extends LitElement {
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
-          ${isWide && !this._showDashboard
+          ${isWide && !this._showDashboard && panes.length === 0
             ? html`<mux-title-bar
                 desktop
+                .dockActionsVisible="${false}"
                 @launcher-action="${this._onLauncherAction}"
                 @pane-select="${this._onActivePane}"
                 @pane-create-request="${this._createPaneOptimistic}"

@@ -28,6 +28,8 @@ export interface VoiceStatus {
   enabled: boolean;
   /** True only when this running server registered the app-voice candidate. */
   appVoiceCandidateAvailable: boolean;
+  /** True only when this running server registered legacy COS voice. */
+  legacyVoiceAvailable: boolean;
   mode: VoiceMode;
   endpoint: string;
   model: string;
@@ -48,6 +50,7 @@ export interface VoiceStatus {
 export const DEFAULT_VOICE_STATUS: VoiceStatus = {
   enabled: false,
   appVoiceCandidateAvailable: false,
+  legacyVoiceAvailable: false,
   mode: 'azure_entra',
   endpoint: '',
   model: '',
@@ -77,6 +80,7 @@ export function parseVoiceStatus(raw: unknown): VoiceStatus {
   return {
     enabled: r['enabled'] === true,
     appVoiceCandidateAvailable: r['appVoiceCandidateAvailable'] === true,
+    legacyVoiceAvailable: r['legacyVoiceAvailable'] === true,
     mode: mode === 'openai_key' || mode === 'azure_key' || mode === 'azure_entra'
       ? mode
       : 'azure_entra',
@@ -111,7 +115,7 @@ async function errorText(res: Response, fallback: string): Promise<string> {
 /** GET /api/voice/settings — configuration plus whether a key is set. */
 export async function fetchVoiceStatus(): Promise<VoiceStatus> {
   const res = await fetch(apiPath('/api/voice/settings'));
-  if (!res.ok) return DEFAULT_VOICE_STATUS;
+  if (!res.ok) throw new Error(`Could not read voice availability (HTTP ${res.status}).`);
   return parseVoiceStatus(await res.json());
 }
 

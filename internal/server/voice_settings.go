@@ -95,13 +95,17 @@ var allowedVoiceEndpointSuffixes = []string{
 // voiceStatus is everything the browser is allowed to know. Note what is
 // absent: any field derived from a secret's value.
 type voiceStatus struct {
-	Enabled                    bool   `json:"enabled"`
-	AppVoiceCandidateAvailable bool   `json:"appVoiceCandidateAvailable"`
-	Mode                       string `json:"mode"`
-	Endpoint                   string `json:"endpoint"`
-	Model                      string `json:"model"`
-	AuthMode                   string `json:"authMode"`
-	EntraScope                 string `json:"entraScope"`
+	Enabled                    bool `json:"enabled"`
+	AppVoiceCandidateAvailable bool `json:"appVoiceCandidateAvailable"`
+	// LegacyVoiceAvailable is true only when this running process registered
+	// the established legacy voice manager. It is deliberately runtime truth,
+	// not the on-disk enabled intent shown by Enabled above.
+	LegacyVoiceAvailable bool   `json:"legacyVoiceAvailable"`
+	Mode                 string `json:"mode"`
+	Endpoint             string `json:"endpoint"`
+	Model                string `json:"model"`
+	AuthMode             string `json:"authMode"`
+	EntraScope           string `json:"entraScope"`
 	// KeySource is "stored", "env", "none" or "" (not a key mode). It says
 	// WHERE the key comes from, never what it is.
 	KeySource string `json:"keySource"`
@@ -147,6 +151,7 @@ func (s *Server) buildVoiceStatus() voiceStatus {
 	st := voiceStatus{
 		Enabled:                    v.Enabled,
 		AppVoiceCandidateAvailable: s.appVoice != nil,
+		LegacyVoiceAvailable:       s.voice != nil,
 		Mode:                       voiceModeOf(v),
 		Endpoint:                   v.Endpoint,
 		Model:                      v.Model,

@@ -13,6 +13,7 @@ import {
   APP_VOICE_PROTOCOL_VERSION,
   type AppVoiceLease,
 } from './app-voice-operations.js';
+import * as legacyVoice from './legacy-voice-session-controller.js';
 import { voiceCaptureArbiter } from './voice-capture-arbiter.js';
 
 export type VoiceSessionState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'error';
@@ -63,7 +64,7 @@ let releasing: Promise<void> | null = null;
 let candidateAvailable = false;
 const listeners = new Set<Listener>();
 
-export function isSupported(): boolean {
+function appIsSupported(): boolean {
   return (
     typeof RTCPeerConnection === 'function' &&
     typeof navigator !== 'undefined' &&
@@ -71,7 +72,7 @@ export function isSupported(): boolean {
   );
 }
 
-export function snapshot(): VoiceSessionSnapshot {
+function appSnapshot(): VoiceSessionSnapshot {
   return Object.freeze({
     state,
     level,
@@ -81,25 +82,25 @@ export function snapshot(): VoiceSessionSnapshot {
     muted,
     canMute: liveInputTracks().length > 0,
     available: candidateAvailable,
-    supported: isSupported(),
+    supported: appIsSupported(),
   });
 }
 
-export function subscribe(listener: Listener): () => void {
+function appSubscribe(listener: Listener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
 
-export function isActive(): boolean {
+function appIsActive(): boolean {
   return state !== 'idle' && state !== 'error';
 }
 
 /** Runtime server capability; false by default so audio remains opt-in. */
-export function isCandidateAvailable(): boolean {
+function appIsCandidateAvailable(): boolean {
   return candidateAvailable;
 }
 
-export function setCandidateAvailable(available: boolean): void {
+function appSetCandidateAvailable(available: boolean): void {
   if (candidateAvailable === available) return;
   candidateAvailable = available;
   publish();
@@ -107,7 +108,7 @@ export function setCandidateAvailable(available: boolean): void {
 
 function publish(next?: VoiceSessionState): void {
   if (next) state = next;
-  const value = snapshot();
+  const value = appSnapshot();
   for (const listener of listeners) listener(value);
 }
 
@@ -184,7 +185,7 @@ function onInputTrackEnded(stream: MediaStream, trackGeneration: number): void {
   inputActive = false;
   stopInputLevelMeter(false);
   syncMuted();
-  if (isActive()) fail('Microphone disconnected. Start voice mode to reconnect.', true, trackGeneration);
+  if (appIsActive()) fail('Microphone disconnected. Start voice mode to reconnect.', true, trackGeneration);
 }
 
 function attachInputMeter(stream: MediaStream, trackGeneration: number): void {
@@ -296,7 +297,7 @@ function onRealtimeEvent(raw: unknown): void {
     case 'response.cancelled':
       inputActive = false;
       stopInputLevelMeter(false);
-      if (isActive() && peer && dataChannel && canPublishListening(peer, dataChannel)) publish('listening');
+      if (appIsActive() && peer && dataChannel && canPublishListening(peer, dataChannel)) publish('listening');
       break;
     case 'error': {
       const detail = event.error as { message?: unknown } | undefined;
@@ -326,22 +327,14 @@ function canPublishListening(connection: RTCPeerConnection, channel: RTCDataChan
   );
 }
 
-export async function toggle(): Promise<void> {
-  if (isActive()) {
-    stop();
-    return;
-  }
-  await start();
-}
-
-export async function start(): Promise<void> {
-  if (isActive() || releasing) return;
+async function appStart(): Promise<void> {
+  if (appIsActive() || releasing) return;
   if (!candidateAvailable) {
     error = 'App voice is not enabled for this running server.';
     publish('error');
     return;
   }
-  if (!isSupported()) {
+  if (!appIsSupported()) {
     error = 'This browser cannot start a WebRTC voice session.';
     publish('error');
     return;
@@ -549,7 +542,7 @@ function beginRelease(sendEnd: boolean): Promise<void> {
   return releasing;
 }
 
-export function stop(): void {
+function appStop(): void {
   void beginRelease(true);
   publish('idle');
 }
@@ -558,7 +551,7 @@ export function stop(): void {
  * Toggle only the actual browser input tracks. The peer connection, provider
  * session, data channel and output sink remain in place while muted.
  */
-export function setMuted(next: boolean): void {
+function appSetMuted(next: boolean): void {
   const tracks = liveInputTracks();
   if (tracks.length === 0) return;
   for (const track of tracks) track.enabled = !next;
@@ -570,7 +563,7 @@ export function setMuted(next: boolean): void {
 }
 
 /** An idle error is presentational and may be dismissed without starting media. */
-export function dismissError(): void {
+function appDismissError(): void {
   if (state !== 'error') return;
   error = '';
   publish('idle');
@@ -583,12 +576,9 @@ function fail(message: string, sendEnd = true, expectedGeneration = generation):
   void beginRelease(sendEnd);
 }
 
-/** Legacy server notices do not control an app v1 lease. */
-export function endedByServer(_sessionId: string): void {}
-
 appVoiceOperations.onLeaseChange((next, reason) => {
   lease = next;
-  if (next === null && isActive()) {
+  if (next === null && appIsActive()) {
     fail(
       reason === 'takeover' ? 'App voice was released for an explicit takeover.' : 'The app voice lease ended.',
       false,
@@ -603,10 +593,169 @@ appVoiceOperations.onDrainRequest(async (epoch, nonce) => {
   publish('idle');
 });
 
+type VoiceBackend = 'app_v1' | 'legacy';
+
+/**
+ * Runtime facts from the authenticated settings endpoint. Presentation props
+ * are never accepted here: only this server status may enable a transport.
+ */
+export interface VoiceAvailability {
+  readonly appVoiceCandidateAvailable: boolean;
+  readonly legacyVoiceAvailable: boolean;
+}
+
+let legacyAvailable = false;
+let selectedBackend: VoiceBackend | null = null;
+const facadeListeners = new Set<Listener>();
+
+function backendIsActive(backend: VoiceBackend): boolean {
+  return backend === 'app_v1' ? appIsActive() : legacyVoice.isActive();
+}
+
+function transportIsReleasing(): boolean {
+  return releasing !== null || legacyVoice.isCaptureClaimed();
+}
+
+function preferredBackend(): VoiceBackend | null {
+  if (selectedBackend !== null) return selectedBackend;
+  if (candidateAvailable) return 'app_v1';
+  if (legacyAvailable) return 'legacy';
+  return null;
+}
+
+function backendAvailable(backend: VoiceBackend): boolean {
+  return backend === 'app_v1' ? candidateAvailable : legacyAvailable;
+}
+
+function backendSupported(backend: VoiceBackend | null): boolean {
+  return backend === 'legacy' ? legacyVoice.isSupported() : appIsSupported();
+}
+
+function facadeSnapshot(): VoiceSessionSnapshot {
+  const backend = preferredBackend();
+  const source = backend === 'legacy' ? legacyVoice.snapshot() : appSnapshot();
+  return Object.freeze({
+    state: source.state,
+    level: source.level,
+    heard: source.heard,
+    spoken: source.spoken,
+    error: source.error,
+    muted: source.muted,
+    canMute: source.canMute,
+    available: backend !== null && backendAvailable(backend),
+    supported: backendSupported(backend),
+  });
+}
+
+function publishFacade(): void {
+  const value = facadeSnapshot();
+  for (const listener of facadeListeners) listener(value);
+}
+
+// Each transport has exactly one bridge into the public singleton. Components
+// subscribe only to this facade, so navigation cannot mount a second session.
+appSubscribe(publishFacade);
+legacyVoice.subscribe(publishFacade);
+
+export function isSupported(): boolean {
+  return backendSupported(preferredBackend());
+}
+
+/** Compatibility for existing fixture callers; this never enables legacy. */
+export function isCandidateAvailable(): boolean {
+  return appIsCandidateAvailable();
+}
+
+/** Compatibility for older callers that knew only the app-v1 capability. */
+export function setCandidateAvailable(available: boolean): void {
+  appSetCandidateAvailable(available);
+  publishFacade();
+}
+
+/**
+ * Availability controls future starts only. An active transport remains owned
+ * by its original backend until explicit Stop or its authoritative end event;
+ * a settings refresh is not a session-revocation message.
+ */
+export function setAvailability(availability: VoiceAvailability): void {
+  appSetCandidateAvailable(availability.appVoiceCandidateAvailable);
+  legacyAvailable = availability.legacyVoiceAvailable;
+  publishFacade();
+}
+
+export function isActive(): boolean {
+  return selectedBackend !== null && backendIsActive(selectedBackend);
+}
+
+export function snapshot(): VoiceSessionSnapshot {
+  return facadeSnapshot();
+}
+
+export function subscribe(listener: Listener): () => void {
+  facadeListeners.add(listener);
+  return () => facadeListeners.delete(listener);
+}
+
+export async function start(): Promise<void> {
+  if (isActive()) return;
+  // Both transports claim the same microphone owner. Do not hand off while a
+  // stopped transport is still draining a late permission or media cleanup.
+  if (transportIsReleasing()) return;
+  const backend = candidateAvailable ? 'app_v1' : legacyAvailable ? 'legacy' : null;
+  if (backend === null) {
+    // The unavailable control is disabled in product UI, but preserve an
+    // explicit, truthful error for programmatic callers without touching media.
+    selectedBackend = null;
+    publishFacade();
+    return;
+  }
+  selectedBackend = backend;
+  if (backend === 'app_v1') await appStart();
+  else await legacyVoice.start();
+  publishFacade();
+}
+
+export function stop(): void {
+  const backend = selectedBackend;
+  if (backend === 'app_v1') appStop();
+  else if (backend === 'legacy') legacyVoice.stop();
+  selectedBackend = null;
+  publishFacade();
+}
+
+export async function toggle(): Promise<void> {
+  if (isActive()) {
+    stop();
+    return;
+  }
+  await start();
+}
+
+export function setMuted(next: boolean): void {
+  if (selectedBackend === 'legacy') legacyVoice.setMuted(next);
+  else if (selectedBackend === 'app_v1') appSetMuted(next);
+}
+
+export function dismissError(): void {
+  if (selectedBackend === 'legacy') legacyVoice.dismissError();
+  else if (selectedBackend === 'app_v1') appDismissError();
+  selectedBackend = null;
+  publishFacade();
+}
+
+/** voiceEnded is a legacy COS event and must never tear down an app-v1 lease. */
+export function endedByServer(endedSessionId: string): void {
+  if (selectedBackend !== 'legacy') return;
+  legacyVoice.endedByServer(endedSessionId);
+  if (!legacyVoice.isActive()) selectedBackend = null;
+  publishFacade();
+}
+
 export const voiceSessionController = {
   isSupported,
   isCandidateAvailable,
   setCandidateAvailable,
+  setAvailability,
   isActive,
   snapshot,
   subscribe,
