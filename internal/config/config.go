@@ -32,8 +32,9 @@ type Config struct {
 	MissionControl MissionControlConfig `toml:"missioncontrol" json:"missioncontrol"`
 }
 
-// MissionControlConfig holds opt-in Mission Control gates. Both switches must
-// be true before the text-thread preview can start an isolated sidecar.
+// MissionControlConfig retains legacy TOML fields for compatibility. Normal
+// Mission Control channels initialize independently of ThreadsV2/TextPreview;
+// those fields are parsed but never rewritten or treated as normal-mode gates.
 type MissionControlConfig struct {
 	ThreadsV2   bool `toml:"threads_v2" json:"threads_v2"`
 	TextPreview bool `toml:"text_preview" json:"text_preview"`
@@ -698,10 +699,10 @@ func Defaults() Config {
 			EntraScope:      DefaultVoiceEntraScope,
 			SyncToolTimeout: DefaultVoiceSyncToolTimeout,
 		},
-		// All four release gates default off: missioncontrol.threads_v2,
-		// missioncontrol.text_preview, missioncontrol.voice_preview, and
-		// voice.enabled. No candidate registers until each applicable gate
-		// is deliberately enabled.
+			// Legacy preview fields remain parsed for existing configuration but
+			// do not gate normal channels. VoicePreview remains a separate
+			// legacy candidate setting; voice.enabled is the normal app-voice
+			// configuration gate.
 		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false, VoicePreview: false, TextWorkerCap: 4},
 	}
 }

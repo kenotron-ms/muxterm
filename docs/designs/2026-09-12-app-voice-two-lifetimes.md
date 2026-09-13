@@ -17,9 +17,13 @@ Authoritative user correction to the multichannel voice design. This addendum su
 
 One explicit microphone arbiter prevents simultaneous hidden dictation and conversational capture. Switching modes requires visible user intent and completion of the previous capture's release; navigation never starts capture.
 
-## Candidate release gate
+## Normal supported experience — 2026-09-13 authoritative correction
 
-App voice is candidate-only, not a production live-permission grant. Registration requires valid enabled legacy `[voice]` configuration and the independent `missioncontrol.voice_preview` gate; `missioncontrol.threads_v2`, `missioncontrol.text_preview`, `missioncontrol.voice_preview`, and `voice.enabled` all default off. Runtime status reports registration rather than on-disk `voice.enabled`, so a completed UI may be released disabled and cannot start the candidate without the server-side gate.
+App-wide conversational voice is the normal supported voice experience, not a separate fallback or a user-visible experimental mode. Existing valid enabled `[voice]` configuration and explicit Start are the normal entry path. Hidden `missioncontrol.voice_preview`, `missioncontrol.text_preview`, and `missioncontrol.threads_v2` settings must not gate the finished experience. Compatibility handling is internal and must preserve credentials, existing conversations and independent channel ownership; it is not permission to enable unverified code or silently replace stored history.
+
+Availability describes actual configuration, browser support, permission, explicit disablement, or service failure with actionable reasons. Registered runtime availability does not establish real provider/audio success. Finish and verify the app-wide provider session, finite app operations, channel transition, and controller-driven bubble before calling the normal experience delivered. Keep actual microphone access behind explicit user action and report concrete remaining provider/media gates honestly.
+
+Release and supported local-update authorization do not override session preservation: an update that terminates sessiond-owned PTYs requires a separate explicit decision. A published build with the requested experience still inaccessible is incomplete delivery.
 
 ## App operations and authorization
 

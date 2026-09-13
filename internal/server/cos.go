@@ -56,6 +56,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -160,6 +161,11 @@ type cosRelay struct {
 	mu   sync.Mutex
 	sup  *cos.Supervisor
 	err  error
+	// attempted is set before the legacy sidecar starts. Lobby adoption checks
+	// it under this lock, so a process cannot acquire two writers for the old
+	// SessionStore root during a transition.
+	attempted   bool
+	normalOwner bool
 
 	// subMu guards the submission table AND is held across cos.Supervisor.Submit.
 	//
@@ -197,6 +203,14 @@ func newCosRelay() *cosRelay {
 // process that no longer exists.
 func (r *cosRelay) get() (*cos.Supervisor, error) {
 	r.once.Do(func() {
+		r.mu.Lock()
+		if r.normalOwner {
+			r.err = errors.New("legacy COS relay is unavailable because normal channels own its session")
+			r.mu.Unlock()
+			return
+		}
+		r.attempted = true
+		r.mu.Unlock()
 		sup := cos.New(r.cfg)
 		if err := sup.Start(context.Background()); err != nil {
 			r.mu.Lock()
@@ -211,6 +225,19 @@ func (r *cosRelay) get() (*cos.Supervisor, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.sup, r.err
+}
+
+// claimNormalOwnership atomically reserves the legacy SessionStore identity
+// for the normal Lobby before metadata adoption. It neither starts nor stops a
+// sidecar; a previously attempted relay is a hard conflict.
+func (r *cosRelay) claimNormalOwnership() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.attempted || r.normalOwner {
+		return false
+	}
+	r.normalOwner = true
+	return true
 }
 
 // started reports whether a sidecar was ever launched, WITHOUT launching one.
@@ -406,16 +433,20 @@ func (c *Client) handleCosMessage(data []byte) {
 			}
 		}
 	}
-	if c.hub.missionControlTextEnabled() {
+	if c.hub.missionControlOwnsChannels() {
 		switch msg.Type {
-		case cosTypeTurn, cosTypeApproval, cosTypeCancel, cosTypeClear:
-			c.sendCosError("", "legacy_mutation_disabled", "legacy COS mutation is unavailable while Mission Control text preview is enabled")
+		case cosTypeTurn, cosTypeApproval, cosTypeCancel:
+			c.sendCosError("", "channel_protocol_required", "normal channels own this conversation; refresh muxterm to use the channel protocol")
+			return
+		case cosTypeClear:
+			c.sendCosClearRefusal("channel_protocol_required", "normal channels own this conversation; refresh muxterm to use the channel protocol")
 			return
 		case cosTypeSubscribe:
-			// A legacy replay is safe only if its already-running legacy root
-			// exists; subscribing must not start a parallel mutable root.
-			if msg.On && (c.hub.cos == nil || c.hub.cos.started() == nil) {
-				c.sendCosSubscribeResult(false, "legacy history is unavailable; Mission Control text preview does not start legacy COS", "", false)
+			// The normal catalog owns the Lobby source identity (or failed
+			// closed while reserving it). A legacy subscribe must not start a
+			// parallel relay for the same stored conversation.
+			if msg.On {
+				c.sendCosSubscribeResult(false, "normal channels own this conversation; refresh muxterm to use the channel protocol", "", false)
 				return
 			}
 		}
@@ -792,6 +823,25 @@ func (c *Client) sendCosClearResult(ok bool, removed, kept int, errMsg string) {
 	}
 	if err := c.writeText(data); err != nil {
 		log.Printf("cos: clear result write error: %v", err)
+	}
+}
+
+// sendCosClearRefusal adds a machine-readable code without changing the
+// established count-carrying clear-result shape for legacy sidecar failures.
+func (c *Client) sendCosClearRefusal(code, errMsg string) {
+	frame := struct {
+		Type  string `json:"type"`
+		OK    bool   `json:"ok"`
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}{Type: cosTypeClearResult, Code: code, Error: errMsg}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		log.Printf("cos: encode clear refusal: %v", err)
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("cos: clear refusal write error: %v", err)
 	}
 }
 

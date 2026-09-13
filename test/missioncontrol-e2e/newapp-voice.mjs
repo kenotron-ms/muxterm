@@ -17,6 +17,7 @@ const usage = `Usage:
     --muxterm-bin <path> --provider-records <private JSON> --output <private directory> \\
     --source-sha <40-git-sha|64-source-archive-sha256> --accept-disposable-fixtures \\
     [--playwright-module <module-or-absolute-path>]
+    [--known-lane-session-id <native-session-id> --known-lane-machine <machine-id>]
 
 Requires an already-running isolated browser/server/sessiond/sideband DTU and
 realtimefixture --rtc-relay. It never starts or stops product processes.
@@ -115,6 +116,15 @@ function createWorkspace(label) {
   if (typeof out.workspaceId !== 'string' || !out.workspaceId) throw new Error('workspace_create_shape_invalid');
   return out.workspaceId;
 }
+function createPane(workspaceID) {
+  const out = JSON.parse(execFileSync(
+    opt['muxterm-bin'],
+    ['pane', 'create', '--workspace', workspaceID, '--cmd', 'sh', '--cmd', '-c', '--cmd', 'printf fixture-pane', '--json'],
+    { encoding: 'utf8', env: process.env },
+  ));
+  if (!Number.isSafeInteger(out.pane_id) || out.pane_id < 1) throw new Error('pane_create_shape_invalid');
+  return out.pane_id;
+}
 function appMetadata(command) {
   const metadata = command?.metadata;
   if (!metadata || typeof metadata.app_voice_capture_id !== 'string' || !metadata.app_voice_capture_id) throw new Error('missing_app_capture_metadata');
@@ -171,7 +181,7 @@ function gate(name, condition, evidence = {}) {
   throw new Error(`assertion_${name}`);
 }
 function blockRemainder(reason) {
-  for (const name of ['pane_applet_navigation_preserves_bridge', 'rapid_navigation_refuses_pending_submit', 'two_browser_takeover_drain', 'owner_disconnect_fences_lease', 'replayed_sdp_and_cross_origin_refused', 'known_lane_transcript_attribution']) blocked(name, reason);
+  for (const name of ['two_browser_takeover_drain', 'owner_disconnect_fences_lease', 'replayed_sdp_and_cross_origin_refused']) blocked(name, reason);
 }
 
 try {
@@ -191,11 +201,39 @@ try {
   const { chromium } = require(playwrightModule);
   browser = await chromium.launch({
     channel: 'chrome', headless: !opt.headed,
-    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${path.join(output, 'synthetic-input.wav')}`],
+    args: ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${path.join(output, 'synthetic-input.wav')}`],
   });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
   await page.addInitScript(() => {
+    // Browser-API boundary observers retain only native object references. They
+    // neither synthesize media nor reach into the app controller.
+    const media = { streams: [], peers: [], audioContexts: [] };
+    const nativeGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async (...args) => {
+      const stream = await nativeGetUserMedia(...args);
+      media.streams.push(stream);
+      return stream;
+    };
+    const NativePeer = window.RTCPeerConnection;
+    function ObservedPeer(...args) {
+      const peer = new NativePeer(...args);
+      media.peers.push(peer);
+      return peer;
+    }
+    Object.setPrototypeOf(ObservedPeer, NativePeer);
+    ObservedPeer.prototype = NativePeer.prototype;
+    window.RTCPeerConnection = ObservedPeer;
+    const NativeAudioContext = window.AudioContext;
+    function ObservedAudioContext(...args) {
+      const context = new NativeAudioContext(...args);
+      media.audioContexts.push(context);
+      return context;
+    }
+    Object.setPrototypeOf(ObservedAudioContext, NativeAudioContext);
+    ObservedAudioContext.prototype = NativeAudioContext.prototype;
+    window.AudioContext = ObservedAudioContext;
+    window.__fixtureMedia = media;
     const instances = [];
     class FixtureSpeechRecognition extends EventTarget {
       constructor() { super(); instances.push(this); }
@@ -218,6 +256,8 @@ try {
   });
   const frames = [];
   const voiceResponses = [];
+  const postPaths = [];
+  const browserErrors = [];
   page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
     try {
       const frame = JSON.parse(String(payload));
@@ -228,9 +268,78 @@ try {
     const url = new URL(response.url());
     if (url.pathname.startsWith('/api/app/voice/')) voiceResponses.push({ path: url.pathname, status: response.status() });
   });
+  page.on('request', (request) => {
+    if (request.method() === 'POST') postPaths.push(new URL(request.url()).pathname);
+  });
+  page.on('pageerror', (error) => {
+    // Names only: error messages may contain server/provider controlled data.
+    browserErrors.push(error instanceof Error && /^[A-Za-z0-9_]{1,80}$/.test(error.name) ? error.name : 'BrowserError');
+  });
   await page.goto(base.href, { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: /Mission Control/ }).first().click();
   await page.locator('[data-thread-context-selector]').waitFor({ state: 'visible', timeout: 30_000 });
+  stage = 'normal_voice_preflight';
+  const preflight = await page.evaluate(async () => {
+    const [settingsResponse, configResponse] = await Promise.all([
+      fetch('/api/voice/settings', { credentials: 'include', cache: 'no-store' }),
+      fetch('/api/config', { credentials: 'include', cache: 'no-store' }),
+    ]);
+    const settings = await settingsResponse.json();
+    const config = await configResponse.json();
+    const missionControl = config?.missioncontrol ?? {};
+    return {
+      settings_status: settingsResponse.status,
+      config_status: configResponse.status,
+      available: settings?.available === true,
+      availability_reason: settings?.availabilityReason,
+      compatibility_flags_false:
+        missionControl.threads_v2 === false &&
+        missionControl.text_preview === false &&
+        missionControl.voice_preview === false,
+    };
+  });
+  gate(
+    'normal_voice_settings_ready_without_preview_flags',
+    preflight.settings_status === 200 &&
+      preflight.config_status === 200 &&
+      preflight.available &&
+      preflight.availability_reason === 'ready' &&
+      preflight.compatibility_flags_false,
+    preflight,
+  );
+  async function activeBubble(expectedLabel) {
+    return eventually(async () => {
+      const bubbles = page.locator('mux-voice-mode-bubble [data-voice-mode-bubble]:visible');
+      if (await bubbles.count() !== 1) return null;
+      const result = await bubbles.evaluate((bubble) => {
+        const host = bubble.getRootNode().host;
+        const status = bubble.querySelector('[role="status"]')?.textContent?.trim() ?? '';
+        return {
+          snapshot_is_undefined: host instanceof HTMLElement && host.snapshot === undefined,
+          state: bubble.getAttribute('data-state'),
+          label: status,
+          edge: bubble.getAttribute('data-edge'),
+        };
+      });
+      return result.snapshot_is_undefined && (!expectedLabel || result.label === expectedLabel) ? result : null;
+    }, `active_bubble_${expectedLabel ?? 'any'}`);
+  }
+  async function tagAndVerifyBubble() {
+    return eventually(() => page.evaluate(() => {
+      const bubble = document.querySelector('mux-voice-mode-bubble')?.shadowRoot?.querySelector('[data-voice-mode-bubble]');
+      if (!(bubble instanceof HTMLElement)) return false;
+      if (!window.__fixtureBubbleReferences) {
+        window.__fixtureBubbleReferences = new WeakSet([bubble]);
+      }
+      return window.__fixtureBubbleReferences.has(bubble);
+    }), 'same_bubble_dom_node');
+  }
+  async function openBubbleMenu() {
+    const control = page.locator('mux-voice-mode-bubble [data-voice-mode-button]:visible');
+    gate('one_visible_live_bubble_control', await control.count() === 1);
+    if (!await page.locator('mux-voice-mode-bubble [role="dialog"]:visible').count()) await control.click();
+    await page.locator('mux-voice-mode-bubble [role="dialog"][aria-label="Voice mode controls"]:visible').waitFor({ state: 'visible', timeout: 10_000 });
+  }
   async function select(label) {
     const cursor = frames.length;
     await page.locator('[data-thread-context-selector]').click();
@@ -272,8 +381,30 @@ try {
   gate('accepted_A_dictation_retained', (await page.locator('[data-thread-composer]').inputValue()).includes('ACCEPTED_A_DRAFT'));
 
   stage = 'app_voice_start';
-  const voice = page.locator('mux-cos').locator('button[data-voice-state]').first();
+  const voice = page.locator('button[data-voice-mode-button][aria-label="Start voice mode"]:visible');
+  gate('one_visible_mission_control_header_start_control', await voice.count() === 1);
+  const mintedResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/app/voice/token' && response.request().method() === 'POST',
+  );
   await voice.click();
+  await page.evaluate(() => {
+    const label = document.createElement('div');
+    label.textContent = 'REAL RTC / SYNTHETIC MEDIA — NO PHYSICAL MIC';
+    Object.assign(label.style, {
+      position: 'fixed', left: '4px', bottom: '4px', zIndex: '9999',
+      padding: '4px', background: '#fff4cc', color: '#111', font: '11px system-ui', pointerEvents: 'none',
+    });
+    document.body.append(label);
+  });
+  const minted = await mintedResponse;
+  const mintedBody = await minted.json();
+  gate(
+    'provider_mint_observed_without_secret_persistence',
+    minted.ok() && typeof mintedBody?.session_id === 'string' && mintedBody.session_id.length > 0,
+    { provider_session_sha256: sha(mintedBody?.session_id ?? '') },
+  );
+  await activeBubble('Connecting');
+  await page.screenshot({ path: path.join(output, 'synthetic-connecting-bubble.png') });
   const pending = await eventually(async () => {
     const reply = await fixtureControl('pending_offer');
     return reply.response.ok ? reply.body : null;
@@ -285,8 +416,9 @@ try {
   const answer = await peerPage.evaluate(async (offer) => {
     const peer = new RTCPeerConnection();
     const events = [];
-    window.__fixturePeer = { peer, events };
+    window.__fixturePeer = { peer, events, channel: null, audio: null, oscillator: null };
     peer.ondatachannel = ({ channel }) => {
+      window.__fixturePeer.channel = channel;
       channel.onmessage = (event) => { try { events.push(JSON.parse(String(event.data)).type ?? 'unknown'); } catch { events.push('non_json'); } };
       channel.onopen = () => {
         channel.send(JSON.stringify({ type: 'session.created', session: { id: 'fixture-peer' } }));
@@ -315,6 +447,72 @@ try {
   const callId = pending.call_id;
   await eventually(() => fixtureOK('inspect', { call_id: callId }).then((row) => row.connected === true), 'sideband_wss');
   pass('REALRTC_SYNTHETIC_MEDIA', { call_id_sha256: sha(callId) });
+  await activeBubble('Listening');
+  await tagAndVerifyBubble();
+  await page.screenshot({ path: path.join(output, 'REAL-RTC-SYNTHETIC-MEDIA-NO-PHYSICAL-MIC-active-bubble.png') });
+  pass('live_controller_bubble_not_presentation_snapshot', {
+    capture: 'REAL RTC / SYNTHETIC MEDIA — NO PHYSICAL MIC',
+    provider_session_sha256: sha(mintedBody.session_id),
+  });
+  async function peerEvent(event) {
+    await eventually(() => peerPage.evaluate((fixtureEvent) => {
+      const channel = window.__fixturePeer?.channel;
+      if (!channel || channel.readyState !== 'open') return false;
+      channel.send(JSON.stringify(fixtureEvent));
+      return true;
+    }, event), `peer_datachannel_${event.type}`);
+  }
+  await peerEvent({ type: 'response.output_audio_transcript.delta', delta: 'SYNTHETIC_FIXTURE_PROVIDER_AUDIO' });
+  await activeBubble('Speaking');
+  await peerEvent({ type: 'response.done' });
+  await activeBubble('Listening');
+  await peerEvent({ type: 'response.created', response: { id: 'synthetic-state-only' } });
+  await activeBubble('Thinking');
+  await peerEvent({ type: 'response.done' });
+  await activeBubble('Listening');
+
+  stage = 'live_bubble_interaction';
+  const bubble = page.locator('mux-voice-mode-bubble [data-voice-mode-bubble]:visible');
+  const bubbleMain = bubble.locator('mux-voice-mode-button');
+  const beforeDragSelection = await page.locator('[data-thread-context-selector]').innerText();
+  const beforeDragPosts = postPaths.length;
+  const dragBox = await bubbleMain.boundingBox();
+  if (!dragBox) throw new Error('live_bubble_box_missing');
+  await page.mouse.move(dragBox.x + dragBox.width / 2, dragBox.y + dragBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(20, Math.min(650, dragBox.y + 90), { steps: 12 });
+  await page.mouse.up();
+  await eventually(() => bubble.getAttribute('data-edge').then((edge) => edge === 'left'), 'bubble_docked_left');
+  const afterDragBox = await bubble.boundingBox();
+  gate('live_bubble_drag_docks_without_retarget_or_requests',
+    Boolean(afterDragBox && afterDragBox.x >= 0 && afterDragBox.x < 40) &&
+    await page.locator('[data-thread-context-selector]').innerText() === beforeDragSelection &&
+    postPaths.length === beforeDragPosts);
+  await openBubbleMenu();
+  await page.locator('mux-voice-mode-bubble [data-voice-mode-dock-right]').click();
+  await eventually(() => bubble.getAttribute('data-edge').then((edge) => edge === 'right'), 'bubble_docked_right');
+  await page.locator('mux-voice-mode-bubble [data-voice-mode-mute]').click();
+  await activeBubble('Mic muted');
+  gate('mute_changes_native_tracks_not_session', await page.evaluate(() =>
+    window.__fixtureMedia.streams.length === 1 &&
+    window.__fixtureMedia.streams[0].getAudioTracks().every((track) => !track.enabled && track.readyState === 'live') &&
+    window.__fixtureMedia.peers.length === 1 && window.__fixtureMedia.peers[0].connectionState === 'connected'));
+  await page.locator('mux-voice-mode-bubble [data-voice-mode-mute]').click();
+  await activeBubble('Listening');
+  gate('unmute_preserves_native_peer', await page.evaluate(() =>
+    window.__fixtureMedia.streams[0].getAudioTracks().every((track) => track.enabled && track.readyState === 'live') &&
+    window.__fixtureMedia.peers.length === 1));
+  await page.locator('mux-voice-mode-bubble [data-voice-mode-close]').click();
+  for (const [name, width, height] of [['portrait', 390, 844], ['landscape', 844, 390]]) {
+    await page.setViewportSize({ width, height });
+    await eventually(async () => {
+      const box = await bubble.boundingBox();
+      return box && box.x >= 0 && box.y >= 0 && box.x + box.width <= width && box.y + box.height <= height;
+    }, `live_bubble_clamp_${name}`);
+    await page.screenshot({ path: path.join(output, `synthetic-live-bubble-${name}.png`) });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  gate('same_bubble_after_drag_mute_and_rotation', Boolean(await tagAndVerifyBubble()));
 
   stage = 'A_B_lobby_navigation';
   const sdpBeforeNavigation = voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length;
@@ -327,7 +525,7 @@ try {
   await page.locator('[data-thread-talk-here]').click();
   await eventually(() => page.locator('[data-thread-context-selector]').innerText().then((text) => text.includes('Lobby')), 'lobby_selection');
   await select(labelA);
-  gate('A_B_lobby_navigation_preserves_one_token_sdp_call', voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length === sdpBeforeNavigation && voiceResponses.filter((row) => row.path === '/api/app/voice/token').length === tokenBeforeNavigation && (await page.locator('mux-cos').locator('button[data-voice-state]:not([data-voice-state="idle"]):not([data-voice-state="error"])').count()) === 1, { token_requests: tokenBeforeNavigation, sdp_requests: sdpBeforeNavigation, call_id_sha256: sha(callId) });
+  gate('A_B_lobby_navigation_preserves_one_token_sdp_call', voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length === sdpBeforeNavigation && voiceResponses.filter((row) => row.path === '/api/app/voice/token').length === tokenBeforeNavigation && Boolean(await activeBubble('Listening')) && Boolean(await tagAndVerifyBubble()), { token_requests: tokenBeforeNavigation, sdp_requests: sdpBeforeNavigation, call_id_sha256: sha(callId) });
 
   stage = 'conversation_dictation_blocked';
   const recognitionsBefore = await page.evaluate(() => window.__fixtureSpeech.instances.length);
@@ -381,6 +579,23 @@ try {
   stage = 'voice_workspace_navigation';
   const workspaceNavigation = await newUtterance('navigate_app', { expected_revision: inventory.revision, target: { kind: 'workspace', workspace_id: workspaceB } });
   gate('navigate_app_authoritative_workspace_ack', workspaceNavigation.output?.selected_target?.workspace_id === workspaceB, { workspace_id_sha256: sha(workspaceB) });
+  const paneB = createPane(workspaceB);
+  const paneObservation = await newUtterance('app_observe', {});
+  const paneNavigation = await newUtterance('navigate_app', {
+    expected_revision: paneObservation.output.revision,
+    target: { kind: 'pane', workspace_id: workspaceB, pane_id: paneB },
+  });
+  gate('navigate_app_authoritative_pane_ack', paneNavigation.output?.selected_target?.pane_id === paneB);
+  const appletObservation = await newUtterance('app_observe', {});
+  const appletNavigation = await newUtterance('navigate_app', {
+    expected_revision: appletObservation.output.revision,
+    target: { kind: 'applet', applet_id: 'files' },
+  });
+  gate('navigate_app_authoritative_applet_ack', appletNavigation.output?.selected_target?.applet_id === 'files');
+  gate('pane_applet_navigation_preserves_bridge',
+    voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length === sdpBeforeNavigation &&
+    voiceResponses.filter((row) => row.path === '/api/app/voice/token').length === tokenBeforeNavigation &&
+    Boolean(await tagAndVerifyBubble()) && Boolean(await activeBubble()));
   stage = 'voice_thread_navigation';
   const afterWorkspaceObserve = await newUtterance('app_observe', {});
   const selectedThread = await newUtterance('navigate_app', { expected_revision: afterWorkspaceObserve.output.revision, target: { kind: 'thread', thread_id: a.thread.id, runtime_generation: a.thread.runtime_generation } });
@@ -411,6 +626,34 @@ try {
   await wait(500);
   const duplicateCommands = (await commands(callId)).slice(duplicateBefore);
   gate('exact_duplicate_final_no_extra_effect_or_fence', duplicateCommands.length === 0 && providerRecords().length === providerStart + dispatched.length);
+  if (opt['known-lane-session-id'] && opt['known-lane-machine']) {
+    const known = await newUtterance('read_lane_transcript', {
+      machine: opt['known-lane-machine'], session_id: opt['known-lane-session-id'], last_n: 2,
+    });
+    gate('known_lane_transcript_attribution', known.output?.status !== 'refused' && known.output?.session_id === opt['known-lane-session-id']);
+  } else {
+    blocked('known_lane_transcript_attribution', 'requires an operator-provisioned real, discoverable fixture lane; no transcript was fabricated');
+  }
+  stage = 'explicit_live_bubble_stop';
+  const endBefore = postPaths.filter((value) => value === '/api/app/voice/end').length;
+  await openBubbleMenu();
+  await page.locator('mux-voice-mode-bubble [data-voice-mode-stop]').click();
+  await eventually(() => page.evaluate(() =>
+    window.__fixtureMedia.streams.length > 0 &&
+    window.__fixtureMedia.streams.every((stream) => stream.getTracks().every((track) => track.readyState === 'ended')) &&
+    window.__fixtureMedia.peers.length > 0 &&
+    window.__fixtureMedia.peers.every((peer) => peer.connectionState === 'closed') &&
+    window.__fixtureMedia.audioContexts.every((audio) => audio.state === 'closed')), 'native_media_released_after_stop');
+  await eventually(() => page.locator('mux-voice-mode-bubble [data-voice-mode-bubble]:visible').count().then((count) => count === 0), 'bubble_hidden_after_stop');
+  await eventually(() => fixtureOK('inspect', { call_id: callId }).then((row) => row.connected === false), 'sideband_disconnected_after_stop');
+  gate('one_provider_end_on_explicit_bubble_stop', postPaths.filter((value) => value === '/api/app/voice/end').length === endBefore + 1);
+  const recognitionCount = await page.evaluate(() => window.__fixtureSpeech.instances.length);
+  await page.locator('mux-cos').getByRole('button', { name: 'Dictate', exact: true }).click();
+  await eventually(() => page.evaluate((before) => window.__fixtureSpeech.instances.length === before + 1, recognitionCount), 'dictation_after_voice_stop');
+  await page.evaluate((index) => window.__fixtureSpeech.end(index), recognitionCount);
+  pass('explicit_stop_releases_media_sideband_bubble_and_capture_arbiter');
+  gate('no_browser_runtime_errors', browserErrors.length === 0, { error_names: browserErrors });
+  blocked('rapid_navigation_refuses_pending_submit', 'requires a separate pending-confirmation race journey; not implied by normal confirmed submission');
   blockRemainder('not executed by the bounded core flow; parent DTU may extend with final stable selectors');
   run.status = 'PASS';
 } catch (error) {

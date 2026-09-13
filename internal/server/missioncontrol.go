@@ -141,19 +141,31 @@ func (h *Hub) missionControlCatalog() (*missioncontrol.Store, error) {
 func (h *Hub) missionControlTextEnabled() bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	// This answers whether the v2 text-preview gate was configured, rather
-	// than whether the catalog happened to open.  Callers use it to deny
-	// legacy/voice fallbacks when initialization failed closed.
-	return h.missionControlTextPreview
+	// This is runtime truth, not the retained TOML compatibility flags. A
+	// failed normal-router initialization is surfaced as an error rather than
+	// negotiated as "disabled".
+	return h.missionControlRouter != nil
 }
 
 func (h *Hub) missionControlRouterForText() (*missioncontrol.Router, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	if h.missionControlTextPreview && h.missionControlRouter != nil {
+	if h.missionControlRouter != nil {
 		return h.missionControlRouter, nil
 	}
-	return nil, errors.New("mission control text preview is disabled")
+	if h.missionControlErr != nil {
+		return nil, fmt.Errorf("Mission Control normal channels unavailable: %w", h.missionControlErr)
+	}
+	return nil, errors.New("Mission Control normal channels are unavailable")
+}
+
+// missionControlOwnsChannels prevents the compatibility relay from starting a
+// second writer when normal channels are live or when their initialization
+// failed closed while reserving the source root.
+func (h *Hub) missionControlOwnsChannels() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.missionControlRouter != nil || h.missionControlErr != nil
 }
 
 func isMissionControlMessage(typ string) bool {
@@ -398,16 +410,6 @@ func validMissionControlRequestID(value string) bool {
 }
 
 func (c *Client) missionControlCapabilities(msg missionControlClientMessage) {
-	if !c.hub.missionControlTextEnabled() {
-		// Disabled is a successful capability negotiation, not a failed
-		// configured preview. The browser must retain the legacy conversation.
-		c.sendMissionControlResult(missionControlResult{
-			Type: missionControlResultType, ProtocolVersion: missionControlProtocolVersion,
-			Op: "capabilities", RequestID: msg.RequestID, OK: true, Enabled: false,
-			Capabilities: map[string]bool{"text_threads": false, "voice": false, "approval": false},
-		})
-		return
-	}
 	if _, err := c.hub.missionControlCatalog(); err != nil {
 		c.sendMissionControlResult(missionControlFailure(msg, "catalog_unavailable", err.Error()))
 		return
@@ -427,10 +429,6 @@ func (c *Client) missionControlCapabilities(msg missionControlClientMessage) {
 }
 
 func (c *Client) missionControlList(msg missionControlClientMessage) {
-	if !c.hub.missionControlTextEnabled() {
-		c.sendMissionControlResult(missionControlFailure(msg, "missioncontrol_disabled", "mission control text preview is disabled"))
-		return
-	}
 	catalog, err := c.hub.missionControlCatalog()
 	if err != nil {
 		c.sendMissionControlResult(missionControlFailure(msg, "missioncontrol_disabled", err.Error()))

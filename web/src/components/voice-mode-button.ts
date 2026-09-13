@@ -20,7 +20,18 @@ function isActive(snapshot: VoiceSessionSnapshot): boolean {
 }
 
 function unavailableReason(snapshot: VoiceSessionSnapshot): string {
-  if (!snapshot.available) return 'App voice is not enabled for this running server.';
+  if (!snapshot.available) {
+    switch (snapshot.availabilityReason) {
+      case 'voice_disabled':
+        return 'Voice mode is disabled in this server configuration.';
+      case 'voice_config_invalid':
+        return 'Voice mode configuration is invalid. Fix voice settings and restart the server.';
+      case 'voice_provider_unavailable':
+        return 'Voice provider is unavailable on this running server.';
+      default:
+        return 'Voice settings are unavailable from this server.';
+    }
+  }
   if (!snapshot.supported) return 'This browser cannot start a WebRTC voice session.';
   return '';
 }

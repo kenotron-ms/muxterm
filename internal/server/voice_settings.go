@@ -95,8 +95,13 @@ var allowedVoiceEndpointSuffixes = []string{
 // voiceStatus is everything the browser is allowed to know. Note what is
 // absent: any field derived from a secret's value.
 type voiceStatus struct {
-	Enabled                    bool `json:"enabled"`
-	AppVoiceCandidateAvailable bool `json:"appVoiceCandidateAvailable"`
+	Enabled bool `json:"enabled"`
+	// Available is runtime registration truth for the normal app-wide voice
+	// service. It does not claim that a provider session or microphone has
+	// succeeded; those require an explicit Start.
+	Available                  bool   `json:"available"`
+	AvailabilityReason         string `json:"availabilityReason"`
+	AppVoiceCandidateAvailable bool   `json:"appVoiceCandidateAvailable"`
 	// LegacyVoiceAvailable is true only when this running process registered
 	// the established legacy voice manager. It is deliberately runtime truth,
 	// not the on-disk enabled intent shown by Enabled above.
@@ -148,6 +153,7 @@ func (s *Server) voiceConfigOnDisk() muxcfg.VoiceConfig {
 
 func (s *Server) buildVoiceStatus() voiceStatus {
 	v := s.voiceConfigOnDisk()
+	runtime := s.cfg.Voice
 	st := voiceStatus{
 		Enabled:                    v.Enabled,
 		AppVoiceCandidateAvailable: s.appVoice != nil,
@@ -163,6 +169,7 @@ func (s *Server) buildVoiceStatus() voiceStatus {
 		ConfigPath:                 s.configPath,
 		KeyPath:                    voice.DefaultKeyPath(),
 	}
+	st.Available, st.AvailabilityReason = appVoiceAvailability(runtime, s.appVoice)
 	switch st.KeySource {
 	case "stored":
 		st.KeyConfigured = s.voiceKeyStore().Present()
@@ -175,6 +182,22 @@ func (s *Server) buildVoiceStatus() voiceStatus {
 	}
 	st.RestartRequired = voiceRuntimeDiffers(s.cfg.Voice, v)
 	return st
+}
+
+// appVoiceAvailability distinguishes configured intent from a route that was
+// actually registered in this running process. Its values are a fixed
+// credential-free wire enum; provider response errors belong to explicit Start.
+func appVoiceAvailability(cfg muxcfg.VoiceConfig, service *appVoiceService) (bool, string) {
+	if !cfg.Enabled {
+		return false, "voice_disabled"
+	}
+	if err := cfg.Validate(); err != nil {
+		return false, "voice_config_invalid"
+	}
+	if service == nil {
+		return false, "voice_provider_unavailable"
+	}
+	return true, "ready"
 }
 
 // voiceModeOf picks which of the three form shapes a stored config is in.

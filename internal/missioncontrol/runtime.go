@@ -273,10 +273,11 @@ func (r *Router) startRuntime(threadID string) (*Runtime, error) {
 		SessionID: thread.RuntimeSessionID, Cwd: thread.StorageCWD,
 		StatePath: thread.StatusPath, InstructionPath: thread.InstructionPath,
 		ThreadedTextPreview: true, ThreadKind: thread.Kind, OwnerLockFile: ownerLock,
-		ThreadJournalPath:      thread.JournalPath,
-		ThreadContextMaxTokens: r.contextMaxTokens,
-		EventObserver:          runtime.onSidecarEvent,
-		BeforeReply:            runtime.captureReplyBoundary,
+		ThreadJournalPath:       thread.JournalPath,
+		ThreadContextMaxTokens:  r.contextMaxTokens,
+		PreserveExistingHistory: thread.LobbyOrigin != nil,
+		EventObserver:           runtime.onSidecarEvent,
+		BeforeReply:             runtime.captureReplyBoundary,
 	})
 	if err := runtime.Supervisor.Start(r.ctx); err != nil {
 		_ = syscall.Flock(int(ownerLock.Fd()), syscall.LOCK_UN)

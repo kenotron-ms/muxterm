@@ -8,6 +8,7 @@
  */
 
 import type { MuxSocket } from '../ws.js';
+import { threadStore } from './thread-store.js';
 
 export const APP_VOICE_PROTOCOL_VERSION = 1;
 const OPERATION_TTL_MS = 10_000;
@@ -271,7 +272,7 @@ function parseThreadTurnTarget(value: unknown): AppVoiceThreadTurnTarget | null 
   const channel = validChannel(target.channel_id);
   const threadId = boundedString(target.thread_id, 36);
   const machineId = boundedString(target.machine_id, 36);
-  const sessionId = boundedString(target.runtime_session_id, 36);
+  const sessionId = boundedString(target.runtime_session_id, 128);
   const generation = positiveInteger(target.runtime_generation);
   const incarnation = boundedString(target.runtime_incarnation, 36);
   const draftRef = boundedString(target.draft_ref, 36);
@@ -281,7 +282,8 @@ function parseThreadTurnTarget(value: unknown): AppVoiceThreadTurnTarget | null 
     channel !== `thread:${threadId}` ||
     !UUID_RE.test(threadId) ||
     !UUID_RE.test(machineId) ||
-    !UUID_RE.test(sessionId) ||
+    (!UUID_RE.test(sessionId) &&
+      !threadStore.matchesRuntimeIdentity(threadId, generation, sessionId, incarnation)) ||
     !generation ||
     !UUID_RE.test(incarnation) ||
     !UUID_RE.test(draftRef)
@@ -975,7 +977,14 @@ function normalizeObservation(value: AppVoiceObservation): AppVoiceObservation |
     !Number.isSafeInteger(composer.runtime_generation) ||
     composer.runtime_generation < 0 ||
     typeof composer.runtime_session_id !== 'string' ||
-    (composer.runtime_session_id !== '' && !UUID_RE.test(composer.runtime_session_id)) ||
+    (composer.runtime_session_id !== '' &&
+      !UUID_RE.test(composer.runtime_session_id) &&
+      !threadStore.matchesRuntimeIdentity(
+        composer.thread_id,
+        composer.runtime_generation,
+        composer.runtime_session_id,
+        composer.runtime_incarnation,
+      )) ||
     typeof composer.runtime_incarnation !== 'string' ||
     (composer.runtime_incarnation !== '' && !UUID_RE.test(composer.runtime_incarnation)) ||
     typeof composer.draft_ref !== 'string' ||

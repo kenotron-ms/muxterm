@@ -20,6 +20,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/ai"
 	"github.com/kenotron-ms/muxterm/internal/authserver"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
+	"github.com/kenotron-ms/muxterm/internal/cos"
 	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/voice"
@@ -206,28 +207,7 @@ func New(cfg Config) *Server {
 		aiKeyPath = ai.DefaultKeyPath()
 	}
 	s.ai = ai.NewManager(aiKeyPath)
-	if s.cfg.MissionControl.ThreadsV2 {
-		catalog, err := missioncontrol.Open(missioncontrol.DefaultPath())
-		if err != nil {
-			// Keep the configured v2/text-preview state visible even when an
-			// existing catalog cannot be opened.  Falling back to legacy COS
-			// here silently starts the unrelated global sidecar after a
-			// protocol-aware client explicitly requested the constrained path.
-			hub.setMissionControl(nil, nil, s.cfg.MissionControl.TextPreview, err)
-		} else {
-			var router *missioncontrol.Router
-			if s.cfg.MissionControl.TextPreview {
-				if err := s.cfg.MissionControl.ValidateTextContextMaxTokens(); err != nil {
-					hub.setMissionControl(nil, nil, true, err)
-				} else {
-					router = missioncontrol.NewRouter(catalog, s.cfg.MissionControl.TextWorkerCap, s.cfg.MissionControl.TextContextMaxTokens)
-				}
-			}
-			if router != nil || !s.cfg.MissionControl.TextPreview {
-				hub.setMissionControl(catalog, router, s.cfg.MissionControl.TextPreview, nil)
-			}
-		}
-	}
+	s.initializeMissionControl()
 
 	// The collected pull requests, loaded from disk at construction so the
 	// first GET after a restart answers from the store rather than from an
@@ -378,6 +358,71 @@ func New(cfg Config) *Server {
 	}
 
 	return s
+}
+
+// initializeMissionControl creates the normal channel catalog and router
+// independently of the retired preview flags. A legacy COS root is adopted
+// only after the sidecar's public SessionStore.exists API confirms it exists
+// in this exact server working-directory scope; no filesystem layout is
+// guessed and no history is read or copied here.
+func (s *Server) initializeMissionControl() {
+	catalog, err := missioncontrol.Open(missioncontrol.DefaultPath())
+	if err != nil {
+		s.hub.setMissionControl(nil, nil, true, err)
+		return
+	}
+	fail := func(err error) {
+		_ = catalog.Close()
+		s.hub.setMissionControl(nil, nil, true, err)
+	}
+	lobby, err := catalog.Lobby()
+	if err != nil {
+		fail(fmt.Errorf("Mission Control normal channels unavailable: %w", err))
+		return
+	}
+	// A reset deliberately creates a fresh UUID root and clears LobbyOrigin.
+	// If one is already present, it is the selected normal history; do not
+	// re-adopt an older muxterm-cos source on a subsequent server startup.
+	if lobby.RuntimeSessionID != "" && lobby.LobbyOrigin == nil {
+		if err := s.cfg.MissionControl.ValidateTextContextMaxTokens(); err != nil {
+			fail(err)
+			return
+		}
+		s.hub.setMissionControl(catalog, missioncontrol.NewRouter(catalog, s.cfg.MissionControl.TextWorkerCap, s.cfg.MissionControl.TextContextMaxTokens), true, nil)
+		return
+	}
+	cwd, err := cos.ResolveWorkingDir("")
+	if err != nil {
+		fail(fmt.Errorf("Mission Control normal channels unavailable: resolve server storage scope: %w", err))
+		return
+	}
+	legacySessionID, _ := cos.ResolveSessionID("")
+	probeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	legacyExists, err := cos.SessionStoreExists(probeCtx, legacySessionID, cwd)
+	cancel()
+	if err != nil {
+		fail(fmt.Errorf("Mission Control normal channels unavailable: verify existing conversation before transition: %w", err))
+		return
+	}
+	if legacyExists {
+		if s.hub.cos == nil || !s.hub.cos.claimNormalOwnership() {
+			fail(errors.New("Mission Control normal channels unavailable: legacy COS relay is already active; restart the server to transition without two owners"))
+			return
+		}
+		if _, err := catalog.BindLobbyOrigin(legacySessionID, cwd); err != nil {
+			fail(fmt.Errorf("Mission Control normal channels unavailable: %w", err))
+			return
+		}
+	} else if lobby.LobbyOrigin != nil {
+		fail(errors.New("Mission Control normal channels unavailable: legacy_history_missing: the persisted Lobby origin no longer exists; refusing to create a replacement conversation"))
+		return
+	}
+	if err := s.cfg.MissionControl.ValidateTextContextMaxTokens(); err != nil {
+		fail(err)
+		return
+	}
+	router := missioncontrol.NewRouter(catalog, s.cfg.MissionControl.TextWorkerCap, s.cfg.MissionControl.TextContextMaxTokens)
+	s.hub.setMissionControl(catalog, router, true, nil)
 }
 
 // Handler returns the http.Handler for use with httptest or custom servers.

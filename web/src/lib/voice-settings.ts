@@ -23,9 +23,19 @@ export type VoiceMode = 'openai_key' | 'azure_key' | 'azure_entra';
 
 /** Where an api_key-mode credential is read from. Never what it is. */
 export type VoiceKeySource = 'stored' | 'env' | 'none' | '';
+export type VoiceAvailabilityReason =
+  | 'ready'
+  | 'voice_disabled'
+  | 'voice_config_invalid'
+  | 'voice_provider_unavailable'
+  | 'config_unavailable';
 
 export interface VoiceStatus {
   enabled: boolean;
+  /** Runtime registration status for normal app-wide voice. */
+  available: boolean;
+  /** Fixed safe reason for availability; never contains provider or credential detail. */
+  availabilityReason: VoiceAvailabilityReason;
   /** True only when this running server registered the app-voice candidate. */
   appVoiceCandidateAvailable: boolean;
   /** True only when this running server registered legacy COS voice. */
@@ -49,6 +59,8 @@ export interface VoiceStatus {
 
 export const DEFAULT_VOICE_STATUS: VoiceStatus = {
   enabled: false,
+  available: false,
+  availabilityReason: 'config_unavailable',
   appVoiceCandidateAvailable: false,
   legacyVoiceAvailable: false,
   mode: 'azure_entra',
@@ -69,6 +81,16 @@ function str(r: Record<string, unknown>, k: string): string {
   return typeof r[k] === 'string' ? (r[k] as string) : '';
 }
 
+function availabilityReason(value: unknown): VoiceAvailabilityReason {
+  return value === 'ready' ||
+    value === 'voice_disabled' ||
+    value === 'voice_config_invalid' ||
+    value === 'voice_provider_unavailable' ||
+    value === 'config_unavailable'
+    ? value
+    : 'config_unavailable';
+}
+
 /** Narrow untrusted JSON into a VoiceStatus, defaulting anything unexpected. */
 export function parseVoiceStatus(raw: unknown): VoiceStatus {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -79,6 +101,8 @@ export function parseVoiceStatus(raw: unknown): VoiceStatus {
   const source = r['keySource'];
   return {
     enabled: r['enabled'] === true,
+    available: r['available'] === true,
+    availabilityReason: availabilityReason(r['availabilityReason']),
     appVoiceCandidateAvailable: r['appVoiceCandidateAvailable'] === true,
     legacyVoiceAvailable: r['legacyVoiceAvailable'] === true,
     mode: mode === 'openai_key' || mode === 'azure_key' || mode === 'azure_entra'

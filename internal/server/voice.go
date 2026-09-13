@@ -130,13 +130,18 @@ func (t *voiceTurn) Wait(ctx context.Context) (string, error) {
 // muxterm from starting: a typo in an optional capability must not take the
 // terminal multiplexer down with it.
 func (s *Server) registerVoiceRoutes(cfg config.VoiceConfig, protect func(http.Handler) http.Handler) {
+	// App voice is the normal app-wide voice surface. It is intentionally
+	// independent of every Mission Control preview setting: valid enabled
+	// [voice] configuration is sufficient to register its own authenticated,
+	// owner-lease-bound routes.
+	s.registerAppVoiceRoutes(cfg, protect)
+
 	if s.hub.missionControlTextEnabled() {
 		// Text-preview is deliberately provider/microphone-off.  It does expose
 		// a separate lease/focus/capture safety seam for a later thread-scoped
 		// provider attachment; that seam cannot mint a token, connect SDP, or
 		// submit work.  Legacy global voice routes remain explicit refusals.
 		s.registerMissionControlVoiceRoutes(cfg, protect)
-		s.registerAppVoiceRoutes(cfg, protect)
 		refuse := protect(http.HandlerFunc(s.handleThreadedTextVoiceRefusal))
 		s.mux.Handle("POST /api/cos/voice/token", refuse)
 		s.mux.Handle("POST /api/cos/voice/sdp", refuse)
