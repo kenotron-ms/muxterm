@@ -368,6 +368,9 @@ func New(cfg Config) *Server {
 // in this exact server working-directory scope; no filesystem layout is
 // guessed and no history is read or copied here.
 func (s *Server) initializeMissionControl() {
+	s.cfgMu.RLock()
+	missionCfg := s.cfg.MissionControl
+	s.cfgMu.RUnlock()
 	catalog, err := missioncontrol.Open(missioncontrol.DefaultPath())
 	if err != nil {
 		s.hub.setMissionControl(nil, nil, true, err)
@@ -386,11 +389,11 @@ func (s *Server) initializeMissionControl() {
 	// If one is already present, it is the selected normal history; do not
 	// re-adopt an older muxterm-cos source on a subsequent server startup.
 	if lobby.RuntimeSessionID != "" && lobby.LobbyOrigin == nil {
-		if err := s.cfg.MissionControl.ValidateTextContextMaxTokens(); err != nil {
+		if err := missionCfg.ValidateTextContextMaxTokens(); err != nil {
 			fail(err)
 			return
 		}
-		s.hub.setMissionControl(catalog, missioncontrol.NewRouter(catalog, s.cfg.MissionControl.TextWorkerCap, s.cfg.MissionControl.TextContextMaxTokens), true, nil)
+		s.hub.setMissionControl(catalog, missioncontrol.NewRouter(catalog, missionCfg.TextWorkerCap, missionCfg.TextContextMaxTokens), true, nil)
 		return
 	}
 	cwd, err := cos.ResolveWorkingDir("")
@@ -419,11 +422,11 @@ func (s *Server) initializeMissionControl() {
 		fail(errors.New("Mission Control normal channels unavailable: legacy_history_missing: the persisted Lobby origin no longer exists; refusing to create a replacement conversation"))
 		return
 	}
-	if err := s.cfg.MissionControl.ValidateTextContextMaxTokens(); err != nil {
+	if err := missionCfg.ValidateTextContextMaxTokens(); err != nil {
 		fail(err)
 		return
 	}
-	router := missioncontrol.NewRouter(catalog, s.cfg.MissionControl.TextWorkerCap, s.cfg.MissionControl.TextContextMaxTokens)
+	router := missioncontrol.NewRouter(catalog, missionCfg.TextWorkerCap, missionCfg.TextContextMaxTokens)
 	s.hub.setMissionControl(catalog, router, true, nil)
 }
 
