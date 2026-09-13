@@ -183,7 +183,9 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 	return nil
 }
 func (b *appVoiceBridge) ReserveToolCall(event voice.ProviderEvent) (voice.Correlation, error) {
-	if event.CallRef == "" || event.ItemID == "" || event.ResponseID == "" {
+	// Final argument events may omit call_id. Only the previously observed
+	// output-item mapping below can supply it; a supplied value must match.
+	if event.ItemID == "" || event.ResponseID == "" {
 		return voice.Correlation{}, errors.New("unmapped provider function call")
 	}
 	b.service.mu.Lock()
