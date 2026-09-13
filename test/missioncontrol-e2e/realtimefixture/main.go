@@ -51,12 +51,13 @@ type command struct {
 }
 
 type fixture struct {
-	mu       sync.Mutex
-	next     uint64
-	sessions map[string]string // ephemeral secret -> provider session ID
-	calls    map[string]*call
-	evidence string
-	rtcRelay bool
+	mu          sync.Mutex
+	next        uint64
+	sdpRequests uint64
+	sessions    map[string]string // ephemeral secret -> provider session ID
+	calls       map[string]*call
+	evidence    string
+	rtcRelay    bool
 }
 
 func (f *fixture) id(kind string) string {
@@ -72,14 +73,15 @@ func (f *fixture) writeEvidence() {
 	}
 	f.mu.Lock()
 	out := struct {
-		Format string `json:"format"`
-		Calls  []struct {
+		Format           string `json:"format"`
+		ExchangeRequests uint64 `json:"exchange_requests"`
+		Calls            []struct {
 			ID        string    `json:"id"`
 			Connected bool      `json:"connected"`
 			Commands  []command `json:"commands"`
 			CommandN  int       `json:"command_count"`
 		} `json:"calls"`
-	}{Format: "missioncontrol-realtime-fixture-v1"}
+	}{Format: "missioncontrol-realtime-fixture-v1", ExchangeRequests: f.sdpRequests}
 	for _, c := range f.calls {
 		row := struct {
 			ID        string    `json:"id"`
@@ -268,6 +270,11 @@ func (f *fixture) mint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fixture) sdp(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		f.mu.Lock()
+		f.sdpRequests++
+		f.mu.Unlock()
+	}
 	if r.Method != http.MethodPost || bearer(r) == "" {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "ephemeral bearer required"})
 		return
@@ -456,13 +463,14 @@ func (f *fixture) control(w http.ResponseWriter, r *http.Request) {
 	case "inspect":
 		f.mu.Lock()
 		c := f.calls[request.CallID]
+		exchangeRequests := f.sdpRequests
 		f.mu.Unlock()
 		if c == nil {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown fixture call"})
 			return
 		}
 		f.mu.Lock()
-		reply := map[string]any{"call_id": c.id, "connected": c.conn != nil, "commands": append([]command(nil), c.commands...)}
+		reply := map[string]any{"call_id": c.id, "connected": c.conn != nil, "commands": append([]command(nil), c.commands...), "exchange_requests": exchangeRequests}
 		f.mu.Unlock()
 		writeJSON(w, http.StatusOK, reply)
 	case "inject":
