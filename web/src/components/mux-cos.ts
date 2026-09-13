@@ -2362,16 +2362,20 @@ export class MuxCos extends LitElement {
     if (!held) return;
     if (heldVoiceComposer === held) heldVoiceComposer = null;
     if (!sameComposerIdentity(held.identity, cosStore.composerIdentity)) return;
-    cosStore.setDraft(held.draft);
+    // Takeover never changes the store draft. Keep any explicit draft edit
+    // requested during voice instead of overwriting it with an older snapshot.
+    const draftUnchanged = cosStore.draft === held.draft;
     this.requestUpdate();
     void this.updateComplete.then(() => {
       const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
       if (!el) return;
       this._fit(el);
-      el.setSelectionRange(
-        Math.min(held.start, el.value.length),
-        Math.min(held.end, el.value.length),
-      );
+      if (draftUnchanged) {
+        el.setSelectionRange(
+          Math.min(held.start, el.value.length),
+          Math.min(held.end, el.value.length),
+        );
+      }
       if (held.focused) el.focus();
     });
   }
