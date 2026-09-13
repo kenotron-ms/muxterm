@@ -541,16 +541,43 @@ try {
   const slowPrompt = `SINGLE_COS_SLOW_STREAM_${stamp}`;
   const slowStart = Date.now();
   const eventStart = frames.length;
+  const providerBeforeSlow = providerRecords().length;
   await composer.fill(slowPrompt);
   stage = 'generation_stop_send';
   await page.locator('mux-cos button[aria-label="Send"]').click();
   stage = 'generation_stop_visible';
   await page.locator('mux-cos button[aria-label="Stop generating"]').waitFor({ state: 'visible', timeout: 15_000 });
-  stage = 'generation_stop_first_delta';
-  const firstDelta = await eventually(() => frames.slice(eventStart).find((f) => f.type === 'cos-event' && f.event?.ev === 'delta'), 'slow_turn_first_delta');
+  stage = 'generation_stop_provider_started';
+  // Cancellation must work while the provider is generating, including before
+  // the first rendered token. Waiting for a buffered delta can miss the whole
+  // short fixture generation and test an already-completed turn instead.
+  await eventually(() => providerRecords().slice(providerBeforeSlow).some((record) =>
+    inputText(record.request?.input).includes(slowPrompt)), 'slow_turn_provider_started');
+  const firstDelta = frames.slice(eventStart).find((f) => f.type === 'cos-event' && f.event?.ev === 'delta');
+  const stopButtonState = await page.locator('mux-cos .cbtn.send').evaluate((button) => {
+    const ancestors = [];
+    let node = button;
+    while (node instanceof Element) {
+      ancestors.push({ tag: node.tagName, role: node.getAttribute('role'),
+        disabled: node.hasAttribute('disabled'), ariaDisabled: node.getAttribute('aria-disabled'),
+        inert: node.hasAttribute('inert') });
+      node = node.parentElement ?? node.getRootNode().host;
+    }
+    return { label: button.getAttribute('aria-label'), disabled: button.disabled,
+      matchesDisabled: button.matches(':disabled'), ancestors, observedAt: Date.now() };
+  });
+  run.stop_button_before_click = stopButtonState;
+  run.stop_button_playwright_enabled = await page.locator('mux-cos button[aria-label="Stop generating"]').isEnabled();
   const endBeforeStop = postPaths.filter((x) => x === '/api/app/voice/end').length;
   stage = 'generation_stop_click';
-  await page.locator('mux-cos button[aria-label="Stop generating"]').click();
+  const stopControl = page.locator('mux-cos button[aria-label="Stop generating"]');
+  if (!(await stopControl.isEnabled())) throw new Error('generation_stop_not_enabled');
+  const stopBox = await stopControl.boundingBox();
+  if (!stopBox) throw new Error('generation_stop_box_missing');
+  // Hit the real enabled control without a locator retry crossing its later
+  // Stop-to-Send transition. Native hit testing and the cancellation receipt
+  // still have to succeed; no force click or DOM/state manipulation is used.
+  await page.mouse.click(stopBox.x + stopBox.width / 2, stopBox.y + stopBox.height / 2);
   stage = 'generation_stop_terminal';
   const terminal = await eventually(() => frames.slice(eventStart).find((f) =>
     f.type === 'cos-event' && ['turn_cancelled', 'cancelled', 'turn_end'].includes(f.event?.ev)), 'slow_turn_terminal');
@@ -559,7 +586,7 @@ try {
   gate('single_composer_stop_cancels_generation_without_ending_voice', terminal.event?.ev === 'cancelled' &&
     postPaths.filter((x) => x === '/api/app/voice/end').length === endBeforeStop &&
     await bubble.count() === 1, {
-      submit_to_first_delta_ms: firstDelta._receivedAt - slowStart,
+      submit_to_first_delta_ms: firstDelta ? firstDelta._receivedAt - slowStart : null,
       submit_to_terminal_ms: terminal._receivedAt - slowStart,
     });
 
