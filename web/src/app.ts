@@ -1849,7 +1849,10 @@ export class MuxApp extends LitElement {
 
   /** Client-local active-pane selection (sessiond has no select-pane message). */
   private _onActivePane = (e: CustomEvent<{ paneId: number; appVoiceOperationId?: string }>): void => {
-    if (e.detail.appVoiceOperationId !== this._appVoiceNavigatingOperationId) {
+    const ownedVoiceNavigation = !!e.detail.appVoiceOperationId &&
+      e.detail.appVoiceOperationId === this._appVoiceNavigatingOperationId &&
+      appVoiceOperations.isOperationActive(e.detail.appVoiceOperationId);
+    if (!ownedVoiceNavigation) {
       this._appVoiceDetailThreadId = '';
       appVoiceOperations.userNavigation();
     }
@@ -1866,7 +1869,10 @@ export class MuxApp extends LitElement {
     // ackPane is the component's responsibility (mux-pane-picker._selectPane or
     // mux-dock onDidActivePanelChange). Do not ack here — the component already did.
     store.setActivePane(e.detail.paneId);
-    appVoiceOperations.observe(this._appVoiceObservation());
+    // The owner operation publishes its new observation atomically in its
+    // acknowledgement. An ordinary observation here would cancel that same
+    // operation on the server as an unrelated focus change.
+    if (!ownedVoiceNavigation) appVoiceOperations.observe(this._appVoiceObservation());
     // This pane just became the visible tab in this client's layout, so it
     // should claim PTY-sizing authority (active-view-wins).
     this._paneFocusCoordinator?.claimPane(e.detail.paneId);
@@ -2680,6 +2686,8 @@ export class MuxApp extends LitElement {
   };
 
   private _onAppVoiceObservation = (): void => {
+    if (this._appVoiceNavigatingOperationId &&
+      appVoiceOperations.isOperationActive(this._appVoiceNavigatingOperationId)) return;
     appVoiceOperations.observe(this._appVoiceObservation());
   };
 
@@ -2840,6 +2848,10 @@ export class MuxApp extends LitElement {
         this._assertAppVoiceOperationCurrent(operationId, signal);
         this._appVoiceDetailThreadId = '';
         await this._selectWorkspaceForAppVoice(target.workspace_id, operationId, signal);
+        this._assertAppVoiceOperationCurrent(operationId, signal);
+        this._showDashboard = false;
+        await this.updateComplete;
+        this._assertAppVoiceOperationCurrent(operationId, signal);
         return { selected_target: target };
       }
       throw new Error('The requested app navigation target is unavailable.');
