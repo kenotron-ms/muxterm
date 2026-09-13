@@ -542,15 +542,21 @@ try {
   const slowStart = Date.now();
   const eventStart = frames.length;
   await composer.fill(slowPrompt);
+  stage = 'generation_stop_send';
   await page.locator('mux-cos button[aria-label="Send"]').click();
+  stage = 'generation_stop_visible';
   await page.locator('mux-cos button[aria-label="Stop generating"]').waitFor({ state: 'visible', timeout: 15_000 });
+  stage = 'generation_stop_first_delta';
   const firstDelta = await eventually(() => frames.slice(eventStart).find((f) => f.type === 'cos-event' && f.event?.ev === 'delta'), 'slow_turn_first_delta');
   const endBeforeStop = postPaths.filter((x) => x === '/api/app/voice/end').length;
+  stage = 'generation_stop_click';
   await page.locator('mux-cos button[aria-label="Stop generating"]').click();
+  stage = 'generation_stop_terminal';
   const terminal = await eventually(() => frames.slice(eventStart).find((f) =>
     f.type === 'cos-event' && ['turn_cancelled', 'cancelled', 'turn_end'].includes(f.event?.ev)), 'slow_turn_terminal');
+  stage = 'generation_stop_reset';
   await page.locator('mux-cos button[aria-label="Send"]').waitFor({ state: 'visible', timeout: 15_000 });
-  gate('single_composer_stop_cancels_generation_without_ending_voice', Boolean(terminal) &&
+  gate('single_composer_stop_cancels_generation_without_ending_voice', terminal.event?.ev === 'cancelled' &&
     postPaths.filter((x) => x === '/api/app/voice/end').length === endBeforeStop &&
     await bubble.count() === 1, {
       submit_to_first_delta_ms: firstDelta._receivedAt - slowStart,
@@ -573,6 +579,8 @@ try {
   if (!firstFailure) firstFailure = `stage_${stage}`;
   run.errors.push(`stage:${stage}`, `error_type:${error?.name ?? 'Error'}`);
   const message = String(error?.message ?? ''); if (/^[a-zA-Z0-9_.: -]{1,160}$/.test(message)) run.errors.push(`detail:${message}`);
+  // Private diagnostic only, never attached to public result/manifest output.
+  writePrivate('failure-private.json', { stage, message, stack: String(error?.stack ?? '') });
   const subscribeFailure = frames?.slice().reverse().find((frame) => frame.type === 'cos-subscribe-result' && frame.ok !== true);
   const safeCode = typeof subscribeFailure?.code === 'string' && /^[a-z0-9_-]{1,96}$/i.test(subscribeFailure.code)
     ? subscribeFailure.code

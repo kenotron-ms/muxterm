@@ -1899,7 +1899,7 @@ export class MuxCos extends LitElement {
               class="cbtn send"
               type="button"
               aria-label="${busy ? 'Stop generating' : admissionPending ? 'Sending' : 'Send'}"
-              ?disabled="${negotiating || admissionPending || (!busy && !ready)}"
+              ?disabled="${!busy && (negotiating || admissionPending || !ready)}"
               @click="${busy ? this._stopGeneration : this._submit}"
             >${icon(busy ? Square : ArrowUp, { size: 15 })}</button>
           </div>
@@ -2137,7 +2137,8 @@ export class MuxCos extends LitElement {
   };
 
   private _stopGeneration = (): void => {
-    const active = cosStore.turns.find((turn) => turn.status === 'pending' || turn.status === 'streaming');
+    const active = cosStore.turns.find((turn) => turn.status === 'streaming') ??
+      cosStore.turns.find((turn) => turn.status === 'pending');
     if (active) cosStore.cancel(active.id);
     void this.updateComplete.then(() => {
       this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext')?.focus();
