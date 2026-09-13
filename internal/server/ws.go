@@ -198,6 +198,23 @@ func (c *Client) getAttachedHost() string {
 	return c.attachedHost
 }
 
+// attachedWorkspaceForHost returns the browser-facing workspace id only when
+// host still owns the current pane-id namespace. The qualifier check prevents
+// a remote event from ever being recorded under a local (or another remote)
+// cache key.
+func (c *Client) attachedWorkspaceForHost(host string) (string, bool) {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.attachedHost != host || c.workspaceID == "" {
+		return "", false
+	}
+	qualifier, local := splitID(c.workspaceID)
+	if qualifier != host || local == "" {
+		return "", false
+	}
+	return c.workspaceID, true
+}
+
 // setPreviewWanted / setSessionStateWanted record the browser's opt-ins;
 // subscriptions reads them back for a session that connects later (A.5).
 func (c *Client) setPreviewWanted(v bool) {
@@ -752,6 +769,9 @@ func (c *Client) handleTextInput(data []byte) {
 			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
+		if workspaceID, ok := c.attachedWorkspaceForHost(host); ok {
+			c.rememberAppVoicePane(workspaceID, paneID)
+		}
 		c.sendMessage(&sessiond.Message{
 			Type:   sessiond.TypePaneCreated,
 			CID:    msg.CID,
@@ -950,6 +970,7 @@ func (c *Client) setSessions(host string, sessions []sessiond.SessionState) {
 // while a disconnect deletes it so they vanish -- because that is what the
 // user asked for.
 func (c *Client) forgetHost(host string) {
+	c.forgetAppVoiceHost(host)
 	c.mergeMu.Lock()
 	delete(c.wsByHost, host)
 	delete(c.ssByHost, host)

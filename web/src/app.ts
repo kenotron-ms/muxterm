@@ -2767,12 +2767,14 @@ export class MuxApp extends LitElement {
     operationId: string,
     signal: AbortSignal,
   ): Promise<{ readonly selected_target: AppVoiceNavigateTarget }> {
-    const cos = this.renderRoot.querySelector('mux-cos');
     this._appVoiceNavigatingOperationId = operationId;
     try {
       if (target.kind === 'thread') {
         this._assertAppVoiceOperationCurrent(operationId, signal);
         this._appVoiceDetailThreadId = '';
+        this._showDashboard = true;
+        await this.updateComplete;
+        this._assertAppVoiceOperationCurrent(operationId, signal);
         const receipt = await threadStore.selectForAppVoice(
           target.thread_id,
           target.runtime_generation,
@@ -2792,6 +2794,10 @@ export class MuxApp extends LitElement {
       if (target.kind === 'applet') {
         this._assertAppVoiceOperationCurrent(operationId, signal);
         this._appVoiceDetailThreadId = '';
+        this._showDashboard = true;
+        await this.updateComplete;
+        this._assertAppVoiceOperationCurrent(operationId, signal);
+        const cos = this.renderRoot.querySelector('mux-cos');
         if (!cos || !(await cos.navigateAppletForAppVoice(target.applet_id, undefined, operationId, signal))) {
           throw new Error('The requested applet could not be selected.');
         }

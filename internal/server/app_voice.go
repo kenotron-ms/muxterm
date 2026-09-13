@@ -1235,6 +1235,9 @@ func (c *Client) appVoiceFleet() []map[string]any {
 	return out
 }
 func (c *Client) rememberAppVoicePanes(workspace string, panes []sessiond.PaneInfo) {
+	if workspace == "" {
+		return
+	}
 	c.wsMu.Lock()
 	defer c.wsMu.Unlock()
 	known := make(map[int]bool, len(panes))
@@ -1244,6 +1247,49 @@ func (c *Client) rememberAppVoicePanes(workspace string, panes []sessiond.PaneIn
 		}
 	}
 	c.appVoicePanes[workspace] = known
+}
+func (c *Client) rememberAppVoicePane(workspace string, pane int) {
+	if workspace == "" || pane <= 0 {
+		return
+	}
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.appVoicePanes == nil {
+		c.appVoicePanes = make(map[string]map[int]bool)
+	}
+	if c.appVoicePanes[workspace] == nil {
+		c.appVoicePanes[workspace] = make(map[int]bool)
+	}
+	c.appVoicePanes[workspace][pane] = true
+}
+func (c *Client) forgetAppVoicePane(workspace string, pane int) {
+	if workspace == "" || pane <= 0 {
+		return
+	}
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	delete(c.appVoicePanes[workspace], pane)
+}
+func (c *Client) forgetAppVoiceWorkspace(workspace string) {
+	if workspace == "" {
+		return
+	}
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	delete(c.appVoicePanes, workspace)
+}
+func (c *Client) forgetAppVoiceHost(host string) {
+	if host == "" {
+		return
+	}
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	for workspace := range c.appVoicePanes {
+		qualifier, _ := splitID(workspace)
+		if qualifier == host {
+			delete(c.appVoicePanes, workspace)
+		}
+	}
 }
 func (c *Client) appVoicePaneKnown(workspace string, pane int) bool {
 	c.wsMu.Lock()
