@@ -1,4 +1,4 @@
-import { LitElement } from 'lit';
+import { LitElement, render } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import type {
   DockviewGroupPanel,
@@ -20,6 +20,10 @@ import { groupFor, type SessionState } from '../lib/session-state.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import { parseHostRef } from '../lib/host-ref.js';
 import { apiPath } from '../lib/base-path.js';
+import { icon } from '../lib/icons.js';
+import { Ellipsis } from 'lucide';
+import './voice-mode-button.js';
+import './launcher-menu.js';
 
 type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
 
@@ -329,6 +333,15 @@ export class MuxDock extends LitElement {
   @property({ attribute: false }) requestedPaneId = -1;
   @property({ attribute: false }) layout = '';
 
+  /**
+   * Whether the workspace-only voice/menu rail is exposed. The Dashboard keeps
+   * this dock mounted underneath its opaque overlay to preserve terminal and
+   * layout state, but the covered workspace must not remain interactive or in
+   * the accessibility tree.
+   */
+  @property({ attribute: 'workspace-actions-visible', type: Boolean, reflect: true })
+  workspaceActionsVisible = true;
+
   /** Test hook: exposes the MuxStore instance for E2E verification scripts. */
   readonly __store = store;
   /**
@@ -564,6 +577,11 @@ export class MuxDock extends LitElement {
   private _dropbar: HTMLElement | null = null;
   private _dropTick: number | undefined;
   private _unsubRemotes: (() => void) | null = null;
+  private _dockRoot: HTMLElement | null = null;
+  private _workspaceActions: HTMLElement | null = null;
+  private _workspaceActionsFrame: number | undefined;
+  private _dockObserver: MutationObserver | null = null;
+  private _workspaceLauncher: HTMLElement | null = null;
 
   /**
    * Put the dock into (or out of) the dropped state.
@@ -636,6 +654,81 @@ export class MuxDock extends LitElement {
     return bar;
   }
 
+  private _scheduleWorkspaceActions(): void {
+    if (this._workspaceActionsFrame !== undefined) return;
+    this._workspaceActionsFrame = requestAnimationFrame(() => {
+      this._workspaceActionsFrame = undefined;
+      this._rehomeWorkspaceActions();
+    });
+  }
+
+  private _rehomeWorkspaceActions(): void {
+    if (!this._workspaceActions || this.narrow || !this._dockRoot) return;
+    let target: HTMLElement | null = null;
+    let bestTop = Number.POSITIVE_INFINITY;
+    let bestRight = Number.NEGATIVE_INFINITY;
+    for (const group of this.querySelectorAll<HTMLElement>('.dv-groupview')) {
+      const tabs = group.querySelector<HTMLElement>(':scope > .dv-tabs-and-actions-container');
+      if (!tabs || tabs.offsetParent === null) continue;
+      const rect = group.getBoundingClientRect();
+      if (rect.top < bestTop - 1 || (Math.abs(rect.top - bestTop) <= 1 && rect.right > bestRight)) {
+        target = tabs.querySelector<HTMLElement>(':scope > .dv-right-actions-container');
+        bestTop = rect.top;
+        bestRight = rect.right;
+      }
+    }
+    if (!target) return;
+    // appendChild() moves an existing child even when it is already in this
+    // target. That mutation re-triggers our observer forever, so only re-home
+    // when Dockview actually selected a different header.
+    if (this._workspaceActions.parentElement === target) return;
+    target.appendChild(this._workspaceActions);
+  }
+
+  /** Keep the covered dock alive for layout/terminal caching, but inert. */
+  private _syncWorkspaceActionVisibility(): void {
+    const covered = !this.workspaceActionsVisible;
+    this.toggleAttribute('inert', covered);
+    this.toggleAttribute('aria-hidden', covered);
+  }
+
+  private _createWorkspaceActions(): HTMLElement {
+    const rail = document.createElement('div');
+    rail.className = 'mux-workspace-actions';
+    rail.appendChild(document.createElement('mux-voice-mode-button'));
+
+    const launcher = document.createElement('button');
+    launcher.className = 'mux-workspace-launcher';
+    launcher.type = 'button';
+    launcher.title = 'Open menu';
+    launcher.setAttribute('aria-label', 'Open menu');
+    render(icon(Ellipsis, { size: 16 }), launcher);
+    launcher.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this._openWorkspaceLauncher(launcher);
+    });
+    rail.appendChild(launcher);
+    return rail;
+  }
+
+  private _openWorkspaceLauncher(anchor: HTMLElement): void {
+    const menu = this._workspaceLauncher;
+    if (!menu) return;
+    try {
+      menu.showPopover();
+      const rect = anchor.getBoundingClientRect();
+      const width = menu.getBoundingClientRect().width || 180;
+      menu.style.position = 'fixed';
+      menu.style.margin = '0';
+      menu.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width))}px`;
+      menu.style.top = `${Math.min(window.innerHeight - 8, rect.bottom + 4)}px`;
+      menu.style.right = 'auto';
+      menu.style.bottom = 'auto';
+    } catch {
+      /* already open */
+    }
+  }
+
   private _paintDropbar(bar: HTMLElement, host: DockHost): void {
     const state = bar.querySelector<HTMLElement>('.dropbar-state');
     if (state) state.textContent = `${DROP_GLYPH} ${dropLabel(host.state)}`;
@@ -706,6 +799,7 @@ export class MuxDock extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    this._syncWorkspaceActionVisibility();
 
     // Session state changes repaint the tab marks. Low rate (one frame per
     // session state change), and it touches text nodes only — no Lit render,
@@ -776,10 +870,18 @@ export class MuxDock extends LitElement {
           width: 100%;
           height: 100%;
         }
+        mux-dock .dock-root {
+          position: relative;
+          width: 100%;
+          height: 100%;
+          min-width: 0;
+          min-height: 0;
+        }
 
         /* Dockview re-skin: all values driven by CSS custom properties so the
            entire tab strip + panel chrome follows the selected theme. */
         mux-dock .dv-dockview {
+          --dv-tabs-and-actions-container-height: 44px;
           --dv-background-color: var(--chrome-body);
 
           /* Panel CONTENT background. Must equal the terminal background so the
@@ -834,6 +936,13 @@ export class MuxDock extends LitElement {
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+        }
+        mux-dock .dv-tabs-container > .dv-tab:first-child {
+          padding-inline-start: var(--main-header-inline-padding, 24px) !important;
+        }
+        mux-dock:not([workspace-actions-visible]) .mux-workspace-actions {
+          visibility: hidden;
+          pointer-events: none;
         }
         mux-dock .dv-tab.dv-active-tab {
           border-top: 2px solid var(--chrome-accent) !important;
@@ -907,6 +1016,42 @@ export class MuxDock extends LitElement {
         }
         mux-dock .mux-header-btn:active {
           background: color-mix(in srgb, var(--chrome-accent) 25%, transparent);
+        }
+
+        mux-dock .mux-workspace-actions {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          flex: 0 0 92px;
+          width: 92px;
+          height: 100%;
+          box-sizing: border-box;
+        }
+        mux-dock .mux-workspace-actions mux-voice-mode-button,
+        mux-dock .mux-workspace-launcher {
+          flex: 0 0 44px;
+          width: 44px;
+          height: 44px;
+          min-width: 44px;
+          min-height: 44px;
+          box-sizing: border-box;
+        }
+        mux-dock .mux-workspace-launcher {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0;
+          border: 0;
+          border-radius: 6px;
+          background: transparent;
+          color: var(--chrome-text-bright);
+          cursor: pointer;
+        }
+        mux-dock .mux-workspace-launcher:hover,
+        mux-dock .mux-workspace-launcher:focus-visible {
+          outline: 2px solid var(--chrome-accent);
+          outline-offset: -2px;
+          background: var(--chrome-hover);
         }
 
         /* dockview's action containers shrink-wrap their button and sit at the
@@ -1061,8 +1206,26 @@ export class MuxDock extends LitElement {
     }
 
     this.classList.add('dockview-theme-abyss');
+    const dockRoot = document.createElement('div');
+    dockRoot.className = 'dock-root';
+    this.appendChild(dockRoot);
+    this._dockRoot = dockRoot;
+    this._workspaceActions = this._createWorkspaceActions();
+    const launcherMenu = document.createElement('mux-launcher-menu');
+    launcherMenu.setAttribute('popover', 'auto');
+    launcherMenu.addEventListener('launcher-action', () => {
+      try {
+        launcherMenu.hidePopover();
+      } catch {
+        /* already closed */
+      }
+    });
+    dockRoot.appendChild(launcherMenu);
+    this._workspaceLauncher = launcherMenu;
+    this._dockObserver = new MutationObserver(() => this._scheduleWorkspaceActions());
+    this._dockObserver.observe(dockRoot, { childList: true, subtree: true });
     this.addEventListener('dblclick', this._onTabDblClick);
-    this._dv = new DockviewComponent(this, {
+    this._dv = new DockviewComponent(dockRoot, {
       // Total by construction: EVERY component name resolves to a
       // TerminalRenderer, `opts.name` is never inspected. dockview calls this
       // factory unconditionally (no name registry, no fallback of its own), so
@@ -1096,6 +1259,7 @@ export class MuxDock extends LitElement {
       },
     });
     this._dv.onDidLayoutChange(() => this._scheduleLayoutSave());
+    this._dv.onDidLayoutChange(() => this._scheduleWorkspaceActions());
     this._dv.onDidActivePanelChange((panel) => {
       if (this._settingActive) return;
       if (!panel) return;
@@ -1112,6 +1276,7 @@ export class MuxDock extends LitElement {
       // activeView and the wrong pane is selected after a refresh.
       this._scheduleLayoutSave();
     });
+    this._scheduleWorkspaceActions();
     this._dv.onDidRemovePanel(() => {
       requestAnimationFrame(() => {
         if (this._dv) {
@@ -1130,8 +1295,18 @@ export class MuxDock extends LitElement {
     this._unsubRemotes?.();
     this._unsubRemotes = null;
     this._removeDropbar();
+    if (this._workspaceActionsFrame !== undefined) cancelAnimationFrame(this._workspaceActionsFrame);
+    this._workspaceActionsFrame = undefined;
+    this._dockObserver?.disconnect();
+    this._dockObserver = null;
+    this._workspaceActions?.remove();
+    this._workspaceActions = null;
+    this._workspaceLauncher?.remove();
+    this._workspaceLauncher = null;
     this._dv?.dispose();
     this._dv = null;
+    this._dockRoot?.remove();
+    this._dockRoot = null;
   }
 
   /** Handle double-click on a dockview default tab — starts inline rename. */
@@ -1183,6 +1358,8 @@ export class MuxDock extends LitElement {
   };
 
   override updated(changed: Map<string, unknown>): void {
+    super.updated(changed);
+    if (changed.has('workspaceActionsVisible')) this._syncWorkspaceActionVisibility();
     if (!this._dv) return;
 
     // Case 1: workspaceKey changed → full panel reset
@@ -1404,6 +1581,7 @@ export class MuxDock extends LitElement {
     // Adding or closing a pane can build a new group, and the bar lives inside
     // one. Idempotent: with nothing dropped this is two no-op class toggles.
     this._syncDropState();
+    if (changed.has('narrow')) this._scheduleWorkspaceActions();
   }
 
   /**

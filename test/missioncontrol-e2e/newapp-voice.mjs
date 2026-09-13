@@ -17,6 +17,7 @@ const usage = `Usage:
     --muxterm-bin <path> --provider-records <private JSON> --output <private directory> \\
     --source-sha <40-git-sha|64-source-archive-sha256> --accept-disposable-fixtures \\
     [--playwright-module <module-or-absolute-path>]
+    [--known-lane-session-id <native-session-id> --known-lane-machine <machine-id>]
 
 Requires an already-running isolated browser/server/sessiond/sideband DTU and
 realtimefixture --rtc-relay. It never starts or stops product processes.
@@ -115,6 +116,15 @@ function createWorkspace(label) {
   if (typeof out.workspaceId !== 'string' || !out.workspaceId) throw new Error('workspace_create_shape_invalid');
   return out.workspaceId;
 }
+function createPane(workspaceID) {
+  const out = JSON.parse(execFileSync(
+    opt['muxterm-bin'],
+    ['pane', 'create', '--workspace', workspaceID, '--cmd', '/bin/sh', '--cmd', '-c', '--cmd', 'printf fixture-pane; exec /bin/sh', '--json'],
+    { encoding: 'utf8', env: process.env },
+  ));
+  if (!Number.isSafeInteger(out.paneId) || out.paneId < 1) throw new Error('pane_create_shape_invalid');
+  return out.paneId;
+}
 function appMetadata(command) {
   const metadata = command?.metadata;
   if (!metadata || typeof metadata.app_voice_capture_id !== 'string' || !metadata.app_voice_capture_id) throw new Error('missing_app_capture_metadata');
@@ -162,6 +172,39 @@ let stage = 'setup';
 let firstFailure = '';
 let browser;
 let peerPage;
+let peerPages = new Set();
+let actorContext;
+let actorPage;
+const protocolEvents = [];
+function recordProtocol(direction, payload) {
+  try {
+    const frame = JSON.parse(String(payload));
+    if (typeof frame.type !== 'string' || !(
+      frame.type.startsWith('app-voice-') ||
+      ['pane-added', 'pane-created', 'pane-closed', 'composition'].includes(frame.type)
+    )) return;
+    const row = { direction, type: frame.type };
+    for (const key of ['status', 'code', 'action']) {
+      if (typeof frame[key] === 'string' && /^[a-z0-9_-]{1,96}$/i.test(frame[key])) row[key] = frame[key];
+    }
+    for (const key of ['revision', 'expected_revision', 'observation_revision', 'paneId', 'pane_id']) {
+      if (Number.isSafeInteger(frame[key])) row[key] = frame[key];
+    }
+    const active = frame.active ?? frame.observation?.active;
+    if (active && ['dock', 'mission_control'].includes(active.surface)) {
+      row.surface = active.surface;
+      row.active_pane = active.pane_id;
+    }
+    if (frame.target && ['pane', 'thread', 'workspace', 'applet'].includes(frame.target.kind)) {
+      row.target_kind = frame.target.kind;
+      if (Number.isSafeInteger(frame.target.pane_id)) row.target_pane = frame.target.pane_id;
+    }
+    if (typeof frame.error === 'string') row.error_sha256 = sha(frame.error);
+    if (Array.isArray(frame.panes)) row.pane_count = frame.panes.length;
+    if (protocolEvents.length === 256) protocolEvents.shift();
+    protocolEvents.push(row);
+  } catch { /* only bounded protocol metadata belongs in diagnostic evidence */ }
+}
 const pass = (name, evidence = {}) => { run.checks[name] = { status: 'PASS', ...evidence }; };
 const blocked = (name, reason) => { if (!run.checks[name]) run.checks[name] = { status: 'BLOCKED', reason }; };
 function gate(name, condition, evidence = {}) {
@@ -171,7 +214,7 @@ function gate(name, condition, evidence = {}) {
   throw new Error(`assertion_${name}`);
 }
 function blockRemainder(reason) {
-  for (const name of ['pane_applet_navigation_preserves_bridge', 'rapid_navigation_refuses_pending_submit', 'two_browser_takeover_drain', 'owner_disconnect_fences_lease', 'replayed_sdp_and_cross_origin_refused', 'known_lane_transcript_attribution']) blocked(name, reason);
+  for (const name of ['two_browser_takeover_drain', 'owner_disconnect_fences_lease', 'replayed_sdp_and_cross_origin_refused', 'rapid_navigation_refuses_pending_submit']) blocked(name, reason);
 }
 
 try {
@@ -191,11 +234,39 @@ try {
   const { chromium } = require(playwrightModule);
   browser = await chromium.launch({
     channel: 'chrome', headless: !opt.headed,
-    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${path.join(output, 'synthetic-input.wav')}`],
+    args: ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${path.join(output, 'synthetic-input.wav')}`],
   });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
   await page.addInitScript(() => {
+    // Browser-API boundary observers retain only native object references. They
+    // neither synthesize media nor reach into the app controller.
+    const media = { streams: [], peers: [], audioContexts: [] };
+    const nativeGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async (...args) => {
+      const stream = await nativeGetUserMedia(...args);
+      media.streams.push(stream);
+      return stream;
+    };
+    const NativePeer = window.RTCPeerConnection;
+    function ObservedPeer(...args) {
+      const peer = new NativePeer(...args);
+      media.peers.push(peer);
+      return peer;
+    }
+    Object.setPrototypeOf(ObservedPeer, NativePeer);
+    ObservedPeer.prototype = NativePeer.prototype;
+    window.RTCPeerConnection = ObservedPeer;
+    const NativeAudioContext = window.AudioContext;
+    function ObservedAudioContext(...args) {
+      const context = new NativeAudioContext(...args);
+      media.audioContexts.push(context);
+      return context;
+    }
+    Object.setPrototypeOf(ObservedAudioContext, NativeAudioContext);
+    ObservedAudioContext.prototype = NativeAudioContext.prototype;
+    window.AudioContext = ObservedAudioContext;
+    window.__fixtureMedia = media;
     const instances = [];
     class FixtureSpeechRecognition extends EventTarget {
       constructor() { super(); instances.push(this); }
@@ -218,19 +289,145 @@ try {
   });
   const frames = [];
   const voiceResponses = [];
-  page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
-    try {
-      const frame = JSON.parse(String(payload));
-      if (frame.type === 'missioncontrol-result' || frame.type === 'missioncontrol-event') frames.push(frame);
-    } catch { /* unrelated transport */ }
-  }));
+  const voiceRequestRAM = new Map();
+  const postPaths = [];
+  const browserErrors = [];
+  page.on('websocket', (socket) => {
+    socket.on('framesent', ({ payload }) => recordProtocol('sent', payload));
+    socket.on('framereceived', ({ payload }) => {
+      recordProtocol('received', payload);
+      try {
+        const frame = JSON.parse(String(payload));
+        if (frame.type === 'missioncontrol-result' || frame.type === 'missioncontrol-event') frames.push(frame);
+      } catch { /* unrelated transport */ }
+    });
+  });
   page.on('response', (response) => {
     const url = new URL(response.url());
     if (url.pathname.startsWith('/api/app/voice/')) voiceResponses.push({ path: url.pathname, status: response.status() });
   });
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST') postPaths.push(pathname);
+    // This exists only long enough to make the two negative HTTP requests
+    // below. Credentials and SDP are never copied to output or diagnostics.
+    if (request.method() === 'POST' && ['/api/app/voice/token', '/api/app/voice/sdp'].includes(pathname)) {
+      void request.allHeaders().then((headers) => {
+        voiceRequestRAM.set(pathname, { url: request.url(), headers, body: request.postData() ?? '' });
+      }).catch(() => {});
+    }
+  });
+  page.on('pageerror', (error) => {
+    // Names only: error messages may contain server/provider controlled data.
+    browserErrors.push(error instanceof Error && /^[A-Za-z0-9_]{1,80}$/.test(error.name) ? error.name : 'BrowserError');
+  });
   await page.goto(base.href, { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: /Mission Control/ }).first().click();
   await page.locator('[data-thread-context-selector]').waitFor({ state: 'visible', timeout: 30_000 });
+  stage = 'normal_voice_preflight';
+  const preflight = await page.evaluate(async () => {
+    const [settingsResponse, configResponse] = await Promise.all([
+      fetch('/api/voice/settings', { credentials: 'include', cache: 'no-store' }),
+      fetch('/api/config', { credentials: 'include', cache: 'no-store' }),
+    ]);
+    const settings = await settingsResponse.json();
+    const config = await configResponse.json();
+    const missionControl = config?.missioncontrol ?? {};
+    return {
+      settings_status: settingsResponse.status,
+      config_status: configResponse.status,
+      available: settings?.available === true,
+      availability_reason: settings?.availabilityReason,
+      compatibility_flags_false:
+        missionControl.threads_v2 === false &&
+        missionControl.text_preview === false &&
+        missionControl.voice_preview === false,
+    };
+  });
+  gate(
+    'normal_voice_settings_ready_without_preview_flags',
+    preflight.settings_status === 200 &&
+      preflight.config_status === 200 &&
+      preflight.available &&
+      preflight.availability_reason === 'ready' &&
+      preflight.compatibility_flags_false,
+    preflight,
+  );
+  async function activeBubble(expectedLabel) {
+    return eventually(async () => {
+      const bubbles = page.locator('mux-voice-mode-bubble [data-voice-mode-bubble]:visible');
+      if (await bubbles.count() !== 1) return null;
+      const result = await bubbles.evaluate((bubble) => {
+        const host = bubble.getRootNode().host;
+        const status = bubble.querySelector('[role="status"]')?.textContent?.trim() ?? '';
+        return {
+          snapshot_is_undefined: host instanceof HTMLElement && host.snapshot === undefined,
+          state: bubble.getAttribute('data-state'),
+          label: status,
+          edge: bubble.getAttribute('data-edge'),
+        };
+      });
+      return result.snapshot_is_undefined && (!expectedLabel || result.label === expectedLabel) ? result : null;
+    }, `active_bubble_${expectedLabel ?? 'any'}`);
+  }
+  async function connectSyntheticPeer(browserContext, offerSDP) {
+    const fixturePeer = await browserContext.newPage();
+    peerPages.add(fixturePeer);
+    await fixturePeer.goto('about:blank');
+    const answerSDP = await fixturePeer.evaluate(async (offer) => {
+      const peer = new RTCPeerConnection();
+      const events = [];
+      window.__fixturePeer = { peer, events, channel: null, audio: null, oscillator: null };
+      peer.ondatachannel = ({ channel }) => {
+        window.__fixturePeer.channel = channel;
+        channel.onmessage = (event) => { try { events.push(JSON.parse(String(event.data)).type ?? 'unknown'); } catch { events.push('non_json'); } };
+        channel.onopen = () => {
+          channel.send(JSON.stringify({ type: 'session.created', session: { id: 'fixture-peer' } }));
+          channel.send(JSON.stringify({ type: 'session.updated', session: { type: 'realtime' } }));
+        };
+      };
+      const audio = new AudioContext();
+      const oscillator = audio.createOscillator();
+      const destination = audio.createMediaStreamDestination();
+      oscillator.connect(destination); oscillator.start();
+      window.__fixturePeer.audio = audio; window.__fixturePeer.oscillator = oscillator;
+      for (const track of destination.stream.getTracks()) peer.addTrack(track, destination.stream);
+      await peer.setRemoteDescription({ type: 'offer', sdp: offer });
+      await peer.setLocalDescription(await peer.createAnswer());
+      await new Promise((resolve) => {
+        if (peer.iceGatheringState === 'complete') return resolve();
+        const timer = setTimeout(resolve, 10_000);
+        peer.addEventListener('icegatheringstatechange', () => { if (peer.iceGatheringState === 'complete') { clearTimeout(timer); resolve(); } });
+      });
+      return peer.localDescription.sdp;
+    }, offerSDP);
+    return { page: fixturePeer, answerSDP };
+  }
+  async function closeSyntheticPeer(fixturePeer) {
+    if (!fixturePeer) return;
+    await fixturePeer.evaluate(async () => {
+      window.__fixturePeer?.oscillator?.stop();
+      await window.__fixturePeer?.audio?.close();
+      window.__fixturePeer?.peer?.close();
+    }).catch(() => {});
+    peerPages.delete(fixturePeer);
+    await fixturePeer.close().catch(() => {});
+  }
+  async function tagAndVerifyBubble() {
+    return eventually(() => page.locator('mux-voice-mode-bubble [data-voice-mode-bubble]:visible').evaluate((bubble) => {
+      if (!(bubble instanceof HTMLElement)) return false;
+      if (!window.__fixtureBubbleReferences) {
+        window.__fixtureBubbleReferences = new WeakSet([bubble]);
+      }
+      return window.__fixtureBubbleReferences.has(bubble);
+    }), 'same_bubble_dom_node');
+  }
+  async function openBubbleMenu() {
+    const control = page.locator('mux-voice-mode-bubble [data-voice-mode-button]:visible');
+    gate('one_visible_live_bubble_control', await control.count() === 1);
+    if (!await page.locator('mux-voice-mode-bubble [role="dialog"]:visible').count()) await control.click();
+    await page.locator('mux-voice-mode-bubble [role="dialog"][aria-label="Voice mode controls"]:visible').waitFor({ state: 'visible', timeout: 10_000 });
+  }
   async function select(label) {
     const cursor = frames.length;
     await page.locator('[data-thread-context-selector]').click();
@@ -272,49 +469,117 @@ try {
   gate('accepted_A_dictation_retained', (await page.locator('[data-thread-composer]').inputValue()).includes('ACCEPTED_A_DRAFT'));
 
   stage = 'app_voice_start';
-  const voice = page.locator('mux-cos').locator('button[data-voice-state]').first();
+  const voice = page.locator('button[data-voice-mode-button][aria-label="Start voice mode"]:visible');
+  gate('one_visible_mission_control_header_start_control', await voice.count() === 1);
+  const mintedResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/app/voice/token' && response.request().method() === 'POST',
+  );
   await voice.click();
+  await page.evaluate(() => {
+    const label = document.createElement('div');
+    label.textContent = 'REAL RTC / SYNTHETIC MEDIA — NO PHYSICAL MIC';
+    Object.assign(label.style, {
+      position: 'fixed', left: '4px', bottom: '4px', zIndex: '9999',
+      padding: '4px', background: '#fff4cc', color: '#111', font: '11px system-ui', pointerEvents: 'none',
+    });
+    document.body.append(label);
+  });
+  const minted = await mintedResponse;
+  const mintedBody = await minted.json();
+  gate(
+    'provider_mint_observed_without_secret_persistence',
+    minted.ok() && typeof mintedBody?.session_id === 'string' && mintedBody.session_id.length > 0,
+    { provider_session_sha256: sha(mintedBody?.session_id ?? '') },
+  );
+  await activeBubble('Connecting');
+  await page.screenshot({ path: path.join(output, 'synthetic-connecting-bubble.png') });
   const pending = await eventually(async () => {
     const reply = await fixtureControl('pending_offer');
     return reply.response.ok ? reply.body : null;
   }, 'pending_offer');
   gate('bounded_private_browser_offer', typeof pending.call_id === 'string' && typeof pending.offer_sdp === 'string', { call_id_sha256: sha(pending.call_id ?? '') });
-  peerPage = await context.newPage();
-  await peerPage.goto('about:blank');
   stage = 'real_rtc_peer_answer';
-  const answer = await peerPage.evaluate(async (offer) => {
-    const peer = new RTCPeerConnection();
-    const events = [];
-    window.__fixturePeer = { peer, events };
-    peer.ondatachannel = ({ channel }) => {
-      channel.onmessage = (event) => { try { events.push(JSON.parse(String(event.data)).type ?? 'unknown'); } catch { events.push('non_json'); } };
-      channel.onopen = () => {
-        channel.send(JSON.stringify({ type: 'session.created', session: { id: 'fixture-peer' } }));
-        channel.send(JSON.stringify({ type: 'session.updated', session: { type: 'realtime' } }));
-      };
-    };
-    const audio = new AudioContext();
-    const oscillator = audio.createOscillator();
-    const destination = audio.createMediaStreamDestination();
-    oscillator.connect(destination); oscillator.start();
-    window.__fixturePeer.audio = audio; window.__fixturePeer.oscillator = oscillator;
-    for (const track of destination.stream.getTracks()) peer.addTrack(track, destination.stream);
-    await peer.setRemoteDescription({ type: 'offer', sdp: offer });
-    await peer.setLocalDescription(await peer.createAnswer());
-    await new Promise((resolve) => {
-      if (peer.iceGatheringState === 'complete') return resolve();
-      const timer = setTimeout(resolve, 10_000);
-      peer.addEventListener('icegatheringstatechange', () => { if (peer.iceGatheringState === 'complete') { clearTimeout(timer); resolve(); } });
-    });
-    return peer.localDescription.sdp;
-  }, pending.offer_sdp);
-  await fixtureOK('answer_sdp', { call_id: pending.call_id, answer_sdp: answer });
+  const firstPeer = await connectSyntheticPeer(context, pending.offer_sdp);
+  peerPage = firstPeer.page;
+  await fixtureOK('answer_sdp', { call_id: pending.call_id, answer_sdp: firstPeer.answerSDP });
   await eventually(() => voiceResponses.some((row) => row.path === '/api/app/voice/sdp' && row.status >= 200 && row.status < 300), 'product_sdp_success');
   await eventually(() => peerPage.evaluate(() => window.__fixturePeer.peer.connectionState === 'connected'), 'dtls_ice_connected');
   gate('real_webrtc_dtls_ice_datachannel', (await peerPage.evaluate(() => window.__fixturePeer.events)).includes('session.update'));
   const callId = pending.call_id;
   await eventually(() => fixtureOK('inspect', { call_id: callId }).then((row) => row.connected === true), 'sideband_wss');
   pass('REALRTC_SYNTHETIC_MEDIA', { call_id_sha256: sha(callId) });
+  await activeBubble('Listening');
+  await tagAndVerifyBubble();
+  await page.screenshot({ path: path.join(output, 'REAL-RTC-SYNTHETIC-MEDIA-NO-PHYSICAL-MIC-active-bubble.png') });
+  pass('live_controller_bubble_not_presentation_snapshot', {
+    capture: 'REAL RTC / SYNTHETIC MEDIA — NO PHYSICAL MIC',
+    provider_session_sha256: sha(mintedBody.session_id),
+  });
+  async function peerEvent(event) {
+    await eventually(() => peerPage.evaluate((fixtureEvent) => {
+      const channel = window.__fixturePeer?.channel;
+      if (!channel || channel.readyState !== 'open') return false;
+      channel.send(JSON.stringify(fixtureEvent));
+      return true;
+    }, event), `peer_datachannel_${event.type}`);
+  }
+  await peerEvent({ type: 'response.output_audio_transcript.delta', delta: 'SYNTHETIC_FIXTURE_PROVIDER_AUDIO' });
+  await activeBubble('Speaking');
+  await peerEvent({ type: 'response.done' });
+  await activeBubble('Listening');
+  await peerEvent({ type: 'response.created', response: { id: 'synthetic-state-only' } });
+  await activeBubble('Thinking');
+  await peerEvent({ type: 'response.done' });
+  await activeBubble('Listening');
+
+  stage = 'live_bubble_interaction';
+  const bubble = page.locator('mux-voice-mode-bubble [data-voice-mode-bubble]:visible');
+  const bubbleMain = bubble.locator('mux-voice-mode-button');
+  const beforeDragSelection = await page.locator('[data-thread-context-selector]').innerText();
+  const beforeDragPosts = postPaths.length;
+  const dragBox = await bubbleMain.boundingBox();
+  if (!dragBox) throw new Error('live_bubble_box_missing');
+  await page.mouse.move(dragBox.x + dragBox.width / 2, dragBox.y + dragBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(20, Math.min(650, dragBox.y + 90), { steps: 12 });
+  await page.mouse.up();
+  await eventually(() => bubble.getAttribute('data-edge').then((edge) => edge === 'left'), 'bubble_docked_left');
+  await eventually(() => bubble.getAttribute('data-snapping').then((value) => value === 'false'), 'bubble_snap_finished');
+  const afterDragBox = await bubble.boundingBox();
+  gate('live_bubble_drag_docks_without_retarget_or_requests',
+    Boolean(afterDragBox && afterDragBox.x >= 0 && afterDragBox.x < 40) &&
+    await page.locator('[data-thread-context-selector]').innerText() === beforeDragSelection &&
+    postPaths.length === beforeDragPosts);
+  await openBubbleMenu();
+  await page.locator('mux-voice-mode-bubble [data-voice-mode-dock-right]').click();
+  await eventually(() => bubble.getAttribute('data-edge').then((edge) => edge === 'right'), 'bubble_docked_right');
+  await eventually(async () => {
+    const box = await bubble.boundingBox();
+    const width = page.viewportSize().width;
+    return box && box.x >= 0 && box.x + box.width <= width && width - box.x - box.width < 24;
+  }, 'bubble_right_edge_geometry');
+  await page.locator('mux-voice-mode-bubble [data-voice-mode-mute]').click();
+  await activeBubble('Mic muted');
+  gate('mute_changes_native_tracks_not_session', await page.evaluate(() =>
+    window.__fixtureMedia.streams.length === 1 &&
+    window.__fixtureMedia.streams[0].getAudioTracks().every((track) => !track.enabled && track.readyState === 'live') &&
+    window.__fixtureMedia.peers.length === 1 && window.__fixtureMedia.peers[0].connectionState === 'connected'));
+  await page.locator('mux-voice-mode-bubble [data-voice-mode-mute]').click();
+  await activeBubble('Listening');
+  gate('unmute_preserves_native_peer', await page.evaluate(() =>
+    window.__fixtureMedia.streams[0].getAudioTracks().every((track) => track.enabled && track.readyState === 'live') &&
+    window.__fixtureMedia.peers.length === 1));
+  await page.locator('mux-voice-mode-bubble [data-voice-mode-close]').click();
+  for (const [name, width, height] of [['portrait', 390, 844], ['landscape', 844, 390]]) {
+    await page.setViewportSize({ width, height });
+    await eventually(async () => {
+      const box = await bubble.boundingBox();
+      return box && box.x >= 0 && box.y >= 0 && box.x + box.width <= width && box.y + box.height <= height;
+    }, `live_bubble_clamp_${name}`);
+    await page.screenshot({ path: path.join(output, `synthetic-live-bubble-${name}.png`) });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  gate('same_bubble_after_drag_mute_and_rotation', Boolean(await tagAndVerifyBubble()));
 
   stage = 'A_B_lobby_navigation';
   const sdpBeforeNavigation = voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length;
@@ -327,7 +592,7 @@ try {
   await page.locator('[data-thread-talk-here]').click();
   await eventually(() => page.locator('[data-thread-context-selector]').innerText().then((text) => text.includes('Lobby')), 'lobby_selection');
   await select(labelA);
-  gate('A_B_lobby_navigation_preserves_one_token_sdp_call', voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length === sdpBeforeNavigation && voiceResponses.filter((row) => row.path === '/api/app/voice/token').length === tokenBeforeNavigation && (await page.locator('mux-cos').locator('button[data-voice-state]:not([data-voice-state="idle"]):not([data-voice-state="error"])').count()) === 1, { token_requests: tokenBeforeNavigation, sdp_requests: sdpBeforeNavigation, call_id_sha256: sha(callId) });
+  gate('A_B_lobby_navigation_preserves_one_token_sdp_call', voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length === sdpBeforeNavigation && voiceResponses.filter((row) => row.path === '/api/app/voice/token').length === tokenBeforeNavigation && Boolean(await activeBubble('Listening')) && Boolean(await tagAndVerifyBubble()), { token_requests: tokenBeforeNavigation, sdp_requests: sdpBeforeNavigation, call_id_sha256: sha(callId) });
 
   stage = 'conversation_dictation_blocked';
   const recognitionsBefore = await page.evaluate(() => window.__fixtureSpeech.instances.length);
@@ -381,6 +646,47 @@ try {
   stage = 'voice_workspace_navigation';
   const workspaceNavigation = await newUtterance('navigate_app', { expected_revision: inventory.revision, target: { kind: 'workspace', workspace_id: workspaceB } });
   gate('navigate_app_authoritative_workspace_ack', workspaceNavigation.output?.selected_target?.workspace_id === workspaceB, { workspace_id_sha256: sha(workspaceB) });
+  const paneB = createPane(workspaceB);
+  const paneObservation = await newUtterance('app_observe', {});
+  const paneNavigation = await newUtterance('navigate_app', {
+    expected_revision: paneObservation.output.revision,
+    target: { kind: 'pane', workspace_id: workspaceB, pane_id: paneB },
+  });
+  gate('navigate_app_authoritative_pane_ack', paneNavigation.output?.selected_target?.pane_id === paneB);
+  stage = 'live_workspace_resize_capture';
+  const mintBeforeWorkspaceCapture = voiceResponses.filter((row) => row.path === '/api/app/voice/token').length;
+  const sdpBeforeWorkspaceCapture = voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length;
+  await page.screenshot({ path: path.join(output, 'actual-normal-workspace-desktop-live-bubble.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await eventually(async () => {
+    const box = await bubble.boundingBox();
+    return box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 390 && box.y + box.height <= 844;
+  }, 'actual_workspace_portrait_settled_clamp');
+  await page.screenshot({ path: path.join(output, 'actual-normal-workspace-portrait-live-bubble.png') });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await eventually(async () => {
+    const box = await bubble.boundingBox();
+    return box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 1280 && box.y + box.height <= 900;
+  }, 'actual_workspace_desktop_restore_settled_clamp');
+  const resizedWorkspaceObservation = await newUtterance('app_observe', {});
+  gate(
+    'live_workspace_resize_preserves_root_bubble_and_bridge',
+    resizedWorkspaceObservation.output?.revision > paneObservation.output.revision &&
+      Boolean(await tagAndVerifyBubble()) &&
+      voiceResponses.filter((row) => row.path === '/api/app/voice/token').length === mintBeforeWorkspaceCapture &&
+      voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length === sdpBeforeWorkspaceCapture,
+    { observation_revision: resizedWorkspaceObservation.output?.revision ?? 0 },
+  );
+  const appletObservation = await newUtterance('app_observe', {});
+  const appletNavigation = await newUtterance('navigate_app', {
+    expected_revision: appletObservation.output.revision,
+    target: { kind: 'applet', applet_id: 'files' },
+  });
+  gate('navigate_app_authoritative_applet_ack', appletNavigation.output?.selected_target?.applet_id === 'files');
+  gate('pane_applet_navigation_preserves_bridge',
+    voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length === sdpBeforeNavigation &&
+    voiceResponses.filter((row) => row.path === '/api/app/voice/token').length === tokenBeforeNavigation &&
+    Boolean(await tagAndVerifyBubble()) && Boolean(await activeBubble()));
   stage = 'voice_thread_navigation';
   const afterWorkspaceObserve = await newUtterance('app_observe', {});
   const selectedThread = await newUtterance('navigate_app', { expected_revision: afterWorkspaceObserve.output.revision, target: { kind: 'thread', thread_id: a.thread.id, runtime_generation: a.thread.runtime_generation } });
@@ -411,7 +717,270 @@ try {
   await wait(500);
   const duplicateCommands = (await commands(callId)).slice(duplicateBefore);
   gate('exact_duplicate_final_no_extra_effect_or_fence', duplicateCommands.length === 0 && providerRecords().length === providerStart + dispatched.length);
-  blockRemainder('not executed by the bounded core flow; parent DTU may extend with final stable selectors');
+  if (opt['known-lane-session-id'] && opt['known-lane-machine']) {
+    const known = await newUtterance('read_lane_transcript', {
+      machine: opt['known-lane-machine'], session_id: opt['known-lane-session-id'], last_n: 2,
+    });
+    gate(
+      'known_lane_transcript_attribution',
+      known.output?.status !== 'refused' &&
+        known.output?.session_id === opt['known-lane-session-id'] &&
+        known.output?.machine === opt['known-lane-machine'] &&
+        known.output?.harness === 'amplifier' &&
+        Number.isInteger(known.output?.turns_count) &&
+        known.output.turns_count >= 1 &&
+        known.output.turns_count <= 2,
+      { requested_turns: 2, returned_turns: known.output?.turns_count ?? 0 },
+    );
+  } else {
+    blocked('known_lane_transcript_attribution', 'operator must supply both --known-lane-session-id and --known-lane-machine for a real discoverable Amplifier lane; no transcript was fabricated');
+  }
+  stage = 'rapid_navigation_pending_submit';
+  const submittedTerminal = await eventually(
+    () => frames.find((frame) => frame.type === 'missioncontrol-event' && frame.thread_id === a.thread.id &&
+      frame.event?.ev === 'turn_end' && frame.event.turn_id === submit.output.turn_id),
+    'native_persisted_A_turn_end',
+  );
+  gate('submitted_A_turn_persisted_before_navigation_race',
+    submittedTerminal.event.persisted === true && !submittedTerminal.event.error);
+  await select(labelA);
+  const rapidObservation = await newUtterance('app_observe', {});
+  const rapidProviderCount = providerRecords().length;
+  const rapidPending = await beginUtterance('submit_thread_turn', {
+    expected_revision: rapidObservation.output.revision,
+    target: threadTarget(rapidObservation.output.active, a.thread.machine_id),
+    text: 'A_PENDING_NAVIGATION_MUST_NOT_DISPATCH',
+  });
+  await confirm.waitFor({ state: 'visible', timeout: 10_000 });
+  await select(labelB);
+  const rapidSubmit = await finishUtterance(rapidPending);
+  gate(
+    'rapid_navigation_refuses_pending_submit',
+    rapidSubmit.output?.status === 'refused' &&
+      providerRecords().length === rapidProviderCount &&
+      await page.locator('[data-app-voice-submit-confirmation]:visible').count() === 0,
+    { refusal_code: rapidSubmit.output?.refusal_code ?? 'unclassified' },
+  );
+  await select(labelA);
+
+  stage = 'replayed_sdp_cross_origin_refusal';
+  const replayBaseline = {
+    provider_records: providerRecords().length,
+    session_sha256: sha(mintedBody.session_id),
+  };
+  const capturedSDP = await eventually(() => voiceRequestRAM.get('/api/app/voice/sdp') ?? null, 'normal_sdp_request_ram_capture');
+  const fixtureReplayBaseline = await fixtureOK('inspect', { call_id: callId });
+  gate('fixture_exchange_counter_available', Number.isSafeInteger(fixtureReplayBaseline.exchange_requests));
+  const replayHeaders = { ...capturedSDP.headers };
+  const replay = await context.request.fetch(capturedSDP.url, {
+    method: 'POST', headers: replayHeaders, data: capturedSDP.body,
+  });
+  const forged = await context.request.fetch(capturedSDP.url, {
+    method: 'POST', headers: { ...replayHeaders, origin: 'https://untrusted.invalid' }, data: capturedSDP.body,
+  });
+  const extraOffer = await fixtureControl('pending_offer');
+  const originalFixture = await fixtureOK('inspect', { call_id: callId });
+  gate(
+    'replayed_sdp_and_cross_origin_refused',
+    replay.status() >= 400 &&
+      forged.status() === 403 &&
+      !extraOffer.response.ok &&
+      originalFixture.connected === true &&
+      providerRecords().length === replayBaseline.provider_records &&
+      originalFixture.exchange_requests === fixtureReplayBaseline.exchange_requests,
+    {
+      replay_status: replay.status(),
+      forged_origin_status: forged.status(),
+      provider_session_sha256: replayBaseline.session_sha256,
+      exchange_requests: originalFixture.exchange_requests,
+    },
+  );
+  stage = 'explicit_live_bubble_stop';
+  const endBefore = postPaths.filter((value) => value === '/api/app/voice/end').length;
+  await openBubbleMenu();
+  await page.locator('mux-voice-mode-bubble [data-voice-mode-stop]').click();
+  await eventually(() => page.evaluate(() =>
+    window.__fixtureMedia.streams.length > 0 &&
+    window.__fixtureMedia.streams.every((stream) => stream.getTracks().every((track) => track.readyState === 'ended')) &&
+    window.__fixtureMedia.peers.length > 0 &&
+    window.__fixtureMedia.peers.every((peer) => peer.connectionState === 'closed') &&
+    window.__fixtureMedia.audioContexts.every((audio) => audio.state === 'closed')), 'native_media_released_after_stop');
+  await eventually(() => page.locator('mux-voice-mode-bubble [data-voice-mode-bubble]:visible').count().then((count) => count === 0), 'bubble_hidden_after_stop');
+  await eventually(() => fixtureOK('inspect', { call_id: callId }).then((row) => row.connected === false), 'sideband_disconnected_after_stop');
+  gate('one_provider_end_on_explicit_bubble_stop', postPaths.filter((value) => value === '/api/app/voice/end').length === endBefore + 1);
+  const recognitionCount = await page.evaluate(() => window.__fixtureSpeech.instances.length);
+  await page.locator('mux-cos').getByRole('button', { name: 'Dictate', exact: true }).click();
+  await eventually(() => page.evaluate((before) => window.__fixtureSpeech.instances.length === before + 1, recognitionCount), 'dictation_after_voice_stop');
+  await page.evaluate((index) => window.__fixtureSpeech.end(index), recognitionCount);
+  pass('explicit_stop_releases_media_sideband_bubble_and_capture_arbiter');
+
+  // The remaining lease checks deliberately use an ordinary browser WebSocket,
+  // not the app's operations object. Frames (including control tokens) remain
+  // inside the second page and only fixed receipt fields cross this boundary.
+  async function openProtocolActor() {
+    actorContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    actorPage = await actorContext.newPage();
+    await actorPage.goto(base.href, { waitUntil: 'domcontentloaded' });
+    await actorPage.evaluate(async () => {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      let basePath = '/';
+      try {
+        const directory = new URL('.', document.baseURI).pathname;
+        basePath = directory.endsWith('/') ? directory : `${directory}/`;
+      } catch { /* opaque document bases use the origin root */ }
+      const ws = new WebSocket(`${protocol}//${location.host}${basePath}ws`);
+      const frames = [];
+      window.__fixtureProtocolActor = { ws, frames };
+      ws.onmessage = (event) => {
+        try { frames.push(JSON.parse(String(event.data))); } catch { /* non-protocol frames are irrelevant */ }
+      };
+      await new Promise((resolve, reject) => {
+        ws.addEventListener('open', resolve, { once: true });
+        ws.addEventListener('error', () => reject(new Error('protocol_actor_socket_error')), { once: true });
+      });
+    });
+  }
+  async function actorClaim(takeover) {
+    return actorPage.evaluate(async (requestedTakeover) => {
+      const actor = window.__fixtureProtocolActor;
+      if (!actor?.ws || actor.ws.readyState !== WebSocket.OPEN) throw new Error('protocol_actor_socket_closed');
+      const start = actor.frames.length;
+      actor.ws.send(JSON.stringify({ type: 'app-voice-claim', protocol_version: 1, takeover: requestedTakeover }));
+      const result = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('protocol_actor_claim_timeout')), 10_000);
+        let interval;
+        const check = () => {
+          const frame = actor.frames.slice(start).find((item) => item.type === 'app-voice-claim-result');
+          if (!frame) return;
+          clearInterval(interval);
+          clearTimeout(timer);
+          resolve(frame);
+        };
+        interval = setInterval(() => {
+          check();
+          if (actor.ws.readyState !== WebSocket.OPEN) {
+            clearInterval(interval);
+            clearTimeout(timer);
+            reject(new Error('protocol_actor_socket_closed'));
+          }
+        }, 25);
+      });
+      return {
+        ok: result.ok === true,
+        code: typeof result.code === 'string' ? result.code : '',
+        lease_epoch: Number.isSafeInteger(result.lease_epoch) ? result.lease_epoch : 0,
+        state: typeof result.state === 'string' ? result.state : '',
+      };
+    }, takeover);
+  }
+  async function actorRelease(epoch) {
+    await actorPage.evaluate(async (leaseEpoch) => {
+      const actor = window.__fixtureProtocolActor;
+      if (!actor?.ws || actor.ws.readyState !== WebSocket.OPEN) throw new Error('protocol_actor_socket_closed');
+      const start = actor.frames.length;
+      actor.ws.send(JSON.stringify({ type: 'app-voice-release', protocol_version: 1, lease_epoch: leaseEpoch }));
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('protocol_actor_release_timeout')), 10_000);
+        const interval = setInterval(() => {
+          if (actor.frames.slice(start).some((item) => item.type === 'app-voice-lease-ended')) {
+            clearInterval(interval);
+            clearTimeout(timer);
+            resolve();
+          }
+        }, 25);
+      });
+    }, epoch);
+  }
+  async function startMainSyntheticBridge() {
+    const tokenBefore = voiceResponses.filter((row) => row.path === '/api/app/voice/token').length;
+    const sdpBefore = voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length;
+    const mint = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === '/api/app/voice/token' && response.request().method() === 'POST',
+    );
+    await page.locator('button[data-voice-mode-button][aria-label="Start voice mode"]:visible').click();
+    const tokenResponse = await mint;
+    gate('restart_main_bridge_mint', tokenResponse.ok());
+    const offer = await eventually(async () => {
+      const reply = await fixtureControl('pending_offer');
+      return reply.response.ok ? reply.body : null;
+    }, 'restart_pending_offer');
+    const fixturePeer = await connectSyntheticPeer(context, offer.offer_sdp);
+    await fixtureOK('answer_sdp', { call_id: offer.call_id, answer_sdp: fixturePeer.answerSDP });
+    await eventually(() => voiceResponses.filter((row) => row.path === '/api/app/voice/sdp').length === sdpBefore + 1, 'restart_sdp_success');
+    await eventually(() => fixturePeer.page.evaluate(() => window.__fixturePeer.peer.connectionState === 'connected'), 'restart_dtls_ice_connected');
+    await eventually(() => fixtureOK('inspect', { call_id: offer.call_id }).then((row) => row.connected === true), 'restart_sideband_wss');
+    gate('restart_main_bridge_single_transport', voiceResponses.filter((row) => row.path === '/api/app/voice/token').length === tokenBefore + 1);
+    const request = await eventually(() => {
+      const captured = voiceRequestRAM.get('/api/app/voice/sdp');
+      const epoch = Number(captured?.headers?.['x-app-voice-lease-epoch']);
+      return Number.isSafeInteger(epoch) && epoch > 0 ? { epoch, captured } : null;
+    }, 'restart_sdp_lease_epoch_ram_capture');
+    return { call_id: offer.call_id, peer: fixturePeer.page, lease_epoch: request.epoch };
+  }
+
+  stage = 'two_browser_takeover_drain';
+  await closeSyntheticPeer(peerPage);
+  peerPage = null;
+  const takeoverBridge = await startMainSyntheticBridge();
+  peerPage = takeoverBridge.peer;
+  const originalEpoch = takeoverBridge.lease_epoch;
+  const mediaBeforeActor = await page.evaluate(() => window.__fixtureMedia.streams.length);
+  await openProtocolActor();
+  const basicClaim = await actorClaim(false);
+  gate(
+    'second_browser_claim_without_takeover_refused',
+    !basicClaim.ok &&
+      basicClaim.code === 'lease_active' &&
+      await peerPage.evaluate(() => window.__fixturePeer.peer.connectionState === 'connected') &&
+      (await fixtureOK('inspect', { call_id: takeoverBridge.call_id })).connected === true,
+  );
+  const takeoverRequest = await actorClaim(true);
+  gate('second_browser_takeover_requests_native_owner_drain', !takeoverRequest.ok && takeoverRequest.code === 'takeover_drain_required');
+  await eventually(() => page.evaluate(() => {
+    const media = window.__fixtureMedia;
+    const stream = media.streams.at(-1);
+    const peer = media.peers.at(-1);
+    const audio = media.audioContexts.at(-1);
+    return stream?.getTracks().every((track) => track.readyState === 'ended') && peer?.connectionState === 'closed' && audio?.state === 'closed';
+  }), 'main_owner_native_drain_before_second_lease');
+  await eventually(() => fixtureOK('inspect', { call_id: takeoverBridge.call_id }).then((row) => row.connected === false), 'main_owner_sideband_drain');
+  const secondLease = await actorClaim(false);
+  await actorPage.evaluate((staleEpoch) => {
+    window.__fixtureProtocolActor.ws.send(JSON.stringify({
+      type: 'app-voice-release', protocol_version: 1, lease_epoch: staleEpoch,
+    }));
+  }, originalEpoch);
+  const fencedOldLease = await actorClaim(false);
+  gate(
+    'two_browser_takeover_drain',
+    secondLease.ok &&
+      secondLease.state === 'claimed' &&
+      secondLease.lease_epoch > originalEpoch &&
+      fencedOldLease.ok &&
+      fencedOldLease.lease_epoch === secondLease.lease_epoch &&
+      await page.locator('mux-voice-mode-bubble [data-voice-mode-bubble]:visible').count() === 0 &&
+      await page.evaluate((before) => window.__fixtureMedia.streams.length === before, mediaBeforeActor),
+    { first_epoch: originalEpoch, second_epoch: secondLease.lease_epoch },
+  );
+  await actorRelease(secondLease.lease_epoch);
+  await closeSyntheticPeer(peerPage);
+  peerPage = null;
+
+  stage = 'owner_disconnect_fences_lease';
+  const disconnectBridge = await startMainSyntheticBridge();
+  peerPage = disconnectBridge.peer;
+  await page.close();
+  await eventually(() => fixtureOK('inspect', { call_id: disconnectBridge.call_id }).then((row) => row.connected === false), 'owner_page_sideband_disconnect');
+  const disconnectLease = await actorClaim(false);
+  gate(
+    'owner_disconnect_fences_lease',
+    disconnectLease.ok && disconnectLease.state === 'claimed' && disconnectLease.lease_epoch > secondLease.lease_epoch,
+    { replacement_epoch: disconnectLease.lease_epoch },
+  );
+  await actorRelease(disconnectLease.lease_epoch);
+  await closeSyntheticPeer(peerPage);
+  peerPage = null;
+  gate('no_browser_runtime_errors', browserErrors.length === 0, { error_names: browserErrors });
   run.status = 'PASS';
 } catch (error) {
   if (!firstFailure) firstFailure = `stage_${stage}`;
@@ -422,13 +991,19 @@ try {
   if (/^[a-zA-Z0-9_.: -]{1,160}$/.test(message)) run.errors.push(`detail:${message}`);
   blockRemainder(`not run after gated failure: ${firstFailure}`);
 } finally {
-  await peerPage?.evaluate(async () => {
-    window.__fixturePeer?.oscillator?.stop();
-    await window.__fixturePeer?.audio?.close();
-    window.__fixturePeer?.peer?.close();
-  }).catch(() => {});
+  for (const fixturePeer of peerPages) {
+    await fixturePeer.evaluate(async () => {
+      window.__fixturePeer?.oscillator?.stop();
+      await window.__fixturePeer?.audio?.close();
+      window.__fixturePeer?.peer?.close();
+    }).catch(() => {});
+    await fixturePeer.close().catch(() => {});
+  }
+  await actorPage?.evaluate(() => window.__fixtureProtocolActor?.ws?.close()).catch(() => {});
+  await actorContext?.close().catch(() => {});
   await browser?.close();
   if (firstFailure) run.first_failure = firstFailure;
+  run.protocol_events = protocolEvents;
   writePrivate('results.json', run);
 }
 console.log(JSON.stringify({ status: run.status, source_reference: run.source_reference.type }));

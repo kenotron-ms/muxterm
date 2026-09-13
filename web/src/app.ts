@@ -14,7 +14,7 @@ import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './
 import { injectTerminalFont } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
 import { voiceSessionController } from './lib/voice-session-controller.js';
-import { fetchVoiceStatus } from './lib/voice-settings.js';
+import { DEFAULT_VOICE_STATUS, fetchVoiceStatus } from './lib/voice-settings.js';
 import {
   appVoiceOperations,
   type AppVoiceComposerTarget,
@@ -181,6 +181,7 @@ export function installKeybindings(actions: UIActions): () => void {
 export class MuxApp extends LitElement {
   static styles = css`
     :host {
+      --main-header-inline-padding: 24px;
       display: flex;
       flex-direction: column;
       width: 100vw;
@@ -923,7 +924,9 @@ export class MuxApp extends LitElement {
     // The server's runtime voice candidate is false until this explicit status
     // check says otherwise. Browser TTS voice enumeration is intentionally not
     // part of this provider-WebRTC capability decision.
-    void fetchVoiceStatus().then((status) => voiceSessionController.setCandidateAvailable(status.appVoiceCandidateAvailable));
+    void fetchVoiceStatus()
+      .then((status) => voiceSessionController.setAvailability(status))
+      .catch(() => voiceSessionController.setAvailability(DEFAULT_VOICE_STATUS));
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
@@ -1010,8 +1013,8 @@ export class MuxApp extends LitElement {
     this._socket.onPaneResized = (paneId, cols, rows) => {
       terminalRegistry.applyServerResize(paneId, cols, rows);
     };
-    // Sidebar live previews: the store owns the opt-in and both data sources
-    // (local xterm buffer for the attached workspace, daemon push for the rest).
+    // Sidebar previews are on-demand workspace-screen reads; the store owns the
+    // authenticated socket seam and does not subscribe or poll at startup.
     previewStore.attach(this._socket);
     // Serve-local conversation frames. Nothing is asked of the server until
     // the overlay opens: threadStore negotiates capability before it either
@@ -1035,9 +1038,6 @@ export class MuxApp extends LitElement {
     // happens to make active. Here, immediately after the store the Dashboard
     // reads is wired -- and NOT on the socket's connect callback. See below.
     this._applyBootSurface();
-    this._socket.onWorkspacePreview = (msg) => {
-      previewStore.handleWorkspacePreview(msg);
-    };
     // Home view session state. Opt in once per connection; the daemon does no
     // work at all until we ask.
     //
@@ -1286,7 +1286,9 @@ export class MuxApp extends LitElement {
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
-      void fetchVoiceStatus().then((status) => voiceSessionController.setCandidateAvailable(status.appVoiceCandidateAvailable));
+      void fetchVoiceStatus()
+        .then((status) => voiceSessionController.setAvailability(status))
+        .catch(() => voiceSessionController.setAvailability(DEFAULT_VOICE_STATUS));
       // A successful attach is the only thing that disproves the diagnosis.
       this._daemonUnreachable = false;
       this._reconnectDetail = '';
@@ -1298,7 +1300,6 @@ export class MuxApp extends LitElement {
       // The preview opt-in is per daemon connection, so a reconnect (or a
       // daemon restart underneath us) silently loses it and tiles would just
       // stop arriving. Re-send it here, alongside the composition re-sync.
-      previewStore.resubscribe();
       // Re-negotiate first; this never replays a pending turn. The coordinator
       // explicitly chooses v2 selection or the unscoped legacy fallback.
       threadStore.markReconnected();
@@ -1577,9 +1578,10 @@ export class MuxApp extends LitElement {
           ></mux-sidebar>
         ` : ''}
         <div class="main-pane">
-          ${isWide && !this._showDashboard
+          ${isWide && !this._showDashboard && panes.length === 0
             ? html`<mux-title-bar
                 desktop
+                .dockActionsVisible="${false}"
                 @launcher-action="${this._onLauncherAction}"
                 @pane-select="${this._onActivePane}"
                 @pane-create-request="${this._createPaneOptimistic}"
@@ -1604,6 +1606,7 @@ export class MuxApp extends LitElement {
                   .requestedPaneId="${this._requestedPaneId}"
                   .layout="${store.layout}"
                   .narrow="${!isWide}"
+                  .workspaceActionsVisible="${!this._showDashboard}"
                   @pane-select="${this._onActivePane}"
                   @pane-create="${this._createPaneOptimistic}"
                   @pane-rename="${this._onPaneRename}"
@@ -1842,7 +1845,10 @@ export class MuxApp extends LitElement {
 
   /** Client-local active-pane selection (sessiond has no select-pane message). */
   private _onActivePane = (e: CustomEvent<{ paneId: number; appVoiceOperationId?: string }>): void => {
-    if (e.detail.appVoiceOperationId !== this._appVoiceNavigatingOperationId) {
+    const ownedVoiceNavigation = !!e.detail.appVoiceOperationId &&
+      e.detail.appVoiceOperationId === this._appVoiceNavigatingOperationId &&
+      appVoiceOperations.isOperationActive(e.detail.appVoiceOperationId);
+    if (!ownedVoiceNavigation) {
       this._appVoiceDetailThreadId = '';
       appVoiceOperations.userNavigation();
     }
@@ -1859,7 +1865,10 @@ export class MuxApp extends LitElement {
     // ackPane is the component's responsibility (mux-pane-picker._selectPane or
     // mux-dock onDidActivePanelChange). Do not ack here — the component already did.
     store.setActivePane(e.detail.paneId);
-    appVoiceOperations.observe(this._appVoiceObservation());
+    // The owner operation publishes its new observation atomically in its
+    // acknowledgement. An ordinary observation here would cancel that same
+    // operation on the server as an unrelated focus change.
+    if (!ownedVoiceNavigation) appVoiceOperations.observe(this._appVoiceObservation());
     // This pane just became the visible tab in this client's layout, so it
     // should claim PTY-sizing authority (active-view-wins).
     this._paneFocusCoordinator?.claimPane(e.detail.paneId);
@@ -2673,6 +2682,8 @@ export class MuxApp extends LitElement {
   };
 
   private _onAppVoiceObservation = (): void => {
+    if (this._appVoiceNavigatingOperationId &&
+      appVoiceOperations.isOperationActive(this._appVoiceNavigatingOperationId)) return;
     appVoiceOperations.observe(this._appVoiceObservation());
   };
 
@@ -2760,12 +2771,14 @@ export class MuxApp extends LitElement {
     operationId: string,
     signal: AbortSignal,
   ): Promise<{ readonly selected_target: AppVoiceNavigateTarget }> {
-    const cos = this.renderRoot.querySelector('mux-cos');
     this._appVoiceNavigatingOperationId = operationId;
     try {
       if (target.kind === 'thread') {
         this._assertAppVoiceOperationCurrent(operationId, signal);
         this._appVoiceDetailThreadId = '';
+        this._showDashboard = true;
+        await this.updateComplete;
+        this._assertAppVoiceOperationCurrent(operationId, signal);
         const receipt = await threadStore.selectForAppVoice(
           target.thread_id,
           target.runtime_generation,
@@ -2785,6 +2798,10 @@ export class MuxApp extends LitElement {
       if (target.kind === 'applet') {
         this._assertAppVoiceOperationCurrent(operationId, signal);
         this._appVoiceDetailThreadId = '';
+        this._showDashboard = true;
+        await this.updateComplete;
+        this._assertAppVoiceOperationCurrent(operationId, signal);
+        const cos = this.renderRoot.querySelector('mux-cos');
         if (!cos || !(await cos.navigateAppletForAppVoice(target.applet_id, undefined, operationId, signal))) {
           throw new Error('The requested applet could not be selected.');
         }
@@ -2827,6 +2844,10 @@ export class MuxApp extends LitElement {
         this._assertAppVoiceOperationCurrent(operationId, signal);
         this._appVoiceDetailThreadId = '';
         await this._selectWorkspaceForAppVoice(target.workspace_id, operationId, signal);
+        this._assertAppVoiceOperationCurrent(operationId, signal);
+        this._showDashboard = false;
+        await this.updateComplete;
+        this._assertAppVoiceOperationCurrent(operationId, signal);
         return { selected_target: target };
       }
       throw new Error('The requested app navigation target is unavailable.');

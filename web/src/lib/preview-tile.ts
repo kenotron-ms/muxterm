@@ -25,6 +25,10 @@ export interface PreviewTile {
   fg?: Int8Array[];
   /** bg[y][x] = ANSI index 0..15, or -1 for default background. Absent = no cell fills. */
   bg?: Int8Array[];
+  /** Full-grid colour tokens from workspace-screen-result. */
+  fgColors?: string[][];
+  bgColors?: string[][];
+  inverse?: boolean[][];
 }
 
 /** One source cell, as produced by either data source. */
@@ -276,6 +280,37 @@ export function tileFromLines(lines: string[], cols: number, rows: number): Prev
   }
 
   return { cols: c, rows: r, lines: out };
+}
+
+/** Preserve the complete authoritative VT viewport, including blank rows. */
+export function tileFromScreen(
+  lines: string[],
+  fg: string[][],
+  bg: string[][],
+  inverse: boolean[][],
+  cols: number,
+  rows: number,
+): PreviewTile {
+  const c = toCount(cols);
+  const r = toCount(rows);
+  const out: string[] = [];
+  for (let y = 0; y < r; y++) {
+    const raw = typeof lines[y] === 'string' ? lines[y] : '';
+    let text = '';
+    for (const ch of raw) {
+      if (text.length >= c) break;
+      text += sanitizeChar(ch, 1);
+    }
+    out.push(text.slice(0, c) + ' '.repeat(Math.max(0, c - text.length)));
+  }
+  return {
+    cols: c,
+    rows: r,
+    lines: out,
+    fgColors: fg.map((row) => row.slice(0, c)),
+    bgColors: bg.map((row) => row.slice(0, c)),
+    inverse: inverse.map((row) => row.slice(0, c)),
+  };
 }
 
 // ---------------------------------------------------------------------------

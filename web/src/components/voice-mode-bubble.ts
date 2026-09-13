@@ -138,32 +138,11 @@ export class MuxVoiceModeBubble extends LitElement {
       transition: left ${SNAP_DURATION_MS}ms ease-out, top ${SNAP_DURATION_MS}ms ease-out;
     }
 
-    .bubble[data-state='connecting'],
-    .bubble[data-state='thinking'],
-    .bubble[data-state='speaking'] {
-      border-color: var(--chrome-accent, currentColor);
-    }
-
-    .bubble[data-state='listening'] {
-      border-color: var(--mux-ok, var(--chrome-text-bright, currentColor));
-    }
-
-    .bubble[data-state='error'] {
-      border-color: var(--mux-error, var(--chrome-danger, currentColor));
-    }
-
-    .bubble[data-muted='true'] {
-      border-color: var(--mux-warn, var(--chrome-text-bright, currentColor));
-    }
-
     mux-voice-mode-button.bubble-main {
       --voice-mode-target: 60px;
       --voice-mode-icon-size: 38px;
       touch-action: none;
       flex: none;
-      border: 1.5px solid currentColor;
-      border-radius: 50%;
-      background: var(--chrome-bar, #202124);
       pointer-events: auto;
     }
 
@@ -299,7 +278,7 @@ export class MuxVoiceModeBubble extends LitElement {
   @state() private _snapping = false;
 
   private readonly _storedPosition = restorePosition();
-  private _edge: DockEdge = this._storedPosition.edge;
+  @state() private _edge: DockEdge = this._storedPosition.edge;
   private _vertical = this._storedPosition.vertical;
   private _x = 0;
   private _y = 0;
@@ -755,6 +734,7 @@ export class MuxVoiceModeBubble extends LitElement {
               <mux-voice-mode-button
                 class="bubble-main"
                 menu-trigger
+                bubble-variant
                 .snapshot="${this._session}"
                 @pointerdown="${this._onPointerDown}"
                 @pointermove="${this._onPointerMove}"

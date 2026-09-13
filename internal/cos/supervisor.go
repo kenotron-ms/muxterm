@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -81,6 +83,25 @@ func ResolveSessionID(override string) (id, source string) {
 		return env, "$" + EnvSessionID
 	}
 	return DefaultSessionID, "default"
+}
+
+// IsValidSessionID accepts the bounded opaque SessionStore identifiers that
+// legacy COS has historically used. Session IDs are names, never paths:
+// separators, controls, dot-paths, leading/trailing whitespace, invalid UTF-8,
+// and values over 128 UTF-8 bytes are refused. Interior spaces, colons, and
+// non-control Unicode remain valid for compatibility with existing stores.
+func IsValidSessionID(value string) bool {
+	if value == "" || len(value) > 128 || !utf8.ValidString(value) ||
+		value != strings.TrimSpace(value) || value == "." || value == ".." ||
+		strings.ContainsAny(value, `/\`) {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveCwd pins the sidecar's working directory ONCE, at construction.
@@ -217,6 +238,10 @@ type Config struct {
 	// ThreadContextMaxTokens is the validated context-simple max_tokens
 	// override for this one threaded root; zero preserves shipped defaults.
 	ThreadContextMaxTokens int
+	// PreserveExistingHistory marks the one Lobby root adopted from legacy COS.
+	// The sidecar must resume it as-is and must not run transcript repair before
+	// later explicitly admitted work.
+	PreserveExistingHistory bool
 	// SubscriberDepth is the default per-subscriber buffer (0 =
 	// DefaultSubscriberDepth).
 	SubscriberDepth int
@@ -315,6 +340,57 @@ func New(cfg Config) *Supervisor {
 	s.q = newQueue(s.sendOp, s.publishSynthEvent, cfg.Logf, newTurnID)
 	s.q.beforeDispatch = s.pushTuning
 	return s
+}
+
+// ResolveWorkingDir returns the stable working directory used to derive the
+// amplifier SessionStore project scope. Callers that need to bind a persisted
+// root use this exact result rather than guessing a SessionStore path.
+func ResolveWorkingDir(override string) (string, error) {
+	dir, _ := resolveCwd(override)
+	if dir == "" {
+		return "", errors.New("cos: working directory is unavailable")
+	}
+	absolute, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("cos: resolve working directory: %w", err)
+	}
+	return absolute, nil
+}
+
+// SessionStoreExists asks the sidecar's own Python environment whether the
+// public SessionStore API sees this exact session in this exact project scope.
+// It does not construct a session, load transcript content, or write anything.
+func SessionStoreExists(ctx context.Context, sessionID, cwd string) (bool, error) {
+	if !IsValidSessionID(sessionID) {
+		return false, errors.New("cos: session store probe requires a bounded opaque session ID")
+	}
+	if !filepath.IsAbs(cwd) {
+		return false, errors.New("cos: session store probe requires an absolute working directory")
+	}
+	python, _, err := ResolveInterpreter("")
+	if err != nil {
+		return false, err
+	}
+	script, _, err := ResolveSidecarScript("")
+	if err != nil {
+		return false, err
+	}
+	cmd := exec.CommandContext(ctx, python, script, "--session-id", sessionID, "--cwd", cwd, "--session-store-exists") //nolint:gosec // values are bounded above or resolver-produced
+	cmd.Dir = cwd
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("cos: session store probe failed: %w", err)
+	}
+	var response struct {
+		Event   string `json:"ev"`
+		Session string `json:"session_id"`
+		Exists  bool   `json:"exists"`
+	}
+	if len(output) > 4096 || json.Unmarshal(bytes.TrimSpace(output), &response) != nil ||
+		response.Event != "session_store_exists" || response.Session != sessionID {
+		return false, errors.New("cos: session store probe returned an invalid response")
+	}
+	return response.Exists, nil
 }
 
 // publishSynthEvent is the queue-only terminal path. Normal sidecar events
@@ -987,6 +1063,9 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 		}
 		if s.cfg.ThreadContextMaxTokens > 0 {
 			args = append(args, "--thread-context-max-tokens", strconv.Itoa(s.cfg.ThreadContextMaxTokens))
+		}
+		if s.cfg.PreserveExistingHistory {
+			args = append(args, "--preserve-existing-history")
 		}
 	}
 

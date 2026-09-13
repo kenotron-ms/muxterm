@@ -78,6 +78,7 @@ import {
   type VoiceState,
   type VoiceTranscriptPayload,
 } from '../lib/voice-input-controller.js';
+import { voiceCaptureArbiter, type VoiceCaptureOwner } from '../lib/voice-capture-arbiter.js';
 import type { MuxApplets } from './mux-applets.js';
 import './voice-mode-button.js';
 // ONE applet host, in one of two containers: the right-hand region in
@@ -190,6 +191,7 @@ export class MuxCos extends LitElement {
   /** The exact scoped request in flight; also closes the pre-render double-click gap. */
   @state() private _threadControlPending: ThreadControlConfirmation | null = null;
   @state() private _voice: VoiceState = voiceInputController.getState();
+  @state() private _captureOwner: VoiceCaptureOwner = voiceCaptureArbiter.snapshot().owner;
   @state() private _dictationNotice = '';
   @state() private _appVoiceConfirmation: AppVoiceSubmitConfirmation | null = null;
 
@@ -221,6 +223,7 @@ export class MuxCos extends LitElement {
 
   private _unsub: (() => void) | null = null;
   private _unsubVoice: (() => void) | null = null;
+  private _unsubCaptureOwner: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
   private _unsubVoiceError: (() => void) | null = null;
   private _unsubSelectionWillChange: (() => void) | null = null;
@@ -419,7 +422,7 @@ export class MuxCos extends LitElement {
       align-items: center;
       gap: var(--s-5);
       position: relative;
-      padding: 0 var(--s-6) 0 var(--s-7);
+      padding: 0 var(--s-6) 0 var(--main-header-inline-padding, var(--s-7));
       border-bottom: 1px solid var(--chrome-border);
       background: var(--chrome-body);
     }
@@ -581,13 +584,20 @@ export class MuxCos extends LitElement {
       min-width: 0;
     }
 
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: none;
+    }
+
     .dots {
       font: inherit;
       color: var(--ink-3);
       background: transparent;
       border: 0;
-      width: var(--ctl);
-      height: var(--ctl);
+      width: 44px;
+      height: 44px;
       display: grid;
       place-items: center;
       border-radius: var(--r-ctl);
@@ -698,18 +708,14 @@ export class MuxCos extends LitElement {
     }
 
     .turn {
-      display: grid;
-      grid-template-columns: 42px minmax(0, 1fr);
-      gap: var(--s-5);
-      align-items: start;
-    }
-    /* Portrait has no 42px to spare for a gutter, so the speaker label goes
-       above its own words instead of beside them. */
-    :host([narrow]) .turn {
-      grid-template-columns: minmax(0, 1fr);
-      gap: var(--s-2);
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-3);
+      min-width: 0;
     }
     .who {
+      display: block;
+      flex: none;
       font-family: var(--mono);
       font-size: 10.5px;
       line-height: 1.8;
@@ -725,6 +731,7 @@ export class MuxCos extends LitElement {
       display: flex;
       flex-direction: column;
       gap: var(--s-5);
+      width: 100%;
       min-width: 0;
     }
     .say {
@@ -756,6 +763,7 @@ export class MuxCos extends LitElement {
     .thought.md {
       white-space: normal;
       min-width: 0;
+      overflow-wrap: anywhere;
     }
     .md > *:first-child {
       margin-top: 0;
@@ -815,6 +823,7 @@ export class MuxCos extends LitElement {
       /* The block scrolls; the conversation does not reflow around it. */
       overflow-x: auto;
       max-width: 100%;
+      box-sizing: border-box;
     }
     .md .md-pre code {
       font-family: var(--mono);
@@ -864,10 +873,12 @@ export class MuxCos extends LitElement {
       margin: 0 0 var(--s-4);
       overflow-x: auto;
       max-width: 100%;
+      min-width: 0;
     }
     .md .md-table {
       border-collapse: collapse;
       font-size: 0.94em;
+      max-width: none;
     }
     .md .md-th,
     .md .md-td {
@@ -1450,6 +1461,10 @@ export class MuxCos extends LitElement {
     // unseen tab can still notice a lane going blocked; the argument for that
     // exception, and the adopt-current-state-on-reattach reasoning, moved with
     // it to applet-dashboard's _onFleet() and _sync().
+    this._captureOwner = voiceCaptureArbiter.snapshot().owner;
+    this._unsubCaptureOwner = voiceCaptureArbiter.subscribe(({ owner }) => {
+      this._captureOwner = owner;
+    });
     this._unsubVoice = voiceInputController.onStateChange((s) => {
       this._voice = s;
       if (s !== 'listening') {
@@ -1489,6 +1504,8 @@ export class MuxCos extends LitElement {
     this._unsub = null;
     this._unsubVoice?.();
     this._unsubVoice = null;
+    this._unsubCaptureOwner?.();
+    this._unsubCaptureOwner = null;
     this._unsubTranscript?.();
     this._unsubTranscript = null;
     this._unsubVoiceError?.();
@@ -1812,14 +1829,16 @@ export class MuxCos extends LitElement {
         >Mission Control</h1>
         ${threadStore.threaded ? this._renderContextSelector() : nothing}
         <span class="spacer"></span>
-        <mux-voice-mode-button></mux-voice-mode-button>
-        <button
-          class="dots ${this._menuOpen ? 'on' : ''}"
-          type="button"
-          aria-label="Conversation options"
-          aria-expanded="${this._menuOpen ? 'true' : 'false'}"
-          @click="${this._toggleMenu}"
-        >${icon(Ellipsis, { size: 16 })}</button>
+        <div class="topbar-actions">
+          <mux-voice-mode-button></mux-voice-mode-button>
+          <button
+            class="dots ${this._menuOpen ? 'on' : ''}"
+            type="button"
+            aria-label="Conversation options"
+            aria-expanded="${this._menuOpen ? 'true' : 'false'}"
+            @click="${this._toggleMenu}"
+          >${icon(Ellipsis, { size: 16 })}</button>
+        </div>
         ${this._menuOpen ? this._renderMenu() : nothing}
       </div>
     `;
@@ -2164,12 +2183,12 @@ export class MuxCos extends LitElement {
     return html`
       ${t.prompt
         ? html`<div class="turn you">
-            <div class="who">you</div>
+            <div class="who">YOU</div>
             <div class="bd"><p class="say">${t.prompt}</p></div>
           </div>`
         : nothing}
       <div class="turn cos">
-        <div class="who">${ASSISTANT_NAME.toLowerCase()}</div>
+        <div class="who">OPERATOR</div>
         <div class="bd">
           ${t.blocks.map((b, i) => this._renderBlock(t, b, i))}
           ${live && t.blocks.length === 0
@@ -2472,9 +2491,10 @@ export class MuxCos extends LitElement {
               ? html`<button
                   class="cbtn ${listening ? 'rec' : ''}"
                   type="button"
-                  title="${listening ? 'Stop dictating' : 'Dictate'}"
+                  title="${this._captureOwner === 'app_conversation' ? 'Stop voice mode before using composer dictation.' : listening ? 'Stop dictating' : 'Dictate'}"
                   aria-label="${listening ? 'Stop dictating' : 'Dictate'}"
                   aria-pressed="${listening ? 'true' : 'false'}"
+                  ?disabled="${this._captureOwner === 'app_conversation'}"
                   @click="${this._toggleVoice}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}

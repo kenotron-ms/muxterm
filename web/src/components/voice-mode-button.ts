@@ -20,7 +20,18 @@ function isActive(snapshot: VoiceSessionSnapshot): boolean {
 }
 
 function unavailableReason(snapshot: VoiceSessionSnapshot): string {
-  if (!snapshot.available) return 'App voice is not enabled for this running server.';
+  if (!snapshot.available) {
+    switch (snapshot.availabilityReason) {
+      case 'voice_disabled':
+        return 'Voice mode is disabled in this server configuration.';
+      case 'voice_config_invalid':
+        return 'Voice mode configuration is invalid. Fix voice settings and restart the server.';
+      case 'voice_provider_unavailable':
+        return 'Voice provider is unavailable on this running server.';
+      default:
+        return 'Voice settings are unavailable from this server.';
+    }
+  }
   if (!snapshot.supported) return 'This browser cannot start a WebRTC voice session.';
   return '';
 }
@@ -114,6 +125,49 @@ export class MuxVoiceModeButton extends LitElement {
       outline: none;
     }
 
+    :host([bubble-variant]) {
+      --voice-mode-target: 60px;
+      --voice-mode-icon-size: 38px;
+    }
+
+    :host([bubble-variant]) .control {
+      border: 1.5px solid currentColor;
+      border-radius: 50%;
+      background: var(--chrome-bar, #202124);
+      outline: none;
+    }
+
+    :host([bubble-variant]) .control[data-state='connecting'] {
+      color: var(--chrome-accent, currentColor);
+    }
+
+    :host([bubble-variant]) .control[data-state='listening'],
+    :host([bubble-variant]) .control[data-state='thinking'],
+    :host([bubble-variant]) .control[data-state='speaking'] {
+      color: var(--mux-ok, var(--chrome-text-bright, currentColor));
+    }
+
+    :host([bubble-variant]) .control[data-state='error'] {
+      color: var(--mux-error, var(--chrome-danger, currentColor));
+    }
+
+    :host([bubble-variant]) .control[data-muted='true'] {
+      color: var(--mux-warn, var(--chrome-text-bright, currentColor));
+    }
+
+    :host([bubble-variant]) .control:hover:not(:disabled) {
+      background: var(--chrome-bar, #202124);
+    }
+
+    :host([bubble-variant]) .control:focus-visible {
+      outline: 2px solid currentColor;
+      outline-offset: 3px;
+    }
+
+    :host([bubble-variant]) .control[aria-pressed='true'] {
+      outline: none;
+    }
+
     mux-voice-mode-icon {
       width: var(--voice-mode-icon-size, 24px);
       height: var(--voice-mode-icon-size, 24px);
@@ -140,6 +194,7 @@ export class MuxVoiceModeButton extends LitElement {
 
   /** A bubble uses the same mark as a menu opener rather than a direct toggle. */
   @property({ type: Boolean, attribute: 'menu-trigger' }) menuTrigger = false;
+  @property({ type: Boolean, attribute: 'bubble-variant' }) bubbleVariant = false;
 
   @state() private _liveSnapshot: VoiceSessionSnapshot = voiceSessionController.snapshot();
   private _unsubscribe: (() => void) | null = null;
@@ -203,6 +258,7 @@ export class MuxVoiceModeButton extends LitElement {
           .state="${snapshot.state}"
           .level="${snapshot.level}"
           .muted="${snapshot.muted}"
+          .bare="${this.bubbleVariant}"
         ></mux-voice-mode-icon>
       </button>
       ${unavailable

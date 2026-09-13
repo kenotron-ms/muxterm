@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kenotron-ms/muxterm/internal/atomicfile"
+	"github.com/kenotron-ms/muxterm/internal/cos"
 )
 
 // schemaVersion 2 adds bounded summary/attention metadata. Version 1 is
@@ -313,6 +314,18 @@ type Thread struct {
 	CreatedAt          time.Time          `json:"created_at"`
 	ArchivedAt         *time.Time         `json:"archived_at,omitempty"`
 	RetiredRuntimes    []RuntimeReference `json:"retired_runtimes,omitempty"`
+	// LobbyOrigin is present only when the active Lobby root adopted the one
+	// legacy COS SessionStore identity. It is metadata, never a path to inspect.
+	// Its exact pair is the sole exception to UUID runtime-session IDs.
+	LobbyOrigin *LobbyOrigin `json:"lobby_origin,omitempty"`
+}
+
+// LobbyOrigin is the exact legacy root identity admitted into the Lobby. It
+// permits one bounded opaque SessionStore ID while preserving UUID-only roots
+// for every workspace and every unrelated Lobby runtime.
+type LobbyOrigin struct {
+	SessionID  string `json:"session_id"`
+	StorageCWD string `json:"storage_cwd"`
 }
 
 // RuntimeReference preserves an old root's canonical SessionStore reference
@@ -337,6 +350,10 @@ func snapshotThread(thread Thread) Thread {
 		thread.ArchivedAt = &archivedAt
 	}
 	thread.RetiredRuntimes = append([]RuntimeReference(nil), thread.RetiredRuntimes...)
+	if thread.LobbyOrigin != nil {
+		origin := *thread.LobbyOrigin
+		thread.LobbyOrigin = &origin
+	}
 	return thread
 }
 
@@ -485,6 +502,23 @@ func validUUID(value string) bool {
 	return err == nil && parsed != uuid.Nil
 }
 
+func validOpaqueSessionID(value string) bool {
+	return cos.IsValidSessionID(value)
+}
+
+func validLobbyOrigin(thread Thread) bool {
+	origin := thread.LobbyOrigin
+	return thread.Kind == "lobby" && origin != nil &&
+		validOpaqueSessionID(origin.SessionID) &&
+		origin.SessionID == thread.RuntimeSessionID &&
+		filepath.IsAbs(origin.StorageCWD) &&
+		origin.StorageCWD == thread.StorageCWD
+}
+
+func validRuntimeSession(thread Thread) bool {
+	return validUUID(thread.RuntimeSessionID) || validLobbyOrigin(thread)
+}
+
 func validateCatalog(data catalog) error {
 	if data.SchemaVersion != schemaVersion {
 		return fmt.Errorf("missioncontrol: catalog schema %d is unsupported; refusing writes", data.SchemaVersion)
@@ -506,10 +540,13 @@ func validateCatalog(data catalog) error {
 		}
 		hasRuntime := thread.RuntimeSessionID != "" || thread.RuntimeGeneration != 0 ||
 			thread.StorageCWD != "" || thread.StatusPath != "" || thread.InstructionPath != "" || thread.JournalPath != ""
-		if hasRuntime && (!validUUID(thread.RuntimeSessionID) || thread.RuntimeGeneration == 0 ||
+		if hasRuntime && (!validRuntimeSession(thread) || thread.RuntimeGeneration == 0 ||
 			!filepath.IsAbs(thread.StorageCWD) || thread.TranscriptRef == "" ||
 			!filepath.IsAbs(thread.StatusPath) || !filepath.IsAbs(thread.InstructionPath) || !filepath.IsAbs(thread.JournalPath)) {
 			return errors.New("missioncontrol: catalog has an invalid runtime record; refusing writes")
+		}
+		if !hasRuntime && thread.LobbyOrigin != nil {
+			return errors.New("missioncontrol: catalog has an unbound Lobby origin; refusing writes")
 		}
 		if thread.RuntimeIncarnation != "" && !validUUID(thread.RuntimeIncarnation) {
 			return errors.New("missioncontrol: catalog has an invalid runtime incarnation; refusing writes")
@@ -591,7 +628,7 @@ func (s *Store) Summaries(limit int) ([]Summary, error) {
 
 func (s *Store) RecordSummary(threadID, runtimeSessionID string, generation uint64, turnID, text string) error {
 	text = strings.TrimSpace(text)
-	if text == "" || len(text) > maxSummaryChars || !validUUID(threadID) || !validUUID(runtimeSessionID) || generation == 0 || turnID == "" {
+	if text == "" || len(text) > maxSummaryChars || !validUUID(threadID) || generation == 0 || turnID == "" {
 		return errors.New("missioncontrol: invalid bounded summary")
 	}
 	s.mu.Lock()
@@ -600,7 +637,7 @@ func (s *Store) RecordSummary(threadID, runtimeSessionID string, generation uint
 		return errors.New("missioncontrol: catalog is closed")
 	}
 	thread, ok := s.data.Threads[threadID]
-	if !ok || thread.RuntimeSessionID != runtimeSessionID || thread.RuntimeGeneration != generation {
+	if !ok || !validRuntimeSession(thread) || thread.RuntimeSessionID != runtimeSessionID || thread.RuntimeGeneration != generation {
 		return errors.New("missioncontrol: summary runtime is stale")
 	}
 	for _, known := range s.data.Summaries {
@@ -796,6 +833,58 @@ func (s *Store) Thread(threadID string) (Thread, Binding, bool, error) {
 	return snapshotThread(thread), Binding{}, true, nil
 }
 
+// BindLobbyOrigin atomically gives an otherwise-unrooted Lobby the exact
+// already-existing legacy COS SessionStore identity. It is intentionally
+// metadata-only: callers must establish source existence with SessionStore's
+// public API before invoking it, and this method never reads, copies, resets,
+// or rewrites the source history.
+//
+// Repeating the exact source is idempotent. A Lobby that already owns another
+// root is a transition conflict, not an invitation to overwrite either root.
+func (s *Store) BindLobbyOrigin(sessionID, storageCWD string) (Thread, error) {
+	if !validOpaqueSessionID(sessionID) || !filepath.IsAbs(storageCWD) {
+		return Thread{}, errors.New("missioncontrol: Lobby origin requires a bounded session ID and absolute storage cwd")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return Thread{}, errors.New("missioncontrol: catalog is closed")
+	}
+	var lobby Thread
+	for _, thread := range s.data.Threads {
+		if thread.Kind == "lobby" {
+			lobby = thread
+			break
+		}
+	}
+	if lobby.ID == "" {
+		return Thread{}, errors.New("missioncontrol: catalog has no Lobby")
+	}
+	if lobby.RuntimeSessionID != "" {
+		if validLobbyOrigin(lobby) && lobby.LobbyOrigin.SessionID == sessionID && lobby.LobbyOrigin.StorageCWD == storageCWD {
+			return snapshotThread(lobby), nil
+		}
+		return Thread{}, fmt.Errorf("missioncontrol: history_transition_conflict: Lobby already owns runtime %q; preserving both stored roots without copying history", lobby.RuntimeSessionID)
+	}
+	lobby.RuntimeSessionID = sessionID
+	lobby.RuntimeGeneration = 1
+	lobby.RuntimeIncarnation = ""
+	lobby.StorageCWD = storageCWD
+	runtimeDir := runtimeDirectory(sessionID)
+	lobby.StatusPath = filepath.Join(runtimeDir, "status.json")
+	lobby.InstructionPath = filepath.Join(runtimeDir, "instruction.txt")
+	lobby.JournalPath = filepath.Join(runtimeDir, "turns.jsonl")
+	lobby.TranscriptRef = "amplifier-session:" + sessionID
+	lobby.LobbyOrigin = &LobbyOrigin{SessionID: sessionID, StorageCWD: storageCWD}
+	next := s.cloneLocked()
+	next.Threads[lobby.ID] = lobby
+	if err := s.publishLocked(next); err != nil {
+		return Thread{}, err
+	}
+	s.data = next
+	return snapshotThread(lobby), nil
+}
+
 // EnsureRuntime persists immutable root identity before a sidecar is started.
 // The unique UUID session ID is the canonical SessionStore key; transcript_ref
 // records that fact without reading or duplicating the transcript.
@@ -816,7 +905,7 @@ func (s *Store) EnsureRuntime(threadID, storageCWD string) (Thread, error) {
 		return Thread{}, errors.New("missioncontrol: thread is not active")
 	}
 	if thread.RuntimeSessionID != "" {
-		if !validUUID(thread.RuntimeSessionID) || thread.RuntimeGeneration == 0 {
+		if !validRuntimeSession(thread) || thread.RuntimeGeneration == 0 {
 			return Thread{}, errors.New("missioncontrol: invalid persisted runtime")
 		}
 		return snapshotThread(thread), nil
@@ -850,7 +939,7 @@ func (s *Store) RotateRuntimeGeneration(threadID string) (Thread, error) {
 		return Thread{}, errors.New("missioncontrol: catalog is closed")
 	}
 	thread, ok := s.data.Threads[threadID]
-	if !ok || !validUUID(thread.RuntimeSessionID) || thread.RuntimeGeneration == 0 {
+	if !ok || !validRuntimeSession(thread) || thread.RuntimeGeneration == 0 {
 		return Thread{}, errors.New("missioncontrol: thread has no valid runtime to rotate")
 	}
 	thread.RuntimeGeneration++
@@ -875,7 +964,7 @@ func (s *Store) BeginRuntime(threadID string) (Thread, error) {
 		return Thread{}, errors.New("missioncontrol: catalog is closed")
 	}
 	thread, ok := s.data.Threads[threadID]
-	if !ok || !validUUID(thread.RuntimeSessionID) || thread.RuntimeGeneration == 0 {
+	if !ok || !validRuntimeSession(thread) || thread.RuntimeGeneration == 0 {
 		return Thread{}, errors.New("missioncontrol: thread has no valid runtime")
 	}
 	if thread.RuntimeIncarnation != "" {
@@ -901,7 +990,7 @@ func (s *Store) ResetRuntime(threadID string) (Thread, error) {
 		return Thread{}, errors.New("missioncontrol: catalog is closed")
 	}
 	thread, ok := s.data.Threads[threadID]
-	if !ok || !validUUID(thread.RuntimeSessionID) || thread.RuntimeGeneration == 0 {
+	if !ok || !validRuntimeSession(thread) || thread.RuntimeGeneration == 0 {
 		return Thread{}, errors.New("missioncontrol: thread has no valid runtime to reset")
 	}
 	retired := make([]RuntimeReference, len(thread.RetiredRuntimes), len(thread.RetiredRuntimes)+1)
@@ -916,6 +1005,7 @@ func (s *Store) ResetRuntime(threadID string) (Thread, error) {
 	thread.RuntimeIncarnation = ""
 	thread.RuntimeSessionID = uuid.New().String()
 	thread.TranscriptRef = "amplifier-session:" + thread.RuntimeSessionID
+	thread.LobbyOrigin = nil
 	runtimeDir := runtimeDirectory(thread.RuntimeSessionID)
 	thread.StatusPath = filepath.Join(runtimeDir, "status.json")
 	thread.InstructionPath = filepath.Join(runtimeDir, "instruction.txt")

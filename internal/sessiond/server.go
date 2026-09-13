@@ -717,6 +717,9 @@ func (c *conn) handle(msg Message) {
 			_ = p.Resize(msg.Cols, msg.Rows)
 			info := p.Info()
 			c.broadcastPaneResizedExcept(info.Cols, info.Rows, msg.PaneID)
+			if msg.UserActive {
+				c.srv.reg.MarkUserActivePane(c.attached, msg.PaneID)
+			}
 		}
 	case TypeRenamePane:
 		if c.attached != "" && c.srv.reg.RenamePane(c.attached, msg.PaneID, msg.Name) {
@@ -775,6 +778,8 @@ func (c *conn) handle(msg Message) {
 			Text:   vb.ScreenText(),
 			Cursor: &CursorPos{Row: row, Col: col},
 		})
+	case TypeWorkspaceScreen:
+		c.workspaceScreen(msg)
 	case TypeScrollbackPage:
 		c.scrollbackPage(msg)
 	case TypeReadFile:
@@ -798,6 +803,34 @@ func (c *conn) handle(msg Message) {
 		// unknown control type.
 		c.reply(&Message{Type: TypeSessionStateSubscribeResult, CID: msg.CID, OK: true})
 	}
+}
+
+func (c *conn) workspaceScreen(msg Message) {
+	if msg.WorkspaceID == "" {
+		c.replyError(msg.CID, CodeUnknownWorkspace, "workspace is required")
+		return
+	}
+	pane, revision, ok := c.srv.reg.UserActivePane(msg.WorkspaceID)
+	if !ok {
+		c.replyError(msg.CID, CodePaneNotFound, "workspace has no user-active pane")
+		return
+	}
+	vtb, ok := pane.buf.(*VTBuffer)
+	if !ok {
+		c.replyError(msg.CID, CodePaneNotFound, "user-active pane has no VT screen")
+		return
+	}
+	cols, rows, lines, fg, bg, inverse, ok := vtb.FullScreen()
+	if !ok {
+		c.replyError(msg.CID, CodePaneNotFound, "user-active screen is unavailable")
+		return
+	}
+	current, currentRevision, ok := c.srv.reg.UserActivePane(msg.WorkspaceID)
+	if !ok || current != pane || currentRevision != revision {
+		c.replyError(msg.CID, CodePaneNotFound, "user-active pane changed during screen read")
+		return
+	}
+	c.reply(&Message{Type: TypeWorkspaceScreenResult, CID: msg.CID, WorkspaceID: msg.WorkspaceID, PaneID: pane.LocalID, Cols: cols, Rows: rows, Lines: lines, FG: fg, BG: bg, Inverse: inverse})
 }
 
 // scrollbackPage answers a TypeScrollbackPage request with one page of the

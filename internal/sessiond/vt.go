@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 )
@@ -462,6 +463,49 @@ func (b *VTBuffer) PreviewTile(cols, rows int) []string {
 		out = append(out, strings.TrimRight(line.String(), " "))
 	}
 	return out
+}
+
+// FullScreen returns the complete current viewport atomically. It never reads
+// scrollback and refuses oversized grids rather than returning a crop.
+func (b *VTBuffer) FullScreen() (cols, rows int, lines []string, fg, bg [][]string, inverse [][]bool, ok bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	emu := b.emu.Emulator
+	cols, rows = emu.Width(), emu.Height()
+	if cols <= 0 || rows <= 0 || cols > 1024 || rows > 1024 || cols*rows > 65536 {
+		return 0, 0, nil, nil, nil, nil, false
+	}
+	lines, fg, bg, inverse = make([]string, rows), make([][]string, rows), make([][]string, rows), make([][]bool, rows)
+	for y := 0; y < rows; y++ {
+		var line strings.Builder
+		fg[y], bg[y], inverse[y] = make([]string, cols), make([]string, cols), make([]bool, cols)
+		for x := 0; x < cols; x++ {
+			cell := emu.CellAt(x, y)
+			if cell == nil {
+				line.WriteByte(' ')
+				continue
+			}
+			line.WriteString(sanitizeCell(cell.Content, 1))
+			fg[y][x] = fullScreenColor(cell.Style.Fg)
+			bg[y][x] = fullScreenColor(cell.Style.Bg)
+			inverse[y][x] = cell.Style.Attrs&uv.AttrReverse != 0
+		}
+		lines[y] = line.String()
+	}
+	return cols, rows, lines, fg, bg, inverse, true
+}
+
+func fullScreenColor(c interface {
+	RGBA() (uint32, uint32, uint32, uint32)
+}) string {
+	if c == nil {
+		return ""
+	}
+	if basic, ok := c.(ansi.BasicColor); ok && basic <= ansi.BrightWhite {
+		return fmt.Sprintf("ansi:%d", basic)
+	}
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8)
 }
 
 // rowHasInk reports whether row y holds any cell that is not blank, scanning

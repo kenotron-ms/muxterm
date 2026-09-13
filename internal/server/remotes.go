@@ -553,6 +553,11 @@ func (s *hostSession) bringUp(conn DaemonConn) (chan struct{}, error) {
 func (s *hostSession) afterConnect(conn DaemonConn, workspaces []sessiond.WorkspaceInfo) {
 	c := s.client
 
+	// A newly dialed remote has a fresh native authority boundary. Forget its
+	// old pane snapshots before any reattach composition can repopulate the
+	// one workspace the browser is actively using.
+	c.forgetAppVoiceHost(s.host.ID)
+
 	// A.5: subscriptions are recorded on the Client, and every session started
 	// AFTERWARDS re-asserts them on connect. Without this a host connected
 	// after page load silently produces no preview tiles and no session rows.
@@ -630,9 +635,11 @@ func (s *hostSession) reattach(conn DaemonConn) {
 		log.Printf("hostSession %s: reattach %s: %v", s.host.ID, wsID, err)
 		return
 	}
+	workspaceID := nsID(s.host.ID, comp.WorkspaceID)
+	c.rememberAppVoicePanes(workspaceID, comp.Panes)
 	c.sendMessage(&sessiond.Message{
 		Type:        sessiond.TypeComposition,
-		WorkspaceID: nsID(s.host.ID, comp.WorkspaceID),
+		WorkspaceID: workspaceID,
 		Panes:       comp.Panes,
 		Layout:      comp.Layout,
 	})
@@ -683,14 +690,16 @@ func (s *hostSession) installHandlers() {
 			}
 		},
 		OnPaneAdded: func(pane sessiond.PaneInfo) {
-			if !attached() {
+			workspaceID, ok := c.attachedWorkspaceForHost(hostID)
+			if !ok {
 				return
 			}
+			c.rememberAppVoicePane(workspaceID, pane.PaneID)
 			c.sendMessage(&sessiond.Message{
 				Type: sessiond.TypePaneAdded,
 				// Already namespaced: the attached workspace id is stored
 				// stamped, so state.ts keeps matching on it.
-				WorkspaceID:     c.getWorkspaceID(),
+				WorkspaceID:     workspaceID,
 				PaneID:          pane.PaneID,
 				Cols:            pane.Cols,
 				Rows:            pane.Rows,
@@ -704,13 +713,17 @@ func (s *hostSession) installHandlers() {
 			if !attached() {
 				return
 			}
+			namespacedWorkspaceID := nsID(hostID, workspaceID)
+			c.forgetAppVoicePane(namespacedWorkspaceID, paneID)
 			c.sendMessage(&sessiond.Message{
-				Type: sessiond.TypePaneClosed, WorkspaceID: nsID(hostID, workspaceID), PaneID: paneID,
+				Type: sessiond.TypePaneClosed, WorkspaceID: namespacedWorkspaceID, PaneID: paneID,
 				ProcessExitCode: processExitCode, RuntimeMs: runtimeMs,
 			})
 		},
 		OnWorkspaceClosed: func(workspaceID string) {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceClosed, WorkspaceID: nsID(hostID, workspaceID)})
+			namespacedWorkspaceID := nsID(hostID, workspaceID)
+			c.forgetAppVoiceWorkspace(namespacedWorkspaceID)
+			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceClosed, WorkspaceID: namespacedWorkspaceID})
 		},
 		OnWorkspaceRenamed: func(workspaceID, name string) {
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceRenamed, WorkspaceID: nsID(hostID, workspaceID), Name: name})

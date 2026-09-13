@@ -240,6 +240,9 @@ export class MuxTitleBar extends LitElement {
   /** Wide workspace chrome reuses this title bar without a drawer control. */
   @property({ type: Boolean, reflect: true }) desktop = false;
 
+  /** The dock supplies the wide workspace voice/menu pair when panes exist. */
+  @property({ type: Boolean }) dockActionsVisible = false;
+
   /** Bumped when the session list changes, so the badge re-derives. */
   @state() private _sessionVersion = 0;
 
@@ -397,13 +400,15 @@ export class MuxTitleBar extends LitElement {
               ${needs ? html`<span class="needs-dot"></span>` : ''}
             </button>`
           : html`<mux-mic-button></mux-mic-button>`}
-        <mux-voice-mode-button></mux-voice-mode-button>
-        <button
-          class="launcher-btn"
-          type="button"
-          title="Open menu"
-          popovertarget="launcher-sheet"
-        >${icon(Ellipsis, { size: 16 })}</button>
+        ${this.desktop && this.dockActionsVisible
+          ? ''
+          : html`<mux-voice-mode-button></mux-voice-mode-button>
+              <button
+                class="launcher-btn"
+                type="button"
+                title="Open menu"
+                popovertarget="launcher-sheet"
+              >${icon(Ellipsis, { size: 16 })}</button>`}
       </div>
       <mux-launcher-menu
         id="launcher-sheet"

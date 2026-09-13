@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -50,12 +51,13 @@ type command struct {
 }
 
 type fixture struct {
-	mu       sync.Mutex
-	next     uint64
-	sessions map[string]string // ephemeral secret -> provider session ID
-	calls    map[string]*call
-	evidence string
-	rtcRelay bool
+	mu          sync.Mutex
+	next        uint64
+	sdpRequests uint64
+	sessions    map[string]string // ephemeral secret -> provider session ID
+	calls       map[string]*call
+	evidence    string
+	rtcRelay    bool
 }
 
 func (f *fixture) id(kind string) string {
@@ -71,14 +73,15 @@ func (f *fixture) writeEvidence() {
 	}
 	f.mu.Lock()
 	out := struct {
-		Format string `json:"format"`
-		Calls  []struct {
+		Format           string `json:"format"`
+		ExchangeRequests uint64 `json:"exchange_requests"`
+		Calls            []struct {
 			ID        string    `json:"id"`
 			Connected bool      `json:"connected"`
 			Commands  []command `json:"commands"`
 			CommandN  int       `json:"command_count"`
 		} `json:"calls"`
-	}{Format: "missioncontrol-realtime-fixture-v1"}
+	}{Format: "missioncontrol-realtime-fixture-v1", ExchangeRequests: f.sdpRequests}
 	for _, c := range f.calls {
 		row := struct {
 			ID        string    `json:"id"`
@@ -137,11 +140,34 @@ func fixtureOutput(value map[string]any) map[string]any {
 	var decoded any
 	if json.Unmarshal([]byte(raw), &decoded) != nil {
 		if strings.HasPrefix(raw, "Refused:") {
-			return map[string]any{"status": "refused"}
+			out := map[string]any{
+				"status":         "refused",
+				"refusal_sha256": fmt.Sprintf("%x", sha256.Sum256([]byte(raw))),
+			}
+			// Retain only fixed protocol codes, never arbitrary error text.
+			switch reason := strings.TrimSpace(strings.TrimPrefix(raw, "Refused:")); reason {
+			case "stale_observation", "target_mismatch", "operation_expired",
+				"operation_refused", "user_navigation", "state_changed":
+				out["refusal_code"] = reason
+			}
+			return out
 		}
 		return nil
 	}
 	safe := map[string]any{}
+	// Preserve the exact top-level receipt identity used by submit/transcript
+	// assertions. Nested inventory IDs remain separate below; no turn text is
+	// copied into the evidence.
+	if receipt, ok := decoded.(map[string]any); ok {
+		for _, key := range []string{"thread_id", "turn_id", "session_id", "machine", "harness"} {
+			if value, ok := receipt[key].(string); ok && len(value) <= 256 {
+				safe[key] = value
+			}
+		}
+		if turns, ok := receipt["turns"].([]any); ok {
+			safe["turns_count"] = len(turns)
+		}
+	}
 	ids := make([]string, 0, 16)
 	machines := make([]string, 0, 8)
 	statuses := make([]string, 0, 8)
@@ -244,6 +270,11 @@ func (f *fixture) mint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fixture) sdp(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		f.mu.Lock()
+		f.sdpRequests++
+		f.mu.Unlock()
+	}
 	if r.Method != http.MethodPost || bearer(r) == "" {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "ephemeral bearer required"})
 		return
@@ -432,13 +463,14 @@ func (f *fixture) control(w http.ResponseWriter, r *http.Request) {
 	case "inspect":
 		f.mu.Lock()
 		c := f.calls[request.CallID]
+		exchangeRequests := f.sdpRequests
 		f.mu.Unlock()
 		if c == nil {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown fixture call"})
 			return
 		}
 		f.mu.Lock()
-		reply := map[string]any{"call_id": c.id, "connected": c.conn != nil, "commands": append([]command(nil), c.commands...)}
+		reply := map[string]any{"call_id": c.id, "connected": c.conn != nil, "commands": append([]command(nil), c.commands...), "exchange_requests": exchangeRequests}
 		f.mu.Unlock()
 		writeJSON(w, http.StatusOK, reply)
 	case "inject":

@@ -183,7 +183,9 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 	return nil
 }
 func (b *appVoiceBridge) ReserveToolCall(event voice.ProviderEvent) (voice.Correlation, error) {
-	if event.CallRef == "" || event.ItemID == "" || event.ResponseID == "" {
+	// Final argument events may omit call_id. Only the previously observed
+	// output-item mapping below can supply it; a supplied value must match.
+	if event.ItemID == "" || event.ResponseID == "" {
 		return voice.Correlation{}, errors.New("unmapped provider function call")
 	}
 	b.service.mu.Lock()
@@ -312,9 +314,13 @@ func appVoiceInputReplaySlots(inputID string) (int, int) {
 func (s *Server) registerAppVoiceRoutes(cfg config.VoiceConfig, protect func(http.Handler) http.Handler) {
 	// This runs during Server construction, before the status route is
 	// registered and before the Server is available to concurrent requests.
-	// Publish s.appVoice only after every candidate gate and provider setup
-	// succeeds; buildVoiceStatus reports that runtime fact, never disk intent.
-	if !s.cfg.MissionControl.VoicePreview || !cfg.Enabled || cfg.Validate() != nil {
+	// Publish s.appVoice only after normal [voice] configuration and provider
+	// setup succeed. Mission Control preview flags never gate app voice.
+	if !cfg.Enabled {
+		return
+	}
+	if err := cfg.Validate(); err != nil {
+		log.Printf("app voice: enabled configuration is invalid, so app voice is unavailable: %v", err)
 		return
 	}
 	mgr, err := voice.NewManager(cfg, appVoiceDisabledBridge{}, voice.DefaultKeyPath())
@@ -488,13 +494,13 @@ func validAppObservation(c *Client, active map[string]any) bool {
 	if detail, _ := active["detail"].(string); detail != "" {
 		thread, _ := active["thread_id"].(string)
 		generation, _ := appVoiceUint(active["runtime_generation"])
-		if detail != thread || !c.appVoiceThreadKnown(thread, generation) {
+		if detail != thread || !c.appVoiceThreadKnown(thread, generation, "", "") {
 			return false
 		}
 	}
 	if thread, _ := active["thread_id"].(string); thread != "" {
 		generation, ok := appVoiceUint(active["runtime_generation"])
-		if !ok || !c.appVoiceThreadKnown(thread, generation) {
+		if !ok || !c.appVoiceThreadKnown(thread, generation, "", "") {
 			return false
 		}
 	}
@@ -513,8 +519,8 @@ func validAppObservation(c *Client, active map[string]any) bool {
 		draftRef, _ := composer["draft_ref"].(string)
 		return strings.HasPrefix(channel, "thread:") && channel == "thread:"+threadID &&
 			validMissionControlRequestID(threadID) && generationOK &&
-			validMissionControlRequestID(sessionID) && validMissionControlRequestID(incarnation) &&
-			validMissionControlRequestID(draftRef) && c.appVoiceThreadKnown(threadID, generation)
+			sessionID != "" && validMissionControlRequestID(incarnation) &&
+			validMissionControlRequestID(draftRef) && c.appVoiceThreadKnown(threadID, generation, sessionID, incarnation)
 	}
 	return true
 }
@@ -684,7 +690,7 @@ func (s *appVoiceService) validTarget(owner *Client, active map[string]any, tool
 		case "thread":
 			threadID, _ := target["thread_id"].(string)
 			generation, _ := appVoiceUint(target["runtime_generation"])
-			if !owner.appVoiceThreadKnown(threadID, generation) {
+			if !owner.appVoiceThreadKnown(threadID, generation, "", "") {
 				return false
 			}
 			catalog, err := s.hub.missionControlCatalog()
@@ -697,7 +703,7 @@ func (s *appVoiceService) validTarget(owner *Client, active map[string]any, tool
 			threadID, _ := target["thread_id"].(string)
 			detailID, _ := target["detail_id"].(string)
 			generation, _ := appVoiceUint(target["runtime_generation"])
-			if detailID != threadID || !owner.appVoiceThreadKnown(threadID, generation) {
+			if detailID != threadID || !owner.appVoiceThreadKnown(threadID, generation, "", "") {
 				return false
 			}
 			catalog, err := s.hub.missionControlCatalog()
@@ -715,7 +721,9 @@ func (s *appVoiceService) validTarget(owner *Client, active map[string]any, tool
 		}
 		threadID, _ := target["thread_id"].(string)
 		generation, _ := appVoiceUint(target["runtime_generation"])
-		if !owner.appVoiceThreadKnown(threadID, generation) {
+		sessionID, _ := target["runtime_session_id"].(string)
+		incarnation, _ := target["runtime_incarnation"].(string)
+		if !owner.appVoiceThreadKnown(threadID, generation, sessionID, incarnation) {
 			return false
 		}
 		catalog, err := s.hub.missionControlCatalog()
@@ -786,6 +794,12 @@ func (s *appVoiceService) ack(c *Client, f struct {
 		s.mu.Unlock()
 		return
 	}
+	if f.Status != "ok" {
+		delete(s.operations, op.ID)
+		s.mu.Unlock()
+		op.done <- appVoiceOperationResult{err: errors.New("operation refused: " + f.Code)}
+		return
+	}
 	active, _ := f.Result["active"].(map[string]any)
 	selected, selectedOK := f.Result["selected_target"].(map[string]any)
 	navigationRevision, navigationRevisionOK := appVoiceUint(f.Result["observation_revision"])
@@ -814,10 +828,6 @@ func (s *appVoiceService) ack(c *Client, f struct {
 		return
 	}
 	delete(s.operations, op.ID)
-	if f.Status != "ok" {
-		op.done <- appVoiceOperationResult{err: errors.New("operation refused: " + f.Code)}
-		return
-	}
 	if !validAppAck(op, f.Result) {
 		op.done <- appVoiceOperationResult{err: errors.New("operation acknowledgement mismatch")}
 		return
@@ -851,17 +861,20 @@ func validAppAck(op *appVoiceOperation, result map[string]any) bool {
 }
 func appActiveMatchesTarget(active, target map[string]any) bool {
 	kind, _ := target["kind"].(string)
+	composer, _ := active["composer"].(map[string]any)
 	switch kind {
 	case "workspace":
-		return active["workspace_id"] == target["workspace_id"]
+		return active["surface"] == "dock" && active["workspace_id"] == target["workspace_id"]
 	case "pane":
-		return active["workspace_id"] == target["workspace_id"] && active["pane_id"] == target["pane_id"]
+		return active["surface"] == "dock" && active["workspace_id"] == target["workspace_id"] && active["pane_id"] == target["pane_id"]
 	case "applet":
-		return active["applet_id"] == target["applet_id"]
+		return active["surface"] == "mission_control" && active["applet_id"] == target["applet_id"]
 	case "thread":
-		return active["thread_id"] == target["thread_id"] && active["runtime_generation"] == target["runtime_generation"]
+		return active["surface"] == "mission_control" && composer != nil &&
+			composer["thread_id"] == target["thread_id"] && composer["runtime_generation"] == target["runtime_generation"]
 	case "detail":
-		return active["thread_id"] == target["thread_id"] && active["runtime_generation"] == target["runtime_generation"] && active["detail"] == target["detail_id"]
+		return active["surface"] == "mission_control" && composer != nil &&
+			composer["thread_id"] == target["thread_id"] && composer["runtime_generation"] == target["runtime_generation"] && active["detail"] == target["detail_id"]
 	}
 	return false
 }
@@ -1158,14 +1171,50 @@ func (c *Client) appVoiceWorkspaceKnown(id string) bool {
 	}
 	return false
 }
-func (c *Client) appVoiceThreadKnown(id string, generation uint64) bool {
+
+// lookupCatalogThread reads the Hub-published catalog before taking the
+// client subscription lock. App-voice callers invoke it outside the app voice
+// service lock, preserving the Hub/client lock ordering used on disconnect.
+func (c *Client) lookupCatalogThread(id string) (missioncontrol.Thread, bool) {
+	catalog, err := c.hub.missionControlCatalog()
+	if err != nil {
+		return missioncontrol.Thread{}, false
+	}
+	thread, _, found, err := catalog.Thread(id)
+	return thread, err == nil && found
+}
+
+// appVoiceThreadKnown proves both catalog identity and this browser's existing
+// authority over the root. An empty runtime pair is used only by metadata-only
+// observation/navigation records that carry no runtime address. Turn/composer
+// records supply both values and therefore bind the opaque Lobby exception to
+// the exact persisted origin rather than accepting arbitrary session strings.
+func (c *Client) appVoiceThreadKnown(id string, generation uint64, sessionID, incarnation string) bool {
+	thread, found := c.lookupCatalogThread(id)
+	if !found || thread.ID != id || thread.Lifecycle != "active" ||
+		thread.RuntimeGeneration != generation || !validMissionControlRequestID(thread.RuntimeIncarnation) ||
+		(incarnation != "" && incarnation != thread.RuntimeIncarnation) {
+		return false
+	}
+	if validMissionControlRequestID(thread.RuntimeSessionID) {
+		if sessionID != "" && sessionID != thread.RuntimeSessionID {
+			return false
+		}
+	} else if thread.Kind != "lobby" || thread.LobbyOrigin == nil ||
+		thread.LobbyOrigin.SessionID != thread.RuntimeSessionID ||
+		(sessionID != "" && sessionID != thread.RuntimeSessionID) {
+		return false
+	}
+
 	c.missionControlMu.Lock()
 	defer c.missionControlMu.Unlock()
 	if c.missionControlSelection.threadID == id && c.missionControlSelection.generation == generation {
 		return true
 	}
 	sub, ok := c.missionControlSubscriptions[id]
-	return ok && sub.runtime != nil && sub.runtime.Thread.RuntimeGeneration == generation
+	return ok && sub.runtime != nil && sub.runtime.Thread.RuntimeSessionID == thread.RuntimeSessionID &&
+		sub.runtime.Thread.RuntimeGeneration == generation &&
+		sub.runtime.Thread.RuntimeIncarnation == thread.RuntimeIncarnation
 }
 func (c *Client) appVoiceFleet() []map[string]any {
 	c.mergeMu.Lock()
@@ -1191,6 +1240,9 @@ func (c *Client) appVoiceFleet() []map[string]any {
 	return out
 }
 func (c *Client) rememberAppVoicePanes(workspace string, panes []sessiond.PaneInfo) {
+	if workspace == "" {
+		return
+	}
 	c.wsMu.Lock()
 	defer c.wsMu.Unlock()
 	known := make(map[int]bool, len(panes))
@@ -1200,6 +1252,49 @@ func (c *Client) rememberAppVoicePanes(workspace string, panes []sessiond.PaneIn
 		}
 	}
 	c.appVoicePanes[workspace] = known
+}
+func (c *Client) rememberAppVoicePane(workspace string, pane int) {
+	if workspace == "" || pane <= 0 {
+		return
+	}
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.appVoicePanes == nil {
+		c.appVoicePanes = make(map[string]map[int]bool)
+	}
+	if c.appVoicePanes[workspace] == nil {
+		c.appVoicePanes[workspace] = make(map[int]bool)
+	}
+	c.appVoicePanes[workspace][pane] = true
+}
+func (c *Client) forgetAppVoicePane(workspace string, pane int) {
+	if workspace == "" || pane <= 0 {
+		return
+	}
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	delete(c.appVoicePanes[workspace], pane)
+}
+func (c *Client) forgetAppVoiceWorkspace(workspace string) {
+	if workspace == "" {
+		return
+	}
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	delete(c.appVoicePanes, workspace)
+}
+func (c *Client) forgetAppVoiceHost(host string) {
+	if host == "" {
+		return
+	}
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	for workspace := range c.appVoicePanes {
+		qualifier, _ := splitID(workspace)
+		if qualifier == host {
+			delete(c.appVoicePanes, workspace)
+		}
+	}
 }
 func (c *Client) appVoicePaneKnown(workspace string, pane int) bool {
 	c.wsMu.Lock()

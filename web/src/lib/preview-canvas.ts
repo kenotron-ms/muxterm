@@ -27,6 +27,13 @@ export interface RenderOptions {
   scale?: number;
 }
 
+function resolveColour(token: string | undefined, palette: string[], fallback: string): string {
+  if (!token) return fallback;
+  if (/^#[0-9a-fA-F]{6}$/.test(token)) return token;
+  const match = /^ansi:([0-9]|1[0-5])$/.exec(token);
+  return match ? palette[Number(match[1])] ?? fallback : fallback;
+}
+
 const DEFAULT_CONTRAST_FLOOR = 4.5;
 
 /** Font spec — integer px, always. A fractional size destroys the bitmap. */
@@ -171,17 +178,32 @@ export function renderTile(canvas: HTMLCanvasElement, tile: PreviewTile, opts: R
   // Cell fills use raw palette colours: the contrast floor exists to keep ink
   // visible, and lifting a background would wash the cell out instead.
   const cellBg = tile.bg;
-  if (!mono && cellBg) {
+  const cellBgColors = tile.bgColors;
+  const cellFg = tile.fg;
+  const cellFgColors = tile.fgColors;
+  const inverseRow = tile.inverse;
+  if (!mono && (cellBg || cellBgColors)) {
     for (let y = 0; y < rows; y++) {
-      const row = cellBg[y];
-      if (!row) continue;
+      const row = cellBg?.[y];
+      const colourRow = cellBgColors?.[y];
+      const fgRow = cellFg?.[y];
+      const fgColourRow = cellFgColors?.[y];
+      const invertRow = inverseRow?.[y];
       let x = 0;
-      while (x < cols && x < row.length) {
-        const idx = row[x];
-        if (idx < 0) { x++; continue; }
+      while (x < cols && (row !== undefined || colourRow !== undefined)) {
+        const inverted = invertRow?.[x] === true;
+        const idx = inverted ? fgRow?.[x] ?? -1 : row?.[x] ?? -1;
+        const token = inverted ? fgColourRow?.[x] ?? '' : colourRow?.[x] ?? '';
+        if (idx < 0 && token === '') { x++; continue; }
         let end = x + 1;
-        while (end < cols && end < row.length && row[end] === idx) end++;
-        ctx.fillStyle = opts.palette[idx] ?? opts.bg;
+        while (
+          end < cols &&
+          (invertRow?.[end] === true) === inverted &&
+          (inverted ? fgRow?.[end] ?? -1 : row?.[end] ?? -1) === idx &&
+          (inverted ? fgColourRow?.[end] ?? '' : colourRow?.[end] ?? '') === token
+        ) end++;
+        const fallback = inverted ? opts.fg : opts.bg;
+        ctx.fillStyle = colourRow || inverted ? resolveColour(token, opts.palette, fallback) : opts.palette[idx] ?? fallback;
         ctx.fillRect(x * cellW, y * cellH, (end - x) * cellW, cellH);
         x = end;
       }
@@ -200,20 +222,37 @@ export function renderTile(canvas: HTMLCanvasElement, tile: PreviewTile, opts: R
     const line = tile.lines[y];
     if (!line) continue;
     const fgRow = mono ? undefined : tile.fg?.[y];
+    const fgColourRow = mono ? undefined : tile.fgColors?.[y];
+    const inverseRow = mono ? undefined : tile.inverse?.[y];
+    const bgRow = mono ? undefined : tile.bg?.[y];
+    const bgColourRow = mono ? undefined : tile.bgColors?.[y];
     const py = y * cellH;
     const limit = Math.min(cols, line.length);
     let x = 0;
     while (x < limit) {
       if (line.charCodeAt(x) === 32) { x++; continue; }
       const idx = fgRow && x < fgRow.length ? fgRow[x] : -1;
+      const inverted = inverseRow?.[x] === true;
+      const effectiveIdx = inverted ? bgRow?.[x] ?? -1 : idx;
+      const token = inverted ? bgColourRow?.[x] ?? '' : fgColourRow?.[x] ?? '';
       // Batch the run of same-coloured columns into one fillText. Safe because
       // the font's advance is exactly cellW for every glyph it carries, which
       // tools/font/build.sh asserts.
       let end = x + 1;
-      while (end < limit && (fgRow && end < fgRow.length ? fgRow[end] : -1) === idx) end++;
+      while (
+        end < limit &&
+        (inverseRow?.[end] === true) === inverted &&
+        (inverted ? bgRow?.[end] ?? -1 : fgRow && end < fgRow.length ? fgRow[end] : -1) === effectiveIdx &&
+        (inverted ? bgColourRow?.[end] ?? '' : fgColourRow?.[end] ?? '') === token
+      ) end++;
       const run = line.slice(x, end).trimEnd();
       if (run !== '') {
-        ctx.fillStyle = mono ? defaultInk : inkFor(idx);
+        const fallback = inverted ? opts.bg : opts.fg;
+        ctx.fillStyle = mono
+          ? defaultInk
+          : fgColourRow || inverted
+            ? resolveColour(token, opts.palette, fallback)
+            : inkFor(effectiveIdx);
         ctx.fillText(run, x * cellW, py);
       }
       x = end;

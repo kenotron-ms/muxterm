@@ -49,6 +49,13 @@ export interface CatalogThread {
   readonly runtimeSessionId: string;
   readonly runtimeGeneration: number;
   readonly runtimeIncarnation: string;
+  /** Present only for the one server-validated adopted legacy Lobby root. */
+  readonly lobbyOrigin: LobbyOrigin | null;
+}
+
+interface LobbyOrigin {
+  readonly sessionId: string;
+  readonly storageCwd: string;
 }
 
 /** Immutable runtime address accepted by the experimental scoped voice API. */
@@ -387,6 +394,60 @@ function uuidValue(value: unknown): string {
   return UUID_RE.test(candidate) ? candidate : '';
 }
 
+function parseLobbyOrigin(value: unknown): LobbyOrigin | null {
+  if (value === undefined || value === null) return null;
+  const raw = recordValue(value);
+  if (!raw) return null;
+  const sessionId = stringValue(raw.session_id);
+  const storageCwd = stringValue(raw.storage_cwd);
+  if (!validOpaqueLegacySessionId(sessionId) || !storageCwd.startsWith('/')) {
+    return null;
+  }
+  return Object.freeze({ sessionId, storageCwd });
+}
+
+function validOpaqueLegacySessionId(value: string): boolean {
+  return (
+    value !== '' &&
+    new TextEncoder().encode(value).byteLength <= 128 &&
+    value === value.trim() &&
+    value !== '.' &&
+    value !== '..' &&
+    !value.includes('/') &&
+    !value.includes('\\') &&
+    !/[\p{Cc}]/u.test(value)
+  );
+}
+
+function hasValidRuntimeSession(thread: CatalogThread): boolean {
+  return (
+    uuidValue(thread.runtimeSessionId) !== '' ||
+    (thread.kind === 'lobby' &&
+      thread.lobbyOrigin !== null &&
+      thread.lobbyOrigin.sessionId === thread.runtimeSessionId)
+  );
+}
+
+function matchesCatalogRuntimeIdentity(
+  thread: CatalogThread,
+  generation: number,
+  sessionId: string,
+  incarnation: string,
+): boolean {
+  if (
+    thread.runtimeGeneration !== generation ||
+    thread.runtimeSessionId !== sessionId ||
+    thread.runtimeIncarnation !== incarnation ||
+    !uuidValue(thread.runtimeIncarnation)
+  ) {
+    return false;
+  }
+  return thread.kind === 'workspace'
+    ? uuidValue(thread.runtimeSessionId) !== ''
+    : uuidValue(thread.runtimeSessionId) !== '' ||
+        (thread.lobbyOrigin !== null && thread.lobbyOrigin.sessionId === thread.runtimeSessionId);
+}
+
 function protocolFailure(frame: Record<string, unknown>, fallback: string): string {
   const detail = stringValue(frame.error);
   const code = stringValue(frame.code);
@@ -446,6 +507,16 @@ function parseCatalogThread(value: unknown): CatalogThread | null {
   const kind = stringValue(raw.kind);
   const displayName = stringValue(raw.display_name);
   if (!id || (kind !== 'lobby' && kind !== 'workspace') || !displayName) return null;
+  const runtimeSessionId = stringValue(raw.runtime_session_id);
+  const lobbyOrigin = parseLobbyOrigin(raw.lobby_origin);
+  if (raw.lobby_origin !== undefined && raw.lobby_origin !== null && lobbyOrigin === null) return null;
+  if (
+    runtimeSessionId !== '' &&
+    !uuidValue(runtimeSessionId) &&
+    !(kind === 'lobby' && lobbyOrigin !== null && lobbyOrigin.sessionId === runtimeSessionId)
+  ) {
+    return null;
+  }
   const rawGeneration = raw.runtime_generation;
   const runtimeGeneration = rawGeneration === undefined ? 0 : positiveSafeInteger(rawGeneration);
   if (rawGeneration !== undefined && runtimeGeneration === 0) return null;
@@ -455,9 +526,10 @@ function parseCatalogThread(value: unknown): CatalogThread | null {
     displayName,
     machineId: stringValue(raw.machine_id),
     workspaceUuid: stringValue(raw.workspace_uuid),
-    runtimeSessionId: stringValue(raw.runtime_session_id),
+    runtimeSessionId,
     runtimeGeneration,
     runtimeIncarnation: stringValue(raw.runtime_incarnation),
+    lobbyOrigin,
   };
 }
 
@@ -466,7 +538,7 @@ function parseRuntimeThread(value: unknown): CatalogThread | null {
   // Text preview remains compatible with a server predating voice incarnation
   // attestation. The separate voiceTarget getter fails closed until that field
   // is present and valid, so an old text server never gains voice authority.
-  if (!thread || !uuidValue(thread.runtimeSessionId) || thread.runtimeGeneration === 0) return null;
+  if (!thread || !hasValidRuntimeSession(thread) || thread.runtimeGeneration === 0) return null;
   return thread;
 }
 
@@ -930,6 +1002,7 @@ class ThreadStore {
   private _storageLoaded = false;
   private _storageUnavailable = false;
   private _legacyUnsubscribe: (() => void) | null = null;
+  private _workspaceListUnsubscribe: (() => void) | null = null;
 
   get mode(): ThreadMode {
     return this._mode;
@@ -1069,6 +1142,35 @@ class ThreadStore {
   }
 
   /**
+   * Read-only admission for the sole opaque runtime-session exception. The
+   * caller still needs the normal selected-composer and server-side checks;
+   * this only proves that this live, validated catalog records this exact
+   * runtime identity. Workspace roots remain UUID-only.
+   */
+  matchesRuntimeIdentity(
+    threadId: string,
+    generation: number,
+    sessionId: string,
+    incarnation: string,
+  ): boolean {
+    if (
+      !this._catalogReady ||
+      this._socket?.connected !== true ||
+      !uuidValue(threadId) ||
+      !positiveSafeInteger(generation) ||
+      !uuidValue(incarnation)
+    ) {
+      return false;
+    }
+    const catalogThread = this._threads.find((thread) => thread.id === threadId);
+    if (!catalogThread || !matchesCatalogRuntimeIdentity(catalogThread, generation, sessionId, incarnation)) {
+      return false;
+    }
+    const stateThread = this._states.get(threadId)?.thread;
+    return stateThread === undefined || matchesCatalogRuntimeIdentity(stateThread, generation, sessionId, incarnation);
+  }
+
+  /**
    * The only frontend source for a voice attachment address. It is produced
    * from the committed thread snapshot rather than terminal/app focus and
    * excludes stale, syncing, archived, or connection-unready roots.
@@ -1128,7 +1230,7 @@ class ThreadStore {
       state.syncing ||
       state.archived ||
       !uuidValue(thread.id) ||
-      !uuidValue(thread.runtimeSessionId) ||
+      !hasValidRuntimeSession(thread) ||
       !uuidValue(thread.runtimeIncarnation) ||
       thread.runtimeGeneration === 0 ||
       !uuidValue(state.draftRef)
@@ -1355,12 +1457,15 @@ class ThreadStore {
   }
 
   attach(socket: MuxSocket): void {
+    this._workspaceListUnsubscribe?.();
+    this._workspaceListUnsubscribe = null;
     this._socket = socket;
     this._loadPersistedState();
     cosStore.attach(socket);
     this._legacyUnsubscribe?.();
     this._legacyUnsubscribe = cosStore.subscribe(() => this._notify());
     socket.onMissionControlFrame = (frame) => this._handleFrame(frame);
+    this._workspaceListUnsubscribe = socket.onWorkspaceList(() => this._refreshWorkspaceCatalog());
     socket.setLegacyCosFramesEnabled(true);
     if (this._wanted && socket.connected) this._beginNegotiation();
   }
@@ -1479,10 +1584,11 @@ class ThreadStore {
     operationId: string,
     signal: AbortSignal,
   ): Promise<ThreadSelectionReceipt> {
-    const known = this._threads.find(
-      (thread) => thread.id === threadId && thread.runtimeGeneration === runtimeGeneration,
-    );
-    if (!known) {
+    // Selection snapshots contain the authoritative runtime identity. A
+    // workspace root can be created after the last catalog list, so that list
+    // alone may still omit it or describe generation zero.
+    const known = this._states.get(threadId)?.thread ?? this._threads.find((thread) => thread.id === threadId);
+    if (!known || known.runtimeGeneration !== runtimeGeneration) {
       return Promise.resolve({
         ok: false,
         requested: { kind: 'thread', threadId },
@@ -2405,7 +2511,7 @@ class ThreadStore {
 
   private _requestList(): void {
     const socket = this._socket;
-    if (!socket || !socket.connected || !this.threaded) return;
+    if (!socket || !socket.connected || !this.threaded || this._listRequestId !== '') return;
     const requestId = makeRequestId();
     if (!requestId) {
       this._setProblem('request_id_unavailable', 'A secure request ID could not be created.');
@@ -2424,6 +2530,14 @@ class ThreadStore {
       return;
     }
     this._notify();
+  }
+
+  // A workspace-list is native daemon inventory, not a catalog inference.
+  // Coalescing behind the existing request fence prevents burst broadcasts
+  // from resetting selection or starting a request feedback loop.
+  private _refreshWorkspaceCatalog(): void {
+    if (!this._wanted || !this._catalogReady) return;
+    this._requestList();
   }
 
   /** Fetch durable read-only attention; no root is selected or started. */
@@ -2661,12 +2775,17 @@ class ThreadStore {
       this._setProblem('invalid_context_list', 'The server returned an invalid workspace context.');
       return;
     }
+    const refreshing = this._catalogReady;
     this._threads = parsedThreads;
     this._workspaces = workspaces as WorkspaceContext[];
     this._catalogReady = true;
     for (const thread of parsedThreads) {
       const existing = this._states.get(thread.id);
       if (existing) existing.thread = { ...existing.thread, ...thread };
+    }
+    if (refreshing) {
+      this._notify();
+      return;
     }
     const restore = this._lastExplicitThreadId;
     const target =

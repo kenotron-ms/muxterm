@@ -934,6 +934,7 @@ class Sidecar:
         # unmapped instead of inheriting another turn's identity.
         self._journal_by_fingerprint: dict[str, list[str]] = {}
         self._context_max_tokens = 0
+        self._preserve_existing_history = bool(args.preserve_existing_history)
         # Set by serve(); read by _on_signal to wake the loop.  Both stay None
         # until then, so a signal before serve() has nothing to poke and
         # nothing to crash on.
@@ -997,6 +998,11 @@ class Sidecar:
                 resume_error = "stored transcript could not be loaded"
         if self.args.threaded_text_preview and resume_error:
             raise RuntimeError(f"threaded preview refuses unsafe resume: {resume_error}")
+        if self.args.preserve_existing_history and not resume_exists:
+            # The adopted Lobby source disappeared after the host's existence
+            # probe. Creating this threaded root would recreate its old
+            # session ID with an empty transcript, silently replacing history.
+            raise RuntimeError("adopted Lobby source is missing; refusing empty replacement")
         self.resumed = resume_exists and transcript is not None
         if self.args.threaded_text_preview:
             self._load_thread_journal()
@@ -1807,6 +1813,12 @@ class Sidecar:
 
     async def _repair_transcript(self) -> None:
         """Pre-turn repair of orphaned tool calls left behind by a cancelled turn."""
+        if self._preserve_existing_history:
+            # An adopted legacy Lobby is continuation, not a migration rewrite.
+            # Its existing SessionStore bytes and metadata are authoritative;
+            # new admitted work may append normally, but this safety helper must
+            # not transform prior history as a side effect of first use.
+            return
         context = self.session.coordinator.get("context")
         if context is None or not hasattr(context, "get_messages"):
             return
@@ -2614,11 +2626,19 @@ def parse_args(argv: list) -> argparse.Namespace:
                    help="per-thread durable turn attribution journal")
     p.add_argument("--thread-context-max-tokens", type=int, default=0,
                    help="validated context-simple max_tokens override for this threaded root")
+    p.add_argument("--preserve-existing-history", action="store_true",
+                   help="resume an adopted legacy Lobby without transcript repair")
+    p.add_argument("--session-store-exists", action="store_true",
+                   help="emit public SessionStore existence for this exact cwd/session and exit")
     args = p.parse_args(argv)
     if args.threaded_text_preview != (args.thread_kind is not None):
         p.error("--threaded-text-preview and --thread-kind must be used together")
     if args.threaded_text_preview and not args.thread_journal:
         p.error("--threaded-text-preview requires --thread-journal")
+    if args.preserve_existing_history and not args.threaded_text_preview:
+        p.error("--preserve-existing-history requires --threaded-text-preview")
+    if args.session_store_exists and (args.threaded_text_preview or args.preserve_existing_history):
+        p.error("--session-store-exists cannot create a threaded runtime")
     if args.thread_context_max_tokens and (args.thread_context_max_tokens < 256 or args.thread_context_max_tokens > 200_000):
         p.error("--thread-context-max-tokens must be between 256 and 200000")
     return args
@@ -2693,6 +2713,16 @@ def main(argv=None) -> int:
             return 1
 
     proto = Proto(_PROTO_STREAM)
+    if args.session_store_exists:
+        try:
+            from amplifier_app_cli.session_store import SessionStore
+
+            proto.emit(ev="session_store_exists", session_id=args.session_id,
+                       exists=bool(SessionStore().exists(args.session_id)))
+        except BaseException as exc:  # noqa: BLE001 -- probe must fail closed
+            _fatal(f"session store probe failed: {type(exc).__name__}: {exc}")
+            return 1
+        return 0
     try:
         return asyncio.run(run(args, proto))
     except KeyboardInterrupt:

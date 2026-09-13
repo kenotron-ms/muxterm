@@ -198,6 +198,23 @@ func (c *Client) getAttachedHost() string {
 	return c.attachedHost
 }
 
+// attachedWorkspaceForHost returns the browser-facing workspace id only when
+// host still owns the current pane-id namespace. The qualifier check prevents
+// a remote event from ever being recorded under a local (or another remote)
+// cache key.
+func (c *Client) attachedWorkspaceForHost(host string) (string, bool) {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.attachedHost != host || c.workspaceID == "" {
+		return "", false
+	}
+	qualifier, local := splitID(c.workspaceID)
+	if qualifier != host || local == "" {
+		return "", false
+	}
+	return c.workspaceID, true
+}
+
 // setPreviewWanted / setSessionStateWanted record the browser's opt-ins;
 // subscriptions reads them back for a session that connects later (A.5).
 func (c *Client) setPreviewWanted(v bool) {
@@ -544,7 +561,8 @@ func (c *Client) route(msg *sessiond.Message) (sess *hostSession, browserWSID st
 		sessiond.TypeRenameWorkspace,
 		sessiond.TypeCloseWorkspace,
 		sessiond.TypeSaveLayout,
-		sessiond.TypeCloseIntent:
+		sessiond.TypeCloseIntent,
+		sessiond.TypeWorkspaceScreen:
 		host, msg.WorkspaceID = splitID(msg.WorkspaceID)
 
 	case sessiond.TypeCloseConfirm:
@@ -640,6 +658,23 @@ func (c *Client) handleTextInput(data []byte) {
 	}
 
 	switch msg.Type {
+	case sessiond.TypeWorkspaceScreen:
+		screenClient, ok := dc.(interface {
+			WorkspaceScreenWithin(string, time.Duration) (*sessiond.Message, error)
+		})
+		if !ok {
+			c.sendError(msg.CID, browserWSID, errors.New("workspace screen is unavailable on this daemon"))
+			return
+		}
+		screen, err := screenClient.WorkspaceScreenWithin(msg.WorkspaceID, sessiond.MissionControlReplyTimeout)
+		if err != nil {
+			c.sendError(msg.CID, browserWSID, err)
+			return
+		}
+		screen.WorkspaceID = nsID(host, screen.WorkspaceID)
+		screen.CID = msg.CID
+		c.sendMessage(screen)
+
 	case sessiond.TypeAttach:
 		// attachSeq must be held for the entire Attach()+sendMessage sequence:
 		// it also gates OnPaneOutput's binary relay (see installHandlers), so
@@ -752,6 +787,9 @@ func (c *Client) handleTextInput(data []byte) {
 			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
+		if workspaceID, ok := c.attachedWorkspaceForHost(host); ok {
+			c.rememberAppVoicePane(workspaceID, paneID)
+		}
 		c.sendMessage(&sessiond.Message{
 			Type:   sessiond.TypePaneCreated,
 			CID:    msg.CID,
@@ -766,7 +804,15 @@ func (c *Client) handleTextInput(data []byte) {
 
 	case sessiond.TypePaneFocus:
 		// Fire-and-forget: the daemon sends no reply.
-		if err := dc.PaneFocus(uint32(msg.PaneID), msg.Cols, msg.Rows); err != nil {
+		var err error
+		if activeFocus, ok := dc.(interface {
+			PaneFocusWithActive(uint32, int, int, bool) error
+		}); ok {
+			err = activeFocus.PaneFocusWithActive(uint32(msg.PaneID), msg.Cols, msg.Rows, msg.UserActive)
+		} else {
+			err = dc.PaneFocus(uint32(msg.PaneID), msg.Cols, msg.Rows)
+		}
+		if err != nil {
 			log.Printf("handleTextInput: pane-focus error: %v", err)
 		}
 
@@ -950,6 +996,7 @@ func (c *Client) setSessions(host string, sessions []sessiond.SessionState) {
 // while a disconnect deletes it so they vanish -- because that is what the
 // user asked for.
 func (c *Client) forgetHost(host string) {
+	c.forgetAppVoiceHost(host)
 	c.mergeMu.Lock()
 	delete(c.wsByHost, host)
 	delete(c.ssByHost, host)
@@ -1102,6 +1149,9 @@ type Hub struct {
 	missionControlRouter      *missioncontrol.Router
 	missionControlTextPreview bool
 	missionControlErr         error
+	missionControlInit        func()
+	missionControlInitOnce    sync.Once
+	missionControlClosed      bool
 	// missionControlVoiceBusy is installed by the server-owned voice
 	// attachment controller. Reset/archive must not retire a runtime while it
 	// still owns an immutable audio attachment.
@@ -1531,6 +1581,7 @@ func (h *Hub) CloseMissionControl() {
 	h.missionControl = nil
 	h.missionControlRouter = nil
 	h.missionControlTextPreview = false
+	h.missionControlClosed = true
 	h.missionControlErr = errors.New("mission control catalog is closed")
 	h.mu.Unlock()
 	if router != nil {
