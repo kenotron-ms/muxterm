@@ -40,7 +40,6 @@ import './launcher-menu.js';
 import './mux-pane-picker.js';
 import './mic-button.js';
 import './mux-start-card.js';
-import './voice-mode-button.js';
 import { icon } from '../lib/icons.js';
 import { Ellipsis, LayoutGrid, Menu } from 'lucide';
 import { instanceLabel } from '../lib/instance-identity.js';
@@ -240,7 +239,7 @@ export class MuxTitleBar extends LitElement {
   /** Wide workspace chrome reuses this title bar without a drawer control. */
   @property({ type: Boolean, reflect: true }) desktop = false;
 
-  /** The dock supplies the wide workspace voice/menu pair when panes exist. */
+  /** The dock supplies the wide workspace menu when panes exist. */
   @property({ type: Boolean }) dockActionsVisible = false;
 
   /** Bumped when the session list changes, so the badge re-derives. */
@@ -402,8 +401,7 @@ export class MuxTitleBar extends LitElement {
           : html`<mux-mic-button></mux-mic-button>`}
         ${this.desktop && this.dockActionsVisible
           ? ''
-          : html`<mux-voice-mode-button></mux-voice-mode-button>
-              <button
+          : html`<button
                 class="launcher-btn"
                 type="button"
                 title="Open menu"

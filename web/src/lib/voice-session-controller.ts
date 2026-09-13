@@ -691,6 +691,7 @@ function beginRelease(sendEnd: boolean): Promise<void> {
 }
 
 function appStop(): void {
+  error = '';
   void beginRelease(true);
   publish('idle');
 }

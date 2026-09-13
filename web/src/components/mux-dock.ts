@@ -22,7 +22,6 @@ import { parseHostRef } from '../lib/host-ref.js';
 import { apiPath } from '../lib/base-path.js';
 import { icon } from '../lib/icons.js';
 import { Ellipsis } from 'lucide';
-import './voice-mode-button.js';
 import './launcher-menu.js';
 
 type PaneCloseTarget = Extract<CloseTarget, { targetKind: 'pane' }>;
@@ -695,7 +694,6 @@ export class MuxDock extends LitElement {
   private _createWorkspaceActions(): HTMLElement {
     const rail = document.createElement('div');
     rail.className = 'mux-workspace-actions';
-    rail.appendChild(document.createElement('mux-voice-mode-button'));
 
     const launcher = document.createElement('button');
     launcher.className = 'mux-workspace-launcher';
@@ -1022,12 +1020,11 @@ export class MuxDock extends LitElement {
           display: flex;
           align-items: center;
           gap: 4px;
-          flex: 0 0 92px;
-          width: 92px;
+          flex: 0 0 44px;
+          width: 44px;
           height: 100%;
           box-sizing: border-box;
         }
-        mux-dock .mux-workspace-actions mux-voice-mode-button,
         mux-dock .mux-workspace-launcher {
           flex: 0 0 44px;
           width: 44px;
