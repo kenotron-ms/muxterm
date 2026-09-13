@@ -62,9 +62,9 @@ type ProviderEventBridge interface {
 	ResolveToolCall(ProviderEvent) (Correlation, error)
 }
 
-// AppOperationBridge is the deliberately small app-wide voice surface. Unlike
-// Bridge, it cannot reach the legacy COS. Every mutating operation is
-// represented by an owner-browser acknowledgement before this method returns.
+// AppOperationBridge is the deliberately small app-wide voice surface. Its
+// generic browser operations remain owner-acknowledged; AppOperatorBridge
+// extends it with the separately correlated, server-owned Operator relay.
 type AppOperationBridge interface {
 	Bridge
 	ProviderEventBridge
@@ -76,9 +76,9 @@ type AppOperationBridge interface {
 }
 
 // AppOperatorBridge is the app profile's deliberately correlated Operator
-// bridge. Unlike Bridge.Submit it can only submit a request after the owner
-// browser visibly confirms the exact current Mission Control composer target.
-// Approval and cancellation are restricted to turns this bridge admitted.
+// bridge. It admits work directly to the canonical server-owned Mission
+// Control conversation. Approval and cancellation are restricted to turns this
+// bridge admitted.
 type AppOperatorBridge interface {
 	AppOperationBridge
 	SubmitOperator(context.Context, Correlation, string) (TurnHandle, error)

@@ -223,13 +223,6 @@ export class CosStore {
   private _draftRevision = 0;
   private _draftRef = '';
   private _pendingAdmission: PendingAdmission | null = null;
-  private _pendingAppVoice = new Map<string, {
-    resolve: (value: { readonly thread_id: string; readonly runtime_generation: number; readonly turn_id: string }) => void;
-    reject: (error: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-    signal: AbortSignal;
-    onAbort: () => void;
-  }>();
   private _turns: CosTurn[] = [];
   private _byId = new Map<string, CosTurn>();
   private _approvals: CosApproval[] = [];
@@ -296,18 +289,6 @@ export class CosStore {
       draftRef: current ? this._draftRef : '',
       label: ASSISTANT_NAME,
     };
-  }
-
-  get appVoiceThreadTurnTarget(): {
-    readonly channelId: string;
-    readonly threadId: string;
-    readonly runtimeSessionId: string;
-    readonly runtimeGeneration: number;
-    readonly runtimeIncarnation: string;
-    readonly draftRef: string;
-  } | null {
-    const identity = this.composerIdentity;
-    return identity.threadId ? identity : null;
   }
 
   canCancel(turnId: string): boolean { return this._byId.get(turnId)?.status === 'pending' || this._byId.get(turnId)?.status === 'streaming'; }
@@ -442,44 +423,6 @@ export class CosStore {
     return true;
   }
 
-  sendForAppVoice(
-    prompt: string,
-    operationId: string,
-    signal: AbortSignal,
-  ): Promise<{ readonly thread_id: string; readonly runtime_generation: number; readonly turn_id: string }> {
-    const current = this._conversation;
-    if (!current || this._status !== 'ready' || !this._socket) {
-      return Promise.reject(new Error('Mission Control is not ready.'));
-    }
-    if (signal.aborted) return Promise.reject(new Error('The app voice turn was cancelled.'));
-    // The server binds this exact reference to the pending, owner-authorized
-    // voice operation. A random reference is not an admission receipt.
-    const clientRef = `app_voice:${operationId}`;
-    if (this._pendingAppVoice.has(clientRef)) {
-      return Promise.reject(new Error('This voice request is already awaiting confirmation.'));
-    }
-    return new Promise((resolve, reject) => {
-      const onAbort = (): void => {
-        const pending = this._pendingAppVoice.get(clientRef);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        signal.removeEventListener('abort', onAbort);
-        this._pendingAppVoice.delete(clientRef);
-        reject(new Error('The app voice turn was cancelled.'));
-      };
-      const timer = setTimeout(() => {
-        const pending = this._pendingAppVoice.get(clientRef);
-        if (!pending) return;
-        signal.removeEventListener('abort', onAbort);
-        this._pendingAppVoice.delete(clientRef);
-        reject(new Error('Mission Control did not confirm the turn.'));
-      }, 15000);
-      this._pendingAppVoice.set(clientRef, { resolve, reject, timer, signal, onAbort });
-      signal.addEventListener('abort', onAbort, { once: true });
-      if (!this._socket?.cosTurn(prompt, clientRef, operationId)) onAbort();
-    });
-  }
-
   /**
    * Answer an approval.
    *
@@ -568,12 +511,6 @@ export class CosStore {
         fatal: false,
       };
     }
-    for (const pending of this._pendingAppVoice.values()) {
-      clearTimeout(pending.timer);
-      pending.signal.removeEventListener('abort', pending.onAbort);
-      pending.reject(new Error('Mission Control connection closed.'));
-    }
-    this._pendingAppVoice.clear();
     this._subscribed = false;
     if (this._status !== 'idle') this._setStatus('down');
     this._notify();
@@ -623,22 +560,6 @@ export class CosStore {
     }
     if (type === 'cos-turn-result') {
       const clientRef = str(frame.client_ref);
-      const pending = this._pendingAppVoice.get(clientRef);
-      if (pending) {
-        clearTimeout(pending.timer);
-        pending.signal.removeEventListener('abort', pending.onAbort);
-        this._pendingAppVoice.delete(clientRef);
-        if (frame.ok !== true || !this._conversation || !str(frame.turn_id)) {
-          pending.reject(new Error(str(frame.error) || str(frame.code) || 'Mission Control could not start the turn.'));
-        } else {
-          pending.resolve({
-            thread_id: this._conversation.id,
-            runtime_generation: this._conversation.generation,
-            turn_id: str(frame.turn_id),
-          });
-        }
-        return;
-      }
       const admission = this._pendingAdmission;
       if (!admission || admission.clientRef !== clientRef) return;
       clearTimeout(admission.timer);

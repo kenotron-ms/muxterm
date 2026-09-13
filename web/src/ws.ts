@@ -704,12 +704,11 @@ export class MuxSocket {
   }
 
   /** Submit one turn. Returns whether it actually went out (see sendSessiond). */
-  cosTurn(prompt: string, clientRef?: string, appVoiceOperationId?: string): boolean {
+  cosTurn(prompt: string, clientRef?: string): boolean {
     return this._sendCos({
       type: 'cos-turn',
       prompt,
       client_ref: clientRef ?? '',
-      ...(appVoiceOperationId ? { app_voice_operation_id: appVoiceOperationId } : {}),
     });
   }
 
