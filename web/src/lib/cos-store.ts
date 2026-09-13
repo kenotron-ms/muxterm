@@ -451,24 +451,32 @@ export class CosStore {
     if (!current || this._status !== 'ready' || !this._socket) {
       return Promise.reject(new Error('Mission Control is not ready.'));
     }
-    const clientRef = `app-voice-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    if (signal.aborted) return Promise.reject(new Error('The app voice turn was cancelled.'));
+    // The server binds this exact reference to the pending, owner-authorized
+    // voice operation. A random reference is not an admission receipt.
+    const clientRef = `app_voice:${operationId}`;
+    if (this._pendingAppVoice.has(clientRef)) {
+      return Promise.reject(new Error('This voice request is already awaiting confirmation.'));
+    }
     return new Promise((resolve, reject) => {
       const onAbort = (): void => {
         const pending = this._pendingAppVoice.get(clientRef);
         if (!pending) return;
         clearTimeout(pending.timer);
+        signal.removeEventListener('abort', onAbort);
         this._pendingAppVoice.delete(clientRef);
         reject(new Error('The app voice turn was cancelled.'));
       };
       const timer = setTimeout(() => {
         const pending = this._pendingAppVoice.get(clientRef);
         if (!pending) return;
+        signal.removeEventListener('abort', onAbort);
         this._pendingAppVoice.delete(clientRef);
         reject(new Error('Mission Control did not confirm the turn.'));
       }, 15000);
       this._pendingAppVoice.set(clientRef, { resolve, reject, timer, signal, onAbort });
       signal.addEventListener('abort', onAbort, { once: true });
-      if (!this._socket?.cosTurn(prompt.trim(), clientRef, operationId)) onAbort();
+      if (!this._socket?.cosTurn(prompt, clientRef, operationId)) onAbort();
     });
   }
 
