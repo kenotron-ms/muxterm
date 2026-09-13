@@ -1123,6 +1123,9 @@ type Hub struct {
 	missionControlRouter      *missioncontrol.Router
 	missionControlTextPreview bool
 	missionControlErr         error
+	missionControlInit        func()
+	missionControlInitOnce    sync.Once
+	missionControlClosed      bool
 	// missionControlVoiceBusy is installed by the server-owned voice
 	// attachment controller. Reset/archive must not retire a runtime while it
 	// still owns an immutable audio attachment.
@@ -1552,6 +1555,7 @@ func (h *Hub) CloseMissionControl() {
 	h.missionControl = nil
 	h.missionControlRouter = nil
 	h.missionControlTextPreview = false
+	h.missionControlClosed = true
 	h.missionControlErr = errors.New("mission control catalog is closed")
 	h.mu.Unlock()
 	if router != nil {

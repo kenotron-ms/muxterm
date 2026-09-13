@@ -117,8 +117,40 @@ func missionControlFailure(msg missionControlClientMessage, code, detail string)
 	}
 }
 
+// setMissionControlInitializer reserves normal-channel ownership at server
+// construction, but defers the legacy SessionStore probe until an actual
+// Mission Control request needs the catalog.
+func (h *Hub) setMissionControlInitializer(init func()) {
+	h.mu.Lock()
+	h.missionControlInit = init
+	h.missionControlTextPreview = init != nil
+	h.mu.Unlock()
+}
+
+func (h *Hub) ensureMissionControl() {
+	h.missionControlInitOnce.Do(func() {
+		h.mu.RLock()
+		init := h.missionControlInit
+		closed := h.missionControlClosed
+		h.mu.RUnlock()
+		if init != nil && !closed {
+			init()
+		}
+	})
+}
+
 func (h *Hub) setMissionControl(catalog *missioncontrol.Store, router *missioncontrol.Router, enabled bool, err error) {
 	h.mu.Lock()
+	if h.missionControlClosed {
+		h.mu.Unlock()
+		if router != nil {
+			router.Close()
+		}
+		if catalog != nil {
+			_ = catalog.Close()
+		}
+		return
+	}
 	h.missionControl = catalog
 	h.missionControlRouter = router
 	h.missionControlTextPreview = enabled
@@ -127,6 +159,7 @@ func (h *Hub) setMissionControl(catalog *missioncontrol.Store, router *missionco
 }
 
 func (h *Hub) missionControlCatalog() (*missioncontrol.Store, error) {
+	h.ensureMissionControl()
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	if h.missionControl != nil {
@@ -141,13 +174,14 @@ func (h *Hub) missionControlCatalog() (*missioncontrol.Store, error) {
 func (h *Hub) missionControlTextEnabled() bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	// This is runtime truth, not the retained TOML compatibility flags. A
-	// failed normal-router initialization is surfaced as an error rather than
-	// negotiated as "disabled".
-	return h.missionControlRouter != nil
+	// Construction reserves the normal-channel surface without synchronously
+	// starting its legacy-store probe. A later initialization failure remains
+	// an explicit catalog/router error at the request boundary.
+	return h.missionControlTextPreview
 }
 
 func (h *Hub) missionControlRouterForText() (*missioncontrol.Router, error) {
+	h.ensureMissionControl()
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	if h.missionControlRouter != nil {
@@ -165,7 +199,7 @@ func (h *Hub) missionControlRouterForText() (*missioncontrol.Router, error) {
 func (h *Hub) missionControlOwnsChannels() bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.missionControlRouter != nil || h.missionControlErr != nil
+	return h.missionControlTextPreview || h.missionControlRouter != nil || h.missionControlErr != nil
 }
 
 func isMissionControlMessage(typ string) bool {

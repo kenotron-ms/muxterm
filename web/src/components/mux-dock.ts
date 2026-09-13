@@ -581,7 +581,6 @@ export class MuxDock extends LitElement {
   private _workspaceActions: HTMLElement | null = null;
   private _workspaceActionsFrame: number | undefined;
   private _dockObserver: MutationObserver | null = null;
-  private _movingWorkspaceActions = false;
   private _workspaceLauncher: HTMLElement | null = null;
 
   /**
@@ -664,7 +663,7 @@ export class MuxDock extends LitElement {
   }
 
   private _rehomeWorkspaceActions(): void {
-    if (!this._workspaceActions || this.narrow || !this._dockRoot || this._movingWorkspaceActions) return;
+    if (!this._workspaceActions || this.narrow || !this._dockRoot) return;
     let target: HTMLElement | null = null;
     let bestTop = Number.POSITIVE_INFINITY;
     let bestRight = Number.NEGATIVE_INFINITY;
@@ -683,9 +682,7 @@ export class MuxDock extends LitElement {
     // target. That mutation re-triggers our observer forever, so only re-home
     // when Dockview actually selected a different header.
     if (this._workspaceActions.parentElement === target) return;
-    this._movingWorkspaceActions = true;
     target.appendChild(this._workspaceActions);
-    this._movingWorkspaceActions = false;
   }
 
   /** Keep the covered dock alive for layout/terminal caching, but inert. */

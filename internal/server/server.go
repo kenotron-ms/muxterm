@@ -207,7 +207,7 @@ func New(cfg Config) *Server {
 		aiKeyPath = ai.DefaultKeyPath()
 	}
 	s.ai = ai.NewManager(aiKeyPath)
-	s.initializeMissionControl()
+	s.hub.setMissionControlInitializer(s.initializeMissionControl)
 
 	// The collected pull requests, loaded from disk at construction so the
 	// first GET after a restart answers from the store rather than from an
@@ -360,7 +360,9 @@ func New(cfg Config) *Server {
 	return s
 }
 
-// initializeMissionControl creates the normal channel catalog and router
+// initializeMissionControl creates the normal channel catalog and router on
+// the first Mission Control access. The potentially slow legacy-store probe
+// must not hold up construction of the terminal server.
 // independently of the retired preview flags. A legacy COS root is adopted
 // only after the sidecar's public SessionStore.exists API confirms it exists
 // in this exact server working-directory scope; no filesystem layout is
