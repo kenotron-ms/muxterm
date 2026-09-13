@@ -8,7 +8,7 @@
  */
 
 import type { MuxSocket } from '../ws.js';
-import { threadStore } from './thread-store.js';
+import { cosStore } from './cos-store.js';
 
 export const APP_VOICE_PROTOCOL_VERSION = 1;
 const OPERATION_TTL_MS = 10_000;
@@ -283,7 +283,7 @@ function parseThreadTurnTarget(value: unknown): AppVoiceThreadTurnTarget | null 
     !UUID_RE.test(threadId) ||
     !UUID_RE.test(machineId) ||
     (!UUID_RE.test(sessionId) &&
-      !threadStore.matchesRuntimeIdentity(threadId, generation, sessionId, incarnation)) ||
+      !cosStore.matchesRuntimeIdentity(threadId, generation, sessionId, incarnation)) ||
     !generation ||
     !UUID_RE.test(incarnation) ||
     !UUID_RE.test(draftRef)
@@ -979,7 +979,7 @@ function normalizeObservation(value: AppVoiceObservation): AppVoiceObservation |
     typeof composer.runtime_session_id !== 'string' ||
     (composer.runtime_session_id !== '' &&
       !UUID_RE.test(composer.runtime_session_id) &&
-      !threadStore.matchesRuntimeIdentity(
+      !cosStore.matchesRuntimeIdentity(
         composer.thread_id,
         composer.runtime_generation,
         composer.runtime_session_id,

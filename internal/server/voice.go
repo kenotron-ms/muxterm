@@ -60,7 +60,7 @@ func (b *voiceBridge) Submit(prompt string) (voice.TurnHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	turn := b.relay.submit(sup, prompt, "voice")
+	turn, _ := b.relay.submit(sup, prompt, "", "")
 	if turn == nil {
 		return nil, errors.New("the chief of staff refused the turn")
 	}
@@ -136,19 +136,6 @@ func (s *Server) registerVoiceRoutes(cfg config.VoiceConfig, protect func(http.H
 	// owner-lease-bound routes.
 	s.registerAppVoiceRoutes(cfg, protect)
 
-	if s.hub.missionControlTextEnabled() {
-		// Text-preview is deliberately provider/microphone-off.  It does expose
-		// a separate lease/focus/capture safety seam for a later thread-scoped
-		// provider attachment; that seam cannot mint a token, connect SDP, or
-		// submit work.  Legacy global voice routes remain explicit refusals.
-		s.registerMissionControlVoiceRoutes(cfg, protect)
-		refuse := protect(http.HandlerFunc(s.handleThreadedTextVoiceRefusal))
-		s.mux.Handle("POST /api/cos/voice/token", refuse)
-		s.mux.Handle("POST /api/cos/voice/sdp", refuse)
-		s.mux.Handle("POST /api/cos/voice/end", refuse)
-		s.mux.Handle("GET /api/cos/voice/trace", refuse)
-		return
-	}
 	if !cfg.Enabled {
 		return
 	}
@@ -175,10 +162,6 @@ func (s *Server) registerVoiceRoutes(cfg config.VoiceConfig, protect func(http.H
 	s.mux.Handle("POST /api/cos/voice/end", protect(http.HandlerFunc(s.handleVoiceEnd)))
 	s.mux.Handle("GET /api/cos/voice/trace", protect(http.HandlerFunc(s.handleVoiceTrace)))
 	log.Printf("voice: realtime voice enabled (model %s, auth_mode %s)", cfg.Model, cfg.AuthMode)
-}
-
-func (s *Server) handleThreadedTextVoiceRefusal(w http.ResponseWriter, _ *http.Request) {
-	writeVoiceError(w, http.StatusConflict, "voice is unavailable while Mission Control text preview is enabled")
 }
 
 // handleVoiceToken is C2: mint a short-lived ephemeral secret.

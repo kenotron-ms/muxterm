@@ -336,12 +336,6 @@ export class MuxSocket {
    */
   onCosFrame?: (frame: Record<string, unknown>) => void;
   /**
-   * Versioned Mission Control text-thread frames. These are serve-local like
-   * COS frames, but deliberately have their own route so raw `cos-*` frames
-   * can never be mistaken for an attributed thread event.
-   */
-  onMissionControlFrame?: (frame: Record<string, unknown>) => void;
-  /**
    * Fires on a host-state frame: one remote host's connection state changed
    * (or the server is describing the registry to a freshly attached tab).
    *
@@ -679,13 +673,6 @@ export class MuxSocket {
   // Serve-local frames. They never reach sessiond, so they bypass
   // sendSessiond's frozen SessiondMessage type and go out as plain objects.
 
-  /**
-   * The thread capability handshake owns whether raw COS frames are allowed to
-   * reach the legacy store. It is true by default to retain the old wire path
-   * until a genuine v2 text capability says otherwise.
-   */
-  private _legacyCosFramesEnabled = true;
-
   private _sendCos(frame: Record<string, unknown>): boolean {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
       try {
@@ -711,29 +698,19 @@ export class MuxSocket {
     this._sendCos({ type: 'cos-subscribe', on });
   }
 
-  /**
-   * Gate raw legacy COS frame dispatch without changing the socket's ordinary
-   * terminal/sessiond routes. Threaded text preview uses this before it makes
-   * a v2 request, so a stray legacy event cannot reach either a per-thread
-   * renderer or the legacy voice bridge.
-   */
-  setLegacyCosFramesEnabled(enabled: boolean): void {
-    this._legacyCosFramesEnabled = enabled;
-  }
-
-  /** Send one versioned Mission Control frame if the socket is open. */
-  missionControl(frame: Record<string, unknown>): boolean {
-    return this._sendCos(frame);
-  }
-
   /** Send one app-voice v1 frame on the existing authenticated WebSocket. */
   appVoice(frame: Record<string, unknown>): boolean {
     return this._sendCos(frame);
   }
 
   /** Submit one turn. Returns whether it actually went out (see sendSessiond). */
-  cosTurn(prompt: string, clientRef?: string): boolean {
-    return this._sendCos({ type: 'cos-turn', prompt, client_ref: clientRef ?? '' });
+  cosTurn(prompt: string, clientRef?: string, appVoiceOperationId?: string): boolean {
+    return this._sendCos({
+      type: 'cos-turn',
+      prompt,
+      client_ref: clientRef ?? '',
+      ...(appVoiceOperationId ? { app_voice_operation_id: appVoiceOperationId } : {}),
+    });
   }
 
   /**
@@ -1153,11 +1130,7 @@ export class MuxSocket {
       if (this._sessionStateWanted) {
         this.sendSessiond({ type: SessiondType.SessionStateSubscribe, ok: true });
       }
-      // Chief-of-staff replay is intentionally NOT automatic here. The
-      // conversation coordinator negotiates Mission Control capability first,
-      // then either explicitly re-subscribes to unscoped legacy COS or keeps
-      // that path gated for threaded text. Replaying `_cosWanted` before that
-      // decision would leak a raw global event into a selected thread.
+      // COS replay is intentionally controlled by the app-wide COS store.
       this.onReconnect?.();
       this._emitState();
     };
@@ -1190,15 +1163,8 @@ export class MuxSocket {
         // the sessiond hook. (Legacy single-key envelopes have no "type" field,
         // so the two paths never collide.)
         if (typeof raw.type === 'string') {
-          // Serve-local chief-of-staff frames are answered by the server, not
-          // the daemon. Routed off BEFORE onSessiondMessage so the frozen
-          // wire-state store never sees a type it has no projection for.
-          if (raw.type === 'missioncontrol-result' || raw.type === 'missioncontrol-event') {
-            this.onMissionControlFrame?.(raw);
-            return;
-          }
           if (raw.type.startsWith('cos-')) {
-            if (this._legacyCosFramesEnabled) this.onCosFrame?.(raw);
+            this.onCosFrame?.(raw);
             return;
           }
           this.onSessiondMessage?.(raw as unknown as SessiondMessage);

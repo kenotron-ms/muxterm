@@ -2,6 +2,45 @@
 
 Authoritative user correction to the multichannel voice design. This addendum supersedes channel-attached conversational voice assumptions; it does not reopen the closed Sandbox lifecycle policy or enable production features. Implementation/verification status belongs in the feature ledger, not in this contract.
 
+## Superseding correction — one Mission Control conversation
+
+The 2026-09-13 simplification supersedes the multi-channel/Lobby requirements
+below. Mission Control is one persistent, capable conversation across normal
+browser refresh and workspace/pane navigation. There is no read-only Lobby,
+chat-context picker, channel switch, or instruction-copy workflow. The existing
+server-owned COS supervisor provides the conversation, queue, tools and
+approvals; obsolete channel runtimes, stores, transports and sidecar branches
+are removed rather than hidden behind flags.
+
+Existing Mission Control history is selected through read-only persisted
+session/scope metadata with exclusive ownership. Unrelated workspace histories,
+catalog bytes, workspaces, panes and running sessions are not merged, cleared
+or deleted. Ambiguous or missing established history fails explicitly instead
+of silently creating a replacement. Work destination is resolved using existing
+tools and permissions, with a short question in the same conversation only
+when it is genuinely ambiguous.
+
+The app-wide voice lifetime remains independent. The bubble's single circular
+surface has the green active border; tapping pauses/resumes microphone
+transmission and playback without ending the conversation. Dragging reveals a
+large bottom-center X target; dropping there exits and releases all voice
+resources. Other drops dock to the nearest edge without becoming a tap.
+The header activation control reopens voice after dismissal. Generation Stop
+is separate: the composer's Send button changes to a square Stop icon in the
+same size and position while generating, then returns to Send.
+
+YOU and OPERATOR labels remain above full-width messages within pane padding.
+Workspace entries are compact menu rows with a status dot, retaining the
+on-demand entire-screen tiny-font tooltip of the last user-selected pane.
+Internal extraction/validation diagnostics do not appear as conversation text.
+Mobile portrait/landscape and desktop must be visually inspected on the actual
+build. Refresh persistence and responsiveness require measured runtime proof;
+real-provider/microphone results must be distinguished from synthetic fixtures.
+Publication remains separate from installing or restarting the running instance.
+
+The remaining sections document the prior implementation and apply only where
+consistent with this superseding correction.
+
 ## Explicitly superseded
 
 - Mandatory voice teardown, drain and provider remint on channel selection.

@@ -36,21 +36,6 @@ function unavailableReason(snapshot: VoiceSessionSnapshot): string {
   return '';
 }
 
-function statusLabel(snapshot: VoiceSessionSnapshot): string {
-  if (snapshot.state === 'error') return 'Error';
-  if (snapshot.muted) return 'Mic muted';
-  switch (snapshot.state) {
-    case 'connecting':
-      return 'Connecting';
-    case 'thinking':
-      return 'Thinking';
-    case 'speaking':
-      return 'Speaking';
-    default:
-      return 'Listening';
-  }
-}
-
 @customElement('mux-voice-mode-button')
 export class MuxVoiceModeButton extends LitElement {
   static styles = css`
@@ -120,21 +105,17 @@ export class MuxVoiceModeButton extends LitElement {
       outline-offset: -4px;
     }
 
-    :host([menu-trigger]) .control {
-      border-radius: 50%;
-      outline: none;
-    }
-
     :host([bubble-variant]) {
       --voice-mode-target: 60px;
       --voice-mode-icon-size: 38px;
     }
 
     :host([bubble-variant]) .control {
-      border: 1.5px solid currentColor;
+      border: 2px solid var(--mux-ok, #22c55e);
       border-radius: 50%;
       background: var(--chrome-bar, #202124);
       outline: none;
+      box-shadow: none;
     }
 
     :host([bubble-variant]) .control[data-state='connecting'] {
@@ -148,7 +129,12 @@ export class MuxVoiceModeButton extends LitElement {
     }
 
     :host([bubble-variant]) .control[data-state='error'] {
+      border-color: var(--mux-error, var(--chrome-danger, currentColor));
       color: var(--mux-error, var(--chrome-danger, currentColor));
+    }
+
+    :host([bubble-variant]) .control[data-state='paused'] {
+      color: var(--mux-ok, #22c55e);
     }
 
     :host([bubble-variant]) .control[data-muted='true'] {
@@ -192,8 +178,6 @@ export class MuxVoiceModeButton extends LitElement {
    */
   @property({ attribute: false }) snapshot: VoiceSessionSnapshot | undefined;
 
-  /** A bubble uses the same mark as a menu opener rather than a direct toggle. */
-  @property({ type: Boolean, attribute: 'menu-trigger' }) menuTrigger = false;
   @property({ type: Boolean, attribute: 'bubble-variant' }) bubbleVariant = false;
 
   @state() private _liveSnapshot: VoiceSessionSnapshot = voiceSessionController.snapshot();
@@ -218,9 +202,9 @@ export class MuxVoiceModeButton extends LitElement {
   }
 
   private _onClick = (event: MouseEvent): void => {
-    if (this.menuTrigger) {
+    if (this.bubbleVariant) {
       this.dispatchEvent(
-        new CustomEvent('voice-mode-menu-request', {
+        new CustomEvent('voice-mode-bubble-activate', {
           bubbles: true,
           composed: true,
           detail: { pointerActivation: event.detail > 0 },
@@ -235,8 +219,17 @@ export class MuxVoiceModeButton extends LitElement {
     const snapshot = this.snapshot ?? this._liveSnapshot;
     const active = isActive(snapshot);
     const unavailable = unavailableReason(snapshot);
-    const actionLabel = active ? 'Stop voice mode' : 'Start voice mode';
-    const label = this.menuTrigger ? `Voice controls: ${statusLabel(snapshot)}` : actionLabel;
+    const paused = snapshot.paused || snapshot.state === 'paused';
+    const actionLabel = this.bubbleVariant
+      ? paused
+        ? 'Resume voice mode'
+        : active
+          ? 'Pause voice mode'
+          : 'Start voice mode'
+      : active
+        ? 'Stop voice mode'
+        : 'Start voice mode';
+    const label = actionLabel;
     const descriptionId = unavailable ? 'voice-mode-unavailable' : undefined;
 
     return html`
@@ -245,13 +238,18 @@ export class MuxVoiceModeButton extends LitElement {
         type="button"
         data-voice-mode-button
         data-state="${snapshot.state}"
+        data-paused="${String(paused)}"
         data-muted="${String(snapshot.muted)}"
         title="${unavailable || actionLabel}"
         aria-label="${label}"
-        aria-pressed="${active ? 'true' : 'false'}"
+        aria-pressed="${active && !paused ? 'true' : 'false'}"
         aria-busy="${snapshot.state === 'connecting' ? 'true' : 'false'}"
+        aria-keyshortcuts="${this.bubbleVariant ? 'Space Enter Delete Backspace ArrowLeft ArrowRight ArrowUp ArrowDown' : nothing}"
+        aria-description="${this.bubbleVariant
+          ? 'Press Space to pause or resume; Delete to exit; arrow keys to move.'
+          : nothing}"
         aria-describedby="${descriptionId ?? nothing}"
-        ?disabled="${!this.menuTrigger && !active && unavailable !== ''}"
+        ?disabled="${!this.bubbleVariant && !active && unavailable !== ''}"
         @click="${this._onClick}"
       >
         <mux-voice-mode-icon

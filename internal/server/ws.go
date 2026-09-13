@@ -10,12 +10,12 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/kenotron-ms/muxterm/internal/cos"
-	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
 )
@@ -34,19 +34,6 @@ type Client struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	writeMu sync.Mutex
-	// missionControlRequests isolates metadata lookups from terminal input while
-	// retaining a bounded, per-client ordering for slow sidecar/identity work.
-	missionControlRequests chan []byte
-	// Mission Control selection belongs to this authenticated connection, never
-	// to terminal navigation. Subscriptions deliberately outlive selection so a
-	// late result remains visible in its originating thread.
-	missionControlMu            sync.Mutex
-	missionControlSelection     missionControlSelection
-	missionControlSubscriptions map[string]missionControlSubscription
-	// missionControlStopped is set only during Hub.Remove. The subscriptions
-	// map is intentionally nil until the first subscription, so map nil cannot
-	// represent the disconnected-client lifetime.
-	missionControlStopped bool
 
 	// sessMu guards sessions and unsubscribeRemotes. sessions holds this
 	// browser's daemon links keyed by transport.HostRef.ID; the empty key is
@@ -321,16 +308,15 @@ func closeRelayFailure(target sessiond.CloseTarget) sessiond.CloseOutcome {
 func newClient(hub *Hub, conn *websocket.Conn) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		hub:                    hub,
-		conn:                   conn,
-		ctx:                    ctx,
-		cancel:                 cancel,
-		sessions:               make(map[string]*hostSession),
-		closeTickets:           make(map[string]closeTicket),
-		missionControlRequests: make(chan []byte, missionControlRequestQueueSize),
-		wsByHost:               make(map[string][]sessiond.WorkspaceInfo),
-		ssByHost:               make(map[string][]sessiond.SessionState),
-		appVoicePanes:          make(map[string]map[int]bool),
+		hub:           hub,
+		conn:          conn,
+		ctx:           ctx,
+		cancel:        cancel,
+		sessions:      make(map[string]*hostSession),
+		closeTickets:  make(map[string]closeTicket),
+		wsByHost:      make(map[string][]sessiond.WorkspaceInfo),
+		ssByHost:      make(map[string][]sessiond.SessionState),
+		appVoicePanes: make(map[string]map[int]bool),
 	}
 	c.writeTextFn = func(data []byte) error {
 		c.writeMu.Lock()
@@ -346,7 +332,6 @@ func newClient(hub *Hub, conn *websocket.Conn) *Client {
 		defer wcancel()
 		return c.conn.Write(wctx, websocket.MessageBinary, data)
 	}
-	go c.missionControlWorker()
 	return c
 }
 
@@ -629,8 +614,8 @@ func (c *Client) handleTextInput(data []byte) {
 			c.handleCosMessage(data)
 			return
 		}
-		if isMissionControlMessage(probe.Type) {
-			c.enqueueMissionControlMessage(data)
+		if strings.HasPrefix(probe.Type, "missioncontrol-") {
+			c.sendMissionControlUnsupported(probe.Type)
 			return
 		}
 	}
@@ -1143,19 +1128,6 @@ type Hub struct {
 	// until a browser sends cos-subscribe or cos-turn.
 	cos *cosRelay
 
-	// missionControl owns durable thread metadata. Router is present only when
-	// both explicit text-preview gates are enabled.
-	missionControl            *missioncontrol.Store
-	missionControlRouter      *missioncontrol.Router
-	missionControlTextPreview bool
-	missionControlErr         error
-	missionControlInit        func()
-	missionControlInitOnce    sync.Once
-	missionControlClosed      bool
-	// missionControlVoiceBusy is installed by the server-owned voice
-	// attachment controller. Reset/archive must not retire a runtime while it
-	// still owns an immutable audio attachment.
-	missionControlVoiceBusy func(threadID string) bool
 	// appVoice owns the one browser-bound app voice lease. It must be fenced
 	// from Hub.Remove before this connection can be replaced.
 	appVoice *appVoiceService
@@ -1561,7 +1533,6 @@ func (h *Hub) Remove(c *Client) {
 		appVoice.disconnect(c)
 	}
 	c.stopCos()
-	c.stopMissionControl()
 	c.teardownSessions()
 	c.close()
 }
@@ -1570,30 +1541,6 @@ func (h *Hub) Remove(c *Client) {
 // muxterm does not orphan a python process on exit. Safe to call when no
 // sidecar was launched.
 func (h *Hub) CloseCos() { h.cos.close() }
-
-// CloseMissionControl releases the catalog's process lock on every server exit.
-// A request that had already obtained the store observes its closed state rather
-// than writing concurrently with a later server instance.
-func (h *Hub) CloseMissionControl() {
-	h.mu.Lock()
-	catalog := h.missionControl
-	router := h.missionControlRouter
-	h.missionControl = nil
-	h.missionControlRouter = nil
-	h.missionControlTextPreview = false
-	h.missionControlClosed = true
-	h.missionControlErr = errors.New("mission control catalog is closed")
-	h.mu.Unlock()
-	if router != nil {
-		router.Close()
-	}
-	if catalog == nil {
-		return
-	}
-	if err := catalog.Close(); err != nil {
-		log.Printf("missioncontrol: close catalog: %v", err)
-	}
-}
 
 // ClientCount returns the number of connected clients.
 func (h *Hub) ClientCount() int {

@@ -443,12 +443,20 @@ export class MuxSidebar extends LitElement {
     /* ---- workspace cards ---- */
 
     .ws-card {
-      padding: 7px 10px;
-      margin: 2px 6px;
+      box-sizing: border-box;
+      min-height: 34px;
+      padding: 5px 10px;
+      margin: 1px 6px;
       border-radius: 5px;
       cursor: pointer;
       border: 1px solid transparent;
       transition: background 0.12s, border-color 0.12s;
+    }
+
+    @media (pointer: coarse) {
+      .ws-card {
+        min-height: 44px;
+      }
     }
 
     .ws-card:hover {
@@ -609,16 +617,6 @@ export class MuxSidebar extends LitElement {
         padding: 0;
         opacity: 1;
       }
-    }
-
-    .ws-hint {
-      font-size: 11px;
-      color: var(--chrome-text-dim);
-      margin-top: 2px;
-      padding-left: 12px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
 
     .preview-tooltip {
@@ -2201,7 +2199,6 @@ export class MuxSidebar extends LitElement {
         @click="${() => this._onWsClick(card.id)}"
       >
         ${this._renderHeader(card)}
-        ${card.hint ? html`<div class="ws-hint">${card.hint}</div>` : ''}
       </div>
     `;
   }

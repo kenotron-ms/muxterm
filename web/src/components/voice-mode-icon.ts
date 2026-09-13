@@ -16,6 +16,7 @@ export type VoiceModeIconState =
   | 'listening'
   | 'thinking'
   | 'speaking'
+  | 'paused'
   | 'error';
 
 function limitedLevel(value: number): number {

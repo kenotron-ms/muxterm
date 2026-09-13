@@ -55,15 +55,21 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kenotron-ms/muxterm/internal/cos"
+	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
 )
 
 // Message types on the browser <-> serve wire. These are SERVE-LOCAL, not
@@ -131,15 +137,16 @@ const (
 // Unknown fields are dropped by encoding/json for free, which is the additive
 // half of the compatibility contract.
 type cosClientMessage struct {
-	Type          string `json:"type"`
-	On            bool   `json:"on"`
-	Prompt        string `json:"prompt"`
-	ClientRef     string `json:"client_ref"`
-	RequestID     string `json:"request_id"`
-	Approved      *bool  `json:"approved"`
-	Reason        string `json:"reason"`
-	TurnID        string `json:"turn_id"`
-	OlderThanDays int    `json:"older_than_days"`
+	Type                string `json:"type"`
+	On                  bool   `json:"on"`
+	Prompt              string `json:"prompt"`
+	ClientRef           string `json:"client_ref"`
+	RequestID           string `json:"request_id"`
+	Approved            *bool  `json:"approved"`
+	Reason              string `json:"reason"`
+	TurnID              string `json:"turn_id"`
+	OlderThanDays       int    `json:"older_than_days"`
+	AppVoiceOperationID string `json:"app_voice_operation_id"`
 }
 
 // --- relay -----------------------------------------------------------------
@@ -148,6 +155,7 @@ type cosClientMessage struct {
 // itself never learns: which tab asked, and what it asked. turn_start carries
 // only a turn id (internal/cos/sidecar/main.py:752).
 type cosSubmission struct {
+	ownerKey  string
 	clientRef string
 	prompt    string
 }
@@ -161,11 +169,16 @@ type cosRelay struct {
 	mu   sync.Mutex
 	sup  *cos.Supervisor
 	err  error
-	// attempted is set before the legacy sidecar starts. Lobby adoption checks
-	// it under this lock, so a process cannot acquire two writers for the old
-	// SessionStore root during a transition.
-	attempted   bool
-	normalOwner bool
+	// root is resolved exactly once before the sidecar starts. The optional
+	// catalog lock is kept open for this relay lifetime and inherited by the
+	// sidecar, so an older server cannot concurrently own the selected root.
+	rootOnce    sync.Once
+	root        missioncontrol.SingleConversationOrigin
+	catalogLock *os.File
+	rootLock    *os.File
+	rootErr     error
+	incarnation string
+	closed      bool
 
 	// subMu guards the submission table AND is held across cos.Supervisor.Submit.
 	//
@@ -178,6 +191,7 @@ type cosRelay struct {
 	// non-blocking channel send), so the critical section cannot stall.
 	subMu    sync.Mutex
 	subs     map[string]cosSubmission
+	refs     map[string]string
 	subOrder []string
 }
 
@@ -187,7 +201,9 @@ func newCosRelay() *cosRelay {
 			Logf:            log.Printf,
 			SubscriberDepth: cosSubscriberDepth,
 		},
-		subs: make(map[string]cosSubmission),
+		subs:        make(map[string]cosSubmission),
+		refs:        make(map[string]string),
+		incarnation: uuid.New().String(),
 	}
 }
 
@@ -203,41 +219,180 @@ func newCosRelay() *cosRelay {
 // process that no longer exists.
 func (r *cosRelay) get() (*cos.Supervisor, error) {
 	r.once.Do(func() {
-		r.mu.Lock()
-		if r.normalOwner {
-			r.err = errors.New("legacy COS relay is unavailable because normal channels own its session")
-			r.mu.Unlock()
-			return
-		}
-		r.attempted = true
-		r.mu.Unlock()
-		sup := cos.New(r.cfg)
-		if err := sup.Start(context.Background()); err != nil {
+		if err := r.configureRoot(); err != nil {
 			r.mu.Lock()
 			r.err = err
 			r.mu.Unlock()
 			return
 		}
+		sup := cos.New(r.cfg)
+		if err := sup.Start(context.Background()); err != nil {
+			r.mu.Lock()
+			r.err = err
+			r.mu.Unlock()
+			r.releaseRootLock()
+			return
+		}
 		r.mu.Lock()
+		if r.closed {
+			r.err = errors.New("Mission Control is shutting down")
+			r.mu.Unlock()
+			_ = sup.Close()
+			r.releaseRootLock()
+			return
+		}
 		r.sup = sup
 		r.mu.Unlock()
 	})
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		if r.err == nil {
+			r.err = errors.New("Mission Control is shutting down")
+		}
+		return nil, r.err
+	}
 	return r.sup, r.err
 }
 
-// claimNormalOwnership atomically reserves the legacy SessionStore identity
-// for the normal Lobby before metadata adoption. It neither starts nor stops a
-// sidecar; a previously attempted relay is a hard conflict.
-func (r *cosRelay) claimNormalOwnership() bool {
+// configureRoot selects the one durable conversation before any supervisor is
+// constructed. It never creates or repairs catalog metadata. A persisted root
+// must already exist in the exact native SessionStore scope; otherwise the
+// caller receives an explicit unavailable error instead of a replacement.
+func (r *cosRelay) configureRoot() error {
+	r.rootOnce.Do(func() {
+		root, catalogLock, err := missioncontrol.ReadSingleConversationOrigin(missioncontrol.DefaultPath())
+		if err != nil {
+			r.mu.Lock()
+			r.rootErr = fmt.Errorf("Mission Control is unavailable: %w", err)
+			r.mu.Unlock()
+			return
+		}
+		if root.SessionID == "" {
+			root.SessionID, _ = cos.ResolveSessionID("")
+		}
+		if root.StorageCWD == "" {
+			root.StorageCWD, err = cos.ResolveWorkingDir("")
+			if err != nil {
+				if catalogLock != nil {
+					_ = catalogLock.Close()
+				}
+				r.mu.Lock()
+				r.rootErr = fmt.Errorf("Mission Control is unavailable: resolve conversation scope: %w", err)
+				r.mu.Unlock()
+				return
+			}
+		}
+		if root.ID == "" {
+			root.ID = root.SessionID
+		}
+		if root.Existing {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			exists, probeErr := cos.SessionStoreExists(ctx, root.SessionID, root.StorageCWD)
+			cancel()
+			if probeErr != nil || !exists {
+				if catalogLock != nil {
+					_ = catalogLock.Close()
+				}
+				if probeErr != nil {
+					r.mu.Lock()
+					r.rootErr = fmt.Errorf("Mission Control is unavailable: verify persisted conversation: %w", probeErr)
+					r.mu.Unlock()
+				} else {
+					r.mu.Lock()
+					r.rootErr = errors.New("Mission Control is unavailable: persisted conversation is missing; refusing to create a replacement")
+					r.mu.Unlock()
+				}
+				return
+			}
+		}
+		r.mu.Lock()
+		if r.closed {
+			r.rootErr = errors.New("Mission Control is shutting down")
+			r.mu.Unlock()
+			if catalogLock != nil {
+				_ = catalogLock.Close()
+			}
+			return
+		}
+		r.mu.Unlock()
+		rootLock, lockErr := acquireCosRootLock(root)
+		if lockErr != nil {
+			if catalogLock != nil {
+				_ = catalogLock.Close()
+			}
+			r.mu.Lock()
+			r.rootErr = lockErr
+			r.mu.Unlock()
+			return
+		}
+		r.mu.Lock()
+		if r.closed {
+			r.rootErr = errors.New("Mission Control is shutting down")
+			r.mu.Unlock()
+			_ = rootLock.Close()
+			if catalogLock != nil {
+				_ = catalogLock.Close()
+			}
+			return
+		}
+		r.root, r.catalogLock, r.rootLock = root, catalogLock, rootLock
+		r.cfg.SessionID = root.SessionID
+		r.cfg.Cwd = root.StorageCWD
+		r.cfg.OwnerLockFile = rootLock
+		r.mu.Unlock()
+	})
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.attempted || r.normalOwner {
-		return false
+	return r.rootErr
+}
+
+func (r *cosRelay) rootIdentity() (missioncontrol.SingleConversationOrigin, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.root, r.sup != nil && r.rootErr == nil && !r.closed
+}
+
+func (r *cosRelay) releaseRootLock() {
+	r.mu.Lock()
+	rootLock, catalogLock := r.rootLock, r.catalogLock
+	r.rootLock = nil
+	r.catalogLock = nil
+	r.mu.Unlock()
+	if rootLock != nil {
+		_ = rootLock.Close()
 	}
-	r.normalOwner = true
-	return true
+	if catalogLock != nil {
+		_ = catalogLock.Close()
+	}
+}
+
+func acquireCosRootLock(root missioncontrol.SingleConversationOrigin) (*os.File, error) {
+	base := strings.TrimSpace(os.Getenv("AMPLIFIER_HOME"))
+	if base == "" {
+		home := strings.TrimSpace(os.Getenv("HOME"))
+		if home == "" {
+			return nil, errors.New("Mission Control is unavailable: home directory is unset")
+		}
+		base = filepath.Join(home, ".amplifier")
+	}
+	if !filepath.IsAbs(base) {
+		return nil, errors.New("Mission Control is unavailable: native session home is not absolute")
+	}
+	key := sha256.Sum256([]byte(base + "\x00" + root.StorageCWD + "\x00" + root.SessionID))
+	dir := filepath.Join(base, "muxterm", "ownership")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("Mission Control is unavailable: create ownership directory: %w", err)
+	}
+	lock, err := os.OpenFile(filepath.Join(dir, fmt.Sprintf("%x.lock", key[:])), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("Mission Control is unavailable: open ownership lock: %w", err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lock.Close()
+		return nil, errors.New("Mission Control is already active for this conversation")
+	}
+	return lock, nil
 }
 
 // started reports whether a sidecar was ever launched, WITHOUT launching one.
@@ -245,6 +400,9 @@ func (r *cosRelay) claimNormalOwnership() bool {
 func (r *cosRelay) started() *cos.Supervisor {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return nil
+	}
 	return r.sup
 }
 
@@ -254,18 +412,31 @@ func (r *cosRelay) started() *cos.Supervisor {
 // proven silent-turn-loss defect: two concurrent turns against one amplifier
 // session erase one of them, and the sidecar refuses the second rather than
 // queueing it (spec 2.4 law 1).
-func (r *cosRelay) submit(sup *cos.Supervisor, prompt, clientRef string) *cos.Turn {
+func (r *cosRelay) submit(sup *cos.Supervisor, prompt, ownerKey, clientRef string) (*cos.Turn, bool) {
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
+	refKey := ownerKey + "\x00" + clientRef
+	if clientRef != "" {
+		if turnID := r.refs[refKey]; turnID != "" {
+			return &cos.Turn{ID: turnID}, true
+		}
+	}
 
 	turn := sup.Submit(prompt)
-	r.subs[turn.ID] = cosSubmission{clientRef: clientRef, prompt: prompt}
+	r.subs[turn.ID] = cosSubmission{ownerKey: ownerKey, clientRef: clientRef, prompt: prompt}
+	if clientRef != "" {
+		r.refs[refKey] = turn.ID
+	}
 	r.subOrder = append(r.subOrder, turn.ID)
 	for len(r.subOrder) > cosMaxTrackedTurns {
-		delete(r.subs, r.subOrder[0])
+		oldID := r.subOrder[0]
+		if old := r.subs[oldID]; old.clientRef != "" {
+			delete(r.refs, old.ownerKey+"\x00"+old.clientRef)
+		}
+		delete(r.subs, oldID)
 		r.subOrder = r.subOrder[1:]
 	}
-	return turn
+	return turn, false
 }
 
 // submission returns what the browser told us about a turn.
@@ -328,9 +499,14 @@ func (r *cosRelay) close() {
 	if r == nil {
 		return
 	}
-	if sup := r.started(); sup != nil {
+	r.mu.Lock()
+	r.closed = true
+	sup := r.sup
+	r.mu.Unlock()
+	if sup != nil {
 		_ = sup.Close()
 	}
+	r.releaseRootLock()
 }
 
 // --- framing ---------------------------------------------------------------
@@ -433,25 +609,6 @@ func (c *Client) handleCosMessage(data []byte) {
 			}
 		}
 	}
-	if c.hub.missionControlOwnsChannels() {
-		switch msg.Type {
-		case cosTypeTurn, cosTypeApproval, cosTypeCancel:
-			c.sendCosError("", "channel_protocol_required", "normal channels own this conversation; refresh muxterm to use the channel protocol")
-			return
-		case cosTypeClear:
-			c.sendCosClearRefusal("channel_protocol_required", "normal channels own this conversation; refresh muxterm to use the channel protocol")
-			return
-		case cosTypeSubscribe:
-			// The normal catalog owns the Lobby source identity (or failed
-			// closed while reserving it). A legacy subscribe must not start a
-			// parallel relay for the same stored conversation.
-			if msg.On {
-				c.sendCosSubscribeResult(false, "normal channels own this conversation; refresh muxterm to use the channel protocol", "", false)
-				return
-			}
-		}
-	}
-
 	switch msg.Type {
 	case cosTypeSubscribe:
 		c.cosSubscribe(msg.On)
@@ -503,7 +660,7 @@ func (c *Client) cosSubscribe(on bool) {
 	// ready is reported here, not only as an event: the sidecar publishes its
 	// ready event exactly once, so a tab that subscribes after boot would
 	// otherwise never learn the session is live.
-	c.sendCosSubscribeResult(true, "", st.SessionID, st.Ready)
+	c.sendCosSubscribeResult(true, "", st.SessionID, st.Ready, relay)
 
 	go c.cosPump(sub, relay)
 	// History is fetched on its own goroutine because the sidecar may still
@@ -644,29 +801,74 @@ func (c *Client) stopCos() {
 func (c *Client) cosTurn(msg cosClientMessage) {
 	prompt := strings.TrimSpace(msg.Prompt)
 	if prompt == "" {
-		c.sendCosError("", "bad_request", "an empty prompt was ignored")
+		c.cosTurnFailure(msg, "bad_request", "an empty prompt was ignored")
 		return
 	}
 	if len(prompt) > cosPromptMaxBytes {
-		c.sendCosError("", "bad_request",
+		c.cosTurnFailure(msg, "bad_request",
 			fmt.Sprintf("prompt is %d bytes; the limit is %d", len(prompt), cosPromptMaxBytes))
 		return
 	}
 	relay := c.hub.cos
 	if relay == nil {
-		c.sendCosError("", cos.CodeSidecarUnavailable, "the chief of staff is not available on this server")
+		c.cosTurnFailure(msg, cos.CodeSidecarUnavailable, "Mission Control is not available on this server")
 		return
 	}
 	sup, err := relay.get()
 	if err != nil {
-		c.sendCosError("", cos.CodeSidecarUnavailable, err.Error())
+		log.Printf("cos: Mission Control start failed: %v", err)
+		c.cosTurnFailure(msg, cos.CodeSidecarUnavailable, "Mission Control could not start")
 		return
 	}
 
 	// The turn's visible existence is its turn_start, which reaches EVERY
 	// subscriber through the shared broker -- including tabs that did not ask
 	// for it, because the conversation is shared. Nothing is fanned out here.
-	relay.submit(sup, prompt, msg.ClientRef)
+	root, active := relay.rootIdentity()
+	if !active {
+		c.cosTurnFailure(msg, cos.CodeSidecarUnavailable, "Mission Control is starting; try again")
+		return
+	}
+	c.hub.mu.RLock()
+	appVoice := c.hub.appVoice
+	c.hub.mu.RUnlock()
+	if appVoice != nil && msg.AppVoiceOperationID != "" {
+		turn, duplicate, err := appVoice.submitReservedCosTurn(c, msg, root, relay, sup)
+		if err != nil {
+			c.cosTurnFailure(msg, "app_voice_reservation_required", "voice submission was not accepted")
+			log.Printf("app voice: reject Mission Control turn: %v", err)
+			return
+		}
+		c.sendCosTurnResult(msg.ClientRef, true, turn.ID, "")
+		if duplicate {
+			log.Printf("cos: duplicate app voice client_ref %q returned turn %s", msg.ClientRef, turn.ID)
+		}
+		return
+	}
+	if msg.AppVoiceOperationID == "" && strings.HasPrefix(msg.ClientRef, "app_voice:") {
+		c.cosTurnFailure(msg, "app_voice_reservation_required", "voice submission was not accepted")
+		return
+	}
+	turn, duplicate := relay.submit(sup, prompt, fmt.Sprintf("%p", c), msg.ClientRef)
+	c.sendCosTurnResult(msg.ClientRef, true, turn.ID, "")
+	if duplicate {
+		log.Printf("cos: duplicate client_ref %q returned turn %s", msg.ClientRef, turn.ID)
+	}
+}
+
+func (c *Client) cosTurnFailure(msg cosClientMessage, code, message string) {
+	c.sendCosError("", code, message)
+	c.sendCosTurnResult(msg.ClientRef, false, "", code)
+}
+
+func (c *Client) sendMissionControlUnsupported(typ string) {
+	data, err := json.Marshal(map[string]any{
+		"type": "missioncontrol-result", "op": strings.TrimPrefix(typ, "missioncontrol-"),
+		"ok": false, "code": "unsupported", "error": "use the shared Mission Control conversation",
+	})
+	if err == nil {
+		_ = c.writeText(data)
+	}
 }
 
 // cosApproval answers an approval_request.
@@ -790,14 +992,31 @@ func (c *Client) cosRunClear(relay *cosRelay, olderThanDays int) {
 
 // --- outbound frames -------------------------------------------------------
 
-func (c *Client) sendCosSubscribeResult(ok bool, errMsg, sessionID string, ready bool) {
+func (c *Client) sendCosSubscribeResult(ok bool, errMsg, sessionID string, ready bool, relay ...*cosRelay) {
+	var conversation *struct {
+		ID          string `json:"id"`
+		SessionID   string `json:"session_id"`
+		Generation  uint64 `json:"generation"`
+		Incarnation string `json:"incarnation"`
+	}
+	if ok && len(relay) > 0 && relay[0] != nil {
+		if root, active := relay[0].rootIdentity(); active {
+			conversation = &struct {
+				ID          string `json:"id"`
+				SessionID   string `json:"session_id"`
+				Generation  uint64 `json:"generation"`
+				Incarnation string `json:"incarnation"`
+			}{ID: root.ID, SessionID: root.SessionID, Generation: 1, Incarnation: relay[0].incarnation}
+		}
+	}
 	frame := struct {
-		Type      string `json:"type"`
-		OK        bool   `json:"ok"`
-		SessionID string `json:"session_id,omitempty"`
-		Ready     bool   `json:"ready"`
-		Error     string `json:"error,omitempty"`
-	}{Type: cosTypeSubscribeResult, OK: ok, SessionID: sessionID, Ready: ready, Error: errMsg}
+		Type         string `json:"type"`
+		OK           bool   `json:"ok"`
+		SessionID    string `json:"session_id,omitempty"`
+		Ready        bool   `json:"ready"`
+		Error        string `json:"error,omitempty"`
+		Conversation any    `json:"conversation,omitempty"`
+	}{Type: cosTypeSubscribeResult, OK: ok, SessionID: sessionID, Ready: ready, Error: errMsg, Conversation: conversation}
 	data, err := json.Marshal(frame)
 	if err != nil {
 		log.Printf("cos: encode subscribe result: %v", err)
@@ -805,6 +1024,24 @@ func (c *Client) sendCosSubscribeResult(ok bool, errMsg, sessionID string, ready
 	}
 	if err := c.writeText(data); err != nil {
 		log.Printf("cos: subscribe result write error: %v", err)
+	}
+}
+
+func (c *Client) sendCosTurnResult(clientRef string, ok bool, turnID, code string) {
+	frame := struct {
+		Type      string `json:"type"`
+		ClientRef string `json:"client_ref"`
+		OK        bool   `json:"ok"`
+		TurnID    string `json:"turn_id,omitempty"`
+		Code      string `json:"code,omitempty"`
+	}{Type: "cos-turn-result", ClientRef: clientRef, OK: ok, TurnID: turnID, Code: code}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		log.Printf("cos: encode turn result: %v", err)
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("cos: turn result write error: %v", err)
 	}
 }
 
