@@ -119,11 +119,11 @@ function createWorkspace(label) {
 function createPane(workspaceID) {
   const out = JSON.parse(execFileSync(
     opt['muxterm-bin'],
-    ['pane', 'create', '--workspace', workspaceID, '--cmd', 'sh', '--cmd', '-c', '--cmd', 'printf fixture-pane', '--json'],
+    ['pane', 'create', '--workspace', workspaceID, '--cmd', '/bin/sh', '--cmd', '-c', '--cmd', 'printf fixture-pane; exec /bin/sh', '--json'],
     { encoding: 'utf8', env: process.env },
   ));
-  if (!Number.isSafeInteger(out.pane_id) || out.pane_id < 1) throw new Error('pane_create_shape_invalid');
-  return out.pane_id;
+  if (!Number.isSafeInteger(out.paneId) || out.paneId < 1) throw new Error('pane_create_shape_invalid');
+  return out.paneId;
 }
 function appMetadata(command) {
   const metadata = command?.metadata;
@@ -325,8 +325,7 @@ try {
     }, `active_bubble_${expectedLabel ?? 'any'}`);
   }
   async function tagAndVerifyBubble() {
-    return eventually(() => page.evaluate(() => {
-      const bubble = document.querySelector('mux-voice-mode-bubble')?.shadowRoot?.querySelector('[data-voice-mode-bubble]');
+    return eventually(() => page.locator('mux-voice-mode-bubble [data-voice-mode-bubble]:visible').evaluate((bubble) => {
       if (!(bubble instanceof HTMLElement)) return false;
       if (!window.__fixtureBubbleReferences) {
         window.__fixtureBubbleReferences = new WeakSet([bubble]);
@@ -483,6 +482,7 @@ try {
   await page.mouse.move(20, Math.min(650, dragBox.y + 90), { steps: 12 });
   await page.mouse.up();
   await eventually(() => bubble.getAttribute('data-edge').then((edge) => edge === 'left'), 'bubble_docked_left');
+  await eventually(() => bubble.getAttribute('data-snapping').then((value) => value === 'false'), 'bubble_snap_finished');
   const afterDragBox = await bubble.boundingBox();
   gate('live_bubble_drag_docks_without_retarget_or_requests',
     Boolean(afterDragBox && afterDragBox.x >= 0 && afterDragBox.x < 40) &&
