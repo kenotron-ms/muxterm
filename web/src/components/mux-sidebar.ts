@@ -456,6 +456,8 @@ export class MuxSidebar extends LitElement {
     @media (pointer: coarse) {
       .ws-card {
         min-height: 44px;
+        /* The close control already supplies its 44px touch target. */
+        padding-block: 0;
       }
     }
 

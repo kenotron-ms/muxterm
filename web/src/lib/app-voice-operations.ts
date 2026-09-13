@@ -328,7 +328,9 @@ function parseOperation(value: unknown): AppVoiceOperation | null {
   // values. Normalize only those documented absent values before applying the
   // strict per-action frame shape; arbitrary extra fields still refuse.
   const frame = { ...raw };
-  if (frame.text === '') delete frame.text;
+  if (frame.text === '' && !(frame.action === 'composer_draft' && frame.draft_mode === 'set')) {
+    delete frame.text;
+  }
   if (frame.draft_mode === '') delete frame.draft_mode;
   const operationId = boundedString(frame.operation_id, 36);
   const leaseEpoch = positiveInteger(frame.lease_epoch);

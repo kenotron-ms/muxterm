@@ -474,6 +474,17 @@ try {
       provider_cos_requests: providerRecords().length - providerBeforeDraft,
     });
 
+  stage = 'app_voice_composer_clear';
+  const cleared = await appUtterance('composer_draft', {
+    expected_revision: observation.revision,
+    mode: 'set',
+    target: activeComposerTarget(observation.active),
+    text: '',
+  });
+  await eventually(() => composer.inputValue().then((value) => value === ''), 'app_voice_draft_cleared');
+  gate('composer_draft_empty_set_clears_without_dispatch', cleared.output?.channel_id === activeComposer.channel_id &&
+    providerRecords().length === providerBeforeDraft);
+
   stage = 'app_voice_submit_current_cos';
   const submitObserved = await appUtterance('app_observe', {});
   const submitObservation = submitObserved.output;
