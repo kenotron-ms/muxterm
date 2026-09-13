@@ -78,6 +78,7 @@ import {
   type VoiceState,
   type VoiceTranscriptPayload,
 } from '../lib/voice-input-controller.js';
+import { voiceCaptureArbiter, type VoiceCaptureOwner } from '../lib/voice-capture-arbiter.js';
 import type { MuxApplets } from './mux-applets.js';
 import './voice-mode-button.js';
 // ONE applet host, in one of two containers: the right-hand region in
@@ -190,6 +191,7 @@ export class MuxCos extends LitElement {
   /** The exact scoped request in flight; also closes the pre-render double-click gap. */
   @state() private _threadControlPending: ThreadControlConfirmation | null = null;
   @state() private _voice: VoiceState = voiceInputController.getState();
+  @state() private _captureOwner: VoiceCaptureOwner = voiceCaptureArbiter.snapshot().owner;
   @state() private _dictationNotice = '';
   @state() private _appVoiceConfirmation: AppVoiceSubmitConfirmation | null = null;
 
@@ -221,6 +223,7 @@ export class MuxCos extends LitElement {
 
   private _unsub: (() => void) | null = null;
   private _unsubVoice: (() => void) | null = null;
+  private _unsubCaptureOwner: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
   private _unsubVoiceError: (() => void) | null = null;
   private _unsubSelectionWillChange: (() => void) | null = null;
@@ -1458,6 +1461,10 @@ export class MuxCos extends LitElement {
     // unseen tab can still notice a lane going blocked; the argument for that
     // exception, and the adopt-current-state-on-reattach reasoning, moved with
     // it to applet-dashboard's _onFleet() and _sync().
+    this._captureOwner = voiceCaptureArbiter.snapshot().owner;
+    this._unsubCaptureOwner = voiceCaptureArbiter.subscribe(({ owner }) => {
+      this._captureOwner = owner;
+    });
     this._unsubVoice = voiceInputController.onStateChange((s) => {
       this._voice = s;
       if (s !== 'listening') {
@@ -1497,6 +1504,8 @@ export class MuxCos extends LitElement {
     this._unsub = null;
     this._unsubVoice?.();
     this._unsubVoice = null;
+    this._unsubCaptureOwner?.();
+    this._unsubCaptureOwner = null;
     this._unsubTranscript?.();
     this._unsubTranscript = null;
     this._unsubVoiceError?.();
@@ -2482,9 +2491,10 @@ export class MuxCos extends LitElement {
               ? html`<button
                   class="cbtn ${listening ? 'rec' : ''}"
                   type="button"
-                  title="${listening ? 'Stop dictating' : 'Dictate'}"
+                  title="${this._captureOwner === 'app_conversation' ? 'Stop voice mode before using composer dictation.' : listening ? 'Stop dictating' : 'Dictate'}"
                   aria-label="${listening ? 'Stop dictating' : 'Dictate'}"
                   aria-pressed="${listening ? 'true' : 'false'}"
+                  ?disabled="${this._captureOwner === 'app_conversation'}"
                   @click="${this._toggleVoice}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
