@@ -736,10 +736,13 @@ try {
     blocked('known_lane_transcript_attribution', 'operator must supply both --known-lane-session-id and --known-lane-machine for a real discoverable Amplifier lane; no transcript was fabricated');
   }
   stage = 'rapid_navigation_pending_submit';
-  await eventually(
-    () => frames.some((frame) => frame.type === 'missioncontrol-event' && frame.thread_id === a.thread.id && frame.event?.type === 'turn_end'),
+  const submittedTerminal = await eventually(
+    () => frames.find((frame) => frame.type === 'missioncontrol-event' && frame.thread_id === a.thread.id &&
+      frame.event?.ev === 'turn_end' && frame.event.turn_id === submit.output.turn_id),
     'native_persisted_A_turn_end',
   );
+  gate('submitted_A_turn_persisted_before_navigation_race',
+    submittedTerminal.event.persisted === true && !submittedTerminal.event.error);
   await select(labelA);
   const rapidObservation = await newUtterance('app_observe', {});
   const rapidProviderCount = providerRecords().length;
