@@ -304,6 +304,9 @@ func (q *queue) observe(ev Event) {
 func terminalError(ev Event) error {
 	switch ev.Ev {
 	case EvTurnEnd:
+		if ev.Error != "" {
+			return fmt.Errorf("%w: %s", ErrTurnFailed, ev.Error)
+		}
 		return nil
 	case EvCancelled, EvTurnCancelled:
 		return fmt.Errorf("%w: cancelled", ErrTurnFailed)

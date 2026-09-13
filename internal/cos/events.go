@@ -138,6 +138,7 @@ type Event struct {
 
 	// turn_end
 	Response string      `json:"response,omitempty"`
+	Error    string      `json:"error,omitempty"`
 	CostUSD  json.Number `json:"cost_usd,omitempty"`
 	// Persisted is true only when the sidecar successfully saved this terminal
 	// turn's transcript before emitting its terminal event.

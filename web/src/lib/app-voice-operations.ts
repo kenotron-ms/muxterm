@@ -655,6 +655,19 @@ class AppVoiceOperations {
     );
   }
 
+  /** Report the local audio fence for the exact owner epoch. */
+  setPlaybackPaused(leaseEpoch: number, paused: boolean): boolean {
+    return (
+      this._lease?.lease_epoch === leaseEpoch &&
+      this._socket?.appVoice({
+        type: 'app-voice-playback-state',
+        protocol_version: APP_VOICE_PROTOCOL_VERSION,
+        lease_epoch: leaseEpoch,
+        paused,
+      }) === true
+    );
+  }
+
   onLeaseChange(listener: LeaseListener): () => void {
     this._leaseListeners.add(listener);
     return () => this._leaseListeners.delete(listener);

@@ -69,6 +69,11 @@ type Registry struct {
 	closeTickets        map[string]closeTicket
 	retiredCloseTickets map[string]retiredCloseTicket
 	closeTicketSequence uint64
+
+	// snapshotChanged coalesces durable-state mutations for the snapshot
+	// writer. It is intentionally a one-place notification, not a mutation
+	// log: a later snapshot always captures the complete authoritative state.
+	snapshotChanged chan struct{}
 }
 
 // NewRegistry returns an empty Registry ready for use.
@@ -78,6 +83,22 @@ func NewRegistry() *Registry {
 		unboundSnapshotUUIDs: make(map[string]bool),
 		closeTickets:         make(map[string]closeTicket),
 		retiredCloseTickets:  make(map[string]retiredCloseTicket),
+		snapshotChanged:      make(chan struct{}, 1),
+	}
+}
+
+// SnapshotChanges returns the coalescing durable-state notification consumed by
+// StartSnapshotWriter. Callers only receive notifications; all state remains
+// owned by Registry and must be read through snapshotView.
+func (r *Registry) SnapshotChanges() <-chan struct{} { return r.snapshotChanged }
+
+// notifySnapshotChangedLocked records that a new snapshot should be written.
+// The caller must hold r.mu. A full channel means a writer is already scheduled,
+// which is sufficient because snapshots capture the whole registry.
+func (r *Registry) notifySnapshotChangedLocked() {
+	select {
+	case r.snapshotChanged <- struct{}{}:
+	default:
 	}
 }
 
@@ -203,10 +224,20 @@ func (r *Registry) PutPane(wsID string, p *Pane) bool {
 	if !ok || p == nil {
 		return false
 	}
+	wasEmpty := len(ws.Panes) == 0
 	r.nextPaneGeneration++
 	p.targetGeneration = r.nextPaneGeneration
 	ws.Panes[p.LocalID] = p
 	ws.membershipGeneration++
+	if wasEmpty {
+		// The first pane is the workspace's explicit initial selection. This
+		// covers a newly created workspace without deriving selection from its
+		// output, pane order, or a browser visit. Restore corrects or clears
+		// this provisional value before the daemon accepts connections.
+		ws.lastUserActivePane = p.LocalID
+		ws.activeRevision++
+		r.notifySnapshotChangedLocked()
+	}
 	// A workspace somebody has put a pane back into is in use again, not a
 	// result sitting there waiting to be read. Reusing it is as good a
 	// dismissal as closing it, and leaving a stale "finished" badge on a
@@ -277,8 +308,12 @@ func (r *Registry) MarkUserActivePane(wsID string, paneID int) bool {
 	if !ok || ws.Panes[paneID] == nil {
 		return false
 	}
+	if ws.lastUserActivePane == paneID {
+		return true
+	}
 	ws.lastUserActivePane = paneID
 	ws.activeRevision++
+	r.notifySnapshotChangedLocked()
 	return true
 }
 
@@ -431,7 +466,73 @@ func (r *Registry) removePaneLocked(wsID string, paneID int) (*Pane, int, bool) 
 	}
 	delete(ws.Panes, paneID)
 	ws.membershipGeneration++
+	if ws.lastUserActivePane == paneID {
+		// A close cannot be allowed to turn an unrelated pane's output into
+		// the selected preview. Only a still-valid selection recorded by the
+		// workspace layout may succeed the removed active pane; otherwise the
+		// honest state is unavailable.
+		ws.lastUserActivePane = 0
+		if successor, ok := activePaneFromWorkspaceLayoutLocked(ws); ok {
+			ws.lastUserActivePane = successor
+		}
+		ws.activeRevision++
+		r.notifySnapshotChangedLocked()
+	}
 	return p, len(ws.Panes), true
+}
+
+// restoreUserActivePane sets the selection established by one snapshot restore
+// pass. paneID must be a currently-restored pane; zero explicitly records that
+// no authoritative selection survived. Unlike MarkUserActivePane it does not
+// schedule another snapshot while boot-time restore is still assembling state.
+func (r *Registry) restoreUserActivePane(wsID string, paneID int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok {
+		return false
+	}
+	ws.lastUserActivePane = 0
+	if paneID != 0 {
+		if ws.Panes[paneID] == nil {
+			ws.activeRevision++
+			return false
+		}
+		ws.lastUserActivePane = paneID
+	}
+	ws.activeRevision++
+	return paneID != 0
+}
+
+// activePaneFromWorkspaceLayoutLocked returns the saved workspace selection
+// only when it still names a live pane. The caller must hold r.mu. "wide"
+// deliberately remains the established desktop/sidebar authority, with
+// "narrow" only when wide contains no selection at all.
+func activePaneFromWorkspaceLayoutLocked(ws *Workspace) (int, bool) {
+	for _, breakpoint := range [...]string{"wide", "narrow"} {
+		paneID, ok := StrictActivePaneFromLayout(ws.Layouts[breakpoint])
+		if !ok {
+			continue
+		}
+		if ws.Panes[paneID] != nil {
+			return paneID, true
+		}
+		return 0, false
+	}
+	return 0, false
+}
+
+// authoritativeLayoutActivePane returns only an explicitly persisted dockview
+// selection that names a live pane. It is used during restore after layouts have
+// passed identity remapping; it never applies display-recovery fallbacks.
+func (r *Registry) authoritativeLayoutActivePane(wsID string) (int, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws := r.workspaces[wsID]
+	if ws == nil {
+		return 0, false
+	}
+	return activePaneFromWorkspaceLayoutLocked(ws)
 }
 
 // workspaceLiveView is a point-in-time, read-only view of one workspace's
@@ -441,9 +542,10 @@ func (r *Registry) removePaneLocked(wsID string, paneID int) (*Pane, int, bool) 
 // invoke them after the registry lock is released. Used only by the
 // session-restore snapshot writer (see snapshot.go).
 type workspaceLiveView struct {
-	ID   string
-	UUID string
-	Name string
+	ID                 string
+	UUID               string
+	Name               string
+	LastUserActivePane int
 	// NameOrigin travels with Name because the snapshot writer persists both:
 	// a name restored without its provenance is a name the deriver is free to
 	// overwrite on the next tick, which is how a crash-recovery restart would
@@ -488,7 +590,11 @@ func (r *Registry) snapshotView() []workspaceLiveView {
 			layout[k] = v
 		}
 
-		out = append(out, workspaceLiveView{ID: id, UUID: ws.UUID, Name: ws.Name, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes})
+		activePaneID := 0
+		if ws.Panes[ws.lastUserActivePane] != nil {
+			activePaneID = ws.lastUserActivePane
+		}
+		out = append(out, workspaceLiveView{ID: id, UUID: ws.UUID, Name: ws.Name, LastUserActivePane: activePaneID, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes})
 	}
 	return out
 }

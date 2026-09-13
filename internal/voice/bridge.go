@@ -75,6 +75,24 @@ type AppOperationBridge interface {
 	CompleteAppTool(Correlation) (map[string]string, error)
 }
 
+// AppOperatorBridge is the app profile's deliberately correlated Operator
+// bridge. Unlike Bridge.Submit it can only submit a request after the owner
+// browser visibly confirms the exact current Mission Control composer target.
+// Approval and cancellation are restricted to turns this bridge admitted.
+type AppOperatorBridge interface {
+	AppOperationBridge
+	SubmitOperator(context.Context, Correlation, string) (TurnHandle, error)
+	ApproveOperator(Correlation, string, bool, string) error
+	CancelOperator(Correlation, string) error
+	PrepareOperatorReply(Correlation, string, bool) (map[string]string, error)
+	QueueOperatorCompletion(Correlation, string) error
+	RetainOperatorTerminal(Correlation, string)
+	QueueOperatorNotice(Correlation, string) error
+	SetOperatorCompletionSink(func(Correlation, string, bool))
+	MarkOperatorNarration(Correlation)
+	OperatorPlaybackFinished(string, bool)
+}
+
 // AppCaptureBridge commits a provider-originated input item before the server
 // asks the manual-response profile to respond. The capture identifier is never
 // supplied by a browser or model.
