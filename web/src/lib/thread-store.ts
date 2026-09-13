@@ -1002,6 +1002,7 @@ class ThreadStore {
   private _storageLoaded = false;
   private _storageUnavailable = false;
   private _legacyUnsubscribe: (() => void) | null = null;
+  private _workspaceListUnsubscribe: (() => void) | null = null;
 
   get mode(): ThreadMode {
     return this._mode;
@@ -1456,12 +1457,15 @@ class ThreadStore {
   }
 
   attach(socket: MuxSocket): void {
+    this._workspaceListUnsubscribe?.();
+    this._workspaceListUnsubscribe = null;
     this._socket = socket;
     this._loadPersistedState();
     cosStore.attach(socket);
     this._legacyUnsubscribe?.();
     this._legacyUnsubscribe = cosStore.subscribe(() => this._notify());
     socket.onMissionControlFrame = (frame) => this._handleFrame(frame);
+    this._workspaceListUnsubscribe = socket.onWorkspaceList(() => this._refreshWorkspaceCatalog());
     socket.setLegacyCosFramesEnabled(true);
     if (this._wanted && socket.connected) this._beginNegotiation();
   }
@@ -2507,7 +2511,7 @@ class ThreadStore {
 
   private _requestList(): void {
     const socket = this._socket;
-    if (!socket || !socket.connected || !this.threaded) return;
+    if (!socket || !socket.connected || !this.threaded || this._listRequestId !== '') return;
     const requestId = makeRequestId();
     if (!requestId) {
       this._setProblem('request_id_unavailable', 'A secure request ID could not be created.');
@@ -2526,6 +2530,14 @@ class ThreadStore {
       return;
     }
     this._notify();
+  }
+
+  // A workspace-list is native daemon inventory, not a catalog inference.
+  // Coalescing behind the existing request fence prevents burst broadcasts
+  // from resetting selection or starting a request feedback loop.
+  private _refreshWorkspaceCatalog(): void {
+    if (!this._wanted || !this._catalogReady) return;
+    this._requestList();
   }
 
   /** Fetch durable read-only attention; no root is selected or started. */
@@ -2763,12 +2775,17 @@ class ThreadStore {
       this._setProblem('invalid_context_list', 'The server returned an invalid workspace context.');
       return;
     }
+    const refreshing = this._catalogReady;
     this._threads = parsedThreads;
     this._workspaces = workspaces as WorkspaceContext[];
     this._catalogReady = true;
     for (const thread of parsedThreads) {
       const existing = this._states.get(thread.id);
       if (existing) existing.thread = { ...existing.thread, ...thread };
+    }
+    if (refreshing) {
+      this._notify();
+      return;
     }
     const restore = this._lastExplicitThreadId;
     const target =

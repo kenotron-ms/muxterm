@@ -194,6 +194,7 @@ export class MuxSocket {
   private _controlMessageCb: ControlMessageCallback | null = null;
   /** Owner-only app-voice frames stay off the generic control/sessiond paths. */
   private _appVoiceFrameListeners = new Set<AppVoiceFrameCallback>();
+  private _workspaceListListeners = new Set<() => void>();
   private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private _reconnectAttempts = 0;
   private _intentionalClose = false;
@@ -306,6 +307,12 @@ export class MuxSocket {
   onAppVoiceFrame(cb: AppVoiceFrameCallback): () => void {
     this._appVoiceFrameListeners.add(cb);
     return () => this._appVoiceFrameListeners.delete(cb);
+  }
+
+  /** Subscribe to authoritative daemon workspace-list publications. */
+  onWorkspaceList(cb: () => void): () => void {
+    this._workspaceListListeners.add(cb);
+    return () => this._workspaceListListeners.delete(cb);
   }
 
   connect(): void {
@@ -1042,6 +1049,8 @@ export class MuxSocket {
           // mux-dock can handle them without coupling to the socket directly.
           if (raw.type === SessiondType.LayoutCommand) {
             window.dispatchEvent(new CustomEvent('layout-command', { detail: raw }));
+          } else if (raw.type === SessiondType.WorkspaceList) {
+            for (const listener of [...this._workspaceListListeners]) listener();
           } else if (raw.type === SessiondType.PaneResized) {
             this.onPaneResized?.(raw.paneId as number, raw.cols as number, raw.rows as number);
           } else if (raw.type === SessiondType.WorkspacePreview) {
