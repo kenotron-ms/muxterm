@@ -682,9 +682,15 @@ func (c *Client) Resize(paneID, cols, rows int) error {
 // reply. Only meaningful for interactive (non-agent) connections — the daemon
 // silently ignores it from an agent-kind conn.
 func (c *Client) PaneFocus(paneID uint32, cols, rows int) error {
+	return c.PaneFocusWithActive(paneID, cols, rows, false)
+}
+
+// PaneFocusWithActive preserves the focus/resize authority path while marking
+// only the browser's explicitly selected pane as the workspace screen source.
+func (c *Client) PaneFocusWithActive(paneID uint32, cols, rows int, userActive bool) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return WriteControl(c.conn, &Message{Type: TypePaneFocus, PaneID: int(paneID), Cols: cols, Rows: rows})
+	return WriteControl(c.conn, &Message{Type: TypePaneFocus, PaneID: int(paneID), Cols: cols, Rows: rows, UserActive: userActive})
 }
 
 // dispatchPaneData routes a decoded pane-data frame to OnPaneOutput if set. It

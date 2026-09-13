@@ -228,6 +228,8 @@ export interface SessiondMessage {
   paneId?: number;
   cols?: number;
   rows?: number;
+  /** Explicit browser-selected pane on pane-focus; other visible panes retain resize authority only. */
+  userActive?: boolean;
   cmd?: string[];
   title?: string;
   workspaces?: SessiondWorkspaceInfo[];

@@ -877,7 +877,13 @@ export class MuxSocket {
    * resize()'s shape exactly — same three fields, different type.
    */
   paneFocus(paneId: number, cols: number, rows: number): void {
-    this.sendSessiond({ type: SessiondType.PaneFocus, paneId, cols, rows });
+    this.sendSessiond({
+      type: SessiondType.PaneFocus,
+      paneId,
+      cols,
+      rows,
+      userActive: paneId === this._store.activePaneId,
+    });
   }
 
   destroy(): void {

@@ -355,6 +355,7 @@ type Message struct {
 	PaneID      int             `json:"paneId,omitempty"`      // workspace-local
 	Cols        int             `json:"cols,omitempty"`        //
 	Rows        int             `json:"rows,omitempty"`        //
+	UserActive  bool            `json:"userActive,omitempty"`  // explicit browser-selected pane on pane-focus
 	Cmd         []string        `json:"cmd,omitempty"`         // argv, empty => default $SHELL
 	Title       string          `json:"title,omitempty"`       //
 	Breakpoint  string          `json:"breakpoint,omitempty"`  // responsive layout key (opaque to daemon)

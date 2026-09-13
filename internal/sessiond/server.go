@@ -717,7 +717,9 @@ func (c *conn) handle(msg Message) {
 			_ = p.Resize(msg.Cols, msg.Rows)
 			info := p.Info()
 			c.broadcastPaneResizedExcept(info.Cols, info.Rows, msg.PaneID)
-			c.srv.reg.MarkUserActivePane(c.attached, msg.PaneID)
+			if msg.UserActive {
+				c.srv.reg.MarkUserActivePane(c.attached, msg.PaneID)
+			}
 		}
 	case TypeRenamePane:
 		if c.attached != "" && c.srv.reg.RenamePane(c.attached, msg.PaneID, msg.Name) {

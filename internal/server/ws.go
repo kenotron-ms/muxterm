@@ -804,7 +804,15 @@ func (c *Client) handleTextInput(data []byte) {
 
 	case sessiond.TypePaneFocus:
 		// Fire-and-forget: the daemon sends no reply.
-		if err := dc.PaneFocus(uint32(msg.PaneID), msg.Cols, msg.Rows); err != nil {
+		var err error
+		if activeFocus, ok := dc.(interface {
+			PaneFocusWithActive(uint32, int, int, bool) error
+		}); ok {
+			err = activeFocus.PaneFocusWithActive(uint32(msg.PaneID), msg.Cols, msg.Rows, msg.UserActive)
+		} else {
+			err = dc.PaneFocus(uint32(msg.PaneID), msg.Cols, msg.Rows)
+		}
+		if err != nil {
 			log.Printf("handleTextInput: pane-focus error: %v", err)
 		}
 
