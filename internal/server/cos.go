@@ -165,10 +165,11 @@ type cosSubmission struct {
 type cosRelay struct {
 	cfg cos.Config
 
-	once sync.Once
-	mu   sync.Mutex
-	sup  *cos.Supervisor
-	err  error
+	once    sync.Once
+	kickoff sync.Once
+	mu      sync.Mutex
+	sup     *cos.Supervisor
+	err     error
 	// root is resolved exactly once before the sidecar starts. The optional
 	// catalog lock is kept open for this relay lifetime and inherited by the
 	// sidecar, so an older server cannot concurrently own the selected root.
@@ -253,6 +254,18 @@ func (r *cosRelay) get() (*cos.Supervisor, error) {
 		return nil, r.err
 	}
 	return r.sup, r.err
+}
+
+// startAsync makes progress on the shared lazy initialization without making a
+// browser read pump wait for root probing or sidecar startup.
+func (r *cosRelay) startAsync() {
+	r.kickoff.Do(func() {
+		go func() {
+			if _, err := r.get(); err != nil {
+				log.Printf("cos: Mission Control start failed: %v", err)
+			}
+		}()
+	})
 }
 
 // configureRoot selects the one durable conversation before any supervisor is
@@ -640,33 +653,68 @@ func (c *Client) cosSubscribe(on bool) {
 		c.sendCosSubscribeResult(false, "the chief of staff is not available on this server", "", false)
 		return
 	}
-	sup, err := relay.get()
-	if err != nil {
-		c.sendCosSubscribeResult(false, err.Error(), "", false)
+	c.cosMu.Lock()
+	if c.cosSubscribePending {
+		c.cosMu.Unlock()
 		return
 	}
-
-	// A repeat subscribe replaces the old subscription rather than stacking a
-	// second pump onto the same socket.
-	c.stopCos()
-
-	sub := sup.Subscribe(cosSubscriberDepth)
-	st := sup.Status()
-
-	c.cosMu.Lock()
-	c.cosSub = sub
+	c.cosSubscribeGeneration++
+	generation := c.cosSubscribeGeneration
+	old := c.cosSub
+	c.cosSub = nil
+	c.cosSubscribePending = true
 	c.cosMu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	relay.startAsync()
+	go c.cosFinishSubscribe(relay, generation)
+}
 
-	// ready is reported here, not only as an event: the sidecar publishes its
-	// ready event exactly once, so a tab that subscribes after boot would
-	// otherwise never learn the session is live.
+func (c *Client) cosFinishSubscribe(relay *cosRelay, generation uint64) {
+	sup, err := relay.get()
+	if err != nil {
+		if c.cosFinishStartup(generation, nil) {
+			c.sendCosSubscribeResult(false, "Mission Control could not start", "", false)
+		}
+		return
+	}
+	sub := sup.Subscribe(cosSubscriberDepth)
+	c.cosMu.Lock()
+	current := c.cosSubscribeGeneration == generation && c.cosSubscribePending
+	if current {
+		c.cosSubscribePending = false
+		c.cosSub = sub
+	}
+	c.cosMu.Unlock()
+	if !current {
+		sub.Close()
+		return
+	}
+	if !c.cosCurrent(generation, sub) {
+		sub.Close()
+		return
+	}
+	st := sup.Status()
 	c.sendCosSubscribeResult(true, "", st.SessionID, st.Ready, relay)
-
 	go c.cosPump(sub, relay)
-	// History is fetched on its own goroutine because the sidecar may still
-	// be booting: blocking the read pump on a ~2s amplifier start would stall
-	// every terminal keystroke on this socket behind a chat replay.
 	go c.cosSendHistory(sup, sub)
+}
+
+func (c *Client) cosFinishStartup(generation uint64, sub *cos.Subscription) bool {
+	c.cosMu.Lock()
+	defer c.cosMu.Unlock()
+	if c.cosSubscribeGeneration != generation || !c.cosSubscribePending {
+		return false
+	}
+	c.cosSubscribePending = false
+	return c.ctx.Err() == nil
+}
+
+func (c *Client) cosCurrent(generation uint64, sub *cos.Subscription) bool {
+	c.cosMu.Lock()
+	defer c.cosMu.Unlock()
+	return c.ctx.Err() == nil && c.cosSubscribeGeneration == generation && c.cosSub == sub
 }
 
 // cosSendHistory replays the conversation to ONE freshly-subscribed tab.
@@ -791,6 +839,8 @@ func (c *Client) stopCos() {
 	c.cosMu.Lock()
 	sub := c.cosSub
 	c.cosSub = nil
+	c.cosSubscribePending = false
+	c.cosSubscribeGeneration++
 	c.cosMu.Unlock()
 	if sub != nil {
 		sub.Close()
@@ -814,10 +864,10 @@ func (c *Client) cosTurn(msg cosClientMessage) {
 		c.cosTurnFailure(msg, cos.CodeSidecarUnavailable, "Mission Control is not available on this server")
 		return
 	}
-	sup, err := relay.get()
-	if err != nil {
-		log.Printf("cos: Mission Control start failed: %v", err)
-		c.cosTurnFailure(msg, cos.CodeSidecarUnavailable, "Mission Control could not start")
+	sup := relay.started()
+	if sup == nil || !sup.Status().Ready {
+		relay.startAsync()
+		c.cosTurnFailure(msg, "starting", "Mission Control is starting; try again")
 		return
 	}
 

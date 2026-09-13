@@ -97,14 +97,17 @@ type Client struct {
 	wsByHost map[string][]sessiond.WorkspaceInfo
 	ssByHost map[string][]sessiond.SessionState
 
-	// cosMu guards cosSub, this connection's opt-in subscription to the
+	// cosMu guards cosSub and the generation-fenced asynchronous startup for this
+	// connection's opt-in subscription to the
 	// server-owned chief-of-staff event stream (cos.go). nil means "never
 	// subscribed": a connection that never sends cos-subscribe receives no
 	// cos-event and costs nothing. Every subscription is an independent,
 	// droppable view of the ONE shared broker, so a turn submitted in any tab
 	// streams to all of them without this layer fanning anything out.
-	cosMu  sync.Mutex
-	cosSub *cos.Subscription
+	cosMu                  sync.Mutex
+	cosSub                 *cos.Subscription
+	cosSubscribeGeneration uint64
+	cosSubscribePending    bool
 
 	// attachSeq enforces the frozen "composition FIRST" ordering guarantee
 	// across the goroutine boundary between the daemon connection's read loop

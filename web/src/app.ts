@@ -2412,17 +2412,16 @@ export class MuxApp extends LitElement {
     this._bootSurfaceApplied = true;
     if (!customElements.get('mux-cos')) return;
     this._showDashboard = true;
-    // Same call _onDashboardShow makes. It negotiates before any legacy
-    // subscribe, then selects an explicit v2 context when text preview is on.
+    // Subscribe once because the single conversation is the visible boot
+    // surface. This does not select or create a workspace chat context.
     cosStore.open();
   }
 
   /**
    * Dashboard card / ctrl+` -- open the Dashboard from anywhere.
    *
-   * This is also what starts conversation setup: cosStore negotiates
-   * capability before it can select a thread or explicitly opt into legacy
-   * COS, so muxterm pays nothing at all for a surface nobody opened.
+   * This starts the one shared conversation if it has not been opened yet.
+   * Reopening the surface keeps the existing subscription, history and draft.
    */
   private _onDashboardShow = (): void => {
     this._appVoiceDetailThreadId = '';

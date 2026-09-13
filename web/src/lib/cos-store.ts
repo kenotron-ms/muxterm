@@ -506,14 +506,12 @@ export class CosStore {
     this._notify();
   }
 
-  /** Re-assert after a reconnect once capability negotiation chose legacy COS. */
+  /** Restore the one shared subscription after reconnect, if previously opened. */
   markReconnected(): void {
     if (this._status === 'idle') return;
     this._subscribed = true;
-    // The socket deliberately does not replay raw COS on open: the
-    // conversation coordinator must negotiate v2 capability before allowing
-    // unscoped legacy traffic. Once it has explicitly selected legacy, this is
-    // the one safe place to re-subscribe.
+    // The socket does not independently replay COS traffic. This is the one
+    // owner of reconnect subscription and the accompanying history replay.
     this._replayRequestedAt = Date.now();
     this._setStatus('starting');
     this._socket?.cosSubscribe(true);

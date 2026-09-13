@@ -101,7 +101,7 @@ function createPane(workspaceId) {
 
 const sourceReference = /^[0-9a-f]{40}$/i.test(opt['source-sha']) ? { type: 'git_sha', value: opt['source-sha'].toLowerCase() } : { type: 'source_archive_sha256', value: opt['source-sha'].toLowerCase() };
 const run = { format: 'missioncontrol-app-voice-e2e-v3', mode: ['REALRTC_SYNTHETIC_MEDIA_NO_PHYSICAL_MIC', 'SCRIPTED_PROVIDER', 'SCRIPTED_RECOGNITION_API'], status: 'FAIL', source_reference: sourceReference, limitations: ['Synthetic software media only; not acoustic.', 'Recognition/provider events are fixture edges; not cloud or physical STT.'], checks: {}, errors: [] };
-let stage = 'setup'; let firstFailure = ''; let browser; let page; let peerPage; const peerPages = new Set();
+let stage = 'setup'; let firstFailure = ''; let browser; let page; let peerPage; let frames = []; const peerPages = new Set();
 const protocolEvents = [];
 function recordProtocol(direction, payload) {
   try {
@@ -141,7 +141,7 @@ try {
     Object.setPrototypeOf(ObservedAudio, NativeAudio); ObservedAudio.prototype = NativeAudio.prototype; window.Audio = ObservedAudio;
     window.__fixtureMedia = media;
   });
-  const frames = []; const voiceResponses = []; const postPaths = []; const browserErrors = [];
+  frames = []; const voiceResponses = []; const postPaths = []; const browserErrors = [];
   page.on('websocket', (socket) => { socket.on('framesent', ({ payload }) => recordProtocol('sent', payload)); socket.on('framereceived', ({ payload }) => { recordProtocol('received', payload); try { const f = JSON.parse(String(payload)); if (typeof f.type === 'string' && f.type.startsWith('cos-')) frames.push({ ...f, _receivedAt: Date.now() }); } catch {} }); });
   page.on('response', (response) => { if (new URL(response.url()).pathname.startsWith('/api/app/voice/')) voiceResponses.push({ path: new URL(response.url()).pathname, status: response.status() }); });
   page.on('request', (request) => { if (request.method() === 'POST') postPaths.push(new URL(request.url()).pathname); });
@@ -155,10 +155,17 @@ try {
     Object.assign(label.style, { position: 'fixed', left: '4px', bottom: '4px', zIndex: '9999', padding: '4px', background: '#fff4cc', color: '#111', font: '11px system-ui', pointerEvents: 'none' });
     document.body.append(label);
   });
-  await wait(500);
-  gate('startup_has_no_eager_cos_or_multichannel_traffic', !protocolEvents.some((x) => x.type === 'cos-subscribe' || x.type.startsWith('missioncontrol-')));
-  await page.getByRole('button', { name: /Mission Control/ }).first().click();
   const composer = page.locator('[data-thread-composer]');
+  await wait(500);
+  const missionControlVisibleAtBoot = await page.locator('mux-cos:visible').count() === 1;
+  const bootSubscribes = protocolEvents.filter((x) => x.direction === 'sent' && x.type === 'cos-subscribe').length;
+  const bootMultichannel = protocolEvents.filter((x) => x.direction === 'sent' && x.type.startsWith('missioncontrol-')).length;
+  gate(
+    'startup_has_only_visible_single_conversation_subscription',
+    bootMultichannel === 0 && (missionControlVisibleAtBoot ? bootSubscribes === 1 : bootSubscribes === 0),
+    { mission_control_visible: missionControlVisibleAtBoot, cos_subscribe_count: bootSubscribes, multichannel_count: bootMultichannel },
+  );
+  if (!missionControlVisibleAtBoot) await page.getByRole('button', { name: /Mission Control/ }).first().click();
   await composer.waitFor({ state: 'visible', timeout: 30_000 });
   await eventually(() => frames.find((f) => f.type === 'cos-subscribe-result' && f.ok === true && f.conversation?.id && f.conversation?.session_id && Number.isSafeInteger(f.conversation?.generation) && f.conversation?.generation > 0 && f.conversation?.incarnation), 'cos_conversation_identity');
   const subscribe = frames.find((f) => f.type === 'cos-subscribe-result' && f.ok === true);
@@ -186,7 +193,15 @@ try {
   stage = 'refresh_persistence';
   const beforeReload = frames.length;
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: /Mission Control/ }).first().click();
+  await page.evaluate(() => {
+    const label = document.createElement('div');
+    label.textContent = 'REALRTC_SYNTHETIC_MEDIA_NO_PHYSICAL_MIC';
+    Object.assign(label.style, { position: 'fixed', left: '4px', bottom: '4px', zIndex: '9999', padding: '4px', background: '#fff4cc', color: '#111', font: '11px system-ui', pointerEvents: 'none' });
+    document.body.append(label);
+  });
+  if (await page.locator('mux-cos:visible').count() !== 1) {
+    await page.getByRole('button', { name: /Mission Control/ }).first().click();
+  }
   await composer.waitFor({ state: 'visible', timeout: 30_000 });
   const refreshed = await eventually(() => frames.slice(beforeReload).find((f) =>
     f.type === 'cos-subscribe-result' && f.ok === true && f.conversation?.id === identity.id &&
@@ -292,6 +307,12 @@ try {
   if (!firstFailure) firstFailure = `stage_${stage}`;
   run.errors.push(`stage:${stage}`, `error_type:${error?.name ?? 'Error'}`);
   const message = String(error?.message ?? ''); if (/^[a-zA-Z0-9_.: -]{1,160}$/.test(message)) run.errors.push(`detail:${message}`);
+  const subscribeFailure = frames?.slice().reverse().find((frame) => frame.type === 'cos-subscribe-result' && frame.ok !== true);
+  const safeCode = typeof subscribeFailure?.code === 'string' && /^[a-z0-9_-]{1,96}$/i.test(subscribeFailure.code)
+    ? subscribeFailure.code
+    : '';
+  if (safeCode) run.errors.push(`cos_subscribe_code:${safeCode}`);
+  await page?.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
 } finally {
   await page?.evaluate(() => window.__mcMutationObserver?.disconnect()).catch(() => {});
   for (const page of peerPages) { await page.evaluate(async () => { window.__fixturePeer?.oscillator?.stop(); await window.__fixturePeer?.audio?.close(); window.__fixturePeer?.peerConnection?.close(); }).catch(() => {}); await page.close().catch(() => {}); }

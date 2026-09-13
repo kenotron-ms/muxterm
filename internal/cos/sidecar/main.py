@@ -1227,25 +1227,6 @@ class Sidecar:
         cont = HookResult(action="continue")
         root = self.session_id
 
-        if self._threaded_allowed_tools is not None:
-            allowed_tools = frozenset(self._threaded_allowed_tools)
-
-            async def enforce_threaded_tool_allowlist(event: str, data: dict) -> Any:
-                # This executes at tool dispatch, not only at boot. It fences a
-                # tool a module or callback adds after the initial unmount.
-                name = str(data.get("tool_name") or "")
-                if name not in allowed_tools:
-                    return HookResult(
-                        action="deny",
-                        reason="Mission Control text preview permits no such tool in this thread",
-                    )
-                return cont
-
-            hooks.register(
-                "tool:pre", enforce_threaded_tool_allowlist,
-                priority=-1000, name="missioncontrol-threaded-tool-fence",
-            )
-
         def trace(event: str, data: dict) -> None:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("hook %s keys=%s", event, sorted(data.keys()))
