@@ -233,9 +233,22 @@ try {
   stage = 'workspace_navigation_portrait_mission_control';
   await page.locator('mux-sidebar mux-start-card button').click();
   await composer.waitFor({ state: 'visible' });
+  // The popover's closing transition keeps it in the top layer briefly.
+  // Inspect the settled product layout, not a frame mid-navigation.
+  await page.locator('.drawer').waitFor({ state: 'hidden' });
+  await eventually(() => page.locator('mux-cos').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return element.hasAttribute('narrow') && rect.left >= 0 &&
+      rect.right <= window.innerWidth + 1 && rect.bottom <= window.innerHeight + 1;
+  }), 'portrait_conversation_layout_settled');
   gate('workspace_navigation_does_not_rebind_single_conversation_or_draft', await composer.inputValue() === 'DRAFT_SURVIVES_NAVIGATION' && frames.filter((f) => f.type === 'cos-subscribe-result').at(-1)?.conversation?.id === identity.id);
   await page.screenshot({ path: path.join(output, 'mission-control-portrait.png') });
-  await page.setViewportSize({ width: 844, height: 390 }); await page.screenshot({ path: path.join(output, 'mission-control-landscape.png') });
+  await page.setViewportSize({ width: 844, height: 390 });
+  await eventually(() => page.locator('mux-cos').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.right <= window.innerWidth + 1 && rect.bottom <= window.innerHeight + 1;
+  }), 'landscape_conversation_layout_settled');
+  await page.screenshot({ path: path.join(output, 'mission-control-landscape.png') });
   await page.setViewportSize({ width: 1280, height: 900 });
 
   async function connectSyntheticPeer(offer) {
@@ -312,7 +325,7 @@ try {
   await eventually(() => exitTarget.count().then(Boolean), 'exit_drop_target_visible');
   const exitBox = await exitTarget.boundingBox(); if (!exitBox) throw new Error('exit_drop_target_box_missing');
   await page.mouse.move(exitBox.x + exitBox.width / 2, exitBox.y + exitBox.height / 2, { steps: 10 });
-  gate('drag_exit_target_highlighted', await exitTarget.evaluate((target) => target.getAttribute('data-active') === 'true' || target.classList.contains('active')));
+  gate('drag_exit_target_highlighted', await exitTarget.getAttribute('data-highlighted') === 'true');
   await page.screenshot({ path: path.join(output, 'drag-exit-highlight.png') }); await page.mouse.up();
   await eventually(() => bubble.count().then((n) => n === 0), 'bubble_hidden_after_exit');
   gate('drag_to_exit_closes_native_media_and_provider_session', await page.evaluate(() => window.__fixtureMedia.peers.every((item) => item.connectionState === 'closed')) && postPaths.filter((x) => x === '/api/app/voice/end').length === endCount + 1);

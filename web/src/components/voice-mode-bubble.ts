@@ -36,6 +36,7 @@ interface DropTargetBounds {
 
 interface DragState {
   readonly pointerId: number;
+  readonly captureTarget: HTMLButtonElement;
   readonly originX: number;
   readonly originY: number;
   readonly startX: number;
@@ -438,9 +439,10 @@ export class MuxVoiceModeBubble extends LitElement {
     this._dropHighlighted = false;
     this._suppressNextClick = false;
     if (!drag) return;
-    const trigger = this.renderRoot.querySelector<HTMLElement>('mux-voice-mode-button');
     try {
-      if (trigger?.hasPointerCapture(drag.pointerId)) trigger.releasePointerCapture(drag.pointerId);
+      if (drag.captureTarget.hasPointerCapture(drag.pointerId)) {
+        drag.captureTarget.releasePointerCapture(drag.pointerId);
+      }
     } catch {
       // Detach may already have released capture.
     }
@@ -464,13 +466,16 @@ export class MuxVoiceModeBubble extends LitElement {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     if (this._drag) return;
     this._suppressNextClick = false;
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLElement)) return;
-    event.preventDefault();
+    const captureTarget = event.composedPath().find(
+      (target): target is HTMLButtonElement =>
+        target instanceof HTMLButtonElement && target.hasAttribute('data-voice-mode-button'),
+    );
+    if (!captureTarget) return;
     event.stopPropagation();
-    target.setPointerCapture(event.pointerId);
+    captureTarget.setPointerCapture(event.pointerId);
     this._drag = {
       pointerId: event.pointerId,
+      captureTarget,
       originX: event.clientX,
       originY: event.clientY,
       startX: this._x,
@@ -482,7 +487,6 @@ export class MuxVoiceModeBubble extends LitElement {
   private _onPointerMove = (event: PointerEvent): void => {
     const drag = this._drag;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
     event.stopPropagation();
     const deltaX = event.clientX - drag.originX;
     const deltaY = event.clientY - drag.originY;
@@ -491,6 +495,7 @@ export class MuxVoiceModeBubble extends LitElement {
       drag.moved = true;
       this._dropVisible = true;
     }
+    event.preventDefault();
     const bounds = this._bounds();
     this._x = clamp(drag.startX + deltaX, bounds.minX, bounds.maxX);
     this._y = clamp(drag.startY + deltaY, bounds.minY, bounds.maxY);
@@ -502,15 +507,14 @@ export class MuxVoiceModeBubble extends LitElement {
   private _finishPointer = (event: PointerEvent, cancelled: boolean): void => {
     const drag = this._drag;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
     event.stopPropagation();
-    const target = event.currentTarget;
     const shouldExit = drag.moved && !cancelled && this._isOverDropTarget();
     this._drag = null;
     this._dropVisible = false;
     this._dropHighlighted = false;
-    if (target instanceof HTMLElement && target.hasPointerCapture(event.pointerId)) {
-      target.releasePointerCapture(event.pointerId);
+    if (drag.moved || cancelled) event.preventDefault();
+    if (drag.captureTarget.hasPointerCapture(event.pointerId)) {
+      drag.captureTarget.releasePointerCapture(event.pointerId);
     }
     if (drag.moved) {
       // A pointer drag must never activate the native button's click. The
@@ -604,9 +608,10 @@ export class MuxVoiceModeBubble extends LitElement {
     this._dropVisible = false;
     this._dropHighlighted = false;
     this._suppressNextClick = true;
-    const trigger = this.renderRoot.querySelector<HTMLElement>('mux-voice-mode-button');
     try {
-      if (trigger?.hasPointerCapture(drag.pointerId)) trigger.releasePointerCapture(drag.pointerId);
+      if (drag.captureTarget.hasPointerCapture(drag.pointerId)) {
+        drag.captureTarget.releasePointerCapture(drag.pointerId);
+      }
     } catch {
       // The browser already released capture.
     }
