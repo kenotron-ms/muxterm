@@ -1580,10 +1580,11 @@ class ThreadStore {
     operationId: string,
     signal: AbortSignal,
   ): Promise<ThreadSelectionReceipt> {
-    const known = this._threads.find(
-      (thread) => thread.id === threadId && thread.runtimeGeneration === runtimeGeneration,
-    );
-    if (!known) {
+    // Selection snapshots contain the authoritative runtime identity. A
+    // workspace root can be created after the last catalog list, so that list
+    // alone may still omit it or describe generation zero.
+    const known = this._states.get(threadId)?.thread ?? this._threads.find((thread) => thread.id === threadId);
+    if (!known || known.runtimeGeneration !== runtimeGeneration) {
       return Promise.resolve({
         ok: false,
         requested: { kind: 'thread', threadId },

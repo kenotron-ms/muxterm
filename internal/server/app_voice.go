@@ -794,6 +794,12 @@ func (s *appVoiceService) ack(c *Client, f struct {
 		s.mu.Unlock()
 		return
 	}
+	if f.Status != "ok" {
+		delete(s.operations, op.ID)
+		s.mu.Unlock()
+		op.done <- appVoiceOperationResult{err: errors.New("operation refused: " + f.Code)}
+		return
+	}
 	active, _ := f.Result["active"].(map[string]any)
 	selected, selectedOK := f.Result["selected_target"].(map[string]any)
 	navigationRevision, navigationRevisionOK := appVoiceUint(f.Result["observation_revision"])
@@ -822,10 +828,6 @@ func (s *appVoiceService) ack(c *Client, f struct {
 		return
 	}
 	delete(s.operations, op.ID)
-	if f.Status != "ok" {
-		op.done <- appVoiceOperationResult{err: errors.New("operation refused: " + f.Code)}
-		return
-	}
 	if !validAppAck(op, f.Result) {
 		op.done <- appVoiceOperationResult{err: errors.New("operation acknowledgement mismatch")}
 		return
