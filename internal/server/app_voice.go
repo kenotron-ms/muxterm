@@ -391,9 +391,6 @@ type appVoiceTurn struct {
 func (t *appVoiceTurn) ID() string { return t.turn.ID }
 func (t *appVoiceTurn) Wait(ctx context.Context) (string, error) {
 	ev, err := t.turn.Wait(ctx)
-	if err != nil {
-		return "", err
-	}
 	if ev.IsTerminal() {
 		t.once.Do(func() {
 			t.service.mu.Lock()
@@ -405,6 +402,9 @@ func (t *appVoiceTurn) Wait(ctx context.Context) (string, error) {
 			}
 			t.service.mu.Unlock()
 		})
+	}
+	if err != nil {
+		return "", err
 	}
 	if ev.Ev == cos.EvError {
 		if ev.Message != "" {
