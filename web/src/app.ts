@@ -45,7 +45,6 @@ import type { CloseConfirmationModal } from './components/close-confirmation-mod
 import './components/reconnect-overlay.js';
 import './components/mux-connect-dialog.js';
 import './components/mux-sidebar.js';
-import './components/voice-mode-bubble.js';
 // <mux-home> is deliberately NOT imported. The Dashboard IS home now (see
 // <mux-cos>), and the two were never meant to be alternatives you could be
 // looking at one of. The component and its standalone demo are untouched.
@@ -1656,8 +1655,6 @@ export class MuxApp extends LitElement {
         </div>
 
       </div>
-
-      <mux-voice-mode-bubble></mux-voice-mode-bubble>
 
       ${!isWide
         ? html`

@@ -966,7 +966,7 @@ func (s *Server) handleAppVoiceToken(w http.ResponseWriter, r *http.Request) {
 			a.minting = false
 		}
 		a.mu.Unlock()
-		writeAppVoiceFailure(w, http.StatusBadGateway, "provider mint failed")
+		writeAppVoiceStartupFailure(w, err)
 		return
 	}
 	a.mu.Lock()
@@ -1012,7 +1012,7 @@ func (s *Server) handleAppVoiceSDP(w http.ResponseWriter, r *http.Request) {
 	}
 	answer, _, err := a.provider.ConnectApp(r.Context(), session, string(body))
 	if err != nil {
-		writeAppVoiceFailure(w, http.StatusBadGateway, "provider SDP exchange failed")
+		writeAppVoiceStartupFailure(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/sdp")
@@ -1044,6 +1044,27 @@ func (s *Server) handleAppVoiceEnd(w http.ResponseWriter, r *http.Request) {
 func writeAppVoiceFailure(w http.ResponseWriter, status int, detail string) {
 	writeAppVoiceJSON(w, status, map[string]any{"error": detail})
 }
+
+func writeAppVoiceStartupFailure(w http.ResponseWriter, err error) {
+	failure := voice.SafeStartupFailure(err)
+	log.Printf("app voice: startup stage=%s provider_status=%d code=%s parameter=%s",
+		failure.Stage, failure.HTTPStatus, failure.Code, failure.Parameter)
+	body := map[string]any{
+		"error": failure.Message(),
+		"stage": failure.Stage,
+	}
+	if failure.Code != "" {
+		body["code"] = failure.Code
+	}
+	if failure.Parameter != "" {
+		body["parameter"] = failure.Parameter
+	}
+	if failure.HTTPStatus != 0 {
+		body["provider_status"] = failure.HTTPStatus
+	}
+	writeAppVoiceJSON(w, http.StatusBadGateway, body)
+}
+
 func writeAppVoiceJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

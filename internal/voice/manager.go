@@ -109,7 +109,7 @@ func (m *Manager) MintApp(ctx context.Context, bridge AppOperationBridge) (Ephem
 	}
 	eph, err = m.rememberMint(eph, bridge)
 	if err != nil {
-		return Ephemeral{}, err
+		return Ephemeral{}, startupFailure("session_mint", 0, err)
 	}
 	eph.Value = ""
 	return eph, nil
@@ -121,11 +121,18 @@ func (m *Manager) ConnectApp(ctx context.Context, sessionID, offerSDP string) (A
 	h := m.handles[sessionID]
 	if h == nil || h.appExchangeUsed {
 		m.mu.Unlock()
-		return Answer{}, nil, errors.New("voice: app session SDP exchange was already used or expired")
+		return Answer{}, nil, startupFailure("sdp_exchange", 0, errors.New("voice: app session SDP exchange was already used or expired"))
 	}
 	h.appExchangeUsed = true
 	m.mu.Unlock()
-	return m.connect(ctx, sessionID, offerSDP)
+	answer, sideband, err := m.connect(ctx, sessionID, offerSDP, true)
+	if err != nil {
+		var startup *StartupError
+		if !errors.As(err, &startup) {
+			return Answer{}, nil, startupFailure("sdp_exchange", 0, err)
+		}
+	}
+	return answer, sideband, err
 }
 
 func (m *Manager) mint(ctx context.Context, bridge Bridge) (Ephemeral, error) {
@@ -167,7 +174,7 @@ func (m *Manager) rememberMint(eph Ephemeral, bridge Bridge) (Ephemeral, error) 
 // header on the exchange muxterm performed, because the sideband keyed to it
 // executes shell tools.
 func (m *Manager) Connect(ctx context.Context, sessionID, offerSDP string) (Answer, error) {
-	answer, _, err := m.connect(ctx, sessionID, offerSDP)
+	answer, _, err := m.connect(ctx, sessionID, offerSDP, false)
 	return answer, err
 }
 
@@ -176,10 +183,10 @@ func (m *Manager) Connect(ctx context.Context, sessionID, offerSDP string) (Answ
 // local deterministic-prefix acknowledgement. The request context bounds only
 // setup; the Sideband's lifetime is owned by Manager.End/Close.
 func (m *Manager) ConnectScoped(ctx context.Context, sessionID, offerSDP string) (Answer, *Sideband, error) {
-	return m.connect(ctx, sessionID, offerSDP)
+	return m.connect(ctx, sessionID, offerSDP, false)
 }
 
-func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string) (Answer, *Sideband, error) {
+func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string, app bool) (Answer, *Sideband, error) {
 	m.mu.Lock()
 	m.sweepLocked()
 	h, ok := m.handles[sessionID]
@@ -195,7 +202,13 @@ func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string) (Answ
 		return Answer{}, nil, errors.New("voice: unknown or expired voice session; mint a new one")
 	}
 
-	answer, err := m.client.ExchangeSDP(ctx, h.secret, offerSDP)
+	var answer Answer
+	var err error
+	if app {
+		answer, err = m.client.ExchangeSDPApp(ctx, h.secret, offerSDP)
+	} else {
+		answer, err = m.client.ExchangeSDP(ctx, h.secret, offerSDP)
+	}
 	if err != nil {
 		m.mu.Lock()
 		if m.handles[sessionID] == h {
@@ -219,6 +232,9 @@ func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string) (Answ
 			h.connecting = false
 		}
 		m.mu.Unlock()
+		if app {
+			return Answer{}, nil, startupFailure("sideband", 0, err)
+		}
 		return Answer{}, nil, err
 	}
 

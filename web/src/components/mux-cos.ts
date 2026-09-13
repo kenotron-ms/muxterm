@@ -54,6 +54,7 @@ import { ArrowUp, Check, ChevronDown, Ellipsis, Mic, Square, TriangleAlert, X } 
 import type { AppletChangedDetail, AppletId } from '../lib/applet-registry.js';
 import {
   shortToolName,
+  type CosComposerIdentity,
   type CosApproval,
   type CosBlock,
   type CosTurn,
@@ -73,7 +74,11 @@ import {
 } from '../lib/voice-input-controller.js';
 import { voiceCaptureArbiter, type VoiceCaptureOwner } from '../lib/voice-capture-arbiter.js';
 import type { MuxApplets } from './mux-applets.js';
-import './voice-mode-button.js';
+import {
+  voiceSessionController,
+  type VoiceSessionSnapshot,
+} from '../lib/voice-session-controller.js';
+import './mux-voice-orb.js';
 // ONE applet host, in one of two containers: the right-hand region in
 // landscape, the bottom sheet in portrait. This file imports no applet: the
 // host owns the registry and mounts whatever is in it, which is the whole
@@ -121,6 +126,46 @@ interface AppVoiceSubmitConfirmation {
   readonly resolve: (outcome: AppVoiceSubmitConfirmationOutcome) => void;
 }
 
+function isVoiceSessionActive(snapshot: VoiceSessionSnapshot): boolean {
+  return snapshot.state !== 'idle';
+}
+
+function voiceStatusLabel(snapshot: VoiceSessionSnapshot): string {
+  if (snapshot.state === 'error') return 'Voice error';
+  if (snapshot.paused || snapshot.state === 'paused') return 'Paused';
+  if (snapshot.muted) return 'Mic muted';
+  switch (snapshot.state) {
+    case 'connecting':
+      return 'Connecting';
+    case 'thinking':
+      return 'Thinking';
+    case 'speaking':
+      return 'Speaking';
+    default:
+      return 'Listening';
+  }
+}
+
+interface HeldVoiceComposer {
+  readonly identity: CosComposerIdentity;
+  readonly draft: string;
+  readonly height: number;
+  readonly start: number;
+  readonly end: number;
+  readonly focused: boolean;
+}
+
+let heldVoiceComposer: HeldVoiceComposer | null = null;
+
+function sameComposerIdentity(a: CosComposerIdentity, b: CosComposerIdentity): boolean {
+  return a.channelId === b.channelId &&
+    a.threadId === b.threadId &&
+    a.runtimeSessionId === b.runtimeSessionId &&
+    a.runtimeGeneration === b.runtimeGeneration &&
+    a.runtimeIncarnation === b.runtimeIncarnation &&
+    a.draftRef === b.draftRef;
+}
+
 /** The sheet's resting sizes. Continuous while dragging; these on release. */
 type SheetDetent = 'half' | 'full';
 
@@ -166,6 +211,8 @@ export class MuxCos extends LitElement {
   @state() private _captureOwner: VoiceCaptureOwner = voiceCaptureArbiter.snapshot().owner;
   @state() private _dictationNotice = '';
   @state() private _appVoiceConfirmation: AppVoiceSubmitConfirmation | null = null;
+  @state() private _voiceSession: VoiceSessionSnapshot = voiceSessionController.snapshot();
+  private _heldVoiceComposer: HeldVoiceComposer | null = null;
 
   /**
    * Whether the portrait applet sheet is open.
@@ -195,6 +242,7 @@ export class MuxCos extends LitElement {
 
   private _unsub: (() => void) | null = null;
   private _unsubVoice: (() => void) | null = null;
+  private _unsubVoiceSession: (() => void) | null = null;
   private _unsubCaptureOwner: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
   private _unsubVoiceError: (() => void) | null = null;
@@ -1055,6 +1103,63 @@ export class MuxCos extends LitElement {
       color: var(--ink-3);
       cursor: default;
     }
+    .cbtn.voice {
+      background: transparent;
+      overflow: visible;
+    }
+    .cbtn.voice mux-voice-orb {
+      --orb-box: 30px;
+      --orb-d: 22px;
+      pointer-events: none;
+    }
+    .cbtn.voice:hover {
+      background: transparent;
+    }
+    .cbtn.voice.live mux-voice-orb {
+      --orb-d: 24px;
+    }
+    .cbtn.voice.solo {
+      width: 64px;
+      height: 64px;
+    }
+    .cbtn.voice.solo mux-voice-orb {
+      --orb-box: 64px;
+      --orb-d: 52px;
+    }
+    .cbox.voice-solo {
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      min-height: 72px;
+    }
+    .voice-status {
+      color: var(--ink-2);
+      font-size: var(--t-meta);
+      line-height: 1.25;
+    }
+    .voice-error {
+      max-width: 32ch;
+      color: var(--fail);
+      font-size: var(--t-meta);
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+      text-align: center;
+    }
+    .voice-exit {
+      border: 0;
+      border-radius: var(--r-ctl);
+      padding: 4px 8px;
+      background: transparent;
+      color: var(--ink-3);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--t-meta);
+    }
+    .voice-exit:hover,
+    .voice-exit:focus-visible {
+      background: var(--chrome-hover);
+      color: var(--ink-1);
+    }
     /* Listening. A filled red STOP, no ring, no pulse -- the square is the
        international \"press this to make it stop\" and needs no help. */
     .cbtn.rec,
@@ -1257,6 +1362,21 @@ export class MuxCos extends LitElement {
     this._unsubVoiceError = voiceInputController.onError((message) => {
       this._dictationNotice = message;
     });
+    this._heldVoiceComposer = heldVoiceComposer;
+    this._unsubVoiceSession = voiceSessionController.subscribe((snapshot) => {
+      const wasActive = isVoiceSessionActive(this._voiceSession);
+      this._voiceSession = snapshot;
+      const nowActive = isVoiceSessionActive(snapshot);
+      if (!wasActive && nowActive && !this._heldVoiceComposer) {
+        this._holdVoiceComposer();
+      } else if (wasActive && !nowActive) {
+        this._releaseVoiceComposer();
+      }
+    });
+    this._voiceSession = voiceSessionController.snapshot();
+    if (!isVoiceSessionActive(this._voiceSession) && this._heldVoiceComposer) {
+      this._releaseVoiceComposer();
+    }
     this._syncTicker();
     this.style.setProperty('--chat-w', `${this._split}%`);
   }
@@ -1273,6 +1393,8 @@ export class MuxCos extends LitElement {
     this._unsubTranscript = null;
     this._unsubVoiceError?.();
     this._unsubVoiceError = null;
+    this._unsubVoiceSession?.();
+    this._unsubVoiceSession = null;
     if (this._ticker !== undefined) clearInterval(this._ticker);
     this._ticker = undefined;
     // Only OUR session. An unconditional abort here would kill a dictation
@@ -1606,7 +1728,6 @@ export class MuxCos extends LitElement {
         >Mission Control</h1>
         <span class="spacer"></span>
         <div class="topbar-actions">
-          <mux-voice-mode-button></mux-voice-mode-button>
           <button
             class="dots ${this._menuOpen ? 'on' : ''}"
             type="button"
@@ -1853,11 +1974,64 @@ export class MuxCos extends LitElement {
     `;
   }
 
+  private _renderVoiceControl(solo = false): TemplateResult {
+    const snapshot = this._voiceSession;
+    const active = isVoiceSessionActive(snapshot);
+    const orbState = snapshot.state === 'error' || snapshot.state === 'paused'
+      ? 'asleep'
+      : snapshot.state;
+    const label = active ? 'Exit voice mode' : 'Start voice mode';
+    return html`
+      <button
+        class="cbtn voice ${active ? 'live' : ''} ${solo ? 'solo' : ''}"
+        type="button"
+        title="${snapshot.state === 'error' && snapshot.error ? snapshot.error : label}"
+        aria-label="${label}"
+        aria-pressed="${active ? 'true' : 'false'}"
+        data-voice-state="${snapshot.state}"
+        @pointerdown="${this._prepareVoiceEntry}"
+        @click="${this._toggleSession}"
+      >
+        <mux-voice-orb .state="${orbState}" .level="${snapshot.level}"></mux-voice-orb>
+      </button>
+    `;
+  }
+
+  private _renderVoiceComposer(): TemplateResult {
+    const busy = cosStore.busy;
+    const canPause = ['listening', 'thinking', 'speaking', 'paused'].includes(this._voiceSession.state);
+    const paused = this._voiceSession.paused || this._voiceSession.state === 'paused';
+    return html`
+      <div class="comp">
+        <div class="cbox voice-solo" style="${this._heldVoiceComposer?.height ? `min-height:${this._heldVoiceComposer.height}px` : ''}">
+          ${this._renderVoiceControl(true)}
+          <span class="voice-status" role="status" aria-live="polite">${voiceStatusLabel(this._voiceSession)}</span>
+          ${this._voiceSession.error
+            ? html`<span class="voice-error" role="alert">${this._voiceSession.error}</span>`
+            : nothing}
+          ${canPause
+            ? html`<button
+                class="voice-exit"
+                type="button"
+                aria-label="${paused ? 'Resume voice mode' : 'Pause voice mode'}"
+                @click="${() => void voiceSessionController.togglePaused()}"
+              >${paused ? 'Resume voice' : 'Pause voice'}</button>`
+            : nothing}
+          ${busy
+            ? html`<button class="cbtn send" type="button" aria-label="Stop generating" @click="${this._stopGeneration}">${icon(Square, { size: 15 })}</button>`
+            : nothing}
+          <button class="voice-exit" type="button" aria-label="Exit voice mode" @click="${this._exitVoice}">Exit voice</button>
+        </div>
+      </div>
+    `;
+  }
+
   /**
-   * App voice is controlled by the persistent root bubble. The text composer
-   * stays mounted for every app voice state.
+   * The normal composer keeps one voice affordance beside dictation and Send.
+   * Once voice starts, the same composer is taken over by the orb.
    */
   private _renderComposer(): TemplateResult {
+    if (isVoiceSessionActive(this._voiceSession)) return this._renderVoiceComposer();
     const negotiating = cosStore.negotiating;
     const busy = cosStore.busy;
     const admissionPending = cosStore.admissionPending;
@@ -1884,6 +2058,7 @@ export class MuxCos extends LitElement {
             ${this._dictationNotice
               ? html`<span class="dictation-status" data-voice-dictation-status role="status">${this._dictationNotice}</span>`
               : nothing}
+            ${voiceSessionController.isSupported() ? this._renderVoiceControl() : nothing}
             ${!negotiating && cosStore.composerIdentity.channelId !== 'none' && voiceInputController.isSupported()
               ? html`<button
                   class="cbtn ${listening ? 'rec' : ''}"
@@ -1892,7 +2067,7 @@ export class MuxCos extends LitElement {
                   aria-label="${listening ? 'Stop dictating' : 'Dictate'}"
                   aria-pressed="${listening ? 'true' : 'false'}"
                   ?disabled="${this._captureOwner === 'app_conversation'}"
-                  @click="${this._toggleVoice}"
+                  @click="${this._toggleDictation}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
             <button
@@ -2145,7 +2320,67 @@ export class MuxCos extends LitElement {
     });
   };
 
-  private _toggleVoice = (): void => {
+  private _prepareVoiceEntry = (): void => {
+    if (!isVoiceSessionActive(this._voiceSession)) this._holdVoiceComposer();
+  };
+
+  private _toggleSession = (): void => {
+    if (isVoiceSessionActive(this._voiceSession)) {
+      voiceSessionController.stop();
+      return;
+    }
+    this._holdVoiceComposer();
+    void voiceSessionController.start();
+  };
+
+  private _exitVoice = (): void => {
+    voiceSessionController.stop();
+  };
+
+  private _holdVoiceComposer(): void {
+    if (heldVoiceComposer) {
+      this._heldVoiceComposer = heldVoiceComposer;
+      return;
+    }
+    const box = this.renderRoot.querySelector<HTMLElement>('.cbox');
+    const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
+    const held: HeldVoiceComposer = {
+      identity: cosStore.composerIdentity,
+      draft: cosStore.draft,
+      height: box?.getBoundingClientRect().height ?? 0,
+      start: el?.selectionStart ?? 0,
+      end: el?.selectionEnd ?? 0,
+      focused: this.shadowRoot?.activeElement === el,
+    };
+    heldVoiceComposer = held;
+    this._heldVoiceComposer = held;
+  }
+
+  private _releaseVoiceComposer(): void {
+    const held = this._heldVoiceComposer ?? heldVoiceComposer;
+    this._heldVoiceComposer = null;
+    if (!held) return;
+    if (heldVoiceComposer === held) heldVoiceComposer = null;
+    if (!sameComposerIdentity(held.identity, cosStore.composerIdentity)) return;
+    // Takeover never changes the store draft. Keep any explicit draft edit
+    // requested during voice instead of overwriting it with an older snapshot.
+    const draftUnchanged = cosStore.draft === held.draft;
+    this.requestUpdate();
+    void this.updateComplete.then(() => {
+      const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
+      if (!el) return;
+      this._fit(el);
+      if (draftUnchanged) {
+        el.setSelectionRange(
+          Math.min(held.start, el.value.length),
+          Math.min(held.end, el.value.length),
+        );
+      }
+      if (held.focused) el.focus();
+    });
+  }
+
+  private _toggleDictation = (): void => {
     if (cosStore.negotiating) return;
     if (this._voice === 'listening') {
       if (this._chatDictationActive) voiceInputController.stop();
