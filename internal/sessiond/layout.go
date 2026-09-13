@@ -86,6 +86,166 @@ func ActivePaneFromLayout(layout string) (int, bool) {
 	return id, true
 }
 
+// StrictActivePaneFromLayout returns an authoritative persisted selection only
+// when dockview explicitly names both its active group and that group's active
+// pane. Unlike ActivePaneFromLayout, it never falls back to a first leaf or
+// first tab: those are display-recovery conveniences, not daemon authority.
+func StrictActivePaneFromLayout(layout string) (int, bool) {
+	if strings.TrimSpace(layout) == "" {
+		return 0, false
+	}
+	var g dockGrid
+	if err := json.Unmarshal([]byte(layout), &g); err != nil || g.ActiveGroup == "" {
+		return 0, false
+	}
+	var active *dockLeaf
+	for _, leaf := range collectLeaves(&g.Grid.Root) {
+		if leaf.ID != g.ActiveGroup {
+			continue
+		}
+		if active != nil {
+			return 0, false
+		}
+		candidate := leaf
+		active = &candidate
+	}
+	if active == nil || active.ActiveView == "" {
+		return 0, false
+	}
+	for _, view := range active.Views {
+		if view != active.ActiveView {
+			continue
+		}
+		id, err := strconv.Atoi(view)
+		return id, err == nil && id > 0
+	}
+	return 0, false
+}
+
+// RemapLayoutPaneIDs rewrites dockview's pane references through one complete
+// snapshot-local old-to-new mapping. It handles only the structured fields
+// dockview owns (leaf views/activeView and panels keys/id), never generic text
+// replacement. Every referenced pane must map to a restored pane or the
+// layout is rejected rather than being allowed to select a colliding new id.
+func RemapLayoutPaneIDs(layout string, paneIDs map[int]int) (string, bool) {
+	if strings.TrimSpace(layout) == "" {
+		return "", true
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(layout), &doc); err != nil {
+		return "", false
+	}
+	grid, ok := doc["grid"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	root, ok := grid["root"].(map[string]any)
+	if !ok || !remapLayoutNode(root, paneIDs) {
+		return "", false
+	}
+	panels, ok := doc["panels"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	remappedPanels := make(map[string]any, len(panels))
+	for key, rawPanel := range panels {
+		oldID, ok := layoutPaneID(key)
+		if !ok {
+			return "", false
+		}
+		newID, ok := paneIDs[oldID]
+		if !ok {
+			return "", false
+		}
+		panel, ok := rawPanel.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		id, ok := panel["id"].(string)
+		if !ok || id != key {
+			return "", false
+		}
+		panel["id"] = strconv.Itoa(newID)
+		remappedPanels[strconv.Itoa(newID)] = panel
+	}
+	doc["panels"] = remappedPanels
+	out, err := json.Marshal(doc)
+	return string(out), err == nil
+}
+
+func remapLayoutNode(node map[string]any, paneIDs map[int]int) bool {
+	kind, ok := node["type"].(string)
+	if !ok {
+		return false
+	}
+	switch kind {
+	case "leaf":
+		leaf, ok := node["data"].(map[string]any)
+		if !ok {
+			return false
+		}
+		views, ok := leaf["views"].([]any)
+		if !ok || len(views) == 0 {
+			return false
+		}
+		activeView, ok := leaf["activeView"].(string)
+		if !ok || activeView == "" {
+			return false
+		}
+		activeFound := false
+		for i, rawView := range views {
+			view, ok := rawView.(string)
+			if !ok {
+				return false
+			}
+			oldID, ok := layoutPaneID(view)
+			if !ok {
+				return false
+			}
+			newID, ok := paneIDs[oldID]
+			if !ok {
+				return false
+			}
+			if view == activeView {
+				activeFound = true
+			}
+			views[i] = strconv.Itoa(newID)
+		}
+		if !activeFound {
+			return false
+		}
+		oldActiveID, ok := layoutPaneID(activeView)
+		if !ok {
+			return false
+		}
+		newActiveID, ok := paneIDs[oldActiveID]
+		if !ok {
+			return false
+		}
+		leaf["activeView"] = strconv.Itoa(newActiveID)
+		return true
+	case "branch":
+		children, ok := node["data"].([]any)
+		if !ok || len(children) == 0 {
+			return false
+		}
+		for _, rawChild := range children {
+			child, ok := rawChild.(map[string]any)
+			if !ok || !remapLayoutNode(child, paneIDs) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func layoutPaneID(value string) (int, bool) {
+	id, err := strconv.Atoi(value)
+	return id, err == nil && id > 0
+}
+
 // ASCIILayout parses a dockview layout JSON string and renders an ASCII box
 // diagram. panes provides PaneInfo for each known pane id; active is the
 // active pane id (-1 = none). Returns "" on empty or malformed input.

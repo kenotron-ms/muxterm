@@ -61,14 +61,22 @@ type WorkspaceSnapshot struct {
 
 	Layout map[string]string `json:"layout,omitempty"` // verbatim copy of Registry's per-workspace Layouts map
 	Panes  []PaneSnapshot    `json:"panes"`
+
+	// LastActivePaneID is the optional, daemon-owned selected-pane identity.
+	// It refers to PaneSnapshot.PaneID, never the newly allocated restored
+	// local id. A pointer distinguishes a legacy snapshot with no selection
+	// metadata from an invalid explicit value, which must fail closed.
+	LastActivePaneID *int `json:"last_active_pane_id,omitempty"`
 }
 
 // PaneSnapshot is one pane's captured identity, foreground command, and
-// recent output. There is deliberately no pid/FD-index/durable-identity
-// field of any kind: nothing here is ever looked up by id after restore, a
-// restored pane gets a fresh id via the normal allocation path exactly like
-// any live-created pane.
+// recent output. PaneID is a snapshot-local identity used only to resolve
+// WorkspaceSnapshot.LastActivePaneID and saved-layout selection through the
+// same restore pass; a restored pane still receives a fresh local id through
+// the normal allocation path.
 type PaneSnapshot struct {
+	PaneID int `json:"pane_id,omitempty"`
+
 	Title string `json:"title"`
 
 	// TitleOrigin is "derived" or "explicit" -- who chose Title (autoname.go).
@@ -197,7 +205,8 @@ func LoadSnapshot(path string) (*Snapshot, error) {
 }
 
 // BuildSnapshot walks every live workspace and pane in reg and assembles a
-// Snapshot ready to write to disk. reason is "periodic" or "shutdown".
+// Snapshot ready to write to disk. reason is "periodic", "selection", or
+// "shutdown".
 //
 // Registry.snapshotView() releases reg's lock before this function does any
 // per-pane inspection (foreground pid resolution, /proc reads, VT grid
@@ -212,6 +221,10 @@ func BuildSnapshot(reg *Registry, reason string) Snapshot {
 	}
 	for _, view := range views {
 		wsSnap := WorkspaceSnapshot{WorkspaceUUID: view.UUID, Name: view.Name, NameOrigin: string(view.NameOrigin), Layout: view.Layout}
+		if view.LastUserActivePane > 0 {
+			activePaneID := view.LastUserActivePane
+			wsSnap.LastActivePaneID = &activePaneID
+		}
 		for _, p := range view.Panes {
 			wsSnap.Panes = append(wsSnap.Panes, capturePaneSnapshot(p))
 		}
@@ -236,6 +249,7 @@ func capturePaneSnapshot(p *Pane) PaneSnapshot {
 	// serialized before or after that resize.
 	title, titleOrigin, cols, rows, fullReplay := p.snapshotState()
 	out := PaneSnapshot{
+		PaneID:      p.LocalID,
 		Title:       title,
 		TitleOrigin: string(titleOrigin),
 		Cols:        cols,
@@ -464,17 +478,26 @@ func dropLargestReplay(snap *Snapshot) bool {
 }
 
 // StartSnapshotWriter starts a background goroutine that captures and writes
-// a "periodic" snapshot every interval, until ctx is cancelled (matching
-// tmux-continuum's periodic autosave). interval <= 0 falls back to 30s. The
-// goroutine exits on its own when ctx is done; there is nothing for the
-// caller to stop or wait on.
-func StartSnapshotWriter(ctx context.Context, reg *Registry, interval time.Duration, path string) {
+// a periodic snapshot every interval and an expedited, debounced selection
+// snapshot after an authoritative active-pane change, until ctx is cancelled.
+// interval <= 0 falls back to 30s. The goroutine exits on its own when ctx is
+// done; there is nothing for the caller to stop or wait on.
+func StartSnapshotWriter(ctx context.Context, reg *Registry, interval time.Duration, path string) <-chan struct{} {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		var debounce *time.Timer
+		var debounceC <-chan time.Time
+		defer func() {
+			if debounce != nil {
+				debounce.Stop()
+			}
+		}()
 		for {
 			select {
 			case <-ctx.Done():
@@ -484,9 +507,33 @@ func StartSnapshotWriter(ctx context.Context, reg *Registry, interval time.Durat
 				if err := WriteSnapshot(path, snap); err != nil {
 					log.Printf("sessiond: periodic snapshot write failed: %v", err)
 				}
+			case <-reg.SnapshotChanges():
+				// Pane focus can arrive repeatedly as browser focus churns.
+				// Registry only signals an actual selection change; this
+				// additional short debounce coalesces rapid A -> B -> A
+				// changes into one complete durable snapshot.
+				if debounce == nil {
+					debounce = time.NewTimer(250 * time.Millisecond)
+					debounceC = debounce.C
+				} else {
+					if !debounce.Stop() {
+						select {
+						case <-debounce.C:
+						default:
+						}
+					}
+					debounce.Reset(250 * time.Millisecond)
+				}
+			case <-debounceC:
+				debounceC = nil
+				snap := BuildSnapshot(reg, "selection")
+				if err := WriteSnapshot(path, snap); err != nil {
+					log.Printf("sessiond: selection snapshot write failed: %v", err)
+				}
 			}
 		}
 	}()
+	return done
 }
 
 // RestoreFromSnapshot attempts to repopulate s's registry from the snapshot
@@ -526,17 +573,28 @@ func (s *Server) RestoreFromSnapshot(enabled bool, path string) int {
 		// derived last run must come back derived, or it freezes at whatever
 		// the first session happened to be called and can never be refined.
 		s.reg.restoreWorkspaceNameOrigin(wsID, nameOriginFromSnapshot(wsSnap.NameOrigin))
-		for bp, layout := range wsSnap.Layout {
-			s.reg.SaveLayout(wsID, bp, layout)
-		}
 
 		paneCount := 0
+		restoredPaneIDs := make([]int, 0, len(wsSnap.Panes))
+		paneIDMap := make(map[int]int, len(wsSnap.Panes))
+		seenSnapshotPaneIDs := make(map[int]bool, len(wsSnap.Panes))
+		completePaneIDMap := true
 		for _, paneSnap := range wsSnap.Panes {
-			if err := s.restorePane(wsID, paneSnap); err != nil {
+			if paneSnap.PaneID <= 0 || seenSnapshotPaneIDs[paneSnap.PaneID] {
+				completePaneIDMap = false
+			} else {
+				seenSnapshotPaneIDs[paneSnap.PaneID] = true
+			}
+			restoredPaneID, err := s.restorePane(wsID, paneSnap)
+			if err != nil {
 				log.Printf("sessiond: restore: pane %q in workspace %s: %v", paneSnap.Title, wsID, err)
 				continue
 			}
 			paneCount++
+			restoredPaneIDs = append(restoredPaneIDs, restoredPaneID)
+			if completePaneIDMap {
+				paneIDMap[paneSnap.PaneID] = restoredPaneID
+			}
 		}
 		if paneCount == 0 {
 			// Every pane in this workspace failed to spawn (or the snapshot
@@ -547,9 +605,36 @@ func (s *Server) RestoreFromSnapshot(enabled bool, path string) int {
 			s.reg.ReapIfEmpty(wsID)
 			continue
 		}
+		s.restoreWorkspaceLayouts(wsID, wsSnap.Layout, paneIDMap, completePaneIDMap)
+		s.restoreWorkspaceActivePane(wsID, wsSnap, restoredPaneIDs, paneIDMap, completePaneIDMap)
 		restored++
 	}
 	return restored
+}
+
+// restoreWorkspaceLayouts writes a snapshot's layout only after every pane has
+// been restored and its old identity has been mapped to its fresh local id.
+// A malformed/incomplete layout is discarded, never retained with old ids that
+// could collide with an unrelated restored pane.
+func (s *Server) restoreWorkspaceLayouts(wsID string, layouts map[string]string, paneIDMap map[int]int, completePaneIDMap bool) {
+	if !completePaneIDMap {
+		for breakpoint, layout := range layouts {
+			if strings.TrimSpace(layout) != "" {
+				log.Printf("sessiond: restore: discarded %s layout for workspace %s without a complete pane identity map", breakpoint, wsID)
+			}
+		}
+		return
+	}
+	for breakpoint, layout := range layouts {
+		remapped, ok := RemapLayoutPaneIDs(layout, paneIDMap)
+		if !ok {
+			log.Printf("sessiond: restore: discarded invalid %s layout for workspace %s", breakpoint, wsID)
+			continue
+		}
+		if !s.reg.SaveLayout(wsID, breakpoint, remapped) {
+			log.Printf("sessiond: restore: could not save %s layout for unknown workspace %s", breakpoint, wsID)
+		}
+	}
 }
 
 // restorePane constructs one restored pane in workspace wsID from paneSnap,
@@ -561,10 +646,10 @@ func (s *Server) RestoreFromSnapshot(enabled bool, path string) int {
 // before NewPane starts the pty and its read-loop goroutine -- so no live
 // byte can ever interleave with the seed. There is no client to race with
 // yet at this point in boot anyway (the accept loop has not started).
-func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) error {
+func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) (int, error) {
 	localID, ok := s.reg.AllocPaneID(wsID)
 	if !ok {
-		return fmt.Errorf("unknown workspace")
+		return 0, fmt.Errorf("unknown workspace")
 	}
 	cols, rows := sizeOrDefault(paneSnap.Cols, paneSnap.Rows)
 
@@ -617,7 +702,7 @@ func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) error {
 		paneSnap.Cwd,
 	)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if paneSnap.Title != "" {
 		// Restored with the provenance it was captured with, NOT through the
@@ -628,7 +713,42 @@ func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) error {
 		p.setTitle(paneSnap.Title, nameOriginFromSnapshot(paneSnap.TitleOrigin))
 	}
 	s.reg.PutPane(wsID, p)
-	return nil
+	return localID, nil
+}
+
+// restoreWorkspaceActivePane restores only selection metadata that can be
+// proven within this snapshot pass. It never selects a pane because it wrote
+// output or happened to be first in a multi-pane map.
+func (s *Server) restoreWorkspaceActivePane(wsID string, wsSnap WorkspaceSnapshot, restoredPaneIDs []int, paneIDMap map[int]int, completePaneIDMap bool) {
+	if wsSnap.LastActivePaneID != nil {
+		if *wsSnap.LastActivePaneID > 0 && completePaneIDMap {
+			if restoredPaneID, ok := paneIDMap[*wsSnap.LastActivePaneID]; ok {
+				s.reg.restoreUserActivePane(wsID, restoredPaneID)
+				return
+			}
+		}
+		log.Printf("sessiond: restore: workspace %s has an unavailable last-active pane reference", wsID)
+		s.reg.restoreUserActivePane(wsID, 0)
+		return
+	}
+
+	// Legacy snapshots lack explicit selection metadata. The saved layout was
+	// remapped and validated before this point, so its strict selection now
+	// names a fresh live pane rather than a source id that might collide.
+	if completePaneIDMap {
+		if restoredPaneID, found := s.reg.authoritativeLayoutActivePane(wsID); found {
+			s.reg.restoreUserActivePane(wsID, restoredPaneID)
+			return
+		}
+	}
+
+	if len(restoredPaneIDs) == 1 {
+		// A one-pane workspace is unambiguous. Record its initial selection
+		// explicitly rather than treating its screen activity as a proxy.
+		s.reg.restoreUserActivePane(wsID, restoredPaneIDs[0])
+		return
+	}
+	s.reg.restoreUserActivePane(wsID, 0)
 }
 
 // buildRestoreSeed assembles the bytes written into a restored pane's buffer

@@ -249,6 +249,11 @@ func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string, app b
 	h.connecting = false
 	m.live = h
 	m.mu.Unlock()
+	if app, ok := h.bridge.(AppOperatorBridge); ok {
+		app.SetOperatorCompletionSink(func(c Correlation, text string, terminal bool) {
+			sb.startTask(func(context.Context) { _ = sb.deliverAppCompletion(app, c, text, terminal) })
+		})
+	}
 
 	if prev != nil && prev != h && prev.sideband != nil {
 		prev.sideband.Close()

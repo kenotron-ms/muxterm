@@ -59,6 +59,7 @@ type appVoiceOperation struct {
 	requestID       string
 	turnID          string
 	dispatchState   string
+	turn            *cos.Turn
 	done            chan appVoiceOperationResult
 }
 type appVoiceOperationResult struct {
@@ -80,6 +81,14 @@ type appVoiceService struct {
 	inputs                         map[string]string
 	retiredInputBits               [appVoiceInputReplayWords]uint64
 	bridge                         *appVoiceBridge
+	operatorTurns                  map[string]*cos.Turn
+	operatorApprovals              map[string]string
+	operatorRequestCaptures        map[string]bool
+	operatorSub                    *cos.Subscription
+	playbackPaused                 bool
+	userTurnActive                 bool
+	operatorCompletionSink         func(voice.Correlation, string, bool)
+	operatorSequence               uint64
 	providerGeneration             uint64
 	minting                        bool
 }
@@ -89,6 +98,13 @@ type appVoiceCapture struct {
 	calls                                                     map[string]bool
 	outputCalls                                               map[string]string
 	dispatchItem                                              string
+	operatorPending                                           bool
+	operatorResult                                            string
+	operatorDelivery, operatorAudioDone                       bool
+	operatorCorrelation                                       voice.Correlation
+	operatorProgress                                          string
+	operatorSequence                                          uint64
+	operatorProgressAt                                        time.Time
 }
 
 // appVoiceBridge is minted once for one exact owner, lease epoch, and provider
@@ -117,6 +133,260 @@ func (b *appVoiceBridge) Approve(string, bool, string) error {
 func (b *appVoiceBridge) Cancel(string) error {
 	return errors.New("app voice has no legacy bridge")
 }
+func (b *appVoiceBridge) SubmitOperator(ctx context.Context, c voice.Correlation, request string) (voice.TurnHandle, error) {
+	s := b.service
+	s.mu.Lock()
+	if !b.activeLocked() {
+		s.mu.Unlock()
+		return nil, errors.New("app voice bridge lease is no longer current")
+	}
+	revision := s.observation.Revision
+	target := appThreadTurnTarget(s.observation.Active)
+	s.mu.Unlock()
+	if revision == 0 || target == nil {
+		return nil, errors.New("Operator requires an observed Mission Control composer")
+	}
+	s.observeOperatorApprovals()
+	s.mu.Lock()
+	if !b.activeLocked() {
+		s.mu.Unlock()
+		return nil, errors.New("app voice bridge lease is no longer current")
+	}
+	s.operatorRequestCaptures[c.CaptureID] = true
+	s.mu.Unlock()
+	if _, err := s.execute(ctx, b, c, voice.AppToolSubmitThreadTurn, map[string]any{
+		"expected_revision": float64(revision), "target": target, "text": request,
+	}); err != nil {
+		return nil, err
+	}
+	key := appOperatorKey(c)
+	s.mu.Lock()
+	turn := s.operatorTurns[key]
+	s.mu.Unlock()
+	if turn == nil {
+		return nil, errors.New("Operator submission was acknowledged without an admitted turn")
+	}
+	return &appVoiceTurn{turn: turn, service: s, key: key}, nil
+}
+func (b *appVoiceBridge) ApproveOperator(c voice.Correlation, requestID string, approved bool, reason string) error {
+	s := b.service
+	s.mu.Lock()
+	if !b.activeLocked() || s.operatorApprovals[requestID] == "" {
+		s.mu.Unlock()
+		return errors.New("approval is not pending for this voice session's Operator work")
+	}
+	s.mu.Unlock()
+	sup := s.hub.cos.started()
+	if sup == nil {
+		return errors.New("Operator is not running")
+	}
+	if err := sup.Approve(requestID, approved, reason); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	delete(s.operatorApprovals, requestID)
+	s.mu.Unlock()
+	return nil
+}
+func (b *appVoiceBridge) CancelOperator(c voice.Correlation, turnID string) error {
+	s := b.service
+	s.mu.Lock()
+	if !b.activeLocked() {
+		s.mu.Unlock()
+		return errors.New("app voice bridge lease is no longer current")
+	}
+	turn := s.operatorTurns[appOperatorKey(c)]
+	if turnID != "" {
+		turn = nil
+		for _, candidate := range s.operatorTurns {
+			if candidate.ID == turnID {
+				turn = candidate
+				break
+			}
+		}
+	} else if turn == nil {
+		var best uint64
+		for id, candidate := range s.operatorTurns {
+			if capture := s.captures[strings.Split(id, "\x00")[0]]; capture != nil && capture.operatorSequence > best {
+				best, turn = capture.operatorSequence, candidate
+			}
+		}
+	}
+	s.mu.Unlock()
+	if turn == nil {
+		return errors.New("no Operator turn is tracked for this voice request")
+	}
+	sup := s.hub.cos.started()
+	if sup == nil {
+		return errors.New("Operator is not running")
+	}
+	return sup.Cancel(turn.ID)
+}
+func (b *appVoiceBridge) PrepareOperatorReply(c voice.Correlation) (map[string]string, error) {
+	s := b.service
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !b.activeLocked() {
+		return nil, errors.New("app voice bridge lease is no longer current")
+	}
+	record := s.captures[c.CaptureID]
+	if record == nil || record.continuationPending || (record.operatorResult == "" && record.operatorProgress == "") {
+		return nil, errors.New("Operator completion no longer has a current provider capture")
+	}
+	nonce, err := appVoiceRandom()
+	if err != nil {
+		return nil, err
+	}
+	record.continuationNonce, record.continuationPending = nonce, true
+	if record.operatorResult != "" {
+		record.operatorDelivery, record.operatorAudioDone = true, false
+	} else {
+		// Coalesced progress is advisory. Once handed to the provider it is
+		// consumed; a later COS event replaces it rather than replaying it.
+		record.operatorProgress = ""
+	}
+	return map[string]string{"app_voice_capture_id": c.CaptureID, "app_voice_response_nonce": nonce}, nil
+}
+func (b *appVoiceBridge) QueueOperatorCompletion(c voice.Correlation, output string) error {
+	s := b.service
+	s.mu.Lock()
+	if !b.activeLocked() {
+		s.mu.Unlock()
+		return errors.New("app voice bridge lease is no longer current")
+	}
+	record := s.captures[c.CaptureID]
+	if record == nil || record.operatorResult != "" {
+		s.mu.Unlock()
+		return errors.New("Operator completion is stale or already queued")
+	}
+	record.operatorResult = output
+	record.operatorCorrelation = c
+	sink := s.readyOperatorCompletionLocked(c, record)
+	s.mu.Unlock()
+	if sink != nil {
+		sink(c, output, true)
+	}
+	return nil
+}
+
+func (b *appVoiceBridge) RetainOperatorTerminal(c voice.Correlation, output string) {
+	s := b.service
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !b.activeLocked() {
+		return
+	}
+	if record := s.captures[c.CaptureID]; record != nil && record.operatorPending && record.operatorResult == "" {
+		record.operatorResult, record.operatorCorrelation = output, c
+	}
+}
+func (b *appVoiceBridge) QueueOperatorNotice(c voice.Correlation, output string) error {
+	s := b.service
+	s.mu.Lock()
+	if !b.activeLocked() {
+		s.mu.Unlock()
+		return errors.New("app voice bridge lease is no longer current")
+	}
+	record := s.captures[c.CaptureID]
+	if record == nil || !record.operatorPending {
+		s.mu.Unlock()
+		return errors.New("Operator notice is stale")
+	}
+	record.operatorCorrelation, record.operatorProgress = c, output
+	sink := s.readyOperatorNoticeLocked(record)
+	s.mu.Unlock()
+	if sink != nil {
+		sink(c, output, false)
+	}
+	return nil
+}
+func (b *appVoiceBridge) SetOperatorCompletionSink(sink func(voice.Correlation, string, bool)) {
+	b.service.mu.Lock()
+	if b.activeLocked() {
+		b.service.operatorCompletionSink = sink
+	}
+	b.service.mu.Unlock()
+}
+func (b *appVoiceBridge) MarkOperatorNarration(c voice.Correlation) {
+	b.service.mu.Lock()
+	if record := b.service.captures[c.CaptureID]; record != nil && record.operatorPending {
+		record.operatorDelivery, record.operatorAudioDone = true, false
+	}
+	b.service.mu.Unlock()
+}
+func (b *appVoiceBridge) OperatorPlaybackFinished(responseID string, cleared bool) {
+	s := b.service
+	s.mu.Lock()
+	for id, record := range s.captures {
+		if record.operatorDelivery && responseID != "" && record.responseID == responseID {
+			// A pause first reports its lease state, then clears provider output.
+			// Preserve the terminal result in that ordering: it must be narrated
+			// after resume rather than mistaken for audio the user heard.
+			if s.playbackPaused || cleared {
+				record.operatorDelivery, record.operatorAudioDone = false, false
+				continue
+			}
+			record.operatorAudioDone = true
+			if record.terminal {
+				record.operatorPending, record.operatorDelivery, record.operatorResult = false, false, ""
+				s.releaseCaptureLocked(id)
+			}
+		}
+	}
+	s.mu.Unlock()
+}
+func (s *appVoiceService) readyOperatorCompletionLocked(c voice.Correlation, record *appVoiceCapture) func(voice.Correlation, string, bool) {
+	if s.playbackPaused || s.userTurnActive || !record.terminal || record.continuationPending || record.operatorDelivery || record.operatorResult == "" {
+		return nil
+	}
+	return s.operatorCompletionSink
+}
+func (s *appVoiceService) readyOperatorNoticeLocked(record *appVoiceCapture) func(voice.Correlation, string, bool) {
+	if s.playbackPaused || record.operatorDelivery || record.operatorProgress == "" {
+		return nil
+	}
+	return s.operatorCompletionSink
+}
+
+type appVoiceTurn struct {
+	turn    *cos.Turn
+	service *appVoiceService
+	key     string
+	once    sync.Once
+}
+
+func (t *appVoiceTurn) ID() string { return t.turn.ID }
+func (t *appVoiceTurn) Wait(ctx context.Context) (string, error) {
+	ev, err := t.turn.Wait(ctx)
+	if err != nil {
+		return "", err
+	}
+	if ev.IsTerminal() {
+		t.once.Do(func() {
+			t.service.mu.Lock()
+			delete(t.service.operatorTurns, t.key)
+			for id, key := range t.service.operatorApprovals {
+				if key == t.key {
+					delete(t.service.operatorApprovals, id)
+				}
+			}
+			t.service.mu.Unlock()
+		})
+	}
+	if ev.Ev == cos.EvError {
+		if ev.Message != "" {
+			return "", errors.New(ev.Message)
+		}
+		return "", errors.New(ev.Code)
+	}
+	if ev.Ev == cos.EvCancelled || ev.Ev == cos.EvTurnCancelled {
+		return "", errors.New("cancelled")
+	}
+	return ev.Response, nil
+}
+func appOperatorKey(c voice.Correlation) string {
+	return c.CaptureID + "\x00" + c.ProviderItemID
+}
 func (b *appVoiceBridge) SidebandTerminal(reason string) {
 	b.service.mu.Lock()
 	current := b.activeLocked()
@@ -137,6 +407,9 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 	defer b.service.mu.Unlock()
 	if !b.activeLocked() {
 		return errors.New("app voice bridge lease is no longer current")
+	}
+	if event.Type == "input_audio_buffer.speech_started" {
+		b.service.userTurnActive = true
 	}
 	if event.Type == "response.created" && event.ResponseID != "" {
 		capture := event.Metadata["app_voice_capture_id"]
@@ -178,7 +451,21 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 		if capture := b.service.responses[event.ResponseID]; capture != "" {
 			if record := b.service.captures[capture]; record != nil {
 				record.terminal = true
+				if event.Type == "response.done" && !record.operatorDelivery {
+					b.service.userTurnActive = false
+					for _, deferred := range b.service.captures {
+						if sink := b.service.readyOperatorCompletionLocked(deferred.operatorCorrelation, deferred); sink != nil {
+							go sink(deferred.operatorCorrelation, deferred.operatorResult, true)
+						}
+					}
+				}
+				if record.operatorDelivery && record.operatorAudioDone {
+					record.operatorPending, record.operatorDelivery, record.operatorResult = false, false, ""
+				}
 				b.service.releaseCaptureLocked(capture)
+				if sink := b.service.readyOperatorCompletionLocked(record.operatorCorrelation, record); sink != nil {
+					go sink(record.operatorCorrelation, record.operatorResult, true)
+				}
 			}
 		}
 	}
@@ -279,7 +566,7 @@ func (b *appVoiceBridge) CommitAppInput(event voice.ProviderEvent) (map[string]s
 }
 func (s *appVoiceService) releaseCaptureLocked(captureID string) {
 	record := s.captures[captureID]
-	if record == nil || !record.terminal || record.continuationPending {
+	if record == nil || !record.terminal || record.continuationPending || record.operatorPending {
 		return
 	}
 	for _, done := range record.calls {
@@ -330,7 +617,7 @@ func (s *Server) registerAppVoiceRoutes(cfg config.VoiceConfig, protect func(htt
 		log.Printf("app voice: provider unavailable: %v", err)
 		return
 	}
-	service := &appVoiceService{hub: s.hub, provider: mgr, operations: make(map[string]*appVoiceOperation), captures: make(map[string]*appVoiceCapture), responses: make(map[string]string), inputs: make(map[string]string)}
+	service := &appVoiceService{hub: s.hub, provider: mgr, operations: make(map[string]*appVoiceOperation), captures: make(map[string]*appVoiceCapture), responses: make(map[string]string), inputs: make(map[string]string), operatorTurns: make(map[string]*cos.Turn), operatorApprovals: make(map[string]string), operatorRequestCaptures: make(map[string]bool)}
 	s.appVoice = service
 	s.hub.appVoice = service
 	// Provider reasons are descriptive prose, not client protocol values.
@@ -378,10 +665,57 @@ func (s *appVoiceService) handleFrame(c *Client, raw []byte) {
 		s.release(c, f.Epoch)
 	case "app-voice-drain-ack":
 		s.drainAck(c, f.Epoch, f.DrainNonce)
+	case "app-voice-playback-state":
+		var playback struct {
+			Epoch  uint64 `json:"lease_epoch"`
+			Paused bool   `json:"paused"`
+		}
+		if json.Unmarshal(raw, &playback) == nil {
+			s.playbackState(c, playback.Epoch, playback.Paused)
+		}
 	case "app-voice-observation":
 		s.observe(c, f.Epoch, f.Revision, f.Active)
 	case "app-voice-operation-ack":
 		s.ack(c, f)
+	}
+}
+
+// playbackState is advisory delivery state, never work authority. The exact
+// owner epoch may report it so completion narration can remain correlated to
+// this lease; pausing audio never cancels an admitted Operator turn.
+func (s *appVoiceService) playbackState(c *Client, epoch uint64, paused bool) {
+	s.mu.Lock()
+	if c != s.owner || epoch == 0 || epoch != s.epoch {
+		s.mu.Unlock()
+		return
+	}
+	s.playbackPaused = paused
+	var ready []struct {
+		c        voice.Correlation
+		v        string
+		terminal bool
+	}
+	if !paused && s.operatorCompletionSink != nil {
+		for _, record := range s.captures {
+			if s.readyOperatorCompletionLocked(record.operatorCorrelation, record) != nil {
+				ready = append(ready, struct {
+					c        voice.Correlation
+					v        string
+					terminal bool
+				}{record.operatorCorrelation, record.operatorResult, true})
+			} else if s.readyOperatorNoticeLocked(record) != nil {
+				ready = append(ready, struct {
+					c        voice.Correlation
+					v        string
+					terminal bool
+				}{record.operatorCorrelation, record.operatorProgress, false})
+			}
+		}
+	}
+	sink := s.operatorCompletionSink
+	s.mu.Unlock()
+	for _, next := range ready {
+		sink(next.c, next.v, next.terminal)
 	}
 }
 
@@ -417,8 +751,12 @@ func (s *appVoiceService) claim(c *Client, takeover bool) {
 	s.captures = make(map[string]*appVoiceCapture)
 	s.responses = make(map[string]string)
 	s.inputs = make(map[string]string)
+	s.operatorTurns = make(map[string]*cos.Turn)
+	s.operatorApprovals = make(map[string]string)
+	s.operatorRequestCaptures = make(map[string]bool)
 	s.retiredInputBits = [appVoiceInputReplayWords]uint64{}
 	s.bridge = nil
+	s.playbackPaused = false
 	s.minting = false
 	c.sendAppVoice(s.claimResultLocked())
 }
@@ -867,11 +1205,18 @@ func (s *appVoiceService) endLocked() (*Client, uint64) {
 	s.control = ""
 	s.drainNonce = ""
 	s.bridge = nil
+	if s.operatorSub != nil {
+		s.operatorSub.Close()
+		s.operatorSub = nil
+	}
 	s.minting = false
 	s.refuseOperationsLocked("lease_ended")
 	s.captures = make(map[string]*appVoiceCapture)
 	s.responses = make(map[string]string)
 	s.inputs = make(map[string]string)
+	s.operatorTurns = make(map[string]*cos.Turn)
+	s.operatorApprovals = make(map[string]string)
+	s.operatorRequestCaptures = make(map[string]bool)
 	return owner, endedEpoch
 }
 func (s *appVoiceService) refuseOperationsLocked(code string) {
@@ -897,7 +1242,7 @@ func (s *appVoiceService) disconnect(c *Client) {
 
 func isAppVoiceMessage(typ string) bool {
 	switch typ {
-	case "app-voice-claim", "app-voice-release", "app-voice-drain-ack", "app-voice-observation", "app-voice-operation-ack":
+	case "app-voice-claim", "app-voice-release", "app-voice-drain-ack", "app-voice-playback-state", "app-voice-observation", "app-voice-operation-ack":
 		return true
 	}
 	return false
@@ -1015,10 +1360,84 @@ func (s *Server) handleAppVoiceSDP(w http.ResponseWriter, r *http.Request) {
 		writeAppVoiceStartupFailure(w, err)
 		return
 	}
+	a.observeOperatorApprovals()
 	w.Header().Set("Content-Type", "application/sdp")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-App-Voice-Session", session)
 	_, _ = io.WriteString(w, answer.SDP)
+}
+
+// observeOperatorApprovals is the one app-voice listener on the shared COS
+// broker. It records only approval IDs whose turn was admitted by this lease;
+// a voice tool can therefore never answer another tab's pending approval.
+func (s *appVoiceService) observeOperatorApprovals() {
+	if s.hub == nil || s.hub.cos == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.operatorSub != nil || s.owner == nil {
+		s.mu.Unlock()
+		return
+	}
+	sup := s.hub.cos.started()
+	if sup == nil {
+		s.mu.Unlock()
+		return
+	}
+	sub := sup.Subscribe(cosSubscriberDepth)
+	s.operatorSub = sub
+	owner, epoch, bridge := s.owner, s.epoch, s.bridge
+	s.mu.Unlock()
+	go func() {
+		for event := range sub.C() {
+			if event.TurnID == "" {
+				continue
+			}
+			s.mu.Lock()
+			if s.owner != owner || s.epoch != epoch || s.bridge != bridge || s.operatorSub != sub {
+				s.mu.Unlock()
+				return
+			}
+			for key, turn := range s.operatorTurns {
+				if turn != nil && turn.ID == event.TurnID {
+					captureID := strings.Split(key, "\x00")[0]
+					record := s.captures[captureID]
+					if record == nil {
+						break
+					}
+					if event.Ev == cos.EvApprovalRequest && event.RequestID != "" {
+						s.operatorApprovals[event.RequestID] = key
+						record.operatorProgress = "Operator needs approval for " + boundedOperatorText(event.Tool, 120) + ": " + boundedOperatorText(event.Detail, 240) + ". Use the approval tool with request ID " + event.RequestID + "."
+					} else if event.Ev == cos.EvToolStart {
+						if time.Since(record.operatorProgressAt) < 5*time.Second {
+							break
+						}
+						record.operatorProgress = "Operator is working with " + boundedOperatorText(event.Name, 120) + "."
+					} else {
+						break
+					}
+					record.operatorProgressAt = time.Now()
+					sink := s.readyOperatorNoticeLocked(record)
+					text, correlation := record.operatorProgress, record.operatorCorrelation
+					s.mu.Unlock()
+					if sink != nil {
+						sink(correlation, text, false)
+					}
+					goto next
+				}
+			}
+			s.mu.Unlock()
+		next:
+		}
+	}()
+}
+
+func boundedOperatorText(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if len(value) > max {
+		return value[:max] + "…"
+	}
+	return value
 }
 func (s *Server) handleAppVoiceEnd(w http.ResponseWriter, r *http.Request) {
 	a, epoch, ok := s.appVoiceHTTP(w, r)
@@ -1320,6 +1739,15 @@ func (s *appVoiceService) submitReservedCosTurn(c *Client, msg cosClientMessage,
 		return nil, false, errors.New("app voice work operation was already consumed")
 	}
 	turn, duplicate := relay.submit(sup, msg.Prompt, fmt.Sprintf("%p", c), msg.ClientRef)
-	op.requestID, op.turnID, op.dispatchState = msg.ClientRef, turn.ID, "dispatched"
+	op.requestID, op.turnID, op.dispatchState, op.turn = msg.ClientRef, turn.ID, "dispatched", turn
+	if !duplicate && s.operatorRequestCaptures[op.Correlation.CaptureID] {
+		if capture := s.captures[op.Correlation.CaptureID]; capture != nil {
+			capture.operatorPending = true
+			capture.operatorCorrelation = op.Correlation
+			s.operatorSequence++
+			capture.operatorSequence = s.operatorSequence
+		}
+		s.operatorTurns[appOperatorKey(op.Correlation)] = turn
+	}
 	return turn, duplicate, nil
 }

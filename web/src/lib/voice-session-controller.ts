@@ -717,6 +717,7 @@ async function appPause(): Promise<void> {
     sink.pause();
     sink.muted = true;
   }
+  if (lease) appVoiceOperations.setPlaybackPaused(lease.lease_epoch, true);
   const suspendingMeter = meterContext?.suspend() ?? Promise.resolve();
   cancelProviderOutput();
   publish('paused');
@@ -764,6 +765,7 @@ async function appResume(): Promise<void> {
     for (const track of tracks) track.enabled = !pausedMuted;
     paused = false;
     pendingPause = false;
+    if (lease) appVoiceOperations.setPlaybackPaused(lease.lease_epoch, false);
     inputActive = false;
     syncMuted();
     if (peer && dataChannel && canPublishListening(peer, dataChannel)) {

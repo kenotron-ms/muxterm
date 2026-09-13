@@ -48,18 +48,25 @@ func serveSessiond(ctx context.Context, socketPath string) error {
 
 	cfg, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
 	snapshotPath := sessiond.DefaultSnapshotPath()
+	var snapshotWriterDone <-chan struct{}
+	writerCtx, stopWriter := context.WithCancel(ctx)
+	defer stopWriter()
 
 	if n := srv.RestoreFromSnapshot(cfg.Restore.Enabled, snapshotPath); n > 0 {
 		log.Printf("sessiond: restored %d workspace(s) from %s", n, snapshotPath)
 	}
 	if cfg.Restore.Enabled {
-		sessiond.StartSnapshotWriter(ctx, srv.Registry(), cfg.Restore.SnapshotInterval, snapshotPath)
+		snapshotWriterDone = sessiond.StartSnapshotWriter(writerCtx, srv.Registry(), cfg.Restore.SnapshotInterval, snapshotPath)
 	}
 
 	log.Printf("muxterm sessiond listening on %s", socketPath)
 	serveErr := srv.ListenAndServe(ctx)
+	stopWriter()
 
 	if cfg.Restore.Enabled {
+		// The writer stops with ctx before the final flush so an already-selected
+		// periodic tick cannot overwrite this later, newer shutdown snapshot.
+		<-snapshotWriterDone
 		// Best-effort only: a kill -9/OOM gets no shutdown flush and relies
 		// on the periodic write instead -- the same tradeoff tmux-continuum
 		// makes.

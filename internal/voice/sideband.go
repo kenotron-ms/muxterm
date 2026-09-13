@@ -557,10 +557,16 @@ func (s *Sideband) handle(data []byte) {
 		// the only event on this wire that describes delivery rather than
 		// generation, which is why the spoken exit waits for it.
 		s.signalFarewell(sigAudioStopped)
+		if operator, ok := s.bridge.(AppOperatorBridge); ok {
+			operator.OperatorPlaybackFinished(ev.ResponseID, false)
+		}
 	case ev.Type == "output_audio_buffer.cleared":
 		// Audio thrown away mid-play -- a barge-in, on a session whose
 		// turn detection carries interrupt_response.
 		s.signalFarewell(sigAudioCleared)
+		if operator, ok := s.bridge.(AppOperatorBridge); ok {
+			operator.OperatorPlaybackFinished(ev.ResponseID, true)
+		}
 	case ev.Type == "response.done" || ev.Type == "response.cancelled":
 		s.releaseResponse()
 		s.signalFarewell(sigResponseDone)
@@ -597,6 +603,26 @@ func (s *Sideband) dispatchAppReserved(ctx context.Context, bridge AppOperationB
 		}
 	}
 	s.emit(Trace{Kind: TraceToolCall, Name: ev.Name})
+	if operator, ok := bridge.(AppOperatorBridge); ok {
+		switch ev.Name {
+		case ToolAsk, ToolDispatch:
+			s.dispatchAppOperator(ctx, operator, ev, correlation, args)
+			return
+		case ToolApproval:
+			s.runAppApproval(operator, correlation, ev.CallID, args)
+			return
+		case ToolCancel:
+			if err := operator.CancelOperator(correlation, str(args["turn_id"])); err != nil {
+				_ = s.queueAppReply(operator, correlation, ev.CallID, "Nothing admitted by this voice session could be cancelled: "+trimErr(err), true)
+			} else {
+				_ = s.queueAppReply(operator, correlation, ev.CallID, "Operator cancellation was requested for this voice session's work.", true)
+			}
+			return
+		case ToolEnd:
+			s.runEnd(ev.CallID, args)
+			return
+		}
+	}
 	output, err := bridge.ExecuteAppTool(ctx, correlation, ev.Name, args)
 	if ctx.Err() != nil {
 		return
@@ -614,6 +640,132 @@ func (s *Sideband) dispatchAppReserved(ctx context.Context, bridge AppOperationB
 	if err != nil || s.RequestScopedResponse(metadata) != nil {
 		s.Fence("app tool continuation rejected")
 	}
+}
+
+func (s *Sideband) dispatchAppOperator(ctx context.Context, bridge AppOperatorBridge, ev realtimeEvent, correlation Correlation, args map[string]any) {
+	request := strings.TrimSpace(str(args["request"]))
+	if request == "" {
+		_ = s.queueAppReply(bridge, correlation, ev.CallID, "No request was given.", true)
+		return
+	}
+	turn, err := bridge.SubmitOperator(ctx, correlation, request)
+	if err != nil {
+		_ = s.queueAppReply(bridge, correlation, ev.CallID, "Operator could not accept this request: "+trimErr(err), true)
+		return
+	}
+	if ev.Name == ToolDispatch {
+		_ = s.queueAppReply(bridge, correlation, ev.CallID, "Operator accepted the work and is working on it.", false)
+		s.startTask(func(wait context.Context) { s.awaitAppOperator(wait, bridge, correlation, turn) })
+		return
+	}
+	wait, cancel := context.WithTimeout(ctx, s.cfg.syncTimeout)
+	text, err := turn.Wait(wait)
+	cancel()
+	if err == nil {
+		bridge.RetainOperatorTerminal(correlation, text)
+		_ = s.queueAppReply(bridge, correlation, ev.CallID, text, true)
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		_ = s.queueAppReply(bridge, correlation, ev.CallID, "Operator accepted the request and is still working on it.", false)
+		s.startTask(func(wait context.Context) { s.awaitAppOperator(wait, bridge, correlation, turn) })
+		return
+	}
+	output := "Operator stopped before completing this request: " + trimErr(err)
+	bridge.RetainOperatorTerminal(correlation, output)
+	_ = s.queueAppReply(bridge, correlation, ev.CallID, output, true)
+}
+
+func (s *Sideband) awaitAppOperator(ctx context.Context, bridge AppOperatorBridge, correlation Correlation, turn TurnHandle) {
+	text, err := turn.Wait(ctx)
+	if ctx.Err() != nil || s.isClosed() {
+		return
+	}
+	if err != nil {
+		_ = s.queueAppCompletion(bridge, correlation, "Operator stopped before completing this request: "+trimErr(err))
+		return
+	}
+	_ = s.queueAppCompletion(bridge, correlation, text)
+}
+
+func (s *Sideband) queueAppReply(bridge AppOperationBridge, correlation Correlation, callID, output string, terminal bool) error {
+	if len(output) > 32768 {
+		output = output[:32768]
+	}
+	if !s.SendScopedFunctionOutput(correlation.ProviderCallID, output) {
+		return errors.New("could not send function output")
+	}
+	if terminal {
+		if operator, ok := bridge.(AppOperatorBridge); ok {
+			operator.MarkOperatorNarration(correlation)
+		}
+	}
+	metadata, err := bridge.CompleteAppTool(correlation)
+	if err != nil {
+		return err
+	}
+	return s.RequestScopedResponse(metadata)
+}
+
+// queueAppCompletion creates a fresh, correlated conversation item after a
+// function output has already been consumed. It never reuses a function call
+// ID, which providers may reject as a duplicate.
+func (s *Sideband) queueAppCompletion(bridge AppOperatorBridge, correlation Correlation, output string) error {
+	return bridge.QueueOperatorCompletion(correlation, output)
+}
+
+func (s *Sideband) queueAppNotice(bridge AppOperatorBridge, correlation Correlation, output string) error {
+	return bridge.QueueOperatorNotice(correlation, output)
+}
+
+func (s *Sideband) deliverAppCompletion(bridge AppOperatorBridge, correlation Correlation, output string, terminal bool) error {
+	if len(output) > 32768 {
+		output = output[:32768]
+	}
+	metadata, err := bridge.PrepareOperatorReply(correlation)
+	if err != nil {
+		return err
+	}
+	s.scopedWriteMu.Lock()
+	defer s.scopedWriteMu.Unlock()
+	if !s.write(map[string]any{"type": "conversation.item.create", "item": map[string]any{
+		"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": map[bool]string{true: "[Operator final result] ", false: "[Operator progress] "}[terminal] + output}},
+	}}) {
+		return errors.New("could not send Operator completion")
+	}
+	return s.requestScopedResponseLocked(metadata)
+}
+
+func (s *Sideband) runAppApproval(bridge AppOperatorBridge, correlation Correlation, callID string, args map[string]any) {
+	requestID := strings.TrimSpace(str(args["request_id"]))
+	decision := normalizeDecision(str(args["decision"]))
+	confirm, _ := args["confirm"].(bool)
+	if requestID == "" {
+		_ = s.queueAppReply(bridge, correlation, callID, "No approval request was named, so nothing was answered.", true)
+		return
+	}
+	s.mu.Lock()
+	intent, had := s.pending[requestID]
+	if had && time.Since(intent.at) > approvalIntentTTL {
+		delete(s.pending, requestID)
+		had = false
+	}
+	if !had {
+		s.pending[requestID] = &approvalIntent{decision: decision, at: time.Now()}
+	}
+	s.mu.Unlock()
+	if !had || !confirm || intent.decision != decision {
+		_ = s.queueAppReply(bridge, correlation, callID, "Not sent yet. Read the decision back and get a clear confirmation first.", true)
+		return
+	}
+	s.mu.Lock()
+	delete(s.pending, requestID)
+	s.mu.Unlock()
+	if err := bridge.ApproveOperator(correlation, requestID, decision == "approve", "approved by app voice"); err != nil {
+		_ = s.queueAppReply(bridge, correlation, callID, "That approval could not be sent: "+trimErr(err)+". Nothing was approved.", true)
+		return
+	}
+	_ = s.queueAppReply(bridge, correlation, callID, map[bool]string{true: "Approved.", false: "Denied."}[decision == "approve"], true)
 }
 
 func (s *Sideband) dispatchScopedReserved(ctx context.Context, ev realtimeEvent, correlation Correlation) {
@@ -887,6 +1039,10 @@ func (s *Sideband) SendScopedCompletion(output string) bool {
 func (s *Sideband) RequestScopedResponse(metadata map[string]string) error {
 	s.scopedWriteMu.Lock()
 	defer s.scopedWriteMu.Unlock()
+	return s.requestScopedResponseLocked(metadata)
+}
+
+func (s *Sideband) requestScopedResponseLocked(metadata map[string]string) error {
 	s.mu.Lock()
 	if s.closed || s.fenced {
 		s.mu.Unlock()
