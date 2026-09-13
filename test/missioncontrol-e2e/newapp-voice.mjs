@@ -475,10 +475,12 @@ try {
     });
 
   stage = 'app_voice_composer_clear';
+  const clearObserved = await appUtterance('app_observe', {});
+  const clearObservation = clearObserved.output;
   const cleared = await appUtterance('composer_draft', {
-    expected_revision: observation.revision,
+    expected_revision: clearObservation.revision,
     mode: 'set',
-    target: activeComposerTarget(observation.active),
+    target: activeComposerTarget(clearObservation.active),
     text: '',
   });
   await eventually(() => composer.inputValue().then((value) => value === ''), 'app_voice_draft_cleared');
