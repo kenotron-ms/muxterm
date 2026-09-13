@@ -8,6 +8,7 @@
 
 import { LitElement, css, html } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { nothing } from 'lit';
 
 export type VoiceModeIconState =
   | 'idle'
@@ -67,6 +68,7 @@ export class MuxVoiceModeIcon extends LitElement {
   @property({ type: String }) state: VoiceModeIconState = 'idle';
   @property({ type: Number }) level = 0;
   @property({ type: Boolean }) muted = false;
+  @property({ type: Boolean }) bare = false;
 
   override render() {
     const level = this.state === 'listening' && !this.muted ? limitedLevel(this.level) : 0;
@@ -79,7 +81,7 @@ export class MuxVoiceModeIcon extends LitElement {
 
     return html`
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <circle class="circle" cx="12" cy="12" r="9"></circle>
+        ${this.bare ? nothing : html`<circle class="circle" cx="12" cy="12" r="9"></circle>`}
         <path class="bar" style="transform:scaleY(${scales[0]})" d="M8.1 14.2V9.8"></path>
         <path class="bar" style="transform:scaleY(${scales[1]})" d="M10.7 16.1V7.9"></path>
         <path class="bar" style="transform:scaleY(${scales[2]})" d="M13.3 15.1V8.9"></path>

@@ -80,6 +80,8 @@ export const SessiondType = {
   // above: that entry has no Go counterpart and is dead vocabulary.
   PreviewSubscribe: 'preview-subscribe',
   WorkspacePreview: 'workspace-preview',
+  WorkspaceScreen: 'workspace-screen',
+  WorkspaceScreenResult: 'workspace-screen-result',
   // Home view session state (ADDITIVE, post-v1) — mirrors Go's
   // TypeSessionStateSubscribe / TypeSessionStateSubscribeResult /
   // TypeSessionState. Same opt-in shape as the preview pair above: a client
@@ -90,6 +92,19 @@ export const SessiondType = {
 } as const;
 
 export type SessiondMessageType = (typeof SessiondType)[keyof typeof SessiondType];
+
+export interface WorkspaceScreenResult {
+  type: typeof SessiondType.WorkspaceScreenResult;
+  cid: number;
+  workspaceId: string;
+  paneId: number;
+  cols: number;
+  rows: number;
+  lines: string[];
+  fg: string[][];
+  bg: string[][];
+  inverse: boolean[][];
+}
 
 export type CloseIntentRequest = {
   type: typeof SessiondType.CloseIntent;
@@ -243,6 +258,10 @@ export interface SessiondMessage {
   /** Tile payload of workspace-preview: at most `rows` entries of at most
    *  `cols` characters, trailing-space trimmed on the wire. */
   lines?: string[];
+  /** Full-grid colours returned by workspace-screen-result. */
+  fg?: string[][];
+  bg?: string[][];
+  inverse?: boolean[][];
 }
 
 // ---------------------------------------------------------------------------

@@ -1013,8 +1013,8 @@ export class MuxApp extends LitElement {
     this._socket.onPaneResized = (paneId, cols, rows) => {
       terminalRegistry.applyServerResize(paneId, cols, rows);
     };
-    // Sidebar live previews: the store owns the opt-in and both data sources
-    // (local xterm buffer for the attached workspace, daemon push for the rest).
+    // Sidebar previews are on-demand workspace-screen reads; the store owns the
+    // authenticated socket seam and does not subscribe or poll at startup.
     previewStore.attach(this._socket);
     // Serve-local conversation frames. Nothing is asked of the server until
     // the overlay opens: threadStore negotiates capability before it either
@@ -1038,9 +1038,6 @@ export class MuxApp extends LitElement {
     // happens to make active. Here, immediately after the store the Dashboard
     // reads is wired -- and NOT on the socket's connect callback. See below.
     this._applyBootSurface();
-    this._socket.onWorkspacePreview = (msg) => {
-      previewStore.handleWorkspacePreview(msg);
-    };
     // Home view session state. Opt in once per connection; the daemon does no
     // work at all until we ask.
     //
@@ -1303,7 +1300,6 @@ export class MuxApp extends LitElement {
       // The preview opt-in is per daemon connection, so a reconnect (or a
       // daemon restart underneath us) silently loses it and tiles would just
       // stop arriving. Re-send it here, alongside the composition re-sync.
-      previewStore.resubscribe();
       // Re-negotiate first; this never replays a pending turn. The coordinator
       // explicitly chooses v2 selection or the unscoped legacy fallback.
       threadStore.markReconnected();

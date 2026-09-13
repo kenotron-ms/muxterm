@@ -460,6 +460,11 @@ export class MuxSidebar extends LitElement {
       border-color: var(--chrome-accent);
     }
 
+    .ws-card:focus-visible {
+      outline: 2px solid var(--chrome-accent);
+      outline-offset: 2px;
+    }
+
     .ws-header {
       display: flex;
       align-items: center;
@@ -614,6 +619,45 @@ export class MuxSidebar extends LitElement {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .preview-tooltip {
+      position: fixed;
+      inset: auto;
+      z-index: 2000;
+      margin: 0;
+      padding: 8px;
+      box-sizing: border-box;
+      border: 1px solid var(--chrome-border);
+      border-radius: 6px;
+      background: var(--chrome-body);
+      color: var(--chrome-text-bright);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      pointer-events: auto;
+      overflow: hidden;
+    }
+
+    .preview-tooltip::backdrop {
+      background: transparent;
+    }
+
+    .preview-tooltip-frame {
+      display: grid;
+      place-items: center;
+      min-width: 160px;
+      min-height: 32px;
+    }
+
+    .preview-tooltip canvas {
+      display: block;
+      image-rendering: pixelated;
+    }
+
+    .preview-tooltip-message {
+      padding: 4px 8px;
+      color: var(--chrome-text-dim);
+      font-size: 12px;
+      white-space: nowrap;
     }
 
     /* ---- workspace cards: live preview variant ----
@@ -1196,6 +1240,17 @@ export class MuxSidebar extends LitElement {
    */
   private _drawn = new WeakMap<HTMLCanvasElement, string>();
 
+  @state() private _previewWorkspaceId: string | null = null;
+  @state() private _previewState: 'hidden' | 'loading' | 'ready' | 'unavailable' = 'hidden';
+  @state() private _previewEntry: PreviewEntry | null = null;
+  @state() private _previewMessage = '';
+  private _previewAbort: AbortController | null = null;
+  private _previewTimer: number | null = null;
+  private _previewDismissTimer: number | null = null;
+  private _previewGeneration = 0;
+  private _previewTooltipHovered = false;
+  private _previewVisualViewport: VisualViewport | null = null;
+
   private _onOutsideClick = (e: MouseEvent): void => {
     if (this._menuOpen && !e.composedPath().includes(this)) {
       this._menuOpen = false;
@@ -1242,10 +1297,6 @@ export class MuxSidebar extends LitElement {
       this._version++;
     });
 
-    // Preview tiles arrive at ~6 Hz. This callback deliberately does NOT bump
-    // _version — see _onPreviewTick. Gated on `previewsVisible` (D6).
-    this._syncPreviewSubscription();
-
     // One probe per page, remembered. Until it resolves we render the preview
     // layout but draw nothing; if it resolves false every card falls back to
     // the text layout permanently.
@@ -1254,6 +1305,12 @@ export class MuxSidebar extends LitElement {
         this._version++;
       });
     }
+    window.addEventListener('keydown', this._onPreviewKeyDown, true);
+    window.addEventListener('resize', this._onPreviewViewportChange);
+    window.addEventListener('scroll', this._onPreviewViewportChange, true);
+    this._previewVisualViewport = window.visualViewport;
+    this._previewVisualViewport?.addEventListener('resize', this._onPreviewViewportChange);
+    this._previewVisualViewport?.addEventListener('scroll', this._onPreviewViewportChange);
   }
 
   override disconnectedCallback(): void {
@@ -1267,6 +1324,13 @@ export class MuxSidebar extends LitElement {
     this._unsubSessions = null;
     this._unsubRemotes?.();
     this._unsubRemotes = null;
+    window.removeEventListener('keydown', this._onPreviewKeyDown, true);
+    window.removeEventListener('resize', this._onPreviewViewportChange);
+    window.removeEventListener('scroll', this._onPreviewViewportChange, true);
+    this._previewVisualViewport?.removeEventListener('resize', this._onPreviewViewportChange);
+    this._previewVisualViewport?.removeEventListener('scroll', this._onPreviewViewportChange);
+    this._previewVisualViewport = null;
+    this._dismissPreview(true);
     this._resizeObserver?.disconnect();
     this._resizeObserver = null;
     if (this._resizeTimer !== null) {
@@ -1305,10 +1369,14 @@ export class MuxSidebar extends LitElement {
    * without going through Lit at all.
    */
   override updated(changed: Map<PropertyKey, unknown>): void {
-    if (changed.has('previewsVisible')) this._syncPreviewSubscription();
     this._collectCanvases();
     this._paintAll(this._cards);
     this._syncAgeTicker();
+    if (this._previewState !== 'hidden') {
+      void this.updateComplete.then(() => {
+        if (this._previewState !== 'hidden') this._positionPreviewTooltip();
+      });
+    }
   }
 
   /**
@@ -1631,6 +1699,213 @@ export class MuxSidebar extends LitElement {
   // Workspace helpers
   // ---------------------------------------------------------------------------
 
+  private _anchorForPreview(workspaceId: string): HTMLElement | null {
+    for (const row of this.shadowRoot?.querySelectorAll<HTMLElement>('.ws-card[data-workspace-id]') ?? []) {
+      if (row.dataset['workspaceId'] === workspaceId) return row;
+    }
+    return null;
+  }
+
+  private _clearPreviewTimers(): void {
+    if (this._previewTimer !== null) {
+      window.clearTimeout(this._previewTimer);
+      this._previewTimer = null;
+    }
+    if (this._previewDismissTimer !== null) {
+      window.clearTimeout(this._previewDismissTimer);
+      this._previewDismissTimer = null;
+    }
+  }
+
+  private _dismissPreview(immediate: boolean): void {
+    this._clearPreviewTimers();
+    if (!immediate && this._previewTooltipHovered) return;
+    this._previewGeneration++;
+    this._previewAbort?.abort();
+    this._previewAbort = null;
+    const tooltip = this.shadowRoot?.querySelector<HTMLElement>('[data-workspace-preview-tooltip]');
+    try {
+      tooltip?.hidePopover();
+    } catch {
+      // Older browsers may not implement the Popover API.
+    }
+    this._previewWorkspaceId = null;
+    this._previewEntry = null;
+    this._previewMessage = '';
+    this._previewState = 'hidden';
+  }
+
+  private _schedulePreviewDismiss(): void {
+    this._clearPreviewTimers();
+    this._previewDismissTimer = window.setTimeout(() => {
+      this._previewDismissTimer = null;
+      if (!this._previewTooltipHovered) this._dismissPreview(true);
+    }, 140);
+  }
+
+  private _beginPreview(workspaceId: string): void {
+    if (previewStore.mode === 'off') return;
+    this._clearPreviewTimers();
+    if (
+      this._previewWorkspaceId === workspaceId &&
+      this._previewState !== 'hidden' &&
+      this._previewState !== 'unavailable'
+    ) return;
+    this._previewGeneration++;
+    const generation = this._previewGeneration;
+    this._previewAbort?.abort();
+    const controller = new AbortController();
+    this._previewAbort = controller;
+    this._previewWorkspaceId = workspaceId;
+    this._previewEntry = null;
+    this._previewMessage = '';
+    this._previewState = 'loading';
+    this._previewTimer = window.setTimeout(() => {
+      this._previewTimer = null;
+      if (generation !== this._previewGeneration || !this._anchorForPreview(workspaceId)) return;
+      void this._loadPreview(workspaceId, generation, controller.signal);
+    }, 150);
+  }
+
+  private async _loadPreview(workspaceId: string, generation: number, signal: AbortSignal): Promise<void> {
+    try {
+      const entry = await previewStore.request(workspaceId, signal);
+      if (generation !== this._previewGeneration || signal.aborted) return;
+      if (!entry || entry.tile.cols <= 0 || entry.tile.rows <= 0) throw new Error('Preview unavailable');
+      if (!(await fontReady())) throw new Error('Preview unavailable');
+      if (generation !== this._previewGeneration || signal.aborted) return;
+      this._previewEntry = entry;
+      this._previewState = 'ready';
+      this._previewMessage = '';
+    } catch {
+      if (generation !== this._previewGeneration || signal.aborted) return;
+      this._previewEntry = null;
+      this._previewMessage = 'Preview unavailable';
+      this._previewState = 'unavailable';
+    }
+  }
+
+  private _onPreviewPointerEnter = (event: PointerEvent, workspaceId: string): void => {
+    if (event.pointerType === 'touch') return;
+    this._beginPreview(workspaceId);
+  };
+
+  private _onPreviewPointerLeave = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') return;
+    this._schedulePreviewDismiss();
+  };
+
+  private _onPreviewFocusIn = (_event: FocusEvent, workspaceId: string): void => {
+    this._beginPreview(workspaceId);
+  };
+
+  private _onPreviewFocusOut = (event: FocusEvent): void => {
+    const next = event.relatedTarget;
+    if (next instanceof Node && (event.currentTarget as HTMLElement).contains(next)) return;
+    this._dismissPreview(true);
+  };
+
+  private _onPreviewKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && this._previewState !== 'hidden') {
+      event.preventDefault();
+      event.stopPropagation();
+      this._dismissPreview(true);
+    }
+  };
+
+  private _onPreviewViewportChange = (): void => {
+    if (this._previewState !== 'hidden') this._dismissPreview(true);
+  };
+
+  private _onPreviewTooltipEnter = (): void => {
+    this._previewTooltipHovered = true;
+    if (this._previewDismissTimer !== null) {
+      window.clearTimeout(this._previewDismissTimer);
+      this._previewDismissTimer = null;
+    }
+  };
+
+  private _onPreviewTooltipLeave = (): void => {
+    this._previewTooltipHovered = false;
+    this._schedulePreviewDismiss();
+  };
+
+  private _paintPreviewTooltip(): void {
+    const entry = this._previewEntry;
+    const canvas = this.shadowRoot?.querySelector<HTMLCanvasElement>('[data-workspace-preview-canvas]');
+    if (!entry || !canvas) return;
+    const palette = resolvePalette(store.config.theme.palette);
+    renderTile(canvas, entry.tile, {
+      palette: paletteAnsiArray(palette),
+      fg: palette.foreground,
+      bg: palette.background,
+      contrastFloor: 0,
+      mono: false,
+    });
+    const naturalW = entry.tile.cols * PREVIEW_CELL.w;
+    const naturalH = entry.tile.rows * PREVIEW_CELL.h;
+    const viewport = window.visualViewport;
+    const maxW = Math.max(80, (viewport?.width ?? window.innerWidth) - 24);
+    const maxH = Math.max(48, (viewport?.height ?? window.innerHeight) - 24);
+    const scale = Math.min(1, maxW / (naturalW + 16), maxH / (naturalH + 16));
+    canvas.style.width = `${Math.max(1, Math.floor(naturalW * scale))}px`;
+    canvas.style.height = `${Math.max(1, Math.floor(naturalH * scale))}px`;
+  }
+
+  private _positionPreviewTooltip(): void {
+    const tooltip = this.shadowRoot?.querySelector<HTMLElement>('[data-workspace-preview-tooltip]');
+    const workspaceId = this._previewWorkspaceId;
+    if (!tooltip || !workspaceId) return;
+    if (this._previewState === 'ready') this._paintPreviewTooltip();
+    const anchor = this._anchorForPreview(workspaceId);
+    if (!anchor) {
+      this._dismissPreview(true);
+      return;
+    }
+    try {
+      tooltip.showPopover();
+    } catch {
+      // The fixed fallback still provides the preview on older browsers.
+    }
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft ?? 0;
+    const top = viewport?.offsetTop ?? 0;
+    const right = left + (viewport?.width ?? window.innerWidth);
+    const bottom = top + (viewport?.height ?? window.innerHeight);
+    const anchorRect = anchor.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    let x = anchorRect.right + 8;
+    let y = anchorRect.top;
+    if (x + tooltipRect.width > right - 8) x = anchorRect.left - tooltipRect.width - 8;
+    if (x < left + 8) x = Math.min(right - tooltipRect.width - 8, anchorRect.left);
+    if (y + tooltipRect.height > bottom - 8) y = bottom - tooltipRect.height - 8;
+    y = Math.max(top + 8, y);
+    tooltip.style.left = `${Math.max(left + 8, x)}px`;
+    tooltip.style.top = `${y}px`;
+  }
+
+  private _renderPreviewTooltip() {
+    if (this._previewState === 'hidden') return '';
+    return html`
+      <div
+        id="workspace-preview-tooltip"
+        class="preview-tooltip"
+        popover="manual"
+        role="tooltip"
+        data-workspace-preview-tooltip
+        data-workspace-preview-state="${this._previewState}"
+        @pointerenter="${this._onPreviewTooltipEnter}"
+        @pointerleave="${this._onPreviewTooltipLeave}"
+      >
+        <div class="preview-tooltip-frame">
+          ${this._previewState === 'ready'
+            ? html`<canvas data-workspace-preview-canvas></canvas>`
+            : html`<span class="preview-tooltip-message">${this._previewState === 'loading' ? 'Loading preview…' : this._previewMessage}</span>`}
+        </div>
+      </div>
+    `;
+  }
+
   /** The Start card is the way back to home from anywhere. */
   private _onStartClick(): void {
     this.dispatchEvent(
@@ -1877,6 +2152,26 @@ export class MuxSidebar extends LitElement {
     return html`
       <div
         class="ws-card ${this._remoteClass(card)}${card.active ? 'active' : ''}"
+        data-workspace-id="${card.id}"
+        role="button"
+        tabindex="0"
+        aria-describedby="${this._previewWorkspaceId === card.id && this._previewState !== 'hidden'
+          ? 'workspace-preview-tooltip'
+          : ''}"
+        @pointerenter="${(e: PointerEvent) => this._onPreviewPointerEnter(e, card.id)}"
+        @pointerleave="${this._onPreviewPointerLeave}"
+        @focusin="${(e: FocusEvent) => this._onPreviewFocusIn(e, card.id)}"
+        @focusout="${this._onPreviewFocusOut}"
+        @keydown="${(e: KeyboardEvent) => {
+          if (e.key === 'Escape') this._onPreviewKeyDown(e);
+          else if (
+            (e.key === 'Enter' || e.key === ' ') &&
+            !(e.target as Element).closest('button,input')
+          ) {
+            e.preventDefault();
+            this._onWsClick(card.id);
+          }
+        }}"
         @click="${() => this._onWsClick(card.id)}"
       >
         ${this._renderHeader(card)}
@@ -1932,10 +2227,6 @@ export class MuxSidebar extends LitElement {
   /** One machine's section: header, then its cards (ux D1). */
   private _renderHostGroup(
     group: HostGroup,
-    previewOn: boolean,
-    rows: number,
-    cols: number,
-    compact: boolean,
   ) {
     const collapsed = this._isCollapsed(group.host);
     const remote = group.host !== '';
@@ -1989,11 +2280,7 @@ export class MuxSidebar extends LitElement {
                 >retry</button>
               </div>`
             : ''}
-          ${group.cards.map((card) =>
-            previewOn
-              ? this._renderPreviewCard(card, rows, cols, compact)
-              : this._renderTextCard(card),
-          )}
+          ${group.cards.map((card) => this._renderTextCard(card))}
           <button
             class="new-ws-btn${remote ? ' remote' : ''}"
             @click="${() => this._onNewWsOn(group.host)}"
@@ -2006,20 +2293,12 @@ export class MuxSidebar extends LitElement {
   }
 
   private _renderWorkspaces() {
-    const rows = this._previewRows;
     const cols = this._cols;
     // Recorded so the preview tick can tell a structural change from a mere
     // content change without re-rendering to find out.
     const cards = this._computeCards();
     this._cards = cards;
     this._cardSig = cardsSignature(cards, previewStore.mode, cols);
-
-    // Deliberately NOT gated on `cols`: the card box (and its reserved tile
-    // height) must exist from the very first paint, so an unmeasured card
-    // renders the placeholder at full height rather than the text layout and
-    // then visibly reflowing once the ResizeObserver reports.
-    const previewOn = rows > 0;
-    const compact = previewStore.mode === 'compact';
 
     // Recomputed every render: a host that stopped being dropped must stop
     // the 1 Hz clock, and only the render knows.
@@ -2033,7 +2312,7 @@ export class MuxSidebar extends LitElement {
     const groups = groupCards(cards, instanceLabel());
     return html`
       ${groups.map((group) =>
-        this._renderHostGroup(group, previewOn, rows, cols, compact),
+        this._renderHostGroup(group),
       )}
       <button class="new-ws-btn remote" @click="${() => this._onConnectMachine()}">
         + Connect machine
@@ -2176,6 +2455,7 @@ export class MuxSidebar extends LitElement {
         ${this._renderWorkspaces()}
       </div>
       ${this._renderFooter()}
+      ${this._renderPreviewTooltip()}
     `;
   }
 }

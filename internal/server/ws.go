@@ -561,7 +561,8 @@ func (c *Client) route(msg *sessiond.Message) (sess *hostSession, browserWSID st
 		sessiond.TypeRenameWorkspace,
 		sessiond.TypeCloseWorkspace,
 		sessiond.TypeSaveLayout,
-		sessiond.TypeCloseIntent:
+		sessiond.TypeCloseIntent,
+		sessiond.TypeWorkspaceScreen:
 		host, msg.WorkspaceID = splitID(msg.WorkspaceID)
 
 	case sessiond.TypeCloseConfirm:
@@ -657,6 +658,23 @@ func (c *Client) handleTextInput(data []byte) {
 	}
 
 	switch msg.Type {
+	case sessiond.TypeWorkspaceScreen:
+		screenClient, ok := dc.(interface {
+			WorkspaceScreenWithin(string, time.Duration) (*sessiond.Message, error)
+		})
+		if !ok {
+			c.sendError(msg.CID, browserWSID, errors.New("workspace screen is unavailable on this daemon"))
+			return
+		}
+		screen, err := screenClient.WorkspaceScreenWithin(msg.WorkspaceID, sessiond.MissionControlReplyTimeout)
+		if err != nil {
+			c.sendError(msg.CID, browserWSID, err)
+			return
+		}
+		screen.WorkspaceID = nsID(host, screen.WorkspaceID)
+		screen.CID = msg.CID
+		c.sendMessage(screen)
+
 	case sessiond.TypeAttach:
 		// attachSeq must be held for the entire Attach()+sendMessage sequence:
 		// it also gates OnPaneOutput's binary relay (see installHandlers), so

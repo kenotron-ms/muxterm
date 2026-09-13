@@ -9,6 +9,7 @@ import {
   type CloseRiskReason,
   type CloseTarget,
   type SessiondMessage,
+  type WorkspaceScreenResult,
 } from './types';
 import type { MuxStore } from './state';
 import { wsUrl } from './lib/base-path.js';
@@ -100,6 +101,7 @@ const WAKE_MIN_INTERVAL_MS = 250;
 
 const CLOSE_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CLOSE_CID = Number.MAX_SAFE_INTEGER;
+const WORKSPACE_SCREEN_TIMEOUT_MS = 3000;
 const INVALID_CLOSE_TICKET_FAILURE = 'invalid-close-ticket';
 const CLOSE_RISK_REASONS = new Set<CloseRiskReason>([
   'command-active',
@@ -122,12 +124,77 @@ interface PendingCloseRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingWorkspaceScreen {
+  workspaceId: string;
+  resolve: (result: WorkspaceScreenResult) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
 function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isScreenColour(value: unknown): value is string {
+  return (
+    value === '' ||
+    (typeof value === 'string' && /^ansi:(?:[0-9]|1[0-5])$/.test(value)) ||
+    (typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value))
+  );
+}
+
+function isWorkspaceScreenResult(
+  input: unknown,
+  workspaceId: string,
+  cid: number,
+): input is WorkspaceScreenResult {
+  if (typeof input !== 'object' || input === null) return false;
+  const value = input as Record<string, unknown>;
+  if (
+    value.type !== 'workspace-screen-result' ||
+    value.cid !== cid ||
+    value.workspaceId !== workspaceId ||
+    !isPositiveSafeInteger(value.paneId) ||
+    !isPositiveSafeInteger(value.cols) ||
+    !isPositiveSafeInteger(value.rows) ||
+    value.cols > 1024 ||
+    value.rows > 1024 ||
+    value.cols * value.rows > 65536 ||
+    !Array.isArray(value.lines) ||
+    value.lines.length !== value.rows ||
+    !Array.isArray(value.fg) ||
+    value.fg.length !== value.rows ||
+    !Array.isArray(value.bg) ||
+    value.bg.length !== value.rows ||
+    !Array.isArray(value.inverse) ||
+    value.inverse.length !== value.rows
+  ) return false;
+  for (let y = 0; y < value.rows; y++) {
+    const line = value.lines[y];
+    const fg = value.fg[y];
+    const bg = value.bg[y];
+    const inverse = value.inverse[y];
+    if (
+      typeof line !== 'string' ||
+      line.length !== value.cols ||
+      !Array.isArray(fg) ||
+      !Array.isArray(bg) ||
+      fg.length !== value.cols ||
+      bg.length !== value.cols ||
+      !Array.isArray(inverse) ||
+      inverse.length !== value.cols ||
+      !fg.every(isScreenColour) ||
+      !bg.every(isScreenColour) ||
+      !inverse.every((cell) => typeof cell === 'boolean')
+    ) return false;
+  }
+  return true;
 }
 
 function hasValidCloseTarget(message: Record<string, unknown>): boolean {
@@ -200,6 +267,8 @@ export class MuxSocket {
   private _intentionalClose = false;
   private _nextCloseCid = 1;
   private _pendingCloseRequests = new Map<number, PendingCloseRequest>();
+  private _nextWorkspaceScreenCid = 1;
+  private _pendingWorkspaceScreens = new Map<number, PendingWorkspaceScreen>();
   /** Epoch-ms an attempt was last STARTED. Feeds the WAKE_MIN_INTERVAL floor. */
   private _lastAttemptAt = 0;
   /** Epoch-ms the pending timer is due to fire, or 0 when none is armed. */
@@ -329,6 +398,7 @@ export class MuxSocket {
     this._rejectPendingCloseRequests(
       new Error('The close outcome could not be confirmed because the connection closed.'),
     );
+    this._rejectPendingWorkspaceScreens(new Error('The workspace preview connection closed.'));
     this._clearTimer();
     if (this._ws) {
       this._ws.close();
@@ -469,6 +539,55 @@ export class MuxSocket {
       return true;
     }
     return false;
+  }
+
+  /** Read one authoritative full VT grid without attaching or resizing it. */
+  requestWorkspaceScreen(workspaceId: string, signal?: AbortSignal): Promise<WorkspaceScreenResult> {
+    if (workspaceId === '') return Promise.reject(new Error('The workspace preview target is unavailable.'));
+    const ws = this._ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('The workspace preview connection is unavailable.'));
+    }
+
+    const start = this._nextWorkspaceScreenCid;
+    let cid = start;
+    do {
+      cid = this._nextWorkspaceScreenCid;
+      this._nextWorkspaceScreenCid = cid >= MAX_CLOSE_CID ? 1 : cid + 1;
+      if (!this._pendingWorkspaceScreens.has(cid) && !this._pendingCloseRequests.has(cid)) break;
+    } while (this._nextWorkspaceScreenCid !== start);
+    if (this._pendingWorkspaceScreens.has(cid) || this._pendingCloseRequests.has(cid)) {
+      return Promise.reject(new Error('No workspace preview correlation IDs are available.'));
+    }
+
+    return new Promise<WorkspaceScreenResult>((resolve, reject) => {
+      const settle = (error?: Error, result?: WorkspaceScreenResult): void => {
+        const pending = this._pendingWorkspaceScreens.get(cid);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        if (pending.signal && pending.onAbort) pending.signal.removeEventListener('abort', pending.onAbort);
+        this._pendingWorkspaceScreens.delete(cid);
+        if (error) reject(error);
+        else if (result) resolve(result);
+        else reject(new Error('The workspace preview returned no result.'));
+      };
+      const onAbort = (): void => settle(new Error('The workspace preview was cancelled.'));
+      const timer = setTimeout(
+        () => settle(new Error('The workspace preview did not respond in time.')),
+        WORKSPACE_SCREEN_TIMEOUT_MS,
+      );
+      this._pendingWorkspaceScreens.set(cid, { workspaceId, resolve, reject, timer, signal, onAbort });
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      try {
+        ws.send(JSON.stringify({ type: SessiondType.WorkspaceScreen, workspaceId, cid }));
+      } catch (error) {
+        settle(error instanceof Error ? error : new Error('The workspace preview could not be sent.'));
+      }
+    });
   }
 
   /**
@@ -945,6 +1064,37 @@ export class MuxSocket {
     this._pendingCloseRequests.clear();
   }
 
+  private _rejectPendingWorkspaceScreens(error: Error): void {
+    for (const pending of this._pendingWorkspaceScreens.values()) {
+      clearTimeout(pending.timer);
+      if (pending.signal && pending.onAbort) pending.signal.removeEventListener('abort', pending.onAbort);
+      pending.reject(error);
+    }
+    this._pendingWorkspaceScreens.clear();
+  }
+
+  private _resolveWorkspaceScreen(raw: Record<string, unknown>): boolean {
+    if (raw.type !== SessiondType.WorkspaceScreenResult && raw.type !== SessiondType.Error) return false;
+    if (!isPositiveSafeInteger(raw.cid)) return false;
+    const pending = this._pendingWorkspaceScreens.get(raw.cid);
+    if (!pending) return false;
+    clearTimeout(pending.timer);
+    if (pending.signal && pending.onAbort) pending.signal.removeEventListener('abort', pending.onAbort);
+    this._pendingWorkspaceScreens.delete(raw.cid);
+    if (raw.type === SessiondType.Error) {
+      pending.reject(
+        new Error(typeof raw.error === 'string' && raw.error !== '' ? raw.error : 'The workspace preview failed.'),
+      );
+      return true;
+    }
+    if (!isWorkspaceScreenResult(raw, pending.workspaceId, raw.cid)) {
+      pending.reject(new Error('The workspace preview returned an invalid screen.'));
+      return true;
+    }
+    pending.resolve(raw);
+    return true;
+  }
+
   /**
    * Make a socket we are walking away from inert.
    *
@@ -1025,6 +1175,7 @@ export class MuxSocket {
           for (const listener of this._appVoiceFrameListeners) listener(raw);
           return;
         }
+        if (this._resolveWorkspaceScreen(raw)) return;
         this._resolveCloseOutcome(raw);
         // Pass the raw message to control handlers (e.g. for detached/session-picker).
         // Non-typed envelopes (e.g. serve config) still flow through here.
@@ -1078,6 +1229,7 @@ export class MuxSocket {
       this._rejectPendingCloseRequests(
         new Error('The close outcome could not be confirmed because the connection was lost.'),
       );
+      this._rejectPendingWorkspaceScreens(new Error('The workspace preview connection was lost.'));
       if (this._intentionalClose) {
         return;
       }

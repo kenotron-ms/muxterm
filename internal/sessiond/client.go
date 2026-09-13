@@ -456,6 +456,12 @@ func (c *Client) ScreenSnapshot(paneID int) (*Message, error) {
 	return c.request(&Message{Type: TypeScreenSnapshot, PaneID: paneID})
 }
 
+// WorkspaceScreen reads the selected workspace's user-active VT viewport
+// without attaching, focusing, resizing, or sending input.
+func (c *Client) WorkspaceScreenWithin(workspaceID string, timeout time.Duration) (*Message, error) {
+	return c.requestWithin(&Message{Type: TypeWorkspaceScreen, WorkspaceID: workspaceID}, timeout)
+}
+
 // ScrollbackPage requests one page of server-side scrollback history for the
 // pane identified by the workspace-local paneID, paging BACKWARD from cursor.
 //

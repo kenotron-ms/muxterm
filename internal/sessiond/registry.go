@@ -11,13 +11,15 @@ import (
 // Workspace is one daemon-managed workspace. Its panes use workspace-local ids
 // allocated by the Registry, independent of any other workspace.
 type Workspace struct {
-	ID         string            // daemon-allocated, e.g. "w1"
-	UUID       string            // durable UUID; empty only for an unbound legacy snapshot
-	Name       string            // optional label; "" means unnamed
-	ClientRef  string            // client-minted optimistic-create correlation id; "" when none
-	Panes      map[int]*Pane     // keyed by workspace-local pane id
-	Layouts    map[string]string // breakpoint label -> opaque dockview layout JSON
-	nextPaneID int
+	ID                 string            // daemon-allocated, e.g. "w1"
+	UUID               string            // durable UUID; empty only for an unbound legacy snapshot
+	Name               string            // optional label; "" means unnamed
+	ClientRef          string            // client-minted optimistic-create correlation id; "" when none
+	Panes              map[int]*Pane     // keyed by workspace-local pane id
+	Layouts            map[string]string // breakpoint label -> opaque dockview layout JSON
+	nextPaneID         int
+	lastUserActivePane int
+	activeRevision     uint64
 
 	// nameOrigin says whether Name was chosen by a person or derived by the
 	// daemon. Guarded by Registry.mu like every other field here, written only
@@ -265,6 +267,32 @@ func (r *Registry) Pane(wsID string, paneID int) (*Pane, bool) {
 	}
 	p, ok := ws.Panes[paneID]
 	return p, ok
+}
+
+// MarkUserActivePane records only a validated interactive pane-focus event.
+func (r *Registry) MarkUserActivePane(wsID string, paneID int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok || ws.Panes[paneID] == nil {
+		return false
+	}
+	ws.lastUserActivePane = paneID
+	ws.activeRevision++
+	return true
+}
+
+// UserActivePane returns the authoritative focused pane and revision. It never
+// guesses from output or pane order.
+func (r *Registry) UserActivePane(wsID string) (*Pane, uint64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[wsID]
+	if !ok {
+		return nil, 0, false
+	}
+	p := ws.Panes[ws.lastUserActivePane]
+	return p, ws.activeRevision, p != nil
 }
 
 // PaneIDs returns a deterministic sorted snapshot of the pane ids in wsID, or

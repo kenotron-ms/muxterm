@@ -33,8 +33,9 @@ const (
 	TypePaneFocus       = "pane-focus"
 	TypeRenamePane      = "rename-pane"
 	TypeSaveLayout      = "save-layout"
-	TypeScreenSnapshot  = "screen-snapshot" // request: MCP → daemon, VT grid for a pane
-	TypeGetLayout       = "get-layout"      // request: MCP → daemon, ASCII layout diagram
+	TypeScreenSnapshot  = "screen-snapshot"  // request: MCP → daemon, VT grid for a pane
+	TypeWorkspaceScreen = "workspace-screen" // request: browser → daemon, current user-active VT grid
+	TypeGetLayout       = "get-layout"       // request: MCP → daemon, ASCII layout diagram
 	// TypeMissionControlIdentity is a read-only capability handshake. It has
 	// no turn, voice, or focus operation, and older daemons reject it rather
 	// than causing callers to guess a local identity.
@@ -42,13 +43,14 @@ const (
 	TypeMissionControlIdentityResult = "missioncontrol-identity-result"
 
 	// Replies (daemon -> client, echo request cid).
-	TypeWorkspaceCreated     = "workspace-created"
-	TypeWorkspaceList        = "workspace-list"
-	TypeComposition          = "composition"
-	TypePaneCreated          = "pane-created"
-	TypeOK                   = "ok"
-	TypeScreenSnapshotResult = "screen-snapshot-result"
-	TypeLayoutResult         = "layout-result"
+	TypeWorkspaceCreated      = "workspace-created"
+	TypeWorkspaceList         = "workspace-list"
+	TypeComposition           = "composition"
+	TypePaneCreated           = "pane-created"
+	TypeOK                    = "ok"
+	TypeScreenSnapshotResult  = "screen-snapshot-result"
+	TypeWorkspaceScreenResult = "workspace-screen-result"
+	TypeLayoutResult          = "layout-result"
 
 	// Events (daemon -> all subscribers, cid=0).
 	TypePaneAdded        = "pane-added"
@@ -440,11 +442,14 @@ type Message struct {
 	// Lines is additionally the tile payload of TypeWorkspacePreview (one
 	// entry per rendered terminal row); the two uses never appear on the same
 	// message, so no second string-slice field is minted for it.
-	LineCursor *uint64  `json:"lineCursor,omitempty"`
-	Limit      int      `json:"limit,omitempty"`
-	Lines      []string `json:"lines,omitempty"`
-	NextCursor *uint64  `json:"nextCursor,omitempty"`
-	StartLine  uint64   `json:"startLine,omitempty"`
+	LineCursor *uint64    `json:"lineCursor,omitempty"`
+	Limit      int        `json:"limit,omitempty"`
+	Lines      []string   `json:"lines,omitempty"`
+	FG         [][]string `json:"fg,omitempty"`      // workspace-screen-result foreground cells
+	BG         [][]string `json:"bg,omitempty"`      // workspace-screen-result background cells
+	Inverse    [][]bool   `json:"inverse,omitempty"` // workspace-screen-result reverse-video cells
+	NextCursor *uint64    `json:"nextCursor,omitempty"`
+	StartLine  uint64     `json:"startLine,omitempty"`
 
 	// Read-only filesystem fields (ADDITIVE, post-v1; see TypeReadFile).
 	//
