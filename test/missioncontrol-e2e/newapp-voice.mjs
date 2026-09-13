@@ -491,6 +491,11 @@ try {
   await openBubbleMenu();
   await page.locator('mux-voice-mode-bubble [data-voice-mode-dock-right]').click();
   await eventually(() => bubble.getAttribute('data-edge').then((edge) => edge === 'right'), 'bubble_docked_right');
+  await eventually(async () => {
+    const box = await bubble.boundingBox();
+    const width = page.viewportSize().width;
+    return box && box.x >= 0 && box.x + box.width <= width && width - box.x - box.width < 24;
+  }, 'bubble_right_edge_geometry');
   await page.locator('mux-voice-mode-bubble [data-voice-mode-mute]').click();
   await activeBubble('Mic muted');
   gate('mute_changes_native_tracks_not_session', await page.evaluate(() =>

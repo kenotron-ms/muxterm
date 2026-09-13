@@ -299,7 +299,7 @@ export class MuxVoiceModeBubble extends LitElement {
   @state() private _snapping = false;
 
   private readonly _storedPosition = restorePosition();
-  private _edge: DockEdge = this._storedPosition.edge;
+  @state() private _edge: DockEdge = this._storedPosition.edge;
   private _vertical = this._storedPosition.vertical;
   private _x = 0;
   private _y = 0;
