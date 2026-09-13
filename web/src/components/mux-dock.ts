@@ -333,6 +333,15 @@ export class MuxDock extends LitElement {
   @property({ attribute: false }) requestedPaneId = -1;
   @property({ attribute: false }) layout = '';
 
+  /**
+   * Whether the workspace-only voice/menu rail is exposed. The Dashboard keeps
+   * this dock mounted underneath its opaque overlay to preserve terminal and
+   * layout state, but the covered workspace must not remain interactive or in
+   * the accessibility tree.
+   */
+  @property({ attribute: 'workspace-actions-visible', type: Boolean, reflect: true })
+  workspaceActionsVisible = true;
+
   /** Test hook: exposes the MuxStore instance for E2E verification scripts. */
   readonly __store = store;
   /**
@@ -670,9 +679,20 @@ export class MuxDock extends LitElement {
       }
     }
     if (!target) return;
+    // appendChild() moves an existing child even when it is already in this
+    // target. That mutation re-triggers our observer forever, so only re-home
+    // when Dockview actually selected a different header.
+    if (this._workspaceActions.parentElement === target) return;
     this._movingWorkspaceActions = true;
     target.appendChild(this._workspaceActions);
     this._movingWorkspaceActions = false;
+  }
+
+  /** Keep the covered dock alive for layout/terminal caching, but inert. */
+  private _syncWorkspaceActionVisibility(): void {
+    const covered = !this.workspaceActionsVisible;
+    this.toggleAttribute('inert', covered);
+    this.toggleAttribute('aria-hidden', covered);
   }
 
   private _createWorkspaceActions(): HTMLElement {
@@ -782,6 +802,7 @@ export class MuxDock extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    this._syncWorkspaceActionVisibility();
 
     // Session state changes repaint the tab marks. Low rate (one frame per
     // session state change), and it touches text nodes only — no Lit render,
@@ -919,8 +940,12 @@ export class MuxDock extends LitElement {
           text-overflow: ellipsis;
           white-space: nowrap;
         }
-        mux-dock .dv-tabs-and-actions-container {
-          padding-inline-start: var(--main-header-inline-padding, 24px);
+        mux-dock .dv-tabs-container > .dv-tab:first-child {
+          padding-inline-start: var(--main-header-inline-padding, 24px) !important;
+        }
+        mux-dock:not([workspace-actions-visible]) .mux-workspace-actions {
+          visibility: hidden;
+          pointer-events: none;
         }
         mux-dock .dv-tab.dv-active-tab {
           border-top: 2px solid var(--chrome-accent) !important;
@@ -1337,6 +1362,7 @@ export class MuxDock extends LitElement {
 
   override updated(changed: Map<string, unknown>): void {
     super.updated(changed);
+    if (changed.has('workspaceActionsVisible')) this._syncWorkspaceActionVisibility();
     if (!this._dv) return;
 
     // Case 1: workspaceKey changed → full panel reset

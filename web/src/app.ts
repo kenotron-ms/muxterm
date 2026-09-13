@@ -14,7 +14,7 @@ import { applyDocumentTitle, applyTitlebarColor, restoreTitlebarColor } from './
 import { injectTerminalFont } from './lib/fonts.js';
 import { voiceInputController } from './lib/voice-input-controller.js';
 import { voiceSessionController } from './lib/voice-session-controller.js';
-import { fetchVoiceStatus } from './lib/voice-settings.js';
+import { DEFAULT_VOICE_STATUS, fetchVoiceStatus } from './lib/voice-settings.js';
 import {
   appVoiceOperations,
   type AppVoiceComposerTarget,
@@ -924,7 +924,9 @@ export class MuxApp extends LitElement {
     // The server's runtime voice candidate is false until this explicit status
     // check says otherwise. Browser TTS voice enumeration is intentionally not
     // part of this provider-WebRTC capability decision.
-    void fetchVoiceStatus().then((status) => voiceSessionController.setAvailability(status));
+    void fetchVoiceStatus()
+      .then((status) => voiceSessionController.setAvailability(status))
+      .catch(() => voiceSessionController.setAvailability(DEFAULT_VOICE_STATUS));
 
     // Track launcher-open state on the host element for E2E assertions.
     window.addEventListener('open-launcher', this._onOpenLauncherAttr);
@@ -1287,7 +1289,9 @@ export class MuxApp extends LitElement {
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
-      void fetchVoiceStatus().then((status) => voiceSessionController.setAvailability(status));
+      void fetchVoiceStatus()
+        .then((status) => voiceSessionController.setAvailability(status))
+        .catch(() => voiceSessionController.setAvailability(DEFAULT_VOICE_STATUS));
       // A successful attach is the only thing that disproves the diagnosis.
       this._daemonUnreachable = false;
       this._reconnectDetail = '';
@@ -1606,6 +1610,7 @@ export class MuxApp extends LitElement {
                   .requestedPaneId="${this._requestedPaneId}"
                   .layout="${store.layout}"
                   .narrow="${!isWide}"
+                  .workspaceActionsVisible="${!this._showDashboard}"
                   @pane-select="${this._onActivePane}"
                   @pane-create="${this._createPaneOptimistic}"
                   @pane-rename="${this._onPaneRename}"

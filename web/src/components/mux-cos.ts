@@ -760,6 +760,7 @@ export class MuxCos extends LitElement {
     .thought.md {
       white-space: normal;
       min-width: 0;
+      overflow-wrap: anywhere;
     }
     .md > *:first-child {
       margin-top: 0;
@@ -819,6 +820,7 @@ export class MuxCos extends LitElement {
       /* The block scrolls; the conversation does not reflow around it. */
       overflow-x: auto;
       max-width: 100%;
+      box-sizing: border-box;
     }
     .md .md-pre code {
       font-family: var(--mono);
