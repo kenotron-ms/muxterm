@@ -153,6 +153,19 @@ func fixtureOutput(value map[string]any) map[string]any {
 		return nil
 	}
 	safe := map[string]any{}
+	// Preserve the exact top-level receipt identity used by submit/transcript
+	// assertions. Nested inventory IDs remain separate below; no turn text is
+	// copied into the evidence.
+	if receipt, ok := decoded.(map[string]any); ok {
+		for _, key := range []string{"thread_id", "turn_id", "session_id", "machine", "harness"} {
+			if value, ok := receipt[key].(string); ok && len(value) <= 256 {
+				safe[key] = value
+			}
+		}
+		if turns, ok := receipt["turns"].([]any); ok {
+			safe["turns_count"] = len(turns)
+		}
+	}
 	ids := make([]string, 0, 16)
 	machines := make([]string, 0, 8)
 	statuses := make([]string, 0, 8)

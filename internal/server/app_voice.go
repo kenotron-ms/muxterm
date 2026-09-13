@@ -861,17 +861,20 @@ func validAppAck(op *appVoiceOperation, result map[string]any) bool {
 }
 func appActiveMatchesTarget(active, target map[string]any) bool {
 	kind, _ := target["kind"].(string)
+	composer, _ := active["composer"].(map[string]any)
 	switch kind {
 	case "workspace":
-		return active["workspace_id"] == target["workspace_id"]
+		return active["surface"] == "dock" && active["workspace_id"] == target["workspace_id"]
 	case "pane":
-		return active["workspace_id"] == target["workspace_id"] && active["pane_id"] == target["pane_id"]
+		return active["surface"] == "dock" && active["workspace_id"] == target["workspace_id"] && active["pane_id"] == target["pane_id"]
 	case "applet":
-		return active["applet_id"] == target["applet_id"]
+		return active["surface"] == "mission_control" && active["applet_id"] == target["applet_id"]
 	case "thread":
-		return active["thread_id"] == target["thread_id"] && active["runtime_generation"] == target["runtime_generation"]
+		return active["surface"] == "mission_control" && composer != nil &&
+			composer["thread_id"] == target["thread_id"] && composer["runtime_generation"] == target["runtime_generation"]
 	case "detail":
-		return active["thread_id"] == target["thread_id"] && active["runtime_generation"] == target["runtime_generation"] && active["detail"] == target["detail_id"]
+		return active["surface"] == "mission_control" && composer != nil &&
+			composer["thread_id"] == target["thread_id"] && composer["runtime_generation"] == target["runtime_generation"] && active["detail"] == target["detail_id"]
 	}
 	return false
 }
