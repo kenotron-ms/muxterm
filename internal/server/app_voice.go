@@ -226,7 +226,7 @@ func (b *appVoiceBridge) CancelOperator(c voice.Correlation, turnID string) erro
 	}
 	return sup.Cancel(turn.ID)
 }
-func (b *appVoiceBridge) PrepareOperatorReply(c voice.Correlation) (map[string]string, error) {
+func (b *appVoiceBridge) PrepareOperatorReply(c voice.Correlation, output string, terminal bool) (map[string]string, error) {
 	s := b.service
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -234,15 +234,22 @@ func (b *appVoiceBridge) PrepareOperatorReply(c voice.Correlation) (map[string]s
 		return nil, errors.New("app voice bridge lease is no longer current")
 	}
 	record := s.captures[c.CaptureID]
-	if record == nil || record.continuationPending || (record.operatorResult == "" && record.operatorProgress == "") {
+	if record == nil {
 		return nil, errors.New("Operator completion no longer has a current provider capture")
+	}
+	if terminal {
+		if !s.operatorTerminalReadyLocked(record) || record.operatorResult != output {
+			return nil, errors.New("Operator terminal delivery is stale")
+		}
+	} else if !s.operatorNoticeReadyLocked(record) || record.operatorResult != "" || record.operatorProgress != output {
+		return nil, errors.New("Operator notice delivery is stale")
 	}
 	nonce, err := appVoiceRandom()
 	if err != nil {
 		return nil, err
 	}
 	record.continuationNonce, record.continuationPending = nonce, true
-	if record.operatorResult != "" {
+	if terminal {
 		record.operatorDelivery, record.operatorAudioDone = true, false
 	} else {
 		// Coalesced progress is advisory. Once handed to the provider it is
@@ -340,16 +347,38 @@ func (b *appVoiceBridge) OperatorPlaybackFinished(responseID string, cleared boo
 	s.mu.Unlock()
 }
 func (s *appVoiceService) readyOperatorCompletionLocked(c voice.Correlation, record *appVoiceCapture) func(voice.Correlation, string, bool) {
-	if s.playbackPaused || s.userTurnActive || !record.terminal || record.continuationPending || record.operatorDelivery || record.operatorResult == "" {
+	if !s.operatorTerminalReadyLocked(record) {
 		return nil
 	}
 	return s.operatorCompletionSink
 }
 func (s *appVoiceService) readyOperatorNoticeLocked(record *appVoiceCapture) func(voice.Correlation, string, bool) {
-	if s.playbackPaused || record.operatorDelivery || record.operatorProgress == "" {
+	if !s.operatorNoticeReadyLocked(record) || record.operatorResult != "" {
 		return nil
 	}
 	return s.operatorCompletionSink
+}
+func (s *appVoiceService) operatorTerminalReadyLocked(record *appVoiceCapture) bool {
+	if s.playbackPaused || s.userTurnActive || !record.terminal || record.continuationPending || record.operatorDelivery || record.operatorResult == "" {
+		return false
+	}
+	for _, done := range record.calls {
+		if !done {
+			return false
+		}
+	}
+	return true
+}
+func (s *appVoiceService) operatorNoticeReadyLocked(record *appVoiceCapture) bool {
+	if s.playbackPaused || s.userTurnActive || !record.operatorPending || !record.terminal || record.continuationPending || record.operatorDelivery || record.operatorProgress == "" {
+		return false
+	}
+	for _, done := range record.calls {
+		if !done {
+			return false
+		}
+	}
+	return true
 }
 
 type appVoiceTurn struct {
@@ -471,6 +500,8 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 					for _, deferred := range b.service.captures {
 						if sink := b.service.readyOperatorCompletionLocked(deferred.operatorCorrelation, deferred); sink != nil {
 							go sink(deferred.operatorCorrelation, deferred.operatorResult, true)
+						} else if sink := b.service.readyOperatorNoticeLocked(deferred); sink != nil {
+							go sink(deferred.operatorCorrelation, deferred.operatorProgress, false)
 						}
 					}
 				}
@@ -480,6 +511,8 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 				b.service.releaseCaptureLocked(capture)
 				if sink := b.service.readyOperatorCompletionLocked(record.operatorCorrelation, record); sink != nil {
 					go sink(record.operatorCorrelation, record.operatorResult, true)
+				} else if sink := b.service.readyOperatorNoticeLocked(record); sink != nil {
+					go sink(record.operatorCorrelation, record.operatorProgress, false)
 				}
 			}
 		}

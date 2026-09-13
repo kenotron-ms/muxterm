@@ -722,7 +722,7 @@ func (s *Sideband) deliverAppCompletion(bridge AppOperatorBridge, correlation Co
 	if len(output) > 32768 {
 		output = output[:32768]
 	}
-	metadata, err := bridge.PrepareOperatorReply(correlation)
+	metadata, err := bridge.PrepareOperatorReply(correlation, output, terminal)
 	if err != nil {
 		return err
 	}

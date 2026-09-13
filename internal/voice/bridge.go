@@ -84,7 +84,7 @@ type AppOperatorBridge interface {
 	SubmitOperator(context.Context, Correlation, string) (TurnHandle, error)
 	ApproveOperator(Correlation, string, bool, string) error
 	CancelOperator(Correlation, string) error
-	PrepareOperatorReply(Correlation) (map[string]string, error)
+	PrepareOperatorReply(Correlation, string, bool) (map[string]string, error)
 	QueueOperatorCompletion(Correlation, string) error
 	RetainOperatorTerminal(Correlation, string)
 	QueueOperatorNotice(Correlation, string) error
