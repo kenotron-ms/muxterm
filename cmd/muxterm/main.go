@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,7 +22,6 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/deploy"
 	"github.com/kenotron-ms/muxterm/internal/mcp"
-	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
 	"github.com/kenotron-ms/muxterm/internal/server"
 	"github.com/kenotron-ms/muxterm/internal/service"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
@@ -143,10 +141,8 @@ func main() {
 			os.Exit(1)
 		}
 	case "missioncontrol-preview":
-		if err := runMissionControlPreview(cfg.Args); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
+		fmt.Fprintln(os.Stderr, "error: missioncontrol-preview is unsupported; use the shared Mission Control conversation")
+		os.Exit(1)
 	case "amplifier-install":
 		if err := runAmplifierBundleInstall(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -155,44 +151,6 @@ func main() {
 	case "version":
 		fmt.Printf("muxterm %s (MCP: stdio)\n", version)
 	}
-}
-
-// runMissionControlPreview is intentionally the sole CLI surface for this
-// preview. It has no apply/rollback command and never opens the writable
-// catalog Store.
-func runMissionControlPreview(args []string) error {
-	fs := flag.NewFlagSet("missioncontrol-preview", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
-	operation := fs.String("operation", "", "preview operation: migration or rollback (required)")
-	legacySessionID := fs.String("legacy-session-id", "", "explicit legacy SessionStore session ID")
-	legacyStoreDir := fs.String("legacy-store-dir", "", "absolute exact legacy SessionStore session directory")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stdout, "Usage: muxterm missioncontrol-preview --operation migration|rollback [--legacy-session-id ID --legacy-store-dir ABSOLUTE_SESSION_DIR]")
-		fmt.Fprintln(os.Stdout, "")
-		fmt.Fprintln(os.Stdout, "Read-only preview only: computes catalog and explicit legacy-source checksums.")
-		fmt.Fprintln(os.Stdout, "It never applies migration/rollback, opens a catalog writer, modifies config, or reads transcript content.")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("missioncontrol-preview accepts flags only")
-	}
-	if *operation != "migration" && *operation != "rollback" {
-		return fmt.Errorf("--operation must be migration or rollback")
-	}
-	preview, err := missioncontrol.PreviewMigration(missioncontrol.PreviewOptions{
-		Operation: *operation, CatalogPath: missioncontrol.DefaultPath(),
-		LegacySessionID: *legacySessionID, LegacyStoreDir: *legacyStoreDir,
-	})
-	if err != nil {
-		return err
-	}
-	return json.NewEncoder(os.Stdout).Encode(preview)
 }
 
 // runDoctor reports the status of the muxterm daemon and system service.

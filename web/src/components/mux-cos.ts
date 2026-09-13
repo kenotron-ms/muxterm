@@ -33,9 +33,8 @@
  * neighbours on every pointermove, and the whole right column jitters under
  * the hand that is dragging.
  *
- * PRESENTATIONAL over the conversation coordinator, read-only here: it picks
- * a legacy CosStore or the committed catalog thread. Session state belongs to
- * the Dashboard applet now, which
+ * PRESENTATIONAL over the conversation coordinator, read-only here: it renders
+ * the one persistent conversation. Session state belongs to the Dashboard applet now, which
  * subscribes to homeSessions itself and only while it is on screen. This file
  * imports no socket and parses no wire frame, and reports intent through
  * events only: `home-dismiss` (Esc) and `fleet-state` (the mobile sheet opened
@@ -59,13 +58,7 @@ import {
   type CosBlock,
   type CosTurn,
 } from '../lib/cos-store.js';
-import {
-  threadStore,
-  type ThreadAttention,
-  type ThreadContextOption,
-  type ThreadControlTarget,
-  type ThreadSummary,
-} from '../lib/thread-store.js';
+import { cosStore } from '../lib/cos-store.js';
 import { ASSISTANT_ALIAS, ASSISTANT_NAME } from '../lib/assistant-identity.js';
 import {
   clampDashboardSplit,
@@ -117,23 +110,8 @@ function clock(msLeft: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** A catalog observation timestamp, never a claim that remote work is fresh. */
-function observedAt(iso: string): string {
-  const value = Date.parse(iso);
-  return Number.isFinite(value) ? new Date(value).toLocaleString() : iso;
-}
-
-function compactText(text: string, limit = 280): string {
-  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
-}
-
 /** What the housekeeping menu offers. `days` is the cut, or 'all'. */
 type Housekeeping = 7 | 30 | 'all';
-type ThreadControlConfirmation = Readonly<{
-  action: 'reset' | 'archive';
-  target: ThreadControlTarget;
-}>;
-
 export type AppVoiceSubmitConfirmationOutcome = 'confirmed' | 'declined' | 'unavailable';
 
 interface AppVoiceSubmitConfirmation {
@@ -169,27 +147,21 @@ export class MuxCos extends LitElement {
   @state() private _version = 0;
 
   /**
-   * Draft ownership lives in threadStore so switching A -> B -> A restores
-   * the thread's own sentence rather than one component-global value.
+   * Draft ownership lives in the one persistent CosStore conversation.
    */
   private get _draft(): string {
-    return threadStore.draft;
+    return cosStore.draft;
   }
 
   private set _draft(value: string) {
-    threadStore.setDraft(value);
+    cosStore.setDraft(value);
+    this.requestUpdate();
   }
 
   @state() private _showThinking = new Set<string>();
   @state() private _menuOpen = false;
-  @state() private _contextOpen = false;
-  @state() private _contextCandidate = '';
   /** Which housekeeping action is awaiting a yes. null = none pending. */
   @state() private _confirm: Housekeeping | null = null;
-  /** Scoped reset/archive confirmation with its immutable selected target. */
-  @state() private _threadConfirm: ThreadControlConfirmation | null = null;
-  /** The exact scoped request in flight; also closes the pre-render double-click gap. */
-  @state() private _threadControlPending: ThreadControlConfirmation | null = null;
   @state() private _voice: VoiceState = voiceInputController.getState();
   @state() private _captureOwner: VoiceCaptureOwner = voiceCaptureArbiter.snapshot().owner;
   @state() private _dictationNotice = '';
@@ -226,8 +198,6 @@ export class MuxCos extends LitElement {
   private _unsubCaptureOwner: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
   private _unsubVoiceError: (() => void) | null = null;
-  private _unsubSelectionWillChange: (() => void) | null = null;
-  private _unsubSelectionSettled: (() => void) | null = null;
   private _ticker: ReturnType<typeof setInterval> | undefined;
 
   /** False once the reader scrolls up: streaming must not yank them back down. */
@@ -243,7 +213,6 @@ export class MuxCos extends LitElement {
   private _chatDictationActive = false;
   /** Immutable capture identity used to reject late A results while B is visible. */
   private _chatDictationCapture: ComposerDictationCapture | null = null;
-  private _userSelectionPending = false;
   private _activeApplet: AppletId | '' = '';
   private _voiceAppletOperationId = '';
   private _appletOperationWaiter:
@@ -434,151 +403,6 @@ export class MuxCos extends LitElement {
       color: var(--ink-1);
       flex: none;
     }
-    .context {
-      position: relative;
-      display: flex;
-      align-items: center;
-      gap: var(--s-3);
-      min-width: 0;
-      flex: 0 1 auto;
-    }
-    .context-trigger {
-      display: inline-flex;
-      align-items: center;
-      gap: var(--s-2);
-      min-width: 0;
-      max-width: min(42vw, 390px);
-      font: inherit;
-      font-family: var(--mono);
-      font-size: var(--t-meta);
-      line-height: 1;
-      color: var(--ink-2);
-      background: var(--surface);
-      border: 1px solid var(--edge);
-      border-radius: var(--r-ctl);
-      padding: 6px var(--s-3);
-      cursor: pointer;
-    }
-    .context-trigger:hover,
-    .context-trigger[aria-expanded='true'] {
-      color: var(--ink-1);
-      border-color: var(--chrome-accent);
-    }
-    .context-label {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .context-badge,
-    .context-row-badge {
-      flex: none;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--need);
-    }
-    .context-status {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-family: var(--mono);
-      font-size: var(--t-meta);
-      color: var(--ink-3);
-    }
-    .context-menu {
-      position: absolute;
-      top: calc(100% + 6px);
-      left: 0;
-      z-index: 31;
-      width: min(360px, calc(100vw - var(--s-7) - var(--s-6)));
-      padding: var(--s-3);
-      background: var(--surface);
-      border: 1px solid var(--edge);
-      border-radius: var(--r-card);
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
-    }
-    .context-heading,
-    .context-empty {
-      padding: var(--s-3) var(--s-4);
-      font-family: var(--mono);
-      font-size: var(--t-meta);
-      line-height: var(--lh-tight);
-      color: var(--ink-3);
-    }
-    .context-list {
-      max-height: min(48vh, 320px);
-      margin: 0;
-      padding: 0;
-      overflow-y: auto;
-      list-style: none;
-    }
-    .context-option {
-      display: flex;
-      width: 100%;
-      align-items: flex-start;
-      gap: var(--s-3);
-      padding: 8px var(--s-4);
-      color: var(--ink-2);
-      background: transparent;
-      border: 0;
-      border-radius: var(--r-ctl);
-      font: inherit;
-      text-align: left;
-      cursor: pointer;
-    }
-    .context-option:hover,
-    .context-option[aria-pressed='true'] {
-      color: var(--ink-1);
-      background: var(--chrome-hover);
-    }
-    .context-option-main {
-      min-width: 0;
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: var(--s-2);
-    }
-    .context-option-name {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-family: var(--mono);
-      font-size: var(--t-ui);
-    }
-    .context-option-detail {
-      font-size: var(--t-meta);
-      line-height: var(--lh-tight);
-      color: var(--ink-3);
-      overflow-wrap: anywhere;
-    }
-    .context-option-detail.refused {
-      color: var(--fail);
-    }
-    .context-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: var(--s-3);
-      margin-top: var(--s-3);
-      padding: var(--s-3) var(--s-1) 0;
-      border-top: 1px solid var(--edge);
-    }
-    .context-talk {
-      font: inherit;
-      font-size: var(--t-ui);
-      font-weight: 600;
-      line-height: 1;
-      padding: 7px 11px;
-      border: 1px solid color-mix(in srgb, var(--ok) 55%, transparent);
-      border-radius: var(--r-ctl);
-      color: var(--ink-1);
-      background: color-mix(in srgb, var(--ok) 20%, var(--surface));
-      cursor: pointer;
-    }
-    .context-talk[disabled] {
-      opacity: 0.5;
-      cursor: default;
-    }
     .spacer {
       flex: 1;
       min-width: 0;
@@ -611,9 +435,6 @@ export class MuxCos extends LitElement {
     }
 
     .dots:focus-visible,
-    .context-trigger:focus-visible,
-    .context-option:focus-visible,
-    .context-talk:focus-visible,
     .btn:focus-visible,
     .cbtn:focus-visible {
       outline: 2px solid var(--chrome-accent);
@@ -933,13 +754,6 @@ export class MuxCos extends LitElement {
       white-space: nowrap;
       opacity: 0.75;
     }
-    .tool .ms {
-      margin-left: auto;
-      padding-left: var(--s-4);
-      flex: none;
-      opacity: 0.7;
-      font-variant-numeric: tabular-nums;
-    }
 
     /* -- THINKING --------------------------------------------------------- */
     .think {
@@ -1097,24 +911,10 @@ export class MuxCos extends LitElement {
       color: var(--ink-3);
       font-variant-numeric: tabular-nums;
     }
-    .foot .cost {
-      margin-left: auto;
-    }
     .notice {
       font-size: var(--t-ui);
       color: var(--ink-3);
       border-left: 2px solid var(--edge);
-      padding-left: var(--s-5);
-    }
-    .thread-unread {
-      display: flex;
-      align-items: center;
-      gap: var(--s-3);
-      font-family: var(--mono);
-      font-size: var(--t-meta);
-      line-height: var(--lh-tight);
-      color: var(--ink-3);
-      border-left: 2px solid var(--need);
       padding-left: var(--s-5);
     }
     .fatal {
@@ -1215,8 +1015,7 @@ export class MuxCos extends LitElement {
       gap: var(--s-3);
       justify-content: flex-end;
     }
-    .threaded-voice,
-    .threaded-status {
+    .dictation-status {
       min-width: 0;
       margin-right: auto;
       overflow: hidden;
@@ -1226,25 +1025,6 @@ export class MuxCos extends LitElement {
       font-size: var(--t-meta);
       line-height: 1.3;
       color: var(--ink-3);
-    }
-    .threaded-voice {
-      color: var(--need);
-    }
-    .threaded-release {
-      font: inherit;
-      font-family: var(--mono);
-      font-size: var(--t-meta);
-      line-height: 1;
-      color: var(--ink-2);
-      background: transparent;
-      border: 0;
-      padding: var(--s-2) var(--s-3);
-      border-radius: var(--r-chip);
-      cursor: pointer;
-    }
-    .threaded-release:hover {
-      color: var(--ink-1);
-      background: var(--chrome-hover);
     }
     .cbtn {
       width: 30px;
@@ -1451,11 +1231,10 @@ export class MuxCos extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener('mousedown', this._onOutsideClick);
-    this._unsub = threadStore.subscribe(() => {
-      this._settleThreadControlPending();
+    this._unsub = cosStore.subscribe(() => {
+      this._syncTicker();
       this._version++;
     });
-    this._settleThreadControlPending();
     // Session state is the Dashboard APPLET's subscription now. It is held
     // while that applet is CONNECTED rather than while it is on screen, so an
     // unseen tab can still notice a lane going blocked; the argument for that
@@ -1478,23 +1257,7 @@ export class MuxCos extends LitElement {
     this._unsubVoiceError = voiceInputController.onError((message) => {
       this._dictationNotice = message;
     });
-    this._unsubSelectionWillChange = threadStore.onSelectionWillChange((from, to) => {
-      const capture = this._chatDictationCapture;
-      if (capture && capture.channelId === from && from !== to) {
-        voiceInputController.invalidateComposerChannel(from);
-      }
-    });
-    this._unsubSelectionSettled = threadStore.onSelectionSettled(() => {
-      if (!this._userSelectionPending) return;
-      this._userSelectionPending = false;
-      this.dispatchEvent(new CustomEvent('app-voice-observation', { bubbles: true, composed: true }));
-    });
-    // One second is the whole resolution of an mm:ss countdown, and the
-    // ticker only runs while something is counting: an idle Dashboard costs
-    // no timer.
-    this._ticker = setInterval(() => {
-      if (threadStore.approvals.length > 0) this._version++;
-    }, 1000);
+    this._syncTicker();
     this.style.setProperty('--chat-w', `${this._split}%`);
   }
 
@@ -1510,10 +1273,6 @@ export class MuxCos extends LitElement {
     this._unsubTranscript = null;
     this._unsubVoiceError?.();
     this._unsubVoiceError = null;
-    this._unsubSelectionWillChange?.();
-    this._unsubSelectionWillChange = null;
-    this._unsubSelectionSettled?.();
-    this._unsubSelectionSettled = null;
     if (this._ticker !== undefined) clearInterval(this._ticker);
     this._ticker = undefined;
     // Only OUR session. An unconditional abort here would kill a dictation
@@ -1523,7 +1282,6 @@ export class MuxCos extends LitElement {
     }
     this._chatDictationActive = false;
     this._chatDictationCapture = null;
-    this._userSelectionPending = false;
     this._settleAppVoiceConfirmation('unavailable');
     this._settleAppletOperationWaiter(false);
     // NO DRAG MAY OUTLIVE THE DETACH. This element is parked by cache(), not
@@ -1537,6 +1295,25 @@ export class MuxCos extends LitElement {
     // had just chosen.
     persistDashboardSplit(this._split);
     super.disconnectedCallback();
+  }
+
+  private _syncTicker(): void {
+    if (cosStore.approvals.length > 0) {
+      if (this._ticker === undefined) {
+        this._ticker = setInterval(() => {
+          if (cosStore.approvals.length > 0) this._version++;
+          else {
+            clearInterval(this._ticker);
+            this._ticker = undefined;
+          }
+        }, 1000);
+      }
+      return;
+    }
+    if (this._ticker !== undefined) {
+      clearInterval(this._ticker);
+      this._ticker = undefined;
+    }
   }
 
   /** Cancel any drag in progress and leave no half-dragged DOM behind. */
@@ -1827,7 +1604,6 @@ export class MuxCos extends LitElement {
         <h1
           title="Mission Control — you're talking with ${ASSISTANT_NAME}. Nickname: ${ASSISTANT_ALIAS}."
         >Mission Control</h1>
-        ${threadStore.threaded ? this._renderContextSelector() : nothing}
         <span class="spacer"></span>
         <div class="topbar-actions">
           <mux-voice-mode-button></mux-voice-mode-button>
@@ -1849,337 +1625,45 @@ export class MuxCos extends LitElement {
    * asks for a second, explicit Talk here action before it transmits a select
    * request; terminal/workspace navigation never reaches this path.
    */
-  private _renderContextSelector(): TemplateResult {
-    const options = threadStore.contexts;
-    const candidate = options.find((option) => option.key === this._contextCandidate);
-    const status = threadStore.contextStatus;
-    return html`
-      <div class="context">
-        <button
-          class="context-trigger"
-          type="button"
-          data-thread-context-selector
-          aria-label="Conversation context: ${threadStore.contextLabel}${threadStore.hasUnread ? ', unread updates' : ''}"
-          aria-expanded="${this._contextOpen ? 'true' : 'false'}"
-          aria-controls="thread-context-menu"
-          @click="${this._toggleContext}"
-        >
-          <span class="context-label">Context: ${threadStore.contextLabel}</span>
-          ${threadStore.hasUnread
-            ? html`<span class="context-badge" aria-hidden="true"></span>`
-            : nothing}
-          ${icon(ChevronDown, { size: 12 })}
-        </button>
-        ${status
-          ? html`<span class="context-status" data-thread-context-status role="status">${status}</span>`
-          : nothing}
-        ${this._contextOpen
-          ? html`
-              <div
-                class="context-menu"
-                id="thread-context-menu"
-                data-thread-context-menu
-                role="dialog"
-                aria-label="Choose conversation context"
-                @keydown="${this._onContextListKey}"
-              >
-                <div class="context-heading">Choose a context, then talk there.</div>
-                ${options.length > 0
-                  ? html`
-                      <ul class="context-list" aria-label="Conversation contexts">
-                        ${options.map((option) => this._renderContextOption(option))}
-                      </ul>
-                    `
-                  : html`<div class="context-empty" role="status">Loading real contexts…</div>`}
-                <div class="context-actions">
-                  <button
-                    class="context-talk"
-                    type="button"
-                    data-thread-talk-here
-                    ?disabled="${!candidate || !threadStore.canSelect}"
-                    @click="${this._talkHere}"
-                  >Talk here</button>
-                </div>
-              </div>
-            `
-          : nothing}
-      </div>
-    `;
-  }
-
-  private _renderContextOption(option: ThreadContextOption): TemplateResult {
-    const selected = option.key === this._contextCandidate;
-    const detail = option.detail;
-    return html`
-      <li>
-        <button
-          class="context-option"
-          type="button"
-          data-thread-context-option="${option.key}"
-          aria-pressed="${selected ? 'true' : 'false'}"
-          aria-current="${option.threadId !== '' && option.threadId === threadStore.selectedThreadId ? 'true' : 'false'}"
-          aria-label="${option.unread ? `${option.label}, unread updates` : option.label}"
-          @click="${() => {
-            this._contextCandidate = option.key;
-          }}"
-        >
-          <span class="context-option-main">
-            <span class="context-option-name">${option.label}</span>
-            ${detail
-              ? html`<span class="context-option-detail ${option.refused ? 'refused' : ''}">${detail}</span>`
-              : nothing}
-          </span>
-          ${option.unread ? html`<span class="context-row-badge" aria-hidden="true"></span>` : nothing}
-        </button>
-      </li>
-    `;
-  }
-
-  /**
-   * Housekeeping. No counts -- see the file header -- so the items say what
-   * they will do and the confirm says what it costs, and neither offers a
-   * number to weigh the decision against.
-   */
   private _renderMenu(): TemplateResult {
-    if (threadStore.threaded) {
-      const noScopedControls =
-        !threadStore.resetAvailable &&
-        !threadStore.archiveAvailable &&
-        !(threadStore.archiveSupported && threadStore.controlTarget?.kind === 'lobby');
-      return html`
-        <div class="menu" role="menu">
-          ${threadStore.resetAvailable
-            ? html`
-                <button
-                  type="button"
-                  role="menuitem"
-                  data-thread-reset
-                  @click="${() => this._askThreadControl('reset')}"
-                >Reset this context</button>
-              `
-            : nothing}
-          ${threadStore.archiveAvailable
-            ? html`
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="danger"
-                  data-thread-archive
-                  @click="${() => this._askThreadControl('archive')}"
-                >Archive this context</button>
-              `
-            : nothing}
-          ${threadStore.archiveSupported && threadStore.controlTarget?.kind === 'lobby'
-            ? html`<button type="button" role="menuitem" disabled>Lobby cannot be archived</button>`
-            : nothing}
-          ${noScopedControls
-            ? html`<button type="button" role="menuitem" disabled>
-                Thread controls are unavailable in text preview
-              </button>`
-            : nothing}
-          <button
-            type="button"
-            role="menuitem"
-            data-thread-migration-preview
-            ?disabled="${threadStore.migrationPreviewPending}"
-            @click="${this._previewMigration}"
-          >${threadStore.migrationPreviewPending
-            ? 'Opening migration preview…'
-            : 'Preview catalog migration / rollback'}</button>
-          <button type="button" role="menuitem" disabled>
-            Clear messages is unavailable in text preview
-          </button>
-        </div>
-      `;
-    }
-    const any = threadStore.hasMessages;
+    const any = cosStore.hasMessages;
     return html`
       <div class="menu" role="menu">
-        <button
-          type="button"
-          role="menuitem"
-          ?disabled="${!any}"
-          @click="${() => this._ask(7)}"
-        >Clear messages older than 7 days</button>
-        <button
-          type="button"
-          role="menuitem"
-          ?disabled="${!any}"
-          @click="${() => this._ask(30)}"
-        >Clear messages older than 30 days</button>
+        <button type="button" role="menuitem" ?disabled="${!any}" @click="${() => this._ask(7)}">Clear messages older than 7 days</button>
+        <button type="button" role="menuitem" ?disabled="${!any}" @click="${() => this._ask(30)}">Clear messages older than 30 days</button>
         <div class="msep"></div>
-        <button
-          type="button"
-          role="menuitem"
-          class="danger"
-          ?disabled="${!any}"
-          @click="${() => this._ask('all')}"
-        >Clear all messages</button>
+        <button type="button" role="menuitem" class="danger" ?disabled="${!any}" @click="${() => this._ask('all')}">Clear all messages</button>
       </div>
     `;
   }
 
   private _renderThread(): TemplateResult {
-    const turns = threadStore.turns;
-    const fault = threadStore.fault;
+    const turns = cosStore.turns;
+    const fault = cosStore.fault;
     return html`
-      ${this._renderAttentionNotice()}
-      ${this._renderLobbySummaries()}
-      ${turns.length === 0 && !this._confirm && !this._threadConfirm ? this._renderZero() : nothing}
+      ${turns.length === 0 && !this._confirm ? this._renderZero() : nothing}
       ${turns.map((t) => this._renderTurn(t))}
-      ${this._renderRootState()}
-      ${threadStore.threaded && threadStore.hasUnread
-        ? html`
-            <div class="thread-unread" data-thread-unread role="status">
-              Updates are waiting in another context. Open Context to choose where to talk.
-            </div>
-          `
-        : nothing}
       ${fault && fault.fatal
         ? html`<div class="fatal" role="alert">${fault.message}</div>`
         : nothing}
       ${fault && !fault.fatal ? html`<div class="notice">${fault.message}</div>` : nothing}
-      ${threadStore.threaded && this._threadConfirm !== null
-        ? this._renderThreadConfirm(this._threadConfirm)
-        : nothing}
       ${this._appVoiceConfirmation ? this._renderAppVoiceConfirmation(this._appVoiceConfirmation) : nothing}
-      ${!threadStore.threaded && this._confirm !== null ? this._renderConfirm(this._confirm) : nothing}
-    `;
-  }
-
-  /**
-   * One durable item at a time: dismissal reveals the next catalog item. No
-   * incoming record opens a context, Viewer, microphone, or approval prompt.
-   */
-  private _renderAttentionNotice(): TemplateResult | typeof nothing {
-    const attention = threadStore.attention[0];
-    if (!attention) return nothing;
-    return html`
-      <div class="notice" data-thread-attention="${attention.id}" aria-label="Queued attention">
-        <div><strong>Attention queued</strong></div>
-        <div>
-          From ${attention.label} · observed
-          <time datetime="${attention.observedAt}" title="${attention.observedAt}"
-            >${observedAt(attention.observedAt)}</time
-          >
-        </div>
-        <div>${attention.reason}</div>
-        ${attention.canViewDetail
-          ? nothing
-          : html`<div>${attention.detailUnavailable}</div>`}
-        <div class="row">
-          <button
-            class="btn pri"
-            type="button"
-            data-thread-attention-view="${attention.id}"
-            title="${attention.canViewDetail ? 'Open a read-only Viewer detail for this context' : attention.detailUnavailable}"
-            ?disabled="${!attention.canViewDetail || attention.detailPending}"
-            @click="${() => threadStore.viewAttentionDetail(attention.id)}"
-          >${attention.detailPending ? 'opening detail…' : 'View detail'}</button>
-          <button
-            class="btn no"
-            type="button"
-            data-thread-attention-talk="${attention.id}"
-            ?disabled="${!threadStore.canSelect}"
-            @click="${() => this._talkAttention(attention)}"
-          >Talk here</button>
-          <button
-            class="btn no"
-            type="button"
-            data-thread-attention-dismiss="${attention.id}"
-            ?disabled="${attention.acknowledging}"
-            @click="${() => threadStore.acknowledgeAttention(attention.id)}"
-          >${attention.acknowledging ? 'dismissing…' : 'Dismiss'}</button>
-        </div>
-      </div>
-    `;
-  }
-
-  /** Bounded terminal extracts are context, not a claim that remote work is current. */
-  private _renderLobbySummaries(): TemplateResult | typeof nothing {
-    const summaries = threadStore.lobbySummaries;
-    if (summaries.length === 0) return nothing;
-    return html`
-      <div class="notice" data-thread-summaries aria-label="Completed work extracts">
-        <div><strong>Completed-work extracts</strong></div>
-        <div>Bounded provenance records; observed time is not a freshness claim.</div>
-        ${summaries.map((summary) => this._renderSummary(summary))}
-      </div>
-    `;
-  }
-
-  private _renderSummary(summary: ThreadSummary): TemplateResult {
-    return html`
-      <div data-thread-summary="${summary.id}">
-        <div>
-          ${summary.label} · observed
-          <time datetime="${summary.observedAt}" title="${summary.observedAt}"
-            >${observedAt(summary.observedAt)}</time
-          >
-          · extract${summary.truncated ? ' (display truncated)' : ''}
-        </div>
-        <div>${summary.text}</div>
-      </div>
-    `;
-  }
-
-  /** Per-root tool snapshots stay inside the transcript; they are not a dashboard. */
-  private _renderRootState(): TemplateResult | typeof nothing {
-    const root = threadStore.rootState;
-    if (!root) return nothing;
-    return html`
-      <div class="notice" data-thread-root-state aria-label="Context tracking state">
-        <div><strong>Context tracking</strong></div>
-        ${root.goal
-          ? html`<div title="${root.goal}">Goal: ${compactText(root.goal)}</div>`
-          : nothing}
-        ${root.goal ? html`<div>Goal tracking only; autonomous scheduling is unavailable.</div>` : nothing}
-        ${root.todos.length > 0
-          ? html`
-              <div>Todo:</div>
-              ${root.todos.map(
-                (todo) => html`<div data-thread-todo-status="${todo.status}">
-                  [${todo.status}] ${compactText(todo.activeForm || todo.content, 200)}
-                </div>`,
-              )}
-            `
-          : nothing}
-      </div>
+      ${this._confirm !== null ? this._renderConfirm(this._confirm) : nothing}
     `;
   }
 
   private _renderZero(): TemplateResult {
-    if (threadStore.negotiating) {
-      return html`
-        <div class="zero">
-          <div class="lede">Connecting to ${ASSISTANT_NAME}…</div>
-          <p class="sub">Checking whether this server offers real text-thread contexts.</p>
-        </div>
-      `;
-    }
-    if (threadStore.threaded && threadStore.selectionPending) {
-      return html`
-        <div class="zero">
-          <div class="lede">Opening context…</div>
-          <p class="sub">Waiting for the server's authoritative history and draft reference.</p>
-        </div>
-      `;
-    }
     return html`
       <div class="zero">
         <div class="lede">What needs you?</div>
-        <p class="sub">
-          Describe a problem and ${ASSISTANT_NAME} splits it, routes it, and
-          starts the lanes. What it starts shows up on the right.
-        </p>
+        <p class="sub">Describe a problem and ${ASSISTANT_NAME} will help.</p>
       </div>
     `;
   }
 
   private _renderTurn(t: CosTurn): TemplateResult {
-    const asks = threadStore.approvals.filter((a) => a.turnId === t.id);
+    const asks = cosStore.approvals.filter((a) => a.turnId === t.id);
     const live = t.status === 'pending' || t.status === 'streaming';
-    const cancelling = threadStore.threaded && threadStore.isControlPending('cancel', t.id);
     return html`
       ${t.prompt
         ? html`<div class="turn you">
@@ -2194,17 +1678,6 @@ export class MuxCos extends LitElement {
           ${live && t.blocks.length === 0
             ? html`<div class="waiting">working...</div>`
             : nothing}
-          ${threadStore.threaded && (threadStore.canCancel(t.id) || cancelling)
-            ? html`
-                <button
-                  class="btn no"
-                  type="button"
-                  data-thread-cancel="${t.id}"
-                  ?disabled="${cancelling}"
-                  @click="${() => threadStore.cancel(t.id)}"
-                >${cancelling ? 'stopping…' : 'stop this turn'}</button>
-              `
-            : nothing}
           <!--
             A turn CAN legitimately end with no reply: the loop stops after a
             tool result and the model never speaks again, so turn_end carries
@@ -2217,9 +1690,7 @@ export class MuxCos extends LitElement {
           ${!live && t.status === 'done' && !t.blocks.some((b) => b.kind === 'text')
             ? html`<div class="waiting">ended without a reply</div>`
             : nothing}
-          ${threadStore.threaded && asks.length > 0 && !threadStore.approvalAvailable
-            ? html`<div class="notice">Approvals are unavailable in text preview.</div>`
-            : asks.map((a) => this._renderAsk(a))}
+          ${asks.map((a) => this._renderAsk(a))}
           ${t.notices.map((n) => html`<div class="notice">${n}</div>`)}
           ${this._renderFoot(t)}
         </div>
@@ -2248,13 +1719,11 @@ export class MuxCos extends LitElement {
       `;
     }
     const cls = b.done && !b.ok ? 'tool fail' : 'tool';
-    const right = b.done ? (b.ms > 0 ? `${b.ms}ms` : b.ok ? 'ok' : 'failed') : '...';
     return html`
       <div class="${cls}" title="${b.summary || b.name}">
         <span class="ok">${b.done ? (b.ok ? '\u2713' : '\u2717') : '\u00b7'}</span>
         <span class="tname">${shortToolName(b.name) || 'tool'}</span>
         <span class="targs">${b.summary && b.done ? b.summary : b.args}</span>
-        <span class="ms">${right}</span>
       </div>
     `;
   }
@@ -2267,8 +1736,8 @@ export class MuxCos extends LitElement {
   private _renderAsk(a: CosApproval): TemplateResult {
     const left = a.deadline - Date.now();
     const settled = a.answered !== '';
-    const pending = threadStore.threaded && threadStore.isControlPending('approval', a.requestId);
-    const enabled = !threadStore.threaded || threadStore.canAnswer(a.turnId, a.requestId);
+    const pending = a.answered !== '';
+    const enabled = cosStore.canAnswer(a.turnId, a.requestId);
     return html`
       <div class="ask ${settled ? 'settled' : ''}" role="alertdialog" aria-label="Approval requested">
         <div class="h">
@@ -2285,14 +1754,14 @@ export class MuxCos extends LitElement {
                   type="button"
                   data-thread-approval="approve:${a.turnId}:${a.requestId}"
                   ?disabled="${pending || !enabled}"
-                  @click="${() => threadStore.answer(a.turnId, a.requestId, true)}"
+                  @click="${() => cosStore.answer(a.requestId, true)}"
                 >${pending ? 'sending…' : 'approve'}</button>
                 <button
                   class="btn no"
                   type="button"
                   data-thread-approval="deny:${a.turnId}:${a.requestId}"
                   ?disabled="${pending || !enabled}"
-                  @click="${() => threadStore.answer(a.turnId, a.requestId, false)}"
+                  @click="${() => cosStore.answer(a.requestId, false)}"
                 >deny</button>
                 <span class="clock ${left < 30000 ? 'soon' : ''}">${clock(left)} left</span>
               `}
@@ -2306,12 +1775,10 @@ export class MuxCos extends LitElement {
     const bits: string[] = [];
     if (t.status === 'cancelled') bits.push('cancelled');
     if (t.status === 'failed') bits.push(t.error || 'failed');
-    if (t.ms > 0) bits.push(`${(t.ms / 1000).toFixed(1)}s`);
-    if (bits.length === 0 && !t.costUsd) return nothing;
+    if (bits.length === 0) return nothing;
     return html`
       <div class="foot">
         <span>${bits.join(' \u00b7 ')}</span>
-        ${t.costUsd ? html`<span class="cost">$${t.costUsd}</span>` : nothing}
       </div>
     `;
   }
@@ -2356,45 +1823,6 @@ export class MuxCos extends LitElement {
     `;
   }
 
-  /** One scoped destructive control, shown with the exact target before send. */
-  private _renderThreadConfirm(confirm: ThreadControlConfirmation): TemplateResult {
-    const pending = this._threadControlPending !== null;
-    const resetting = confirm.action === 'reset';
-    const head = resetting
-      ? `Reset ${confirm.target.label}?`
-      : `Archive ${confirm.target.label}?`;
-    const detail = resetting
-      ? 'This resets only this conversation context. It does not change terminals, workspaces, lanes, or applets. Its current draft binding is cleared and you must explicitly select the new generation.'
-      : 'This archives only this conversation context. It does not change terminals, workspaces, lanes, or applets. Its history remains an immutable reference.';
-    return html`
-      <div class="turn">
-        <div class="who"></div>
-        <div class="bd">
-          <div class="confirm" role="alertdialog" aria-label="${head}">
-            <div class="h">${icon(TriangleAlert, { size: 13 })} ${head}</div>
-            <p class="d">${detail}</p>
-            <div class="row">
-              <button
-                class="btn danger"
-                type="button"
-                data-thread-confirm="${confirm.action}:${confirm.target.threadId}:${confirm.target.generation}"
-                ?disabled="${pending}"
-                @click="${() => this._doThreadControl(confirm)}"
-              >${resetting ? 'Reset this context' : 'Archive this context'}</button>
-              <button
-                class="btn no"
-                type="button"
-                @click="${() => {
-                  this._threadConfirm = null;
-                }}"
-              >Cancel</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
   private _renderAppVoiceConfirmation(confirm: AppVoiceSubmitConfirmation): TemplateResult {
     return html`
       <div class="turn" data-app-voice-submit-confirmation>
@@ -2427,25 +1855,15 @@ export class MuxCos extends LitElement {
 
   /**
    * App voice is controlled by the persistent root bubble. The text composer
-   * and its context selector stay mounted for every app voice state.
+   * stays mounted for every app voice state.
    */
   private _renderComposer(): TemplateResult {
-    const threaded = threadStore.threaded;
-    const negotiating = threadStore.negotiating;
-    const ready = this._draft.trim().length > 0 && (!threaded || threadStore.inputEnabled);
-    const locked = negotiating || (threaded && !threadStore.inputEnabled);
+    const negotiating = cosStore.negotiating;
+    const busy = cosStore.busy;
+    const admissionPending = cosStore.admissionPending;
+    const ready = this._draft.trim().length > 0 && cosStore.inputEnabled;
+    const locked = negotiating || !cosStore.inputEnabled;
     const listening = !negotiating && this._voice === 'listening';
-    const busy = threadStore.busy;
-    const last = threadStore.turns[threadStore.turns.length - 1];
-    const notice = threadStore.composerNotice;
-    const storageNotice = threadStore.storageNotice;
-    const placeholder = threaded
-      ? threadStore.selectionPending
-        ? 'waiting for context…'
-        : 'message this context…'
-      : negotiating
-        ? 'checking text threads…'
-        : 'describe a problem…';
     return html`
       <div class="comp">
         <div class="cbox ${listening ? 'live' : ''}">
@@ -2455,39 +1873,18 @@ export class MuxCos extends LitElement {
             rows="1"
             autocomplete="off"
             spellcheck="false"
-            placeholder="${placeholder}"
-            aria-label="${threaded ? 'Message the selected conversation context' : 'Describe a problem'}"
+            placeholder="Message Mission Control…"
+            aria-label="Message Mission Control"
             ?disabled="${locked}"
             .value="${this._draft}"
             @input="${this._onDraft}"
             @keydown="${this._onKey}"
           ></textarea>
           <div class="crow">
-            ${notice
-              ? html`<span class="threaded-status" data-thread-composer-status role="status">${notice}</span>`
-              : nothing}
             ${this._dictationNotice
-              ? html`<span class="threaded-status" data-voice-dictation-status role="status">${this._dictationNotice}</span>`
+              ? html`<span class="dictation-status" data-voice-dictation-status role="status">${this._dictationNotice}</span>`
               : nothing}
-            ${storageNotice ? html`<span class="threaded-status" role="status">${storageNotice}</span>` : nothing}
-            ${threaded && threadStore.hasUncertainTurn
-              ? html`
-                  <button
-                    class="threaded-release"
-                    type="button"
-                    data-thread-release-uncertain
-                    @click="${this._releaseUncertainDraft}"
-                  >Enable a new send</button>
-                `
-              : nothing}
-            ${!threaded && !negotiating && busy && last
-              ? html`<button
-                  class="btn no"
-                  type="button"
-                  @click="${() => threadStore.cancel(last.id)}"
-                >stop</button>`
-              : nothing}
-            ${!negotiating && threadStore.composerIdentity.channelId !== 'none' && voiceInputController.isSupported()
+            ${!negotiating && cosStore.composerIdentity.channelId !== 'none' && voiceInputController.isSupported()
               ? html`<button
                   class="cbtn ${listening ? 'rec' : ''}"
                   type="button"
@@ -2498,15 +1895,13 @@ export class MuxCos extends LitElement {
                   @click="${this._toggleVoice}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
-            ${negotiating || ready
-              ? html`<button
-                  class="cbtn send"
-                  type="button"
-                  aria-label="Send"
-                  ?disabled="${!ready}"
-                  @click="${this._submit}"
-                >${icon(ArrowUp, { size: 15 })}</button>`
-              : nothing}
+            <button
+              class="cbtn send"
+              type="button"
+              aria-label="${busy ? 'Stop generating' : admissionPending ? 'Sending' : 'Send'}"
+              ?disabled="${!busy && (negotiating || admissionPending || !ready)}"
+              @click="${busy ? this._stopGeneration : this._submit}"
+            >${icon(busy ? Square : ArrowUp, { size: 15 })}</button>
           </div>
         </div>
       </div>
@@ -2627,63 +2022,9 @@ export class MuxCos extends LitElement {
   // Intent
   // -------------------------------------------------------------------------
 
-  private _toggleContext = (e: Event): void => {
-    e.stopPropagation();
-    if (!threadStore.threaded) return;
-    this._contextOpen = !this._contextOpen;
-    this._menuOpen = false;
-    if (!this._contextOpen) return;
-    const options = threadStore.contexts;
-    const current = options.find((option) => option.threadId === threadStore.selectedThreadId);
-    this._contextCandidate = current?.key ?? options[0]?.key ?? '';
-    void this.updateComplete.then(() => {
-      this.renderRoot.querySelector<HTMLButtonElement>('.context-option')?.focus();
-    });
-  };
-
-  private _talkHere = (): void => {
-    const option = threadStore.contexts.find((item) => item.key === this._contextCandidate);
-    if (!option) return;
-    this._userSelectionPending = true;
-    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
-    if (!threadStore.select(option.target)) {
-      this._userSelectionPending = false;
-      return;
-    }
-    this._contextOpen = false;
-    this._threadConfirm = null;
-    this._pinned = true;
-  };
-
-  private _onContextListKey = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      this._contextOpen = false;
-      this.renderRoot.querySelector<HTMLButtonElement>('.context-trigger')?.focus();
-      return;
-    }
-    let delta = 0;
-    if (e.key === 'ArrowDown') delta = 1;
-    else if (e.key === 'ArrowUp') delta = -1;
-    else if (e.key === 'Home') delta = -Infinity;
-    else if (e.key === 'End') delta = Infinity;
-    else return;
-    const choices = [
-      ...this.renderRoot.querySelectorAll<HTMLButtonElement>('.context-option'),
-    ];
-    if (choices.length === 0) return;
-    e.preventDefault();
-    const from = e.target instanceof Element ? e.target.closest<HTMLButtonElement>('.context-option') : null;
-    const at = from ? choices.indexOf(from) : 0;
-    const next =
-      delta === -Infinity ? 0 : delta === Infinity ? choices.length - 1 : (at + delta + choices.length) % choices.length;
-    choices[next]?.focus();
-  };
-
   private _toggleMenu = (e: Event): void => {
     e.stopPropagation();
     this._menuOpen = !this._menuOpen;
-    this._contextOpen = false;
   };
 
   /**
@@ -2703,7 +2044,7 @@ export class MuxCos extends LitElement {
    * of re-opening what this had just closed.
    */
   private _onOutsideClick = (e: MouseEvent): void => {
-    if (!this._menuOpen && !this._contextOpen) return;
+    if (!this._menuOpen) return;
     const path = e.composedPath();
     const pressed = (sel: string): boolean => {
       const el = this.renderRoot.querySelector(sel);
@@ -2711,18 +2052,14 @@ export class MuxCos extends LitElement {
     };
     if (
       pressed('.menu') ||
-      pressed('.dots') ||
-      pressed('.context-menu') ||
-      pressed('.context-trigger')
+      pressed('.dots')
     ) {
       return;
     }
     this._menuOpen = false;
-    this._contextOpen = false;
   };
 
   private _ask(which: Housekeeping): void {
-    if (threadStore.threaded) return;
     this._menuOpen = false;
     this._confirm = which;
     this._pinned = true;
@@ -2732,55 +2069,7 @@ export class MuxCos extends LitElement {
     const which = this._confirm;
     this._confirm = null;
     if (which === null) return;
-    threadStore.clear(which);
-  };
-
-  private _askThreadControl(action: 'reset' | 'archive'): void {
-    const target = threadStore.controlTarget;
-    if (!target) return;
-    if (action === 'reset' && !threadStore.resetAvailable) return;
-    if (action === 'archive' && !threadStore.archiveAvailable) return;
-    this._menuOpen = false;
-    this._threadConfirm = { action, target };
-    this._pinned = true;
-  }
-
-  private _doThreadControl = (confirm: ThreadControlConfirmation): void => {
-    if (this._threadControlPending !== null) return;
-    this._threadControlPending = confirm;
-    this._threadConfirm = null;
-    const sent = confirm.action === 'reset'
-      ? threadStore.reset(confirm.target)
-      : threadStore.archive(confirm.target);
-    // A synchronous transmit/validation rejection creates no store pending
-    // record, so only this exact rejected attempt may clear the local guard.
-    if (!sent) this._threadControlPending = null;
-  };
-
-  private _settleThreadControlPending(): void {
-    const pending = this._threadControlPending;
-    if (!pending || threadStore.isThreadControlPending(pending.action, pending.target)) return;
-    // The store removed this exact request only after its matching result (or
-    // disconnect cleanup), never because another context's control settled.
-    this._threadControlPending = null;
-  }
-
-  /** Explicit context switch from a queued record; no attention event calls this. */
-  private _talkAttention = (attention: ThreadAttention): void => {
-    this._userSelectionPending = true;
-    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
-    if (!threadStore.select({ kind: 'thread', threadId: attention.threadId })) {
-      this._userSelectionPending = false;
-      return;
-    }
-    this._threadConfirm = null;
-    this._pinned = true;
-  };
-
-  /** The backend endpoint is metadata-only; Viewer opens only after this click. */
-  private _previewMigration = (): void => {
-    this._menuOpen = false;
-    if (threadStore.migrationPreview()) this._pinned = true;
+    cosStore.clear(which);
   };
 
   private _onThink(key: string, e: Event): void {
@@ -2793,6 +2082,7 @@ export class MuxCos extends LitElement {
 
   private _onDraft = (e: Event): void => {
     const el = e.target as HTMLTextAreaElement;
+    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
     this._draft = el.value;
     this._fit(el);
   };
@@ -2822,15 +2112,11 @@ export class MuxCos extends LitElement {
       // pending in front of it leaves the surface.
       if (
         this._menuOpen ||
-        this._contextOpen ||
-        this._confirm !== null ||
-        this._threadConfirm !== null
+        this._confirm !== null
       ) {
         e.preventDefault();
         this._menuOpen = false;
-        this._contextOpen = false;
         this._confirm = null;
-        this._threadConfirm = null;
         return;
       }
       this.dispatchEvent(new CustomEvent('home-dismiss', { bubbles: true, composed: true }));
@@ -2840,10 +2126,9 @@ export class MuxCos extends LitElement {
   private _submit = (): void => {
     const prompt = this._draft.trim();
     if (!prompt) return;
-    // In threaded mode the coordinator retains this draft until the server
-    // sends a real turn receipt. A missing receipt is uncertainty, not proof
-    // that the user's words were sent.
-    if (!threadStore.send(prompt)) return;
+    // The store retains this draft until the server sends a real turn receipt.
+    // A missing receipt is uncertainty, not proof that the user's words were sent.
+    if (!cosStore.send(prompt)) return;
     this._pinned = true;
     void this.updateComplete.then(() => {
       const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
@@ -2851,20 +2136,22 @@ export class MuxCos extends LitElement {
     });
   };
 
-  private _releaseUncertainDraft = (): void => {
-    threadStore.releaseUncertainDraft();
+  private _stopGeneration = (): void => {
+    const active = cosStore.turns.find((turn) => turn.status === 'streaming') ??
+      cosStore.turns.find((turn) => turn.status === 'pending');
+    if (active) cosStore.cancel(active.id);
     void this.updateComplete.then(() => {
       this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext')?.focus();
     });
   };
 
   private _toggleVoice = (): void => {
-    if (threadStore.negotiating) return;
+    if (cosStore.negotiating) return;
     if (this._voice === 'listening') {
       if (this._chatDictationActive) voiceInputController.stop();
       return;
     }
-    const composer = threadStore.composerIdentity;
+    const composer = cosStore.composerIdentity;
     if (composer.channelId === 'none') return;
     const capture = voiceInputController.startComposer(composer.channelId);
     if (!capture) return;
@@ -2884,7 +2171,7 @@ export class MuxCos extends LitElement {
   private _takeTranscript(payload: VoiceTranscriptPayload): void {
     if (payload.target !== 'composer' || payload.kind !== 'final') return;
     const capture = this._chatDictationCapture;
-    const composer = threadStore.composerIdentity;
+    const composer = cosStore.composerIdentity;
     if (
       !capture ||
       composer.channelId !== capture.channelId ||
@@ -2896,6 +2183,7 @@ export class MuxCos extends LitElement {
     }
     const t = payload.text.trim();
     if (!t) return;
+    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
     this._draft = this._draft.trim() === '' ? t : `${this._draft.trimEnd()} ${t}`;
     void this.updateComplete.then(() => {
       const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');

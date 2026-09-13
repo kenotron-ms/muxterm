@@ -211,6 +211,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_sse(self, value: dict[str, Any], request: dict[str, Any]) -> None:
         item = value["output"][0]
+        slow = "SINGLE_COS_SLOW_STREAM" in "\n".join(text_fragments(latest_user_input(request)))
         events: list[tuple[str, dict[str, Any]]] = [
             ("response.created", {"type": "response.created", "response": value}),
             ("response.in_progress", {"type": "response.in_progress", "response": value}),
@@ -239,16 +240,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
-        for event, data in events:
-            self.wfile.write(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode("utf-8"))
+        try:
+            for event, data in events:
+                if slow and event == "response.output_text.delta":
+                    text = str(data["delta"])
+                    for offset in range(0, len(text), 3):
+                        piece = {**data, "delta": text[offset : offset + 3]}
+                        self.wfile.write(f"event: {event}\ndata: {json.dumps(piece)}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                        time.sleep(0.15)
+                    continue
+                self.wfile.write(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                if event in {"response.output_text.delta", "response.function_call_arguments.delta"}:
+                    # Hold a real open stream after a delivered delta, not an
+                    # unanswered HTTP request. The operator releases only this
+                    # explicitly marked disposable fixture turn.
+                    self.fixture.wait_for_barrier(request)
+            self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
-            if event in {"response.output_text.delta", "response.function_call_arguments.delta"}:
-                # Hold a real open stream after a delivered delta, not an
-                # unanswered HTTP request. The operator releases only this
-                # explicitly marked disposable fixture turn.
-                self.fixture.wait_for_barrier(request)
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # Cancellation closing a disposable test stream is expected.
+            return
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/healthz":

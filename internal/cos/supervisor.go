@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,8 +19,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/google/uuid"
 )
 
 // Op names (spec 2.2). Anything else is an unknown op the sidecar must ignore
@@ -214,12 +211,6 @@ type Config struct {
 	// InstructionPath overrides where the effective instruction is written.
 	// It is paired with StatePath for an isolated threaded runtime.
 	InstructionPath string
-	// ThreadedTextPreview creates a constrained, independently rooted
-	// Mission Control text worker. It is deliberately opt-in so legacy COS
-	// behavior and its environment remain unchanged.
-	ThreadedTextPreview bool
-	// ThreadKind is lobby or workspace when ThreadedTextPreview is enabled.
-	ThreadKind string
 	// OwnerLockFile stays open across the child process lifetime. The child
 	// inherits the descriptor so a crashed supervisor cannot release the
 	// writer lock before its PDEATHSIG child exits.
@@ -232,16 +223,6 @@ type Config struct {
 	// captured before handleEvent can advance queue state for another event.
 	// Callers must not block or issue supervisor operations from this callback.
 	BeforeReply func(Event, QueueState)
-	// ThreadJournalPath is the per-root attribution journal used only by a
-	// threaded text worker; it never shares SessionStore files.
-	ThreadJournalPath string
-	// ThreadContextMaxTokens is the validated context-simple max_tokens
-	// override for this one threaded root; zero preserves shipped defaults.
-	ThreadContextMaxTokens int
-	// PreserveExistingHistory marks the one Lobby root adopted from legacy COS.
-	// The sidecar must resume it as-is and must not run transcript repair before
-	// later explicitly admitted work.
-	PreserveExistingHistory bool
 	// SubscriberDepth is the default per-subscriber buffer (0 =
 	// DefaultSubscriberDepth).
 	SubscriberDepth int
@@ -333,11 +314,7 @@ func New(cfg Config) *Supervisor {
 	// The queue publishes the terminal events it synthesizes, so a turn that
 	// fails BEFORE it reaches the sidecar is visible to subscribers and not
 	// only to whoever holds its handle (queue.fail).
-	var newTurnID func() string
-	if cfg.ThreadedTextPreview {
-		newTurnID = func() string { return uuid.New().String() }
-	}
-	s.q = newQueue(s.sendOp, s.publishSynthEvent, cfg.Logf, newTurnID)
+	s.q = newQueue(s.sendOp, s.publishSynthEvent, cfg.Logf, nil)
 	s.q.beforeDispatch = s.pushTuning
 	return s
 }
@@ -416,12 +393,6 @@ func (s *Supervisor) publishSynthEvent(ev Event) {
 // were delivered. Re-sending is a few kilobytes down a pipe already carrying
 // the prompt; the sidecar diffs and only acts when something actually changed.
 func (s *Supervisor) pushTuning() {
-	if s.cfg.ThreadedTextPreview {
-		// Threaded roots snapshot a fixed read-only policy at creation. Do not
-		// read global personal tuning here: it may reintroduce tools or context
-		// contributions into a different thread on a later turn.
-		return
-	}
 	dir, dirSrc := ConfigDir()
 	t := LoadTuning(dir)
 
@@ -992,11 +963,6 @@ func (s *Supervisor) supervise(ctx context.Context) {
 		}
 		s.cfg.Logf("cos: %s after %s (ready=%v)", reason, uptime.Round(time.Millisecond), reachedReady)
 		s.handleExit(reason)
-		if s.cfg.ThreadedTextPreview {
-			s.fail(errors.New("threaded text sidecar exited; explicit reselection is required"))
-			return
-		}
-
 		if reachedReady {
 			earlyFailures = 0
 			if uptime >= stableUptime {
@@ -1055,18 +1021,6 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	cwd := s.cfg.Cwd
 	if cwd != "" {
 		args = append(args, "--cwd", cwd)
-	}
-	if s.cfg.ThreadedTextPreview {
-		args = append(args, "--threaded-text-preview", "--thread-kind", s.cfg.ThreadKind)
-		if s.cfg.ThreadJournalPath != "" {
-			args = append(args, "--thread-journal", s.cfg.ThreadJournalPath)
-		}
-		if s.cfg.ThreadContextMaxTokens > 0 {
-			args = append(args, "--thread-context-max-tokens", strconv.Itoa(s.cfg.ThreadContextMaxTokens))
-		}
-		if s.cfg.PreserveExistingHistory {
-			args = append(args, "--preserve-existing-history")
-		}
 	}
 
 	cmd := exec.CommandContext(ctx, s.python, args...) //nolint:gosec // interpreter and script are resolved, not user text
@@ -1309,11 +1263,6 @@ func (s *Supervisor) markReady(ev Event) {
 
 	s.cfg.Logf("cos: %s", ev)
 	s.writeState(st)
-	if s.cfg.ThreadedTextPreview {
-		// A threaded runtime must publish its own immutable effective policy
-		// even though it deliberately never receives a reconfigure op.
-		go s.publishEffective()
-	}
 	s.readyOnce.Do(func() { close(s.readyCh) })
 }
 

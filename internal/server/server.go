@@ -20,8 +20,6 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/ai"
 	"github.com/kenotron-ms/muxterm/internal/authserver"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
-	"github.com/kenotron-ms/muxterm/internal/cos"
-	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/voice"
 )
@@ -136,15 +134,6 @@ type Server struct {
 	// alongside it, so a nil here means the paths do not exist.
 	voice *voice.Manager
 
-	// missionControlVoice owns the one bounded safety-only bridge lease for
-	// this Server. It never owns a provider or microphone session.
-	missionControlVoice *voice.LeaseManager
-	// missionControlVoiceProvider is constructed only behind the independent
-	// Mission Control candidate gate. It is never the legacy global bridge.
-	missionControlVoiceProvider     *voice.Manager
-	missionControlVoiceAttachmentMu sync.Mutex
-	missionControlVoiceAttachment   *missionControlVoiceAttachment
-
 	// appVoice is the owner-WebSocket-bound conversational bridge. It is
 	// intentionally unrelated to the scoped Mission Control attachment above.
 	appVoice *appVoiceService
@@ -207,7 +196,6 @@ func New(cfg Config) *Server {
 		aiKeyPath = ai.DefaultKeyPath()
 	}
 	s.ai = ai.NewManager(aiKeyPath)
-	s.hub.setMissionControlInitializer(s.initializeMissionControl)
 
 	// The collected pull requests, loaded from disk at construction so the
 	// first GET after a restart answers from the store rather than from an
@@ -360,76 +348,6 @@ func New(cfg Config) *Server {
 	return s
 }
 
-// initializeMissionControl creates the normal channel catalog and router on
-// the first Mission Control access. The potentially slow legacy-store probe
-// must not hold up construction of the terminal server.
-// independently of the retired preview flags. A legacy COS root is adopted
-// only after the sidecar's public SessionStore.exists API confirms it exists
-// in this exact server working-directory scope; no filesystem layout is
-// guessed and no history is read or copied here.
-func (s *Server) initializeMissionControl() {
-	s.cfgMu.RLock()
-	missionCfg := s.cfg.MissionControl
-	s.cfgMu.RUnlock()
-	catalog, err := missioncontrol.Open(missioncontrol.DefaultPath())
-	if err != nil {
-		s.hub.setMissionControl(nil, nil, true, err)
-		return
-	}
-	fail := func(err error) {
-		_ = catalog.Close()
-		s.hub.setMissionControl(nil, nil, true, err)
-	}
-	lobby, err := catalog.Lobby()
-	if err != nil {
-		fail(fmt.Errorf("Mission Control normal channels unavailable: %w", err))
-		return
-	}
-	// A reset deliberately creates a fresh UUID root and clears LobbyOrigin.
-	// If one is already present, it is the selected normal history; do not
-	// re-adopt an older muxterm-cos source on a subsequent server startup.
-	if lobby.RuntimeSessionID != "" && lobby.LobbyOrigin == nil {
-		if err := missionCfg.ValidateTextContextMaxTokens(); err != nil {
-			fail(err)
-			return
-		}
-		s.hub.setMissionControl(catalog, missioncontrol.NewRouter(catalog, missionCfg.TextWorkerCap, missionCfg.TextContextMaxTokens), true, nil)
-		return
-	}
-	cwd, err := cos.ResolveWorkingDir("")
-	if err != nil {
-		fail(fmt.Errorf("Mission Control normal channels unavailable: resolve server storage scope: %w", err))
-		return
-	}
-	legacySessionID, _ := cos.ResolveSessionID("")
-	probeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	legacyExists, err := cos.SessionStoreExists(probeCtx, legacySessionID, cwd)
-	cancel()
-	if err != nil {
-		fail(fmt.Errorf("Mission Control normal channels unavailable: verify existing conversation before transition: %w", err))
-		return
-	}
-	if legacyExists {
-		if s.hub.cos == nil || !s.hub.cos.claimNormalOwnership() {
-			fail(errors.New("Mission Control normal channels unavailable: legacy COS relay is already active; restart the server to transition without two owners"))
-			return
-		}
-		if _, err := catalog.BindLobbyOrigin(legacySessionID, cwd); err != nil {
-			fail(fmt.Errorf("Mission Control normal channels unavailable: %w", err))
-			return
-		}
-	} else if lobby.LobbyOrigin != nil {
-		fail(errors.New("Mission Control normal channels unavailable: legacy_history_missing: the persisted Lobby origin no longer exists; refusing to create a replacement conversation"))
-		return
-	}
-	if err := missionCfg.ValidateTextContextMaxTokens(); err != nil {
-		fail(err)
-		return
-	}
-	router := missioncontrol.NewRouter(catalog, missionCfg.TextWorkerCap, missionCfg.TextContextMaxTokens)
-	s.hub.setMissionControl(catalog, router, true, nil)
-}
-
 // Handler returns the http.Handler for use with httptest or custom servers.
 func (s *Server) Handler() http.Handler {
 	return s.mux
@@ -457,19 +375,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// It does NOT cover a panic-free-fall past this frame or a SIGKILL; that is
 	// what the child's Pdeathsig is for (internal/cos/pdeathsig_linux.go).
 	defer s.hub.CloseCos()
-	defer s.hub.CloseMissionControl()
 
 	// A voice sideband is a live outbound WebSocket to the realtime
 	// vendor. Left open it keeps billing a session nobody is listening to,
 	// so it goes down on every return path, exactly as the sidecar does.
 	if s.voice != nil {
 		defer s.voice.Close()
-	}
-	if s.missionControlVoice != nil {
-		defer s.missionControlVoice.Close()
-	}
-	if s.missionControlVoiceProvider != nil {
-		defer s.missionControlVoiceProvider.Close()
 	}
 	if s.appVoice != nil {
 		defer s.appVoice.provider.Close()

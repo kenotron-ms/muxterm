@@ -51,7 +51,7 @@ import './components/voice-mode-bubble.js';
 // looking at one of. The component and its standalone demo are untouched.
 import './components/mux-cos.js';
 import { homeSessions } from './lib/home-sessions.js';
-import { threadStore, type ThreadComposerIdentity } from './lib/thread-store.js';
+import { cosStore, type CosComposerIdentity } from './lib/cos-store.js';
 import { remotesStore } from './lib/remotes-store.js';
 import type { SessionState } from './lib/session-state.js';
 
@@ -977,7 +977,7 @@ export class MuxApp extends LitElement {
     // The conversation coordinator owns capability negotiation and selects
     // either the legacy unscoped store or one attributed v2 thread. Subscribe
     // here so the shell observes that state without parsing its wire frames.
-    this._unsubCos = threadStore.subscribe(() => {
+    this._unsubCos = cosStore.subscribe(() => {
       this._version++;
       if (!this._appVoiceNavigatingOperationId) appVoiceOperations.observe(this._appVoiceObservation());
     });
@@ -1017,9 +1017,9 @@ export class MuxApp extends LitElement {
     // authenticated socket seam and does not subscribe or poll at startup.
     previewStore.attach(this._socket);
     // Serve-local conversation frames. Nothing is asked of the server until
-    // the overlay opens: threadStore negotiates capability before it either
+    // the overlay opens: cosStore negotiates capability before it either
     // subscribes to explicit unscoped legacy COS or selects one v2 thread.
-    threadStore.attach(this._socket);
+    cosStore.attach(this._socket);
     appVoiceOperations.attach(this._socket, {
       getObservation: () => this._appVoiceObservation(),
       navigate: (target, operationId, signal) => this._navigateForAppVoice(target, operationId, signal),
@@ -1031,7 +1031,6 @@ export class MuxApp extends LitElement {
         this.renderRoot.querySelector('mux-cos')?.cancelAppVoiceSubmitConfirmation(operationId),
       cancelNavigation: (operationId) => {
         this.renderRoot.querySelector('mux-cos')?.cancelAppVoiceNavigation(operationId);
-        threadStore.cancelDetailForAppVoice(operationId);
       },
     });
     // A launch lands on the Dashboard, not on whichever pane the composition
@@ -1265,7 +1264,7 @@ export class MuxApp extends LitElement {
       this._dropPendingDispatch('the connection was lost');
       // The coordinator retains drafts/history but drops connection-scoped
       // selection authority and any unconfirmed receipt claim.
-      threadStore.markDisconnected();
+      cosStore.markDisconnected();
       const interruptedTargets = new Map<string, CloseTarget>();
       for (const [key, request] of this._closeRequests) {
         interruptedTargets.set(key, request.target);
@@ -1302,7 +1301,7 @@ export class MuxApp extends LitElement {
       // stop arriving. Re-send it here, alongside the composition re-sync.
       // Re-negotiate first; this never replays a pending turn. The coordinator
       // explicitly chooses v2 selection or the unscoped legacy fallback.
-      threadStore.markReconnected();
+      cosStore.markReconnected();
       appVoiceOperations.attach(this._socket!, {
         getObservation: () => this._appVoiceObservation(),
         navigate: (target, operationId, signal) => this._navigateForAppVoice(target, operationId, signal),
@@ -1314,7 +1313,6 @@ export class MuxApp extends LitElement {
           this.renderRoot.querySelector('mux-cos')?.cancelAppVoiceSubmitConfirmation(operationId),
         cancelNavigation: (operationId) => {
           this.renderRoot.querySelector('mux-cos')?.cancelAppVoiceNavigation(operationId);
-          threadStore.cancelDetailForAppVoice(operationId);
         },
       });
     };
@@ -1361,7 +1359,7 @@ export class MuxApp extends LitElement {
       this._unsubscribe = null;
     }
     if (this._socket) {
-      threadStore.markDisconnected();
+      cosStore.markDisconnected();
       appVoiceOperations.detach('owner_disconnected');
       this._socket.disconnect();
       this._socket = null;
@@ -2414,17 +2412,16 @@ export class MuxApp extends LitElement {
     this._bootSurfaceApplied = true;
     if (!customElements.get('mux-cos')) return;
     this._showDashboard = true;
-    // Same call _onDashboardShow makes. It negotiates before any legacy
-    // subscribe, then selects an explicit v2 context when text preview is on.
-    threadStore.open();
+    // Subscribe once because the single conversation is the visible boot
+    // surface. This does not select or create a workspace chat context.
+    cosStore.open();
   }
 
   /**
    * Dashboard card / ctrl+` -- open the Dashboard from anywhere.
    *
-   * This is also what starts conversation setup: threadStore negotiates
-   * capability before it can select a thread or explicitly opt into legacy
-   * COS, so muxterm pays nothing at all for a surface nobody opened.
+   * This starts the one shared conversation if it has not been opened yet.
+   * Reopening the surface keeps the existing subscription, history and draft.
    */
   private _onDashboardShow = (): void => {
     this._appVoiceDetailThreadId = '';
@@ -2433,7 +2430,7 @@ export class MuxApp extends LitElement {
     // On a phone the Dashboard card IS the drawer's top row, so the Dashboard
     // would open underneath the drawer that asked for it.
     this._closeDrawer();
-    threadStore.open();
+    cosStore.open();
     appVoiceOperations.observe(this._appVoiceObservation());
     void this.updateComplete.then(() => {
       this.renderRoot.querySelector('mux-cos')?.focusComposer();
@@ -2678,7 +2675,7 @@ export class MuxApp extends LitElement {
 
   private _onAppVoiceUserNavigation = (): void => {
     this._appVoiceDetailThreadId = '';
-    appVoiceOperations.userNavigation();
+    if (appVoiceOperations.hasPendingOperations()) appVoiceOperations.userNavigation();
   };
 
   private _onAppVoiceObservation = (): void => {
@@ -2688,7 +2685,7 @@ export class MuxApp extends LitElement {
   };
 
   private _appVoiceObservation(): AppVoiceObservation {
-    const composer = threadStore.composerIdentity;
+    const composer = cosStore.composerIdentity;
     const cos = this.renderRoot.querySelector('mux-cos');
     return {
       surface: this._showDashboard ? 'mission_control' : 'dock',
@@ -2707,11 +2704,13 @@ export class MuxApp extends LitElement {
     };
   }
 
-  private _sameComposerTarget(target: AppVoiceComposerTarget, current: ThreadComposerIdentity): boolean {
+  private _sameComposerTarget(target: AppVoiceComposerTarget, current: CosComposerIdentity): boolean {
     return (
       target.channel_id === current.channelId &&
       target.thread_id === current.threadId &&
+      target.runtime_session_id === current.runtimeSessionId &&
       target.runtime_generation === current.runtimeGeneration &&
+      target.runtime_incarnation === current.runtimeIncarnation &&
       target.draft_ref === current.draftRef
     );
   }
@@ -2775,24 +2774,15 @@ export class MuxApp extends LitElement {
     try {
       if (target.kind === 'thread') {
         this._assertAppVoiceOperationCurrent(operationId, signal);
+        const current = cosStore.conversation;
+        if (!current || current.id !== target.thread_id || current.generation !== target.runtime_generation) {
+          throw new Error('The requested conversation is not the current Mission Control conversation.');
+        }
         this._appVoiceDetailThreadId = '';
         this._showDashboard = true;
         await this.updateComplete;
+        cosStore.open();
         this._assertAppVoiceOperationCurrent(operationId, signal);
-        const receipt = await threadStore.selectForAppVoice(
-          target.thread_id,
-          target.runtime_generation,
-          operationId,
-          signal,
-        );
-        this._assertAppVoiceOperationCurrent(operationId, signal);
-        if (
-          !receipt.ok ||
-          receipt.selected.threadId !== target.thread_id ||
-          receipt.selected.runtimeGeneration !== target.runtime_generation
-        ) {
-          throw new Error(receipt.error || 'The requested conversation was not authoritatively selected.');
-        }
         return { selected_target: target };
       }
       if (target.kind === 'applet') {
@@ -2809,21 +2799,7 @@ export class MuxApp extends LitElement {
         return { selected_target: target };
       }
       if (target.kind === 'detail') {
-        this._assertAppVoiceOperationCurrent(operationId, signal);
-        this._appVoiceDetailThreadId = '';
-        this._showDashboard = true;
-        await this.updateComplete;
-        this._assertAppVoiceOperationCurrent(operationId, signal);
-        const receipt = await threadStore.viewDetailForAppVoice(
-          target.thread_id,
-          target.runtime_generation,
-          operationId,
-          signal,
-        );
-        this._assertAppVoiceOperationCurrent(operationId, signal);
-        if (!receipt.ok) throw new Error(receipt.error);
-        this._appVoiceDetailThreadId = target.thread_id;
-        return { selected_target: target };
+        throw new Error('Mission Control has no alternate conversation detail view.');
       }
       if (target.kind === 'pane') {
         if (store.attached !== target.workspace_id) {
@@ -2867,16 +2843,16 @@ export class MuxApp extends LitElement {
     | Readonly<{ readonly target: AppVoiceComposerTarget }>
   > {
     this._assertAppVoiceOperationCurrent(operationId, signal);
-    const current = threadStore.composerIdentity;
+    const current = cosStore.composerIdentity;
     if (!this._sameComposerTarget(target, current)) throw new Error('The requested composer is no longer active.');
     if (mode === 'inspect') {
-      const result = threadStore.inspectDraftForAppVoice(current);
+      const result = cosStore.inspectDraftForAppVoice(current);
       if (!result) throw new Error('The requested composer is no longer active.');
       this._assertAppVoiceOperationCurrent(operationId, signal);
       return { target, ...result };
     }
     this._assertAppVoiceOperationCurrent(operationId, signal);
-    if (text === undefined || !threadStore.setDraftForAppVoice(current, text)) {
+    if (text === undefined || !cosStore.setDraftForAppVoice(current, text)) {
       throw new Error('The requested composer draft could not be set.');
     }
     this._assertAppVoiceOperationCurrent(operationId, signal);
@@ -2890,12 +2866,11 @@ export class MuxApp extends LitElement {
     signal: AbortSignal,
   ): Promise<Readonly<{ readonly thread_id: string; readonly runtime_generation: number; readonly turn_id: string }>> {
     this._assertAppVoiceOperationCurrent(operationId, signal);
-    const current = threadStore.appVoiceThreadTurnTarget;
+    const current = cosStore.appVoiceThreadTurnTarget;
     if (
       !current ||
       current.channelId !== target.channel_id ||
       current.threadId !== target.thread_id ||
-      current.machineId !== target.machine_id ||
       current.runtimeSessionId !== target.runtime_session_id ||
       current.runtimeGeneration !== target.runtime_generation ||
       current.runtimeIncarnation !== target.runtime_incarnation ||
@@ -2905,25 +2880,30 @@ export class MuxApp extends LitElement {
     }
     const confirmation = await this.renderRoot
       .querySelector('mux-cos')
-      ?.requestAppVoiceSubmitConfirmation(operationId, current.label, text);
+      ?.requestAppVoiceSubmitConfirmation(operationId, cosStore.composerIdentity.label, text);
     this._assertAppVoiceOperationCurrent(operationId, signal);
     if (confirmation !== 'confirmed') throw new Error('Explicit human confirmation is required before sending work.');
     this._assertAppVoiceOperationCurrent(operationId, signal);
-    const receipt = await threadStore.sendForAppVoice(current, text, operationId, signal);
+    const confirmedCurrent = cosStore.appVoiceThreadTurnTarget;
+    if (
+      !confirmedCurrent ||
+      confirmedCurrent.channelId !== target.channel_id ||
+      confirmedCurrent.threadId !== target.thread_id ||
+      confirmedCurrent.runtimeSessionId !== target.runtime_session_id ||
+      confirmedCurrent.runtimeGeneration !== target.runtime_generation ||
+      confirmedCurrent.runtimeIncarnation !== target.runtime_incarnation ||
+      confirmedCurrent.draftRef !== target.draft_ref
+    ) {
+      throw new Error('The requested work target changed before confirmation was sent.');
+    }
+    const receipt = await cosStore.sendForAppVoice(text, operationId, signal);
     this._assertAppVoiceOperationCurrent(operationId, signal);
     if (
-      !receipt.ok ||
-      !receipt.turnId ||
-      receipt.threadId !== target.thread_id ||
-      receipt.runtimeGeneration !== target.runtime_generation
-    ) {
-      throw new Error(receipt.error || 'The turn receipt was not confirmed.');
-    }
-    return {
-      thread_id: receipt.threadId,
-      runtime_generation: receipt.runtimeGeneration,
-      turn_id: receipt.turnId,
-    };
+      !receipt.turn_id ||
+      receipt.thread_id !== target.thread_id ||
+      receipt.runtime_generation !== target.runtime_generation
+    ) throw new Error('The turn receipt was not confirmed.');
+    return receipt;
   }
 
   private _routePaneOutput(paneId: number, data: Uint8Array): void {

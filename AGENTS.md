@@ -122,38 +122,43 @@ that breaks a test literal builds green. Run `go vet ./...` to catch it.
 
 ### Mission Control conversation ownership
 
-`missioncontrol.threads_v2` and `missioncontrol.text_preview` default off.
-Threaded roots belong to the server router, not a browser connection. Each root
-has its own immutable session/storage identity, queue, approval broker, and
-persisted todo/goal state. Never replace one root's messages to simulate another
-thread, infer history identity from `wN`/names, or route a missing target to the
-current focus. Reset/archive control only that conversation; they never close
-sessiond panes or stop unrelated lanes. Goal changes require the originating
-thread/turn/generation's confirmation.
+Mission Control is one persistent, capable server-owned COS conversation.
+There is no user-facing Lobby, chat-channel picker, or workspace-to-chat routing
+workflow. Workspaces and panes organize work, not separate Mission Control
+histories. Use the existing COS supervisor, queue, approval broker and native
+SessionStore; do not recreate a channel router behind a feature flag.
+
+Existing catalog metadata is a read-only history-compatibility input. Select
+the established Mission Control session and exact storage scope, retain root
+ownership locks, and leave unrelated histories and catalog bytes untouched.
+Never merge histories, infer session identity from workspace names or `wN`,
+clear storage to make a transition succeed, or silently replace a missing
+persisted conversation. Missing or ambiguous metadata is an explicit error.
 
 Verify changes with real browser/server/sessiond/sidecar fixtures in the approved
 isolated environment. Provider-edge fixtures may supply deterministic API
 responses, but never substitute fake context modules or injected browser history
-for isolation evidence. The voice lease safety API does not enable audio:
-threaded microphone/provider attachment remains disabled pending its separate
-correlation, drain, spoken-prefix, and live-microphone gates.
+for persistence evidence. Measure first-open readiness, idle subscriptions and
+render activity; removing controls alone does not prove responsiveness.
 
 The 2026-09-12 correction in
-`docs/designs/2026-09-12-app-voice-two-lifetimes.md` supersedes per-channel
-conversational voice ownership. Composer dictation cancels and invalidates late
-transcription on channel departure, preserving accepted draft text. App voice
-belongs to the authenticated browser session and persists across navigation;
-view observation never silently retargets work. Each submission still uses an
-immutable validated thread/runtime identity. App voice tools reuse authenticated
-app controls without expanding rights. Missing local SpeechSynthesis voices is
-not proof that provider audio is unavailable. Live mic access remains opt-in.
+`docs/designs/2026-09-12-app-voice-two-lifetimes.md`, as superseded by its
+single-conversation correction, preserves independent dictation and app-voice
+lifetimes. App voice belongs to the authenticated browser session and persists
+across navigation. Work submission validates the immutable conversation,
+operation, owner and lease at queue admission; later voice exit does not cancel
+already-admitted work. Existing tool permissions and approval gates remain.
+Missing local SpeechSynthesis voices is not proof that provider audio is
+unavailable. Live microphone access remains opt-in.
 
-App voice activation belongs in shared title actions immediately before the
-ellipsis menu, not in a channel composer. One app-root floating voice control
-survives navigation; its position is presentation state, never a work target.
-Keep Stop reachable during connection setup and errors. Public component
-snapshot inputs are rendering-only: labelled visual fixtures do not establish
-live microphone, provider, session-lifetime, or acoustic verification.
+App voice activation belongs immediately before the ellipsis in Mission Control
+and at the fixed trailing workspace dock action group. Preserve mobile spacing.
+The floating bubble is one circular control: tap pauses/resumes microphone
+transmission and playback; dragging reveals an X exit target. Exit releases
+voice resources, while other drops dock to an edge without triggering a tap.
+Generation Stop is the composer Send button in its generating state and affects
+only that generation. Labelled visual/synthetic fixtures do not establish
+real-provider or physical-microphone/acoustic success.
 
 ### Terminal query ownership (CSI 6n, OSC 11;?)
 

@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kenotron-ms/muxterm/internal/config"
+	"github.com/kenotron-ms/muxterm/internal/cos"
 	"github.com/kenotron-ms/muxterm/internal/mcp"
 	"github.com/kenotron-ms/muxterm/internal/missioncontrol"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
@@ -506,21 +508,21 @@ func validAppObservation(c *Client, active map[string]any) bool {
 	}
 	if composer, ok := active["composer"].(map[string]any); ok {
 		channel, _ := composer["channel_id"].(string)
-		threadID, _ := composer["thread_id"].(string)
 		if channel == "none" {
-			return threadID == ""
+			return composer["thread_id"] == "" && composer["runtime_session_id"] == "" &&
+				composer["runtime_generation"] == float64(0) && composer["runtime_incarnation"] == "" &&
+				composer["draft_ref"] == ""
 		}
-		if channel == "legacy-cos" {
-			return threadID == ""
+		if channel != "legacy-cos" {
+			return false
 		}
+		threadID, _ := composer["thread_id"].(string)
 		generation, generationOK := appVoiceUint(composer["runtime_generation"])
 		sessionID, _ := composer["runtime_session_id"].(string)
 		incarnation, _ := composer["runtime_incarnation"].(string)
 		draftRef, _ := composer["draft_ref"].(string)
-		return strings.HasPrefix(channel, "thread:") && channel == "thread:"+threadID &&
-			validMissionControlRequestID(threadID) && generationOK &&
-			sessionID != "" && validMissionControlRequestID(incarnation) &&
-			validMissionControlRequestID(draftRef) && c.appVoiceThreadKnown(threadID, generation, sessionID, incarnation)
+		return generationOK && validAppUUID(draftRef) &&
+			c.appVoiceThreadKnown(threadID, generation, sessionID, incarnation)
 	}
 	return true
 }
@@ -626,22 +628,14 @@ func (s *appVoiceService) execute(ctx context.Context, bridge *appVoiceBridge, c
 }
 
 func (s *appVoiceService) appVoiceThreads() []map[string]any {
-	catalog, err := s.hub.missionControlCatalog()
-	if err != nil {
+	if s.hub == nil || s.hub.cos == nil {
 		return nil
 	}
-	rows, err := catalog.List()
-	if err != nil {
+	root, active := s.hub.cos.rootIdentity()
+	if !active {
 		return nil
 	}
-	out := make([]map[string]any, 0, 128)
-	for _, row := range rows {
-		if len(out) == 128 {
-			break
-		}
-		out = append(out, map[string]any{"thread_id": row.ID, "runtime_generation": row.RuntimeGeneration, "label": boundedThreadVoiceLabel(row)})
-	}
-	return out
+	return []map[string]any{{"thread_id": root.ID, "runtime_generation": 1, "label": "Mission Control"}}
 }
 func appAction(tool string) string {
 	if tool == voice.AppToolNavigate {
@@ -690,33 +684,17 @@ func (s *appVoiceService) validTarget(owner *Client, active map[string]any, tool
 		case "thread":
 			threadID, _ := target["thread_id"].(string)
 			generation, _ := appVoiceUint(target["runtime_generation"])
-			if !owner.appVoiceThreadKnown(threadID, generation, "", "") {
-				return false
-			}
-			catalog, err := s.hub.missionControlCatalog()
-			if err != nil {
-				return false
-			}
-			thread, _, found, err := catalog.Thread(threadID)
-			return err == nil && found && thread.Lifecycle == "active" && thread.RuntimeGeneration == generation
+			return owner.appVoiceThreadKnown(threadID, generation, "", "")
 		case "detail":
 			threadID, _ := target["thread_id"].(string)
 			detailID, _ := target["detail_id"].(string)
 			generation, _ := appVoiceUint(target["runtime_generation"])
-			if detailID != threadID || !owner.appVoiceThreadKnown(threadID, generation, "", "") {
-				return false
-			}
-			catalog, err := s.hub.missionControlCatalog()
-			if err != nil {
-				return false
-			}
-			thread, _, found, err := catalog.Thread(threadID)
-			return err == nil && found && thread.Lifecycle == "active" && thread.RuntimeGeneration == generation
+			return detailID == threadID && owner.appVoiceThreadKnown(threadID, generation, "", "")
 		}
 	case voice.AppToolComposerDraft:
 		return appTargetsEqual(target, appComposerTarget(active))
 	case voice.AppToolSubmitThreadTurn:
-		if !appTargetMatchesExcept(target, appThreadTurnTarget(active), "machine_id") {
+		if !appTargetsEqual(target, appThreadTurnTarget(active)) {
 			return false
 		}
 		threadID, _ := target["thread_id"].(string)
@@ -726,14 +704,7 @@ func (s *appVoiceService) validTarget(owner *Client, active map[string]any, tool
 		if !owner.appVoiceThreadKnown(threadID, generation, sessionID, incarnation) {
 			return false
 		}
-		catalog, err := s.hub.missionControlCatalog()
-		if err != nil {
-			return false
-		}
-		thread, _, found, err := catalog.Thread(threadID)
-		return err == nil && found && thread.Lifecycle == "active" &&
-			thread.MachineID == target["machine_id"] && thread.RuntimeSessionID == target["runtime_session_id"] &&
-			thread.RuntimeGeneration == generation && thread.RuntimeIncarnation == target["runtime_incarnation"]
+		return owner.appVoiceThreadKnown(threadID, generation, sessionID, incarnation)
 	}
 	return false
 }
@@ -749,7 +720,7 @@ func appComposerTarget(active map[string]any) map[string]any {
 	if composer == nil {
 		return nil
 	}
-	return map[string]any{"kind": "composer", "channel_id": composer["channel_id"], "thread_id": composer["thread_id"], "runtime_generation": composer["runtime_generation"], "draft_ref": composer["draft_ref"]}
+	return map[string]any{"kind": "composer", "channel_id": composer["channel_id"], "thread_id": composer["thread_id"], "runtime_session_id": composer["runtime_session_id"], "runtime_generation": composer["runtime_generation"], "runtime_incarnation": composer["runtime_incarnation"], "draft_ref": composer["draft_ref"]}
 }
 func appThreadTurnTarget(active map[string]any) map[string]any {
 	composer, _ := active["composer"].(map[string]any)
@@ -762,16 +733,9 @@ func appThreadTurnTarget(active map[string]any) map[string]any {
 	}
 	return map[string]any{"kind": "thread_turn", "channel_id": composer["channel_id"], "thread_id": threadID, "runtime_session_id": composer["runtime_session_id"], "runtime_generation": composer["runtime_generation"], "runtime_incarnation": composer["runtime_incarnation"], "draft_ref": composer["draft_ref"]}
 }
-func appTargetMatchesExcept(actual, expected map[string]any, skip string) bool {
-	if expected == nil {
-		return false
-	}
-	for key, want := range expected {
-		if key != skip && actual[key] != want {
-			return false
-		}
-	}
-	return true
+func validAppUUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed != uuid.Nil
 }
 func (s *appVoiceService) ack(c *Client, f struct {
 	Type             string         `json:"type"`
@@ -1172,49 +1136,32 @@ func (c *Client) appVoiceWorkspaceKnown(id string) bool {
 	return false
 }
 
-// lookupCatalogThread reads the Hub-published catalog before taking the
-// client subscription lock. App-voice callers invoke it outside the app voice
-// service lock, preserving the Hub/client lock ordering used on disconnect.
-func (c *Client) lookupCatalogThread(id string) (missioncontrol.Thread, bool) {
-	catalog, err := c.hub.missionControlCatalog()
-	if err != nil {
-		return missioncontrol.Thread{}, false
+// lookupConversation reads the relay's sole active conversation identity before
+// taking the client subscription lock.
+func (c *Client) lookupConversation(id string) (missioncontrol.SingleConversationOrigin, string, bool) {
+	if c.hub == nil || c.hub.cos == nil {
+		return missioncontrol.SingleConversationOrigin{}, "", false
 	}
-	thread, _, found, err := catalog.Thread(id)
-	return thread, err == nil && found
+	root, active := c.hub.cos.rootIdentity()
+	if !active || id != root.ID {
+		return missioncontrol.SingleConversationOrigin{}, "", false
+	}
+	return root, c.hub.cos.incarnation, true
 }
 
-// appVoiceThreadKnown proves both catalog identity and this browser's existing
-// authority over the root. An empty runtime pair is used only by metadata-only
-// observation/navigation records that carry no runtime address. Turn/composer
-// records supply both values and therefore bind the opaque Lobby exception to
-// the exact persisted origin rather than accepting arbitrary session strings.
+// appVoiceThreadKnown proves the sole COS conversation identity and this
+// browser's subscription authority. It never accepts an opaque ID merely
+// because it is well formed: every field is compared to the active relay root.
 func (c *Client) appVoiceThreadKnown(id string, generation uint64, sessionID, incarnation string) bool {
-	thread, found := c.lookupCatalogThread(id)
-	if !found || thread.ID != id || thread.Lifecycle != "active" ||
-		thread.RuntimeGeneration != generation || !validMissionControlRequestID(thread.RuntimeIncarnation) ||
-		(incarnation != "" && incarnation != thread.RuntimeIncarnation) {
+	root, currentIncarnation, found := c.lookupConversation(id)
+	if !found || root.ID != id || generation != 1 ||
+		(incarnation != "" && incarnation != currentIncarnation) {
 		return false
 	}
-	if validMissionControlRequestID(thread.RuntimeSessionID) {
-		if sessionID != "" && sessionID != thread.RuntimeSessionID {
-			return false
-		}
-	} else if thread.Kind != "lobby" || thread.LobbyOrigin == nil ||
-		thread.LobbyOrigin.SessionID != thread.RuntimeSessionID ||
-		(sessionID != "" && sessionID != thread.RuntimeSessionID) {
+	if sessionID != "" && sessionID != root.SessionID {
 		return false
 	}
-
-	c.missionControlMu.Lock()
-	defer c.missionControlMu.Unlock()
-	if c.missionControlSelection.threadID == id && c.missionControlSelection.generation == generation {
-		return true
-	}
-	sub, ok := c.missionControlSubscriptions[id]
-	return ok && sub.runtime != nil && sub.runtime.Thread.RuntimeSessionID == thread.RuntimeSessionID &&
-		sub.runtime.Thread.RuntimeGeneration == generation &&
-		sub.runtime.Thread.RuntimeIncarnation == thread.RuntimeIncarnation
+	return c.cosSubscribed()
 }
 func (c *Client) appVoiceFleet() []map[string]any {
 	c.mergeMu.Lock()
@@ -1332,39 +1279,26 @@ func (c *Client) appVoiceMachines() []string {
 	return out
 }
 
-// appVoiceTurnReservation is consumed by the existing Mission Control turn
-// path only. A caller cannot turn an operation frame into arbitrary HTTP work.
-func (s *appVoiceService) appVoiceTurnReservation(c *Client, msg missionControlClientMessage, thread missioncontrol.Thread) error {
-	if !strings.HasPrefix(msg.ClientRef, "app_voice:") {
-		return nil
-	}
-	id := strings.TrimPrefix(msg.ClientRef, "app_voice:")
+// appVoiceCosTurnReservation binds an app-voice operation to the only live
+// Mission Control root before the ordinary COS queue accepts it. Browser
+// annotations alone are never authority: owner, lease epoch, operation ID,
+// exact root identity, and exact text must all still match server state.
+func (s *appVoiceService) submitReservedCosTurn(c *Client, msg cosClientMessage, root missioncontrol.SingleConversationOrigin, relay *cosRelay, sup *cos.Supervisor) (*cos.Turn, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	op := s.operations[id]
-	if c != s.owner || op == nil || op.Action != "submit_thread_turn" || time.Now().After(op.Expires) {
-		return errors.New("app voice work operation is missing or expired")
+	op := s.operations[msg.AppVoiceOperationID]
+	if c != s.owner || op == nil || op.Action != "submit_thread_turn" || op.Epoch != s.epoch || time.Now().After(op.Expires) {
+		return nil, false, errors.New("app voice work operation is missing or expired")
 	}
-	if op.Text != msg.Text || op.Target["thread_id"] != thread.ID || op.Target["runtime_generation"] != float64(thread.RuntimeGeneration) ||
-		op.Target["draft_ref"] != msg.DraftRef || op.Target["runtime_session_id"] != thread.RuntimeSessionID ||
-		op.Target["runtime_incarnation"] != thread.RuntimeIncarnation || op.Target["machine_id"] != thread.MachineID {
-		return errors.New("app voice work operation target does not match the live runtime")
+	if msg.ClientRef != "app_voice:"+op.ID || op.Text != msg.Prompt ||
+		op.Target["thread_id"] != root.ID || op.Target["runtime_session_id"] != root.SessionID ||
+		op.Target["runtime_generation"] != float64(1) || op.Target["runtime_incarnation"] != c.hub.cos.incarnation {
+		return nil, false, errors.New("app voice work operation target does not match Mission Control")
 	}
-	if op.requestID != "" && op.requestID != msg.RequestID {
-		return errors.New("app voice work operation was already consumed")
+	if op.requestID != "" && op.requestID != msg.ClientRef {
+		return nil, false, errors.New("app voice work operation was already consumed")
 	}
-	op.requestID = msg.RequestID
-	return nil
-}
-func (s *appVoiceService) recordTurnReceipt(c *Client, msg missionControlClientMessage, turnID, dispatchState string) {
-	if !strings.HasPrefix(msg.ClientRef, "app_voice:") || turnID == "" || (dispatchState != "dispatched" && dispatchState != "terminal") {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	op := s.operations[strings.TrimPrefix(msg.ClientRef, "app_voice:")]
-	if op == nil || c != s.owner || op.requestID != msg.RequestID || op.Target["thread_id"] != msg.ThreadID {
-		return
-	}
-	op.turnID, op.dispatchState = turnID, dispatchState
+	turn, duplicate := relay.submit(sup, msg.Prompt, fmt.Sprintf("%p", c), msg.ClientRef)
+	op.requestID, op.turnID, op.dispatchState = msg.ClientRef, turn.ID, "dispatched"
+	return turn, duplicate, nil
 }

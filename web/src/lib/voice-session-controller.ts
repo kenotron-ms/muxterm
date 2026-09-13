@@ -16,7 +16,14 @@ import {
 import { voiceCaptureArbiter } from './voice-capture-arbiter.js';
 import type { VoiceAvailabilityReason } from './voice-settings.js';
 
-export type VoiceSessionState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'error';
+export type VoiceSessionState =
+  | 'idle'
+  | 'connecting'
+  | 'listening'
+  | 'thinking'
+  | 'speaking'
+  | 'paused'
+  | 'error';
 
 export interface VoiceSessionSnapshot {
   readonly state: VoiceSessionState;
@@ -24,6 +31,8 @@ export interface VoiceSessionSnapshot {
   readonly heard: string;
   readonly spoken: string;
   readonly error: string;
+  /** The provider session is retained, but local input/output is paused. */
+  readonly paused: boolean;
   /** True only while every live input track is disabled. */
   readonly muted: boolean;
   /** A live browser input track can be muted without ending the session. */
@@ -59,10 +68,20 @@ let meterAnalyser: AnalyserNode | null = null;
 let levelTimer: ReturnType<typeof setInterval> | null = null;
 let inputActive = false;
 let muted = false;
+let paused = false;
+let pendingPause = false;
+let pausedMuted = false;
 let sessionId = '';
 let lease: AppVoiceLease | null = null;
 let generation = 0;
 let releasing: Promise<void> | null = null;
+interface InputSenderBinding {
+  readonly sender: RTCRtpSender;
+  readonly track: MediaStreamTrack;
+}
+let inputSenders: InputSenderBinding[] = [];
+let pauseResumeFence = 0;
+let pauseResumeSerial: Promise<void> = Promise.resolve();
 let candidateAvailable = false;
 let availabilityReason: VoiceAvailabilityReason = 'config_unavailable';
 const listeners = new Set<Listener>();
@@ -82,6 +101,7 @@ function appSnapshot(): VoiceSessionSnapshot {
     heard,
     spoken,
     error,
+    paused,
     muted,
     canMute: liveInputTracks().length > 0,
     available: candidateAvailable,
@@ -127,7 +147,13 @@ function unavailableMessage(reason: VoiceAvailabilityReason): string {
 }
 
 function publish(next?: VoiceSessionState): void {
-  if (next) state = next;
+  if (next) {
+    // Provider events can arrive after a pause request. A paused snapshot is a
+    // hard presentation fence: only an explicit resume or a terminal error may
+    // move it out of the paused state.
+    if (!paused || next === 'paused' || next === 'error') state = next;
+  }
+  if (paused && state !== 'error') state = 'paused';
   const value = appSnapshot();
   for (const listener of listeners) listener(value);
 }
@@ -197,7 +223,7 @@ function syncMuted(): boolean {
 }
 
 function shouldMeasureInput(): boolean {
-  return inputActive && state === 'listening' && !muted && liveInputTracks().length > 0;
+  return inputActive && state === 'listening' && !paused && !pendingPause && !muted && liveInputTracks().length > 0;
 }
 
 function stopInputLevelMeter(publishChange = true): void {
@@ -244,6 +270,7 @@ function attachInputMeter(stream: MediaStream, trackGeneration: number): void {
     meterSource = nextSource;
     meterAnalyser = nextAnalyser;
     void nextContext.resume().catch(() => {});
+    if (paused) void nextContext.suspend().catch(() => {});
   } catch {
     meterAnalyser = null;
   }
@@ -285,12 +312,14 @@ function attachSink(stream: MediaStream): void {
   sink?.pause();
   const audio = new Audio();
   audio.srcObject = stream;
-  audio.autoplay = true;
-  audio.play().catch(() => {});
+  audio.autoplay = !paused;
+  audio.muted = paused;
+  if (!paused) audio.play().catch(() => {});
   sink = audio;
 }
 
 function onRealtimeEvent(raw: unknown): void {
+  if (paused || pendingPause) return;
   if (typeof raw !== 'string') return;
   let event: Record<string, unknown>;
   try {
@@ -353,11 +382,50 @@ function configureSession(): void {
 
 function canPublishListening(connection: RTCPeerConnection, channel: RTCDataChannel): boolean {
   return (
+    !paused &&
+    !pendingPause &&
     connection === peer &&
     channel === dataChannel &&
     channel.readyState === 'open' &&
     connection.currentRemoteDescription !== null &&
     liveInputTracks().length > 0
+  );
+}
+
+type RealtimeControlType = 'response.cancel' | 'output_audio_buffer.clear';
+
+function sendRealtimeControl(type: RealtimeControlType): void {
+  if (dataChannel?.readyState !== 'open') return;
+  try {
+    dataChannel.send(JSON.stringify({ type }));
+  } catch {
+    // The peer may be closing. Local pause still fences playback and input.
+  }
+}
+
+function cancelProviderOutput(): void {
+  sendRealtimeControl('response.cancel');
+  sendRealtimeControl('output_audio_buffer.clear');
+}
+
+async function detachInputSenders(): Promise<void> {
+  const bindings = inputSenders.slice();
+  await Promise.all(
+    bindings.map(async ({ sender }) => {
+      await sender.replaceTrack(null);
+    }),
+  );
+}
+
+async function restoreInputSenders(): Promise<void> {
+  const bindings = inputSenders.slice();
+  if (bindings.some(({ track }) => track.readyState !== 'live')) {
+    throw new Error('The microphone ended while voice mode was paused.');
+  }
+  await Promise.all(
+    bindings.map(async ({ sender, track }) => {
+      await sender.replaceTrack(track);
+    }),
   );
 }
 
@@ -387,6 +455,10 @@ async function appStart(): Promise<void> {
   heard = '';
   spoken = '';
   muted = false;
+  paused = false;
+  pendingPause = false;
+  pausedMuted = false;
+  pauseResumeFence++;
   inputActive = false;
   stopInputLevelMeter(false);
   publish('connecting');
@@ -424,10 +496,25 @@ async function appStart(): Promise<void> {
     }
     microphone = acquiredMicrophone;
     attachInputMeter(acquiredMicrophone, current);
+    if (paused) {
+      for (const track of liveInputTracks()) track.enabled = false;
+      inputActive = false;
+      stopInputLevelMeter(false);
+      syncMuted();
+      void meterContext?.suspend().catch(() => {});
+    }
     syncMuted();
     const connection = new RTCPeerConnection();
     peer = connection;
-    for (const track of microphone.getTracks()) connection.addTrack(track, microphone);
+    inputSenders = [];
+    for (const track of microphone.getTracks()) {
+      inputSenders.push({ sender: connection.addTrack(track, microphone), track });
+    }
+    if (paused) {
+      await detachInputSenders();
+      if (generation !== current) return;
+      pendingPause = false;
+    }
     connection.ontrack = (event) => {
       if (generation === current) attachSink(event.streams[0] ?? new MediaStream([event.track]));
     };
@@ -447,6 +534,7 @@ async function appStart(): Promise<void> {
     dataChannel.onopen = () => {
       if (generation !== current) return;
       configureSession();
+      if (paused || pendingPause) cancelProviderOutput();
       if (remoteDescriptionAccepted && canPublishListening(connection, dataChannel!)) {
         publish('listening');
       }
@@ -496,6 +584,8 @@ async function appStart(): Promise<void> {
  */
 async function releaseBrowserMedia(): Promise<void> {
   inputActive = false;
+  pendingPause = false;
+  paused = false;
   detachInputMeter();
   const closingMeterContext = meterContext;
   meterContext = null;
@@ -506,6 +596,7 @@ async function releaseBrowserMedia(): Promise<void> {
   }
   microphone?.getTracks().forEach((track) => track.stop());
   microphone = null;
+  inputSenders = [];
   muted = false;
   try {
     dataChannel?.close();
@@ -548,6 +639,9 @@ async function endProviderSession(previousLease: AppVoiceLease, previousSession:
 }
 
 function beginRelease(sendEnd: boolean): Promise<void> {
+  pendingPause = false;
+  paused = false;
+  pauseResumeFence++;
   if (releasing) return releasing;
   const previousLease = lease;
   const previousSession = sessionId;
@@ -581,11 +675,114 @@ function appStop(): void {
   publish('idle');
 }
 
+function resumeErrorMessage(cause: unknown): string {
+  if (cause instanceof Error && cause.message) return `Voice mode could not resume safely: ${cause.message}`;
+  return 'Voice mode could not resume safely. Start voice mode again.';
+}
+
+async function appPause(): Promise<void> {
+  if (!appIsActive() || paused) return;
+  const currentGeneration = generation;
+  const currentFence = ++pauseResumeFence;
+  pendingPause = true;
+  pausedMuted = muted;
+  paused = true;
+  state = 'paused';
+  inputActive = false;
+  stopInputLevelMeter(false);
+  for (const track of liveInputTracks()) track.enabled = false;
+  syncMuted();
+  if (sink) {
+    sink.pause();
+    sink.muted = true;
+  }
+  const suspendingMeter = meterContext?.suspend() ?? Promise.resolve();
+  cancelProviderOutput();
+  publish('paused');
+
+  try {
+    await Promise.all([suspendingMeter, detachInputSenders()]);
+    if (generation !== currentGeneration || !paused || pauseResumeFence !== currentFence) return;
+    // A connection which has not acquired its tracks yet keeps this intent in
+    // `pendingPause`; appStart applies it at the first safe media boundary.
+    if (peer) pendingPause = false;
+  } catch (cause) {
+    if (generation !== currentGeneration || !paused || pauseResumeFence !== currentFence) return;
+    paused = false;
+    pendingPause = false;
+    error = resumeErrorMessage(cause);
+    publish('error');
+    await beginRelease(true);
+  }
+}
+
+async function appResume(): Promise<void> {
+  if (!paused) return;
+  const currentGeneration = generation;
+  const currentFence = ++pauseResumeFence;
+  const tracks = liveInputTracks();
+  if (microphone && tracks.length === 0) {
+    paused = false;
+    pendingPause = false;
+    error = 'The microphone ended while voice mode was paused. Start voice mode again.';
+    publish('error');
+    await beginRelease(true);
+    return;
+  }
+
+  const playback = sink
+    ? (() => {
+        sink!.muted = false;
+        return sink!.play();
+      })()
+    : Promise.resolve();
+  const resumingMeter = meterContext?.resume() ?? Promise.resolve();
+  try {
+    await Promise.all([restoreInputSenders(), playback, resumingMeter]);
+    if (generation !== currentGeneration || !paused || pauseResumeFence !== currentFence) return;
+    for (const track of tracks) track.enabled = !pausedMuted;
+    paused = false;
+    pendingPause = false;
+    inputActive = false;
+    syncMuted();
+    if (peer && dataChannel && canPublishListening(peer, dataChannel)) {
+      publish('listening');
+    } else {
+      publish('connecting');
+    }
+  } catch (cause) {
+    if (generation !== currentGeneration || !paused || pauseResumeFence !== currentFence) return;
+    for (const track of tracks) track.enabled = false;
+    if (sink) {
+      sink.pause();
+      sink.muted = true;
+    }
+    void meterContext?.suspend().catch(() => {});
+    try {
+      await detachInputSenders();
+    } catch {
+      // The terminal stop below still closes the peer and ends every track.
+    }
+    paused = false;
+    pendingPause = false;
+    error = resumeErrorMessage(cause);
+    publish('error');
+    await beginRelease(true);
+  }
+}
+
+function serializePauseResume(operation: () => Promise<void>): Promise<void> {
+  const next = pauseResumeSerial.then(operation, operation);
+  pauseResumeSerial = next.catch(() => {});
+  return next;
+}
+
 /**
  * Toggle only the actual browser input tracks. The peer connection, provider
  * session, data channel and output sink remain in place while muted.
  */
 function appSetMuted(next: boolean): void {
+  if (paused) return;
   const tracks = liveInputTracks();
   if (tracks.length === 0) return;
   for (const track of tracks) track.enabled = !next;
@@ -605,6 +802,9 @@ function appDismissError(): void {
 
 function fail(message: string, sendEnd = true, expectedGeneration = generation): void {
   if (generation !== expectedGeneration) return;
+  paused = false;
+  pendingPause = false;
+  pauseResumeFence++;
   error = message;
   publish('error');
   void beginRelease(sendEnd);
@@ -687,6 +887,10 @@ export function isActive(): boolean {
   return appIsActive();
 }
 
+export function isPaused(): boolean {
+  return paused;
+}
+
 export function snapshot(): VoiceSessionSnapshot {
   return facadeSnapshot();
 }
@@ -714,6 +918,22 @@ export async function start(): Promise<void> {
 export function stop(): void {
   appStop();
   publishFacade();
+}
+
+export function pause(): Promise<void> {
+  return serializePauseResume(appPause);
+}
+
+export function resume(): Promise<void> {
+  return serializePauseResume(appResume);
+}
+
+export async function togglePaused(): Promise<void> {
+  if (paused) {
+    await resume();
+    return;
+  }
+  if (appIsActive()) await pause();
 }
 
 export async function toggle(): Promise<void> {
@@ -744,10 +964,14 @@ export const voiceSessionController = {
   setCandidateAvailable,
   setAvailability,
   isActive,
+  isPaused,
   snapshot,
   subscribe,
   start,
   stop,
+  pause,
+  resume,
+  togglePaused,
   setMuted,
   dismissError,
   toggle,

@@ -46,6 +46,23 @@ import { ASSISTANT_NAME } from './assistant-identity.js';
  */
 export type CosStatus = 'idle' | 'starting' | 'ready' | 'down';
 
+export interface CosConversationIdentity {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly generation: number;
+  readonly incarnation: string;
+}
+
+export interface CosComposerIdentity {
+  readonly channelId: string;
+  readonly threadId: string;
+  readonly runtimeSessionId: string;
+  readonly runtimeGeneration: number;
+  readonly runtimeIncarnation: string;
+  readonly draftRef: string;
+  readonly label: string;
+}
+
 /** One assistant text run. Deltas append to the tail of the newest one. */
 export interface CosTextBlock {
   kind: 'text';
@@ -135,33 +152,11 @@ export interface CosFault {
   fatal: boolean;
 }
 
-/**
- * A text-thread event after the Mission Control transport has attributed it.
- *
- * The existing COS renderer still consumes the raw COS event payload, but the
- * threaded transport never hands that payload around without its originating
- * thread, runtime generation, sequence fence, and immutable event id.
- */
-export interface ThreadedCosEvent {
-  readonly thread_id: string;
-  readonly runtime_generation: number;
-  readonly thread_seq: number;
-  readonly event_id: string;
-  readonly event: Readonly<Record<string, unknown>>;
-}
-
-/** Explicit runtime state accompanying an ordered Mission Control snapshot. */
-export interface ThreadedSnapshotState {
-  readonly coveredTurnIds: readonly string[];
-  /**
-   * Persisted terminal turns at the snapshot's event cut which canonical
-   * history already represents but cannot safely identity-bind (for example
-   * duplicate structural transcript groups). This is render-only suppression;
-   * the transport still consumes their event ids and sequences.
-   */
-  readonly replaySuppressedTurnIds: readonly string[];
-  readonly activeTurnId: string;
-  readonly pendingTurnIds: readonly string[];
+interface PendingAdmission {
+  readonly clientRef: string;
+  readonly draftRevision: number;
+  readonly conversation: CosConversationIdentity;
+  readonly timer: ReturnType<typeof setTimeout>;
 }
 
 // ---------------------------------------------------------------------------
@@ -223,6 +218,18 @@ export class CosStore {
 
   private _status: CosStatus = 'idle';
   private _sessionId = '';
+  private _conversation: CosConversationIdentity | null = null;
+  private _draft = '';
+  private _draftRevision = 0;
+  private _draftRef = '';
+  private _pendingAdmission: PendingAdmission | null = null;
+  private _pendingAppVoice = new Map<string, {
+    resolve: (value: { readonly thread_id: string; readonly runtime_generation: number; readonly turn_id: string }) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+    signal: AbortSignal;
+    onAbort: () => void;
+  }>();
   private _turns: CosTurn[] = [];
   private _byId = new Map<string, CosTurn>();
   private _approvals: CosApproval[] = [];
@@ -238,21 +245,102 @@ export class CosStore {
    * entitled to erase.
    */
   private _replayRequestedAt = 0;
-  /**
-   * Immutable runtime turn ids represented by the latest threaded snapshot.
-   * The v2 coordinator consumes a late event's sequence fence regardless, but
-   * this renderer must never materialize a second copy of a covered turn.
-   */
-  private _threadCoveredTurnIds = new Set<string>();
-  /** See ThreadedSnapshotState.replaySuppressedTurnIds. */
-  private _threadReplaySuppressedTurnIds = new Set<string>();
-
   get status(): CosStatus {
     return this._status;
   }
 
   get sessionId(): string {
     return this._sessionId;
+  }
+
+  get conversation(): CosConversationIdentity | null {
+    return this._conversation;
+  }
+
+  matchesConversationIdentity(id: string, generation: number, sessionId = '', incarnation = ''): boolean {
+    const current = this._conversation;
+    return !!current &&
+      current.id === id &&
+      current.generation === generation &&
+      (sessionId === '' || current.sessionId === sessionId) &&
+      (incarnation === '' || current.incarnation === incarnation);
+  }
+
+  matchesRuntimeIdentity(threadId: string, generation: number, sessionId: string, incarnation: string): boolean {
+    const current = this._conversation;
+    return !!current &&
+      current.id === threadId &&
+      current.generation === generation &&
+      current.sessionId === sessionId &&
+      current.incarnation === incarnation;
+  }
+
+  get negotiating(): boolean { return this._status === 'starting'; }
+  get inputEnabled(): boolean { return this._status === 'ready' && this._conversation !== null; }
+  get draft(): string { return this._draft; }
+  get draftRevision(): number { return this._draftRevision; }
+  get admissionPending(): boolean { return this._pendingAdmission !== null; }
+  setDraft(value: string): void {
+    this._draft = value;
+    this._draftRevision++;
+  }
+
+  get composerIdentity(): CosComposerIdentity {
+    const current = this._conversation;
+    return {
+      channelId: current ? 'legacy-cos' : 'none',
+      threadId: current?.id ?? '',
+      runtimeSessionId: current?.sessionId ?? '',
+      runtimeGeneration: current?.generation ?? 0,
+      runtimeIncarnation: current?.incarnation ?? '',
+      draftRef: current ? this._draftRef : '',
+      label: ASSISTANT_NAME,
+    };
+  }
+
+  get appVoiceThreadTurnTarget(): {
+    readonly channelId: string;
+    readonly threadId: string;
+    readonly runtimeSessionId: string;
+    readonly runtimeGeneration: number;
+    readonly runtimeIncarnation: string;
+    readonly draftRef: string;
+  } | null {
+    const identity = this.composerIdentity;
+    return identity.threadId ? identity : null;
+  }
+
+  canCancel(turnId: string): boolean { return this._byId.get(turnId)?.status === 'pending' || this._byId.get(turnId)?.status === 'streaming'; }
+  canAnswer(_turnId: string, requestId: string): boolean { return this._approvals.some((item) => item.requestId === requestId); }
+  setDraftForAppVoice(target: CosComposerIdentity, value: string): boolean {
+    if (!this._sameComposer(target)) return false;
+    this._draft = value;
+    this._draftRevision++;
+    this._notify();
+    return true;
+  }
+  inspectDraftForAppVoice(target: CosComposerIdentity): { readonly text: string; readonly truncated: boolean } | null {
+    return this._sameComposer(target) ? { text: this._draft, truncated: false } : null;
+  }
+  private _sameComposer(target: CosComposerIdentity): boolean {
+    const current = this.composerIdentity;
+    return target.channelId === current.channelId &&
+      target.threadId === current.threadId &&
+      target.runtimeGeneration === current.runtimeGeneration &&
+      target.runtimeSessionId === current.runtimeSessionId &&
+      target.runtimeIncarnation === current.runtimeIncarnation &&
+      target.draftRef === current.draftRef;
+  }
+
+  private _setConversation(next: CosConversationIdentity | null): void {
+    const current = this._conversation;
+    const unchanged =
+      current?.id === next?.id &&
+      current?.sessionId === next?.sessionId &&
+      current?.generation === next?.generation &&
+      current?.incarnation === next?.incarnation;
+    this._conversation = next;
+    if (!unchanged) this._draftRef = next ? globalThis.crypto.randomUUID() : '';
   }
 
   get turns(): readonly CosTurn[] {
@@ -289,6 +377,7 @@ export class CosStore {
 
   /** Called once by app.ts, the same way previewStore.attach is. */
   attach(socket: MuxSocket): void {
+    if (this._socket && this._socket !== socket) this._socket.onCosFrame = undefined;
     this._socket = socket;
     socket.onCosFrame = (frame) => this.handleFrame(frame);
   }
@@ -318,8 +407,77 @@ export class CosStore {
   send(prompt: string): boolean {
     const text = prompt.trim();
     if (!text) return false;
-    if (!this._socket) return false;
-    return this._socket.cosTurn(text, `cos-${Date.now().toString(36)}`);
+    const conversation = this._conversation;
+    if (!conversation || this._status !== 'ready' || !this._socket || this._pendingAdmission) return false;
+    const clientRef = `cos-${globalThis.crypto.randomUUID()}`;
+    const pending: PendingAdmission = {
+      clientRef,
+      draftRevision: this._draftRevision,
+      conversation,
+      timer: setTimeout(() => {
+        if (this._pendingAdmission?.clientRef !== clientRef) return;
+        this._pendingAdmission = null;
+        this._fault = {
+          code: 'turn_admission_timeout',
+          message: 'Send was not confirmed; your draft was kept.',
+          fatal: false,
+        };
+        this._notify();
+      }, 15_000),
+    };
+    this._pendingAdmission = pending;
+    this._fault = null;
+    if (!this._socket.cosTurn(text, clientRef)) {
+      clearTimeout(pending.timer);
+      this._pendingAdmission = null;
+      this._fault = {
+        code: 'turn_admission_failed',
+        message: 'Send could not be sent; your draft was kept.',
+        fatal: false,
+      };
+      this._notify();
+      return false;
+    }
+    this._notify();
+    return true;
+  }
+
+  sendForAppVoice(
+    prompt: string,
+    operationId: string,
+    signal: AbortSignal,
+  ): Promise<{ readonly thread_id: string; readonly runtime_generation: number; readonly turn_id: string }> {
+    const current = this._conversation;
+    if (!current || this._status !== 'ready' || !this._socket) {
+      return Promise.reject(new Error('Mission Control is not ready.'));
+    }
+    if (signal.aborted) return Promise.reject(new Error('The app voice turn was cancelled.'));
+    // The server binds this exact reference to the pending, owner-authorized
+    // voice operation. A random reference is not an admission receipt.
+    const clientRef = `app_voice:${operationId}`;
+    if (this._pendingAppVoice.has(clientRef)) {
+      return Promise.reject(new Error('This voice request is already awaiting confirmation.'));
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = (): void => {
+        const pending = this._pendingAppVoice.get(clientRef);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        signal.removeEventListener('abort', onAbort);
+        this._pendingAppVoice.delete(clientRef);
+        reject(new Error('The app voice turn was cancelled.'));
+      };
+      const timer = setTimeout(() => {
+        const pending = this._pendingAppVoice.get(clientRef);
+        if (!pending) return;
+        signal.removeEventListener('abort', onAbort);
+        this._pendingAppVoice.delete(clientRef);
+        reject(new Error('Mission Control did not confirm the turn.'));
+      }, 15000);
+      this._pendingAppVoice.set(clientRef, { resolve, reject, timer, signal, onAbort });
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (!this._socket?.cosTurn(prompt, clientRef, operationId)) onAbort();
+    });
   }
 
   /**
@@ -335,7 +493,7 @@ export class CosStore {
    *
    * Returns whether the decision actually went out.
    */
-  answer(requestId: string, approved: boolean): boolean {
+  answer(requestId: string, approved: boolean, _turnId?: string): boolean {
     if (!this._socket?.cosApproval(requestId, approved)) {
       this._fault = {
         code: 'approval_failed',
@@ -401,174 +559,35 @@ export class CosStore {
 
   /** The socket went away. The transcript survives; the readiness claim cannot. */
   markDisconnected(): void {
+    if (this._pendingAdmission) {
+      clearTimeout(this._pendingAdmission.timer);
+      this._pendingAdmission = null;
+      this._fault = {
+        code: 'turn_admission_disconnected',
+        message: 'Connection closed before Send was confirmed; your draft was kept.',
+        fatal: false,
+      };
+    }
+    for (const pending of this._pendingAppVoice.values()) {
+      clearTimeout(pending.timer);
+      pending.signal.removeEventListener('abort', pending.onAbort);
+      pending.reject(new Error('Mission Control connection closed.'));
+    }
+    this._pendingAppVoice.clear();
     this._subscribed = false;
     if (this._status !== 'idle') this._setStatus('down');
     this._notify();
   }
 
-  /** Re-assert after a reconnect once capability negotiation chose legacy COS. */
+  /** Restore the one shared subscription after reconnect, if previously opened. */
   markReconnected(): void {
     if (this._status === 'idle') return;
     this._subscribed = true;
-    // The socket deliberately does not replay raw COS on open: the
-    // conversation coordinator must negotiate v2 capability before allowing
-    // unscoped legacy traffic. Once it has explicitly selected legacy, this is
-    // the one safe place to re-subscribe.
+    // The socket does not independently replay COS traffic. This is the one
+    // owner of reconnect subscription and the accompanying history replay.
     this._replayRequestedAt = Date.now();
     this._setStatus('starting');
     this._socket?.cosSubscribe(true);
-    this._notify();
-  }
-
-  /**
-   * Adopt one authoritative Mission Control selection result.
-   *
-   * This deliberately reuses the exact history renderer used by the legacy
-   * stream. The transport owns thread attribution and generation fencing;
-   * CosStore remains the single turn/block projection.
-   */
-  adoptThreadSnapshot(
-    sessionId: string,
-    history: readonly unknown[],
-    snapshot: ThreadedSnapshotState,
-  ): void {
-    this._sessionId = sessionId;
-    this._fault = null;
-    this._approvals = [];
-    this._threadCoveredTurnIds = new Set(snapshot.coveredTurnIds);
-    this._threadReplaySuppressedTurnIds = new Set(snapshot.replaySuppressedTurnIds);
-    this._replayRequestedAt = Date.now();
-    this._replaceThreadHistoryCanonical(history, snapshot);
-    this._setStatus('ready');
-    this._notify();
-  }
-
-  /**
-   * Adopt an authoritative history repair for an already-selected thread.
-   * Unlike a selection, this does not alter connection-scoped readiness data.
-   */
-  adoptThreadHistory(history: readonly unknown[], snapshot: ThreadedSnapshotState): void {
-    this._fault = null;
-    this._approvals = [];
-    this._threadCoveredTurnIds = new Set(snapshot.coveredTurnIds);
-    this._threadReplaySuppressedTurnIds = new Set(snapshot.replaySuppressedTurnIds);
-    this._replayRequestedAt = Date.now();
-    this._replaceThreadHistoryCanonical(history, snapshot);
-    this._notify();
-  }
-
-  /**
-   * Render one event that was already fenced and attributed by the threaded
-   * transport. It intentionally does not emit through `onEvent`: that raw
-   * event stream belongs to the legacy global voice bridge, which threaded
-   * text preview must never drive.
-   */
-  receiveThreadEvent(envelope: ThreadedCosEvent): void {
-    // No content/prompt heuristic is permitted here. The immutable identity
-    // sets are supplied with this snapshot. Suppressing at the adapter also
-    // keeps these events off the raw voice stream (receiveThreadEvent never
-    // emits through onEvent).
-    const turnId = str(envelope.event.turn_id);
-    if (
-      this._threadCoveredTurnIds.has(turnId) ||
-      this._threadReplaySuppressedTurnIds.has(turnId)
-    ) {
-      this._notify();
-      return;
-    }
-    this._event(envelope.event, false);
-    this._notify();
-  }
-
-  /**
-   * The v2 transport received a scoped approval receipt. This remains a
-   * renderer-local state change; unlike the legacy answer path it never emits
-   * a global COS command or guesses a terminal turn result.
-   */
-  settleThreadApproval(approvalId: string, approved: boolean): void {
-    const approval = this._approvals.find((item) => item.requestId === approvalId);
-    if (!approval) return;
-    approval.answered = approved ? 'approved' : 'denied';
-    setTimeout(() => {
-      this._approvals = this._approvals.filter((item) => item.requestId !== approvalId);
-      this._notify();
-    }, 900);
-    this._notify();
-  }
-
-  /**
-   * Replace this threaded renderer with exactly one canonical server history,
-   * then materialize the separately authoritative active/queued identities.
-   * These are queue-local ids, never inferred from prompts or prose.
-   */
-  private _replaceThreadHistoryCanonical(
-    raw: readonly unknown[],
-    snapshot: ThreadedSnapshotState,
-  ): void {
-    const turns: CosTurn[] = [];
-    const byId = new Map<string, CosTurn>();
-    for (let index = 0; index < raw.length; index++) {
-      const item = raw[index];
-      const turn = this._fromHistory(item);
-      if (!turn || byId.has(turn.id)) continue;
-      const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : null;
-      // The sidecar's ordered snapshot reads the live transcript before it
-      // reports its sole active queue-local id. A currently active turn is the
-      // final un-attributed transcript group; adopt that *structural* identity
-      // instead of matching its prompt or response content.
-      if (
-        snapshot.activeTurnId &&
-        index === raw.length - 1 &&
-        str(record?.turn_id) === ''
-      ) {
-        turn.id = snapshot.activeTurnId;
-        turn.status = 'streaming';
-        turn.endedAt = 0;
-      }
-      turns.push(turn);
-      byId.set(turn.id, turn);
-    }
-    this._ensureThreadSnapshotTurn(turns, byId, snapshot.activeTurnId, 'streaming');
-    for (const turnId of snapshot.pendingTurnIds) {
-      this._ensureThreadSnapshotTurn(turns, byId, turnId, 'pending');
-    }
-    this._turns = turns;
-    this._byId = byId;
-  }
-
-  private _ensureThreadSnapshotTurn(
-    turns: CosTurn[],
-    byId: Map<string, CosTurn>,
-    turnId: string,
-    status: 'pending' | 'streaming',
-  ): void {
-    if (!turnId) return;
-    const existing = byId.get(turnId);
-    if (existing) {
-      existing.status = status;
-      existing.endedAt = 0;
-      return;
-    }
-    const turn: CosTurn = {
-      id: turnId,
-      prompt: '',
-      clientRef: '',
-      blocks: [],
-      status,
-      notices: [],
-      costUsd: '',
-      ms: 0,
-      error: '',
-      createdAt: Date.now(),
-      endedAt: 0,
-    };
-    turns.push(turn);
-    byId.set(turnId, turn);
-  }
-
-  /** Surface a transport refusal without pretending it was a COS event. */
-  setThreadFault(code: string, message: string, fatal = false): void {
-    this._fault = { code, message, fatal };
     this._notify();
   }
 
@@ -580,12 +599,74 @@ export class CosStore {
     if (type === 'cos-subscribe-result') {
       const ok = frame.ok === true;
       this._sessionId = str(frame.session_id);
+      const conversation = frame.conversation && typeof frame.conversation === 'object'
+        ? frame.conversation as Record<string, unknown>
+        : null;
+      const id = str(conversation?.id);
+      const sessionId = str(conversation?.session_id);
+      const generation = typeof conversation?.generation === 'number' ? conversation.generation : 0;
+      const incarnation = str(conversation?.incarnation);
+      this._setConversation(
+        id && sessionId && generation > 0 && incarnation
+          ? { id, sessionId, generation, incarnation }
+          : null,
+      );
       if (!ok) {
         this._setStatus('down');
         this._fault = { code: 'subscribe_failed', message: str(frame.error) || `${ASSISTANT_NAME} could not be reached`, fatal: true };
       } else {
         this._fault = null;
-        this._setStatus(frame.ready === true ? 'ready' : 'starting');
+        this._setStatus(frame.ready === true && this._conversation ? 'ready' : 'starting');
+      }
+      this._notify();
+      return;
+    }
+    if (type === 'cos-turn-result') {
+      const clientRef = str(frame.client_ref);
+      const pending = this._pendingAppVoice.get(clientRef);
+      if (pending) {
+        clearTimeout(pending.timer);
+        pending.signal.removeEventListener('abort', pending.onAbort);
+        this._pendingAppVoice.delete(clientRef);
+        if (frame.ok !== true || !this._conversation || !str(frame.turn_id)) {
+          pending.reject(new Error(str(frame.error) || str(frame.code) || 'Mission Control could not start the turn.'));
+        } else {
+          pending.resolve({
+            thread_id: this._conversation.id,
+            runtime_generation: this._conversation.generation,
+            turn_id: str(frame.turn_id),
+          });
+        }
+        return;
+      }
+      const admission = this._pendingAdmission;
+      if (!admission || admission.clientRef !== clientRef) return;
+      clearTimeout(admission.timer);
+      this._pendingAdmission = null;
+      const current = this._conversation;
+      if (frame.ok !== true || !current || !str(frame.turn_id)) {
+        this._fault = {
+          code: 'turn_admission_refused',
+          message: `${str(frame.error) || str(frame.code) || 'Send was refused.'}`.slice(0, 220),
+          fatal: false,
+        };
+      } else if (
+        current.id !== admission.conversation.id ||
+        current.sessionId !== admission.conversation.sessionId ||
+        current.generation !== admission.conversation.generation ||
+        current.incarnation !== admission.conversation.incarnation
+      ) {
+        this._fault = {
+          code: 'turn_admission_identity_changed',
+          message: 'Conversation changed before Send was confirmed; your draft was kept.',
+          fatal: false,
+        };
+      } else {
+        this._fault = null;
+        if (this._draftRevision === admission.draftRevision) {
+          this._draft = '';
+          this._draftRevision++;
+        }
       }
       this._notify();
       return;

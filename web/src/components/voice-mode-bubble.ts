@@ -27,8 +27,16 @@ interface ViewportBounds {
   readonly middleX: number;
 }
 
+interface DropTargetBounds {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
 interface DragState {
   readonly pointerId: number;
+  readonly captureTarget: HTMLButtonElement;
   readonly originX: number;
   readonly originY: number;
   readonly startX: number;
@@ -36,11 +44,13 @@ interface DragState {
   moved: boolean;
 }
 
-const PRESENTATION_STORAGE_KEY = 'muxterm.voice-mode-bubble.presentation.v1';
+const PRESENTATION_STORAGE_KEY = '[REDACTED:SECRET]';
 const DEFAULT_POSITION: StoredPosition = Object.freeze({ edge: 'right', vertical: 0.56 });
 const EDGE_GAP = 12;
 const DRAG_THRESHOLD = 6;
 const SNAP_DURATION_MS = 160;
+const DROP_TARGET_SIZE = 76;
+const DROP_TARGET_HIT_PADDING = 18;
 const FALLBACK_BUBBLE_WIDTH = 84;
 const FALLBACK_BUBBLE_HEIGHT = 88;
 
@@ -79,6 +89,7 @@ function visible(snapshot: VoiceSessionSnapshot): boolean {
 }
 
 function statusLabel(snapshot: VoiceSessionSnapshot): string {
+  if (snapshot.paused || snapshot.state === 'paused') return 'Paused';
   if (snapshot.state === 'error') return 'Error';
   if (snapshot.muted) return 'Mic muted';
   switch (snapshot.state) {
@@ -120,6 +131,7 @@ export class MuxVoiceModeBubble extends LitElement {
 
     .bubble {
       position: absolute;
+      z-index: 1;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -166,97 +178,37 @@ export class MuxVoiceModeBubble extends LitElement {
       color: var(--mux-warn, var(--chrome-text-bright, currentColor));
     }
 
-    .menu {
-      position: fixed;
-      z-index: 1;
-      width: min(288px, calc(100vw - 24px));
-      box-sizing: border-box;
-      max-height: calc(100dvh - 24px);
-      overflow: auto;
-      overscroll-behavior: contain;
-      pointer-events: auto;
-      padding: 8px;
-      border: 1px solid var(--chrome-text-dim, currentColor);
-      border-radius: 8px;
-      background: var(--chrome-bar);
-      color: var(--chrome-text-bright, currentColor);
+    .bubble[data-paused='true'] .status {
+      color: var(--mux-ok, #22c55e);
     }
 
-    .bubble[data-edge='left'] .menu {
-      left: 0;
-    }
-
-    .bubble[data-edge='right'] .menu {
-      right: 0;
-    }
-
-    .bubble[data-menu-up='true'] .menu {
-      bottom: calc(100% + 8px);
-    }
-
-    .bubble[data-menu-up='false'] .menu {
-      top: calc(100% + 8px);
-    }
-
-    .menu-heading {
-      margin: 2px 4px 6px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-
-    .menu-status,
-    .menu-help {
-      margin: 0 4px 8px;
-      font-size: 12px;
-      line-height: 1.35;
-      color: var(--chrome-text-dim, currentColor);
-    }
-
-    .menu-actions,
-    .dock-actions {
+    .drop-target {
+      position: absolute;
+      z-index: 0;
       display: grid;
-      gap: 4px;
-    }
-
-    .dock-actions {
-      grid-template-columns: 1fr 1fr;
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid var(--chrome-border, currentColor);
-    }
-
-    .menu button {
-      min-height: 44px;
-      padding: 8px 10px;
-      border: 1px solid var(--chrome-border, currentColor);
-      border-radius: 5px;
+      place-items: center;
+      width: ${DROP_TARGET_SIZE}px;
+      height: ${DROP_TARGET_SIZE}px;
+      box-sizing: border-box;
+      padding: 0;
+      border: 2px dashed var(--mux-error, var(--chrome-danger, #ef4444));
+      border-radius: 50%;
       background: transparent;
-      color: inherit;
+      color: var(--mux-error, var(--chrome-danger, #ef4444));
       font: inherit;
-      font-size: 13px;
-      font-weight: 650;
-      text-align: left;
-      cursor: pointer;
+      font-size: 42px;
+      font-weight: 400;
+      line-height: 1;
+      pointer-events: none;
     }
 
-    .dock-actions button {
-      text-align: center;
+    .drop-target[data-highlighted='true'] {
+      background: color-mix(in srgb, var(--mux-error, #ef4444) 16%, transparent);
     }
 
-    .menu button:hover:not(:disabled),
-    .menu button:focus-visible {
-      outline: 2px solid var(--chrome-accent, currentColor);
-      outline-offset: -2px;
-      background: var(--chrome-hover, transparent);
-    }
-
-    .menu button:disabled {
-      cursor: not-allowed;
-      opacity: 0.56;
-    }
-
-    .stop {
-      border-color: var(--mux-error, var(--chrome-danger, currentColor)) !important;
+    .drop-target:focus-visible {
+      outline: 2px solid currentColor;
+      outline-offset: 3px;
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -273,9 +225,10 @@ export class MuxVoiceModeBubble extends LitElement {
   private get _session(): VoiceSessionSnapshot {
     return this.snapshot ?? this._liveSession;
   }
-  @state() private _menuOpen = false;
   @state() private _positioned = false;
   @state() private _snapping = false;
+  @state() private _dropVisible = false;
+  @state() private _dropHighlighted = false;
 
   private readonly _storedPosition = restorePosition();
   @state() private _edge: DockEdge = this._storedPosition.edge;
@@ -286,8 +239,7 @@ export class MuxVoiceModeBubble extends LitElement {
   private _unsubscribe: (() => void) | null = null;
   private _positionFrame: number | null = null;
   private _snapTimer: ReturnType<typeof setTimeout> | undefined;
-  private _menuInitiator: HTMLElement | null = null;
-  private _suppressMenuRequest = false;
+  private _suppressNextClick = false;
   private _visualViewport: VisualViewport | null = null;
 
   override connectedCallback(): void {
@@ -296,12 +248,16 @@ export class MuxVoiceModeBubble extends LitElement {
     this._unsubscribe = voiceSessionController.subscribe((snapshot) => {
       if (this.snapshot !== undefined) return;
       const wasVisible = visible(this._session);
-      const previousState = this._session.state;
+      const previous = this._session;
       this._liveSession = snapshot;
       if (!visible(snapshot)) {
-        this._menuOpen = false;
-        this._menuInitiator = null;
-      } else if (!wasVisible || snapshot.state !== previousState) {
+        this._endDragOnDisconnect();
+      } else if (
+        !wasVisible ||
+        snapshot.state !== previous.state ||
+        snapshot.paused !== previous.paused ||
+        snapshot.muted !== previous.muted
+      ) {
         this._queuePosition();
       }
     });
@@ -330,14 +286,20 @@ export class MuxVoiceModeBubble extends LitElement {
 
   override updated(changed: Map<string, unknown>): void {
     if (changed.has('snapshot') || changed.has('_liveSession')) {
-      const previous = changed.get(changed.has('snapshot') ? 'snapshot' : '_liveSession') as VoiceSessionSnapshot | undefined;
+      const previous = changed.get(changed.has('snapshot') ? 'snapshot' : '_liveSession') as
+        | VoiceSessionSnapshot
+        | undefined;
       if (!visible(this._session)) {
-        this._menuOpen = false;
-      } else if (!previous || previous.state !== this._session.state || previous.muted !== this._session.muted) {
+        this._endDragOnDisconnect();
+      } else if (
+        !previous ||
+        previous.state !== this._session.state ||
+        previous.paused !== this._session.paused ||
+        previous.muted !== this._session.muted
+      ) {
         this._queuePosition();
       }
     }
-    if (changed.has('_menuOpen') && this._menuOpen) this._placeMenu();
   }
 
   private _bubble(): HTMLElement | null {
@@ -379,31 +341,45 @@ export class MuxVoiceModeBubble extends LitElement {
     };
   }
 
+  private _dropTargetBounds(): DropTargetBounds {
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft ?? 0;
+    const top = viewport?.offsetTop ?? 0;
+    const width = viewport?.width ?? window.innerWidth;
+    const height = viewport?.height ?? window.innerHeight;
+    const insets = this._safeInsets();
+    const minimumTop = top + insets.top + EDGE_GAP;
+    const bottom = Math.max(minimumTop + DROP_TARGET_SIZE, top + height - insets.bottom - EDGE_GAP);
+    const targetTop = Math.max(minimumTop, bottom - DROP_TARGET_SIZE);
+    const targetLeft = left + width / 2 - DROP_TARGET_SIZE / 2;
+    return {
+      left: targetLeft,
+      top: targetTop,
+      right: targetLeft + DROP_TARGET_SIZE,
+      bottom: targetTop + DROP_TARGET_SIZE,
+    };
+  }
+
+  private _isOverDropTarget(): boolean {
+    const target = this._dropTargetBounds();
+    const rect = this._bubble()?.getBoundingClientRect();
+    const bubbleWidth = rect?.width || FALLBACK_BUBBLE_WIDTH;
+    const bubbleHeight = rect?.height || FALLBACK_BUBBLE_HEIGHT;
+    const centerX = this._x + bubbleWidth / 2;
+    const centerY = this._y + bubbleHeight / 2;
+    return (
+      centerX >= target.left - DROP_TARGET_HIT_PADDING &&
+      centerX <= target.right + DROP_TARGET_HIT_PADDING &&
+      centerY >= target.top - DROP_TARGET_HIT_PADDING &&
+      centerY <= target.bottom + DROP_TARGET_HIT_PADDING
+    );
+  }
+
   private _applyPosition(): void {
     const bubble = this._bubble();
     if (!bubble) return;
     bubble.style.left = `${this._x}px`;
     bubble.style.top = `${this._y}px`;
-    if (this._menuOpen) this._placeMenu();
-  }
-
-  private _placeMenu(): void {
-    const menu = this.renderRoot.querySelector<HTMLElement>('.menu');
-    if (!menu) return;
-    const viewport = window.visualViewport;
-    const insets = this._safeInsets();
-    const left = (viewport?.offsetLeft ?? 0) + insets.left + EDGE_GAP;
-    const top = (viewport?.offsetTop ?? 0) + insets.top + EDGE_GAP;
-    const right = (viewport?.offsetLeft ?? 0) + (viewport?.width ?? window.innerWidth) - insets.right - EDGE_GAP;
-    const bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight) - insets.bottom - EDGE_GAP;
-    menu.style.maxHeight = `${Math.max(44, bottom - top)}px`;
-    menu.style.width = `${Math.max(44, Math.min(288, right - left))}px`;
-    const height = menu.getBoundingClientRect().height;
-    const y = this._vertical > 0.5 ? this._y - height - 8 : this._y + FALLBACK_BUBBLE_HEIGHT + 8;
-    menu.style.left = `${clamp(this._x, left, Math.max(left, right - menu.getBoundingClientRect().width))}px`;
-    menu.style.top = `${clamp(y, top, Math.max(top, bottom - height))}px`;
-    menu.style.right = 'auto';
-    menu.style.bottom = 'auto';
   }
 
   private _placeAtStoredPosition(): void {
@@ -423,6 +399,7 @@ export class MuxVoiceModeBubble extends LitElement {
         this._x = clamp(this._x, bounds.minX, bounds.maxX);
         this._y = clamp(this._y, bounds.minY, bounds.maxY);
         this._applyPosition();
+        this.requestUpdate();
         return;
       }
       this._placeAtStoredPosition();
@@ -431,6 +408,7 @@ export class MuxVoiceModeBubble extends LitElement {
 
   private _onViewportChange = (): void => {
     this._queuePosition();
+    if (this._dropVisible) this.requestUpdate();
   };
 
   private _persistPosition(): void {
@@ -457,11 +435,14 @@ export class MuxVoiceModeBubble extends LitElement {
   private _endDragOnDisconnect(): void {
     const drag = this._drag;
     this._drag = null;
-    this._suppressMenuRequest = false;
+    this._dropVisible = false;
+    this._dropHighlighted = false;
+    this._suppressNextClick = false;
     if (!drag) return;
-    const trigger = this.renderRoot.querySelector<HTMLElement>('mux-voice-mode-button');
     try {
-      if (trigger?.hasPointerCapture(drag.pointerId)) trigger.releasePointerCapture(drag.pointerId);
+      if (drag.captureTarget.hasPointerCapture(drag.pointerId)) {
+        drag.captureTarget.releasePointerCapture(drag.pointerId);
+      }
     } catch {
       // Detach may already have released capture.
     }
@@ -474,16 +455,9 @@ export class MuxVoiceModeBubble extends LitElement {
     this._edge = this._x + bubbleWidth / 2 < bounds.middleX ? 'left' : 'right';
     this._vertical =
       bounds.maxY === bounds.minY ? 0 : clamp((this._y - bounds.minY) / (bounds.maxY - bounds.minY), 0, 1);
-    if (animate && !this._reducedMotion()) {
-      if (this._snapTimer !== undefined) clearTimeout(this._snapTimer);
-      this._snapping = true;
-      const bubble = this._bubble();
-      if (bubble) {
-        bubble.dataset.snapping = 'true';
-        void bubble.offsetWidth;
-      }
-      this._snapTimer = setTimeout(() => this._finishSnap(), SNAP_DURATION_MS);
-    }
+    if (this._snapTimer !== undefined) clearTimeout(this._snapTimer);
+    this._snapping = animate && !this._reducedMotion();
+    this._snapTimer = this._snapping ? setTimeout(() => this._finishSnap(), SNAP_DURATION_MS) : undefined;
     this._placeAtStoredPosition();
     this._persistPosition();
   }
@@ -491,14 +465,17 @@ export class MuxVoiceModeBubble extends LitElement {
   private _onPointerDown = (event: PointerEvent): void => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     if (this._drag) return;
-    this._suppressMenuRequest = false;
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLElement)) return;
-    event.preventDefault();
+    this._suppressNextClick = false;
+    const captureTarget = event.composedPath().find(
+      (target): target is HTMLButtonElement =>
+        target instanceof HTMLButtonElement && target.hasAttribute('data-voice-mode-button'),
+    );
+    if (!captureTarget) return;
     event.stopPropagation();
-    target.setPointerCapture(event.pointerId);
+    captureTarget.setPointerCapture(event.pointerId);
     this._drag = {
       pointerId: event.pointerId,
+      captureTarget,
       originX: event.clientX,
       originY: event.clientY,
       startX: this._x,
@@ -510,98 +487,95 @@ export class MuxVoiceModeBubble extends LitElement {
   private _onPointerMove = (event: PointerEvent): void => {
     const drag = this._drag;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
     event.stopPropagation();
     const deltaX = event.clientX - drag.originX;
     const deltaY = event.clientY - drag.originY;
     if (!drag.moved && Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD) return;
     if (!drag.moved) {
       drag.moved = true;
-      this._closeMenu(false);
+      this._dropVisible = true;
     }
+    event.preventDefault();
     const bounds = this._bounds();
     this._x = clamp(drag.startX + deltaX, bounds.minX, bounds.maxX);
     this._y = clamp(drag.startY + deltaY, bounds.minY, bounds.maxY);
+    this._dropHighlighted = this._isOverDropTarget();
     this._applyPosition();
+    this.requestUpdate();
   };
 
-  private _endPointer = (event: PointerEvent, cancelled: boolean): void => {
+  private _finishPointer = (event: PointerEvent, cancelled: boolean): void => {
     const drag = this._drag;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault();
     event.stopPropagation();
-    const target = event.currentTarget;
-    if (target instanceof HTMLElement && target.hasPointerCapture(event.pointerId)) {
-      target.releasePointerCapture(event.pointerId);
-    }
+    const shouldExit = drag.moved && !cancelled && this._isOverDropTarget();
     this._drag = null;
+    this._dropVisible = false;
+    this._dropHighlighted = false;
+    if (drag.moved || cancelled) event.preventDefault();
+    if (drag.captureTarget.hasPointerCapture(event.pointerId)) {
+      drag.captureTarget.releasePointerCapture(event.pointerId);
+    }
     if (drag.moved) {
-      this._suppressMenuRequest = true;
-      this._commitDragPosition(!cancelled);
+      // A pointer drag must never activate the native button's click. The
+      // custom event records pointer activation so keyboard activation remains
+      // available even if the browser emitted no compatibility click.
+      this._suppressNextClick = true;
+      if (shouldExit) {
+        voiceSessionController.stop();
+      } else {
+        this._commitDragPosition(!cancelled);
+      }
       return;
     }
-    if (cancelled) {
-      this._suppressMenuRequest = true;
-      this._queuePosition();
-      return;
-    }
-    this._suppressMenuRequest = true;
-    this._openMenu(target instanceof HTMLElement ? target : null);
+    this._suppressNextClick = cancelled;
+    if (cancelled) this._queuePosition();
   };
 
   private _onPointerUp = (event: PointerEvent): void => {
-    this._endPointer(event, false);
+    this._finishPointer(event, false);
   };
 
   private _onPointerCancel = (event: PointerEvent): void => {
-    this._endPointer(event, true);
+    this._finishPointer(event, true);
   };
 
-  private _onMenuRequest = (event: Event): void => {
+  private _onLostPointerCapture = (event: PointerEvent): void => {
+    // Losing capture is a cancelled drag, never an exit gesture.
+    this._finishPointer(event, true);
+  };
+
+  private _onBubbleActivate = (event: Event): void => {
     event.stopPropagation();
-    const pointerActivation = (event as CustomEvent<{ pointerActivation?: boolean }>).detail?.pointerActivation === true;
-    // Only suppress the compatibility click from the completed pointer
-    // gesture. A cancelled pointer can have no subsequent click at all;
-    // it must never swallow the next keyboard/assistive activation.
-    if (this._suppressMenuRequest && pointerActivation) {
-      this._suppressMenuRequest = false;
+    const pointerActivation =
+      (event as CustomEvent<{ pointerActivation?: boolean }>).detail?.pointerActivation === true;
+    if (this._suppressNextClick && pointerActivation) {
+      this._suppressNextClick = false;
       return;
     }
-    this._suppressMenuRequest = false;
-    this._openMenu(event.currentTarget instanceof HTMLElement ? event.currentTarget : null);
+    this._suppressNextClick = false;
+    if (this._session.state === 'error') {
+      void voiceSessionController.start();
+    } else {
+      void voiceSessionController.togglePaused();
+    }
   };
 
-  private _openMenu(initiator: HTMLElement | null): void {
-    if (this._menuOpen) {
-      this._closeMenu(true);
-      return;
-    }
-    this._menuInitiator = initiator;
-    this._menuOpen = true;
-    void this.updateComplete.then(() => {
-      if (!this._menuOpen) return;
-      this.renderRoot
-        .querySelector<HTMLButtonElement>('[data-voice-mode-stop], [data-voice-mode-dismiss], [data-voice-mode-mute]')
-        ?.focus();
-    });
-  }
-
-  private _closeMenu(restoreFocus: boolean): void {
-    const initiator = this._menuInitiator;
-    this._menuOpen = false;
-    this._menuInitiator = null;
-    if (!restoreFocus || !initiator?.isConnected) return;
-    void this.updateComplete.then(() => initiator.focus({ preventScroll: true }));
-  }
-
-  private _onMenuKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      this._closeMenu(true);
-      return;
-    }
+  private _onBubbleKeyDown = (event: KeyboardEvent): void => {
     switch (event.key) {
+      case 'Delete':
+      case 'Backspace':
+        event.preventDefault();
+        event.stopPropagation();
+        voiceSessionController.stop();
+        return;
+      case 'Escape':
+        event.stopPropagation();
+        if (this._drag) {
+          event.preventDefault();
+          this._cancelDrag();
+        }
+        return;
       case 'ArrowLeft':
         event.preventDefault();
         event.stopPropagation();
@@ -622,16 +596,34 @@ export class MuxVoiceModeBubble extends LitElement {
         event.stopPropagation();
         this._moveVertical(0.1);
         return;
-      case 'r':
-      case 'R':
-      case 'Home':
-        event.preventDefault();
-        event.stopPropagation();
-        this._resetPosition();
-        return;
       default:
         return;
     }
+  };
+
+  private _cancelDrag(): void {
+    const drag = this._drag;
+    if (!drag) return;
+    this._drag = null;
+    this._dropVisible = false;
+    this._dropHighlighted = false;
+    this._suppressNextClick = true;
+    try {
+      if (drag.captureTarget.hasPointerCapture(drag.pointerId)) {
+        drag.captureTarget.releasePointerCapture(drag.pointerId);
+      }
+    } catch {
+      // The browser already released capture.
+    }
+    if (drag.moved) this._commitDragPosition(false);
+    else this._queuePosition();
+  }
+
+  private _onDropTargetClick = (event: Event): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    this._cancelDrag();
+    voiceSessionController.stop();
   };
 
   private _dock(edge: DockEdge): void {
@@ -646,104 +638,51 @@ export class MuxVoiceModeBubble extends LitElement {
     this._persistPosition();
   }
 
-  private _resetPosition = (): void => {
-    this._edge = DEFAULT_POSITION.edge;
-    this._vertical = DEFAULT_POSITION.vertical;
-    this._placeAtStoredPosition();
-    this._persistPosition();
-  };
-
-  private _stop = (): void => {
-    this._closeMenu(false);
-    voiceSessionController.stop();
-  };
-
-  private _toggleMute = (): void => {
-    voiceSessionController.setMuted(!this._session.muted);
-  };
-
-  private _dismissError = (): void => {
-    this._closeMenu(false);
-    voiceSessionController.dismissError();
-  };
-
-  private _renderMenu() {
-    const snapshot = this._session;
-    // Error can still mean a partially allocated backend attachment. Stop is
-    // the explicit cleanup/retry path; dismiss only clears the presentation.
-    const active = snapshot.state !== 'idle';
-    return html`
-      <div
-        class="menu"
-        role="dialog"
-        aria-label="Voice mode controls"
-        aria-describedby="voice-mode-position-help"
-        @keydown="${this._onMenuKeyDown}"
-      >
-        <div class="menu-heading">Voice mode</div>
-        <p class="menu-status" data-voice-mode-status>${statusLabel(snapshot)}</p>
-        <div class="menu-actions">
-          ${active
-            ? html`
-                <button class="stop" type="button" data-voice-mode-stop @click="${this._stop}">Stop voice mode</button>
-                <button
-                  type="button"
-                  data-voice-mode-mute
-                  title="${snapshot.canMute ? '' : 'Microphone is not ready to mute yet.'}"
-                  ?disabled="${!snapshot.canMute}"
-                  @click="${this._toggleMute}"
-                >${snapshot.muted ? 'Unmute microphone' : 'Mute microphone'}</button>
-              `
-            : nothing}
-          ${snapshot.state === 'error'
-            ? html`<button type="button" data-voice-mode-dismiss @click="${this._dismissError}">Dismiss error</button>`
-            : nothing}
-          <button type="button" data-voice-mode-close @click="${() => this._closeMenu(true)}">Close controls</button>
-        </div>
-        <p id="voice-mode-position-help" class="menu-help">
-          Drag the voice control to move it. Arrow keys dock left or right and move it up or down. Press R or Home to reset.
-        </p>
-        <div class="dock-actions" aria-label="Voice control position">
-          <button type="button" data-voice-mode-dock-left @click="${() => this._dock('left')}">Dock left</button>
-          <button type="button" data-voice-mode-dock-right @click="${() => this._dock('right')}">Dock right</button>
-          <button type="button" data-voice-mode-move-up @click="${() => this._moveVertical(-0.1)}">Move up</button>
-          <button type="button" data-voice-mode-move-down @click="${() => this._moveVertical(0.1)}">Move down</button>
-          <button type="button" data-voice-mode-reset @click="${this._resetPosition}">Reset position</button>
-        </div>
-      </div>
-    `;
-  }
-
   override render() {
-    const show = visible(this._session);
+    const snapshot = this._session;
+    const show = visible(snapshot);
+    const dropTarget = this._dropTargetBounds();
     return html`
       <div class="safe-insets" aria-hidden="true"></div>
+      ${this._dropVisible && show
+        ? html`
+            <button
+              class="drop-target"
+              type="button"
+              data-voice-mode-exit-target
+              data-highlighted="${String(this._dropHighlighted)}"
+              aria-label="Exit voice mode"
+              style="left:${dropTarget.left}px;top:${dropTarget.top}px"
+              @click="${this._onDropTargetClick}"
+            ><span aria-hidden="true">×</span></button>
+          `
+        : nothing}
       ${show
         ? html`
             <div
               class="bubble"
               data-voice-mode-bubble
-              data-state="${this._session.state}"
-              data-muted="${String(this._session.muted)}"
+              data-state="${snapshot.state}"
+              data-paused="${String(snapshot.paused || snapshot.state === 'paused')}"
+              data-muted="${String(snapshot.muted)}"
               data-edge="${this._edge}"
-              data-menu-up="${String(this._vertical > 0.5)}"
               data-positioned="${String(this._positioned)}"
               data-snapping="${String(this._snapping)}"
               style="left:${this._x}px;top:${this._y}px"
             >
               <mux-voice-mode-button
                 class="bubble-main"
-                menu-trigger
                 bubble-variant
-                .snapshot="${this._session}"
+                .snapshot="${snapshot}"
                 @pointerdown="${this._onPointerDown}"
                 @pointermove="${this._onPointerMove}"
                 @pointerup="${this._onPointerUp}"
                 @pointercancel="${this._onPointerCancel}"
-                @voice-mode-menu-request="${this._onMenuRequest}"
+                @lostpointercapture="${this._onLostPointerCapture}"
+                @keydown="${this._onBubbleKeyDown}"
+                @voice-mode-bubble-activate="${this._onBubbleActivate}"
               ></mux-voice-mode-button>
-              <span class="status" role="status" aria-live="polite">${statusLabel(this._session)}</span>
-              ${this._menuOpen ? this._renderMenu() : nothing}
+              <span class="status" role="status" aria-live="polite">${statusLabel(snapshot)}</span>
             </div>
           `
         : nothing}
