@@ -152,6 +152,13 @@ export interface CosFault {
   fatal: boolean;
 }
 
+interface PendingAdmission {
+  readonly clientRef: string;
+  readonly draftRevision: number;
+  readonly conversation: CosConversationIdentity;
+  readonly timer: ReturnType<typeof setTimeout>;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -213,6 +220,8 @@ export class CosStore {
   private _sessionId = '';
   private _conversation: CosConversationIdentity | null = null;
   private _draft = '';
+  private _draftRevision = 0;
+  private _pendingAdmission: PendingAdmission | null = null;
   private _pendingAppVoice = new Map<string, {
     resolve: (value: { readonly thread_id: string; readonly runtime_generation: number; readonly turn_id: string }) => void;
     reject: (error: Error) => void;
@@ -268,7 +277,12 @@ export class CosStore {
   get negotiating(): boolean { return this._status === 'starting'; }
   get inputEnabled(): boolean { return this._status === 'ready' && this._conversation !== null; }
   get draft(): string { return this._draft; }
-  setDraft(value: string): void { this._draft = value; }
+  get draftRevision(): number { return this._draftRevision; }
+  get admissionPending(): boolean { return this._pendingAdmission !== null; }
+  setDraft(value: string): void {
+    this._draft = value;
+    this._draftRevision++;
+  }
 
   get composerIdentity(): CosComposerIdentity {
     const current = this._conversation;
@@ -303,6 +317,7 @@ export class CosStore {
   setDraftForAppVoice(target: CosComposerIdentity, value: string): boolean {
     if (!this._sameComposer(target)) return false;
     this._draft = value;
+    this._draftRevision++;
     this._notify();
     return true;
   }
@@ -382,8 +397,39 @@ export class CosStore {
   send(prompt: string): boolean {
     const text = prompt.trim();
     if (!text) return false;
-    if (!this._socket) return false;
-    return this._socket.cosTurn(text, `cos-${Date.now().toString(36)}`);
+    const conversation = this._conversation;
+    if (!conversation || this._status !== 'ready' || !this._socket || this._pendingAdmission) return false;
+    const clientRef = `cos-${globalThis.crypto.randomUUID()}`;
+    const pending: PendingAdmission = {
+      clientRef,
+      draftRevision: this._draftRevision,
+      conversation,
+      timer: setTimeout(() => {
+        if (this._pendingAdmission?.clientRef !== clientRef) return;
+        this._pendingAdmission = null;
+        this._fault = {
+          code: 'turn_admission_timeout',
+          message: 'Send was not confirmed; your draft was kept.',
+          fatal: false,
+        };
+        this._notify();
+      }, 15_000),
+    };
+    this._pendingAdmission = pending;
+    this._fault = null;
+    if (!this._socket.cosTurn(text, clientRef)) {
+      clearTimeout(pending.timer);
+      this._pendingAdmission = null;
+      this._fault = {
+        code: 'turn_admission_failed',
+        message: 'Send could not be sent; your draft was kept.',
+        fatal: false,
+      };
+      this._notify();
+      return false;
+    }
+    this._notify();
+    return true;
   }
 
   sendForAppVoice(
@@ -495,6 +541,15 @@ export class CosStore {
 
   /** The socket went away. The transcript survives; the readiness claim cannot. */
   markDisconnected(): void {
+    if (this._pendingAdmission) {
+      clearTimeout(this._pendingAdmission.timer);
+      this._pendingAdmission = null;
+      this._fault = {
+        code: 'turn_admission_disconnected',
+        message: 'Connection closed before Send was confirmed; your draft was kept.',
+        fatal: false,
+      };
+    }
     for (const pending of this._pendingAppVoice.values()) {
       clearTimeout(pending.timer);
       pending.signal.removeEventListener('abort', pending.onAbort);
@@ -549,19 +604,51 @@ export class CosStore {
     if (type === 'cos-turn-result') {
       const clientRef = str(frame.client_ref);
       const pending = this._pendingAppVoice.get(clientRef);
-      if (!pending) return;
-      clearTimeout(pending.timer);
-      pending.signal.removeEventListener('abort', pending.onAbort);
-      this._pendingAppVoice.delete(clientRef);
-      if (frame.ok !== true || !this._conversation || !str(frame.turn_id)) {
-        pending.reject(new Error(str(frame.error) || str(frame.code) || 'Mission Control could not start the turn.'));
-      } else {
-        pending.resolve({
-          thread_id: this._conversation.id,
-          runtime_generation: this._conversation.generation,
-          turn_id: str(frame.turn_id),
-        });
+      if (pending) {
+        clearTimeout(pending.timer);
+        pending.signal.removeEventListener('abort', pending.onAbort);
+        this._pendingAppVoice.delete(clientRef);
+        if (frame.ok !== true || !this._conversation || !str(frame.turn_id)) {
+          pending.reject(new Error(str(frame.error) || str(frame.code) || 'Mission Control could not start the turn.'));
+        } else {
+          pending.resolve({
+            thread_id: this._conversation.id,
+            runtime_generation: this._conversation.generation,
+            turn_id: str(frame.turn_id),
+          });
+        }
+        return;
       }
+      const admission = this._pendingAdmission;
+      if (!admission || admission.clientRef !== clientRef) return;
+      clearTimeout(admission.timer);
+      this._pendingAdmission = null;
+      const current = this._conversation;
+      if (frame.ok !== true || !current || !str(frame.turn_id)) {
+        this._fault = {
+          code: 'turn_admission_refused',
+          message: `${str(frame.error) || str(frame.code) || 'Send was refused.'}`.slice(0, 220),
+          fatal: false,
+        };
+      } else if (
+        current.id !== admission.conversation.id ||
+        current.sessionId !== admission.conversation.sessionId ||
+        current.generation !== admission.conversation.generation ||
+        current.incarnation !== admission.conversation.incarnation
+      ) {
+        this._fault = {
+          code: 'turn_admission_identity_changed',
+          message: 'Conversation changed before Send was confirmed; your draft was kept.',
+          fatal: false,
+        };
+      } else {
+        this._fault = null;
+        if (this._draftRevision === admission.draftRevision) {
+          this._draft = '';
+          this._draftRevision++;
+        }
+      }
+      this._notify();
       return;
     }
     if (type === 'cos-history') {

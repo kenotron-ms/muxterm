@@ -147,8 +147,7 @@ export class MuxCos extends LitElement {
   @state() private _version = 0;
 
   /**
-   * Draft ownership lives in cosStore so switching A -> B -> A restores
-   * the thread's own sentence rather than one component-global value.
+   * Draft ownership lives in the one persistent CosStore conversation.
    */
   private get _draft(): string {
     return cosStore.draft;
@@ -156,6 +155,7 @@ export class MuxCos extends LitElement {
 
   private set _draft(value: string) {
     cosStore.setDraft(value);
+    this.requestUpdate();
   }
 
   @state() private _showThinking = new Set<string>();
@@ -1855,11 +1855,12 @@ export class MuxCos extends LitElement {
 
   /**
    * App voice is controlled by the persistent root bubble. The text composer
-   * and its context selector stay mounted for every app voice state.
+   * stays mounted for every app voice state.
    */
   private _renderComposer(): TemplateResult {
     const negotiating = cosStore.negotiating;
     const busy = cosStore.busy;
+    const admissionPending = cosStore.admissionPending;
     const ready = this._draft.trim().length > 0 && cosStore.inputEnabled;
     const locked = negotiating || !cosStore.inputEnabled;
     const listening = !negotiating && this._voice === 'listening';
@@ -1894,15 +1895,13 @@ export class MuxCos extends LitElement {
                   @click="${this._toggleVoice}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
-            ${busy || negotiating || ready
-              ? html`<button
-                  class="cbtn send"
-                  type="button"
-                  aria-label="${busy ? 'Stop generating' : 'Send'}"
-                  ?disabled="${negotiating || (!busy && !ready)}"
-                  @click="${busy ? this._stopGeneration : this._submit}"
-                >${icon(busy ? Square : ArrowUp, { size: 15 })}</button>`
-              : nothing}
+            <button
+              class="cbtn send"
+              type="button"
+              aria-label="${busy ? 'Stop generating' : admissionPending ? 'Sending' : 'Send'}"
+              ?disabled="${negotiating || admissionPending || (!busy && !ready)}"
+              @click="${busy ? this._stopGeneration : this._submit}"
+            >${icon(busy ? Square : ArrowUp, { size: 15 })}</button>
           </div>
         </div>
       </div>
