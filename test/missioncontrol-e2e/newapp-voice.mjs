@@ -88,6 +88,43 @@ async function fixtureControl(operation, extra = {}) {
   return { response, body: await response.json().catch(() => ({})) };
 }
 async function fixtureOK(operation, extra = {}) { const reply = await fixtureControl(operation, extra); if (!reply.response.ok) throw new Error(`fixture_${operation}_${reply.response.status}`); return reply.body; }
+async function commands(callId) { return (await fixtureOK('inspect', { call_id: callId })).commands ?? []; }
+async function nextCommand(callId, after, type, predicate = () => true) {
+  return eventually(async () => (await commands(callId)).slice(after).find((item) => item.type === type && predicate(item)), `command_${type}`);
+}
+function appMetadata(command) {
+  const metadata = command?.metadata;
+  if (!metadata || typeof metadata.app_voice_capture_id !== 'string' || !metadata.app_voice_capture_id ||
+    typeof metadata.app_voice_response_nonce !== 'string' || !metadata.app_voice_response_nonce) throw new Error('missing_app_capture_metadata');
+  return metadata;
+}
+function activeComposerTarget(active) {
+  const composer = active?.composer;
+  if (!composer || typeof composer.channel_id !== 'string' || typeof composer.thread_id !== 'string' ||
+    !Number.isSafeInteger(composer.runtime_generation) || typeof composer.draft_ref !== 'string') throw new Error('missing_active_composer_target');
+  return {
+    kind: 'composer',
+    channel_id: composer.channel_id,
+    thread_id: composer.thread_id,
+    runtime_session_id: composer.runtime_session_id,
+    runtime_generation: composer.runtime_generation,
+    runtime_incarnation: composer.runtime_incarnation,
+    draft_ref: composer.draft_ref,
+  };
+}
+function activeThreadTarget(active) {
+  const composer = active?.composer;
+  if (!composer) throw new Error('missing_active_thread_target');
+  return {
+    kind: 'thread_turn',
+    channel_id: composer.channel_id,
+    thread_id: composer.thread_id,
+    runtime_session_id: composer.runtime_session_id,
+    runtime_generation: composer.runtime_generation,
+    runtime_incarnation: composer.runtime_incarnation,
+    draft_ref: composer.draft_ref,
+  };
+}
 function createWorkspace(label) {
   const out = JSON.parse(execFileSync(opt['muxterm-bin'], ['workspace', 'create', label, '--json'], { encoding: 'utf8', env: process.env }));
   if (typeof out.workspaceId !== 'string' || !out.workspaceId) throw new Error('workspace_create_shape_invalid');
@@ -275,6 +312,7 @@ try {
   const pending = await eventually(async () => { const reply = await fixtureControl('pending_offer'); return reply.response.ok && typeof reply.body.offer_sdp === 'string' ? reply.body : null; }, 'pending_offer');
   const peer = await connectSyntheticPeer(pending.offer_sdp); peerPage = peer.peer;
   await fixtureOK('answer_sdp', { call_id: pending.call_id, answer_sdp: peer.answer });
+  const callId = pending.call_id;
   await eventually(() => peerPage.evaluate(() => window.__fixturePeer.peerConnection.connectionState === 'connected'), 'real_rtc_connected');
   const bubble = page.locator('mux-voice-mode-bubble [data-voice-mode-bubble]:visible');
   await eventually(() => bubble.count().then((n) => n === 1), 'one_live_bubble');
@@ -283,21 +321,221 @@ try {
   gate('real_rtc_single_outline_live_bubble', await bubbleControl.count() === 1 && circles === 0 && await bubbleControl.evaluate((button) => getComputedStyle(button).borderTopWidth !== '0px'), { classification: 'REALRTC_SYNTHETIC_MEDIA_NO_PHYSICAL_MIC' });
   await page.screenshot({ path: path.join(output, 'REAL-RTC-SYNTHETIC-MEDIA-NO-PHYSICAL-MIC-active-bubble.png') });
 
+  const mediaSnapshot = () => page.evaluate(() => {
+    const media = window.__fixtureMedia;
+    const stream = media.streams[0];
+    const peer = media.peers[0];
+    const inputTracks = stream?.getAudioTracks() ?? [];
+    const senders = peer?.getSenders() ?? [];
+    const audioSenders = senders.filter((sender) => sender.track?.kind === 'audio');
+    const sinks = media.audioElements;
+    return {
+      peerCount: media.peers.length,
+      connectionState: peer?.connectionState ?? '',
+      inputTrackCount: inputTracks.length,
+      enabledFlags: inputTracks.map((track) => track.enabled),
+      senderTracksNull: audioSenders.length === 0,
+      sinkCount: sinks.length,
+      sinkPaused: sinks.map((audio) => audio.paused),
+      sinkMuted: sinks.map((audio) => audio.muted),
+      senderRestored: inputTracks.length > 0 && senders.some((sender) => sender.track === inputTracks[0]),
+    };
+  });
+
   stage = 'pause_resume'; const tokenCount = voiceResponses.filter((x) => x.path === '/api/app/voice/token').length; const endCount = postPaths.filter((x) => x === '/api/app/voice/end').length;
   await bubbleControl.click(); await eventually(() => bubble.getAttribute('data-paused').then((state) => state === 'true'), 'bubble_paused');
-  gate('bubble_pause_preserves_peer_and_detaches_sender_track', await page.evaluate(() => {
-    const media = window.__fixtureMedia; const peer = media.peers[0]; const stream = media.streams[0];
-    return peer?.connectionState === 'connected' && stream?.getAudioTracks().every((track) => !track.enabled) &&
-      peer.getSenders().filter((sender) => sender.track?.kind === 'audio').length === 0 &&
-      media.audioElements.every((audio) => audio.paused && audio.muted);
-  }), { provider_end_requests: postPaths.filter((x) => x === '/api/app/voice/end').length - endCount });
+  const pauseStartedAt = Date.now();
+  let pausedMedia;
+  try {
+    pausedMedia = await eventually(async () => {
+      const state = await mediaSnapshot();
+      return state.peerCount === 1 && state.connectionState === 'connected' &&
+        state.inputTrackCount > 0 && state.enabledFlags.every((enabled) => !enabled) &&
+        state.senderTracksNull && state.sinkCount > 0 &&
+        state.sinkPaused.every(Boolean) && state.sinkMuted.every(Boolean) ? state : null;
+    }, 'native_pause_media_settled', 5_000);
+  } catch (error) {
+    run.checks.native_pause_media_settled = { status: 'FAIL', snapshot: await mediaSnapshot() };
+    throw error;
+  }
+  gate('bubble_pause_preserves_peer_and_detaches_sender_track', true, {
+    ...pausedMedia,
+    pause_settle_ms: Date.now() - pauseStartedAt,
+    provider_end_requests: postPaths.filter((x) => x === '/api/app/voice/end').length - endCount,
+  });
   await page.screenshot({ path: path.join(output, 'pause-bubble.png') });
-  await bubbleControl.press('Space'); await eventually(() => page.evaluate(() => {
-    const media = window.__fixtureMedia; return media.streams[0]?.getAudioTracks().every((track) => track.enabled) &&
-      media.peers[0]?.getSenders().some((sender) => sender.track === media.streams[0].getAudioTracks()[0]) &&
-      media.audioElements.every((audio) => !audio.paused && !audio.muted);
-  }), 'bubble_resumed');
-  gate('bubble_resume_preserves_provider_session', voiceResponses.filter((x) => x.path === '/api/app/voice/token').length === tokenCount && await peerPage.evaluate(() => window.__fixturePeer.peerConnection.connectionState === 'connected'));
+  stage = 'resume_native_media';
+  const resumeStartedAt = Date.now();
+  await bubbleControl.press('Space');
+  let resumedMedia;
+  try {
+    resumedMedia = await eventually(async () => {
+      const state = await mediaSnapshot();
+      return state.peerCount === 1 && state.connectionState === 'connected' &&
+        state.inputTrackCount > 0 && state.enabledFlags.every(Boolean) &&
+        state.senderRestored && state.sinkCount > 0 &&
+        state.sinkPaused.every((paused) => !paused) && state.sinkMuted.every((muted) => !muted) ? state : null;
+    }, 'native_resume_media_settled', 5_000);
+  } catch (error) {
+    run.checks.native_resume_media_settled = { status: 'FAIL', snapshot: await mediaSnapshot() };
+    throw error;
+  }
+  gate('bubble_resume_preserves_provider_session',
+    voiceResponses.filter((x) => x.path === '/api/app/voice/token').length === tokenCount &&
+    postPaths.filter((x) => x === '/api/app/voice/end').length === endCount &&
+    await peerPage.evaluate(() => window.__fixturePeer.peerConnection.connectionState === 'connected'), {
+      ...resumedMedia, resume_settle_ms: Date.now() - resumeStartedAt,
+    });
+
+  stage = 'voice_workspace_round_trip';
+  const navigationTokens = voiceResponses.filter((x) => x.path === '/api/app/voice/token').length;
+  const navigationSDP = voiceResponses.filter((x) => x.path === '/api/app/voice/sdp').length;
+  await page.locator(`mux-sidebar .ws-card[data-workspace-id="${workspaceB}"]`).click();
+  await page.locator('mux-dock:not([aria-hidden])').waitFor({ state: 'visible', timeout: 30_000 });
+  await page.locator('mux-sidebar mux-start-card button').click();
+  await composer.waitFor({ state: 'visible', timeout: 30_000 });
+  gate('voice_workspace_round_trip_preserves_native_peer_and_provider_session',
+    await peerPage.evaluate(() => window.__fixturePeer.peerConnection.connectionState === 'connected') &&
+    voiceResponses.filter((x) => x.path === '/api/app/voice/token').length === navigationTokens &&
+    voiceResponses.filter((x) => x.path === '/api/app/voice/sdp').length === navigationSDP, {
+      token_requests: navigationTokens,
+      sdp_requests: navigationSDP,
+    });
+
+  let appUtteranceNumber = 0;
+  async function beginAppUtterance(name, args) {
+    appUtteranceNumber += 1;
+    const sequence = appUtteranceNumber;
+    const before = (await commands(callId)).length;
+    const responseId = `fixture_app_response_${sequence}`;
+    const itemId = `fixture_app_item_${sequence}`;
+    const functionCallId = `fixture_app_function_${sequence}`;
+    await fixtureOK('inject', { call_id: callId, event: { type: 'input_audio_buffer.committed', item_id: `fixture_app_input_${sequence}` } });
+    const initial = await nextCommand(callId, before, 'response.create', (row) =>
+      typeof row.metadata?.app_voice_capture_id === 'string' && typeof row.metadata?.app_voice_response_nonce === 'string');
+    const metadata = appMetadata(initial);
+    gate(`app_voice_capture_binding_${sequence}`, Boolean(metadata.app_voice_capture_id && metadata.app_voice_response_nonce), { metadata_field_count: Object.keys(metadata).length });
+    await fixtureOK('inject', { call_id: callId, event: { type: 'response.created', response: { id: responseId, metadata } } });
+    await fixtureOK('inject', { call_id: callId, event: { type: 'response.output_item.added', response_id: responseId, item: { type: 'function_call', id: itemId, call_id: functionCallId } } });
+    const outputStart = (await commands(callId)).length;
+    const final = { type: 'response.function_call_arguments.done', response_id: responseId, item_id: itemId, name, arguments: JSON.stringify(args) };
+    await fixtureOK('inject', { call_id: callId, event: final });
+    return { sequence, responseId, functionCallId, metadata, outputStart, final };
+  }
+  async function finishAppUtterance(pending) {
+    const output = await nextCommand(callId, pending.outputStart, 'conversation.item.create',
+      (row) => row.function_call_id === pending.functionCallId && row.output);
+    gate(`app_voice_function_output_binding_${pending.sequence}`, output.function_call_id === pending.functionCallId);
+    await fixtureOK('inject', { call_id: callId, event: { type: 'response.done', response_id: pending.responseId } });
+    const continuation = await nextCommand(callId, pending.outputStart, 'response.create', (row) =>
+      row.metadata?.app_voice_capture_id === pending.metadata.app_voice_capture_id &&
+      typeof row.metadata?.app_voice_response_nonce === 'string' &&
+      row.metadata.app_voice_response_nonce !== pending.metadata.app_voice_response_nonce);
+    const continuationId = `${pending.responseId}_continuation`;
+    await fixtureOK('inject', { call_id: callId, event: { type: 'response.created', response: { id: continuationId, metadata: continuation.metadata } } });
+    await fixtureOK('inject', { call_id: callId, event: { type: 'response.done', response_id: continuationId } });
+    return { ...pending, output: output.output };
+  }
+  async function appUtterance(name, args) {
+    return finishAppUtterance(await beginAppUtterance(name, args));
+  }
+
+  stage = 'app_observe_current_cos';
+  const observed = await appUtterance('app_observe', {});
+  const observation = observed.output;
+  const activeComposer = observation?.active?.composer;
+  gate('app_observe_returns_current_one_cos_root_and_native_workspace_inventory',
+    observation?.threads_count === 1 &&
+    observation?.workspaces_count >= 2 &&
+    Array.isArray(observation?.ids) && observation.ids.includes(identity.id) &&
+    observation.ids.includes(workspaceA) && observation.ids.includes(workspaceB) &&
+    activeComposer?.thread_id === identity.id &&
+    activeComposer?.runtime_session_id === identity.session_id &&
+    activeComposer?.runtime_generation === identity.generation &&
+    activeComposer?.runtime_incarnation === identity.incarnation, {
+      cos_root_sha256: sha(identity.id),
+      workspace_inventory_count: observation?.workspaces_count ?? -1,
+      thread_inventory_count: observation?.threads_count ?? -1,
+    });
+
+  stage = 'app_voice_composer_draft';
+  const draftText = `APP_VOICE_DRAFT_${stamp}`;
+  const providerBeforeDraft = providerRecords().length;
+  const drafted = await appUtterance('composer_draft', {
+    expected_revision: observation.revision,
+    mode: 'set',
+    target: activeComposerTarget(observation.active),
+    text: draftText,
+  });
+  await eventually(() => composer.inputValue().then((value) => value === draftText), 'app_voice_draft_set');
+  gate('composer_draft_sets_authoritative_active_composer_without_cos_request',
+    drafted.output?.channel_id === activeComposer.channel_id &&
+    providerRecords().length === providerBeforeDraft, {
+      provider_cos_requests: providerRecords().length - providerBeforeDraft,
+    });
+
+  stage = 'app_voice_submit_current_cos';
+  const submitObserved = await appUtterance('app_observe', {});
+  const submitObservation = submitObserved.output;
+  const submitMissing = ['channel_id', 'thread_id', 'runtime_session_id', 'runtime_generation', 'runtime_incarnation', 'draft_ref']
+    .filter((field) => submitObservation?.active?.composer?.[field] === undefined || submitObservation.active.composer[field] === '');
+  gate('submit_thread_turn_canonical_active_target_fields_present', submitMissing.length === 0, {
+    missing_field_count: submitMissing.length,
+    missing_field_codes: submitMissing,
+  });
+  const submitCanary = `APP_VOICE_COS_CANARY_${stamp}`;
+  const cosAdmissionsBeforeSubmit = frames.filter((frame) => frame.type === 'cos-turn-result').length;
+  const providerBeforeSubmit = providerRecords().length;
+  const pendingSubmit = await beginAppUtterance('submit_thread_turn', {
+    expected_revision: submitObservation.revision,
+    target: activeThreadTarget(submitObservation.active),
+    text: submitCanary,
+  });
+  const confirmation = page.locator('mux-cos').getByTestId('app-voice-submit-confirm');
+  await confirmation.waitFor({ state: 'visible', timeout: 10_000 });
+  await confirmation.click();
+  const submitted = await finishAppUtterance(pendingSubmit);
+  const turn = await eventually(() => frames.slice().reverse().find((frame) =>
+    frame.type === 'cos-turn-result' && frame.ok === true && frame.turn_id === submitted.output?.turn_id), 'app_voice_cos_turn_receipt');
+  const persisted = await eventually(() => frames.slice().reverse().find((frame) =>
+    frame.type === 'cos-event' && frame.event?.turn_id === turn.turn_id && frame.event?.ev === 'turn_end' && frame.event?.persisted === true), 'app_voice_cos_turn_persisted');
+  await eventually(() => providerRecords().slice(providerBeforeSubmit).some((record) => inputText(record.request?.input).includes(submitCanary)), 'app_voice_cos_provider_canary');
+  gate('submit_thread_turn_confirms_and_persists_exact_current_cos_turn',
+    submitted.output?.thread_id === identity.id &&
+    persisted.event.persisted === true &&
+    providerRecords().slice(providerBeforeSubmit).some((record) => inputText(record.request?.input).includes(submitCanary)), {
+      turn_id_sha256: sha(turn.turn_id),
+      provider_cos_requests: providerRecords().length - providerBeforeSubmit,
+      cos_admissions: frames.filter((frame) => frame.type === 'cos-turn-result').length - cosAdmissionsBeforeSubmit,
+    });
+
+  stage = 'app_voice_duplicate_bound_call';
+  const duplicateCommandsBefore = (await commands(callId)).length;
+  const duplicateAdmissionsBefore = frames.filter((frame) => frame.type === 'cos-turn-result').length;
+  const duplicateProviderBefore = providerRecords().length;
+  await fixtureOK('inject', { call_id: callId, event: pendingSubmit.final });
+  await wait(500);
+  gate('exact_duplicate_bound_call_has_no_extra_cos_admission',
+    (await commands(callId)).slice(duplicateCommandsBefore).length === 0 &&
+    frames.filter((frame) => frame.type === 'cos-turn-result').length === duplicateAdmissionsBefore &&
+    providerRecords().length === duplicateProviderBefore, {
+      extra_cos_admissions: frames.filter((frame) => frame.type === 'cos-turn-result').length - duplicateAdmissionsBefore,
+      extra_provider_cos_requests: providerRecords().length - duplicateProviderBefore,
+    });
+
+  stage = 'app_voice_unknown_transcript_refusal';
+  const providerBeforeUnknownTranscript = providerRecords().length;
+  const unknownTranscript = await appUtterance('read_lane_transcript', {
+    machine: 'unknown-fixture-machine',
+    session_id: 'unknown-fixture-session',
+    last_n: 1,
+  });
+  gate('unknown_remote_session_transcript_refuses_without_fallback',
+    unknownTranscript.output?.status === 'refused' &&
+    providerRecords().length === providerBeforeUnknownTranscript, {
+      refusal_code: unknownTranscript.output?.refusal_code ?? 'unclassified',
+      provider_cos_requests: providerRecords().length - providerBeforeUnknownTranscript,
+    });
 
   stage = 'generation_stop';
   const slowPrompt = `SINGLE_COS_SLOW_STREAM_${stamp}`;

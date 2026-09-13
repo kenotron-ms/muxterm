@@ -17,6 +17,7 @@ const MAX_TEXT_BYTES = 131_072;
 const MAX_DRAFT_INSPECT_BYTES = 8_192;
 const MAX_DETAIL_CHARS = 512;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const APP_VOICE_CHANNEL = 'legacy-cos';
 
 export type AppVoiceSurface = 'mission_control' | 'dock';
 export type AppVoiceAppletId = 'dashboard' | 'files' | 'prs' | 'artifact';
@@ -25,7 +26,9 @@ export interface AppVoiceComposerTarget {
   readonly kind: 'composer';
   readonly channel_id: string;
   readonly thread_id: string;
+  readonly runtime_session_id: string;
   readonly runtime_generation: number;
+  readonly runtime_incarnation: string;
   readonly draft_ref: string;
 }
 
@@ -33,7 +36,6 @@ export interface AppVoiceThreadTurnTarget {
   readonly kind: 'thread_turn';
   readonly channel_id: string;
   readonly thread_id: string;
-  readonly machine_id: string;
   readonly runtime_session_id: string;
   readonly runtime_generation: number;
   readonly runtime_incarnation: string;
@@ -144,6 +146,10 @@ function boundedString(value: unknown, maximum: number): string {
   return typeof value === 'string' && value.length <= maximum ? value : '';
 }
 
+function boundedOpaque(value: unknown): string {
+  return typeof value === 'string' && value.length >= 1 && value.length <= 256 ? value : '';
+}
+
 function boundedText(value: unknown, minimum = 0): string | null {
   if (typeof value !== 'string') return null;
   if (new TextEncoder().encode(value).byteLength > MAX_TEXT_BYTES || value.length < minimum) return null;
@@ -156,9 +162,7 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 }
 
 function validChannel(value: unknown): string {
-  const channel = boundedString(value, 128);
-  if (channel === 'legacy-cos' || channel === 'none') return channel;
-  return channel.startsWith('thread:') && UUID_RE.test(channel.slice('thread:'.length)) ? channel : '';
+  return value === APP_VOICE_CHANNEL ? APP_VOICE_CHANNEL : '';
 }
 
 function parseNavigateTarget(value: unknown): AppVoiceNavigateTarget | null {
@@ -172,9 +176,9 @@ function parseNavigateTarget(value: unknown): AppVoiceNavigateTarget | null {
         : null;
     }
     case 'thread': {
-      const threadId = boundedString(target.thread_id, 36);
+      const threadId = boundedOpaque(target.thread_id);
       const generation = positiveInteger(target.runtime_generation);
-      return exactKeys(target, ['kind', 'thread_id', 'runtime_generation']) && UUID_RE.test(threadId) && generation
+      return exactKeys(target, ['kind', 'thread_id', 'runtime_generation']) && threadId && generation
         ? Object.freeze({ kind: 'thread', thread_id: threadId, runtime_generation: generation })
         : null;
     }
@@ -200,12 +204,12 @@ function parseNavigateTarget(value: unknown): AppVoiceNavigateTarget | null {
       return Object.freeze({ kind: 'applet' as const, applet_id: applet });
     }
     case 'detail': {
-      const threadId = boundedString(target.thread_id, 36);
+      const threadId = boundedOpaque(target.thread_id);
       const generation = positiveInteger(target.runtime_generation);
       const detailId = boundedString(target.detail_id, MAX_DETAIL_CHARS);
       return (
         exactKeys(target, ['kind', 'thread_id', 'runtime_generation', 'detail_id']) &&
-        UUID_RE.test(threadId) &&
+        threadId &&
         generation &&
         detailId === threadId
       )
@@ -224,22 +228,38 @@ function parseNavigateTarget(value: unknown): AppVoiceNavigateTarget | null {
 
 function parseComposerTarget(value: unknown): AppVoiceComposerTarget | null {
   const target = recordValue(value);
-  if (!target || !exactKeys(target, ['kind', 'channel_id', 'thread_id', 'runtime_generation', 'draft_ref'])) {
+  if (
+    !target ||
+    !exactKeys(target, [
+      'kind',
+      'channel_id',
+      'thread_id',
+      'runtime_session_id',
+      'runtime_generation',
+      'runtime_incarnation',
+      'draft_ref',
+    ])
+  ) {
     return null;
   }
   const channel = validChannel(target.channel_id);
-  const threadId = boundedString(target.thread_id, 36);
+  const threadId = boundedOpaque(target.thread_id);
+  const sessionId = boundedOpaque(target.runtime_session_id);
   const generation =
     typeof target.runtime_generation === 'number' && Number.isSafeInteger(target.runtime_generation)
       ? target.runtime_generation
       : -1;
+  const incarnation = boundedString(target.runtime_incarnation, 36);
   const draftRef = boundedString(target.draft_ref, 36);
   if (
     target.kind !== 'composer' ||
-    !channel ||
-    generation < 0 ||
-    (threadId !== '' && !UUID_RE.test(threadId)) ||
-    (draftRef !== '' && !UUID_RE.test(draftRef))
+    channel !== APP_VOICE_CHANNEL ||
+    !threadId ||
+    !sessionId ||
+    !generation ||
+    !UUID_RE.test(incarnation) ||
+    !UUID_RE.test(draftRef) ||
+    !cosStore.matchesRuntimeIdentity(threadId, generation, sessionId, incarnation)
   ) {
     return null;
   }
@@ -247,7 +267,9 @@ function parseComposerTarget(value: unknown): AppVoiceComposerTarget | null {
     kind: 'composer',
     channel_id: channel,
     thread_id: threadId,
+    runtime_session_id: sessionId,
     runtime_generation: generation,
+    runtime_incarnation: incarnation,
     draft_ref: draftRef,
   });
 }
@@ -260,7 +282,6 @@ function parseThreadTurnTarget(value: unknown): AppVoiceThreadTurnTarget | null 
       'kind',
       'channel_id',
       'thread_id',
-      'machine_id',
       'runtime_session_id',
       'runtime_generation',
       'runtime_incarnation',
@@ -270,23 +291,20 @@ function parseThreadTurnTarget(value: unknown): AppVoiceThreadTurnTarget | null 
     return null;
   }
   const channel = validChannel(target.channel_id);
-  const threadId = boundedString(target.thread_id, 36);
-  const machineId = boundedString(target.machine_id, 36);
-  const sessionId = boundedString(target.runtime_session_id, 128);
+  const threadId = boundedOpaque(target.thread_id);
+  const sessionId = boundedOpaque(target.runtime_session_id);
   const generation = positiveInteger(target.runtime_generation);
   const incarnation = boundedString(target.runtime_incarnation, 36);
   const draftRef = boundedString(target.draft_ref, 36);
   if (
     target.kind !== 'thread_turn' ||
-    !channel ||
-    channel !== `thread:${threadId}` ||
-    !UUID_RE.test(threadId) ||
-    !UUID_RE.test(machineId) ||
-    (!UUID_RE.test(sessionId) &&
-      !cosStore.matchesRuntimeIdentity(threadId, generation, sessionId, incarnation)) ||
+    channel !== APP_VOICE_CHANNEL ||
+    !threadId ||
+    !sessionId ||
     !generation ||
     !UUID_RE.test(incarnation) ||
-    !UUID_RE.test(draftRef)
+    !UUID_RE.test(draftRef) ||
+    !cosStore.matchesRuntimeIdentity(threadId, generation, sessionId, incarnation)
   ) {
     return null;
   }
@@ -294,7 +312,6 @@ function parseThreadTurnTarget(value: unknown): AppVoiceThreadTurnTarget | null 
     kind: 'thread_turn',
     channel_id: channel,
     thread_id: threadId,
-    machine_id: machineId,
     runtime_session_id: sessionId,
     runtime_generation: generation,
     runtime_incarnation: incarnation,
@@ -577,6 +594,10 @@ class AppVoiceOperations {
 
   isOperationActive(operationId: string): boolean {
     return this._pending.has(operationId);
+  }
+
+  hasPendingOperations(): boolean {
+    return this._pending.size > 0;
   }
 
   endLease(leaseEpoch: number, reason = 'explicit_end'): void {
@@ -971,26 +992,20 @@ function normalizeObservation(value: AppVoiceObservation): AppVoiceObservation |
     typeof value.detail !== 'string' ||
     value.detail.length > MAX_DETAIL_CHARS ||
     !composer ||
-    !validChannel(composer.channel_id) ||
-    typeof composer.thread_id !== 'string' ||
-    (composer.thread_id !== '' && !UUID_RE.test(composer.thread_id)) ||
+    composer.channel_id !== APP_VOICE_CHANNEL ||
+    !boundedOpaque(composer.thread_id) ||
     !Number.isSafeInteger(composer.runtime_generation) ||
-    composer.runtime_generation < 0 ||
-    typeof composer.runtime_session_id !== 'string' ||
-    (composer.runtime_session_id !== '' &&
-      !UUID_RE.test(composer.runtime_session_id) &&
-      !cosStore.matchesRuntimeIdentity(
-        composer.thread_id,
-        composer.runtime_generation,
-        composer.runtime_session_id,
-        composer.runtime_incarnation,
-      )) ||
-    typeof composer.runtime_incarnation !== 'string' ||
-    (composer.runtime_incarnation !== '' && !UUID_RE.test(composer.runtime_incarnation)) ||
-    typeof composer.draft_ref !== 'string' ||
-    (composer.draft_ref !== '' && !UUID_RE.test(composer.draft_ref)) ||
-    (composer.channel_id.startsWith('thread:') && composer.channel_id !== `thread:${composer.thread_id}`) ||
-    (value.detail !== '' && (!UUID_RE.test(value.detail) || value.detail !== composer.thread_id))
+    composer.runtime_generation <= 0 ||
+    !boundedOpaque(composer.runtime_session_id) ||
+    !UUID_RE.test(composer.runtime_incarnation) ||
+    !UUID_RE.test(composer.draft_ref) ||
+    value.detail !== '' ||
+    !cosStore.matchesRuntimeIdentity(
+      composer.thread_id,
+      composer.runtime_generation,
+      composer.runtime_session_id,
+      composer.runtime_incarnation,
+    )
   ) {
     return null;
   }

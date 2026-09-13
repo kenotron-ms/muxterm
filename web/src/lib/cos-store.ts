@@ -221,6 +221,7 @@ export class CosStore {
   private _conversation: CosConversationIdentity | null = null;
   private _draft = '';
   private _draftRevision = 0;
+  private _draftRef = '';
   private _pendingAdmission: PendingAdmission | null = null;
   private _pendingAppVoice = new Map<string, {
     resolve: (value: { readonly thread_id: string; readonly runtime_generation: number; readonly turn_id: string }) => void;
@@ -292,7 +293,7 @@ export class CosStore {
       runtimeSessionId: current?.sessionId ?? '',
       runtimeGeneration: current?.generation ?? 0,
       runtimeIncarnation: current?.incarnation ?? '',
-      draftRef: '',
+      draftRef: current ? this._draftRef : '',
       label: ASSISTANT_NAME,
     };
   }
@@ -300,16 +301,13 @@ export class CosStore {
   get appVoiceThreadTurnTarget(): {
     readonly channelId: string;
     readonly threadId: string;
-    readonly machineId: string;
     readonly runtimeSessionId: string;
     readonly runtimeGeneration: number;
     readonly runtimeIncarnation: string;
     readonly draftRef: string;
   } | null {
     const identity = this.composerIdentity;
-    return identity.threadId
-      ? { ...identity, machineId: '' }
-      : null;
+    return identity.threadId ? identity : null;
   }
 
   canCancel(turnId: string): boolean { return this._byId.get(turnId)?.status === 'pending' || this._byId.get(turnId)?.status === 'streaming'; }
@@ -330,7 +328,19 @@ export class CosStore {
       target.threadId === current.threadId &&
       target.runtimeGeneration === current.runtimeGeneration &&
       target.runtimeSessionId === current.runtimeSessionId &&
-      target.runtimeIncarnation === current.runtimeIncarnation;
+      target.runtimeIncarnation === current.runtimeIncarnation &&
+      target.draftRef === current.draftRef;
+  }
+
+  private _setConversation(next: CosConversationIdentity | null): void {
+    const current = this._conversation;
+    const unchanged =
+      current?.id === next?.id &&
+      current?.sessionId === next?.sessionId &&
+      current?.generation === next?.generation &&
+      current?.incarnation === next?.incarnation;
+    this._conversation = next;
+    if (!unchanged) this._draftRef = next ? globalThis.crypto.randomUUID() : '';
   }
 
   get turns(): readonly CosTurn[] {
@@ -588,9 +598,11 @@ export class CosStore {
       const sessionId = str(conversation?.session_id);
       const generation = typeof conversation?.generation === 'number' ? conversation.generation : 0;
       const incarnation = str(conversation?.incarnation);
-      this._conversation = id && sessionId && generation > 0 && incarnation
-        ? { id, sessionId, generation, incarnation }
-        : null;
+      this._setConversation(
+        id && sessionId && generation > 0 && incarnation
+          ? { id, sessionId, generation, incarnation }
+          : null,
+      );
       if (!ok) {
         this._setStatus('down');
         this._fault = { code: 'subscribe_failed', message: str(frame.error) || `${ASSISTANT_NAME} could not be reached`, fatal: true };

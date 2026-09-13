@@ -2675,7 +2675,7 @@ export class MuxApp extends LitElement {
 
   private _onAppVoiceUserNavigation = (): void => {
     this._appVoiceDetailThreadId = '';
-    appVoiceOperations.userNavigation();
+    if (appVoiceOperations.hasPendingOperations()) appVoiceOperations.userNavigation();
   };
 
   private _onAppVoiceObservation = (): void => {
@@ -2708,7 +2708,9 @@ export class MuxApp extends LitElement {
     return (
       target.channel_id === current.channelId &&
       target.thread_id === current.threadId &&
+      target.runtime_session_id === current.runtimeSessionId &&
       target.runtime_generation === current.runtimeGeneration &&
+      target.runtime_incarnation === current.runtimeIncarnation &&
       target.draft_ref === current.draftRef
     );
   }
@@ -2771,7 +2773,17 @@ export class MuxApp extends LitElement {
     this._appVoiceNavigatingOperationId = operationId;
     try {
       if (target.kind === 'thread') {
-        throw new Error('Mission Control has one persistent conversation; no alternate thread can be selected.');
+        this._assertAppVoiceOperationCurrent(operationId, signal);
+        const current = cosStore.conversation;
+        if (!current || current.id !== target.thread_id || current.generation !== target.runtime_generation) {
+          throw new Error('The requested conversation is not the current Mission Control conversation.');
+        }
+        this._appVoiceDetailThreadId = '';
+        this._showDashboard = true;
+        await this.updateComplete;
+        cosStore.open();
+        this._assertAppVoiceOperationCurrent(operationId, signal);
+        return { selected_target: target };
       }
       if (target.kind === 'applet') {
         this._assertAppVoiceOperationCurrent(operationId, signal);
@@ -2859,7 +2871,6 @@ export class MuxApp extends LitElement {
       !current ||
       current.channelId !== target.channel_id ||
       current.threadId !== target.thread_id ||
-      current.machineId !== target.machine_id ||
       current.runtimeSessionId !== target.runtime_session_id ||
       current.runtimeGeneration !== target.runtime_generation ||
       current.runtimeIncarnation !== target.runtime_incarnation ||
@@ -2873,6 +2884,18 @@ export class MuxApp extends LitElement {
     this._assertAppVoiceOperationCurrent(operationId, signal);
     if (confirmation !== 'confirmed') throw new Error('Explicit human confirmation is required before sending work.');
     this._assertAppVoiceOperationCurrent(operationId, signal);
+    const confirmedCurrent = cosStore.appVoiceThreadTurnTarget;
+    if (
+      !confirmedCurrent ||
+      confirmedCurrent.channelId !== target.channel_id ||
+      confirmedCurrent.threadId !== target.thread_id ||
+      confirmedCurrent.runtimeSessionId !== target.runtime_session_id ||
+      confirmedCurrent.runtimeGeneration !== target.runtime_generation ||
+      confirmedCurrent.runtimeIncarnation !== target.runtime_incarnation ||
+      confirmedCurrent.draftRef !== target.draft_ref
+    ) {
+      throw new Error('The requested work target changed before confirmation was sent.');
+    }
     const receipt = await cosStore.sendForAppVoice(text, operationId, signal);
     this._assertAppVoiceOperationCurrent(operationId, signal);
     if (

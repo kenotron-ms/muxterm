@@ -508,20 +508,21 @@ func validAppObservation(c *Client, active map[string]any) bool {
 	}
 	if composer, ok := active["composer"].(map[string]any); ok {
 		channel, _ := composer["channel_id"].(string)
-		threadID, _ := composer["thread_id"].(string)
 		if channel == "none" {
-			return threadID == ""
+			return composer["thread_id"] == "" && composer["runtime_session_id"] == "" &&
+				composer["runtime_generation"] == float64(0) && composer["runtime_incarnation"] == "" &&
+				composer["draft_ref"] == ""
 		}
-		if channel == "legacy-cos" {
-			return threadID == ""
+		if channel != "legacy-cos" {
+			return false
 		}
+		threadID, _ := composer["thread_id"].(string)
 		generation, generationOK := appVoiceUint(composer["runtime_generation"])
 		sessionID, _ := composer["runtime_session_id"].(string)
 		incarnation, _ := composer["runtime_incarnation"].(string)
 		draftRef, _ := composer["draft_ref"].(string)
-		return strings.HasPrefix(channel, "thread:") && channel == "thread:"+threadID &&
-			threadID != "" && generationOK && sessionID != "" && incarnation != "" &&
-			draftRef != "" && c.appVoiceThreadKnown(threadID, generation, sessionID, incarnation)
+		return generationOK && validAppUUID(draftRef) &&
+			c.appVoiceThreadKnown(threadID, generation, sessionID, incarnation)
 	}
 	return true
 }
@@ -693,7 +694,7 @@ func (s *appVoiceService) validTarget(owner *Client, active map[string]any, tool
 	case voice.AppToolComposerDraft:
 		return appTargetsEqual(target, appComposerTarget(active))
 	case voice.AppToolSubmitThreadTurn:
-		if !appTargetMatchesExcept(target, appThreadTurnTarget(active), "machine_id") {
+		if !appTargetsEqual(target, appThreadTurnTarget(active)) {
 			return false
 		}
 		threadID, _ := target["thread_id"].(string)
@@ -719,7 +720,7 @@ func appComposerTarget(active map[string]any) map[string]any {
 	if composer == nil {
 		return nil
 	}
-	return map[string]any{"kind": "composer", "channel_id": composer["channel_id"], "thread_id": composer["thread_id"], "runtime_generation": composer["runtime_generation"], "draft_ref": composer["draft_ref"]}
+	return map[string]any{"kind": "composer", "channel_id": composer["channel_id"], "thread_id": composer["thread_id"], "runtime_session_id": composer["runtime_session_id"], "runtime_generation": composer["runtime_generation"], "runtime_incarnation": composer["runtime_incarnation"], "draft_ref": composer["draft_ref"]}
 }
 func appThreadTurnTarget(active map[string]any) map[string]any {
 	composer, _ := active["composer"].(map[string]any)
@@ -732,16 +733,9 @@ func appThreadTurnTarget(active map[string]any) map[string]any {
 	}
 	return map[string]any{"kind": "thread_turn", "channel_id": composer["channel_id"], "thread_id": threadID, "runtime_session_id": composer["runtime_session_id"], "runtime_generation": composer["runtime_generation"], "runtime_incarnation": composer["runtime_incarnation"], "draft_ref": composer["draft_ref"]}
 }
-func appTargetMatchesExcept(actual, expected map[string]any, skip string) bool {
-	if expected == nil {
-		return false
-	}
-	for key, want := range expected {
-		if key != skip && actual[key] != want {
-			return false
-		}
-	}
-	return true
+func validAppUUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed != uuid.Nil
 }
 func (s *appVoiceService) ack(c *Client, f struct {
 	Type             string         `json:"type"`
@@ -1142,9 +1136,8 @@ func (c *Client) appVoiceWorkspaceKnown(id string) bool {
 	return false
 }
 
-// lookupCatalogThread reads the Hub-published catalog before taking the
-// client subscription lock. App-voice callers invoke it outside the app voice
-// service lock, preserving the Hub/client lock ordering used on disconnect.
+// lookupConversation reads the relay's sole active conversation identity before
+// taking the client subscription lock.
 func (c *Client) lookupConversation(id string) (missioncontrol.SingleConversationOrigin, string, bool) {
 	if c.hub == nil || c.hub.cos == nil {
 		return missioncontrol.SingleConversationOrigin{}, "", false
@@ -1156,11 +1149,9 @@ func (c *Client) lookupConversation(id string) (missioncontrol.SingleConversatio
 	return root, c.hub.cos.incarnation, true
 }
 
-// appVoiceThreadKnown proves both catalog identity and this browser's existing
-// authority over the root. An empty runtime pair is used only by metadata-only
-// observation/navigation records that carry no runtime address. Turn/composer
-// records supply both values and therefore bind the opaque Lobby exception to
-// the exact persisted origin rather than accepting arbitrary session strings.
+// appVoiceThreadKnown proves the sole COS conversation identity and this
+// browser's subscription authority. It never accepts an opaque ID merely
+// because it is well formed: every field is compared to the active relay root.
 func (c *Client) appVoiceThreadKnown(id string, generation uint64, sessionID, incarnation string) bool {
 	root, currentIncarnation, found := c.lookupConversation(id)
 	if !found || root.ID != id || generation != 1 ||

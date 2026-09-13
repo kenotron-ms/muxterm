@@ -2082,6 +2082,7 @@ export class MuxCos extends LitElement {
 
   private _onDraft = (e: Event): void => {
     const el = e.target as HTMLTextAreaElement;
+    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
     this._draft = el.value;
     this._fit(el);
   };
@@ -2181,6 +2182,7 @@ export class MuxCos extends LitElement {
     }
     const t = payload.text.trim();
     if (!t) return;
+    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
     this._draft = this._draft.trim() === '' ? t : `${this._draft.trimEnd()} ${t}`;
     void this.updateComplete.then(() => {
       const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
