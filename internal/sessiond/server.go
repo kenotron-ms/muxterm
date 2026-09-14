@@ -41,6 +41,18 @@ type Server struct {
 	subs  map[string]map[*conn]bool // workspaceId -> set of attached connections
 	conns map[*conn]bool            // all live connections
 
+	// workspaceListMu serializes a whole workspace-list snapshot and its
+	// publication. It is intentionally separate from mu: obtaining a current
+	// snapshot can classify pane activity through /proc, and terminal/control
+	// fan-out must never wait on that inspection.
+	workspaceListMu sync.Mutex
+
+	// activityRefreshMu coalesces authenticated shell-lifecycle transitions
+	// into one authoritative workspace-list refresh. It is not a terminal
+	// output ticker: only Pane's activity observer can schedule it.
+	activityRefreshMu      sync.Mutex
+	activityRefreshPending bool
+
 	// preview is the sidebar preview ticker's per-workspace change-gating
 	// state, keyed by workspace id. Guarded by mu, pruned each tick to the
 	// live workspace set. See the preview section at the end of this file.
@@ -1006,6 +1018,7 @@ func (c *conn) createPane(msg Message) {
 		p.setTitleDerived(title)
 	}
 	c.srv.reg.PutPane(wsID, p)
+	p.SetActivityObserver(c.srv.scheduleActivityRefresh)
 	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
 	c.srv.broadcast(wsID, &Message{
 		Type:        TypePaneAdded,
@@ -1171,29 +1184,34 @@ func (s *Server) broadcastCloseMutation(outcome CloseOutcome) {
 // Server.mu. Every workspace-list broadcaster takes this path so an older
 // Registry snapshot cannot enqueue after a newer workspace mutation.
 func (s *Server) broadcastWorkspaceList() {
+	s.workspaceListMu.Lock()
+	defer s.workspaceListMu.Unlock()
+	workspaces := s.reg.List()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.broadcastWorkspaceListLocked()
+	s.broadcastWorkspaceListLocked(workspaces)
 }
 
 // replyWorkspaceList captures and queues a correlated workspace-list under the
 // same publication lock as broadcasts. A list request therefore cannot enqueue
 // an older snapshot after a close broadcast that already announced newer state.
 func (s *Server) replyWorkspaceList(c *conn, cid uint64) {
+	s.workspaceListMu.Lock()
+	defer s.workspaceListMu.Unlock()
+	workspaces := s.reg.List()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c.sub.enqueueControl(&Message{
 		Type:       TypeWorkspaceList,
 		CID:        cid,
-		Workspaces: s.reg.List(),
+		Workspaces: workspaces,
 	})
 }
 
-// broadcastWorkspaceListLocked captures the Registry snapshot while Server.mu
-// is held and then publishes it to every live connection. The established
-// Server -> Registry lock order matches attach and unsubscribe paths.
-func (s *Server) broadcastWorkspaceListLocked() {
-	workspaces := s.reg.List()
+// broadcastWorkspaceListLocked publishes a snapshot that was captured while
+// workspaceListMu was held. Server.mu is held only around the non-blocking
+// enqueue fan-out, never across registry or OS process inspection.
+func (s *Server) broadcastWorkspaceListLocked(workspaces []WorkspaceInfo) {
 	for c := range s.conns {
 		c.sub.enqueueControl(&Message{Type: TypeWorkspaceList, Workspaces: workspaces})
 	}
@@ -1204,12 +1222,43 @@ func (s *Server) broadcastWorkspaceListLocked() {
 // after acquiring Server.mu keeps this publication ordered against every other
 // workspace snapshot.
 func (s *Server) broadcastWorkspaceClosed(workspaceID string) {
+	s.workspaceListMu.Lock()
+	defer s.workspaceListMu.Unlock()
+	workspaces := s.reg.List()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for c := range s.conns {
 		c.sub.enqueueControl(&Message{Type: TypeWorkspaceClosed, WorkspaceID: workspaceID})
 	}
-	s.broadcastWorkspaceListLocked()
+	s.broadcastWorkspaceListLocked(workspaces)
+}
+
+// scheduleActivityRefresh publishes a fresh activity aggregate shortly after
+// a trusted shell lifecycle transition. The short coalescing window groups the
+// prompt-construction/prompt pair without turning arbitrary PTY output into a
+// sidebar status signal.
+func (s *Server) scheduleActivityRefresh() {
+	s.mu.Lock()
+	hasListeners := len(s.conns) != 0
+	s.mu.Unlock()
+	if !hasListeners {
+		return
+	}
+
+	s.activityRefreshMu.Lock()
+	if s.activityRefreshPending {
+		s.activityRefreshMu.Unlock()
+		return
+	}
+	s.activityRefreshPending = true
+	s.activityRefreshMu.Unlock()
+
+	time.AfterFunc(75*time.Millisecond, func() {
+		s.activityRefreshMu.Lock()
+		s.activityRefreshPending = false
+		s.activityRefreshMu.Unlock()
+		s.broadcastWorkspaceList()
+	})
 }
 
 // reply enqueues a control reply to this connection.

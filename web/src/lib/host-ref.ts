@@ -37,6 +37,25 @@ export interface HostRefParts {
 }
 
 /**
+ * Presentation-safe execution source for a stable HostRef.ID.
+ *
+ * This is deliberately derived from the transport-qualified identity, never
+ * from HostRef.DisplayName or a dial target. A human may call any SSH machine
+ * "sandbox 1"; that does not make it an Azure sandbox. The `sandbox:` namespace
+ * is the only authority for the Azure presentation cue until a concrete sandbox
+ * transport publishes a richer source field.
+ */
+export type HostSource = 'local' | 'ssh' | 'azure-sandbox' | 'unknown';
+
+/** Classify a host qualifier for the workspace-sidebar source token. */
+export function sourceForHostRef(host: string): HostSource {
+  if (host === '') return 'local';
+  if (host.startsWith('ssh:')) return 'ssh';
+  if (host.startsWith('sandbox:')) return 'azure-sandbox';
+  return 'unknown';
+}
+
+/**
  * Parse a namespaced id (rule P2): the FIRST separator wins, and an id
  * carrying no separator is local → { host: '', localId: id }.
  *

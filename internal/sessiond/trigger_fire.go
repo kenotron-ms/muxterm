@@ -171,6 +171,7 @@ func (s *Server) spawnTriggerLane(t Trigger) (wsID string, paneID int, err error
 		p.setTitleDerived(title)
 	}
 	s.reg.PutPane(wsID, p)
+	p.SetActivityObserver(s.scheduleActivityRefresh)
 	s.broadcast(wsID, &Message{
 		Type:        TypePaneAdded,
 		WorkspaceID: wsID,

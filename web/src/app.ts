@@ -1668,7 +1668,7 @@ export class MuxApp extends LitElement {
             >
               <mux-sidebar
                 .homeActive="${this._showDashboard}"
-                .homeKey="${''}"
+                .homeKey="${store.config.keys.toggleHome}"
                 .previewsVisible="${this._drawerOpen}"
                 @workspace-switch="${this._onWorkspaceSelected}"
                 @workspace-create="${this._onOpenCreateModal}"

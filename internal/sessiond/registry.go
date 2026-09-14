@@ -182,24 +182,71 @@ func (r *Registry) Has(id string) bool {
 
 // List returns a deterministic snapshot of all workspaces, sorted by
 // WorkspaceID.
+//
+// Workspace activity is classified after copying the membership under the
+// registry lock. ClassifyActivity can inspect process state, so holding the
+// registry lock across it would make a slow /proc read block unrelated
+// workspace lifecycle operations. The copied pane pointers remain safe to
+// classify: a concurrently removed or exited pane resolves to unknown rather
+// than being weakened to idle.
 func (r *Registry) List() []WorkspaceInfo {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]WorkspaceInfo, 0, len(r.workspaces))
+	type snapshot struct {
+		info  WorkspaceInfo
+		panes []*Pane
+	}
+	snapshots := make([]snapshot, 0, len(r.workspaces))
 	for _, ws := range r.workspaces {
-		out = append(out, WorkspaceInfo{
-			WorkspaceID:   ws.ID,
-			WorkspaceUUID: ws.UUID,
-			Name:          ws.Name,
-			ClientRef:     ws.ClientRef,
-			PaneCount:     len(ws.Panes),
-			Completion:    ws.completion,
+		panes := make([]*Pane, 0, len(ws.Panes))
+		for _, pane := range ws.Panes {
+			panes = append(panes, pane)
+		}
+		snapshots = append(snapshots, snapshot{
+			info: WorkspaceInfo{
+				WorkspaceID: ws.ID,
+				Name:        ws.Name,
+				ClientRef:   ws.ClientRef,
+				PaneCount:   len(panes),
+				Completion:  ws.completion,
+			},
+			panes: panes,
 		})
+	}
+	r.mu.Unlock()
+
+	out := make([]WorkspaceInfo, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		snapshot.info.Activity = classifyWorkspaceActivity(snapshot.panes)
+		out = append(out, snapshot.info)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].WorkspaceID < out[j].WorkspaceID
 	})
 	return out
+}
+
+// classifyWorkspaceActivity keeps the sidebar's compact workspace mark tied to
+// the same daemon authority that close transactions use. Busy wins because one
+// running pane makes the workspace non-idle; idle is asserted only when every
+// pane is authoritatively idle; an empty workspace or any uncertainty is
+// unknown.
+func classifyWorkspaceActivity(panes []*Pane) ActivityClassification {
+	if len(panes) == 0 {
+		return ActivityUnknown
+	}
+	sawUnknown := false
+	for _, pane := range panes {
+		switch pane.ClassifyActivity().Classification {
+		case ActivityBusy:
+			return ActivityBusy
+		case ActivityUnknown:
+			sawUnknown = true
+		}
+	}
+	if sawUnknown {
+		return ActivityUnknown
+	}
+	return ActivityIdle
 }
 
 // AllocPaneID reserves and returns the next workspace-local pane id (starting at

@@ -713,6 +713,7 @@ func (s *Server) restorePane(wsID string, paneSnap PaneSnapshot) (int, error) {
 		p.setTitle(paneSnap.Title, nameOriginFromSnapshot(paneSnap.TitleOrigin))
 	}
 	s.reg.PutPane(wsID, p)
+	p.SetActivityObserver(s.scheduleActivityRefresh)
 	return localID, nil
 }
 

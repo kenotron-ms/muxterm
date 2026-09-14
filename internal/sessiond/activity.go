@@ -251,12 +251,13 @@ func (p *Pane) bindRootProcess(pid int, source shellLifecycleSource, token strin
 	return generation
 }
 
-func (p *Pane) observeLifecycleData(generation uint64, data []byte, observedAt time.Time) {
+func (p *Pane) observeLifecycleData(generation uint64, data []byte, observedAt time.Time) bool {
 	p.activityMu.Lock()
 	defer p.activityMu.Unlock()
 	if generation != p.rootGeneration || p.rootExited {
-		return
+		return false
 	}
+	activityChanged := false
 	wasParsing := p.lifecycleParsing
 	for _, marker := range p.lifecycleParser.feed(data) {
 		phase := lifecycleConflicting
@@ -270,6 +271,9 @@ func (p *Pane) observeLifecycleData(generation uint64, data []byte, observedAt t
 		case lifecycleMarkerConflict:
 			phase = lifecycleConflicting
 		}
+		if p.lifecycle.generation != generation || p.lifecycle.phase != phase {
+			activityChanged = true
+		}
 		p.lifecycle = lifecycleEvidence{
 			generation: generation,
 			phase:      phase,
@@ -281,15 +285,19 @@ func (p *Pane) observeLifecycleData(generation uint64, data []byte, observedAt t
 	if p.lifecycleParsing != wasParsing {
 		p.activityRevision++
 	}
+	return activityChanged
 }
 
-func (p *Pane) markRootExited(generation uint64) {
+func (p *Pane) markRootExited(generation uint64) bool {
 	p.activityMu.Lock()
+	changed := false
 	if generation == p.rootGeneration {
 		p.rootExited = true
 		p.activityRevision++
+		changed = true
 	}
 	p.activityMu.Unlock()
+	return changed
 }
 
 type activitySnapshot struct {

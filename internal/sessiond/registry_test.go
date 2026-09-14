@@ -130,8 +130,8 @@ func TestRegistryListReportsWorkspaceInfo(t *testing.T) {
 
 	list := r.List()
 	want := []WorkspaceInfo{
-		{WorkspaceID: a, Name: "alpha", PaneCount: 1},
-		{WorkspaceID: b, Name: "beta", PaneCount: 0},
+		{WorkspaceID: a, Name: "alpha", PaneCount: 1, Activity: ActivityUnknown},
+		{WorkspaceID: b, Name: "beta", PaneCount: 0, Activity: ActivityUnknown},
 	}
 	if !reflect.DeepEqual(list, want) {
 		t.Fatalf("List() = %+v, want %+v", list, want)

@@ -260,6 +260,95 @@ export class MuxStartCard extends LitElement {
       color: var(--chrome-text-dim);
       flex-shrink: 0;
     }
+
+    /* The approved sidebar treatment is one quiet navigation row. The legacy
+       count/split properties remain accepted below for shared-demo API
+       compatibility, but none of their visual card treatment belongs here. */
+    :host {
+      margin: 4px 6px 6px;
+    }
+
+    .start {
+      position: relative;
+      display: flex;
+      align-items: center;
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 36px;
+      padding: 0 9px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--chrome-text-bright);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+
+    .start:hover {
+      border-color: transparent;
+      background: var(--chrome-hover);
+    }
+
+    .start.here,
+    .start.here:hover {
+      border-color: var(--chrome-accent);
+      background: var(--chrome-hover);
+      box-shadow: none;
+    }
+
+    .shortcut-tip {
+      position: absolute;
+      z-index: 1;
+      left: 8px;
+      bottom: calc(100% + 5px);
+      box-sizing: border-box;
+      padding: 3px 6px;
+      border: 1px solid var(--chrome-border);
+      border-radius: 3px;
+      background: var(--chrome-body);
+      color: var(--chrome-text-bright);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.3;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.12s, visibility 0.12s;
+    }
+
+    .start:hover .shortcut-tip,
+    .start:focus-visible .shortcut-tip {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .start:focus-visible {
+      outline: 2px solid var(--chrome-accent);
+      outline-offset: 2px;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (pointer: coarse) {
+      .start {
+        min-height: 44px;
+      }
+    }
   `;
 
   private _onClick(): void {
@@ -267,102 +356,29 @@ export class MuxStartCard extends LitElement {
   }
 
   override render() {
-    const zero = this.count === 0;
-    const cls = `start ${zero ? 'zero' : ''} ${this.active ? 'here' : ''}`;
-
-    // The second line says WHERE the card takes you -- so while Mission Control
-    // is the thing on screen it must not still read "click to go there". The
-    // spread is a shape, not a tally: "across 2 workspaces" tells you the
-    // attention is scattered, which is a different fact from how many rows
-    // there are, and it is the one the sidebar can act on.
-    const spread =
-      this.spread > 1
-        ? `across ${this.spread} workspaces`
-        : '';
-    const lbl = this.active
-      ? spread || 'you are here'
-      : zero
-        ? 'nothing is waiting'
-        : spread || 'something wants you';
-
-    // The card's whole body: its name, the one dot, and the line saying where
-    // it takes you.
-    const body = html`<div class="name">
-        Mission Control
-        ${zero ? '' : html`<span class="dot"></span>`}
-      </div>
-      <div class="lbl">${lbl}</div>`;
-
-    // THE ZERO-REMOTE GATE, expressed in Lit rather than as an early return.
-    //
-    // `body` is passed through UNTOUCHED when there is no split, into the same
-    // single binding it has always occupied. Appending a second `${...}` to the
-    // template instead would add a ChildPart marker comment to the card on
-    // every machine, including the ones with no remotes at all -- so the split
-    // is composed INSIDE the existing binding's value, where it costs a browser
-    // with one machine exactly nothing.
-    //
-    // A row shows a dot when that machine wants you, `?` when we cannot see it,
-    // and nothing at all when it is clear. No numbers: this card is the door to
-    // Mission Control, and Mission Control counts nothing.
-    const shown =
-      this.split.length === 0
-        ? body
-        : html`${body}
-            <div class="split">
-              ${this.split.map(
-                (row) => html`<div class="splitrow ${row.count === null ? 'unknown' : ''}">
-                  <span class="nm" title="${row.name}">${row.name}</span>
-                  ${row.count === null
-                    ? html`<span class="mk" title="not connected">?</span>`
-                    : row.count > 0
-                      ? html`<span class="dot"></span>`
-                      : ''}
-                </div>`,
-              )}
-            </div>`;
-
-    // Selection has to reach a screen reader too, or the fix is only for
-    // people who can see the ring. aria-current="page" is the cue for "this
-    // is the view you are on"; it replaces aria-pressed, which described the
-    // card as a toggle rather than as where you are. The dot is decorative
-    // here -- the label below carries the same fact in words.
-    const need = zero ? 'Nothing needs input.' : 'Sessions need input.';
-
-    // An aria-label REPLACES the element's contents for a screen reader, and
-    // this card is one button — so a split that exists only in the DOM is a
-    // split nobody using one can hear, including the `?` that is the whole
-    // point of it. Appended to the label, and empty when there is no split, so
-    // the label a machine with no remotes exposes is the string it exposes now.
-    // It says the same three states the dots say, in words, and no numbers.
-    const fleet =
-      this.split.length === 0
-        ? ''
-        : ` ${this.split
-            .map((r) =>
-              r.count === null
-                ? `${r.name}: unknown, not connected.`
-                : r.count > 0
-                  ? `${r.name}: needs input.`
-                  : `${r.name}: nothing waiting.`,
-            )
-            .join(' ')}`;
-
+    const displayShortcut = this.hint
+      .replace(/^ctrl/i, 'Ctrl')
+      .replace(/^control/i, 'Ctrl');
+    const ariaShortcut = this.hint
+      .replace(/^ctrl/i, 'Control')
+      .replace(/^cmd/i, 'Meta');
+    const description = displayShortcut ? `Shortcut: ${displayShortcut}.` : '';
     return html`
       <button
         type="button"
-        class="${cls}"
-        aria-label="${(this.active
-          ? `${need} Mission Control, current view.`
-          : `${need} Go to Mission Control.`) + fleet}"
+        class="start ${this.active ? 'here' : ''}"
+        aria-label="${this.active ? 'Mission Control, current view.' : 'Go to Mission Control.'}"
         aria-current="${this.active ? 'page' : 'false'}"
+        aria-keyshortcuts="${ariaShortcut}"
+        aria-describedby="${description ? 'mission-control-shortcut' : ''}"
+        title="${displayShortcut ? `Mission Control — ${displayShortcut}` : 'Mission Control'}"
         @click="${this._onClick}"
       >
-        <div class="head">
-          <span>mission control</span>
-          ${this.hint ? html`<span class="kb">${this.hint}</span>` : ''}
-        </div>
-        ${shown}
+        <span>Mission Control</span>
+        ${displayShortcut
+          ? html`<span class="shortcut-tip" role="tooltip" aria-hidden="true">${displayShortcut}</span>
+              <span id="mission-control-shortcut" class="sr-only">${description}</span>`
+          : ''}
       </button>
     `;
   }
