@@ -112,7 +112,44 @@ interface PendingOperation {
   readonly controller: AbortController;
 }
 
-type LeaseListener = (lease: AppVoiceLease | null, reason: string) => void;
+export type AppVoiceLeaseEndReason =
+  | 'explicit_end'
+  | 'logout'
+  | 'revoked'
+  | 'owner_disconnected'
+  | 'takeover'
+  | 'provider_ended';
+
+export type AppVoiceLeaseEndSource =
+  | 'local_release'
+  | 'local_confirmation'
+  | 'local_detach'
+  | 'server';
+
+export type AppVoiceLeaseTransition =
+  | Readonly<{
+      readonly kind: 'claimed';
+      readonly lease: AppVoiceLease;
+    }>
+  | Readonly<{
+      readonly kind: 'ended';
+      readonly lease: null;
+      readonly leaseEpoch: number;
+      readonly reason: AppVoiceLeaseEndReason;
+      readonly source: 'local_release';
+      /** In-process correlation only; this never enters a WebSocket frame. */
+      readonly localSessionId: string;
+    }>
+  | Readonly<{
+      readonly kind: 'ended';
+      readonly lease: null;
+      readonly leaseEpoch: number;
+      readonly reason: AppVoiceLeaseEndReason;
+      readonly source: Exclude<AppVoiceLeaseEndSource, 'local_release'>;
+      readonly localSessionId: null;
+    }>;
+
+type LeaseListener = (transition: AppVoiceLeaseTransition) => void;
 type DrainListener = (leaseEpoch: number, nonce: string) => void | Promise<void>;
 
 function recordValue(value: unknown): Record<string, unknown> | null {
@@ -127,6 +164,21 @@ function positiveInteger(value: unknown): number {
 
 function boundedString(value: unknown, maximum: number): string {
   return typeof value === 'string' && value.length <= maximum ? value : '';
+}
+
+function leaseEndReason(value: unknown): AppVoiceLeaseEndReason | null {
+  const reason = boundedString(value, 64);
+  switch (reason) {
+    case 'explicit_end':
+    case 'logout':
+    case 'revoked':
+    case 'owner_disconnected':
+    case 'takeover':
+    case 'provider_ended':
+      return reason;
+    default:
+      return null;
+  }
 }
 
 function boundedOpaque(value: unknown): string {
@@ -406,14 +458,14 @@ class AppVoiceOperations {
     this._unsubSocket = socket.onAppVoiceFrame((frame) => this._handleFrame(frame));
   }
 
-  detach(reason = 'owner_disconnected'): void {
+  detach(reason: AppVoiceLeaseEndReason = 'owner_disconnected'): void {
     this._unsubSocket?.();
     this._unsubSocket = null;
     this._socket = null;
     this._handlers = null;
     this._rejectClaim(new AppVoiceOperationRefusal('owner_disconnected', 'The app voice owner connection was lost.'));
     this._finishAll('focus_changed', 'The app voice operation was cancelled because the view changed.');
-    this._clearLease(reason);
+    this._clearLease(reason, 'local_detach');
     this._revision = 0;
   }
 
@@ -512,10 +564,10 @@ class AppVoiceOperations {
     return this._pending.size > 0;
   }
 
-  endLease(leaseEpoch: number, reason = 'explicit_end'): void {
+  endLease(leaseEpoch: number, reason: AppVoiceLeaseEndReason = 'explicit_end'): void {
     if (!this._lease || this._lease.lease_epoch !== leaseEpoch) return;
     this._finishAll('owner_disconnected', 'The app voice lease ended before this operation completed.');
-    this._clearLease(reason);
+    this._clearLease(reason, 'local_confirmation');
   }
 
   /**
@@ -532,7 +584,7 @@ class AppVoiceOperations {
    * This deliberately works before a provider session is minted, where the
    * HTTP end endpoint has no session identifier to authorize.
    */
-  releaseLease(lease: AppVoiceLease): boolean {
+  releaseLease(lease: AppVoiceLease, localSessionId = ''): boolean {
     if (!this._lease || this._lease.lease_epoch !== lease.lease_epoch) {
       return this._releasingEpoch === lease.lease_epoch;
     }
@@ -543,7 +595,15 @@ class AppVoiceOperations {
     // socket loss can lose that notice, but it cannot retain browser authority.
     this._finishAll('owner_disconnected', 'The app voice lease was explicitly released.');
     this._lease = null;
-    for (const listener of this._leaseListeners) listener(null, 'explicit_end');
+    const transition: AppVoiceLeaseTransition = Object.freeze({
+      kind: 'ended',
+      lease: null,
+      leaseEpoch: lease.lease_epoch,
+      reason: 'explicit_end',
+      source: 'local_release',
+      localSessionId,
+    });
+    for (const listener of this._leaseListeners) listener(transition);
     this._rememberReleasingEpoch(lease.lease_epoch);
     this._socket?.appVoice({
       type: 'app-voice-release',
@@ -632,7 +692,8 @@ class AppVoiceOperations {
     this._lease = lease;
     this._revision = 0;
     this.observe(this._handlers?.getObservation() ?? this._observation ?? emptyObservation(), true);
-    for (const listener of this._leaseListeners) listener(lease, 'claimed');
+    const transition: AppVoiceLeaseTransition = Object.freeze({ kind: 'claimed', lease });
+    for (const listener of this._leaseListeners) listener(transition);
     claim.resolve(lease);
     if (claim.cancelled) this.releaseLease(lease);
   }
@@ -654,10 +715,10 @@ class AppVoiceOperations {
 
   private _handleLeaseEnded(frame: Record<string, unknown>): void {
     const epoch = positiveInteger(frame.lease_epoch);
-    const reason = boundedString(frame.reason, 64);
+    const reason = leaseEndReason(frame.reason);
     if (
       frame.protocol_version !== APP_VOICE_PROTOCOL_VERSION ||
-      !['explicit_end', 'logout', 'revoked', 'owner_disconnected', 'takeover', 'provider_ended'].includes(reason)
+      reason === null
     ) {
       return;
     }
@@ -670,7 +731,7 @@ class AppVoiceOperations {
     }
     if (epoch !== this._lease.lease_epoch) return;
     this._finishAll('owner_disconnected', 'The app voice lease ended before this operation completed.');
-    this._clearLease(reason);
+    this._clearLease(reason, 'server');
   }
 
   private _acceptOperation(operation: AppVoiceOperation): void {
@@ -848,11 +909,23 @@ class AppVoiceOperations {
     claim.reject(error);
   }
 
-  private _clearLease(reason: string): void {
+  private _clearLease(
+    reason: AppVoiceLeaseEndReason,
+    source: Exclude<AppVoiceLeaseEndSource, 'local_release'>,
+  ): void {
     if (!this._lease) return;
-    this._clearReleasingEpoch(this._lease.lease_epoch);
+    const leaseEpoch = this._lease.lease_epoch;
+    this._clearReleasingEpoch(leaseEpoch);
     this._lease = null;
-    for (const listener of this._leaseListeners) listener(null, reason);
+    const transition: AppVoiceLeaseTransition = Object.freeze({
+      kind: 'ended',
+      lease: null,
+      leaseEpoch,
+      reason,
+      source,
+      localSessionId: null,
+    });
+    for (const listener of this._leaseListeners) listener(transition);
   }
 
   /**
