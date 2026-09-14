@@ -4,7 +4,8 @@ bundle:
   description: Wires the muxterm MCP server as a tool source, registers the muxterm-expert agent, and stamps the session id into the process title for crash-recovery discovery
 
 hooks:
-  # On session:start, stamp "amplifier resume <session-id>" into this
+  # After successful module initialization (on_session_ready callback), stamp
+  # "amplifier resume <session-id>" into this
   # process's own title via setproctitle. muxterm's sessiond already reads
   # /proc/<pid>/cmdline for every pane (to capture argv for crash-recovery
   # snapshots); this hook makes that existing read also carry the session
@@ -48,6 +49,10 @@ hooks:
     # this one; setting either to an empty string is read as "no override" and
     # restores the session's own model for that call.
     config:
+      # v0.7.0 publishes initialized roots before their first model turn.
+      # Local snapshots are not collector acknowledgement; see
+      # docs/session-state-protocol.md#amplifier-lane-commissioning.
+      # publish_state: false         # explicit opt-out; title recovery remains
       classify_model: "claude-haiku-4-5"
       label_model: "claude-haiku-4-5"
       # classify_end_of_turn: true   # set false to skip the model call entirely

@@ -49,6 +49,7 @@ import json
 import logging
 import os
 import re
+import stat
 import tempfile
 import time
 from pathlib import Path
@@ -102,6 +103,12 @@ HARNESS = "amplifier"
 # logged reason rather than guessing. Additive optional fields do not need a
 # bump -- that is what makes them additive. See docs/session-state-protocol.md.
 SCHEMA_VERSION = 1
+PUBLISHER = "hooks-muxterm-session/0.7.0"
+MAX_SNAPSHOT_BYTES = 64 * 1024
+_SESSION_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_LIFECYCLES = frozenset(
+    {"initialized", "running", "resumed", "turn-complete", "completed", "failed", "cancelled", "unknown"}
+)
 
 # Display bounds. A goal lane's first prompt is an entire inlined goal file and
 # an artifact list is unbounded; neither belongs on a sidebar row, and neither
@@ -120,6 +127,10 @@ KNOWS_ENTRY_MAX_CHARS = 256
 # The in-progress todo item's own text. It occupies the SAME card line `doing`
 # would have, so it gets the same order of budget rather than a larger one.
 TODO_CURRENT_MAX_CHARS = 100
+TODO_MAX_ENTRIES = 999
+TODO_ITEM_MAX_CHARS = 1_000
+_TODO_STATUSES = frozenset({"pending", "in_progress", "completed"})
+_DIAGNOSTIC_WARNED: set[tuple[str, str, str]] = set()
 
 
 def spool_dir() -> Path:
@@ -214,42 +225,155 @@ def _clip(text: Any, limit: int) -> str:
     """Collapse arbitrary event text to one bounded display line."""
     if not isinstance(text, str):
         text = "" if text is None else str(text)
+    # A snapshot is rendered outside this process.  Keep terminal controls and
+    # other non-printing bytes out even when an event source supplies them.
+    text = "".join(char if ord(char) >= 32 and ord(char) != 127 else " " for char in text)
     text = " ".join(text.split())
     if len(text) > limit:
         text = text[: limit - 1].rstrip() + "\u2026"
     return text
 
 
-def _todo_progress(tool_input: Any) -> dict[str, Any] | None:
-    """Project a `todo` tool call's payload into the snapshot's todo field.
+def _valid_session_id(session_id: Any) -> bool:
+    return isinstance(session_id, str) and bool(_SESSION_ID.fullmatch(session_id)) and not session_id.startswith(".")
 
-    The kernel hands TOOL_PRE the tool's arguments verbatim, so the list arrives
-    here as the same structured array the model sent -- `[{content, activeForm,
-    status}, ...]`. Nothing is parsed out of rendered output; the terminal panel
-    a human sees is drawn from this identical payload by the separate
-    hooks-todo-display module.
 
-    Returns None for anything that is not a list-bearing create/update, which
-    covers `action: "list"` (a read, carrying no todos) and any malformed call.
-    None means "publish nothing", and the consumer renders the row exactly as it
-    did before todos existed -- see to_payload.
+def _private_dir(path: Path) -> bool:
+    """Create and validate an owner-private, non-symlink directory."""
+    try:
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        info = path.lstat()
+        return (
+            stat.S_ISDIR(info.st_mode)
+            and info.st_uid == os.getuid()
+            and not (info.st_mode & 0o077)
+        )
+    except OSError:
+        return False
+
+
+def _atomic_write(path: Path, body: bytes) -> bool:
+    """Atomically write a small private file without following temp symlinks."""
+    if not _private_dir(path.parent):
+        return False
+    tmp_name = ""
+    try:
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{path.stem}.", suffix=".tmp", dir=path.parent)
+        with os.fdopen(fd, "wb") as handle:
+            try:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(body)
+                handle.flush()
+                try:
+                    os.fsync(handle.fileno())
+                except OSError:
+                    pass
+            except Exception:
+                raise
+        os.replace(tmp_name, path)
+        return True
+    except OSError:
+        return False
+    finally:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+
+
+def write_diagnostic(
+    spool: Path,
+    session_id: Any,
+    *,
+    status: str,
+    code: str,
+    pid: int | None = None,
+    pid_start: int | None = None,
+) -> bool:
+    """Best-effort bounded publisher diagnostic; it never contains raw errors."""
+    if status not in {"initialized", "disabled", "failed", "unobserved", "observed"}:
+        status = "failed"
+    if not _valid_session_id(session_id):
+        return False
+    pid = os.getpid() if pid is None else pid
+    pid_start = _pid_start_time(pid) if pid_start is None else pid_start
+    payload = {
+        "v": 1,
+        "sessionId": session_id,
+        "pid": pid if isinstance(pid, int) and pid > 0 else 0,
+        "pidStart": pid_start if isinstance(pid_start, int) and pid_start > 0 else 0,
+        "publisher": PUBLISHER,
+        "status": status,
+        "code": _clip(code, 64) or "unknown",
+        "updatedAt": int(time.time()),
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    if len(body) >= MAX_SNAPSHOT_BYTES:
+        return False
+    if not _private_dir(spool):
+        _warn_diagnostic_once(session_id, status, "diagnostic-spool-unavailable")
+        return False
+    ok = _atomic_write(spool / ".reporting" / f"{session_id}.json", body)
+    if not ok:
+        _warn_diagnostic_once(session_id, status, "diagnostic-write-failed")
+    return ok
+
+
+def _warn_diagnostic_once(session_id: str, status: str, code: str) -> None:
+    outcome = (session_id, status, code)
+    if outcome not in _DIAGNOSTIC_WARNED:
+        _DIAGNOSTIC_WARNED.add(outcome)
+        # Code-only: no filesystem paths, exception strings, or tool payloads.
+        logger.warning("hooks-muxterm-session: %s", code)
+
+
+_NO_TODO_RESULT = object()
+
+
+def _todo_progress(tool_input: Any, result: Any) -> dict[str, Any] | None | object:
+    """Project a successful `todo` result's authoritative output into progress.
+
+    TOOL_PRE is an attempted mutation, not a committed one.  TOOL_POST carries
+    the actual tool result and only its narrowly-shaped ``result.output.todos``
+    is authoritative.  ``None`` means an explicit successful empty list (clear);
+    the sentinel means no mutation.
     """
     if not isinstance(tool_input, dict):
-        return None
+        return _NO_TODO_RESULT
     if tool_input.get("action") not in ("create", "update"):
-        return None
-    todos = tool_input.get("todos")
-    if not isinstance(todos, list) or not todos:
-        # An explicitly EMPTIED list is not progress, and publishing 0/0 for it
-        # would render as a stalled lane. Absent is the honest projection.
+        return _NO_TODO_RESULT
+    if not isinstance(result, dict) or result.get("success") is not True:
+        return _NO_TODO_RESULT
+    output = result.get("output")
+    if not isinstance(output, dict) or "todos" not in output:
+        return _NO_TODO_RESULT
+    todos = output.get("todos")
+    if not isinstance(todos, list) or len(todos) > TODO_MAX_ENTRIES:
+        return _NO_TODO_RESULT
+    if not todos:
         return None
 
     done = 0
     current = ""
     for item in todos:
         if not isinstance(item, dict):
-            continue
+            return _NO_TODO_RESULT
         status = item.get("status")
+        content = item.get("content")
+        active_form = item.get("activeForm")
+        if (
+            status not in _TODO_STATUSES
+            or not isinstance(content, str)
+            or not content.strip()
+            or len(content) > TODO_ITEM_MAX_CHARS
+            or not isinstance(active_form, str)
+            or not active_form.strip()
+            or len(active_form) > TODO_ITEM_MAX_CHARS
+        ):
+            return _NO_TODO_RESULT
         if status == "completed":
             done += 1
         elif status == "in_progress" and not current:
@@ -257,7 +381,7 @@ def _todo_progress(tool_input: Any) -> dict[str, Any] | None:
             # is what a progress line is for; `content` is imperative ("Cut the
             # release") and reads as an instruction to the reader.
             current = _clip(
-                item.get("activeForm") or item.get("content") or "",
+                active_form,
                 TODO_CURRENT_MAX_CHARS,
             )
 
@@ -311,11 +435,13 @@ class SessionRecord:
         "pid",
         "pid_start",
         "sid",
+        "sid_start",
         "project",
         "name",
         "label",
         "mode",
         "state",
+        "lifecycle",
         "waiting_for",
         "doing",
         "done_means",
@@ -332,6 +458,7 @@ class SessionRecord:
         self.pid = os.getpid()
         self.pid_start = _pid_start_time(self.pid)
         self.sid = _pid_session_id(self.pid)
+        self.sid_start = _pid_start_time(self.sid) if self.sid > 0 else 0
         self.project = os.getcwd()
         self.name = ""
         # A 1-3 word tab label, derived once from the first prompt (label.py).
@@ -339,7 +466,9 @@ class SessionRecord:
         # spawn from argv" -- see internal/sessiond/autolabel.go.
         self.label = ""
         self.mode = MODE_INTERACTIVE
-        self.state = STATE_WORKING
+        # A mounted, live process has not necessarily started executing a turn.
+        self.state = STATE_STOPPED
+        self.lifecycle = "initialized"
         self.waiting_for = ""
         self.doing = ""
         self.done_means = ""
@@ -371,9 +500,9 @@ class SessionRecord:
 
         Read from the session's own snapshot file, whose name is the session id,
         so this can only ever adopt from a previous run of the SAME session --
-        never from a neighbouring one. It runs before on_session_start's
-        sweep_stale, which keeps endings for ENDING_TTL_SECONDS anyway, so a
-        resume seconds later always finds it.
+        never from a neighbouring one. The collector owns stale-spool cleanup,
+        so this writer never removes another session's record before the
+        handover can read its own terminal verdict.
 
         Deliberately narrow. Only an AUTONOMOUS snapshot in a TERMINAL state is
         adopted, which is exactly "a goal run that ended". An interactive
@@ -387,38 +516,62 @@ class SessionRecord:
         being a finished goal lane and becomes the ordinary chat session it now
         is, and reads as one.
         """
+        if not _valid_session_id(self.session_id):
+            return
         try:
-            with self.path.open("r", encoding="utf-8") as handle:
-                prior = json.load(handle)
+            if not _private_dir(self.path.parent):
+                return
+            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as handle:
+                info = os.fstat(handle.fileno())
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.getuid()
+                    or info.st_mode & 0o077
+                    or info.st_size >= MAX_SNAPSHOT_BYTES
+                ):
+                    return
+                body = handle.read(MAX_SNAPSHOT_BYTES)
+                if len(body) >= MAX_SNAPSHOT_BYTES:
+                    return
+                prior = json.loads(body)
         except Exception:
             # No prior snapshot, unreadable, or not JSON. A fresh session is
             # the correct and safe reading of all three.
             return
-        if not isinstance(prior, dict):
+        if (
+            not isinstance(prior, dict)
+            or prior.get("v", SCHEMA_VERSION) != SCHEMA_VERSION
+            or prior.get("sessionId") != self.session_id
+            or prior.get("publisher") != PUBLISHER
+        ):
             return
         if prior.get("mode") != MODE_AUTONOMOUS:
             return
         state = prior.get("state")
         if state not in TERMINAL_STATES:
             return
+        if prior.get("lifecycle") not in {"completed", "failed", "cancelled"}:
+            return
 
         self.mode = MODE_AUTONOMOUS
         self.state = state
+        self.lifecycle = prior["lifecycle"]
         self.goal_finished = True
         # The stop condition is the one fact that makes this row legible as a
         # finished goal lane rather than as some idle session, and it cannot be
         # recovered from anywhere else once the loop has dropped it.
         prior_done_means = prior.get("doneMeans")
         if isinstance(prior_done_means, str) and prior_done_means:
-            self.done_means = prior_done_means
+            self.done_means = _clip(prior_done_means, DONE_MEANS_MAX_CHARS)
         # Name and label are carried for continuity only: the pane and the row
         # should not appear to become a different lane at the handover.
         prior_name = prior.get("name")
         if isinstance(prior_name, str) and prior_name:
-            self.name = prior_name
+            self.name = _clip(prior_name, NAME_MAX_CHARS)
         prior_label = prior.get("label")
         if isinstance(prior_label, str) and prior_label:
-            self.label = prior_label
+            self.label = _clip(prior_label, SUBJECT_MAX_CHARS)
 
     # -- projection ---------------------------------------------------------
 
@@ -443,10 +596,12 @@ class SessionRecord:
 
     def set_blocked(self, reason: str) -> None:
         self.state = STATE_BLOCKED
+        self.lifecycle = "running"
         self.waiting_for = reason
 
     def set_working(self, doing: str | None = None) -> None:
         self.state = STATE_WORKING
+        self.lifecycle = "running"
         self.waiting_for = ""
         if doing is not None:
             self.doing = doing
@@ -468,41 +623,49 @@ class SessionRecord:
             "pidStart": self.pid_start,
             "sessionId": self.session_id,
             "harness": HARNESS,
-            "name": self.name,
+            "name": _clip(self.name or self.session_id, NAME_MAX_CHARS),
             "mode": self.mode,
             "state": self.state,
+            "lifecycle": self.lifecycle if self.lifecycle in _LIFECYCLES else "unknown",
             "updatedAt": int(time.time()),
+            # On-disk provenance only: sessiond does not forward this producer
+            # implementation detail to browser consumers.
+            "publisher": PUBLISHER,
         }
         if self.sid:
             # Omitted when /proc could not answer. The daemon then falls back
             # to walking our ancestry, which works while we are alive and not
             # after -- see _pid_session_id.
             payload["sid"] = self.sid
+        if self.sid_start > 0:
+            payload["sidStart"] = self.sid_start
         if self.project:
-            payload["project"] = self.project
+            payload["project"] = _clip(self.project, 1024)
         if self.label:
             # Omitted until the model has produced one. Absent means "keep
             # whatever the daemon derived at spawn"; an empty string here would
             # instead read as "this session declares it has no label".
-            payload["label"] = self.label
+            payload["label"] = _clip(self.label, SUBJECT_MAX_CHARS)
         if self.waiting_for:
-            payload["waitingFor"] = self.waiting_for
+            payload["waitingFor"] = _clip(self.waiting_for, SUBJECT_MAX_CHARS)
         if self.doing:
-            payload["doing"] = self.doing
+            payload["doing"] = _clip(self.doing, DOING_MAX_CHARS)
         if self.done_means:
-            payload["doneMeans"] = self.done_means
+            payload["doneMeans"] = _clip(self.done_means, DONE_MEANS_MAX_CHARS)
         if self.todo:
             # Absent, not zeroed, for a session that tracks no todos. A consumer
             # reading `"todo": {"done":0,"total":0}` would draw a stalled-looking
             # 0/0; absence lets it draw what it drew before this field existed.
             payload["todo"] = self.todo
         if self.knows:
-            payload["knows"] = self.knows
+            payload["knows"] = [_clip(path, KNOWS_ENTRY_MAX_CHARS) for path in self.knows[:KNOWS_MAX_ENTRIES]]
         return payload
 
     # -- durability ---------------------------------------------------------
 
-    def flush(self) -> None:
+    def flush(
+        self, *, diagnostic_status: str = "unobserved", diagnostic_code: str = "snapshot-written"
+    ) -> bool:
         """Atomically replace this session's snapshot file.
 
         Write-then-rename, so a reader mid-tick sees either the previous whole
@@ -527,103 +690,39 @@ class SessionRecord:
         # session sitting blocked at a permission prompt, whose content is
         # exactly what will not change. One stat is cheap next to the write it
         # usually avoids.
-        if rendered == self._last_payload and self.path.exists():
-            return
+        if rendered == self._last_payload and self.path.exists() and not self.path.is_symlink():
+            return True
 
-        body = json.dumps(payload, separators=(",", ":"))
-        # A deterministic sibling temp name, not mkstemp: hooks for one session
-        # run sequentially on a single event loop, so there is no writer to race
-        # with, and a plain open() avoids the file-descriptor ownership hazard
-        # of mkstemp + fdopen (a failure between the two either leaks the fd or
-        # double-closes a number the runtime may already have handed out again).
-        # It must be a sibling so os.replace stays within one filesystem, which
-        # is what makes it atomic.
-        tmp = self.path.with_name(f".{self.session_id}.tmp")
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            with open(tmp, "w", encoding="utf-8") as handle:
-                handle.write(body)
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, self.path)
+            if not _valid_session_id(self.session_id) or len(body) >= MAX_SNAPSHOT_BYTES:
+                raise OSError("invalid-snapshot")
+            if not _atomic_write(self.path, body):
+                raise OSError("snapshot-write")
             self._last_payload = rendered
-        except Exception as exc:
-            logger.debug("hooks-muxterm-session: snapshot write failed: %s", exc)
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-def sweep_stale(spool: Path) -> None:
-    """Reclaim snapshots that no longer describe anything.
-
-    A snapshot deliberately outlives its session so the home view can show how
-    that session ended (see on_session_end). Something still has to reclaim
-    them, and the daemon only reaps while a browser is subscribed -- so on a
-    machine where nobody ever opens the home view, this sweep is the only one
-    that ever runs.
-
-    Which makes WHAT it deletes load-bearing. This runs at session START, and
-    an earlier version deleted every snapshot whose process was gone: opening a
-    second pane and starting a session in it silently wiped the FIRST pane's
-    ending, from across the machine, for no reason connected to that pane at
-    all. Endings are therefore kept until ENDING_TTL_SECONDS, and only three
-    things are reclaimed here:
-
-      - a session whose process is gone and whose last state was not an ending
-        (killed mid-flight -- it never got to say how it went, and leaving it
-        up would assert that it is still thinking or still waiting on a human)
-      - an ending older than the TTL
-      - a snapshot whose pid is now held by a DIFFERENT process, which pidStart
-        detects; that identity is definitively dead
-
-    Entirely best-effort. Failing to sweep costs a stale file; raising here
-    would cost a session.
-    """
-    if not os.path.isdir("/proc"):
-        # Liveness here is a /proc existence test. Without /proc every pid would
-        # look dead and the sweep would delete every live session's snapshot.
-        # Do nothing rather than something destructive.
-        return
-    try:
-        entries = list(spool.iterdir())
-    except OSError:
-        return
-    for entry in entries:
-        if entry.suffix != ".json" or not entry.is_file():
-            continue
-        try:
-            with entry.open("r", encoding="utf-8") as fh:
-                snap = json.load(fh)
-            pid = snap.get("pid")
-            if not isinstance(pid, int) or pid <= 0:
-                continue
-            # Our own pid is NOT special-cased. Our own snapshot carries our
-            # own pidStart, so the identity check below keeps it; skipping it
-            # would instead have punched a hole exactly where a recycled pid
-            # needs catching.
-            running = os.path.exists(f"/proc/{pid}")
-            if running:
-                recorded = snap.get("pidStart")
-                if isinstance(recorded, int) and recorded > 0 and _pid_start_time(pid) != recorded:
-                    # The pid is live but it is somebody else now. This file
-                    # describes a session that is definitively gone, and the
-                    # identity it points at is a stranger's.
-                    entry.unlink(missing_ok=True)
-                continue
-            if snap.get("state") in TERMINAL_STATES:
-                # An ending. Keep it -- this is the row that answers
-                # "how did it end?" -- until it is old enough that nobody
-                # is coming back for it.
-                try:
-                    age = time.time() - entry.stat().st_mtime
-                except OSError:
-                    continue
-                if age < ENDING_TTL_SECONDS:
-                    continue
-            entry.unlink(missing_ok=True)
+            write_diagnostic(
+                self.path.parent,
+                self.session_id,
+                # This writer cannot know whether the collector saw it.  Receipt
+                # acknowledgement belongs to the collector commissioning path.
+                status=diagnostic_status,
+                code=diagnostic_code,
+                pid=self.pid,
+                pid_start=self.pid_start,
+            )
+            return True
         except Exception:
-            continue
-
+            # Do not include exception text: it can contain paths or tool data.
+            logger.debug("hooks-muxterm-session: snapshot-write-failed")
+            write_diagnostic(
+                self.path.parent,
+                self.session_id,
+                status="failed",
+                code="snapshot-write-failed",
+                pid=self.pid,
+                pid_start=self.pid_start,
+            )
+            return False
 
 # Records are process-global rather than per-coordinator because a delegated
 # sub-agent mounts this module again, against its own coordinator, inside this
@@ -634,6 +733,9 @@ _RECORDS: dict[str, SessionRecord] = {}
 _PARENTS: dict[str, str] = {}
 # child session id -> agent name, captured from session:fork for the `doing` line.
 _AGENTS: dict[str, str] = {}
+# Root id -> outstanding ``session-id + separator + approval-id`` tokens.  A
+# child approval must not be cleared by another child's resolution.
+_APPROVALS: dict[str, set[str]] = {}
 
 
 def _root_id(session_id: str) -> str:
@@ -677,17 +779,74 @@ class SessionStateTracker:
         self._classify_model = classify_model
         self._label_enabled = label_enabled
         self._label_model = label_model
+        self._session_id, self._parent_id = self._coordinator_identity()
+        self._approval_serial = 0
+        self._ready_seen = False
+        self._lifecycle_events: set[str] = set()
+
+    def _coordinator_identity(self) -> tuple[str | None, str | None]:
+        try:
+            session_id = getattr(self._coordinator, "session_id", None)
+            parent_id = getattr(self._coordinator, "parent_id", "__unattributed__")
+        except Exception:
+            return None, None
+        return (
+            session_id if _valid_session_id(session_id) else None,
+            parent_id if _valid_session_id(parent_id) else
+            None if parent_id is None else "__unattributed__",
+        )
+
+    def _identity(self, data: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Resolve event identity, falling back to this coordinator, not root."""
+        session_id = data.get("session_id")
+        if not _valid_session_id(session_id):
+            session_id = self._session_id
+        parent_id = data.get("parent_id", data.get("parent"))
+        if _valid_session_id(parent_id):
+            return session_id, parent_id
+        if session_id is not None and _valid_session_id(_PARENTS.get(session_id)):
+            # A known child can omit parent_id on follow-on events.  Its known
+            # lineage wins over treating its data as a root event.
+            parent_id = _PARENTS[session_id]
+        elif session_id == self._session_id:
+            parent_id = self._parent_id
+        else:
+            # A foreign event with no known ancestry cannot commission a root.
+            return None, None
+        return session_id, parent_id
+
+    async def on_session_ready(self, session_id: str, parent_id: str | None) -> None:
+        """Publish the pre-prompt initialized root record exactly once."""
+        if self._ready_seen:
+            return
+        self._ready_seen = True
+        if parent_id is not None:
+            _PARENTS[session_id] = parent_id
+            return
+        record = _RECORDS.get(session_id)
+        if record is None:
+            record = SessionRecord(session_id, self._spool)
+            _RECORDS[session_id] = record
+        if not (record.mode == MODE_AUTONOMOUS and record.goal_finished and record.state in TERMINAL_STATES):
+            record.state = STATE_STOPPED
+            record.waiting_for = ""
+            record.doing = "Initialized; awaiting first prompt"
+        else:
+            record.doing = f"Initialized; previous goal {record.state}"
+        # A previous goal verdict is not a terminal report from this NEW
+        # process. Keep its state/mode for handover, but provenance is current.
+        record.lifecycle = "initialized"
+        record.flush(diagnostic_status="initialized", diagnostic_code="ready")
 
     # -- goal mode ----------------------------------------------------------
 
     def _goal(self) -> dict[str, Any] | None:
         """Read the live /goal state off the coordinator.
 
-        There is no --goal flag and no environment variable: `/goal` is a slash
-        command that writes coordinator.session_state["goal"] (amplifier_app_cli
-        main.py), and the loop-streaming orchestrator reads it back on every
-        turn. Reading the same dict is therefore the authoritative answer, and
-        it is live -- the orchestrator clears it the instant the loop ends.
+        The version-matched `/goal` command writes
+        coordinator.session_state["goal"], and the loop-streaming orchestrator
+        reads it back on every turn. Reading the same dict is authoritative and
+        live -- the orchestrator clears it the instant the loop ends.
 
         session_state is absent from the published type stub, so it is accessed
         defensively; a kernel that drops it degrades this to interactive mode, which
@@ -764,11 +923,10 @@ class SessionStateTracker:
         stamps them as default fields on emit -- so this needs no state of its
         own beyond the fork chain.
         """
-        session_id = data.get("session_id")
-        if not isinstance(session_id, str) or not session_id:
+        session_id, parent_id = self._identity(data)
+        if session_id is None:
             return None
-        parent_id = data.get("parent_id")
-        if isinstance(parent_id, str) and parent_id:
+        if parent_id is not None:
             _PARENTS[session_id] = parent_id
             root = _root_id(session_id)
             # A child never creates a row: it has no pane of its own, it shares
@@ -780,30 +938,50 @@ class SessionStateTracker:
             _RECORDS[session_id] = record
         return record
 
-    @staticmethod
-    def _is_child(data: dict[str, Any]) -> bool:
-        parent_id = data.get("parent_id")
-        return isinstance(parent_id, str) and bool(parent_id)
+    def _is_child(self, data: dict[str, Any]) -> bool:
+        _, parent_id = self._identity(data)
+        return parent_id is not None
 
     def _agent_prefix(self, data: dict[str, Any]) -> str:
         """Label a sub-agent's activity so the root row stays honest."""
-        session_id = data.get("session_id")
+        session_id, _ = self._identity(data)
         agent = _AGENTS.get(session_id) if isinstance(session_id, str) else None
         return f"[{agent}] " if agent else "[delegate] "
 
     # -- handlers -----------------------------------------------------------
 
     async def on_session_start(self, event: str, data: dict[str, Any]) -> None:
+        if "start" in self._lifecycle_events:
+            return
+        self._lifecycle_events.add("start")
         if self._is_child(data):
             return
         record = self._record(data)
         if record is None:
             return
-        # Reclaim what previous sessions left behind. This is the only sweep
-        # that runs on a machine where nobody ever opens the home view, and it
-        # costs one directory listing per session start.
-        sweep_stale(self._spool)
-        self._sync_mode(record)
+        # This kernel event occurs only for first execute, so it is affirmative
+        # running evidence (unlike a mounted/alive coordinator).
+        self._sync_mode(record, fresh_turn=True)
+        record.set_working(record.doing)
+        record.flush()
+
+    async def on_session_resume(self, event: str, data: dict[str, Any]) -> None:
+        if "resume" in self._lifecycle_events:
+            return
+        self._lifecycle_events.add("resume")
+        if self._is_child(data):
+            return
+        record = self._record(data)
+        if record is None:
+            return
+        # Resume's first lifecycle event proves this process is executing now;
+        # it must not retain an earlier terminal row as its current state.
+        self._sync_mode(record, fresh_turn=True)
+        record.state = STATE_WORKING
+        record.lifecycle = "resumed"
+        record.waiting_for = ""
+        if not record.doing:
+            record.doing = "Resumed; running"
         record.flush()
 
     async def on_session_fork(self, event: str, data: dict[str, Any]) -> None:
@@ -815,9 +993,8 @@ class SessionStateTracker:
         record, and naming the agent is what makes the root's `doing` line say
         something truer than "waiting".
         """
-        session_id = data.get("session_id")
-        parent_id = data.get("parent_id")
-        if not isinstance(session_id, str) or not isinstance(parent_id, str):
+        session_id, parent_id = self._identity(data)
+        if session_id is None or parent_id is None:
             return
         _PARENTS[session_id] = parent_id
         metadata = data.get("metadata")
@@ -827,7 +1004,18 @@ class SessionStateTracker:
         record = _RECORDS.get(_root_id(session_id))
         if record is None:
             return
-        record.set_working(_clip(f"delegating to {agent or 'sub-agent'}", DOING_MAX_CHARS))
+        if not _APPROVALS.get(record.session_id):
+            record.set_working(_clip(f"delegating to {agent or 'sub-agent'}", DOING_MAX_CHARS))
+        record.flush()
+
+    async def on_orchestrator_start(self, event: str, data: dict[str, Any]) -> None:
+        """Actual execution start, including turns without prompt:submit."""
+        record = self._record(data)
+        if record is None or self._is_child(data):
+            return
+        self._sync_mode(record, fresh_turn=True)
+        if not _APPROVALS.get(record.session_id):
+            record.set_working("Executing turn")
         record.flush()
 
     async def on_prompt_submit(self, event: str, data: dict[str, Any]) -> None:
@@ -844,12 +1032,11 @@ class SessionStateTracker:
             return
         if self._is_child(data):
             return
-        # A new prompt is unambiguously the start of work: it clears any stale
-        # blocked reason and releases the pinned terminal goal verdict.
+        # Prompt submit is not guaranteed for every execution.  It only resets
+        # goal handover identity; execution:start is what claims active work.
         self._sync_mode(record, fresh_turn=True)
         if not record.name:
             record.name = _first_line(data.get("prompt"), NAME_MAX_CHARS)
-        record.set_working("")
         record.flush()
 
         await self._maybe_label(record, data)
@@ -907,18 +1094,6 @@ class SessionStateTracker:
         if record is None:
             return
         tool = data.get("tool_name")
-        if tool == "todo" and not self._is_child(data):
-            # The todo list is the one field on this row that is not a guess.
-            # `doing` is re-templated on EVERY tool call and so says what the
-            # session touched a second ago; this says how far through its own
-            # plan it is, and only changes when the session says so.
-            #
-            # Root sessions only. A sub-agent keeps its own todo list, and
-            # letting one overwrite the row would make the parent's progress
-            # jump to a stranger's numbers and back.
-            progress = _todo_progress(data.get("tool_input"))
-            if progress is not None:
-                record.todo = progress
         # A tool call that cannot be named specifically -- a shell command
         # whose verb this hook does not recognise -- falls back to what the
         # session is FOR rather than to a generic verb. The record already
@@ -933,7 +1108,9 @@ class SessionStateTracker:
             record.doing = _clip(self._agent_prefix(data) + doing, DOING_MAX_CHARS)
         else:
             self._sync_mode(record)
-            record.set_working(_clip(doing, DOING_MAX_CHARS))
+            # An outstanding approval wins over incidental tool activity.
+            if record.state != STATE_BLOCKED:
+                record.set_working(_clip(doing, DOING_MAX_CHARS))
         record.flush()
 
     async def on_tool_post(self, event: str, data: dict[str, Any]) -> None:
@@ -941,11 +1118,17 @@ class SessionStateTracker:
         if record is None:
             return
         if not self._is_child(data):
+            if data.get("tool_name") == "todo":
+                progress = _todo_progress(data.get("tool_input"), data.get("result"))
+                if progress is not _NO_TODO_RESULT:
+                    # Explicit output.todos=[] clears committed progress.
+                    record.todo = progress
             self._sync_mode(record)
             # Post-tool the session is back to thinking. Leaving `doing` on the
             # finished tool would make a long provider call look like a stuck
             # tool call.
-            record.set_working(record.doing)
+            if record.state != STATE_BLOCKED:
+                record.set_working(record.doing)
         record.flush()
 
     async def on_tool_error(self, event: str, data: dict[str, Any]) -> None:
@@ -959,14 +1142,10 @@ class SessionStateTracker:
         record = self._record(data)
         if record is None:
             return
-        error = data.get("error")
-        if isinstance(error, dict):
-            detail = error.get("msg") or error.get("type") or ""
-        else:
-            detail = error or ""
-        label = data.get("tool_name") or data.get("provider") or "call"
         prefix = self._agent_prefix(data) if self._is_child(data) else ""
-        record.doing = _clip(f"{prefix}{label} error: {detail}", DOING_MAX_CHARS)
+        # Error strings can contain credentials or raw request bodies. A failed
+        # call is not a terminal verdict; disclose only that structural fact.
+        record.doing = _clip(f"{prefix}Call failed; recovery not yet reported", DOING_MAX_CHARS)
         record.flush()
 
     async def on_artifact_read(self, event: str, data: dict[str, Any]) -> None:
@@ -987,6 +1166,15 @@ class SessionStateTracker:
         record = self._record(data)
         if record is None:
             return
+        session_id, _ = self._identity(data)
+        if session_id is None:
+            return
+        root = _root_id(session_id)
+        approval_id = self._approval_id(data)
+        if approval_id == "__unknown__":
+            self._approval_serial += 1
+            approval_id = f"__unknown__:{self._approval_serial}"
+        _APPROVALS.setdefault(root, set()).add(f"{session_id}\x1f{approval_id}")
         record.set_blocked(WAITING_FOR_PERMISSION)
         action = data.get("action") or data.get("tool_name")
         if action:
@@ -997,8 +1185,58 @@ class SessionStateTracker:
         record = self._record(data)
         if record is None:
             return
-        if record.state == STATE_BLOCKED:
+        session_id, _ = self._identity(data)
+        if session_id is None:
+            return
+        root = _root_id(session_id)
+        pending = _APPROVALS.get(root)
+        if pending is not None:
+            approval_id = self._approval_id(data)
+            matches = [
+                token for token in pending if token.endswith(f"\x1f{approval_id}")
+            ]
+            if len(matches) == 1:
+                pending.remove(matches[0])
+            elif approval_id == "__unknown__" and len(pending) == 1:
+                # Older optional approval emitters omit an id.  They can only
+                # resolve an unambiguous lone request, never another child's.
+                pending.clear()
+            if not pending:
+                _APPROVALS.pop(root, None)
+        if record.state == STATE_BLOCKED and not _APPROVALS.get(root):
             record.set_working(record.doing)
+        record.flush()
+
+    @staticmethod
+    def _approval_id(data: dict[str, Any]) -> str:
+        for key in ("approval_id", "request_id", "id"):
+            value = data.get(key)
+            if isinstance(value, str) and value:
+                return _clip(value, 128)
+        # A scoped unknown remains distinct from a real id and supports the
+        # old single-outstanding-request compatibility case above.
+        return "__unknown__"
+
+    async def on_cancel_requested(self, event: str, data: dict[str, Any]) -> None:
+        record = self._record(data)
+        if record is None or self._is_child(data):
+            return
+        # Requesting is not completion: cancellation can still fail or finish
+        # normally. Keep the interim declaration non-terminal and unknown.
+        record.state = STATE_WORKING
+        record.lifecycle = "unknown"
+        record.waiting_for = ""
+        record.doing = "Cancelling"
+        record.flush()
+
+    async def on_cancel_completed(self, event: str, data: dict[str, Any]) -> None:
+        record = self._record(data)
+        if record is None or self._is_child(data):
+            return
+        record.state = STATE_STOPPED
+        record.lifecycle = "cancelled"
+        record.waiting_for = ""
+        record.doing = "Cancelled"
         record.flush()
 
     async def on_user_notification(self, event: str, data: dict[str, Any]) -> None:
@@ -1045,6 +1283,15 @@ class SessionStateTracker:
         record = self._record(data)
         if record is None:
             return
+        if self._is_child(data):
+            # Child progress is useful narration but never a root verdict.
+            summary = data.get("summary") or data.get("reason")
+            if summary:
+                record.doing = _clip(
+                    self._agent_prefix(data) + str(summary), DOING_MAX_CHARS
+                )
+                record.flush()
+            return
         record.mode = MODE_AUTONOMOUS
         condition = data.get("condition")
         if isinstance(condition, str) and condition:
@@ -1052,14 +1299,17 @@ class SessionStateTracker:
         state = data.get("state")
         if state == "achieved":
             record.state = STATE_DONE
+            record.lifecycle = "completed"
             record.waiting_for = ""
             record.goal_finished = True
         elif state in ("stalled", "error"):
             record.state = STATE_FAILED
+            record.lifecycle = "failed"
             record.waiting_for = ""
             record.goal_finished = True
         elif state in ("cap_hit", "cancelled"):
             record.state = STATE_STOPPED
+            record.lifecycle = "cancelled"
             record.waiting_for = ""
             record.goal_finished = True
         else:
@@ -1109,6 +1359,7 @@ class SessionStateTracker:
         self._sync_mode(record)
         if record.state in (STATE_WORKING, STATE_BLOCKED):
             record.state = STATE_STOPPED
+            record.lifecycle = "turn-complete"
             record.waiting_for = ""
         record.flush()
 
@@ -1134,6 +1385,7 @@ class SessionStateTracker:
         already_blocked = record.state == STATE_BLOCKED
         if record.state in (STATE_WORKING, STATE_BLOCKED):
             record.state = STATE_STOPPED
+            record.lifecycle = "turn-complete"
             record.waiting_for = ""
         record.flush()
 
@@ -1205,34 +1457,52 @@ class SessionStateTracker:
         Leaving the file behind is only safe because the snapshot carries
         pidStart as well as pid: a stale file cannot be misattributed to an
         unrelated process that later inherits the pid. Reclamation is
-        bounded twice over: the daemon drops this row the moment its PANE runs
-        something else or is closed, and sweep_stale expires it by age on a
-        machine where nobody ever watches.
+        bounded by collector policy: the daemon drops this row when its PANE
+        runs something else or is closed. This writer never sweeps unrelated
+        spool files.
         """
+        if "end" in self._lifecycle_events:
+            return
+        self._lifecycle_events.add("end")
         if self._is_child(data):
-            self._forget(data.get("session_id"))
+            session_id, _ = self._identity(data)
+            self._forget(session_id)
             return
         record = self._record(data)
         if record is None:
             return
-        # A session that simply exits has, in fact, finished -- so working and
-        # blocked are promoted to done on the way out.
-        #
-        # `stopped` is promoted too, EXCEPT on a goal lane that already has a
-        # verdict. There, `stopped` came from on_goal_progress and means
-        # cap_hit or cancelled: the loop stopped SHORT of the condition the
-        # user gave it. `amplifier run '/goal ...'` exits the moment the loop
-        # ends, so promoting here would rewrite every capped-out lane as `done`
-        # on its way out the door -- claiming it finished what it was asked to
-        # do, erasing the only signal that it did not, and hiding a failure.
-        # That is the one direction this view must never fail in.
-        promote_from = (STATE_WORKING, STATE_BLOCKED, STATE_STOPPED)
-        if record.mode == MODE_AUTONOMOUS and record.goal_finished:
-            promote_from = (STATE_WORKING, STATE_BLOCKED)
-        if record.state in promote_from:
-            record.state = STATE_DONE
+        # Normal process completion does not mean its goal was achieved. Keep
+        # an explicit terminal goal verdict; failed/cancelled process endings
+        # still take precedence. Unknown status must never imply success.
+        status = data.get("status")
+        if status == "completed":
+            if not (
+                record.mode == MODE_AUTONOMOUS
+                and record.goal_finished
+                and record.state in TERMINAL_STATES
+            ):
+                record.state = STATE_DONE
+            record.lifecycle = {
+                STATE_DONE: "completed",
+                STATE_FAILED: "failed",
+                STATE_STOPPED: "cancelled",
+            }[record.state]
+            record.waiting_for = ""
+        elif status == "failed":
+            record.state = STATE_FAILED
+            record.lifecycle = "failed"
+            record.waiting_for = ""
+        elif status == "cancelled":
+            record.state = STATE_STOPPED
+            record.lifecycle = "cancelled"
+            record.waiting_for = ""
+        else:
+            record.state = STATE_STOPPED
+            record.lifecycle = "unknown"
             record.waiting_for = ""
         record.flush()
+        session_id, _ = self._identity(data)
+        self._forget(session_id)
 
     @staticmethod
     def _forget(session_id: Any) -> None:
@@ -1248,11 +1518,35 @@ class SessionStateTracker:
         _RECORDS.pop(session_id, None)
         _AGENTS.pop(session_id, None)
         _PARENTS.pop(session_id, None)
+        _APPROVALS.pop(session_id, None)
+        for pending in _APPROVALS.values():
+            for token in tuple(pending):
+                if token.startswith(f"{session_id}\x1f"):
+                    pending.remove(token)
         # Any child still pointing at this root is unreachable too.
         for child, parent in list(_PARENTS.items()):
             if parent == session_id:
                 _PARENTS.pop(child, None)
                 _AGENTS.pop(child, None)
+                for pending in _APPROVALS.values():
+                    for token in tuple(pending):
+                        if token.startswith(f"{child}\x1f"):
+                            pending.remove(token)
+
+    def cleanup(self) -> None:
+        """Drop process-global bookkeeping, retaining the on-disk snapshot."""
+        session_id, parent_id = self._coordinator_identity()
+        if session_id is None:
+            return
+        if parent_id is None:
+            self._forget(session_id)
+            return
+        _PARENTS.pop(session_id, None)
+        _AGENTS.pop(session_id, None)
+        for pending in _APPROVALS.values():
+            for token in tuple(pending):
+                if token.startswith(f"{session_id}\x1f"):
+                    pending.remove(token)
 
 
 # --- mid-turn narration ----------------------------------------------------

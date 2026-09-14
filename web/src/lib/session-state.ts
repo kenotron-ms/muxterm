@@ -22,6 +22,23 @@
  */
 export type SessionRunState = 'working' | 'blocked' | 'done' | 'failed' | 'stopped';
 
+/**
+ * Optional provenance for the producer transition that made this declaration.
+ * It does not replace the five-value SessionRunState contract. `lost` is
+ * collector-generated when a proven pane generation outlives a non-terminal
+ * producer report.
+ */
+export type SessionLifecycle =
+  | 'initialized'
+  | 'running'
+  | 'resumed'
+  | 'turn-complete'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'unknown'
+  | 'lost';
+
 /** Reasons a session is blocked. Only meaningful when state === 'blocked'. */
 export type WaitingFor =
   | 'permission prompt'
@@ -132,6 +149,8 @@ export interface SessionState {
   label?: string;
   mode: SessionMode;
   state: SessionRunState;
+  /** Optional producer transition provenance; see SessionLifecycle. */
+  lifecycle?: SessionLifecycle;
   /** Present only when state === 'blocked'. */
   waitingFor?: WaitingFor;
   /** Short line describing current activity, refreshed cheaply. */

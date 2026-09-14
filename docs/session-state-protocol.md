@@ -456,7 +456,126 @@ An environment variable rather than a config key, because the config file is the
 *browser's* config, live-editable from the UI, and "may this daemon execute a
 subprocess" is not a preference a web page should be able to flip.
 
-## Related
+## Amplifier lane commissioning
+
+Publisher `hooks-muxterm-session/0.7.0` reuses the existing v1 snapshot; it is
+not another card producer. It requires core 1.6.1's supported **module-level
+async `on_session_ready(coordinator)` callback**, invoked after successful
+mounts and before the first prompt. This is not a `session:ready` event.
+Module mount is idempotent per coordinator and returns hook-unregistration
+cleanup. Only root sessions stamp titles and publish cards by default;
+child coordinators establish ancestry and fold activity into the root.
+
+The current bundle already mounts this module through
+`behaviors/muxterm.yaml`. MCP tool availability alone does not install it.
+Do not modify personal or cached bundles to force registration. Use an
+explicitly composed bundle or the existing supported project-local module
+source override, then start a **new** process. Already-running lanes keep
+their imported code and registrations: they are **not hot-patched**.
+`publish_state: false` remains an intentional opt-out; title recovery is
+independent. Optional model-based labels/classification retain their existing
+configuration; neither is called during readiness.
+
+### Supported transitions
+
+| Source | Declaration |
+|---|---|
+| `on_session_ready` callback | `stopped`, `lifecycle: initialized`; awaiting first prompt, not working/blocked from process existence |
+| `session:start` / `session:resume` | First execute is working; idempotent start/resume handlers |
+| `execution:start` | Subsequent actual turn starts, even when CLI does not emit `prompt:submit` |
+| `tool:pre` / `tool:post` / `tool:error`, `provider:error` | Bounded activity, recoverable errors are not terminal failures |
+| Successful root `todo` POST | `result.output.todos` supplies committed counts/current task; explicit `[]` clears; attempted/failed/malformed changes do not replace progress |
+| `approval:required` / `approval:granted` / `approval:denied` | Real optional approval-hook waits; unrelated child/tool activity does not clear an outstanding approval |
+| `orchestrator:complete` / `prompt:complete` | Interactive turn ended; not proof the process exited |
+| `orchestrator:goal_progress` | Live goal metadata/verdict, not “headless implies autonomous” |
+| `cancel:requested` / `cancel:completed` | Cancelling is interim; completed cancellation is stopped/cancelled |
+| `session:end.status` | completed → done unless a terminal goal verdict is already declared; failed → failed, cancelled → stopped; absent/unknown status → stopped/unknown |
+
+Optional sources/fields vary by orchestrator and modules. Missing events cannot
+prove a lifecycle transition. The optional wire `lifecycle` field distinguishes
+initialized/running/resumed/turn-complete/completed/failed/cancelled/unknown.
+The collector may emit `lost` when a proven pane generation outlives a producer
+without a terminal report. It clears stale waiting/todo rather than resurrecting
+working state. A previous autonomous terminal verdict can accompany a freshly
+initialized interactive handover; it does not mean the loop resumed.
+
+### Three different readiness facts
+
+Use the repo-owned helper inside a muxterm pane on the target machine:
+
+```sh
+# Explicit launch: leave out the prompt to avoid a model turn for registration.
+python3 tools/commission-amplifier.py --bundle /path/to/composed-bundle.yaml
+
+# Supported saved-root resume, still no model turn until a prompt is submitted.
+python3 tools/commission-amplifier.py --bundle /path/to/composed-bundle.yaml \
+  --resume SESSION_ID
+
+# Pure observation of a newly launched root (also works for the goal run PID).
+python3 tools/commission-amplifier.py --observe-pid PID --timeout 15
+```
+
+The launch form runs the ordinary Amplifier CLI, including its normal first-run
+setup/update behavior; it is not a side-effect-free preflight. Use observer mode
+when launches are owned elsewhere. Existing UI/MCP/CLI/trigger launchers still
+use their effective bundle; their pane/harness acknowledgement is **only process
+started**, not proof of a loaded hook or collector receipt.
+
+The helper distinguishes `process/started`, `publisher/initialized`, and
+`collector/observed`. It never sends dummy prompts, writes snapshots, installs
+hooks, polls providers, or kills the agent on a reporting failure. It checks for
+at most 15 seconds by default (maximum 60), activating the ordinary read-only
+`muxterm fleet --json` subscription. Collector absence/failure, disabled publisher,
+missing/incompatible publisher, unsafe/unwritable spool, rejected identity and
+missing receipt remain structured non-success results. Launch mode leaves the
+agent running regardless; observer mode exits 2 unless observed.
+
+Publisher diagnostics live under `<spool>/.reporting/<sessionId>.json`.
+Registration diagnostics are also available as coordinator capability
+`hooks-muxterm-session/0.7.0/diagnostic`. These contain bounded codes and identities,
+not prompt bodies, raw tool payloads, provider error text or transcripts.
+Unwritable diagnostics degrade to bounded code-only warnings, never agent failure.
+
+### Collector receipt contract (local, private, v1)
+
+The new publisher adds on-disk `publisher` and `sidStart`; these are not sent to
+the browser. Its receipt is `<spool>/.receipts/<sessionId>.json`, atomically
+written 0600. An `observed` receipt follows actual collection and final pane
+retention; a `rejected` receipt records validation/placement rejection. The receipt
+contains v, sessionId, pid, pidStart, publisher, status, code, snapshotSha256,
+collectorPid, collectorStart, observedAt, and (only if observed) workspaceId/paneId.
+The SHA-256 names the exact snapshot bytes ingested. The helper checks that digest,
+both live process generations, and binding; an old collector's receipt cannot
+commission a new daemon. Reattach uses the existing authoritative whole-fleet
+subscription; no producer activity is needed.
+
+For this negotiated publisher, Linux `(pid,pidStart)` and `(sid,sidStart)` must
+be verifiable. Live placement checks actual SID **and ancestry**; dead placement
+requires the same still-live SID generation. Unknown identity/platform support
+is rejected, never assigned by a pane number or guessed parent. Schema or publisher
+versions not supported by this collector are rejected with fixed codes. Legacy
+v1 producers do not gain receipts or claim commissioned status; private same-user,
+regular, bounded file requirements apply to all reads. No auth or adapter opt-in
+is changed. The `MUXTERM_SESSION_STATE_DIR` override remains supported.
+
+**Current residuals:** real browser commissioning must be run before rollout.
+The existing three-group browser still places initialized/stopped rows in its
+completed group even though their `doing` line says initialized; a lifecycle-aware
+group label requires coordinated UI work. The pane-completion callback carries only
+a root PID, so after that root has been reaped its start identity cannot be proved:
+new-publisher completion lookup rejects it rather than risking a wrong historical
+binding. A future identity-aware callback change is separate from this publisher.
+
+### Recovery boundary
+
+Amplifier's proc-title identity and start/resume title fallback remain intact.
+`snapshot.go` can construct `amplifier resume <ID>`; its current `events.jsonl`
+existence check is not proof of complete resumable context. Restoring a pane is
+not process survival, and an interactive resume is not a goal-loop restart.
+Claude's reporting adapter does not provide symmetric identity-bound recovery.
+No Claude recovery change or production restart is part of this integration.
+
+## Related implementation
 
 - `internal/sessiond/sessionstate.go` — the wire contract (Go)
 - `web/src/lib/session-state.ts` — its browser mirror

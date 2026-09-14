@@ -1,13 +1,13 @@
 package sessiond
 
 import (
-	"encoding/json"
 	"errors"
 	"hash/fnv"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -135,6 +135,17 @@ type sessionSnapshot struct {
 	// writer). Such a snapshot falls back to the ancestor walk, which works
 	// while the process lives and not afterwards.
 	SID int `json:"sid,omitempty"`
+	// Publisher activates the stricter, acknowledged collector path for the
+	// current Amplifier hook. It deliberately stays on disk: consumers receive
+	// the harness-neutral SessionState, not producer implementation details.
+	Publisher string `json:"publisher,omitempty"`
+	// SIDStart is the pane root session leader's process start time. Together
+	// with SID it proves a dead producer's ending or loss belongs to the
+	// current pane generation rather than a recycled pid.
+	SIDStart uint64 `json:"sidStart,omitempty"`
+
+	rawRead        bool   `json:"-"`
+	snapshotSHA256 string `json:"-"`
 }
 
 // snapshotPIDMatches reports whether the process now holding snap.PID is the
@@ -148,6 +159,19 @@ func snapshotPIDMatches(snap sessionSnapshot) bool {
 		return true // reader cannot tell either; same reasoning
 	}
 	return start == snap.PIDStart
+}
+
+func strictSnapshotPIDMatches(snap sessionSnapshot) bool {
+	start, ok := processStartTime(snap.PID)
+	return snap.PIDStart != 0 && ok && start == snap.PIDStart
+}
+
+func strictLastDeclarationPIDMatches(snap sessionSnapshot, rootPID int) bool {
+	if !strictSnapshotPIDMatches(snap) {
+		return false
+	}
+	sid, ok := processSessionID(snap.PID)
+	return ok && sid == rootPID
 }
 
 // sessionStore holds the change gate for session-state pushes.
@@ -172,11 +196,22 @@ type sessionStore struct {
 	// line rather than one per tick forever. Touched only by collect, which
 	// runs solely on the session-state ticker goroutine -- it is deliberately
 	// NOT guarded by Server.mu, and must not be read from anywhere else.
-	warnedVersions map[string]int
+	warnedVersions    map[string]int
+	receiptOutcomes   map[string]string
+	warnedRejections  map[string]string
+	receiptWarnings   map[string]struct{}
+	rejectionOverflow bool
+	receiptOverflow   bool
 }
 
 func newSessionStore() *sessionStore {
-	return &sessionStore{dir: sessionStateDir(), warnedVersions: map[string]int{}}
+	return &sessionStore{
+		dir:              sessionStateDir(),
+		warnedVersions:   map[string]int{},
+		receiptOutcomes:  map[string]string{},
+		warnedRejections: map[string]string{},
+		receiptWarnings:  map[string]struct{}{},
+	}
 }
 
 // rearmLocked forces the next collection to publish even if nothing changed, so a
@@ -227,6 +262,12 @@ func (s *sessionStore) changedLocked(rows []SessionState) bool {
 // the producer recorded into its own file, so a session that starts AND
 // finishes with no browser open still has its row waiting when one opens.
 func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState, bool) {
+	if !privateSessionDir(s.dir) {
+		if _, err := os.Lstat(s.dir); errors.Is(err, fs.ErrNotExist) {
+			return nil, true
+		}
+		return nil, false
+	}
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -267,15 +308,23 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 		if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		if info, err := entry.Info(); err != nil || info.Size() > maxSessionSnapshotBytes {
-			continue
-		}
 		path := filepath.Join(s.dir, entry.Name())
-		snap, ok := readSessionSnapshot(path)
-		if !ok {
+		snap, parsed := readSessionSnapshot(path)
+		if !parsed {
+			s.rejectSnapshot(path, snap, "invalid_snapshot")
 			continue
 		}
-		if snap.V > sessionSnapshotVersion {
+		if !snapshotFilenameMatches(entry.Name(), snap.SessionID) {
+			s.rejectSnapshot(path, snap, "invalid_snapshot")
+			continue
+		}
+		acknowledged := snap.Publisher != ""
+		if acknowledged {
+			if code := validateAcknowledgedSnapshot(snap); code != "" {
+				s.rejectSnapshot(path, snap, code)
+				continue
+			}
+		} else if snap.V > sessionSnapshotVersion {
 			// Written by a producer newer than this daemon. Skip it rather
 			// than render half of it: the whole point of shipping a version is
 			// that the reader gets to decline, loudly, instead of silently
@@ -294,7 +343,7 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 		}
 		if snap.PID <= 0 {
 			// Not attributable to any process, now or ever.
-			_ = os.Remove(path)
+			s.removeSnapshot(path, snap.SessionID)
 			continue
 		}
 		if owners == nil {
@@ -307,39 +356,68 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 				// outlived its session and the kernel handed the number on.
 				// Publishing it would pin a dead session's row to an unrelated
 				// terminal, indistinguishable from a real one.
-				_ = os.Remove(path)
+				if acknowledged {
+					s.rejectSnapshot(path, snap, "identity_mismatch")
+				} else {
+					s.removeSnapshot(path, snap.SessionID)
+				}
 				continue
 			}
-			pane, ok := placeSnapshot(snap, owners)
-			if !ok {
-				// Running, but not inside any pane of ours. Left on disk
-				// rather than reclaimed: it is a live process's file, and it
-				// is not ours to delete.
+			pane, code := placeLiveSnapshot(snap, owners, acknowledged)
+			if code != "" {
+				if acknowledged {
+					s.rejectSnapshot(path, snap, code)
+				}
 				continue
 			}
 			pending = append(pending, pendingRow{
-				row:  stampPane(snap.SessionState, pane),
-				path: path,
-				pane: pane,
-				live: true,
+				row:          stampPane(snap.SessionState, pane),
+				path:         path,
+				pane:         pane,
+				live:         true,
+				receipt:      snap,
+				acknowledged: acknowledged,
 			})
 			continue
 		}
 
 		// The process is gone. Whether the row goes with it depends on
 		// whether the session ENDED or was killed.
-		if !sessionStateIsTerminal(snap.State) {
-			_ = os.Remove(path)
+		if acknowledged {
+			pane, code := placeDeadSnapshot(snap, owners)
+			if code != "" {
+				s.rejectSnapshot(path, snap, code)
+				continue
+			}
+			row := snap.SessionState
+			if !sessionLifecycleIsTerminal(snap.Lifecycle) {
+				row.State = SessionStateStopped
+				row.Lifecycle = LifecycleLost
+				row.Doing = "Process ended without a terminal report"
+				row.WaitingFor = ""
+				row.Todo = nil
+			}
+			pending = append(pending, pendingRow{
+				row:          stampPane(row, pane),
+				path:         path,
+				pane:         pane,
+				receipt:      snap,
+				acknowledged: true,
+			})
 			continue
 		}
-		pane, ok := placeSnapshot(snap, owners)
-		if !ok {
+		if !sessionStateIsTerminal(snap.State) {
+			s.removeSnapshot(path, snap.SessionID)
+			continue
+		}
+		pane, code := placeDeadSnapshot(snap, owners)
+		if code != "" {
 			// Its pane is gone -- or it never wrote a sid, in which case the
 			// walk has nothing left to walk now that /proc has forgotten the
 			// process. Either way there is no terminal to show this on, and
 			// closing a pane is the user saying they are done with it,
 			// endings included.
-			_ = os.Remove(path)
+			s.removeSnapshot(path, snap.SessionID)
 			continue
 		}
 		pending = append(pending, pendingRow{
@@ -389,10 +467,16 @@ func (s *sessionStore) collect(ownersFor func() map[int]paneRef) ([]SessionState
 	}
 	for i := range pending {
 		if !keep[i] {
-			_ = os.Remove(pending[i].path)
+			s.removeSnapshot(pending[i].path, pending[i].row.SessionID)
+			if pending[i].acknowledged {
+				s.receiptFor(pending[i].receipt, "rejected", "superseded", paneRef{})
+			}
 			continue
 		}
 		rows = append(rows, pending[i].row)
+		if pending[i].acknowledged {
+			s.receiptFor(pending[i].receipt, "observed", "accepted", pending[i].pane)
+		}
 	}
 
 	// Deterministic order, so an unchanged set hashes identically tick after
@@ -440,6 +524,9 @@ func (s *sessionStore) lastDeclarationFor(rootPID int) (SessionState, bool) {
 	if rootPID <= 0 {
 		return SessionState{}, false
 	}
+	if !privateSessionDir(s.dir) {
+		return SessionState{}, false
+	}
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return SessionState{}, false
@@ -450,11 +537,24 @@ func (s *sessionStore) lastDeclarationFor(rootPID int) (SessionState, bool) {
 		if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		if info, err := entry.Info(); err != nil || info.Size() > maxSessionSnapshotBytes {
+		snap, ok := readSessionSnapshot(filepath.Join(s.dir, entry.Name()))
+		if !ok || !snapshotFilenameMatches(entry.Name(), snap.SessionID) {
 			continue
 		}
-		snap, ok := readSessionSnapshot(filepath.Join(s.dir, entry.Name()))
-		if !ok || snap.V > sessionSnapshotVersion {
+		if snap.Publisher != "" {
+			if validateAcknowledgedSnapshot(snap) != "" {
+				continue
+			}
+			if runtime.GOOS == "linux" {
+				start, startOK := processStartTime(rootPID)
+				if !startOK || snap.PIDStart == 0 || snap.SID != rootPID ||
+					snap.SIDStart == 0 || snap.SIDStart != start ||
+					(processLive(snap.PID) && !strictLastDeclarationPIDMatches(snap, rootPID)) {
+					continue
+				}
+			}
+		}
+		if snap.Publisher == "" && snap.V > sessionSnapshotVersion {
 			continue
 		}
 		if snap.SID != rootPID && snap.PID != rootPID {
@@ -468,32 +568,176 @@ func (s *sessionStore) lastDeclarationFor(rootPID int) (SessionState, bool) {
 	return best, found
 }
 
-// placeSnapshot resolves the pane a snapshot belongs to.
-//
-// sid first, when the producer wrote one: a pane's root shell leads its own
-// POSIX session, so that single integer is the whole join and -- because it
-// lives in the file rather than in /proc -- it still resolves after the writer
-// has exited. That is what lets a finished session keep its row.
-//
-// The ancestor walk stays for producers that write no sid. It is correct while
-// the process lives and impossible afterwards, which is exactly the old
-// behaviour, unchanged for them.
-func placeSnapshot(snap sessionSnapshot, owners map[int]paneRef) (paneRef, bool) {
-	if snap.SID > 0 {
-		if ref, ok := owners[snap.SID]; ok {
-			return ref, true
-		}
+func snapshotFilenameMatches(filename, sessionID string) bool {
+	return ValidSessionID(sessionID) && filename == sessionID+".json"
+}
+
+// validateAcknowledgedSnapshot validates the current producer's stable schema
+// before any process or pane join. Legacy producers keep their permissive v0/v1
+// handling; a publisher declaration opts into receipt-backed strictness.
+func validateAcknowledgedSnapshot(snap sessionSnapshot) string {
+	if snap.Publisher != newSessionSnapshotPublisher {
+		return "incompatible_publisher"
 	}
-	return resolvePaneForPID(snap.PID, owners)
+	if snap.V != sessionSnapshotVersion {
+		return "incompatible_schema"
+	}
+	if runtime.GOOS != "linux" {
+		// This publisher's generation contract is /proc-based. Legacy
+		// producers retain their platform behavior, but receipt-backed
+		// attribution must not silently degrade to recycled PID matching.
+		return "identity_unavailable"
+	}
+	if snap.PIDStart == 0 || snap.SID <= 0 || snap.SIDStart == 0 {
+		return "identity_unavailable"
+	}
+	if snap.PID <= 0 || !ValidState(snap.State) || !ValidMode(snap.Mode) ||
+		!ValidWaitingFor(snap.WaitingFor) || !ValidLifecycle(snap.Lifecycle) ||
+		snap.Lifecycle == LifecycleLost {
+		return "invalid_snapshot"
+	}
+	return ""
+}
+
+// placeLiveSnapshot proves a live producer belongs to its actual pane. It
+// always walks the live ancestry; a declared sid never places a live row by
+// itself. When the kernel can tell us the actual sid, it must agree with a
+// declared value and its owner must agree with the ancestry result.
+func placeLiveSnapshot(snap sessionSnapshot, owners map[int]paneRef, strict bool) (paneRef, string) {
+	actualSID, sidOK := processSessionID(snap.PID)
+	if !sidOK {
+		if strict && runtime.GOOS == "linux" {
+			return paneRef{}, "identity_mismatch"
+		}
+		pane, ok := resolvePaneForPID(snap.PID, owners)
+		if !ok {
+			return paneRef{}, "unplaceable"
+		}
+		return pane, ""
+	}
+	if snap.SID > 0 && actualSID != snap.SID {
+		return paneRef{}, "identity_mismatch"
+	}
+	pane, ok := resolvePaneForPID(snap.PID, owners)
+	if !ok {
+		return paneRef{}, "unplaceable"
+	}
+	sidPane, sidPlaced := owners[actualSID]
+	if strict && !sidPlaced {
+		return paneRef{}, "unplaceable"
+	}
+	if sidPlaced && sidPane != pane {
+		return paneRef{}, "unplaceable"
+	}
+	return pane, ""
+}
+
+// strictLiveSnapshotIdentity proves both members of the current producer's
+// (pid, pidStart, sid, sidStart) identity on Linux. If /proc cannot provide an
+// answer, this fails closed rather than attaching a row to a recycled process.
+func strictLiveSnapshotIdentity(snap sessionSnapshot, pane paneRef) bool {
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	pidStart, pidOK := processStartTime(snap.PID)
+	sidStart, sidOK := processStartTime(snap.SID)
+	return snap.PIDStart != 0 && snap.SID > 0 && snap.SIDStart != 0 &&
+		pidOK && sidOK && pidStart == snap.PIDStart &&
+		sidStart == snap.SIDStart && pane.pidStart == snap.SIDStart
+}
+
+// placeDeadSnapshot can place only a recorded session leader. Current
+// publisher snapshots also have to prove that the leader is the very pane-root
+// generation that remains live, not a process which reused its pid.
+func placeDeadSnapshot(snap sessionSnapshot, owners map[int]paneRef) (paneRef, string) {
+	if snap.SID <= 0 {
+		return paneRef{}, "unplaceable"
+	}
+	pane, ok := owners[snap.SID]
+	if !ok {
+		return paneRef{}, "unplaceable"
+	}
+	if snap.Publisher != "" && runtime.GOOS == "linux" &&
+		(snap.SIDStart == 0 || pane.pidStart == 0 || pane.pidStart != snap.SIDStart) {
+		return paneRef{}, "identity_mismatch"
+	}
+	return pane, ""
+}
+
+func sessionLifecycleIsTerminal(lifecycle string) bool {
+	switch lifecycle {
+	case LifecycleCompleted, LifecycleFailed, LifecycleCancelled:
+		return true
+	}
+	return false
+}
+
+func (s *sessionStore) rejectSnapshot(path string, snap sessionSnapshot, code string) {
+	if snap.Publisher != "" && snap.rawRead &&
+		snapshotFilenameMatches(filepath.Base(path), snap.SessionID) {
+		s.receiptFor(snap, "rejected", code, paneRef{})
+	}
+	if !snap.rawRead || (snap.Publisher == "" && ValidSessionID(snap.SessionID)) {
+		return
+	}
+	key := path
+	outcome := code + "\x00" + snap.snapshotSHA256
+	if s.warnedRejections[key] == outcome {
+		return
+	}
+	if s.warnedRejections == nil {
+		s.warnedRejections = make(map[string]string)
+	}
+	if _, known := s.warnedRejections[key]; known || len(s.warnedRejections) < maxSessionReceiptOutcomes {
+		s.warnedRejections[key] = outcome
+		log.Printf("sessiond: rejecting session snapshot: %s", code)
+		return
+	}
+	if !s.rejectionOverflow {
+		s.rejectionOverflow = true
+		log.Printf("sessiond: additional session snapshot rejections suppressed")
+	}
+}
+
+func (s *sessionStore) warnReceiptFailure(sessionID, outcome, code string) {
+	key := sessionID + "\x00" + outcome
+	if _, known := s.receiptWarnings[key]; known {
+		return
+	}
+	if s.receiptWarnings == nil {
+		s.receiptWarnings = make(map[string]struct{})
+	}
+	if len(s.receiptWarnings) < maxSessionReceiptOutcomes {
+		s.receiptWarnings[key] = struct{}{}
+		log.Printf("sessiond: receipt write failed for session %s: %s", sessionID, code)
+		return
+	}
+	if !s.receiptOverflow {
+		s.receiptOverflow = true
+		log.Printf("sessiond: additional session receipt write failures suppressed")
+	}
+}
+
+func (s *sessionStore) removeSnapshot(path, sessionID string) {
+	if !privateSessionDir(s.dir) {
+		return
+	}
+	if err := os.Remove(path); err == nil {
+		s.removeReceipt(sessionID)
+	}
 }
 
 // pendingRow is one snapshot that survived reading, waiting on collect's
 // per-pane decision. It carries its own path so an unpublished one can be
 // reclaimed without going back to the directory.
 type pendingRow struct {
-	row  SessionState
-	path string
-	pane paneRef
+	row     SessionState
+	path    string
+	pane    paneRef
+	receipt sessionSnapshot
+	// acknowledged snapshots receive a collection receipt only after this row
+	// survives the per-pane retention decision.
+	acknowledged bool
 	// live distinguishes "the process is running" from "this is how it ended".
 	live bool
 }
@@ -537,6 +781,7 @@ func endingIsNewer(a, b SessionState) bool {
 type paneRef struct {
 	workspaceID string
 	paneID      int
+	pidStart    uint64
 }
 
 // paneOwners maps each live pane's root process id to that pane's identity.
@@ -552,7 +797,8 @@ func paneOwners(views []workspaceLiveView) map[int]paneRef {
 			if snap.exited || snap.pid <= 0 {
 				continue
 			}
-			owners[snap.pid] = paneRef{workspaceID: ws.ID, paneID: p.LocalID}
+			start, _ := processStartTime(snap.pid)
+			owners[snap.pid] = paneRef{workspaceID: ws.ID, paneID: p.LocalID, pidStart: start}
 		}
 	}
 	return owners
@@ -579,28 +825,6 @@ func resolvePaneForPID(pid int, owners map[int]paneRef) (paneRef, bool) {
 	return paneRef{}, false
 }
 
-// readSessionSnapshot decodes one snapshot file.
-//
-// A malformed or truncated file is skipped silently rather than logged: the
-// hook writes with write-then-rename so a partial document should be
-// impossible, but if one ever appears, the next event repairs it. Snapshots are
-// whole-state documents, which is precisely what makes a lost or unreadable one
-// self-healing instead of a permanently wrong delta.
-func readSessionSnapshot(path string) (sessionSnapshot, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return sessionSnapshot{}, false
-	}
-	var snap sessionSnapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return sessionSnapshot{}, false
-	}
-	if snap.SessionID == "" {
-		return sessionSnapshot{}, false
-	}
-	return snap, true
-}
-
 // sessionStateHash summarizes a published set so an unchanged one costs nothing.
 //
 // It covers every field the browser renders, and deliberately EXCLUDES
@@ -619,6 +843,7 @@ func sessionStateHash(rows []SessionState) uint64 {
 		writeHashField(h, r.Label)
 		writeHashField(h, r.Mode)
 		writeHashField(h, r.State)
+		writeHashField(h, r.Lifecycle)
 		writeHashField(h, r.WaitingFor)
 		writeHashField(h, r.Doing)
 		writeHashField(h, r.DoneMeans)
