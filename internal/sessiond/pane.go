@@ -103,6 +103,10 @@ type Pane struct {
 	onData      func(localID int, data []byte)
 	onExit      func(localID int, exitCode int, runtimeMilliseconds int64)
 	onPromptPtr atomic.Pointer[func(int, *Message)] // written once (createPane), read by readLoop
+	// onActivityPtr is installed once after this pane has entered the registry.
+	// It is deliberately separate from onData: only authenticated lifecycle
+	// changes may refresh a workspace activity aggregate.
+	onActivityPtr atomic.Pointer[func()]
 
 	closeOnce              sync.Once
 	integrationCleanupOnce sync.Once
@@ -371,7 +375,9 @@ func (p *Pane) readLoop(generation uint64) {
 		n, err := p.ptmx.Read(chunk)
 		if n > 0 {
 			data := chunk[:n]
-			p.observeLifecycleData(generation, data, time.Now())
+			if p.observeLifecycleData(generation, data, time.Now()) {
+				p.notifyActivity()
+			}
 			if code, prompted := scanOSC133(data); prompted {
 				if fn := p.onPromptPtr.Load(); fn != nil {
 					(*fn)(p.LocalID, &Message{Type: TypeShellPrompt, ExitCode: code})
@@ -390,7 +396,9 @@ func (p *Pane) readLoop(generation uint64) {
 		}
 	}
 	err2 := p.cmd.Wait()
-	p.markRootExited(generation)
+	if p.markRootExited(generation) {
+		p.notifyActivity()
+	}
 	p.cleanupIntegration()
 	exitCode := 0
 	if p.cmd.ProcessState != nil {
@@ -401,6 +409,24 @@ func (p *Pane) readLoop(generation uint64) {
 	runtimeMs := time.Since(p.startTime).Milliseconds()
 	if p.onExit != nil {
 		p.onExit(p.LocalID, exitCode, runtimeMs)
+	}
+}
+
+// SetActivityObserver installs the daemon-side workspace activity refresh
+// observer after the pane is registered. Scheduling once here covers the
+// initial prompt race before the observer existed; later scheduling comes only
+// from authenticated lifecycle transitions.
+func (p *Pane) SetActivityObserver(fn func()) {
+	if fn == nil {
+		return
+	}
+	p.onActivityPtr.Store(&fn)
+	fn()
+}
+
+func (p *Pane) notifyActivity() {
+	if fn := p.onActivityPtr.Load(); fn != nil {
+		(*fn)()
 	}
 }
 

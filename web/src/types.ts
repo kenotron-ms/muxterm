@@ -194,6 +194,12 @@ export interface SessiondWorkspaceInfo {
   clientRef?: string;
   paneCount: number;
   /**
+   * Daemon-owned aggregate of this workspace's pane activity. Absent is an
+   * older-daemon compatibility case and must render as unknown; it is never
+   * inferred from screen content or browser interaction.
+   */
+  activity?: 'idle' | 'busy' | 'unknown';
+  /**
    * Set when this workspace is holding a finished lane's result. A workspace
    * with `paneCount: 0` AND a completion is a RESULT, not an empty shell --
    * render it as finished rather than hiding or reaping it.

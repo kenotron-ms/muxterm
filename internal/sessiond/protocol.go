@@ -626,6 +626,11 @@ type WorkspaceInfo struct {
 	Name          string `json:"name,omitempty"`
 	ClientRef     string `json:"clientRef,omitempty"`
 	PaneCount     int    `json:"paneCount"`
+	// Activity is the daemon-owned aggregate across this workspace's panes.
+	// It is additive on the existing whole-state workspace-list snapshot:
+	// older browsers ignore it, while a browser connected to an older daemon
+	// receives an absent value and must fail closed to unknown.
+	Activity ActivityClassification `json:"activity,omitempty"`
 
 	// Completion is present (ADDITIVE, post-v1) only on a workspace whose
 	// lane has finished and has not yet been dismissed. Its presence is what
