@@ -2378,7 +2378,7 @@ export class MuxCos extends LitElement {
       // controller instead; its release path preserves this draft and caret.
       if (this._textMode && isSessionLive(this._voiceSession)) {
         e.preventDefault();
-        voiceSessionController.stop();
+        voiceSessionController.exitByUser();
         return;
       }
       this.dispatchEvent(new CustomEvent('home-dismiss', { bubbles: true, composed: true }));
@@ -2413,7 +2413,7 @@ export class MuxCos extends LitElement {
 
   private _toggleSession = (): void => {
     if (isSessionLive(this._voiceSession)) {
-      voiceSessionController.stop();
+      voiceSessionController.exitByUser();
       return;
     }
     this._holdVoiceComposer();
@@ -2509,7 +2509,7 @@ export class MuxCos extends LitElement {
     }
     e.preventDefault();
     e.stopPropagation();
-    voiceSessionController.stop();
+    voiceSessionController.exitByUser();
   };
 
   private _toggleDictation = (): void => {

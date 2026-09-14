@@ -12,6 +12,7 @@ import {
   appVoiceOperations,
   APP_VOICE_PROTOCOL_VERSION,
   type AppVoiceLease,
+  type AppVoiceLeaseTransition,
 } from './app-voice-operations.js';
 import { voiceCaptureArbiter } from './voice-capture-arbiter.js';
 import type { VoiceAvailabilityReason } from './voice-settings.js';
@@ -75,6 +76,12 @@ let sessionId = '';
 let lease: AppVoiceLease | null = null;
 let generation = 0;
 let releasing: Promise<void> | null = null;
+interface VoluntaryVoiceExit {
+  readonly generation: number;
+  readonly leaseEpoch: number;
+  readonly sessionId: string;
+}
+let voluntaryVoiceExit: VoluntaryVoiceExit | null = null;
 interface InputSenderBinding {
   readonly sender: RTCRtpSender;
   readonly track: MediaStreamTrack;
@@ -437,6 +444,7 @@ async function restoreInputSenders(): Promise<void> {
 
 async function appStart(): Promise<void> {
   if (appIsActive() || releasing) return;
+  voluntaryVoiceExit = null;
   if (!candidateAvailable) {
     error = unavailableMessage(availabilityReason);
     publish('error');
@@ -647,13 +655,22 @@ async function endProviderSession(previousLease: AppVoiceLease, previousSession:
   }
 }
 
-function beginRelease(sendEnd: boolean): Promise<void> {
+function beginRelease(sendEnd: boolean, intent: 'user_exit' | 'non_user' = 'non_user'): Promise<void> {
   pendingPause = false;
   paused = false;
   pauseResumeFence++;
   if (releasing) return releasing;
+  const previousGeneration = generation;
   const previousLease = lease;
   const previousSession = sessionId;
+  voluntaryVoiceExit =
+    intent === 'user_exit' && previousLease
+      ? Object.freeze({
+          generation: previousGeneration,
+          leaseEpoch: previousLease.lease_epoch,
+          sessionId: previousSession,
+        })
+      : null;
   lease = null;
   sessionId = '';
   generation++;
@@ -675,13 +692,13 @@ function beginRelease(sendEnd: boolean): Promise<void> {
   // Stop withdraws the old owner epoch before awaiting browser/media cleanup.
   // `previousLease` remains an immutable correlation for the bounded provider
   // end request below; no cleanup path reads the mutable current lease.
-  if (previousLease) appVoiceOperations.releaseLease(previousLease);
+  if (previousLease) appVoiceOperations.releaseLease(previousLease, previousSession);
   return releasing;
 }
 
-function appStop(): void {
+function appStop(intent: 'user_exit' | 'non_user'): void {
   error = '';
-  void beginRelease(true);
+  void beginRelease(true, intent);
   publish('idle');
 }
 
@@ -822,14 +839,53 @@ function fail(message: string, sendEnd = true, expectedGeneration = generation):
   void beginRelease(sendEnd);
 }
 
-appVoiceOperations.onLeaseChange((next, reason) => {
-  lease = next;
-  if (next === null && appIsActive()) {
+type LeaseEndHandling = 'claimed' | 'suppressed_user_exit' | 'unexpected_end';
+
+function isVoluntaryVoiceExit(transition: AppVoiceLeaseTransition): boolean {
+  const expected = voluntaryVoiceExit;
+  return (
+    transition.kind === 'ended' &&
+    expected !== null &&
+    transition.source === 'local_release' &&
+    transition.reason === 'explicit_end' &&
+    transition.leaseEpoch === expected.leaseEpoch &&
+    transition.localSessionId === expected.sessionId &&
+    generation === expected.generation + 1
+  );
+}
+
+function handleLeaseTransition(transition: AppVoiceLeaseTransition): LeaseEndHandling {
+  if (transition.kind === 'claimed') {
+    lease = transition.lease;
+    return 'claimed';
+  }
+
+  lease = null;
+  if (isVoluntaryVoiceExit(transition)) {
+    // This is the synchronous local release belonging to the exact browser
+    // generation and lease armed by the user's End/Exit control. It is a
+    // handled normal terminal transition, not an error presentation.
+    voluntaryVoiceExit = null;
+    return 'suppressed_user_exit';
+  }
+
+  // This marker is one-use and never authorizes a different terminal source,
+  // reason, lease epoch, or browser generation to be hidden.
+  voluntaryVoiceExit = null;
+  if (appIsActive()) {
     fail(
-      reason === 'takeover' ? 'App voice was released for an explicit takeover.' : 'The app voice lease ended.',
+      transition.reason === 'takeover'
+        ? 'App voice was released for an explicit takeover.'
+        : 'The app voice lease ended.',
       false,
     );
   }
+  return 'unexpected_end';
+}
+
+appVoiceOperations.onLeaseChange((transition) => {
+  const handling = handleLeaseTransition(transition);
+  if (handling === 'suppressed_user_exit') return;
 });
 
 appVoiceOperations.onDrainRequest(async (epoch, nonce) => {
@@ -928,7 +984,13 @@ export async function start(): Promise<void> {
 }
 
 export function stop(): void {
-  appStop();
+  appStop('non_user');
+  publishFacade();
+}
+
+/** The visible composer End/Exit control explicitly owns this normal release. */
+export function exitByUser(): void {
+  appStop('user_exit');
   publishFacade();
 }
 
@@ -950,7 +1012,7 @@ export async function togglePaused(): Promise<void> {
 
 export async function toggle(): Promise<void> {
   if (isActive()) {
-    stop();
+    exitByUser();
     return;
   }
   await start();
@@ -981,6 +1043,7 @@ export const voiceSessionController = {
   subscribe,
   start,
   stop,
+  exitByUser,
   pause,
   resume,
   togglePaused,
