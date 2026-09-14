@@ -8,6 +8,7 @@ import (
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // newTestHub builds a Hub whose dialer always returns the supplied DaemonConn,
@@ -38,12 +39,26 @@ func firstOfType(msgs [][]byte, typ string) (sessiond.Message, bool) {
 // a real WebSocket connection.
 func newTestClient(hub *Hub, wt, wb func([]byte) error) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
+	owner, err := workspaceauth.NewEphemeralOwner()
+	if err != nil {
+		panic(err)
+	}
+	authorizer, err := workspaceauth.NewOwnerOnlyAuthorizer(owner)
+	if err != nil {
+		panic(err)
+	}
+	admission, err := workspaceauth.NewLocalOwnerAdmission(owner.Principal)
+	if err != nil {
+		panic(err)
+	}
 	return &Client{
 		hub:           hub,
 		ctx:           ctx,
 		cancel:        cancel,
 		writeTextFn:   wt,
 		writeBinaryFn: wb,
+		authorizer:    authorizer,
+		admission:     admission,
 	}
 }
 

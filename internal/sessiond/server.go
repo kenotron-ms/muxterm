@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // Connection kinds carried by Message.ClientKind on attach and recorded in
@@ -58,11 +60,26 @@ type Server struct {
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
 // errors on an empty socket path.
 func NewServer(socketPath string) (*Server, error) {
+	owner, err := workspaceauth.NewEphemeralOwner()
+	if err != nil {
+		return nil, errors.New("sessiond: owner initialization failed")
+	}
+	return NewServerWithOwner(socketPath, owner)
+}
+
+// NewServerWithOwner constructs a server bound to a supplied private instance
+// owner. Raw same-UID sessiond access remains an owner-only local
+// administration channel, not multi-user authorization.
+func NewServerWithOwner(socketPath string, owner workspaceauth.InstanceOwner) (*Server, error) {
 	if socketPath == "" {
 		return nil, errors.New("sessiond: empty socket path")
 	}
+	reg, err := NewRegistryWithOwner(owner)
+	if err != nil {
+		return nil, errors.New("sessiond: owner initialization failed")
+	}
 	s := &Server{
-		reg:         NewRegistry(),
+		reg:         reg,
 		socket:      socketPath,
 		subs:        make(map[string]map[*conn]bool),
 		conns:       make(map[*conn]bool),

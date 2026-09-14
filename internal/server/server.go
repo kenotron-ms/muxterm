@@ -21,6 +21,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/authserver"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/voice"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 func init() {
@@ -34,7 +35,7 @@ func init() {
 type Config struct {
 	Addr          string
 	StaticFS      fs.FS
-	NoAuth        bool          // skip all auth checks, including loopback bypass (dev only)
+	NoAuth        bool          // explicit insecure development/test auth bypass
 	ConfigPath    string        // path to write config.toml on PATCH /api/config (empty = skip writes)
 	InitialConfig muxcfg.Config // initial resolved configuration (zero value = package defaults)
 
@@ -45,16 +46,15 @@ type Config struct {
 	AIKeyPath string
 
 	// AuthServer is nil when the platform login backend is unavailable at
-	// startup (see cmd/muxterm's newAuthServer) — in that case every
-	// non-loopback request is denied (fail closed), and /authorize,
+	// startup (see cmd/muxterm's newAuthServer) — in that case every normal
+	// browser request is denied (fail closed), and /authorize,
 	// /token, /auth/login, /auth/callback are not mounted at all.
 	AuthServer *authserver.AuthServer
 	// WebRedirectURI is the exact-match redirect URI for the muxterm-web
 	// OAuth client (e.g. "http://127.0.0.1:8311/auth/callback").
 	WebRedirectURI string
-	// BehindReverseProxy mirrors config.ServerConfig.BehindReverseProxy.
-	// When true the IsLocalhost() auth bypass is disabled entirely — see
-	// internal/server/authmiddleware.go.
+	// BehindReverseProxy mirrors config.ServerConfig.BehindReverseProxy and
+	// remains routing/configuration context; it no longer changes admission.
 	BehindReverseProxy bool
 
 	// LocalToken authenticates same-user helper processes on this machine
@@ -76,6 +76,13 @@ type Config struct {
 	// The concrete transport is adapted to this interface in cmd/muxterm, so
 	// internal/server never imports internal/transport/ssh or internal/deploy.
 	Remotes RemoteTransport
+
+	// Owner, Authorizer, Principal, and Admission are code-injected only. They have no
+	// configuration, request-header, or wire representation.
+	Owner      workspaceauth.InstanceOwner
+	Authorizer workspaceauth.Authorizer
+	Principal  workspaceauth.PrincipalID
+	Admission  workspaceauth.Admission
 }
 
 // Server is the HTTP server for muxterm.
@@ -123,12 +130,48 @@ type Server struct {
 	// concurrent clients cannot both rewrite the binary.
 	version  string
 	updating atomic.Bool
+
+	authorizer workspaceauth.Authorizer
+	owner      workspaceauth.InstanceOwner
+	admission  workspaceauth.Admission
 }
 
 // New creates a Server, registers routes, and optionally serves static files.
 // The Hub is created with a nil dialer; the per-browser daemon dialer is
 // injected later via s.hub.SetDialer.
 func New(cfg Config) *Server {
+	legacyAuthorization := cfg.Owner.V == 0 && cfg.Owner.Principal == "" &&
+		cfg.Authorizer == nil && cfg.Principal == "" && cfg.Admission.IsZero()
+
+	owner := cfg.Owner
+	authorizer := cfg.Authorizer
+	admission := cfg.Admission
+	if legacyAuthorization {
+		var ownerErr error
+		owner, ownerErr = workspaceauth.NewEphemeralOwner()
+		if ownerErr != nil {
+			panic("server: owner authorization initialization failed")
+		}
+		var err error
+		authorizer, err = workspaceauth.NewOwnerOnlyAuthorizer(owner)
+		if err != nil {
+			panic("server: owner authorization initialization failed")
+		}
+		admission, err = workspaceauth.NewLocalOwnerAdmission(owner.Principal)
+		if err != nil {
+			panic("server: owner authorization initialization failed")
+		}
+	} else if owner.Validate() != nil || authorizer == nil || cfg.Principal == "" ||
+		cfg.Principal != owner.Principal || !admission.Valid() ||
+		admission.Principal != cfg.Principal ||
+		authorizer.Authorize(cfg.Principal, workspaceauth.ActionAccess, workspaceauth.Resource{Kind: workspaceauth.ResourceInstance}) != nil {
+		// Once a caller supplies any authorization field, this is an explicit
+		// injection path. Never repair a partial/absent/mismatched injection
+		// with a synthesized local owner: middleware must deny it before any
+		// protected handler, WebSocket accept, daemon dial, or enumeration.
+		authorizer = nil
+		admission = workspaceauth.Admission{}
+	}
 	tunnels := NewTunnelRegistry()
 	hub := NewHub(nil)
 	hub.tunnels = tunnels
@@ -143,6 +186,9 @@ func New(cfg Config) *Server {
 		authSrv:        cfg.AuthServer,
 		webRedirectURI: cfg.WebRedirectURI,
 		version:        cfg.Version,
+		authorizer:     authorizer,
+		owner:          owner,
+		admission:      admission,
 	}
 
 	s.configPath = cfg.ConfigPath
@@ -161,6 +207,7 @@ func New(cfg Config) *Server {
 	s.ai = ai.NewManager(aiKeyPath)
 
 	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy, cfg.LocalToken)
+	authMW.SetAuthorization(authorizer, admission)
 	protect := func(h http.Handler) http.Handler {
 		return authMW.Wrap(h)
 	}
@@ -191,8 +238,8 @@ func New(cfg Config) *Server {
 		s.mux.HandleFunc("POST /auth/logout", s.handleAuthLogout)
 	}
 
-	// Protected routes: loopback bypass, else a valid session (cookie or
-	// bearer token) is required — see internal/server/authmiddleware.go.
+	// Protected routes require a valid browser session cookie/bearer token,
+	// except the explicit development/test or same-user helper paths.
 	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
 	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
 

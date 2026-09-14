@@ -230,7 +230,7 @@ type serverInfo struct {
 	URL string `json:"url"`
 	// Token authenticates local helper processes to the serve layer's HTTP
 	// API. It exists because those callers previously relied on the
-	// IsLocalhost() auth bypass, which behind_reverse_proxy disables --
+	// browser-auth admission boundary --
 	// leaving them with no credential at all and every call returning 401.
 	// It is minted fresh on each serve start and never persisted anywhere
 	// else.

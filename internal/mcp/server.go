@@ -4,11 +4,14 @@ package mcp
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // Protocol and server version constants.
@@ -52,6 +55,9 @@ type Server struct {
 	// Subscription state.
 	subsMu        sync.Mutex
 	subscriptions map[string]bool
+
+	authorizer workspaceauth.Authorizer
+	principal  workspaceauth.PrincipalID
 }
 
 // NewServer constructs a Server wired to os.Stdin and os.Stdout.
@@ -63,12 +69,46 @@ func NewServer() *Server {
 // NewServerWithIO constructs a Server with the provided reader and writer.
 // Used by tests with bytes.Buffer.
 func NewServerWithIO(in io.Reader, out io.Writer) *Server {
+	owner, err := workspaceauth.NewEphemeralOwner()
+	if err != nil {
+		panic("mcp: authorization initialization failed")
+	}
+	authorizer, err := workspaceauth.NewOwnerOnlyAuthorizer(owner)
+	if err != nil {
+		panic("mcp: authorization initialization failed")
+	}
+	return NewServerWithIOAndAuthorization(in, out, authorizer, owner.Principal)
+}
+
+// NewServerWithIOAndAuthorization is the code-only integration boundary for a
+// synthetic principal/authorizer. Stdio never accepts a network or
+// client-supplied identity.
+func NewServerWithIOAndAuthorization(in io.Reader, out io.Writer, authorizer workspaceauth.Authorizer, principal workspaceauth.PrincipalID) *Server {
+	// This is an explicit injection boundary: a partial or malformed pair
+	// means deny every tool/resource path, never silently construct a legacy
+	// owner that could impersonate the caller.
+	if authorizer == nil || principal == "" {
+		authorizer = nil
+		principal = ""
+	} else if _, err := workspaceauth.NewLocalOwnerAdmission(principal); err != nil {
+		authorizer = nil
+		principal = ""
+	}
 	return &Server{
 		in:            bufio.NewReader(in),
 		out:           json.NewEncoder(out),
 		tools:         make(map[string]*tool),
 		subscriptions: make(map[string]bool),
+		authorizer:    authorizer,
+		principal:     principal,
 	}
+}
+
+func (s *Server) authorize(action workspaceauth.Action) error {
+	if s.authorizer == nil {
+		return workspaceauth.ErrUnauthorized
+	}
+	return s.authorizer.Authorize(s.principal, action, workspaceauth.Resource{Kind: workspaceauth.ResourceInstance})
 }
 
 // SetResourceProvider installs the list and read hooks for MCP resources.
@@ -77,8 +117,21 @@ func (s *Server) SetResourceProvider(
 	list func() []map[string]any,
 	read func(uri string) (string, error),
 ) {
-	s.resourceList = list
-	s.resourceRead = read
+	s.resourceList = func() []map[string]any {
+		if s.authorize(workspaceauth.ActionRead) != nil || list == nil {
+			return nil
+		}
+		return list()
+	}
+	s.resourceRead = func(uri string) (string, error) {
+		if err := s.authorize(workspaceauth.ActionRead); err != nil {
+			return "", workspaceauth.ErrUnauthorized
+		}
+		if read == nil {
+			return "", fmt.Errorf("resources not available")
+		}
+		return read(uri)
+	}
 }
 
 // Register adds or updates a tool. If the name is new, it is appended to the
@@ -91,7 +144,12 @@ func (s *Server) Register(name, description string, schema map[string]any, fn To
 		name:        name,
 		description: description,
 		schema:      schema,
-		fn:          fn,
+		fn: func(args map[string]any) (string, error) {
+			if err := s.authorize(workspaceauth.ActionWrite); err != nil {
+				return "", workspaceauth.ErrUnauthorized
+			}
+			return fn(args)
+		},
 	}
 }
 
@@ -222,6 +280,9 @@ func (s *Server) handleInitialize(id json.RawMessage) {
 
 // handleToolsList responds to the 'tools/list' method with all registered tools.
 func (s *Server) handleToolsList(id json.RawMessage) {
+	if s.authorize(workspaceauth.ActionRead) != nil {
+		return
+	}
 	tools := make([]map[string]any, 0, len(s.order))
 	for _, name := range s.order {
 		t := s.tools[name]
@@ -236,6 +297,9 @@ func (s *Server) handleToolsList(id json.RawMessage) {
 
 // handleToolsCall responds to the 'tools/call' method by dispatching to the named tool.
 func (s *Server) handleToolsCall(id json.RawMessage, rawParams json.RawMessage) {
+	if s.authorize(workspaceauth.ActionWrite) != nil {
+		return
+	}
 	var params struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -261,7 +325,13 @@ func (s *Server) handleToolsCall(id json.RawMessage, rawParams json.RawMessage) 
 
 	text, err := t.fn(params.Arguments)
 	if err != nil {
+		if errors.Is(err, workspaceauth.ErrUnauthorized) {
+			return
+		}
 		s.writeError(id, codeInternalError, err.Error())
+		return
+	}
+	if s.authorize(workspaceauth.ActionRead) != nil {
 		return
 	}
 
@@ -278,6 +348,9 @@ func (s *Server) handleToolsCall(id json.RawMessage, rawParams json.RawMessage) 
 
 // handleResourcesList responds to 'resources/list' with all provider resources.
 func (s *Server) handleResourcesList(id json.RawMessage) {
+	if s.authorize(workspaceauth.ActionRead) != nil {
+		return
+	}
 	var resources []map[string]any
 	if s.resourceList != nil {
 		resources = s.resourceList()
@@ -285,11 +358,17 @@ func (s *Server) handleResourcesList(id json.RawMessage) {
 	if resources == nil {
 		resources = []map[string]any{}
 	}
+	if s.authorize(workspaceauth.ActionRead) != nil {
+		return
+	}
 	s.writeResult(id, map[string]any{"resources": resources})
 }
 
 // handleResourcesRead responds to 'resources/read' with the content of the named resource.
 func (s *Server) handleResourcesRead(id json.RawMessage, rawParams json.RawMessage) {
+	if s.authorize(workspaceauth.ActionRead) != nil {
+		return
+	}
 	var params struct {
 		URI string `json:"uri"`
 	}
@@ -307,7 +386,13 @@ func (s *Server) handleResourcesRead(id json.RawMessage, rawParams json.RawMessa
 	}
 	text, err := s.resourceRead(params.URI)
 	if err != nil {
+		if errors.Is(err, workspaceauth.ErrUnauthorized) {
+			return
+		}
 		s.writeError(id, codeInternalError, err.Error())
+		return
+	}
+	if s.authorize(workspaceauth.ActionRead) != nil {
 		return
 	}
 	s.writeResult(id, map[string]any{
@@ -323,6 +408,9 @@ func (s *Server) handleResourcesRead(id json.RawMessage, rawParams json.RawMessa
 
 // handleResourcesSubscribe records the URI in the subscriptions map.
 func (s *Server) handleResourcesSubscribe(id json.RawMessage, rawParams json.RawMessage) {
+	if s.authorize(workspaceauth.ActionRead) != nil {
+		return
+	}
 	var params struct {
 		URI string `json:"uri"`
 	}
@@ -331,6 +419,10 @@ func (s *Server) handleResourcesSubscribe(id json.RawMessage, rawParams json.Raw
 		return
 	}
 	s.subsMu.Lock()
+	if s.authorize(workspaceauth.ActionRead) != nil {
+		s.subsMu.Unlock()
+		return
+	}
 	s.subscriptions[params.URI] = true
 	s.subsMu.Unlock()
 	s.writeResult(id, map[string]any{})
@@ -338,6 +430,9 @@ func (s *Server) handleResourcesSubscribe(id json.RawMessage, rawParams json.Raw
 
 // handleResourcesUnsubscribe removes the URI from the subscriptions map.
 func (s *Server) handleResourcesUnsubscribe(id json.RawMessage, rawParams json.RawMessage) {
+	if s.authorize(workspaceauth.ActionRead) != nil {
+		return
+	}
 	var params struct {
 		URI string `json:"uri"`
 	}
@@ -346,6 +441,10 @@ func (s *Server) handleResourcesUnsubscribe(id json.RawMessage, rawParams json.R
 		return
 	}
 	s.subsMu.Lock()
+	if s.authorize(workspaceauth.ActionRead) != nil {
+		s.subsMu.Unlock()
+		return
+	}
 	delete(s.subscriptions, params.URI)
 	s.subsMu.Unlock()
 	s.writeResult(id, map[string]any{})
@@ -354,6 +453,9 @@ func (s *Server) handleResourcesUnsubscribe(id json.RawMessage, rawParams json.R
 // NotifyResourceUpdated sends a notifications/resources/updated notification if
 // uri is subscribed. Safe to call from any goroutine.
 func (s *Server) NotifyResourceUpdated(uri string) {
+	if s.authorize(workspaceauth.ActionRead) != nil {
+		return
+	}
 	s.subsMu.Lock()
 	subscribed := s.subscriptions[uri]
 	s.subsMu.Unlock()

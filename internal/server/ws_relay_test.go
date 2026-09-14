@@ -7,6 +7,7 @@ import (
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // trackingDaemonConn wraps fakeDaemonConn and records which create method was called.
@@ -34,11 +35,25 @@ func TestHandleTextInput_TypeCreatePane_TerminalSurfaceKind(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	owner, err := workspaceauth.NewEphemeralOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := workspaceauth.NewOwnerOnlyAuthorizer(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := workspaceauth.NewLocalOwnerAdmission(owner.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	c := &Client{
-		hub:    NewHub(nil),
-		ctx:    ctx,
-		cancel: cancel,
+		hub:        NewHub(nil),
+		ctx:        ctx,
+		cancel:     cancel,
+		authorizer: authorizer,
+		admission:  admission,
 	}
 	// The daemon connection now lives in a hostSession keyed by host id; the
 	// zero HostRef is the local daemon, which is where an unqualified browser

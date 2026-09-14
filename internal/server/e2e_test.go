@@ -85,7 +85,7 @@ func startEchoDaemon(t *testing.T) string {
 func TestE2EBrowserToDaemonRoundTrip(t *testing.T) {
 	sock := startEchoDaemon(t)
 
-	srv := New(Config{Addr: "127.0.0.1:0"})
+	srv := New(Config{Addr: "127.0.0.1:0", NoAuth: true})
 	srv.Hub().SetDialer(func(ctx context.Context, h transport.HostRef) (DaemonConn, error) {
 		return sessiond.Dial(sock)
 	})

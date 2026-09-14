@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // Refusal reasons for tools that are deliberately not machine-scoped. They are
@@ -258,6 +259,13 @@ func NewStdioServer(tr MachineTransport) (*Server, func() error) {
 	return NewServerWithTransport(os.Stdin, os.Stdout, tr)
 }
 
+// NewStdioServerWithAuthorization is the production/code integration boundary
+// for the shared private instance owner. It does not create a network MCP
+// identity path.
+func NewStdioServerWithAuthorization(tr MachineTransport, authorizer workspaceauth.Authorizer, principal workspaceauth.PrincipalID) (*Server, func() error) {
+	return NewServerWithTransportAndAuthorization(os.Stdin, os.Stdout, tr, authorizer, principal)
+}
+
 // NewServerWithTransport is NewStdioServer with explicit IO, mirroring the
 // NewServer / NewServerWithIO pair on Server itself and existing for the same
 // reason: the tool surface is worth driving over something other than this
@@ -267,7 +275,18 @@ func NewStdioServer(tr MachineTransport) (*Server, func() error) {
 // remote wiring -- so exercising it exercises what ships, rather than a
 // reimplementation of it that can drift.
 func NewServerWithTransport(in io.Reader, out io.Writer, tr MachineTransport) (*Server, func() error) {
-	srv := NewServerWithIO(in, out)
+	return NewServerWithTransportAndAuthorization(in, out, tr, nil, "")
+}
+
+// NewServerWithTransportAndAuthorization assembles stdio MCP with a supplied
+// code-only authorizer. Empty arguments retain legacy in-memory construction.
+func NewServerWithTransportAndAuthorization(in io.Reader, out io.Writer, tr MachineTransport, authorizer workspaceauth.Authorizer, principal workspaceauth.PrincipalID) (*Server, func() error) {
+	var srv *Server
+	if authorizer == nil && principal == "" {
+		srv = NewServerWithIO(in, out)
+	} else {
+		srv = NewServerWithIOAndAuthorization(in, out, authorizer, principal)
+	}
 	pool := &clientPool{local: &lazyClient{}, machines: newMachines(tr)}
 	registerWithLazy(srv, pool)
 	closer := func() error {

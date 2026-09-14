@@ -56,6 +56,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -63,6 +64,7 @@ import (
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/cos"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // Message types on the browser <-> serve wire. These are SERVE-LOCAL, not
@@ -266,12 +268,24 @@ func (r *cosRelay) submission(turnID string) (cosSubmission, bool) {
 // destructive request the user just confirmed is not a surprise; silently
 // answering "there was nothing to clear" while a transcript sits on disk
 // would be.
-func (r *cosRelay) clear(ctx context.Context, olderThanDays int) (removed, kept int, err error) {
+func (r *cosRelay) clear(ctx context.Context, olderThanDays int, beforeClear func() error) (removed, kept int, err error) {
 	sup, err := r.get()
 	if err != nil {
 		return 0, 0, err
 	}
 	if _, err := sup.WaitReady(ctx); err != nil {
+		return 0, 0, err
+	}
+	// WaitReady can block while the caller's admission changes. Run the
+	// required checker at the dispatch boundary, after readiness and
+	// immediately before the non-contextual irreversible clear.
+	if ctx.Err() != nil {
+		return 0, 0, ctx.Err()
+	}
+	if beforeClear == nil {
+		return 0, 0, workspaceauth.ErrUnauthorized
+	}
+	if err := beforeClear(); err != nil {
 		return 0, 0, err
 	}
 	return sup.Clear(olderThanDays)
@@ -699,11 +713,22 @@ func (c *Client) cosClear(msg cosClientMessage) {
 
 // cosRunClear performs the prune and tells everyone what survived.
 func (c *Client) cosRunClear(relay *cosRelay, olderThanDays int) {
-	ctx, cancel := context.WithTimeout(context.Background(), cosBootWait)
+	ctx, cancel := context.WithTimeout(c.ctx, cosBootWait)
 	defer cancel()
 
-	removed, kept, err := relay.clear(ctx, olderThanDays)
+	removed, kept, err := relay.clear(ctx, olderThanDays, func() error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return c.authorizeInstance(workspaceauth.ActionWrite)
+	})
 	if err != nil {
+		// The checker runs at the irreversible dispatch boundary. A revoked,
+		// stale, or cancelled client must receive no result/history/error
+		// egress because no clear was dispatched.
+		if ctx.Err() != nil || errors.Is(err, workspaceauth.ErrUnauthorized) {
+			return
+		}
 		// The counts travel even on failure: a clear_partial refusal means the
 		// disk WAS pruned while the live session was not, and reporting 0/0
 		// there would hide the very split the sidecar refused to lie about.

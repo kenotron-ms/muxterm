@@ -3,6 +3,7 @@ package sessiond
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // Session-restore snapshotting: periodic capture of every live workspace and
@@ -21,7 +24,11 @@ import (
 // exact argv verbatim (see agent_catalog.go), and seeds the last-seen output
 // back into the pane as inert historical text above a fresh, live prompt.
 const (
-	snapshotVersion = 1
+	// snapshotVersion is the first owner-security snapshot schema. Version 1
+	// (and historical zero values) predate security metadata and migrate only
+	// as wholly legacy snapshots.
+	snapshotVersion       = 2
+	legacySnapshotVersion = 1
 
 	// maxReplayBytesPerPane caps how much historical output each pane's
 	// snapshot retains. If Replay() returns more, the trailing (most recent)
@@ -57,6 +64,10 @@ type WorkspaceSnapshot struct {
 
 	Layout map[string]string `json:"layout,omitempty"` // verbatim copy of Registry's per-workspace Layouts map
 	Panes  []PaneSnapshot    `json:"panes"`
+
+	// Security is private daemon metadata. It is intentionally absent from
+	// WorkspaceInfo and protocol.go; legacy snapshots omit it.
+	Security *workspaceauth.Metadata `json:"security,omitempty"`
 }
 
 // PaneSnapshot is one pane's captured identity, foreground command, and
@@ -173,7 +184,31 @@ func LoadSnapshot(path string) (*Snapshot, error) {
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, fmt.Errorf("sessiond: parse snapshot %s: %w", path, err)
 	}
+	if err := validateSnapshotSchema(&snap); err != nil {
+		return nil, errors.New("sessiond: unsupported snapshot version")
+	}
 	return &snap, nil
+}
+
+func validateSnapshotSchema(snap *Snapshot) error {
+	switch snap.Version {
+	case 0, legacySnapshotVersion:
+		for _, workspace := range snap.Workspaces {
+			if workspace.Security != nil {
+				return errors.New("legacy snapshot contains security metadata")
+			}
+		}
+		return nil
+	case snapshotVersion:
+		for _, workspace := range snap.Workspaces {
+			if workspace.Security == nil || workspace.Security.ValidateStructure() != nil {
+				return errors.New("invalid workspace security metadata")
+			}
+		}
+		return nil
+	default:
+		return errors.New("unsupported snapshot version")
+	}
 }
 
 // BuildSnapshot walks every live workspace and pane in reg and assembles a
@@ -191,7 +226,8 @@ func BuildSnapshot(reg *Registry, reason string) Snapshot {
 		Reason:    reason,
 	}
 	for _, view := range views {
-		wsSnap := WorkspaceSnapshot{Name: view.Name, NameOrigin: string(view.NameOrigin), Layout: view.Layout}
+		security := view.Security
+		wsSnap := WorkspaceSnapshot{Name: view.Name, NameOrigin: string(view.NameOrigin), Layout: view.Layout, Security: &security}
 		for _, p := range view.Panes {
 			wsSnap.Panes = append(wsSnap.Panes, capturePaneSnapshot(p))
 		}
@@ -455,6 +491,13 @@ func dropLargestReplay(snap *Snapshot) bool {
 // goroutine exits on its own when ctx is done; there is nothing for the
 // caller to stop or wait on.
 func StartSnapshotWriter(ctx context.Context, reg *Registry, interval time.Duration, path string) {
+	StartSnapshotWriterWithGuard(ctx, reg, interval, path, func() bool { return true })
+}
+
+// StartSnapshotWriterWithGuard is StartSnapshotWriter with a fail-closed
+// persistence guard. It prevents a malformed/future/inconsistent restore file
+// from being overwritten by a new blank snapshot.
+func StartSnapshotWriterWithGuard(ctx context.Context, reg *Registry, interval time.Duration, path string, mayWrite func() bool) {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
@@ -466,6 +509,9 @@ func StartSnapshotWriter(ctx context.Context, reg *Registry, interval time.Durat
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if mayWrite == nil || !mayWrite() {
+					continue
+				}
 				snap := BuildSnapshot(reg, "periodic")
 				if err := WriteSnapshot(path, snap); err != nil {
 					log.Printf("sessiond: periodic snapshot write failed: %v", err)
@@ -473,6 +519,14 @@ func StartSnapshotWriter(ctx context.Context, reg *Registry, interval time.Durat
 			}
 		}
 	}()
+}
+
+// RestoreResult describes whether the source snapshot may safely be replaced.
+// A caller can keep legacy RestoreFromSnapshot behavior while using SafeToWrite
+// to protect recovery evidence.
+type RestoreResult struct {
+	Restored    int
+	SafeToWrite bool
 }
 
 // RestoreFromSnapshot attempts to repopulate s's registry from the snapshot
@@ -490,23 +544,42 @@ func StartSnapshotWriter(ctx context.Context, reg *Registry, interval time.Durat
 // historical divider be seeded into its buffer strictly before that pane's
 // PTY/read-loop goroutines start (see restorePane / buildRestoreSeed).
 func (s *Server) RestoreFromSnapshot(enabled bool, path string) int {
+	return s.RestoreFromSnapshotResult(enabled, path).Restored
+}
+
+// RestoreFromSnapshotResult restores compatible owner-only data and reports
+// whether later periodic/shutdown writes may replace the source snapshot.
+func (s *Server) RestoreFromSnapshotResult(enabled bool, path string) RestoreResult {
 	if !enabled {
-		return 0
+		return RestoreResult{SafeToWrite: true}
 	}
 	snap, err := LoadSnapshot(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("sessiond: restore: snapshot at %s unreadable (%v); starting with a blank default workspace instead", path, err)
 		}
-		return 0
+		return RestoreResult{SafeToWrite: os.IsNotExist(err)}
 	}
 	if len(snap.Workspaces) == 0 {
-		return 0
+		return RestoreResult{SafeToWrite: true}
+	}
+	if snap.Version == snapshotVersion {
+		for _, wsSnap := range snap.Workspaces {
+			if wsSnap.Security == nil || wsSnap.Security.ValidateFor(s.reg.ownerRecord()) != nil {
+				log.Printf("sessiond: restore: workspace security metadata rejected; preserving snapshot")
+				return RestoreResult{}
+			}
+		}
 	}
 
 	restored := 0
 	for _, wsSnap := range snap.Workspaces {
 		wsID := s.reg.AddWorkspace(wsSnap.Name, "")
+		if snap.Version == snapshotVersion && !s.reg.restoreWorkspaceSecurity(wsID, *wsSnap.Security) {
+			// Prevalidation above makes this unreachable, but never continue
+			// after a failed security transfer.
+			return RestoreResult{}
+		}
 		// AddWorkspace records every creation as explicit, which is right for
 		// every live caller and wrong for exactly this one: a name this daemon
 		// derived last run must come back derived, or it freezes at whatever
@@ -535,7 +608,19 @@ func (s *Server) RestoreFromSnapshot(enabled bool, path string) int {
 		}
 		restored++
 	}
-	return restored
+	return RestoreResult{Restored: restored, SafeToWrite: true}
+}
+
+// SnapshotRequiresOwner reports whether a parseable current security snapshot
+// requires its prior owner record. Legacy v0/v1 snapshots never do. It
+// deliberately reveals no record contents and is only used to prevent unsafe
+// owner bootstrapping.
+func SnapshotRequiresOwner(path string) (bool, error) {
+	snap, err := LoadSnapshot(path)
+	if err != nil {
+		return false, err
+	}
+	return snap.Version == snapshotVersion, nil
 }
 
 // restorePane constructs one restored pane in workspace wsID from paneSnap,
