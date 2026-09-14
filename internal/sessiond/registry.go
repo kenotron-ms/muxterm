@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // Workspace is one daemon-managed workspace. Its panes use workspace-local ids
@@ -39,6 +41,10 @@ type Workspace struct {
 	// workspace that emptied for any other reason has nil here and is reaped
 	// exactly as before.
 	completion *WorkspaceCompletion
+
+	// security is daemon-internal, owner-only persistence metadata. It must
+	// never be copied into WorkspaceInfo or the frozen sessiond protocol.
+	security workspaceauth.Metadata
 }
 
 // Registry is the single source of truth for workspaces and their panes. All
@@ -60,15 +66,35 @@ type Registry struct {
 	closeTickets        map[string]closeTicket
 	retiredCloseTickets map[string]retiredCloseTicket
 	closeTicketSequence uint64
+	owner               workspaceauth.InstanceOwner
 }
 
 // NewRegistry returns an empty Registry ready for use.
 func NewRegistry() *Registry {
+	owner, err := workspaceauth.NewEphemeralOwner()
+	if err != nil {
+		panic("sessiond: cannot generate in-memory owner")
+	}
+	reg, err := NewRegistryWithOwner(owner)
+	if err != nil {
+		panic("sessiond: cannot initialize in-memory owner")
+	}
+	return reg
+}
+
+// NewRegistryWithOwner creates a registry bound to one owner record. Production
+// sessiond supplies its shared durable owner here; NewRegistry remains an
+// in-memory compatibility constructor for existing callers and tests.
+func NewRegistryWithOwner(owner workspaceauth.InstanceOwner) (*Registry, error) {
+	if err := owner.Validate(); err != nil {
+		return nil, fmt.Errorf("sessiond: invalid owner")
+	}
 	return &Registry{
 		workspaces:          make(map[string]*Workspace),
 		closeTickets:        make(map[string]closeTicket),
 		retiredCloseTickets: make(map[string]retiredCloseTicket),
-	}
+		owner:               owner,
+	}, nil
 }
 
 // addWorkspaceLocked allocates a new workspace id, inserts the workspace, and
@@ -80,6 +106,12 @@ func NewRegistry() *Registry {
 // the cold-start/reap defaults pass "" -- which the deriver may fill in later
 // precisely because it is empty, whatever its provenance says.
 func (r *Registry) addWorkspaceLocked(name, clientRef string) string {
+	security, err := workspaceauth.NewMetadata(r.owner)
+	if err != nil {
+		// An entropy failure cannot safely create a workspace with guessed or
+		// derived security metadata. Stop rather than weaken owner binding.
+		panic("sessiond: cannot generate workspace security metadata")
+	}
 	r.nextWSID++
 	r.nextWorkspaceGeneration++
 	id := fmt.Sprintf("w%d", r.nextWSID)
@@ -91,6 +123,7 @@ func (r *Registry) addWorkspaceLocked(name, clientRef string) string {
 		Panes:      make(map[int]*Pane),
 		Layouts:    make(map[string]string),
 		generation: r.nextWorkspaceGeneration,
+		security:   security,
 	}
 	return id
 }
@@ -383,6 +416,7 @@ type workspaceLiveView struct {
 	NameOrigin nameOrigin
 	Layout     map[string]string
 	Panes      []*Pane
+	Security   workspaceauth.Metadata
 }
 
 // snapshotView returns a deterministic, point-in-time view of every
@@ -420,7 +454,25 @@ func (r *Registry) snapshotView() []workspaceLiveView {
 			layout[k] = v
 		}
 
-		out = append(out, workspaceLiveView{ID: id, Name: ws.Name, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes})
+		out = append(out, workspaceLiveView{ID: id, Name: ws.Name, NameOrigin: ws.nameOrigin, Layout: layout, Panes: panes, Security: ws.security})
 	}
 	return out
 }
+
+// restoreWorkspaceSecurity replaces freshly minted metadata only after the
+// snapshot metadata has been validated against this registry's owner.
+func (r *Registry) restoreWorkspaceSecurity(id string, security workspaceauth.Metadata) bool {
+	if err := security.ValidateFor(r.owner); err != nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.workspaces[id]
+	if !ok {
+		return false
+	}
+	ws.security = security
+	return true
+}
+
+func (r *Registry) ownerRecord() workspaceauth.InstanceOwner { return r.owner }

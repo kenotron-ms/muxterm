@@ -72,8 +72,9 @@ func (ct *configTools) doRequest(method, path string, body []byte) ([]byte, erro
 		req.Header.Set("Content-Type", "application/json")
 	}
 	// Same-user local helper credential -- see the equivalent block in
-	// tools_tunnel.go's doRequest for why this is required once
-	// behind_reverse_proxy disables the loopback bypass.
+	// tools_tunnel.go's doRequest. Browser routes require login in both
+	// direct and reverse-proxy modes, while this is the helper's private
+	// local administration channel.
 	if token, err := sessiond.ServerToken(); err == nil && token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

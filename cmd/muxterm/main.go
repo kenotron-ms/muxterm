@@ -27,6 +27,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
 	sshtransport "github.com/kenotron-ms/muxterm/internal/transport/ssh"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 	webstatic "github.com/kenotron-ms/muxterm/web"
 )
 
@@ -329,9 +330,8 @@ func newSessiondDialer(tr server.RemoteTransport) server.DialFunc {
 // SERVE MODE ONLY. runLocal deliberately does NOT call this: bare
 // `muxterm` is loopback-only by definition and must stay that way even on
 // a host whose config.toml sets behind_reverse_proxy = true (which is
-// exactly the production host). Honoring the file there would disable the
-// loopback bypass and point the local browser at the public origin,
-// breaking local interactive use on the one machine where it matters most.
+// exactly the production host). Honoring the file there would point the local
+// browser at the public origin, breaking direct local interactive use.
 func resolveServerConfig(cli Config, file config.ServerConfig) config.ServerConfig {
 	out := file
 	if cli.Addr != "" {
@@ -410,10 +410,9 @@ func webRedirectURIFor(addr string, sc config.ServerConfig) string {
 // newAuthServer wires the platform login backend (PAM on Linux; a
 // fail-closed stub on other platforms until Phases 4-5) into a new
 // AuthServer for addr. A non-nil error means the login backend is
-// unavailable; callers MUST still start the HTTP server (loopback access
-// is unaffected) but MUST pass the resulting nil *authserver.AuthServer
-// through to server.Config so the auth middleware fails closed for any
-// non-loopback caller — see design doc Error Handling, "Login backend
+// unavailable; callers MUST still start the HTTP server but MUST pass the
+// resulting nil *authserver.AuthServer through to server.Config so browser
+// admission fails closed — see design doc Error Handling, "Login backend
 // unavailable."
 func newAuthServer(addr string, sc config.ServerConfig) (*authserver.AuthServer, error) {
 	backend, err := loginbackend.New()
@@ -436,53 +435,60 @@ func newAuthServer(addr string, sc config.ServerConfig) (*authserver.AuthServer,
 // shutdown.
 func runLocal(cfg Config) error {
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
+	owner, authorizer, err := loadOwnerAuthorization()
+	if err != nil {
+		return errors.New("owner security state unavailable")
+	}
+	ownerAdmission, err := workspaceauth.NewLocalOwnerAdmission(owner.Principal)
+	if err != nil {
+		return errors.New("owner security state unavailable")
+	}
 
-	// Local mode is loopback-only BY DEFINITION and deliberately ignores
+	// Local mode is loopback-bound BY DEFINITION and deliberately ignores
 	// the [server] section entirely: it never reads that section off the
 	// resolved config, never applies serve mode's flag-over-file
 	// resolution to it, and never runs its startup validation. (Those three
 	// names are deliberately not spelled out here: the C4 guard greps this
 	// function body for them, and even a mention in a comment trips it.)
 	// Bare `muxterm` on a host whose config.toml sets behind_reverse_proxy =
-	// true — i.e. the production host — must still behave exactly as it
-	// does today: loopback bypass on, loopback-derived redirect URI, no
-	// startup error. Honoring the file here would send the *local* browser
-	// to the public origin and turn the bypass off, breaking local
-	// interactive use on the one machine where it matters most. Only
+	// true — i.e. the production host — must still derive a local redirect
+	// URI and avoid a startup error. Browser login is required even on
+	// loopback: an IP address does not prove the current OS user. Only
 	// `serve` mode honors the new fields.
 	//
 	// The explicit zero config.ServerConfig{} below is what pins that:
 	// BehindReverseProxy is false, so webRedirectURIFor falls through to
-	// the pre-existing loopback derivation, byte-for-byte unchanged.
+	// the local redirect derivation.
 	localServerCfg := config.ServerConfig{}
 
 	authSrv, err := newAuthServer(cfg.Addr, localServerCfg)
 	if err != nil {
-		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
+		log.Printf("muxterm: login backend unavailable (%v) — browser access will be denied", err)
 	}
 
 	rt := newSSHRemoteTransport()
 
-	// Local mode keeps the loopback bypass, so the token is not strictly
-	// required here -- but publishing it anyway keeps the handoff file's
-	// shape identical across both modes and costs nothing.
+	// Publish the same-user helper token so local MCP tooling retains its
+	// private administration channel; browser admission still requires login.
 	localToken, err := sessiond.NewLocalToken()
 	if err != nil {
 		return err
 	}
 
 	srv := server.New(server.Config{
-		Addr:          cfg.Addr,
-		StaticFS:      mustSubFS(webstatic.Dist, "dist"),
-		ConfigPath:    config.DefaultPath(),
-		InitialConfig: resolved,
-		AuthServer:    authSrv,
-		// No BehindReverseProxy field is set: local mode leaves it at its
-		// zero false, keeping the IsLocalhost() bypass exactly as today.
+		Addr:           cfg.Addr,
+		StaticFS:       mustSubFS(webstatic.Dist, "dist"),
+		ConfigPath:     config.DefaultPath(),
+		InitialConfig:  resolved,
+		AuthServer:     authSrv,
 		WebRedirectURI: webRedirectURIFor(cfg.Addr, localServerCfg),
 		LocalToken:     localToken,
 		Version:        version,
 		Remotes:        rt,
+		Owner:          owner,
+		Authorizer:     authorizer,
+		Principal:      owner.Principal,
+		Admission:      ownerAdmission,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))
@@ -514,8 +520,8 @@ func runLocal(cfg Config) error {
 func runServe(cfg Config) error {
 	// LoadStrictServer, not Load: a malformed config file degrades every
 	// section to defaults, and for [server] that silently moves the
-	// listener and clears behind_reverse_proxy (re-enabling the loopback
-	// auth bypass). Serve mode depends on that section, so it refuses
+	// listener and clears reverse-proxy public-origin behavior. Serve mode
+	// depends on that section, so it refuses
 	// rather than guessing.
 	resolved, malformed, _ := config.LoadStrictServer(config.DefaultPath())
 	if malformed {
@@ -523,6 +529,14 @@ func runServe(cfg Config) error {
 			"config: %s could not be parsed, and serve mode depends on its [server] section "+
 				"(listen address, public origin, reverse-proxy mode). Fix the file, or move it "+
 				"aside to start with built-in defaults", config.DefaultPath())
+	}
+	owner, authorizer, err := loadOwnerAuthorization()
+	if err != nil {
+		return errors.New("owner security state unavailable")
+	}
+	ownerAdmission, err := workspaceauth.NewLocalOwnerAdmission(owner.Principal)
+	if err != nil {
+		return errors.New("owner security state unavailable")
 	}
 
 	// One line, once, at startup: an installed unit still passing --secret
@@ -584,7 +598,7 @@ func runServe(cfg Config) error {
 
 	authSrv, err := newAuthServer(addr, srvCfg)
 	if err != nil {
-		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
+		log.Printf("muxterm: login backend unavailable (%v) — browser access will be denied", err)
 	}
 
 	rt := newSSHRemoteTransport()
@@ -592,7 +606,7 @@ func runServe(cfg Config) error {
 	// Mint the same-user helper-process credential before the server is
 	// built, so the middleware and the on-disk handoff file agree. Without
 	// it the MCP tools have no credential at all and rely entirely on the
-	// loopback bypass that behind_reverse_proxy disables.
+	// browser admission path used in direct and proxy deployments.
 	localToken, err := sessiond.NewLocalToken()
 	if err != nil {
 		return err
@@ -610,6 +624,10 @@ func runServe(cfg Config) error {
 		LocalToken:         localToken,
 		Version:            version,
 		Remotes:            rt,
+		Owner:              owner,
+		Authorizer:         authorizer,
+		Principal:          owner.Principal,
+		Admission:          ownerAdmission,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))
@@ -866,16 +884,34 @@ func runMCPCommand(cfg Config) error {
 	}
 	// Redirect all log output to stderr so stdout stays clean for JSON-RPC.
 	log.SetOutput(os.Stderr)
+	owner, authorizer, err := loadOwnerAuthorization()
+	if err != nil {
+		return errors.New("owner security state unavailable")
+	}
 
 	// The MCP server reaches other machines through the same transport the
 	// browser relay uses, injected here rather than imported there: the
 	// choice of transport belongs to the binary that assembles the process
 	// (see remote_transport.go and internal/server/remotes.go:42).
-	srv, closer := mcp.NewStdioServer(sshtransport.New())
+	srv, closer := mcp.NewStdioServerWithAuthorization(sshtransport.New(), authorizer, owner.Principal)
 	defer closer() //nolint:errcheck
 
 	log.Printf("mcp: stdio server ready")
 	return srv.Run()
+}
+
+// loadOwnerAuthorization creates only the private installation-owner record
+// used by local/serve/MCP construction. It is not a browser identity source.
+func loadOwnerAuthorization() (workspaceauth.InstanceOwner, workspaceauth.Authorizer, error) {
+	owner, err := sessiondOwnerForSnapshot(sessiond.DefaultSnapshotPath())
+	if err != nil {
+		return workspaceauth.InstanceOwner{}, nil, errors.New("owner security state unavailable")
+	}
+	authorizer, err := workspaceauth.NewOwnerOnlyAuthorizer(owner)
+	if err != nil {
+		return workspaceauth.InstanceOwner{}, nil, errors.New("owner security state unavailable")
+	}
+	return owner, authorizer, nil
 }
 
 // mustSubFS returns a sub-FS rooted at dir, panicking on error (embed paths

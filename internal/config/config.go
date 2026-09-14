@@ -175,9 +175,10 @@ const (
 // a default anyone backs into. Every default-addr site derives from here.
 const DefaultAddr = "127.0.0.1:8311"
 
-// ServerConfig holds deployment-topology settings: where muxterm listens,
-// where it is publicly reachable, and whether the loopback auth bypass
-// applies. These are POLICY and live in the config file rather than in the
+// ServerConfig holds deployment-topology settings: where muxterm listens and
+// where it is publicly reachable through a reverse proxy. Protected browser
+// routes require login in every topology. These are POLICY and live in the
+// config file rather than in the
 // generated service unit, which `muxterm install` rewrites wholesale on
 // every run.
 //
@@ -210,12 +211,10 @@ type ServerConfig struct {
 	// entirely when BehindReverseProxy is false.
 	PublicOrigin string `toml:"public_origin"        json:"public_origin"`
 	// BehindReverseProxy opts muxterm into reverse-proxy mode: every
-	// public-facing URL muxterm builds derives from PublicOrigin, and the
-	// IsLocalhost() auth bypass is disabled entirely. Opt-in, default
-	// false. The bypass must go, because the proxy's own hop to muxterm is
-	// indistinguishable from a genuinely local caller at the RemoteAddr
-	// level — honoring it would silently grant unauthenticated access to
-	// genuinely remote traffic.
+	// public-facing URL muxterm builds derives from PublicOrigin. Browser
+	// login is required both in this mode and in direct/loopback mode; this
+	// setting controls proxy/public-origin behavior, not browser identity
+	// admission. Opt-in, default false.
 	BehindReverseProxy bool `toml:"behind_reverse_proxy" json:"behind_reverse_proxy"`
 }
 
@@ -466,8 +465,8 @@ func Load(path string) (Config, error) {
 // Load's contract -- a malformed file degrades to defaults with only a log
 // line, so "a typo can never take the app down" -- is right for the
 // cosmetic sections and wrong for [server]. Silently substituting defaults
-// there moves the listener, and clears behind_reverse_proxy, which
-// re-enables the loopback auth bypass. Both are silent, and both are
+// there moves the listener and clears reverse-proxy public-origin behavior.
+// Both are silent, and both are
 // exactly the kind of change an operator must never get by accident.
 //
 // So the degradation stays for everything else, and callers that depend on

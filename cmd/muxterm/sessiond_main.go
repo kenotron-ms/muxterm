@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // runSessiond is the Phase-1 daemon entrypoint. It resolves the daemon's Unix
@@ -41,25 +43,31 @@ func serveSessiond(ctx context.Context, socketPath string) error {
 		return fmt.Errorf("create socket dir: %w", err)
 	}
 
-	srv, err := sessiond.NewServer(socketPath)
+	snapshotPath := sessiond.DefaultSnapshotPath()
+	owner, err := sessiondOwnerForSnapshot(snapshotPath)
+	if err != nil {
+		return errors.New("sessiond: owner security state unavailable")
+	}
+	srv, err := sessiond.NewServerWithOwner(socketPath, owner)
 	if err != nil {
 		return fmt.Errorf("create sessiond server: %w", err)
 	}
 
 	cfg, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
-	snapshotPath := sessiond.DefaultSnapshotPath()
-
-	if n := srv.RestoreFromSnapshot(cfg.Restore.Enabled, snapshotPath); n > 0 {
+	restore := srv.RestoreFromSnapshotResult(cfg.Restore.Enabled, snapshotPath)
+	if n := restore.Restored; n > 0 {
 		log.Printf("sessiond: restored %d workspace(s) from %s", n, snapshotPath)
 	}
 	if cfg.Restore.Enabled {
-		sessiond.StartSnapshotWriter(ctx, srv.Registry(), cfg.Restore.SnapshotInterval, snapshotPath)
+		sessiond.StartSnapshotWriterWithGuard(ctx, srv.Registry(), cfg.Restore.SnapshotInterval, snapshotPath, func() bool {
+			return restore.SafeToWrite
+		})
 	}
 
 	log.Printf("muxterm sessiond listening on %s", socketPath)
 	serveErr := srv.ListenAndServe(ctx)
 
-	if cfg.Restore.Enabled {
+	if cfg.Restore.Enabled && restore.SafeToWrite {
 		// Best-effort only: a kill -9/OOM gets no shutdown flush and relies
 		// on the periodic write instead -- the same tradeoff tmux-continuum
 		// makes.
@@ -70,4 +78,23 @@ func serveSessiond(ctx context.Context, socketPath string) error {
 	}
 
 	return serveErr
+}
+
+// sessiondOwnerForSnapshot never replaces a missing owner record when a
+// current, structurally valid snapshot already binds workspaces to one. It
+// avoids inferring ownership from runtime IDs, names, or process identity.
+func sessiondOwnerForSnapshot(snapshotPath string) (workspaceauth.InstanceOwner, error) {
+	ownerPath := workspaceauth.DefaultOwnerPath()
+	owner, err := workspaceauth.LoadOwner(ownerPath)
+	if err == nil {
+		return owner, nil
+	}
+	if !os.IsNotExist(err) {
+		return workspaceauth.InstanceOwner{}, errors.New("owner record unavailable")
+	}
+	requiresOwner, snapshotErr := sessiond.SnapshotRequiresOwner(snapshotPath)
+	if snapshotErr == nil && requiresOwner {
+		return workspaceauth.InstanceOwner{}, errors.New("owner record unavailable")
+	}
+	return workspaceauth.LoadOrCreateOwner(ownerPath)
 }

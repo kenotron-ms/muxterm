@@ -282,11 +282,11 @@ func parseServe(args []string) (Config, error) {
 	secret := fs.String("secret", "", "deprecated and ignored; muxterm authenticates via browser login")
 	noAuth := fs.Bool("no-auth", false, "skip WebSocket auth check (dev only — never use in production)")
 	publicOrigin := fs.String("public-origin", "", "canonical public origin when behind a reverse proxy (e.g. https://muxterm.example.com); required with --behind-reverse-proxy")
-	behindProxy := fs.Bool("behind-reverse-proxy", false, "run behind a reverse proxy: derive public URLs from --public-origin and disable the loopback auth bypass")
+	behindProxy := fs.Bool("behind-reverse-proxy", false, "run behind a reverse proxy: derive public URLs from --public-origin; browser login is required in every mode")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm serve [flags]")
 		fmt.Fprintln(os.Stdout, "")
-		fmt.Fprintln(os.Stdout, "Start muxterm server for remote/shared access with optional authentication.")
+		fmt.Fprintln(os.Stdout, "Start muxterm server with browser login required for protected routes.")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Flags:")
 		fs.PrintDefaults()
@@ -339,7 +339,7 @@ func parseInstall(args []string) (Config, error) {
 	// ExecStart (or the launchd plist). install persists them to the
 	// muxterm config file instead -- see writeInstallServerConfig for why.
 	publicOrigin := fs.String("public-origin", "", "canonical public origin when behind a reverse proxy (e.g. https://muxterm.example.com); written to the muxterm config file, not to the service unit")
-	behindProxy := fs.Bool("behind-reverse-proxy", false, "run behind a reverse proxy: derive public URLs from --public-origin and disable the loopback auth bypass; written to the muxterm config file, not to the service unit")
+	behindProxy := fs.Bool("behind-reverse-proxy", false, "run behind a reverse proxy: derive public URLs from --public-origin; browser login is required in every mode; written to the muxterm config file, not to the service unit")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm install [flags]")
 		fmt.Fprintln(os.Stdout, "")

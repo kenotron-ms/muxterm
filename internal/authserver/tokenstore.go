@@ -12,7 +12,7 @@ import (
 	"github.com/go-oauth2/oauth2/v4/models"
 )
 
-// fileTokenStore is a mutex-guarded, file-persisted implementation of
+// fileTokenStore is an RWMutex-guarded, file-persisted implementation of
 // oauth2.TokenStore, sized for muxterm's actual load (a single OS account,
 // occasional logins) — not a high-throughput token store.
 //
@@ -28,7 +28,7 @@ import (
 // TokenStore interface and to safely no-op if ever called independently of
 // GetByCode.
 type fileTokenStore struct {
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	path   string
 	codes  map[string]*models.Token
 	access map[string]*models.Token
@@ -172,8 +172,8 @@ func (s *fileTokenStore) GetByAccess(_ context.Context, access string) (oauth2.T
 	if access == "" {
 		return nil, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	tok, ok := s.access[access]
 	if !ok {
 		return nil, nil

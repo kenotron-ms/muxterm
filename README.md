@@ -85,7 +85,7 @@ make build
 - **Palette-derived chrome** — UI colors are derived from the active terminal palette automatically
 - **Session persistence** — the sessiond daemon detaches from the HTTP server; your shells survive server restarts, deploys, and reboots
 - **Single binary** — Go binary with embedded frontend; no external runtime besides a shell
-- **Auth** — HMAC token-based auth with localhost bypass
+- **Auth** — browser login with opaque session tokens; loopback browser access also requires login
 - **Service install** — `muxterm install` sets up systemd (Linux) or launchd (macOS)
 - **Push deploy** — `muxterm deploy user@host` copies the binary and installs remotely
 - **Agent integration (MCP)** — connect any MCP-compatible AI agent to drive workspaces, panes, and terminals

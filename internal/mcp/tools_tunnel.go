@@ -81,12 +81,11 @@ func (tt *tunnelTools) doRequest(method, path string, body []byte) ([]byte, erro
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	// Authenticate as a same-user local helper process. Without this the
-	// only thing admitting these calls is the serve layer's loopback
-	// bypass, which behind_reverse_proxy disables -- turning every tunnel
-	// tool into an unexplained 401 the moment reverse-proxy mode is on. A
+	// Authenticate as a same-user local helper process. Browser routes
+	// require login in both direct and reverse-proxy modes; this private
+	// helper token supplies the separate local administration channel. A
 	// serve process that published no token (older build) yields "", and
-	// the request proceeds unauthenticated exactly as before.
+	// the request is denied by the normal protected-route admission.
 	if token, err := sessiond.ServerToken(); err == nil && token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

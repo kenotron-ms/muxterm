@@ -14,6 +14,7 @@ import (
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // HostState is the relay-level connection state for one host as seen by ONE
@@ -453,6 +454,9 @@ func (s *hostSession) markUp() {
 // unreachable.
 func (s *hostSession) run(ctx context.Context) {
 	for {
+		if s.client.authorizeWorkspace(workspaceauth.ActionAccess, s.host.ID, "") != nil {
+			return
+		}
 		// A dial that returns no error has not yet proved anything, so the two
 		// steps are reported as one failure: see bringUp.
 		conn, err := s.client.hub.Dial(ctx, s.host)
@@ -521,6 +525,10 @@ func (s *hostSession) run(ctx context.Context) {
 // A failure here is returned to run() as if the dial itself had failed, because
 // as far as the user is concerned it did.
 func (s *hostSession) bringUp(conn DaemonConn) (chan struct{}, error) {
+	if s.client.authorizeWorkspace(workspaceauth.ActionRead, s.host.ID, "") != nil {
+		_ = conn.Close()
+		return nil, workspaceauth.ErrUnauthorized
+	}
 	// Handlers before Run: the read loop starts dispatching the moment it is
 	// scheduled, and an event that arrives before SetHandlers is an event
 	// nobody receives.
@@ -552,6 +560,9 @@ func (s *hostSession) bringUp(conn DaemonConn) (chan struct{}, error) {
 // refresh the merge cache, announce the host.
 func (s *hostSession) afterConnect(conn DaemonConn, workspaces []sessiond.WorkspaceInfo) {
 	c := s.client
+	if c.authorizeWorkspace(workspaceauth.ActionRead, s.host.ID, "") != nil {
+		return
+	}
 
 	// A.5: subscriptions are recorded on the Client, and every session started
 	// AFTERWARDS re-asserts them on connect. Without this a host connected
@@ -614,28 +625,37 @@ func (s *hostSession) reattach(conn DaemonConn) {
 		return
 	}
 	c := s.client
-	wsID, breakpoint, ok := c.attachedTo(s.host.ID)
+	a, ok := c.attachmentForHost(s.host.ID)
 	if !ok {
 		return
 	}
 
 	c.attachSeq.Lock()
 	defer c.attachSeq.Unlock()
+	if !c.stillAttached(a) || c.authorizeWorkspace(workspaceauth.ActionRead, a.host, a.workspace) != nil {
+		return
+	}
 
-	comp, err := conn.Attach(wsID, breakpoint, sessiond.ClientKindInteractive)
+	comp, err := conn.Attach(a.workspace, a.breakpoint, sessiond.ClientKindInteractive)
 	if err != nil {
 		// Logged, not surfaced. The workspace may simply be gone (the far
 		// daemon restarted), and the workspace-list that follows is what tells
 		// the browser that in the vocabulary it already handles.
-		log.Printf("hostSession %s: reattach %s: %v", s.host.ID, wsID, err)
+		log.Printf("hostSession %s: reattach %s: %v", s.host.ID, a.workspace, err)
 		return
 	}
-	c.sendMessage(&sessiond.Message{
+	if !c.stillAttached(a) || c.authorizeWorkspace(workspaceauth.ActionRead, a.host, a.workspace) != nil {
+		return
+	}
+	data, err := json.Marshal(&sessiond.Message{
 		Type:        sessiond.TypeComposition,
-		WorkspaceID: nsID(s.host.ID, comp.WorkspaceID),
+		WorkspaceID: nsID(a.host, comp.WorkspaceID),
 		Panes:       comp.Panes,
 		Layout:      comp.Layout,
 	})
+	if err == nil {
+		_ = c.writeTextFn(data)
+	}
 }
 
 // installHandlers wires this session's daemon events to the browser, with the
@@ -660,37 +680,28 @@ func (s *hostSession) installHandlers() {
 		return
 	}
 
-	// attached reports whether this session owns the browser's current pane-id
-	// namespace. For the local daemon with no remotes it is always true, so
-	// every guard below is a branch not taken and the relayed bytes are
-	// today's bytes.
-	attached := func() bool { return c.getAttachedHost() == hostID }
-
 	conn.SetHandlers(sessiond.Handlers{
 		OnPaneOutput: func(paneID uint32, data []byte) {
-			if !attached() {
+			a, ok := c.attachmentForHost(hostID)
+			if !ok {
 				return
 			}
 			// Blocks while an Attach() reply is being forwarded to the
 			// browser/app WebSocket (see attachSeq), so replay frames for the
 			// pane just announced in that composition can never overtake it
 			// on the wire.
-			c.attachSeq.Lock()
-			err := c.writeBinary(EncodeBinaryFrame(paneID, data))
-			c.attachSeq.Unlock()
+			err := c.emitAttachedBinary(a, EncodeBinaryFrame(paneID, data))
 			if err != nil {
 				log.Printf("attachClient: pane output write error: %v", err)
 			}
 		},
 		OnPaneAdded: func(pane sessiond.PaneInfo) {
-			if !attached() {
+			a, ok := c.attachmentForHost(hostID)
+			if !ok {
 				return
 			}
-			c.sendMessage(&sessiond.Message{
-				Type: sessiond.TypePaneAdded,
-				// Already namespaced: the attached workspace id is stored
-				// stamped, so state.ts keeps matching on it.
-				WorkspaceID:     c.getWorkspaceID(),
+			c.emitAttachedMessage(a, &sessiond.Message{
+				Type:            sessiond.TypePaneAdded,
 				PaneID:          pane.PaneID,
 				Cols:            pane.Cols,
 				Rows:            pane.Rows,
@@ -701,19 +712,20 @@ func (s *hostSession) installHandlers() {
 			})
 		},
 		OnPaneClosedWithWorkspace: func(workspaceID string, paneID int, processExitCode *int, runtimeMs int64) {
-			if !attached() {
+			a, ok := c.attachmentForHost(hostID)
+			if !ok || a.workspace != workspaceID {
 				return
 			}
-			c.sendMessage(&sessiond.Message{
-				Type: sessiond.TypePaneClosed, WorkspaceID: nsID(hostID, workspaceID), PaneID: paneID,
+			c.emitAttachedMessage(a, &sessiond.Message{
+				Type: sessiond.TypePaneClosed, PaneID: paneID,
 				ProcessExitCode: processExitCode, RuntimeMs: runtimeMs,
 			})
 		},
 		OnWorkspaceClosed: func(workspaceID string) {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceClosed, WorkspaceID: nsID(hostID, workspaceID)})
+			c.emitWorkspaceMessage(hostID, workspaceID, &sessiond.Message{Type: sessiond.TypeWorkspaceClosed})
 		},
 		OnWorkspaceRenamed: func(workspaceID, name string) {
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceRenamed, WorkspaceID: nsID(hostID, workspaceID), Name: name})
+			c.emitWorkspaceMessage(hostID, workspaceID, &sessiond.Message{Type: sessiond.TypeWorkspaceRenamed, Name: name})
 		},
 		OnWorkspaceList: func(workspaces []sessiond.WorkspaceInfo) {
 			// Whole-state document: merged at the edge, never forwarded raw,
@@ -722,29 +734,30 @@ func (s *hostSession) installHandlers() {
 			c.emitWorkspaceList(0)
 		},
 		OnPaneRenamed: func(paneID int, name string) {
-			if !attached() {
+			a, ok := c.attachmentForHost(hostID)
+			if !ok {
 				return
 			}
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneRenamed, PaneID: paneID, Name: name})
+			c.emitAttachedMessage(a, &sessiond.Message{Type: sessiond.TypePaneRenamed, PaneID: paneID, Name: name})
 		},
 		OnPaneResized: func(paneID uint32, cols, rows int) {
-			if !attached() {
+			a, ok := c.attachmentForHost(hostID)
+			if !ok {
 				return
 			}
-			c.sendMessage(&sessiond.Message{Type: sessiond.TypePaneResized, PaneID: int(paneID), Cols: cols, Rows: rows})
+			c.emitAttachedMessage(a, &sessiond.Message{Type: sessiond.TypePaneResized, PaneID: int(paneID), Cols: cols, Rows: rows})
 		},
 		OnWorkspacePreview: func(msg *sessiond.Message) {
 			// The tile names its own workspace (it is pushed for workspaces
 			// this client is NOT attached to), so unlike OnPaneAdded the id
 			// comes off the message rather than the attached workspace.
-			c.sendMessage(&sessiond.Message{
-				Type:        sessiond.TypeWorkspacePreview,
-				WorkspaceID: nsID(hostID, msg.WorkspaceID),
-				PaneID:      msg.PaneID,
-				Title:       msg.Title,
-				Cols:        msg.Cols,
-				Rows:        msg.Rows,
-				Lines:       msg.Lines,
+			c.emitWorkspaceMessage(hostID, msg.WorkspaceID, &sessiond.Message{
+				Type:   sessiond.TypeWorkspacePreview,
+				PaneID: msg.PaneID,
+				Title:  msg.Title,
+				Cols:   msg.Cols,
+				Rows:   msg.Rows,
+				Lines:  msg.Lines,
 			})
 		},
 		OnSessionState: func(msg *sessiond.Message) {

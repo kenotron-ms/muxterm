@@ -17,6 +17,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/cos"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // Client represents a connected WebSocket client. Each browser WebSocket is
@@ -78,6 +79,7 @@ type Client struct {
 	workspaceID  string
 	attachedHost string
 	breakpoint   string
+	attachEpoch  uint64
 
 	// subMu guards the browser's subscription opt-ins. They are recorded here
 	// so that every session started AFTERWARDS can re-assert them on connect
@@ -116,10 +118,15 @@ type Client struct {
 	// replay frames race ahead of handleTextInput's sendMessage(composition)
 	// call and reach the wire first, since a buffered-channel handoff to the
 	// pending request does not yield the daemon read-loop goroutine. Held by
-	// handleTextInput for the full Attach()+sendMessage(composition) sequence,
+	// handleTextInput for the full attachment-state+Attach()+sendMessage
+	// (composition) sequence,
 	// and by OnPaneOutput around every binary relay, so pane-data can never be
 	// written to the WebSocket while a composition send is in flight.
 	attachSeq sync.Mutex
+
+	authorizer workspaceauth.Authorizer
+	admission  workspaceauth.Admission
+	invalid    sync.Once
 }
 
 const (
@@ -135,7 +142,48 @@ func (c *Client) setAttached(host, workspaceID, breakpoint string) {
 	c.attachedHost = host
 	c.workspaceID = workspaceID
 	c.breakpoint = breakpoint
+	c.attachEpoch++
 	c.wsMu.Unlock()
+}
+
+type attachment struct {
+	host       string
+	workspace  string
+	epoch      uint64
+	breakpoint string
+}
+
+// attachmentForHost takes one atomic attachment snapshot. Egress handlers use
+// it before waiting on attachSeq and recheck it afterward so bytes/events from
+// a prior workspace cannot be authorized or emitted as a later attachment.
+func (c *Client) attachmentForHost(host string) (attachment, bool) {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.attachedHost != host || c.workspaceID == "" {
+		return attachment{}, false
+	}
+	qualifier, workspace := splitID(c.workspaceID)
+	if host == "" {
+		workspace = c.workspaceID
+	} else if qualifier != host || workspace == "" {
+		return attachment{}, false
+	}
+	return attachment{host: host, workspace: workspace, epoch: c.attachEpoch, breakpoint: c.breakpoint}, true
+}
+
+func (c *Client) stillAttached(a attachment) bool {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.attachedHost != a.host || c.workspaceID == "" || c.attachEpoch != a.epoch {
+		return false
+	}
+	qualifier, workspace := splitID(c.workspaceID)
+	if a.host == "" {
+		workspace = c.workspaceID
+	} else if qualifier != a.host {
+		return false
+	}
+	return workspace == a.workspace
 }
 
 // attachedTo reports the BARE, daemon-local workspace id this client is
@@ -282,6 +330,22 @@ func closeRelayFailure(target sessiond.CloseTarget) sessiond.CloseOutcome {
 // newClient creates a new Client with a cancellable context and real WebSocket
 // writers.
 func newClient(hub *Hub, conn *websocket.Conn) *Client {
+	owner, err := workspaceauth.NewEphemeralOwner()
+	if err != nil {
+		panic("server: client authorization initialization failed")
+	}
+	authorizer, err := workspaceauth.NewOwnerOnlyAuthorizer(owner)
+	if err != nil {
+		panic("server: client authorization initialization failed")
+	}
+	admission, err := workspaceauth.NewLocalOwnerAdmission(owner.Principal)
+	if err != nil {
+		panic("server: client authorization initialization failed")
+	}
+	return newAuthorizedClient(hub, conn, authorizer, admission)
+}
+
+func newAuthorizedClient(hub *Hub, conn *websocket.Conn, authorizer workspaceauth.Authorizer, admission workspaceauth.Admission) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		hub:          hub,
@@ -292,6 +356,8 @@ func newClient(hub *Hub, conn *websocket.Conn) *Client {
 		closeTickets: make(map[string]closeTicket),
 		wsByHost:     make(map[string][]sessiond.WorkspaceInfo),
 		ssByHost:     make(map[string][]sessiond.SessionState),
+		authorizer:   authorizer,
+		admission:    admission,
 	}
 	c.writeTextFn = func(data []byte) error {
 		c.writeMu.Lock()
@@ -310,11 +376,112 @@ func newClient(hub *Hub, conn *websocket.Conn) *Client {
 	return c
 }
 
+// authorizeInstance is the single Client seam for instance-global state and
+// control. HostRef IDs select a routing destination only; they are machine
+// context, never principals.
+func (c *Client) authorizeInstance(action workspaceauth.Action) error {
+	return c.authorize(action, workspaceauth.Resource{Kind: workspaceauth.ResourceInstance})
+}
+
+// authorizeWorkspace gates a workspace operation using the trusted internal
+// routing scope and runtime workspace handle. The current owner-only evaluator
+// does not treat this runtime ID as security identity; a future per-workspace
+// evaluator requires a daemon-side resolver to map it to private metadata.
+func (c *Client) authorizeWorkspace(action workspaceauth.Action, hostID, runtimeWorkspaceID string) error {
+	return c.authorize(action, workspaceauth.Resource{
+		Kind:               workspaceauth.ResourceWorkspace,
+		RuntimeWorkspaceID: runtimeWorkspaceID,
+		HostID:             hostID,
+	})
+}
+
+func (c *Client) authorize(action workspaceauth.Action, resource workspaceauth.Resource) error {
+	if !c.admission.Valid() || c.authorizer == nil ||
+		c.authorizer.Authorize(c.admission.Principal, action, resource) != nil {
+		c.invalidate()
+		return workspaceauth.ErrUnauthorized
+	}
+	return nil
+}
+
+func (c *Client) invalidate() {
+	c.invalid.Do(func() {
+		c.close()
+		if c.hub != nil {
+			go c.hub.Remove(c)
+		}
+	})
+}
+
+func (c *Client) attachedResource() (hostID, runtimeWorkspaceID string) {
+	workspaceID := c.getWorkspaceID()
+	hostID, runtimeWorkspaceID = splitID(workspaceID)
+	if workspaceID != "" && runtimeWorkspaceID == "" {
+		runtimeWorkspaceID = workspaceID
+		hostID = c.getAttachedHost()
+	}
+	return hostID, runtimeWorkspaceID
+}
+
 // writeBinary writes a binary frame via the client's binary writer.
-func (c *Client) writeBinary(data []byte) error { return c.writeBinaryFn(data) }
+func (c *Client) writeBinary(data []byte) error {
+	hostID, workspaceID := c.attachedResource()
+	if err := c.authorizeWorkspace(workspaceauth.ActionRead, hostID, workspaceID); err != nil {
+		return err
+	}
+	return c.writeBinaryFn(data)
+}
 
 // writeText writes a text frame via the client's text writer.
-func (c *Client) writeText(data []byte) error { return c.writeTextFn(data) }
+func (c *Client) writeText(data []byte) error {
+	if err := c.authorizeInstance(workspaceauth.ActionRead); err != nil {
+		return err
+	}
+	return c.writeTextFn(data)
+}
+
+func (c *Client) writeTextFor(data []byte, hostID, workspaceID string) error {
+	if err := c.authorizeWorkspace(workspaceauth.ActionRead, hostID, workspaceID); err != nil {
+		return err
+	}
+	return c.writeTextFn(data)
+}
+
+func (c *Client) emitAttachedBinary(a attachment, data []byte) error {
+	c.attachSeq.Lock()
+	defer c.attachSeq.Unlock()
+	if !c.stillAttached(a) {
+		return nil
+	}
+	if err := c.authorizeWorkspace(workspaceauth.ActionRead, a.host, a.workspace); err != nil {
+		return err
+	}
+	return c.writeBinaryFn(data)
+}
+
+func (c *Client) emitAttachedMessage(a attachment, msg *sessiond.Message) {
+	c.attachSeq.Lock()
+	defer c.attachSeq.Unlock()
+	if !c.stillAttached(a) || c.authorizeWorkspace(workspaceauth.ActionRead, a.host, a.workspace) != nil {
+		return
+	}
+	msg.WorkspaceID = nsID(a.host, a.workspace)
+	data, err := json.Marshal(msg)
+	if err == nil {
+		_ = c.writeTextFn(data)
+	}
+}
+
+func (c *Client) emitWorkspaceMessage(host, workspace string, msg *sessiond.Message) {
+	if c.authorizeWorkspace(workspaceauth.ActionRead, host, workspace) != nil {
+		return
+	}
+	msg.WorkspaceID = nsID(host, workspace)
+	data, err := json.Marshal(msg)
+	if err == nil {
+		_ = c.writeTextFn(data)
+	}
+}
 
 // readPump loops reading messages from the connection.
 // On exit it removes the client from the hub.
@@ -340,6 +507,10 @@ func (c *Client) readPump() {
 // daemon as pane input. Binary framing is unchanged from the legacy protocol:
 // [4-byte LE uint32 paneId][raw bytes].
 func (c *Client) handleBinaryInput(data []byte) {
+	hostID, workspaceID := c.attachedResource()
+	if err := c.authorizeWorkspace(workspaceauth.ActionWrite, hostID, workspaceID); err != nil {
+		return
+	}
 	paneID, payload, err := DecodeBinaryFrame(data)
 	if err != nil {
 		log.Printf("handleBinaryInput: decode error: %v", err)
@@ -422,6 +593,9 @@ func (c *Client) route(msg *sessiond.Message) (sess *hostSession, browserWSID st
 // handleTextInput unmarshals a frozen sessiond.Message from the browser and
 // relays it to the daemon, re-emitting the reply with the browser's cid echoed.
 func (c *Client) handleTextInput(data []byte) {
+	if err := c.authorizeInstance(workspaceauth.ActionWrite); err != nil {
+		return
+	}
 	// Chief-of-staff frames are SERVE-LOCAL: they are answered here and never
 	// relayed to sessiond, so they are routed off before the sessiond decode
 	// and, deliberately, before the "no daemon connection" guard below. The
@@ -456,6 +630,30 @@ func (c *Client) handleTextInput(data []byte) {
 		c.sendError(msg.CID, browserWSID, errHostNotConnected(host))
 		return
 	}
+	resourceWorkspaceID := msg.WorkspaceID
+	switch msg.Type {
+	case sessiond.TypeCreateWorkspace,
+		sessiond.TypeListWorkspaces,
+		sessiond.TypePreviewSubscribe,
+		sessiond.TypeSessionStateSubscribe,
+		sessiond.TypeCloseConfirm:
+		// These operations are host/instance scoped until a specific
+		// workspace is selected or remembered. Do not substitute the
+		// currently attached workspace for an explicit create/list request.
+	case sessiond.TypeAttach,
+		sessiond.TypeRenameWorkspace,
+		sessiond.TypeCloseWorkspace,
+		sessiond.TypeSaveLayout,
+		sessiond.TypeCloseIntent:
+		// route already stripped the actual requested workspace ID.
+	default:
+		_, resourceWorkspaceID = c.attachedResource()
+	}
+	if msg.Type != sessiond.TypeCloseConfirm &&
+		msg.Type != sessiond.TypeListWorkspaces &&
+		(c.authorizeWorkspace(workspaceauth.ActionWrite, host, resourceWorkspaceID) != nil) {
+		return
+	}
 
 	switch msg.Type {
 	case sessiond.TypeAttach:
@@ -465,6 +663,11 @@ func (c *Client) handleTextInput(data []byte) {
 		// composition reply that announces its pane, preserving the frozen
 		// "composition FIRST" wire ordering across the goroutine boundary.
 		c.attachSeq.Lock()
+		// Publish the requested attachment under attachSeq before the daemon can
+		// dispatch replay. Its output handler snapshots this identity, waits on
+		// the same lock, and can therefore neither overtake composition nor
+		// attribute replay to a subsequent workspace switch.
+		c.setAttached(host, nsID(host, msg.WorkspaceID), msg.Breakpoint)
 		comp, err := dc.Attach(msg.WorkspaceID, msg.Breakpoint, "interactive")
 		if err != nil {
 			c.attachSeq.Unlock()
@@ -472,7 +675,6 @@ func (c *Client) handleTextInput(data []byte) {
 			return
 		}
 		attachedID := nsID(host, comp.WorkspaceID)
-		c.setAttached(host, attachedID, msg.Breakpoint)
 		c.sendMessage(&sessiond.Message{
 			Type:        sessiond.TypeComposition,
 			CID:         msg.CID,
@@ -550,6 +752,16 @@ func (c *Client) handleTextInput(data []byte) {
 		// The remembered target is already namespaced; every use of it below
 		// goes straight to the browser.
 		target, knownTarget := c.closeTargetForTicket(msg.Ticket)
+		targetHost, targetWorkspaceID := host, ""
+		if knownTarget {
+			// A confirmation can arrive long after its intent. Recheck using
+			// the remembered resource rather than trusting the opaque ticket
+			// or the client message to retain authority.
+			targetHost, targetWorkspaceID = splitID(target.WorkspaceID)
+		}
+		if err := c.authorizeWorkspace(workspaceauth.ActionWrite, targetHost, targetWorkspaceID); err != nil {
+			return
+		}
 		outcome, err := dc.CloseConfirm(msg.Ticket)
 		if err != nil {
 			c.sendMessage(sessiond.CloseOutcomeMessage(msg.CID, closeRelayFailure(target)))
@@ -696,6 +908,9 @@ func (c *Client) refreshWorkspaceLists() error {
 		wg.Add(1)
 		go func(s *hostSession, conn DaemonConn) {
 			defer wg.Done()
+			if err := c.authorizeWorkspace(workspaceauth.ActionRead, s.host.ID, ""); err != nil {
+				return
+			}
 			wsList, err := conn.ListWorkspaces()
 			if err != nil {
 				log.Printf("refreshWorkspaceLists %s: %v", s.host.ID, err)
@@ -711,6 +926,9 @@ func (c *Client) refreshWorkspaceLists() error {
 	var localErr error
 	if local != nil {
 		if conn := local.daemon(); conn != nil {
+			if err := c.authorizeWorkspace(workspaceauth.ActionRead, "", ""); err != nil {
+				return err
+			}
 			wsList, err := conn.ListWorkspaces()
 			if err != nil {
 				localErr = err
@@ -741,22 +959,38 @@ const workspaceListFanoutDeadline = 5 * time.Second
 // setWorkspaces replaces host's cached workspace list, stamping every id.
 func (c *Client) setWorkspaces(host string, workspaces []sessiond.WorkspaceInfo) {
 	stamped := stampWorkspaces(host, workspaces)
+	filtered := stamped[:0]
+	for _, workspace := range stamped {
+		workspaceHost, workspaceID := splitID(workspace.WorkspaceID)
+		if c.authorizeWorkspace(workspaceauth.ActionRead, workspaceHost, workspaceID) != nil {
+			return
+		}
+		filtered = append(filtered, workspace)
+	}
 	c.mergeMu.Lock()
 	if c.wsByHost == nil {
 		c.wsByHost = make(map[string][]sessiond.WorkspaceInfo)
 	}
-	c.wsByHost[host] = stamped
+	c.wsByHost[host] = filtered
 	c.mergeMu.Unlock()
 }
 
 // setSessions replaces host's cached session-state set, stamping every row.
 func (c *Client) setSessions(host string, sessions []sessiond.SessionState) {
 	stamped := stampSessions(host, sessions)
+	filtered := stamped[:0]
+	for _, session := range stamped {
+		sessionHost, workspaceID := splitID(session.WorkspaceID)
+		if c.authorizeWorkspace(workspaceauth.ActionRead, sessionHost, workspaceID) != nil {
+			return
+		}
+		filtered = append(filtered, session)
+	}
 	c.mergeMu.Lock()
 	if c.ssByHost == nil {
 		c.ssByHost = make(map[string][]sessiond.SessionState)
 	}
-	c.ssByHost[host] = stamped
+	c.ssByHost[host] = filtered
 	c.mergeMu.Unlock()
 }
 
@@ -807,7 +1041,14 @@ func (c *Client) emitWorkspaceList(cid uint64) {
 	}
 	out := make([]sessiond.WorkspaceInfo, 0, total)
 	for _, h := range mergedHosts(c.wsByHost) {
-		out = append(out, c.wsByHost[h]...)
+		for _, workspace := range c.wsByHost[h] {
+			workspaceHost, workspaceID := splitID(workspace.WorkspaceID)
+			if c.authorizeWorkspace(workspaceauth.ActionRead, workspaceHost, workspaceID) != nil {
+				c.mergeMu.Unlock()
+				return
+			}
+			out = append(out, workspace)
+		}
 	}
 	c.mergeMu.Unlock()
 
@@ -828,7 +1069,14 @@ func (c *Client) emitSessionState() {
 	}
 	out := make([]sessiond.SessionState, 0, total)
 	for _, h := range mergedHosts(c.ssByHost) {
-		out = append(out, c.ssByHost[h]...)
+		for _, session := range c.ssByHost[h] {
+			sessionHost, workspaceID := splitID(session.WorkspaceID)
+			if c.authorizeWorkspace(workspaceauth.ActionRead, sessionHost, workspaceID) != nil {
+				c.mergeMu.Unlock()
+				return
+			}
+			out = append(out, session)
+		}
 	}
 	c.mergeMu.Unlock()
 
@@ -845,8 +1093,23 @@ func (c *Client) sendMessage(msg *sessiond.Message) {
 		log.Printf("sendMessage: marshal error: %v", err)
 		return
 	}
-	if err := c.writeText(data); err != nil {
-		log.Printf("sendMessage: write error: %v", err)
+	hostID, workspaceID := splitID(msg.WorkspaceID)
+	if msg.WorkspaceID == "" {
+		hostID, workspaceID = c.attachedResource()
+	}
+	if workspaceID == "" {
+		if err := c.writeText(data); err != nil {
+			if !errors.Is(err, workspaceauth.ErrUnauthorized) {
+				log.Printf("sendMessage: write error: %v", err)
+			}
+		}
+		return
+	}
+	if err := c.writeTextFor(data, hostID, workspaceID); err != nil {
+		if !errors.Is(err, workspaceauth.ErrUnauthorized) {
+			log.Printf("sendMessage: write error: %v", err)
+		}
+		return
 	}
 }
 
@@ -859,7 +1122,7 @@ func (c *Client) sendConfig(cfg any) {
 		log.Printf("sendConfig: marshal error: %v", err)
 		return
 	}
-	if err := c.writeText(data); err != nil {
+	if err := c.writeText(data); err != nil && !errors.Is(err, workspaceauth.ErrUnauthorized) {
 		log.Printf("sendConfig: write error: %v", err)
 	}
 }
@@ -960,7 +1223,7 @@ func (c *Client) sendAIStatus(status any) {
 		log.Printf("sendAIStatus: marshal error: %v", err)
 		return
 	}
-	if err := c.writeText(data); err != nil {
+	if err := c.writeText(data); err != nil && !errors.Is(err, workspaceauth.ErrUnauthorized) {
 		log.Printf("sendAIStatus: write error: %v", err)
 	}
 }
@@ -996,7 +1259,7 @@ func (c *Client) sendVoiceEnded(sessionID, reason string) {
 		log.Printf("sendVoiceEnded: marshal error: %v", err)
 		return
 	}
-	if err := c.writeText(data); err != nil {
+	if err := c.writeText(data); err != nil && !errors.Is(err, workspaceauth.ErrUnauthorized) {
 		log.Printf("sendVoiceEnded: write error: %v", err)
 	}
 }
@@ -1062,6 +1325,9 @@ func (h *Hub) Dial(ctx context.Context, host transport.HostRef) (DaemonConn, err
 // forward daemon events to the browser, starts the connection's read loop, and
 // seeds the browser with config and the workspace list.
 func (h *Hub) attachClient(c *Client) error {
+	if err := c.authorizeInstance(workspaceauth.ActionAccess); err != nil {
+		return err
+	}
 	h.mu.RLock()
 	dial := h.dial
 	cfg := h.resolvedConfig
@@ -1104,6 +1370,9 @@ func (h *Hub) attachClient(c *Client) error {
 		c.sendConfig(cfg)
 	}
 
+	if err := c.authorizeWorkspace(workspaceauth.ActionRead, "", ""); err != nil {
+		return err
+	}
 	workspaces, err := dc.ListWorkspaces()
 	if err != nil {
 		log.Printf("attachClient: ListWorkspaces error: %v", err)
@@ -1180,6 +1449,12 @@ func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
 	// Auth is now handled uniformly by AuthMiddleware at the mux level
 	// (GET /ws is wrapped in server.go's New()) — no inline check needed
 	// here anymore.
+	admission, ok := workspaceauth.AdmissionFromContext(r.Context())
+	if !ok || !admission.Valid() || s.authorizer == nil ||
+		s.authorizer.Authorize(admission.Principal, workspaceauth.ActionAccess, workspaceauth.Resource{Kind: workspaceauth.ResourceInstance}) != nil {
+		httpJSONError(w, http.StatusForbidden, "authorization_denied", "authorization denied")
+		return
+	}
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
@@ -1189,7 +1464,7 @@ func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
 
 	conn.SetReadLimit(1 << 20) // 1MB
 
-	client := newClient(s.hub, conn)
+	client := newAuthorizedClient(s.hub, conn, s.authorizer, admission)
 	s.hub.Add(client)
 	go client.readPump()
 }

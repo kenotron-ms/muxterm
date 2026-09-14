@@ -1,13 +1,16 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/go-oauth2/oauth2/v4/manage"
 	"github.com/kenotron-ms/muxterm/internal/authserver"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // SessionCookieName is the HttpOnly cookie holding the opaque access token
@@ -15,44 +18,40 @@ import (
 // handler).
 const SessionCookieName = "muxterm_session"
 
-// AuthMiddleware gates access to protected routes. The loopback bypass
-// applies only in direct/local-dev mode; when muxterm runs behind a reverse
-// proxy the bypass is disabled entirely (see behindReverseProxy below).
-// Otherwise a valid session cookie (browser) or Authorization: Bearer token
-// (all other callers) is required, validated against the AuthServer's token
-// store.
+// AuthMiddleware gates access to protected routes. A loopback IP is not an OS
+// user identity, so normal browser requests require the existing login
+// admission. --no-auth remains the explicit insecure development/test escape.
 type AuthMiddleware struct {
-	authSrv *authserver.AuthServer // nil => login backend unavailable; fail closed for non-loopback callers
+	authSrv *authserver.AuthServer // nil => login backend unavailable; fail closed for browser callers
 	noAuth  bool
-	// behindReverseProxy disables the IsLocalhost() bypass unconditionally.
-	// A fronting proxy's own hop to muxterm is indistinguishable from a
-	// genuinely local caller at the RemoteAddr level — and in the real
-	// production topology it is not even loopback — so honoring the bypass
-	// here would silently grant unauthenticated access to genuinely remote
-	// traffic, defeating the entire point of running behind the proxy. This
-	// is a static, config-gated switch: never auto-detected, never derived
-	// from a forwarded header.
+	// behindReverseProxy is retained for constructor/config compatibility.
+	// Authentication no longer changes based on a caller IP address.
 	behindReverseProxy bool
 	// localToken authenticates same-user helper processes on this machine
 	// (today: the MCP server) that talk to the serve layer's HTTP API. It
 	// is published only through a 0600 file inside the 0700 runtime dir,
 	// so possession of it already implies the same UID that runs muxterm.
 	//
-	// It exists because those callers had NO credential at all: they were
-	// admitted solely by the IsLocalhost() bypass above, which
-	// behind_reverse_proxy disables -- so enabling reverse-proxy mode used
-	// to 401 every tunnel and config tool with no indication why. Empty
-	// string disables the check entirely (never matches).
+	// It keeps the same-user helper channel separate from browser login.
+	// Empty string disables the check entirely (never matches).
 	localToken string
+	authorizer workspaceauth.Authorizer
+	admission  workspaceauth.Admission
+}
+
+// SetAuthorization installs the server-created owner admission and centralized
+// evaluator. It is intentionally code-only: no request data is ever parsed as
+// a principal or admission.
+func (m *AuthMiddleware) SetAuthorization(authorizer workspaceauth.Authorizer, admission workspaceauth.Admission) {
+	m.authorizer = authorizer
+	m.admission = admission
 }
 
 // NewAuthMiddleware returns a middleware wired to authSrv, which may be
 // nil if the platform login backend is unavailable at startup (see
-// cmd/muxterm's newAuthServer) — in that case every non-loopback request
-// is denied (fail closed), per the design doc's Error Handling section.
-// noAuth mirrors the existing --no-auth dev-only flag: when set, ALL
-// checks (including loopback and the fail-closed case) are skipped.
-// behindReverseProxy disables the loopback bypass entirely.
+// cmd/muxterm's newAuthServer) — browser requests then fail closed.
+// noAuth mirrors the existing explicitly insecure development/test escape.
+// behindReverseProxy is retained for constructor compatibility.
 // localToken is the same-user helper-process credential; pass "" to disable.
 //
 // Deliberately NOT parameterized by the configured public host. An earlier
@@ -68,11 +67,25 @@ type AuthMiddleware struct {
 // another -- is now explained where it actually surfaces, in
 // handleAuthCallback, which needs no header trust to detect it.
 func NewAuthMiddleware(authSrv *authserver.AuthServer, noAuth, behindReverseProxy bool, localToken string) *AuthMiddleware {
+	owner, err := workspaceauth.NewEphemeralOwner()
+	if err != nil {
+		panic("server: authorization initialization failed")
+	}
+	authorizer, err := workspaceauth.NewOwnerOnlyAuthorizer(owner)
+	if err != nil {
+		panic("server: authorization initialization failed")
+	}
+	admission, err := workspaceauth.NewLocalOwnerAdmission(owner.Principal)
+	if err != nil {
+		panic("server: authorization initialization failed")
+	}
 	return &AuthMiddleware{
 		authSrv:            authSrv,
 		noAuth:             noAuth,
 		behindReverseProxy: behindReverseProxy,
 		localToken:         localToken,
+		authorizer:         authorizer,
+		admission:          admission,
 	}
 }
 
@@ -80,23 +93,14 @@ func NewAuthMiddleware(authSrv *authserver.AuthServer, noAuth, behindReverseProx
 func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if m.noAuth {
-			next.ServeHTTP(w, r)
+			m.admit(w, r, next, m.admission)
 			return
 		}
-		// Loopback bypass — direct/local-dev mode only. Behind a reverse
-		// proxy every request must complete the real OAuth flow regardless
-		// of which interface it arrived on.
-		if !m.behindReverseProxy && IsLocalhost(r) {
-			next.ServeHTTP(w, r)
-			return
-		}
-
 		// Same-user local helper processes (MCP). Checked BEFORE the
 		// authSrv==nil fail-closed gate on purpose: these callers hold a
-		// credential that never depended on the login backend, so a PAM
-		// outage must not take muxterm's own tooling down with it.
+		// credential that never depended on the login backend.
 		if token, ok := bearerToken(r); ok && m.matchesLocalToken(token) {
-			next.ServeHTTP(w, r)
+			m.admit(w, r, next, m.admission)
 			return
 		}
 
@@ -112,20 +116,56 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 
 		if token, ok := bearerToken(r); ok {
 			if _, err := mgr.LoadAccessToken(r.Context(), token); err == nil {
-				next.ServeHTTP(w, r)
+				m.admit(w, r, next, m.tokenAdmission(mgr, token))
 				return
 			}
 		}
 
 		if cookie, err := r.Cookie(SessionCookieName); err == nil && cookie.Value != "" {
 			if _, err := mgr.LoadAccessToken(r.Context(), cookie.Value); err == nil {
-				next.ServeHTTP(w, r)
+				m.admit(w, r, next, m.tokenAdmission(mgr, cookie.Value))
 				return
 			}
 		}
 
 		m.deny(w, r)
 	})
+}
+
+// admit attaches the internal current-owner subject only after existing
+// admission succeeds, then authorizes all protected HTTP work before a handler
+// sees the request.
+func (m *AuthMiddleware) admit(w http.ResponseWriter, r *http.Request, next http.Handler, admission workspaceauth.Admission) {
+	if !admission.Valid() || m.authorizer == nil {
+		httpJSONError(w, http.StatusForbidden, "authorization_denied", "authorization denied")
+		return
+	}
+	if m.authorizer != nil {
+		if err := m.authorizer.Authorize(admission.Principal, workspaceauth.ActionAccess, workspaceauth.Resource{Kind: workspaceauth.ResourceInstance}); err != nil {
+			httpJSONError(w, http.StatusForbidden, "authorization_denied", "authorization denied")
+			return
+		}
+		r = r.WithContext(workspaceauth.WithAdmission(r.Context(), admission))
+	}
+	next.ServeHTTP(w, r)
+}
+
+// tokenAdmission captures the token only inside a renewal closure. Every later
+// workspace authorization rechecks the existing OAuth manager, so expiry or
+// revocation invalidates an already-upgraded WebSocket without exposing the
+// token on any wire, log, or error.
+func (m *AuthMiddleware) tokenAdmission(mgr *manage.Manager, token string) workspaceauth.Admission {
+	admission, err := workspaceauth.NewAdmission(m.admission.Principal, func() bool {
+		if !m.admission.Valid() {
+			return false
+		}
+		_, err := mgr.LoadAccessToken(context.Background(), token)
+		return err == nil
+	})
+	if err != nil {
+		return workspaceauth.Admission{}
+	}
+	return admission
 }
 
 func (m *AuthMiddleware) deny(w http.ResponseWriter, r *http.Request) {

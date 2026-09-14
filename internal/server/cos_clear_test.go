@@ -15,6 +15,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/cos"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
+	"github.com/kenotron-ms/muxterm/internal/workspaceauth"
 )
 
 // Clearing the conversation, from the serve side.
@@ -47,7 +48,21 @@ func newRecordingClient(t *testing.T, h *Hub, broker *cos.Broker, subscribed boo
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	rc := &recordingClient{Client: &Client{hub: h, ctx: ctx, cancel: cancel}}
+	owner, err := workspaceauth.NewEphemeralOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := workspaceauth.NewOwnerOnlyAuthorizer(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := workspaceauth.NewLocalOwnerAdmission(owner.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := &recordingClient{Client: &Client{
+		hub: h, ctx: ctx, cancel: cancel, authorizer: authorizer, admission: admission,
+	}}
 	rc.writeTextFn = func(data []byte) error {
 		rc.mu.Lock()
 		defer rc.mu.Unlock()
