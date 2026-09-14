@@ -20,10 +20,9 @@ type agentCatalogEntry struct {
 // user-extensible list could be added later without an API change -- that is
 // NOT built here.
 //
-// This 4-entry allowlist is what makes relaunch-without-confirmation safe:
-// restoring a pane never executes anything beyond "spawn this exact captured
-// argv again, verbatim" for one of these four names; anything else falls
-// back to a plain default shell.
+// This catalog recognizes four harnesses. Restore may replay recognized
+// non-Claude argv; Claude is deliberately shell-only until native conversation
+// recovery is verified (see claude_recovery.go).
 //
 // The names are the Harness* constants from sessionstate.go, not string
 // literals, because they are the SAME vocabulary: "which agent CLI is this"
@@ -33,7 +32,7 @@ type agentCatalogEntry struct {
 func defaultAgentCatalog() []agentCatalogEntry {
 	return []agentCatalogEntry{
 		{Name: HarnessAmplifier, Match: matchArgvBasename(HarnessAmplifier)},
-		{Name: HarnessClaude, Match: matchArgvBasename(HarnessClaude)},
+		{Name: HarnessClaude, Match: isClaudeArgv},
 		{Name: HarnessCodex, Match: matchArgvBasename(HarnessCodex)},
 		{Name: HarnessOpenCode, Match: matchArgvBasename(HarnessOpenCode)},
 	}
