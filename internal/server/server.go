@@ -102,6 +102,13 @@ type Server struct {
 	// holding its link. See internal/server/publish.go.
 	publications *PublicationRegistry
 
+	// filesUploads owns the short-lived, HttpOnly destination bindings for the
+	// Files applet's narrowly scoped local upload surface. It is deliberately
+	// unrelated to publications and has no public route.
+	filesUploads   *filesUploadManager
+	filesBrowserMu sync.Mutex
+	filesBrowsers  map[filesBrowserKey]*Client
+
 	// publicDocFS is the one asset family reachable without authentication:
 	// the markdown renderer loaded by the /p/{id} page. See Config.
 	publicDocFS fs.FS
@@ -176,6 +183,8 @@ func New(cfg Config) *Server {
 		hub:            hub,
 		tunnels:        tunnels,
 		publications:   NewPublicationRegistry(),
+		filesUploads:   newFilesUploadManager(),
+		filesBrowsers:  make(map[filesBrowserKey]*Client),
 		publicDocFS:    cfg.PublicDocFS,
 		authSrv:        cfg.AuthServer,
 		webRedirectURI: cfg.WebRedirectURI,
@@ -325,6 +334,7 @@ func New(cfg Config) *Server {
 	// already hands out a shell. See internal/server/files_api.go and
 	// internal/server/prs_api.go.
 	s.mux.Handle("GET /api/files", protect(http.HandlerFunc(s.handleFilesList)))
+	s.mux.Handle("POST /api/files/upload", protect(http.HandlerFunc(s.handleFilesUpload)))
 	s.mux.Handle("GET /api/prs", protect(http.HandlerFunc(s.handlePRsList)))
 	s.mux.Handle("POST /api/prs/dismiss", protect(http.HandlerFunc(s.handlePRDismiss)))
 
@@ -342,7 +352,11 @@ func New(cfg Config) *Server {
 	s.mux.Handle("GET /ws", protect(http.HandlerFunc(s.handleWS)))
 
 	if cfg.StaticFS != nil {
-		s.mux.Handle("/", protect(http.FileServer(http.FS(cfg.StaticFS))))
+		static := http.FileServer(http.FS(cfg.StaticFS))
+		s.mux.Handle("/", protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.ensureFilesBrowser(w, r)
+			static.ServeHTTP(w, r)
+		})))
 	}
 
 	return s

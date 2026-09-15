@@ -69,13 +69,14 @@ type fileEntry struct {
 // filesListResponse is GET /api/files. Entries is ALWAYS present and never
 // null: the browser iterates it unconditionally.
 type filesListResponse struct {
-	Path         string      `json:"path"`         // the cleaned absolute directory listed
-	Parent       string      `json:"parent"`       // "" at the filesystem root
-	RepoRoot     string      `json:"repoRoot"`     // "" when not inside a worktree
-	Branch       string      `json:"branch"`       // "" when detached or not a worktree
-	GitAvailable bool        `json:"gitAvailable"` // false when git is missing, this is no worktree, or status failed
-	GitError     string      `json:"gitError"`     // one human sentence when GitAvailable is false
-	Entries      []fileEntry `json:"entries"`
+	Path         string                  `json:"path"`         // the cleaned absolute directory listed
+	Parent       string                  `json:"parent"`       // "" at the filesystem root
+	RepoRoot     string                  `json:"repoRoot"`     // "" when not inside a worktree
+	Branch       string                  `json:"branch"`       // "" when detached or not a worktree
+	GitAvailable bool                    `json:"gitAvailable"` // false when git is missing, this is no worktree, or status failed
+	GitError     string                  `json:"gitError"`     // one human sentence when GitAvailable is false
+	Entries      []fileEntry             `json:"entries"`
+	Upload       filesUploadAvailability `json:"upload"`
 }
 
 func writeFilesJSON(w http.ResponseWriter, code int, v any) {
@@ -149,6 +150,7 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		GitAvailable: git.err == "",
 		GitError:     git.err,
 		Entries:      entries,
+		Upload:       s.filesUploadAvailability(r, dir),
 	})
 }
 
