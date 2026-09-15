@@ -1919,14 +1919,14 @@ class Sidecar:
             return
         turn.cancel_requests += 1
         cancellation = self.session.coordinator.cancellation
-        if turn.cancel_requests == 1:
-            cancellation.request_graceful()
-            logger.info("graceful cancel requested for %s", turn.id)
-        else:
-            cancellation.request_immediate()
-            logger.info("immediate cancel requested for %s", turn.id)
-            if turn.task is not None:
-                turn.task.cancel()
+        # A single composer Stop is the full user action, not the first half of
+        # a hidden two-click escalation. A provider/tool await may not observe
+        # graceful cancellation promptly; cancel the owning task too so its
+        # finally block emits the one terminal event that releases the FIFO.
+        cancellation.request_immediate()
+        logger.info("immediate cancel requested for %s", turn.id)
+        if turn.task is not None:
+            turn.task.cancel()
 
     def _handle_approval(self, msg: dict) -> None:
         request_id = msg.get("request_id")

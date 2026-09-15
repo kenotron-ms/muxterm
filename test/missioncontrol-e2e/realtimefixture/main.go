@@ -37,9 +37,14 @@ type call struct {
 	secret   string
 	conn     *websocket.Conn
 	commands []command
-	offer    string
-	answer   chan string
-	answered bool
+	// Fixed, non-secret VAD fields sent at mint time. The fixture records this
+	// so the browser integration test can prove compatibility configuration
+	// without retaining prompt instructions or any bearer.
+	turnDetection   map[string]any
+	offer           string
+	answer          chan string
+	answered        bool
+	connectionEpoch uint64
 }
 
 type command struct {
@@ -55,6 +60,7 @@ type fixture struct {
 	next        uint64
 	sdpRequests uint64
 	sessions    map[string]string // ephemeral secret -> provider session ID
+	turns       map[string]map[string]any
 	calls       map[string]*call
 	evidence    string
 	rtcRelay    bool
@@ -254,14 +260,39 @@ func (f *fixture) mint(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST required"})
 		return
 	}
-	// Deliberately consume but never retain the server-owned instructions/tools.
-	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxEventSize)).Decode(&map[string]any{})
+	// Deliberately consume but never retain server-owned instructions or tools.
+	// Only the six fixed server-VAD compatibility fields are retained.
+	var payload struct {
+		Session struct {
+			Audio struct {
+				Input struct {
+					TurnDetection struct {
+						Type              string  `json:"type"`
+						Threshold         float64 `json:"threshold"`
+						PrefixPaddingMS   int     `json:"prefix_padding_ms"`
+						SilenceDurationMS int     `json:"silence_duration_ms"`
+						InterruptResponse bool    `json:"interrupt_response"`
+						CreateResponse    bool    `json:"create_response"`
+					} `json:"turn_detection"`
+				} `json:"input"`
+			} `json:"audio"`
+		} `json:"session"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, maxEventSize)).Decode(&payload)
 	secretBytes := make([]byte, 18)
 	_, _ = rand.Read(secretBytes)
 	secret := "ephemeral_fixture_" + hex.EncodeToString(secretBytes)
 	sessionID := f.id("session")
 	f.mu.Lock()
 	f.sessions[secret] = sessionID
+	f.turns[sessionID] = map[string]any{
+		"type":                payload.Session.Audio.Input.TurnDetection.Type,
+		"threshold":           payload.Session.Audio.Input.TurnDetection.Threshold,
+		"prefix_padding_ms":   payload.Session.Audio.Input.TurnDetection.PrefixPaddingMS,
+		"silence_duration_ms": payload.Session.Audio.Input.TurnDetection.SilenceDurationMS,
+		"interrupt_response":  payload.Session.Audio.Input.TurnDetection.InterruptResponse,
+		"create_response":     payload.Session.Audio.Input.TurnDetection.CreateResponse,
+	}
 	f.mu.Unlock()
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"value": secret, "expires_at": time.Now().Add(5 * time.Minute).Unix(),
@@ -280,7 +311,8 @@ func (f *fixture) sdp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.mu.Lock()
-	_, valid := f.sessions[bearer(r)]
+	sessionID, valid := f.sessions[bearer(r)]
+	turnDetection := f.turns[sessionID]
 	f.mu.Unlock()
 	if !valid {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unknown ephemeral bearer"})
@@ -293,10 +325,17 @@ func (f *fixture) sdp(w http.ResponseWriter, r *http.Request) {
 	}
 	callID := f.id("call")
 	f.mu.Lock()
-	c := &call{id: callID, secret: bearer(r)}
+	c := &call{id: callID, secret: bearer(r), turnDetection: turnDetection}
 	if f.rtcRelay {
 		c.offer = string(offer)
 		c.answer = make(chan string, 1)
+	}
+	// Keep only the fixed, non-secret VAD fields for the integration
+	// assertion. Copying avoids a later fixture mutation changing the
+	// already-minted call's effective configuration.
+	c.turnDetection = make(map[string]any, len(turnDetection))
+	for key, value := range turnDetection {
+		c.turnDetection[key] = value
 	}
 	f.calls[callID] = c
 	f.mu.Unlock()
@@ -336,6 +375,7 @@ func (f *fixture) realtime(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	c.conn = conn
+	c.connectionEpoch++
 	f.mu.Unlock()
 	_ = f.send(c, map[string]any{"type": "session.created", "session": map[string]any{"id": "fixture-sideband-session"}})
 	_ = f.send(c, map[string]any{"type": "session.updated", "session": map[string]any{"type": "realtime"}})
@@ -470,7 +510,7 @@ func (f *fixture) control(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.mu.Lock()
-		reply := map[string]any{"call_id": c.id, "connected": c.conn != nil, "commands": append([]command(nil), c.commands...), "exchange_requests": exchangeRequests}
+		reply := map[string]any{"call_id": c.id, "connected": c.conn != nil, "connection_epoch": c.connectionEpoch, "commands": append([]command(nil), c.commands...), "turn_detection": c.turnDetection, "exchange_requests": exchangeRequests}
 		f.mu.Unlock()
 		writeJSON(w, http.StatusOK, reply)
 	case "inject":
@@ -545,7 +585,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "load TLS certificate:", err)
 		os.Exit(2)
 	}
-	f := &fixture{sessions: map[string]string{}, calls: map[string]*call{}, evidence: *evidence, rtcRelay: *rtcRelay}
+	f := &fixture{sessions: map[string]string{}, turns: map[string]map[string]any{}, calls: map[string]*call{}, evidence: *evidence, rtcRelay: *rtcRelay}
 	mux := http.NewServeMux()
 	mux.HandleFunc(prefix+"/realtime/client_secrets", f.mint)
 	mux.HandleFunc(prefix+"/realtime/calls", f.sdp)

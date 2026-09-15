@@ -73,6 +73,9 @@ type AppOperationBridge interface {
 	// browser has already admitted.
 	ExecuteAppTool(context.Context, Correlation, string, map[string]any) (string, error)
 	CompleteAppTool(Correlation) (map[string]string, error)
+	// CompleteAppToolQuietly completes a routine tool handoff without asking
+	// the provider to generate an unsolicited continuation.
+	CompleteAppToolQuietly(Correlation) error
 }
 
 // AppOperatorBridge is the app profile's deliberately correlated Operator
@@ -81,6 +84,10 @@ type AppOperationBridge interface {
 // bridge admitted.
 type AppOperatorBridge interface {
 	AppOperationBridge
+	// BeginAppUserTurn is called only after Sideband has accepted a real user
+	// input boundary. A raw VAD edge during output playback is not enough:
+	// echo must never become a user turn.
+	BeginAppUserTurn(ProviderEvent)
 	SubmitOperator(context.Context, Correlation, string) (TurnHandle, error)
 	ApproveOperator(Correlation, string, bool, string) error
 	CancelOperator(Correlation, string) error
@@ -98,6 +105,7 @@ type AppOperatorBridge interface {
 // supplied by a browser or model.
 type AppCaptureBridge interface {
 	AppOperationBridge
+	BeginAppUserTurn(ProviderEvent)
 	// created is false for an exact replay; it must not create another response.
 	CommitAppInput(ProviderEvent) (metadata map[string]string, created bool, err error)
 }

@@ -157,8 +157,22 @@ func (c *Client) mintApp(ctx context.Context) (Ephemeral, error) {
 		"tools": AppToolDefinitions(),
 		"audio": map[string]any{
 			"input": map[string]any{
-				"turn_detection": map[string]any{"type": "server_vad", "create_response": false},
-				"transcription":  map[string]any{"model": "whisper-1"},
+				// v0.32 deliberately inherited the provider's server_vad
+				// profile. Its measured gpt-realtime-2.1 baseline was
+				// threshold=.5, prefix padding=300ms, silence=500ms, and
+				// interruption enabled (docs/research/realtime-voice.md).
+				// App Voice keeps create_response:false for its correlated
+				// Operator handoff, so name that compatibility profile here
+				// instead of letting a provider/model default shorten it.
+				"turn_detection": map[string]any{
+					"type":                "server_vad",
+					"threshold":           0.5,
+					"prefix_padding_ms":   300,
+					"silence_duration_ms": 500,
+					"interrupt_response":  true,
+					"create_response":     false,
+				},
+				"transcription": map[string]any{"model": "whisper-1"},
 			},
 		},
 	}

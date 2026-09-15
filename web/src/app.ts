@@ -922,6 +922,7 @@ export class MuxApp extends LitElement {
     // The server's runtime voice candidate is false until this explicit status
     // check says otherwise. Browser TTS voice enumeration is intentionally not
     // part of this provider-WebRTC capability decision.
+    voiceSessionController.setAvailabilityPending();
     void fetchVoiceStatus()
       .then((status) => voiceSessionController.setAvailability(status))
       .catch(() => voiceSessionController.setAvailability(DEFAULT_VOICE_STATUS));
@@ -1279,6 +1280,7 @@ export class MuxApp extends LitElement {
     };
     this._socket.onReconnect = () => {
       this._showReconnectOverlay = false;
+      voiceSessionController.setAvailabilityPending();
       void fetchVoiceStatus()
         .then((status) => voiceSessionController.setAvailability(status))
         .catch(() => voiceSessionController.setAvailability(DEFAULT_VOICE_STATUS));
