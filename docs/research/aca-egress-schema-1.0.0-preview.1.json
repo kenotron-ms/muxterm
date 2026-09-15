@@ -1,0 +1,157 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ACA Sandbox Egress Policy",
+  "description": "Egress policy for Azure Container Apps sandboxes. Rules are evaluated in order — first match wins.",
+  "type": "object",
+  "required": ["defaultAction"],
+  "properties": {
+    "defaultAction": {
+      "type": "string",
+      "enum": ["Allow", "Deny"],
+      "description": "Default action when no rule matches."
+    },
+    "trafficInspection": {
+      "type": "string",
+      "enum": ["Legacy", "Full", "Partial", "None"],
+      "description": "TLS inspection mode for the egress proxy."
+    },
+    "hostRules": {
+      "type": "array",
+      "description": "Simple host-pattern allow/deny rules.",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "action"],
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Host glob pattern (e.g., '*.github.com')."
+          },
+          "action": {
+            "type": "string",
+            "enum": ["Allow", "Deny"]
+          }
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "description": "Advanced rules with Transform/Rewrite actions. Evaluated in order — first match wins.",
+      "items": {
+        "type": "object",
+        "required": ["match", "action"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Optional rule name."
+          },
+          "match": {
+            "type": "object",
+            "required": ["host"],
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Host glob pattern (e.g., 'api.openai.com')."
+              },
+              "path": {
+                "type": "string",
+                "description": "Path glob pattern (e.g., '/v1/*'). Trailing * matches all."
+              },
+              "methods": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "HTTP methods (e.g., ['GET', 'POST'])."
+              }
+            }
+          },
+          "action": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["Allow", "Deny", "Transform", "Rewrite"]
+              },
+              "host": {
+                "type": "string",
+                "description": "Rewrite target host."
+              },
+              "path": {
+                "type": "string",
+                "description": "Rewrite target path."
+              },
+              "scheme": {
+                "type": "string",
+                "description": "Rewrite target scheme."
+              },
+              "headers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["operation", "name"],
+                  "properties": {
+                    "operation": {
+                      "type": "string",
+                      "enum": ["Set", "Insert", "Remove"]
+                    },
+                    "name": { "type": "string" },
+                    "value": {
+                      "type": "string",
+                      "description": "Static header value. Mutually exclusive with valueRef."
+                    },
+                    "valueRef": {
+                      "type": "object",
+                      "description": "Dynamic header value source. Exactly one of secretRef or managedIdentityRef must be set. Mutually exclusive with value.",
+                      "properties": {
+                        "secretRef": {
+                          "type": "object",
+                          "required": ["secretId"],
+                          "properties": {
+                            "secretId": {
+                              "type": "string",
+                              "description": "Name of a secret in the sandbox group (see 'aca sandboxgroup secret set')."
+                            },
+                            "secretKey": {
+                              "type": "string",
+                              "description": "Key within the secret. Optional; the server picks a default if omitted."
+                            },
+                            "format": {
+                              "type": "string",
+                              "description": "Optional template; '{value}' is replaced with the resolved secret value (e.g., 'Bearer {value}')."
+                            }
+                          }
+                        },
+                        "managedIdentityRef": {
+                          "type": "object",
+                          "required": ["type", "resource"],
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": ["SystemAssigned", "UserAssigned"],
+                              "description": "Identity kind. 'UserAssigned' also requires 'identityResourceId'."
+                            },
+                            "identityResourceId": {
+                              "type": "string",
+                              "description": "Full ARM resource ID of the user-assigned managed identity (e.g., /subscriptions/.../resourceGroups/.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>). Required when type is 'UserAssigned'."
+                            },
+                            "resource": {
+                              "type": "string",
+                              "description": "AAD resource the token is issued for (e.g., 'https://management.azure.com')."
+                            },
+                            "format": {
+                              "type": "string",
+                              "description": "Optional template; '{value}' is replaced with the acquired token (e.g., 'Bearer {value}')."
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
