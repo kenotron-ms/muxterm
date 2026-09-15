@@ -108,6 +108,12 @@ type Sideband struct {
 	lastResponseCreated time.Time
 	retryCount          int
 	eventKinds          map[string]int
+	// appTurns restores the v0.32 forgiving endpoint boundary for the app
+	// profile without weakening its current correlated-response contract.
+	appTurns *appTurnGate
+	// delivery is the sole promotion boundary from operational events to new
+	// spoken output. The transcript and fleet remain independently complete.
+	delivery *appVoiceDeliveryPolicy
 
 	writeMu       sync.Mutex
 	scopedWriteMu sync.Mutex
@@ -204,6 +210,7 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 		scopedFinalCalls:       map[string]scopedFinalCall{},
 		scopedRetiredCalls:     map[string]scopedFinalCall{},
 		scopedRetiredResponses: map[string]struct{}{},
+		delivery:               newAppVoiceDeliveryPolicy(),
 		ctx:                    sbCtx,
 		cancel:                 sbCancel,
 		done:                   make(chan struct{}),
@@ -365,6 +372,18 @@ func (s *Sideband) reattach() bool {
 			continue
 		}
 		conn.SetReadLimit(8 << 20)
+		// We cannot query the provider for buffered WebRTC output after this
+		// observer dropped. If audio was still draining, accepting the next
+		// speech edge could promote its echo as a human turn; retaining the
+		// stale state would instead wedge real input. End this voice-specific
+		// unsafe lease and let the browser offer a clean retry.
+		if s.appTurns != nil && s.appTurns.playbackActive() {
+			_ = conn.Close(websocket.StatusNormalClosure, "playback delivery state unavailable after reattach")
+			if bridge, ok := s.bridge.(SidebandTerminalBridge); ok {
+				go bridge.SidebandTerminal("provider playback state unavailable after reconnect")
+			}
+			return false
+		}
 		s.writeMu.Lock()
 		s.conn = conn
 		s.writeMu.Unlock()
@@ -435,15 +454,11 @@ func (s *Sideband) handle(data []byte) {
 		if ev.Type == "response.created" {
 			s.bindScopedFarewell(event.ResponseID, ev.Response.Metadata)
 		}
-		if app, ok := s.bridge.(AppCaptureBridge); ok && ev.Type == "input_audio_buffer.committed" {
-			metadata, created, err := app.CommitAppInput(event)
-			if err == nil && !created {
-				return
-			}
-			if err != nil || s.RequestScopedResponse(metadata) != nil {
-				s.Fence("app provider input commit rejected")
-				return
-			}
+		if app, ok := s.bridge.(AppCaptureBridge); ok {
+			// Identity is checked above. This gate is then the only place app
+			// voice may translate VAD start/stop/commit ordering into the
+			// correlated response that eventually reaches Operator.
+			s.observeAppTurnEvent(app, event)
 		}
 		// The app bridge has a persistent conversation, so it retires calls
 		// response-by-response. Keep legacy/threaded-v3's existing permanent
@@ -578,6 +593,16 @@ func (s *Sideband) handle(data []byte) {
 	case ev.Type == "response.done" || ev.Type == "response.cancelled":
 		s.releaseResponse()
 		s.signalFarewellForResponse(sigResponseDone, ev.ResponseID)
+		if ev.Type == "response.cancelled" {
+			// A cancelled response can arrive without a subsequent
+			// output_audio_buffer.cleared event. It is still a provider-owned
+			// interruption, so release the retained Operator result for a
+			// later eligible delivery rather than leaving it permanently
+			// marked as audible.
+			if operator, ok := s.bridge.(AppOperatorBridge); ok {
+				operator.OperatorPlaybackFinished(ev.ResponseID, true)
+			}
+		}
 	case strings.HasPrefix(ev.Type, "error"):
 		// The one error worth acting on rather than reporting.
 		//
@@ -621,9 +646,9 @@ func (s *Sideband) dispatchAppReserved(ctx context.Context, bridge AppOperationB
 			return
 		case ToolCancel:
 			if err := operator.CancelOperator(correlation, str(args["turn_id"])); err != nil {
-				_ = s.queueAppReply(operator, correlation, ev.CallID, "Nothing admitted by this voice session could be cancelled: "+trimErr(err), true)
+				_ = s.queueAppReply(operator, correlation, ev.CallID, "Operator could not stop that request.", AppVoiceBlocker)
 			} else {
-				_ = s.queueAppReply(operator, correlation, ev.CallID, "Operator cancellation was requested for this voice session's work.", true)
+				_ = s.queueAppReply(operator, correlation, ev.CallID, "Operator is stopping that request.", AppVoiceDirectReply)
 			}
 			return
 		case ToolEnd:
@@ -635,7 +660,7 @@ func (s *Sideband) dispatchAppReserved(ctx context.Context, bridge AppOperationB
 			// never regain the retired browser-operation authority merely by
 			// reaching this generic dispatch fallback.
 			_ = s.queueAppReply(operator, correlation, ev.CallID,
-				"That action is not available in this voice conversation.", true)
+				"That action is not available in this voice conversation.", AppVoiceBlocker)
 			return
 		}
 	}
@@ -661,16 +686,16 @@ func (s *Sideband) dispatchAppReserved(ctx context.Context, bridge AppOperationB
 func (s *Sideband) dispatchAppOperator(ctx context.Context, bridge AppOperatorBridge, ev realtimeEvent, correlation Correlation, args map[string]any) {
 	request := strings.TrimSpace(str(args["request"]))
 	if request == "" {
-		_ = s.queueAppReply(bridge, correlation, ev.CallID, "No request was given.", true)
+		_ = s.queueAppReply(bridge, correlation, ev.CallID, "What would you like Operator to do?", AppVoiceDecision)
 		return
 	}
 	turn, err := bridge.SubmitOperator(ctx, correlation, request)
 	if err != nil {
-		_ = s.queueAppReply(bridge, correlation, ev.CallID, "Operator could not accept this request: "+trimErr(err), true)
+		_ = s.queueAppReply(bridge, correlation, ev.CallID, "Operator could not accept that request. Try again.", AppVoiceBlocker)
 		return
 	}
 	if ev.Name == ToolDispatch {
-		_ = s.queueAppReply(bridge, correlation, ev.CallID, "Operator accepted the work and is working on it.", false)
+		_ = s.queueAppReply(bridge, correlation, ev.CallID, "Operator accepted the work.", AppVoiceRoutine)
 		s.startTask(func(wait context.Context) { s.awaitAppOperator(wait, bridge, correlation, turn) })
 		return
 	}
@@ -679,17 +704,17 @@ func (s *Sideband) dispatchAppOperator(ctx context.Context, bridge AppOperatorBr
 	cancel()
 	if err == nil {
 		bridge.RetainOperatorTerminal(correlation, text)
-		_ = s.queueAppReply(bridge, correlation, ev.CallID, text, true)
+		_ = s.queueAppReply(bridge, correlation, ev.CallID, text, AppVoiceDirectReply)
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		_ = s.queueAppReply(bridge, correlation, ev.CallID, "Operator accepted the request and is still working on it.", false)
+		_ = s.queueAppReply(bridge, correlation, ev.CallID, "Operator is working on the request.", AppVoiceRoutine)
 		s.startTask(func(wait context.Context) { s.awaitAppOperator(wait, bridge, correlation, turn) })
 		return
 	}
-	output := "Operator stopped before completing this request: " + trimErr(err)
+	output := "Operator could not complete that request."
 	bridge.RetainOperatorTerminal(correlation, output)
-	_ = s.queueAppReply(bridge, correlation, ev.CallID, output, true)
+	_ = s.queueAppReply(bridge, correlation, ev.CallID, output, AppVoiceBlocker)
 }
 
 func (s *Sideband) awaitAppOperator(ctx context.Context, bridge AppOperatorBridge, correlation Correlation, turn TurnHandle) {
@@ -698,20 +723,28 @@ func (s *Sideband) awaitAppOperator(ctx context.Context, bridge AppOperatorBridg
 		return
 	}
 	if err != nil {
-		_ = s.queueAppCompletion(bridge, correlation, "Operator stopped before completing this request: "+trimErr(err))
+		_ = s.queueAppCompletion(bridge, correlation, "Operator could not complete that request.")
 		return
 	}
 	_ = s.queueAppCompletion(bridge, correlation, text)
 }
 
-func (s *Sideband) queueAppReply(bridge AppOperationBridge, correlation Correlation, callID, output string, terminal bool) error {
+func (s *Sideband) queueAppReply(
+	bridge AppOperationBridge,
+	correlation Correlation,
+	callID, output string,
+	delivery AppVoiceDelivery,
+) error {
 	if len(output) > 32768 {
 		output = output[:32768]
 	}
 	if !s.SendScopedFunctionOutput(correlation.ProviderCallID, output) {
 		return errors.New("could not send function output")
 	}
-	if terminal {
+	if delivery == AppVoiceRoutine || !s.delivery.allow(delivery, appVoiceDeliveryKey(delivery, correlation, output)) {
+		return bridge.CompleteAppToolQuietly(correlation)
+	}
+	if delivery == AppVoiceDirectReply || delivery == AppVoiceTaskResult || delivery == AppVoiceBlocker || delivery == AppVoiceDecision {
 		if operator, ok := bridge.(AppOperatorBridge); ok {
 			operator.MarkOperatorNarration(correlation)
 		}
@@ -738,6 +771,13 @@ func (s *Sideband) deliverAppCompletion(bridge AppOperatorBridge, correlation Co
 	if len(output) > 32768 {
 		output = output[:32768]
 	}
+	delivery := AppVoiceDecision
+	if terminal {
+		delivery = AppVoiceTaskResult
+	}
+	if !s.delivery.allow(delivery, appVoiceDeliveryKey(delivery, correlation, output)) {
+		return nil
+	}
 	metadata, err := bridge.PrepareOperatorReply(correlation, output, terminal)
 	if err != nil {
 		return err
@@ -745,11 +785,17 @@ func (s *Sideband) deliverAppCompletion(bridge AppOperatorBridge, correlation Co
 	s.scopedWriteMu.Lock()
 	defer s.scopedWriteMu.Unlock()
 	if !s.write(map[string]any{"type": "conversation.item.create", "item": map[string]any{
-		"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": map[bool]string{true: "[Operator final result] ", false: "[Operator progress] "}[terminal] + output}},
+		"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": map[bool]string{true: "[Operator final result] ", false: "[Operator decision] "}[terminal] + output}},
 	}}) {
 		return errors.New("could not send Operator completion")
 	}
 	return s.requestScopedResponseLocked(metadata)
+}
+
+func appVoiceDeliveryKey(delivery AppVoiceDelivery, correlation Correlation, output string) string {
+	sum := sha256.Sum256([]byte(string(delivery) + "\x00" + correlation.CaptureID + "\x00" +
+		correlation.ProviderItemID + "\x00" + correlation.ProviderResponseID + "\x00" + output))
+	return fmt.Sprintf("%s:%x", delivery, sum[:])
 }
 
 func (s *Sideband) runAppApproval(bridge AppOperatorBridge, correlation Correlation, callID string, args map[string]any) {
@@ -757,7 +803,7 @@ func (s *Sideband) runAppApproval(bridge AppOperatorBridge, correlation Correlat
 	decision := normalizeDecision(str(args["decision"]))
 	confirm, _ := args["confirm"].(bool)
 	if requestID == "" {
-		_ = s.queueAppReply(bridge, correlation, callID, "No approval request was named, so nothing was answered.", true)
+		_ = s.queueAppReply(bridge, correlation, callID, "Which approval should I answer?", AppVoiceDecision)
 		return
 	}
 	s.mu.Lock()
@@ -771,17 +817,17 @@ func (s *Sideband) runAppApproval(bridge AppOperatorBridge, correlation Correlat
 	}
 	s.mu.Unlock()
 	if !had || !confirm || intent.decision != decision {
-		_ = s.queueAppReply(bridge, correlation, callID, "Not sent yet. Read the decision back and get a clear confirmation first.", true)
+		_ = s.queueAppReply(bridge, correlation, callID, "Please confirm that decision before I send it.", AppVoiceDecision)
 		return
 	}
 	s.mu.Lock()
 	delete(s.pending, requestID)
 	s.mu.Unlock()
 	if err := bridge.ApproveOperator(correlation, requestID, decision == "approve", "approved by app voice"); err != nil {
-		_ = s.queueAppReply(bridge, correlation, callID, "That approval could not be sent: "+trimErr(err)+". Nothing was approved.", true)
+		_ = s.queueAppReply(bridge, correlation, callID, "That approval could not be sent. Nothing was approved.", AppVoiceBlocker)
 		return
 	}
-	_ = s.queueAppReply(bridge, correlation, callID, map[bool]string{true: "Approved.", false: "Denied."}[decision == "approve"], true)
+	_ = s.queueAppReply(bridge, correlation, callID, map[bool]string{true: "Approved.", false: "Denied."}[decision == "approve"], AppVoiceDirectReply)
 }
 
 func (s *Sideband) dispatchScopedReserved(ctx context.Context, ev realtimeEvent, correlation Correlation) {

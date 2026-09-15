@@ -122,6 +122,14 @@ function isSessionLive(snapshot: VoiceSessionSnapshot): boolean {
   return snapshot.state !== 'idle' && snapshot.state !== 'error';
 }
 
+// Connecting is a cancellable Voice Mode bootstrap, not a reason to take the
+// user's text box away. The voice takeover begins only after the browser has a
+// usable conversational media state; "type instead" remains the escape hatch
+// while a live conversation is intentionally foregrounded.
+function isVoiceTakeoverLive(snapshot: VoiceSessionSnapshot): boolean {
+  return ['listening', 'thinking', 'speaking', 'paused'].includes(snapshot.state);
+}
+
 function voiceStatusLabel(snapshot: VoiceSessionSnapshot): string {
   if (snapshot.state === 'error') return 'Voice error';
   if (snapshot.paused || snapshot.state === 'paused') return 'Paused';
@@ -141,6 +149,22 @@ function voiceStatusLabel(snapshot: VoiceSessionSnapshot): string {
 function shortVoiceError(message: string): string {
   const text = message.trim().replace(/\s+/g, ' ');
   return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+}
+
+function voiceAvailabilityMessage(snapshot: VoiceSessionSnapshot): string {
+  if (snapshot.availabilityState === 'checking') return 'Checking voice availability…';
+  if (!snapshot.supported) return 'Voice mode needs browser microphone support.';
+  if (snapshot.available) return '';
+  switch (snapshot.availabilityReason) {
+    case 'voice_disabled':
+      return 'Voice mode is off for this server.';
+    case 'voice_config_invalid':
+      return 'Voice mode needs valid server settings.';
+    case 'voice_provider_unavailable':
+      return 'Voice provider is unavailable. Try again shortly.';
+    default:
+      return 'Voice availability could not be checked. Try again.';
+  }
 }
 
 interface HeldVoiceComposer {
@@ -209,6 +233,7 @@ export class MuxCos extends LitElement {
   @state() private _dictationNotice = '';
   @state() private _voiceSession: VoiceSessionSnapshot = voiceSessionController.snapshot();
   @state() private _textMode = false;
+  @state() private _primaryMenuOpen = false;
   private _heldVoiceComposer: HeldVoiceComposer | null = null;
 
   /**
@@ -244,6 +269,8 @@ export class MuxCos extends LitElement {
   private _unsubTranscript: (() => void) | null = null;
   private _unsubVoiceError: (() => void) | null = null;
   private _ticker: ReturnType<typeof setInterval> | undefined;
+  private _primaryHoldTimer: ReturnType<typeof setTimeout> | undefined;
+  private _suppressPrimaryClick = false;
 
   /** False once the reader scrolls up: streaming must not yank them back down. */
   private _pinned = true;
@@ -1188,6 +1215,7 @@ export class MuxCos extends LitElement {
       align-items: center;
       gap: var(--s-3);
       justify-content: flex-end;
+      position: relative;
     }
     .dictation-status {
       min-width: 0;
@@ -1196,6 +1224,16 @@ export class MuxCos extends LitElement {
       text-overflow: ellipsis;
       white-space: nowrap;
       font-family: var(--mono);
+      font-size: var(--t-meta);
+      line-height: 1.3;
+      color: var(--ink-3);
+    }
+    .queue-status {
+      min-width: 0;
+      margin-right: auto;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       font-size: var(--t-meta);
       line-height: 1.3;
       color: var(--ink-3);
@@ -1228,6 +1266,44 @@ export class MuxCos extends LitElement {
       background: transparent;
       color: var(--ink-3);
       cursor: default;
+    }
+    .primary-menu {
+      position: absolute;
+      right: 0;
+      bottom: calc(100% + var(--s-2));
+      z-index: 2;
+      min-width: 190px;
+      padding: var(--s-1);
+      border: 1px solid var(--edge);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 8px 22px rgb(0 0 0 / 20%);
+    }
+    .primary-menu button {
+      width: 100%;
+      min-height: 44px;
+      border: 0;
+      border-radius: 6px;
+      padding: var(--s-2) var(--s-3);
+      background: transparent;
+      color: var(--ink-1);
+      font: inherit;
+      font-size: var(--t-meta);
+      text-align: left;
+      cursor: pointer;
+    }
+    .primary-menu button:hover,
+    .primary-menu button:focus-visible {
+      outline: none;
+      background: var(--chrome-hover);
+    }
+    .primary-help {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
     }
     .cbtn.voice {
       background: transparent;
@@ -1281,10 +1357,10 @@ export class MuxCos extends LitElement {
       background: var(--fail);
       color: var(--chrome-body);
     }
-    @media (pointer: coarse) {
+    @media (pointer: coarse), (any-pointer: coarse) {
       .cbtn {
-        width: 40px;
-        height: 40px;
+        width: 44px;
+        height: 44px;
       }
     }
 
@@ -1478,9 +1554,9 @@ export class MuxCos extends LitElement {
     });
     this._heldVoiceComposer = heldVoiceComposer;
     this._unsubVoiceSession = voiceSessionController.subscribe((snapshot) => {
-      const wasActive = isSessionLive(this._voiceSession);
+      const wasActive = isVoiceTakeoverLive(this._voiceSession);
       this._voiceSession = snapshot;
-      const nowActive = isSessionLive(snapshot);
+      const nowActive = isVoiceTakeoverLive(snapshot);
       if (!wasActive && nowActive && !this._heldVoiceComposer) {
         this._holdVoiceComposer();
       } else if (wasActive && !nowActive) {
@@ -1488,7 +1564,7 @@ export class MuxCos extends LitElement {
       }
     });
     this._voiceSession = voiceSessionController.snapshot();
-    if (!isSessionLive(this._voiceSession) && this._heldVoiceComposer) {
+    if (!isVoiceTakeoverLive(this._voiceSession) && this._heldVoiceComposer) {
       this._releaseVoiceComposer();
     }
     document.addEventListener('keydown', this._onDocKey);
@@ -1513,6 +1589,8 @@ export class MuxCos extends LitElement {
     this._unsubVoiceSession = null;
     if (this._ticker !== undefined) clearInterval(this._ticker);
     this._ticker = undefined;
+    if (this._primaryHoldTimer !== undefined) clearTimeout(this._primaryHoldTimer);
+    this._primaryHoldTimer = undefined;
     // Only OUR session. An unconditional abort here would kill a dictation
     // the title bar's mic started against a terminal pane.
     if (this._chatDictationActive && this._voice === 'listening') {
@@ -2064,7 +2142,7 @@ export class MuxCos extends LitElement {
     const orbState = snapshot.state === 'error' || snapshot.state === 'paused'
       ? 'asleep'
       : snapshot.state;
-    const label = active ? 'Exit voice mode' : 'Start voice mode';
+    const label = active ? 'Exit voice mode' : snapshot.state === 'error' ? 'Retry voice mode' : 'Start voice mode';
     return html`
       <button
         class="cbtn voice ${active ? 'live' : ''} ${solo ? 'solo' : ''}"
@@ -2073,7 +2151,6 @@ export class MuxCos extends LitElement {
         aria-label="${label}"
         aria-pressed="${active ? 'true' : 'false'}"
         data-voice-state="${snapshot.state}"
-        @pointerdown="${this._prepareVoiceEntry}"
         @click="${this._toggleSession}"
       >
         <mux-voice-orb .state="${orbState}" .level="${snapshot.level}"></mux-voice-orb>
@@ -2117,17 +2194,34 @@ export class MuxCos extends LitElement {
    * without ending an active spoken conversation.
    */
   private _renderComposer(): TemplateResult {
-    const call = isSessionLive(this._voiceSession);
+    const voiceActive = isSessionLive(this._voiceSession);
+    const call = isVoiceTakeoverLive(this._voiceSession);
     if (call && !this._textMode) return this._renderVoiceComposer();
     const negotiating = cosStore.negotiating;
+    const activeTurn = cosStore.activeTurn;
     const busy = cosStore.busy;
     const admissionPending = cosStore.admissionPending;
-    const ready = this._draft.trim().length > 0 && cosStore.inputEnabled;
-    const locked = negotiating || !cosStore.inputEnabled;
-    const listening = !call && !negotiating && this._voice === 'listening';
+    const draftPresent = this._draft.trim().length > 0;
+    const draftAdmissionPending = cosStore.draftAdmissionPending;
+    // Each send owns an independent receipt. Do not make a person wait for one
+    // round trip before queuing an edited next message, but never admit the
+    // exact same unchanged draft twice before its receipt.
+    const ready = draftPresent && cosStore.textSubmissionAvailable && !draftAdmissionPending;
+    const locked = !cosStore.textSubmissionAvailable;
+    const listening = !voiceActive && !negotiating && this._voice === 'listening';
+    const queueNotice = draftAdmissionPending
+      ? 'Sending…'
+      : activeTurn
+      ? draftPresent ? 'Send adds this after the active turn.' : 'Working. Send a draft to queue it.'
+      : admissionPending ? 'Sending…'
+      : cosStore.queuedTurns.length > 0 ? 'Queued messages will run in order.'
+      : '';
+    const primaryLabel = draftPresent
+      ? draftAdmissionPending ? 'Sending message' : activeTurn ? 'Queue message after active turn' : 'Send'
+      : activeTurn ? 'Stop active turn' : admissionPending ? 'Sending' : 'Send';
     return html`
       <div class="comp">
-        <div class="cbox ${listening || call ? 'live' : ''}">
+        <div class="cbox ${listening || voiceActive ? 'live' : ''}">
           <textarea
             class="ctext"
             data-thread-composer
@@ -2145,10 +2239,16 @@ export class MuxCos extends LitElement {
             ${this._dictationNotice
               ? html`<span class="dictation-status" data-voice-dictation-status role="status">${this._dictationNotice}</span>`
               : nothing}
-            ${!call && this._voiceSession.error
+            ${!voiceActive && this._voiceSession.error
               ? html`<span class="voice-error" role="alert">${shortVoiceError(this._voiceSession.error)}</span>`
               : nothing}
-            ${call
+            ${!voiceActive && !this._voiceSession.error && voiceAvailabilityMessage(this._voiceSession)
+              ? html`<span class="queue-status" role="status">${voiceAvailabilityMessage(this._voiceSession)}</span>`
+              : nothing}
+            ${queueNotice
+              ? html`<span class="queue-status" role="status">${queueNotice}</span>`
+              : nothing}
+            ${voiceActive
               ? html`
                   <span class="micon" role="status">
                     <span class="micdot"></span><span class="micword">${voiceStatusLabel(this._voiceSession).toLowerCase()}</span>
@@ -2162,7 +2262,7 @@ export class MuxCos extends LitElement {
                   >back to the orb</button>
                 `
               : nothing}
-            ${!call && !negotiating && cosStore.composerIdentity.channelId !== 'none' && voiceInputController.isSupported()
+            ${!voiceActive && !negotiating && cosStore.composerIdentity.channelId !== 'none' && voiceInputController.isSupported()
               ? html`<button
                   class="cbtn ${listening ? 'rec' : ''}"
                   type="button"
@@ -2173,15 +2273,37 @@ export class MuxCos extends LitElement {
                   @click="${this._toggleDictation}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
-            ${call ? this._renderVoiceControl() : nothing}
-            ${busy || call || ready || !voiceSessionController.isSupported()
+            ${voiceActive || busy || ready
+              ? this._renderVoiceControl()
+              : nothing}
+            ${busy || voiceActive || ready || admissionPending || !voiceSessionController.isSupported()
               ? html`<button
-                  class="cbtn send"
+                  class="cbtn send primary-control"
                   type="button"
-                  aria-label="${busy ? 'Stop generating' : admissionPending ? 'Sending' : 'Send'}"
-                  ?disabled="${!busy && (negotiating || admissionPending || !ready)}"
-                  @click="${busy ? this._stopGeneration : this._submit}"
-                >${icon(busy ? Square : ArrowUp, { size: 15 })}</button>`
+                  aria-label="${primaryLabel}"
+                  aria-haspopup="${activeTurn && draftPresent ? 'menu' : 'false'}"
+                  aria-expanded="${this._primaryMenuOpen ? 'true' : 'false'}"
+                  aria-describedby="${activeTurn && draftPresent ? 'composer-primary-help' : nothing}"
+                  ?disabled="${!ready && !activeTurn}"
+                  @pointerdown="${this._onPrimaryPointerDown}"
+                  @pointerup="${this._onPrimaryPointerUp}"
+                  @pointercancel="${this._onPrimaryPointerUp}"
+                  @keydown="${this._onPrimaryControlKey}"
+                  @click="${this._onPrimaryClick}"
+                >${icon(!draftPresent && activeTurn ? Square : ArrowUp, { size: 15 })}</button>
+                ${activeTurn && draftPresent
+                  ? html`<span id="composer-primary-help" class="primary-help">Press Down Arrow or hold to open actions including Stop active turn.</span>`
+                  : nothing}
+                ${this._primaryMenuOpen && activeTurn
+                  ? html`<div class="primary-menu" role="menu" aria-label="Composer actions">
+                      <button
+                        role="menuitem"
+                        type="button"
+                        @keydown="${this._onPrimaryMenuKey}"
+                        @click="${this._stopGeneration}"
+                      >Stop active turn</button>
+                    </div>`
+                  : nothing}`
               : this._renderVoiceControl()}
           </div>
         </div>
@@ -2298,7 +2420,7 @@ export class MuxCos extends LitElement {
    * of re-opening what this had just closed.
    */
   private _onOutsideClick = (e: MouseEvent): void => {
-    if (!this._menuOpen) return;
+    if (!this._menuOpen && !this._primaryMenuOpen) return;
     const path = e.composedPath();
     const pressed = (sel: string): boolean => {
       const el = this.renderRoot.querySelector(sel);
@@ -2306,11 +2428,14 @@ export class MuxCos extends LitElement {
     };
     if (
       pressed('.menu') ||
-      pressed('.dots')
+      pressed('.dots') ||
+      pressed('.primary-menu') ||
+      pressed('.primary-control')
     ) {
       return;
     }
     this._menuOpen = false;
+    this._primaryMenuOpen = false;
   };
 
   private _ask(which: Housekeeping): void {
@@ -2366,10 +2491,12 @@ export class MuxCos extends LitElement {
       // pending in front of it leaves the surface.
       if (
         this._menuOpen ||
+        this._primaryMenuOpen ||
         this._confirm !== null
       ) {
         e.preventDefault();
         this._menuOpen = false;
+        this._primaryMenuOpen = false;
         this._confirm = null;
         return;
       }
@@ -2399,16 +2526,59 @@ export class MuxCos extends LitElement {
   };
 
   private _stopGeneration = (): void => {
-    const active = cosStore.turns.find((turn) => turn.status === 'streaming') ??
-      cosStore.turns.find((turn) => turn.status === 'pending');
+    this._primaryMenuOpen = false;
+    const active = cosStore.activeTurn;
     if (active) cosStore.cancel(active.id);
     void this.updateComplete.then(() => {
       this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext')?.focus();
     });
   };
 
-  private _prepareVoiceEntry = (): void => {
-    if (!isSessionLive(this._voiceSession)) this._holdVoiceComposer();
+  private _onPrimaryPointerDown = (): void => {
+    if (!cosStore.activeTurn || this._draft.trim() === '') return;
+    if (this._primaryHoldTimer !== undefined) clearTimeout(this._primaryHoldTimer);
+    this._primaryHoldTimer = setTimeout(() => {
+      this._primaryHoldTimer = undefined;
+      this._suppressPrimaryClick = true;
+      this._primaryMenuOpen = true;
+    }, 550);
+  };
+
+  private _onPrimaryPointerUp = (): void => {
+    if (this._primaryHoldTimer !== undefined) {
+      clearTimeout(this._primaryHoldTimer);
+      this._primaryHoldTimer = undefined;
+    }
+  };
+
+  private _onPrimaryControlKey = (e: KeyboardEvent): void => {
+    if (!cosStore.activeTurn || this._draft.trim() === '') return;
+    if (e.key === 'ArrowDown' || (e.altKey && e.key === 'ArrowDown')) {
+      e.preventDefault();
+      this._primaryMenuOpen = true;
+      void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>('.primary-menu button')?.focus());
+    }
+  };
+
+  private _onPrimaryMenuKey = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    this._primaryMenuOpen = false;
+    void this.updateComplete.then(() => {
+      this.renderRoot.querySelector<HTMLButtonElement>('.primary-control')?.focus();
+    });
+  };
+
+  private _onPrimaryClick = (): void => {
+    if (this._suppressPrimaryClick) {
+      this._suppressPrimaryClick = false;
+      return;
+    }
+    if (this._draft.trim() !== '') {
+      this._submit();
+      return;
+    }
+    this._stopGeneration();
   };
 
   private _toggleSession = (): void => {
@@ -2416,7 +2586,8 @@ export class MuxCos extends LitElement {
       voiceSessionController.exitByUser();
       return;
     }
-    this._holdVoiceComposer();
+    // Startup stays in the regular composer. The subscription takes the
+    // snapshot only once Voice Mode has reached a usable live state.
     void voiceSessionController.start();
   };
 
@@ -2501,9 +2672,10 @@ export class MuxCos extends LitElement {
     const nowhere =
       from === document.body || from === document.documentElement || from === document;
     if (!mine && !nowhere) return;
-    if (this._menuOpen || this._confirm !== null) {
+    if (this._menuOpen || this._primaryMenuOpen || this._confirm !== null) {
       e.preventDefault();
       this._menuOpen = false;
+      this._primaryMenuOpen = false;
       this._confirm = null;
       return;
     }

@@ -26,6 +26,8 @@ export type VoiceSessionState =
   | 'paused'
   | 'error';
 
+export type VoiceAvailabilityState = 'checking' | 'ready' | 'unavailable';
+
 export interface VoiceSessionSnapshot {
   readonly state: VoiceSessionState;
   readonly level: number;
@@ -42,6 +44,8 @@ export interface VoiceSessionSnapshot {
   readonly available: boolean;
   /** Fixed server availability reason, retained while an active bridge drains. */
   readonly availabilityReason: VoiceAvailabilityReason;
+  /** Status lookup is independent from an actual Start/lease/media attempt. */
+  readonly availabilityState: VoiceAvailabilityState;
   /** This browser can create the required WebRTC/media objects. */
   readonly supported: boolean;
 }
@@ -91,6 +95,7 @@ let pauseResumeFence = 0;
 let pauseResumeSerial: Promise<void> = Promise.resolve();
 let candidateAvailable = false;
 let availabilityReason: VoiceAvailabilityReason = 'config_unavailable';
+let availabilityKnown = false;
 const listeners = new Set<Listener>();
 
 function appIsSupported(): boolean {
@@ -113,6 +118,7 @@ function appSnapshot(): VoiceSessionSnapshot {
     canMute: liveInputTracks().length > 0,
     available: candidateAvailable,
     availabilityReason,
+    availabilityState: !availabilityKnown ? 'checking' : candidateAvailable ? 'ready' : 'unavailable',
     supported: appIsSupported(),
   });
 }
@@ -132,22 +138,29 @@ function appIsCandidateAvailable(): boolean {
 }
 
 function appSetAvailability(available: boolean, reason: VoiceAvailabilityReason): void {
-  if (candidateAvailable === available && availabilityReason === reason) return;
+  if (availabilityKnown && candidateAvailable === available && availabilityReason === reason) return;
+  availabilityKnown = true;
   candidateAvailable = available;
   availabilityReason = reason;
+  publish();
+}
+
+function appSetAvailabilityPending(): void {
+  if (!availabilityKnown) return;
+  availabilityKnown = false;
   publish();
 }
 
 function unavailableMessage(reason: VoiceAvailabilityReason): string {
   switch (reason) {
     case 'voice_disabled':
-      return 'Voice mode is disabled in this server configuration.';
+      return 'Voice mode is off for this server.';
     case 'voice_config_invalid':
-      return 'Voice mode configuration is invalid. Fix voice settings and restart the server.';
+      return 'Voice mode needs valid server settings.';
     case 'voice_provider_unavailable':
-      return 'Voice provider is unavailable on this running server.';
+      return 'Voice provider is unavailable. Try again shortly.';
     case 'config_unavailable':
-      return 'Voice settings are unavailable from this server.';
+      return 'Voice availability could not be checked. Try again.';
     default:
       return 'Voice mode is unavailable on this running server.';
   }
@@ -173,14 +186,10 @@ function headers(control: string): HeadersInit {
   };
 }
 
-async function errorText(response: Response, fallback: string): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: unknown };
-    if (typeof body.error === 'string' && body.error) return body.error;
-  } catch {
-    // A provider SDP response is not JSON.
-  }
-  return `${fallback} (HTTP ${response.status})`;
+async function errorText(_response: Response, fallback: string): Promise<string> {
+  // Provider and server responses belong in diagnostics, not in a conversation
+  // control. The UI exposes only stable recovery language.
+  return fallback;
 }
 
 type StartPhase = 'claim' | 'session_setup' | 'microphone' | 'connection';
@@ -192,18 +201,17 @@ function startErrorMessage(cause: unknown, phase: StartPhase): string {
       : '';
   if (phase === 'microphone') {
     if (name === 'NotAllowedError' || name === 'SecurityError') {
-      return 'Microphone permission was denied. Allow microphone access, then Start voice mode.';
+      return 'Microphone permission was denied. Allow it, then try again.';
     }
     if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-      return 'No microphone is available. Connect one, then Start voice mode.';
+      return 'No microphone is available. Connect one, then try again.';
     }
     return 'Microphone setup failed. Check microphone access, then Start voice mode.';
   }
   if (phase === 'claim') return 'Could not claim app voice control. Try again.';
-  const detail = cause instanceof Error && cause.message ? ` ${cause.message}` : '';
   return phase === 'session_setup'
-    ? `Voice session setup failed.${detail}`
-    : `Voice connection failed.${detail}`;
+    ? 'Voice session could not start. Try again.'
+    : 'Voice connection could not start. Try again.';
 }
 
 async function waitForIce(connection: RTCPeerConnection): Promise<void> {
@@ -445,13 +453,21 @@ async function restoreInputSenders(): Promise<void> {
 async function appStart(): Promise<void> {
   if (appIsActive() || releasing) return;
   voluntaryVoiceExit = null;
+  if (!availabilityKnown) {
+    // Status refresh is neither a failed voice session nor a reason to move
+    // the composer into an error state. Keep this cancellable idle state and
+    // let the visible availability text explain what is pending.
+    error = '';
+    publish();
+    return;
+  }
   if (!candidateAvailable) {
     error = unavailableMessage(availabilityReason);
     publish('error');
     return;
   }
   if (!appIsSupported()) {
-    error = 'This browser cannot start a WebRTC voice session.';
+    error = 'Voice mode needs browser microphone support.';
     publish('error');
     return;
   }
@@ -702,8 +718,7 @@ function appStop(intent: 'user_exit' | 'non_user'): void {
   publish('idle');
 }
 
-function resumeErrorMessage(cause: unknown): string {
-  if (cause instanceof Error && cause.message) return `Voice mode could not resume safely: ${cause.message}`;
+function resumeErrorMessage(_cause: unknown): string {
   return 'Voice mode could not resume safely. Start voice mode again.';
 }
 
@@ -875,8 +890,8 @@ function handleLeaseTransition(transition: AppVoiceLeaseTransition): LeaseEndHan
   if (appIsActive()) {
     fail(
       transition.reason === 'takeover'
-        ? 'App voice was released for an explicit takeover.'
-        : 'The app voice lease ended.',
+        ? 'Voice mode was taken over in another browser.'
+        : 'Voice mode ended. Start voice mode again.',
       false,
     );
   }
@@ -936,6 +951,12 @@ export function isCandidateAvailable(): boolean {
 /** Compatibility for older callers that knew only the app-v1 capability. */
 export function setCandidateAvailable(available: boolean): void {
   appSetAvailability(available, available ? 'ready' : 'voice_provider_unavailable');
+  publishFacade();
+}
+
+/** A fetch is in flight; this is pending, not evidence that voice is unavailable. */
+export function setAvailabilityPending(): void {
+  appSetAvailabilityPending();
   publishFacade();
 }
 
@@ -1036,6 +1057,7 @@ export const voiceSessionController = {
   isSupported,
   isCandidateAvailable,
   setCandidateAvailable,
+  setAvailabilityPending,
   setAvailability,
   isActive,
   isPaused,

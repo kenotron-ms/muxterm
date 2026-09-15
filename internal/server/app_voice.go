@@ -132,6 +132,26 @@ func (b *appVoiceBridge) Approve(string, bool, string) error {
 func (b *appVoiceBridge) Cancel(string) error {
 	return errors.New("app voice has no legacy bridge")
 }
+
+// BeginAppUserTurn is called only once Sideband has accepted a real user
+// boundary. A raw VAD edge during assistant playback may be echo and cannot
+// independently suppress or preempt an Operator delivery.
+func (b *appVoiceBridge) BeginAppUserTurn(event voice.ProviderEvent) {
+	if event.ItemID == "" {
+		return
+	}
+	b.service.mu.Lock()
+	defer b.service.mu.Unlock()
+	if !b.activeLocked() {
+		return
+	}
+	b.service.userTurnActive = true
+	b.service.postBargeGeneration++
+	b.service.postBargeInputItemID = event.ItemID
+	b.service.postBargeCaptureID = ""
+	b.service.postBargeResponseID = ""
+}
+
 func (b *appVoiceBridge) SubmitOperator(_ context.Context, c voice.Correlation, request string) (voice.TurnHandle, error) {
 	s := b.service
 	s.mu.Lock()
@@ -467,13 +487,6 @@ func (b *appVoiceBridge) ObserveProviderEvent(event voice.ProviderEvent) error {
 	if !b.activeLocked() {
 		return errors.New("app voice bridge lease is no longer current")
 	}
-	if event.Type == "input_audio_buffer.speech_started" {
-		b.service.userTurnActive = true
-		b.service.postBargeGeneration++
-		b.service.postBargeInputItemID = event.ItemID
-		b.service.postBargeCaptureID = ""
-		b.service.postBargeResponseID = ""
-	}
 	if event.Type == "response.created" && event.ResponseID != "" {
 		capture := event.Metadata["app_voice_capture_id"]
 		nonce := event.Metadata["app_voice_response_nonce"]
@@ -606,6 +619,26 @@ func (b *appVoiceBridge) CompleteAppTool(c voice.Correlation) (map[string]string
 	record.continuationPending = true
 	return map[string]string{"app_voice_capture_id": captureID, "app_voice_response_nonce": nonce}, nil
 }
+
+// CompleteAppToolQuietly completes a routine handoff without starting a new
+// provider response. The result remains available to the provider, but normal
+// acknowledgements and progress do not become an unsolicited spoken turn.
+func (b *appVoiceBridge) CompleteAppToolQuietly(c voice.Correlation) error {
+	b.service.mu.Lock()
+	defer b.service.mu.Unlock()
+	if !b.activeLocked() {
+		return errors.New("app voice bridge lease is no longer current")
+	}
+	captureID := b.service.responses[c.ProviderResponseID]
+	record := b.service.captures[captureID]
+	if record == nil || record.responseID != c.ProviderResponseID || record.calls[c.ProviderItemID] ||
+		record.outputCalls[c.ProviderItemID] != c.ProviderCallID || record.continuationPending {
+		return errors.New("app provider call mapping is stale")
+	}
+	record.calls[c.ProviderItemID] = true
+	return nil
+}
+
 func (b *appVoiceBridge) CommitAppInput(event voice.ProviderEvent) (map[string]string, bool, error) {
 	if event.ItemID == "" {
 		return nil, false, errors.New("provider committed input has no item ID")
@@ -1451,17 +1484,14 @@ func (s *appVoiceService) observeOperatorApprovals(sup *cos.Supervisor, owner *C
 					if record == nil {
 						break
 					}
-					if event.Ev == cos.EvApprovalRequest && event.RequestID != "" {
-						s.operatorApprovals[event.RequestID] = key
-						record.operatorProgress = "Operator needs approval for " + boundedOperatorText(event.Tool, 120) + ": " + boundedOperatorText(event.Detail, 240) + ". Use the approval tool with request ID " + event.RequestID + "."
-					} else if event.Ev == cos.EvToolStart {
-						if time.Since(record.operatorProgressAt) < 5*time.Second {
-							break
-						}
-						record.operatorProgress = "Operator is working with " + boundedOperatorText(event.Name, 120) + "."
-					} else {
+					// The fleet/transcript retain routine tool and lane activity.
+					// Voice promotes only a real human decision request, once.
+					if event.Ev != cos.EvApprovalRequest || event.RequestID == "" ||
+						s.operatorApprovals[event.RequestID] != "" {
 						break
 					}
+					s.operatorApprovals[event.RequestID] = key
+					record.operatorProgress = "Operator needs approval for " + boundedOperatorText(event.Tool, 120) + ": " + boundedOperatorText(event.Detail, 240) + "."
 					record.operatorProgressAt = time.Now()
 					sink := s.readyOperatorNoticeLocked(record)
 					text, correlation := record.operatorProgress, record.operatorCorrelation
