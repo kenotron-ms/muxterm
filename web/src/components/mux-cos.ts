@@ -2287,7 +2287,7 @@ export class MuxCos extends LitElement {
                   ?disabled="${!ready && !activeTurn}"
                   @pointerdown="${this._onPrimaryPointerDown}"
                   @pointerup="${this._onPrimaryPointerUp}"
-                  @pointercancel="${this._onPrimaryPointerUp}"
+                  @pointercancel="${this._onPrimaryPointerCancel}"
                   @keydown="${this._onPrimaryControlKey}"
                   @click="${this._onPrimaryClick}"
                 >${icon(!draftPresent && activeTurn ? Square : ArrowUp, { size: 15 })}</button>
@@ -2549,6 +2549,14 @@ export class MuxCos extends LitElement {
       clearTimeout(this._primaryHoldTimer);
       this._primaryHoldTimer = undefined;
     }
+  };
+
+  private _onPrimaryPointerCancel = (): void => {
+    this._onPrimaryPointerUp();
+    // A long press opens the compact Stop menu and suppresses its trailing
+    // click. Pointer cancellation has no trailing click, so retaining that
+    // bit would wrongly swallow the next deliberate Send/Stop action.
+    this._suppressPrimaryClick = false;
   };
 
   private _onPrimaryControlKey = (e: KeyboardEvent): void => {

@@ -275,14 +275,23 @@ try {
   );
   await stopMenuItem.press('Escape');
   await stopMenuItem.waitFor({ state: 'hidden' });
+  // A cancelled long-press has no trailing click to suppress. The next
+  // deliberate primary activation must still submit the current draft.
+  await primaryControl.dispatchEvent('pointerdown');
+  await wait(600);
+  await primaryControl.dispatchEvent('pointercancel');
+  await stopMenuItem.waitFor({ state: 'visible' });
+  await stopMenuItem.press('Escape');
+  await stopMenuItem.waitFor({ state: 'hidden' });
   const queueOneFrames = frames.length;
-  await composer.press('Enter');
+  await primaryControl.click();
   const queueOneReceipt = await eventually(
     () => frames.slice(queueOneFrames).find((frame) =>
       frame.type === 'cos-turn-result' && frame.ok && frame.turn_id,
     ),
     'first_queued_turn_admitted',
   );
+  gate('cancelled_long_press_does_not_swallow_next_primary_submission', Boolean(queueOneReceipt));
   await composer.fill('VOICE_QUEUE_TWO');
   const queueTwoFrames = frames.length;
   await composer.press('Enter');
