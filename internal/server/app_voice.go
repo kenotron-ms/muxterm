@@ -1491,7 +1491,7 @@ func (s *appVoiceService) observeOperatorApprovals(sup *cos.Supervisor, owner *C
 						break
 					}
 					s.operatorApprovals[event.RequestID] = key
-					record.operatorProgress = "Operator needs approval for " + boundedOperatorText(event.Tool, 120) + ": " + boundedOperatorText(event.Detail, 240) + "."
+					record.operatorProgress = "Operator needs approval for " + boundedOperatorText(event.Tool, 120) + ": " + boundedOperatorText(event.Detail, 240) + ". Use the approval tool with request ID " + event.RequestID + "."
 					record.operatorProgressAt = time.Now()
 					sink := s.readyOperatorNoticeLocked(record)
 					text, correlation := record.operatorProgress, record.operatorCorrelation

@@ -2582,6 +2582,9 @@ export class MuxCos extends LitElement {
       this._suppressPrimaryClick = false;
       return;
     }
+    // A direct primary activation after its menu was opened is Send/Stop, not
+    // a request to leave a stale duplicate menu over the composer.
+    this._primaryMenuOpen = false;
     if (this._draft.trim() !== '') {
       this._submit();
       return;
