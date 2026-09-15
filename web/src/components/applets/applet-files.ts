@@ -54,9 +54,11 @@ import { appletControlStyles, appletToggle } from '../../lib/applet-controls.js'
 import { appletEmpty, appletError, appletStateStyles } from '../mux-applets.js';
 import {
   fetchFiles,
+  uploadFilesFile,
   type FileEntry,
   type FileStatus,
   type FilesListing,
+  type FilesUploadResolution,
 } from '../../lib/files-api.js';
 import { homeSessions } from '../../lib/home-sessions.js';
 import { isRemoteId } from '../../lib/host-ref.js';
@@ -87,6 +89,20 @@ const PREVIEW_READ_MAX_BYTES = 4 * 1024;
 const PREVIEW_OPEN_DELAY_MS = 300;
 const PREVIEW_MAX_HEIGHT_PX = 260;
 const PREVIEW_GAP_PX = 4;
+const UPLOAD_CONCURRENCY = 2;
+
+type UploadPhase = 'queued' | 'uploading' | 'conflict' | 'replace-confirm' | 'complete' | 'failed' | 'cancelled';
+
+interface FilesUploadItem {
+  file: File;
+  name: string;
+  size: number;
+  phase: UploadPhase;
+  loaded: number;
+  message: string;
+  /** Held only while this browser request is in flight; never serialized. */
+  controller: AbortController | null;
+}
 
 /**
  * A place this applet can be rooted at.
@@ -284,6 +300,10 @@ export class AppletFiles extends LitElement implements AppletElement {
   @state() private _listing: FilesListing | null = null;
   @state() private _error = '';
   @state() private _loading = false;
+  /** Per-file, in-surface upload queue. Never contains a filesystem path. */
+  @state() private _uploads: FilesUploadItem[] = [];
+  @state() private _draggingFiles = false;
+  private _uploadsRunning = 0;
 
   /** Bumped by the fleet subscription: the root picker is derived from it. */
   @state() private _fleetVersion = 0;
@@ -545,6 +565,128 @@ export class AppletFiles extends LitElement implements AppletElement {
       display: flex;
       flex-direction: column;
       gap: 1px;
+    }
+
+    /* The drop surface is the current directory list only. It does not sit
+       over controls, the tab strip, or the rest of the page, so an ordinary
+       browser drop outside Files keeps its ordinary browser behavior. */
+    .upload-zone {
+      position: relative;
+      min-height: 42px;
+    }
+    .upload-overlay {
+      position: absolute;
+      z-index: 6;
+      inset: 0;
+      display: grid;
+      place-content: center;
+      gap: var(--s-2);
+      min-height: 96px;
+      padding: var(--s-5);
+      text-align: center;
+      color: var(--ink-1);
+      background: color-mix(in srgb, var(--chrome-accent) 17%, var(--surface));
+      border: 2px dashed var(--chrome-accent);
+      border-radius: var(--r-ctl);
+      pointer-events: none;
+    }
+    .upload-overlay strong {
+      font-family: var(--mono);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .upload-overlay span {
+      color: var(--ink-2);
+      font-size: var(--t-meta);
+    }
+    .upload-controls {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: var(--s-3);
+      padding: 0 var(--s-1) var(--s-4);
+    }
+    .upload-controls .ctl {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+    .upload-controls .ctl[aria-disabled='true'] {
+      cursor: default;
+      opacity: 0.55;
+    }
+    .upload-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .upload-why {
+      color: var(--ink-3);
+      font-family: var(--mono);
+      font-size: var(--t-meta);
+      line-height: var(--lh-tight);
+    }
+    .upload-queue {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      margin: 0 0 var(--s-4);
+    }
+    .upload-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: var(--s-2) var(--s-3);
+      min-width: 0;
+      padding: 4px var(--s-4);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 1.35;
+      color: var(--ink-2);
+      border-top: 1px solid var(--edge);
+    }
+    .upload-row:first-child {
+      border-top: 0;
+    }
+    .upload-name {
+      flex: 1 1 12ch;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--ink-1);
+    }
+    .upload-status {
+      flex: 0 1 auto;
+      color: var(--ink-3);
+    }
+    .upload-row.complete .upload-status {
+      color: var(--ok);
+    }
+    .upload-row.failed .upload-status,
+    .upload-row.cancelled .upload-status,
+    .upload-row.conflict .upload-status {
+      color: var(--fail);
+    }
+    .upload-progress {
+      flex: 1 1 7rem;
+      min-width: 5rem;
+      height: 6px;
+      accent-color: var(--chrome-accent);
+    }
+    .upload-summary {
+      padding: 0 var(--s-1) var(--s-4);
+      color: var(--ink-3);
+      font-size: var(--t-meta);
+    }
+    .upload-summary strong {
+      color: var(--ink-2);
+      font-weight: 600;
     }
     .row {
       position: relative;
@@ -1142,6 +1284,7 @@ export class AppletFiles extends LitElement implements AppletElement {
     this._abort = null;
     this._loading = false;
     this._stale = true;
+    this._cancelUploads('Upload cancelled because this Files surface is no longer open.');
     this._previewClose();
   }
 
@@ -1303,6 +1446,8 @@ export class AppletFiles extends LitElement implements AppletElement {
   private _go(path: string): void {
     this._previewClose();
     if (path === '' || path === this._path) return;
+    this._draggingFiles = false;
+    this._cancelUploads('Upload cancelled because the destination folder changed.');
     this._path = path;
     this._stale = true;
     this._sync();
@@ -1516,6 +1661,8 @@ export class AppletFiles extends LitElement implements AppletElement {
             `
           : html`
               ${l ? this._renderHead(l) : nothing} ${this._renderPicker(l)}
+              ${this._renderUploadControls(l)}
+              ${this._renderUploadQueue()}
               ${this._pubError === '' ? nothing : html`<div class="puberr">${this._pubError}</div>`}
               ${this._renderBody(l, f)}
             `}
@@ -1642,15 +1789,318 @@ export class AppletFiles extends LitElement implements AppletElement {
           </button>`
         : nothing;
 
-    if (rows.length === 0) {
-      return html`
-        <div class="tree">${up}</div>
-        ${l.entries.length === 0
-          ? appletEmpty('This directory is empty.')
-          : appletEmpty('Nothing in this directory has changed.')}
-      `;
+    const contents =
+      rows.length === 0
+        ? html`
+            <div class="tree">${up}</div>
+            ${l.entries.length === 0
+              ? appletEmpty('This directory is empty.')
+              : appletEmpty('Nothing in this directory has changed.')}
+          `
+        : html`<div class="tree">${up}${rows.map((e) => this._renderEntry(e, l.path))}</div>`;
+    return html`
+      <div
+        class="upload-zone"
+        @dragenter="${this._onDragEnter}"
+        @dragover="${this._onDragOver}"
+        @dragleave="${this._onDragLeave}"
+        @drop="${this._onDrop}"
+      >
+        ${contents}
+        ${this._draggingFiles
+          ? html`<div class="upload-overlay" role="status">
+              <strong>Upload to ${l.path}</strong>
+              <span>This muxterm server</span>
+            </div>`
+          : nothing}
+      </div>
+    `;
+  }
+
+  private _uploadAllowed(l: FilesListing | null = this._listing): boolean {
+    return this.active && l?.upload.available === true && this._uploads.every((u) => u.phase !== 'replace-confirm');
+  }
+
+  private _renderUploadControls(l: FilesListing | null): TemplateResult | typeof nothing {
+    if (!l) return nothing;
+    const allowed = this._uploadAllowed(l);
+    const reason = l.upload.reason;
+    return html`
+      <div class="upload-controls" role="group" aria-label="Upload files">
+        <label class="ctl" aria-disabled="${allowed ? 'false' : 'true'}" title="${allowed ? `Upload files to ${l.path}` : reason}">
+          <input
+            class="upload-input"
+            type="file"
+            multiple
+            ?disabled="${!allowed}"
+            aria-label="Upload files to ${l.path}"
+            @change="${this._onFilePicker}"
+          />
+          Upload files
+        </label>
+        ${!allowed && reason !== '' ? html`<span class="upload-why">${reason}</span>` : nothing}
+      </div>
+    `;
+  }
+
+  private _renderUploadQueue(): TemplateResult | typeof nothing {
+    if (this._uploads.length === 0) return nothing;
+    const completed = this._uploads.filter((u) => u.phase === 'complete').length;
+    const failed = this._uploads.filter((u) => u.phase === 'failed' || u.phase === 'cancelled').length;
+    return html`
+      <div class="upload-queue" aria-live="polite" aria-relevant="additions text">
+        ${this._uploads.map((u) => this._renderUploadRow(u))}
+      </div>
+      <div class="upload-summary" role="status">
+        <strong>${completed} uploaded</strong>${failed > 0 ? html` · ${failed} not uploaded` : nothing}
+      </div>
+    `;
+  }
+
+  private _renderUploadRow(item: FilesUploadItem): TemplateResult {
+    const busy = item.phase === 'uploading';
+    const progress = item.size > 0 ? Math.min(item.loaded, item.size) : 0;
+    const percent = item.size > 0 ? Math.floor((progress / item.size) * 100) : 0;
+    const state =
+      item.phase === 'queued'
+        ? 'queued'
+        : item.phase === 'uploading'
+          ? `uploading ${percent}%`
+          : item.phase === 'complete'
+            ? 'uploaded'
+            : item.phase === 'cancelled'
+              ? 'cancelled'
+              : item.phase === 'failed'
+                ? 'not uploaded'
+                : 'needs a decision';
+    return html`
+      <div class="upload-row ${item.phase}">
+        <span class="upload-name" title="${item.name}">${item.name}</span>
+        ${busy
+          ? html`<progress class="upload-progress" value="${progress}" max="${item.size || 1}" aria-label="${item.name}: ${percent}% uploaded"></progress>`
+          : nothing}
+        <span class="upload-status">${item.message || state}</span>
+        ${item.phase === 'queued' || busy
+          ? html`<button type="button" class="act" @click="${() => this._cancelUpload(item)}">cancel</button>`
+          : nothing}
+        ${item.phase === 'conflict'
+          ? html`
+              <button type="button" class="act go" @click="${() => this._resolveUpload(item, 'keep')}">keep both</button>
+              <button type="button" class="act warn" @click="${() => this._confirmReplace(item)}">replace</button>
+              <button type="button" class="act" @click="${() => this._cancelUpload(item)}">cancel</button>
+            `
+          : nothing}
+        ${item.phase === 'replace-confirm'
+          ? html`
+              <span class="warnline">replace the existing ${item.name}?</span>
+              <button type="button" class="act warn" @click="${() => this._resolveUpload(item, 'replace')}">replace file</button>
+              <button type="button" class="act" @click="${() => this._cancelReplace(item)}">cancel</button>
+            `
+          : nothing}
+      </div>
+    `;
+  }
+
+  private _onFilePicker = (event: Event): void => {
+    const input = event.currentTarget as HTMLInputElement;
+    this._enqueueUploads(Array.from(input.files ?? []));
+    // Keep selecting the same file possible after a conflict or cancellation.
+    input.value = '';
+  };
+
+  private _onDragEnter = (event: DragEvent): void => {
+    if (!this._dropIsUploadable(event.dataTransfer)) return;
+    event.preventDefault();
+    this._draggingFiles = true;
+  };
+
+  private _onDragOver = (event: DragEvent): void => {
+    if (!this._dropIsUploadable(event.dataTransfer)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    if (!this._draggingFiles) this._draggingFiles = true;
+  };
+
+  private _onDragLeave = (event: DragEvent): void => {
+    if (!this._draggingFiles) return;
+    const zone = event.currentTarget as HTMLElement;
+    if (event.relatedTarget instanceof Node && zone.contains(event.relatedTarget)) return;
+    this._draggingFiles = false;
+  };
+
+  private _onDrop = (event: DragEvent): void => {
+    if (!this._dropIsUploadable(event.dataTransfer)) return;
+    event.preventDefault();
+    this._draggingFiles = false;
+    this._enqueueUploads(Array.from(event.dataTransfer?.files ?? []));
+  };
+
+  private _dropIsUploadable(transfer: DataTransfer | null): boolean {
+    if (!this._uploadAllowed() || !transfer) return false;
+    const types = Array.from(transfer.types);
+    if (
+      !types.includes('Files') ||
+      types.some((type) => type === 'text/plain' || type === 'text/html' || type === 'text/uri-list')
+    ) {
+      return false;
     }
-    return html`<div class="tree">${up}${rows.map((e) => this._renderEntry(e, l.path))}</div>`;
+    const items = Array.from(transfer.items);
+    if (items.length === 0 || items.some((item) => item.kind !== 'file')) return false;
+    return Array.from(transfer.files).every((file) => this._browserUploadProblem(file) === '');
+  }
+
+  private _enqueueUploads(files: File[]): void {
+    const listing = this._listing;
+    if (!this._uploadAllowed(listing) || !listing) return;
+    const total = files.reduce((sum, file) => sum + file.size, 0);
+    const tooMany = files.length > 32;
+    const tooLarge = total > 128 * 1024 * 1024;
+    const next = files.map((file): FilesUploadItem => {
+      const problem =
+        tooMany
+          ? 'Choose no more than 32 files at once.'
+          : tooLarge
+            ? 'The selected files are larger than the upload limit.'
+            : this._browserUploadProblem(file);
+      return {
+        file,
+        name: file.name || 'unnamed file',
+        size: file.size,
+        phase: problem === '' ? 'queued' : 'failed',
+        loaded: 0,
+        message: problem,
+        controller: null,
+      };
+    });
+    this._uploads = [...this._uploads, ...next];
+    this._pumpUploads();
+  }
+
+  private _browserUploadProblem(file: File): string {
+    const relative = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+    if (!file.name || relative || file.name === '.' || file.name === '..' || /[\\/\u0000-\u001f\u007f]/.test(file.name)) {
+      return 'Choose an ordinary file with a valid filename.';
+    }
+    if (file.size > 64 * 1024 * 1024) return 'This file is larger than the upload limit.';
+    if (/\.(zip|tar|tgz|gz|bz2|xz|7z|rar)$/i.test(file.name)) {
+      return 'Archives are not supported here. Choose ordinary files instead.';
+    }
+    return '';
+  }
+
+  private _pumpUploads(): void {
+    while (this._uploadsRunning < UPLOAD_CONCURRENCY) {
+      const next = this._uploads.find((item) => item.phase === 'queued');
+      if (!next) break;
+      void this._runUpload(next, 'new');
+    }
+  }
+
+  private async _runUpload(item: FilesUploadItem, resolution: FilesUploadResolution): Promise<void> {
+    const listing = this._listing;
+    const destination = listing?.path ?? '';
+    if (!listing || !this.active || !listing.upload.available || destination === '') {
+      this._setUpload(item, { phase: 'cancelled', message: 'Upload cancelled because this folder is no longer available.' });
+      return;
+    }
+
+    this._uploadsRunning++;
+    const controller = new AbortController();
+    this._setUpload(item, { phase: 'uploading', controller, loaded: 0, message: '' });
+    try {
+      const result = await uploadFilesFile(item.file, resolution, controller.signal, (loaded, total) => {
+        if (!controller.signal.aborted && item.controller === controller) {
+          this._setUpload(item, { loaded, size: total || item.size });
+        }
+      });
+      if (controller.signal.aborted) {
+        this._setUpload(item, { phase: 'cancelled', controller: null, message: 'Upload cancelled. No file was saved.' });
+      } else if (result.status === 'conflict') {
+        this._setUpload(item, {
+          phase: 'conflict',
+          controller: null,
+          message: result.message || 'A file with this name already exists. Choose what to do with it.',
+        });
+      } else if (result.status === 'complete') {
+        this._setUpload(item, {
+          phase: 'complete',
+          controller: null,
+          name: result.name || item.name,
+          loaded: result.size || item.size,
+          message: 'uploaded',
+        });
+        // Do not update a directory the user has since left. The server bound
+        // the request to its original directory descriptor; this check only
+        // governs what the applet redraws.
+        if (this.active && this._path === destination) this._stale = true;
+      } else {
+        this._setUpload(item, {
+          phase: result.status === 'cancelled' ? 'cancelled' : 'failed',
+          controller: null,
+          message: result.message || 'This file was not uploaded.',
+        });
+      }
+    } catch (error) {
+      const cancelled = controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError');
+      this._setUpload(item, {
+        phase: cancelled ? 'cancelled' : 'failed',
+        controller: null,
+        message: cancelled
+          ? 'Upload cancelled. No file was saved.'
+          : 'This file was not uploaded. No file was saved.',
+      });
+    } finally {
+      this._uploadsRunning--;
+      this._pumpUploads();
+      // A completed queue refreshes just once, after the server confirmed every
+      // atomic file commit. It never repositions the current view.
+      if (
+        this._uploadsRunning === 0 &&
+        !this._uploads.some((upload) => upload.phase === 'queued' || upload.phase === 'uploading' || upload.phase === 'conflict' || upload.phase === 'replace-confirm') &&
+        this._stale &&
+        this.active &&
+        this._path === destination
+      ) {
+        this._sync();
+      }
+    }
+  }
+
+  private _resolveUpload(item: FilesUploadItem, resolution: Extract<FilesUploadResolution, 'keep' | 'replace'>): void {
+    if (item.phase !== 'conflict' && item.phase !== 'replace-confirm') return;
+    void this._runUpload(item, resolution);
+  }
+
+  private _confirmReplace(item: FilesUploadItem): void {
+    if (item.phase === 'conflict') this._setUpload(item, { phase: 'replace-confirm', message: '' });
+  }
+
+  private _cancelReplace(item: FilesUploadItem): void {
+    if (item.phase === 'replace-confirm') this._setUpload(item, { phase: 'conflict', message: 'Choose what to do with this existing file.' });
+  }
+
+  private _cancelUpload(item: FilesUploadItem): void {
+    item.controller?.abort();
+    if (item.phase !== 'uploading') {
+      this._setUpload(item, { phase: 'cancelled', controller: null, message: 'Upload cancelled. No file was saved.' });
+      this._pumpUploads();
+    }
+  }
+
+  private _cancelUploads(message: string): void {
+    for (const item of this._uploads) {
+      if (item.phase === 'queued' || item.phase === 'conflict' || item.phase === 'replace-confirm') {
+        this._setUpload(item, { phase: 'cancelled', controller: null, message });
+      } else if (item.phase === 'uploading') {
+        item.controller?.abort();
+      }
+    }
+    this._draggingFiles = false;
+  }
+
+  private _setUpload(item: FilesUploadItem, patch: Partial<FilesUploadItem>): void {
+    Object.assign(item, patch);
+    this._uploads = [...this._uploads];
   }
 
   // -------------------------------------------------------------------------

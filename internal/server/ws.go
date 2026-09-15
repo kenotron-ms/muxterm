@@ -29,11 +29,13 @@ import (
 // the serve<->daemon cid is owned by the DaemonConn internally. serve never
 // rewrites browser cids onto daemon requests.
 type Client struct {
-	hub     *Hub
-	conn    *websocket.Conn
-	ctx     context.Context
-	cancel  context.CancelFunc
-	writeMu sync.Mutex
+	hub       *Hub
+	conn      *websocket.Conn
+	ctx       context.Context
+	cancel    context.CancelFunc
+	writeMu   sync.Mutex
+	closeOnce sync.Once
+	closeHook func()
 
 	// sessMu guards sessions and unsubscribeRemotes. sessions holds this
 	// browser's daemon links keyed by transport.HostRef.ID; the empty key is
@@ -1105,10 +1107,15 @@ func (c *Client) sendError(cid uint64, workspaceID string, err error) {
 
 // close cancels the client context and closes the connection.
 func (c *Client) close() {
-	c.cancel()
-	if c.conn != nil {
-		c.conn.CloseNow()
-	}
+	c.closeOnce.Do(func() {
+		c.cancel()
+		if c.closeHook != nil {
+			c.closeHook()
+		}
+		if c.conn != nil {
+			c.conn.CloseNow()
+		}
+	})
 }
 
 // Hub manages WebSocket clients, dialing one DaemonConn per browser.
@@ -1570,6 +1577,13 @@ func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
 	// Preserve legacy WebSocket acceptance. This flag gates only the new app
 	// voice frame family and is computed before accepting untrusted frames.
 	client.appVoiceAllowed = s.appVoiceSameOrigin(r)
+	if key, ok := s.filesBrowserKey(r); ok {
+		s.registerFilesBrowser(key, client)
+		client.closeHook = func() {
+			s.unregisterFilesBrowser(key, client)
+			s.filesUploads.cancelOwner(client)
+		}
+	}
 	s.hub.Add(client)
 	go client.readPump()
 	// Started beside readPump, not inside it: Ping waits for a pong that only
