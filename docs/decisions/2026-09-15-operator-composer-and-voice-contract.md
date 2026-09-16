@@ -141,6 +141,49 @@ call: the fixed server instruction makes the tool discoverable without
 colliding with active text admission or duplicating provider conversation
 items.
 
+### Quiet, retryable composer and compact geometry
+
+The composer is a direct-manipulation surface, not a Voice diagnostic console.
+Current v0.34.6 had no live availability probe; the quoted “Voice availability
+could not be checked” wording belonged to the removed v0.34.5 App Voice
+availability state. The actual current diagnostic path was
+`voice-session-controller` storing a transient `_error`, followed by
+`mux-cos` rendering that value as `.voice-error` with `role=alert`. This
+hotfix removes both producer and renderer:
+
+- failed token, SDP, provider, connection, and non-permanent capture attempts
+  clean up only their own WebRTC/mic/sideband attempt and return silently to
+  the ready orb;
+- a Realtime active-response conflict remains connected and silent;
+- only an explicit local microphone permission denial, an unsupported
+  browser/capture stack, or an insecure context becomes a durable
+  `blocked` state. The orb stays visible but is disabled, with a concise
+  accessible label containing only the safe local action;
+- no server/provider availability result, body, identifier, queue state, or
+  error is rendered in the composer or used to hide/disable the normal orb.
+
+The large empty composer had two independent source causes:
+
+1. `mux-cos._fit()` writes an inline textarea height. `CosStore.send()` keeps
+   the draft until its receipt, so `_submit()` measured the still-present long
+   draft. On later `cos-turn-result` draft clearing, no sizing function ran;
+   the old inline height survived the reactive value update.
+2. `_holdVoiceComposer()` measured the whole current `.cbox` and
+   `_renderVoiceComposer()` copied that historical height inline onto the
+   solo Voice box. A long previous draft or status row therefore persisted as
+   an empty tall Voice composer.
+
+The fix makes sizing value-owned rather than activity-owned: `_fit()` grows
+only a nonempty current draft up to CSS's existing `max-height` and enables
+its own overflow; empty/currently sent input clears inline sizing
+synchronously. The post-render synchronization observes a changed
+authoritative draft value, including receipt/reconnect clearing. Voice solo
+uses only its intentional compact orb minimum and never copies the prior
+composer's measured height. The visible `.queue-status`, `.voice-error`, and
+dictation status nodes are removed, not CSS-hidden; Send/Stop labels still
+communicate their direct action, and the live microphone indicator remains
+visible without `aria-live` state chatter.
+
 ## Retained v0.32 boundary and scope-out
 
 The browser still sends only transcription configuration in its

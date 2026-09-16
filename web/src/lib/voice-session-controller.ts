@@ -28,9 +28,9 @@
  * not execute one if it did: muxterm's tools run shell commands, and tool
  * authority in a tab is not something this codebase hands out. Function
  * calls are delivered to muxterm's own process over a sideband connection to
- * the same realtime session, and executed there. What this file sends over
- * the data channel is narration — text for the model to speak — which is
- * exactly the authority a page should have over its own microphone.
+ * the same realtime session and executed there. This file sends only the
+ * transcription session configuration over its data channel; text/COS events
+ * must never create a competing realtime response from the browser.
  *
  * ── The Chromium trap ──────────────────────────────────────────────────────
  *
@@ -46,11 +46,21 @@ import { apiPath } from './base-path.js';
 
 export type VoiceSessionState =
   | 'idle'
+  | 'blocked'
   | 'connecting'
   | 'listening'
   | 'thinking'
-  | 'speaking'
-  | 'error';
+  | 'speaking';
+
+/**
+ * A local condition that is durable enough to disable the Voice control.
+ * Server/provider reachability deliberately does not appear here: it is
+ * advisory for a click attempt, never a capability decision.
+ */
+export type VoiceBlockReason =
+  | 'microphone-permission-denied'
+  | 'browser-unsupported'
+  | 'insecure-context';
 
 export interface VoiceSessionSnapshot {
   state: VoiceSessionState;
@@ -60,7 +70,8 @@ export interface VoiceSessionSnapshot {
   heard: string;
   /** What the assistant is saying, streaming. */
   spoken: string;
-  error: string;
+  /** Null unless the browser has confirmed a durable local capability block. */
+  blockedReason: VoiceBlockReason | null;
 }
 
 interface TokenResponse {
@@ -77,11 +88,11 @@ type Listener = (s: VoiceSessionSnapshot) => void;
 // state
 // ---------------------------------------------------------------------------
 
-let _state: VoiceSessionState = 'idle';
+let _blockedReason: VoiceBlockReason | null = _localVoiceBlock();
+let _state: VoiceSessionState = _blockedReason ? 'blocked' : 'idle';
 let _level = 0;
 let _heard = '';
 let _spoken = '';
-let _error = '';
 
 let _pc: RTCPeerConnection | null = null;
 let _dc: RTCDataChannel | null = null;
@@ -108,15 +119,17 @@ const _listeners = new Set<Listener>();
 // ---------------------------------------------------------------------------
 
 export function isSupported(): boolean {
-  return (
-    typeof RTCPeerConnection === 'function' &&
-    typeof navigator !== 'undefined' &&
-    !!navigator.mediaDevices?.getUserMedia
-  );
+  return _blockedReason === null && _localVoiceBlock() === null;
 }
 
 export function snapshot(): VoiceSessionSnapshot {
-  return { state: _state, level: _level, heard: _heard, spoken: _spoken, error: _error };
+  return {
+    state: _state,
+    level: _level,
+    heard: _heard,
+    spoken: _spoken,
+    blockedReason: _blockedReason,
+  };
 }
 
 export function subscribe(cb: Listener): () => void {
@@ -127,7 +140,7 @@ export function subscribe(cb: Listener): () => void {
 }
 
 export function isActive(): boolean {
-  return _state !== 'idle' && _state !== 'error';
+  return _state === 'connecting' || _state === 'listening' || _state === 'thinking' || _state === 'speaking';
 }
 
 /** Start or stop, whichever the current state calls for. */
@@ -140,24 +153,32 @@ export async function toggle(): Promise<void> {
 }
 
 export async function start(): Promise<void> {
-  if (isActive()) return;
+  if (isActive() || _blockedReason !== null) return;
+  const localBlock = _localVoiceBlock();
+  if (localBlock) {
+    _blockedReason = localBlock;
+    _setState('blocked');
+    return;
+  }
   const gen = ++_gen;
-  _error = '';
   _heard = '';
   _spoken = '';
   _setState('connecting');
+  let phase: 'mint' | 'microphone' | 'connection' = 'mint';
 
   try {
     // 1. A short-lived secret, minted server-side. The credential that
     //    minted it never comes anywhere near this file.
     const tokenRes = await fetch(apiPath('/api/cos/voice/token'), { method: 'POST' });
-    if (!tokenRes.ok) throw new Error(await _errorText(tokenRes, 'could not start a voice session'));
+    if (!tokenRes.ok) throw new Error('voice token request failed');
     const token = (await tokenRes.json()) as TokenResponse;
     if (gen !== _gen) return;
     _sessionId = token.session_id;
 
-    // 2. The microphone. Fails loudly and early if permission is refused,
-    //    which is better than a session that connects and hears nothing.
+    // 2. The microphone. An explicit browser permission denial is the one
+    // dynamic failure which becomes a durable local disabled state. Network,
+    // provider and transient capture failures return quietly to the orb.
+    phase = 'microphone';
     _mic = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
@@ -167,6 +188,7 @@ export async function start(): Promise<void> {
     }
 
     // 3. The peer connection.
+    phase = 'connection';
     const pc = new RTCPeerConnection();
     _pc = pc;
     // addTrack creates a SENDRECV transceiver on its own, so the offer
@@ -183,7 +205,7 @@ export async function start(): Promise<void> {
     pc.onconnectionstatechange = () => {
       if (gen !== _gen) return;
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        _fail('the voice connection dropped');
+        _settleFailedAttempt();
       }
     };
 
@@ -215,21 +237,21 @@ export async function start(): Promise<void> {
       headers: { 'Content-Type': 'application/sdp', 'X-Voice-Session': _sessionId },
       body: pc.localDescription?.sdp ?? offer.sdp ?? '',
     });
-    if (!sdpRes.ok) throw new Error(await _errorText(sdpRes, 'the voice service refused the connection'));
+    if (!sdpRes.ok) throw new Error('voice SDP request failed');
     const answer = await sdpRes.text();
     if (gen !== _gen) return;
     await pc.setRemoteDescription({ type: 'answer', sdp: answer });
 
   } catch (err) {
     if (gen !== _gen) return;
-    _fail(err instanceof Error ? err.message : String(err));
+    _settleFailedAttempt(_blockForStartFailure(err, phase));
   }
 }
 
 export function stop(): void {
   _gen++;
   _teardown();
-  _setState('idle');
+  _setState(_blockedReason ? 'blocked' : 'idle');
 }
 
 /**
@@ -334,7 +356,7 @@ function _onRealtimeEvent(raw: unknown): void {
       // response FIFO. It is recoverable, and must never turn a healthy
       // microphone/WebRTC session into a user-visible Voice Mode failure.
       if (_isActiveResponseConflict(ev.error)) return;
-      _fail(_safeRealtimeError(ev.error));
+      _settleFailedAttempt();
       break;
     }
   }
@@ -354,16 +376,6 @@ function _isActiveResponseConflict(error: unknown): boolean {
     detail.code === 'conversation_already_has_active_response' ||
     (typeof detail.message === 'string' && detail.message.includes('conversation_already_has_active_response'))
   );
-}
-
-function _safeRealtimeError(error: unknown): string {
-  const code =
-    error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-      ? error.code
-      : '';
-  if (code === 'rate_limit_exceeded') return 'The voice provider is temporarily busy. Try again shortly.';
-  if (code === 'session_expired') return 'The voice session expired. Start Voice Mode again.';
-  return 'Voice Mode encountered a connection error. Start Voice Mode again.';
 }
 
 // ---------------------------------------------------------------------------
@@ -510,10 +522,16 @@ function _teardown(): void {
   }
 }
 
-function _fail(message: string): void {
-  _error = message;
+/**
+ * A failed network/provider attempt must not become a composer diagnostic or a
+ * durable unavailable state. Bump the generation before closing so stale
+ * peer/channel callbacks cannot affect a later click's session.
+ */
+function _settleFailedAttempt(blockedReason: VoiceBlockReason | null = null): void {
+  _gen++;
   _teardown();
-  _setState('error');
+  _blockedReason = blockedReason;
+  _setState(blockedReason ? 'blocked' : 'idle');
 }
 
 function _setState(s: VoiceSessionState): void {
@@ -532,10 +550,30 @@ function _notify(): void {
   }
 }
 
-async function _errorText(res: Response, fallback: string): Promise<string> {
-  // Provider/server error bodies can include reflected credentials, response
-  // identifiers, or diagnostics. The caller gets only stable recovery copy.
-  return `${fallback} (HTTP ${res.status})`;
+function _localVoiceBlock(): VoiceBlockReason | null {
+  if (typeof window !== 'undefined' && window.isSecureContext === false) return 'insecure-context';
+  if (
+    typeof RTCPeerConnection !== 'function' ||
+    typeof navigator === 'undefined' ||
+    typeof navigator.mediaDevices?.getUserMedia !== 'function'
+  ) {
+    return 'browser-unsupported';
+  }
+  return null;
+}
+
+function _blockForStartFailure(
+  error: unknown,
+  phase: 'mint' | 'microphone' | 'connection',
+): VoiceBlockReason | null {
+  const localBlock = _localVoiceBlock();
+  if (localBlock) return localBlock;
+  if (phase !== 'microphone') return null;
+  const name =
+    error && typeof error === 'object' && 'name' in error && typeof error.name === 'string'
+      ? error.name
+      : '';
+  return name === 'NotAllowedError' ? 'microphone-permission-denied' : null;
 }
 
 export const voiceSessionController = {
