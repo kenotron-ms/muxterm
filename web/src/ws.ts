@@ -323,6 +323,12 @@ export class MuxSocket {
    */
   onSessionState?: (msg: SessiondMessage) => void;
   /**
+   * Fires for the session-state subscription acknowledgement. `ok: false`
+   * means the local daemon cannot supply Fleet state, so the UI must not wait
+   * forever or present an empty Fleet as a real one.
+   */
+  onSessionStateSubscribeResult?: (msg: SessiondMessage) => void;
+  /**
    * Fires for every serve-local chief-of-staff frame: cos-subscribe-result and
    * cos-event. Same direct-callback shape as onSessionState above.
    *
@@ -448,9 +454,11 @@ export class MuxSocket {
    * Storm prevention, in the order the guards apply:
    *
    *  1. Already OPEN -- nothing to do, and no state to disturb.
-   *  2. Already CONNECTING -- an attempt IS in flight; this wake would only
-   *     add a second racing handshake. _open() assigns this._ws synchronously,
-   *     so every wake after the first in a burst lands here. This is the guard
+   *  2. Already CONNECTING or CLOSING -- an attempt is in flight, or the
+   *     existing socket's close callback still owns the next one. Replacing a
+   *     CLOSING socket would suppress that callback and skip the Fleet
+   *     snapshot-generation reset. _open() assigns this._ws synchronously, so
+   *     every wake after the first in a burst lands here. This is the guard
    *     that actually absorbs visibilitychange + focus arriving together.
    *  3. Too soon since the last attempt STARTED -- re-arm the timer for the
    *     remainder instead of dialling, so a pathological event storm against
@@ -463,7 +471,7 @@ export class MuxSocket {
 
     // The user is back. Whatever rung the ladder had climbed to is forfeit.
     this._reconnectAttempts = 0;
-    if (state === WebSocket.CONNECTING) return;
+    if (state === WebSocket.CONNECTING || state === WebSocket.CLOSING) return;
 
     const since = Date.now() - this._lastAttemptAt;
     if (since < WAKE_MIN_INTERVAL_MS) {
@@ -1152,6 +1160,8 @@ export class MuxSocket {
             this.onPaneResized?.(raw.paneId as number, raw.cols as number, raw.rows as number);
           } else if (raw.type === SessiondType.WorkspacePreview) {
             this.onWorkspacePreview?.(raw as unknown as SessiondMessage);
+          } else if (raw.type === SessiondType.SessionStateSubscribeResult) {
+            this.onSessionStateSubscribeResult?.(raw as unknown as SessiondMessage);
           } else if (raw.type === SessiondType.SessionState) {
             this.onSessionState?.(raw as unknown as SessiondMessage);
           } else if (raw.type === HOST_STATE) {

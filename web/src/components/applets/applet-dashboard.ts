@@ -672,8 +672,18 @@ export class AppletDashboard extends LitElement implements AppletElement {
     );
     for (const s of homeSessions.sessions) byGroup.get(groupFor(s))?.push(s);
     const total = homeSessions.sessions.length;
+    const freshness = homeSessions.snapshotStatus;
 
     if (total === 0) {
+      if (freshness === 'loading') {
+        return html`<div class="fzero">Loading Fleet…</div>`;
+      }
+      if (freshness === 'partial') {
+        return html`<div class="fzero">Fleet sources are incomplete. No session state is complete yet.</div>`;
+      }
+      if (freshness === 'unavailable') {
+        return html`<div class="fzero">Fleet status is unavailable from this muxterm daemon.</div>`;
+      }
       return html`<div class="fzero">
         Nothing is running. Describe a problem on the left and the lanes it
         starts appear here.
@@ -682,6 +692,12 @@ export class AppletDashboard extends LitElement implements AppletElement {
 
     return html`
       ${homeSessions.source === 'fixture' ? html`<div class="fx">fixture</div>` : nothing}
+      ${freshness === 'partial'
+        ? html`<div class="fzero">Fleet sources are incomplete; showing the latest rows.</div>`
+        : nothing}
+      ${freshness === 'unavailable'
+        ? html`<div class="fzero">Fleet status is unavailable; showing its last known rows.</div>`
+        : nothing}
       ${HOME_GROUPS.map((g) => {
         const members = byGroup.get(g) ?? [];
         if (members.length === 0) return nothing;

@@ -562,6 +562,12 @@ type conn struct {
 	// goroutine reads it while fanning rows out. See setSessionStateOn.
 	sessionStateOn bool
 
+	// sessionStatePending means this connection still needs the current
+	// whole-state picture. It is set on subscription and after a droppable
+	// enqueue cannot enter the queue; it clears only after that enqueue
+	// succeeds. Guarded by Server.mu alongside sessionStateOn.
+	sessionStatePending bool
+
 	// peerPid is the pid of the process on the other end of nc, from
 	// SO_PEERCRED, or 0 when it could not be established (non-Linux, or a
 	// connection that did not arrive over a Unix socket). Read-only after
@@ -1547,13 +1553,11 @@ func (c *conn) setSessionStateOn(on bool) {
 	c.srv.mu.Lock()
 	defer c.srv.mu.Unlock()
 	c.sessionStateOn = on
-	if on {
-		// Re-arm the change gate so the next tick republishes the current set
-		// for this newly-subscribed connection. Without this, a client
-		// attaching to an already-running daemon would see nothing until some
-		// session happened to change state on its own.
-		c.srv.sessions.rearmLocked()
-	}
+	// A subscription starts with no snapshot, even when the global current
+	// state has not changed since another browser subscribed. Keep that
+	// delivery obligation on this connection rather than rearming the global
+	// change gate and needlessly repainting every healthy browser.
+	c.sessionStatePending = on
 }
 
 // sessionStateWanted reports whether any live connection has opted in.
@@ -1626,24 +1630,25 @@ func (s *Server) emitSessionState() {
 	s.publishSessionState(rows)
 }
 
-// publishSessionState commits the change gate and fans the set out to every
-// opted-in connection.
+// publishSessionState advances the shared change gate and fans the set out to
+// every opted-in connection that needs it.
 //
 // Frames go out via enqueuePreview, which DROPS on a full queue rather than
 // disconnecting the client. That method's contract explicitly covers "any
 // future advisory push" (subscriber.go), and this is one: a backgrounded
-// browser tab must lose home-view rows, never its terminal session. Losing a
-// frame is harmless because each frame is the whole current set, so the next
-// tick repairs the view completely.
+// browser tab must lose home-view rows, never its terminal session. A dropped
+// whole-state frame stays pending for that one connection until a later tick
+// successfully queues the current complete set. The shared change gate remains
+// quiet for healthy connections.
 func (s *Server) publishSessionState(rows []SessionState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.sessions.changedLocked(rows) {
-		return
-	}
+	changed := s.sessions.changedLocked(rows)
+	msg := &Message{Type: TypeSessionState, Sessions: rows}
 	for c := range s.conns {
-		if c.sessionStateOn {
-			c.sub.enqueuePreview(&Message{Type: TypeSessionState, Sessions: rows})
+		if !c.sessionStateOn || (!changed && !c.sessionStatePending) {
+			continue
 		}
+		c.sessionStatePending = !c.sub.enqueuePreview(msg)
 	}
 }
