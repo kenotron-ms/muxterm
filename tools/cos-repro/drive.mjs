@@ -4,12 +4,14 @@
  * and reports, in numbers, how much of the reply survived. See README.md for
  * scenarios, modes and isolation rules.
  *
- *   node drive.mjs "<prompt>" [--mode plain|s1|s3|s4|s5] [--label N] [--out DIR]
+ *   node drive.mjs "<prompt>" [--mode plain|s1|s3|s4|s5|restart|clear-race|overlap-clear|peer
+ *        |replay-order|identity-fence|metadata-absent|metadata-unknown] [--label N] [--out DIR]
  *        [--url URL] [--timeout MS] [--settle MS] [--viewport WxH] [--headed]
  *
  * THREE LAYERS, because "it didn't render" does not say where the bytes went:
  *   1 WIRE    every cos-* frame the browser received (page.on('websocket')).
- *   2 DOM     text of p.say inside <mux-cos>'s shadow root, PER TURN.
+ *   2 DOM     assistant prose from div.say.md inside <mux-cos>'s shadow root,
+ *             per turn. p.say remains the user-prompt selector.
  *   3 SCREEN  geometry: is the end of the answer inside .chatbody's visible box.
  * Layer 3 exists because layers 1-2 kept saying 100% while a user saw nothing.
  * It reads geometry only - the component's private _pinned is deliberately not
@@ -20,8 +22,9 @@
  * that submitted the turn is gone, and in every mode the browser's idea of
  * "finished" is the thing under test. repro-sidecar.py appends a record to
  * turns.jsonl when it emits turn_end; that file is the server-side truth. It
- * also writes the exact payload it sent, so expected bytes are read, never
- * re-derived: a disagreement between harness and product stays visible.
+ * also writes the exact payload it sent, so expected semantic markers and
+ * chunk tokens are read, never re-derived. Markdown deliberately changes
+ * textContent, so this harness does not claim literal DOM-byte equality.
  */
 
 import { chromium } from 'playwright';
@@ -32,14 +35,16 @@ import path from 'node:path';
 
 const argv = process.argv.slice(2);
 if (argv.length === 0 || argv[0].startsWith('--')) {
-  console.error('usage: drive.mjs "<prompt>" [--mode plain|s1|s3|s4|s5] [--label N]'
+  console.error('usage: drive.mjs "<prompt>" [--mode plain|s1|s3|s4|s5|restart|clear-race|overlap-clear|peer'
+    + '|replay-order|identity-fence|metadata-absent|metadata-unknown] [--label N]'
     + ' [--out DIR] [--url URL] [--timeout MS] [--settle MS] [--viewport WxH] [--headed]');
   process.exit(2);
 }
 const scenario = argv[0];
 const flag = (n, d) => (argv.indexOf(`--${n}`) >= 0 ? argv[argv.indexOf(`--${n}`) + 1] : d);
 const mode = String(flag('mode', 'plain')).toLowerCase();
-if (!['plain', 's1', 's3', 's4', 's5'].includes(mode)) {
+if (!['plain', 's1', 's3', 's4', 's5', 'restart', 'clear-race', 'overlap-clear', 'peer',
+  'replay-order', 'identity-fence', 'metadata-absent', 'metadata-unknown'].includes(mode)) {
   console.error(`unknown --mode ${mode}`);
   process.exit(2);
 }
@@ -61,6 +66,10 @@ const viewport = { width: Number(vp[1]), height: Number(vp[2]) };
 const PIN_PX = 48;
 const AWAY_FRAC = 0.33;      // how far into the payload s4/s5 act
 const AWAY_AFTER_MS = 800;   // how long after the first delta s1/s3 act
+// Set by run.sh only for replay-order. These are intentionally harmless fixture
+// literals, never a SessionStore-derived prompt or response.
+const REPLAY_ORDER_SEED_PROMPT = 'fixture durable seed prompt';
+const REPLAY_ORDER_SEED_ANSWER = 'fixture durable seed answer';
 
 fs.mkdirSync(outDir, { recursive: true });
 const reportPath = path.join(outDir, `report-${label}.json`);
@@ -117,6 +126,8 @@ function instrument(page, tag) {
       received.push({
         t: ms(), page: tag, bytes: Buffer.byteLength(text), type: p.type,
         ev: ev ? String(ev.ev ?? '') : '', turn_id: ev ? String(ev.turn_id ?? '') : '',
+        ok: p.ok === true, reason: typeof p.reason === 'string' ? p.reason : '',
+        conversation: p.conversation ?? null,
         event: ev, turns: p.type === 'cos-history' ? p.turns : null,
       });
     });
@@ -128,6 +139,14 @@ const TERMINAL = new Set(['turn_end', 'cancelled']);
 const terminalFrame = (turnId) => received.find((f) => f.type === 'cos-event' && f.event
   && (!turnId || !f.turn_id || f.turn_id === turnId)
   && (TERMINAL.has(f.ev) || (f.ev === 'error' && (f.event.fatal === true || f.event.code === 'busy')))) || null;
+const validConversationIdentity = (value) => !!value && typeof value === 'object'
+  && !Array.isArray(value)
+  && typeof value.id === 'string' && value.id !== ''
+  && typeof value.session_id === 'string' && value.session_id !== ''
+  && Number.isSafeInteger(value.generation) && value.generation > 0
+  && typeof value.incarnation === 'string' && value.incarnation !== '';
+const successfulSubscription = (frame, pageTag) => frame.page === pageTag
+  && frame.type === 'cos-subscribe-result' && frame.ok === true;
 
 /** Bytes of payload the WIRE has carried to any page so far. */
 const wireDeltaBytes = () => received.reduce((n, f) =>
@@ -164,7 +183,9 @@ const READ = `(arg) => {
 
   const els = q('.turn.cos');
   const turns = els.map((el) => {
-    const says = Array.from(el.querySelectorAll('p.say')).map(txt);
+    // Assistant markdown is a div.say.md. p.say is deliberately reserved for
+    // the preceding .you user row below, so never use it to measure a reply.
+    const says = Array.from(el.querySelectorAll('div.say.md')).map(txt);
     const text = says.join('');
     const prev = el.previousElementSibling;
     const pn = prev?.classList?.contains('you') ? prev.querySelector('p.say') : null;
@@ -176,9 +197,12 @@ const READ = `(arg) => {
       toolNodes: el.querySelectorAll('.tool').length,
       waiting: Array.from(el.querySelectorAll('.waiting')).map((e) => squash(txt(e))),
       notices: Array.from(el.querySelectorAll('.notice, .fatal')).map((e) => squash(txt(e))),
-      // _renderFoot returns nothing while a turn is pending or streaming, so no
-      // footer IS the rendered definition of "still live".
-      live: el.querySelectorAll('.foot').length === 0,
+      // A completed turn intentionally has no .foot. The only visible
+      // streaming signal this harness may use is the component's explicit
+      // working placeholder.
+      live: Array.from(el.querySelectorAll('.waiting'))
+        .map((e) => squash(txt(e)))
+        .some((text) => text === 'working...'),
       hasMarker: arg.markerStart ? text.includes(arg.markerStart) : false,
       _text: text,
     };
@@ -190,6 +214,9 @@ const READ = `(arg) => {
   }
   if (i < 0 && turns.length) i = turns.length - 1;
   const text = i >= 0 ? turns[i]._text : '';
+  const seedAnswerInSeedTurn = arg.seedPrompt && arg.seedAnswer
+    ? turns.some((t) => t.prompt === arg.seedPrompt && t._text.includes(arg.seedAnswer))
+    : false;
   for (const t of turns) delete t._text;
 
   const out = {
@@ -201,6 +228,10 @@ const READ = `(arg) => {
     turnsWithThisPrompt: arg.prompt ? turns.filter((t) => t.prompt === arg.prompt).length : 0,
     liveTurns: turns.filter((t) => t.live).length,
     muxCosPresent: q('mux-cos').length > 0,
+    hasPrompt: arg.findPrompt ? turns.some((t) => t.prompt === arg.findPrompt) : false,
+    containsText: arg.containsText ? q('mux-cos').some((el) => txt(el).includes(arg.containsText)) : false,
+    promptOrder: turns.map((t) => t.prompt),
+    seedAnswerInSeedTurn,
   };
   if (!arg.geo) return out;
 
@@ -223,7 +254,7 @@ const READ = `(arg) => {
   };
   if (i < 0) return { ...out, screen: S };
 
-  const says = Array.from(els[i].querySelectorAll('p.say'));
+  const says = Array.from(els[i].querySelectorAll('div.say.md'));
   const say = (arg.markerStart && says.find((e) => (e.textContent || '').includes(arg.markerStart)))
     || says[says.length - 1] || null;
   if (say) {
@@ -268,8 +299,26 @@ const READ = `(arg) => {
 const read = (page, arg) =>
   page.evaluate(`(${READ})(${JSON.stringify({ prompt: scenario, ...arg })})`).catch((e) => ({
     target: -1, turn: null, text: '', bytes: 0, cosTurnCount: 0, turnsWithThisPrompt: 0,
-    liveTurns: 0, muxCosPresent: false, readError: String(e?.message || e),
+    liveTurns: 0, muxCosPresent: false, hasPrompt: false, containsText: false,
+    promptOrder: [], seedAnswerInSeedTurn: false,
+    readError: String(e?.message || e),
   }));
+
+async function waitUntil(check, deadlineAt, pause = 150) {
+  while (Date.now() < deadlineAt) {
+    const value = await check();
+    if (value) return value;
+    await sleep(pause);
+  }
+  return null;
+}
+
+async function waitForArtifact(name, deadlineAt) {
+  const artifact = path.join(sidecarDir, name);
+  return waitUntil(() => {
+    try { return JSON.parse(fs.readFileSync(artifact, 'utf8')); } catch { return null; }
+  }, deadlineAt, 100);
+}
 
 // One deep walk for the composer, reused: presence, focus and typing all need
 // the same element, and s3's Escape only raises `home-dismiss` if it is focused.
@@ -294,6 +343,15 @@ async function openDashboard(page) {
   await sleep(800);
   return (await composerPresent(page)) ? 'home-show-event' : '';
 }
+
+/** Drive the visible destructive action, including its confirmation. */
+async function clearThroughUI(page, menuItem, confirmation) {
+  await page.getByRole('button', { name: 'Conversation options', exact: true }).click();
+  await page.getByRole('menuitem', { name: menuItem, exact: true }).click();
+  await page.getByRole('button', { name: confirmation, exact: true }).click();
+}
+
+const clearAllThroughUI = (page) => clearThroughUI(page, 'Clear all messages', 'Clear everything');
 
 // --- the sidecar's own record ----------------------------------------------
 
@@ -345,7 +403,11 @@ const report = { scenario, mode, label, url, viewport, startedAt: new Date().toI
 let exitCode = 0;
 let context = null;
 let page = null;
+let pageA = null;
+let pageB = null;
+let delayedHistoryPage = null;
 const contexts = [];
+const special = {};
 const browser = await chromium.launch({ headless: !argv.includes('--headed') });
 
 async function bootPage(tag, ctx) {
@@ -361,6 +423,7 @@ try {
   contexts.push(context);
   const booted = await bootPage('A', context);
   page = booted.page;
+  pageA = page;
   report.httpStatus = booted.status;
   report.dashboardOpenedVia = await openDashboard(page);
   if (!report.dashboardOpenedVia) throw new Error('could not find the cos composer');
@@ -371,6 +434,43 @@ try {
     await sleep(200);
   }
   report.subscribed = received.some((f) => f.type === 'cos-subscribe-result');
+  if (mode === 'peer') {
+    const peerContext = await makeContext();
+    contexts.push(peerContext);
+    pageB = (await bootPage('B', peerContext)).page;
+    const peerVia = await openDashboard(pageB);
+    if (!peerVia) throw new Error('peer: second page has no cos composer');
+    const bothSubscribed = await waitUntil(
+      () => successfulSubscription(received.find((f) => successfulSubscription(f, 'A')) || {}, 'A')
+        && successfulSubscription(received.find((f) => successfulSubscription(f, 'B')) || {}, 'B'),
+      Date.now() + timeoutMs,
+      150,
+    );
+    if (!bothSubscribed) throw new Error('peer: both pages did not subscribe before submission');
+    special.peerSubscriptionsBeforeSubmission = { pageA: true, pageB: true, pageBVia: peerVia };
+    mark('peer pages subscribed before submission', special.peerSubscriptionsBeforeSubmission);
+  }
+  if (mode === 'replay-order') {
+    const seeded = await waitUntil(
+      async () => {
+        const d = await read(page, {
+          findPrompt: REPLAY_ORDER_SEED_PROMPT,
+          seedPrompt: REPLAY_ORDER_SEED_PROMPT,
+          seedAnswer: REPLAY_ORDER_SEED_ANSWER,
+        });
+        return d.hasPrompt && d.seedAnswerInSeedTurn ? d : null;
+      },
+      Date.now() + timeoutMs,
+      150,
+    );
+    if (!seeded) throw new Error('replay-order: durable fixture seed did not render before submission');
+    special.seedBeforeSubmission = {
+      promptRendered: seeded.hasPrompt,
+      answerRendered: seeded.seedAnswerInSeedTurn,
+      turnsRendered: seeded.cosTurnCount,
+    };
+    mark('durable seed replayed before submission', special.seedBeforeSubmission);
+  }
 
   // Typed through a real input event so Lit's @input updates _draft (mux-cos.ts
   // _onDraft); pressing Enter is what a user does.
@@ -442,7 +542,7 @@ try {
     await sleep(2500);
     report.away.dashboardReopenedVia = await openDashboard(page);
     mark('dashboard reopened after reload', { via: report.away.dashboardReopenedVia });
-  } else if (mode === 's5') {
+  } else if (mode === 's5' || mode === 'replay-order') {
     const frac = await waitForFraction();
     report.away.bytesBeforeKill = frac.reached;
     report.away.fractionVia = frac.via;
@@ -453,6 +553,7 @@ try {
       return { killed: n, socketsBefore: socks.length };
     })()`);
     report.away.socketKill = killed;
+    report.away.socketKilledAtMs = ms();
     mark('websocket killed from inside the page', { ...killed, bytes: frac.reached });
     // Let the app's own backoff (ws.ts _scheduleReconnect) do its job.
     const reDeadline = Math.min(deadline, Date.now() + 60000);
@@ -489,6 +590,129 @@ try {
     report.away.dashboardReopenedVia = await openDashboard(page);
     if (!report.away.dashboardReopenedVia) throw new Error('s3: could not reopen the dashboard');
     mark('dashboard reopened', { via: report.away.dashboardReopenedVia });
+  }
+
+  // The remaining modes begin only after the fixture's first turn completed.
+  // They all use fresh browser contexts, so any answer visible there had to
+  // travel through the server's supported history subscription path.
+  if (['restart', 'identity-fence', 'metadata-absent', 'metadata-unknown'].includes(mode)) {
+    context = await makeContext();
+    contexts.push(context);
+    page = (await bootPage('B', context)).page;
+    const via = await openDashboard(page);
+    if (!via) throw new Error(`${mode}: fresh page has no cos composer`);
+    special.freshDashboardVia = via;
+    mark('fresh dashboard open', { mode, via });
+    if (mode === 'restart') {
+      special.restartRequest = await waitForArtifact('restart-on-history.json', deadline);
+      if (!special.restartRequest) throw new Error('restart: fixture did not exit on the persisted history request');
+      mark('fixture exited for controlled restart', special.restartRequest);
+    }
+  } else if (mode === 'clear-race') {
+    // B's subscribe snapshot is captured first and intentionally delayed by
+    // the fixture. Clear happens only after that capture is durable evidence.
+    context = await makeContext();
+    contexts.push(context);
+    delayedHistoryPage = (await bootPage('B', context)).page;
+    const via = await openDashboard(delayedHistoryPage);
+    if (!via) throw new Error('clear-race: delayed-history page has no cos composer');
+    special.delayedHistoryRequest = await waitForArtifact('delayed-history.json', deadline);
+    if (!special.delayedHistoryRequest) throw new Error('clear-race: fixture did not capture a pre-clear history request');
+    mark('pre-clear history captured and delayed', special.delayedHistoryRequest);
+
+    await clearAllThroughUI(pageA);
+    special.clearResult = await waitUntil(
+      () => received.find((f) => f.page === 'A' && f.type === 'cos-clear-result' && f.event === null) || null,
+      deadline,
+    );
+    if (!special.clearResult) throw new Error('clear-race: Clear all did not return a result');
+    mark('Clear all confirmed through UI', { received: !!special.clearResult });
+
+    // The fixture records this only AFTER it emits the captured pre-clear
+    // response. A fixed server correctly fences that stale reply before it
+    // reaches B, so delivery through the server must not be the wait condition.
+    special.delayedHistoryEmission = await waitForArtifact('delayed-history-emitted.json', deadline);
+    if (!special.delayedHistoryEmission) {
+      throw new Error('clear-race: fixture did not emit the delayed pre-clear response');
+    }
+    mark('delayed pre-clear snapshot emitted by fixture', special.delayedHistoryEmission);
+    await sleep(500); // Give an unfenced server enough time to render the stale snapshot.
+    special.delayedSnapshotPageAfterEmission = await read(delayedHistoryPage, { findPrompt: scenario });
+
+    special.clearingPageBeforeReload = await read(pageA, { findPrompt: scenario });
+    await pageA.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+    await sleep(2500);
+    page = pageA;
+    special.freshAfterClearVia = await openDashboard(pageA);
+    if (!special.freshAfterClearVia) throw new Error('clear-race: fresh page after clear has no cos composer');
+    mark('dashboard reloaded after clear', { via: special.freshAfterClearVia });
+  } else if (mode === 'overlap-clear') {
+    // The fixture seeded one old and one current turn before either page
+    // connected. Both browser operations below are real distinct UI clears:
+    // scoped seven-day pruning first, then an all-clear from the other page.
+    const overlapContext = await makeContext();
+    contexts.push(overlapContext);
+    pageB = (await bootPage('B', overlapContext)).page;
+    const via = await openDashboard(pageB);
+    if (!via) throw new Error('overlap-clear: second page has no cos composer');
+    special.overlapClearSeed = await waitForArtifact('overlap-clear-seed.json', deadline);
+    if (!special.overlapClearSeed) throw new Error('overlap-clear: fixture did not create its old/current seed history');
+    const initialBHistory = await waitUntil(
+      () => received.find((f) => f.page === 'B' && f.type === 'cos-history'
+        && validConversationIdentity(f.conversation)) || null,
+      deadline,
+      100,
+    );
+    if (!initialBHistory) throw new Error('overlap-clear: second page did not receive its initial history');
+    const clearHistoryCount = (tag) => received.filter((f) => f.page === tag
+      && f.type === 'cos-history' && f.reason === 'clear'
+      && validConversationIdentity(f.conversation)).length;
+    const snapshotsBefore = { pageA: clearHistoryCount('A'), pageB: clearHistoryCount('B') };
+    await clearThroughUI(pageA, 'Clear messages older than 7 days', 'Clear them');
+    special.overlapFirstResult = await waitUntil(
+      () => received.find((f) => f.page === 'A' && f.type === 'cos-clear-result' && f.ok) || null,
+      deadline,
+    );
+    if (!special.overlapFirstResult) throw new Error('overlap-clear: seven-day clear did not return success');
+    mark('seven-day clear confirmed through UI', { received: true });
+
+    await clearAllThroughUI(pageB);
+    special.overlapAllResult = await waitUntil(
+      () => received.find((f) => f.page === 'B' && f.type === 'cos-clear-result' && f.ok) || null,
+      deadline,
+    );
+    if (!special.overlapAllResult) throw new Error('overlap-clear: all-clear did not return success');
+    mark('all-clear confirmed through UI', { received: true });
+
+    special.overlapFirstHistoryEmission = await waitForArtifact(
+      'overlap-first-clear-history-emitted.json', deadline,
+    );
+    if (!special.overlapFirstHistoryEmission) {
+      throw new Error('overlap-clear: fixture did not emit the delayed first post-clear history');
+    }
+    const snapshots = await waitUntil(() => {
+      const pageA = clearHistoryCount('A') - snapshotsBefore.pageA;
+      const pageB = clearHistoryCount('B') - snapshotsBefore.pageB;
+      return pageA >= 2 && pageB >= 2 ? { pageA, pageB } : null;
+    }, deadline, 100);
+    if (!snapshots) throw new Error('overlap-clear: both post-clear snapshots did not reach a browser');
+    special.overlapClearSnapshotsAfterRequests = snapshots;
+    mark('both clear snapshots arrived after delayed first read-back', {
+      snapshots,
+    });
+    await sleep(500);
+    special.overlapPageABeforeReload = await read(pageA, {
+      findPrompt: 'fixture recent clear seed prompt',
+    });
+    special.overlapPageBBeforeReload = await read(pageB, {
+      findPrompt: 'fixture recent clear seed prompt',
+    });
+    await pageA.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+    await sleep(2500);
+    page = pageA;
+    special.overlapFreshAfterClearVia = await openDashboard(pageA);
+    if (!special.overlapFreshAfterClearVia) throw new Error('overlap-clear: fresh page after all-clear has no cos composer');
+    mark('page reloaded after both clear transactions', { via: special.overlapFreshAfterClearVia });
   }
 
   // Keep waiting for the browser's own terminal event - which is the claim under
@@ -545,15 +769,155 @@ try {
       ? `no such file: ${payloadFile} (the sidecar never reached turn_end)`
       : 'no turn id could be resolved';
   }
-  const chunks = (s) => (s.match(/\[\[chunk-\d{4}\]\]/g) || []).length;
+  const chunkTokens = (s) => s.match(/\[\[chunk-\d{4}\]\]/g) || [];
+  const tokenSequence = (expectedTokens, actualTokens) => {
+    const firstMismatch = expectedTokens.findIndex((token, index) => token !== actualTokens[index]);
+    return {
+      matches: firstMismatch < 0 && expectedTokens.length === actualTokens.length,
+      firstMismatch: firstMismatch >= 0 ? firstMismatch
+        : expectedTokens.length === actualTokens.length ? -1 : Math.min(expectedTokens.length, actualTokens.length),
+    };
+  };
   const markerStart = turnId ? `MARKER-START-${turnId}` : '';
   const markerEnd = turnId ? `MARKER-END-${turnId}` : '';
   report.expected = expected === null ? null
-    : { bytes: expected.length, chunkTokens: chunks(expected) };
+    : { bytes: expected.length, chunkTokens: chunkTokens(expected).length };
 
-  const fin = await read(page, { markerStart, markerEnd, wantText: true, geo: true });
+  // Markdown rendering is intentionally not a byte-preserving transform: table
+  // delimiters, code markup, and HTML markup are consumed before textContent is
+  // observed. The durable marker pair and exact ordered chunk-token sequence
+  // are therefore the full-payload assertion, while raw byte counts remain
+  // diagnostics only.
+  const semanticCheck = (d) => {
+    if (expected === null) return null;
+    const markerStartAt = markerStart ? d.text.indexOf(markerStart) : -1;
+    const markerEndAt = markerEnd ? d.text.indexOf(markerEnd) : -1;
+    const expectedChunks = chunkTokens(expected);
+    const actualChunks = chunkTokens(d.text);
+    const sequence = tokenSequence(expectedChunks, actualChunks);
+    const noReplyExpected = expected.length === 0;
+    const markersOrdered = noReplyExpected
+      ? null
+      : markerStartAt >= 0 && markerEndAt > markerStartAt;
+    const fullPayload = noReplyExpected
+      ? d.bytes === 0
+      : markersOrdered && sequence.matches;
+    const exactlyOneSubmittedTurn = d.turnsWithThisPrompt === 1;
+    const noWorkingPlaceholder = d.liveTurns === 0 && d.turn?.live !== true;
+    return {
+      fullPayload,
+      complete: fullPayload && exactlyOneSubmittedTurn && noWorkingPlaceholder,
+      markersOrdered,
+      markerStartAt,
+      markerEndAt,
+      expectedChunks: expectedChunks.length,
+      actualChunks: actualChunks.length,
+      chunkTokenSequenceMatches: sequence.matches,
+      chunkTokenFirstMismatch: sequence.firstMismatch,
+      exactlyOneSubmittedTurn,
+      noWorkingPlaceholder,
+    };
+  };
+  const isExactOnce = (d) => semanticCheck(d)?.complete === true;
+  if (['restart', 'peer', 'metadata-absent', 'metadata-unknown'].includes(mode)) {
+    // `restart` intentionally loses the first fresh-page history request. A
+    // passing product must arrange one replacement replay, not just restart.
+    const fresh = await waitUntil(
+      async () => {
+        const d = await read(page, { markerStart, markerEnd, wantText: true });
+        return isExactOnce(d) ? d : null;
+      },
+      deadline,
+      250,
+    );
+    special.freshExact = fresh
+      ? { passed: true, turnCount: fresh.cosTurnCount, matchingPromptCount: fresh.turnsWithThisPrompt }
+      : { passed: false };
+  }
+
+  if (mode === 'identity-fence') {
+    const foreignPrompt = 'FOREIGN-HISTORY-MUST-NOT-RENDER';
+    const foreignAnswer = 'foreign fixture answer must remain invisible';
+    // Establish the real fresh-page handoff first. Rejecting a foreign frame
+    // only proves identity fencing when this page already accepted a complete
+    // current history under a structurally valid server-selected identity.
+    const legitimate = await waitUntil(
+      async () => {
+        const subscribe = received.find((f) => successfulSubscription(f, 'B')
+          && validConversationIdentity(f.conversation));
+        const history = received.find((f) => f.page === 'B' && f.type === 'cos-history'
+          && validConversationIdentity(f.conversation));
+        const d = await read(page, { markerStart, markerEnd, wantText: true });
+        return subscribe && history && isExactOnce(d) ? { subscribe, history } : null;
+      },
+      deadline,
+      150,
+    );
+    if (!legitimate) {
+      throw new Error('identity-fence: fresh page did not accept a valid identity-bearing canonical history');
+    }
+    special.identityLegitimateHistory = {
+      freshPage: 'B',
+      subscribeIdentity: legitimate.subscribe.conversation,
+      historyIdentity: legitimate.history.conversation,
+      semanticallyComplete: true,
+    };
+    mark('fresh page accepted canonical identity-bearing history', {
+      conversation: legitimate.history.conversation,
+    });
+    special.identityInjection = await page.evaluate(({ prompt, answer }) => {
+      const socket = (window.__cosSockets || []).find((s) => s.readyState === WebSocket.OPEN);
+      if (!socket) return { injected: false, reason: 'no open app socket' };
+      const frame = {
+        type: 'cos-history',
+        // Deliberately incompatible with this socket's subscribe identity.
+        // This is only harmless fixture text, never a real transcript.
+        conversation: {
+          id: 'foreign-fixture-conversation',
+          session_id: 'foreign-fixture-session',
+          generation: 999,
+          incarnation: 'foreign-fixture-incarnation',
+        },
+        turns: [{
+          id: 'foreign-fixture-turn',
+          prompt,
+          ts: new Date(0).toISOString(),
+          blocks: [{ kind: 'text', text: answer }],
+        }],
+      };
+      socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(frame) }));
+      return { injected: true };
+    }, { prompt: foreignPrompt, answer: foreignAnswer });
+    await sleep(300); // Let the store's requestAnimationFrame notification paint.
+    const foreign = await read(page, {
+      findPrompt: foreignPrompt,
+      containsText: foreignAnswer,
+      markerStart,
+      markerEnd,
+      wantText: true,
+    });
+    special.identityFence = {
+      ...special.identityInjection,
+      fakePromptRendered: foreign.hasPrompt,
+      fakeAnswerRendered: foreign.containsText,
+      fakeIgnored: !foreign.hasPrompt && !foreign.containsText,
+      canonicalHistoryRemains: isExactOnce(foreign),
+    };
+    mark('foreign history identity injection assessed', special.identityFence);
+  }
+
+  const fin = await read(page, {
+    markerStart,
+    markerEnd,
+    wantText: true,
+    geo: true,
+    ...(mode === 'replay-order'
+      ? { seedPrompt: REPLAY_ORDER_SEED_PROMPT, seedAnswer: REPLAY_ORDER_SEED_ANSWER }
+      : {}),
+  });
   const say = fin.text;
   const T = fin.turn || {};
+  const semantic = semanticCheck(fin);
 
   // --- layer 1 --------------------------------------------------------------
   const cos = received.filter((f) => f.type.startsWith('cos-'));
@@ -615,19 +979,17 @@ try {
     endedWithoutAReply: (T.waiting || []).includes('ended without a reply'),
     hasMarkerStart: expected === null ? null : say.includes(markerStart),
     hasMarkerEnd: expected === null ? null : say.includes(markerEnd),
-    chunkTokens: chunks(say),
-    matchesExpected: expected === null ? null : say === expected,
-    firstDivergenceAt: null,
+    chunkTokens: chunkTokens(say).length,
+    semanticFullPayload: semantic?.fullPayload ?? null,
+    semanticFullPayloadOnce: semantic?.complete ?? null,
+    markersOrdered: semantic?.markersOrdered ?? null,
+    expectedChunkTokens: semantic?.expectedChunks ?? null,
+    chunkTokenSequenceMatches: semantic?.chunkTokenSequenceMatches ?? null,
+    chunkTokenFirstMismatch: semantic?.chunkTokenFirstMismatch ?? null,
+    exactlyOneSubmittedTurn: semantic?.exactlyOneSubmittedTurn ?? null,
+    noWorkingPlaceholder: semantic?.noWorkingPlaceholder ?? null,
   };
   delete report.dom.prompt;
-  if (expected !== null && say !== expected) {
-    let i = 0;
-    const n = Math.min(expected.length, say.length);
-    while (i < n && expected[i] === say[i]) i += 1;
-    report.dom.firstDivergenceAt = i;
-    report.dom.expectedAround = expected.slice(Math.max(0, i - 60), i + 60);
-    report.dom.domAround = say.slice(Math.max(0, i - 60), i + 60);
-  }
 
   // --- layer 3 --------------------------------------------------------------
   const S = fin.screen || { ok: false, why: 'geometry not read' };
@@ -639,6 +1001,135 @@ try {
     followingAtEnd: S.ok ? S.distanceFromBottom <= PIN_PX : null,
   };
 
+  if (mode === 'peer') {
+    const peerA = await waitUntil(
+      async () => {
+        const d = await read(pageA, { markerStart, markerEnd, wantText: true });
+        return isExactOnce(d) ? d : null;
+      },
+      deadline,
+      150,
+    );
+    const peerB = await waitUntil(
+      async () => {
+        const d = await read(pageB, { markerStart, markerEnd, wantText: true });
+        return isExactOnce(d) ? d : null;
+      },
+      deadline,
+      150,
+    );
+    const terminalEvents = (tag) => received.filter((f) => f.page === tag && f.type === 'cos-event'
+      && f.turn_id === turnId && TERMINAL.has(f.ev)).length;
+    special.peer = {
+      ...special.peerSubscriptionsBeforeSubmission,
+      pageATerminalEvents: terminalEvents('A'),
+      pageBTerminalEvents: terminalEvents('B'),
+      pageAExactOnce: !!peerA,
+      pageBExactOnce: !!peerB,
+      finalViewsAgree: !!peerA && !!peerB
+        && peerA.cosTurnCount === peerB.cosTurnCount
+        && peerA.turnsWithThisPrompt === peerB.turnsWithThisPrompt
+        && peerA.text === peerB.text,
+      sameCanonicalHistoryOnce: terminalEvents('A') === 1 && terminalEvents('B') === 1
+        && !!peerA && !!peerB
+        && peerA.cosTurnCount === peerB.cosTurnCount
+        && peerA.turnsWithThisPrompt === peerB.turnsWithThisPrompt
+        && peerA.text === peerB.text,
+    };
+  } else if (mode === 'clear-race') {
+    const delayedB = special.delayedSnapshotPageAfterEmission;
+    const freshReloadedA = await read(page, { findPrompt: scenario });
+    const empty = (d) => d.cosTurnCount === 0 && !d.hasPrompt && d.liveTurns === 0;
+    special.clearRace = {
+      delayedFixtureResponseEmitted: !!special.delayedHistoryEmission,
+      clearingPageEmptyBeforeReload: empty(special.clearingPageBeforeReload),
+      delayedSnapshotPageDidNotRenderOldPrompt: !delayedB.hasPrompt,
+      delayedSnapshotPageEmpty: empty(delayedB),
+      freshlyReloadedPageEmpty: empty(freshReloadedA),
+      allEmpty: !!special.delayedHistoryEmission
+        && empty(special.clearingPageBeforeReload)
+        && !delayedB.hasPrompt
+        && empty(delayedB)
+        && empty(freshReloadedA),
+    };
+  } else if (mode === 'overlap-clear') {
+    const empty = (d) => d.cosTurnCount === 0 && !d.hasPrompt && d.liveTurns === 0;
+    const reloadedA = await read(pageA, { findPrompt: 'fixture recent clear seed prompt' });
+    const clearSnapshotsInOrder = (tag) => {
+      const snapshots = received.filter((f) => f.page === tag && f.type === 'cos-history'
+        && f.reason === 'clear' && validConversationIdentity(f.conversation)).slice(-2);
+      return snapshots.length === 2
+        && Array.isArray(snapshots[0].turns) && snapshots[0].turns.length > 0
+        && Array.isArray(snapshots[1].turns) && snapshots[1].turns.length === 0;
+    };
+    special.overlapClear = {
+      firstWasSevenDays: !!special.overlapFirstResult,
+      laterWasAll: !!special.overlapAllResult,
+      delayedFirstSnapshotEmitted: !!special.overlapFirstHistoryEmission,
+      bothSnapshotsArrived: special.overlapClearSnapshotsAfterRequests?.pageA >= 2
+        && special.overlapClearSnapshotsAfterRequests?.pageB >= 2,
+      pageAClearSnapshotsInMutationOrder: clearSnapshotsInOrder('A'),
+      pageBClearSnapshotsInMutationOrder: clearSnapshotsInOrder('B'),
+      pageAEmptyAfterBothSnapshots: empty(special.overlapPageABeforeReload),
+      pageBEmptyAfterBothSnapshots: empty(special.overlapPageBBeforeReload),
+      freshReloadedPageEmpty: empty(reloadedA),
+      laterAllClearWins: !!special.overlapFirstResult
+        && !!special.overlapAllResult
+        && !!special.overlapFirstHistoryEmission
+        && special.overlapClearSnapshotsAfterRequests?.pageA >= 2
+        && special.overlapClearSnapshotsAfterRequests?.pageB >= 2
+        && clearSnapshotsInOrder('A')
+        && clearSnapshotsInOrder('B')
+        && empty(special.overlapPageABeforeReload)
+        && empty(special.overlapPageBBeforeReload)
+        && empty(reloadedA),
+    };
+  } else if (mode === 'metadata-absent' || mode === 'metadata-unknown') {
+    const metadataMarker = mode === 'metadata-unknown' ? 'fixture-provenance' : '';
+    const metadata = metadataMarker ? await read(page, { containsText: metadataMarker }) : null;
+    special.metadata = {
+      mode,
+      ordinaryCanonicalHistoryOnce: isExactOnce(fin),
+      metadataRendered: metadata ? metadata.containsText : false,
+      acceptedWithoutMetadata: mode === 'metadata-absent' ? isExactOnce(fin) : null,
+      ignoredUnknownMetadata: mode === 'metadata-unknown'
+        ? isExactOnce(fin) && metadata?.containsText === false
+        : null,
+    };
+  } else if (mode === 'replay-order') {
+    const promptOrder = fin.promptOrder || [];
+    const seedIndex = promptOrder.indexOf(REPLAY_ORDER_SEED_PROMPT);
+    const submittedIndex = promptOrder.indexOf(scenario);
+    const historyAfterReconnect = histFrames.some((f) => f.t > (report.away.socketKilledAtMs || Infinity));
+    const seedArtifact = await waitForArtifact('seed-history.json', deadline);
+    special.replayOrder = {
+      seedArtifact,
+      seedArtifactMatches: seedArtifact?.prompt === REPLAY_ORDER_SEED_PROMPT
+        && seedArtifact?.answer === REPLAY_ORDER_SEED_ANSWER,
+      reconnectObserved: report.away.reconnected === true,
+      historyFrameAfterReconnect: historyAfterReconnect,
+      exactlyTwoRenderedTurns: fin.cosTurnCount === 2,
+      seedPromptCount: promptOrder.filter((prompt) => prompt === REPLAY_ORDER_SEED_PROMPT).length,
+      submittedPromptCount: promptOrder.filter((prompt) => prompt === scenario).length,
+      seedAnswerInSeedTurn: fin.seedAnswerInSeedTurn,
+      chronologicalSeedBeforeSubmitted: seedIndex === 0 && submittedIndex === 1,
+      promptOrder,
+      submittedSemanticComplete: isExactOnce(fin),
+      noWorkingPlaceholder: fin.liveTurns === 0,
+    };
+    special.replayOrder.passed = special.replayOrder.seedArtifactMatches
+      && special.replayOrder.reconnectObserved
+      && special.replayOrder.historyFrameAfterReconnect
+      && special.replayOrder.exactlyTwoRenderedTurns
+      && special.replayOrder.seedPromptCount === 1
+      && special.replayOrder.submittedPromptCount === 1
+      && special.replayOrder.seedAnswerInSeedTurn
+      && special.replayOrder.chronologicalSeedBeforeSubmitted
+      && special.replayOrder.submittedSemanticComplete
+      && special.replayOrder.noWorkingPlaceholder;
+  }
+  report.special = special;
+
   fs.writeFileSync(path.join(outDir, `dom-${label}.txt`), say);
   await page.screenshot({ path: path.join(outDir, `shot-${label}.png`) }).catch(() => {});
 
@@ -646,15 +1137,37 @@ try {
   const exp = report.expected;
   const lostOnWire = !!exp && wireTurnEnd.length < exp.bytes && wireDelta.length < exp.bytes
     && histText < exp.bytes;
+  const specialPass = mode === 'clear-race'
+    ? special.clearRace?.allEmpty === true
+    : mode === 'overlap-clear'
+      ? special.overlapClear?.laterAllClearWins === true
+    : mode === 'peer'
+      ? special.peer?.sameCanonicalHistoryOnce === true
+      : mode === 'restart'
+        ? special.freshExact?.passed === true
+        : mode === 'replay-order'
+          ? special.replayOrder?.passed === true
+        : mode === 'metadata-absent'
+          ? special.metadata?.acceptedWithoutMetadata === true
+          : mode === 'metadata-unknown'
+            ? special.metadata?.ignoredUnknownMetadata === true
+            : mode === 'identity-fence'
+              ? special.identityFence?.fakeIgnored === true
+                && special.identityFence?.canonicalHistoryRemains === true
+              : true;
   report.verdict = {
-    rendered: exp ? report.dom.matchesExpected === true : null,
+    rendered: mode === 'clear-race' || mode === 'overlap-clear'
+      ? specialPass
+      : exp ? report.dom.semanticFullPayloadOnce === true && specialPass : null,
     where: !exp ? 'unknown (no expected payload)'
       : exp.bytes === 0 ? 'n/a - this turn had no reply to lose'
       : lostOnWire ? 'WIRE - the payload never reached the browser'
-      : report.dom.sayBytes < exp.bytes ? 'DOM - the browser received it, the DOM does not show it'
-      : 'nowhere - full payload present in the DOM',
+      : report.dom.semanticFullPayload !== true
+        ? 'DOM - ordered semantic markers/chunk tokens do not show the full payload'
+        : 'nowhere - semantic full payload present in the DOM',
     // IN THE DOM and ON THE SCREEN are different claims.
-    onScreen: S.ok ? report.screen.markerEndVisible === true : null,
+    onScreen: mode === 'clear-race' || mode === 'overlap-clear'
+      ? null : S.ok ? report.screen.markerEndVisible === true : null,
     duplicateTurns: report.dom.turnsWithThisPrompt > 1,
     stuckLive: report.dom.liveTurnsStillRendered > 0,
   };
@@ -665,11 +1178,14 @@ try {
     `EXPECTED ${exp ? `${exp.bytes}B, ${exp.chunkTokens} chunk tokens` : report.expectedMissingReason}`,
     `WIRE     delta ${wireDelta.length}B  turn_end ${wireTurnEnd.length}B reached=${turnEnds > 0}`
       + `  history ${histFrames.length} frame(s)/${histBlocks} blocks/${histText}B  by ev ${JSON.stringify(byEv)}`,
-    `DOM      p.say ${say.length}B in ${T.sayNodes ?? 0} node(s) = ${pct} of expected`
+    `DOM      div.say.md ${say.length} rendered-text bytes in ${T.sayNodes ?? 0} node(s) = ${pct} of fixture bytes (diagnostic)`
       + `  (turn #${fin.target} of ${fin.cosTurnCount} by ${report.dom.targetFoundBy})`,
     `         markers ${report.dom.hasMarkerStart}/${report.dom.hasMarkerEnd}`
-      + `  chunks ${report.dom.chunkTokens}/${exp ? exp.chunkTokens : '?'}`
-      + `  identical ${report.dom.matchesExpected}  divergence@ ${report.dom.firstDivergenceAt}`,
+      + ` ordered ${report.dom.markersOrdered}`
+      + `  chunks ${report.dom.chunkTokens}/${report.dom.expectedChunkTokens}`
+      + ` sequence ${report.dom.chunkTokenSequenceMatches}`
+      + ` mismatch@ ${report.dom.chunkTokenFirstMismatch}`
+      + `  semantic-full-once ${report.dom.semanticFullPayloadOnce}`,
     `         thoughts ${T.thoughtNodes ?? 0}  tools ${T.toolNodes ?? 0}`
       + `  waiting ${JSON.stringify(T.waiting || [])}  stuckLive ${fin.liveTurns}`,
     S.ok ? `SCREEN   .chatbody ${S.clientWidth}x${S.clientHeight}  scrollHeight ${S.scrollHeight}`
@@ -686,7 +1202,8 @@ try {
   if (report.verdict.rendered !== true) exitCode = 1;
   // Complete in the DOM and off the screen is a FAILURE, or a matrix reads as
   // all-green. A turn with no reply is exempt: there is no MARKER-END to see.
-  if (exp && exp.bytes > 0 && report.verdict.onScreen === false) exitCode = 1;
+  if (!['clear-race', 'overlap-clear'].includes(mode)
+      && exp && exp.bytes > 0 && report.verdict.onScreen === false) exitCode = 1;
 } catch (err) {
   report.harnessError = String(err?.stack || err);
   console.error(`\nHARNESS ERROR: ${report.harnessError}`);

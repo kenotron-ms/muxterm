@@ -168,14 +168,11 @@ func (r *cosRelay) voiceConversationContext(ctx context.Context, view voice.Conv
 	if sup == nil {
 		return voice.OperatorConversationContext{}, errors.New("Operator context is unavailable")
 	}
-	if _, err := sup.WaitReady(ctx); err != nil {
-		return voice.OperatorConversationContext{}, errors.New("Operator context is unavailable")
-	}
 	turnLimit := voiceContextRecentTurns
 	if view == voice.ConversationContextContinuitySummary {
 		turnLimit = voiceContextSummaryTurns
 	}
-	history, err := sup.History(turnLimit)
+	history, err := sup.HistoryWhenReady(ctx, turnLimit)
 	if err != nil {
 		return voice.OperatorConversationContext{}, errors.New("Operator context is unavailable")
 	}

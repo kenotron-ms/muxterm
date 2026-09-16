@@ -346,6 +346,23 @@ export class CosStore {
     if (!unchanged) this._draftRef = next ? globalThis.crypto.randomUUID() : '';
   }
 
+  /** A current history frame must name this exact server-selected root. */
+  private _matchesHistoryConversation(raw: unknown): boolean {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    const advertised = raw as Record<string, unknown>;
+    const id = str(advertised.id);
+    const sessionId = str(advertised.session_id);
+    const generation = advertised.generation;
+    const incarnation = str(advertised.incarnation);
+    const current = this._conversation;
+    return !!current &&
+      id === current.id &&
+      sessionId === current.sessionId &&
+      Number.isSafeInteger(generation) &&
+      generation === current.generation &&
+      incarnation === current.incarnation;
+  }
+
   get turns(): readonly CosTurn[] {
     return this._turns;
   }
@@ -667,6 +684,17 @@ export class CosStore {
       return;
     }
     if (type === 'cos-history') {
+      // A current server identifies every snapshot with the same fixed
+      // conversation identity it advertised at subscription. Never let an
+      // asynchronous or foreign snapshot replace this tab's transcript.
+      // Legacy servers omitted the field entirely, so only its absence retains
+      // the compatibility path.
+      if (
+        Object.prototype.hasOwnProperty.call(frame, 'conversation') &&
+        !this._matchesHistoryConversation(frame.conversation)
+      ) {
+        return;
+      }
       // A replay sent because the transcript was PRUNED is authoritative about
       // what is gone; a replay sent because this tab subscribed is only a
       // snapshot, and may be older than what this browser has already seen.
