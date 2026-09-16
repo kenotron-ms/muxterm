@@ -36,6 +36,7 @@ memory = "2048Mi"
 auto_suspend_seconds = 300
 auto_delete_seconds = 3600
 controller_cidrs = ["192.0.2.0/24"]
+egress_hosts = ["packages.example.com"]
 ```
 
 Enabled profiles fail closed before any provider request unless they have:
@@ -44,7 +45,9 @@ Enabled profiles fail closed before any provider request unless they have:
   immutable OCI image digest;
 - CPU/memory, disk-backed auto-suspend, and an auto-delete TTL between 300 and
   86,400 seconds;
-- one to ten exact controller egress CIDRs, never IPv4 or IPv6 `/0`.
+- one to ten exact controller egress CIDRs, never IPv4 or IPv6 `/0`; and
+- zero to ten exact lowercase DNS egress hostnames. Schemes, paths, ports,
+  userinfo, wildcard patterns, and literal IP addresses are rejected.
 
 The create request has a single port `8443`, default-deny IP access control,
 and one configured CIDR allow rule. Its environment is exactly four
@@ -53,13 +56,20 @@ and an Ed25519 **public** verification key derived from the record's private sig
 Those runtime bindings, the disk/image binding, provider ID, labels, and signer
 never appear in CLI, HTTP, browser, or error output.
 
+Create also always sends `egressPolicy.defaultAction = Deny`. Each reviewed
+`egress_hosts` entry becomes only a simple `{pattern, action: Allow}` host
+rule—no caller-selected egress rule/body exists. An empty `egress_hosts` list
+is valid and means explicit no-egress.
+
 The direct request shape is based on the current vendored
 `azure-containerapps-sandbox` source: `AsyncSandboxOperationsMixin` supports
 group `PUT/GET /sandboxes` and delete; `SandboxClient` supports `POST /stop`
 and `POST /resume`; `LifecyclePolicy._to_dict` supports `autoSuspendPolicy`
 and `autoDeletePolicy`; and `AddPortRequest._to_dict` supports
-`ports[].ipAccessControl` with `defaultAction` and rules. This controller has
-no generic Azure request or endpoint interface.
+`ports[].ipAccessControl` with `defaultAction` and rules. The vendored
+`EgressPolicy._to_dict` supports `egressPolicy.defaultAction` and
+`hostRules[].{pattern,action}`. This controller has no generic Azure request
+or endpoint interface.
 
 Collection observation follows the vendored `nextLink` paging shape through at
 most 100 pages, including its supported bare-array response form. Each next
@@ -93,6 +103,11 @@ superseding lifecycle mutation, including destroy, is admitted until explicit
 reconciliation observes the requested valid target. `reconcile` is the sole
 explicit provider observation and marks an operation `succeeded` only when it
 observes `Running`, `Stopped`/`Suspended`/`Idle`, or `404` after destroy.
+An observation that completes while the lifecycle is still `Creating` or
+`Stopping` records that **reconcile** as succeeded, but list/describe continue
+to show the prior lifecycle operation as `accepted` with
+`reconcile-needed`; a later reconciliation is required before any superseding
+lifecycle action.
 Ambiguous outcomes remain reconciliation-required or quarantined; no blind
 provider retry occurs. List and describe are local durable reads: they do not
 acquire a token or make cloud calls.

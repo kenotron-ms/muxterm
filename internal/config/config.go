@@ -63,6 +63,7 @@ type SandboxAzureProfile struct {
 	AutoSuspendSecond int      `toml:"auto_suspend_seconds"`
 	AutoDeleteSeconds int      `toml:"auto_delete_seconds"`
 	ControllerCIDRs   []string `toml:"controller_cidrs"`
+	EgressHosts       []string `toml:"egress_hosts"`
 }
 
 // MissionControlConfig retains legacy TOML fields for compatibility. Normal

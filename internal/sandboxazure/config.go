@@ -62,6 +62,7 @@ type Profile struct {
 	AutoSuspendSecond int      `toml:"auto_suspend_seconds"`
 	AutoDeleteSeconds int      `toml:"auto_delete_seconds"`
 	ControllerCIDRs   []string `toml:"controller_cidrs"`
+	EgressHosts       []string `toml:"egress_hosts"`
 }
 
 // LoadConfig reads only [sandbox_azure] and its [[sandbox_azure.profile]]
@@ -157,6 +158,19 @@ func (p Profile) Validate() error {
 			return errors.New("direct Azure sandbox profile has an invalid controller CIDR")
 		}
 	}
+	if len(p.EgressHosts) > 10 {
+		return errors.New("direct Azure sandbox profile permits at most ten egress hosts")
+	}
+	seenHosts := make(map[string]struct{}, len(p.EgressHosts))
+	for _, host := range p.EgressHosts {
+		if !validEgressHost(host) {
+			return errors.New("direct Azure sandbox profile has an invalid egress host")
+		}
+		if _, exists := seenHosts[host]; exists {
+			return errors.New("direct Azure sandbox profile repeats an egress host")
+		}
+		seenHosts[host] = struct{}{}
+	}
 	return nil
 }
 
@@ -180,10 +194,24 @@ func (p Profile) Checksum() string {
 	cidrs := append([]string(nil), p.ControllerCIDRs...)
 	sort.Strings(cidrs)
 	parts = append(parts, cidrs...)
+	hosts := append([]string(nil), p.EgressHosts...)
+	sort.Strings(hosts)
+	parts = append(parts, hosts...)
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
 
 var (
 	digestReference = regexp.MustCompile(`^[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}$`)
+	egressHostname  = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
 )
+
+// validEgressHost accepts a canonical DNS hostname only. URLs, ports, paths,
+// wildcards, userinfo, and literal addresses are all unrepresentable.
+func validEgressHost(host string) bool {
+	if len(host) == 0 || len(host) > 253 || !egressHostname.MatchString(host) {
+		return false
+	}
+	_, err := netip.ParseAddr(host)
+	return err != nil
+}

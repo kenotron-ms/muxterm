@@ -44,6 +44,7 @@ type CreateSpec struct {
 	AutoSuspendSeconds int
 	AutoDeleteSeconds  int
 	ControllerCIDRs    []string
+	EgressHosts        []string
 	Environment        map[string]string // exactly controller-generated runtime bindings
 	Labels             map[string]string
 	RequestID          string
@@ -116,6 +117,10 @@ func CreatePayload(spec CreateSpec) map[string]any {
 		labels[name] = value
 	}
 	cidrs := append([]string(nil), spec.ControllerCIDRs...)
+	hostRules := make([]map[string]string, 0, len(spec.EgressHosts))
+	for _, host := range spec.EgressHosts {
+		hostRules = append(hostRules, map[string]string{"pattern": host, "action": "Allow"})
+	}
 	body := map[string]any{
 		"sourcesRef": map[string]any{"diskImage": map[string]any{"id": spec.DiskID}},
 		"resources":  map[string]string{"cpu": spec.CPU, "memory": spec.Memory},
@@ -123,6 +128,10 @@ func CreatePayload(spec CreateSpec) map[string]any {
 			"enabled": true, "interval": spec.AutoSuspendSeconds, "mode": "Disk",
 		}},
 		"environment": env,
+		"egressPolicy": map[string]any{
+			"defaultAction": "Deny",
+			"hostRules":     hostRules,
+		},
 		"ports": []map[string]any{{
 			"port": ingressPort,
 			"ipAccessControl": map[string]any{
@@ -152,6 +161,7 @@ func (s CreateSpec) Validate() error {
 		s.Protocol != RuntimeProtocol || s.AutoSuspendSeconds < 60 ||
 		s.AutoDeleteSeconds < 300 || s.AutoDeleteSeconds > 86400 ||
 		s.AutoDeleteSeconds < s.AutoSuspendSeconds || len(s.ControllerCIDRs) == 0 || len(s.ControllerCIDRs) > 10 ||
+		len(s.EgressHosts) > 10 ||
 		s.CPU == "" || s.Memory == "" {
 		return errors.New("invalid sealed sandbox create specification")
 	}
@@ -159,6 +169,11 @@ func (s CreateSpec) Validate() error {
 		prefix, err := netip.ParsePrefix(cidr)
 		if err != nil || prefix != prefix.Masked() || prefix.Bits() == 0 {
 			return errors.New("invalid sealed sandbox controller CIDR")
+		}
+	}
+	for _, host := range s.EgressHosts {
+		if !validEgressHost(host) {
+			return errors.New("invalid sealed sandbox egress host")
 		}
 	}
 	required := []string{

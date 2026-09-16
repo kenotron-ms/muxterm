@@ -86,10 +86,24 @@ func verify() error {
 	if _, err := controller.Destroy(ctx, created.Handle, created.Generation, "a0000000-0000-4000-8000-000000000023"); !errors.Is(err, sandboxazure.ErrReconcileRequired) {
 		return errors.New("accepted create allowed destroy before reconciliation")
 	}
+	creating, err := controller.Reconcile(ctx, created.Handle, created.Generation, "a0000000-0000-4000-8000-000000000016")
+	if err != nil || creating.Operation != "reconcile" || creating.OperationState != sandboxazure.OperationSucceeded ||
+		creating.ReconcileState != sandboxazure.ReconcileNeeded || creating.ObservedState != "creating" {
+		return errors.New("transitional create observation did not settle reconcile truth")
+	}
+	current, err := controller.Describe(ctx, created.Handle)
+	if err != nil || current.Operation != "create" || current.OperationState != sandboxazure.OperationAccepted ||
+		current.ReconcileState != sandboxazure.ReconcileNeeded {
+		return errors.New("current view did not retain accepted lifecycle after transitional create observation")
+	}
+	retryReconcile, err := controller.Reconcile(ctx, created.Handle, created.Generation, "a0000000-0000-4000-8000-000000000016")
+	if err != nil || retryReconcile.Operation != "reconcile" || retryReconcile.OperationState != sandboxazure.OperationSucceeded {
+		return errors.New("completed transitional reconcile was not idempotently replayed")
+	}
 	item := fake.items["provider-secret-id"]
 	item.State = "Running"
 	fake.items["provider-secret-id"] = item
-	reconciled, err := controller.Reconcile(ctx, created.Handle, created.Generation, "a0000000-0000-4000-8000-000000000016")
+	reconciled, err := controller.Reconcile(ctx, created.Handle, created.Generation, "a0000000-0000-4000-8000-000000000024")
 	if err != nil || reconciled.ReconcileState != sandboxazure.ReconcileClean || reconciled.ObservedState != "running" {
 		return errors.New("accepted create was not reconciled to an observed running target")
 	}
@@ -99,7 +113,7 @@ func verify() error {
 	if _, err := controller.Stop(ctx, created.Handle, created.Generation+1, "a0000000-0000-4000-8000-000000000002"); !errors.Is(err, sandboxazure.ErrStaleGeneration) {
 		return errors.New("stale stop was not fenced")
 	}
-	fake.stopState = "Idle"
+	fake.stopState = "Stopping"
 	stopped, err := controller.Stop(ctx, created.Handle, created.Generation, "a0000000-0000-4000-8000-000000000003")
 	if err != nil || stopped.Generation != 2 || stopped.Operation != "stop" {
 		return errors.New("stop acceptance/generation fence failed")
@@ -117,8 +131,23 @@ func verify() error {
 	if _, err := controller.Resume(ctx, created.Handle, stopped.Generation, "a0000000-0000-4000-8000-000000000017"); !errors.Is(err, sandboxazure.ErrReconcileRequired) {
 		return errors.New("accepted stop allowed resume before reconciliation")
 	}
-	refreshed, err := controller.Reconcile(ctx, created.Handle, stopped.Generation, "a0000000-0000-4000-8000-000000000014")
-	if err != nil || refreshed.ObservedState != "idle" || refreshed.OperationState != sandboxazure.OperationSucceeded {
+	stopping, err := controller.Reconcile(ctx, created.Handle, stopped.Generation, "a0000000-0000-4000-8000-000000000014")
+	if err != nil || stopping.Operation != "reconcile" || stopping.OperationState != sandboxazure.OperationSucceeded ||
+		stopping.ObservedState != "stopping" || stopping.ReconcileState != sandboxazure.ReconcileNeeded {
+		return errors.New("transitional stop observation did not settle reconcile truth")
+	}
+	current, err = controller.Describe(ctx, created.Handle)
+	if err != nil || current.Operation != "stop" || current.OperationState != sandboxazure.OperationAccepted ||
+		current.ReconcileState != sandboxazure.ReconcileNeeded {
+		return errors.New("current view did not retain accepted lifecycle after transitional stop observation")
+	}
+	fake.stopState = "Idle"
+	item = fake.items["provider-secret-id"]
+	item.State = "Idle"
+	fake.items["provider-secret-id"] = item
+	refreshed, err := controller.Reconcile(ctx, created.Handle, stopped.Generation, "a0000000-0000-4000-8000-000000000025")
+	if err != nil || refreshed.ObservedState != "idle" || refreshed.OperationState != sandboxazure.OperationSucceeded ||
+		refreshed.ReconcileState != sandboxazure.ReconcileClean {
 		return errors.New("explicit refresh did not recognize Idle as a stop terminal target")
 	}
 	if _, err := controller.Resume(ctx, created.Handle, created.Generation, "a0000000-0000-4000-8000-000000000004"); !errors.Is(err, sandboxazure.ErrStaleGeneration) {
@@ -327,7 +356,8 @@ func verifyHTTPAPI(controller sandboxazure.Lifecycle) error {
 func verifyCreateContract(spec sandboxazure.CreateSpec, checksum string) error {
 	if spec.DiskID == "" || spec.ImageDigest == "" || spec.Protocol != sandboxazure.RuntimeProtocol ||
 		spec.AutoSuspendSeconds <= 0 || spec.AutoDeleteSeconds <= 0 || len(spec.ControllerCIDRs) != 1 ||
-		spec.ControllerCIDRs[0] != "192.0.2.0/24" {
+		spec.ControllerCIDRs[0] != "192.0.2.0/24" || len(spec.EgressHosts) != 1 ||
+		spec.EgressHosts[0] != "packages.example.com" {
 		return errors.New("sealed create omitted required image, lifecycle, or ingress policy")
 	}
 	if spec.Environment["MUXTERM_SANDBOX_PROTOCOL"] != "1" ||
@@ -356,6 +386,21 @@ func verifyCreateContract(spec sandboxazure.CreateSpec, checksum string) error {
 	acl, ok := ports[0]["ipAccessControl"].(map[string]any)
 	if !ok || acl["defaultAction"] != "Deny" {
 		return errors.New("provider payload did not default-deny ingress")
+	}
+	egress, ok := payload["egressPolicy"].(map[string]any)
+	if !ok || egress["defaultAction"] != "Deny" {
+		return errors.New("provider payload did not default-deny egress")
+	}
+	hostRules, ok := egress["hostRules"].([]map[string]string)
+	if !ok || len(hostRules) != 1 || hostRules[0]["pattern"] != "packages.example.com" || hostRules[0]["action"] != "Allow" {
+		return errors.New("provider payload did not seal reviewed egress hosts")
+	}
+	noEgress := spec
+	noEgress.EgressHosts = nil
+	emptyPolicy, ok := sandboxazure.CreatePayload(noEgress)["egressPolicy"].(map[string]any)
+	emptyRules, rulesOK := emptyPolicy["hostRules"].([]map[string]string)
+	if !ok || !rulesOK || emptyPolicy["defaultAction"] != "Deny" || len(emptyRules) != 0 {
+		return errors.New("empty egress profile did not produce explicit no-egress policy")
 	}
 	lifecycle, ok := payload["lifecycle"].(map[string]any)
 	if !ok || lifecycle["autoDeletePolicy"] == nil || lifecycle["autoSuspendPolicy"] == nil ||
@@ -446,6 +491,16 @@ func verifyStoreSafety() error {
 	if err := invalid.Validate(); err == nil {
 		return errors.New("profile accepted IPv6 default-route controller CIDR")
 	}
+	invalid = profile()
+	invalid.EgressHosts = []string{"https://attacker.example"}
+	if err := invalid.Validate(); err == nil {
+		return errors.New("profile accepted non-host egress policy input")
+	}
+	invalid = profile()
+	invalid.EgressHosts = []string{"packages.example.com", "packages.example.com"}
+	if err := invalid.Validate(); err == nil {
+		return errors.New("profile accepted repeated egress host")
+	}
 	return nil
 }
 
@@ -499,6 +554,7 @@ memory = "2048Mi"
 auto_suspend_seconds = 300
 auto_delete_seconds = 3600
 controller_cidrs = ["192.0.2.0/24"]
+egress_hosts = ["packages.example.com"]
 
 `
 	if err := os.WriteFile(path, []byte(configured), 0o600); err != nil {
@@ -515,7 +571,8 @@ controller_cidrs = ["192.0.2.0/24"]
 		return err
 	}
 	loaded, err := sandboxazure.LoadConfig(path)
-	if err != nil || !loaded.Enabled || len(loaded.Profiles) != 1 || loaded.Profiles[0].Name != "fixture" {
+	if err != nil || !loaded.Enabled || len(loaded.Profiles) != 1 || loaded.Profiles[0].Name != "fixture" ||
+		len(loaded.Profiles[0].EgressHosts) != 1 || loaded.Profiles[0].EgressHosts[0] != "packages.example.com" {
 		return errors.New("owner-only sandbox configuration was not retained across config write")
 	}
 	return nil
@@ -531,6 +588,7 @@ func profile() sandboxazure.Profile {
 		Protocol:      sandboxazure.RuntimeProtocol,
 		CPU:           "1000m", Memory: "2048Mi", AutoSuspendSecond: 300, AutoDeleteSeconds: 3600,
 		ControllerCIDRs: []string{"192.0.2.0/24"},
+		EgressHosts:     []string{"packages.example.com"},
 	}
 }
 

@@ -201,6 +201,7 @@ func createSpec(profile Profile, r Record) (CreateSpec, error) {
 		CPU: profile.CPU, Memory: profile.Memory,
 		AutoSuspendSeconds: profile.AutoSuspendSecond, AutoDeleteSeconds: profile.AutoDeleteSeconds,
 		ControllerCIDRs: append([]string(nil), profile.ControllerCIDRs...),
+		EgressHosts:     append([]string(nil), profile.EgressHosts...),
 		Environment:     env, RequestID: r.RequestID,
 		Labels: map[string]string{"muxterm.handle": r.Handle, "muxterm.request-id": r.RequestID},
 	}, nil
@@ -323,21 +324,26 @@ func (c *Controller) Reconcile(ctx context.Context, handle string, generation ui
 			if len(matches) != 1 {
 				r.ReconcileState = ReconcileQuarantined
 				c.setOperation(&r, requestID, OperationFailed)
+				r.setCurrentLifecycleView()
 			} else {
 				r.ProviderID, r.ObservedState = matches[0].ID, stateOrUnknown(matches[0].State)
 				if targetReached(r.DesiredState, r.ObservedState) {
 					r.ReconcileState = ReconcileClean
 					c.markTargetIfObserved(&r)
-					c.setOperation(&r, requestID, OperationSucceeded)
 				} else {
 					r.ReconcileState = ReconcileNeeded
-					c.setOperation(&r, requestID, OperationPending)
 				}
+				// The observation itself completed, even if its lifecycle
+				// target remains transitional. Keep that reconcile request
+				// replayable as succeeded while the durable current view
+				// remains the prior accepted lifecycle operation.
+				c.setOperation(&r, requestID, OperationSucceeded)
+				r.setCurrentLifecycleView()
 			}
 			if err := c.store.Save(r); err != nil {
 				return err
 			}
-			result = r.View()
+			result = r.viewFor(*r.operation(requestID))
 			return nil
 		}
 		if r.ProviderID == "" {
@@ -350,6 +356,7 @@ func (c *Controller) Reconcile(ctx context.Context, handle string, generation ui
 			r.ObservedState, r.ReconcileState = "destroyed", ReconcileClean
 			c.markTargetIfObserved(&r)
 			c.setOperation(&r, requestID, OperationSucceeded)
+			r.setCurrentLifecycleView()
 		} else if err != nil {
 			// Observation failure does not rewrite the previous lifecycle state.
 			err = c.recordObservationFailure(&r, requestID)
@@ -360,16 +367,16 @@ func (c *Controller) Reconcile(ctx context.Context, handle string, generation ui
 			if targetReached(r.DesiredState, r.ObservedState) {
 				r.ReconcileState = ReconcileClean
 				c.markTargetIfObserved(&r)
-				c.setOperation(&r, requestID, OperationSucceeded)
 			} else {
 				r.ReconcileState = ReconcileNeeded
-				c.setOperation(&r, requestID, OperationPending)
 			}
+			c.setOperation(&r, requestID, OperationSucceeded)
+			r.setCurrentLifecycleView()
 		}
 		if err := c.store.Save(r); err != nil {
 			return err
 		}
-		result = r.View()
+		result = r.viewFor(*r.operation(requestID))
 		return nil
 	})
 	return result, err
@@ -470,10 +477,30 @@ func (c *Controller) recordProviderFailure(r *Record, requestID string, err erro
 // create/stop/resume/destroy failed.
 func (c *Controller) recordObservationFailure(r *Record, requestID string) error {
 	c.setOperation(r, requestID, OperationAmbiguous)
+	r.setCurrentLifecycleView()
 	if err := c.store.Save(*r); err != nil {
 		return err
 	}
 	return ErrProviderAmbiguous
+}
+
+// setCurrentLifecycleView restores Record's durable current fields after a
+// reconcile attempt. Reconcile is an observation audit entry, not the current
+// lifecycle truth shown by list/describe: a completed observation of Creating
+// must leave the accepted create visible and fenced.
+func (r *Record) setCurrentLifecycleView() {
+	for i := len(r.Operations) - 1; i >= 0; i-- {
+		op := r.Operations[i]
+		if op.Kind == "reconcile" {
+			continue
+		}
+		r.RequestID = op.RequestID
+		r.Operation = op.Kind
+		r.OperationState = op.State
+		r.ExpectedGeneration = op.ExpectedGeneration
+		r.DesiredState = op.DesiredState
+		return
+	}
 }
 
 func (c *Controller) setOperation(r *Record, requestID string, state OperationState) {
