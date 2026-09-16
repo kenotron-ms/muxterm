@@ -553,11 +553,6 @@ func (s *hostSession) bringUp(conn DaemonConn) (chan struct{}, error) {
 func (s *hostSession) afterConnect(conn DaemonConn, workspaces []sessiond.WorkspaceInfo) {
 	c := s.client
 
-	// A newly dialed remote has a fresh native authority boundary. Forget its
-	// old pane snapshots before any reattach composition can repopulate the
-	// one workspace the browser is actively using.
-	c.forgetAppVoiceHost(s.host.ID)
-
 	// A.5: subscriptions are recorded on the Client, and every session started
 	// AFTERWARDS re-asserts them on connect. Without this a host connected
 	// after page load silently produces no preview tiles and no session rows.
@@ -636,7 +631,6 @@ func (s *hostSession) reattach(conn DaemonConn) {
 		return
 	}
 	workspaceID := nsID(s.host.ID, comp.WorkspaceID)
-	c.rememberAppVoicePanes(workspaceID, comp.Panes)
 	c.sendMessage(&sessiond.Message{
 		Type:        sessiond.TypeComposition,
 		WorkspaceID: workspaceID,
@@ -694,7 +688,6 @@ func (s *hostSession) installHandlers() {
 			if !ok {
 				return
 			}
-			c.rememberAppVoicePane(workspaceID, pane.PaneID)
 			c.sendMessage(&sessiond.Message{
 				Type: sessiond.TypePaneAdded,
 				// Already namespaced: the attached workspace id is stored
@@ -714,7 +707,6 @@ func (s *hostSession) installHandlers() {
 				return
 			}
 			namespacedWorkspaceID := nsID(hostID, workspaceID)
-			c.forgetAppVoicePane(namespacedWorkspaceID, paneID)
 			c.sendMessage(&sessiond.Message{
 				Type: sessiond.TypePaneClosed, WorkspaceID: namespacedWorkspaceID, PaneID: paneID,
 				ProcessExitCode: processExitCode, RuntimeMs: runtimeMs,
@@ -722,7 +714,6 @@ func (s *hostSession) installHandlers() {
 		},
 		OnWorkspaceClosed: func(workspaceID string) {
 			namespacedWorkspaceID := nsID(hostID, workspaceID)
-			c.forgetAppVoiceWorkspace(namespacedWorkspaceID)
 			c.sendMessage(&sessiond.Message{Type: sessiond.TypeWorkspaceClosed, WorkspaceID: namespacedWorkspaceID})
 		},
 		OnWorkspaceRenamed: func(workspaceID, name string) {

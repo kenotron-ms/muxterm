@@ -62,7 +62,7 @@ func (b *voiceBridge) Submit(prompt string) (voice.TurnHandle, error) {
 	}
 	turn, _ := b.relay.submit(sup, prompt, "", "")
 	if turn == nil {
-		return nil, errors.New("the chief of staff refused the turn")
+		return nil, errors.New("Operator refused the turn")
 	}
 	b.mu.Lock()
 	b.last = turn.ID
@@ -73,7 +73,7 @@ func (b *voiceBridge) Submit(prompt string) (voice.TurnHandle, error) {
 func (b *voiceBridge) Approve(requestID string, approved bool, reason string) error {
 	sup := b.relay.started()
 	if sup == nil {
-		return errors.New("the chief of staff is not running")
+		return errors.New("Operator is not running")
 	}
 	return sup.Approve(requestID, approved, reason)
 }
@@ -81,7 +81,7 @@ func (b *voiceBridge) Approve(requestID string, approved bool, reason string) er
 func (b *voiceBridge) Cancel(turnID string) error {
 	sup := b.relay.started()
 	if sup == nil {
-		return errors.New("the chief of staff is not running")
+		return errors.New("Operator is not running")
 	}
 	if turnID == "" {
 		b.mu.Lock()
@@ -130,12 +130,6 @@ func (t *voiceTurn) Wait(ctx context.Context) (string, error) {
 // muxterm from starting: a typo in an optional capability must not take the
 // terminal multiplexer down with it.
 func (s *Server) registerVoiceRoutes(cfg config.VoiceConfig, protect func(http.Handler) http.Handler) {
-	// App voice is the normal app-wide voice surface. It is intentionally
-	// independent of every Mission Control preview setting: valid enabled
-	// [voice] configuration is sufficient to register its own authenticated,
-	// owner-lease-bound routes.
-	s.registerAppVoiceRoutes(cfg, protect)
-
 	if !cfg.Enabled {
 		return
 	}

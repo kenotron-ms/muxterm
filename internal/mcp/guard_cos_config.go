@@ -74,7 +74,7 @@ func guardCosConfig(texts ...string) error {
 		for _, n := range needles {
 			if strings.Contains(hay, n) {
 				return fmt.Errorf(
-					"refused: %s names the chief of staff's tuning files (%s). "+
+					"refused: %s names Operator's tuning files (%s). "+
 						"Those are a human-only surface -- an agent that can rewrite its own "+
 						"instruction can undo every restriction placed on it. "+
 						"Edit them yourself, and read them with 'muxterm cos --config --full'",

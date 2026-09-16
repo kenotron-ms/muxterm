@@ -1630,7 +1630,7 @@ export class MuxDock extends LitElement {
   }
 
   /** Select a known panel through Dockview; never synthesizes a pane identity. */
-  selectKnownPane(paneId: number, appVoiceOperationId = ''): boolean {
+  selectKnownPane(paneId: number): boolean {
     if (this.workspaceKey !== store.attached || !store.panes.some((pane) => pane.paneId === paneId)) return false;
     const panel = this._panels.get(paneId);
     if (!panel) return false;
@@ -1645,7 +1645,7 @@ export class MuxDock extends LitElement {
     store.ackPane(paneId);
     this.dispatchEvent(
       new CustomEvent('pane-select', {
-        detail: { paneId, appVoiceOperationId },
+        detail: { paneId },
         bubbles: true,
         composed: true,
       }),

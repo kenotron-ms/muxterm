@@ -1,21 +1,49 @@
 /**
- * App-global conversational provider transport.
+ * voice-session-controller — a live, two-way spoken conversation with the
+ * Operator.
  *
- * The authenticated owner lease is independent of Mission Control selection:
- * no composer, thread, pane, workspace, applet, or Lobby navigation is read
- * here or can stop/remint this connection. Microphone access occurs only from
- * explicit `start()` user intent.
+ * A SIBLING of voice-input-controller.ts, not a replacement for it, and the
+ * distinction is the product decision: dictation is free, one utterance, and
+ * fills the composer for a human to check; a live session is metered per
+ * minute and acts. Two different jobs, two different controls. Nothing in
+ * this file touches the mic button or the dictation path.
+ *
+ * Same module-level-singleton convention as its sibling (and as
+ * terminal-registry.ts, pane-focus-coordinator.ts): this file owns all
+ * session state, components only render and subscribe.
+ *
+ * ── The shape ──────────────────────────────────────────────────────────────
+ *
+ *   browser ──WebRTC audio──▶ realtime endpoint ◀──sideband WS── muxterm
+ *
+ * WebRTC, not WebSocket, and that is a real decision rather than a default.
+ * Over WebRTC the server tracks how much audio has actually been played and
+ * truncates the unplayed remainder itself when the user interrupts. Barge-in
+ * — the hardest part of a spoken conversation — therefore costs zero lines
+ * of client code. The WebSocket transport would put that work here:
+ * watching for speech_started, stopping playback, counting milliseconds
+ * played, and sending a truncate.
+ *
+ * The browser is a PURE AUDIO TRANSPORT. It never sees a tool call and could
+ * not execute one if it did: muxterm's tools run shell commands, and tool
+ * authority in a tab is not something this codebase hands out. Function
+ * calls are delivered to muxterm's own process over a sideband connection to
+ * the same realtime session, and executed there. What this file sends over
+ * the data channel is narration — text for the model to speak — which is
+ * exactly the authority a page should have over its own microphone.
+ *
+ * ── The Chromium trap ──────────────────────────────────────────────────────
+ *
+ * A remote WebRTC track feeds an AnalyserNode NOTHING BUT ZEROS in Chromium
+ * unless the stream is also attached to a media element (crbug 40094084).
+ * Chromium will not start its WebRTCAudioRenderer for an inbound track until
+ * something consumes it as media, and Web Audio does not count. There is no
+ * error; the level meter simply sits at zero forever. `_attachSink` below is
+ * that workaround and must not be "cleaned up".
  */
 
 import { apiPath } from './base-path.js';
-import {
-  appVoiceOperations,
-  APP_VOICE_PROTOCOL_VERSION,
-  type AppVoiceLease,
-  type AppVoiceLeaseTransition,
-} from './app-voice-operations.js';
-import { voiceCaptureArbiter } from './voice-capture-arbiter.js';
-import type { VoiceAvailabilityReason } from './voice-settings.js';
+import { cosStore, shortToolName } from './cos-store.js';
 
 export type VoiceSessionState =
   | 'idle'
@@ -23,1054 +51,725 @@ export type VoiceSessionState =
   | 'listening'
   | 'thinking'
   | 'speaking'
-  | 'paused'
   | 'error';
 
-export type VoiceAvailabilityState = 'checking' | 'ready' | 'unavailable';
-
 export interface VoiceSessionSnapshot {
-  readonly state: VoiceSessionState;
-  readonly level: number;
-  readonly heard: string;
-  readonly spoken: string;
-  readonly error: string;
-  /** The provider session is retained, but local input/output is paused. */
-  readonly paused: boolean;
-  /** True only while every live input track is disabled. */
-  readonly muted: boolean;
-  /** A live browser input track can be muted without ending the session. */
-  readonly canMute: boolean;
-  /** The running server explicitly exposed app-voice capability. */
-  readonly available: boolean;
-  /** Fixed server availability reason, retained while an active bridge drains. */
-  readonly availabilityReason: VoiceAvailabilityReason;
-  /** Status lookup is independent from an actual Start/lease/media attempt. */
-  readonly availabilityState: VoiceAvailabilityState;
-  /** This browser can create the required WebRTC/media objects. */
-  readonly supported: boolean;
+  state: VoiceSessionState;
+  /** Live output level, 0..1. Drives the orb. */
+  level: number;
+  /** What the user was last heard to say. */
+  heard: string;
+  /** What the assistant is saying, streaming. */
+  spoken: string;
+  error: string;
 }
 
 interface TokenResponse {
-  readonly session_id: string;
-  readonly expires_at: number;
-  readonly model: string;
+  session_id: string;
+  value: string;
+  expires_at: number;
+  model: string;
+  auth_mode: string;
 }
 
-type Listener = (snapshot: VoiceSessionSnapshot) => void;
+type Listener = (s: VoiceSessionSnapshot) => void;
 
-let state: VoiceSessionState = 'idle';
-let level = 0;
-let heard = '';
-let spoken = '';
-let error = '';
-let peer: RTCPeerConnection | null = null;
-let dataChannel: RTCDataChannel | null = null;
-let microphone: MediaStream | null = null;
-let sink: HTMLAudioElement | null = null;
-let meterContext: AudioContext | null = null;
-let meterSource: MediaStreamAudioSourceNode | null = null;
-let meterAnalyser: AnalyserNode | null = null;
-let levelTimer: ReturnType<typeof setInterval> | null = null;
-let inputActive = false;
-let muted = false;
-let paused = false;
-let pendingPause = false;
-let pausedMuted = false;
-let sessionId = '';
-let lease: AppVoiceLease | null = null;
-let generation = 0;
-let releasing: Promise<void> | null = null;
-interface VoluntaryVoiceExit {
-  readonly generation: number;
-  readonly leaseEpoch: number;
-  readonly sessionId: string;
-}
-let voluntaryVoiceExit: VoluntaryVoiceExit | null = null;
-interface InputSenderBinding {
-  readonly sender: RTCRtpSender;
-  readonly track: MediaStreamTrack;
-}
-let inputSenders: InputSenderBinding[] = [];
-let pauseResumeFence = 0;
-let pauseResumeSerial: Promise<void> = Promise.resolve();
-let candidateAvailable = false;
-let availabilityReason: VoiceAvailabilityReason = 'config_unavailable';
-let availabilityKnown = false;
-const listeners = new Set<Listener>();
+// ---------------------------------------------------------------------------
+// state
+// ---------------------------------------------------------------------------
 
-function appIsSupported(): boolean {
+let _state: VoiceSessionState = 'idle';
+let _level = 0;
+let _heard = '';
+let _spoken = '';
+let _error = '';
+
+let _pc: RTCPeerConnection | null = null;
+let _dc: RTCDataChannel | null = null;
+let _mic: MediaStream | null = null;
+let _sink: HTMLAudioElement | null = null;
+let _ctx: AudioContext | null = null;
+let _analyser: AnalyserNode | null = null;
+let _levelRaf: number | null = null;
+let _sessionId = '';
+let _unsubCos: (() => void) | null = null;
+
+/**
+ * Generation counter. Every start() increments it; every async continuation
+ * is gated on still holding the current value. Same scheme as
+ * voice-input-controller's session token, for the same reason: a stop()
+ * during an in-flight SDP exchange must make everything that exchange
+ * eventually resolves into a guaranteed no-op.
+ */
+let _gen = 0;
+
+const _listeners = new Set<Listener>();
+
+// ---------------------------------------------------------------------------
+// narration bookkeeping
+// ---------------------------------------------------------------------------
+
+/**
+ * Tools already announced, by turn. A turn that runs the same tool eight
+ * times should not be narrated eight times — that is worse than silence.
+ */
+let _narratedTools = new Set<string>();
+/** Approvals already spoken, so a re-render never re-announces one. */
+const _spokenApprovals = new Set<string>();
+/** When narration last spoke, so progress does not become chatter. */
+let _lastNarration = 0;
+
+/**
+ * Whether the model is mid-response, and anything waiting for it to finish.
+ *
+ * This gate is not politeness, it is protection. Asking for a response while
+ * one is running is answered with conversation_already_has_active_response
+ * -- and on this platform that error CLOSES the server's tool sideband,
+ * taking every tool and every pending answer with it, silently, for the rest
+ * of the conversation.
+ *
+ * The browser is the right place to enforce it because the browser has
+ * perfect information: every response.created and response.done arrives on
+ * its data channel. The server, watching the same session as an observer,
+ * learns the same facts a beat later.
+ */
+let _responseActive = false;
+let _pendingSay: Array<{ text: string; instructions: string }> = [];
+
+/** Minimum gap between two spoken progress notes. */
+const NARRATION_GAP_MS = 9000;
+/** How long a turn must have been running before progress is worth saying. */
+const NARRATION_AFTER_MS = 6000;
+
+// ---------------------------------------------------------------------------
+// public API
+// ---------------------------------------------------------------------------
+
+export function isSupported(): boolean {
   return (
     typeof RTCPeerConnection === 'function' &&
     typeof navigator !== 'undefined' &&
-    typeof navigator.mediaDevices?.getUserMedia === 'function'
+    !!navigator.mediaDevices?.getUserMedia
   );
-}
-
-function appSnapshot(): VoiceSessionSnapshot {
-  return Object.freeze({
-    state,
-    level,
-    heard,
-    spoken,
-    error,
-    paused,
-    muted,
-    canMute: liveInputTracks().length > 0,
-    available: candidateAvailable,
-    availabilityReason,
-    availabilityState: !availabilityKnown ? 'checking' : candidateAvailable ? 'ready' : 'unavailable',
-    supported: appIsSupported(),
-  });
-}
-
-function appSubscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-function appIsActive(): boolean {
-  return state !== 'idle' && state !== 'error';
-}
-
-/** Runtime server capability; false by default so audio remains opt-in. */
-function appIsCandidateAvailable(): boolean {
-  return candidateAvailable;
-}
-
-function appSetAvailability(available: boolean, reason: VoiceAvailabilityReason): void {
-  if (availabilityKnown && candidateAvailable === available && availabilityReason === reason) return;
-  availabilityKnown = true;
-  candidateAvailable = available;
-  availabilityReason = reason;
-  publish();
-}
-
-function appSetAvailabilityPending(): void {
-  if (!availabilityKnown) return;
-  availabilityKnown = false;
-  publish();
-}
-
-function unavailableMessage(reason: VoiceAvailabilityReason): string {
-  switch (reason) {
-    case 'voice_disabled':
-      return 'Voice mode is off for this server.';
-    case 'voice_config_invalid':
-      return 'Voice mode needs valid server settings.';
-    case 'voice_provider_unavailable':
-      return 'Voice provider is unavailable. Try again shortly.';
-    case 'config_unavailable':
-      return 'Voice availability could not be checked. Try again.';
-    default:
-      return 'Voice mode is unavailable on this running server.';
-  }
-}
-
-function publish(next?: VoiceSessionState): void {
-  if (next) {
-    // Provider events can arrive after a pause request. A paused snapshot is a
-    // hard presentation fence: only an explicit resume or a terminal error may
-    // move it out of the paused state.
-    if (!paused || next === 'paused' || next === 'error') state = next;
-  }
-  if (paused && state !== 'error') state = 'paused';
-  const value = appSnapshot();
-  for (const listener of listeners) listener(value);
-}
-
-function headers(control: string): HeadersInit {
-  return {
-    'Content-Type': 'application/json',
-    'X-App-Voice-Protocol': String(APP_VOICE_PROTOCOL_VERSION),
-    'X-App-Voice-Control': control,
-  };
-}
-
-async function errorText(_response: Response, fallback: string): Promise<string> {
-  // Provider and server responses belong in diagnostics, not in a conversation
-  // control. The UI exposes only stable recovery language.
-  return fallback;
-}
-
-type StartPhase = 'claim' | 'session_setup' | 'microphone' | 'connection';
-
-function startErrorMessage(cause: unknown, phase: StartPhase): string {
-  const name =
-    typeof cause === 'object' && cause !== null && 'name' in cause && typeof cause.name === 'string'
-      ? cause.name
-      : '';
-  if (phase === 'microphone') {
-    if (name === 'NotAllowedError' || name === 'SecurityError') {
-      return 'Microphone permission was denied. Allow it, then try again.';
-    }
-    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-      return 'No microphone is available. Connect one, then try again.';
-    }
-    return 'Microphone setup failed. Check microphone access, then Start voice mode.';
-  }
-  if (phase === 'claim') return 'Could not claim app voice control. Try again.';
-  return phase === 'session_setup'
-    ? 'Voice session could not start. Try again.'
-    : 'Voice connection could not start. Try again.';
-}
-
-async function waitForIce(connection: RTCPeerConnection): Promise<void> {
-  if (connection.iceGatheringState === 'complete') return;
-  await new Promise<void>((resolve) => {
-    const finish = (): void => {
-      connection.removeEventListener('icegatheringstatechange', changed);
-      clearTimeout(timer);
-      resolve();
-    };
-    const changed = (): void => {
-      if (connection.iceGatheringState === 'complete') finish();
-    };
-    const timer = setTimeout(finish, 2_000);
-    connection.addEventListener('icegatheringstatechange', changed);
-  });
-}
-
-function liveInputTracks(): MediaStreamTrack[] {
-  return microphone?.getAudioTracks().filter((track) => track.readyState === 'live') ?? [];
-}
-
-function tracksAreMuted(): boolean {
-  const tracks = liveInputTracks();
-  return tracks.length > 0 && tracks.every((track) => !track.enabled);
-}
-
-function syncMuted(): boolean {
-  const next = tracksAreMuted();
-  if (muted === next) return false;
-  muted = next;
-  return true;
-}
-
-function shouldMeasureInput(): boolean {
-  return inputActive && state === 'listening' && !paused && !pendingPause && !muted && liveInputTracks().length > 0;
-}
-
-function stopInputLevelMeter(publishChange = true): void {
-  if (levelTimer !== null) clearInterval(levelTimer);
-  levelTimer = null;
-  if (level === 0) return;
-  level = 0;
-  if (publishChange) publish();
-}
-
-function onInputTrackEnded(stream: MediaStream, trackGeneration: number): void {
-  // A stopped generation must never release or overwrite a newer capture.
-  if (generation !== trackGeneration || microphone !== stream) return;
-  if (liveInputTracks().length > 0) {
-    syncMuted();
-    publish();
-    return;
-  }
-  inputActive = false;
-  stopInputLevelMeter(false);
-  syncMuted();
-  if (appIsActive()) fail('Microphone disconnected. Start voice mode to reconnect.', true, trackGeneration);
-}
-
-function attachInputMeter(stream: MediaStream, trackGeneration: number): void {
-  stopInputLevelMeter(false);
-  meterSource?.disconnect();
-  meterSource = null;
-  meterAnalyser?.disconnect();
-  meterAnalyser = null;
-  void meterContext?.close().catch(() => {});
-  meterContext = null;
-  for (const track of stream.getAudioTracks()) {
-    track.addEventListener('ended', () => onInputTrackEnded(stream, trackGeneration));
-  }
-  try {
-    const nextContext = new AudioContext();
-    const nextSource = nextContext.createMediaStreamSource(stream);
-    const nextAnalyser = nextContext.createAnalyser();
-    nextAnalyser.fftSize = 512;
-    nextAnalyser.smoothingTimeConstant = 0.6;
-    nextSource.connect(nextAnalyser);
-    meterContext = nextContext;
-    meterSource = nextSource;
-    meterAnalyser = nextAnalyser;
-    void nextContext.resume().catch(() => {});
-    if (paused) void nextContext.suspend().catch(() => {});
-  } catch {
-    meterAnalyser = null;
-  }
-}
-
-function detachInputMeter(): void {
-  stopInputLevelMeter(false);
-  meterSource?.disconnect();
-  meterSource = null;
-  meterAnalyser?.disconnect();
-  meterAnalyser = null;
-}
-
-function startInputLevelMeter(): void {
-  if (levelTimer !== null || !meterAnalyser || !shouldMeasureInput()) return;
-  const values = new Uint8Array(meterAnalyser.frequencyBinCount);
-  const sample = (): void => {
-    if (!meterAnalyser || !shouldMeasureInput()) {
-      stopInputLevelMeter();
-      return;
-    }
-    meterAnalyser.getByteTimeDomainData(values);
-    let sum = 0;
-    for (const value of values) {
-      const sampleValue = (value - 128) / 128;
-      sum += sampleValue * sampleValue;
-    }
-    const next = Math.min(1, Math.sqrt(sum / Math.max(1, values.length)) * 3.2);
-    if (Math.abs(next - level) > 0.01) {
-      level = next;
-      publish();
-    }
-  };
-  levelTimer = setInterval(sample, 100);
-  sample();
-}
-
-function attachSink(stream: MediaStream): void {
-  sink?.pause();
-  const audio = new Audio();
-  audio.srcObject = stream;
-  audio.autoplay = !paused;
-  audio.muted = paused;
-  if (!paused) audio.play().catch(() => {});
-  sink = audio;
-}
-
-function onRealtimeEvent(raw: unknown): void {
-  if (paused || pendingPause) return;
-  if (typeof raw !== 'string') return;
-  let event: Record<string, unknown>;
-  try {
-    event = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return;
-  }
-  switch (String(event.type ?? '')) {
-    case 'input_audio_buffer.speech_started':
-      if (!peer || !dataChannel || !canPublishListening(peer, dataChannel)) return;
-      spoken = '';
-      inputActive = !muted;
-      publish('listening');
-      startInputLevelMeter();
-      break;
-    case 'input_audio_buffer.speech_stopped':
-      inputActive = false;
-      stopInputLevelMeter();
-      break;
-    case 'conversation.item.input_audio_transcription.completed':
-      heard = String(event.transcript ?? '').trim();
-      publish();
-      break;
-    case 'response.created':
-      spoken = '';
-      inputActive = false;
-      stopInputLevelMeter(false);
-      publish('thinking');
-      break;
-    case 'response.output_audio_transcript.delta':
-    case 'response.audio_transcript.delta':
-      spoken += String(event.delta ?? '');
-      inputActive = false;
-      stopInputLevelMeter(false);
-      publish('speaking');
-      break;
-    case 'response.done':
-    case 'response.cancelled':
-      inputActive = false;
-      stopInputLevelMeter(false);
-      if (appIsActive() && peer && dataChannel && canPublishListening(peer, dataChannel)) publish('listening');
-      break;
-    case 'error': {
-      // Provider messages may echo credentials or arbitrary request data.
-      // Keep the visible mobile error bounded to fixed, actionable copy.
-      const detail = event.error as { code?: unknown } | undefined;
-      const message = detail?.code === 'rate_limit_exceeded'
-        ? 'Voice provider is temporarily busy. Try again shortly.'
-        : detail?.code === 'session_expired'
-          ? 'The voice session expired. Start voice mode again.'
-          : 'The voice provider reported a session error. Start voice mode again.';
-      fail(message);
-      break;
-    }
-  }
-}
-
-function canPublishListening(connection: RTCPeerConnection, channel: RTCDataChannel): boolean {
-  return (
-    !paused &&
-    !pendingPause &&
-    connection === peer &&
-    channel === dataChannel &&
-    channel.readyState === 'open' &&
-    connection.currentRemoteDescription !== null &&
-    liveInputTracks().length > 0
-  );
-}
-
-type RealtimeControlType = 'response.cancel' | 'output_audio_buffer.clear';
-
-function sendRealtimeControl(type: RealtimeControlType): void {
-  if (dataChannel?.readyState !== 'open') return;
-  try {
-    dataChannel.send(JSON.stringify({ type }));
-  } catch {
-    // The peer may be closing. Local pause still fences playback and input.
-  }
-}
-
-function cancelProviderOutput(): void {
-  sendRealtimeControl('response.cancel');
-  sendRealtimeControl('output_audio_buffer.clear');
-}
-
-async function detachInputSenders(): Promise<void> {
-  const bindings = inputSenders.slice();
-  await Promise.all(
-    bindings.map(async ({ sender }) => {
-      await sender.replaceTrack(null);
-    }),
-  );
-}
-
-async function restoreInputSenders(): Promise<void> {
-  const bindings = inputSenders.slice();
-  if (bindings.some(({ track }) => track.readyState !== 'live')) {
-    throw new Error('The microphone ended while voice mode was paused.');
-  }
-  await Promise.all(
-    bindings.map(async ({ sender, track }) => {
-      await sender.replaceTrack(track);
-    }),
-  );
-}
-
-async function appStart(): Promise<void> {
-  if (appIsActive() || releasing) return;
-  voluntaryVoiceExit = null;
-  if (!availabilityKnown) {
-    // Status refresh is neither a failed voice session nor a reason to move
-    // the composer into an error state. Keep this cancellable idle state and
-    // let the visible availability text explain what is pending.
-    error = '';
-    publish();
-    return;
-  }
-  if (!candidateAvailable) {
-    error = unavailableMessage(availabilityReason);
-    publish('error');
-    return;
-  }
-  if (!appIsSupported()) {
-    error = 'Voice mode needs browser microphone support.';
-    publish('error');
-    return;
-  }
-  const acquired = voiceCaptureArbiter.acquire('app_conversation');
-  if (!acquired.ok) {
-    error =
-      acquired.owner === 'composer_dictation'
-        ? 'Finish dictation before starting a spoken conversation.'
-        : 'Another microphone capture is still releasing.';
-    publish('error');
-    return;
-  }
-  const current = ++generation;
-  error = '';
-  heard = '';
-  spoken = '';
-  muted = false;
-  paused = false;
-  pendingPause = false;
-  pausedMuted = false;
-  pauseResumeFence++;
-  inputActive = false;
-  stopInputLevelMeter(false);
-  publish('connecting');
-  let phase: StartPhase = 'claim';
-  try {
-    const claimedLease = await appVoiceOperations.claim(false);
-    if (generation !== current) {
-      appVoiceOperations.releaseLease(claimedLease);
-      return;
-    }
-    lease = claimedLease;
-    phase = 'session_setup';
-    const tokenResponse = await fetch(apiPath('/api/app/voice/token'), {
-      method: 'POST',
-      credentials: 'include',
-      cache: 'no-store',
-      headers: headers(claimedLease.control_token),
-      body: JSON.stringify({ protocol_version: APP_VOICE_PROTOCOL_VERSION, lease_epoch: claimedLease.lease_epoch }),
-    });
-    if (!tokenResponse.ok) throw new Error(await errorText(tokenResponse, 'Could not mint the app voice session'));
-    const token = (await tokenResponse.json()) as TokenResponse;
-    if (!token.session_id) throw new Error('The app voice provider returned no session.');
-    if (generation !== current) {
-      appVoiceOperations.releaseLease(claimedLease);
-      return;
-    }
-    sessionId = token.session_id;
-
-    phase = 'microphone';
-    const acquiredMicrophone = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
-    if (generation !== current) {
-      // Do not call the global release path here: a stopped, late permission
-      // request can resolve after a newer session owns those globals.
-      acquiredMicrophone.getTracks().forEach((track) => track.stop());
-      return;
-    }
-    microphone = acquiredMicrophone;
-    attachInputMeter(acquiredMicrophone, current);
-    if (paused) {
-      for (const track of liveInputTracks()) track.enabled = false;
-      inputActive = false;
-      stopInputLevelMeter(false);
-      syncMuted();
-      void meterContext?.suspend().catch(() => {});
-    }
-    syncMuted();
-    phase = 'connection';
-    const connection = new RTCPeerConnection();
-    peer = connection;
-    inputSenders = [];
-    for (const track of microphone.getTracks()) {
-      inputSenders.push({ sender: connection.addTrack(track, microphone), track });
-    }
-    if (paused) {
-      await detachInputSenders();
-      if (generation !== current) return;
-      pendingPause = false;
-    }
-    connection.ontrack = (event) => {
-      if (generation === current) attachSink(event.streams[0] ?? new MediaStream([event.track]));
-    };
-    connection.onconnectionstatechange = () => {
-      if (
-        generation === current &&
-        (connection.connectionState === 'failed' || connection.connectionState === 'closed')
-      ) {
-        fail('The app voice connection dropped.');
-      }
-    };
-    dataChannel = connection.createDataChannel('oai-events');
-    let remoteDescriptionAccepted = false;
-    dataChannel.onmessage = (event) => {
-      if (generation === current) onRealtimeEvent(event.data);
-    };
-    dataChannel.onopen = () => {
-      if (generation !== current) return;
-      if (paused || pendingPause) cancelProviderOutput();
-      if (remoteDescriptionAccepted && canPublishListening(connection, dataChannel!)) {
-        publish('listening');
-      }
-    };
-    const offer = await connection.createOffer();
-    await connection.setLocalDescription(offer);
-    await waitForIce(connection);
-    if (generation !== current) {
-      appVoiceOperations.releaseLease(claimedLease);
-      return;
-    }
-    const response = await fetch(apiPath('/api/app/voice/sdp'), {
-      method: 'POST',
-      credentials: 'include',
-      cache: 'no-store',
-      headers: {
-        'Content-Type': 'application/sdp',
-        'X-App-Voice-Protocol': String(APP_VOICE_PROTOCOL_VERSION),
-        'X-App-Voice-Control': claimedLease.control_token,
-        'X-App-Voice-Lease-Epoch': String(claimedLease.lease_epoch),
-        'X-App-Voice-Session': sessionId,
-      },
-      body: connection.localDescription?.sdp ?? offer.sdp ?? '',
-    });
-    if (generation !== current) {
-      appVoiceOperations.releaseLease(claimedLease);
-      return;
-    }
-    if (!response.ok) throw new Error(await errorText(response, 'The app voice provider refused the connection'));
-    if (response.headers.get('X-App-Voice-Session') !== sessionId) {
-      throw new Error('The app voice provider returned a different session.');
-    }
-    await connection.setRemoteDescription({ type: 'answer', sdp: await response.text() });
-    remoteDescriptionAccepted = true;
-    if (generation === current && dataChannel && canPublishListening(connection, dataChannel)) {
-      publish('listening');
-    }
-  } catch (cause) {
-    if (generation === current) fail(startErrorMessage(cause, phase));
-  }
-}
-
-/**
- * This is the local drain boundary used for Stop, owner lease loss, and
- * takeover. It releases browser tracks/sink/peer before any drain ACK; this
- * truthfully proves local resource release, not acoustic playback proof.
- */
-async function releaseBrowserMedia(): Promise<void> {
-  inputActive = false;
-  pendingPause = false;
-  paused = false;
-  detachInputMeter();
-  const closingMeterContext = meterContext;
-  meterContext = null;
-  if (sink) {
-    sink.pause();
-    sink.srcObject = null;
-    sink = null;
-  }
-  microphone?.getTracks().forEach((track) => track.stop());
-  microphone = null;
-  inputSenders = [];
-  muted = false;
-  try {
-    dataChannel?.close();
-  } catch {}
-  dataChannel = null;
-  try {
-    peer?.close();
-  } catch {}
-  peer = null;
-  level = 0;
-  // Sources are disconnected and tracks stopped above; do not let a browser
-  // AudioContext close hang the explicit-stop release deadline.
-  void closingMeterContext?.close().catch(() => {});
-}
-
-async function endProviderSession(previousLease: AppVoiceLease, previousSession: string): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3_000);
-  try {
-    const response = await fetch(apiPath('/api/app/voice/end'), {
-      method: 'POST',
-      credentials: 'include',
-      cache: 'no-store',
-      headers: headers(previousLease.control_token),
-      body: JSON.stringify({
-        protocol_version: APP_VOICE_PROTOCOL_VERSION,
-        lease_epoch: previousLease.lease_epoch,
-        session_id: previousSession,
-      }),
-      keepalive: true,
-      signal: controller.signal,
-    });
-    return response.ok;
-  } catch {
-    // The exact owner-epoch WebSocket release below is the bounded fallback.
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function beginRelease(sendEnd: boolean, intent: 'user_exit' | 'non_user' = 'non_user'): Promise<void> {
-  pendingPause = false;
-  paused = false;
-  pauseResumeFence++;
-  if (releasing) return releasing;
-  const previousGeneration = generation;
-  const previousLease = lease;
-  const previousSession = sessionId;
-  voluntaryVoiceExit =
-    intent === 'user_exit' && previousLease
-      ? Object.freeze({
-          generation: previousGeneration,
-          leaseEpoch: previousLease.lease_epoch,
-          sessionId: previousSession,
-        })
-      : null;
-  lease = null;
-  sessionId = '';
-  generation++;
-  if (!previousLease) appVoiceOperations.cancelClaim();
-  // Install the release barrier before notifying lease listeners. A local
-  // release notifies synchronously; without this ordering its listener would
-  // recursively start a second browser-media cleanup.
-  const browserRelease = releaseBrowserMedia();
-  releasing = browserRelease
-    .then(async () => {
-      if (!sendEnd || !previousLease) return;
-      const ended = previousSession !== '' && (await endProviderSession(previousLease, previousSession));
-      if (ended) appVoiceOperations.endLease(previousLease.lease_epoch);
-    })
-    .finally(() => {
-      releasing = null;
-      void voiceCaptureArbiter.release('app_conversation');
-    });
-  // Stop withdraws the old owner epoch before awaiting browser/media cleanup.
-  // `previousLease` remains an immutable correlation for the bounded provider
-  // end request below; no cleanup path reads the mutable current lease.
-  if (previousLease) appVoiceOperations.releaseLease(previousLease, previousSession);
-  return releasing;
-}
-
-function appStop(intent: 'user_exit' | 'non_user'): void {
-  error = '';
-  void beginRelease(true, intent);
-  publish('idle');
-}
-
-function resumeErrorMessage(_cause: unknown): string {
-  return 'Voice mode could not resume safely. Start voice mode again.';
-}
-
-async function appPause(): Promise<void> {
-  if (!appIsActive() || paused) return;
-  const currentGeneration = generation;
-  const currentFence = ++pauseResumeFence;
-  pendingPause = true;
-  pausedMuted = muted;
-  paused = true;
-  state = 'paused';
-  inputActive = false;
-  stopInputLevelMeter(false);
-  for (const track of liveInputTracks()) track.enabled = false;
-  syncMuted();
-  if (sink) {
-    sink.pause();
-    sink.muted = true;
-  }
-  if (lease) appVoiceOperations.setPlaybackPaused(lease.lease_epoch, true);
-  const suspendingMeter = meterContext?.suspend() ?? Promise.resolve();
-  cancelProviderOutput();
-  publish('paused');
-
-  try {
-    await Promise.all([suspendingMeter, detachInputSenders()]);
-    if (generation !== currentGeneration || !paused || pauseResumeFence !== currentFence) return;
-    // A connection which has not acquired its tracks yet keeps this intent in
-    // `pendingPause`; appStart applies it at the first safe media boundary.
-    if (peer) pendingPause = false;
-  } catch (cause) {
-    if (generation !== currentGeneration || !paused || pauseResumeFence !== currentFence) return;
-    paused = false;
-    pendingPause = false;
-    error = resumeErrorMessage(cause);
-    publish('error');
-    await beginRelease(true);
-  }
-}
-
-async function appResume(): Promise<void> {
-  if (!paused) return;
-  const currentGeneration = generation;
-  const currentFence = ++pauseResumeFence;
-  const tracks = liveInputTracks();
-  if (microphone && tracks.length === 0) {
-    paused = false;
-    pendingPause = false;
-    error = 'The microphone ended while voice mode was paused. Start voice mode again.';
-    publish('error');
-    await beginRelease(true);
-    return;
-  }
-
-  const playback = sink
-    ? (() => {
-        sink!.muted = false;
-        return sink!.play();
-      })()
-    : Promise.resolve();
-  const resumingMeter = meterContext?.resume() ?? Promise.resolve();
-  try {
-    await Promise.all([restoreInputSenders(), playback, resumingMeter]);
-    if (generation !== currentGeneration || !paused || pauseResumeFence !== currentFence) return;
-    for (const track of tracks) track.enabled = !pausedMuted;
-    paused = false;
-    pendingPause = false;
-    if (lease) appVoiceOperations.setPlaybackPaused(lease.lease_epoch, false);
-    inputActive = false;
-    syncMuted();
-    if (peer && dataChannel && canPublishListening(peer, dataChannel)) {
-      publish('listening');
-    } else {
-      publish('connecting');
-    }
-  } catch (cause) {
-    if (generation !== currentGeneration || !paused || pauseResumeFence !== currentFence) return;
-    for (const track of tracks) track.enabled = false;
-    if (sink) {
-      sink.pause();
-      sink.muted = true;
-    }
-    void meterContext?.suspend().catch(() => {});
-    try {
-      await detachInputSenders();
-    } catch {
-      // The terminal stop below still closes the peer and ends every track.
-    }
-    paused = false;
-    pendingPause = false;
-    error = resumeErrorMessage(cause);
-    publish('error');
-    await beginRelease(true);
-  }
-}
-
-function serializePauseResume(operation: () => Promise<void>): Promise<void> {
-  const next = pauseResumeSerial.then(operation, operation);
-  pauseResumeSerial = next.catch(() => {});
-  return next;
-}
-
-/**
- * Toggle only the actual browser input tracks. The peer connection, provider
- * session, data channel and output sink remain in place while muted.
- */
-function appSetMuted(next: boolean): void {
-  if (paused) return;
-  const tracks = liveInputTracks();
-  if (tracks.length === 0) return;
-  for (const track of tracks) track.enabled = !next;
-  inputActive = false;
-  const levelChanged = level !== 0;
-  stopInputLevelMeter(false);
-  const mutedChanged = syncMuted();
-  if (levelChanged || mutedChanged) publish();
-}
-
-/** An idle error is presentational and may be dismissed without starting media. */
-function appDismissError(): void {
-  if (state !== 'error') return;
-  error = '';
-  publish('idle');
-}
-
-function fail(message: string, sendEnd = true, expectedGeneration = generation): void {
-  if (generation !== expectedGeneration) return;
-  paused = false;
-  pendingPause = false;
-  pauseResumeFence++;
-  error = message;
-  publish('error');
-  void beginRelease(sendEnd);
-}
-
-type LeaseEndHandling = 'claimed' | 'suppressed_user_exit' | 'unexpected_end';
-
-function isVoluntaryVoiceExit(transition: AppVoiceLeaseTransition): boolean {
-  const expected = voluntaryVoiceExit;
-  return (
-    transition.kind === 'ended' &&
-    expected !== null &&
-    transition.source === 'local_release' &&
-    transition.reason === 'explicit_end' &&
-    transition.leaseEpoch === expected.leaseEpoch &&
-    transition.localSessionId === expected.sessionId &&
-    generation === expected.generation + 1
-  );
-}
-
-function handleLeaseTransition(transition: AppVoiceLeaseTransition): LeaseEndHandling {
-  if (transition.kind === 'claimed') {
-    lease = transition.lease;
-    return 'claimed';
-  }
-
-  lease = null;
-  if (isVoluntaryVoiceExit(transition)) {
-    // This is the synchronous local release belonging to the exact browser
-    // generation and lease armed by the user's End/Exit control. It is a
-    // handled normal terminal transition, not an error presentation.
-    voluntaryVoiceExit = null;
-    return 'suppressed_user_exit';
-  }
-
-  // This marker is one-use and never authorizes a different terminal source,
-  // reason, lease epoch, or browser generation to be hidden.
-  voluntaryVoiceExit = null;
-  if (appIsActive()) {
-    fail(
-      transition.reason === 'takeover'
-        ? 'Voice mode was taken over in another browser.'
-        : 'Voice mode ended. Start voice mode again.',
-      false,
-    );
-  }
-  return 'unexpected_end';
-}
-
-appVoiceOperations.onLeaseChange((transition) => {
-  const handling = handleLeaseTransition(transition);
-  if (handling === 'suppressed_user_exit') return;
-});
-
-appVoiceOperations.onDrainRequest(async (epoch, nonce) => {
-  if (!lease || lease.lease_epoch !== epoch) return;
-  await beginRelease(false);
-  appVoiceOperations.acknowledgeDrain(epoch, nonce);
-  publish('idle');
-});
-
-/**
- * Runtime facts from the authenticated settings endpoint. Presentation props
- * are never accepted here: only this server status may enable a transport.
- */
-export interface VoiceAvailability {
-  readonly available: boolean;
-  readonly availabilityReason: VoiceAvailabilityReason;
-}
-
-const facadeListeners = new Set<Listener>();
-
-function transportIsReleasing(): boolean {
-  return releasing !== null;
-}
-
-function facadeSnapshot(): VoiceSessionSnapshot {
-  return appSnapshot();
-}
-
-function publishFacade(): void {
-  const value = facadeSnapshot();
-  for (const listener of facadeListeners) listener(value);
-}
-
-// Each transport has exactly one bridge into the public singleton. Components
-// subscribe only to this app-v1 transport, so navigation cannot mount a
-// second session or choose a legacy backend.
-appSubscribe(publishFacade);
-
-export function isSupported(): boolean {
-  return appIsSupported();
-}
-
-/** Compatibility for existing fixture callers; this never enables legacy. */
-export function isCandidateAvailable(): boolean {
-  return appIsCandidateAvailable();
-}
-
-/** Compatibility for older callers that knew only the app-v1 capability. */
-export function setCandidateAvailable(available: boolean): void {
-  appSetAvailability(available, available ? 'ready' : 'voice_provider_unavailable');
-  publishFacade();
-}
-
-/** A fetch is in flight; this is pending, not evidence that voice is unavailable. */
-export function setAvailabilityPending(): void {
-  appSetAvailabilityPending();
-  publishFacade();
-}
-
-/**
- * Availability controls future starts only. An active transport remains owned
- * by its original backend until explicit Stop or its authoritative end event;
- * a settings refresh is not a session-revocation message.
- */
-export function setAvailability(availability: VoiceAvailability): void {
-  // This governs only future Starts. Existing leases stay alive until their
-  // authoritative end, explicit Stop, owner loss, or takeover drain.
-  appSetAvailability(availability.available, availability.availabilityReason);
-  publishFacade();
-}
-
-export function isActive(): boolean {
-  return appIsActive();
-}
-
-export function isPaused(): boolean {
-  return paused;
 }
 
 export function snapshot(): VoiceSessionSnapshot {
-  return facadeSnapshot();
+  return { state: _state, level: _level, heard: _heard, spoken: _spoken, error: _error };
 }
 
-export function subscribe(listener: Listener): () => void {
-  facadeListeners.add(listener);
-  return () => facadeListeners.delete(listener);
+export function subscribe(cb: Listener): () => void {
+  _listeners.add(cb);
+  return () => {
+    _listeners.delete(cb);
+  };
 }
 
-export async function start(): Promise<void> {
-  if (isActive()) return;
-  // Do not re-enter while this transport is still draining a late permission
-  // or media cleanup.
-  if (transportIsReleasing()) return;
-  if (!candidateAvailable) {
-    // The unavailable control is disabled in product UI, but preserve an
-    // explicit, truthful error for programmatic callers without touching media.
-    await appStart();
-    return;
-  }
-  await appStart();
-  publishFacade();
+export function isActive(): boolean {
+  return _state !== 'idle' && _state !== 'error';
 }
 
-export function stop(): void {
-  appStop('non_user');
-  publishFacade();
-}
-
-/** The visible composer End/Exit control explicitly owns this normal release. */
-export function exitByUser(): void {
-  appStop('user_exit');
-  publishFacade();
-}
-
-export function pause(): Promise<void> {
-  return serializePauseResume(appPause);
-}
-
-export function resume(): Promise<void> {
-  return serializePauseResume(appResume);
-}
-
-export async function togglePaused(): Promise<void> {
-  if (paused) {
-    await resume();
-    return;
-  }
-  if (appIsActive()) await pause();
-}
-
+/** Start or stop, whichever the current state calls for. */
 export async function toggle(): Promise<void> {
   if (isActive()) {
-    exitByUser();
+    stop();
     return;
   }
   await start();
 }
 
-export function setMuted(next: boolean): void {
-  appSetMuted(next);
+export async function start(): Promise<void> {
+  if (isActive()) return;
+  const gen = ++_gen;
+  _error = '';
+  _heard = '';
+  _spoken = '';
+  _setState('connecting');
+
+  try {
+    // 1. A short-lived secret, minted server-side. The credential that
+    //    minted it never comes anywhere near this file.
+    const tokenRes = await fetch(apiPath('/api/cos/voice/token'), { method: 'POST' });
+    if (!tokenRes.ok) throw new Error(await _errorText(tokenRes, 'could not start a voice session'));
+    const token = (await tokenRes.json()) as TokenResponse;
+    if (gen !== _gen) return;
+    _sessionId = token.session_id;
+
+    // 2. The microphone. Fails loudly and early if permission is refused,
+    //    which is better than a session that connects and hears nothing.
+    _mic = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    if (gen !== _gen) {
+      _mic.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
+    // 3. The peer connection.
+    const pc = new RTCPeerConnection();
+    _pc = pc;
+    // addTrack creates a SENDRECV transceiver on its own, so the offer
+    // already asks to receive. An extra addTransceiver('audio') here adds a
+    // SECOND m-line that carries nothing — harmless to the conversation,
+    // but it splits getStats across two outbound-rtp reports and makes the
+    // empty one look like a session that never sent any audio.
+    for (const track of _mic.getTracks()) pc.addTrack(track, _mic);
+
+    pc.ontrack = (ev) => {
+      if (gen !== _gen) return;
+      _attachSink(ev.streams[0] ?? new MediaStream([ev.track]));
+    };
+    pc.onconnectionstatechange = () => {
+      if (gen !== _gen) return;
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        _fail('the voice connection dropped');
+      }
+    };
+
+    const dc = pc.createDataChannel('oai-events');
+    _dc = dc;
+    dc.onmessage = (ev) => {
+      if (gen !== _gen) return;
+      _onRealtimeEvent(ev.data);
+    };
+    dc.onopen = () => {
+      if (gen !== _gen) return;
+      _configureSession();
+      _setState('listening');
+    };
+
+    // 4. Offer → muxterm → vendor → answer.
+    //
+    //    Proxied through muxterm rather than posted straight to the vendor.
+    //    The response's Location header names the CALL ID, and the sideband
+    //    keyed to that id executes shell tools — so it must be an id muxterm
+    //    watched the vendor mint, not one this page handed it.
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await _iceSettled(pc);
+    if (gen !== _gen) return;
+
+    const sdpRes = await fetch(apiPath('/api/cos/voice/sdp'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp', 'X-Voice-Session': _sessionId },
+      body: pc.localDescription?.sdp ?? offer.sdp ?? '',
+    });
+    if (!sdpRes.ok) throw new Error(await _errorText(sdpRes, 'the voice service refused the connection'));
+    const answer = await sdpRes.text();
+    if (gen !== _gen) return;
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+
+    _subscribeToChiefOfStaff();
+  } catch (err) {
+    if (gen !== _gen) return;
+    _fail(err instanceof Error ? err.message : String(err));
+  }
 }
 
-export function dismissError(): void {
-  appDismissError();
-  publishFacade();
+export function stop(): void {
+  _gen++;
+  _teardown();
+  _setState('idle');
 }
 
-/** Legacy COS events are not app-v1 authority and cannot end this lease. */
-export function endedByServer(_endedSessionId: string): void {
-  // App voice lease-end frames are handled by appVoiceOperations above.
+/**
+ * The server tore this session down and is telling us so.
+ *
+ * That is the spoken exit: the user asked the model to hang up, the model
+ * confirmed it with them, said goodbye, and muxterm ended the session in its
+ * own process. None of that reaches the microphone light, the peer connection
+ * or the idle state — those all live here — so the page follows.
+ *
+ * The session id is cleared BEFORE tearing down, so this path does not post
+ * /api/cos/voice/end back at a server that has already ended it.
+ *
+ * A broadcast naming a different session is ignored: only one voice session
+ * runs at a time, but a late frame for a previous one must not close the one
+ * that replaced it.
+ */
+export function endedByServer(sessionId: string): void {
+  if (!_sessionId) return;
+  if (sessionId && sessionId !== _sessionId) return;
+  _sessionId = '';
+  stop();
+}
+
+// ---------------------------------------------------------------------------
+// realtime events
+// ---------------------------------------------------------------------------
+
+function _configureSession(): void {
+  // Transcription is asked for explicitly: it is off by default, and both
+  // transcripts are what make a spoken turn readable in the log afterwards.
+  //
+  // turn_detection is left at the server's own server_vad default, which
+  // already carries interrupt_response: true — barge-in needs no
+  // configuration on this stack.
+  _send({
+    type: 'session.update',
+    session: {
+      type: 'realtime',
+      audio: {
+        input: {
+          transcription: { model: 'whisper-1' },
+        },
+      },
+    },
+  });
+}
+
+function _onRealtimeEvent(raw: unknown): void {
+  if (typeof raw !== 'string') return;
+  let ev: Record<string, unknown>;
+  try {
+    ev = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  const type = String(ev.type ?? '');
+
+  switch (type) {
+    // The user started talking. Over WebRTC the server has already
+    // truncated its own unplayed audio, so this is a UI signal only.
+    case 'input_audio_buffer.speech_started':
+      _spoken = '';
+      _setState('listening');
+      break;
+
+    case 'conversation.item.input_audio_transcription.completed':
+      _heard = String(ev.transcript ?? '').trim();
+      _log.push({ at: Date.now(), dir: 'heard', text: _heard });
+      _notify();
+      break;
+
+    case 'response.created':
+      _responseActive = true;
+      // Reset HERE, not only on speech_started. A response the server
+      // creates on its own -- narration, an injected answer, a tool result
+      // being spoken -- has no preceding user utterance, so a buffer only
+      // cleared on speech_started concatenates two separate answers into
+      // one run-on line.
+      _spoken = '';
+      _setState('thinking');
+      break;
+
+    case 'response.output_audio_transcript.delta':
+    case 'response.audio_transcript.delta':
+      _spoken += String(ev.delta ?? '');
+      if (_state !== 'speaking') _setState('speaking');
+      else _notify();
+      break;
+
+    case 'response.output_audio.done':
+    case 'response.audio.done':
+      break;
+
+    case 'response.done':
+    case 'response.cancelled':
+      if (_spoken.trim()) _log.push({ at: Date.now(), dir: 'spoke', text: _spoken.trim() });
+      _releaseResponse();
+      if (_state === 'speaking' || _state === 'thinking') _setState('listening');
+      break;
+
+    case 'error': {
+      const e = ev.error as { message?: string } | undefined;
+      _fail(e?.message ?? 'the voice service reported an error');
+      break;
+    }
+  }
+}
+
+/** Send a client event over the data channel, if it is open. */
+function _send(msg: unknown): boolean {
+  if (!_dc || _dc.readyState !== 'open') return false;
+  _dc.send(JSON.stringify(msg));
+  return true;
+}
+
+/**
+ * Say something that answers no user utterance.
+ *
+ * The text goes in as a conversation item and a response is requested with
+ * instructions. If the user is mid-sentence the model waits for the turn
+ * boundary rather than talking over them, which is the behaviour you want.
+ */
+function _say(text: string, instructions: string): void {
+  if (
+    !_send({
+      type: 'conversation.item.create',
+      item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+    })
+  ) {
+    return;
+  }
+  if (_responseActive) {
+    // Held, not dropped, and coalesced to the most recent: three progress
+    // notes queued behind one long answer would be delivered as a
+    // monologue nobody asked for.
+    _pendingSay = [{ text, instructions }];
+    return;
+  }
+  _responseActive = true;
+  _send({ type: 'response.create', response: { instructions } });
+}
+
+/** Called when a response ends: release the gate and flush one held ask. */
+function _releaseResponse(): void {
+  _responseActive = false;
+  const next = _pendingSay.pop();
+  _pendingSay = [];
+  if (next) {
+    _responseActive = true;
+    _send({ type: 'response.create', response: { instructions: next.instructions } });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// narration — C6
+// ---------------------------------------------------------------------------
+
+/**
+ * Speak progress from the event stream that is already arriving.
+ *
+ * This is wiring, not invention. muxterm's sidecar already emits a
+ * structured, real-time account of what it is doing — turn_start, thinking,
+ * tool_start, tool_end, approval_request, turn_end — and that stream already
+ * reaches this browser and is already switched on by cos-store. Most
+ * projects building voice over an agent have to build this from nothing.
+ *
+ * The failure mode being prevented is specific: a chief-of-staff turn can
+ * run for minutes, and in a spoken conversation thirty seconds of silence is
+ * indistinguishable from a crash.
+ *
+ * The failure mode being AVOIDED in the other direction is chatter. Two
+ * gates: nothing is said for the first few seconds of a turn (most turns
+ * finish inside that), and no two progress notes come closer together than
+ * NARRATION_GAP_MS. A tool already announced this turn is never announced
+ * again.
+ */
+function _subscribeToChiefOfStaff(): void {
+  _unsubCos?.();
+  let turnStartedAt = 0;
+
+  _unsubCos = cosStore.onEvent((ev) => {
+    if (!isActive()) return;
+    const kind = String(ev.ev ?? '');
+
+    switch (kind) {
+      case 'turn_start':
+        turnStartedAt = Date.now();
+        _narratedTools = new Set<string>();
+        break;
+
+      case 'tool_start': {
+        const name = shortToolName(String(ev.name ?? ''));
+        if (!name || _narratedTools.has(name)) break;
+        if (Date.now() - turnStartedAt < NARRATION_AFTER_MS) break;
+        if (Date.now() - _lastNarration < NARRATION_GAP_MS) break;
+        _narratedTools.add(name);
+        _lastNarration = Date.now();
+        _log.push({ at: Date.now(), dir: 'event', text: `narrate:tool_start:${name}` });
+        _say(
+          `[progress] Still working. Currently running: ${name}.`,
+          'Tell the user in ONE short sentence what you are doing right now. Do not repeat yourself and do not add detail.',
+        );
+        break;
+      }
+
+      case 'approval_request': {
+        // C7's browser half: bring the request into the conversation so it
+        // can be spoken. The DECISION is not made here and cannot be — the
+        // gate is server-side, in the sideband, where the answer has to
+        // survive a two-step confirmation before anything is transmitted.
+        const id = String(ev.request_id ?? '');
+        if (!id || _spokenApprovals.has(id)) break;
+        _spokenApprovals.add(id);
+        _lastNarration = Date.now();
+        const tool = String(ev.tool ?? 'something');
+        const detail = String(ev.detail ?? '').slice(0, 400);
+        _log.push({ at: Date.now(), dir: 'event', text: `narrate:approval_request:${tool}` });
+        _say(
+          `[approval needed] request_id=${id} tool=${tool} detail=${detail}`,
+          'Operator needs permission. Say plainly what it wants to do and ask the user to approve or deny. ' +
+            'Then follow the approval rules exactly: read their decision back, wait for confirmation, and only then call answer_approval with confirm true. If it is unclear, deny.',
+        );
+        break;
+      }
+
+      case 'turn_end':
+        turnStartedAt = 0;
+        break;
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// audio plumbing
+// ---------------------------------------------------------------------------
+
+/**
+ * Attach the inbound stream to BOTH a media element and the analyser.
+ *
+ * The media element is not optional and is not for playback convenience: in
+ * Chromium an inbound WebRTC track produces silence in Web Audio unless
+ * something consumes it as media first (crbug 40094084). Without these four
+ * lines the level meter reads zero forever, with no error anywhere.
+ *
+ * The element is NOT muted — it is how the assistant is actually heard.
+ */
+function _attachSink(stream: MediaStream): void {
+  _sink?.pause();
+  const el = new Audio();
+  el.srcObject = stream;
+  el.autoplay = true;
+  el.play().catch(() => {
+    /* autoplay policy; the user gesture that started the session covers it */
+  });
+  _sink = el;
+
+  try {
+    _ctx?.close().catch(() => {});
+    const ctx = new AudioContext();
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.6;
+    src.connect(analyser);
+    _ctx = ctx;
+    _analyser = analyser;
+    _startLevelLoop();
+  } catch {
+    // No analyser means no level meter. The conversation still works, so
+    // this is not a session-ending failure.
+    _analyser = null;
+  }
+}
+
+function _startLevelLoop(): void {
+  if (_levelRaf !== null) return;
+  const buf = new Uint8Array(_analyser?.frequencyBinCount ?? 0);
+  const loop = () => {
+    if (!_analyser || !isActive()) {
+      _levelRaf = null;
+      return;
+    }
+    _analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / Math.max(1, buf.length));
+    // A conversational RMS sits well under 0.3; scale so ordinary speech
+    // uses most of the range rather than a twentieth of it.
+    const next = Math.min(1, rms * 3.2);
+    if (Math.abs(next - _level) > 0.01) {
+      _level = next;
+      _notify();
+    }
+    _levelRaf = requestAnimationFrame(loop);
+  };
+  _levelRaf = requestAnimationFrame(loop);
+}
+
+/**
+ * Wait for ICE gathering, but not forever.
+ *
+ * A full gather can stall on a network with no route to a STUN server, and
+ * the candidates already collected are usually enough. Two seconds is the
+ * budget; the connection then proceeds with what it has.
+ */
+function _iceSettled(pc: RTCPeerConnection): Promise<void> {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      pc.removeEventListener('icegatheringstatechange', onChange);
+      clearTimeout(timer);
+      resolve();
+    };
+    const onChange = () => {
+      if (pc.iceGatheringState === 'complete') done();
+    };
+    const timer = setTimeout(done, 2000);
+    pc.addEventListener('icegatheringstatechange', onChange);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// lifecycle
+// ---------------------------------------------------------------------------
+
+function _teardown(): void {
+  _unsubCos?.();
+  _unsubCos = null;
+
+  if (_levelRaf !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_levelRaf);
+  _levelRaf = null;
+  _analyser = null;
+  _ctx?.close().catch(() => {});
+  _ctx = null;
+
+  if (_sink) {
+    _sink.pause();
+    _sink.srcObject = null;
+    _sink = null;
+  }
+  // The microphone light is the user's only evidence that a session ended.
+  // Stopping these tracks is what turns it off.
+  _mic?.getTracks().forEach((t) => t.stop());
+  _mic = null;
+
+  try {
+    _dc?.close();
+  } catch {
+    /* already gone */
+  }
+  _dc = null;
+  try {
+    _pc?.close();
+  } catch {
+    /* already gone */
+  }
+  _pc = null;
+
+  _level = 0;
+  _spokenApprovals.clear();
+  _narratedTools = new Set<string>();
+  _responseActive = false;
+  _pendingSay = [];
+
+  // Best-effort: tell muxterm to drop the sideband. keepalive so it still
+  // goes out if this fires during a page unload.
+  if (_sessionId) {
+    const id = _sessionId;
+    _sessionId = '';
+    fetch(apiPath('/api/cos/voice/end'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: id }),
+      keepalive: true,
+    }).catch(() => {
+      /* the server also tears sessions down on shutdown */
+    });
+  }
+}
+
+function _fail(message: string): void {
+  _error = message;
+  _teardown();
+  _setState('error');
+}
+
+function _setState(s: VoiceSessionState): void {
+  _state = s;
+  _notify();
+}
+
+function _notify(): void {
+  const snap = snapshot();
+  for (const cb of _listeners) {
+    try {
+      cb(snap);
+    } catch {
+      /* a bad listener is not this module's problem */
+    }
+  }
+}
+
+async function _errorText(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: string };
+    if (body?.error) return body.error;
+  } catch {
+    /* not JSON */
+  }
+  return `${fallback} (HTTP ${res.status})`;
 }
 
 export const voiceSessionController = {
   isSupported,
-  isCandidateAvailable,
-  setCandidateAvailable,
-  setAvailabilityPending,
-  setAvailability,
   isActive,
-  isPaused,
   snapshot,
   subscribe,
   start,
   stop,
-  exitByUser,
-  pause,
-  resume,
-  togglePaused,
-  setMuted,
-  dismissError,
   toggle,
   endedByServer,
 };
+
+// ---------------------------------------------------------------------------
+// DEV verification accessor — extends the SAME window.__muxterm object
+// terminal-registry.ts and voice-input-controller.ts already install, using
+// the IDENTICAL spread pattern so no module clobbers another's keys
+// regardless of evaluation order. Deliberately NOT gated behind
+// import.meta.env.DEV, for the reason voice-input-controller's accessor
+// gives: this repo builds with plain `vite build`, where that flag is false.
+//
+// It exists because this feature's proof CANNOT be a person speaking into a
+// microphone. The automated end-to-end run drives a real browser with a real
+// WAV file in place of a mic and needs to read back what was actually heard
+// and said. Everything here is READ-ONLY except start/stop, which are the
+// same code paths the button uses; there is no way to fake a transcript
+// through it, so a passing run is a real conversation or it is nothing.
+// ---------------------------------------------------------------------------
+
+/** Every transcript event, in order, for the automated end-to-end run. */
+const _log: Array<{ at: number; dir: 'heard' | 'spoke' | 'event'; text: string }> = [];
+
+if (typeof window !== 'undefined') {
+  (window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm = {
+    ...(window as unknown as { __muxterm?: Record<string, unknown> }).__muxterm,
+    voiceSession: {
+      /** Start, by the same path the button takes. */
+      start: (): Promise<void> => start(),
+      stop: (): void => stop(),
+      /** Live snapshot: state, level, both transcripts, any error. */
+      snapshot: (): VoiceSessionSnapshot => snapshot(),
+      /** Ordered transcript log, oldest first. */
+      log: () => _log.slice(),
+      /**
+       * Live inbound-audio statistics, straight from the peer connection.
+       *
+       * This is what proves audio came BACK, as opposed to a handshake that
+       * merely succeeded: bytes and packets on the inbound RTP stream, and
+       * the concealment/played sample counters the browser only maintains
+       * for audio it actually rendered.
+       */
+      stats: async (): Promise<Record<string, number>> => {
+        const out: Record<string, number> = {};
+        if (!_pc) return out;
+        // SUMMED across reports, not assigned. A peer connection can carry
+        // more than one audio m-line, and assigning lets whichever report
+        // arrives last speak for all of them — an empty one then reads as
+        // "no audio was ever sent".
+        const add = (k: string, v: unknown) => {
+          out[k] = (out[k] ?? 0) + Number(v ?? 0);
+        };
+        const report = await _pc.getStats();
+        report.forEach((s: Record<string, unknown>) => {
+          if (s.type === 'inbound-rtp' && s.kind === 'audio') {
+            add('inboundBytes', s.bytesReceived);
+            add('inboundPackets', s.packetsReceived);
+            add('playedSamples', s.totalSamplesReceived);
+            out.audioLevel = Math.max(out.audioLevel ?? 0, Number(s.audioLevel ?? 0));
+          }
+          if (s.type === 'outbound-rtp' && s.kind === 'audio') {
+            add('outboundBytes', s.bytesSent);
+            add('outboundPackets', s.packetsSent);
+          }
+        });
+        return out;
+      },
+      connectionState: (): string => _pc?.connectionState ?? 'none',
+      /**
+       * Feed one sidecar event through the REAL path — cos-store's own
+       * frame handler, the same one the WebSocket calls — so the narration
+       * and approval wiring is exercised exactly as it is in production.
+       * There is no shortcut into the narrator; an event injected here
+       * takes every gate a real one does.
+       */
+      feedCosEvent: (ev: Record<string, unknown>): void => {
+        cosStore.handleFrame({ type: 'cos-event', event: ev });
+      },
+    },
+  };
+}

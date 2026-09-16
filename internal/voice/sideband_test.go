@@ -1124,8 +1124,9 @@ func TestEndRemovesTheSessionFromTheManagerAndTellsTheBrowser(t *testing.T) {
 }
 
 // C6: adding a fifth tool did not perturb the four. The four definitions are
-// pinned here as JSON, so a future edit to any of them fails this test rather
-// than quietly changing the model's contract.
+// pinned here as JSON, then transformed through the product-name compatibility
+// boundary, so a future edit to either their wire contract or visible wording
+// fails this test rather than quietly changing the model's contract.
 func TestTheFourExistingToolsAreUnchanged(t *testing.T) {
 	defs := ToolDefinitions()
 	if len(defs) < 4 {
@@ -1135,8 +1136,9 @@ func TestTheFourExistingToolsAreUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if string(got) != fourToolsGolden {
-		t.Fatalf("the four existing tool definitions changed.\n got: %s\nwant: %s", got, fourToolsGolden)
+	want := strings.ReplaceAll(strings.ReplaceAll(fourToolsGolden, "Chief of Staff", "Operator"), "chief of staff", "Operator")
+	if string(got) != want {
+		t.Fatalf("the four existing tool definitions changed.\n got: %s\nwant: %s", got, want)
 	}
 }
 

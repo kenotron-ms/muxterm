@@ -1,104 +1,69 @@
-# Operator composer and Voice Mode contract
+# Operator Voice Mode compatibility record
 
-## Evidence and boundary
+**Restoration baseline:** `v0.32.0` / `4c5f897c7759f6776e95cada2f00aa36911ae9f2`
+**Reconciled target:** `origin/main` / `8cfe4caecf2d1f3e6cd04937fb2b85d1e0b6e2be`
 
-Mission Control is one persistent conversation, with no Lobby, context picker, or
-per-workspace voice lifetime (`docs/designs/2026-09-12-app-voice-two-lifetimes.md`,
-sections 1 and 2). Its server-side `cos.Supervisor` already provides the required
-single-consumer FIFO queue (`internal/cos/queue.go`): an accepted turn is created
-before dispatch and queued turns survive a sidecar restart. The correction below
-uses that queue; it does not invent a pretend "steer" operation that the backend
-cannot honor.
+## Restored behavioral boundary
 
-## Independent state
+Voice Mode restores the released v0.32 browser WebRTC and server-side sideband
+flow: protected `/api/cos/voice/token`, `/api/cos/voice/sdp`, and
+`/api/cos/voice/end`; an ephemeral browser-only provider secret; provider-derived
+call identity; and the server-side tool/approval/farewell bridge. The browser's
+`session.update` asks for transcription only. It deliberately does not set
+turn-detection/VAD values, `create_response: false`, local endpoint gates, or an
+App Voice delivery policy.
 
-The UI derives three independent values:
+The composer owns live Voice Mode. With an empty draft, its orb occupies the Send
+slot. From `connecting` through call end it takes over the composer, preserving
+draft/caret/focus and reader position. `type instead` returns to the text composer
+without hanging up; returning to the orb reverses it; Escape or the orb ends the
+call. This does not restore Lobby, contexts, threads, per-workspace voice, a
+floating bubble, or title/dock controls.
 
-| Concern | Authority | May affect |
-| --- | --- | --- |
-| Text composer | draft, admission receipts, and the Mission Control socket | Send availability and queued-turn presentation |
-| Operator work | the COS turn stream and server queue | Whether there is an active turn and which already-accepted turns wait |
-| Voice Mode | browser WebRTC/media capability, runtime voice availability, and the app voice lease | Only the Voice Mode control and its recovery message |
+## Retained current Mission Control/text behavior
 
-No voice value can disable the textarea, change its selection, discard its draft,
-or decide whether a text turn is sent. Likewise, an Operator turn is not a reason
-to hide or end a usable Voice Mode connection.
+Mission Control remains the one persistent server-owned conversation. Durable
+draft storage, FIFO text admission/queue/reconnect behavior, ordinary Send/Stop
+semantics, and one-shot composer dictation remain current behavior. Dictation
+only fills the durable draft for review and never auto-sends. Live Voice Mode
+uses its restored provider-owned response flow but submits tools through the
+current canonical COS relay with empty owner/client-reference values so distinct
+spoken turns never share a constant idempotency key.
 
-## Text invariant and routing
+## Identity compatibility
 
-The text area is always editable after it is rendered. Voice status lookup,
-credential minting, `getUserMedia`, lease claim/loss, WebRTC setup, an active
-lane/tool/stream, and browser microphone permission are not editability gates.
-Its draft is held in tab session storage so a normal refresh restores an
-unsubmitted draft; unavailable session storage remains a non-fatal loss of
-stickiness, not a disabled composer.
+`Operator` remains the only human-facing assistant name in UI labels, tool
+descriptions, spoken-provider instructions, narration, and user-facing errors.
+The five v0.32 provider tool identifiers retain their historical wire spelling
+(`ask_chief_of_staff`, `dispatch_chief_of_staff`, and
+`cancel_chief_of_staff`) because changing identifiers would alter the provider
+tool contract. Their model-visible prose uses `Operator`; this has no effect on
+endpointing, turn ownership, tool execution, approval, or farewell behavior.
+`Tank` remains only an existing display alias.
 
-A submitted message uses the existing server-owned FIFO:
-
-1. The browser sends `cos-turn` in submit order and keeps the draft until that
-   request receives `cos-turn-result`.
-2. The relay serializes startup admissions, then gives each accepted message a
-   turn ID and enqueues it in `cos.Supervisor`. The queue runs one turn at a time.
-   If work is already active, this is automatically **queued for the next turn**.
-3. The server publishes the accepted queue snapshot, so a reconnecting or
-   refreshed browser rebuilds the ordered pending rows even before the sidecar
-   has dispatched them. A pending row says “Queued for the next turn”; it never
-   claims to alter an already-dispatched tool action.
-4. A failed or unconfirmed admission leaves the draft intact. The person can
-   retry explicitly. An accepted queue entry survives a browser refresh,
-   WebSocket reconnect, a voice lease transition, and a recoverable sidecar
-   restart. It cannot honestly survive a permanent server/supervisor shutdown;
-   that failure is reported as such rather than silently replayed.
-
-There is no direct-steer UI in this revision because the current server protocol
-has no reliable operation that can safely modify an active Operator turn.
-
-## One primary composer control
-
-The circular primary control has a deliberately small state machine:
-
-| Active Operator turn | Draft | Primary press | Stop access |
+| Restored area | v0.32 source | Intentional departure | Behavioral effect |
 | --- | --- | --- | --- |
-| no | empty | disabled Send icon | not applicable |
-| no | present | Send | not applicable |
-| yes | empty | Stop active response | primary control |
-| yes | present | Queue message | hold the same control, or press Arrow Down while it is focused, to open its compact action menu and choose **Stop active response** |
+| Provider tool IDs | `*_chief_of_staff` identifiers | Retained as wire compatibility identifiers | None; tool dispatch remains the same |
+| Provider-visible prose | Chief-of-Staff wording | `Operator` wording at tool/session/narration boundaries | Identity only; no turn/endpoint change |
+| COS bridge call | Three-argument relay submit | Current `(supervisor, prompt, "", "")` FIFO call | No shared idempotency key; distinct spoken turns remain distinct |
+| SDP lifecycle | No duplicate-connect fence | Current generic `connecting` and end-during-connect guards | Rejects duplicate/racing SDP exchanges without App Voice state |
+| Provider errors | Provider response snippets on some failed check/mint/SDP requests | Fixed body-free error/recovery messages | Credential protection only |
+| Publication root guard | Rejects config directory and descendants | Also rejects an ancestor containing the config directory | Credential protection only |
 
-The draft-present state makes sending the safe default: a normal tap, Enter, or
-Space on the focused primary button cannot accidentally stop work. The compact
-menu exists only while an actual streamed turn is active; it contains one
-explicitly named Stop action, no duplicate permanent stop button, and never
-clears accepted queued turns. Escape closes the menu. The control exposes the
-same action and recovery instructions through its accessible name/description,
-and its coarse-pointer target remains at least 40px.
+## Approved security-only deviations
 
-Stop is a single deliberate action: it immediately cancels the specifically
-active sidecar task so the FIFO receives one terminal cancellation event. It
-does not require a hidden second click, and it never cancels queued turn IDs.
+1. Voice check, mint, and SDP failures never copy a non-success provider body
+   into a browser response or log. They use bounded fixed status/recovery text.
+2. Publication rejects a resolved root that equals, is inside, or contains
+   muxterm's configuration directory, protecting stored Voice Settings keys.
 
-## Voice Mode states
+Neither deviation adds an App Voice lease, app operation, VAD profile, endpoint
+gate, capture correlation, or delivery policy.
 
-Voice Mode stays rendered beside the primary composer control and remains
-independent of Operator busy state. It is disabled only for one of these actual
-voice-specific conditions:
+## Validation boundary
 
-| Condition | Visible message |
-| --- | --- |
-| availability check in progress | “Checking voice availability…” |
-| browser lacks WebRTC/microphone support | “Voice mode needs browser microphone support.” |
-| server has voice switched off | “Voice mode is off for this server.” |
-| server configuration is invalid | “Voice mode needs valid server settings.” |
-| runtime provider is unavailable | “Voice provider is unavailable. Try again shortly.” |
-| availability check failed | “Voice availability could not be checked. Try again.” |
-| microphone permission denied | “Microphone permission was denied. Allow it, then try again.” |
-| no microphone | “No microphone is available. Connect one, then try again.” |
-| lease, mint, or WebRTC setup failed | “Voice session could not start. Try again.” or “Voice connection could not start. Try again.” |
-
-Recoverable errors make the Voice Mode control a Retry action. A normal user
-exit is silent; raw provider responses, lease event names, token details,
-completed-work extracts, and server internals are never rendered.
-
-An active Voice Mode connection does not survive a browser refresh or owner
-connection loss: browser media and the owner lease are deliberately released and
-must be started again. The text draft and accepted Operator queue are separate
-from that lifetime, so neither is lost merely because voice ends.
+Source comparison, removal searches, type/static checks, and compilation establish
+code and dependency compatibility only. No synthetic WebRTC/provider fixture,
+browser automation, microphone, credentials, or live provider session is used as
+acceptance evidence. Real microphone/provider/conversation acceptance remains
+explicit user validation after release.

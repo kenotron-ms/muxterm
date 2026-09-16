@@ -2,7 +2,7 @@
  * cos-store.ts — the ONE seam between the chief-of-staff chat and its data.
  *
  * ┌────────────────────────────────────────────────────────────────────┐
- * │  Everything that renders the chief of staff (<mux-cos>, and the    │
+ * │  Everything that renders Operator (<mux-cos>, and the              │
  * │  entry control's readiness dot) reads from this store and nothing   │
  * │  else. app.ts calls cosStore.attach(socket) once; the component     │
  * │  subscribes and reads. No component parses a wire frame.            │
@@ -334,26 +334,6 @@ export class CosStore {
 
   canCancel(turnId: string): boolean { return this._byId.get(turnId)?.status === 'pending' || this._byId.get(turnId)?.status === 'streaming'; }
   canAnswer(_turnId: string, requestId: string): boolean { return this._approvals.some((item) => item.requestId === requestId); }
-  setDraftForAppVoice(target: CosComposerIdentity, value: string): boolean {
-    if (!this._sameComposer(target)) return false;
-    this._draft = value;
-    this._draftRevision++;
-    persistDraft(value);
-    this._notify();
-    return true;
-  }
-  inspectDraftForAppVoice(target: CosComposerIdentity): { readonly text: string; readonly truncated: boolean } | null {
-    return this._sameComposer(target) ? { text: this._draft, truncated: false } : null;
-  }
-  private _sameComposer(target: CosComposerIdentity): boolean {
-    const current = this.composerIdentity;
-    return target.channelId === current.channelId &&
-      target.threadId === current.threadId &&
-      target.runtimeGeneration === current.runtimeGeneration &&
-      target.runtimeSessionId === current.runtimeSessionId &&
-      target.runtimeIncarnation === current.runtimeIncarnation &&
-      target.draftRef === current.draftRef;
-  }
 
   private _setConversation(next: CosConversationIdentity | null): void {
     const current = this._conversation;

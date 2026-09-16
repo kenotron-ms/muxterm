@@ -135,8 +135,6 @@ export interface AppletManifest {
 export interface AppletNavigateDetail {
   applet: AppletId;
   target?: string;
-  /** Present only for a live app-voice operation's own acknowledged route. */
-  appVoiceOperationId?: string;
 }
 
 /**
