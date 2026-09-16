@@ -133,8 +133,9 @@ to the one authoritative Operator conversation:
   `prior_user_turn` / `prior_operator_turn` entries. It excludes thinking,
   tool blocks/results, IDs, timestamps, errors, and diagnostics; it applies
   fixed count/size budgets: six recent or three summary turns, at most twelve
-  prior items/7,200 bytes and five current-work items/600 characters
-  each. It redacts credential-like values, provider response IDs, home paths,
+  prior items/7,200 characters and five current-work items/600 characters
+  each. It redacts credential-like values including complete
+  `Authorization: Bearer …` forms, provider response IDs, home paths,
   and e-mail-like identities. Active/queued
   user-visible prompts are the only current-work projection. Approval state
   is omitted because this path has no safe authoritative approval snapshot.

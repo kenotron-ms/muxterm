@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/cos"
@@ -70,7 +71,7 @@ const (
 )
 
 var voiceContextRedactions = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:authorization|bearer|api[_ -]?key|token|secret|password|cookie)\b\s*(?::|=|\s)\s*\S+`),
+	regexp.MustCompile(`(?i)\b(?:authorization|bearer|api[_ -]?key|token|secret|password|cookie)\b(?:\s*(?::|=)\s*|\s+)(?:bearer\s+)?\S+`),
 	regexp.MustCompile(`\b(?:sk|ek|rk|pk)_[A-Za-z0-9_-]{8,}\b`),
 	regexp.MustCompile(`\bresp_[A-Za-z0-9_-]+\b`),
 	regexp.MustCompile(`(?i)\b[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*\s*=\s*\S+`),
@@ -246,7 +247,7 @@ func newestVoiceContextItems(items []voice.ConversationContextItem, budget, limi
 			break
 		}
 		item := items[i]
-		size := len(item.Text)
+		size := utf8.RuneCountInString(item.Text)
 		if size == 0 {
 			continue
 		}
