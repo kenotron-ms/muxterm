@@ -227,15 +227,3 @@ func (c *Client) WebSocketURL(callID string) (string, error) {
 func (c *Client) safeProviderFailure(stage string, status int) error {
 	return fmt.Errorf("voice: %s returned HTTP %d%s", stage, status, c.authHint(status))
 }
-
-// snippet bounds an error body so a vendor's HTML error page cannot flood a
-// log line. It is used only for bounded sideband protocol diagnostics; mint,
-// SDP, and settings-check provider failures never expose provider bodies.
-func snippet(b []byte) string {
-	s := strings.TrimSpace(string(b))
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 300 {
-		return s[:300] + "…"
-	}
-	return s
-}

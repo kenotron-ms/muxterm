@@ -2152,7 +2152,7 @@ export class MuxCos extends LitElement {
                   @click="${this._toggleDictation}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
-            ${!voiceActive && !busy && !admissionPending && !draftPresent && voiceSessionController.isSupported()
+            ${!voiceActive && voiceSessionController.isSupported()
               ? this._renderVoiceControl()
               : nothing}
             ${busy || voiceActive || ready || admissionPending || !voiceSessionController.isSupported()

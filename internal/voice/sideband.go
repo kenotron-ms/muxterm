@@ -79,17 +79,17 @@ type Sideband struct {
 	// heard. It happens on the most ordinary timing there is: the model is
 	// still saying "I'll go and ask" when the answer comes back.
 	//
-	// So a response request that arrives during an active response is HELD
-	// and replayed on response.done rather than sent and lost.
+	// So response admission is a FIFO. The current request is reserved before
+	// bytes leave this process; response.done/cancelled is the only eligibility
+	// transition that releases the next request. A busy refusal moves the
+	// current request back to the queue and waits for that same transition.
+	// There is deliberately no timer retry: time cannot prove the provider is
+	// eligible, and retrying on a timer was the race that made Voice Mode look
+	// like it had failed.
 	respActive  bool
+	respCurrent map[string]any
 	respQueued  []map[string]any
-	respStarted time.Time
-	// lastResponseReq is the most recent response.create, kept so it can
-	// be re-sent if the vendor refuses it as concurrent.
-	lastResponseReq     map[string]any
-	lastResponseCreated time.Time
-	retryCount          int
-	eventKinds          map[string]int
+	eventKinds  map[string]int
 
 	writeMu sync.Mutex
 	done    chan struct{}
@@ -180,12 +180,10 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 	// protocol break.
 	conn.SetReadLimit(8 << 20)
 	sb.conn = conn
-	sb.emit(Trace{Kind: TraceConnected, Detail: callID})
+	sb.emit(Trace{Kind: TraceConnected})
 
 	sb.wg.Add(1)
 	go sb.listen()
-	sb.wg.Add(1)
-	go sb.sweep()
 	return sb, nil
 }
 
@@ -208,7 +206,7 @@ func (s *Sideband) Close() {
 	s.writeMu.Unlock()
 	_ = conn.Close(websocket.StatusNormalClosure, "")
 	s.wg.Wait()
-	s.emit(Trace{Kind: TraceClosed, Detail: s.callID})
+	s.emit(Trace{Kind: TraceClosed})
 }
 
 func (s *Sideband) isClosed() bool {
@@ -245,7 +243,7 @@ func (s *Sideband) listen() {
 			if s.isClosed() {
 				return
 			}
-			s.emit(Trace{Kind: TraceClosed, Detail: "read: " + trimErr(err)})
+			s.emit(Trace{Kind: TraceClosed, Detail: "sideband read failed"})
 			if s.reattach() {
 				continue
 			}
@@ -289,15 +287,12 @@ func (s *Sideband) reattach() bool {
 		s.writeMu.Lock()
 		s.conn = conn
 		s.writeMu.Unlock()
-		// A fresh connection is not mid-response, whatever the old one
-		// believed. Leaving respActive set here would wedge every later
-		// answer behind a response that no longer exists.
-		s.mu.Lock()
-		s.respActive = false
-		s.respQueued = nil
-		s.retryCount = 0
-		s.mu.Unlock()
-		s.emit(Trace{Kind: TraceReattached, Detail: s.callID})
+		// Keep response admission state across an observer reattach. The
+		// Realtime call is the same call, so treating reconnect as proof
+		// that it is idle would duplicate a request or reintroduce the
+		// active-response race. The next response.done/cancelled is the
+		// authoritative eligibility transition.
+		s.emit(Trace{Kind: TraceReattached})
 		return true
 	}
 	return false
@@ -326,18 +321,14 @@ func (s *Sideband) handle(data []byte) {
 	case ev.Type == "response.created":
 		s.mu.Lock()
 		s.respActive = true
-		s.respStarted = time.Now()
-		s.lastResponseCreated = time.Now()
 		s.mu.Unlock()
 	case ev.Type == "output_audio_buffer.started":
 		// The assistant is audibly speaking. Treated as busy even without
-		// a response.created, because over-blocking costs a beat of delay
-		// (the sweep and the queue recover it) while under-blocking costs
-		// the whole sideband.
+		// a response.created: the browser's audio turn can reach this
+		// observer without its creation event. Over-blocking until the
+		// terminal provider event is safe; under-blocking costs the session.
 		s.mu.Lock()
 		s.respActive = true
-		s.respStarted = time.Now()
-		s.lastResponseCreated = time.Now()
 		s.mu.Unlock()
 		s.signalFarewell(sigAudioStarted)
 	case ev.Type == "output_audio_buffer.stopped":
@@ -353,21 +344,18 @@ func (s *Sideband) handle(data []byte) {
 		s.releaseResponse()
 		s.signalFarewell(sigResponseDone)
 	case strings.HasPrefix(ev.Type, "error"):
-		// The one error worth acting on rather than reporting.
-		//
-		// The observer connection is NOT told when the browser's own audio
-		// starts a response -- there is no response.created on this wire for
-		// a turn the user began by speaking -- so the sideband cannot always
-		// know a response is in flight. Optimism plus this retry is what
-		// covers the gap: the conversation item is already in place, so a
-		// later response.create still makes the model speak it.
+		// The observer is not always told when the browser's audio starts a
+		// response. A busy refusal is therefore admission state, not a Voice
+		// Mode fault: retain the request and wait for response completion.
 		if bytes.Contains(ev.Error, []byte("conversation_already_has_active_response")) {
 			s.emit(Trace{Kind: TraceBusy})
-			s.retryLastResponse()
+			s.holdBusyResponse()
 			return
 		}
-		s.emit(Trace{Kind: TraceError, Detail: snippet(ev.Error)})
-		log.Printf("voice: sideband error event: %s", snippet(ev.Error))
+		// Provider error bodies can reflect call/request identifiers or
+		// credentials. Record only that one occurred, never its body.
+		s.emit(Trace{Kind: TraceError, Detail: "provider event"})
+		log.Printf("voice: sideband error event")
 	}
 }
 
@@ -389,95 +377,41 @@ func (s *Sideband) seen(t string) {
 	}
 }
 
-// retryLastResponse re-asks for a response after the active one should have
-// finished.
-//
-// Backs off and gives up rather than looping: a response request that is
-// still refused after several attempts means something else is wrong, and a
-// tight retry against a vendor endpoint is worse than silence.
-func (s *Sideband) retryLastResponse() {
+// holdBusyResponse converts a provider conflict into a durable admission wait.
+// The rejected response.create has not created a response; its corresponding
+// conversation item is already present, so replaying the same request after
+// the next provider completion is correct and cannot duplicate that item.
+func (s *Sideband) holdBusyResponse() {
 	s.mu.Lock()
-	last := s.lastResponseReq
-	s.respActive = false
-	attempt := s.retryCount
-	s.retryCount++
+	if s.respCurrent != nil {
+		s.respQueued = append([]map[string]any{s.respCurrent}, s.respQueued...)
+		s.respCurrent = nil
+	}
+	// The error itself proves another provider response is active. Preserve
+	// that fact through a reconnect and release only on response.done.
+	s.respActive = true
 	s.mu.Unlock()
-	if last == nil || attempt >= 6 {
-		return
-	}
-	go func() {
-		select {
-		case <-time.After(time.Duration(attempt+1) * 2 * time.Second):
-		case <-s.done:
-			return
-		}
-		s.send(last)
-	}()
 }
 
-// sweep releases a response that has gone stale.
-//
-// A response.done that never arrives -- a dropped event, a response the
-// vendor declined to start -- would otherwise leave every queued answer
-// undeliverable. The read loop cannot notice that on its own because
-// nothing arrives to notice.
-func (s *Sideband) sweep() {
-	defer s.wg.Done()
-	tick := time.NewTicker(2 * time.Second)
-	defer tick.Stop()
-	for {
-		select {
-		case <-s.done:
-			return
-		case <-tick.C:
-			s.mu.Lock()
-			stale := s.respActive && time.Since(s.respStarted) > responseStalePeriod
-			queued := len(s.respQueued) > 0
-			s.mu.Unlock()
-			if stale || (queued && !s.responseIsActive()) {
-				s.releaseResponse()
-			}
-		}
-	}
-}
-
-func (s *Sideband) responseIsActive() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.respActive && time.Since(s.respStarted) < responseStalePeriod
-}
-
-// releaseResponse marks the session free and replays at most one held
-// request.
-//
-// At most ONE, and the rest are dropped: if three tool results landed during
-// a long answer, asking the model to narrate all three in sequence would
-// have it deliver a monologue nobody asked for. The conversation items are
-// all present either way, so the model has every result in context when it
-// speaks; what is coalesced is the number of times it is prompted to.
+// releaseResponse marks the provider eligible and dispatches exactly the next
+// admitted request. It is only called from response.done/cancelled, never by a
+// timer, so every request is attempted once per real eligibility transition.
 func (s *Sideband) releaseResponse() {
 	s.mu.Lock()
 	s.respActive = false
+	s.respCurrent = nil
 	var next map[string]any
 	if len(s.respQueued) > 0 {
-		next = s.respQueued[len(s.respQueued)-1]
-		s.respQueued = nil
+		next = s.respQueued[0]
+		s.respQueued = s.respQueued[1:]
+		s.respActive = true
+		s.respCurrent = next
 	}
 	s.mu.Unlock()
 	if next != nil {
-		s.send(next)
+		s.write(next)
 	}
 }
-
-// responseStalePeriod is how long an "active" response is believed before it
-// is treated as lost. A response.done that never arrives -- a dropped event,
-// a vendor hiccup -- would otherwise wedge the queue permanently, and a
-// wedged queue is silence.
-//
-// Comfortably longer than any spoken answer and far shorter than a person's
-// patience. Erring long risks a beat of delay; erring short risks talking
-// over the assistant mid-sentence, which is worse.
-const responseStalePeriod = 30 * time.Second
 
 // dispatch runs one function call and answers it.
 //
@@ -495,7 +429,9 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 			_ = json.Unmarshal(ev.Arguments, &args)
 		}
 	}
-	s.emit(Trace{Kind: TraceToolCall, Name: ev.Name})
+	if ev.Name != ToolOperatorContext {
+		s.emit(Trace{Kind: TraceToolCall, Name: ev.Name})
+	}
 
 	switch ev.Name {
 	case ToolAsk:
@@ -508,10 +444,45 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 		s.runCancel(ev.CallID)
 	case ToolEnd:
 		s.runEnd(ev.CallID, args)
+	case ToolOperatorContext:
+		s.runOperatorConversationContext(ev.CallID, args)
 	default:
 		s.answer(ev.CallID, fmt.Sprintf("There is no tool called %q.", ev.Name),
 			"Tell the user you tried to do something you have no way to do, and ask what they want instead.")
 	}
+}
+
+// runOperatorConversationContext returns only a function-call output. It
+// deliberately does not call answer/requestResponse: looking up prior context
+// must not create speech, narrate, alter the COS FIFO, or race an active text
+// or voice response. The realtime model uses this output within the response
+// that asked for it, or waits for the next user request.
+func (s *Sideband) runOperatorConversationContext(callID string, args map[string]any) {
+	view := ConversationContextView(str(args["view"]))
+	reader, ok := s.bridge.(ContextBridge)
+	// Enforce the closed wire contract even if a malformed provider event
+	// bypassed the JSON schema: exactly one enum field, never a selector.
+	if !ok || len(args) != 1 || !view.Valid() {
+		s.answerReadOnly(callID, unavailableOperatorConversationContext())
+		return
+	}
+	snapshot, err := reader.ReadOperatorConversationContext(context.Background(), view)
+	if err != nil {
+		// Do not disclose whether any other session/conversation exists, nor
+		// reflect server, provider, filesystem, or authentication errors.
+		s.answerReadOnly(callID, unavailableOperatorConversationContext())
+		return
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		s.answerReadOnly(callID, unavailableOperatorConversationContext())
+		return
+	}
+	s.answerReadOnly(callID, string(data))
+}
+
+func unavailableOperatorConversationContext() string {
+	return `{"kind":"prior_operator_conversation_context","notice":"Prior Operator context is unavailable. Do not infer missing history.","items":[],"current_work":[]}`
 }
 
 // runAsk is the SYNCHRONOUS path -- bounded, never blocking until done.
@@ -625,7 +596,9 @@ func (s *Sideband) runCancel(callID string) {
 // response. The instructions field steers what the model does with it
 // without putting words in its mouth.
 func (s *Sideband) answer(callID, output, instructions string) {
-	s.emit(Trace{Kind: TraceToolResult, Name: callID})
+	// callID is provider correlation, not a user-facing tool name. Never put
+	// it in the trace surface.
+	s.emit(Trace{Kind: TraceToolResult})
 	if callID != "" {
 		s.send(map[string]any{
 			"type": "conversation.item.create",
@@ -639,8 +612,26 @@ func (s *Sideband) answer(callID, output, instructions string) {
 	s.requestResponse(instructions)
 }
 
-// requestResponse asks the model to speak -- but only if it is not already
-// speaking.
+// answerReadOnly returns a tool result without asking the model to speak.
+// It exists for the conversation-context tool, whose lookup is observation
+// only. In particular it cannot create a competing response while text work
+// or a spoken reply is active.
+func (s *Sideband) answerReadOnly(callID, output string) {
+	if callID == "" {
+		return
+	}
+	s.send(map[string]any{
+		"type": "conversation.item.create",
+		"item": map[string]any{
+			"type":    "function_call_output",
+			"call_id": callID,
+			"output":  output,
+		},
+	})
+}
+
+// requestResponse admits a spoken response only when the provider has no
+// active response.
 //
 // This indirection exists because of a hard platform fact: sending
 // response.create while a response is in flight is not merely refused, it
@@ -649,39 +640,16 @@ func (s *Sideband) answer(callID, output, instructions string) {
 // closed sideband means no more tools and no more answers for the rest of
 // the conversation. Recovering afterwards is far worse than not tripping it.
 //
-// So: put the item in, wait a beat, and see whether the model starts talking
-// on its own. Adding a conversation item frequently prompts a response
-// without being asked; if one starts, there is nothing to ask for. Only if
-// the model stays quiet is a response requested, and only when nothing else
-// is running.
-//
-// The delay costs about a second on the path where the model would have been
-// silent. That is the right trade against losing the connection.
+// A completion event, not elapsed time, is the admission proof. The request is
+// retained in FIFO order through an active response, a busy refusal, or an
+// observer reconnect; it is never spun, silently dropped, or retried on a
+// clock.
 func (s *Sideband) requestResponse(instructions string) {
-	marker := time.Now()
-	go func() {
-		select {
-		case <-time.After(responseGrace):
-		case <-s.done:
-			return
-		}
-		s.mu.Lock()
-		spokeOnItsOwn := s.lastResponseCreated.After(marker)
-		s.mu.Unlock()
-		if spokeOnItsOwn {
-			// Already answering. Asking again is the fatal case.
-			return
-		}
-		s.send(map[string]any{
-			"type":     "response.create",
-			"response": map[string]any{"instructions": instructions},
-		})
-	}()
+	s.send(map[string]any{
+		"type":     "response.create",
+		"response": map[string]any{"instructions": instructions},
+	})
 }
-
-// responseGrace is how long the model is given to start speaking on its own
-// after an item is added, before one is asked for.
-const responseGrace = 2 * time.Second
 
 // inject makes the model say something that answers no pending tool call.
 //
@@ -722,23 +690,24 @@ func (s *Sideband) send(msg map[string]any) {
 	}
 	if msg["type"] == "response.create" {
 		s.mu.Lock()
-		if s.respActive && time.Since(s.respStarted) < responseStalePeriod {
+		if s.respActive {
 			s.respQueued = append(s.respQueued, msg)
 			s.mu.Unlock()
 			return
 		}
-		// Deliberately NOT marked active here.
-		//
-		// Marking optimistically closes a narrow race (two results landing
-		// together, both seeing an idle session) at the cost of a much
-		// worse failure: if the vendor never actually starts a response,
-		// no response.done ever arrives, and every later answer sits in a
-		// queue nobody drains. Silence is the failure this whole area
-		// exists to prevent, so the narrow race is left to the retry on
-		// conversation_already_has_active_response, which recovers, while
-		// the wedge -- which does not -- is designed out.
-		s.lastResponseReq = msg
+		// Reserve the only provider response slot before writing. A second
+		// completion or tool result that arrives while the write is in flight
+		// therefore queues instead of racing another response.create.
+		s.respActive = true
+		s.respCurrent = msg
 		s.mu.Unlock()
+	}
+	s.write(msg)
+}
+
+func (s *Sideband) write(msg map[string]any) {
+	if s.isClosed() {
+		return
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
@@ -753,7 +722,7 @@ func (s *Sideband) send(msg map[string]any) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := conn.Write(ctx, websocket.MessageText, b); err != nil {
-		s.emit(Trace{Kind: TraceError, Detail: "write: " + trimErr(err)})
+		s.emit(Trace{Kind: TraceError, Detail: "sideband write failed"})
 	}
 }
 

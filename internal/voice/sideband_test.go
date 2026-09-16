@@ -602,19 +602,27 @@ func TestResponseRequestIsHeldWhileAResponseIsActive(t *testing.T) {
 	})
 }
 
-// A response.done that never arrives must not wedge the queue permanently:
-// a wedged queue is silence, which is the failure this whole area exists to
-// prevent.
-func TestAStaleActiveResponseDoesNotWedgeTheQueue(t *testing.T) {
+// A provider response does not become eligible merely because time passed.
+// The terminal provider event is the one response-admission transition.
+func TestActiveResponseWaitsForTerminalEvent(t *testing.T) {
 	f := newFakeRealtime(t)
 	sb := attach(t, f, &fakeBridge{}, time.Second)
 
 	sb.mu.Lock()
 	sb.respActive = true
-	sb.respStarted = time.Now().Add(-2 * responseStalePeriod)
 	sb.mu.Unlock()
 
 	sb.send(map[string]any{"type": "response.create", "response": map[string]any{}})
+	f.mu.Lock()
+	for _, msg := range f.sent {
+		if msg["type"] == "response.create" {
+			f.mu.Unlock()
+			t.Fatal("response admission was released without response.done or response.cancelled")
+		}
+	}
+	f.mu.Unlock()
+
+	f.push(t, map[string]any{"type": "response.done"})
 	f.waitFor(t, "the response.create to go out anyway", func(m []map[string]any) bool {
 		for _, x := range m {
 			if x["type"] == "response.create" {
@@ -737,17 +745,18 @@ func endCall(callID string, args map[string]any) map[string]any {
 	return toolCall(ToolEnd, callID, args)
 }
 
-// C1: the tool surface is five tools, and the fifth is the one that hangs up.
+// C1: the tool surface keeps the five lifecycle/action tools and adds one
+// closed, read-only continuity lookup.
 func TestToolSurfaceCarriesTheSpokenExit(t *testing.T) {
 	defs := ToolDefinitions()
-	if len(defs) != 5 {
-		t.Fatalf("ToolDefinitions() returned %d tools, want 5", len(defs))
+	if len(defs) != 6 {
+		t.Fatalf("ToolDefinitions() returned %d tools, want 6", len(defs))
 	}
-	last := defs[4]
-	if last["name"] != ToolEnd {
-		t.Fatalf("fifth tool is %v, want %s", last["name"], ToolEnd)
+	end := defs[4]
+	if end["name"] != ToolEnd {
+		t.Fatalf("fifth tool is %v, want %s", end["name"], ToolEnd)
 	}
-	params, _ := last["parameters"].(map[string]any)
+	params, _ := end["parameters"].(map[string]any)
 	props, _ := params["properties"].(map[string]any)
 	if _, ok := props["farewell"]; !ok {
 		t.Fatal("end_voice_session has no farewell parameter")
@@ -773,7 +782,7 @@ func TestToolSurfaceCarriesTheSpokenExit(t *testing.T) {
 	// The description says what the tool DOES. If it tells the model to
 	// confirm, it will confirm again at call time on top of the question
 	// the instructions already ran.
-	desc := strings.ToLower(str(last["description"]))
+	desc := strings.ToLower(str(end["description"]))
 	for _, banned := range []string{"confirm", "twice", "ask the user", "make sure", "are you sure"} {
 		if strings.Contains(desc, banned) {
 			t.Fatalf("the end_voice_session description contains %q, so it re-imposes a confirmation at call time: %q", banned, desc)
@@ -790,6 +799,19 @@ func TestToolSurfaceCarriesTheSpokenExit(t *testing.T) {
 	}
 	if !strings.Contains(Instructions(), "A yes is the trigger to ACT") {
 		t.Fatal("the ending protocol no longer says a yes is the trigger to act, so it does not terminate")
+	}
+
+	contextTool := defs[5]
+	if contextTool["name"] != ToolOperatorContext {
+		t.Fatalf("sixth tool is %v, want %s", contextTool["name"], ToolOperatorContext)
+	}
+	contextParams, _ := contextTool["parameters"].(map[string]any)
+	contextProps, _ := contextParams["properties"].(map[string]any)
+	if len(contextProps) != 1 || contextProps["view"] == nil || contextParams["additionalProperties"] != false {
+		t.Fatalf("context tool must expose only closed view input: %v", contextParams)
+	}
+	if !strings.Contains(Instructions(), ToolOperatorContext) {
+		t.Fatalf("realtime instructions do not tell a re-established session about %s", ToolOperatorContext)
 	}
 }
 
