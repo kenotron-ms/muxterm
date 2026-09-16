@@ -206,7 +206,7 @@ func (p *AzureProvider) List(ctx context.Context) ([]ProviderSandbox, error) {
 			return result, nil
 		}
 		if !p.validContinuation(out.NextLink) {
-			return nil, ErrProviderRejected
+			return nil, ErrProviderAmbiguous
 		}
 		next = out.NextLink
 	}
@@ -303,11 +303,11 @@ func (p *AzureProvider) doURL(ctx context.Context, method, endpoint, requestID s
 		return ErrProviderNotFound
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		if response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests ||
-			response.StatusCode >= 500 {
-			return ErrProviderAmbiguous
-		}
-		return ErrProviderRejected
+		// The vendored preview source does not establish that any generic HTTP
+		// failure (including 409/412) proves no lifecycle effect. Typed 404 is
+		// the sole source-backed absence result. All other non-2xx responses
+		// remain ambiguous so create can reconcile only the controller labels.
+		return ErrProviderAmbiguous
 	}
 	if out != nil && response.StatusCode != http.StatusNoContent {
 		if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out); err != nil {
@@ -315,6 +315,21 @@ func (p *AzureProvider) doURL(ctx context.Context, method, endpoint, requestID s
 		}
 	}
 	return nil
+}
+
+// ClassifyHTTPStatusForFixture exposes the source-backed response boundary to
+// the deterministic verifier without constructing credentials or issuing a
+// provider request. ErrProviderRejected is intentionally reserved for local
+// typed CreateSpec validation and deterministic fake-provider failures.
+func ClassifyHTTPStatusForFixture(status int) error {
+	switch {
+	case status >= 200 && status < 300:
+		return nil
+	case status == http.StatusNotFound:
+		return ErrProviderNotFound
+	default:
+		return ErrProviderAmbiguous
+	}
 }
 
 func (p *AzureProvider) collectionBaseURL() string {

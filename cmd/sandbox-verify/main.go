@@ -172,10 +172,13 @@ func verify() error {
 		return errors.New("destroy acceptance/generation fence failed")
 	}
 
-	fake.createErr = sandboxazure.ErrProviderAmbiguous
+	fake.createErr = sandboxazure.ClassifyHTTPStatusForFixture(http.StatusConflict)
+	if !errors.Is(fake.createErr, sandboxazure.ErrProviderAmbiguous) {
+		return errors.New("Azure HTTP 409 was not classified as ambiguous")
+	}
 	ambiguous, err := controller.Create(ctx, "fixture", "22222222-2222-4222-8222-222222222222")
 	if !errors.Is(err, sandboxazure.ErrProviderAmbiguous) {
-		return errors.New("ambiguous create was not surfaced as ambiguous")
+		return errors.New("ambiguous 409-equivalent create was not surfaced as ambiguous")
 	}
 	ambiguous, err = controller.Create(ctx, "fixture", "22222222-2222-4222-8222-222222222222")
 	if err != nil || ambiguous.ReconcileState != sandboxazure.ReconcileNeeded {
@@ -189,7 +192,7 @@ func verify() error {
 	}
 	recovered, err := controller.Reconcile(ctx, ambiguous.Handle, ambiguous.Generation, "a0000000-0000-4000-8000-000000000008")
 	if err != nil || recovered.ReconcileState != sandboxazure.ReconcileClean || recovered.ObservedState != "running" {
-		return errors.New("ambiguous create was not safely recovered by durable labels")
+		return errors.New("ambiguous 409-equivalent create was not safely recovered by durable labels")
 	}
 	fake.createErr = sandboxazure.ErrProviderAmbiguous
 	quarantined, err := controller.Create(ctx, "fixture", "55555555-5555-4555-8555-555555555555")

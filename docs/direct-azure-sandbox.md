@@ -77,6 +77,13 @@ link must be HTTPS, have no userinfo or fragment, use the configured regional
 data-plane host, exact configured Sandbox Group collection path, and one
 configured API-version value; anything else is rejected without following it.
 
+The vendored preview source establishes typed `404` as the controller's sole
+absence signal. Any other Azure non-2xx response—including `409` and `412`—is
+treated as an ambiguous possible lifecycle effect, never as proof of no effect.
+For create, only the controller's fixed labels may then be reconciled. The
+`provider-rejected` state is reserved for local typed create-spec validation
+and the deterministic fake-provider failed-operation fixture.
+
 ## Lifecycle and durable state
 
 ```text
@@ -147,6 +154,9 @@ stopped/suspended/running, and the attach block. It does not show a remote,
 workspace, provider identity, endpoint, label, credential, scope, or signer.
 The browser keeps one generated UUID for a retried action and asks for a local
 destroy confirmation before sending the matching-handle confirmation field.
+If a reconcile receives a known non-2xx HTTP response, its request UUID is
+rotated so the next explicit refresh performs a new observation. A network
+failure has no known response and retains its UUID for safe retry.
 If Sandbox-specific authentication reports that sign-in is required, the screen
 offers the normal `/auth/login?return_to=...` flow; it neither displays nor
 handles any token.

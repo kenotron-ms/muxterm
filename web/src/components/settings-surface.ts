@@ -32,6 +32,7 @@ import {
 } from '../lib/voice-settings.js';
 import {
   EMPTY_SANDBOXES,
+  SandboxRequestError,
   createSandbox,
   fetchSandboxes,
   sandboxAction,
@@ -2255,6 +2256,12 @@ export class MuxSettingsSurface extends LitElement {
     } catch (err) {
       this._sandboxMessage = err instanceof Error ? err.message : 'Sandbox operation was not accepted.';
       this._sandboxSignInRequired = sandboxAuthRequired(err);
+      // A known HTTP response settles this reconcile request. Rotate only then
+      // so an explicit later refresh reaches the provider again; a fetch
+      // failure has no response and must retain its idempotency key.
+      if (action === 'reconcile' && err instanceof SandboxRequestError && err.hasResponse) {
+        this._sandboxRequestIDs.delete(key);
+      }
       await this._loadSandboxes();
     } finally {
       this._sandboxBusy = false;

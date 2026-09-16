@@ -75,7 +75,15 @@ function parseCollection(raw: unknown): SandboxCollection {
 }
 
 export class SandboxRequestError extends Error {
-  constructor(message: string, readonly code: string) {
+  // hasResponse distinguishes an HTTP rejection, whose durable outcome the
+  // server could report, from fetch/network failure where retrying the exact
+  // request ID remains the only safe option.
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly status: number,
+    readonly hasResponse = true,
+  ) {
     super(message);
   }
 }
@@ -84,7 +92,7 @@ async function requestError(response: Response): Promise<SandboxRequestError> {
   const raw = await response.json().catch(() => ({})) as Record<string, unknown>;
   const code = stringField(raw, 'error');
   const message = stringField(raw, 'error_description') || code || `Sandbox request failed (HTTP ${response.status}).`;
-  return new SandboxRequestError(message, code);
+  return new SandboxRequestError(message, code, response.status);
 }
 
 export function sandboxAuthRequired(error: unknown): boolean {
