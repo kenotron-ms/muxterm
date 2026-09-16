@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# VERIFICATION HARNESS - the whole matrix against ONE tree.
+# VERIFICATION HARNESS - the baseline matrix against ONE tree.
 #
 #   REPO=/root/muxterm-base  TAG=base  bash tools/cos-repro/matrix.sh
 #   REPO=/root/muxterm-fixed TAG=fixed bash tools/cos-repro/matrix.sh

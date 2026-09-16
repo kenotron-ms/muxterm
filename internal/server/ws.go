@@ -115,6 +115,10 @@ type Client struct {
 	cosSub                 *cos.Subscription
 	cosSubscribeGeneration uint64
 	cosSubscribePending    bool
+	// cosHistoryEpoch invalidates asynchronous subscription snapshots after
+	// an authoritative clear. It is checked while cosMu is held across the
+	// WebSocket write, so an old snapshot cannot land after the clear result.
+	cosHistoryEpoch uint64
 
 	// attachSeq enforces the frozen "composition FIRST" ordering guarantee
 	// across the goroutine boundary between the daemon connection's read loop

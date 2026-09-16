@@ -16,9 +16,19 @@ tree under test, so the block cap is exercised rather than imitated.
 
 It measures three layers, because "it didn't render" doesn't say where the bytes
 went: **the wire** (every cos-\* frame the browser received), **the DOM** (text
-of `p.say` in `<mux-cos>`'s shadow root, per turn), and **the screen**
+of assistant `div.say.md` in `<mux-cos>`'s shadow root, per turn), and **the screen**
 (geometry — is the end of the answer inside `.chatbody`'s visible box). The
-third exists because the first two kept saying 100% while a user saw nothing.
+user prompt is deliberately read separately from the preceding `p.say`.
+
+The DOM assertion is semantic, not literal byte equality: Markdown deliberately
+consumes table delimiters and markup before `textContent` is read. A complete
+fixture payload therefore requires its explicit start/end markers in order, the
+exact ordered sequence of durable `[[chunk-NNNN]]` tokens, exactly one rendered
+submitted prompt, and no visible `working...` placeholder. The report records
+whether the ordered token sequence matches and its first mismatch index. Wire and
+DOM byte counts remain diagnostics only. The `working...` check detects the
+component's visible stuck state; it intentionally does not infer liveness from
+the absence of a footer, because a completed turn has no footer too.
 
 ## Running it
 
@@ -27,7 +37,17 @@ third exists because the first two kept saying 100% while a user saw nothing.
 bash tools/cos-repro/run.sh "s6-stream size:4194304"
 MODE=s1 bash tools/cos-repro/run.sh "s6-histcap slow"
 
-# the whole matrix against two trees, then compare
+# targeted persistent-history and cross-tab cases
+MODE=restart bash tools/cos-repro/run.sh "s6-stream"
+MODE=clear-race bash tools/cos-repro/run.sh "s6-stream"
+MODE=overlap-clear bash tools/cos-repro/run.sh "s6-stream"
+MODE=peer bash tools/cos-repro/run.sh "s6-stream"
+MODE=replay-order bash tools/cos-repro/run.sh "s6-stream slow"
+MODE=identity-fence bash tools/cos-repro/run.sh "s6-stream"
+MODE=metadata-absent bash tools/cos-repro/run.sh "s6-stream"
+MODE=metadata-unknown bash tools/cos-repro/run.sh "s6-stream"
+
+# baseline matrix against two trees, then compare
 REPO=/root/muxterm-base  TAG=base  bash tools/cos-repro/matrix.sh
 REPO=/root/muxterm-fixed TAG=fixed bash tools/cos-repro/matrix.sh
 python3 tools/cos-repro/report.py /tmp/cos-repro/base /tmp/cos-repro/fixed
@@ -40,7 +60,56 @@ Scenarios are prompt keywords, parsed by `repro-sidecar.py`: `s6-stream`,
 `s6-nostream`, `s6-empty`, `s6-histcap`, plus `size:<N>`, `delta:<N>`,
 `gap:<ms>`, `tools:<N>`, `slow`, `tool`. Away modes (`--mode` / `MODE=`) are
 `plain`, `s1` (page closed mid-stream, fresh page after), `s3` (Dashboard
-dismissed), `s4` (reload mid-stream), `s5` (websocket killed mid-stream).
+dismissed), `s4` (reload mid-stream), and `s5` (websocket killed mid-stream).
+
+Additional opt-in history modes all submit one completed fixture turn first:
+
+- `restart` persists the fixture's safe summarized transcript, then makes the
+  first fresh-page history request exit the fixture once. The supervisor must
+  replace it and the new page must eventually render the canonical history
+  exactly once. This deliberately exposes a server missed-replay failure; it
+  does not send a substitute snapshot.
+- `clear-race` opens a second page whose pre-clear history response is captured
+  and delayed, confirms **Clear all messages** through the first page's real UI,
+  then requires the current delayed-snapshot page and the clearing page after a
+  real browser reload to remain empty after the fixture emits the stale response.
+  The fixture writes an emission artifact after that response is sent; a fixed
+  server is expected to suppress it before it reaches the second browser page.
+- `overlap-clear` seeds harmless old and recent fixture turns, performs a real
+  **Clear messages older than 7 days** followed by a real **Clear all messages**
+  from the other page, and delays the first post-prune history response. It
+  requires both clear results and both snapshots to arrive in mutation order,
+  the later all-clear to leave both pages empty, and a fresh browser reload to
+  remain empty.
+- `peer` opens and subscribes both pages before submission. Each must receive
+  exactly one terminal event for the submitted turn, render it exactly once,
+  and agree on the final canonical view.
+- `replay-order` creates one known, harmless fixture-owned durable seed before
+  muxterm starts or a browser opens, then uses the real `s5` WebSocket
+  interruption while a second turn streams. It requires exactly the seed and
+  submitted turns, each prompt once and in seed-before-submitted order, a
+  complete submitted payload, and no visible `working...` placeholder. It also
+  requires a real post-reconnect `cos-history` frame; it does not inject a
+  browser frame.
+- `identity-fence` first opens a fresh page and requires an OK subscription
+  result with a structurally valid non-empty identity plus a semantically
+  complete, identity-bearing canonical history replay. It then dispatches a
+  harmless foreign `cos-history` `MessageEvent` through that page's app socket
+  and requires the foreign content to be ignored while the real history remains.
+  No production debug hook is used.
+- `metadata-absent` and `metadata-unknown` respectively replay a history item
+  with no metadata and one with only harmless unknown/provenance-like metadata.
+  Both must render the ordinary prompt/reply exactly once, while the unknown
+  metadata must not render.
+
+`run.sh` alone enables the narrowly scoped fixture environment flags for
+`restart`, `clear-race`, `overlap-clear`, `replay-order`, and the metadata modes. The sidecar
+persists only its safe summarized fixture transcript in the already-isolated
+`$MUXTERM_REPRO_DIR/transcript.json`; it never reads a real SessionStore.
+
+`OUT` is an evidence directory, not a cleanup target. `run.sh` canonicalizes it,
+requires it to be a new path strictly below `/tmp/cos-repro/`, and rejects an
+existing path rather than deleting it. The default already satisfies this.
 
 ## Isolation rules
 

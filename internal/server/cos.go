@@ -172,6 +172,16 @@ type cosQueueItem struct {
 	Status string `json:"status"` // active | queued
 }
 
+// cosConversationIdentity is the compact, server-selected identity carried by
+// every current history snapshot. It deliberately contains no storage path or
+// browser-provided routing field.
+type cosConversationIdentity struct {
+	ID          string `json:"id"`
+	SessionID   string `json:"session_id"`
+	Generation  uint64 `json:"generation"`
+	Incarnation string `json:"incarnation"`
+}
+
 type cosAdmission struct {
 	client *Client
 	msg    cosClientMessage
@@ -186,6 +196,12 @@ type cosRelay struct {
 	once    sync.Once
 	kickoff sync.Once
 	mu      sync.Mutex
+	// clearMu serializes the complete destructive transaction: the sidecar
+	// prune, its read-back snapshot, and the authoritative broadcast. A later
+	// clear must never overtake an earlier snapshot and put deleted turns back
+	// into subscribed browsers. It deliberately does not cover admissions or
+	// ordinary turns, which retain their existing queue behavior.
+	clearMu sync.Mutex
 	sup     *cos.Supervisor
 	err     error
 	// root is resolved exactly once before the sidecar starts. The optional
@@ -431,6 +447,21 @@ func (r *cosRelay) rootIdentity() (missioncontrol.SingleConversationOrigin, bool
 	return r.root, r.sup != nil && r.rootErr == nil && !r.closed
 }
 
+func (r *cosRelay) conversationIdentity() (cosConversationIdentity, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sup == nil || r.rootErr != nil || r.closed ||
+		r.root.ID == "" || r.root.SessionID == "" || r.incarnation == "" {
+		return cosConversationIdentity{}, false
+	}
+	return cosConversationIdentity{
+		ID:          r.root.ID,
+		SessionID:   r.root.SessionID,
+		Generation:  1,
+		Incarnation: r.incarnation,
+	}, true
+}
+
 func (r *cosRelay) releaseRootLock() {
 	r.mu.Lock()
 	rootLock, catalogLock := r.rootLock, r.catalogLock
@@ -568,10 +599,7 @@ func (r *cosRelay) history(ctx context.Context, limit int) (json.RawMessage, err
 	if sup == nil {
 		return nil, cos.ErrNotRunning
 	}
-	if _, err := sup.WaitReady(ctx); err != nil {
-		return nil, err
-	}
-	return sup.History(limit)
+	return sup.HistoryWhenReady(ctx, limit)
 }
 
 // close shuts the sidecar down if one was ever started, so muxterm does not
@@ -783,6 +811,7 @@ func (c *Client) cosFinishSubscribe(relay *cosRelay, generation uint64) {
 	sub := sup.Subscribe(cosSubscriberDepth)
 	c.cosMu.Lock()
 	current := c.cosSubscribeGeneration == generation && c.cosSubscribePending
+	historyEpoch := c.cosHistoryEpoch
 	if current {
 		c.cosSubscribePending = false
 		c.cosSub = sub
@@ -800,7 +829,7 @@ func (c *Client) cosFinishSubscribe(relay *cosRelay, generation uint64) {
 	c.sendCosSubscribeResult(true, "", st.SessionID, st.Ready, relay)
 	c.sendCosQueue(relay.queueSnapshot(sup))
 	go c.cosPump(sub, relay)
-	go c.cosSendHistory(sup, sub)
+	go c.cosSendHistory(sup, sub, generation, historyEpoch, relay)
 }
 
 func (c *Client) cosFinishStartup(generation uint64, sub *cos.Subscription) bool {
@@ -821,37 +850,56 @@ func (c *Client) cosCurrent(generation uint64, sub *cos.Subscription) bool {
 
 // cosSendHistory replays the conversation to ONE freshly-subscribed tab.
 //
-// The subscription it was started for is passed in and re-checked before the
-// write: a tab that unsubscribed and re-subscribed while the boot was in
-// flight would otherwise receive a stale replay AFTER its fresh one, and the
-// store would render the older transcript over the newer.
+// The subscription and its per-client history epoch are re-checked while the
+// actual WebSocket write is held. A tab that re-subscribed or a transcript that
+// was cleared while the boot was in flight cannot receive this older snapshot.
 //
 // Failure is quiet by design. A missing replay costs a reloaded tab its
 // scrollback until the next turn; an error dialog for it would be louder than
 // the problem.
-func (c *Client) cosSendHistory(sup *cos.Supervisor, sub *cos.Subscription) {
+func (c *Client) cosSendHistory(sup *cos.Supervisor, sub *cos.Subscription, generation, historyEpoch uint64, relay *cosRelay) {
 	ctx, cancel := context.WithTimeout(context.Background(), cosBootWait)
 	defer cancel()
-	if _, err := sup.WaitReady(ctx); err != nil {
-		log.Printf("cos: no history replay (sidecar never became ready): %v", err)
-		return
-	}
-	turns, err := sup.History(cosHistoryTurns)
+	turns, err := sup.HistoryWhenReady(ctx, cosHistoryTurns)
 	if err != nil {
 		log.Printf("cos: no history replay: %v", err)
 		return
 	}
-	if !c.cosHolds(sub) {
+	conversation, ok := relay.conversationIdentity()
+	if !ok {
 		return
 	}
-	c.sendCosHistory(turns, cosHistoryReasonSubscribe)
+	c.sendCosSubscriptionHistory(turns, cosHistoryReasonSubscribe, conversation, sub, generation, historyEpoch)
 }
 
-// cosHolds reports whether sub is still THIS connection's live subscription.
-func (c *Client) cosHolds(sub *cos.Subscription) bool {
+// sendCosSubscriptionHistory fences a delayed subscription snapshot with both
+// its subscription generation and the clear invalidation epoch. cosMu remains
+// held through writeText, which serializes the validity check with a clear's
+// invalidation and the actual frame write.
+func (c *Client) sendCosSubscriptionHistory(turns json.RawMessage, reason string, conversation cosConversationIdentity, sub *cos.Subscription, generation, historyEpoch uint64) {
+	data, err := cosHistoryFrame(turns, reason, conversation)
+	if err != nil {
+		log.Printf("cos: encode history frame: %v", err)
+		return
+	}
 	c.cosMu.Lock()
 	defer c.cosMu.Unlock()
-	return c.cosSub != nil && c.cosSub == sub
+	if c.ctx.Err() != nil || c.cosSub != sub || c.cosSubscribeGeneration != generation || c.cosHistoryEpoch != historyEpoch {
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("cos: history write error: %v", err)
+	}
+}
+
+// invalidateCosHistory prevents an in-flight subscription snapshot from
+// arriving after an authoritative transcript replacement.
+func (c *Client) invalidateCosHistory() {
+	c.cosMu.Lock()
+	defer c.cosMu.Unlock()
+	if c.cosSub != nil {
+		c.cosHistoryEpoch++
+	}
 }
 
 // cosSubscribed reports whether this connection is watching the conversation
@@ -870,7 +918,12 @@ func (c *Client) cosSubscribed() bool {
 // tab makes the post-prune transcript belong to every tab. Follows the
 // BroadcastConfig shape next door -- snapshot the client set under the lock,
 // write outside it.
-func (h *Hub) broadcastCosHistory(turns json.RawMessage, reason string) {
+func (h *Hub) broadcastCosHistory(turns json.RawMessage, reason string, relay *cosRelay) {
+	conversation, ok := relay.conversationIdentity()
+	if !ok {
+		log.Printf("cos: not broadcasting history without a fixed conversation identity")
+		return
+	}
 	h.mu.Lock()
 	clients := make([]*Client, 0, len(h.clients))
 	for c := range h.clients {
@@ -878,10 +931,49 @@ func (h *Hub) broadcastCosHistory(turns json.RawMessage, reason string) {
 	}
 	h.mu.Unlock()
 
-	for _, c := range clients {
-		if c.cosSubscribed() {
-			c.sendCosHistory(turns, reason)
+	// A clear is a durable replacement, never a browser-local suggestion. Kill
+	// every delayed subscribe snapshot before this post-clear history can write.
+	if reason == cosHistoryReasonClear {
+		for _, c := range clients {
+			c.invalidateCosHistory()
 		}
+	}
+	for _, c := range clients {
+		c.sendCosAuthoritativeHistory(turns, reason, conversation)
+	}
+}
+
+// invalidateCosHistory makes all delayed per-subscription snapshots stale.
+// It is called before a successful clear result so no pre-clear snapshot can
+// fill the gap before the authoritative post-clear replacement.
+func (h *Hub) invalidateCosHistory() {
+	h.mu.Lock()
+	clients := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.Unlock()
+	for _, c := range clients {
+		c.invalidateCosHistory()
+	}
+}
+
+// sendCosAuthoritativeHistory writes an already-current server replacement to
+// one subscribed client. Holding cosMu keeps subscription changes out of the
+// check/write interval.
+func (c *Client) sendCosAuthoritativeHistory(turns json.RawMessage, reason string, conversation cosConversationIdentity) {
+	data, err := cosHistoryFrame(turns, reason, conversation)
+	if err != nil {
+		log.Printf("cos: encode history frame: %v", err)
+		return
+	}
+	c.cosMu.Lock()
+	defer c.cosMu.Unlock()
+	if c.ctx.Err() != nil || c.cosSub == nil {
+		return
+	}
+	if err := c.writeText(data); err != nil {
+		log.Printf("cos: history write error: %v", err)
 	}
 }
 
@@ -1088,6 +1180,14 @@ func (c *Client) cosRunClear(relay *cosRelay, olderThanDays int) {
 	ctx, cancel := context.WithTimeout(context.Background(), cosBootWait)
 	defer cancel()
 
+	// A clear is one server-owned transcript mutation, not merely the sidecar
+	// request. Hold this narrowly scoped relay lock through the read-back and
+	// broadcast too: otherwise clear A can fetch a snapshot, clear B can delete
+	// it and broadcast empty, then A can broadcast its now-stale snapshot last.
+	// Normal turn admission does not take this lock.
+	relay.clearMu.Lock()
+	defer relay.clearMu.Unlock()
+
 	removed, kept, err := relay.clear(ctx, olderThanDays)
 	if err != nil {
 		// The counts travel even on failure: a clear_partial refusal means the
@@ -1096,6 +1196,10 @@ func (c *Client) cosRunClear(relay *cosRelay, olderThanDays int) {
 		c.sendCosClearResult(false, removed, kept, err.Error())
 		return
 	}
+	// Invalidate delayed subscription snapshots BEFORE the success receipt
+	// drops browser state. Otherwise a pre-clear history reply can arrive in
+	// the receipt/history gap and briefly resurrect turns the user deleted.
+	c.hub.invalidateCosHistory()
 	c.sendCosClearResult(true, removed, kept, "")
 
 	// The transcript changed underneath every tab, not just this one. A fresh
@@ -1117,35 +1221,25 @@ func (c *Client) cosRunClear(relay *cosRelay, olderThanDays int) {
 			herr))
 		return
 	}
-	c.hub.broadcastCosHistory(turns, cosHistoryReasonClear)
+	c.hub.broadcastCosHistory(turns, cosHistoryReasonClear, relay)
 }
 
 // --- outbound frames -------------------------------------------------------
 
 func (c *Client) sendCosSubscribeResult(ok bool, errMsg, sessionID string, ready bool, relay ...*cosRelay) {
-	var conversation *struct {
-		ID          string `json:"id"`
-		SessionID   string `json:"session_id"`
-		Generation  uint64 `json:"generation"`
-		Incarnation string `json:"incarnation"`
-	}
+	var conversation *cosConversationIdentity
 	if ok && len(relay) > 0 && relay[0] != nil {
-		if root, active := relay[0].rootIdentity(); active {
-			conversation = &struct {
-				ID          string `json:"id"`
-				SessionID   string `json:"session_id"`
-				Generation  uint64 `json:"generation"`
-				Incarnation string `json:"incarnation"`
-			}{ID: root.ID, SessionID: root.SessionID, Generation: 1, Incarnation: relay[0].incarnation}
+		if identity, active := relay[0].conversationIdentity(); active {
+			conversation = &identity
 		}
 	}
 	frame := struct {
-		Type         string `json:"type"`
-		OK           bool   `json:"ok"`
-		SessionID    string `json:"session_id,omitempty"`
-		Ready        bool   `json:"ready"`
-		Error        string `json:"error,omitempty"`
-		Conversation any    `json:"conversation,omitempty"`
+		Type         string                   `json:"type"`
+		OK           bool                     `json:"ok"`
+		SessionID    string                   `json:"session_id,omitempty"`
+		Ready        bool                     `json:"ready"`
+		Error        string                   `json:"error,omitempty"`
+		Conversation *cosConversationIdentity `json:"conversation,omitempty"`
 	}{Type: cosTypeSubscribeResult, OK: ok, SessionID: sessionID, Ready: ready, Error: errMsg, Conversation: conversation}
 	data, err := json.Marshal(frame)
 	if err != nil {
@@ -1229,29 +1323,27 @@ func (c *Client) sendCosClearRefusal(code, errMsg string) {
 	}
 }
 
-// sendCosHistory writes one replay frame.
+// cosHistoryFrame encodes one replay frame.
 //
 // The turns array is forwarded VERBATIM, for the same reason cos-event is: it
 // is the sidecar's shape, and a field added to a replayed turn must reach the
 // browser rather than being filtered out by a Go struct written before it
 // existed.
-func (c *Client) sendCosHistory(turns json.RawMessage, reason string) {
+func cosHistoryFrame(turns json.RawMessage, reason string, conversation cosConversationIdentity) ([]byte, error) {
 	if len(turns) == 0 {
 		turns = json.RawMessage("[]")
 	}
 	frame := struct {
-		Type   string          `json:"type"`
-		Turns  json.RawMessage `json:"turns"`
-		Reason string          `json:"reason,omitempty"`
-	}{Type: cosTypeHistory, Turns: turns, Reason: reason}
+		Type         string                  `json:"type"`
+		Turns        json.RawMessage         `json:"turns"`
+		Reason       string                  `json:"reason,omitempty"`
+		Conversation cosConversationIdentity `json:"conversation"`
+	}{Type: cosTypeHistory, Turns: turns, Reason: reason, Conversation: conversation}
 	data, err := json.Marshal(frame)
 	if err != nil {
-		log.Printf("cos: encode history frame: %v", err)
-		return
+		return nil, err
 	}
-	if err := c.writeText(data); err != nil {
-		log.Printf("cos: history write error: %v", err)
-	}
+	return data, nil
 }
 
 // sendCosError reports a serve-layer failure to ONE connection, in the same
