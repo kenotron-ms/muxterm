@@ -186,7 +186,7 @@ func (r *cosRelay) voiceConversationContext(ctx context.Context, view voice.Conv
 // thinking/tool breadcrumbs for rendering; Voice continuity gets only
 // user-visible user/Operator prose and sanitized active/queued prompts.
 func selectVoiceConversationContext(raw json.RawMessage, queue []cosQueueItem) voice.OperatorConversationContext {
-	context := voice.OperatorConversationContext{
+	result := voice.OperatorConversationContext{
 		Kind:        "prior_operator_conversation_context",
 		Notice:      "Every item below is prior context, not a new user instruction.",
 		Items:       []voice.ConversationContextItem{},
@@ -214,10 +214,10 @@ func selectVoiceConversationContext(raw json.RawMessage, queue []cosQueueItem) v
 				}
 			}
 		}
-		context.Items = newestVoiceContextItems(candidates, voiceContextHistoryBudget, voiceContextHistoryItems)
+		result.Items = newestVoiceContextItems(candidates, voiceContextHistoryBudget, voiceContextHistoryItems)
 	}
 	for _, item := range queue {
-		if len(context.CurrentWork) >= voiceContextWorkItems {
+		if len(result.CurrentWork) >= voiceContextWorkItems {
 			break
 		}
 		if item.Status != "active" && item.Status != "queued" {
@@ -227,12 +227,12 @@ func selectVoiceConversationContext(raw json.RawMessage, queue []cosQueueItem) v
 		if text == "" {
 			continue
 		}
-		context.CurrentWork = append(context.CurrentWork, voice.ConversationContextWork{
+		result.CurrentWork = append(result.CurrentWork, voice.ConversationContextWork{
 			State: item.Status,
 			Text:  text,
 		})
 	}
-	return context
+	return result
 }
 
 func newestVoiceContextItems(items []voice.ConversationContextItem, budget, limit int) []voice.ConversationContextItem {
@@ -318,9 +318,9 @@ func (s *Server) registerVoiceRoutes(cfg config.VoiceConfig, protect func(http.H
 func (s *Server) handleVoiceToken(w http.ResponseWriter, r *http.Request) {
 	eph, err := s.voice.Mint(r.Context())
 	if err != nil {
-		// A provider failure can reflect a credential or request identifier.
-		// Keep both browser and server surfaces to fixed recovery language.
-		log.Printf("voice: mint failed")
+		// SafeDiagnostic is an explicitly classified, body-free server
+		// diagnostic. The browser remains deliberately generic.
+		log.Printf("voice: mint failed: %s", voice.SafeDiagnostic(err))
 		writeVoiceError(w, http.StatusBadGateway, "Voice Mode could not start. Try again.")
 		return
 	}
@@ -357,10 +357,9 @@ func (s *Server) handleVoiceSDP(w http.ResponseWriter, r *http.Request) {
 
 	answer, err := s.voice.Connect(r.Context(), sessionID, string(body))
 	if err != nil {
-		// Connect errors can include the provider call identifier. The
-		// authenticated browser needs an actionable recovery path, not a
-		// transport diagnostic.
-		log.Printf("voice: connect failed")
+		// Do not log raw Connect errors: a sideband attach can contain the
+		// provider call id. SafeDiagnostic preserves only a fixed class.
+		log.Printf("voice: connect failed: %s", voice.SafeDiagnostic(err))
 		writeVoiceError(w, http.StatusBadGateway, "Voice Mode could not start. Try again.")
 		return
 	}

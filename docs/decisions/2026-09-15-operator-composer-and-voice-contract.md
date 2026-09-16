@@ -98,8 +98,18 @@ sideband function output. It keeps one response admission slot and a FIFO:
    is eligible.
 
 There is no sleep/timer busy retry, no spin loop, no duplicate conversation
-item, and no raw provider message/response identifier in Voice UI, trace, or
-log output. A recoverable provider admission conflict leaves Voice connected.
+item, and no raw provider message/response identifier in Voice UI or trace.
+A recoverable provider admission conflict leaves Voice connected.
+
+If a locally attempted `response.create` write fails, WebSocket delivery is
+ambiguous: retrying the same create could duplicate a provider response. The
+sideband therefore releases only that request's pointer-identified reservation
+and advances at most one already-queued successor. The successor either runs,
+or receives the normal busy refusal and returns to FIFO order. A second local
+write failure does not cascade unconfirmed attempts; remaining FIFO entries
+wait for a later explicit admission opportunity. This is immediate
+non-wedging local recovery, not a timer-based retry, and preserves
+at-most-once `response.create` delivery under ambiguous transport failure.
 
 ### Read-only continuity tool
 
@@ -125,9 +135,15 @@ to the one authoritative Operator conversation:
   and e-mail-like identities. Active/queued
   user-visible prompts are the only current-work projection. Approval state
   is omitted because this path has no safe authoritative approval snapshot.
-- The tool returns only a Realtime `function_call_output`. It creates no
-  response, narration, work, queue item, Voice end, or user-visible toast.
-  Availability/errors are generic and do not disclose whether another
+- A tool lookup returns only a Realtime `function_call_output`, with no work,
+  queue item, Voice end, or user-visible toast. Realtime's function-call flow
+  requires an explicit continuation after that output: the sideband admits one
+  `response.create` for the *already-spoken* request through the same FIFO.
+  It is queued if the originating response has not yet reached
+  `response.done`, or immediately admitted if it has. Thus either provider
+  event ordering produces exactly one answer continuation, while passive
+  Voice connect still creates none.
+- Availability/errors are generic and do not disclose whether another
   conversation/session exists.
 - Every call obtains a fresh read, so an accepted clear/reset immediately
   removes cleared material from future tool results. Voice end itself never
@@ -195,15 +211,19 @@ context pickers, multi-channel routing, or a Voice-specific transcript store.
 `Operator` remains the human-facing name. Historical
 `*_chief_of_staff` tool identifiers remain wire-compatible identifiers only.
 The two earlier security hardenings remain: body-free provider mint/SDP
-failures and configuration-directory publication protection. This change also
-removes provider call/error detail from sideband trace/log output.
+browser failures and configuration-directory publication protection. Server
+mint/connect logs retain only `voice.SafeDiagnostic`'s finite classified
+detail (for example safe HTTP status/auth-mode guidance); unclassified
+credential, endpoint, provider-body, call-ID, and transport errors reduce to
+fixed text. Sideband trace/log output contains no provider body or call ID.
 
 ## Validation boundary
 
-Repository policy prohibits adding new isolated unit tests. Existing protocol
-test maintenance and ordinary compile/type/static checks can establish source
-and wire-shape properties only. No DTU, browser automation, microphone,
-synthetic audio/WebRTC/provider session, credentials, or live provider run is
-used as acceptance evidence for this hotfix. Live user Voice Mode validation
-after release remains the acceptance test for acoustic continuity and
-interruption behavior.
+Repository policy prohibits adding or changing isolated unit/protocol tests;
+the review-specific response-order and write-ambiguity claims are therefore
+source-traced, not fixture claims. Ordinary compile/type/static checks can
+establish source and wire-shape properties only. No DTU, browser automation,
+microphone, synthetic audio/WebRTC/provider session, credentials, or live
+provider run is used as acceptance evidence for this hotfix. Live user Voice
+Mode validation after release remains the acceptance test for acoustic
+continuity and interruption behavior.

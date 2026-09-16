@@ -85,7 +85,7 @@ func (m *Manager) Mint(ctx context.Context) (Ephemeral, error) {
 	}
 	id, err := newID()
 	if err != nil {
-		return Ephemeral{}, err
+		return Ephemeral{}, newDiagnosticError("mint ephemeral secret", "local session identifier generation failed")
 	}
 
 	m.mu.Lock()
@@ -115,14 +115,14 @@ func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string) (Answ
 	h, ok := m.handles[sessionID]
 	if ok && h.connecting {
 		m.mu.Unlock()
-		return Answer{}, nil, errors.New("voice: session SDP exchange is already in progress")
+		return Answer{}, nil, newDiagnosticError("connect voice session", "SDP exchange already in progress")
 	}
 	if ok {
 		h.connecting = true
 	}
 	m.mu.Unlock()
 	if !ok {
-		return Answer{}, nil, errors.New("voice: unknown or expired voice session; mint a new one")
+		return Answer{}, nil, newDiagnosticError("connect voice session", "session is unavailable")
 	}
 
 	answer, err := m.client.ExchangeSDP(ctx, h.secret, offerSDP)
@@ -149,14 +149,14 @@ func (m *Manager) connect(ctx context.Context, sessionID, offerSDP string) (Answ
 			h.connecting = false
 		}
 		m.mu.Unlock()
-		return Answer{}, nil, err
+		return Answer{}, nil, newDiagnosticError("connect voice session", "sideband attachment failed")
 	}
 
 	m.mu.Lock()
 	if m.handles[sessionID] != h || !h.connecting {
 		m.mu.Unlock()
 		sb.Close()
-		return Answer{}, nil, errors.New("voice: session was ended while SDP exchange completed")
+		return Answer{}, nil, newDiagnosticError("connect voice session", "session ended during exchange")
 	}
 	prev := m.live
 	h.sideband = sb

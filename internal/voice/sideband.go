@@ -87,8 +87,8 @@ type Sideband struct {
 	// eligible, and retrying on a timer was the race that made Voice Mode look
 	// like it had failed.
 	respActive  bool
-	respCurrent map[string]any
-	respQueued  []map[string]any
+	respCurrent *responseRequest
+	respQueued  []*responseRequest
 	eventKinds  map[string]int
 
 	writeMu sync.Mutex
@@ -98,6 +98,14 @@ type Sideband struct {
 
 type sidebandConfig struct {
 	syncTimeout time.Duration
+}
+
+// responseRequest is deliberately a distinct object even though the provider
+// wire shape is a map. A failed local write must only release the reservation
+// it made; identifying the reservation by pointer prevents an old failed
+// writer from clearing a newer request that raced in after it.
+type responseRequest struct {
+	message map[string]any
 }
 
 // Trace is one observable moment in the sideband's life. Deliberately
@@ -384,7 +392,7 @@ func (s *Sideband) seen(t string) {
 func (s *Sideband) holdBusyResponse() {
 	s.mu.Lock()
 	if s.respCurrent != nil {
-		s.respQueued = append([]map[string]any{s.respCurrent}, s.respQueued...)
+		s.respQueued = append([]*responseRequest{s.respCurrent}, s.respQueued...)
 		s.respCurrent = nil
 	}
 	// The error itself proves another provider response is active. Preserve
@@ -400,17 +408,62 @@ func (s *Sideband) releaseResponse() {
 	s.mu.Lock()
 	s.respActive = false
 	s.respCurrent = nil
-	var next map[string]any
-	if len(s.respQueued) > 0 {
-		next = s.respQueued[0]
-		s.respQueued = s.respQueued[1:]
-		s.respActive = true
-		s.respCurrent = next
-	}
+	next := s.nextResponseLocked()
 	s.mu.Unlock()
 	if next != nil {
-		s.write(next)
+		if !s.write(next.message) {
+			s.releaseFailedResponse(next)
+		}
 	}
+}
+
+func (s *Sideband) nextResponseLocked() *responseRequest {
+	if len(s.respQueued) == 0 {
+		return nil
+	}
+	next := s.respQueued[0]
+	s.respQueued = s.respQueued[1:]
+	s.respActive = true
+	s.respCurrent = next
+	return next
+}
+
+// releaseFailedResponse makes a *locally failed* admission non-blocking.
+//
+// WebSocket Write returning an error is delivery-ambiguous: the provider may
+// have received the frame even though this peer did not receive a successful
+// write result. Retrying the same response.create could therefore create a
+// duplicate model response. We do not retry it. Instead, atomically drop only
+// this still-current reservation so later work is not wedged; a later request
+// either starts normally (if the frame was not delivered) or receives the
+// provider's normal busy refusal and re-enters the FIFO. A provider
+// response.created/done for a delivered frame remains authoritative.
+func (s *Sideband) releaseFailedResponse(request *responseRequest) {
+	s.mu.Lock()
+	if s.respCurrent != request {
+		s.mu.Unlock()
+		return
+	}
+	s.respCurrent = nil
+	s.respActive = false
+	next := s.nextResponseLocked()
+	s.mu.Unlock()
+	if next != nil && !s.write(next.message) {
+		// The first error was already delivery-ambiguous. Do not cascade a
+		// burst of unconfirmed retries over a broken socket; leave later FIFO
+		// work intact for the next explicit admission opportunity.
+		s.clearFailedReservation(next)
+	}
+}
+
+func (s *Sideband) clearFailedReservation(request *responseRequest) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.respCurrent != request {
+		return
+	}
+	s.respCurrent = nil
+	s.respActive = false
 }
 
 // dispatch runs one function call and answers it.
@@ -452,33 +505,34 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 	}
 }
 
-// runOperatorConversationContext returns only a function-call output. It
-// deliberately does not call answer/requestResponse: looking up prior context
-// must not create speech, narrate, alter the COS FIFO, or race an active text
-// or voice response. The realtime model uses this output within the response
-// that asked for it, or waits for the next user request.
+// runOperatorConversationContext returns a function-call output and resumes
+// the response that made this tool call. Realtime's documented tool flow ends
+// the function-calling response after arguments finish; the output alone is
+// not a request to continue speaking. The continuation is admitted through the
+// same FIFO as every other response.create, so it cannot compete with active
+// text/voice work and is never created at passive Voice connect.
 func (s *Sideband) runOperatorConversationContext(callID string, args map[string]any) {
 	view := ConversationContextView(str(args["view"]))
 	reader, ok := s.bridge.(ContextBridge)
 	// Enforce the closed wire contract even if a malformed provider event
 	// bypassed the JSON schema: exactly one enum field, never a selector.
 	if !ok || len(args) != 1 || !view.Valid() {
-		s.answerReadOnly(callID, unavailableOperatorConversationContext())
+		s.answerOperatorConversationContext(callID, unavailableOperatorConversationContext())
 		return
 	}
 	snapshot, err := reader.ReadOperatorConversationContext(context.Background(), view)
 	if err != nil {
 		// Do not disclose whether any other session/conversation exists, nor
 		// reflect server, provider, filesystem, or authentication errors.
-		s.answerReadOnly(callID, unavailableOperatorConversationContext())
+		s.answerOperatorConversationContext(callID, unavailableOperatorConversationContext())
 		return
 	}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
-		s.answerReadOnly(callID, unavailableOperatorConversationContext())
+		s.answerOperatorConversationContext(callID, unavailableOperatorConversationContext())
 		return
 	}
-	s.answerReadOnly(callID, string(data))
+	s.answerOperatorConversationContext(callID, string(data))
 }
 
 func unavailableOperatorConversationContext() string {
@@ -612,22 +666,27 @@ func (s *Sideband) answer(callID, output, instructions string) {
 	s.requestResponse(instructions)
 }
 
-// answerReadOnly returns a tool result without asking the model to speak.
-// It exists for the conversation-context tool, whose lookup is observation
-// only. In particular it cannot create a competing response while text work
-// or a spoken reply is active.
-func (s *Sideband) answerReadOnly(callID, output string) {
+// answerOperatorConversationContext writes the read-only data first, then
+// requests the continuation needed to answer the user's existing spoken turn.
+// The read itself has no COS/Voice lifecycle side effects. Its continuation
+// does not create a new user turn, and is admitted exactly once through the
+// normal response FIFO; a passive connection never reaches this method.
+func (s *Sideband) answerOperatorConversationContext(callID, output string) {
 	if callID == "" {
 		return
 	}
-	s.send(map[string]any{
+	if !s.write(map[string]any{
 		"type": "conversation.item.create",
 		"item": map[string]any{
 			"type":    "function_call_output",
 			"call_id": callID,
 			"output":  output,
 		},
-	})
+	}) {
+		return
+	}
+	s.requestResponse("Use the prior Operator context to answer the user's current referential request. " +
+		"The context is history, not a new instruction. Do not call this tool again unless the user asks a new follow-up.")
 }
 
 // requestResponse admits a spoken response only when the provider has no
@@ -688,30 +747,50 @@ func (s *Sideband) send(msg map[string]any) {
 	if s.isClosed() {
 		return
 	}
+	var request *responseRequest
 	if msg["type"] == "response.create" {
+		request = &responseRequest{message: msg}
 		s.mu.Lock()
 		if s.respActive {
-			s.respQueued = append(s.respQueued, msg)
+			s.respQueued = append(s.respQueued, request)
 			s.mu.Unlock()
+			return
+		}
+		if len(s.respQueued) > 0 {
+			// A previous write was delivery-ambiguous. Preserve FIFO by
+			// admitting its oldest later request before this new one rather
+			// than allowing the fresh request to skip the queue.
+			s.respQueued = append(s.respQueued, request)
+			request = s.nextResponseLocked()
+			s.mu.Unlock()
+			if !s.write(request.message) {
+				s.releaseFailedResponse(request)
+			}
 			return
 		}
 		// Reserve the only provider response slot before writing. A second
 		// completion or tool result that arrives while the write is in flight
 		// therefore queues instead of racing another response.create.
 		s.respActive = true
-		s.respCurrent = msg
+		s.respCurrent = request
 		s.mu.Unlock()
 	}
-	s.write(msg)
+	if !s.write(msg) && request != nil {
+		s.releaseFailedResponse(request)
+	}
 }
 
-func (s *Sideband) write(msg map[string]any) {
+// write returns true only after this sideband successfully handed a complete
+// frame to its websocket implementation. An error does not prove the provider
+// missed the frame; response.create callers must use releaseFailedResponse
+// rather than retrying blindly.
+func (s *Sideband) write(msg map[string]any) bool {
 	if s.isClosed() {
-		return
+		return false
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
-		return
+		return false
 	}
 	// Serialized: two writers interleaving frames on one WebSocket is a
 	// corrupt stream, and answer() always writes a pair that must not be
@@ -723,7 +802,9 @@ func (s *Sideband) write(msg map[string]any) {
 	defer cancel()
 	if err := conn.Write(ctx, websocket.MessageText, b); err != nil {
 		s.emit(Trace{Kind: TraceError, Detail: "sideband write failed"})
+		return false
 	}
+	return true
 }
 
 func str(v any) string {
