@@ -44,6 +44,7 @@ type Client struct {
 	// sizing authority is keyed on daemon-connection pointer identity.
 	sessMu             sync.Mutex
 	sessions           map[string]*hostSession
+	remoteTombstones   map[string]uint64
 	unsubscribeRemotes func()
 
 	// closeTickets retains browser-local target identity for opaque confirmation
@@ -93,9 +94,15 @@ type Client struct {
 	// wholesale, so with N sessions each pushing its own full set, forwarding
 	// them raw would make every host clobber the last. The edge is the merge
 	// point (design A.4). Ids in both caches are ALREADY namespaced.
-	mergeMu  sync.Mutex
-	wsByHost map[string][]sessiond.WorkspaceInfo
-	ssByHost map[string][]sessiond.SessionState
+	mergeMu   sync.Mutex
+	wsByHost  map[string][]sessiond.WorkspaceInfo
+	ssByHost  map[string][]sessiond.SessionState
+	ssPending map[string]bool // hosts that have not supplied this subscription's current set
+	// ssLocalUnavailable is stronger than a pending remote: without the local
+	// daemon's subscription the browser must say so, even if remote rows still
+	// arrive. ssRevision orders asynchronous aggregate writes.
+	ssLocalUnavailable bool
+	ssRevision         uint64
 
 	// cosMu guards cosSub and the generation-fenced asynchronous startup for this
 	// connection's opt-in subscription to the
@@ -211,12 +218,86 @@ func (c *Client) setSessionStateWanted(v bool) {
 	c.subMu.Lock()
 	c.sessionStateWanted = v
 	c.subMu.Unlock()
+	if !v {
+		c.mergeMu.Lock()
+		clear(c.ssPending)
+		c.ssLocalUnavailable = false
+		c.mergeMu.Unlock()
+		return
+	}
+
+	// A subscription is a new whole-state generation. Every session current
+	// now must contribute once before an empty aggregate can claim that Fleet
+	// is empty. The cache stays in place so a reconnect can show useful stale
+	// rows while its replacement snapshots arrive.
+	c.sessMu.Lock()
+	c.mergeMu.Lock()
+	if c.ssPending == nil {
+		c.ssPending = make(map[string]bool)
+	}
+	clear(c.ssPending)
+	c.ssLocalUnavailable = false
+	for _, s := range c.sessions {
+		c.ssPending[s.host.ID] = true
+	}
+	c.mergeMu.Unlock()
+	c.sessMu.Unlock()
+	c.emitSessionState()
+}
+
+// sessionStateUnavailable records a local subscription refusal. Remote rows
+// remain useful, but no aggregate containing them may claim every Fleet source
+// is current until the next browser subscription generation resets this fact.
+func (c *Client) sessionStateUnavailable() {
+	c.mergeMu.Lock()
+	if c.ssLocalUnavailable {
+		c.mergeMu.Unlock()
+		return
+	}
+	c.ssLocalUnavailable = true
+	c.mergeMu.Unlock()
+	c.emitSessionState()
 }
 
 func (c *Client) subscriptions() (preview, sessionState bool) {
 	c.subMu.Lock()
 	defer c.subMu.Unlock()
 	return c.previewWanted, c.sessionStateWanted
+}
+
+// sessionStatePending records that source must replace its cached whole set
+// before the browser may call the merged Fleet snapshot complete. The
+// session-map check and pending write share one critical section, so a
+// cancelled/removed host cannot reintroduce itself after forgetHost removed
+// its cache. A remote subscription can fail or wait to reconnect indefinitely,
+// so pending is surfaced as "partial", never as an endless loading spinner.
+func (c *Client) sessionStatePending(source *hostSession) {
+	c.subMu.Lock()
+	wanted := c.sessionStateWanted
+	c.subMu.Unlock()
+	if !wanted {
+		return
+	}
+
+	host := source.host.ID
+	c.sessMu.Lock()
+	if c.sessions[host] != source {
+		c.sessMu.Unlock()
+		return
+	}
+	c.mergeMu.Lock()
+	if c.ssPending == nil {
+		c.ssPending = make(map[string]bool)
+	}
+	if c.ssPending[host] {
+		c.mergeMu.Unlock()
+		c.sessMu.Unlock()
+		return
+	}
+	c.ssPending[host] = true
+	c.mergeMu.Unlock()
+	c.sessMu.Unlock()
+	c.emitSessionState()
 }
 
 func validCloseTarget(target sessiond.CloseTarget) bool {
@@ -305,14 +386,16 @@ func closeRelayFailure(target sessiond.CloseTarget) sessiond.CloseOutcome {
 func newClient(hub *Hub, conn *websocket.Conn) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		hub:          hub,
-		conn:         conn,
-		ctx:          ctx,
-		cancel:       cancel,
-		sessions:     make(map[string]*hostSession),
-		closeTickets: make(map[string]closeTicket),
-		wsByHost:     make(map[string][]sessiond.WorkspaceInfo),
-		ssByHost:     make(map[string][]sessiond.SessionState),
+		hub:              hub,
+		conn:             conn,
+		ctx:              ctx,
+		cancel:           cancel,
+		sessions:         make(map[string]*hostSession),
+		remoteTombstones: make(map[string]uint64),
+		closeTickets:     make(map[string]closeTicket),
+		wsByHost:         make(map[string][]sessiond.WorkspaceInfo),
+		ssByHost:         make(map[string][]sessiond.SessionState),
+		ssPending:        make(map[string]bool),
 	}
 	c.writeTextFn = func(data []byte) error {
 		c.writeMu.Lock()
@@ -822,12 +905,19 @@ func (c *Client) handleTextInput(data []byte) {
 	case sessiond.TypeSessionStateSubscribe:
 		// Per-connection opt-in for home-view session state, with the same
 		// old-daemon contract as preview-subscribe above: an error means this
-		// daemon predates the feature, and relaying it lets the browser stop
+		// daemon predates the feature. Return its typed acknowledgement with
+		// OK=false so the browser can render an unavailable feed rather than
 		// waiting for rows that are never coming.
 		c.setSessionStateWanted(msg.OK)
 		c.broadcastSubscribe(host, func(conn DaemonConn) error { return conn.SessionStateSubscribe(msg.OK) })
 		if err := dc.SessionStateSubscribe(msg.OK); err != nil {
-			c.sendError(msg.CID, browserWSID, err)
+			c.sessionStateUnavailable()
+			c.sendMessage(&sessiond.Message{
+				Type:  sessiond.TypeSessionStateSubscribeResult,
+				CID:   msg.CID,
+				OK:    false,
+				Error: err.Error(),
+			})
 			return
 		}
 		c.sendMessage(&sessiond.Message{
@@ -937,30 +1027,26 @@ func (c *Client) setWorkspaces(host string, workspaces []sessiond.WorkspaceInfo)
 	c.mergeMu.Unlock()
 }
 
-// setSessions replaces host's cached session-state set, stamping every row.
-func (c *Client) setSessions(host string, sessions []sessiond.SessionState) {
+// setSessions replaces source's cached session-state set, stamping every row.
+// The source must still be this browser's current connection for its host: an
+// event raced from an explicitly removed or superseded remote is stale.
+func (c *Client) setSessions(source *hostSession, sessions []sessiond.SessionState) bool {
+	host := source.host.ID
 	stamped := stampSessions(host, sessions)
+	c.sessMu.Lock()
+	if c.sessions[host] != source {
+		c.sessMu.Unlock()
+		return false
+	}
 	c.mergeMu.Lock()
 	if c.ssByHost == nil {
 		c.ssByHost = make(map[string][]sessiond.SessionState)
 	}
 	c.ssByHost[host] = stamped
+	delete(c.ssPending, host)
 	c.mergeMu.Unlock()
-}
-
-// forgetHost drops a host's cached slices and re-emits both merged documents.
-//
-// This is the EXPLICIT-disconnect half of the retention rule (design A.4): a
-// transport drop keeps the cache so the sidebar can ghost the workspaces,
-// while a disconnect deletes it so they vanish -- because that is what the
-// user asked for.
-func (c *Client) forgetHost(host string) {
-	c.mergeMu.Lock()
-	delete(c.wsByHost, host)
-	delete(c.ssByHost, host)
-	c.mergeMu.Unlock()
-	c.emitWorkspaceList(0)
-	c.emitSessionState()
+	c.sessMu.Unlock()
+	return true
 }
 
 // mergedHosts returns the cache keys in the browser's stable render order:
@@ -1018,11 +1104,21 @@ func (c *Client) emitSessionState() {
 	for _, h := range mergedHosts(c.ssByHost) {
 		out = append(out, c.ssByHost[h]...)
 	}
+	status := "ready"
+	if c.ssLocalUnavailable {
+		status = "unavailable"
+	} else if len(c.ssPending) > 0 {
+		status = "partial"
+	}
+	c.ssRevision++
+	revision := c.ssRevision
 	c.mergeMu.Unlock()
 
 	c.sendMessage(&sessiond.Message{
-		Type:     sessiond.TypeSessionState,
-		Sessions: out,
+		Type:                 sessiond.TypeSessionState,
+		Sessions:             out,
+		SessionStateStatus:   status,
+		SessionStateRevision: revision,
 	})
 }
 
@@ -1393,8 +1489,8 @@ func (h *Hub) attachClient(c *Client) error {
 		// its first dial, so this loop is also design D's "one frame per
 		// registry member immediately after attachClient": a fresh tab renders
 		// its host groups without waiting for any dial to resolve.
-		for _, host := range remotes.Hosts() {
-			c.startHostSession(host)
+		for _, membership := range remotes.memberships() {
+			c.startHostSession(membership.host, membership.generation)
 		}
 	}
 

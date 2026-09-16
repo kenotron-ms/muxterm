@@ -79,18 +79,23 @@ func (s *subscriber) enqueueControl(msg *Message) {
 
 // enqueuePreview queues a cosmetic preview frame. Unlike enqueueControl, a full
 // queue DROPS the frame instead of disconnecting the client: previews are
-// advisory and must never be able to kill a session.
+// advisory and must never be able to kill a session. It reports whether the
+// frame entered the queue, so a whole-state producer can arrange a retry rather
+// than treating a dropped current picture as delivered.
 //
 // A periodic broadcast plus a backgrounded browser tab is exactly the shape
 // that fills a 256-deep queue, so routing preview tiles through enqueueControl
 // would turn a sidebar decoration into a session-killer. This establishes a
 // droppable-frame class in a protocol where every other frame is mandatory;
 // any future advisory push belongs here too.
-func (s *subscriber) enqueuePreview(msg *Message) {
+func (s *subscriber) enqueuePreview(msg *Message) bool {
 	select {
 	case s.queue <- outFrame{kind: FrameControl, msg: msg}:
+		return true
 	case <-s.done:
+		return false
 	default: // drop
+		return false
 	}
 }
 

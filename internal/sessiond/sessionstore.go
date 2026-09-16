@@ -179,16 +179,19 @@ func newSessionStore() *sessionStore {
 	return &sessionStore{dir: sessionStateDir(), warnedVersions: map[string]int{}}
 }
 
-// rearmLocked forces the next collection to publish even if nothing changed, so a
-// connection that has just subscribed receives the current picture instead of
-// waiting for some session to happen to change state.
+// rearmLocked forces the next collection to publish even when its rows hash is
+// unchanged. It is only for server-owned inputs outside the spool, such as a
+// completion dismissal. A newly subscribed or briefly queue-full connection
+// instead uses conn.sessionStatePending, so it does not re-notify healthy peers.
 func (s *sessionStore) rearmLocked() {
 	s.hasSent = false
 	s.lastHash = 0
 }
 
-// changedLocked reports whether rows differ from the last published set, recording
-// them as the new baseline. Callers publish only when it returns true.
+// changedLocked reports whether rows differ from the last collected set,
+// recording them as the new baseline. The per-connection delivery state belongs
+// to conn, because one slow browser must not make every healthy subscriber
+// receive a duplicate whole-state frame.
 func (s *sessionStore) changedLocked(rows []SessionState) bool {
 	h := sessionStateHash(rows)
 	if s.hasSent && s.lastHash == h {

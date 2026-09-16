@@ -74,13 +74,14 @@ type RemoteTransport interface {
 // Per-browser is also the honest answer for the UI: the dropbar and the
 // ghosting describe THIS tab's view of that host.
 type RemoteRegistry struct {
-	mu        sync.RWMutex
-	tr        RemoteTransport
-	members   map[string]transport.HostRef // key = HostRef.ID
-	lastState map[string]HostState
-	lastErr   map[string]string
-	lastProbe map[string]ProbeReport
-	subs      map[*Client]struct{}
+	mu         sync.RWMutex
+	tr         RemoteTransport
+	members    map[string]transport.HostRef // key = HostRef.ID
+	generation map[string]uint64            // advances only when a removed host is re-added
+	lastState  map[string]HostState
+	lastErr    map[string]string
+	lastProbe  map[string]ProbeReport
+	subs       map[*Client]struct{}
 }
 
 // NewRemoteRegistry returns an empty registry over tr. A nil tr is valid and
@@ -88,12 +89,13 @@ type RemoteRegistry struct {
 // installed, and the registry simply stays empty.
 func NewRemoteRegistry(tr RemoteTransport) *RemoteRegistry {
 	return &RemoteRegistry{
-		tr:        tr,
-		members:   make(map[string]transport.HostRef),
-		lastState: make(map[string]HostState),
-		lastErr:   make(map[string]string),
-		lastProbe: make(map[string]ProbeReport),
-		subs:      make(map[*Client]struct{}),
+		tr:         tr,
+		members:    make(map[string]transport.HostRef),
+		generation: make(map[string]uint64),
+		lastState:  make(map[string]HostState),
+		lastErr:    make(map[string]string),
+		lastProbe:  make(map[string]ProbeReport),
+		subs:       make(map[*Client]struct{}),
 	}
 }
 
@@ -124,6 +126,29 @@ func (r *RemoteRegistry) Hosts() []transport.HostRef {
 	return out
 }
 
+// memberships snapshots each host together with the generation that owns it.
+// attachClient must not pair a HostRef from one registry instant with a
+// generation read from another: a remove/re-add in between would otherwise
+// attach the stale endpoint as the fresh membership.
+type remoteMembership struct {
+	host       transport.HostRef
+	generation uint64
+}
+
+func (r *RemoteRegistry) memberships() []remoteMembership {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	out := make([]remoteMembership, 0, len(r.members))
+	for id, h := range r.members {
+		out = append(out, remoteMembership{host: h, generation: r.generation[id]})
+	}
+	r.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].host.ID < out[j].host.ID })
+	return out
+}
+
 // Get returns the member named by id.
 func (r *RemoteRegistry) Get(id string) (transport.HostRef, bool) {
 	if r == nil {
@@ -150,7 +175,12 @@ func (r *RemoteRegistry) Add(h transport.HostRef) error {
 	}
 
 	r.mu.Lock()
+	_, present := r.members[h.ID]
 	r.members[h.ID] = h
+	if !present {
+		r.generation[h.ID]++
+	}
+	generation := r.generation[h.ID]
 	if _, seen := r.lastState[h.ID]; !seen {
 		r.lastState[h.ID] = HostNeverConnected
 	}
@@ -158,7 +188,7 @@ func (r *RemoteRegistry) Add(h transport.HostRef) error {
 	r.mu.Unlock()
 
 	for _, c := range subs {
-		c.startHostSession(h)
+		c.startHostSession(h, generation)
 	}
 	return nil
 }
@@ -171,6 +201,7 @@ func (r *RemoteRegistry) Remove(id string) bool {
 	}
 	r.mu.Lock()
 	_, ok := r.members[id]
+	generation := r.generation[id]
 	delete(r.members, id)
 	delete(r.lastState, id)
 	delete(r.lastErr, id)
@@ -178,10 +209,13 @@ func (r *RemoteRegistry) Remove(id string) bool {
 	subs := r.subscribers()
 	r.mu.Unlock()
 
-	for _, c := range subs {
-		c.stopHostSession(id)
+	if !ok {
+		return false
 	}
-	return ok
+	for _, c := range subs {
+		c.stopHostSession(id, generation)
+	}
+	return true
 }
 
 // Note records the last state and error observed for id. Sessions report here
@@ -298,6 +332,9 @@ func backoffFor(attempt int) time.Duration {
 type hostSession struct {
 	host   transport.HostRef
 	client *Client
+	// membershipGeneration distinguishes this registry membership from a later
+	// remove/re-add of the same host id.
+	membershipGeneration uint64
 
 	mu   sync.Mutex
 	conn DaemonConn // nil unless state == connected
@@ -387,6 +424,11 @@ func (s *hostSession) enter(st HostState, errText string, delay time.Duration) {
 	s.mu.Unlock()
 
 	s.client.remoteRegistry().Note(s.host.ID, st, errText)
+	if st != HostConnected {
+		// Retain a remote's cached rows while its link is down, but make their
+		// staleness visible to Fleet until this connection supplies a new set.
+		s.client.sessionStatePending(s)
+	}
 
 	m := hostStateMessage{
 		Type:   typeHostState,
@@ -565,6 +607,9 @@ func (s *hostSession) afterConnect(conn DaemonConn, workspaces []sessiond.Worksp
 		}
 	}
 	if wantSessions {
+		// A new daemon connection must replace any rows retained from its old
+		// link before the merged Fleet is current again.
+		c.sessionStatePending(s)
 		if err := conn.SessionStateSubscribe(true); err != nil {
 			log.Printf("hostSession %s: session-state-subscribe: %v", s.host.ID, err)
 		}
@@ -755,8 +800,9 @@ func (s *hostSession) installHandlers() {
 			// Every row names its own workspace and pane (the set spans
 			// workspaces this client is not attached to). The other
 			// whole-state document, so it merges rather than forwards.
-			c.setSessions(hostID, msg.Sessions)
-			c.emitSessionState()
+			if c.setSessions(s, msg.Sessions) {
+				c.emitSessionState()
+			}
 		},
 	})
 }
@@ -809,7 +855,7 @@ func (c *Client) emitHostState(m hostStateMessage) {
 // Idempotent by design so POST /api/remotes/{id}/connect can be repeated: a
 // live or reconnecting session is left strictly alone. A session that gave up
 // (unreachable) is replaced, because that is what the Retry button means.
-func (c *Client) startHostSession(h transport.HostRef) {
+func (c *Client) startHostSession(h transport.HostRef, generation uint64) {
 	if h.ID == "" {
 		return // the local daemon is not a remote
 	}
@@ -820,8 +866,16 @@ func (c *Client) startHostSession(h transport.HostRef) {
 	if c.sessions == nil {
 		c.sessions = make(map[string]*hostSession)
 	}
+	// A remove can win the race before attachClient's membership snapshot is
+	// installed. Its tombstone makes that removal durable until a later
+	// generation explicitly re-adds the host.
+	if generation <= c.remoteTombstones[h.ID] {
+		c.sessMu.Unlock()
+		return
+	}
 	if existing, ok := c.sessions[h.ID]; ok {
-		if existing.stateOf() != HostUnreachable {
+		if existing.membershipGeneration > generation ||
+			(existing.membershipGeneration == generation && existing.stateOf() != HostUnreachable) {
 			c.sessMu.Unlock()
 			return
 		}
@@ -829,11 +883,12 @@ func (c *Client) startHostSession(h transport.HostRef) {
 	}
 	ctx, cancel := context.WithCancel(c.ctx)
 	s := &hostSession{
-		host:   h,
-		client: c,
-		state:  HostNeverConnected,
-		since:  time.Now(),
-		cancel: cancel,
+		host:                 h,
+		client:               c,
+		membershipGeneration: generation,
+		state:                HostNeverConnected,
+		since:                time.Now(),
+		cancel:               cancel,
 	}
 	c.sessions[h.ID] = s
 	c.sessMu.Unlock()
@@ -841,6 +896,9 @@ func (c *Client) startHostSession(h transport.HostRef) {
 	if stale != nil {
 		stale.close()
 	}
+	// A host can join after the browser opted in. It must participate in the
+	// current Fleet generation before an empty aggregate is called complete.
+	c.sessionStatePending(s)
 
 	// Announce the host BEFORE the first dial (design D: "one frame per
 	// registry member immediately after attachClient"). Without this a fresh
@@ -870,19 +928,36 @@ func (c *Client) startHostSession(h transport.HostRef) {
 // This is the one case where a host's workspaces vanish from the browser
 // rather than ghosting, because the user asked for that (design A.4 retention
 // rule / ux D8).
-func (c *Client) stopHostSession(id string) {
+func (c *Client) stopHostSession(id string, generation uint64) {
 	if id == "" {
 		return
 	}
 	c.sessMu.Lock()
+	if c.remoteTombstones == nil {
+		c.remoteTombstones = make(map[string]uint64)
+	}
+	if generation > c.remoteTombstones[id] {
+		c.remoteTombstones[id] = generation
+	}
 	s, ok := c.sessions[id]
+	if !ok || s.membershipGeneration != generation {
+		c.sessMu.Unlock()
+		return
+	}
 	delete(c.sessions, id)
+	// Pair session removal with the cache/pending removal. A concurrently
+	// re-added generation can only install after this critical section, so it
+	// cannot have its fresh Fleet source deleted by this old removal.
+	c.mergeMu.Lock()
+	delete(c.wsByHost, id)
+	delete(c.ssByHost, id)
+	delete(c.ssPending, id)
+	c.mergeMu.Unlock()
 	c.sessMu.Unlock()
 
-	if ok {
-		s.close()
-	}
-	c.forgetHost(id)
+	s.close()
+	c.emitWorkspaceList(0)
+	c.emitSessionState()
 
 	m := hostStateMessage{
 		Type:  typeHostState,
@@ -890,10 +965,8 @@ func (c *Client) stopHostSession(id string) {
 		State: HostNeverConnected,
 		Since: time.Now().UnixMilli(),
 	}
-	if ok {
-		m.Name = s.host.DisplayName
-		m.Target = s.host.Addr
-	}
+	m.Name = s.host.DisplayName
+	m.Target = s.host.Addr
 	c.emitHostState(m)
 }
 

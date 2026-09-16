@@ -946,9 +946,8 @@ export class MuxApp extends LitElement {
     disposeHomeToggle = installHomeToggle(store.config.keys.toggleHome, this._toggleHome);
 
     // The home view is fed live from the daemon (see _socket.onSessionState
-    // below). Until the first session-state frame arrives the set is simply
-    // empty, which renders as the zero state — that is honest, and better than
-    // showing fixture rows a reader could mistake for real sessions.
+    // below). Until the first session-state frame arrives the set is unknown:
+    // a missing frame must not be rendered as an authoritative empty fleet.
     this._unsubHomeSessions = homeSessions.subscribe(() => {
       this._version++;
     });
@@ -1009,8 +1008,22 @@ export class MuxApp extends LitElement {
     // those two cases here is what stops the needs-input badge sticking at its
     // last non-zero value.
     this._socket.onSessionState = (msg) => {
-      const rows = (msg as { sessions?: SessionState[] }).sessions ?? [];
-      homeSessions.set(rows, 'live');
+      const snapshot = msg as {
+        sessions?: SessionState[];
+        sessionStateStatus?: unknown;
+        sessionStateRevision?: unknown;
+      };
+      const rows = snapshot.sessions ?? [];
+      const status = snapshot.sessionStateStatus === 'partial' || snapshot.sessionStateStatus === 'unavailable'
+        ? snapshot.sessionStateStatus
+        : 'ready';
+      const revision = typeof snapshot.sessionStateRevision === 'number'
+        ? snapshot.sessionStateRevision
+        : undefined;
+      homeSessions.set(rows, 'live', status, revision);
+    };
+    this._socket.onSessionStateSubscribeResult = (msg) => {
+      if ((msg as { ok?: unknown }).ok === false) homeSessions.markUnavailable();
     };
     this._socket.sessionStateSubscribe(true);
     // Per-host connection state. No subscription to send: the server pushes a
@@ -1207,6 +1220,10 @@ export class MuxApp extends LitElement {
       this._reconnectNextAttemptAt = state.phase === 'waiting' ? state.nextAttemptAt : 0;
     };
     this._socket.onDisconnect = () => {
+      // Session-state subscription is scoped to this daemon connection. Retain
+      // any prior rows as a visible fallback, but mark even an empty prior set
+      // stale until the reconnect delivers a fresh whole-state snapshot.
+      homeSessions.markStale();
       this._showReconnectOverlay = true;
       // Deliberately NOT a message: the overlay derives its headline from the
       // live phase. A message here is an override, reserved for the server
@@ -1303,6 +1320,10 @@ export class MuxApp extends LitElement {
       this._unsubscribe = null;
     }
     if (this._socket) {
+      // An intentional close also creates a new relay Client on re-insertion.
+      // Reset its per-connection Fleet revision fence before the old socket is
+      // made inert, just as onDisconnect does for an outage.
+      homeSessions.markStale();
       cosStore.markDisconnected();
       this._socket.disconnect();
       this._socket = null;
