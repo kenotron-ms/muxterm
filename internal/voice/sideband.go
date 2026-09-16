@@ -306,10 +306,12 @@ func (s *Sideband) reattach() bool {
 		s.conn = conn
 		s.writeMu.Unlock()
 		// Keep response admission state across an observer reattach. The
-		// Realtime call is the same call, so treating reconnect as proof
-		// that it is idle would duplicate a request or reintroduce the
-		// active-response race. The next response.done/cancelled is the
-		// authoritative eligibility transition.
+		// Realtime call is the same call, and its resumption contract
+		// delivers the terminal event for an ongoing response to this new
+		// observer. Treating reconnect as proof that it is idle would
+		// duplicate a request or reintroduce the active-response race. The
+		// next response.done/cancelled is the authoritative eligibility
+		// transition.
 		s.emit(Trace{Kind: TraceReattached})
 		return true
 	}

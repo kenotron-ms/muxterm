@@ -94,8 +94,9 @@ sideband function output. It keeps one response admission slot and a FIFO:
 4. A provider active-response conflict moves the rejected request back to the
    FIFO and retains the busy state until that terminal provider signal.
 5. Sideband reattach preserves this admission state for the same provider
-   call. It does not treat reconnect or elapsed time as proof that a response
-   is eligible.
+   call. The provider replays terminal events for an ongoing response to the
+   reattached observer, so it does not treat reconnect or elapsed time as
+   proof that a response is eligible.
 
 There is no sleep/timer busy retry, no spin loop, no duplicate conversation
 item, and no raw provider message/response identifier in Voice UI or trace.
@@ -140,7 +141,7 @@ to the one authoritative Operator conversation:
   user-visible prompts are the only current-work projection. Approval state
   is omitted because this path has no safe authoritative approval snapshot.
 - History selection returns one contiguous newest suffix. When the next older
-  item does not fit the fixed byte budget, selection stops rather than
+  item does not fit the fixed character budget, selection stops rather than
   silently skipping it and presenting an apparently adjacent older turn.
 - A tool lookup returns only a Realtime `function_call_output`, with no work,
   queue item, Voice end, or user-visible toast. Realtime's function-call flow
