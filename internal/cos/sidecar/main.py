@@ -1678,13 +1678,13 @@ class Sidecar:
                 logger.exception("clear: context reset on an empty transcript failed")
                 fail(f"nothing was on disk to prune, but this session's live memory could "
                      f"not be reset ({type(exc).__name__}: {exc}), so unsaved turns would "
-                     f"come back on the next save. Restart the chief of staff to clear them",
+                     f"come back on the next save. Restart Operator to clear them",
                      code="clear_partial", removed=0, kept=0, reloaded=False)
                 return
             if not reset:
                 fail("nothing was on disk to prune, and this session's live memory could not "
                      "be reset, so unsaved turns would come back on the next save. Restart "
-                     "the chief of staff to clear them",
+                     "Operator to clear them",
                      code="clear_partial", removed=0, kept=0, reloaded=False)
                 return
             payload = {"ev": "cleared", "removed": 0, "kept": 0,
@@ -1804,7 +1804,7 @@ class Sidecar:
             fail(
                 f"the transcript on disk was pruned ({removed_count} of {len(messages)} "
                 f"messages removed, {len(kept)} kept) but this session's live memory was "
-                f"NOT: the next turn would bring them back. Restart the chief of staff to "
+                f"NOT: the next turn would bring them back. Restart Operator to "
                 f"make it forget them for real"
                 + (f" ({reload_error})" if reload_error else "")
                 + f". Backup: {backup_path}",

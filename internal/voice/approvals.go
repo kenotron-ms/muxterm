@@ -8,7 +8,7 @@ import (
 
 // Voice approvals.
 //
-// The chief of staff asks permission before some actions. In text that is a
+// Operator asks permission before some actions. In text that is a
 // card with two buttons. Spoken, it is a channel where "no" and "go" differ
 // by one phoneme, over a microphone, in a room with other noise, transcribed
 // by a model that will happily produce a confident wrong word.

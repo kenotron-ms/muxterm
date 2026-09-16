@@ -751,7 +751,7 @@ func (c *Client) cosSubscribe(on bool) {
 
 	relay := c.hub.cos
 	if relay == nil {
-		c.sendCosSubscribeResult(false, "the chief of staff is not available on this server", "", false)
+		c.sendCosSubscribeResult(false, "Operator is not available on this server", "", false)
 		return
 	}
 	c.cosMu.Lock()
@@ -981,13 +981,6 @@ func (c *Client) cosTurn(msg cosClientMessage) {
 		c.cosTurnFailure(msg, cos.CodeSidecarUnavailable, "Mission Control is not available on this server")
 		return
 	}
-	c.hub.mu.RLock()
-	appVoice := c.hub.appVoice
-	c.hub.mu.RUnlock()
-	if appVoice != nil && strings.HasPrefix(msg.ClientRef, "app_voice:") {
-		c.cosTurnFailure(msg, "app_voice_reservation_required", "voice submission was not accepted")
-		return
-	}
 	if !relay.enqueue(cosAdmission{client: c, msg: msg, prompt: prompt}) {
 		c.cosTurnFailure(msg, "admission_full", "Mission Control is busy accepting messages. Try again.")
 	}
@@ -1084,7 +1077,7 @@ func (c *Client) cosClear(msg cosClientMessage) {
 	}
 	relay := c.hub.cos
 	if relay == nil {
-		c.sendCosClearResult(false, 0, 0, "the chief of staff is not available on this server")
+		c.sendCosClearResult(false, 0, 0, "Operator is not available on this server")
 		return
 	}
 	go c.cosRunClear(relay, msg.OlderThanDays)

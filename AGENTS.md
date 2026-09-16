@@ -135,30 +135,21 @@ Never merge histories, infer session identity from workspace names or `wN`,
 clear storage to make a transition succeed, or silently replace a missing
 persisted conversation. Missing or ambiguous metadata is an explicit error.
 
-Verify changes with real browser/server/sessiond/sidecar fixtures in the approved
-isolated environment. Provider-edge fixtures may supply deterministic API
-responses, but never substitute fake context modules or injected browser history
-for persistence evidence. Measure first-open readiness, idle subscriptions and
-render activity; removing controls alone does not prove responsiveness.
+Voice Mode is a composer-owned v0.32-compatible vertical slice: the empty Send
+slot holds its orb and any live session immediately takes over the composer.
+`type instead` restores the text composer without ending the call; Escape or the
+orb ends it. It uses only the protected `/api/cos/voice/{token,sdp,end}` browser
+WebRTC path and a server-owned provider sideband. The provider owns ordinary
+turn detection: do not add browser/manual VAD, committed-event response creation,
+delivery policy, owner lease, app operation, or App Voice routes.
 
-The 2026-09-12 correction in
-`docs/designs/2026-09-12-app-voice-two-lifetimes.md`, as superseded by its
-single-conversation correction, preserves independent dictation and app-voice
-lifetimes. App voice belongs to the authenticated browser session and persists
-across navigation. Work submission validates the immutable conversation,
-operation, owner and lease at queue admission; later voice exit does not cancel
-already-admitted work. Existing tool permissions and approval gates remain.
-Missing local SpeechSynthesis voices is not proof that provider audio is
-unavailable. Live microphone access remains opt-in.
-
-App voice activation belongs immediately before the ellipsis in Mission Control
-and at the fixed trailing workspace dock action group. Preserve mobile spacing.
-The floating bubble is one circular control: tap pauses/resumes microphone
-transmission and playback; dragging reveals an X exit target. Exit releases
-voice resources, while other drops dock to an edge without triggering a tap.
-Generation Stop is the composer Send button in its generating state and affects
-only that generation. Labelled visual/synthetic fixtures do not establish
-real-provider or physical-microphone/acoustic success.
+Keep one persistent Mission Control conversation and the durable text FIFO/draft
+semantics. One-shot dictation remains independent and draft-only; it never
+auto-sends. User-visible assistant wording is `Operator`; stable historical
+provider tool identifiers retain their wire spelling only. Static checks confirm
+source and build compatibility, but live microphone/WebRTC/provider behavior is
+validated only by the user after release; do not use synthetic media or provider
+fixtures as substitute evidence.
 
 ### Terminal query ownership (CSI 6n, OSC 11;?)
 

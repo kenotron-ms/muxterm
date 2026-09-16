@@ -234,7 +234,7 @@ export class MuxApplets extends LitElement {
    *
    * A dormant host is inside a closed sheet, so it cannot have been tapped:
    * every navigation that reaches show() while dormant came from something
-   * other than the person -- the chief of staff raising a document, in
+   * other than the person -- Operator raising a document, in
    * practice. Opening the sheet over whatever they were reading to answer a
    * request they did not make is precisely the yank a phone must not do.
    *
@@ -451,14 +451,8 @@ export class MuxApplets extends LitElement {
    * gesture -- a tab click, an arrow key, or an `applet-navigate` that D3.4
    * only ever fires from a user gesture and never from a data change.
    */
-  show(id: AppletId, target?: string, appVoiceOperationId = ''): void {
+  show(id: AppletId, target?: string): void {
     if (!appletById(id)) return;
-    // A human-requested navigation fences provider work before this host
-    // changes view. An operation's own acknowledged routing carries its id and
-    // must not cancel itself.
-    if (!appVoiceOperationId) {
-      this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
-    }
 
     // NOBODY IS LOOKING AT THIS. See _parked: a dormant host is behind a closed
     // sheet and cannot have been tapped, so this is not the user asking. Hold
@@ -532,7 +526,7 @@ export class MuxApplets extends LitElement {
   private _onNavigate = (e: Event): void => {
     const detail = (e as CustomEvent<AppletNavigateDetail>).detail;
     if (!detail?.applet) return;
-    this.show(detail.applet, detail.target, detail.appVoiceOperationId ?? '');
+    this.show(detail.applet, detail.target);
   };
 
   /** A person touched this surface. The only thing that resets the clock. */

@@ -124,12 +124,6 @@ type Client struct {
 	// and by OnPaneOutput around every binary relay, so pane-data can never be
 	// written to the WebSocket while a composition send is in flight.
 	attachSeq sync.Mutex
-
-	// appVoiceAllowed is derived from the original authenticated WebSocket
-	// upgrade request. App voice claims never accept a later frame as proof that
-	// this socket was opened by the same origin.
-	appVoiceAllowed bool
-	appVoicePanes   map[string]map[int]bool
 }
 
 const (
@@ -311,15 +305,14 @@ func closeRelayFailure(target sessiond.CloseTarget) sessiond.CloseOutcome {
 func newClient(hub *Hub, conn *websocket.Conn) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		hub:           hub,
-		conn:          conn,
-		ctx:           ctx,
-		cancel:        cancel,
-		sessions:      make(map[string]*hostSession),
-		closeTickets:  make(map[string]closeTicket),
-		wsByHost:      make(map[string][]sessiond.WorkspaceInfo),
-		ssByHost:      make(map[string][]sessiond.SessionState),
-		appVoicePanes: make(map[string]map[int]bool),
+		hub:          hub,
+		conn:         conn,
+		ctx:          ctx,
+		cancel:       cancel,
+		sessions:     make(map[string]*hostSession),
+		closeTickets: make(map[string]closeTicket),
+		wsByHost:     make(map[string][]sessiond.WorkspaceInfo),
+		ssByHost:     make(map[string][]sessiond.SessionState),
 	}
 	c.writeTextFn = func(data []byte) error {
 		c.writeMu.Lock()
@@ -595,24 +588,6 @@ func (c *Client) handleTextInput(data []byte) {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err == nil {
-		if isAppVoiceMessage(probe.Type) {
-			c.hub.mu.RLock()
-			appVoice := c.hub.appVoice
-			c.hub.mu.RUnlock()
-			if appVoice != nil {
-				appVoice.handleFrame(c, data)
-			} else if probe.Type == "app-voice-claim" {
-				// A disabled server still speaks the v1 claim protocol.
-				// Epoch zero explicitly means no lease was granted; never
-				// echo an untrusted requested epoch as a valid lease.
-				c.sendAppVoice(map[string]any{
-					"type": "app-voice-claim-result", "protocol_version": 1,
-					"ok": false, "lease_epoch": 0, "code": "app_voice_disabled",
-					"error": "app voice is disabled or unavailable on this server",
-				})
-			}
-			return
-		}
 		if isCosMessage(probe.Type) {
 			c.handleCosMessage(data)
 			return
@@ -678,7 +653,6 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 		attachedID := nsID(host, comp.WorkspaceID)
 		c.setAttached(host, attachedID, msg.Breakpoint)
-		c.rememberAppVoicePanes(attachedID, comp.Panes)
 		c.sendMessage(&sessiond.Message{
 			Type:        sessiond.TypeComposition,
 			CID:         msg.CID,
@@ -774,9 +748,6 @@ func (c *Client) handleTextInput(data []byte) {
 		if err != nil {
 			c.sendError(msg.CID, browserWSID, err)
 			return
-		}
-		if workspaceID, ok := c.attachedWorkspaceForHost(host); ok {
-			c.rememberAppVoicePane(workspaceID, paneID)
 		}
 		c.sendMessage(&sessiond.Message{
 			Type:   sessiond.TypePaneCreated,
@@ -984,7 +955,6 @@ func (c *Client) setSessions(host string, sessions []sessiond.SessionState) {
 // while a disconnect deletes it so they vanish -- because that is what the
 // user asked for.
 func (c *Client) forgetHost(host string) {
-	c.forgetAppVoiceHost(host)
 	c.mergeMu.Lock()
 	delete(c.wsByHost, host)
 	delete(c.ssByHost, host)
@@ -1130,10 +1100,6 @@ type Hub struct {
 	// beside resolvedConfig rather than on the Client. Nothing is spawned
 	// until a browser sends cos-subscribe or cos-turn.
 	cos *cosRelay
-
-	// appVoice owns the one browser-bound app voice lease. It must be fenced
-	// from Hub.Remove before this connection can be replaced.
-	appVoice *appVoiceService
 
 	// attachFailures counts CONSECUTIVE attachClient failures across all
 	// browsers, reset by the first success. Guarded by mu.
@@ -1528,13 +1494,7 @@ func (h *Hub) Remove(c *Client) {
 		return
 	}
 	delete(h.clients, c)
-	appVoice := h.appVoice
 	h.mu.Unlock()
-	// Do not call into the app service under Hub.mu: app operations also read
-	// the catalog and client inventories.
-	if appVoice != nil {
-		appVoice.disconnect(c)
-	}
 	c.stopCos()
 	c.teardownSessions()
 	c.close()
@@ -1567,9 +1527,6 @@ func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(1 << 20) // 1MB
 
 	client := newClient(s.hub, conn)
-	// Preserve legacy WebSocket acceptance. This flag gates only the new app
-	// voice frame family and is computed before accepting untrusted frames.
-	client.appVoiceAllowed = s.appVoiceSameOrigin(r)
 	s.hub.Add(client)
 	go client.readPump()
 	// Started beside readPump, not inside it: Ping waits for a pong that only

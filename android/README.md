@@ -1,7 +1,7 @@
 # muxterm Android wrapper
 
 A plain WebView that loads muxterm and grants it the capabilities the web app needs.
-It implements **no** muxterm feature: the chief of staff, voice and remote sessions all
+It implements **no** muxterm feature: Operator, voice and remote sessions all
 already work in the web app. This wrapper exists to give that page a microphone that
 keeps working when the screen goes off.
 

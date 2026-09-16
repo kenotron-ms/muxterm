@@ -68,9 +68,10 @@ func (c *Client) CheckAuth(ctx context.Context) error {
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	// Read and discard: the body of a success is a model list nobody here
-	// needs, and draining it lets the connection be reused.
+	// Read and discard: a provider error body can reflect a credential and is
+	// never safe to return to a browser or write to a log.
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	_ = raw
 
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
@@ -103,8 +104,8 @@ func (c *Client) CheckAuth(ctx context.Context) error {
 		// round of guessing.
 		return fmt.Errorf("voice: %s answered HTTP 404 -- the endpoint should be the OpenAI-compatible v1 base URL, e.g. https://NAME.openai.azure.com/openai/v1 for Azure or https://api.openai.com/v1 for OpenAI", c.cfg.Endpoint)
 	default:
-		return fmt.Errorf("voice: the endpoint rejected this credential with HTTP %d: %s%s",
-			resp.StatusCode, snippet(raw), c.authHint(resp.StatusCode))
+		return fmt.Errorf("voice: the endpoint rejected this credential with HTTP %d%s",
+			resp.StatusCode, c.authHint(resp.StatusCode))
 	}
 }
 

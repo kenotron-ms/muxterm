@@ -95,22 +95,12 @@ var allowedVoiceEndpointSuffixes = []string{
 // voiceStatus is everything the browser is allowed to know. Note what is
 // absent: any field derived from a secret's value.
 type voiceStatus struct {
-	Enabled bool `json:"enabled"`
-	// Available is runtime registration truth for the normal app-wide voice
-	// service. It does not claim that a provider session or microphone has
-	// succeeded; those require an explicit Start.
-	Available                  bool   `json:"available"`
-	AvailabilityReason         string `json:"availabilityReason"`
-	AppVoiceCandidateAvailable bool   `json:"appVoiceCandidateAvailable"`
-	// LegacyVoiceAvailable is true only when this running process registered
-	// the established legacy voice manager. It is deliberately runtime truth,
-	// not the on-disk enabled intent shown by Enabled above.
-	LegacyVoiceAvailable bool   `json:"legacyVoiceAvailable"`
-	Mode                 string `json:"mode"`
-	Endpoint             string `json:"endpoint"`
-	Model                string `json:"model"`
-	AuthMode             string `json:"authMode"`
-	EntraScope           string `json:"entraScope"`
+	Enabled    bool   `json:"enabled"`
+	Mode       string `json:"mode"`
+	Endpoint   string `json:"endpoint"`
+	Model      string `json:"model"`
+	AuthMode   string `json:"authMode"`
+	EntraScope string `json:"entraScope"`
 	// KeySource is "stored", "env", "none" or "" (not a key mode). It says
 	// WHERE the key comes from, never what it is.
 	KeySource string `json:"keySource"`
@@ -160,21 +150,18 @@ func (s *Server) buildVoiceStatus() voiceStatus {
 	s.cfgMu.RUnlock()
 	v := s.voiceConfigOnDisk()
 	st := voiceStatus{
-		Enabled:                    v.Enabled,
-		AppVoiceCandidateAvailable: s.appVoice != nil,
-		LegacyVoiceAvailable:       s.voice != nil,
-		Mode:                       voiceModeOf(v),
-		Endpoint:                   v.Endpoint,
-		Model:                      v.Model,
-		AuthMode:                   v.AuthMode,
-		EntraScope:                 v.Resolved().EntraScope,
-		KeySource:                  v.KeySource(),
-		KeyEnvVar:                  v.APIKeyEnv,
-		AllowedScopes:              allowedEntraScopes,
-		ConfigPath:                 s.configPath,
-		KeyPath:                    voice.DefaultKeyPath(),
+		Enabled:       v.Enabled,
+		Mode:          voiceModeOf(v),
+		Endpoint:      v.Endpoint,
+		Model:         v.Model,
+		AuthMode:      v.AuthMode,
+		EntraScope:    v.Resolved().EntraScope,
+		KeySource:     v.KeySource(),
+		KeyEnvVar:     v.APIKeyEnv,
+		AllowedScopes: allowedEntraScopes,
+		ConfigPath:    s.configPath,
+		KeyPath:       voice.DefaultKeyPath(),
 	}
-	st.Available, st.AvailabilityReason = appVoiceAvailability(runtime, s.appVoice)
 	switch st.KeySource {
 	case "stored":
 		st.KeyConfigured = s.voiceKeyStore().Present()
@@ -187,22 +174,6 @@ func (s *Server) buildVoiceStatus() voiceStatus {
 	}
 	st.RestartRequired = voiceRuntimeDiffers(runtime, v)
 	return st
-}
-
-// appVoiceAvailability distinguishes configured intent from a route that was
-// actually registered in this running process. Its values are a fixed
-// credential-free wire enum; provider response errors belong to explicit Start.
-func appVoiceAvailability(cfg muxcfg.VoiceConfig, service *appVoiceService) (bool, string) {
-	if !cfg.Enabled {
-		return false, "voice_disabled"
-	}
-	if err := cfg.Validate(); err != nil {
-		return false, "voice_config_invalid"
-	}
-	if service == nil {
-		return false, "voice_provider_unavailable"
-	}
-	return true, "ready"
 }
 
 // voiceModeOf picks which of the three form shapes a stored config is in.

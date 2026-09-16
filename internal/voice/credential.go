@@ -1,7 +1,7 @@
 // Package voice is muxterm's realtime speech-to-speech bridge.
 //
 // The shape, in one line: the realtime model is EARS AND A MOUTH, and the
-// chief of staff keeps its brain.
+// Operator keeps its brain.
 //
 //	Browser ──WebRTC (audio only)──▶ realtime endpoint
 //	                                        ▲

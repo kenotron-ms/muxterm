@@ -36,12 +36,8 @@ type Config struct {
 // Mission Control channels initialize independently of ThreadsV2/TextPreview;
 // those fields are parsed but never rewritten or treated as normal-mode gates.
 type MissionControlConfig struct {
-	ThreadsV2   bool `toml:"threads_v2" json:"threads_v2"`
-	TextPreview bool `toml:"text_preview" json:"text_preview"`
-	// VoicePreview is an independent, default-off candidate gate. It never
-	// inherits either legacy [voice].enabled or text_preview: a configured
-	// threaded text preview must not open a microphone by accident.
-	VoicePreview         bool `toml:"voice_preview" json:"voice_preview"`
+	ThreadsV2            bool `toml:"threads_v2" json:"threads_v2"`
+	TextPreview          bool `toml:"text_preview" json:"text_preview"`
 	TextWorkerCap        int  `toml:"text_worker_cap" json:"text_worker_cap"`
 	TextContextMaxTokens int  `toml:"text_context_max_tokens" json:"text_context_max_tokens"`
 }
@@ -699,10 +695,8 @@ func Defaults() Config {
 			EntraScope:      DefaultVoiceEntraScope,
 			SyncToolTimeout: DefaultVoiceSyncToolTimeout,
 		},
-			// Legacy preview fields remain parsed for existing configuration but
-			// do not gate normal channels. VoicePreview remains a separate
-			// legacy candidate setting; voice.enabled is the normal app-voice
-			// configuration gate.
-		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false, VoicePreview: false, TextWorkerCap: 4},
+		// Legacy preview fields remain parsed for existing configuration but
+		// do not gate normal channels.
+		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false, TextWorkerCap: 4},
 	}
 }

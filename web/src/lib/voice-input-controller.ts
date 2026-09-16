@@ -8,7 +8,6 @@
  */
 
 import { store } from '../state.js';
-import { voiceCaptureArbiter } from './voice-capture-arbiter.js';
 
 interface SpeechRecognitionAlternativeLike {
   readonly transcript: string;
@@ -159,12 +158,11 @@ function messageForError(code: string): string {
 
 function releaseCapture(session: Session): void {
   releasing.delete(session.token);
-  void voiceCaptureArbiter.release('composer_dictation');
 }
 
 /**
- * A final/error fences transcript delivery now, but keeps arbiter ownership
- * until SpeechRecognition's own end event confirms the browser capture ended.
+ * A final/error fences transcript delivery now until SpeechRecognition's own
+ * end event confirms the browser capture ended.
  */
 function finishSession(token: number, waitForEnd = true): void {
   if (token !== tokenCounter || !current) return;
@@ -241,18 +239,8 @@ function newCaptureId(): string | null {
 
 function startFor(target: VoiceTarget): ComposerDictationCapture | null {
   if (!ctor || current || releasing.size > 0) return null;
-  const acquired = voiceCaptureArbiter.acquire('composer_dictation');
-  if (!acquired.ok) {
-    emitError(
-      acquired.owner === 'app_conversation'
-        ? 'Stop the spoken conversation before dictating'
-        : 'Another dictation capture is still releasing',
-    );
-    return null;
-  }
   const captureId = newCaptureId();
   if (!captureId) {
-    void voiceCaptureArbiter.release('composer_dictation');
     emitError('A secure dictation capture ID could not be created');
     return null;
   }

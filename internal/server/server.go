@@ -134,10 +134,6 @@ type Server struct {
 	// alongside it, so a nil here means the paths do not exist.
 	voice *voice.Manager
 
-	// appVoice is the owner-WebSocket-bound conversational bridge. It is
-	// intentionally unrelated to the scoped Mission Control attachment above.
-	appVoice *appVoiceService
-
 	// ai owns the opt-in AI capability: key storage, the enabled flag, and the
 	// lazily-constructed Anthropic client. Never reachable from cfg.
 	ai *ai.Manager
@@ -381,9 +377,6 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// so it goes down on every return path, exactly as the sidecar does.
 	if s.voice != nil {
 		defer s.voice.Close()
-	}
-	if s.appVoice != nil {
-		defer s.appVoice.provider.Close()
 	}
 
 	// Expired publications linger briefly as tombstones so a reader who is

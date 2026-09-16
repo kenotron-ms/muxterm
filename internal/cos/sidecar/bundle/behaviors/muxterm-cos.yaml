@@ -2,7 +2,7 @@ bundle:
   name: muxterm-cos-behavior
   version: 1.0.0
   description: >
-    The chief of staff's tool surface. It delegates, observes, unblocks and
+    Operator's tool surface. It delegates, observes, unblocks and
     reports; it does not do the work. Everything here exists to make that the
     only expressible behaviour -- see
     docs/designs/2026-09-06-cos-delegation-model.md section 2.
@@ -22,7 +22,7 @@ tools:
   # `mcp_muxterm_*` below is a PREFIX, so a muxterm tool added later is granted
   # mechanically, without an edit here. That is deliberate (see the trailing `*`
   # note further down) and it is also a trap worth naming: a tool nothing has
-  # TOLD the chief of staff about is a tool it will not use, whatever the
+  # TOLD Operator about is a tool it will not use, whatever the
   # allowlist says. The surface that actually decides its behaviour is the
   # charter it reads as its system prompt. When you add a muxterm tool, add it
   # to context/cos-charter.md too -- the trigger tools (create_trigger,
@@ -141,7 +141,7 @@ hooks:
 #                 attach to or monitor. It surfaces only as an [agent-name]
 #                 prefix on this session's own `doing` line. It is also the
 #                 reflex tool every amplifier agent reaches for first, so
-#                 leaving it mounted means the chief of staff quietly works in
+#                 leaving it mounted means Operator quietly works in
 #                 the shadows while the fleet view stays empty. spawn_lane is
 #                 the only delegation path.
 #   bash          doing the lane's work, unobserved. See run_command above.
