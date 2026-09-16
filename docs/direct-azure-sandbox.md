@@ -153,6 +153,14 @@ content-free `503`, not `204`.
 This is the source-backed readiness contract for the current-branch image kit;
 it is not a public session endpoint.
 
+Before parsing its four controller-generated runtime bindings or starting
+sessiond, the ingress command rejects inherited environment **names** that
+could carry Azure, ARM, MSI, managed-identity, browser token, client-secret,
+private-key, credential, or API-key material. This is necessary because
+sessiond children inherit the process environment. The check never logs names
+or values; `MUXTERM_SANDBOX_INGRESS_VERIFY_KEY` is explicitly allowed because
+it is the controller-derived public verification key.
+
 Controller attach remains explicitly unsupported. The source proves the sealed
 image/runtime proof protocol can build from current muxterm source, but does
 not establish Azure's external inbound WSS port behavior or the provider's

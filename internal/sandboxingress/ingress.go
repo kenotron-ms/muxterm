@@ -40,6 +40,36 @@ var (
 	ErrProtocol  = errors.New("sandbox ingress: protocol rejected")
 )
 
+// RejectInheritedCredentialEnvironment refuses to start sessiond when its
+// inherited environment contains a credential-shaped variable name. sessiond
+// gives child shells its environment, so rejecting before runtime parsing
+// prevents ambient Azure/browser/private material from crossing the ingress
+// boundary. It intentionally examines names only and returns no name or value.
+//
+// MUXTERM_SANDBOX_INGRESS_VERIFY_KEY is the one deliberate exception: it is a
+// controller-derived public verification key, not a secret.
+func RejectInheritedCredentialEnvironment(environ []string) error {
+	for _, item := range environ {
+		name, _, _ := strings.Cut(item, "=")
+		upper := strings.ToUpper(name)
+		if upper == "MUXTERM_SANDBOX_INGRESS_VERIFY_KEY" {
+			continue
+		}
+		if strings.HasPrefix(upper, "AZURE_") ||
+			strings.HasPrefix(upper, "ARM_") ||
+			strings.HasPrefix(upper, "MSI_") ||
+			strings.HasPrefix(upper, "IDENTITY_") ||
+			strings.Contains(upper, "TOKEN") ||
+			strings.Contains(upper, "CLIENT_SECRET") ||
+			strings.Contains(upper, "PRIVATE_KEY") ||
+			strings.Contains(upper, "CREDENTIAL") ||
+			strings.Contains(upper, "API_KEY") {
+			return ErrProtocol
+		}
+	}
+	return nil
+}
+
 // Config is injected only by the sealed image runtime environment. No HTTP
 // request data or browser value can alter it.
 type Config struct {

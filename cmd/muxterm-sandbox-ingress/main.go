@@ -33,6 +33,12 @@ func main() {
 }
 
 func run() error {
+	// sessiond's pane children inherit this process environment. Reject
+	// credential-shaped inherited names before reading the four sealed runtime
+	// bindings, and never report names or values on failure.
+	if err := sandboxingress.RejectInheritedCredentialEnvironment(os.Environ()); err != nil {
+		return err
+	}
 	cfg, err := sandboxingress.ParseRuntimeConfig(
 		os.Getenv("MUXTERM_SANDBOX_PROTOCOL"),
 		os.Getenv("MUXTERM_SANDBOX_PROFILE_CHECKSUM"),

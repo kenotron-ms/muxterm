@@ -29,6 +29,9 @@ func main() {
 }
 
 func verify() error {
+	if err := verifyIngressEnvironmentGuard(); err != nil {
+		return err
+	}
 	if _, err := sandboxazure.NewController(sandboxazure.Config{}, factory(&fakeProvider{})); !errors.Is(err, sandboxazure.ErrDisabled) {
 		return errors.New("unconfigured controller did not fail closed")
 	}
@@ -241,6 +244,28 @@ func verify() error {
 	}
 	if err := verifyHTTPAPI(controller); err != nil {
 		return err
+	}
+	return nil
+}
+
+func verifyIngressEnvironmentGuard() error {
+	allowed := []string{
+		"MUXTERM_SANDBOX_PROTOCOL=1",
+		"MUXTERM_SANDBOX_GENERATION=1",
+		"MUXTERM_SANDBOX_PROFILE_CHECKSUM=not-a-secret",
+		"MUXTERM_SANDBOX_INGRESS_VERIFY_KEY=public-value",
+	}
+	if err := sandboxingress.RejectInheritedCredentialEnvironment(allowed); err != nil {
+		return errors.New("ingress rejected its allowed public verification key")
+	}
+	for _, name := range []string{
+		"AZURE_CLIENT_ID", "ARM_CLIENT_ID", "MSI_ENDPOINT", "IDENTITY_ENDPOINT",
+		"BROWSER_TOKEN", "APP_CLIENT_SECRET", "SERVICE_PRIVATE_KEY",
+		"USER_CREDENTIAL", "EXTERNAL_API_KEY",
+	} {
+		if err := sandboxingress.RejectInheritedCredentialEnvironment([]string{name + "=value-not-inspected"}); !errors.Is(err, sandboxingress.ErrProtocol) {
+			return errors.New("ingress accepted a credential-shaped inherited environment name")
+		}
 	}
 	return nil
 }
