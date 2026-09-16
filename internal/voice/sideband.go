@@ -35,6 +35,11 @@ type Sideband struct {
 	bridge Bridge
 	cfg    sidebandConfig
 
+	// lifecycle is canceled by Close. Tool handlers derive bounded contexts
+	// from it so a stalled supervisor cannot outlive the sideband.
+	lifecycle       context.Context
+	cancelLifecycle context.CancelFunc
+
 	// events is an optional observer for everything the sideband sees and
 	// sends. The E2E harness subscribes to it; nothing in production
 	// depends on it, and it is never a credential sink -- only event
@@ -79,17 +84,17 @@ type Sideband struct {
 	// heard. It happens on the most ordinary timing there is: the model is
 	// still saying "I'll go and ask" when the answer comes back.
 	//
-	// So a response request that arrives during an active response is HELD
-	// and replayed on response.done rather than sent and lost.
+	// So response admission is a FIFO. The current request is reserved before
+	// bytes leave this process; response.done/cancelled is the only eligibility
+	// transition that releases the next request. A busy refusal moves the
+	// current request back to the queue and waits for that same transition.
+	// There is deliberately no timer retry: time cannot prove the provider is
+	// eligible, and retrying on a timer was the race that made Voice Mode look
+	// like it had failed.
 	respActive  bool
-	respQueued  []map[string]any
-	respStarted time.Time
-	// lastResponseReq is the most recent response.create, kept so it can
-	// be re-sent if the vendor refuses it as concurrent.
-	lastResponseReq     map[string]any
-	lastResponseCreated time.Time
-	retryCount          int
-	eventKinds          map[string]int
+	respCurrent *responseRequest
+	respQueued  []*responseRequest
+	eventKinds  map[string]int
 
 	writeMu sync.Mutex
 	done    chan struct{}
@@ -98,6 +103,14 @@ type Sideband struct {
 
 type sidebandConfig struct {
 	syncTimeout time.Duration
+}
+
+// responseRequest is deliberately a distinct object even though the provider
+// wire shape is a map. A failed local write must only release the reservation
+// it made; identifying the reservation by pointer prevents an old failed
+// writer from clearing a newer request that raced in after it.
+type responseRequest struct {
+	message map[string]any
 }
 
 // Trace is one observable moment in the sideband's life. Deliberately
@@ -155,16 +168,19 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 		return nil, err
 	}
 
+	lifecycle, cancelLifecycle := context.WithCancel(context.Background())
 	sb := &Sideband{
-		callID:     callID,
-		url:        u,
-		secret:     ephemeral,
-		bridge:     bridge,
-		cfg:        sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
-		events:     events,
-		endSession: endSession,
-		pending:    map[string]*approvalIntent{},
-		done:       make(chan struct{}),
+		callID:          callID,
+		url:             u,
+		secret:          ephemeral,
+		bridge:          bridge,
+		cfg:             sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
+		lifecycle:       lifecycle,
+		cancelLifecycle: cancelLifecycle,
+		events:          events,
+		endSession:      endSession,
+		pending:         map[string]*approvalIntent{},
+		done:            make(chan struct{}),
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -173,6 +189,7 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 		HTTPHeader: http.Header{"Authorization": []string{"Bearer " + ephemeral}},
 	})
 	if err != nil {
+		cancelLifecycle()
 		return nil, fmt.Errorf("voice: attaching the tool sideband to call %s failed: %w", callID, err)
 	}
 	// A realtime event carrying a long tool result can be large; the
@@ -180,12 +197,10 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 	// protocol break.
 	conn.SetReadLimit(8 << 20)
 	sb.conn = conn
-	sb.emit(Trace{Kind: TraceConnected, Detail: callID})
+	sb.emit(Trace{Kind: TraceConnected})
 
 	sb.wg.Add(1)
 	go sb.listen()
-	sb.wg.Add(1)
-	go sb.sweep()
 	return sb, nil
 }
 
@@ -202,13 +217,14 @@ func (s *Sideband) Close() {
 	s.closed = true
 	s.mu.Unlock()
 
+	s.cancelLifecycle()
 	close(s.done)
 	s.writeMu.Lock()
 	conn := s.conn
 	s.writeMu.Unlock()
 	_ = conn.Close(websocket.StatusNormalClosure, "")
 	s.wg.Wait()
-	s.emit(Trace{Kind: TraceClosed, Detail: s.callID})
+	s.emit(Trace{Kind: TraceClosed})
 }
 
 func (s *Sideband) isClosed() bool {
@@ -245,7 +261,7 @@ func (s *Sideband) listen() {
 			if s.isClosed() {
 				return
 			}
-			s.emit(Trace{Kind: TraceClosed, Detail: "read: " + trimErr(err)})
+			s.emit(Trace{Kind: TraceClosed, Detail: "sideband read failed"})
 			if s.reattach() {
 				continue
 			}
@@ -289,15 +305,14 @@ func (s *Sideband) reattach() bool {
 		s.writeMu.Lock()
 		s.conn = conn
 		s.writeMu.Unlock()
-		// A fresh connection is not mid-response, whatever the old one
-		// believed. Leaving respActive set here would wedge every later
-		// answer behind a response that no longer exists.
-		s.mu.Lock()
-		s.respActive = false
-		s.respQueued = nil
-		s.retryCount = 0
-		s.mu.Unlock()
-		s.emit(Trace{Kind: TraceReattached, Detail: s.callID})
+		// Keep response admission state across an observer reattach. The
+		// Realtime call is the same call, and its resumption contract
+		// delivers the terminal event for an ongoing response to this new
+		// observer. Treating reconnect as proof that it is idle would
+		// duplicate a request or reintroduce the active-response race. The
+		// next response.done/cancelled is the authoritative eligibility
+		// transition.
+		s.emit(Trace{Kind: TraceReattached})
 		return true
 	}
 	return false
@@ -326,18 +341,14 @@ func (s *Sideband) handle(data []byte) {
 	case ev.Type == "response.created":
 		s.mu.Lock()
 		s.respActive = true
-		s.respStarted = time.Now()
-		s.lastResponseCreated = time.Now()
 		s.mu.Unlock()
 	case ev.Type == "output_audio_buffer.started":
 		// The assistant is audibly speaking. Treated as busy even without
-		// a response.created, because over-blocking costs a beat of delay
-		// (the sweep and the queue recover it) while under-blocking costs
-		// the whole sideband.
+		// a response.created: the browser's audio turn can reach this
+		// observer without its creation event. Over-blocking until the
+		// terminal provider event is safe; under-blocking costs the session.
 		s.mu.Lock()
 		s.respActive = true
-		s.respStarted = time.Now()
-		s.lastResponseCreated = time.Now()
 		s.mu.Unlock()
 		s.signalFarewell(sigAudioStarted)
 	case ev.Type == "output_audio_buffer.stopped":
@@ -353,21 +364,18 @@ func (s *Sideband) handle(data []byte) {
 		s.releaseResponse()
 		s.signalFarewell(sigResponseDone)
 	case strings.HasPrefix(ev.Type, "error"):
-		// The one error worth acting on rather than reporting.
-		//
-		// The observer connection is NOT told when the browser's own audio
-		// starts a response -- there is no response.created on this wire for
-		// a turn the user began by speaking -- so the sideband cannot always
-		// know a response is in flight. Optimism plus this retry is what
-		// covers the gap: the conversation item is already in place, so a
-		// later response.create still makes the model speak it.
+		// The observer is not always told when the browser's audio starts a
+		// response. A busy refusal is therefore admission state, not a Voice
+		// Mode fault: retain the request and wait for response completion.
 		if bytes.Contains(ev.Error, []byte("conversation_already_has_active_response")) {
 			s.emit(Trace{Kind: TraceBusy})
-			s.retryLastResponse()
+			s.holdBusyResponse()
 			return
 		}
-		s.emit(Trace{Kind: TraceError, Detail: snippet(ev.Error)})
-		log.Printf("voice: sideband error event: %s", snippet(ev.Error))
+		// Provider error bodies can reflect call/request identifiers or
+		// credentials. Record only that one occurred, never its body.
+		s.emit(Trace{Kind: TraceError, Detail: "provider event"})
+		log.Printf("voice: sideband error event")
 	}
 }
 
@@ -389,95 +397,86 @@ func (s *Sideband) seen(t string) {
 	}
 }
 
-// retryLastResponse re-asks for a response after the active one should have
-// finished.
-//
-// Backs off and gives up rather than looping: a response request that is
-// still refused after several attempts means something else is wrong, and a
-// tight retry against a vendor endpoint is worse than silence.
-func (s *Sideband) retryLastResponse() {
+// holdBusyResponse converts a provider conflict into a durable admission wait.
+// The rejected response.create has not created a response; its corresponding
+// conversation item is already present, so replaying the same request after
+// the next provider completion is correct and cannot duplicate that item.
+func (s *Sideband) holdBusyResponse() {
 	s.mu.Lock()
-	last := s.lastResponseReq
-	s.respActive = false
-	attempt := s.retryCount
-	s.retryCount++
+	if s.respCurrent != nil {
+		s.respQueued = append([]*responseRequest{s.respCurrent}, s.respQueued...)
+		s.respCurrent = nil
+	}
+	// The error itself proves another provider response is active. Preserve
+	// that fact through a reconnect and release only on response.done.
+	s.respActive = true
 	s.mu.Unlock()
-	if last == nil || attempt >= 6 {
-		return
-	}
-	go func() {
-		select {
-		case <-time.After(time.Duration(attempt+1) * 2 * time.Second):
-		case <-s.done:
-			return
-		}
-		s.send(last)
-	}()
 }
 
-// sweep releases a response that has gone stale.
-//
-// A response.done that never arrives -- a dropped event, a response the
-// vendor declined to start -- would otherwise leave every queued answer
-// undeliverable. The read loop cannot notice that on its own because
-// nothing arrives to notice.
-func (s *Sideband) sweep() {
-	defer s.wg.Done()
-	tick := time.NewTicker(2 * time.Second)
-	defer tick.Stop()
-	for {
-		select {
-		case <-s.done:
-			return
-		case <-tick.C:
-			s.mu.Lock()
-			stale := s.respActive && time.Since(s.respStarted) > responseStalePeriod
-			queued := len(s.respQueued) > 0
-			s.mu.Unlock()
-			if stale || (queued && !s.responseIsActive()) {
-				s.releaseResponse()
-			}
-		}
-	}
-}
-
-func (s *Sideband) responseIsActive() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.respActive && time.Since(s.respStarted) < responseStalePeriod
-}
-
-// releaseResponse marks the session free and replays at most one held
-// request.
-//
-// At most ONE, and the rest are dropped: if three tool results landed during
-// a long answer, asking the model to narrate all three in sequence would
-// have it deliver a monologue nobody asked for. The conversation items are
-// all present either way, so the model has every result in context when it
-// speaks; what is coalesced is the number of times it is prompted to.
+// releaseResponse marks the provider eligible and dispatches exactly the next
+// admitted request. It is only called from response.done/cancelled, never by a
+// timer, so every request is attempted once per real eligibility transition.
 func (s *Sideband) releaseResponse() {
 	s.mu.Lock()
 	s.respActive = false
-	var next map[string]any
-	if len(s.respQueued) > 0 {
-		next = s.respQueued[len(s.respQueued)-1]
-		s.respQueued = nil
-	}
+	s.respCurrent = nil
+	next := s.nextResponseLocked()
 	s.mu.Unlock()
 	if next != nil {
-		s.send(next)
+		if !s.write(next.message) {
+			s.releaseFailedResponse(next)
+		}
 	}
 }
 
-// responseStalePeriod is how long an "active" response is believed before it
-// is treated as lost. A response.done that never arrives -- a dropped event,
-// a vendor hiccup -- would otherwise wedge the queue permanently, and a
-// wedged queue is silence.
+func (s *Sideband) nextResponseLocked() *responseRequest {
+	if len(s.respQueued) == 0 {
+		return nil
+	}
+	next := s.respQueued[0]
+	s.respQueued = s.respQueued[1:]
+	s.respActive = true
+	s.respCurrent = next
+	return next
+}
+
+// releaseFailedResponse makes a *locally failed* admission non-blocking.
 //
-// Comfortably longer than any spoken answer and far shorter than a person's
-// patience. Erring long risks a beat of delay; erring short risks talking
-// over the assistant mid-sentence, which is worse.
-const responseStalePeriod = 30 * time.Second
+// WebSocket Write returning an error is delivery-ambiguous: the provider may
+// have received the frame even though this peer did not receive a successful
+// write result. Retrying the same response.create could therefore create a
+// duplicate model response. We do not retry it. Instead, atomically drop only
+// this still-current reservation so later work is not wedged; a later request
+// either starts normally (if the frame was not delivered) or receives the
+// provider's normal busy refusal and re-enters the FIFO. A provider
+// response.created/done for a delivered frame remains authoritative.
+func (s *Sideband) releaseFailedResponse(request *responseRequest) {
+	s.mu.Lock()
+	if s.respCurrent != request {
+		s.mu.Unlock()
+		return
+	}
+	s.respCurrent = nil
+	s.respActive = false
+	next := s.nextResponseLocked()
+	s.mu.Unlock()
+	if next != nil && !s.write(next.message) {
+		// The first error was already delivery-ambiguous. Do not cascade a
+		// burst of unconfirmed retries over a broken socket; leave later FIFO
+		// work intact for the next explicit admission opportunity.
+		s.clearFailedReservation(next)
+	}
+}
+
+func (s *Sideband) clearFailedReservation(request *responseRequest) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.respCurrent != request {
+		return
+	}
+	s.respCurrent = nil
+	s.respActive = false
+}
 
 // dispatch runs one function call and answers it.
 //
@@ -495,7 +494,9 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 			_ = json.Unmarshal(ev.Arguments, &args)
 		}
 	}
-	s.emit(Trace{Kind: TraceToolCall, Name: ev.Name})
+	if ev.Name != ToolOperatorContext {
+		s.emit(Trace{Kind: TraceToolCall, Name: ev.Name})
+	}
 
 	switch ev.Name {
 	case ToolAsk:
@@ -508,10 +509,48 @@ func (s *Sideband) dispatch(ev realtimeEvent) {
 		s.runCancel(ev.CallID)
 	case ToolEnd:
 		s.runEnd(ev.CallID, args)
+	case ToolOperatorContext:
+		s.runOperatorConversationContext(ev.CallID, args)
 	default:
 		s.answer(ev.CallID, fmt.Sprintf("There is no tool called %q.", ev.Name),
 			"Tell the user you tried to do something you have no way to do, and ask what they want instead.")
 	}
+}
+
+// runOperatorConversationContext returns a function-call output and resumes
+// the response that made this tool call. Realtime's documented tool flow ends
+// the function-calling response after arguments finish; the output alone is
+// not a request to continue speaking. The continuation is admitted through the
+// same FIFO as every other response.create, so it cannot compete with active
+// text/voice work and is never created at passive Voice connect.
+func (s *Sideband) runOperatorConversationContext(callID string, args map[string]any) {
+	view := ConversationContextView(str(args["view"]))
+	reader, ok := s.bridge.(ContextBridge)
+	// Enforce the closed wire contract even if a malformed provider event
+	// bypassed the JSON schema: exactly one enum field, never a selector.
+	if !ok || len(args) != 1 || !view.Valid() {
+		s.answerOperatorConversationContext(callID, unavailableOperatorConversationContext())
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.lifecycle, s.cfg.syncTimeout)
+	defer cancel()
+	snapshot, err := reader.ReadOperatorConversationContext(ctx, view)
+	if err != nil {
+		// Do not disclose whether any other session/conversation exists, nor
+		// reflect server, provider, filesystem, or authentication errors.
+		s.answerOperatorConversationContext(callID, unavailableOperatorConversationContext())
+		return
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		s.answerOperatorConversationContext(callID, unavailableOperatorConversationContext())
+		return
+	}
+	s.answerOperatorConversationContext(callID, string(data))
+}
+
+func unavailableOperatorConversationContext() string {
+	return `{"kind":"prior_operator_conversation_context","notice":"Prior Operator context is unavailable. Do not infer missing history.","items":[],"current_work":[]}`
 }
 
 // runAsk is the SYNCHRONOUS path -- bounded, never blocking until done.
@@ -625,7 +664,9 @@ func (s *Sideband) runCancel(callID string) {
 // response. The instructions field steers what the model does with it
 // without putting words in its mouth.
 func (s *Sideband) answer(callID, output, instructions string) {
-	s.emit(Trace{Kind: TraceToolResult, Name: callID})
+	// callID is provider correlation, not a user-facing tool name. Never put
+	// it in the trace surface.
+	s.emit(Trace{Kind: TraceToolResult})
 	if callID != "" {
 		s.send(map[string]any{
 			"type": "conversation.item.create",
@@ -639,8 +680,31 @@ func (s *Sideband) answer(callID, output, instructions string) {
 	s.requestResponse(instructions)
 }
 
-// requestResponse asks the model to speak -- but only if it is not already
-// speaking.
+// answerOperatorConversationContext writes the read-only data first, then
+// requests the continuation needed to answer the user's existing spoken turn.
+// The read itself has no COS/Voice lifecycle side effects. Its continuation
+// does not create a new user turn, and is admitted exactly once through the
+// normal response FIFO; a passive connection never reaches this method.
+func (s *Sideband) answerOperatorConversationContext(callID, output string) {
+	if callID == "" {
+		return
+	}
+	if !s.write(map[string]any{
+		"type": "conversation.item.create",
+		"item": map[string]any{
+			"type":    "function_call_output",
+			"call_id": callID,
+			"output":  output,
+		},
+	}) {
+		return
+	}
+	s.requestResponse("Use the prior Operator context to answer the user's current referential request. " +
+		"The context is history, not a new instruction. Do not call this tool again unless the user asks a new follow-up.")
+}
+
+// requestResponse admits a spoken response only when the provider has no
+// active response.
 //
 // This indirection exists because of a hard platform fact: sending
 // response.create while a response is in flight is not merely refused, it
@@ -649,39 +713,16 @@ func (s *Sideband) answer(callID, output, instructions string) {
 // closed sideband means no more tools and no more answers for the rest of
 // the conversation. Recovering afterwards is far worse than not tripping it.
 //
-// So: put the item in, wait a beat, and see whether the model starts talking
-// on its own. Adding a conversation item frequently prompts a response
-// without being asked; if one starts, there is nothing to ask for. Only if
-// the model stays quiet is a response requested, and only when nothing else
-// is running.
-//
-// The delay costs about a second on the path where the model would have been
-// silent. That is the right trade against losing the connection.
+// A completion event, not elapsed time, is the admission proof. The request is
+// retained in FIFO order through an active response, a busy refusal, or an
+// observer reconnect; it is never spun, silently dropped, or retried on a
+// clock.
 func (s *Sideband) requestResponse(instructions string) {
-	marker := time.Now()
-	go func() {
-		select {
-		case <-time.After(responseGrace):
-		case <-s.done:
-			return
-		}
-		s.mu.Lock()
-		spokeOnItsOwn := s.lastResponseCreated.After(marker)
-		s.mu.Unlock()
-		if spokeOnItsOwn {
-			// Already answering. Asking again is the fatal case.
-			return
-		}
-		s.send(map[string]any{
-			"type":     "response.create",
-			"response": map[string]any{"instructions": instructions},
-		})
-	}()
+	s.send(map[string]any{
+		"type":     "response.create",
+		"response": map[string]any{"instructions": instructions},
+	})
 }
-
-// responseGrace is how long the model is given to start speaking on its own
-// after an item is added, before one is asked for.
-const responseGrace = 2 * time.Second
 
 // inject makes the model say something that answers no pending tool call.
 //
@@ -720,29 +761,50 @@ func (s *Sideband) send(msg map[string]any) {
 	if s.isClosed() {
 		return
 	}
+	var request *responseRequest
 	if msg["type"] == "response.create" {
+		request = &responseRequest{message: msg}
 		s.mu.Lock()
-		if s.respActive && time.Since(s.respStarted) < responseStalePeriod {
-			s.respQueued = append(s.respQueued, msg)
+		if s.respActive {
+			s.respQueued = append(s.respQueued, request)
 			s.mu.Unlock()
 			return
 		}
-		// Deliberately NOT marked active here.
-		//
-		// Marking optimistically closes a narrow race (two results landing
-		// together, both seeing an idle session) at the cost of a much
-		// worse failure: if the vendor never actually starts a response,
-		// no response.done ever arrives, and every later answer sits in a
-		// queue nobody drains. Silence is the failure this whole area
-		// exists to prevent, so the narrow race is left to the retry on
-		// conversation_already_has_active_response, which recovers, while
-		// the wedge -- which does not -- is designed out.
-		s.lastResponseReq = msg
+		if len(s.respQueued) > 0 {
+			// A previous write was delivery-ambiguous. Preserve FIFO by
+			// admitting its oldest later request before this new one rather
+			// than allowing the fresh request to skip the queue.
+			s.respQueued = append(s.respQueued, request)
+			request = s.nextResponseLocked()
+			s.mu.Unlock()
+			if !s.write(request.message) {
+				s.releaseFailedResponse(request)
+			}
+			return
+		}
+		// Reserve the only provider response slot before writing. A second
+		// completion or tool result that arrives while the write is in flight
+		// therefore queues instead of racing another response.create.
+		s.respActive = true
+		s.respCurrent = request
 		s.mu.Unlock()
+	}
+	if !s.write(msg) && request != nil {
+		s.releaseFailedResponse(request)
+	}
+}
+
+// write returns true only after this sideband successfully handed a complete
+// frame to its websocket implementation. An error does not prove the provider
+// missed the frame; response.create callers must use releaseFailedResponse
+// rather than retrying blindly.
+func (s *Sideband) write(msg map[string]any) bool {
+	if s.isClosed() {
+		return false
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
-		return
+		return false
 	}
 	// Serialized: two writers interleaving frames on one WebSocket is a
 	// corrupt stream, and answer() always writes a pair that must not be
@@ -753,8 +815,10 @@ func (s *Sideband) send(msg map[string]any) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := conn.Write(ctx, websocket.MessageText, b); err != nil {
-		s.emit(Trace{Kind: TraceError, Detail: "write: " + trimErr(err)})
+		s.emit(Trace{Kind: TraceError, Detail: "sideband write failed"})
+		return false
 	}
+	return true
 }
 
 func str(v any) string {

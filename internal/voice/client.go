@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,46 @@ type Client struct {
 	cfg  config.VoiceConfig
 	cred Credential
 	http *http.Client
+}
+
+// diagnosticError carries only a finite, server-safe operational classification.
+// It deliberately never wraps the underlying provider, credential, URL, or
+// transport error: those can reflect credentials, response IDs, endpoints, or
+// identity details. Browser endpoints use fixed copy; server logs use
+// SafeDiagnostic so production can still distinguish failure classes.
+type diagnosticError struct {
+	operation string
+	detail    string
+}
+
+func (e *diagnosticError) Error() string {
+	return fmt.Sprintf("voice: %s: %s", e.operation, e.detail)
+}
+
+func newDiagnosticError(operation, detail string) error {
+	return &diagnosticError{operation: operation, detail: detail}
+}
+
+// SafeDiagnostic returns an error description suitable for server logs. It
+// exposes only diagnostics intentionally constructed by this package; unknown
+// errors reduce to a fixed category instead of leaking their body/string.
+func SafeDiagnostic(err error) string {
+	var diagnostic *diagnosticError
+	if errors.As(err, &diagnostic) {
+		return diagnostic.Error()
+	}
+	return "voice: unexpected internal failure"
+}
+
+func transportDiagnostic(operation string, err error) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return newDiagnosticError(operation, "request timed out")
+	case errors.Is(err, context.Canceled):
+		return newDiagnosticError(operation, "request canceled")
+	default:
+		return newDiagnosticError(operation, "transport failed")
+	}
 }
 
 // NewClient builds a Client for an already-validated config.
@@ -54,7 +95,7 @@ type Ephemeral struct {
 func (c *Client) MintEphemeral(ctx context.Context) (Ephemeral, error) {
 	tok, err := c.cred.Token(ctx)
 	if err != nil {
-		return Ephemeral{}, err
+		return Ephemeral{}, newDiagnosticError("mint ephemeral secret", "credential unavailable")
 	}
 
 	session := map[string]any{
@@ -70,7 +111,7 @@ func (c *Client) MintEphemeral(ctx context.Context) (Ephemeral, error) {
 	}
 	body, err := json.Marshal(map[string]any{"session": session})
 	if err != nil {
-		return Ephemeral{}, fmt.Errorf("voice: encode mint request: %w", err)
+		return Ephemeral{}, newDiagnosticError("mint ephemeral secret", "request encoding failed")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -78,14 +119,14 @@ func (c *Client) MintEphemeral(ctx context.Context) (Ephemeral, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.Endpoint+"/realtime/client_secrets", bytes.NewReader(body))
 	if err != nil {
-		return Ephemeral{}, fmt.Errorf("voice: build mint request: %w", err)
+		return Ephemeral{}, newDiagnosticError("mint ephemeral secret", "request construction failed")
 	}
 	c.authorize(req, tok)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return Ephemeral{}, fmt.Errorf("voice: mint request to the realtime endpoint failed: %w", err)
+		return Ephemeral{}, transportDiagnostic("mint ephemeral secret", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
@@ -101,10 +142,10 @@ func (c *Client) MintEphemeral(ctx context.Context) (Ephemeral, error) {
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		// raw carries the secret; it is never quoted into an error.
-		return Ephemeral{}, fmt.Errorf("voice: the realtime endpoint returned a mint response this build could not parse")
+		return Ephemeral{}, newDiagnosticError("mint ephemeral secret", "provider response could not be parsed")
 	}
 	if out.Value == "" {
-		return Ephemeral{}, fmt.Errorf("voice: the realtime endpoint minted no client secret")
+		return Ephemeral{}, newDiagnosticError("mint ephemeral secret", "provider returned no client secret")
 	}
 	var sess struct {
 		ID string `json:"id"`
@@ -139,14 +180,14 @@ func (c *Client) ExchangeSDP(ctx context.Context, ephemeral, offerSDP string) (A
 	u := c.cfg.Endpoint + "/realtime/calls?model=" + url.QueryEscape(c.cfg.Model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(offerSDP))
 	if err != nil {
-		return Answer{}, fmt.Errorf("voice: build SDP request: %w", err)
+		return Answer{}, newDiagnosticError("SDP exchange", "request construction failed")
 	}
 	req.Header.Set("Authorization", "Bearer "+ephemeral)
 	req.Header.Set("Content-Type", "application/sdp")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return Answer{}, fmt.Errorf("voice: SDP exchange with the realtime endpoint failed: %w", err)
+		return Answer{}, transportDiagnostic("SDP exchange", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
@@ -169,7 +210,7 @@ func (c *Client) ExchangeSDP(ctx context.Context, ephemeral, offerSDP string) (A
 		// model -- but it IS fatal for tools, and a voice assistant
 		// that cannot act is not the thing being built. Say so here
 		// rather than let the sideband fail obscurely later.
-		return Answer{SDP: string(raw)}, fmt.Errorf("voice: the realtime endpoint returned no Location header, so there is no call id to attach the tool sideband to")
+		return Answer{SDP: string(raw)}, newDiagnosticError("SDP exchange", "provider returned no tool-call identifier")
 	}
 	return Answer{SDP: string(raw), CallID: callID}, nil
 }
@@ -225,17 +266,5 @@ func (c *Client) WebSocketURL(callID string) (string, error) {
 // safeProviderFailure is deliberately body-free. Providers can reflect either
 // the long-lived credential used for minting or the ephemeral SDP bearer.
 func (c *Client) safeProviderFailure(stage string, status int) error {
-	return fmt.Errorf("voice: %s returned HTTP %d%s", stage, status, c.authHint(status))
-}
-
-// snippet bounds an error body so a vendor's HTML error page cannot flood a
-// log line. It is used only for bounded sideband protocol diagnostics; mint,
-// SDP, and settings-check provider failures never expose provider bodies.
-func snippet(b []byte) string {
-	s := strings.TrimSpace(string(b))
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 300 {
-		return s[:300] + "…"
-	}
-	return s
+	return newDiagnosticError(stage, fmt.Sprintf("provider returned HTTP %d%s", status, c.authHint(status)))
 }

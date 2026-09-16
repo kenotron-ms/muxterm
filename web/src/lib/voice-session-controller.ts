@@ -28,9 +28,9 @@
  * not execute one if it did: muxterm's tools run shell commands, and tool
  * authority in a tab is not something this codebase hands out. Function
  * calls are delivered to muxterm's own process over a sideband connection to
- * the same realtime session, and executed there. What this file sends over
- * the data channel is narration — text for the model to speak — which is
- * exactly the authority a page should have over its own microphone.
+ * the same realtime session and executed there. This file sends only the
+ * transcription session configuration over its data channel; text/COS events
+ * must never create a competing realtime response from the browser.
  *
  * ── The Chromium trap ──────────────────────────────────────────────────────
  *
@@ -43,15 +43,24 @@
  */
 
 import { apiPath } from './base-path.js';
-import { cosStore, shortToolName } from './cos-store.js';
 
 export type VoiceSessionState =
   | 'idle'
+  | 'blocked'
   | 'connecting'
   | 'listening'
   | 'thinking'
-  | 'speaking'
-  | 'error';
+  | 'speaking';
+
+/**
+ * A local condition that is durable enough to disable the Voice control.
+ * Server/provider reachability deliberately does not appear here: it is
+ * advisory for a click attempt, never a capability decision.
+ */
+export type VoiceBlockReason =
+  | 'microphone-permission-denied'
+  | 'browser-unsupported'
+  | 'insecure-context';
 
 export interface VoiceSessionSnapshot {
   state: VoiceSessionState;
@@ -61,7 +70,8 @@ export interface VoiceSessionSnapshot {
   heard: string;
   /** What the assistant is saying, streaming. */
   spoken: string;
-  error: string;
+  /** Null unless the browser has confirmed a durable local capability block. */
+  blockedReason: VoiceBlockReason | null;
 }
 
 interface TokenResponse {
@@ -78,11 +88,11 @@ type Listener = (s: VoiceSessionSnapshot) => void;
 // state
 // ---------------------------------------------------------------------------
 
-let _state: VoiceSessionState = 'idle';
+let _blockedReason: VoiceBlockReason | null = _localVoiceBlock();
+let _state: VoiceSessionState = _blockedReason ? 'blocked' : 'idle';
 let _level = 0;
 let _heard = '';
 let _spoken = '';
-let _error = '';
 
 let _pc: RTCPeerConnection | null = null;
 let _dc: RTCDataChannel | null = null;
@@ -92,7 +102,6 @@ let _ctx: AudioContext | null = null;
 let _analyser: AnalyserNode | null = null;
 let _levelRaf: number | null = null;
 let _sessionId = '';
-let _unsubCos: (() => void) | null = null;
 
 /**
  * Generation counter. Every start() increments it; every async continuation
@@ -106,55 +115,21 @@ let _gen = 0;
 const _listeners = new Set<Listener>();
 
 // ---------------------------------------------------------------------------
-// narration bookkeeping
-// ---------------------------------------------------------------------------
-
-/**
- * Tools already announced, by turn. A turn that runs the same tool eight
- * times should not be narrated eight times — that is worse than silence.
- */
-let _narratedTools = new Set<string>();
-/** Approvals already spoken, so a re-render never re-announces one. */
-const _spokenApprovals = new Set<string>();
-/** When narration last spoke, so progress does not become chatter. */
-let _lastNarration = 0;
-
-/**
- * Whether the model is mid-response, and anything waiting for it to finish.
- *
- * This gate is not politeness, it is protection. Asking for a response while
- * one is running is answered with conversation_already_has_active_response
- * -- and on this platform that error CLOSES the server's tool sideband,
- * taking every tool and every pending answer with it, silently, for the rest
- * of the conversation.
- *
- * The browser is the right place to enforce it because the browser has
- * perfect information: every response.created and response.done arrives on
- * its data channel. The server, watching the same session as an observer,
- * learns the same facts a beat later.
- */
-let _responseActive = false;
-let _pendingSay: Array<{ text: string; instructions: string }> = [];
-
-/** Minimum gap between two spoken progress notes. */
-const NARRATION_GAP_MS = 9000;
-/** How long a turn must have been running before progress is worth saying. */
-const NARRATION_AFTER_MS = 6000;
-
-// ---------------------------------------------------------------------------
 // public API
 // ---------------------------------------------------------------------------
 
 export function isSupported(): boolean {
-  return (
-    typeof RTCPeerConnection === 'function' &&
-    typeof navigator !== 'undefined' &&
-    !!navigator.mediaDevices?.getUserMedia
-  );
+  return _blockedReason === null && _localVoiceBlock() === null;
 }
 
 export function snapshot(): VoiceSessionSnapshot {
-  return { state: _state, level: _level, heard: _heard, spoken: _spoken, error: _error };
+  return {
+    state: _state,
+    level: _level,
+    heard: _heard,
+    spoken: _spoken,
+    blockedReason: _blockedReason,
+  };
 }
 
 export function subscribe(cb: Listener): () => void {
@@ -165,7 +140,7 @@ export function subscribe(cb: Listener): () => void {
 }
 
 export function isActive(): boolean {
-  return _state !== 'idle' && _state !== 'error';
+  return _state === 'connecting' || _state === 'listening' || _state === 'thinking' || _state === 'speaking';
 }
 
 /** Start or stop, whichever the current state calls for. */
@@ -178,24 +153,32 @@ export async function toggle(): Promise<void> {
 }
 
 export async function start(): Promise<void> {
-  if (isActive()) return;
+  if (isActive() || _blockedReason !== null) return;
+  const localBlock = _localVoiceBlock();
+  if (localBlock) {
+    _blockedReason = localBlock;
+    _setState('blocked');
+    return;
+  }
   const gen = ++_gen;
-  _error = '';
   _heard = '';
   _spoken = '';
   _setState('connecting');
+  let phase: 'mint' | 'microphone' | 'connection' = 'mint';
 
   try {
     // 1. A short-lived secret, minted server-side. The credential that
     //    minted it never comes anywhere near this file.
     const tokenRes = await fetch(apiPath('/api/cos/voice/token'), { method: 'POST' });
-    if (!tokenRes.ok) throw new Error(await _errorText(tokenRes, 'could not start a voice session'));
+    if (!tokenRes.ok) throw new Error('voice token request failed');
     const token = (await tokenRes.json()) as TokenResponse;
     if (gen !== _gen) return;
     _sessionId = token.session_id;
 
-    // 2. The microphone. Fails loudly and early if permission is refused,
-    //    which is better than a session that connects and hears nothing.
+    // 2. The microphone. An explicit browser permission denial is the one
+    // dynamic failure which becomes a durable local disabled state. Network,
+    // provider and transient capture failures return quietly to the orb.
+    phase = 'microphone';
     _mic = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
@@ -205,6 +188,7 @@ export async function start(): Promise<void> {
     }
 
     // 3. The peer connection.
+    phase = 'connection';
     const pc = new RTCPeerConnection();
     _pc = pc;
     // addTrack creates a SENDRECV transceiver on its own, so the offer
@@ -221,7 +205,7 @@ export async function start(): Promise<void> {
     pc.onconnectionstatechange = () => {
       if (gen !== _gen) return;
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        _fail('the voice connection dropped');
+        _settleFailedAttempt();
       }
     };
 
@@ -253,22 +237,21 @@ export async function start(): Promise<void> {
       headers: { 'Content-Type': 'application/sdp', 'X-Voice-Session': _sessionId },
       body: pc.localDescription?.sdp ?? offer.sdp ?? '',
     });
-    if (!sdpRes.ok) throw new Error(await _errorText(sdpRes, 'the voice service refused the connection'));
+    if (!sdpRes.ok) throw new Error('voice SDP request failed');
     const answer = await sdpRes.text();
     if (gen !== _gen) return;
     await pc.setRemoteDescription({ type: 'answer', sdp: answer });
 
-    _subscribeToChiefOfStaff();
   } catch (err) {
     if (gen !== _gen) return;
-    _fail(err instanceof Error ? err.message : String(err));
+    _settleFailedAttempt(_blockForStartFailure(err, phase));
   }
 }
 
 export function stop(): void {
   _gen++;
   _teardown();
-  _setState('idle');
+  _setState(_blockedReason ? 'blocked' : 'idle');
 }
 
 /**
@@ -342,7 +325,6 @@ function _onRealtimeEvent(raw: unknown): void {
       break;
 
     case 'response.created':
-      _responseActive = true;
       // Reset HERE, not only on speech_started. A response the server
       // creates on its own -- narration, an injected answer, a tool result
       // being spoken -- has no preceding user utterance, so a buffer only
@@ -366,13 +348,15 @@ function _onRealtimeEvent(raw: unknown): void {
     case 'response.done':
     case 'response.cancelled':
       if (_spoken.trim()) _log.push({ at: Date.now(), dir: 'spoke', text: _spoken.trim() });
-      _releaseResponse();
       if (_state === 'speaking' || _state === 'thinking') _setState('listening');
       break;
 
     case 'error': {
-      const e = ev.error as { message?: string } | undefined;
-      _fail(e?.message ?? 'the voice service reported an error');
+      // A response-admission conflict belongs to the server sideband's
+      // response FIFO. It is recoverable, and must never turn a healthy
+      // microphone/WebRTC session into a user-visible Voice Mode failure.
+      if (_isActiveResponseConflict(ev.error)) return;
+      _settleFailedAttempt();
       break;
     }
   }
@@ -385,121 +369,13 @@ function _send(msg: unknown): boolean {
   return true;
 }
 
-/**
- * Say something that answers no user utterance.
- *
- * The text goes in as a conversation item and a response is requested with
- * instructions. If the user is mid-sentence the model waits for the turn
- * boundary rather than talking over them, which is the behaviour you want.
- */
-function _say(text: string, instructions: string): void {
-  if (
-    !_send({
-      type: 'conversation.item.create',
-      item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
-    })
-  ) {
-    return;
-  }
-  if (_responseActive) {
-    // Held, not dropped, and coalesced to the most recent: three progress
-    // notes queued behind one long answer would be delivered as a
-    // monologue nobody asked for.
-    _pendingSay = [{ text, instructions }];
-    return;
-  }
-  _responseActive = true;
-  _send({ type: 'response.create', response: { instructions } });
-}
-
-/** Called when a response ends: release the gate and flush one held ask. */
-function _releaseResponse(): void {
-  _responseActive = false;
-  const next = _pendingSay.pop();
-  _pendingSay = [];
-  if (next) {
-    _responseActive = true;
-    _send({ type: 'response.create', response: { instructions: next.instructions } });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// narration — C6
-// ---------------------------------------------------------------------------
-
-/**
- * Speak progress from the event stream that is already arriving.
- *
- * This is wiring, not invention. muxterm's sidecar already emits a
- * structured, real-time account of what it is doing — turn_start, thinking,
- * tool_start, tool_end, approval_request, turn_end — and that stream already
- * reaches this browser and is already switched on by cos-store. Most
- * projects building voice over an agent have to build this from nothing.
- *
- * The failure mode being prevented is specific: a chief-of-staff turn can
- * run for minutes, and in a spoken conversation thirty seconds of silence is
- * indistinguishable from a crash.
- *
- * The failure mode being AVOIDED in the other direction is chatter. Two
- * gates: nothing is said for the first few seconds of a turn (most turns
- * finish inside that), and no two progress notes come closer together than
- * NARRATION_GAP_MS. A tool already announced this turn is never announced
- * again.
- */
-function _subscribeToChiefOfStaff(): void {
-  _unsubCos?.();
-  let turnStartedAt = 0;
-
-  _unsubCos = cosStore.onEvent((ev) => {
-    if (!isActive()) return;
-    const kind = String(ev.ev ?? '');
-
-    switch (kind) {
-      case 'turn_start':
-        turnStartedAt = Date.now();
-        _narratedTools = new Set<string>();
-        break;
-
-      case 'tool_start': {
-        const name = shortToolName(String(ev.name ?? ''));
-        if (!name || _narratedTools.has(name)) break;
-        if (Date.now() - turnStartedAt < NARRATION_AFTER_MS) break;
-        if (Date.now() - _lastNarration < NARRATION_GAP_MS) break;
-        _narratedTools.add(name);
-        _lastNarration = Date.now();
-        _log.push({ at: Date.now(), dir: 'event', text: `narrate:tool_start:${name}` });
-        _say(
-          `[progress] Still working. Currently running: ${name}.`,
-          'Tell the user in ONE short sentence what you are doing right now. Do not repeat yourself and do not add detail.',
-        );
-        break;
-      }
-
-      case 'approval_request': {
-        // C7's browser half: bring the request into the conversation so it
-        // can be spoken. The DECISION is not made here and cannot be — the
-        // gate is server-side, in the sideband, where the answer has to
-        // survive a two-step confirmation before anything is transmitted.
-        const id = String(ev.request_id ?? '');
-        if (!id || _spokenApprovals.has(id)) break;
-        _spokenApprovals.add(id);
-        _lastNarration = Date.now();
-        const tool = String(ev.tool ?? 'something');
-        const detail = String(ev.detail ?? '').slice(0, 400);
-        _log.push({ at: Date.now(), dir: 'event', text: `narrate:approval_request:${tool}` });
-        _say(
-          `[approval needed] request_id=${id} tool=${tool} detail=${detail}`,
-          'Operator needs permission. Say plainly what it wants to do and ask the user to approve or deny. ' +
-            'Then follow the approval rules exactly: read their decision back, wait for confirmation, and only then call answer_approval with confirm true. If it is unclear, deny.',
-        );
-        break;
-      }
-
-      case 'turn_end':
-        turnStartedAt = 0;
-        break;
-    }
-  });
+function _isActiveResponseConflict(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const detail = error as { code?: unknown; message?: unknown };
+  return (
+    detail.code === 'conversation_already_has_active_response' ||
+    (typeof detail.message === 'string' && detail.message.includes('conversation_already_has_active_response'))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -599,9 +475,6 @@ function _iceSettled(pc: RTCPeerConnection): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function _teardown(): void {
-  _unsubCos?.();
-  _unsubCos = null;
-
   if (_levelRaf !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_levelRaf);
   _levelRaf = null;
   _analyser = null;
@@ -632,10 +505,6 @@ function _teardown(): void {
   _pc = null;
 
   _level = 0;
-  _spokenApprovals.clear();
-  _narratedTools = new Set<string>();
-  _responseActive = false;
-  _pendingSay = [];
 
   // Best-effort: tell muxterm to drop the sideband. keepalive so it still
   // goes out if this fires during a page unload.
@@ -653,10 +522,16 @@ function _teardown(): void {
   }
 }
 
-function _fail(message: string): void {
-  _error = message;
+/**
+ * A failed network/provider attempt must not become a composer diagnostic or a
+ * durable unavailable state. Bump the generation before closing so stale
+ * peer/channel callbacks cannot affect a later click's session.
+ */
+function _settleFailedAttempt(blockedReason: VoiceBlockReason | null = null): void {
+  _gen++;
   _teardown();
-  _setState('error');
+  _blockedReason = blockedReason;
+  _setState(blockedReason ? 'blocked' : 'idle');
 }
 
 function _setState(s: VoiceSessionState): void {
@@ -675,14 +550,30 @@ function _notify(): void {
   }
 }
 
-async function _errorText(res: Response, fallback: string): Promise<string> {
-  try {
-    const body = (await res.json()) as { error?: string };
-    if (body?.error) return body.error;
-  } catch {
-    /* not JSON */
+function _localVoiceBlock(): VoiceBlockReason | null {
+  if (typeof window !== 'undefined' && window.isSecureContext === false) return 'insecure-context';
+  if (
+    typeof RTCPeerConnection !== 'function' ||
+    typeof navigator === 'undefined' ||
+    typeof navigator.mediaDevices?.getUserMedia !== 'function'
+  ) {
+    return 'browser-unsupported';
   }
-  return `${fallback} (HTTP ${res.status})`;
+  return null;
+}
+
+function _blockForStartFailure(
+  error: unknown,
+  phase: 'mint' | 'microphone' | 'connection',
+): VoiceBlockReason | null {
+  const localBlock = _localVoiceBlock();
+  if (localBlock) return localBlock;
+  if (phase !== 'microphone') return null;
+  const name =
+    error && typeof error === 'object' && 'name' in error && typeof error.name === 'string'
+      ? error.name
+      : '';
+  return name === 'NotAllowedError' ? 'microphone-permission-denied' : null;
 }
 
 export const voiceSessionController = {
@@ -760,16 +651,6 @@ if (typeof window !== 'undefined') {
         return out;
       },
       connectionState: (): string => _pc?.connectionState ?? 'none',
-      /**
-       * Feed one sidecar event through the REAL path — cos-store's own
-       * frame handler, the same one the WebSocket calls — so the narration
-       * and approval wiring is exercised exactly as it is in production.
-       * There is no shortcut into the narrator; an event injected here
-       * takes every gate a real one does.
-       */
-      feedCosEvent: (ev: Record<string, unknown>): void => {
-        cosStore.handleFrame({ type: 'cos-event', event: ev });
-      },
     },
   };
 }
