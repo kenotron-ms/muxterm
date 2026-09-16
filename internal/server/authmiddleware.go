@@ -128,6 +128,47 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 	})
 }
 
+// WrapSandbox protects the direct Azure lifecycle surface. Unlike Wrap it
+// never admits an unauthenticated loopback caller: a browser needs a valid
+// normal muxterm cookie/bearer session even in local mode, while same-UID
+// helpers may use only the private LocalToken. This stricter rule is local to
+// sandboxes and deliberately changes no unrelated route.
+func (m *AuthMiddleware) WrapSandbox(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// No-auth is a development topology and sandbox routes are unavailable
+		// there. Do not let it weaken this route-specific control.
+		if m.noAuth {
+			httpJSONError(w, http.StatusServiceUnavailable, "sandbox_auth_required",
+				"Azure Sandbox lifecycle is unavailable when muxterm authentication is disabled.")
+			return
+		}
+		if token, ok := bearerToken(r); ok && m.matchesLocalToken(token) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if m.authSrv == nil {
+			httpJSONError(w, http.StatusServiceUnavailable, "login_backend_unavailable",
+				"Azure Sandbox lifecycle requires a muxterm browser session, but login is unavailable.")
+			return
+		}
+		mgr := m.authSrv.Manager()
+		if token, ok := bearerToken(r); ok {
+			if _, err := mgr.LoadAccessToken(r.Context(), token); err == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		if cookie, err := r.Cookie(SessionCookieName); err == nil && cookie.Value != "" {
+			if _, err := mgr.LoadAccessToken(r.Context(), cookie.Value); err == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		httpJSONError(w, http.StatusUnauthorized, "sandbox_auth_required",
+			"Azure Sandbox lifecycle requires a muxterm browser session or owner-local helper token.")
+	})
+}
+
 func (m *AuthMiddleware) deny(w http.ResponseWriter, r *http.Request) {
 	wantsHTML := strings.Contains(r.Header.Get("Accept"), "text/html")
 
