@@ -193,6 +193,27 @@ actual registered-disk-to-image-digest association. Those are the narrow
 external prerequisites for live deployment and for enabling controller attach;
 until then no API or UI claims connection success.
 
+## Delivery status
+
+The current source delivers sealed lifecycle and image-side safeguards; it does not deliver a live provider attachment, image deployment, lifecycle/cleanup proof, or user access. All evidence here is source and offline verification only.
+
+| Delivery item | Status | Source-addressable record |
+| --- | --- | --- |
+| Source baseline | Delivered | `internal/sandboxazure`, `internal/server/sandboxes_api.go`, and `internal/config/config.go` provide configuration-gated profiles, protected routes, durable idempotency, reconciliation, and generation fences. |
+| Authenticated attach | Residual | `sandboxazure.Controller.Attach` applies pre-dial state fences, then returns `sandboxazure.ErrAttachUnsupported`. |
+| Image/provider readiness | Residual | `cmd/muxterm-sandbox-ingress` and `internal/sandboxingress` provide an image-side bounded challenge/proof binary bridge, not provider deployment or image provenance. |
+| Live proof/lifecycle cleanup | Residual | Source/offline verification is not live provider lifecycle, attachment, or cleanup evidence. |
+| Conditional access | Residual | This source performs no Azure RBAC assignments and must not use a direct-provider role as an attach substitute. |
+| Settings/configured deployment | Residual | `web/src/components/settings-surface.ts` and `web/src/lib/sandboxes.ts` remain lifecycle-only; a reviewed deployment contract is required before configuration can represent an attached service. |
+| Workspace/sidebar grouping | Residual | A verified sandbox identity and transport are required; the UI reports attach unavailable rather than creating a remote workspace or machine grouping. |
+| Checks/docs | Offline only | `go run ./cmd/sandbox-verify` verifies the source contract offline; it is not live provider evidence. |
+
+Current safeguards keep profiles configuration-gated and sandbox routes within the existing protected-route model. Browser callers cannot supply provider credentials; implementation must not manufacture a generic proxy, tunnel, or REST read/input loop as a sessiond attach. The fixed ingress adapter is only an image-side source primitive with bounded challenge/proof and binary bridging.
+
+The residual blocker is a requirement missing from this source: a versioned, supported provider or broker contract must be supplied and reviewed for authenticated binary sessiond transport bound to owner, session, handle, generation, profile, and endpoint, with short-lived single-use proofs, replay fencing, and lifecycle/reconnect semantics. Documented immutable image-digest-to-registered-disk provenance is also required.
+
+Next, obtain that approved contract and provenance, or an explicit high-impact owner decision to deploy a broker-owned WSS attachment service with server-side authorization and provider-held authority. The latter is not authorized by this source-only status. Then perform the separately approved single-sandbox live proof and cleanup before any user role assignment.
+
 ## Operations bounds
 
 Each serialized controller/provider attempt has a hard **30-second** context
