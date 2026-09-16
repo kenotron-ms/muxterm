@@ -35,6 +35,11 @@ type Sideband struct {
 	bridge Bridge
 	cfg    sidebandConfig
 
+	// lifecycle is canceled by Close. Tool handlers derive bounded contexts
+	// from it so a stalled supervisor cannot outlive the sideband.
+	lifecycle       context.Context
+	cancelLifecycle context.CancelFunc
+
 	// events is an optional observer for everything the sideband sees and
 	// sends. The E2E harness subscribes to it; nothing in production
 	// depends on it, and it is never a credential sink -- only event
@@ -163,16 +168,19 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 		return nil, err
 	}
 
+	lifecycle, cancelLifecycle := context.WithCancel(context.Background())
 	sb := &Sideband{
-		callID:     callID,
-		url:        u,
-		secret:     ephemeral,
-		bridge:     bridge,
-		cfg:        sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
-		events:     events,
-		endSession: endSession,
-		pending:    map[string]*approvalIntent{},
-		done:       make(chan struct{}),
+		callID:          callID,
+		url:             u,
+		secret:          ephemeral,
+		bridge:          bridge,
+		cfg:             sidebandConfig{syncTimeout: c.Config().SyncToolTimeout},
+		lifecycle:       lifecycle,
+		cancelLifecycle: cancelLifecycle,
+		events:          events,
+		endSession:      endSession,
+		pending:         map[string]*approvalIntent{},
+		done:            make(chan struct{}),
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -181,6 +189,7 @@ func Dial(ctx context.Context, c *Client, callID, ephemeral string, bridge Bridg
 		HTTPHeader: http.Header{"Authorization": []string{"Bearer " + ephemeral}},
 	})
 	if err != nil {
+		cancelLifecycle()
 		return nil, fmt.Errorf("voice: attaching the tool sideband to call %s failed: %w", callID, err)
 	}
 	// A realtime event carrying a long tool result can be large; the
@@ -208,6 +217,7 @@ func (s *Sideband) Close() {
 	s.closed = true
 	s.mu.Unlock()
 
+	s.cancelLifecycle()
 	close(s.done)
 	s.writeMu.Lock()
 	conn := s.conn
@@ -520,7 +530,9 @@ func (s *Sideband) runOperatorConversationContext(callID string, args map[string
 		s.answerOperatorConversationContext(callID, unavailableOperatorConversationContext())
 		return
 	}
-	snapshot, err := reader.ReadOperatorConversationContext(context.Background(), view)
+	ctx, cancel := context.WithTimeout(s.lifecycle, s.cfg.syncTimeout)
+	defer cancel()
+	snapshot, err := reader.ReadOperatorConversationContext(ctx, view)
 	if err != nil {
 		// Do not disclose whether any other session/conversation exists, nor
 		// reflect server, provider, filesystem, or authentication errors.

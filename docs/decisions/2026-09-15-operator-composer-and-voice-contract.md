@@ -126,6 +126,9 @@ to the one authoritative Operator conversation:
 - `voiceConversationContext()` reads the currently running authenticated COS
   supervisor only. It does not call `get()`, start a sidecar, create a
   replacement conversation, submit a turn, or mutate the queue.
+- The sideband derives this read from its cancelable lifetime context and the
+  existing sync-tool deadline. A Close or an extraordinary supervisor stall
+  therefore cannot leave the asynchronous tool dispatcher waiting forever.
 - The server parses the existing bounded history summary into chronological
   `prior_user_turn` / `prior_operator_turn` entries. It excludes thinking,
   tool blocks/results, IDs, timestamps, errors, and diagnostics; it applies
@@ -135,6 +138,9 @@ to the one authoritative Operator conversation:
   and e-mail-like identities. Active/queued
   user-visible prompts are the only current-work projection. Approval state
   is omitted because this path has no safe authoritative approval snapshot.
+- History selection returns one contiguous newest suffix. When the next older
+  item does not fit the fixed byte budget, selection stops rather than
+  silently skipping it and presenting an apparently adjacent older turn.
 - A tool lookup returns only a Realtime `function_call_output`, with no work,
   queue item, Voice end, or user-visible toast. Realtime's function-call flow
   requires an explicit continuation after that output: the sideband admits one

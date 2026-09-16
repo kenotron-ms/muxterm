@@ -247,8 +247,14 @@ func newestVoiceContextItems(items []voice.ConversationContextItem, budget, limi
 		}
 		item := items[i]
 		size := len(item.Text)
-		if size == 0 || used+size > budget {
+		if size == 0 {
 			continue
+		}
+		// The returned history is a contiguous newest suffix. Selecting an
+		// older small item after omitting a newer oversized one would look
+		// chronological but silently hide a conversational gap.
+		if used+size > budget {
+			break
 		}
 		selected = append(selected, item)
 		used += size
