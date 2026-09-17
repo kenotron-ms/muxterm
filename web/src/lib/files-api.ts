@@ -78,7 +78,26 @@ export interface FilesListing {
   gitError: string;
   /** Directories first, then files, each case-insensitive. Never null. */
   entries: FileEntry[];
+  /** Write availability for precisely this rendered local directory. */
+  upload: FilesUploadAvailability;
 }
+
+/** A local, server-scoped upload binding; no host path or capability is exposed. */
+export interface FilesUploadAvailability {
+  available: boolean;
+  /** A safe, user-actionable reason when upload is unavailable. */
+  reason: string;
+}
+
+/** The only browser-visible outcomes of one streamed file upload. */
+export interface FilesUploadResult {
+  status: 'complete' | 'conflict' | 'failed' | 'cancelled';
+  name: string;
+  size: number;
+  message: string;
+}
+
+export type FilesUploadResolution = 'new' | 'keep' | 'replace';
 
 function parseFileStatus(raw: unknown): FileStatus {
   return typeof raw === 'string' && FILE_STATUSES.includes(raw) ? (raw as FileStatus) : '';
@@ -117,6 +136,7 @@ export function parseFilesListing(raw: unknown): FilesListing {
       gitAvailable: false,
       gitError: '',
       entries: [],
+      upload: { available: false, reason: '' },
     };
   }
   const r = raw as Record<string, unknown>;
@@ -131,6 +151,32 @@ export function parseFilesListing(raw: unknown): FilesListing {
     gitAvailable: r['gitAvailable'] === true,
     gitError: typeof r['gitError'] === 'string' ? r['gitError'] : '',
     entries,
+    upload: parseFilesUploadAvailability(r['upload']),
+  };
+}
+
+function parseFilesUploadAvailability(raw: unknown): FilesUploadAvailability {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { available: false, reason: '' };
+  }
+  const r = raw as Record<string, unknown>;
+  return {
+    available: r['available'] === true,
+    reason: typeof r['reason'] === 'string' ? r['reason'] : '',
+  };
+}
+
+function parseFilesUploadResult(raw: unknown): FilesUploadResult {
+  const r = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const status = r['status'];
+  return {
+    status:
+      status === 'complete' || status === 'conflict' || status === 'cancelled'
+        ? status
+        : 'failed',
+    name: typeof r['name'] === 'string' ? r['name'] : '',
+    size: typeof r['size'] === 'number' && Number.isFinite(r['size']) ? r['size'] : 0,
+    message: typeof r['message'] === 'string' ? r['message'] : '',
   };
 }
 
@@ -164,4 +210,52 @@ export async function fetchFiles(path?: string, signal?: AbortSignal): Promise<F
     throw new Error(err);
   }
   return parseFilesListing(body);
+}
+
+/**
+ * Stream one browser File through the scoped Files endpoint.
+ *
+ * XMLHttpRequest is intentional here. Fetch does not provide upload progress;
+ * XHR streams FormData without materializing file bytes in JS and supplies the
+ * progress/cancellation semantics the in-applet queue needs.
+ */
+export function uploadFilesFile(
+  file: File,
+  resolution: FilesUploadResolution,
+  signal: AbortSignal,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<FilesUploadResult> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', apiPath('/api/files/upload'));
+    xhr.responseType = 'json';
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('X-Muxterm-Files-Upload', '1');
+    xhr.setRequestHeader('X-Muxterm-Files-Resolution', resolution);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(event.loaded, event.total);
+    };
+    xhr.onerror = () => reject(new Error('The upload could not reach muxterm. No file was saved.'));
+    xhr.onabort = () => reject(new DOMException('Upload cancelled.', 'AbortError'));
+    xhr.onload = () => {
+      const raw = xhr.response ?? (() => {
+        try {
+          return JSON.parse(xhr.responseText) as unknown;
+        } catch {
+          return {};
+        }
+      })();
+      const result = parseFilesUploadResult(raw);
+      if ((xhr.status >= 200 && xhr.status < 300) || xhr.status === 409 || xhr.status === 499) {
+        resolve(result);
+        return;
+      }
+      reject(new Error(result.message || 'The upload could not be completed. No file was saved.'));
+    };
+    const abort = () => xhr.abort();
+    signal.addEventListener('abort', abort, { once: true });
+    const form = new FormData();
+    form.append('file', file, file.name);
+    xhr.send(form);
+  });
 }
