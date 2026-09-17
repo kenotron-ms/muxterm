@@ -2,7 +2,7 @@ package voice
 
 import "context"
 
-// Bridge is the chief of staff, as much of it as this package needs.
+// Bridge is Operator, as much of it as this package needs.
 //
 // Narrow on purpose. It exists so the sideband can be tested without an
 // amplifier sidecar, and so this package cannot reach anything in
@@ -11,7 +11,7 @@ import "context"
 // SAME supervisor the text chat uses -- one session, one transcript, one set
 // of approvals.
 type Bridge interface {
-	// Submit queues a chief-of-staff turn. The returned handle resolves
+	// Submit queues an Operator turn. The returned handle resolves
 	// exactly once, even if the sidecar dies mid-turn.
 	Submit(prompt string) (TurnHandle, error)
 	// Approve answers a pending approval request.
@@ -21,108 +21,7 @@ type Bridge interface {
 	Cancel(turnID string) error
 }
 
-// CorrelatedBridge is the only bridge shape a thread-scoped realtime
-// attachment may use. The values are copied from provider events observed by
-// the server; neither focus nor an HTTP client can choose a target for them.
-// Legacy Bridge.Submit is deliberately unavailable on a ScopedBridge.
-type CorrelatedBridge interface {
-	Bridge
-	SubmitCorrelated(Correlation, string) (TurnHandle, error)
-}
-
-// Correlation identifies the provider event that requested work, as observed
-// on one immutable provider attachment.
-type Correlation struct {
-	ProviderCallID     string
-	ProviderItemID     string
-	ProviderResponseID string
-	CaptureID          string
-	AttachmentEpoch    uint64
-}
-
-// ProviderEvent is an event observed on one Sideband connection. CallID is
-// always the sideband's server-observed call identity, never a client value.
-type ProviderEvent struct {
-	Type       string
-	CallID     string
-	ItemID     string
-	ResponseID string
-	OutputID   string
-	CallRef    string
-	Metadata   map[string]string
-}
-
-// ProviderEventBridge verifies provider event ordering before Sideband may
-// dispatch a tool. ResolveToolCall returns the one immutable capture
-// correlation for a final function-call event; it never has a "latest"
-// fallback.
-type ProviderEventBridge interface {
-	ObserveProviderEvent(ProviderEvent) error
-	ReserveToolCall(ProviderEvent) (Correlation, error)
-	ResolveToolCall(ProviderEvent) (Correlation, error)
-}
-
-// AppOperationBridge is the deliberately small app-wide voice surface. Its
-// generic browser operations remain owner-acknowledged; AppOperatorBridge
-// extends it with the separately correlated, server-owned Operator relay.
-type AppOperationBridge interface {
-	Bridge
-	ProviderEventBridge
-	// ExecuteAppTool may wait for an authenticated browser acknowledgement.
-	// ctx cancels only that delivery wait; it never cancels an operation the
-	// browser has already admitted.
-	ExecuteAppTool(context.Context, Correlation, string, map[string]any) (string, error)
-	CompleteAppTool(Correlation) (map[string]string, error)
-}
-
-// AppOperatorBridge is the app profile's deliberately correlated Operator
-// bridge. It admits work directly to the canonical server-owned Mission
-// Control conversation. Approval and cancellation are restricted to turns this
-// bridge admitted.
-type AppOperatorBridge interface {
-	AppOperationBridge
-	SubmitOperator(context.Context, Correlation, string) (TurnHandle, error)
-	ApproveOperator(Correlation, string, bool, string) error
-	CancelOperator(Correlation, string) error
-	PrepareOperatorReply(Correlation, string, bool) (map[string]string, error)
-	QueueOperatorCompletion(Correlation, string) error
-	RetainOperatorTerminal(Correlation, string)
-	QueueOperatorNotice(Correlation, string) error
-	SetOperatorCompletionSink(func(Correlation, string, bool))
-	MarkOperatorNarration(Correlation)
-	OperatorPlaybackFinished(string, bool)
-}
-
-// AppCaptureBridge commits a provider-originated input item before the server
-// asks the manual-response profile to respond. The capture identifier is never
-// supplied by a browser or model.
-type AppCaptureBridge interface {
-	AppOperationBridge
-	// created is false for an exact replay; it must not create another response.
-	CommitAppInput(ProviderEvent) (metadata map[string]string, created bool, err error)
-}
-
-// ScopedReplyBridge owns every audible response for a scoped attachment.
-// Sideband may deliver a function result into the provider conversation, but
-// it must delegate response creation to this prefix-gated controller.
-type ScopedReplyBridge interface {
-	// terminal distinguishes the final turn result from a started/working
-	// acknowledgement. Completing work alone does not complete its narration.
-	QueueScopedReply(Correlation, string, string, bool) error
-}
-
-type SidebandTerminalBridge interface {
-	SidebandTerminal(reason string)
-}
-
-// SidebandClosedBridge observes a local Manager.End/Close after task admission
-// has been closed. It is separate from SidebandTerminalBridge: an intentional
-// owner stop is not a provider failure.
-type SidebandClosedBridge interface {
-	SidebandClosed()
-}
-
-// TurnHandle is one in-flight chief-of-staff turn.
+// TurnHandle is one in-flight Operator turn.
 type TurnHandle interface {
 	// ID is the turn_id every event of this turn carries.
 	ID() string

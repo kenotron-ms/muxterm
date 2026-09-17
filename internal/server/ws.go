@@ -46,6 +46,7 @@ type Client struct {
 	// sizing authority is keyed on daemon-connection pointer identity.
 	sessMu             sync.Mutex
 	sessions           map[string]*hostSession
+	remoteTombstones   map[string]uint64
 	unsubscribeRemotes func()
 
 	// closeTickets retains browser-local target identity for opaque confirmation
@@ -95,9 +96,15 @@ type Client struct {
 	// wholesale, so with N sessions each pushing its own full set, forwarding
 	// them raw would make every host clobber the last. The edge is the merge
 	// point (design A.4). Ids in both caches are ALREADY namespaced.
-	mergeMu  sync.Mutex
-	wsByHost map[string][]sessiond.WorkspaceInfo
-	ssByHost map[string][]sessiond.SessionState
+	mergeMu   sync.Mutex
+	wsByHost  map[string][]sessiond.WorkspaceInfo
+	ssByHost  map[string][]sessiond.SessionState
+	ssPending map[string]bool // hosts that have not supplied this subscription's current set
+	// ssLocalUnavailable is stronger than a pending remote: without the local
+	// daemon's subscription the browser must say so, even if remote rows still
+	// arrive. ssRevision orders asynchronous aggregate writes.
+	ssLocalUnavailable bool
+	ssRevision         uint64
 
 	// cosMu guards cosSub and the generation-fenced asynchronous startup for this
 	// connection's opt-in subscription to the
@@ -110,6 +117,10 @@ type Client struct {
 	cosSub                 *cos.Subscription
 	cosSubscribeGeneration uint64
 	cosSubscribePending    bool
+	// cosHistoryEpoch invalidates asynchronous subscription snapshots after
+	// an authoritative clear. It is checked while cosMu is held across the
+	// WebSocket write, so an old snapshot cannot land after the clear result.
+	cosHistoryEpoch uint64
 
 	// attachSeq enforces the frozen "composition FIRST" ordering guarantee
 	// across the goroutine boundary between the daemon connection's read loop
@@ -126,12 +137,6 @@ type Client struct {
 	// and by OnPaneOutput around every binary relay, so pane-data can never be
 	// written to the WebSocket while a composition send is in flight.
 	attachSeq sync.Mutex
-
-	// appVoiceAllowed is derived from the original authenticated WebSocket
-	// upgrade request. App voice claims never accept a later frame as proof that
-	// this socket was opened by the same origin.
-	appVoiceAllowed bool
-	appVoicePanes   map[string]map[int]bool
 }
 
 const (
@@ -219,12 +224,86 @@ func (c *Client) setSessionStateWanted(v bool) {
 	c.subMu.Lock()
 	c.sessionStateWanted = v
 	c.subMu.Unlock()
+	if !v {
+		c.mergeMu.Lock()
+		clear(c.ssPending)
+		c.ssLocalUnavailable = false
+		c.mergeMu.Unlock()
+		return
+	}
+
+	// A subscription is a new whole-state generation. Every session current
+	// now must contribute once before an empty aggregate can claim that Fleet
+	// is empty. The cache stays in place so a reconnect can show useful stale
+	// rows while its replacement snapshots arrive.
+	c.sessMu.Lock()
+	c.mergeMu.Lock()
+	if c.ssPending == nil {
+		c.ssPending = make(map[string]bool)
+	}
+	clear(c.ssPending)
+	c.ssLocalUnavailable = false
+	for _, s := range c.sessions {
+		c.ssPending[s.host.ID] = true
+	}
+	c.mergeMu.Unlock()
+	c.sessMu.Unlock()
+	c.emitSessionState()
+}
+
+// sessionStateUnavailable records a local subscription refusal. Remote rows
+// remain useful, but no aggregate containing them may claim every Fleet source
+// is current until the next browser subscription generation resets this fact.
+func (c *Client) sessionStateUnavailable() {
+	c.mergeMu.Lock()
+	if c.ssLocalUnavailable {
+		c.mergeMu.Unlock()
+		return
+	}
+	c.ssLocalUnavailable = true
+	c.mergeMu.Unlock()
+	c.emitSessionState()
 }
 
 func (c *Client) subscriptions() (preview, sessionState bool) {
 	c.subMu.Lock()
 	defer c.subMu.Unlock()
 	return c.previewWanted, c.sessionStateWanted
+}
+
+// sessionStatePending records that source must replace its cached whole set
+// before the browser may call the merged Fleet snapshot complete. The
+// session-map check and pending write share one critical section, so a
+// cancelled/removed host cannot reintroduce itself after forgetHost removed
+// its cache. A remote subscription can fail or wait to reconnect indefinitely,
+// so pending is surfaced as "partial", never as an endless loading spinner.
+func (c *Client) sessionStatePending(source *hostSession) {
+	c.subMu.Lock()
+	wanted := c.sessionStateWanted
+	c.subMu.Unlock()
+	if !wanted {
+		return
+	}
+
+	host := source.host.ID
+	c.sessMu.Lock()
+	if c.sessions[host] != source {
+		c.sessMu.Unlock()
+		return
+	}
+	c.mergeMu.Lock()
+	if c.ssPending == nil {
+		c.ssPending = make(map[string]bool)
+	}
+	if c.ssPending[host] {
+		c.mergeMu.Unlock()
+		c.sessMu.Unlock()
+		return
+	}
+	c.ssPending[host] = true
+	c.mergeMu.Unlock()
+	c.sessMu.Unlock()
+	c.emitSessionState()
 }
 
 func validCloseTarget(target sessiond.CloseTarget) bool {
@@ -313,15 +392,16 @@ func closeRelayFailure(target sessiond.CloseTarget) sessiond.CloseOutcome {
 func newClient(hub *Hub, conn *websocket.Conn) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		hub:           hub,
-		conn:          conn,
-		ctx:           ctx,
-		cancel:        cancel,
-		sessions:      make(map[string]*hostSession),
-		closeTickets:  make(map[string]closeTicket),
-		wsByHost:      make(map[string][]sessiond.WorkspaceInfo),
-		ssByHost:      make(map[string][]sessiond.SessionState),
-		appVoicePanes: make(map[string]map[int]bool),
+		hub:              hub,
+		conn:             conn,
+		ctx:              ctx,
+		cancel:           cancel,
+		sessions:         make(map[string]*hostSession),
+		remoteTombstones: make(map[string]uint64),
+		closeTickets:     make(map[string]closeTicket),
+		wsByHost:         make(map[string][]sessiond.WorkspaceInfo),
+		ssByHost:         make(map[string][]sessiond.SessionState),
+		ssPending:        make(map[string]bool),
 	}
 	c.writeTextFn = func(data []byte) error {
 		c.writeMu.Lock()
@@ -597,24 +677,6 @@ func (c *Client) handleTextInput(data []byte) {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err == nil {
-		if isAppVoiceMessage(probe.Type) {
-			c.hub.mu.RLock()
-			appVoice := c.hub.appVoice
-			c.hub.mu.RUnlock()
-			if appVoice != nil {
-				appVoice.handleFrame(c, data)
-			} else if probe.Type == "app-voice-claim" {
-				// A disabled server still speaks the v1 claim protocol.
-				// Epoch zero explicitly means no lease was granted; never
-				// echo an untrusted requested epoch as a valid lease.
-				c.sendAppVoice(map[string]any{
-					"type": "app-voice-claim-result", "protocol_version": 1,
-					"ok": false, "lease_epoch": 0, "code": "app_voice_disabled",
-					"error": "app voice is disabled or unavailable on this server",
-				})
-			}
-			return
-		}
 		if isCosMessage(probe.Type) {
 			c.handleCosMessage(data)
 			return
@@ -680,7 +742,6 @@ func (c *Client) handleTextInput(data []byte) {
 		}
 		attachedID := nsID(host, comp.WorkspaceID)
 		c.setAttached(host, attachedID, msg.Breakpoint)
-		c.rememberAppVoicePanes(attachedID, comp.Panes)
 		c.sendMessage(&sessiond.Message{
 			Type:        sessiond.TypeComposition,
 			CID:         msg.CID,
@@ -777,9 +838,6 @@ func (c *Client) handleTextInput(data []byte) {
 			c.sendError(msg.CID, browserWSID, err)
 			return
 		}
-		if workspaceID, ok := c.attachedWorkspaceForHost(host); ok {
-			c.rememberAppVoicePane(workspaceID, paneID)
-		}
 		c.sendMessage(&sessiond.Message{
 			Type:   sessiond.TypePaneCreated,
 			CID:    msg.CID,
@@ -853,12 +911,19 @@ func (c *Client) handleTextInput(data []byte) {
 	case sessiond.TypeSessionStateSubscribe:
 		// Per-connection opt-in for home-view session state, with the same
 		// old-daemon contract as preview-subscribe above: an error means this
-		// daemon predates the feature, and relaying it lets the browser stop
+		// daemon predates the feature. Return its typed acknowledgement with
+		// OK=false so the browser can render an unavailable feed rather than
 		// waiting for rows that are never coming.
 		c.setSessionStateWanted(msg.OK)
 		c.broadcastSubscribe(host, func(conn DaemonConn) error { return conn.SessionStateSubscribe(msg.OK) })
 		if err := dc.SessionStateSubscribe(msg.OK); err != nil {
-			c.sendError(msg.CID, browserWSID, err)
+			c.sessionStateUnavailable()
+			c.sendMessage(&sessiond.Message{
+				Type:  sessiond.TypeSessionStateSubscribeResult,
+				CID:   msg.CID,
+				OK:    false,
+				Error: err.Error(),
+			})
 			return
 		}
 		c.sendMessage(&sessiond.Message{
@@ -968,31 +1033,26 @@ func (c *Client) setWorkspaces(host string, workspaces []sessiond.WorkspaceInfo)
 	c.mergeMu.Unlock()
 }
 
-// setSessions replaces host's cached session-state set, stamping every row.
-func (c *Client) setSessions(host string, sessions []sessiond.SessionState) {
+// setSessions replaces source's cached session-state set, stamping every row.
+// The source must still be this browser's current connection for its host: an
+// event raced from an explicitly removed or superseded remote is stale.
+func (c *Client) setSessions(source *hostSession, sessions []sessiond.SessionState) bool {
+	host := source.host.ID
 	stamped := stampSessions(host, sessions)
+	c.sessMu.Lock()
+	if c.sessions[host] != source {
+		c.sessMu.Unlock()
+		return false
+	}
 	c.mergeMu.Lock()
 	if c.ssByHost == nil {
 		c.ssByHost = make(map[string][]sessiond.SessionState)
 	}
 	c.ssByHost[host] = stamped
+	delete(c.ssPending, host)
 	c.mergeMu.Unlock()
-}
-
-// forgetHost drops a host's cached slices and re-emits both merged documents.
-//
-// This is the EXPLICIT-disconnect half of the retention rule (design A.4): a
-// transport drop keeps the cache so the sidebar can ghost the workspaces,
-// while a disconnect deletes it so they vanish -- because that is what the
-// user asked for.
-func (c *Client) forgetHost(host string) {
-	c.forgetAppVoiceHost(host)
-	c.mergeMu.Lock()
-	delete(c.wsByHost, host)
-	delete(c.ssByHost, host)
-	c.mergeMu.Unlock()
-	c.emitWorkspaceList(0)
-	c.emitSessionState()
+	c.sessMu.Unlock()
+	return true
 }
 
 // mergedHosts returns the cache keys in the browser's stable render order:
@@ -1050,11 +1110,21 @@ func (c *Client) emitSessionState() {
 	for _, h := range mergedHosts(c.ssByHost) {
 		out = append(out, c.ssByHost[h]...)
 	}
+	status := "ready"
+	if c.ssLocalUnavailable {
+		status = "unavailable"
+	} else if len(c.ssPending) > 0 {
+		status = "partial"
+	}
+	c.ssRevision++
+	revision := c.ssRevision
 	c.mergeMu.Unlock()
 
 	c.sendMessage(&sessiond.Message{
-		Type:     sessiond.TypeSessionState,
-		Sessions: out,
+		Type:                 sessiond.TypeSessionState,
+		Sessions:             out,
+		SessionStateStatus:   status,
+		SessionStateRevision: revision,
 	})
 }
 
@@ -1137,10 +1207,6 @@ type Hub struct {
 	// beside resolvedConfig rather than on the Client. Nothing is spawned
 	// until a browser sends cos-subscribe or cos-turn.
 	cos *cosRelay
-
-	// appVoice owns the one browser-bound app voice lease. It must be fenced
-	// from Hub.Remove before this connection can be replaced.
-	appVoice *appVoiceService
 
 	// attachFailures counts CONSECUTIVE attachClient failures across all
 	// browsers, reset by the first success. Guarded by mu.
@@ -1434,8 +1500,8 @@ func (h *Hub) attachClient(c *Client) error {
 		// its first dial, so this loop is also design D's "one frame per
 		// registry member immediately after attachClient": a fresh tab renders
 		// its host groups without waiting for any dial to resolve.
-		for _, host := range remotes.Hosts() {
-			c.startHostSession(host)
+		for _, membership := range remotes.memberships() {
+			c.startHostSession(membership.host, membership.generation)
 		}
 	}
 
@@ -1535,13 +1601,7 @@ func (h *Hub) Remove(c *Client) {
 		return
 	}
 	delete(h.clients, c)
-	appVoice := h.appVoice
 	h.mu.Unlock()
-	// Do not call into the app service under Hub.mu: app operations also read
-	// the catalog and client inventories.
-	if appVoice != nil {
-		appVoice.disconnect(c)
-	}
 	c.stopCos()
 	c.teardownSessions()
 	c.close()
@@ -1574,9 +1634,6 @@ func (s *Server) handleWSImpl(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(1 << 20) // 1MB
 
 	client := newClient(s.hub, conn)
-	// Preserve legacy WebSocket acceptance. This flag gates only the new app
-	// voice frame family and is computed before accepting untrusted frames.
-	client.appVoiceAllowed = s.appVoiceSameOrigin(r)
 	if key, ok := s.filesBrowserKey(r); ok {
 		s.registerFilesBrowser(key, client)
 		client.closeHook = func() {

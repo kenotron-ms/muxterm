@@ -33,10 +33,13 @@ Behaviour is steered by KEYWORDS IN THE PROMPT:
     slow         stretch the turn over ~8s, so an away action has time to land
     tool         one tool_start/tool_end pair mid-stream
 
-Every turn writes what it actually sent to $MUXTERM_REPRO_DIR (default
-/tmp/cos-repro): payload-<turn_id>.txt byte for byte, and one record per turn in
-turns.jsonl. The driver reads those rather than re-deriving them, so a
-harness/product disagreement is visible rather than assumed.
+Every completed turn writes what it actually sent to $MUXTERM_REPRO_DIR (default
+/tmp/cos-repro): payload-<turn_id>.txt byte for byte, one record per turn in
+turns.jsonl, and a safe summarized transcript. The transcript is committed
+before turn_end and reloaded by a supervised replacement fixture process; it
+never opens an Amplifier SessionStore. A delayed fixture history response also
+writes delayed-history-emitted.json after it is emitted; this proves the stale
+input existed without requiring a correctly fenced server to deliver it.
 
 STDOUT DISCIPLINE (spec 2.1): protocol lines go to the REAL stdout, claimed by
 an fd dup before anything else can print to it; everything else goes to stderr.
@@ -50,7 +53,7 @@ import re
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _real = os.dup(1)
 os.dup2(2, 1)
@@ -58,6 +61,17 @@ PROTO = os.fdopen(_real, "w", buffering=1)
 _write_lock = threading.Lock()
 
 ARTIFACT_DIR = os.environ.get("MUXTERM_REPRO_DIR", "/tmp/cos-repro")
+TRANSCRIPT_PATH = os.path.join(ARTIFACT_DIR, "transcript.json")
+RESTART_ON_HISTORY_ONCE = os.environ.get("MUXTERM_REPRO_EXIT_ON_HISTORY_ONCE") == "1"
+DELAY_HISTORY_ONCE_MS = max(0, int(os.environ.get("MUXTERM_REPRO_DELAY_HISTORY_ONCE_MS", "0")))
+DELAY_FIRST_CLEAR_HISTORY_MS = max(
+    0, int(os.environ.get("MUXTERM_REPRO_DELAY_FIRST_CLEAR_HISTORY_MS", "0")),
+)
+HISTORY_METADATA_MODE = os.environ.get("MUXTERM_REPRO_HISTORY_METADATA", "")
+SEED_HISTORY = os.environ.get("MUXTERM_REPRO_SEED_HISTORY") == "1"
+SEED_PROMPT = os.environ.get("MUXTERM_REPRO_SEED_PROMPT", "")
+SEED_ANSWER = os.environ.get("MUXTERM_REPRO_SEED_ANSWER", "")
+OVERLAP_CLEAR_HISTORY = os.environ.get("MUXTERM_REPRO_OVERLAP_CLEAR_HISTORY") == "1"
 DEFAULT_SIZE = 40000
 # The payload is ASCII, so characters and bytes are the same thing here - which
 # is what lets the driver compare a DOM string length against a byte count.
@@ -251,6 +265,35 @@ def write_artifacts(turn_id: str, payload: str, record: dict) -> None:
         log(f"could not write artifacts to {ARTIFACT_DIR}: {exc}")
 
 
+def write_json_atomic(path: str, value: object) -> None:
+    """Write a fixture-owned JSON value without ever exposing a half transcript."""
+    os.makedirs(ARTIFACT_DIR, exist_ok=True)
+    tmp = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(value, f, separators=(",", ":"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def claim_once(name: str, payload: dict) -> bool:
+    """Atomically claim one fixture-only fault injection across replacements."""
+    os.makedirs(ARTIFACT_DIR, exist_ok=True)
+    path = os.path.join(ARTIFACT_DIR, name)
+    try:
+        with open(path, "x") as f:
+            json.dump(payload, f)
+        return True
+    except FileExistsError:
+        return False
+
+
 def _kinds(blocks) -> dict:
     out = {}
     for b in blocks:
@@ -267,9 +310,87 @@ class Repro:
         self.session_id = session_id
         self.active = None
         self.lock = threading.Lock()
-        # The in-memory transcript. THIS is what the history op replays, and
-        # what makes an away/reload scenario testable at all.
-        self.transcript = []
+        # The fixture's safe, summarized transcript. It deliberately models
+        # durability without touching a real SessionStore or its credentials.
+        self.transcript = self._load_transcript()
+        self.clear_count = 0
+        self._seed_history_if_requested()
+
+    def _load_transcript(self):
+        try:
+            with open(TRANSCRIPT_PATH) as f:
+                loaded = json.load(f)
+            if not isinstance(loaded, list) or not all(isinstance(turn, dict) for turn in loaded):
+                raise ValueError("expected a JSON array of summarized turns")
+            log(f"reloaded {len(loaded)} durable summarized turn(s)")
+            return loaded
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            log(f"ignoring unusable fixture transcript {TRANSCRIPT_PATH}: {exc}")
+            return []
+
+    def _persist_transcript_locked(self):
+        # Call while self.lock is held so an overlapping history/clear sees
+        # either the old committed snapshot or this complete replacement.
+        write_json_atomic(TRANSCRIPT_PATH, self.transcript)
+
+    def _seed_history_if_requested(self):
+        """Create one safe fixture-owned history shape before ready/history."""
+        if self.transcript:
+            return
+        if OVERLAP_CLEAR_HISTORY:
+            now = datetime.now(timezone.utc)
+            self.transcript = [
+                {
+                    "id": "fixture-old-clear-seed",
+                    "prompt": "fixture old clear seed prompt",
+                    "ts": (now - timedelta(days=8)).isoformat(),
+                    "blocks": [{"kind": "text", "text": "fixture old clear seed answer"}],
+                },
+                {
+                    "id": "fixture-recent-clear-seed",
+                    "prompt": "fixture recent clear seed prompt",
+                    "ts": now.isoformat(),
+                    "blocks": [{"kind": "text", "text": "fixture recent clear seed answer"}],
+                },
+            ]
+            self._persist_transcript_locked()
+            write_json_atomic(
+                os.path.join(ARTIFACT_DIR, "overlap-clear-seed.json"),
+                {"old_prompt": self.transcript[0]["prompt"], "recent_prompt": self.transcript[1]["prompt"]},
+            )
+            log("created old and recent fixture history for overlapping clears")
+            return
+        if not SEED_HISTORY:
+            return
+        if not SEED_PROMPT or not SEED_ANSWER:
+            raise ValueError("seed history requires both prompt and answer")
+        self.transcript = [{
+            "id": "fixture-durable-seed",
+            "prompt": SEED_PROMPT,
+            # This fixed old timestamp makes the intended chronological order
+            # explicit without borrowing any real transcript metadata.
+            "ts": "2000-01-01T00:00:00+00:00",
+            "blocks": [{"kind": "text", "text": SEED_ANSWER}],
+        }]
+        # This is fixture-only durability under MUXTERM_REPRO_DIR. Persist
+        # before ready so the first browser subscription can only replay it.
+        self._persist_transcript_locked()
+        write_json_atomic(
+            os.path.join(ARTIFACT_DIR, "seed-history.json"),
+            {"prompt": SEED_PROMPT, "answer": SEED_ANSWER},
+        )
+        log("created one durable fixture seed history turn")
+
+    def _history_metadata(self):
+        if HISTORY_METADATA_MODE == "absent":
+            return None
+        if HISTORY_METADATA_MODE == "unknown":
+            # This is intentionally not interpreted or rendered. It exercises
+            # history consumers that receive a harmless future provenance field.
+            return {"provenance": "fixture-provenance", "fixture_unknown": "fixture-unknown-value"}
+        return {"timestamp": now_iso()}
 
     def on_turn(self, turn_id, prompt):
         with self.lock:
@@ -294,11 +415,91 @@ class Repro:
 
     def on_history(self, limit, req_id):
         with self.lock:
-            turns = list(self.transcript)
+            # JSON round-trip freezes the captured pre-clear value. A delayed
+            # reply must not accidentally read the post-clear list by reference.
+            turns = json.loads(json.dumps(self.transcript))
         if limit and limit > 0:
             turns = turns[-limit:]
         log(f"history req={req_id} limit={limit} -> {len(turns)} turn(s)")
+        if RESTART_ON_HISTORY_ONCE and turns and claim_once(
+            "restart-on-history.json", {"req_id": req_id, "turns": len(turns), "ts": now_iso()},
+        ):
+            # Deliberately fail THIS history request after a durable transcript
+            # exists. The real supervisor must restart us and arrange a replay;
+            # emitting a stale snapshot here would hide the product failure.
+            log("exiting once on a persisted history request (controlled restart)")
+            os._exit(0)
+        if DELAY_HISTORY_ONCE_MS and turns and claim_once(
+            "delayed-history.json",
+            {"req_id": req_id, "turns": len(turns), "delay_ms": DELAY_HISTORY_ONCE_MS, "ts": now_iso()},
+        ):
+            # The server can process Clear while this old snapshot is delayed.
+            # Its late arrival is the precise reconciliation race under test.
+            def delayed_reply():
+                time.sleep(DELAY_HISTORY_ONCE_MS / 1000.0)
+                emit(ev="history", req_id=req_id, session_id=self.session_id, turns=turns)
+                write_json_atomic(
+                    os.path.join(ARTIFACT_DIR, "delayed-history-emitted.json"),
+                    {"req_id": req_id, "turns": len(turns), "delay_ms": DELAY_HISTORY_ONCE_MS,
+                     "emitted_at": now_iso()},
+                )
+            threading.Thread(target=delayed_reply, daemon=True).start()
+            return
+        if DELAY_FIRST_CLEAR_HISTORY_MS and self.clear_count == 1 and turns and claim_once(
+            "overlap-first-clear-history.json",
+            {"req_id": req_id, "turns": len(turns), "delay_ms": DELAY_FIRST_CLEAR_HISTORY_MS, "ts": now_iso()},
+        ):
+            # The first seven-day prune has retained current turns. Hold this
+            # captured read-back reply until an all-clear can arrive behind it:
+            # an unfenced server broadcasts this stale retained snapshot last.
+            def delayed_first_clear_reply():
+                time.sleep(DELAY_FIRST_CLEAR_HISTORY_MS / 1000.0)
+                emit(ev="history", req_id=req_id, session_id=self.session_id, turns=turns)
+                write_json_atomic(
+                    os.path.join(ARTIFACT_DIR, "overlap-first-clear-history-emitted.json"),
+                    {"req_id": req_id, "turns": len(turns),
+                     "delay_ms": DELAY_FIRST_CLEAR_HISTORY_MS, "emitted_at": now_iso()},
+                )
+            threading.Thread(target=delayed_first_clear_reply, daemon=True).start()
+            return
         emit(ev="history", req_id=req_id, session_id=self.session_id, turns=turns)
+
+    def on_clear(self, older_than_days, req_id):
+        # The browser harness drives both scoped and all-history clear through
+        # the real UI. Keep all resulting mutation inside the fixture transcript.
+        with self.lock:
+            if self.active is not None:
+                emit(ev="error", req_id=req_id, code="clear_failed",
+                     message="fixture refuses clear during an active turn", fatal=False)
+                return
+            if older_than_days == 0:
+                removed = len(self.transcript)
+                self.transcript = []
+            else:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+                kept_turns = []
+                removed = 0
+                for turn in self.transcript:
+                    try:
+                        timestamp = datetime.fromisoformat(str(turn.get("ts", "")).replace("Z", "+00:00"))
+                        if timestamp.tzinfo is None:
+                            timestamp = timestamp.replace(tzinfo=timezone.utc)
+                    except (TypeError, ValueError):
+                        # A malformed fixture timestamp is retained: a scoped
+                        # destructive operation must not guess that it is old.
+                        kept_turns.append(turn)
+                        continue
+                    if timestamp < cutoff:
+                        removed += 1
+                    else:
+                        kept_turns.append(turn)
+                self.transcript = kept_turns
+            self.clear_count += 1
+            self._persist_transcript_locked()
+            kept = len(self.transcript)
+        log(f"cleared {removed} durable fixture turn(s), kept={kept}, older_than_days={older_than_days}")
+        emit(ev="cleared", req_id=req_id, removed=removed, kept=kept,
+             removed_turns=removed, kept_turns=kept, protected=[], reloaded=True)
 
     def _cancelled(self, turn_id) -> bool:
         with self.lock:
@@ -373,9 +574,21 @@ class Repro:
             return log(f"turn {turn_id} abandoned before turn_end")
 
         elapsed_ms = int((time.time() - started) * 1000)
+        history = self._history_blocks(opts, prompt, payload, thinking, pairs)
+        item = {"id": f"h-{int(time.time() * 1000)}-{turn_id}", "prompt": prompt,
+                "ts": now_iso(), "ms": elapsed_ms, "blocks": history["blocks"]}
+        metadata = self._history_metadata()
+        if metadata is not None:
+            item["metadata"] = metadata
+        with self.lock:
+            self.transcript.append(item)
+            # Durability is deliberately BEFORE turn_end: a process replacement
+            # after the terminal event must replay exactly this safe summary.
+            self._persist_transcript_locked()
+            if self.active == turn_id:
+                self.active = None
         emit(ev="turn_end", turn_id=turn_id, response=payload, cost_usd="0.0100", ms=elapsed_ms)
 
-        history = self._history_blocks(opts, prompt, payload, thinking, pairs)
         record = {
             "turn_id": turn_id, "prompt": prompt, "mode": mode, "slow": opts["slow"],
             "tool": opts["tool"], "requested_bytes": opts["size"] if payload else 0,
@@ -389,12 +602,6 @@ class Repro:
         # the correct expectation, which is not the same as not knowing.
         write_artifacts(turn_id, payload, record)
 
-        with self.lock:
-            self.transcript.append({"id": f"h-{len(self.transcript)}", "prompt": prompt,
-                                    "ts": now_iso(), "ms": elapsed_ms,
-                                    "blocks": history["blocks"]})
-            if self.active == turn_id:
-                self.active = None
         log(f"turn {turn_id} done in {elapsed_ms}ms ({len(deltas)} deltas, {streamed} streamed, "
             f"{len(payload)} response bytes, {len(history['blocks'])} replay blocks via "
             f"{history['record']['history_source']})")
@@ -454,6 +661,10 @@ def main():
     log(f"argv: {args}; artifact dir: {ARTIFACT_DIR}")
 
     repro = Repro(session_id)
+    # run.sh invokes this fixture-only setup mode before it starts muxterm, so
+    # replay-order's durable seed exists before any browser can subscribe.
+    if "--seed-history-only" in args:
+        return
     emit(ev="ready", session_id=session_id, bundle="stub", tools=0, boot_ms=0, resumed=False)
 
     for line in sys.stdin:
@@ -471,6 +682,8 @@ def main():
             repro.on_cancel(op.get("turn_id", ""))
         elif name == "history":
             repro.on_history(int(op.get("limit", 50) or 50), op.get("req_id", ""))
+        elif name == "clear":
+            repro.on_clear(op.get("older_than_days", 0), op.get("req_id", ""))
         elif name == "ping":
             emit(ev="pong")
         elif name == "shutdown":

@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS AT ALL. Opening the viewer from a click is easy: the Files
  * applet fires `applet-navigate`, it bubbles up to <mux-applets>, done. But the
- * chief of staff has to be able to open it too -- somebody says "show me the
+ * Operator has to be able to open it too -- somebody says "show me the
  * design doc", and the answer has to appear on their screen. That request
  * arrives as a websocket frame in app.ts, which is OUTSIDE the applet host's
  * shadow tree. A DOM event dispatched there travels UP, away from the host, and
@@ -26,7 +26,7 @@
  * request is still a gesture. The distinction that rule draws is between A
  * PERSON ASKING and A POLL RETURNING SOMETHING NEW: the second must never move
  * the surface out from under a reader, and it still cannot -- nothing here is
- * reachable from a data change. Somebody asking their chief of staff to show
+ * reachable from a data change. Somebody asking Operator to show
  * them a document is the first kind, and arrives by voice or by typing instead
  * of by a click.
  *
@@ -51,7 +51,6 @@ export type ViewerOpenRequest =
   | Readonly<{
       readonly kind: 'document';
       readonly document: ViewerDocument;
-      readonly appVoiceOperationId: string;
     }>;
 
 type Listener = (request: ViewerOpenRequest) => void;
@@ -80,7 +79,7 @@ export function requestArtifactOpen(path: string): void {
  * This is intentionally a one-process handoff rather than a generated file:
  * no filesystem write, URL, publication, or second applet is involved.
  */
-export function requestViewerDocument(document: ViewerDocument, appVoiceOperationId = ''): void {
+export function requestViewerDocument(document: ViewerDocument): void {
   const title = document.title.trim();
   if (title === '' || document.text === '') return;
   const safe: ViewerDocument = Object.freeze({
@@ -88,7 +87,7 @@ export function requestViewerDocument(document: ViewerDocument, appVoiceOperatio
     text: document.text,
     subtitle: document.subtitle.trim(),
   });
-  for (const fn of listeners) fn({ kind: 'document', document: safe, appVoiceOperationId });
+  for (const fn of listeners) fn({ kind: 'document', document: safe });
 }
 
 /** Listen for open requests. Returns the unsubscribe. */

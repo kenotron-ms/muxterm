@@ -31,10 +31,22 @@ if [ "$PORT" = "9090" ] || [ "$PORT" = "8311" ]; then
   exit 2
 fi
 
+# Artifacts are evidence, never a scratch area to erase. Canonicalize before
+# creation so ../ and a symlinked parent cannot escape the dedicated harness
+# root, then reject reuse rather than recursively deleting prior evidence.
+OUT=$(realpath -m -- "$OUT") || { echo "could not canonicalize OUT: $OUT" >&2; exit 2; }
+case "$OUT" in
+  /tmp/cos-repro/*) ;;
+  *) echo "refusing OUT outside /tmp/cos-repro/: $OUT" >&2; exit 2 ;;
+esac
+if [ -e "$OUT" ]; then
+  echo "refusing existing OUT path: $OUT" >&2
+  exit 2
+fi
+
 SIDECAR_DIR="$OUT/sidecar"
 SERVER_LOG="$OUT/server.log"
 PIDFILE="$STATE/muxterm.pid"
-mkdir -p "$OUT" "$SIDECAR_DIR" "$STATE"
 
 # Playwright resolves its browsers under XDG_CACHE_HOME, which is redirected
 # below. Pin the real location FIRST, or drive.mjs dies with "Executable doesn't
@@ -62,6 +74,10 @@ stop_server() {
   pkill -f "repro-sidecar.py" 2>/dev/null || true
 }
 stop_server
+# The fixture transcript and once-only injection markers must survive a
+# supervised sidecar replacement. OUT was required to be new above, so these
+# begin empty without destroying artifacts from a previous harness invocation.
+mkdir -p "$OUT" "$SIDECAR_DIR" "$STATE"
 
 BIN=${BIN:-/tmp/bin-muxterm-$(basename "$REPO")}
 # web/dist is //go:embed-ed by web/embed.go, so the frontend must exist BEFORE
@@ -80,6 +96,43 @@ echo "    bin:  $BIN  ($(sha256sum "$BIN" | cut -c1-16))"
 export MUXTERM_COS_SIDECAR="$HARNESS/repro-sidecar.py"
 export MUXTERM_COS_PYTHON=${MUXTERM_COS_PYTHON:-python3}
 export MUXTERM_REPRO_DIR="$SIDECAR_DIR"
+# Fault injection is opt-in and scoped to the exact integration mode. Clear
+# inherited values so an ordinary run can never accidentally inherit a race.
+unset MUXTERM_REPRO_EXIT_ON_HISTORY_ONCE MUXTERM_REPRO_DELAY_HISTORY_ONCE_MS
+unset MUXTERM_REPRO_DELAY_FIRST_CLEAR_HISTORY_MS MUXTERM_REPRO_OVERLAP_CLEAR_HISTORY
+unset MUXTERM_REPRO_HISTORY_METADATA
+unset MUXTERM_REPRO_SEED_HISTORY MUXTERM_REPRO_SEED_PROMPT MUXTERM_REPRO_SEED_ANSWER
+case "$MODE" in
+  restart)
+    export MUXTERM_REPRO_EXIT_ON_HISTORY_ONCE=1
+    ;;
+  clear-race)
+    export MUXTERM_REPRO_DELAY_HISTORY_ONCE_MS=3000
+    ;;
+  overlap-clear)
+    # Two harmless fixture-owned turns, one old enough for the seven-day
+    # prune and one recent. The first post-prune history reply is delayed so
+    # a second all-clear can expose an out-of-order server broadcast.
+    export MUXTERM_REPRO_OVERLAP_CLEAR_HISTORY=1
+    export MUXTERM_REPRO_DELAY_FIRST_CLEAR_HISTORY_MS=3000
+    "$MUXTERM_COS_PYTHON" "$HARNESS/repro-sidecar.py" --seed-history-only >/dev/null
+    ;;
+  metadata-absent)
+    export MUXTERM_REPRO_HISTORY_METADATA=absent
+    ;;
+  metadata-unknown)
+    export MUXTERM_REPRO_HISTORY_METADATA=unknown
+    ;;
+  replay-order)
+    # Fixture-owned durable history only. These never name or access a native
+    # SessionStore; repro-sidecar.py writes the one safe seed under
+    # $MUXTERM_REPRO_DIR before the server and browser open.
+    export MUXTERM_REPRO_SEED_HISTORY=1
+    export MUXTERM_REPRO_SEED_PROMPT='fixture durable seed prompt'
+    export MUXTERM_REPRO_SEED_ANSWER='fixture durable seed answer'
+    "$MUXTERM_COS_PYTHON" "$HARNESS/repro-sidecar.py" --seed-history-only >/dev/null
+    ;;
+esac
 
 say "starting muxterm serve on 127.0.0.1:$PORT"
 echo "    artifacts: $OUT"

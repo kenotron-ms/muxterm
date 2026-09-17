@@ -2,7 +2,7 @@
  * cos-store.ts — the ONE seam between the chief-of-staff chat and its data.
  *
  * ┌────────────────────────────────────────────────────────────────────┐
- * │  Everything that renders the chief of staff (<mux-cos>, and the    │
+ * │  Everything that renders Operator (<mux-cos>, and the              │
  * │  entry control's readiness dot) reads from this store and nothing   │
  * │  else. app.ts calls cosStore.attach(socket) once; the component     │
  * │  subscribes and reads. No component parses a wire frame.            │
@@ -155,8 +155,34 @@ export interface CosFault {
 interface PendingAdmission {
   readonly clientRef: string;
   readonly draftRevision: number;
-  readonly conversation: CosConversationIdentity;
+  readonly prompt: string;
+  /**
+   * A first load can accept a turn before the asynchronous subscription
+   * receipt has told this tab the conversation identity. It is still a real
+   * server-owned admission; identity fencing applies once one was known.
+   */
+  readonly conversation: CosConversationIdentity | null;
   readonly timer: ReturnType<typeof setTimeout>;
+}
+
+const DRAFT_STORAGE_KEY = 'muxterm.cos.draft.v1';
+
+/** A tab-local draft survives refresh but never becomes shared conversation data. */
+function restoreDraft(): string {
+  try {
+    return globalThis.sessionStorage?.getItem(DRAFT_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function persistDraft(value: string): void {
+  try {
+    if (value) globalThis.sessionStorage?.setItem(DRAFT_STORAGE_KEY, value);
+    else globalThis.sessionStorage?.removeItem(DRAFT_STORAGE_KEY);
+  } catch {
+    // Private mode or disabled storage is a loss of stickiness, never input.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -219,10 +245,15 @@ export class CosStore {
   private _status: CosStatus = 'idle';
   private _sessionId = '';
   private _conversation: CosConversationIdentity | null = null;
-  private _draft = '';
+  private _draft = restoreDraft();
   private _draftRevision = 0;
   private _draftRef = '';
-  private _pendingAdmission: PendingAdmission | null = null;
+  /**
+   * A receipt is the admission boundary, not the first one. Keeping each
+   * request independently lets a person submit several ordered messages while
+   * the first receipt is still on the wire.
+   */
+  private _pendingAdmissions = new Map<string, PendingAdmission>();
   private _turns: CosTurn[] = [];
   private _byId = new Map<string, CosTurn>();
   private _approvals: CosApproval[] = [];
@@ -272,10 +303,20 @@ export class CosStore {
   get inputEnabled(): boolean { return this._status === 'ready' && this._conversation !== null; }
   get draft(): string { return this._draft; }
   get draftRevision(): number { return this._draftRevision; }
-  get admissionPending(): boolean { return this._pendingAdmission !== null; }
+  /** Text admission is independent of voice readiness and Operator activity. */
+  get textSubmissionAvailable(): boolean { return this._socket !== null; }
+  get admissionPending(): boolean { return this._pendingAdmissions.size > 0; }
+  /** Prevent an unchanged draft from being admitted twice before its receipt. */
+  get draftAdmissionPending(): boolean {
+    const draft = this._draft.trim();
+    return draft !== '' && [...this._pendingAdmissions.values()].some(
+      (pending) => pending.draftRevision === this._draftRevision && pending.prompt === draft,
+    );
+  }
   setDraft(value: string): void {
     this._draft = value;
     this._draftRevision++;
+    persistDraft(value);
   }
 
   get composerIdentity(): CosComposerIdentity {
@@ -293,25 +334,6 @@ export class CosStore {
 
   canCancel(turnId: string): boolean { return this._byId.get(turnId)?.status === 'pending' || this._byId.get(turnId)?.status === 'streaming'; }
   canAnswer(_turnId: string, requestId: string): boolean { return this._approvals.some((item) => item.requestId === requestId); }
-  setDraftForAppVoice(target: CosComposerIdentity, value: string): boolean {
-    if (!this._sameComposer(target)) return false;
-    this._draft = value;
-    this._draftRevision++;
-    this._notify();
-    return true;
-  }
-  inspectDraftForAppVoice(target: CosComposerIdentity): { readonly text: string; readonly truncated: boolean } | null {
-    return this._sameComposer(target) ? { text: this._draft, truncated: false } : null;
-  }
-  private _sameComposer(target: CosComposerIdentity): boolean {
-    const current = this.composerIdentity;
-    return target.channelId === current.channelId &&
-      target.threadId === current.threadId &&
-      target.runtimeGeneration === current.runtimeGeneration &&
-      target.runtimeSessionId === current.runtimeSessionId &&
-      target.runtimeIncarnation === current.runtimeIncarnation &&
-      target.draftRef === current.draftRef;
-  }
 
   private _setConversation(next: CosConversationIdentity | null): void {
     const current = this._conversation;
@@ -322,6 +344,23 @@ export class CosStore {
       current?.incarnation === next?.incarnation;
     this._conversation = next;
     if (!unchanged) this._draftRef = next ? globalThis.crypto.randomUUID() : '';
+  }
+
+  /** A current history frame must name this exact server-selected root. */
+  private _matchesHistoryConversation(raw: unknown): boolean {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    const advertised = raw as Record<string, unknown>;
+    const id = str(advertised.id);
+    const sessionId = str(advertised.session_id);
+    const generation = advertised.generation;
+    const incarnation = str(advertised.incarnation);
+    const current = this._conversation;
+    return !!current &&
+      id === current.id &&
+      sessionId === current.sessionId &&
+      Number.isSafeInteger(generation) &&
+      generation === current.generation &&
+      incarnation === current.incarnation;
   }
 
   get turns(): readonly CosTurn[] {
@@ -337,7 +376,17 @@ export class CosStore {
     return this._fault;
   }
 
-  /** True while a turn is in flight, so the composer can offer Stop. */
+  /** The one actual running turn. Stop never targets a queued turn. */
+  get activeTurn(): CosTurn | null {
+    return this._turns.find((t) => t.status === 'streaming') ?? null;
+  }
+
+  /** Accepted FIFO work that has not reached the sidecar yet, oldest first. */
+  get queuedTurns(): readonly CosTurn[] {
+    return this._turns.filter((t) => t.status === 'pending');
+  }
+
+  /** True while work exists, including accepted work waiting in the FIFO. */
   get busy(): boolean {
     return this._turns.some((t) => t.status === 'pending' || t.status === 'streaming');
   }
@@ -389,15 +438,16 @@ export class CosStore {
     const text = prompt.trim();
     if (!text) return false;
     const conversation = this._conversation;
-    if (!conversation || this._status !== 'ready' || !this._socket || this._pendingAdmission) return false;
+    if (!this._socket) return false;
+    if (this.draftAdmissionPending) return false;
     const clientRef = `cos-${globalThis.crypto.randomUUID()}`;
     const pending: PendingAdmission = {
       clientRef,
       draftRevision: this._draftRevision,
+      prompt: text,
       conversation,
       timer: setTimeout(() => {
-        if (this._pendingAdmission?.clientRef !== clientRef) return;
-        this._pendingAdmission = null;
+        if (!this._pendingAdmissions.delete(clientRef)) return;
         this._fault = {
           code: 'turn_admission_timeout',
           message: 'Send was not confirmed; your draft was kept.',
@@ -406,11 +456,11 @@ export class CosStore {
         this._notify();
       }, 15_000),
     };
-    this._pendingAdmission = pending;
+    this._pendingAdmissions.set(clientRef, pending);
     this._fault = null;
     if (!this._socket.cosTurn(text, clientRef)) {
       clearTimeout(pending.timer);
-      this._pendingAdmission = null;
+      this._pendingAdmissions.delete(clientRef);
       this._fault = {
         code: 'turn_admission_failed',
         message: 'Send could not be sent; your draft was kept.',
@@ -502,12 +552,10 @@ export class CosStore {
 
   /** The socket went away. The transcript survives; the readiness claim cannot. */
   markDisconnected(): void {
-    if (this._pendingAdmission) {
-      clearTimeout(this._pendingAdmission.timer);
-      this._pendingAdmission = null;
+    if (this._pendingAdmissions.size > 0) {
       this._fault = {
-        code: 'turn_admission_disconnected',
-        message: 'Connection closed before Send was confirmed; your draft was kept.',
+        code: 'turn_admission_reconnecting',
+        message: 'Reconnecting to confirm Send; your draft was kept.',
         fatal: false,
       };
     }
@@ -525,6 +573,12 @@ export class CosStore {
     this._replayRequestedAt = Date.now();
     this._setStatus('starting');
     this._socket?.cosSubscribe(true);
+    // A frame accepted by the browser but not acknowledged before disconnect
+    // is retried with the same server-deduplicated reference. The retry is
+    // safe whether the old frame was lost, queued, or already active.
+    for (const pending of this._pendingAdmissions.values()) {
+      this._socket?.cosTurn(pending.prompt, pending.clientRef);
+    }
     this._notify();
   }
 
@@ -560,22 +614,24 @@ export class CosStore {
     }
     if (type === 'cos-turn-result') {
       const clientRef = str(frame.client_ref);
-      const admission = this._pendingAdmission;
-      if (!admission || admission.clientRef !== clientRef) return;
+      const admission = this._pendingAdmissions.get(clientRef);
+      if (!admission) return;
       clearTimeout(admission.timer);
-      this._pendingAdmission = null;
+      this._pendingAdmissions.delete(clientRef);
       const current = this._conversation;
-      if (frame.ok !== true || !current || !str(frame.turn_id)) {
+      if (frame.ok !== true || !str(frame.turn_id)) {
         this._fault = {
           code: 'turn_admission_refused',
           message: `${str(frame.error) || str(frame.code) || 'Send was refused.'}`.slice(0, 220),
           fatal: false,
         };
       } else if (
-        current.id !== admission.conversation.id ||
-        current.sessionId !== admission.conversation.sessionId ||
-        current.generation !== admission.conversation.generation ||
-        current.incarnation !== admission.conversation.incarnation
+        admission.conversation !== null && (!current || (
+          current.id !== admission.conversation.id ||
+          current.sessionId !== admission.conversation.sessionId ||
+          current.generation !== admission.conversation.generation ||
+          current.incarnation !== admission.conversation.incarnation
+        ))
       ) {
         this._fault = {
           code: 'turn_admission_identity_changed',
@@ -584,15 +640,61 @@ export class CosStore {
         };
       } else {
         this._fault = null;
+        const turn = this._ensure(str(frame.turn_id));
+        if (turn) {
+          // A queue receipt is the real proof of acceptance. Its later
+          // turn_start upgrades this same row to streaming.
+          turn.prompt = admission.prompt;
+          turn.clientRef = clientRef;
+        }
         if (this._draftRevision === admission.draftRevision) {
           this._draft = '';
           this._draftRevision++;
+          persistDraft('');
         }
       }
       this._notify();
       return;
     }
+    if (type === 'cos-queue') {
+      const rawItems = Array.isArray(frame.items) ? frame.items : [];
+      const queue: CosTurn[] = [];
+      const seen = new Set<string>();
+      for (const raw of rawItems) {
+        if (!raw || typeof raw !== 'object') continue;
+        const item = raw as Record<string, unknown>;
+        const id = str(item.turn_id);
+        const status = str(item.status);
+        if (!id || seen.has(id) || (status !== 'active' && status !== 'queued')) continue;
+        const turn = this._ensure(id);
+        if (!turn) continue;
+        seen.add(id);
+        turn.prompt = str(item.prompt) || turn.prompt;
+        // A delayed snapshot must never reopen a terminal turn.
+        if (turn.status === 'pending' || turn.status === 'streaming') {
+          turn.status = status === 'active' ? 'streaming' : 'pending';
+        }
+        queue.push(turn);
+      }
+      if (queue.length > 0) {
+        const queuedIDs = new Set(queue.map((turn) => turn.id));
+        this._turns = [...this._turns.filter((turn) => !queuedIDs.has(turn.id)), ...queue];
+      }
+      this._notify();
+      return;
+    }
     if (type === 'cos-history') {
+      // A current server identifies every snapshot with the same fixed
+      // conversation identity it advertised at subscription. Never let an
+      // asynchronous or foreign snapshot replace this tab's transcript.
+      // Legacy servers omitted the field entirely, so only its absence retains
+      // the compatibility path.
+      if (
+        Object.prototype.hasOwnProperty.call(frame, 'conversation') &&
+        !this._matchesHistoryConversation(frame.conversation)
+      ) {
+        return;
+      }
       // A replay sent because the transcript was PRUNED is authoritative about
       // what is gone; a replay sent because this tab subscribed is only a
       // snapshot, and may be older than what this browser has already seen.
@@ -633,16 +735,11 @@ export class CosStore {
     if (!ev || typeof ev !== 'object') return;
     const replay = frame.replay === true;
     this._event(ev as Record<string, unknown>, replay);
-    // Fan the RAW event out to anything that needs the stream itself rather
-    // than the store's digest of it. The voice session is the one consumer
-    // today: tool_start/tool_end/thinking are already exactly the "what am I
-    // doing right now" narration a spoken channel needs, so it subscribes
-    // here rather than inventing its own progress signal.
-    //
-    // Replays are EXCLUDED. A replayed event is history being re-rendered,
-    // not something happening now -- narrating one would have the assistant
-    // announce a tool call it made an hour ago the moment a second tab
-    // opens.
+    // Fan a live raw event only to consumers that explicitly need operational
+    // state. App Voice does NOT consume this browser stream to manufacture
+    // speech: its server-side delivery policy classifies the narrow set of
+    // direct replies, decisions, blockers, and requested results instead.
+    // Replays remain excluded; history is never a new event.
     if (!replay) this._emitEvent(ev as Record<string, unknown>);
     this._notify();
   }

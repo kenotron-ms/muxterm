@@ -2,7 +2,7 @@
  * mux-cos.ts -- Mission Control. ONE surface.
  *
  * Not a peer of <mux-home>: it IS home. The left column is a conversation with
- * the chief of staff; the right column is <mux-applets>, a tab strip over a
+ * Operator; the right column is <mux-applets>, a tab strip over a
  * stack of applets, of which the Dashboard applet is the fleet -- the same
  * rows home used to render, from the same store. A draggable divider between
  * them says how much of each you want, and one topbar spans both.
@@ -13,7 +13,7 @@
  *
  * WHAT THIS SURFACE DOES NOT HAVE, each removed on purpose:
  *
- *   - no status pip. \"The chief of staff is up\" is not a thing a human is
+ *   - no status pip. \"Operator is up\" is not a thing a human is
  *     here to look at; if it is down, the conversation says so where the
  *     answer would have been.
  *   - NO COUNTS, anywhere. Not sessions, not groups (\"wants you\", never
@@ -72,8 +72,6 @@ import {
   type VoiceState,
   type VoiceTranscriptPayload,
 } from '../lib/voice-input-controller.js';
-import { voiceCaptureArbiter, type VoiceCaptureOwner } from '../lib/voice-capture-arbiter.js';
-import type { MuxApplets } from './mux-applets.js';
 import {
   voiceSessionController,
   type VoiceSessionSnapshot,
@@ -119,34 +117,26 @@ function clock(msLeft: number): string {
 type Housekeeping = 7 | 30 | 'all';
 
 function isSessionLive(snapshot: VoiceSessionSnapshot): boolean {
-  return snapshot.state !== 'idle' && snapshot.state !== 'error';
+  return snapshot.state !== 'idle' && snapshot.state !== 'blocked';
 }
 
-function voiceStatusLabel(snapshot: VoiceSessionSnapshot): string {
-  if (snapshot.state === 'error') return 'Voice error';
-  if (snapshot.paused || snapshot.state === 'paused') return 'Paused';
-  if (snapshot.muted) return 'Mic muted';
-  switch (snapshot.state) {
-    case 'connecting':
-      return 'Connecting';
-    case 'thinking':
-      return 'Thinking';
-    case 'speaking':
-      return 'Speaking';
+function voiceControlLabel(snapshot: VoiceSessionSnapshot): string {
+  if (isSessionLive(snapshot)) return 'End the spoken conversation';
+  switch (snapshot.blockedReason) {
+    case 'microphone-permission-denied':
+      return 'Allow microphone access in browser settings to use Voice Mode';
+    case 'insecure-context':
+      return 'Use a secure browser context to use Voice Mode';
+    case 'browser-unsupported':
+      return 'Use a supported browser to use Voice Mode';
     default:
-      return 'Listening';
+      return 'Talk to Operator';
   }
-}
-
-function shortVoiceError(message: string): string {
-  const text = message.trim().replace(/\s+/g, ' ');
-  return text.length > 120 ? `${text.slice(0, 117)}…` : text;
 }
 
 interface HeldVoiceComposer {
   readonly identity: CosComposerIdentity;
   readonly draft: string;
-  readonly height: number;
   readonly start: number;
   readonly end: number;
   readonly focused: boolean;
@@ -205,11 +195,12 @@ export class MuxCos extends LitElement {
   /** Which housekeeping action is awaiting a yes. null = none pending. */
   @state() private _confirm: Housekeeping | null = null;
   @state() private _voice: VoiceState = voiceInputController.getState();
-  @state() private _captureOwner: VoiceCaptureOwner = voiceCaptureArbiter.snapshot().owner;
-  @state() private _dictationNotice = '';
   @state() private _voiceSession: VoiceSessionSnapshot = voiceSessionController.snapshot();
   @state() private _textMode = false;
+  @state() private _primaryMenuOpen = false;
   private _heldVoiceComposer: HeldVoiceComposer | null = null;
+  /** Last value whose inline textarea geometry was deliberately settled. */
+  private _sizedDraft: string | null = null;
 
   /**
    * Whether the portrait applet sheet is open.
@@ -240,10 +231,10 @@ export class MuxCos extends LitElement {
   private _unsub: (() => void) | null = null;
   private _unsubVoice: (() => void) | null = null;
   private _unsubVoiceSession: (() => void) | null = null;
-  private _unsubCaptureOwner: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
-  private _unsubVoiceError: (() => void) | null = null;
   private _ticker: ReturnType<typeof setInterval> | undefined;
+  private _primaryHoldTimer: ReturnType<typeof setTimeout> | undefined;
+  private _suppressPrimaryClick = false;
 
   /** False once the reader scrolls up: streaming must not yank them back down. */
   private _pinned = true;
@@ -259,16 +250,6 @@ export class MuxCos extends LitElement {
   /** Immutable capture identity used to reject late A results while B is visible. */
   private _chatDictationCapture: ComposerDictationCapture | null = null;
   private _activeApplet: AppletId | '' = '';
-  private _voiceAppletOperationId = '';
-  private _appletOperationWaiter:
-    | {
-        readonly operationId: string;
-        readonly applet: AppletId;
-        readonly resolve: (ok: boolean) => void;
-        readonly signal: AbortSignal;
-        readonly onAbort: () => void;
-      }
-    | null = null;
 
   static styles = css`
     *,
@@ -1033,15 +1014,15 @@ export class MuxCos extends LitElement {
     .cbox.solo {
       border-color: color-mix(in srgb, var(--chrome-accent) 55%, transparent);
     }
-    /* THE COMPOSER, DURING A CALL. One control, centred, and exactly as tall
-       as the composer it replaced -- the height is written inline from the
-       measured box (see _renderVoiceComposer), so the conversation above
-       never gives up a pixel and the reader's scroll position does not move. */
+    /* THE COMPOSER, DURING A CALL. It has only the intentional compact size
+       needed by the orb. It must never inherit a stale multiline textarea
+       height from the text composer it replaced. */
     .cbox.solo {
       position: relative;
       align-items: center;
       justify-content: center;
       padding: 0;
+      min-height: 72px;
     }
     /* THE WAY BACK TO THE KEYBOARD, without hanging up.
        A NAVIGATION control, and built to read as one: no fill, no ring, no
@@ -1188,17 +1169,7 @@ export class MuxCos extends LitElement {
       align-items: center;
       gap: var(--s-3);
       justify-content: flex-end;
-    }
-    .dictation-status {
-      min-width: 0;
-      margin-right: auto;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-family: var(--mono);
-      font-size: var(--t-meta);
-      line-height: 1.3;
-      color: var(--ink-3);
+      position: relative;
     }
     .cbtn {
       width: 30px;
@@ -1229,6 +1200,44 @@ export class MuxCos extends LitElement {
       color: var(--ink-3);
       cursor: default;
     }
+    .primary-menu {
+      position: absolute;
+      right: 0;
+      bottom: calc(100% + var(--s-2));
+      z-index: 2;
+      min-width: 190px;
+      padding: var(--s-1);
+      border: 1px solid var(--edge);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 8px 22px rgb(0 0 0 / 20%);
+    }
+    .primary-menu button {
+      width: 100%;
+      min-height: 44px;
+      border: 0;
+      border-radius: 6px;
+      padding: var(--s-2) var(--s-3);
+      background: transparent;
+      color: var(--ink-1);
+      font: inherit;
+      font-size: var(--t-meta);
+      text-align: left;
+      cursor: pointer;
+    }
+    .primary-menu button:hover,
+    .primary-menu button:focus-visible {
+      outline: none;
+      background: var(--chrome-hover);
+    }
+    .primary-help {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
     .cbtn.voice {
       background: transparent;
       overflow: visible;
@@ -1240,6 +1249,10 @@ export class MuxCos extends LitElement {
     }
     .cbtn.voice:hover {
       background: transparent;
+    }
+    .cbtn.voice[disabled] {
+      cursor: not-allowed;
+      opacity: 0.45;
     }
     .cbtn.voice.live mux-voice-orb {
       --orb-d: 24px;
@@ -1263,17 +1276,6 @@ export class MuxCos extends LitElement {
       --orb-box: 64px;
       --orb-d: 52px;
     }
-    .voice-error {
-      min-width: 0;
-      max-width: 42ch;
-      color: var(--fail);
-      font-size: var(--t-meta);
-      line-height: 1.3;
-      overflow-wrap: anywhere;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
     /* Listening. A filled red STOP, no ring, no pulse -- the square is the
        international \"press this to make it stop\" and needs no help. */
     .cbtn.rec,
@@ -1281,10 +1283,10 @@ export class MuxCos extends LitElement {
       background: var(--fail);
       color: var(--chrome-body);
     }
-    @media (pointer: coarse) {
+    @media (pointer: coarse), (any-pointer: coarse) {
       .cbtn {
-        width: 40px;
-        height: 40px;
+        width: 44px;
+        height: 44px;
       }
     }
 
@@ -1459,10 +1461,6 @@ export class MuxCos extends LitElement {
     // unseen tab can still notice a lane going blocked; the argument for that
     // exception, and the adopt-current-state-on-reattach reasoning, moved with
     // it to applet-dashboard's _onFleet() and _sync().
-    this._captureOwner = voiceCaptureArbiter.snapshot().owner;
-    this._unsubCaptureOwner = voiceCaptureArbiter.subscribe(({ owner }) => {
-      this._captureOwner = owner;
-    });
     this._unsubVoice = voiceInputController.onStateChange((s) => {
       this._voice = s;
       if (s !== 'listening') {
@@ -1473,9 +1471,6 @@ export class MuxCos extends LitElement {
     this._unsubTranscript = voiceInputController.onTranscript((p) => {
       this._takeTranscript(p);
     });
-    this._unsubVoiceError = voiceInputController.onError((message) => {
-      this._dictationNotice = message;
-    });
     this._heldVoiceComposer = heldVoiceComposer;
     this._unsubVoiceSession = voiceSessionController.subscribe((snapshot) => {
       const wasActive = isSessionLive(this._voiceSession);
@@ -1483,6 +1478,8 @@ export class MuxCos extends LitElement {
       const nowActive = isSessionLive(snapshot);
       if (!wasActive && nowActive && !this._heldVoiceComposer) {
         this._holdVoiceComposer();
+        this._textMode = false;
+        this._hideSheet();
       } else if (wasActive && !nowActive) {
         this._releaseVoiceComposer();
       }
@@ -1503,16 +1500,14 @@ export class MuxCos extends LitElement {
     this._unsub = null;
     this._unsubVoice?.();
     this._unsubVoice = null;
-    this._unsubCaptureOwner?.();
-    this._unsubCaptureOwner = null;
     this._unsubTranscript?.();
     this._unsubTranscript = null;
-    this._unsubVoiceError?.();
-    this._unsubVoiceError = null;
     this._unsubVoiceSession?.();
     this._unsubVoiceSession = null;
     if (this._ticker !== undefined) clearInterval(this._ticker);
     this._ticker = undefined;
+    if (this._primaryHoldTimer !== undefined) clearTimeout(this._primaryHoldTimer);
+    this._primaryHoldTimer = undefined;
     // Only OUR session. An unconditional abort here would kill a dictation
     // the title bar's mic started against a terminal pane.
     if (this._chatDictationActive && this._voice === 'listening') {
@@ -1520,7 +1515,6 @@ export class MuxCos extends LitElement {
     }
     this._chatDictationActive = false;
     this._chatDictationCapture = null;
-    this._settleAppletOperationWaiter(false);
     // NO DRAG MAY OUTLIVE THE DETACH. This element is parked by cache(), not
     // destroyed, so a _drag left non-null is still non-null when the Dashboard
     // reopens -- and _gripMove checks nothing else. Moving the mouse across
@@ -1581,55 +1575,11 @@ export class MuxCos extends LitElement {
     return this._activeApplet;
   }
 
-  /** Resolves only a registered applet through its existing host. */
-  navigateAppletForAppVoice(
-    applet: AppletId,
-    target: string | undefined,
-    operationId: string,
-    signal: AbortSignal,
-  ): Promise<boolean> {
-    const host = this.renderRoot.querySelector<MuxApplets>('mux-applets');
-    if (!host || signal.aborted) return Promise.resolve(false);
-    this._voiceAppletOperationId = operationId;
-    return new Promise<boolean>((resolve) => {
-      this._settleAppletOperationWaiter(false);
-      const onAbort = () => this.cancelAppVoiceNavigation(operationId);
-      const waiter = { operationId, applet, resolve, signal, onAbort };
-      this._appletOperationWaiter = waiter;
-      signal.addEventListener('abort', onAbort, { once: true });
-      if (signal.aborted) {
-        this.cancelAppVoiceNavigation(operationId);
-        return;
-      }
-      host.show(applet, target, operationId);
-      if (this._activeApplet === applet) {
-        this._settleAppletOperationWaiter(true, waiter);
-      }
-    });
-  }
-
-  cancelAppVoiceNavigation(operationId: string): void {
-    const waiter = this._appletOperationWaiter;
-    if (!waiter || waiter.operationId !== operationId) return;
-    this._settleAppletOperationWaiter(false, waiter);
-  }
-
-  private _settleAppletOperationWaiter(
-    ok: boolean,
-    expected?: NonNullable<MuxCos['_appletOperationWaiter']>,
-  ): void {
-    const waiter = this._appletOperationWaiter;
-    if (!waiter || (expected && waiter !== expected)) return;
-    this._appletOperationWaiter = null;
-    waiter.signal.removeEventListener('abort', waiter.onAbort);
-    if (this._voiceAppletOperationId === waiter.operationId) this._voiceAppletOperationId = '';
-    waiter.resolve(ok);
-  }
-
   override updated(): void {
     // Follow the stream only while the reader is at the bottom. Yanking the
     // scroller down under someone who deliberately scrolled up to re-read a
     // tool line is the fastest way to make a streaming surface unusable.
+    this._syncComposerHeight();
     if (!this._pinned) return;
     const el = this.renderRoot.querySelector<HTMLElement>('.chatbody');
     if (el) el.scrollTop = el.scrollHeight;
@@ -2061,19 +2011,18 @@ export class MuxCos extends LitElement {
   private _renderVoiceControl(solo = false): TemplateResult {
     const snapshot = this._voiceSession;
     const active = isSessionLive(snapshot);
-    const orbState = snapshot.state === 'error' || snapshot.state === 'paused'
-      ? 'asleep'
-      : snapshot.state;
-    const label = active ? 'Exit voice mode' : 'Start voice mode';
+    const blocked = snapshot.blockedReason !== null;
+    const orbState = snapshot.state === 'idle' || snapshot.state === 'blocked' ? 'asleep' : snapshot.state;
+    const label = voiceControlLabel(snapshot);
     return html`
       <button
         class="cbtn voice ${active ? 'live' : ''} ${solo ? 'solo' : ''}"
         type="button"
-        title="${snapshot.state === 'error' && snapshot.error ? snapshot.error : label}"
+        title="${label}"
         aria-label="${label}"
         aria-pressed="${active ? 'true' : 'false'}"
         data-voice-state="${snapshot.state}"
-        @pointerdown="${this._prepareVoiceEntry}"
+        ?disabled="${blocked}"
         @click="${this._toggleSession}"
       >
         <mux-voice-orb .state="${orbState}" .level="${snapshot.level}"></mux-voice-orb>
@@ -2082,23 +2031,10 @@ export class MuxCos extends LitElement {
   }
 
   private _renderVoiceComposer(): TemplateResult {
-    const height = this._heldVoiceComposer?.height;
-    const size = height ? `height:${height}px` : 'min-height:72px';
-    const paused = this._voiceSession.paused || this._voiceSession.state === 'paused';
-    const canPause = ['listening', 'thinking', 'speaking', 'paused'].includes(this._voiceSession.state);
     return html`
       <div class="comp">
-        <div class="cbox solo" style="${size}">
+        <div class="cbox solo">
           ${this._renderVoiceControl(true)}
-          ${canPause
-            ? html`<button
-                class="voicepause"
-                type="button"
-                title="${paused ? 'Resume voice mode' : 'Pause voice mode'}"
-                aria-label="${paused ? 'Resume voice mode' : 'Pause voice mode'}"
-                @click="${() => void voiceSessionController.togglePaused()}"
-              >${paused ? 'resume' : 'pause'}</button>`
-            : nothing}
           <button
             class="tomode"
             type="button"
@@ -2117,17 +2053,27 @@ export class MuxCos extends LitElement {
    * without ending an active spoken conversation.
    */
   private _renderComposer(): TemplateResult {
-    const call = isSessionLive(this._voiceSession);
+    const voiceActive = isSessionLive(this._voiceSession);
+    const call = voiceActive;
     if (call && !this._textMode) return this._renderVoiceComposer();
     const negotiating = cosStore.negotiating;
+    const activeTurn = cosStore.activeTurn;
     const busy = cosStore.busy;
     const admissionPending = cosStore.admissionPending;
-    const ready = this._draft.trim().length > 0 && cosStore.inputEnabled;
-    const locked = negotiating || !cosStore.inputEnabled;
-    const listening = !call && !negotiating && this._voice === 'listening';
+    const draftPresent = this._draft.trim().length > 0;
+    const draftAdmissionPending = cosStore.draftAdmissionPending;
+    // Each send owns an independent receipt. Do not make a person wait for one
+    // round trip before queuing an edited next message, but never admit the
+    // exact same unchanged draft twice before its receipt.
+    const ready = draftPresent && cosStore.textSubmissionAvailable && !draftAdmissionPending;
+    const locked = !cosStore.textSubmissionAvailable;
+    const listening = !voiceActive && !negotiating && this._voice === 'listening';
+    const primaryLabel = draftPresent
+      ? draftAdmissionPending ? 'Sending message' : activeTurn ? 'Queue message after active turn' : 'Send'
+      : activeTurn ? 'Stop active turn' : admissionPending ? 'Sending' : 'Send';
     return html`
       <div class="comp">
-        <div class="cbox ${listening || call ? 'live' : ''}">
+        <div class="cbox ${listening || voiceActive ? 'live' : ''}">
           <textarea
             class="ctext"
             data-thread-composer
@@ -2142,16 +2088,10 @@ export class MuxCos extends LitElement {
             @keydown="${this._onKey}"
           ></textarea>
           <div class="crow">
-            ${this._dictationNotice
-              ? html`<span class="dictation-status" data-voice-dictation-status role="status">${this._dictationNotice}</span>`
-              : nothing}
-            ${!call && this._voiceSession.error
-              ? html`<span class="voice-error" role="alert">${shortVoiceError(this._voiceSession.error)}</span>`
-              : nothing}
-            ${call
+            ${voiceActive
               ? html`
-                  <span class="micon" role="status">
-                    <span class="micdot"></span><span class="micword">${voiceStatusLabel(this._voiceSession).toLowerCase()}</span>
+                  <span class="micon">
+                    <span class="micdot"></span><span class="micword">microphone open</span>
                   </span>
                   <button
                     class="micback"
@@ -2162,27 +2102,46 @@ export class MuxCos extends LitElement {
                   >back to the orb</button>
                 `
               : nothing}
-            ${!call && !negotiating && cosStore.composerIdentity.channelId !== 'none' && voiceInputController.isSupported()
+            ${!voiceActive && !negotiating && cosStore.composerIdentity.channelId !== 'none' && voiceInputController.isSupported()
               ? html`<button
                   class="cbtn ${listening ? 'rec' : ''}"
                   type="button"
-                  title="${this._captureOwner === 'app_conversation' ? 'Stop voice mode before using composer dictation.' : listening ? 'Stop dictating' : 'Dictate'}"
+                  title="${listening ? 'Stop dictating' : 'Dictate'}"
                   aria-label="${listening ? 'Stop dictating' : 'Dictate'}"
                   aria-pressed="${listening ? 'true' : 'false'}"
-                  ?disabled="${this._captureOwner === 'app_conversation'}"
                   @click="${this._toggleDictation}"
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
-            ${call ? this._renderVoiceControl() : nothing}
-            ${busy || call || ready || !voiceSessionController.isSupported()
+            ${!voiceActive ? this._renderVoiceControl() : nothing}
+            ${busy || voiceActive || ready || admissionPending || !voiceSessionController.isSupported()
               ? html`<button
-                  class="cbtn send"
+                  class="cbtn send primary-control"
                   type="button"
-                  aria-label="${busy ? 'Stop generating' : admissionPending ? 'Sending' : 'Send'}"
-                  ?disabled="${!busy && (negotiating || admissionPending || !ready)}"
-                  @click="${busy ? this._stopGeneration : this._submit}"
-                >${icon(busy ? Square : ArrowUp, { size: 15 })}</button>`
-              : this._renderVoiceControl()}
+                  aria-label="${primaryLabel}"
+                  aria-haspopup="${activeTurn && draftPresent ? 'menu' : 'false'}"
+                  aria-expanded="${this._primaryMenuOpen ? 'true' : 'false'}"
+                  aria-describedby="${activeTurn && draftPresent ? 'composer-primary-help' : nothing}"
+                  ?disabled="${!ready && !activeTurn}"
+                  @pointerdown="${this._onPrimaryPointerDown}"
+                  @pointerup="${this._onPrimaryPointerUp}"
+                  @pointercancel="${this._onPrimaryPointerCancel}"
+                  @keydown="${this._onPrimaryControlKey}"
+                  @click="${this._onPrimaryClick}"
+                >${icon(!draftPresent && activeTurn ? Square : ArrowUp, { size: 15 })}</button>
+                ${activeTurn && draftPresent
+                  ? html`<span id="composer-primary-help" class="primary-help">Press Down Arrow or hold to open actions including Stop active turn.</span>`
+                  : nothing}
+                ${this._primaryMenuOpen && activeTurn
+                  ? html`<div class="primary-menu" role="menu" aria-label="Composer actions">
+                      <button
+                        role="menuitem"
+                        type="button"
+                        @keydown="${this._onPrimaryMenuKey}"
+                        @click="${this._stopGeneration}"
+                      >Stop active turn</button>
+                    </div>`
+                  : nothing}`
+              : nothing}
           </div>
         </div>
       </div>
@@ -2260,15 +2219,7 @@ export class MuxCos extends LitElement {
    */
   private _onAppletChanged = (e: Event): void => {
     const detail = (e as CustomEvent<AppletChangedDetail>).detail;
-    if (detail?.applet) {
-      this._activeApplet = detail.applet;
-      if (this._voiceAppletOperationId && this._appletOperationWaiter?.applet === detail.applet) {
-        this._settleAppletOperationWaiter(true);
-      } else {
-        this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
-        this.dispatchEvent(new CustomEvent('app-voice-observation', { bubbles: true, composed: true }));
-      }
-    }
+    if (detail?.applet) this._activeApplet = detail.applet;
     if (detail?.roomy === true) this._setDetent('full');
   };
 
@@ -2298,7 +2249,7 @@ export class MuxCos extends LitElement {
    * of re-opening what this had just closed.
    */
   private _onOutsideClick = (e: MouseEvent): void => {
-    if (!this._menuOpen) return;
+    if (!this._menuOpen && !this._primaryMenuOpen) return;
     const path = e.composedPath();
     const pressed = (sel: string): boolean => {
       const el = this.renderRoot.querySelector(sel);
@@ -2306,11 +2257,14 @@ export class MuxCos extends LitElement {
     };
     if (
       pressed('.menu') ||
-      pressed('.dots')
+      pressed('.dots') ||
+      pressed('.primary-menu') ||
+      pressed('.primary-control')
     ) {
       return;
     }
     this._menuOpen = false;
+    this._primaryMenuOpen = false;
   };
 
   private _ask(which: Housekeeping): void {
@@ -2336,7 +2290,6 @@ export class MuxCos extends LitElement {
 
   private _onDraft = (e: Event): void => {
     const el = e.target as HTMLTextAreaElement;
-    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
     this._draft = el.value;
     this._fit(el);
   };
@@ -2348,8 +2301,32 @@ export class MuxCos extends LitElement {
    * because the inline height outlives the value it was measured from.
    */
   private _fit(el: HTMLTextAreaElement): void {
+    if (el.value.trim() === '') {
+      el.style.height = '';
+      el.style.overflowY = '';
+      this._sizedDraft = el.value;
+      return;
+    }
     el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
+    const max = Number.parseFloat(getComputedStyle(el).maxHeight);
+    const height = Number.isFinite(max) ? Math.min(el.scrollHeight, max) : el.scrollHeight;
+    el.style.height = `${height}px`;
+    el.style.overflowY = el.scrollHeight > height ? 'auto' : 'hidden';
+    this._sizedDraft = el.value;
+  }
+
+  private _resetComposerHeight(): void {
+    const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
+    if (!el) return;
+    el.style.height = '';
+    el.style.overflowY = '';
+    this._sizedDraft = el.value;
+  }
+
+  private _syncComposerHeight(): void {
+    const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
+    if (!el || this._sizedDraft === el.value) return;
+    this._fit(el);
   }
 
   private _onKey = (e: KeyboardEvent): void => {
@@ -2366,10 +2343,12 @@ export class MuxCos extends LitElement {
       // pending in front of it leaves the surface.
       if (
         this._menuOpen ||
+        this._primaryMenuOpen ||
         this._confirm !== null
       ) {
         e.preventDefault();
         this._menuOpen = false;
+        this._primaryMenuOpen = false;
         this._confirm = null;
         return;
       }
@@ -2378,7 +2357,7 @@ export class MuxCos extends LitElement {
       // controller instead; its release path preserves this draft and caret.
       if (this._textMode && isSessionLive(this._voiceSession)) {
         e.preventDefault();
-        voiceSessionController.exitByUser();
+        voiceSessionController.stop();
         return;
       }
       this.dispatchEvent(new CustomEvent('home-dismiss', { bubbles: true, composed: true }));
@@ -2392,31 +2371,84 @@ export class MuxCos extends LitElement {
     // A missing receipt is uncertainty, not proof that the user's words were sent.
     if (!cosStore.send(prompt)) return;
     this._pinned = true;
-    void this.updateComplete.then(() => {
-      const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
-      if (el) this._fit(el);
-    });
+    // The store retains the text until its server receipt, but the input must
+    // immediately return to its compact editing geometry. The receipt/replay
+    // path later clears the value authoritatively.
+    this._resetComposerHeight();
   };
 
   private _stopGeneration = (): void => {
-    const active = cosStore.turns.find((turn) => turn.status === 'streaming') ??
-      cosStore.turns.find((turn) => turn.status === 'pending');
+    this._primaryMenuOpen = false;
+    const active = cosStore.activeTurn;
     if (active) cosStore.cancel(active.id);
     void this.updateComplete.then(() => {
       this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext')?.focus();
     });
   };
 
-  private _prepareVoiceEntry = (): void => {
-    if (!isSessionLive(this._voiceSession)) this._holdVoiceComposer();
+  private _onPrimaryPointerDown = (): void => {
+    if (!cosStore.activeTurn || this._draft.trim() === '') return;
+    if (this._primaryHoldTimer !== undefined) clearTimeout(this._primaryHoldTimer);
+    this._primaryHoldTimer = setTimeout(() => {
+      this._primaryHoldTimer = undefined;
+      this._suppressPrimaryClick = true;
+      this._primaryMenuOpen = true;
+    }, 550);
+  };
+
+  private _onPrimaryPointerUp = (): void => {
+    if (this._primaryHoldTimer !== undefined) {
+      clearTimeout(this._primaryHoldTimer);
+      this._primaryHoldTimer = undefined;
+    }
+  };
+
+  private _onPrimaryPointerCancel = (): void => {
+    this._onPrimaryPointerUp();
+    // A long press opens the compact Stop menu and suppresses its trailing
+    // click. Pointer cancellation has no trailing click, so retaining that
+    // bit would wrongly swallow the next deliberate Send/Stop action.
+    this._suppressPrimaryClick = false;
+  };
+
+  private _onPrimaryControlKey = (e: KeyboardEvent): void => {
+    if (!cosStore.activeTurn || this._draft.trim() === '') return;
+    if (e.key === 'ArrowDown' || (e.altKey && e.key === 'ArrowDown')) {
+      e.preventDefault();
+      this._primaryMenuOpen = true;
+      void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>('.primary-menu button')?.focus());
+    }
+  };
+
+  private _onPrimaryMenuKey = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    this._primaryMenuOpen = false;
+    void this.updateComplete.then(() => {
+      this.renderRoot.querySelector<HTMLButtonElement>('.primary-control')?.focus();
+    });
+  };
+
+  private _onPrimaryClick = (): void => {
+    if (this._suppressPrimaryClick) {
+      this._suppressPrimaryClick = false;
+      return;
+    }
+    // A direct primary activation after its menu was opened is Send/Stop, not
+    // a request to leave a stale duplicate menu over the composer.
+    this._primaryMenuOpen = false;
+    if (this._draft.trim() !== '') {
+      this._submit();
+      return;
+    }
+    this._stopGeneration();
   };
 
   private _toggleSession = (): void => {
     if (isSessionLive(this._voiceSession)) {
-      voiceSessionController.exitByUser();
+      voiceSessionController.stop();
       return;
     }
-    this._holdVoiceComposer();
     void voiceSessionController.start();
   };
 
@@ -2425,12 +2457,10 @@ export class MuxCos extends LitElement {
       this._heldVoiceComposer = heldVoiceComposer;
       return;
     }
-    const box = this.renderRoot.querySelector<HTMLElement>('.cbox');
     const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');
     const held: HeldVoiceComposer = {
       identity: cosStore.composerIdentity,
       draft: cosStore.draft,
-      height: box?.getBoundingClientRect().height ?? 0,
       start: el?.selectionStart ?? 0,
       end: el?.selectionEnd ?? 0,
       focused: this.shadowRoot?.activeElement === el,
@@ -2501,15 +2531,16 @@ export class MuxCos extends LitElement {
     const nowhere =
       from === document.body || from === document.documentElement || from === document;
     if (!mine && !nowhere) return;
-    if (this._menuOpen || this._confirm !== null) {
+    if (this._menuOpen || this._primaryMenuOpen || this._confirm !== null) {
       e.preventDefault();
       this._menuOpen = false;
+      this._primaryMenuOpen = false;
       this._confirm = null;
       return;
     }
     e.preventDefault();
     e.stopPropagation();
-    voiceSessionController.exitByUser();
+    voiceSessionController.stop();
   };
 
   private _toggleDictation = (): void => {
@@ -2522,7 +2553,6 @@ export class MuxCos extends LitElement {
     if (composer.channelId === 'none') return;
     const capture = voiceInputController.startComposer(composer.channelId);
     if (!capture) return;
-    this._dictationNotice = '';
     this._chatDictationActive = true;
     this._chatDictationCapture = capture;
   };
@@ -2550,7 +2580,6 @@ export class MuxCos extends LitElement {
     }
     const t = payload.text.trim();
     if (!t) return;
-    this.dispatchEvent(new CustomEvent('app-voice-user-navigation', { bubbles: true, composed: true }));
     this._draft = this._draft.trim() === '' ? t : `${this._draft.trimEnd()} ${t}`;
     void this.updateComplete.then(() => {
       const el = this.renderRoot.querySelector<HTMLTextAreaElement>('.ctext');

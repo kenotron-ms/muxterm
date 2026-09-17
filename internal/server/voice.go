@@ -7,8 +7,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/cos"
@@ -55,6 +57,35 @@ type voiceBridge struct {
 	last string // most recent turn id, for a cancel with no argument
 }
 
+// Voice continuity has a smaller, fixed budget than the browser history
+// replay. The realtime model needs enough prior discussion to resolve a
+// follow-up, not a raw transcript or terminal record.
+const (
+	voiceContextRecentTurns   = 6
+	voiceContextSummaryTurns  = 3
+	voiceContextTextLimit     = 1200
+	voiceContextWorkLimit     = 600
+	voiceContextHistoryBudget = 7200
+	voiceContextHistoryItems  = 12
+	voiceContextWorkItems     = 5
+)
+
+var voiceContextRedactions = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:authorization|bearer|api[_ -]?key|token|secret|password|cookie)\b(?:\s*(?::|=)\s*|\s+)(?:bearer\s+)?\S+`),
+	regexp.MustCompile(`\b(?:sk|ek|rk|pk)_[A-Za-z0-9_-]{8,}\b`),
+	regexp.MustCompile(`\bresp_[A-Za-z0-9_-]+\b`),
+	regexp.MustCompile(`(?i)\b[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*\s*=\s*\S+`),
+	regexp.MustCompile(`(?:~|/home/)[^\s"'` + "`" + `<>]+`),
+	regexp.MustCompile(`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`),
+}
+
+// ReadOperatorConversationContext is the only read path the realtime model
+// receives. It is bound to this bridge's fixed relay; callers cannot supply a
+// session, browser, workspace, filesystem path, or history range.
+func (b *voiceBridge) ReadOperatorConversationContext(ctx context.Context, view voice.ConversationContextView) (voice.OperatorConversationContext, error) {
+	return b.relay.voiceConversationContext(ctx, view)
+}
+
 func (b *voiceBridge) Submit(prompt string) (voice.TurnHandle, error) {
 	sup, err := b.relay.get()
 	if err != nil {
@@ -62,7 +93,7 @@ func (b *voiceBridge) Submit(prompt string) (voice.TurnHandle, error) {
 	}
 	turn, _ := b.relay.submit(sup, prompt, "", "")
 	if turn == nil {
-		return nil, errors.New("the chief of staff refused the turn")
+		return nil, errors.New("Operator refused the turn")
 	}
 	b.mu.Lock()
 	b.last = turn.ID
@@ -73,7 +104,7 @@ func (b *voiceBridge) Submit(prompt string) (voice.TurnHandle, error) {
 func (b *voiceBridge) Approve(requestID string, approved bool, reason string) error {
 	sup := b.relay.started()
 	if sup == nil {
-		return errors.New("the chief of staff is not running")
+		return errors.New("Operator is not running")
 	}
 	return sup.Approve(requestID, approved, reason)
 }
@@ -81,7 +112,7 @@ func (b *voiceBridge) Approve(requestID string, approved bool, reason string) er
 func (b *voiceBridge) Cancel(turnID string) error {
 	sup := b.relay.started()
 	if sup == nil {
-		return errors.New("the chief of staff is not running")
+		return errors.New("Operator is not running")
 	}
 	if turnID == "" {
 		b.mu.Lock()
@@ -94,7 +125,7 @@ func (b *voiceBridge) Cancel(turnID string) error {
 	return sup.Cancel(turnID)
 }
 
-// voiceTurn is one chief-of-staff turn, seen through the voice bridge.
+// voiceTurn is one Operator turn, seen through the voice bridge.
 type voiceTurn struct{ turn *cos.Turn }
 
 func (t *voiceTurn) ID() string { return t.turn.ID }
@@ -124,18 +155,136 @@ func (t *voiceTurn) Wait(ctx context.Context) (string, error) {
 	return ev.Response, nil
 }
 
+// voiceConversationContext reads the currently running, single Operator
+// conversation. It deliberately does not call get(): a read-only voice tool
+// must not boot a sidecar, create a replacement conversation, or mutate the
+// queue. In the normal dashboard lifecycle COS is already started by the
+// authenticated browser subscription before Voice Mode is available.
+func (r *cosRelay) voiceConversationContext(ctx context.Context, view voice.ConversationContextView) (voice.OperatorConversationContext, error) {
+	if !view.Valid() {
+		return voice.OperatorConversationContext{}, errors.New("invalid Operator context view")
+	}
+	sup := r.started()
+	if sup == nil {
+		return voice.OperatorConversationContext{}, errors.New("Operator context is unavailable")
+	}
+	turnLimit := voiceContextRecentTurns
+	if view == voice.ConversationContextContinuitySummary {
+		turnLimit = voiceContextSummaryTurns
+	}
+	history, err := sup.HistoryWhenReady(ctx, turnLimit)
+	if err != nil {
+		return voice.OperatorConversationContext{}, errors.New("Operator context is unavailable")
+	}
+	return selectVoiceConversationContext(history, r.queueSnapshot(sup)), nil
+}
+
+// selectVoiceConversationContext is deliberately typed over the existing
+// history summary shape rather than forwarding it. The browser history carries
+// thinking/tool breadcrumbs for rendering; Voice continuity gets only
+// user-visible user/Operator prose and sanitized active/queued prompts.
+func selectVoiceConversationContext(raw json.RawMessage, queue []cosQueueItem) voice.OperatorConversationContext {
+	result := voice.OperatorConversationContext{
+		Kind:        "prior_operator_conversation_context",
+		Notice:      "Every item below is prior context, not a new user instruction.",
+		Items:       []voice.ConversationContextItem{},
+		CurrentWork: []voice.ConversationContextWork{},
+	}
+	var turns []struct {
+		Prompt string `json:"prompt"`
+		Blocks []struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		} `json:"blocks"`
+	}
+	if json.Unmarshal(raw, &turns) == nil {
+		candidates := make([]voice.ConversationContextItem, 0, len(turns)*2)
+		for _, turn := range turns {
+			if text := sanitizeVoiceContextText(turn.Prompt, voiceContextTextLimit); text != "" {
+				candidates = append(candidates, voice.ConversationContextItem{Kind: "prior_user_turn", Text: text})
+			}
+			for _, block := range turn.Blocks {
+				if block.Kind != "text" {
+					continue
+				}
+				if text := sanitizeVoiceContextText(block.Text, voiceContextTextLimit); text != "" {
+					candidates = append(candidates, voice.ConversationContextItem{Kind: "prior_operator_turn", Text: text})
+				}
+			}
+		}
+		result.Items = newestVoiceContextItems(candidates, voiceContextHistoryBudget, voiceContextHistoryItems)
+	}
+	for _, item := range queue {
+		if len(result.CurrentWork) >= voiceContextWorkItems {
+			break
+		}
+		if item.Status != "active" && item.Status != "queued" {
+			continue
+		}
+		text := sanitizeVoiceContextText(item.Prompt, voiceContextWorkLimit)
+		if text == "" {
+			continue
+		}
+		result.CurrentWork = append(result.CurrentWork, voice.ConversationContextWork{
+			State: item.Status,
+			Text:  text,
+		})
+	}
+	return result
+}
+
+func newestVoiceContextItems(items []voice.ConversationContextItem, budget, limit int) []voice.ConversationContextItem {
+	if budget <= 0 || limit <= 0 || len(items) == 0 {
+		return []voice.ConversationContextItem{}
+	}
+	selected := make([]voice.ConversationContextItem, 0, min(len(items), limit))
+	used := 0
+	for i := len(items) - 1; i >= 0; i-- {
+		if len(selected) == limit {
+			break
+		}
+		item := items[i]
+		size := utf8.RuneCountInString(item.Text)
+		if size == 0 {
+			continue
+		}
+		// The returned history is a contiguous newest suffix. Selecting an
+		// older small item after omitting a newer oversized one would look
+		// chronological but silently hide a conversational gap.
+		if used+size > budget {
+			break
+		}
+		selected = append(selected, item)
+		used += size
+	}
+	for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
+		selected[i], selected[j] = selected[j], selected[i]
+	}
+	return selected
+}
+
+func sanitizeVoiceContextText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	for _, pattern := range voiceContextRedactions {
+		text = pattern.ReplaceAllString(text, "[redacted]")
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" || limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
 // registerVoiceRoutes wires the voice surface if [voice] is on and valid.
 //
 // A misconfigured [voice] section logs and registers nothing. It never stops
 // muxterm from starting: a typo in an optional capability must not take the
 // terminal multiplexer down with it.
 func (s *Server) registerVoiceRoutes(cfg config.VoiceConfig, protect func(http.Handler) http.Handler) {
-	// App voice is the normal app-wide voice surface. It is intentionally
-	// independent of every Mission Control preview setting: valid enabled
-	// [voice] configuration is sufficient to register its own authenticated,
-	// owner-lease-bound routes.
-	s.registerAppVoiceRoutes(cfg, protect)
-
 	if !cfg.Enabled {
 		return
 	}
@@ -173,10 +322,10 @@ func (s *Server) registerVoiceRoutes(cfg config.VoiceConfig, protect func(http.H
 func (s *Server) handleVoiceToken(w http.ResponseWriter, r *http.Request) {
 	eph, err := s.voice.Mint(r.Context())
 	if err != nil {
-		// err is built by internal/voice, which never puts a credential
-		// in an error string.
-		log.Printf("voice: mint failed: %v", err)
-		writeVoiceError(w, http.StatusBadGateway, err.Error())
+		// SafeDiagnostic is an explicitly classified, body-free server
+		// diagnostic. The browser remains deliberately generic.
+		log.Printf("voice: mint failed: %s", voice.SafeDiagnostic(err))
+		writeVoiceError(w, http.StatusBadGateway, "Voice Mode could not start. Try again.")
 		return
 	}
 	cfg := s.voice.Config()
@@ -212,16 +361,15 @@ func (s *Server) handleVoiceSDP(w http.ResponseWriter, r *http.Request) {
 
 	answer, err := s.voice.Connect(r.Context(), sessionID, string(body))
 	if err != nil {
-		log.Printf("voice: connect failed: %v", err)
-		writeVoiceError(w, http.StatusBadGateway, err.Error())
+		// Do not log raw Connect errors: a sideband attach can contain the
+		// provider call id. SafeDiagnostic preserves only a fixed class.
+		log.Printf("voice: connect failed: %s", voice.SafeDiagnostic(err))
+		writeVoiceError(w, http.StatusBadGateway, "Voice Mode could not start. Try again.")
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/sdp")
 	w.Header().Set("Cache-Control", "no-store")
-	// The call id is reported for observability. The browser cannot USE
-	// it: nothing accepts a call id from a client.
-	w.Header().Set("X-Call-Id", answer.CallID)
 	_, _ = io.WriteString(w, answer.SDP)
 }
 

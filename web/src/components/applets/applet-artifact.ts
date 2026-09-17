@@ -419,7 +419,7 @@ export class AppletArtifact extends LitElement implements AppletElement {
 
   /**
    * A request arrived from outside the DOM -- the server pushed one, because
-   * somebody asked the chief of staff to show them a file.
+   * somebody asked Operator to show them a file.
    *
    * It asks the HOST to show this applet, the ordinary way, by firing
    * `applet-navigate` from itself. The event bubbles up through the host's
@@ -430,7 +430,7 @@ export class AppletArtifact extends LitElement implements AppletElement {
       this._openDocument(request.document);
       this.dispatchEvent(
         new CustomEvent<AppletNavigateDetail>('applet-navigate', {
-          detail: { applet: 'artifact', appVoiceOperationId: request.appVoiceOperationId },
+          detail: { applet: 'artifact' },
           bubbles: true,
           composed: true,
         }),

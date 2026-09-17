@@ -623,7 +623,13 @@ func refuseMuxtermConfigDir(resolved string) error {
 	if dir == "" {
 		return nil
 	}
-	if resolved == dir || strings.HasPrefix(resolved, dir+string(os.PathSeparator)) {
+	relativeConfigDir, err := filepath.Rel(resolved, dir)
+	containsConfigDir := err == nil &&
+		relativeConfigDir != ".." &&
+		!strings.HasPrefix(relativeConfigDir, ".."+string(os.PathSeparator))
+	if resolved == dir ||
+		strings.HasPrefix(resolved, dir+string(os.PathSeparator)) ||
+		containsConfigDir {
 		return fmt.Errorf("refusing to publish %s: that is muxterm's own configuration directory, which holds API keys and session tokens", resolved)
 	}
 	return nil

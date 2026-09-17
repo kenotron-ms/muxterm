@@ -423,6 +423,21 @@ type Message struct {
 	// from the presence of this field.
 	Sessions []SessionState `json:"sessions,omitempty"`
 
+	// SessionStateStatus is relay-only metadata for a merged TypeSessionState
+	// document. A direct daemon event leaves it empty; the browser relay writes
+	// "ready" only after every currently subscribed host has supplied its first
+	// current snapshot, or "partial" while any source is still pending. It is
+	// deliberately on the same whole-state envelope so rows and their freshness
+	// can never be applied out of order.
+	SessionStateStatus string `json:"sessionStateStatus,omitempty"`
+
+	// SessionStateRevision is the relay's monotonically increasing revision for
+	// a merged TypeSessionState document. A daemon leaves it zero; the browser
+	// relay stamps every aggregate before it releases its merge lock, so a
+	// delayed concurrent write cannot replace a newer complete set with an older
+	// partial one.
+	SessionStateRevision uint64 `json:"sessionStateRevision,omitempty"`
+
 	// Scrollback pagination fields (ADDITIVE, post-v1; see TypeScrollbackPage).
 	// LineCursor is deliberately NOT named "Cursor": Message.Cursor is the
 	// frozen *CursorPos screen-snapshot field above and cannot be reused.

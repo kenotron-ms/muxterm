@@ -22,6 +22,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/deploy"
 	"github.com/kenotron-ms/muxterm/internal/mcp"
+	"github.com/kenotron-ms/muxterm/internal/sandboxazure"
 	"github.com/kenotron-ms/muxterm/internal/server"
 	"github.com/kenotron-ms/muxterm/internal/service"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
@@ -137,6 +138,11 @@ func main() {
 		}
 	case "cos":
 		if err := runCos(cfg.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	case "sandbox":
+		if err := runSandbox(cfg.Args); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -444,11 +450,46 @@ func newAuthServer(addr string, sc config.ServerConfig) (*authserver.AuthServer,
 	})
 }
 
+// newSandboxLifecycle is intentionally called during startup, not from HTTP
+// handlers. The loaded sealed config is also passed to the read-only
+// presentation reader so the server does not perform a second config read.
+// Constructing the controller does not acquire a token or make a provider
+// request; those happen only within enabled typed lifecycle operations.
+func newSandboxLifecycle(noAuth bool) (sandboxazure.Lifecycle, sandboxazure.Availability, *sandboxazure.PresentationReader, error) {
+	cfg, err := sandboxazure.LoadConfig(config.DefaultPath())
+	if err != nil {
+		return nil, sandboxazure.Availability{
+			State:  "unconfigured",
+			Detail: "Azure Sandboxes are unavailable because the owner configuration is invalid.",
+		}, sandboxazure.NewUnavailablePresentationReader(), nil
+	}
+	availability := cfg.Availability()
+	if cfg.Enabled && noAuth {
+		return nil, sandboxazure.Availability{}, nil, errors.New("direct Azure sandboxes refuse the --no-auth topology")
+	}
+	presentation := sandboxazure.NewPresentationReader(cfg)
+	if !cfg.Enabled {
+		return nil, availability, presentation, nil
+	}
+	controller, err := sandboxazure.NewController(cfg, sandboxazure.AzureProviderFactory)
+	if err != nil {
+		return nil, sandboxazure.Availability{
+			State:  "unconfigured",
+			Detail: "Azure Sandboxes are unavailable because the owner configuration could not be admitted.",
+		}, sandboxazure.NewUnavailablePresentationReader(), nil
+	}
+	return controller, availability, presentation, nil
+}
+
 // runLocal starts muxterm in local mode: starts the HTTP server on localhost,
 // wires the per-browser sessiond dialer, opens a browser, and blocks until
 // shutdown.
 func runLocal(cfg Config) error {
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
+	sandboxes, sandboxAvailability, sandboxPresentation, err := newSandboxLifecycle(false)
+	if err != nil {
+		return err
+	}
 
 	// Local mode is loopback-only BY DEFINITION and deliberately ignores
 	// the [server] section entirely: it never reads that section off the
@@ -493,10 +534,13 @@ func runLocal(cfg Config) error {
 		AuthServer:    authSrv,
 		// No BehindReverseProxy field is set: local mode leaves it at its
 		// zero false, keeping the IsLocalhost() bypass exactly as today.
-		WebRedirectURI: webRedirectURIFor(cfg.Addr, localServerCfg),
-		LocalToken:     localToken,
-		Version:        version,
-		Remotes:        rt,
+		WebRedirectURI:      webRedirectURIFor(cfg.Addr, localServerCfg),
+		LocalToken:          localToken,
+		Version:             version,
+		Remotes:             rt,
+		Sandbox:             sandboxes,
+		SandboxAvailability: sandboxAvailability,
+		SandboxPresentation: sandboxPresentation,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))
@@ -595,6 +639,10 @@ func runServe(cfg Config) error {
 	// PATCH from the browser would then write that empty value back over
 	// the file.
 	resolved.Server = srvCfg
+	sandboxes, sandboxAvailability, sandboxPresentation, err := newSandboxLifecycle(cfg.NoAuth)
+	if err != nil {
+		return err
+	}
 
 	authSrv, err := newAuthServer(addr, srvCfg)
 	if err != nil {
@@ -613,18 +661,21 @@ func runServe(cfg Config) error {
 	}
 
 	srv := server.New(server.Config{
-		Addr:               addr,
-		StaticFS:           mustSubFS(webstatic.Dist, "dist"),
-		PublicDocFS:        mustSubFS(webstatic.PublicDist, "dist-public"),
-		NoAuth:             cfg.NoAuth,
-		ConfigPath:         config.DefaultPath(),
-		InitialConfig:      resolved,
-		AuthServer:         authSrv,
-		WebRedirectURI:     webRedirectURIFor(addr, srvCfg),
-		BehindReverseProxy: srvCfg.BehindReverseProxy,
-		LocalToken:         localToken,
-		Version:            version,
-		Remotes:            rt,
+		Addr:                addr,
+		StaticFS:            mustSubFS(webstatic.Dist, "dist"),
+		PublicDocFS:         mustSubFS(webstatic.PublicDist, "dist-public"),
+		NoAuth:              cfg.NoAuth,
+		ConfigPath:          config.DefaultPath(),
+		InitialConfig:       resolved,
+		AuthServer:          authSrv,
+		WebRedirectURI:      webRedirectURIFor(addr, srvCfg),
+		BehindReverseProxy:  srvCfg.BehindReverseProxy,
+		LocalToken:          localToken,
+		Version:             version,
+		Remotes:             rt,
+		Sandbox:             sandboxes,
+		SandboxAvailability: sandboxAvailability,
+		SandboxPresentation: sandboxPresentation,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))

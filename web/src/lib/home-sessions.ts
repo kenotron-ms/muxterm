@@ -31,9 +31,22 @@ import { FIXTURE_SESSIONS, type SessionState } from './session-state.js';
  */
 export type HomeSource = 'fixture' | 'live';
 
+/**
+ * Whether this browser has a current whole-Fleet document.
+ *
+ * A partial snapshot is useful -- it can keep a remote's last known rows on
+ * screen -- but it must not make an empty set claim that every source is
+ * empty. `unavailable` is the local daemon's explicit subscription refusal.
+ */
+export type HomeSnapshotStatus = 'loading' | 'partial' | 'ready' | 'unavailable';
+
 class HomeSessionStore {
   private _sessions: readonly SessionState[] = [];
   private _source: HomeSource = 'live';
+  private _snapshotStatus: HomeSnapshotStatus = 'loading';
+  // Assigned by the server relay while it holds its aggregate lock. A delayed
+  // partial write must never overwrite a newer whole Fleet document.
+  private _lastRevision = 0;
   private _listeners = new Set<() => void>();
 
   get sessions(): readonly SessionState[] {
@@ -42,6 +55,10 @@ class HomeSessionStore {
 
   get source(): HomeSource {
     return this._source;
+  }
+
+  get snapshotStatus(): HomeSnapshotStatus {
+    return this._snapshotStatus;
   }
 
   /**
@@ -67,9 +84,43 @@ class HomeSessionStore {
    * rather than trusting each call site to remember `?? []` makes that bug
    * unwritable.
    */
-  set(sessions: readonly SessionState[] | null | undefined, source: HomeSource = 'live'): void {
+  set(
+    sessions: readonly SessionState[] | null | undefined,
+    source: HomeSource = 'live',
+    snapshotStatus: Extract<HomeSnapshotStatus, 'partial' | 'ready' | 'unavailable'> = 'ready',
+    revision?: number,
+  ): void {
+    if (typeof revision === 'number' && Number.isSafeInteger(revision) && revision > 0) {
+      if (revision <= this._lastRevision) return;
+      this._lastRevision = revision;
+    }
     this._sessions = sessions ?? [];
     this._source = source;
+    this._snapshotStatus = snapshotStatus;
+    this._notify();
+  }
+
+  /**
+   * A socket closed, so its last Fleet set is no longer current. Rows remain as
+   * a useful fallback while the connection recovers; the next whole-state frame
+   * makes them authoritative again. This is deliberately idempotent because
+   * several close paths can report the same outage.
+   */
+  markStale(): void {
+    // A new WebSocket gets a new server-side revision sequence. Preserve a
+    // non-empty last set as visibly partial; a prior empty set goes back to
+    // loading rather than claiming to know this connection's Fleet is empty.
+    const next: HomeSnapshotStatus = this._sessions.length === 0 ? 'loading' : 'partial';
+    const changed = this._snapshotStatus !== next;
+    this._lastRevision = 0;
+    this._snapshotStatus = next;
+    if (changed) this._notify();
+  }
+
+  /** The local daemon explicitly cannot supply the subscribed Fleet feed. */
+  markUnavailable(): void {
+    if (this._snapshotStatus === 'unavailable') return;
+    this._snapshotStatus = 'unavailable';
     this._notify();
   }
 

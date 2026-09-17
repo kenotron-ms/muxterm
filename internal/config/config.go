@@ -30,18 +30,48 @@ type Config struct {
 	Restore        RestoreConfig        `toml:"restore"    json:"restore"`
 	Voice          VoiceConfig          `toml:"voice"      json:"voice"`
 	MissionControl MissionControlConfig `toml:"missioncontrol" json:"missioncontrol"`
+	// SandboxAzure is intentionally excluded from browser JSON and Merge().
+	// It is an owner-only outbound Azure scope allowlist; retaining it in the
+	// TOML model prevents an unrelated browser settings save from erasing it.
+	SandboxAzure SandboxAzureConfig `toml:"sandbox_azure" json:"-"`
+}
+
+// SandboxAzureConfig is retained only so config.Write preserves the owner-only
+// [sandbox_azure] TOML section. The direct lifecycle controller decodes and
+// validates the same section independently; browser/API callers cannot read or
+// write this type because its parent field is json:"-".
+type SandboxAzureConfig struct {
+	Enabled    bool                  `toml:"enabled"`
+	KillSwitch bool                  `toml:"kill_switch"`
+	StoreDir   string                `toml:"store_dir"`
+	Profiles   []SandboxAzureProfile `toml:"profile"`
+}
+
+type SandboxAzureProfile struct {
+	Name              string   `toml:"name"`
+	TenantID          string   `toml:"tenant_id"`
+	SubscriptionID    string   `toml:"subscription_id"`
+	ResourceGroup     string   `toml:"resource_group"`
+	SandboxGroup      string   `toml:"sandbox_group"`
+	Region            string   `toml:"region"`
+	DiskID            string   `toml:"disk_id"`
+	ImageDigest       string   `toml:"image_digest"`
+	ReleaseStatus     string   `toml:"release_status"`
+	Protocol          int      `toml:"protocol"`
+	CPU               string   `toml:"cpu"`
+	Memory            string   `toml:"memory"`
+	AutoSuspendSecond int      `toml:"auto_suspend_seconds"`
+	AutoDeleteSeconds int      `toml:"auto_delete_seconds"`
+	ControllerCIDRs   []string `toml:"controller_cidrs"`
+	EgressHosts       []string `toml:"egress_hosts"`
 }
 
 // MissionControlConfig retains legacy TOML fields for compatibility. Normal
 // Mission Control channels initialize independently of ThreadsV2/TextPreview;
 // those fields are parsed but never rewritten or treated as normal-mode gates.
 type MissionControlConfig struct {
-	ThreadsV2   bool `toml:"threads_v2" json:"threads_v2"`
-	TextPreview bool `toml:"text_preview" json:"text_preview"`
-	// VoicePreview is an independent, default-off candidate gate. It never
-	// inherits either legacy [voice].enabled or text_preview: a configured
-	// threaded text preview must not open a microphone by accident.
-	VoicePreview         bool `toml:"voice_preview" json:"voice_preview"`
+	ThreadsV2            bool `toml:"threads_v2" json:"threads_v2"`
+	TextPreview          bool `toml:"text_preview" json:"text_preview"`
 	TextWorkerCap        int  `toml:"text_worker_cap" json:"text_worker_cap"`
 	TextContextMaxTokens int  `toml:"text_context_max_tokens" json:"text_context_max_tokens"`
 }
@@ -699,10 +729,8 @@ func Defaults() Config {
 			EntraScope:      DefaultVoiceEntraScope,
 			SyncToolTimeout: DefaultVoiceSyncToolTimeout,
 		},
-			// Legacy preview fields remain parsed for existing configuration but
-			// do not gate normal channels. VoicePreview remains a separate
-			// legacy candidate setting; voice.enabled is the normal app-voice
-			// configuration gate.
-		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false, VoicePreview: false, TextWorkerCap: 4},
+		// Legacy preview fields remain parsed for existing configuration but
+		// do not gate normal channels.
+		MissionControl: MissionControlConfig{ThreadsV2: false, TextPreview: false, TextWorkerCap: 4},
 	}
 }

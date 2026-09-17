@@ -18,7 +18,6 @@ import { HOST_STATE, remotesStore } from './lib/remotes-store.js';
 
 export type PaneOutputCallback = (paneId: number, data: Uint8Array) => void;
 export type ControlMessageCallback = (msg: Record<string, unknown>) => void;
-export type AppVoiceFrameCallback = (frame: Record<string, unknown>) => void;
 
 /**
  * What the connection is actually doing right now, for a UI that has to tell
@@ -259,8 +258,6 @@ export class MuxSocket {
   private _ws: WebSocket | null = null;
   private _paneOutputCb: PaneOutputCallback | null = null;
   private _controlMessageCb: ControlMessageCallback | null = null;
-  /** Owner-only app-voice frames stay off the generic control/sessiond paths. */
-  private _appVoiceFrameListeners = new Set<AppVoiceFrameCallback>();
   private _workspaceListListeners = new Set<() => void>();
   private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private _reconnectAttempts = 0;
@@ -326,6 +323,12 @@ export class MuxSocket {
    */
   onSessionState?: (msg: SessiondMessage) => void;
   /**
+   * Fires for the session-state subscription acknowledgement. `ok: false`
+   * means the local daemon cannot supply Fleet state, so the UI must not wait
+   * forever or present an empty Fleet as a real one.
+   */
+  onSessionStateSubscribeResult?: (msg: SessiondMessage) => void;
+  /**
    * Fires for every serve-local chief-of-staff frame: cos-subscribe-result and
    * cos-event. Same direct-callback shape as onSessionState above.
    *
@@ -360,16 +363,6 @@ export class MuxSocket {
 
   onControlMessage(cb: ControlMessageCallback): void {
     this._controlMessageCb = cb;
-  }
-
-  /**
-   * Subscribe to owner-targeted app-voice frames on this existing authenticated
-   * WebSocket. The transport intentionally does not create a second socket or
-   * relay these capability-bearing frames through a window event.
-   */
-  onAppVoiceFrame(cb: AppVoiceFrameCallback): () => void {
-    this._appVoiceFrameListeners.add(cb);
-    return () => this._appVoiceFrameListeners.delete(cb);
   }
 
   /** Subscribe to authoritative daemon workspace-list publications. */
@@ -461,9 +454,11 @@ export class MuxSocket {
    * Storm prevention, in the order the guards apply:
    *
    *  1. Already OPEN -- nothing to do, and no state to disturb.
-   *  2. Already CONNECTING -- an attempt IS in flight; this wake would only
-   *     add a second racing handshake. _open() assigns this._ws synchronously,
-   *     so every wake after the first in a burst lands here. This is the guard
+   *  2. Already CONNECTING or CLOSING -- an attempt is in flight, or the
+   *     existing socket's close callback still owns the next one. Replacing a
+   *     CLOSING socket would suppress that callback and skip the Fleet
+   *     snapshot-generation reset. _open() assigns this._ws synchronously, so
+   *     every wake after the first in a burst lands here. This is the guard
    *     that actually absorbs visibilitychange + focus arriving together.
    *  3. Too soon since the last attempt STARTED -- re-arm the timer for the
    *     remainder instead of dialling, so a pathological event storm against
@@ -476,7 +471,7 @@ export class MuxSocket {
 
     // The user is back. Whatever rung the ladder had climbed to is forfeit.
     this._reconnectAttempts = 0;
-    if (state === WebSocket.CONNECTING) return;
+    if (state === WebSocket.CONNECTING || state === WebSocket.CLOSING) return;
 
     const since = Date.now() - this._lastAttemptAt;
     if (since < WAKE_MIN_INTERVAL_MS) {
@@ -696,11 +691,6 @@ export class MuxSocket {
    */
   cosSubscribe(on: boolean): void {
     this._sendCos({ type: 'cos-subscribe', on });
-  }
-
-  /** Send one app-voice v1 frame on the existing authenticated WebSocket. */
-  appVoice(frame: Record<string, unknown>): boolean {
-    return this._sendCos(frame);
   }
 
   /** Submit one turn. Returns whether it actually went out (see sendSessiond). */
@@ -1146,13 +1136,6 @@ export class MuxSocket {
       // Text frame — JSON control message
       if (typeof ev.data === 'string') {
         const raw = JSON.parse(ev.data) as Record<string, unknown>;
-        // App voice has a separate owner-only protocol. In particular, the
-        // server-issued control capability never reaches generic control hooks
-        // or the frozen sessiond state projection.
-        if (typeof raw.type === 'string' && raw.type.startsWith('app-voice-')) {
-          for (const listener of this._appVoiceFrameListeners) listener(raw);
-          return;
-        }
         if (this._resolveWorkspaceScreen(raw)) return;
         this._resolveCloseOutcome(raw);
         // Pass the raw message to control handlers (e.g. for detached/session-picker).
@@ -1177,6 +1160,8 @@ export class MuxSocket {
             this.onPaneResized?.(raw.paneId as number, raw.cols as number, raw.rows as number);
           } else if (raw.type === SessiondType.WorkspacePreview) {
             this.onWorkspacePreview?.(raw as unknown as SessiondMessage);
+          } else if (raw.type === SessiondType.SessionStateSubscribeResult) {
+            this.onSessionStateSubscribeResult?.(raw as unknown as SessiondMessage);
           } else if (raw.type === SessiondType.SessionState) {
             this.onSessionState?.(raw as unknown as SessiondMessage);
           } else if (raw.type === HOST_STATE) {

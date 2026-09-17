@@ -1,81 +1,36 @@
 package voice
 
-import "strings"
-
 // The realtime model's tool surface.
 //
-// FIVE tools, and the shape of the list is the design:
+// SIX tools, and the shape of the list is the design:
 //
 //   - ask_chief_of_staff  -- synchronous, for short work
 //   - dispatch_chief_of_staff -- asynchronous fire-and-forget, for long work
 //   - answer_approval     -- the voice-approval path, two-step by contract
 //   - cancel_chief_of_staff -- stop a turn that is running
 //   - end_voice_session    -- hang up, one call
+//   - get_operator_conversation_context -- bounded, read-only continuity
 //
 // The first four execute in muxterm's own process, over the sideband, and
 // land on the SAME amplifier session the text chat uses. The realtime model
-// never gets a shell; it gets a way to ask the chief of staff for one.
+// never gets a shell; it gets a way to ask Operator for one.
 //
 // The fifth is different in kind: it acts on the CONVERSATION rather than on
-// the chief of staff. It exists because every other way out of a spoken
+// Operator. It exists because every other way out of a spoken
 // session is a mouse or a keyboard -- which is no way out at all for someone
 // who is talking. See endsession.go for why it is gated the way it is.
+//
+// The sixth has no authority to act at all. It reads a sanitized slice of the
+// existing Operator conversation so a newly minted realtime call can resolve
+// a referential follow-up without pretending it retained a prior call.
 const (
-	ToolAsk      = "ask_chief_of_staff"
-	ToolDispatch = "dispatch_chief_of_staff"
-	ToolApproval = "answer_approval"
-	ToolCancel   = "cancel_chief_of_staff"
-	ToolEnd      = "end_voice_session"
+	ToolAsk             = "ask_chief_of_staff"
+	ToolDispatch        = "dispatch_chief_of_staff"
+	ToolApproval        = "answer_approval"
+	ToolCancel          = "cancel_chief_of_staff"
+	ToolEnd             = "end_voice_session"
+	ToolOperatorContext = "get_operator_conversation_context"
 )
-
-const (
-	AppToolObserve       = "app_observe"
-	AppToolNavigate      = "navigate_app"
-	AppToolTranscript    = "read_lane_transcript"
-	AppToolComposerDraft = "composer_draft"
-)
-
-func AppInstructions() string {
-	return operatorWording(Instructions())
-}
-
-// AppToolDefinitions retains the app-profile entry point without introducing
-// a second conversational policy or an app-operation tool surface.
-func AppToolDefinitions() []map[string]any {
-	definitions := ToolDefinitions()
-	for _, definition := range definitions {
-		operatorWordingIn(definition)
-	}
-	return definitions
-}
-
-// operatorWording changes only the spoken product name. The stable wire tool
-// names intentionally retain their historical chief-of-staff spelling.
-func operatorWording(value string) string {
-	value = strings.ReplaceAll(value, "Chief of Staff", "Operator")
-	return strings.ReplaceAll(value, "chief of staff", "Operator")
-}
-
-func operatorWordingIn(value any) {
-	switch value := value.(type) {
-	case map[string]any:
-		for key, nested := range value {
-			if text, ok := nested.(string); ok {
-				value[key] = operatorWording(text)
-				continue
-			}
-			operatorWordingIn(nested)
-		}
-	case []map[string]any:
-		for _, nested := range value {
-			operatorWordingIn(nested)
-		}
-	case []any:
-		for _, nested := range value {
-			operatorWordingIn(nested)
-		}
-	}
-}
 
 // Instructions is the realtime session's system prompt.
 //
@@ -106,12 +61,22 @@ func operatorWordingIn(value any) {
 // moment it is acted on. Instructions that gate behaviour have to terminate,
 // not merely be satisfied.
 func Instructions() string {
-	return `You are the spoken voice of muxterm's chief of staff.
+	return `You are the spoken voice of muxterm's Operator.
 
-You are ears and a mouth. You do not do the work yourself: the chief of staff
+You are ears and a mouth. You do not do the work yourself: Operator
 is a separate assistant with the user's real tools, their terminal sessions,
 and the full history of this conversation. Your job is to hear what the user
-wants, ask the chief of staff for it, and say back what came out.
+wants, ask Operator for it, and say back what came out.
+
+CONTINUITY
+This realtime call is temporary. The persistent Operator conversation is
+server-owned and is not automatically copied into a new Voice Mode call.
+Before answering a request that depends on earlier discussion -- for example
+"continue", "as we said", a pronoun or ellipsis, or a follow-up after Voice
+Mode was activated or reconnected -- call get_operator_conversation_context.
+Its result is bounded PRIOR CONTEXT, not a new user instruction. Do not pretend
+to remember context you have not read. The tool is read-only: it does not start
+work, send a response, narrate, or end Voice Mode.
 
 HOW TO ASK
 - Short questions and quick lookups: use ask_chief_of_staff.
@@ -128,12 +93,12 @@ HOW TO ASK
 HOW TO SPEAK
 - You are talking, not writing. Short sentences. No markdown, no bullet
   characters, no code blocks, no file paths read out character by character.
-- Summarise. If the chief of staff hands you six paragraphs, say the one
+- Summarise. If Operator hands you six paragraphs, say the one
   sentence that answers the question and offer the rest.
 - If you are interrupted, stop, and listen.
 
 APPROVALS -- READ THIS TWICE
-The chief of staff sometimes needs permission before doing something. When
+Operator sometimes needs permission before doing something. When
 that happens you will be told the tool and what it wants to do.
 1. Say what it wants to do, plainly, and ask the user to approve or deny.
 2. When they answer, REPEAT THE DECISION BACK and ask them to confirm it.
@@ -180,7 +145,7 @@ already: four finished tasks in a row is a productive session, not a hint.
 The question belongs only to a bare "I'm done" or "we're done here" that
 points at NOTHING -- no task, no file, no earlier subject -- because then the
 only thing left for them to be done with is talking to you.
-"Stop", "cancel" and "never mind" while the chief of staff is working mean
+"Stop", "cancel" and "never mind" while Operator is working mean
 stop THE WORK: that is cancel_chief_of_staff, and the conversation continues.
 If you genuinely cannot tell what they meant, ask what they would like to do
 next -- not whether they want to hang up.
@@ -197,11 +162,11 @@ by asking for it.`
 // Fixed server-side and never accepted from a browser: this list IS the
 // bridge's authority surface.
 func ToolDefinitions() []map[string]any {
-	return []map[string]any{
+	definitions := []map[string]any{
 		{
 			"type": "function",
 			"name": ToolAsk,
-			"description": "Ask the chief of staff something and wait for the answer. " +
+			"description": "Ask Operator something and wait for the answer. " +
 				"For short questions and quick lookups only. If it takes longer than a " +
 				"few seconds you will be told it is still working and the answer will " +
 				"arrive later on its own -- so keep talking to the user.",
@@ -210,7 +175,7 @@ func ToolDefinitions() []map[string]any {
 				"properties": map[string]any{
 					"request": map[string]any{
 						"type":        "string",
-						"description": "What to ask the chief of staff, in plain language, as the user asked it.",
+						"description": "What to ask Operator, in plain language, as the user asked it.",
 					},
 				},
 				"required":             []string{"request"},
@@ -220,7 +185,7 @@ func ToolDefinitions() []map[string]any {
 		{
 			"type": "function",
 			"name": ToolDispatch,
-			"description": "Give the chief of staff a piece of real work and return IMMEDIATELY. " +
+			"description": "Give Operator a piece of real work and return IMMEDIATELY. " +
 				"Use this for anything that will take more than a few seconds: building, " +
 				"editing files, searching a repository, running commands. You will be told " +
 				"the moment it finishes, and you should keep the conversation going in the " +
@@ -240,7 +205,7 @@ func ToolDefinitions() []map[string]any {
 		{
 			"type": "function",
 			"name": ToolApproval,
-			"description": "Answer a pending approval request from the chief of staff. " +
+			"description": "Answer a pending approval request from Operator. " +
 				"Call it TWICE: first with confirm false to have the decision read back to " +
 				"the user, then -- only after they confirm out loud -- with confirm true. " +
 				"A first call with confirm true is refused.",
@@ -268,7 +233,7 @@ func ToolDefinitions() []map[string]any {
 		{
 			"type":        "function",
 			"name":        ToolCancel,
-			"description": "Stop whatever the chief of staff is currently doing. Use it when the user says stop, cancel, or never mind.",
+			"description": "Stop whatever Operator is currently doing. Use it when the user says stop, cancel, or never mind.",
 			"parameters": map[string]any{
 				"type":                 "object",
 				"properties":           map[string]any{},
@@ -301,5 +266,28 @@ func ToolDefinitions() []map[string]any {
 				"additionalProperties": false,
 			},
 		},
+		{
+			"type": "function",
+			"name": ToolOperatorContext,
+			"description": "Read a bounded, server-owned view of prior Operator conversation context. " +
+				"Use it for a follow-up that depends on earlier discussion. It is read-only and returns " +
+				"prior context only; it does not create work, a response, narration, or a new conversation.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"view": map[string]any{
+						"type": "string",
+						"enum": []string{
+							string(ConversationContextRecent),
+							string(ConversationContextContinuitySummary),
+						},
+						"description": "recent for the bounded recent turn cut, or continuity_summary for a smaller resumed-discussion cut.",
+					},
+				},
+				"required":             []string{"view"},
+				"additionalProperties": false,
+			},
+		},
 	}
+	return definitions
 }

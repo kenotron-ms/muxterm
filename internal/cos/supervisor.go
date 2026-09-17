@@ -278,7 +278,6 @@ type Supervisor struct {
 
 	cancel      context.CancelFunc
 	readyCh     chan struct{}
-	readyOnce   sync.Once
 	deadCh      chan struct{}
 	deadOnce    sync.Once
 	stopCh      chan struct{}
@@ -643,10 +642,14 @@ func (s *Supervisor) Clear(olderThanDays int) (removed, kept int, err error) {
 // reply text, thinking, and one line per tool call. It is never the raw tool
 // results and never the llm payloads, which for this session run to megabytes.
 func (s *Supervisor) History(limit int) (json.RawMessage, error) {
+	return s.history(context.Background(), limit)
+}
+
+func (s *Supervisor) history(ctx context.Context, limit int) (json.RawMessage, error) {
 	if limit <= 0 {
 		limit = DefaultHistoryLimit
 	}
-	ev, err := s.request(op{Op: opHistory, Limit: limit})
+	ev, err := s.requestContext(ctx, op{Op: opHistory, Limit: limit})
 	if err != nil {
 		return nil, err
 	}
@@ -654,6 +657,24 @@ func (s *Supervisor) History(limit int) (json.RawMessage, error) {
 		return json.RawMessage("[]"), nil
 	}
 	return ev.Turns, nil
+}
+
+// HistoryWhenReady returns a history summary from a CURRENT ready sidecar.
+//
+// A supervised sidecar can exit after readiness has been observed but before
+// its reply reaches us. That interruption is not a history refusal: wait for
+// the replacement incarnation and retry it. Other history failures come from
+// the sidecar itself and must remain visible to the caller.
+func (s *Supervisor) HistoryWhenReady(ctx context.Context, limit int) (json.RawMessage, error) {
+	for {
+		if _, err := s.WaitReady(ctx); err != nil {
+			return nil, err
+		}
+		turns, err := s.history(ctx, limit)
+		if err == nil || !errors.Is(err, ErrNotRunning) {
+			return turns, err
+		}
+	}
 }
 
 // Snapshot asks the sidecar for one ordered history/current-turn cut.
@@ -686,6 +707,17 @@ func (s *Supervisor) SetLobbySummaries(records any) error {
 // outstanding request, so the longest a caller can block on a process that
 // has gone away is the time it takes the supervise loop to notice.
 func (s *Supervisor) request(o op) (Event, error) {
+	return s.requestContext(context.Background(), o)
+}
+
+// requestContext is request with a caller-owned cancellation boundary. The
+// ordinary request paths retain their existing timeout via request above;
+// read-only recovery callers can instead give up when their browser request
+// has expired.
+func (s *Supervisor) requestContext(ctx context.Context, o op) (Event, error) {
+	if err := ctx.Err(); err != nil {
+		return Event{}, err
+	}
 	ch := make(chan Event, 1)
 	s.mu.Lock()
 	s.reqSeq++
@@ -710,6 +742,14 @@ func (s *Supervisor) request(o op) (Event, error) {
 			if msg == "" {
 				msg = ev.Code
 			}
+			if o.Op == opHistory && ev.Code == CodeSidecarExit {
+				// handleExit synthesizes this reply when an otherwise valid
+				// read was interrupted by process death. Preserve the
+				// machine-readable distinction so HistoryWhenReady can wait
+				// for the supervised replacement without retrying a real
+				// sidecar history refusal.
+				return ev, fmt.Errorf("%w: cos: %s op refused: %s", ErrNotRunning, o.Op, msg)
+			}
 			return ev, fmt.Errorf("cos: %s op refused: %s", o.Op, msg)
 		}
 		return ev, nil
@@ -717,6 +757,8 @@ func (s *Supervisor) request(o op) (Event, error) {
 		return Event{}, fmt.Errorf("cos: no answer to the %s op within %s", o.Op, requestTimeout)
 	case <-s.stopCh:
 		return Event{}, ErrQueueClosed
+	case <-ctx.Done():
+		return Event{}, ctx.Err()
 	}
 }
 
@@ -758,25 +800,37 @@ func (s *Supervisor) failPending(code, reason string) {
 	}
 }
 
-// WaitReady blocks until the sidecar reports ready, the supervisor gives up
-// permanently, or ctx is cancelled. The ready event carries session id, bundle,
-// tool count, and boot time.
+// WaitReady blocks until the CURRENT sidecar reports ready, the supervisor
+// gives up permanently, or ctx is cancelled. readyCh is a rearmed state-change
+// notification, not proof that some earlier incarnation became ready.
 func (s *Supervisor) WaitReady(ctx context.Context) (Event, error) {
-	select {
-	case <-s.readyCh:
+	for {
 		s.mu.Lock()
-		defer s.mu.Unlock()
-		return s.readyEv, nil
-	case <-s.deadCh:
-		s.mu.Lock()
-		err := s.lastErr
-		s.mu.Unlock()
-		if err == nil {
-			err = ErrNotRunning
+		if s.ready {
+			ev := s.readyEv
+			s.mu.Unlock()
+			return ev, nil
 		}
-		return Event{}, err
-	case <-ctx.Done():
-		return Event{}, ctx.Err()
+		readyCh := s.readyCh
+		s.mu.Unlock()
+
+		select {
+		case <-readyCh:
+			// The current incarnation became ready or exited. Re-check the
+			// locked predicate rather than treating a closed channel as an
+			// old ready event.
+			continue
+		case <-s.deadCh:
+			s.mu.Lock()
+			err := s.lastErr
+			s.mu.Unlock()
+			if err == nil {
+				err = ErrNotRunning
+			}
+			return Event{}, err
+		case <-ctx.Done():
+			return Event{}, ctx.Err()
+		}
 	}
 }
 
@@ -1116,6 +1170,17 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	// holding open.
 	waitErr := cmd.Wait()
 	close(incarnation) // stops writeLoop, which closes our end of stdin
+	// From the moment Wait returns this process cannot accept another op. Clear
+	// its readiness before draining any inherited pipe holders: an orphan can
+	// keep that drain open, but it must not make WaitReady report a dead
+	// incarnation as current while the replacement is backing off.
+	s.mu.Lock()
+	s.running = false
+	s.ready = false
+	s.ops = nil
+	s.pid = 0
+	s.notifyReadyStateLocked()
+	s.mu.Unlock()
 
 	// Then finish the drain, BOUNDED. The ordinary case costs nothing: the
 	// pipes hit EOF when the last holder of the write end goes away, which is
@@ -1132,13 +1197,6 @@ func (s *Supervisor) runOnce(ctx context.Context) (reachedReady bool, err error)
 	<-stdoutDone
 	<-stderrDone
 	<-writerDone
-
-	s.mu.Lock()
-	s.running = false
-	s.ready = false
-	s.ops = nil
-	s.pid = 0
-	s.mu.Unlock()
 
 	return sawReady.Load(), waitErr
 }
@@ -1247,10 +1305,24 @@ func (s *Supervisor) handleEvent(ev Event) {
 	s.broker.Publish(ev)
 }
 
+// notifyReadyStateLocked wakes WaitReady callers and arms the notification for
+// the next sidecar state change. Caller holds s.mu.
+func (s *Supervisor) notifyReadyStateLocked() {
+	close(s.readyCh)
+	s.readyCh = make(chan struct{})
+}
+
 // markReady records the ready event, unblocks WaitReady, and publishes the
 // status file that `muxterm cos --status` reads.
 func (s *Supervisor) markReady(ev Event) {
 	s.mu.Lock()
+	if !s.running || s.ops == nil {
+		// stdout may still drain a buffered ready line after its process was
+		// reaped. It was true of that dead incarnation, not of the current
+		// sidecar a waiter is asking about.
+		s.mu.Unlock()
+		return
+	}
 	s.ready = true
 	s.readyEv = ev
 	// A fresh incarnation boots from the compiled-in bundle and knows nothing
@@ -1259,11 +1331,11 @@ func (s *Supervisor) markReady(ev Event) {
 	// configuration as though it were the live one's.
 	s.effective = nil
 	st := s.stateLocked()
+	s.notifyReadyStateLocked()
 	s.mu.Unlock()
 
 	s.cfg.Logf("cos: %s", ev)
 	s.writeState(st)
-	s.readyOnce.Do(func() { close(s.readyCh) })
 }
 
 // stateLocked builds the published status from supervisor state. Caller holds

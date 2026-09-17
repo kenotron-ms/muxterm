@@ -11,7 +11,7 @@ import (
 // which is no way out at all for someone who is talking, hands busy, or
 // across the room. So the model gets a tool that hangs up. That tool is the
 // only one in the surface that acts on the CONVERSATION rather than on the
-// chief of staff, and it is the only one whose mistake cannot be retried:
+// Operator, and it is the only one whose mistake cannot be retried:
 // approving the wrong thing runs a command, but ending the wrong thing takes
 // away the microphone that would have said "no, wait".
 //
@@ -107,9 +107,6 @@ func (s *Sideband) runEnd(callID string, args map[string]any) {
 
 	s.mu.Lock()
 	s.ending = true
-	s.endingScoped = false
-	s.farewellMetadata = nil
-	s.farewellResponseID = ""
 	ch := make(chan string, 8)
 	s.farewellCh = ch
 	s.mu.Unlock()
@@ -124,47 +121,6 @@ func (s *Sideband) runEnd(callID string, args map[string]any) {
 		"Ending now. Say the goodbye. The connection stays open until the user has heard it, then drops on its own.",
 		"Say this out loud to the user now, and nothing else -- no question, no offer, nothing after it: "+line)
 
-	go s.awaitFarewell(ch)
-}
-
-// runAppEnd is the app profile counterpart to runEnd. It keeps the existing
-// drain state machine, but creates the farewell only through the capture's
-// correlated function output and scoped response path.
-func (s *Sideband) runAppEnd(bridge AppOperatorBridge, c Correlation, callID string, args map[string]any) {
-	farewell := strings.TrimSpace(str(args["farewell"]))
-	if farewell == "" {
-		farewell = "Goodbye."
-	}
-	s.mu.Lock()
-	if s.ending {
-		s.mu.Unlock()
-		return
-	}
-	s.ending = true
-	s.endingScoped = true
-	s.farewellResponseID = ""
-	s.farewellMetadata = nil
-	ch := make(chan string, 8)
-	s.farewellCh = ch
-	s.mu.Unlock()
-	if !s.SendScopedFunctionOutput(c.ProviderCallID,
-		"Ending now. Say this out loud to the user now, and nothing else: "+farewell) {
-		s.abortEnd()
-		return
-	}
-	metadata, err := bridge.CompleteAppTool(c)
-	if err != nil {
-		s.abortEnd()
-		return
-	}
-	s.mu.Lock()
-	s.farewellMetadata = metadata
-	s.mu.Unlock()
-	if err := s.RequestScopedResponse(metadata); err != nil {
-		s.abortEnd()
-		return
-	}
-	s.emit(Trace{Kind: TraceEnding, Name: ToolEnd, Detail: "ending; correlated farewell requested"})
 	go s.awaitFarewell(ch)
 }
 
@@ -270,18 +226,11 @@ func (s *Sideband) finishEnd(why string) {
 // makes a model bring hanging up back up on its own two turns later.
 func (s *Sideband) abortEnd() {
 	s.mu.Lock()
-	scoped := s.endingScoped
 	s.ending = false
-	s.endingScoped = false
-	s.farewellMetadata = nil
-	s.farewellResponseID = ""
 	s.farewellCh = nil
 	s.mu.Unlock()
 
 	s.emit(Trace{Kind: TraceEnding, Name: ToolEnd, Detail: "aborted: the user spoke over the goodbye"})
-	if scoped {
-		return
-	}
 	s.inject("The user interrupted the goodbye, so the conversation is STILL OPEN and nothing was ended.",
 		"Stop saying goodbye. Listen to what the user just said and carry on with it. Do not ask whether "+
 			"they still want to leave -- if they do, they will say so, and that is a fresh request.")
@@ -290,16 +239,10 @@ func (s *Sideband) abortEnd() {
 // signalFarewell hands the read loop's view of the audio to a farewell that
 // is waiting. A no-op when nothing is ending, which is almost always.
 func (s *Sideband) signalFarewell(sig string) {
-	s.signalFarewellForResponse(sig, "")
-}
-
-func (s *Sideband) signalFarewellForResponse(sig, responseID string) {
 	s.mu.Lock()
 	ch := s.farewellCh
-	scoped := s.endingScoped
-	want := s.farewellResponseID
 	s.mu.Unlock()
-	if ch == nil || (scoped && (want == "" || responseID != want)) {
+	if ch == nil {
 		return
 	}
 	select {
@@ -308,23 +251,6 @@ func (s *Sideband) signalFarewellForResponse(sig, responseID string) {
 		// Buffered and bounded: a flood of audio events must not block
 		// the read loop, and a farewell needs only the first of each.
 	}
-}
-
-func (s *Sideband) bindScopedFarewell(responseID string, metadata map[string]string) {
-	if responseID == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.endingScoped || s.farewellResponseID != "" || len(s.farewellMetadata) == 0 {
-		return
-	}
-	for key, value := range s.farewellMetadata {
-		if metadata[key] != value {
-			return
-		}
-	}
-	s.farewellResponseID = responseID
 }
 
 // isEnding is test-facing: it reports whether a goodbye is in flight.

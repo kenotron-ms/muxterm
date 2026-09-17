@@ -6,12 +6,12 @@ One row per run per tree. A FORMATTER: nothing is computed that the run did not
 measure, except the percentage (domB / expB), so a surprising row can be chased
 straight into its report-*.json.
 
-    domB   reply bytes rendered as p.say for THIS turn
+    domB   Markdown-rendered text bytes in div.say.md for THIS turn (diagnostic)
     end?   is MARKER-END - the last line of the answer - in the DOM at all
     vis?   is that same marker inside the visible box of .chatbody
     te?    did turn_end reach the browser
     histB  bytes of answer text the server's history replay carried
-    live   turns still rendered as streaming after the turn ended
+    live   turns visibly carrying the explicit working... placeholder
     drop   events the server dropped into this connection's queue
 """
 
