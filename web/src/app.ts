@@ -30,6 +30,7 @@ registerServiceWorker();
 import './components/title-bar.js';
 import './components/mux-dock.js';
 import './components/settings-surface.js';
+import type { SettingsSection } from './components/settings-surface.js';
 import type { MuxDock } from './components/mux-dock.js';
 import type { LauncherAction } from './components/launcher-menu.js';
 import './components/close-confirmation-modal.js';
@@ -686,6 +687,7 @@ export class MuxApp extends LitElement {
 
   @state()
   private _overlayPanel: 'settings' | 'shortcuts' | 'about' | 'connect' | null = null;
+  private _settingsOpenSection: SettingsSection | null = null;
 
   @state()
   private _layoutMode: 'wide' | 'narrow' = currentLayoutMode();
@@ -1738,6 +1740,7 @@ export class MuxApp extends LitElement {
                 <mux-settings-surface
                   .config="${store.config}"
                   .aiStatus="${store.aiStatus}"
+                  .openSection="${this._settingsOpenSection}"
                   serverAddr="${window.location.host}"
                   @close="${this._closeOverlayPanel}"
                   @config-change="${this._onConfigChange}"
@@ -2527,9 +2530,13 @@ export class MuxApp extends LitElement {
   };
 
   private _onLauncherAction = (e: Event): void => {
-    const action = (e as CustomEvent<{ action: LauncherAction }>).detail?.action;
+    const detail = (e as CustomEvent<{ action: LauncherAction; section?: SettingsSection }>).detail;
+    const action = detail?.action;
     switch (action) {
       case 'settings':
+        this._settingsOpenSection = detail?.section ?? null;
+        this._overlayPanel = action;
+        break;
       case 'shortcuts':
       case 'about':
         this._overlayPanel = action;

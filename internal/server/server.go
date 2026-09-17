@@ -20,6 +20,7 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/ai"
 	"github.com/kenotron-ms/muxterm/internal/authserver"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
+	"github.com/kenotron-ms/muxterm/internal/sandboxazure"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/voice"
 )
@@ -86,6 +87,14 @@ type Config struct {
 	// The concrete transport is adapted to this interface in cmd/muxterm, so
 	// internal/server never imports internal/transport/ssh or internal/deploy.
 	Remotes RemoteTransport
+
+	// Sandbox is the owner-local direct Azure lifecycle boundary. It is nil
+	// unless configuration is explicitly enabled and the normal auth topology
+	// is in force. Browser callers never receive its provider identifiers or
+	// scope configuration.
+	Sandbox             sandboxazure.Lifecycle
+	SandboxAvailability sandboxazure.Availability
+	SandboxPresentation *sandboxazure.PresentationReader
 }
 
 // Server is the HTTP server for muxterm.
@@ -138,6 +147,10 @@ type Server struct {
 	// lazily-constructed Anthropic client. Never reachable from cfg.
 	ai *ai.Manager
 
+	sandbox             sandboxazure.Lifecycle
+	sandboxAvailability sandboxazure.Availability
+	sandboxPresentation *sandboxazure.PresentationReader
+
 	// prs is the durable collector behind the Pull Requests applet: the
 	// pull requests muxterm's own sessions opened, kept after those
 	// sessions are gone. Server-owned rather than per-browser, because a
@@ -166,16 +179,38 @@ func New(cfg Config) *Server {
 	hub.remotes = NewRemoteRegistry(cfg.Remotes)
 
 	s := &Server{
-		addr:           cfg.Addr,
-		noAuth:         cfg.NoAuth,
-		mux:            http.NewServeMux(),
-		hub:            hub,
-		tunnels:        tunnels,
-		publications:   NewPublicationRegistry(),
-		publicDocFS:    cfg.PublicDocFS,
-		authSrv:        cfg.AuthServer,
-		webRedirectURI: cfg.WebRedirectURI,
-		version:        cfg.Version,
+		addr:                cfg.Addr,
+		noAuth:              cfg.NoAuth,
+		mux:                 http.NewServeMux(),
+		hub:                 hub,
+		tunnels:             tunnels,
+		publications:        NewPublicationRegistry(),
+		publicDocFS:         cfg.PublicDocFS,
+		authSrv:             cfg.AuthServer,
+		webRedirectURI:      cfg.WebRedirectURI,
+		version:             cfg.Version,
+		sandbox:             cfg.Sandbox,
+		sandboxAvailability: cfg.SandboxAvailability,
+		sandboxPresentation: cfg.SandboxPresentation,
+	}
+	// --no-auth is an intentionally unsafe development topology. Lifecycle
+	// control must never be reachable through it even if a caller accidentally
+	// supplied a controller.
+	if cfg.NoAuth {
+		s.sandbox = nil
+		s.sandboxAvailability = sandboxazure.Availability{
+			State:  "disabled",
+			Detail: "Azure Sandboxes are unavailable when muxterm authentication is disabled.",
+		}
+	}
+	if s.sandboxAvailability.State == "" {
+		s.sandboxAvailability = sandboxazure.Availability{
+			State:  "unconfigured",
+			Detail: "An owner has not configured Azure Sandboxes on this muxterm.",
+		}
+	}
+	if s.sandboxPresentation == nil {
+		s.sandboxPresentation = sandboxazure.NewPresentationReader(sandboxazure.Config{})
 	}
 
 	s.configPath = cfg.ConfigPath
@@ -203,6 +238,9 @@ func New(cfg Config) *Server {
 	authMW := NewAuthMiddleware(cfg.AuthServer, cfg.NoAuth, cfg.BehindReverseProxy, cfg.LocalToken)
 	protect := func(h http.Handler) http.Handler {
 		return authMW.Wrap(h)
+	}
+	protectSandbox := func(h http.Handler) http.Handler {
+		return authMW.WrapSandbox(h)
 	}
 
 	// NOTE for the Phase 2 (MCP-over-HTTP) surface: muxterm does not yet
@@ -260,6 +298,15 @@ func New(cfg Config) *Server {
 	// bearer token) is required — see internal/server/authmiddleware.go.
 	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
 	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
+
+	// Direct Azure Sandboxes are owner-local lifecycle controls. They are a
+	// distinct protected family, not an SSH remote, and are deliberately
+	// absent from browser configuration reads/writes.
+	s.mux.Handle("GET /api/sandboxes/presentation", protectSandbox(http.HandlerFunc(s.handleSandboxPresentation)))
+	s.mux.Handle("GET /api/sandboxes", protectSandbox(http.HandlerFunc(s.handleSandboxesList)))
+	s.mux.Handle("GET /api/sandboxes/{handle}", protectSandbox(http.HandlerFunc(s.handleSandboxGet)))
+	s.mux.Handle("POST /api/sandboxes", protectSandbox(http.HandlerFunc(s.handleSandboxCreate)))
+	s.mux.Handle("POST /api/sandboxes/{handle}/{action}", protectSandbox(http.HandlerFunc(s.handleSandboxAction)))
 
 	// Opt-in AI capability. Deliberately a separate route family from
 	// /api/config: the key goes in via PUT and only a derived Status comes out.

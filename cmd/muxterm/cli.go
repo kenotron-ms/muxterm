@@ -83,6 +83,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm layout get          Print the workspace layout diagram")
 	fmt.Fprintln(w, "  muxterm mcp [flags]         Start MCP server (stdio transport)")
 	fmt.Fprintln(w, "  muxterm cos <message>       Ask the chief-of-staff sidecar (--status for state)")
+	fmt.Fprintln(w, "  muxterm sandbox <cmd>       Direct Azure sandbox: list | describe | create | stop | resume | destroy | reconcile")
 	fmt.Fprintln(w, "  muxterm amplifier install   Install muxterm bundle into Amplifier")
 	fmt.Fprintln(w, "  muxterm version             Print version")
 	fmt.Fprintln(w, "")
@@ -223,6 +224,8 @@ func parseCommand(args []string) (Config, error) {
 		return Config{Mode: "remote", Args: args[1:]}, nil
 	case "cos":
 		return Config{Mode: "cos", Args: args[1:]}, nil
+	case "sandbox":
+		return Config{Mode: "sandbox", Args: args[1:]}, nil
 	case "missioncontrol-preview":
 		return Config{Mode: "missioncontrol-preview", Args: args[1:]}, nil
 	default:

@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, type PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { PALETTES, isLightTheme } from '../lib/theme.js';
 import { FONT_FAMILIES } from '../lib/fonts.js';
@@ -30,6 +30,26 @@ import {
   type VoiceStatus,
   type VoiceMode,
 } from '../lib/voice-settings.js';
+import {
+  EMPTY_SANDBOXES,
+  SandboxRequestError,
+  createSandbox,
+  fetchSandboxes,
+  sandboxAction,
+  sandboxAuthRequired,
+  sandboxUnavailable,
+  sandboxPresentationStore,
+  type SandboxAction,
+  type SandboxCollection,
+  type SandboxPresentationSnapshot,
+  type SandboxView,
+} from '../lib/sandboxes.js';
+
+export type SettingsSection = 'appearance' | 'notifications' | 'ai' | 'voice' | 'remotes' | 'sandboxes';
+
+function sandboxErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
 
 // ── Theme card display metadata ──────────────────────────────────────────────
 
@@ -1018,13 +1038,62 @@ export class MuxSettingsSurface extends LitElement {
       white-space: pre-wrap;
       color: var(--mux-error);
     }
+
+    /* ── Sandboxes ─────────────────────────────────────────────── */
+    .sandbox-note {
+      max-width: 560px;
+      color: var(--chrome-text-dim);
+      line-height: 1.55;
+      margin: 0 0 16px;
+    }
+    .sandbox-status {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 10px 12px;
+      margin-bottom: 16px;
+      border: 1px solid var(--chrome-border);
+      border-radius: 6px;
+      background: var(--chrome-bar);
+      line-height: 1.45;
+    }
+    .sandbox-status strong { color: var(--chrome-text-bright); }
+    .sandbox-create {
+      display: flex;
+      gap: 8px;
+      margin: 0 0 16px;
+      max-width: 460px;
+    }
+    .sandbox-profile-select {
+      min-width: 0;
+      flex: 1;
+      background: var(--chrome-bar);
+      border: 1px solid var(--chrome-border);
+      border-radius: 6px;
+      color: var(--chrome-text-bright);
+      font: inherit;
+      padding: 6px 9px;
+    }
+    .sandbox-meta {
+      margin-top: 3px;
+      color: var(--chrome-text-dim);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .sandbox-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
   `;
 
   @property({ attribute: false }) config: ResolvedConfig | null = null;
   @property({ type: String }) serverAddr = '';
   @property({ attribute: false }) aiStatus: AIStatus = DEFAULT_AI_STATUS;
+  @property({ attribute: false }) openSection: SettingsSection | null = null;
 
-  @state() private _section: 'appearance' | 'notifications' | 'ai' | 'voice' | 'remotes' = 'appearance';
+  @state() private _section: SettingsSection = 'appearance';
   @state() private _notifPermission: NotificationPermission | 'unsupported' = 'default';
   @state() private _notifRequesting = false;
   @state() private _aiKeyInput = '';
@@ -1061,6 +1130,23 @@ export class MuxSettingsSurface extends LitElement {
   @state() private _remotesError = '';
   @state() private _addTarget = '';
   @state() private _addError = '';
+  @state() private _sandboxes: SandboxCollection = EMPTY_SANDBOXES;
+  @state() private _sandboxPresentation: SandboxPresentationSnapshot = {
+    data: null,
+    loading: false,
+    error: null,
+  };
+  @state() private _sandboxCollectionError: unknown | null = null;
+  @state() private _sandboxCollectionLoading = false;
+  @state() private _sandboxesLoaded = false;
+  @state() private _sandboxProfile = '';
+  @state() private _sandboxMessage = '';
+  @state() private _sandboxBusy = false;
+  // A retry of the same user action reuses its UUID. The key is discarded only
+  // after the server accepts the operation, never after an uncertain failure.
+  private _sandboxRequestIDs = new Map<string, string>();
+  private _sandboxCollectionRequest = 0;
+  private _sandboxCollectionInFlight: Promise<void> | null = null;
   /**
    * The verbatim failure of the last action on a host, by id.
    *
@@ -1075,6 +1161,8 @@ export class MuxSettingsSurface extends LitElement {
   /** Host ids with a request in flight. Their buttons are disabled. */
   private _pending = new Set<string>();
   private _unsubRemotes: (() => void) | null = null;
+  private _unsubSandboxPresentation: (() => void) | null = null;
+  private _stopSandboxPresentationPolling: (() => void) | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -1084,12 +1172,55 @@ export class MuxSettingsSurface extends LitElement {
     this._unsubRemotes = remotesStore.subscribe(() => {
       if (this._section === 'remotes') void this._loadRemotes();
     });
+    this._syncSandboxPresentationSubscription();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this._unsubRemotes?.();
     this._unsubRemotes = null;
+    this._stopSandboxPresentationPolling?.();
+    this._stopSandboxPresentationPolling = null;
+    this._unsubSandboxPresentation?.();
+    this._unsubSandboxPresentation = null;
+  }
+
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    super.willUpdate(changed);
+    if (changed.has('openSection') && this.openSection !== null) {
+      this._setSection(this.openSection);
+    }
+  }
+
+  private _setSection(section: SettingsSection): boolean {
+    if (this._section === section) return false;
+    this._section = section;
+    this._syncSandboxPresentationSubscription();
+    return true;
+  }
+
+  private _openSandboxSection(): void {
+    if (!this._setSection('sandboxes')) void this._refreshSandboxes();
+  }
+
+  private _syncSandboxPresentationSubscription(): void {
+    const want = this.isConnected && this._section === 'sandboxes';
+    if (want === (this._unsubSandboxPresentation !== null)) return;
+    if (want) {
+      this._unsubSandboxPresentation = sandboxPresentationStore.subscribe((snapshot) => {
+        this._sandboxPresentation = snapshot;
+        if (snapshot.data && !snapshot.data.profiles.includes(this._sandboxProfile)) {
+          this._sandboxProfile = snapshot.data.profiles[0] ?? '';
+        }
+      });
+      this._stopSandboxPresentationPolling = sandboxPresentationStore.startPolling();
+      void this._refreshSandboxes();
+      return;
+    }
+    this._stopSandboxPresentationPolling?.();
+    this._stopSandboxPresentationPolling = null;
+    this._unsubSandboxPresentation?.();
+    this._unsubSandboxPresentation = null;
   }
 
   private _refreshNotifPermission(): void {
@@ -2131,6 +2262,293 @@ export class MuxSettingsSurface extends LitElement {
     `;
   }
 
+  private _loadSandboxes(force = false): Promise<void> {
+    if (!force && this._sandboxCollectionInFlight) return this._sandboxCollectionInFlight;
+    const request = ++this._sandboxCollectionRequest;
+    const load = (async () => {
+      this._sandboxCollectionLoading = true;
+      this._sandboxesLoaded = false;
+      try {
+        const collection = await fetchSandboxes();
+        if (request !== this._sandboxCollectionRequest) return;
+        this._sandboxes = collection;
+        this._sandboxCollectionError = null;
+        this._sandboxesLoaded = true;
+      } catch (error) {
+        if (request !== this._sandboxCollectionRequest) return;
+        this._sandboxCollectionError = error;
+        this._sandboxesLoaded = false;
+      } finally {
+        if (request === this._sandboxCollectionRequest) {
+          this._sandboxCollectionLoading = false;
+        }
+      }
+    })();
+    this._sandboxCollectionInFlight = load;
+    void load.finally(() => {
+      if (this._sandboxCollectionInFlight === load) this._sandboxCollectionInFlight = null;
+    });
+    return load;
+  }
+
+  private _refreshSandboxes(forceCollection = false): Promise<void> {
+    return Promise.all([
+      sandboxPresentationStore.refresh(),
+      this._loadSandboxes(forceCollection),
+    ]).then(() => undefined);
+  }
+
+  private _requestID(key: string): string {
+    const existing = this._sandboxRequestIDs.get(key);
+    if (existing) return existing;
+    const requestID = crypto.randomUUID();
+    this._sandboxRequestIDs.set(key, requestID);
+    return requestID;
+  }
+
+  private _sandboxCollectionFresh(): boolean {
+    return this._sandboxCollectionLoaded() &&
+      this._sandboxes.availability.state === 'ready';
+  }
+
+  private _sandboxCollectionLoaded(): boolean {
+    return this._sandboxesLoaded &&
+      !this._sandboxCollectionLoading &&
+      this._sandboxCollectionError === null;
+  }
+
+  private _sandboxActionAllowed(action: SandboxAction): boolean {
+    if (!this._sandboxCollectionLoaded()) return false;
+    if (this._sandboxes.availability.state === 'ready') return true;
+    return this._sandboxes.availability.state === 'kill-switch' &&
+      (action === 'reconcile' || action === 'stop' || action === 'destroy');
+  }
+
+  private _sandboxCollectionBlockedMessage(): string {
+    if (this._sandboxCollectionError !== null) {
+      return sandboxErrorMessage(this._sandboxCollectionError, 'Could not read Sandbox status.');
+    }
+    if (this._sandboxCollectionLoading || !this._sandboxesLoaded) {
+      return 'Validation pending: lifecycle availability has not been loaded.';
+    }
+    return this._sandboxes.availability.detail;
+  }
+
+  private async _createSandbox(): Promise<void> {
+    const profile = this._sandboxProfile.trim();
+    const presentation = this._sandboxPresentation.data;
+    if (!this._sandboxCollectionFresh() ||
+        !presentation || presentation.configuration_state !== 'lifecycle-only' ||
+        !presentation.profiles.includes(profile)) {
+      this._sandboxMessage = !this._sandboxCollectionFresh()
+        ? this._sandboxCollectionBlockedMessage()
+        : 'Terminal/workspace connection unavailable until a configured lifecycle-only profile is supplied.';
+      return;
+    }
+    const key = `create:${profile}`;
+    this._sandboxBusy = true;
+    this._sandboxMessage = '';
+    try {
+      await createSandbox(profile, this._requestID(key));
+      this._sandboxRequestIDs.delete(key);
+      await this._refreshSandboxes(true);
+    } catch (err) {
+      this._sandboxMessage = err instanceof Error ? err.message : 'Sandbox create was not accepted.';
+      await this._refreshSandboxes(true);
+    } finally {
+      this._sandboxBusy = false;
+    }
+  }
+
+  private async _sandboxAction(action: SandboxAction, item: SandboxView): Promise<void> {
+    if (!this._sandboxActionAllowed(action)) {
+      this._sandboxMessage = this._sandboxCollectionBlockedMessage();
+      return;
+    }
+    if (action === 'destroy' && !window.confirm(`Destroy sandbox ${item.handle}? This cannot be undone.`)) {
+      return;
+    }
+    const key = `${action}:${item.handle}:${item.generation}`;
+    this._sandboxBusy = true;
+    this._sandboxMessage = '';
+    try {
+      await sandboxAction(action, item, this._requestID(key));
+      this._sandboxRequestIDs.delete(key);
+      await this._refreshSandboxes(true);
+    } catch (err) {
+      this._sandboxMessage = err instanceof Error ? err.message : 'Sandbox operation was not accepted.';
+      // A known HTTP response settles this reconcile request. Rotate only then
+      // so an explicit later refresh reaches the provider again; a fetch
+      // failure has no response and must retain its idempotency key.
+      if (action === 'reconcile' && err instanceof SandboxRequestError && err.hasResponse) {
+        this._sandboxRequestIDs.delete(key);
+      }
+      await this._refreshSandboxes(true);
+    } finally {
+      this._sandboxBusy = false;
+    }
+  }
+
+  private _sandboxActions(item: SandboxView) {
+    if (!this._sandboxCollectionLoaded()) return html``;
+    const availability = this._sandboxes.availability.state;
+    const blocked = this._sandboxBusy || this._sandboxPresentation.loading ||
+      this._sandboxPresentation.error !== null ||
+      availability === 'unconfigured' || availability === 'disabled';
+    const actions: Array<{ name: SandboxAction; label: string; danger?: boolean }> = [];
+    if (item.reconcile_state === 'reconcile-needed' ||
+        item.operation_state === 'pending' ||
+        item.operation_state === 'accepted' ||
+        item.operation_state === 'ambiguous') {
+      actions.push({ name: 'reconcile', label: 'Refresh status' });
+    } else if (item.observed_state === 'running') {
+      actions.push({ name: 'stop', label: 'Stop' });
+    } else if ((item.observed_state === 'stopped' || item.observed_state === 'suspended' || item.observed_state === 'idle') && availability === 'ready') {
+      actions.push({ name: 'resume', label: 'Resume' });
+    }
+    // Stop and cleanup remain allowed by the owner kill switch. A quarantined
+    // ambiguous create has no safe provider identity, so it deliberately has no destroy.
+    if (item.reconcile_state === 'clean' && item.observed_state !== 'destroyed') {
+      actions.push({ name: 'destroy', label: 'Destroy', danger: true });
+    }
+    return html`
+      <div class="sandbox-actions">
+        ${actions.map(action => html`
+          <button
+            class="r-btn ${action.danger ? 'danger' : ''}"
+            ?disabled="${blocked}"
+            @click="${() => void this._sandboxAction(action.name, item)}"
+          >${action.label}</button>
+        `)}
+      </div>
+    `;
+  }
+
+  private _renderSandboxes() {
+    const presentationSnapshot = this._sandboxPresentation;
+    const presentation = presentationSnapshot.data;
+    const presentationError = presentationSnapshot.error;
+    const collectionError = this._sandboxCollectionError;
+    const lifecycleAvailability = this._sandboxes.availability;
+    const canCreate = presentation?.configuration_state === 'lifecycle-only' &&
+      presentation.profiles.length > 0 &&
+      this._sandboxCollectionFresh() &&
+      !presentationSnapshot.loading && presentationError === null;
+    const lifecycleByHandle = new Map(this._sandboxes.sandboxes.map(item => [item.handle, item]));
+    let statusLabel = 'Validation pending';
+    let statusDetail = 'Loading owner-local Azure Sandbox presentation…';
+    if (presentationError !== null) {
+      statusLabel = 'Error';
+      statusDetail = sandboxErrorMessage(presentationError, 'Could not read the Azure Sandbox presentation.');
+    } else if (presentationSnapshot.loading || !presentation) {
+      statusLabel = 'Validation pending';
+    } else {
+      switch (presentation.configuration_state) {
+        case 'unconfigured':
+          statusLabel = 'Unconfigured';
+          break;
+        case 'disabled':
+          statusLabel = 'Unavailable · disabled';
+          break;
+        case 'kill-switch':
+          statusLabel = 'Unavailable · kill switch';
+          break;
+        case 'lifecycle-only':
+          statusLabel = 'Configured · lifecycle-only';
+          break;
+      }
+      statusDetail = presentation.reason;
+      if (presentation.configuration_state === 'lifecycle-only' &&
+          this._sandboxesLoaded && lifecycleAvailability.state !== 'ready') {
+        statusLabel = 'Unavailable · lifecycle';
+        statusDetail = lifecycleAvailability.detail;
+      }
+    }
+    const authUnavailable = sandboxUnavailable(presentationError) || sandboxUnavailable(collectionError);
+    const signInRequired = sandboxAuthRequired(presentationError) || sandboxAuthRequired(collectionError);
+    const records = presentation?.records ?? [];
+    if (authUnavailable) {
+      statusLabel = 'Unavailable · authentication disabled';
+      statusDetail = 'Azure Sandbox lifecycle and presentation are unavailable while server authentication is disabled.';
+    } else if (signInRequired) {
+      statusLabel = 'Sign in required';
+      statusDetail = 'Sign in to view and manage the owner-local Azure Sandbox inventory.';
+    } else if (collectionError !== null) {
+      statusLabel = 'Error';
+      statusDetail = sandboxErrorMessage(collectionError, 'Could not read Sandbox status.');
+    } else if (this._sandboxCollectionLoading || !this._sandboxesLoaded) {
+      statusLabel = 'Validation pending';
+      statusDetail = 'Refreshing owner-local Azure Sandbox lifecycle status…';
+    }
+    return html`
+      <div class="section-title">Direct Azure Sandboxes</div>
+      <p class="sandbox-note">
+        This screen shows owner-local lifecycle inventory only. It never displays Azure identities,
+        endpoints, credentials, runtime labels, or session transport details.
+      </p>
+      <div class="sandbox-status">
+        <strong>${statusLabel}</strong>
+        <span>${statusDetail}</span>
+      </div>
+      <div class="sandbox-meta">Terminal/workspace connection unavailable.</div>
+      ${presentation && presentation.profiles.length > 0 && !canCreate ? html`
+        <div class="sandbox-meta">Configured profile names: ${presentation.profiles.join(', ')}</div>
+      ` : ''}
+      ${canCreate ? html`
+        <div class="sandbox-create">
+          <select
+            class="sandbox-profile-select"
+            aria-label="Configured sandbox profile"
+            .value="${this._sandboxProfile}"
+            ?disabled="${this._sandboxBusy}"
+            @change="${(e: Event) => { this._sandboxProfile = (e.target as HTMLSelectElement).value; }}"
+          >
+            ${presentation?.profiles.map(profile => html`<option value="${profile}">${profile}</option>`)}
+          </select>
+          <button class="r-btn pri" ?disabled="${this._sandboxBusy}" @click="${() => void this._createSandbox()}">Create lifecycle sandbox</button>
+        </div>
+      ` : ''}
+      ${this._sandboxMessage ? html`<div class="r-error">${this._sandboxMessage}</div>` : ''}
+      ${collectionError !== null && !signInRequired && !authUnavailable
+        ? html`<div class="r-error">${sandboxErrorMessage(collectionError, 'Could not read Sandbox status.')}</div>`
+        : ''}
+      ${signInRequired && !authUnavailable ? html`
+        <p class="sandbox-note">
+          <a class="r-btn pri" href="/auth/login?return_to=${encodeURIComponent(window.location.pathname + window.location.search)}">Sign in to manage Sandboxes</a>
+        </p>
+      ` : ''}
+      ${collectionError === null && !this._sandboxesLoaded
+        ? html`<p class="sandbox-note">Reading owner-local lifecycle status…</p>`
+        : ''}
+      ${presentation && records.length === 0 ? html`
+        <p class="sandbox-note">No recorded Azure Sandbox lifecycle records exist on this machine.</p>
+      ` : ''}
+      ${records.map(record => {
+        const item = lifecycleByHandle.get(record.handle);
+        const failed = item?.operation_state === 'failed' || item?.reconcile_state === 'quarantined';
+        const running = record.observed_state === 'running';
+        return html`
+        <div class="r-row ${failed ? 'err' : running ? 'connected' : 'degraded'}">
+          <span class="r-dot ${failed ? 'err' : running ? 'ok' : 'off'}"></span>
+          <div class="r-main">
+            <div class="r-name">${record.profile} · ${record.observed_state}</div>
+            <div class="sandbox-meta">
+              ${item
+                ? `${item.operation} ${item.operation_state}; desired ${item.desired_state}; generation ${record.generation}${item.reconcile_state === 'clean' ? '' : `; ${item.reconcile_state}`}`
+                : `Recorded lifecycle state; generation ${record.generation}`}
+            </div>
+            <div class="sandbox-meta">Terminal/workspace connection unavailable.</div>
+            ${item?.reconcile_state === 'quarantined' ? html`
+              <div class="sandbox-meta">Recovery is quarantined. An owner recovery procedure is required.</div>
+            ` : ''}
+            ${item ? this._sandboxActions(item) : ''}
+          </div>
+        </div>
+      `;
+      })}
+    `;
+  }
+
   override render() {
     if (!this.config) return html``;
 
@@ -2143,24 +2561,28 @@ export class MuxSettingsSurface extends LitElement {
         <nav class="sidebar">
           <button
             class="sidebar-item ${this._section === 'appearance' ? 'active' : ''}"
-            @click="${() => { this._section = 'appearance'; }}"
+            @click="${() => { this._setSection('appearance'); }}"
           >Appearance</button>
           <button
             class="sidebar-item ${this._section === 'notifications' ? 'active' : ''}"
-            @click="${() => { this._section = 'notifications'; }}"
+            @click="${() => { this._setSection('notifications'); }}"
           >Notifications</button>
           <button
             class="sidebar-item ${this._section === 'ai' ? 'active' : ''}"
-            @click="${() => { this._section = 'ai'; }}"
+            @click="${() => { this._setSection('ai'); }}"
           >AI</button>
           <button
             class="sidebar-item ${this._section === 'voice' ? 'active' : ''}"
-            @click="${() => { this._section = 'voice'; void this._loadVoice(); }}"
+            @click="${() => { this._setSection('voice'); void this._loadVoice(); }}"
           >Voice</button>
           <button
             class="sidebar-item ${this._section === 'remotes' ? 'active' : ''}"
-            @click="${() => { this._section = 'remotes'; void this._loadRemotes(); }}"
+            @click="${() => { this._setSection('remotes'); void this._loadRemotes(); }}"
           >Remotes</button>
+          <button
+            class="sidebar-item ${this._section === 'sandboxes' ? 'active' : ''}"
+            @click="${() => this._openSandboxSection()}"
+          >Sandboxes</button>
         </nav>
         <div class="content">
           ${this._section === 'appearance'
@@ -2169,6 +2591,8 @@ export class MuxSettingsSurface extends LitElement {
               ? this._renderNotifications()
               : this._section === 'remotes'
                 ? this._renderRemotes()
+                : this._section === 'sandboxes'
+                  ? this._renderSandboxes()
                 : this._section === 'voice'
                   ? this._renderVoice()
                   : this._renderAI()}
