@@ -100,7 +100,7 @@ func (c Config) Availability() Availability {
 	case !c.Enabled:
 		return Availability{State: "disabled", Detail: "Azure Sandboxes are configured but disabled by the owner."}
 	case c.KillSwitch:
-		return Availability{State: "kill-switch", Detail: "The owner kill switch blocks create, resume, and attach. Status and cleanup remain available."}
+		return Availability{State: "kill-switch", Detail: "The owner kill switch blocks create, resume, and attach. Status, Stop, and cleanup remain available."}
 	default:
 		return Availability{State: "ready", Detail: "Azure Sandboxes are available through configured owner profiles."}
 	}

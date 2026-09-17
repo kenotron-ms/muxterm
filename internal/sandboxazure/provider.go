@@ -17,6 +17,9 @@ import (
 )
 
 var (
+	// ErrProviderRejected is reserved for local sealed-spec validation and
+	// deterministic fake failures before any Azure request; Azure HTTP results
+	// must never return it.
 	ErrProviderRejected  = errors.New("direct Azure sandbox provider rejected the operation")
 	ErrProviderNotFound  = errors.New("direct Azure sandbox provider resource was not found")
 	ErrProviderAmbiguous = errors.New("direct Azure sandbox provider outcome is ambiguous")

@@ -12,7 +12,8 @@ The controller reads but never writes `config.toml`. `[sandbox_azure]` is
 excluded from browser JSON and browser configuration updates. With no section,
 the feature is explicitly `unconfigured`; configured `enabled = false` is
 `disabled`; `kill_switch = true` blocks create/resume/attach while retaining
-truthful status and cleanup.
+truthful status, Stop, and cleanup. Stop remains available under the kill
+switch as a safety/cleanup action.
 
 ```toml
 [sandbox_azure]
@@ -116,8 +117,20 @@ to show the prior lifecycle operation as `accepted` with
 `reconcile-needed`; a later reconciliation is required before any superseding
 lifecycle action.
 Ambiguous outcomes remain reconciliation-required or quarantined; no blind
-provider retry occurs. List and describe are local durable reads: they do not
-acquire a token or make cloud calls.
+provider retry occurs. List and describe are local validated durable snapshot
+reads: they do not acquire a token or make cloud calls, and do not wait behind
+a lifecycle provider call. They return either the validated before or after
+atomic durable snapshot only.
+
+### Quarantine recovery
+
+Quarantine is terminal for automatic actions. The authorized owner must retain
+the record while examining candidates in sealed configuration scope that match
+both fixed labels. The owner must manually stop/delete candidates through a
+separately approved Azure operator process and independently verify that none
+remain. Before removing only `<store_dir>/<handle>.json`, take the controller
+offline with `enabled = false`; never remove the whole store or `.lock`. A new
+create must use a new UUID. No browser/API action can bypass this procedure.
 
 The store rejects symlink roots, non-private root/record/lock files, unsafe
 ancestors, and cross-principal replacement detected by pre/post-open descriptor
@@ -145,9 +158,13 @@ network call. Every mutation requires UUID `Idempotency-Key`. Create admits
 only `profile`; actions admit only `generation`, plus `confirm_handle` matching
 `{handle}` for destroy. Strict JSON rejects all other fields. A mutation
 returns `202` only for a persisted `accepted` operation, `200` for observed
-success, and a safe non-2xx record view for pending, failed, ambiguous, or
-collision outcomes—an exact retry never receives `202` merely because it was
-retried.
+success, with one narrow exception: only a qualifying demonstrably
+pre-provider local failed-create can receive a successful local destroy
+tombstone (`200`). That is local accounting/cleanup, not Azure observation or
+delete proof; the original record, audit history, and idempotency remain, and
+a later new Create must use a new UUID. Pending, failed, ambiguous, or
+collision outcomes return a safe non-2xx record view—an exact retry never
+receives `202` merely because it was retried.
 
 Sandbox routes do **not** accept muxterm's ordinary loopback bypass. In local
 mode, a browser must obtain a normal muxterm auth-server cookie/bearer session.
@@ -178,10 +195,12 @@ handles any token.
 
 `cmd/muxterm-sandbox-ingress` and `internal/sandboxingress` are the reviewed
 image-side primitives built from this branch. The fixed adapter listens on
-port `8443`; it accepts only cookie-free, origin-free, bearer-free WSS upgrades
-at `/v1/sessiond`, requires a bounded nonce/TTL/profile-checksum/generation
+port `8443`; it accepts only cookie-free, origin-free, bearer-free WebSocket
+upgrades at `/v1/sessiond`, requires a bounded nonce/TTL/profile-checksum/generation
 Ed25519 proof, permits one stream, and proxies bounded binary frames to the
 image's private sessiond Unix socket. It contains no Azure lifecycle controls.
+External WSS requires unverified Azure-edge TLS termination and is not
+implemented.
 Only after sessiond's private socket is live and the adapter has been
 constructed, its enclosing runtime handler returns content-free `204 No
 Content` for exact `GET /healthz` (with no query). Non-GET, query-bearing, and
@@ -251,4 +270,5 @@ than caller data. The hard auto-delete TTL is a cost bound, not automatic local
 cleanup: muxterm does not claim unattended cleanup after it is offline. The
 owner must reconcile accepted or ambiguous records and use destroy for safe
 cleanup. The kill switch prevents new create/resume/attach while retaining
-truthful local status and destroy of already reconciled owned resources.
+truthful local status, Stop as a safety/cleanup action, and destroy of already
+reconciled owned resources.

@@ -15,10 +15,11 @@ import (
 )
 
 var (
-	ErrStaleGeneration   = errors.New("direct Azure sandbox lifecycle generation is stale")
-	ErrRequestCollision  = errors.New("direct Azure sandbox request id was already used for a different operation")
-	ErrAttachUnsupported = errors.New("sandbox attach is unsupported: Azure Sandbox port transport has not established authenticated sessiond WebSocket framing")
-	ErrReconcileRequired = errors.New("direct Azure sandbox requires reconciliation before this operation")
+	ErrStaleGeneration      = errors.New("direct Azure sandbox lifecycle generation is stale")
+	ErrRequestCollision     = errors.New("direct Azure sandbox request id was already used for a different operation")
+	ErrAttachUnsupported    = errors.New("sandbox attach is unsupported: Azure Sandbox port transport has not established authenticated sessiond WebSocket framing")
+	ErrReconcileRequired    = errors.New("direct Azure sandbox requires reconciliation before this operation")
+	ErrReconcileQuarantined = errors.New("direct Azure sandbox recovery is quarantined and requires an owner recovery procedure")
 )
 
 // operationTimeout bounds a serialized controller/provider attempt. The store
@@ -41,9 +42,9 @@ type Lifecycle interface {
 }
 
 // Controller is the lifecycle authority for muxterm's opaque handles and
-// durable mapping. List and Describe report only persisted local truth and
-// never construct a credential or make a cloud request. Reconcile is the sole
-// explicit observation operation.
+// durable mapping. List and Describe read a validated durable snapshot without
+// waiting for the lifecycle lock or making a cloud request. Reconcile is the
+// sole explicit observation operation.
 type Controller struct {
 	config    Config
 	store     *Store
@@ -68,32 +69,32 @@ func NewController(config Config, providers ProviderFactory) (*Controller, error
 }
 
 func (c *Controller) List(_ context.Context) ([]View, error) {
-	var result []View
-	err := c.store.WithLock(func() error {
-		records, err := c.store.List()
-		if err != nil {
-			return err
-		}
-		for _, r := range records {
-			result = append(result, r.View())
-		}
-		sort.Slice(result, func(i, j int) bool { return result[i].Handle < result[j].Handle })
-		return nil
-	})
-	return result, err
+	records, err := c.store.List()
+	// Atomic record replacement can race Load's inode verification. Either the
+	// before or after durable snapshot is safe; retry that read exactly once.
+	if errors.Is(err, ErrUnsafeStore) {
+		records, err = c.store.List()
+	}
+	if err != nil {
+		return nil, err
+	}
+	result := make([]View, 0, len(records))
+	for _, r := range records {
+		result = append(result, r.View())
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Handle < result[j].Handle })
+	return result, nil
 }
 
 func (c *Controller) Describe(_ context.Context, handle string) (View, error) {
-	var result View
-	err := c.store.WithLock(func() error {
-		r, err := c.store.Load(handle)
-		if err != nil {
-			return err
-		}
-		result = r.View()
-		return nil
-	})
-	return result, err
+	r, err := c.store.Load(handle)
+	if errors.Is(err, ErrUnsafeStore) {
+		r, err = c.store.Load(handle)
+	}
+	if err != nil {
+		return View{}, err
+	}
+	return r.View(), nil
 }
 
 // Create persists an intent and stable UUID before calling Azure. A returned
@@ -114,6 +115,9 @@ func (c *Controller) Create(ctx context.Context, profileName, requestID string) 
 				return ErrRequestCollision
 			}
 			result = prior.viewFor(*op)
+			if prior.ReconcileState == ReconcileQuarantined {
+				return ErrReconcileQuarantined
+			}
 			return nil
 		} else if !errors.Is(err, ErrRecordNotFound) {
 			return err
@@ -208,6 +212,7 @@ func createSpec(profile Profile, r Record) (CreateSpec, error) {
 }
 
 func (c *Controller) Stop(ctx context.Context, handle string, generation uint64, requestID string) (View, error) {
+	// Stop remains available under the kill switch as a safety/cleanup action.
 	return c.mutate(ctx, "stop", "stopped", handle, generation, requestID, func(callCtx context.Context, p Provider, id, requestID string) error {
 		return p.Stop(callCtx, id, requestID)
 	})
@@ -246,6 +251,9 @@ func (c *Controller) Attach(handle string, generation uint64, requestID string) 
 		if c.config.KillSwitch {
 			return ErrKillSwitch
 		}
+		if r.ReconcileState == ReconcileQuarantined {
+			return ErrReconcileQuarantined
+		}
 		if r.ReconcileState != ReconcileClean {
 			return ErrReconcileRequired
 		}
@@ -279,10 +287,14 @@ func (c *Controller) Reconcile(ctx context.Context, handle string, generation ui
 				return ErrRequestCollision
 			}
 			result = r.viewFor(*old)
+			if r.ReconcileState == ReconcileQuarantined {
+				return ErrReconcileQuarantined
+			}
 			return nil
 		}
 		if r.ReconcileState == ReconcileQuarantined {
-			return ErrReconcileRequired
+			result = r.View()
+			return ErrReconcileQuarantined
 		}
 		if generation != r.Generation {
 			return ErrStaleGeneration
@@ -344,6 +356,9 @@ func (c *Controller) Reconcile(ctx context.Context, handle string, generation ui
 				return err
 			}
 			result = r.viewFor(*r.operation(requestID))
+			if r.ReconcileState == ReconcileQuarantined {
+				return ErrReconcileQuarantined
+			}
 			return nil
 		}
 		if r.ProviderID == "" {
@@ -402,10 +417,29 @@ func (c *Controller) mutate(ctx context.Context, operation, desired, handle stri
 				return ErrRequestCollision
 			}
 			result = r.viewFor(*old)
+			if r.ReconcileState == ReconcileQuarantined {
+				return ErrReconcileQuarantined
+			}
 			return nil
 		}
 		if generation != r.Generation {
 			return ErrStaleGeneration
+		}
+		if r.ReconcileState == ReconcileQuarantined {
+			result = r.View()
+			return ErrReconcileQuarantined
+		}
+		if operation == "destroy" && r.failedCreateWithoutProvider() {
+			op := OperationRecord{RequestID: requestID, Kind: operation, ExpectedGeneration: generation, DesiredState: desired, State: OperationSucceeded}
+			r.Generation++
+			r.RequestID, r.Operation, r.OperationState, r.ExpectedGeneration, r.DesiredState = requestID, operation, op.State, generation, desired
+			r.ObservedState = "destroyed"
+			r.Operations = append(r.Operations, op)
+			if err := c.store.Save(r); err != nil {
+				return err
+			}
+			result = r.View()
+			return nil
 		}
 		if r.ReconcileState != ReconcileClean || r.ProviderID == "" {
 			return ErrReconcileRequired
@@ -443,6 +477,23 @@ func (c *Controller) mutate(ctx context.Context, operation, desired, handle stri
 		return nil
 	})
 	return result, err
+}
+
+// failedCreateWithoutProvider identifies only a locally failed original create
+// that could not have reached Azure. It can be retained as a local destroy
+// tombstone without constructing or calling a provider.
+func (r Record) failedCreateWithoutProvider() bool {
+	if r.ProviderID != "" || r.ReconcileState != ReconcileClean ||
+		r.Generation != 1 || r.RequestID == "" ||
+		r.Operation != "create" || r.OperationState != OperationFailed ||
+		r.ExpectedGeneration != 0 || r.DesiredState != "running" ||
+		len(r.Operations) != 1 {
+		return false
+	}
+	original := r.Operations[0]
+	return original.RequestID == r.RequestID && original.Kind == "create" &&
+		original.State == OperationFailed && original.ExpectedGeneration == 0 &&
+		original.DesiredState == "running"
 }
 
 func (c *Controller) fencedProfile(r Record) (Profile, error) {

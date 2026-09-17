@@ -2406,8 +2406,8 @@ export class MuxSettingsSurface extends LitElement {
     } else if ((item.observed_state === 'stopped' || item.observed_state === 'suspended' || item.observed_state === 'idle') && availability === 'ready') {
       actions.push({ name: 'resume', label: 'Resume' });
     }
-    // Cleanup remains allowed by the owner kill switch. A quarantined ambiguous
-    // create has no safe provider identity, so it deliberately has no destroy.
+    // Stop and cleanup remain allowed by the owner kill switch. A quarantined
+    // ambiguous create has no safe provider identity, so it deliberately has no destroy.
     if (item.reconcile_state === 'clean' && item.observed_state !== 'destroyed') {
       actions.push({ name: 'destroy', label: 'Destroy', danger: true });
     }
@@ -2538,6 +2538,9 @@ export class MuxSettingsSurface extends LitElement {
                 : `Recorded lifecycle state; generation ${record.generation}`}
             </div>
             <div class="sandbox-meta">Terminal/workspace connection unavailable.</div>
+            ${item?.reconcile_state === 'quarantined' ? html`
+              <div class="sandbox-meta">Recovery is quarantined. An owner recovery procedure is required.</div>
+            ` : ''}
             ${item ? this._sandboxActions(item) : ''}
           </div>
         </div>

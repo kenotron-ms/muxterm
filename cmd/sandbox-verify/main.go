@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	muxconfig "github.com/kenotron-ms/muxterm/internal/config"
 	"github.com/kenotron-ms/muxterm/internal/sandboxazure"
@@ -52,6 +53,9 @@ func verify() error {
 		return err
 	}
 	ctx := context.Background()
+	if err := verifyNonblockingStatus(ctx); err != nil {
+		return err
+	}
 	const requestID = "11111111-1111-4111-8111-111111111111"
 	created, err := controller.Create(ctx, "fixture", requestID)
 	if err != nil {
@@ -180,6 +184,13 @@ func verify() error {
 	if !errors.Is(err, sandboxazure.ErrProviderAmbiguous) {
 		return errors.New("ambiguous 409-equivalent create was not surfaced as ambiguous")
 	}
+	beforeTombstone := fake.callCount()
+	if _, err := controller.Destroy(ctx, ambiguous.Handle, ambiguous.Generation, "a0000000-0000-4000-8000-000000000026"); !errors.Is(err, sandboxazure.ErrReconcileRequired) {
+		return errors.New("ambiguous Azure HTTP create entered the local tombstone path")
+	}
+	if fake.callCount() != beforeTombstone {
+		return errors.New("ambiguous Azure HTTP create attempted a provider call during rejected destroy")
+	}
 	ambiguous, err = controller.Create(ctx, "fixture", "22222222-2222-4222-8222-222222222222")
 	if err != nil || ambiguous.ReconcileState != sandboxazure.ReconcileNeeded {
 		return errors.New("ambiguous create did not preserve retry/reconcile record")
@@ -194,18 +205,67 @@ func verify() error {
 	if err != nil || recovered.ReconcileState != sandboxazure.ReconcileClean || recovered.ObservedState != "running" {
 		return errors.New("ambiguous 409-equivalent create was not safely recovered by durable labels")
 	}
+	fake.createErr = nil
+	fake.emptyCreateID = true
+	emptyID, err := controller.Create(ctx, "fixture", "22222222-2222-4222-8222-222222222223")
+	if !errors.Is(err, sandboxazure.ErrProviderAmbiguous) || emptyID.ReconcileState != sandboxazure.ReconcileNeeded {
+		return errors.New("empty Azure create response did not remain reconciliation-required")
+	}
+	beforeTombstone = fake.callCount()
+	if _, err := controller.Destroy(ctx, emptyID.Handle, emptyID.Generation, "a0000000-0000-4000-8000-000000000037"); !errors.Is(err, sandboxazure.ErrReconcileRequired) ||
+		fake.callCount() != beforeTombstone {
+		return errors.New("empty Azure create response entered the local tombstone path")
+	}
+	fake.emptyCreateID = false
 	fake.createErr = sandboxazure.ErrProviderAmbiguous
-	quarantined, err := controller.Create(ctx, "fixture", "55555555-5555-4555-8555-555555555555")
+	const quarantinedCreateRequestID = "55555555-5555-4555-8555-555555555555"
+	quarantined, err := controller.Create(ctx, "fixture", quarantinedCreateRequestID)
 	if !errors.Is(err, sandboxazure.ErrProviderAmbiguous) {
 		return errors.New("second ambiguous create was not surfaced")
 	}
-	quarantined, err = controller.Create(ctx, "fixture", "55555555-5555-4555-8555-555555555555")
+	quarantined, err = controller.Create(ctx, "fixture", quarantinedCreateRequestID)
 	if err != nil {
 		return errors.New("second ambiguous create record was not available for reconciliation")
 	}
-	quarantined, err = controller.Reconcile(ctx, quarantined.Handle, quarantined.Generation, "a0000000-0000-4000-8000-000000000009")
-	if err != nil || quarantined.ReconcileState != sandboxazure.ReconcileQuarantined {
+	const quarantineRequestID = "a0000000-0000-4000-8000-000000000009"
+	quarantined, err = controller.Reconcile(ctx, quarantined.Handle, quarantined.Generation, quarantineRequestID)
+	if !errors.Is(err, sandboxazure.ErrReconcileQuarantined) || quarantined.ReconcileState != sandboxazure.ReconcileQuarantined {
 		return errors.New("unmatched ambiguous create was not quarantined")
+	}
+	originalCreateView := quarantined
+	originalCreateView.Operation = "create"
+	originalCreateView.OperationState = sandboxazure.OperationAmbiguous
+	originalCreateView.RequestID = quarantinedCreateRequestID
+	originalCreateView.ExpectedGeneration = 0
+	originalCreateView.DesiredState = "running"
+	retryOriginalCreate, err := controller.Create(ctx, "fixture", quarantinedCreateRequestID)
+	if !errors.Is(err, sandboxazure.ErrReconcileQuarantined) || retryOriginalCreate != originalCreateView {
+		return errors.New("quarantined original create did not return its typed durable replay")
+	}
+	retryQuarantine, err := controller.Reconcile(ctx, quarantined.Handle, quarantined.Generation, quarantineRequestID)
+	if !errors.Is(err, sandboxazure.ErrReconcileQuarantined) || retryQuarantine != quarantined {
+		return errors.New("quarantined reconcile did not return the durable typed outcome on exact retry")
+	}
+	for _, action := range []struct {
+		name string
+		call func() (sandboxazure.View, error)
+	}{
+		{"stop", func() (sandboxazure.View, error) {
+			return controller.Stop(ctx, quarantined.Handle, quarantined.Generation, "a0000000-0000-4000-8000-000000000027")
+		}},
+		{"resume", func() (sandboxazure.View, error) {
+			return controller.Resume(ctx, quarantined.Handle, quarantined.Generation, "a0000000-0000-4000-8000-000000000028")
+		}},
+		{"destroy", func() (sandboxazure.View, error) {
+			return controller.Destroy(ctx, quarantined.Handle, quarantined.Generation, "a0000000-0000-4000-8000-000000000029")
+		}},
+	} {
+		if _, err := action.call(); !errors.Is(err, sandboxazure.ErrReconcileQuarantined) {
+			return fmt.Errorf("quarantined %s was not fenced with the typed recovery error", action.name)
+		}
+	}
+	if err := controller.Attach(quarantined.Handle, quarantined.Generation, "a0000000-0000-4000-8000-000000000030"); !errors.Is(err, sandboxazure.ErrReconcileQuarantined) {
+		return errors.New("quarantined attach was not fenced with the typed recovery error")
 	}
 
 	fake.createErr = sandboxazure.ErrProviderRejected
@@ -213,9 +273,24 @@ func verify() error {
 	if !errors.Is(err, sandboxazure.ErrProviderRejected) {
 		return errors.New("rejected create was not surfaced")
 	}
+	beforeTombstone = fake.callCount()
+	beforeFactories := fake.factoryCalls
+	tombstone, err := controller.Destroy(ctx, failed.Handle, failed.Generation, "a0000000-0000-4000-8000-000000000031")
+	if err != nil || tombstone.Generation != failed.Generation+1 || tombstone.Operation != "destroy" ||
+		tombstone.OperationState != sandboxazure.OperationSucceeded || tombstone.DesiredState != "destroyed" ||
+		tombstone.ObservedState != "destroyed" || tombstone.ReconcileState != sandboxazure.ReconcileClean {
+		return errors.New("failed local create did not receive a clean local destroy tombstone")
+	}
+	if fake.callCount() != beforeTombstone || fake.factoryCalls != beforeFactories {
+		return errors.New("local destroy tombstone constructed or called a provider")
+	}
+	retryTombstone, err := controller.Destroy(ctx, failed.Handle, failed.Generation, "a0000000-0000-4000-8000-000000000031")
+	if err != nil || retryTombstone != tombstone || fake.callCount() != beforeTombstone || fake.factoryCalls != beforeFactories {
+		return errors.New("local destroy tombstone was not idempotently replayed without a provider call")
+	}
 	failed, err = controller.Create(ctx, "fixture", "33333333-3333-4333-8333-333333333333")
-	if err != nil || failed.OperationState != sandboxazure.OperationFailed {
-		return errors.New("failed create record was not durable")
+	if err != nil || failed.OperationState != sandboxazure.OperationFailed || failed.Generation != tombstone.Generation {
+		return errors.New("failed create was not idempotently preserved after its local tombstone")
 	}
 
 	fake.createErr = nil
@@ -265,7 +340,17 @@ func verify() error {
 	if _, err := killController.List(ctx); err != nil {
 		return errors.New("kill switch blocked truthful local list")
 	}
-	if _, err := killController.Destroy(ctx, live.Handle, live.Generation, "a0000000-0000-4000-8000-000000000013"); err != nil {
+	if !strings.Contains((sandboxazure.Config{Present: true, Enabled: true, KillSwitch: true}).Availability().Detail, "Stop") {
+		return errors.New("kill switch availability did not state that Stop remains available")
+	}
+	stoppedUnderKill, err := killController.Stop(ctx, live.Handle, live.Generation, "a0000000-0000-4000-8000-000000000032")
+	if err != nil {
+		return errors.New("kill switch blocked Stop safety action")
+	}
+	if _, err := killController.Reconcile(ctx, live.Handle, stoppedUnderKill.Generation, "a0000000-0000-4000-8000-000000000036"); err != nil {
+		return errors.New("kill switch did not permit reconciliation after Stop")
+	}
+	if _, err := killController.Destroy(ctx, live.Handle, stoppedUnderKill.Generation, "a0000000-0000-4000-8000-000000000013"); err != nil {
 		return errors.New("kill switch blocked destroy cleanup")
 	}
 
@@ -279,6 +364,99 @@ func verify() error {
 	}
 	if err := verifyHTTPAPI(controller); err != nil {
 		return err
+	}
+	if err := verifyQuarantineHTTP(controller, quarantined, originalCreateView); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyNonblockingStatus(ctx context.Context) error {
+	fake := &fakeProvider{items: make(map[string]sandboxazure.ProviderSandbox)}
+	controller, err := sandboxazure.NewController(sandboxazure.Config{
+		Enabled: true, StoreDir: mustTempDir(), Profiles: []sandboxazure.Profile{profile()},
+	}, factory(fake))
+	if err != nil {
+		return err
+	}
+	created, err := controller.Create(ctx, "fixture", "88888888-8888-4888-8888-888888888881")
+	if err != nil {
+		return fmt.Errorf("nonblocking status fixture create: %w", err)
+	}
+	item := fake.items["provider-secret-id"]
+	item.State = "Running"
+	fake.items[item.ID] = item
+	if _, err := controller.Reconcile(ctx, created.Handle, created.Generation, "a0000000-0000-4000-8000-000000000033"); err != nil {
+		return fmt.Errorf("nonblocking status fixture reconcile: %w", err)
+	}
+
+	stopStarted := make(chan struct{})
+	blockStop := make(chan struct{})
+	fake.stopStarted = stopStarted
+	fake.blockStop = blockStop
+	stopDone := make(chan error, 1)
+	go func() {
+		_, err := controller.Stop(ctx, created.Handle, created.Generation, "a0000000-0000-4000-8000-000000000034")
+		stopDone <- err
+	}()
+	stopReleased, stopWaited := false, false
+	releaseAndWaitForStop := func() error {
+		if !stopReleased {
+			close(blockStop)
+			stopReleased = true
+		}
+		if !stopWaited {
+			stopWaited = true
+			return <-stopDone
+		}
+		return nil
+	}
+	defer func() { _ = releaseAndWaitForStop() }()
+	select {
+	case <-stopStarted:
+	case <-time.After(time.Second):
+		return errors.New("nonblocking status fixture did not enter provider mutation")
+	}
+	before := fake.callCount()
+	listDone := make(chan []sandboxazure.View, 1)
+	listErr := make(chan error, 1)
+	go func() {
+		views, err := controller.List(ctx)
+		listDone <- views
+		listErr <- err
+	}()
+	describeDone := make(chan sandboxazure.View, 1)
+	describeErr := make(chan error, 1)
+	go func() {
+		view, err := controller.Describe(ctx, created.Handle)
+		describeDone <- view
+		describeErr <- err
+	}()
+	var views []sandboxazure.View
+	select {
+	case views = <-listDone:
+		if err := <-listErr; err != nil {
+			return fmt.Errorf("nonblocking List failed: %w", err)
+		}
+	case <-time.After(time.Second):
+		return errors.New("List waited for an in-flight provider mutation")
+	}
+	var described sandboxazure.View
+	select {
+	case described = <-describeDone:
+		if err := <-describeErr; err != nil {
+			return fmt.Errorf("nonblocking Describe failed: %w", err)
+		}
+	case <-time.After(time.Second):
+		return errors.New("Describe waited for an in-flight provider mutation")
+	}
+	if len(views) != 1 || views[0].Handle != created.Handle || views[0].Operation != "stop" ||
+		views[0].OperationState != sandboxazure.OperationPending || views[0].Generation != created.Generation+1 ||
+		described != views[0] || fake.callCount() != before {
+		return errors.New("status did not return the durable post-save snapshot without provider calls")
+	}
+	if err := releaseAndWaitForStop(); err != nil {
+		return fmt.Errorf("nonblocking status fixture stop: %w", err)
 	}
 	return nil
 }
@@ -402,6 +580,44 @@ func verifyHTTPAPI(controller sandboxazure.Lifecycle) error {
 	}
 	if code, body := requestJSON(srv.Handler(), "POST", "/api/sandboxes", "33333333-3333-4333-8333-333333333333", `{"profile":"fixture"}`, "owner-local-fixture-token"); code < 400 || !strings.Contains(body, `"operation_state":"failed"`) {
 		return errors.New("API returned success for a persisted failed idempotency retry")
+	}
+	return nil
+}
+
+func verifyQuarantineHTTP(controller sandboxazure.Lifecycle, quarantined, originalCreateView sandboxazure.View) error {
+	srv := server.New(server.Config{
+		Sandbox:             controller,
+		SandboxAvailability: sandboxazure.Availability{State: "ready", Detail: "fixture"},
+		LocalToken:          "owner-local-fixture-token",
+	})
+	code, body := requestJSON(
+		srv.Handler(),
+		"POST",
+		"/api/sandboxes/"+quarantined.Handle+"/reconcile",
+		"a0000000-0000-4000-8000-000000000009",
+		fmt.Sprintf("{\"generation\":%d}", quarantined.Generation),
+		"owner-local-fixture-token",
+	)
+	if code != http.StatusConflict ||
+		!strings.Contains(body, "Sandbox recovery is quarantined. An owner recovery procedure is required.") ||
+		strings.Contains(body, "provider-secret-id") || strings.Contains(body, "store_dir") ||
+		strings.Contains(body, "credential") {
+		return errors.New("quarantined sandbox HTTP response was not a safe 409 recovery outcome")
+	}
+	code, body = requestJSON(
+		srv.Handler(),
+		"POST",
+		"/api/sandboxes",
+		"55555555-5555-4555-8555-555555555555",
+		`{"profile":"fixture"}`,
+		"owner-local-fixture-token",
+	)
+	if code != http.StatusConflict ||
+		!strings.Contains(body, "Sandbox recovery is quarantined. An owner recovery procedure is required.") ||
+		!strings.Contains(body, `"operation":"`+originalCreateView.Operation+`"`) ||
+		strings.Contains(body, "provider-secret-id") || strings.Contains(body, "store_dir") ||
+		strings.Contains(body, "credential") {
+		return errors.New("quarantined original create HTTP replay was not a safe 409 recovery outcome")
 	}
 	return nil
 }
@@ -739,21 +955,28 @@ func mustTempDir() string {
 }
 
 func factory(f *fakeProvider) sandboxazure.ProviderFactory {
-	return func(sandboxazure.Profile) (sandboxazure.Provider, error) { return f, nil }
+	return func(sandboxazure.Profile) (sandboxazure.Provider, error) {
+		f.factoryCalls++
+		return f, nil
+	}
 }
 
 type fakeProvider struct {
-	items     map[string]sandboxazure.ProviderSandbox
-	creates   int
-	stops     int
-	resumes   int
-	deletes   int
-	gets      int
-	lists     int
-	createErr error
-	deleteErr error
-	lastSpec  sandboxazure.CreateSpec
-	stopState string
+	items         map[string]sandboxazure.ProviderSandbox
+	factoryCalls  int
+	creates       int
+	stops         int
+	resumes       int
+	deletes       int
+	gets          int
+	lists         int
+	createErr     error
+	emptyCreateID bool
+	deleteErr     error
+	lastSpec      sandboxazure.CreateSpec
+	stopState     string
+	stopStarted   chan struct{}
+	blockStop     chan struct{}
 }
 
 func (f *fakeProvider) callCount() int {
@@ -765,6 +988,9 @@ func (f *fakeProvider) Create(_ context.Context, spec sandboxazure.CreateSpec) (
 	f.lastSpec = spec
 	if f.createErr != nil {
 		return sandboxazure.ProviderSandbox{}, f.createErr
+	}
+	if f.emptyCreateID {
+		return sandboxazure.ProviderSandbox{}, nil
 	}
 	item := sandboxazure.ProviderSandbox{ID: "provider-secret-id", State: "Creating", Labels: spec.Labels}
 	f.items[item.ID] = item
@@ -791,6 +1017,12 @@ func (f *fakeProvider) Get(_ context.Context, id string) (sandboxazure.ProviderS
 
 func (f *fakeProvider) Stop(_ context.Context, id, _ string) error {
 	f.stops++
+	if f.stopStarted != nil {
+		close(f.stopStarted)
+	}
+	if f.blockStop != nil {
+		<-f.blockStop
+	}
 	item, ok := f.items[id]
 	if !ok {
 		return sandboxazure.ErrProviderNotFound

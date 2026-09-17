@@ -221,7 +221,7 @@ func sandboxErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, sandboxazure.ErrRecordNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, sandboxazure.ErrStaleGeneration), errors.Is(err, sandboxazure.ErrRequestCollision), errors.Is(err, sandboxazure.ErrReconcileRequired), errors.Is(err, sandboxazure.ErrKillSwitch):
+	case errors.Is(err, sandboxazure.ErrStaleGeneration), errors.Is(err, sandboxazure.ErrRequestCollision), errors.Is(err, sandboxazure.ErrReconcileRequired), errors.Is(err, sandboxazure.ErrReconcileQuarantined), errors.Is(err, sandboxazure.ErrKillSwitch):
 		return http.StatusConflict
 	case errors.Is(err, sandboxazure.ErrAttachUnsupported):
 		return http.StatusNotImplemented
@@ -238,6 +238,8 @@ func sandboxErrorMessage(err error) string {
 		return "Sandbox handle was not found."
 	case errors.Is(err, sandboxazure.ErrUnknownProfile), errors.Is(err, sandboxazure.ErrBadScope):
 		return "The requested sandbox profile is not configured."
+	case errors.Is(err, sandboxazure.ErrReconcileQuarantined):
+		return "Sandbox recovery is quarantined. An owner recovery procedure is required."
 	case errors.Is(err, sandboxazure.ErrStaleGeneration), errors.Is(err, sandboxazure.ErrRequestCollision), errors.Is(err, sandboxazure.ErrReconcileRequired), errors.Is(err, sandboxazure.ErrKillSwitch), errors.Is(err, sandboxazure.ErrAttachUnsupported):
 		return err.Error()
 	default:

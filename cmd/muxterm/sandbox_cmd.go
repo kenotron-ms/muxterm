@@ -49,7 +49,7 @@ func runSandbox(args []string) error {
 			return err
 		}
 		if *profile == "" || *requestID == "" || fs.NArg() != 0 {
-			return errors.New("usage: muxterm sandbox create --profile <allowlisted-profile> [--request-id <uuid>]")
+			return errors.New("usage: muxterm sandbox create --profile <allowlisted-profile> --request-id <uuid>")
 		}
 		value, err := controller.Create(ctx, *profile, *requestID)
 		return printSandbox(value, err)
