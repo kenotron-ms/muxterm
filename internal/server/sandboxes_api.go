@@ -31,6 +31,25 @@ type sandboxActionRequest struct {
 	ConfirmHandle string `json:"confirm_handle"`
 }
 
+func (s *Server) handleSandboxPresentation(w http.ResponseWriter, _ *http.Request) {
+	if s.sandboxPresentation == nil {
+		writeSandboxError(w, http.StatusServiceUnavailable, "Sandbox presentation is temporarily unavailable.")
+		return
+	}
+	presentation, err := s.sandboxPresentation.Read()
+	if err != nil {
+		if errors.Is(err, sandboxazure.ErrPresentationConfiguration) {
+			w.Header().Set("Cache-Control", "no-store")
+			httpJSONError(w, http.StatusServiceUnavailable, "sandbox_presentation_unavailable",
+				"Sandbox presentation is unavailable until muxterm is restarted with valid owner configuration.")
+			return
+		}
+		writeSandboxError(w, http.StatusServiceUnavailable, "Sandbox presentation is temporarily unavailable.")
+		return
+	}
+	writeSandboxJSON(w, http.StatusOK, presentation)
+}
+
 func (s *Server) handleSandboxesList(w http.ResponseWriter, r *http.Request) {
 	if s.sandbox == nil {
 		writeSandboxJSON(w, http.StatusOK, sandboxEnvelope{Availability: s.sandboxAvailability, Sandboxes: []sandboxazure.View{}})

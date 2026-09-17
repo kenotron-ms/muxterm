@@ -269,6 +269,9 @@ func verify() error {
 		return errors.New("kill switch blocked destroy cleanup")
 	}
 
+	if err := verifyPresentation(storeDir, fake); err != nil {
+		return err
+	}
 	if _, err := sandboxazure.NewController(sandboxazure.Config{
 		Enabled: true, StoreDir: mustTempDir(), Profiles: []sandboxazure.Profile{{Name: "bad"}},
 	}, factory(fake)); err == nil {
@@ -309,6 +312,7 @@ func verifyHTTPAPI(controller sandboxazure.Lifecycle) error {
 	srv := server.New(server.Config{
 		Sandbox:             controller,
 		SandboxAvailability: sandboxazure.Availability{State: "ready", Detail: "fixture"},
+		SandboxPresentation: sandboxazure.NewPresentationReader(sandboxazure.Config{}),
 		LocalToken:          "owner-local-fixture-token",
 	})
 	// Unconfigured has a stable, safe collection shape and no credentials.
@@ -319,16 +323,62 @@ func verifyHTTPAPI(controller sandboxazure.Lifecycle) error {
 	if code, _ := requestJSON(srv.Handler(), "GET", "/api/sandboxes", "", "", ""); code != http.StatusUnauthorized && code != http.StatusServiceUnavailable {
 		return errors.New("sandbox API admitted unauthenticated loopback caller")
 	}
+	if code, _ := requestJSON(srv.Handler(), "GET", "/api/sandboxes/presentation", "", "", ""); code != http.StatusUnauthorized && code != http.StatusServiceUnavailable {
+		return errors.New("sandbox presentation API admitted unauthenticated loopback caller")
+	}
 	if code, body := requestJSON(off.Handler(), "GET", "/api/sandboxes", "", "", "owner-local-fixture-token"); code != 200 || !strings.Contains(body, `"state":"unconfigured"`) || strings.Contains(body, "provider-secret-id") {
 		return errors.New("unconfigured API collection was not safe and explicit")
+	}
+	if code, body := requestJSON(off.Handler(), "GET", "/api/sandboxes/presentation", "", "", "owner-local-fixture-token"); code != 200 ||
+		!strings.Contains(body, `"configuration_state":"unconfigured"`) ||
+		!strings.Contains(body, `"attach_availability":"unavailable"`) ||
+		strings.Contains(body, "provider_id") || strings.Contains(body, "signer_private") {
+		return errors.New("unconfigured presentation API was not safe and explicit")
+	}
+	for _, fixture := range []struct {
+		config   sandboxazure.Config
+		expected sandboxazure.PresentationState
+	}{
+		{config: sandboxazure.Config{Present: true}, expected: sandboxazure.PresentationDisabled},
+		{
+			config: sandboxazure.Config{
+				Present: true, Enabled: true, KillSwitch: true,
+				Profiles: []sandboxazure.Profile{profile()},
+			},
+			expected: sandboxazure.PresentationKillSwitch,
+		},
+		{
+			config: sandboxazure.Config{
+				Present: true, Enabled: true,
+				Profiles: []sandboxazure.Profile{profile()},
+			},
+			expected: sandboxazure.PresentationLifecycleOnly,
+		},
+	} {
+		fixtureServer := server.New(server.Config{
+			SandboxPresentation: sandboxazure.NewPresentationReader(fixture.config),
+			LocalToken:          "owner-local-fixture-token",
+		})
+		code, body := requestJSON(fixtureServer.Handler(), "GET", "/api/sandboxes/presentation", "", "", "owner-local-fixture-token")
+		if code != http.StatusOK || !strings.Contains(body, `"configuration_state":"`+string(fixture.expected)+`"`) ||
+			!strings.Contains(body, `"attach_availability":"unavailable"`) ||
+			strings.Contains(body, "provider_id") || strings.Contains(body, "endpoint") ||
+			strings.Contains(body, "credential") || strings.Contains(body, "signer") {
+			return errors.New("presentation API state fixture was not safe and explicit")
+		}
 	}
 	noAuth := server.New(server.Config{
 		NoAuth: true, Sandbox: controller,
 		SandboxAvailability: sandboxazure.Availability{State: "ready", Detail: "fixture"},
 	})
-	if code, body := requestJSON(noAuth.Handler(), "GET", "/api/sandboxes", "", "", "owner-local-fixture-token"); code != http.StatusServiceUnavailable || !strings.Contains(body, "sandbox_auth_required") {
+	if code, body := requestJSON(noAuth.Handler(), "GET", "/api/sandboxes", "", "", "owner-local-fixture-token"); code != http.StatusServiceUnavailable ||
+		!strings.Contains(body, "sandbox_auth_disabled") || strings.Contains(body, "sandbox_auth_required") {
 		return errors.New("no-auth server topology exposed sandbox lifecycle")
 	}
+	// The browser-side Settings freshness fence is intentionally not exercised
+	// by this Go verifier: a failed/pending collection refresh must prevent
+	// POST dispatch in web/src/components/settings-surface.ts, which requires
+	// browser state and is covered by the source guard plus browser verification.
 	// Strict request decoding rejects caller-provided credential/scope fields.
 	if code, _ := requestJSON(srv.Handler(), "POST", "/api/sandboxes", "b0000000-0000-4000-8000-000000000001", `{"profile":"fixture","endpoint":"https://attacker.invalid"}`, "owner-local-fixture-token"); code != 400 {
 		return errors.New("API accepted a browser Azure endpoint field")
@@ -352,6 +402,91 @@ func verifyHTTPAPI(controller sandboxazure.Lifecycle) error {
 	}
 	if code, body := requestJSON(srv.Handler(), "POST", "/api/sandboxes", "33333333-3333-4333-8333-333333333333", `{"profile":"fixture"}`, "owner-local-fixture-token"); code < 400 || !strings.Contains(body, `"operation_state":"failed"`) {
 		return errors.New("API returned success for a persisted failed idempotency retry")
+	}
+	return nil
+}
+
+func verifyPresentation(storeDir string, fake *fakeProvider) error {
+	states := []struct {
+		name     string
+		config   sandboxazure.Config
+		expected sandboxazure.PresentationState
+	}{
+		{
+			name:     "unconfigured",
+			config:   sandboxazure.Config{},
+			expected: sandboxazure.PresentationUnconfigured,
+		},
+		{
+			name:     "disabled",
+			config:   sandboxazure.Config{Present: true, Profiles: []sandboxazure.Profile{{Name: "disabled-profile"}}},
+			expected: sandboxazure.PresentationDisabled,
+		},
+		{
+			name: "kill-switch",
+			config: sandboxazure.Config{
+				Present: true, Enabled: true, KillSwitch: true, StoreDir: storeDir,
+				Profiles: []sandboxazure.Profile{profile()},
+			},
+			expected: sandboxazure.PresentationKillSwitch,
+		},
+		{
+			name: "lifecycle-only",
+			config: sandboxazure.Config{
+				Present: true, Enabled: true, StoreDir: storeDir,
+				Profiles: []sandboxazure.Profile{profile()},
+			},
+			expected: sandboxazure.PresentationLifecycleOnly,
+		},
+	}
+	for _, fixture := range states {
+		presentation, err := sandboxazure.NewPresentationReader(fixture.config).Read()
+		if err != nil || presentation.ConfigurationState != fixture.expected ||
+			presentation.AttachAvailability != sandboxazure.PresentationAttachUnavailable ||
+			presentation.Records == nil || presentation.Profiles == nil {
+			return fmt.Errorf("%s presentation state was not explicit and non-null", fixture.name)
+		}
+	}
+
+	second := profile()
+	second.Name = "zeta"
+	before := fake.callCount()
+	reader := sandboxazure.NewPresentationReader(sandboxazure.Config{
+		Present: true, Enabled: true, StoreDir: storeDir,
+		Profiles: []sandboxazure.Profile{second, profile()},
+	})
+	first, err := reader.Read()
+	if err != nil {
+		return fmt.Errorf("lifecycle-only presentation read: %w", err)
+	}
+	repeat, err := reader.Read()
+	if err != nil {
+		return fmt.Errorf("repeat lifecycle-only presentation read: %w", err)
+	}
+	after := fake.callCount()
+	if before != after {
+		return errors.New("presentation read invoked the fake provider")
+	}
+	firstJSON, _ := json.Marshal(first)
+	repeatJSON, _ := json.Marshal(repeat)
+	if string(firstJSON) != string(repeatJSON) || len(first.Profiles) != 2 ||
+		first.Profiles[0] != "fixture" || first.Profiles[1] != "zeta" {
+		return errors.New("presentation profiles or records were not deterministic")
+	}
+	for i := 1; i < len(first.Records); i++ {
+		if first.Records[i-1].Handle > first.Records[i].Handle {
+			return errors.New("presentation records were not sorted by opaque handle")
+		}
+	}
+	encoded := string(firstJSON)
+	for _, forbidden := range []string{
+		"provider_id", "tenant_id", "subscription_id", "resource_group", "sandbox_group",
+		"disk_id", "image_digest", "endpoint", "credential", "token", "labels", "nonce",
+		"proof", "signer",
+	} {
+		if strings.Contains(encoded, forbidden) {
+			return fmt.Errorf("presentation leaked forbidden field %q", forbidden)
+		}
 	}
 	return nil
 }
@@ -611,12 +746,18 @@ type fakeProvider struct {
 	items     map[string]sandboxazure.ProviderSandbox
 	creates   int
 	stops     int
+	resumes   int
+	deletes   int
 	gets      int
 	lists     int
 	createErr error
 	deleteErr error
 	lastSpec  sandboxazure.CreateSpec
 	stopState string
+}
+
+func (f *fakeProvider) callCount() int {
+	return f.creates + f.lists + f.gets + f.stops + f.resumes + f.deletes
 }
 
 func (f *fakeProvider) Create(_ context.Context, spec sandboxazure.CreateSpec) (sandboxazure.ProviderSandbox, error) {
@@ -663,6 +804,7 @@ func (f *fakeProvider) Stop(_ context.Context, id, _ string) error {
 }
 
 func (f *fakeProvider) Resume(_ context.Context, id, _ string) error {
+	f.resumes++
 	item, ok := f.items[id]
 	if !ok {
 		return sandboxazure.ErrProviderNotFound
@@ -673,6 +815,7 @@ func (f *fakeProvider) Resume(_ context.Context, id, _ string) error {
 }
 
 func (f *fakeProvider) Delete(_ context.Context, id, _ string) error {
+	f.deletes++
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}

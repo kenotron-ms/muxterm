@@ -94,6 +94,7 @@ type Config struct {
 	// scope configuration.
 	Sandbox             sandboxazure.Lifecycle
 	SandboxAvailability sandboxazure.Availability
+	SandboxPresentation *sandboxazure.PresentationReader
 }
 
 // Server is the HTTP server for muxterm.
@@ -148,6 +149,7 @@ type Server struct {
 
 	sandbox             sandboxazure.Lifecycle
 	sandboxAvailability sandboxazure.Availability
+	sandboxPresentation *sandboxazure.PresentationReader
 
 	// prs is the durable collector behind the Pull Requests applet: the
 	// pull requests muxterm's own sessions opened, kept after those
@@ -189,6 +191,7 @@ func New(cfg Config) *Server {
 		version:             cfg.Version,
 		sandbox:             cfg.Sandbox,
 		sandboxAvailability: cfg.SandboxAvailability,
+		sandboxPresentation: cfg.SandboxPresentation,
 	}
 	// --no-auth is an intentionally unsafe development topology. Lifecycle
 	// control must never be reachable through it even if a caller accidentally
@@ -205,6 +208,9 @@ func New(cfg Config) *Server {
 			State:  "unconfigured",
 			Detail: "An owner has not configured Azure Sandboxes on this muxterm.",
 		}
+	}
+	if s.sandboxPresentation == nil {
+		s.sandboxPresentation = sandboxazure.NewPresentationReader(sandboxazure.Config{})
 	}
 
 	s.configPath = cfg.ConfigPath
@@ -296,6 +302,7 @@ func New(cfg Config) *Server {
 	// Direct Azure Sandboxes are owner-local lifecycle controls. They are a
 	// distinct protected family, not an SSH remote, and are deliberately
 	// absent from browser configuration reads/writes.
+	s.mux.Handle("GET /api/sandboxes/presentation", protectSandbox(http.HandlerFunc(s.handleSandboxPresentation)))
 	s.mux.Handle("GET /api/sandboxes", protectSandbox(http.HandlerFunc(s.handleSandboxesList)))
 	s.mux.Handle("GET /api/sandboxes/{handle}", protectSandbox(http.HandlerFunc(s.handleSandboxGet)))
 	s.mux.Handle("POST /api/sandboxes", protectSandbox(http.HandlerFunc(s.handleSandboxCreate)))

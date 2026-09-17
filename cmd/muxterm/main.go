@@ -451,31 +451,34 @@ func newAuthServer(addr string, sc config.ServerConfig) (*authserver.AuthServer,
 }
 
 // newSandboxLifecycle is intentionally called during startup, not from HTTP
-// handlers. Constructing AzureCliCredential does not acquire a token or make a
-// provider request; those happen only within enabled typed operations.
-func newSandboxLifecycle(noAuth bool) (sandboxazure.Lifecycle, sandboxazure.Availability, error) {
+// handlers. The loaded sealed config is also passed to the read-only
+// presentation reader so the server does not perform a second config read.
+// Constructing the controller does not acquire a token or make a provider
+// request; those happen only within enabled typed lifecycle operations.
+func newSandboxLifecycle(noAuth bool) (sandboxazure.Lifecycle, sandboxazure.Availability, *sandboxazure.PresentationReader, error) {
 	cfg, err := sandboxazure.LoadConfig(config.DefaultPath())
 	if err != nil {
 		return nil, sandboxazure.Availability{
 			State:  "unconfigured",
 			Detail: "Azure Sandboxes are unavailable because the owner configuration is invalid.",
-		}, nil
+		}, sandboxazure.NewUnavailablePresentationReader(), nil
 	}
 	availability := cfg.Availability()
-	if !cfg.Enabled {
-		return nil, availability, nil
+	if cfg.Enabled && noAuth {
+		return nil, sandboxazure.Availability{}, nil, errors.New("direct Azure sandboxes refuse the --no-auth topology")
 	}
-	if noAuth {
-		return nil, sandboxazure.Availability{}, errors.New("direct Azure sandboxes refuse the --no-auth topology")
+	presentation := sandboxazure.NewPresentationReader(cfg)
+	if !cfg.Enabled {
+		return nil, availability, presentation, nil
 	}
 	controller, err := sandboxazure.NewController(cfg, sandboxazure.AzureProviderFactory)
 	if err != nil {
 		return nil, sandboxazure.Availability{
 			State:  "unconfigured",
 			Detail: "Azure Sandboxes are unavailable because the owner configuration could not be admitted.",
-		}, nil
+		}, sandboxazure.NewUnavailablePresentationReader(), nil
 	}
-	return controller, availability, nil
+	return controller, availability, presentation, nil
 }
 
 // runLocal starts muxterm in local mode: starts the HTTP server on localhost,
@@ -483,7 +486,7 @@ func newSandboxLifecycle(noAuth bool) (sandboxazure.Lifecycle, sandboxazure.Avai
 // shutdown.
 func runLocal(cfg Config) error {
 	resolved, _ := config.Load(config.DefaultPath()) // never errors; malformed -> defaults
-	sandboxes, sandboxAvailability, err := newSandboxLifecycle(false)
+	sandboxes, sandboxAvailability, sandboxPresentation, err := newSandboxLifecycle(false)
 	if err != nil {
 		return err
 	}
@@ -537,6 +540,7 @@ func runLocal(cfg Config) error {
 		Remotes:             rt,
 		Sandbox:             sandboxes,
 		SandboxAvailability: sandboxAvailability,
+		SandboxPresentation: sandboxPresentation,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))
@@ -635,7 +639,7 @@ func runServe(cfg Config) error {
 	// PATCH from the browser would then write that empty value back over
 	// the file.
 	resolved.Server = srvCfg
-	sandboxes, sandboxAvailability, err := newSandboxLifecycle(cfg.NoAuth)
+	sandboxes, sandboxAvailability, sandboxPresentation, err := newSandboxLifecycle(cfg.NoAuth)
 	if err != nil {
 		return err
 	}
@@ -671,6 +675,7 @@ func runServe(cfg Config) error {
 		Remotes:             rt,
 		Sandbox:             sandboxes,
 		SandboxAvailability: sandboxAvailability,
+		SandboxPresentation: sandboxPresentation,
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))

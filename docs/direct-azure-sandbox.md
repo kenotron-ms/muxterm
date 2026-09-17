@@ -130,17 +130,24 @@ to defend against privileged or hostile same-UID code.
 ```text
 GET  /api/sandboxes
 GET  /api/sandboxes/{handle}
+GET  /api/sandboxes/presentation
 POST /api/sandboxes
 POST /api/sandboxes/{handle}/{attach|stop|resume|destroy|reconcile}
 ```
 
-These are a distinct protected route family, not SSH remotes. Every mutation
-requires UUID `Idempotency-Key`. Create admits only `profile`; actions admit
-only `generation`, plus `confirm_handle` matching `{handle}` for destroy.
-Strict JSON rejects all other fields. A mutation returns `202` only for a
-persisted `accepted` operation, `200` for observed success, and a safe non-2xx
-record view for pending, failed, ambiguous, or collision outcomes—an exact
-retry never receives `202` merely because it was retried.
+These are a distinct protected route family, not SSH remotes. The
+`presentation` route is an authenticated, read-only projection built from the
+already-loaded sealed configuration and the owner-local durable store. It
+returns only configuration state, the fixed `unavailable` attach status, a
+safe reason code/text, sorted profile names, and opaque local lifecycle
+records. Rendering or reading it makes no provider, credential, reconcile, or
+network call. Every mutation requires UUID `Idempotency-Key`. Create admits
+only `profile`; actions admit only `generation`, plus `confirm_handle` matching
+`{handle}` for destroy. Strict JSON rejects all other fields. A mutation
+returns `202` only for a persisted `accepted` operation, `200` for observed
+success, and a safe non-2xx record view for pending, failed, ambiguous, or
+collision outcomes—an exact retry never receives `202` merely because it was
+retried.
 
 Sandbox routes do **not** accept muxterm's ordinary loopback bypass. In local
 mode, a browser must obtain a normal muxterm auth-server cookie/bearer session.
@@ -148,12 +155,18 @@ A same-UID helper can instead use only the private `LocalToken` bearer. The
 routes are unavailable under `--no-auth`, without changing authentication for
 unrelated muxterm routes.
 
-**Settings → Sandboxes** displays only safe lifecycle state: unconfigured,
-disabled, kill switch, pending/accepted, failed/ambiguous/reconcile,
-stopped/suspended/running, and the attach block. It does not show a remote,
-workspace, provider identity, endpoint, label, credential, scope, or signer.
-The browser keeps one generated UUID for a retried action and asks for a local
-destroy confirmation before sending the matching-handle confirmation field.
+**Settings → Sandboxes** consumes the presentation route for the configured
+state, owner-configured profile names, and local inventory. It explicitly
+renders validation pending/loading, unconfigured, configured lifecycle-only,
+disabled/kill-switch unavailable, and error states. A lifecycle create is
+rendered and admitted only when a selected name is from the server-supplied
+profile allowlist and the lifecycle collection reports safe `ready`
+availability. It always says terminal/workspace connection is unavailable and
+does not offer Connect, Attach, Open terminal, or Azure workspace creation. It
+does not show a remote, workspace, provider identity, endpoint, label,
+credential, scope, or signer. The browser keeps one generated UUID for a
+retried action and asks for a local destroy confirmation before sending the
+matching-handle confirmation field.
 If a reconcile receives a known non-2xx HTTP response, its request UUID is
 rotated so the next explicit refresh performs a new observation. A network
 failure has no known response and retains its UUID for safe retry.
@@ -204,9 +217,16 @@ The current source delivers sealed lifecycle and image-side safeguards; it does 
 | Image/provider readiness | Residual | `cmd/muxterm-sandbox-ingress` and `internal/sandboxingress` provide an image-side bounded challenge/proof binary bridge, not provider deployment or image provenance. |
 | Live proof/lifecycle cleanup | Residual | Source/offline verification is not live provider lifecycle, attachment, or cleanup evidence. |
 | Conditional access | Residual | This source performs no Azure RBAC assignments and must not use a direct-provider role as an attach substitute. |
-| Settings/configured deployment | Residual | `web/src/components/settings-surface.ts` and `web/src/lib/sandboxes.ts` remain lifecycle-only; a reviewed deployment contract is required before configuration can represent an attached service. |
-| Workspace/sidebar grouping | Residual | A verified sandbox identity and transport are required; the UI reports attach unavailable rather than creating a remote workspace or machine grouping. |
+| Settings/sidebar read-only inventory presentation | Delivered | `internal/server/sandboxes_api.go:handleSandboxPresentation` and `sandboxazure.PresentationReader` provide authenticated, read-only configuration/profile/inventory data; `web/src/components/settings-surface.ts` and `web/src/components/mux-sidebar.ts` expose only safe local presentation and keep terminal/workspace connection unavailable. This is not a configured deployment or normal workspace/remote deliverable. |
+| Settings configured deployment selection/validation/persistence | Residual | `sandboxazure.Profile` in `internal/sandboxazure/config.go` has no non-secret broker/deployment reference field, and the source has no server-side validation/persistence API for such a reference; `internal/sandboxazure/provider.go:Provider` offers lifecycle CRUD only. Safe behavior is to expose only server-allowlisted profile names and read-only records, with no settings writes or endpoint discovery. The next action is a reviewed server-side deployment-reference and validation contract that can be projected and persisted owner-only without browser credentials or endpoints. |
+| Normal Azure workspace/sidebar | Residual | `internal/sandboxazure/controller.go:Controller.Attach` returns `sandboxazure.ErrAttachUnsupported`, while `internal/sandboxazure/provider.go:Provider` has no verified sessiond stream contract. Until verified sandbox identity and sessiond transport exist, the safe behavior is the separate Azure inventory group only: no remote registry, workspace creation, or socket path. |
 | Checks/docs | Offline only | `go run ./cmd/sandbox-verify` verifies the source contract offline; it is not live provider evidence. |
+
+The delivered inventory does not establish verified sandbox identity,
+sessiond readiness, reconnect semantics, or RBAC authorization. The Settings
+and sidebar surfaces are therefore truthful local presentation only; they make
+no provider calls on render/read and never reconstitute a remote or workspace
+from a lifecycle record.
 
 Current safeguards keep profiles configuration-gated and sandbox routes within the existing protected-route model. Browser callers cannot supply provider credentials; implementation must not manufacture a generic proxy, tunnel, or REST read/input loop as a sessiond attach. The fixed ingress adapter is only an image-side source primitive with bounded challenge/proof and binary bridging.
 

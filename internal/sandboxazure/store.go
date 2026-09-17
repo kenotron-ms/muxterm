@@ -122,6 +122,18 @@ func NewStore(root string) (*Store, error) {
 	return &Store{root: root}, nil
 }
 
+// OpenStoreReadOnly returns an owner-local store without creating or changing
+// any filesystem entry. The operation that reads the store validates the root
+// immediately before use, avoiding a redundant pre-check that cannot protect a
+// later filesystem operation. Lifecycle setup continues to use NewStore, which
+// is allowed to provision the configured store root.
+func OpenStoreReadOnly(root string) (*Store, error) {
+	if !filepath.IsAbs(root) {
+		return nil, ErrUnsafeStore
+	}
+	return &Store{root: root}, nil
+}
+
 func (s *Store) WithLock(fn func() error) error {
 	if err := s.checkRoot(); err != nil {
 		return err

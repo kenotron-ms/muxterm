@@ -138,7 +138,7 @@ func (m *AuthMiddleware) WrapSandbox(next http.Handler) http.Handler {
 		// No-auth is a development topology and sandbox routes are unavailable
 		// there. Do not let it weaken this route-specific control.
 		if m.noAuth {
-			httpJSONError(w, http.StatusServiceUnavailable, "sandbox_auth_required",
+			httpJSONError(w, http.StatusServiceUnavailable, "sandbox_auth_disabled",
 				"Azure Sandbox lifecycle is unavailable when muxterm authentication is disabled.")
 			return
 		}
