@@ -30,6 +30,11 @@ type Config struct {
 	Restore        RestoreConfig        `toml:"restore"    json:"restore"`
 	Voice          VoiceConfig          `toml:"voice"      json:"voice"`
 	MissionControl MissionControlConfig `toml:"missioncontrol" json:"missioncontrol"`
+	// Cos carries Mission Control capabilities that are operator decisions
+	// rather than browser preferences. It is deliberately absent from
+	// Merge(), so a browser PATCH /api/config can neither enable nor widen
+	// anything under it.
+	Cos CosConfig `toml:"cos" json:"-"`
 	// SandboxAzure is intentionally excluded from browser JSON and Merge().
 	// It is an owner-only outbound Azure scope allowlist; retaining it in the
 	// TOML model prevents an unrelated browser settings save from erasing it.
@@ -64,6 +69,108 @@ type SandboxAzureProfile struct {
 	AutoDeleteSeconds int      `toml:"auto_delete_seconds"`
 	ControllerCIDRs   []string `toml:"controller_cidrs"`
 	EgressHosts       []string `toml:"egress_hosts"`
+}
+
+// CosConfig groups the Mission Control capabilities an operator turns on
+// deliberately. Nothing in here is a browser preference.
+type CosConfig struct {
+	Attachments CosAttachmentsConfig `toml:"attachments"`
+}
+
+// CosAttachmentsConfig gates composer attachments.
+//
+// OFF BY DEFAULT, and that is the whole point of the section. Attachments
+// accept bytes from a browser, write them to a private directory on the
+// machine running muxterm, and hand the Operator a filesystem path it can
+// read. That is a real write surface and a real widening of what the agent
+// can see, so it is an operator decision, never one anyone backs into.
+//
+// MUXTERM_COS_ATTACHMENTS=1|0 overrides Enabled for one process. It exists
+// because `make dev-local` isolates XDG_RUNTIME_DIR and XDG_DATA_HOME but
+// deliberately does NOT isolate XDG_CONFIG_HOME: verifying this feature must
+// never require editing the real ~/.config/muxterm/config.toml that the
+// production server reads. Same family as MUXTERM_COS_SESSION_ID.
+type CosAttachmentsConfig struct {
+	// Enabled gates the whole capability. When false the upload route
+	// answers 404, cos-turn rejects any attachment id, and the browser
+	// never offers the control.
+	Enabled bool `toml:"enabled"`
+
+	// MaxFiles bounds one message. Zero means the shipped default.
+	MaxFiles int `toml:"max_files"`
+
+	// MaxFileBytes bounds one file. Zero means the shipped default.
+	MaxFileBytes int64 `toml:"max_file_bytes"`
+
+	// RetentionHours is how long a SUBMITTED attachment stays readable.
+	// Zero means the shipped default. An attachment that was staged but
+	// never submitted is swept far sooner; see the server package.
+	RetentionHours int `toml:"retention_hours"`
+}
+
+// Shipped attachment policy. Small on purpose: this is a composer, not a file
+// server, and every one of these bytes ends up on the machine's disk and in
+// the Operator's reach.
+const (
+	CosAttachmentsDefaultMaxFiles       = 4
+	CosAttachmentsDefaultMaxFileBytes   = 8 << 20 // 8 MiB
+	CosAttachmentsDefaultRetentionHours = 168     // 7 days
+	cosAttachmentsMaxFilesCeiling       = 10
+	cosAttachmentsMaxFileBytesCeiling   = 64 << 20 // 64 MiB
+	cosAttachmentsMaxRetentionHours     = 8760     // 1 year
+)
+
+// Validate rejects a configured value that is out of range rather than
+// silently clamping it. A clamped limit reads as accepted and behaves as
+// something else, which is the failure mode this project keeps paying for.
+func (a CosAttachmentsConfig) Validate() error {
+	if a.MaxFiles < 0 || a.MaxFiles > cosAttachmentsMaxFilesCeiling {
+		return fmt.Errorf("config: [cos.attachments] max_files must be 0 (default) or between 1 and %d",
+			cosAttachmentsMaxFilesCeiling)
+	}
+	if a.MaxFileBytes < 0 || a.MaxFileBytes > cosAttachmentsMaxFileBytesCeiling {
+		return fmt.Errorf("config: [cos.attachments] max_file_bytes must be 0 (default) or at most %d",
+			cosAttachmentsMaxFileBytesCeiling)
+	}
+	if a.RetentionHours < 0 || a.RetentionHours > cosAttachmentsMaxRetentionHours {
+		return fmt.Errorf("config: [cos.attachments] retention_hours must be 0 (default) or between 1 and %d",
+			cosAttachmentsMaxRetentionHours)
+	}
+	return nil
+}
+
+// Resolved returns the effective policy: configured values where present,
+// shipped defaults where not. EnabledOverride carries the environment
+// override so the caller can report which source decided.
+func (a CosAttachmentsConfig) Resolved() CosAttachmentsConfig {
+	out := a
+	if out.MaxFiles == 0 {
+		out.MaxFiles = CosAttachmentsDefaultMaxFiles
+	}
+	if out.MaxFileBytes == 0 {
+		out.MaxFileBytes = CosAttachmentsDefaultMaxFileBytes
+	}
+	if out.RetentionHours == 0 {
+		out.RetentionHours = CosAttachmentsDefaultRetentionHours
+	}
+	return out
+}
+
+// CosAttachmentsEnvOverride reads MUXTERM_COS_ATTACHMENTS. The second result
+// is false when the variable is unset or unparseable, in which case the
+// configured value stands.
+func CosAttachmentsEnvOverride() (bool, bool) {
+	raw := strings.TrimSpace(os.Getenv("MUXTERM_COS_ATTACHMENTS"))
+	if raw == "" {
+		return false, false
+	}
+	switch strings.ToLower(raw) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	}
+	return false, false
 }
 
 // MissionControlConfig retains legacy TOML fields for compatibility. Normal

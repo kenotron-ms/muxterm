@@ -603,6 +603,14 @@ func runServe(cfg Config) error {
 		return err
 	}
 
+	// Same fail-closed posture for the one Mission Control section that
+	// widens what the Operator can read off this machine's disk. An
+	// out-of-range limit is an error here, not a clamp applied silently
+	// while the operator believes the number they wrote is in force.
+	if err := resolved.Cos.Attachments.Validate(); err != nil {
+		return err
+	}
+
 	// Captured before srvCfg's default-fill and before resolved.Server is
 	// overwritten below. Once either has happened this is indistinguishable
 	// from a value the file actually specified, and the startup log would

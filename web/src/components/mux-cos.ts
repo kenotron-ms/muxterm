@@ -50,7 +50,7 @@
 import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { icon } from '../lib/icons.js';
-import { ArrowUp, Check, ChevronDown, Ellipsis, Mic, Square, TriangleAlert, X } from 'lucide';
+import { ArrowUp, Check, ChevronDown, Ellipsis, FileText, Mic, Paperclip, Square, TriangleAlert, X } from 'lucide';
 import type { AppletChangedDetail, AppletId } from '../lib/applet-registry.js';
 import {
   shortToolName,
@@ -60,6 +60,12 @@ import {
   type CosTurn,
 } from '../lib/cos-store.js';
 import { cosStore } from '../lib/cos-store.js';
+import {
+  humanBytes,
+  isImageMedia,
+  type CosAttachmentRef,
+  type CosDraftAttachment,
+} from '../lib/cos-attachments.js';
 import { ASSISTANT_ALIAS, ASSISTANT_NAME } from '../lib/assistant-identity.js';
 import {
   clampDashboardSplit,
@@ -198,6 +204,15 @@ export class MuxCos extends LitElement {
   @state() private _voiceSession: VoiceSessionSnapshot = voiceSessionController.snapshot();
   @state() private _textMode = false;
   @state() private _primaryMenuOpen = false;
+  /**
+   * Drag depth, not a boolean: dragenter/dragleave fire for every child the
+   * pointer crosses, so a plain flag flickers the highlight off the moment the
+   * cursor passes over the textarea inside the drop zone.
+   */
+  private _dragDepth = 0;
+  @state() private _dropActive = false;
+  /** The last thing said about attachments, announced politely once. */
+  @state() private _attachNotice = '';
   private _heldVoiceComposer: HeldVoiceComposer | null = null;
   /** Last value whose inline textarea geometry was deliberately settled. */
   private _sizedDraft: string | null = null;
@@ -1181,6 +1196,136 @@ export class MuxCos extends LitElement {
     .ctext::placeholder {
       color: var(--ink-3);
     }
+
+    /* ---- attachments ------------------------------------------------------
+       The staged strip sits ABOVE the textarea, inside the same box, so the
+       files and the words that will be sent with them read as one message
+       rather than as a tray parked next to one. */
+    .cbox.dropping {
+      border-color: var(--chrome-accent);
+      border-style: dashed;
+    }
+    .dropnote {
+      font-size: var(--t-meta);
+      color: var(--chrome-accent);
+      padding-bottom: var(--s-2);
+    }
+    .achips,
+    .tattach {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--s-2);
+    }
+    .tattach {
+      margin-top: var(--s-3);
+    }
+    .achip,
+    .tchip {
+      display: flex;
+      align-items: center;
+      gap: var(--s-2);
+      max-width: 100%;
+      min-width: 0;
+      padding: 2px var(--s-2) 2px 2px;
+      border: 1px solid var(--edge);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--surface) 70%, transparent);
+      font-size: var(--t-meta);
+      color: var(--ink-2);
+    }
+    .achip.failed {
+      border-color: color-mix(in srgb, var(--danger, #e5484d) 60%, transparent);
+      color: var(--ink-2);
+    }
+    .achip.uploading {
+      opacity: 0.85;
+    }
+    .athumb {
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      object-fit: cover;
+      flex: none;
+      display: block;
+    }
+    .aicon {
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      flex: none;
+      color: var(--ink-3);
+    }
+    .aname {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 18ch;
+      min-width: 0;
+    }
+    .ameta {
+      color: var(--ink-3);
+      flex: none;
+      white-space: nowrap;
+      max-width: 28ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .adrop {
+      width: 22px;
+      height: 22px;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--ink-3);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      flex: none;
+    }
+    .adrop:hover,
+    .adrop:focus-visible {
+      color: var(--ink-1);
+      background: color-mix(in srgb, var(--ink-1) 10%, transparent);
+    }
+    /* The file input is a mechanism, not a control: the paperclip button is
+       what a person sees and what a screen reader announces. Hidden without
+       display:none, which would make .click() a no-op in some browsers. */
+    .afile {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+      border: 0;
+    }
+    .asr {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    /* Touch targets. A 22px close affordance is fine under a mouse and is
+       below the comfortable minimum under a thumb, which is the input method
+       the portrait layout exists for. */
+    @media (pointer: coarse) {
+      .adrop {
+        width: 30px;
+        height: 30px;
+      }
+      .aname {
+        max-width: 12ch;
+      }
+    }
     .ctext:disabled {
       cursor: not-allowed;
       opacity: 0.62;
@@ -1879,16 +2024,28 @@ export class MuxCos extends LitElement {
           // replay, forever. The prompt text itself is deliberately NOT
           // rendered: it is a machine envelope addressed to the model, and the
           // Operator's reply below it is the part meant for a human.
+          //
+          // Tested FIRST, ahead of the attachment-bearing bubble below, for
+          // that same reason: provenance decides which voice a turn speaks in,
+          // and nothing a turn happens to carry may promote it back into YOU.
+          // A notice never has attachments anyway -- it is composed server-side
+          // and never crosses the composer's ingress path -- so ordering it
+          // first costs the attachment case nothing.
           html`<div class="turn sysnotice">
             <div class="who">MUXTERM</div>
             <div class="bd">
               <p class="say sysline">Lane lifecycle update</p>
             </div>
           </div>`
-        : t.prompt
-          ? html`<div class="turn you">
+        : t.prompt || t.attachments.length > 0
+          ? // A turn with no words but a file IS a message -- paste a
+            // screenshot, press send -- so the bubble is drawn for either.
+            html`<div class="turn you">
               <div class="who">YOU</div>
-              <div class="bd"><p class="say">${t.prompt}</p></div>
+              <div class="bd">
+                ${t.prompt ? html`<p class="say">${t.prompt}</p>` : nothing}
+                ${t.attachments.length > 0 ? this._renderTurnAttachments(t.attachments) : nothing}
+              </div>
             </div>`
           : nothing}
       <div class="turn cos">
@@ -1915,6 +2072,32 @@ export class MuxCos extends LitElement {
           ${this._renderFoot(t)}
         </div>
       </div>
+    `;
+  }
+
+  /**
+   * The files a message carried, under the words that came with it.
+   *
+   * A thumbnail appears only for an image THIS tab uploaded and still holds a
+   * local object URL for. A replayed turn shows the same chip without one,
+   * which is the truth: those bytes are on the server's disk, deliberately not
+   * fetchable, and inventing a placeholder image would imply otherwise.
+   */
+  private _renderTurnAttachments(refs: readonly CosAttachmentRef[]): TemplateResult {
+    return html`
+      <ul class="tattach" aria-label="Attachments">
+        ${refs.map(
+          (ref) => html`
+            <li class="tchip">
+              ${ref.previewUrl && isImageMedia(ref.mediaType)
+                ? html`<img class="athumb" src="${ref.previewUrl}" alt="" />`
+                : html`<span class="aicon" aria-hidden="true">${icon(FileText, { size: 13 })}</span>`}
+              <span class="aname" title="${ref.path || ref.name}">${ref.name}</span>
+              <span class="ameta">${ref.size}</span>
+            </li>
+          `,
+        )}
+      </ul>
     `;
   }
 
@@ -2100,15 +2283,39 @@ export class MuxCos extends LitElement {
     // Each send owns an independent receipt. Do not make a person wait for one
     // round trip before queuing an edited next message, but never admit the
     // exact same unchanged draft twice before its receipt.
-    const ready = draftPresent && cosStore.textSubmissionAvailable && !draftAdmissionPending;
+    const policy = cosStore.attachmentPolicy;
+    const staged = cosStore.attachments;
+    const stagedReady = cosStore.attachmentsReady.length > 0;
+    const stagedBusy = cosStore.attachmentsBusy;
+    const stagedFailed = cosStore.attachmentsFailed;
+    // An attachment is a message on its own, so it makes Send available the
+    // same way typed text does -- which also means the empty Send slot the
+    // voice orb borrows is only empty when there is genuinely nothing to send.
+    const anythingToSend = draftPresent || stagedReady;
+    const ready = anythingToSend && !stagedBusy && !stagedFailed &&
+      cosStore.textSubmissionAvailable && !draftAdmissionPending;
     const locked = !cosStore.textSubmissionAvailable;
     const listening = !voiceActive && !negotiating && this._voice === 'listening';
-    const primaryLabel = draftPresent
-      ? draftAdmissionPending ? 'Sending message' : activeTurn ? 'Queue message after active turn' : 'Send'
+    const primaryLabel = anythingToSend
+      ? stagedBusy
+        ? 'Waiting for attachments to finish uploading'
+        : stagedFailed
+          ? 'Remove the attachment that could not be added, then send'
+          : draftAdmissionPending ? 'Sending message' : activeTurn ? 'Queue message after active turn' : 'Send'
       : activeTurn ? 'Stop active turn' : admissionPending ? 'Sending' : 'Send';
     return html`
       <div class="comp">
-        <div class="cbox ${listening || voiceActive ? 'live' : ''}">
+        <div
+          class="cbox ${listening || voiceActive ? 'live' : ''} ${this._dropActive ? 'dropping' : ''}"
+          @dragenter="${this._onDragEnter}"
+          @dragover="${this._onDragOver}"
+          @dragleave="${this._onDragLeave}"
+          @drop="${this._onDrop}"
+        >
+          ${staged.length > 0 ? this._renderStagedAttachments(staged) : nothing}
+          ${this._dropActive
+            ? html`<div class="dropnote" aria-hidden="true">Drop to attach</div>`
+            : nothing}
           <textarea
             class="ctext"
             data-thread-composer
@@ -2121,6 +2328,7 @@ export class MuxCos extends LitElement {
             .value="${this._draft}"
             @input="${this._onDraft}"
             @keydown="${this._onKey}"
+            @paste="${this._onPaste}"
           ></textarea>
           <div class="crow">
             ${voiceActive
@@ -2137,6 +2345,25 @@ export class MuxCos extends LitElement {
                   >back to the orb</button>
                 `
               : nothing}
+            ${policy.enabled && !voiceActive
+              ? html`<button
+                    class="cbtn attach"
+                    type="button"
+                    title="Attach a file"
+                    aria-label="Attach a file"
+                    ?disabled="${locked || cosStore.attachmentSlotsLeft === 0}"
+                    @click="${this._openFilePicker}"
+                  >${icon(Paperclip, { size: 15 })}</button>
+                  <input
+                    class="afile"
+                    type="file"
+                    multiple
+                    tabindex="-1"
+                    aria-hidden="true"
+                    accept="${policy.accept.join(',')}"
+                    @change="${this._onFilesChosen}"
+                  />`
+              : nothing}
             ${!voiceActive && !negotiating && cosStore.composerIdentity.channelId !== 'none' && voiceInputController.isSupported()
               ? html`<button
                   class="cbtn ${listening ? 'rec' : ''}"
@@ -2148,7 +2375,16 @@ export class MuxCos extends LitElement {
                 >${listening ? icon(Square, { size: 13 }) : icon(Mic, { size: 16 })}</button>`
               : nothing}
             ${!voiceActive ? this._renderVoiceControl() : nothing}
-            ${busy || voiceActive || ready || admissionPending || !voiceSessionController.isSupported()
+            <!--
+              The empty Send slot belongs to the voice orb, and it is empty
+              only when there is genuinely nothing to send. A message that is
+              ready in the person's eyes but BLOCKED -- an upload still in
+              flight, or a row that failed -- keeps a visible, disabled Send
+              whose label says why, rather than making the control vanish and
+              leaving them to guess.
+            -->
+            ${busy || voiceActive || ready || admissionPending || !voiceSessionController.isSupported() ||
+            (anythingToSend && (stagedBusy || stagedFailed))
               ? html`<button
                   class="cbtn send primary-control"
                   type="button"
@@ -2401,7 +2637,16 @@ export class MuxCos extends LitElement {
 
   private _submit = (): void => {
     const prompt = this._draft.trim();
-    if (!prompt) return;
+    // An attachment is enough on its own; words are not required beside it.
+    if (!prompt && cosStore.attachmentsReady.length === 0) return;
+    if (cosStore.attachmentsBusy) {
+      this._attachNotice = 'Waiting for attachments to finish uploading.';
+      return;
+    }
+    if (cosStore.attachmentsFailed) {
+      this._attachNotice = 'Remove the attachment that could not be added, then send.';
+      return;
+    }
     // The store retains this draft until the server sends a real turn receipt.
     // A missing receipt is uncertainty, not proof that the user's words were sent.
     if (!cosStore.send(prompt)) return;
@@ -2411,6 +2656,154 @@ export class MuxCos extends LitElement {
     // path later clears the value authoritatively.
     this._resetComposerHeight();
   };
+
+  // -------------------------------------------------------------------------
+  // Attachments
+  //
+  // Three ways in, one path through. A picked file, a dropped file, and a
+  // pasted image all end at cosStore.addAttachmentFiles, which is where every
+  // policy decision and every visible refusal lives. Nothing here reads a
+  // file's bytes: the browser hands a File to an upload, and the id that comes
+  // back is all this component ever holds.
+  // -------------------------------------------------------------------------
+
+  private _renderStagedAttachments(rows: readonly CosDraftAttachment[]): TemplateResult {
+    return html`
+      <ul class="achips" aria-label="Attachments on this message">
+        ${rows.map(
+          (row) => html`
+            <li class="achip ${row.status}">
+              ${row.previewUrl && row.status !== 'failed'
+                ? html`<img class="athumb" src="${row.previewUrl}" alt="" />`
+                : html`<span class="aicon" aria-hidden="true">${icon(
+                    row.status === 'failed' ? TriangleAlert : FileText,
+                    { size: 13 },
+                  )}</span>`}
+              <span class="aname" title="${row.name}">${row.name}</span>
+              <span class="ameta">
+                ${row.status === 'uploading'
+                  ? `${Math.round(row.progress * 100)}%`
+                  : row.status === 'failed'
+                    ? row.message
+                    : humanBytes(row.size)}
+              </span>
+              <button
+                class="adrop"
+                type="button"
+                aria-label="Remove ${row.name}"
+                @click="${() => this._removeAttachment(row.localId)}"
+              >${icon(X, { size: 12 })}</button>
+            </li>
+          `,
+        )}
+      </ul>
+      <!--
+        One polite live region for the whole strip. Per-chip announcements
+        would talk over a person dropping four files at once, which is the
+        case this exists to serve.
+      -->
+      <div class="asr" role="status" aria-live="polite">${this._attachSummary(rows)}</div>
+    `;
+  }
+
+  private _attachSummary(rows: readonly CosDraftAttachment[]): string {
+    if (this._attachNotice) return this._attachNotice;
+    const failed = rows.filter((r) => r.status === 'failed');
+    if (failed.length > 0) {
+      return failed.length === 1
+        ? `An attachment could not be added: ${failed[0].message}`
+        : `${failed.length} attachments could not be added. First: ${failed[0].message}`;
+    }
+    const busy = rows.filter((r) => r.status === 'uploading').length;
+    if (busy > 0) return `Uploading ${busy} attachment${busy === 1 ? '' : 's'}.`;
+    if (rows.length > 0) return `${rows.length} attachment${rows.length === 1 ? '' : 's'} ready to send.`;
+    return '';
+  }
+
+  private _removeAttachment(localId: string): void {
+    const row = cosStore.attachments.find((a) => a.localId === localId);
+    cosStore.removeAttachment(localId);
+    this._attachNotice = row ? `Removed ${row.name}.` : '';
+    // Focus must not fall to the document when the chip under it disappears.
+    this.updateComplete.then(() => {
+      const next = this.renderRoot.querySelector<HTMLElement>('.achip .adrop')
+        ?? this.renderRoot.querySelector<HTMLElement>('.cbtn.attach')
+        ?? this.renderRoot.querySelector<HTMLElement>('.ctext');
+      next?.focus();
+    }).catch(() => {});
+  }
+
+  private _openFilePicker = (): void => {
+    this._attachNotice = '';
+    this.renderRoot.querySelector<HTMLInputElement>('.afile')?.click();
+  };
+
+  private _onFilesChosen = (e: Event): void => {
+    const input = e.target as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    // Reset first: picking the same file twice in a row must re-fire change.
+    input.value = '';
+    this._accept(files);
+  };
+
+  /**
+   * Paste. `clipboardData.files` is what carries a screenshot from the system
+   * clipboard, and it is EMPTY for an ordinary text paste -- so this never
+   * interferes with pasting words into the draft, and only calls
+   * preventDefault when it is actually taking a file.
+   */
+  private _onPaste = (e: ClipboardEvent): void => {
+    if (!cosStore.attachmentPolicy.enabled) return;
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    this._accept(files);
+  };
+
+  private _onDragEnter = (e: DragEvent): void => {
+    if (!this._draggingFiles(e)) return;
+    e.preventDefault();
+    this._dragDepth++;
+    this._dropActive = true;
+  };
+
+  private _onDragOver = (e: DragEvent): void => {
+    if (!this._draggingFiles(e)) return;
+    // Without this the browser navigates away to the dropped file.
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  };
+
+  private _onDragLeave = (e: DragEvent): void => {
+    if (!this._draggingFiles(e)) return;
+    this._dragDepth = Math.max(0, this._dragDepth - 1);
+    if (this._dragDepth === 0) this._dropActive = false;
+  };
+
+  private _onDrop = (e: DragEvent): void => {
+    if (!this._draggingFiles(e)) return;
+    e.preventDefault();
+    this._dragDepth = 0;
+    this._dropActive = false;
+    this._accept(Array.from(e.dataTransfer?.files ?? []));
+  };
+
+  /**
+   * Only a drag that actually carries files is ours. Dragging selected text,
+   * a link, or one of muxterm's own draggable pane handles across the composer
+   * must not light up a drop zone that would refuse it.
+   */
+  private _draggingFiles(e: DragEvent): boolean {
+    if (!cosStore.attachmentPolicy.enabled) return false;
+    const types = e.dataTransfer?.types;
+    return !!types && Array.from(types).includes('Files');
+  }
+
+  private _accept(files: readonly File[]): void {
+    if (files.length === 0) return;
+    this._attachNotice = '';
+    cosStore.addAttachmentFiles(files);
+  }
 
   private _stopGeneration = (): void => {
     this._primaryMenuOpen = false;
@@ -2472,7 +2865,12 @@ export class MuxCos extends LitElement {
     // A direct primary activation after its menu was opened is Send/Stop, not
     // a request to leave a stale duplicate menu over the composer.
     this._primaryMenuOpen = false;
-    if (this._draft.trim() !== '') {
+    // An attachment is a message, so the primary control has to agree with
+    // the render path about what "there is something to send" means. Reading
+    // only the draft here made the Send arrow do NOTHING for an
+    // attachment-only message -- and, with a turn running, made the control
+    // labelled "Queue message after active turn" cancel that turn instead.
+    if (this._draft.trim() !== '' || cosStore.attachmentsReady.length > 0) {
       this._submit();
       return;
     }

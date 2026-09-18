@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"mime"
 	"net"
 	"net/http"
@@ -237,6 +238,20 @@ func New(cfg Config) *Server {
 	}
 	s.ai = ai.NewManager(aiKeyPath)
 
+	// The composer attachment store is built from the SAME resolved config
+	// the rest of the process observes, once, before any route is served.
+	// Constructing it here (rather than lazily on first upload) is what
+	// makes a broken or unwritable store a startup log line instead of a
+	// surprise in the middle of someone's message.
+	hub.cosAttachments = newCosAttachmentStore(s.cfg.Cos.Attachments)
+	if hub.cosAttachments.available() {
+		log.Printf("muxterm: cos attachments enabled (max %d files, %d bytes each, %s retention)",
+			hub.cosAttachments.policy.MaxFiles,
+			hub.cosAttachments.policy.MaxFileBytes,
+			hub.cosAttachments.policy.Retention)
+		go hub.cosAttachments.runSweeper(context.Background())
+	}
+
 	// The collected pull requests, loaded from disk at construction so the
 	// first GET after a restart answers from the store rather than from an
 	// empty list it would then have to rebuild. Both paths are XDG-derived
@@ -378,6 +393,12 @@ func New(cfg Config) *Server {
 	// internal/server/prs_api.go.
 	s.mux.Handle("GET /api/files", protect(http.HandlerFunc(s.handleFilesList)))
 	s.mux.Handle("POST /api/files/upload", protect(http.HandlerFunc(s.handleFilesUpload)))
+	// Mission Control composer attachments. Behind the same authentication
+	// middleware as every other write route; the handler adds same-origin,
+	// a custom header, and a live attached browser on top, and answers 404
+	// outright when the capability is off.
+	s.mux.Handle("POST /api/cos/attachments", protect(http.HandlerFunc(s.handleCosAttachmentUpload)))
+	s.mux.Handle("DELETE /api/cos/attachments/{id}", protect(http.HandlerFunc(s.handleCosAttachmentDiscard)))
 	s.mux.Handle("GET /api/prs", protect(http.HandlerFunc(s.handlePRsList)))
 	s.mux.Handle("POST /api/prs/dismiss", protect(http.HandlerFunc(s.handlePRDismiss)))
 
