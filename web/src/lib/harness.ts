@@ -22,14 +22,48 @@
  */
 
 /** Harnesses the composer can start. */
-export const LAUNCHABLE_HARNESSES = ['amplifier', 'claude'] as const;
+export const LAUNCHABLE_HARNESSES = ["amplifier", "claude", "codex"] as const;
 
 export type HarnessName = (typeof LAUNCHABLE_HARNESSES)[number];
 
 /** Human label for the composer's harness control. */
 export function harnessLabel(h: HarnessName): string {
-  return h === 'amplifier' ? 'Amplifier' : 'Claude Code';
+  switch (h) {
+    case "claude":
+      return "Claude Code";
+    case "codex":
+      return "Codex";
+    default:
+      return "Amplifier";
+  }
 }
+
+/**
+ * The argv element that points Codex's turn-complete hook back at muxterm.
+ *
+ * TWIN, WITH ONE DELIBERATE DIFFERENCE: `CodexNotifyOverride` in
+ * internal/sessiond/codex_notify.go builds the same override with the ABSOLUTE
+ * path of the running muxterm binary (os.Executable()), because a Go caller
+ * knows it. A browser cannot know it, so this spells the program by name and
+ * lets the pane's PATH resolve it.
+ *
+ * That asymmetry is not drift and must not be "fixed" by weakening the Go side.
+ * It has one visible consequence, stated so nobody has to discover it: on a
+ * machine running a second muxterm build (`make dev-local`), a Codex lane
+ * started from THIS composer reports through whichever `muxterm` is first on
+ * PATH, while one started by spawn_lane reports through the exact build that
+ * will read the snapshot. Both write to the spool named by the pane's own
+ * XDG_RUNTIME_DIR, so both land in the right instance either way.
+ *
+ * There is no opt-out here to match MUXTERM_CODEX_NOTIFY: that variable is read
+ * in the process that BUILDS the argv, and this one runs in a browser with no
+ * environment to read. An operator who wants no override starts lanes from the
+ * agent or the CLI.
+ */
+const CODEX_NOTIFY_OVERRIDE = [
+  "-c",
+  'notify=["muxterm","session","codex-notify"]',
+];
 
 /**
  * The argv that starts `harness` with `prompt` as its opening turn.
@@ -45,6 +79,9 @@ export function harnessLabel(h: HarnessName): string {
  * the composer cannot ask for because it has no goal control. Everything the
  * two both build is identical.
  *
+ * The codex branch has its own, smaller asymmetry -- the notify program is
+ * named rather than given as an absolute path; see CODEX_NOTIFY_OVERRIDE.
+ *
  * If a goal control is ever added to the composer, copy that branch WHOLE. Its
  * argv is not this one plus a prefix -- `/goal` is only honoured on amplifier's
  * headless path, so `--mode chat` would turn the stop condition into ordinary
@@ -53,15 +90,23 @@ export function harnessLabel(h: HarnessName): string {
  */
 export function harnessArgv(harness: HarnessName, prompt: string): string[] {
   switch (harness) {
-    case 'claude':
-      return ['claude', prompt];
-    case 'amplifier':
+    case "claude":
+      return ["claude", prompt];
+    case "codex":
+      // `--` is load-bearing and is why this branch is not just
+      // ['codex', prompt]: Codex parses its command line with clap, so a
+      // prompt starting with '-' is read as an unknown FLAG and the pane dies
+      // with a usage message instead of starting a session. The separator ends
+      // option parsing, so everything after it is the prompt whatever it
+      // begins with. The Go twin carries the same separator and the same note.
+      return ["codex", ...CODEX_NOTIFY_OVERRIDE, "--", prompt];
+    case "amplifier":
     default:
       // `--mode chat` keeps this INTERACTIVE session alive after the first
       // turn. Without it the run is single-shot and the pane dies the moment it
       // answers, which would put a Completed row on the home view for something
       // the user intended to keep talking to. (It is exactly wrong for a goal
       // lane -- see the twin note above.)
-      return ['amplifier', 'run', prompt, '--mode', 'chat'];
+      return ["amplifier", "run", prompt, "--mode", "chat"];
   }
 }

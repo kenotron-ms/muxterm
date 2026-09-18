@@ -36,7 +36,7 @@ func runSessionRead(args []string) error {
 		fmt.Fprintln(os.Stdout, "Usage: muxterm session read <session-id> [--last N] [--json]")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Print the last few turns a session exchanged, read from its harness's own")
-		fmt.Fprintln(os.Stdout, "on-disk transcript (amplifier and claude are understood).")
+		fmt.Fprintln(os.Stdout, "on-disk transcript (amplifier, claude and codex are understood).")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "THIS IS A TAIL. Only the end of the file is read (a bounded window, at most")
 		fmt.Fprintln(os.Stdout, "4 MB however large the file), and each turn's text is clipped to 400")
@@ -62,7 +62,7 @@ func runSessionRead(args []string) error {
 
 	// `session` as a whole is --remote-capable, but this verb is not: the
 	// session row would come from the remote daemon and the transcript from
-	// THIS machine's ~/.amplifier or ~/.claude. That combination does not fail
+	// THIS machine's ~/.amplifier, ~/.claude or ~/.codex. That combination does not fail
 	// -- it silently reads somebody else's file, or reports "no transcript"
 	// for a session that has one. Refusing is the only honest answer until
 	// there is a way to fetch the file from the host that owns it.

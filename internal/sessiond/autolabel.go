@@ -142,6 +142,23 @@ func promptFromArgv(argv []string) string {
 				return arg
 			}
 		}
+	case HarnessCodex:
+		// The prompt is positional too, but "first non-flag argument" is the
+		// WRONG rule here and would name every Codex pane after muxterm's own
+		// plumbing: the lane carries `-c notify=[...]` (codex_notify.go), and
+		// that override is a separate argv element which is not itself a flag.
+		//
+		// The `--` separator the builder emits is the exact answer. Everything
+		// after it is positional by definition, so the prompt is the element
+		// following it, with no guessing about which options take values.
+		for i, arg := range argv[1:] {
+			if arg == "--" {
+				if rest := argv[i+2:]; len(rest) > 0 {
+					return rest[0]
+				}
+				return ""
+			}
+		}
 	}
 	return ""
 }

@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
@@ -156,14 +157,27 @@ func readTranscriptOn(fsys transcriptFS, row sessiond.SessionState, n int) (Tran
 		return readJSONLTail(fsys, row.Harness, amplifierTranscriptPath(row), n, amplifierTurn)
 	case sessiond.HarnessClaude:
 		return readJSONLTail(fsys, row.Harness, claudeTranscriptPath(fsys, row), n, claudeTurn)
+	case sessiond.HarnessCodex:
+		p, err := codexTranscriptPath(fsys, row)
+		if err != nil {
+			return Transcript{}, err
+		}
+		return readCodexTail(fsys, p, n)
 	case "":
 		return Transcript{}, fmt.Errorf("session %q declares no harness, so there is no transcript format to read "+
-			"(readable: %s, %s)", row.SessionID, sessiond.HarnessAmplifier, sessiond.HarnessClaude)
+			"(readable: %s)", row.SessionID, readableHarnesses)
 	default:
 		return Transcript{}, fmt.Errorf("session %q runs harness %q, whose transcript format muxterm does not know "+
-			"(readable: %s, %s)", row.SessionID, row.Harness, sessiond.HarnessAmplifier, sessiond.HarnessClaude)
+			"(readable: %s)", row.SessionID, row.Harness, readableHarnesses)
 	}
 }
+
+// readableHarnesses names the transcript formats above, for the two errors that
+// have to list them. Built from the constants so a fourth reader cannot be
+// added without this sentence updating itself.
+var readableHarnesses = strings.Join([]string{
+	sessiond.HarnessAmplifier, sessiond.HarnessClaude, sessiond.HarnessCodex,
+}, ", ")
 
 // amplifierProjectSlug turns an absolute working directory into the directory
 // name Amplifier files a project under: "/" and "\" become "-", ":" is
@@ -633,6 +647,329 @@ func claudeTurn(raw []byte) (TranscriptTurn, bool) {
 		return TranscriptTurn{}, false
 	}
 	return turn, true
+}
+
+// --- codex -----------------------------------------------------------------
+
+// Codex rollout files: ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl.
+//
+// VERIFIED against codex-cli 0.149.0 on this machine by running real sessions
+// and reading what landed, not inferred from documentation.
+//
+// THE PATH IS DATE-PARTITIONED, NOT PROJECT-PARTITIONED, which is the whole
+// difficulty and the reason this does not look like claudeTranscriptPath. Both
+// Amplifier and Claude Code file a session under a slug derived from its
+// working directory, so knowing the project is knowing the directory. Codex
+// files by the DAY THE THREAD WAS CREATED and puts the session's uuid only in
+// the filename, so the project a row carries says nothing about where to look.
+//
+// Codex does maintain an index -- ~/.codex/state_5.sqlite has a `threads` table
+// whose `rollout_path` column is the exact answer -- and muxterm deliberately
+// does not read it. Three reasons, in order of weight: it would put a SQLite
+// driver in go.mod for one lookup; the database is written live by another
+// process with WAL enabled, so reading it safely is not merely "open the file";
+// and the same source that documents the paginated-history migration states
+// that the JSONL is the durable record and SQLite is a REBUILDABLE PROJECTION
+// of it. Reading the derived copy of a file muxterm can simply open would be
+// the fragile choice, not the sophisticated one.
+//
+// So the day is derived from the row's own UpdatedAt and walked backwards. A
+// session that reported a turn today is found on the FIRST directory listing,
+// which is every session with a live fleet row worth reading; the walk-back
+// only costs round trips for one that has been idle for days, and it is bounded
+// so that a miss cannot turn into an unbounded remote directory crawl.
+
+const (
+	// codexTranscriptDaysBack is how many days before the row's last update to
+	// look for its rollout directory. A thread created on day D and still being
+	// talked to on day D+n is still filed under D.
+	//
+	// Seven, because a pane holding an interactive session for a week is a
+	// thing people actually do, and because the cost is only paid when the
+	// earlier candidates missed. Every listing is skipped the moment one hits.
+	codexTranscriptDaysBack = 7
+
+	// codexRolloutPrefix and codexRolloutSuffix bracket a rollout filename:
+	// rollout-2026-09-18T20-23-14-<uuid>.jsonl. Only the suffix is matched on,
+	// because the timestamp between them is not known from a session row.
+	codexRolloutPrefix = "rollout-"
+	codexRolloutSuffix = ".jsonl"
+)
+
+// codexTranscriptPath locates the rollout file for a Codex session row.
+//
+// The session id is un-prefixed first: the notify producer namespaces every
+// snapshot it writes as "codex-<uuid>" so it can only ever replace its own
+// files (sessiond/codex_notify.go), but the file on disk is named by the bare
+// uuid.
+//
+// Both the UTC and the local calendar date of each candidate day are tried,
+// deduplicated. Which of the two Codex uses for the directory name could not be
+// determined on this host -- its clock is set to UTC, so the two spellings are
+// identical and the observation cannot distinguish them. Trying both costs one
+// extra listing per day on a machine where they differ and removes an entire
+// class of "works here, silently finds nothing there" bug.
+func codexTranscriptPath(fsys transcriptFS, row sessiond.SessionState) (string, error) {
+	uuid := strings.TrimPrefix(row.SessionID, "codex-")
+	if uuid == "" {
+		return "", fmt.Errorf("session %q carries no codex thread id", row.SessionID)
+	}
+	root := path.Join("~", ".codex", "sessions")
+	want := "-" + uuid + codexRolloutSuffix
+
+	anchor := time.Unix(row.UpdatedAt, 0)
+	if row.UpdatedAt <= 0 {
+		// A row with no timestamp is not a reason to refuse: today is the
+		// overwhelmingly likely answer for any session anybody is asking
+		// about, and the walk-back covers the rest.
+		anchor = time.Now()
+	}
+
+	tried := make([]string, 0, 2*(codexTranscriptDaysBack+1))
+	seen := make(map[string]bool, cap(tried))
+	for d := 0; d <= codexTranscriptDaysBack; d++ {
+		day := anchor.AddDate(0, 0, -d)
+		for _, t := range []time.Time{day.UTC(), day.Local()} {
+			dir := path.Join(root, t.Format("2006"), t.Format("01"), t.Format("02"))
+			if seen[dir] {
+				continue
+			}
+			seen[dir] = true
+			tried = append(tried, dir)
+			for _, name := range fsys.listNames(dir) {
+				if strings.HasPrefix(name, codexRolloutPrefix) && strings.HasSuffix(name, want) {
+					return path.Join(dir, name), nil
+				}
+			}
+		}
+	}
+	// NAME WHAT WAS SEARCHED. "no transcript" for a session that is plainly
+	// talking is the single most confusing answer this surface can give, and
+	// the fix is almost always visible in the range: a thread older than the
+	// window, or a $CODEX_HOME that is not ~/.codex.
+	return "", fmt.Errorf("no codex rollout for thread %s under %s: searched %d day directories "+
+		"from %s back to %s (a thread older than that, or a relocated CODEX_HOME, is not found)",
+		uuid, root, len(tried),
+		anchor.UTC().Format("2006-01-02"),
+		anchor.AddDate(0, 0, -codexTranscriptDaysBack).UTC().Format("2006-01-02"))
+}
+
+// codexRecord is one line of a rollout file: {timestamp, ordinal, type, payload}.
+type codexRecord struct {
+	Timestamp string          `json:"timestamp"`
+	Type      string          `json:"type"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+// codexPayload is as much of a payload as either decoder needs. The union is
+// wide -- session_meta, response_item, event_msg, turn_context, world_state,
+// compacted and more all arrive on the same `payload` field -- so this is
+// deliberately a superset with everything optional rather than a type per
+// variant that would have to be kept exhaustive.
+type codexPayload struct {
+	Type string `json:"type"`
+	// response_item / message
+	Role    string         `json:"role"`
+	Content []codexContent `json:"content"`
+	// event_msg / item_completed
+	Item *codexItem `json:"item"`
+}
+
+// codexContent is one text block. The `type` discriminator is NOT used, and
+// that is deliberate: Codex spells it "text" inside a UserMessage and "Text"
+// inside an AgentMessage, and "input_text"/"output_text" inside a response_item
+// message -- four spellings for one concept, all of them verified in one
+// session file on this host. Reading the `text` field wherever it appears is
+// both simpler and immune to the fifth spelling.
+type codexContent struct {
+	Text string `json:"text"`
+}
+
+// codexItem is one completed conversation item.
+//
+// UserMessage, AgentMessage and CommandExecution are VERIFIED shapes. Every
+// other item type Codex emits -- file edits, MCP tool calls, web searches,
+// reasoning -- is handled by the default branch below rather than modelled,
+// because their fields were not observed here and inventing them is how a
+// reader starts returning confidently-empty turns.
+type codexItem struct {
+	Type    string         `json:"type"`
+	Phase   string         `json:"phase"`
+	Content []codexContent `json:"content"`
+	// Command is CommandExecution's argv. It has no Content at all, so without
+	// this a shell call would render as a nameless empty turn.
+	Command []string `json:"command"`
+}
+
+// readCodexTail reads a bounded tail of a rollout file and decodes it.
+//
+// TWO DECODERS, ONE CHOSEN PER READ, and the choice is what keeps this honest.
+// A 0.149.0 rollout carries the SAME turn twice: once as an `event_msg`
+// item_completed record (Codex's own already-filtered view of what happened)
+// and once as a `response_item` message (the raw model history, which also
+// contains three developer-role system prompts and a `<environment_context>`
+// block injected as a user message). Decoding both would show every turn twice;
+// decoding only the raw history means heuristically stripping injected context.
+//
+// So the item records win when the tail contains any, and the model history is
+// the fallback for a rollout that has none -- a legacy-mode file, or a tail
+// window that happened to land past them. Deciding once per read rather than
+// once per line is what makes duplicates structurally impossible.
+func readCodexTail(fsys transcriptFS, p string, n int) (Transcript, error) {
+	window := int64(n) * transcriptTailPerTurn
+	if window < transcriptMinTail {
+		window = transcriptMinTail
+	}
+	if window > transcriptMaxTail {
+		window = transcriptMaxTail
+	}
+
+	lines, truncated, err := tailLines(fsys, p, window)
+	if err != nil {
+		if isNotExist(err) {
+			return Transcript{}, fmt.Errorf("no %s transcript at %s "+
+				"(the session may not have written one yet)", sessiond.HarnessCodex, p)
+		}
+		return Transcript{}, fmt.Errorf("reading %s transcript %s: %w", sessiond.HarnessCodex, p, err)
+	}
+
+	turns := decodeCodexLines(lines, codexItemTurn)
+	if len(turns) == 0 {
+		turns = decodeCodexLines(lines, codexMessageTurn)
+	}
+	if len(turns) > n {
+		turns = turns[len(turns)-n:]
+		truncated = true
+	}
+	return Transcript{Harness: sessiond.HarnessCodex, Path: p, Truncated: truncated, Turns: turns}, nil
+}
+
+func decodeCodexLines(lines [][]byte, decode turnFn) []TranscriptTurn {
+	turns := make([]TranscriptTurn, 0, len(lines))
+	for _, raw := range lines {
+		if t, ok := decode(raw); ok {
+			turns = append(turns, t)
+		}
+	}
+	return turns
+}
+
+// codexItemTurn decodes an event_msg/item_completed record.
+func codexItemTurn(raw []byte) (TranscriptTurn, bool) {
+	var rec codexRecord
+	if err := json.Unmarshal(raw, &rec); err != nil || rec.Type != "event_msg" {
+		return TranscriptTurn{}, false
+	}
+	var pay codexPayload
+	if err := json.Unmarshal(rec.Payload, &pay); err != nil {
+		return TranscriptTurn{}, false
+	}
+	if pay.Type != "item_completed" || pay.Item == nil {
+		// task_started, task_complete and token_count are turn bookkeeping,
+		// not conversation.
+		return TranscriptTurn{}, false
+	}
+	item := pay.Item
+	turn := TranscriptTurn{TS: rec.Timestamp, Text: clip(codexContentText(item.Content))}
+
+	switch item.Type {
+	case "UserMessage":
+		turn.Role = "user"
+	case "AgentMessage":
+		turn.Role = "assistant"
+	case "CommandExecution":
+		turn.Role = "tool"
+		turn.Tool = item.Type
+		turn.Text = clip(strings.Join(item.Command, " "))
+	default:
+		// An item kind this version of muxterm has never seen. Reported as a
+		// tool turn carrying the RAW TYPE NAME, which is the same bargain
+		// claudeState makes with an unrecognised status: the reader learns
+		// that something happened and what Codex calls it, and whoever extends
+		// this next can see the word they need to add a case for. Dropping it
+		// would make a turn full of real work look like a gap.
+		turn.Role = "tool"
+		turn.Tool = item.Type
+	}
+	return turn, true
+}
+
+// codexMessageTurn decodes a response_item/message record -- the raw model
+// history, used only when a rollout carries no item records at all.
+func codexMessageTurn(raw []byte) (TranscriptTurn, bool) {
+	var rec codexRecord
+	if err := json.Unmarshal(raw, &rec); err != nil || rec.Type != "response_item" {
+		return TranscriptTurn{}, false
+	}
+	var pay codexPayload
+	if err := json.Unmarshal(rec.Payload, &pay); err != nil || pay.Type != "message" {
+		return TranscriptTurn{}, false
+	}
+	text := codexContentText(pay.Content)
+
+	switch pay.Role {
+	case "assistant":
+		return TranscriptTurn{Role: "assistant", Text: clip(text), TS: rec.Timestamp}, true
+	case "user":
+		if codexInjectedContext(text) {
+			return TranscriptTurn{}, false
+		}
+		return TranscriptTurn{Role: "user", Text: clip(text), TS: rec.Timestamp}, true
+	default:
+		// role=developer is the system prompt, arriving as three separate
+		// multi-kilobyte records at the head of every session
+		// (<skills_instructions>, the agent charter, <multi_agent_mode>).
+		// Never conversation.
+		return TranscriptTurn{}, false
+	}
+}
+
+// codexInjectedContext reports whether a user-role message is machinery rather
+// than something a human said.
+//
+// Codex injects its environment description as an ordinary user message --
+// verified: "<environment_context>\n  <cwd>...</cwd>..." arrives with the same
+// role and shape as a typed prompt. Claude Code answers this question with a
+// declared field (promptSource "typed" AND origin.kind "human"); Codex declares
+// nothing, so the only available signal is the structure of the text.
+//
+// The rule is tight on purpose: the whole message must OPEN with a lowercase
+// snake_case XML-ish tag. Prose does not begin that way, and every injected
+// block observed does. Anything else is kept, because the cost of wrongly
+// dropping something a person actually typed is far higher than the cost of
+// showing one block of context: a missing user turn makes the transcript lie
+// about what was asked.
+//
+// Only ever consulted on the FALLBACK path. A rollout carrying item records is
+// decoded from those instead, and Codex does not emit an item for the injected
+// block at all -- which is the strongest argument for preferring them.
+func codexInjectedContext(text string) bool {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "<") {
+		return false
+	}
+	end := strings.IndexByte(t, '>')
+	if end <= 1 {
+		return false
+	}
+	for _, r := range t[1:end] {
+		if (r >= 'a' && r <= 'z') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// codexContentText joins every text block in a content array.
+func codexContentText(blocks []codexContent) string {
+	var parts []string
+	for _, b := range blocks {
+		if b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // claudeBlocksText flattens a tool_result content array into a preview string.

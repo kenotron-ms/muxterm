@@ -30,12 +30,12 @@ import (
 
 // LaunchableHarnesses lists the harnesses LaneArgv can start, in schema order.
 //
-// HarnessAmplifier and HarnessClaude are declared in sessionstate.go, where the
-// harness vocabulary already lives. That list is longer than this one on
-// purpose: the agent catalog also RECOGNISES codex and opencode, but neither is
-// launchable, because recognising a process that is already running is not the
-// same as knowing the argv that starts one mid-conversation.
-var LaunchableHarnesses = []string{HarnessAmplifier, HarnessClaude}
+// The Harness* names are declared in sessionstate.go, where the harness
+// vocabulary already lives. That list is still longer than this one: the agent
+// catalog also RECOGNISES opencode, but it is not launchable, because
+// recognising a process that is already running is not the same as knowing the
+// argv that starts one mid-conversation.
+var LaunchableHarnesses = []string{HarnessAmplifier, HarnessClaude, HarnessCodex}
 
 // LaneArgv returns the argv that starts harness with its opening turn already
 // in hand. See mcp.HarnessArgv for the full reasoning; the load-bearing facts
@@ -60,6 +60,43 @@ func LaneArgv(harness, prompt, goal string) ([]string, error) {
 			return nil, fmt.Errorf("prompt is required for harness %q", HarnessClaude)
 		}
 		return []string{"claude", prompt}, nil
+
+	case HarnessCodex:
+		// Codex has no goal mode either. It does carry a `thread_goals` table
+		// internally on 0.149.0, but nothing on the CLI starts a session
+		// against one, so muxterm cannot launch a loop that declares its own
+		// stop condition. Refused rather than dropped, for HarnessClaude's
+		// reason: a lane that looks delegated but declares no intent is worse
+		// than a lane that did not start.
+		if goal != "" {
+			return nil, fmt.Errorf("harness %q has no goal mode: only %q can run /goal loops (drop goal, or switch harness)",
+				HarnessCodex, HarnessAmplifier)
+		}
+		if prompt == "" {
+			return nil, fmt.Errorf("prompt is required for harness %q", HarnessCodex)
+		}
+		// `codex [OPTIONS] [PROMPT]` with no subcommand is the INTERACTIVE
+		// form, and the positional prompt is delivered as the session's first
+		// user message. `codex exec` is the other one and is exactly wrong
+		// here: it is single-shot and headless, so the pane would die after
+		// one turn -- the same failure `--mode chat` exists to prevent on the
+		// amplifier branch.
+		//
+		// THE `--` IS LOAD-BEARING, and this is the one place in muxterm that
+		// has it. Codex parses its command line with clap, so a prompt
+		// beginning with "-" is read as an unknown FLAG: verified on 0.149.0,
+		// where `codex exec "-hello world"` prints usage and exits while
+		// `codex exec -- "-hello world"` runs the prompt. Without the
+		// separator a lane whose opening turn happened to start with a dash
+		// would die instantly with a usage message in the pane.
+		//
+		// The notify override goes BEFORE the separator because it is an
+		// option; see CodexNotifyOverride (codex_notify.go) for what it buys
+		// and what it costs. It is spliced rather than appended so that an
+		// operator opt-out simply produces a shorter argv.
+		argv := []string{"codex"}
+		argv = append(argv, CodexNotifyOverride()...)
+		return append(argv, "--", prompt), nil
 
 	case HarnessAmplifier:
 		if goal != "" {
