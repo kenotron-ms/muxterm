@@ -244,9 +244,25 @@ churns actively costs the user something.
 
 ### Never write these
 
-`paneId` and `workspaceId` are **the daemon's**, filled in during the pane join.
-Anything you put there is discarded. You cannot know them — that is the point of
-the division of labour described below.
+`paneId`, `workspaceId`, `goalId` and `origin` are **the daemon's**, filled in
+during the pane join. Anything you put there is discarded. You cannot know them
+— that is the point of the division of labour described below.
+
+The last two are launch provenance, read from the command line the daemon itself
+started the pane with, and they exist because they answer what a declaration
+cannot:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `goalId` | string | Digest of the stop condition this lane was **launched** with. Every lane running that condition carries the same id, so a batch is recognisable as one. Absent unless the pane was launched as a goal lane. |
+| `origin` | string | Which door the lane came through: `browser`, `agent`, `cli`, or `trigger:<trigger id>`. Absent when the daemon has nothing honest to say — e.g. a pane restored after a restart. |
+
+`goalId` is deliberately not a substitute for `doneMeans`, and it is not derived
+from it. `doneMeans` is what the session says finished means *now*, and it goes
+away the moment a human takes over a finished goal lane and it stops calling
+itself autonomous. `goalId` is what muxterm *launched* — so "which goal was this
+lane for?" is still answerable after the conversation has moved on. Two runs of
+one condition share an id; it names the condition, not the run.
 
 ### Size
 

@@ -195,6 +195,22 @@ type TriggerView struct {
 	// the reason a fire would be skipped right now, surfaced before the skip
 	// happens rather than after.
 	Running bool `json:"running,omitempty"`
+
+	// GoalID identifies this trigger's stop condition (lane_provenance.go), so
+	// a fleet row carrying the same id can be tied back to the trigger that
+	// produced it. Computed, never stored: it is a function of Goal, and a
+	// stored copy could only ever disagree with it.
+	GoalID string `json:"goalId,omitempty"`
+
+	// GoalLint is what the stop condition's lint says about it RIGHT NOW,
+	// recomputed on every listing rather than frozen at creation.
+	//
+	// Recomputed on purpose: a trigger created before a rule existed has never
+	// been looked at by it, and the moment a human lists their triggers is the
+	// moment to say so. Blockers cannot appear here for a trigger created after
+	// this shipped -- CreateTrigger refuses those -- but they can for an older
+	// one, and that is exactly the case worth surfacing.
+	GoalLint []GoalFinding `json:"goalLint,omitempty"`
 }
 
 // triggerStore holds every trigger, in memory and on disk.
