@@ -698,7 +698,7 @@ func registerAllTools(
 	// closes a workspace it did not create -- not by the tool's absence.
 	srv.Register(
 		"spawn_lane",
-		"delegate work: launch a coding-agent session (amplifier|claude) in a pane of the named workspace, "+
+		"delegate work: launch a coding-agent session (amplifier|claude|codex) in a pane of the named workspace, "+
 			"creating that workspace if it does not exist; prompt is the session's opening turn; goal "+
 			"(amplifier only) instead launches a /goal loop with that stop condition, and prompt is ignored; "+
 			"returns workspace_id, pane_id, harness, workspace_created. A goal is LINTED for known "+
@@ -720,7 +720,7 @@ func registerAllTools(
 				},
 				"harness": map[string]any{
 					"type": "string",
-					"enum": []string{"amplifier", "claude"},
+					"enum": Launchable,
 				},
 				"prompt": map[string]any{
 					"type":        "string",
@@ -797,7 +797,7 @@ func registerAllTools(
 	srv.Register(
 		"lane_transcript",
 		"read the last few turns a session actually exchanged, from its harness's own on-disk transcript "+
-			"(amplifier and claude). Harness and project directory come from the fleet snapshot, so only a session "+
+			"(amplifier, claude and codex). Harness and project directory come from the fleet snapshot, so only a session "+
 			"listed by fleet_status can be read. THIS IS A TAIL, NOT THE CONVERSATION: only the end of the file is "+
 			"read (a bounded window, at most 4 MB, however large the file), each turn's text is clipped to 400 "+
 			"characters, and last_n is capped at 100 (default 10). truncated=true in the result means earlier turns "+

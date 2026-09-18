@@ -13,13 +13,14 @@ import (
 const (
 	HarnessAmplifier = sessiond.HarnessAmplifier
 	HarnessClaude    = sessiond.HarnessClaude
+	HarnessCodex     = sessiond.HarnessCodex
 )
 
 // Launchable lists the harnesses HarnessArgv can start, in schema order.
 //
-// The daemon's agent catalog also RECOGNISES codex and opencode, but neither
-// is launchable from here: recognising a process that is already running is
-// not the same as knowing the argv that starts one mid-conversation.
+// The daemon's agent catalog also RECOGNISES opencode, but it is not
+// launchable from here: recognising a process that is already running is not
+// the same as knowing the argv that starts one mid-conversation.
 var Launchable = sessiond.LaunchableHarnesses
 
 // HarnessArgv returns the argv that starts harness with its opening turn

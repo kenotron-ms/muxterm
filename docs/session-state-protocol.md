@@ -461,16 +461,71 @@ muxterm session report --session-id nightly-build --harness nightly-build \
 |----------|------|-------|
 | Amplifier | in-process hook | `modules/hooks-muxterm-session` |
 | any tool | one-shot CLI | `muxterm session report` |
-| Claude Code | opt-in poller | `internal/sessiond/claude_adapter.go` |
+| Claude Code | poller, on by default | `internal/sessiond/claude_adapter.go` |
+| Codex | turn-complete hook, on by default | `internal/sessiond/codex_notify.go` |
 
-The Claude Code adapter is off unless `MUXTERM_CLAUDE_ADAPTER=1` is set in
-sessiond's environment. It polls `claude agents --json` every five seconds while
-a browser is subscribed, and degrades silently — a missing `claude`, a non-zero
-exit, or unparseable output costs one log line and nothing else.
+Both third-party bridges are **on by default with an explicit opt-out**, because
+a fleet view that silently omits half the agents running on the machine is worse
+than one that shows them: it reads as "muxterm cannot see Codex" rather than
+"muxterm was not switched on", and it is believed.
 
-An environment variable rather than a config key, because the config file is the
-*browser's* config, live-editable from the UI, and "may this daemon execute a
-subprocess" is not a preference a web page should be able to flip.
+Each opt-out is an environment variable read where the work happens, rather than
+a config key, because the config file is the *browser's* config, live-editable
+from the UI, and neither "may this daemon execute a subprocess" nor "what argv
+may this daemon build" is a preference a web page should be able to flip. Set
+either to `0`, `false`, `no`, or `off`; **any other value, including a typo,
+means enabled**, so a misspelled opt-out cannot silently disable a feature the
+operator believes is running.
+
+### Claude Code — `MUXTERM_CLAUDE_ADAPTER`
+
+Polls `claude agents --json` every five seconds while a browser is subscribed,
+and degrades silently: a missing `claude`, a non-zero exit, or unparseable
+output costs one log line and nothing else.
+
+### Codex — `MUXTERM_CODEX_NOTIFY`
+
+Not a poller. Codex has a real external-program hook, so muxterm does not run
+`codex` as a subprocess at all — it asks Codex to call muxterm. Lane argv
+carries an override that points Codex's turn-complete hook at this binary:
+
+```
+codex -c notify=["<muxterm>","session","codex-notify"] -- <prompt>
+```
+
+Codex appends one JSON document to that argv after each completed agent turn.
+`muxterm session codex-notify` translates it into a snapshot, and because Codex
+spawns the hook as a **direct child of the codex process**, the ordinary
+pid-to-pane walk places the row with no special case.
+
+To report Codex sessions you start yourself, put the same program in
+`~/.codex/config.toml`:
+
+```toml
+notify = ["muxterm", "session", "codex-notify"]
+```
+
+A lane muxterm starts needs none of that. Note that `-c` **replaces** your own
+`notify` program for that lane's lifetime rather than appending to it — that is
+the cost of needing no setup, and `MUXTERM_CODEX_NOTIFY=0` is the way out.
+
+**What a Codex row cannot say.** These are limits of the hook, not of the
+mapping, and they are why a Codex row is coarser than an Amplifier one. Codex
+emits only `agent-turn-complete`; there is no turn-*started* counterpart, and a
+turn that fails emits nothing at all.
+
+| Field | Codex | Why |
+|---|---|---|
+| `state` | only ever `stopped` | A turn ending is the session arriving at its prompt. No verdict is offered, so `done` would be an invention. |
+| `working` | never observable | No turn-started event exists. |
+| `blocked` | never observable | A session sitting on an approval prompt has not completed a turn, so it looks exactly like one resting. This is the limit that costs the most. |
+| row before first turn | absent | The thread id that identifies the session does not exist until Codex creates it, and does not reach muxterm until the first notify fires. |
+| `mode` | always `interactive` | muxterm cannot launch a Codex session that runs unattended toward its own stop condition, so declaring `autonomous` would make every resting lane an alarm. |
+| `name` | the session's first prompt, stably | Not a limit — `input-messages` accumulates across the thread, so a stateless hook reading element zero re-declares the same title every turn. `label` is left empty so the daemon's argv-derived tab name keeps winning. |
+
+A Codex lane that breaks mid-turn is silent until its pane exits, at which point
+the harness-agnostic exit path writes the completion record and the failure
+becomes visible that way.
 
 ## Related
 

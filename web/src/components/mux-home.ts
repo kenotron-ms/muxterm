@@ -326,7 +326,7 @@ export class MuxHome extends LitElement {
    * that harness -- it does not open a shell and type at it -- so this is the
    * program, not a label.
    */
-  @state() private _harness: 'amplifier' | 'claude' = 'amplifier';
+  @state() private _harness: HarnessName = 'amplifier';
   @state() private _view: HomeView = loadView();
   @state() private _cursor = 0;
   @state() private _peek = false;

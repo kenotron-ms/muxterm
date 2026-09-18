@@ -372,11 +372,14 @@ func TestCreateTriggerRefusesBadInput(t *testing.T) {
 			Workspace: "w", Harness: HarnessAmplifier, Prompt: "do a thing", Enabled: true}
 	}
 	cases := map[string]func(*Trigger){
-		"unparseable schedule":  func(t *Trigger) { t.Schedule = "every tuesday-ish" },
-		"missing schedule":      func(t *Trigger) { t.Schedule = "" },
-		"unknown kind":          func(t *Trigger) { t.Kind = "webhook" },
-		"unknown harness":       func(t *Trigger) { t.Harness = "codex" },
+		"unparseable schedule": func(t *Trigger) { t.Schedule = "every tuesday-ish" },
+		"missing schedule":     func(t *Trigger) { t.Schedule = "" },
+		"unknown kind":         func(t *Trigger) { t.Kind = "webhook" },
+		// "codex" used to stand in for an unlaunchable harness here. It is
+		// launchable now (lane_argv.go), so this needs a name no harness has.
+		"unknown harness":       func(t *Trigger) { t.Harness = "no-such-harness" },
 		"goal on claude":        func(t *Trigger) { t.Harness = HarnessClaude; t.Goal = "done" },
+		"goal on codex":         func(t *Trigger) { t.Harness = HarnessCodex; t.Goal = "done" },
 		"prompt is a command":   func(t *Trigger) { t.Prompt = "/clear" },
 		"blank name":            func(t *Trigger) { t.Name = "" },
 		"newline in workspace":  func(t *Trigger) { t.Workspace = "a\nb" },

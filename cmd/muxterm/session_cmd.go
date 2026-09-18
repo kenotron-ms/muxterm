@@ -25,6 +25,7 @@ func runSession(args []string) error {
 		fmt.Fprintln(os.Stdout, "  attach <workspace-id>   Print a workspace's composition (panes + layout)")
 		fmt.Fprintln(os.Stdout, "  read <session-id>       Print the tail of an agent session's transcript")
 		fmt.Fprintln(os.Stdout, "  report [flags]          Publish a session-state snapshot to the home view")
+		fmt.Fprintln(os.Stdout, "  codex-notify <json>     Codex's turn-complete hook target (not run by hand)")
 		return nil
 	}
 	switch args[0] {
@@ -45,6 +46,11 @@ func runSession(args []string) error {
 		// The universal producer; see session_report_cmd.go. Unlike list and
 		// attach it never dials the daemon -- it writes a file.
 		return runSessionReport(args[1:])
+	case "codex-notify":
+		// The same producer, for a caller that cannot pass flags: Codex hands
+		// its hook program one JSON argument of its own choosing. See
+		// codex_notify_cmd.go.
+		return runCodexNotify(args[1:])
 	default:
 		return fmt.Errorf("unknown session command %q\n\nRun 'muxterm session --help' for usage.", args[0])
 	}
