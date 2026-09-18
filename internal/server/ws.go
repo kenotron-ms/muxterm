@@ -1612,6 +1612,10 @@ func (h *Hub) Remove(c *Client) {
 // sidecar was launched.
 func (h *Hub) CloseCos() { h.cos.close() }
 
+// StartLifecycleNotices runs the Operator lifecycle notice pump for this
+// server. A no-op when the feature is switched off; see lifecycle_notices.go.
+func (h *Hub) StartLifecycleNotices(ctx context.Context) { h.cos.startLifecycleNotices(ctx) }
+
 // ClientCount returns the number of connected clients.
 func (h *Hub) ClientCount() int {
 	h.mu.RLock()

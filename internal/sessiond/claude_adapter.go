@@ -27,23 +27,43 @@ import (
 // the protocol carries rows, the browser renders them. This file is the only
 // place in muxterm that knows the shape of another vendor's JSON.
 //
-// OPT-IN, ALWAYS. The daemon must never execute another vendor's binary
-// because it happened to be on PATH -- an operator gets to decide that a
-// long-lived background service may spawn subprocesses. See claudeAdapterEnv.
+// ON BY DEFAULT, WITH AN EXPLICIT OPT-OUT. This used to be opt-in, and the
+// opt-in was the bug: the practical effect of a default-off bridge is that
+// Claude Code sessions are simply absent from the fleet on every machine
+// nobody remembered to configure, which reads exactly like "muxterm cannot see
+// Claude Code" rather than "muxterm was not switched on". A fleet view that
+// silently omits half the agents running on the machine is worse than one that
+// shows them, because it is believed.
+//
+// The original objection -- a long-lived background service should not execute
+// another vendor's binary just because it is on PATH -- is answered by what
+// this actually does rather than by refusing to run: it invokes ONE documented,
+// non-TTY, read-only scripting command (`claude agents --json`, which prints
+// active sessions and exits), with stdin closed, a hard timeout, no arguments
+// derived from any untrusted input, and no side effect on the Claude Code
+// installation. A machine without `claude` on PATH pays one LookPath failure
+// and one log line, forever. See claudeAdapterEnv for the opt-out an operator
+// who still wants no subprocesses at all can set.
 //
 // DEGRADES SILENTLY. A missing `claude`, a non-zero exit, a timeout, or JSON
 // that does not parse costs one log line and then nothing. None of them may
 // disturb the daemon: a decorative sidebar feature has no business affecting a
 // process that owns people's terminals.
 
-// claudeAdapterEnv is the operator's switch. Set it to 1/true/yes in the
-// environment sessiond is started with.
+// claudeAdapterEnv is the operator's OPT-OUT. Leave it unset for the default
+// (enabled); set it to 0/false/no/off in the environment sessiond is started
+// with to keep the daemon from running `claude` at all.
 //
 // An environment variable rather than a config-file key on purpose: the config
 // file is the BROWSER's config (theme, fonts, keybindings), reloaded live and
 // editable from the UI, and "may this daemon execute a subprocess" is not a
 // preference a web page should be able to flip. It is a property of how the
 // operator launched the service.
+//
+// Any other value -- including an unparseable one -- means enabled, which is
+// the deliberate direction for a default-on switch: a typo in an opt-out must
+// not silently disable a feature the operator believes is running. Only the
+// four unambiguous off words turn it off.
 const claudeAdapterEnv = "MUXTERM_CLAUDE_ADAPTER"
 
 // claudeSnapshotPrefix namespaces every snapshot this adapter writes.
@@ -97,13 +117,14 @@ type claudeAgent struct {
 	WaitingFor string `json:"waitingFor"`
 }
 
-// claudeAdapterEnabled reports the operator's opt-in.
+// claudeAdapterEnabled reports whether the adapter should run: true unless the
+// operator explicitly opted out.
 func claudeAdapterEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(claudeAdapterEnv))) {
-	case "1", "true", "yes", "on":
-		return true
+	case "0", "false", "no", "off":
+		return false
 	}
-	return false
+	return true
 }
 
 // claudeAdapter owns the poll loop and the set of snapshots it has written.
@@ -130,7 +151,7 @@ func (s *Server) claudeAdapterLoop(ctx context.Context) {
 	a := newClaudeAdapter()
 	ticker := time.NewTicker(claudeAdapterTick)
 	defer ticker.Stop()
-	log.Printf("sessiond: claude adapter enabled (%s set); polling `claude agents --json` every %s", claudeAdapterEnv, claudeAdapterTick)
+	log.Printf("sessiond: claude adapter enabled (default on; set %s=0 to opt out); polling `claude agents --json` every %s", claudeAdapterEnv, claudeAdapterTick)
 	for {
 		select {
 		case <-ctx.Done():

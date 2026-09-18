@@ -577,6 +577,36 @@ func (s *Supervisor) SubmitWithID(prompt, turnID string) *Turn {
 	return s.q.submitWithID(prompt, turnID)
 }
 
+// Turn origins. A turn is not always something a human typed.
+//
+// OriginHuman is the default and the meaning of an empty string, here and on
+// the wire and in the persisted transcript. Only OriginLifecycle renders as a
+// system notice, so the failure direction of an unknown value is always "a
+// person said it": a system turn misread as human is cosmetic, a human turn
+// misread as system is a forged message.
+const (
+	OriginHuman     = "human"
+	OriginVoice     = "voice"
+	OriginLifecycle = "lifecycle"
+)
+
+// SubmitOrigin enqueues a turn with explicit provenance, at the FIFO's natural
+// tail position.
+//
+// There is deliberately no priority lane and no preemption. This package's
+// whole doctrine is one turn at a time in submission order, because two
+// independent writers into one amplifier session cost data once already; a
+// "jump the queue" case for notices would reintroduce exactly that risk for a
+// feature whose premise is durability, not urgency. A lifecycle notice that
+// waits behind a human's question is working correctly.
+func (s *Supervisor) SubmitOrigin(prompt, origin, causationID string) *Turn {
+	return s.q.submitRequest(turnRequest{
+		Prompt:      prompt,
+		Origin:      origin,
+		CausationID: causationID,
+	})
+}
+
 // Approve answers an approval_request. The turn stays blocked inside the
 // sidecar until this arrives (2.4 law 3), so a caller that never answers hangs
 // the session - answer, even if the answer is "no".
@@ -1414,6 +1444,13 @@ type op struct {
 	RequestID string `json:"request_id,omitempty"`
 	Approved  *bool  `json:"approved,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+
+	// Origin and CausationID travel with a turn so the sidecar can stamp them
+	// onto the persisted message. Omitted for an ordinary human turn: absence
+	// means `human`, and writing the default onto every message a person types
+	// would be metadata for nothing.
+	Origin      string `json:"origin,omitempty"`
+	CausationID string `json:"causation_id,omitempty"`
 
 	// clear / history / config
 	ReqID         string `json:"req_id,omitempty"`
