@@ -501,10 +501,20 @@ type pendingRow struct {
 	live bool
 }
 
-// stampPane fills in the two fields a producer cannot know about itself.
+// stampPane fills in the fields a producer cannot know about itself.
+//
+// Location was always two of them. Provenance is the other two, and they belong
+// here for the same reason: a session knows what it is doing and has no way to
+// know that a trigger called `nightly-review` started it, or that the condition
+// it is running is the same condition another lane in another workspace is
+// running. Both are muxterm's own launch record, and both are stamped over
+// whatever the producer wrote -- a producer cannot be authoritative about the
+// command line it was started with.
 func stampPane(row SessionState, pane paneRef) SessionState {
 	row.PaneID = pane.paneID
 	row.WorkspaceID = pane.workspaceID
+	row.GoalID = pane.goalID
+	row.Origin = pane.origin
 	return row
 }
 
@@ -537,9 +547,20 @@ func endingIsNewer(a, b SessionState) bool {
 }
 
 // paneRef is a pane's identity: everything the join needs to stamp onto a row.
+//
+// It also carries the two LAUNCH facts, captured in the same walk that builds
+// the map. They ride here rather than being looked up later because this is the
+// one place the join already holds the live *Pane; re-entering the registry
+// from stampPane would take a second lock, per row, once a second, to learn
+// something that was in hand a moment earlier.
 type paneRef struct {
 	workspaceID string
 	paneID      int
+	// goalID identifies the stop condition this pane was launched with, when
+	// it was launched as a goal lane. Empty for every other pane.
+	goalID string
+	// origin is which door the pane came through (lane_provenance.go).
+	origin string
 }
 
 // paneOwners maps each live pane's root process id to that pane's identity.
@@ -555,7 +576,18 @@ func paneOwners(views []workspaceLiveView) map[int]paneRef {
 			if snap.exited || snap.pid <= 0 {
 				continue
 			}
-			owners[snap.pid] = paneRef{workspaceID: ws.ID, paneID: p.LocalID}
+			ref := paneRef{workspaceID: ws.ID, paneID: p.LocalID, origin: p.LaunchOrigin()}
+			// Read from the argv the daemon itself started, not from anything
+			// the session declares. A goal lane's condition is right there in
+			// its command line (goallane.go), and it stays there after the
+			// session has finished, been resumed interactively, and stopped
+			// calling itself autonomous -- which is exactly when doneMeans
+			// disappears from the row and the question "which goal was this?"
+			// gets asked.
+			if goal, ok := goalLaneGoal(p.LaunchArgv()); ok {
+				ref.goalID = GoalID(goal)
+			}
+			owners[snap.pid] = ref
 		}
 	}
 	return owners
@@ -625,6 +657,13 @@ func sessionStateHash(rows []SessionState) uint64 {
 		writeHashField(h, r.WaitingFor)
 		writeHashField(h, r.Doing)
 		writeHashField(h, r.DoneMeans)
+		// Daemon-stamped provenance is hashed like any other rendered field.
+		// Leaving it out would mean a lane whose origin or goal id became known
+		// after its first publish never pushed the correction -- the gate would
+		// see an unchanged set and suppress it, and the row would sit there
+		// missing the fact until something else about it moved.
+		writeHashField(h, r.GoalID)
+		writeHashField(h, r.Origin)
 		writeHashField(h, strconv.Itoa(r.PR))
 		// Todo is a POINTER, so absence is a distinct value the browser renders
 		// differently (it falls back to Doing). A leading presence flag is what

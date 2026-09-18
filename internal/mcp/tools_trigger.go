@@ -169,8 +169,18 @@ func (tt *triggerTools) render(views []sessiond.TriggerView, focus string) (stri
 		}
 		if v.Goal != "" {
 			row["goal"] = v.Goal
+			// The id is what ties this trigger to the fleet rows it produces:
+			// a lane spawned from this condition carries the same goal_id.
+			row["goal_id"] = v.GoalID
 		} else if v.Prompt != "" {
 			row["prompt"] = v.Prompt
+		}
+		// What the stop-condition lint says about this trigger's goal, now.
+		// Emitted on every listing, not only at creation: a trigger authored
+		// before a rule existed has never been read by it, and a caller asking
+		// "is this thing working" is asking a question the lint partly answers.
+		if len(v.GoalLint) > 0 {
+			row["goal_lint"] = goalLintJSON(v.GoalLint)
 		}
 		if v.MaxRuns > 0 {
 			row["max_runs"] = v.MaxRuns

@@ -139,6 +139,26 @@ export interface SessionState {
   /** The session's declared stop condition. Normally only when autonomous. */
   doneMeans?: string;
   /**
+   * Digest of the stop condition this lane was LAUNCHED with. Stamped by the
+   * daemon from the pane's own argv, not declared by the session.
+   *
+   * Two lanes running the same condition share an id, so a batch is
+   * recognisable as a batch. And unlike `doneMeans` -- which the session
+   * declares, and which goes away when a human takes over a finished goal lane
+   * -- this survives, so "which goal was this lane for?" stays answerable.
+   *
+   * Absent for any lane not launched as a goal lane.
+   */
+  goalId?: string;
+  /**
+   * Which door this lane came through: 'browser', 'agent', 'cli', or
+   * 'trigger:<trigger id>'. Stamped by the daemon, never declared.
+   *
+   * Absent is a real value: a pane restored after a daemon restart came
+   * through no door in that process's lifetime.
+   */
+  origin?: string;
+  /**
    * Progress through the session's own task list, when it keeps one.
    *
    * ABSENT means it does not keep one -- which is not the same as no progress,

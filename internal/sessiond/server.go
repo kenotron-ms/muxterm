@@ -1029,6 +1029,11 @@ func (c *conn) createPane(msg Message) {
 	if title != "" {
 		p.setTitleDerived(title)
 	}
+	// Which door this pane came through, recorded before it is registered and
+	// read afterwards onto every fleet row for a session running in it
+	// (lane_provenance.go). Derived from the connection's declared kind, so
+	// there is nothing here for a caller to pass, get wrong, or forge.
+	p.setLaunchOrigin(LaneOriginForClientKind(c.kind))
 	c.srv.reg.PutPane(wsID, p)
 	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
 	c.srv.broadcast(wsID, &Message{

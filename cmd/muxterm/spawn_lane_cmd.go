@@ -24,6 +24,15 @@ type spawnLaneJSON struct {
 	PaneID           int    `json:"paneId"`
 	Harness          string `json:"harness"`
 	WorkspaceCreated bool   `json:"workspaceCreated"`
+	// GoalID mirrors the MCP reply's goal_id: the id the lane's fleet rows
+	// will carry, so a script can follow the lane it just launched.
+	GoalID string `json:"goalId,omitempty"`
+	// GoalLint mirrors goal_lint. Warnings only -- a blocker never gets this
+	// far, because the launch was refused before the daemon was dialled.
+	GoalLint []sessiond.GoalFinding `json:"goalLint,omitempty"`
+	// PromptDropped mirrors prompt_dropped: a /goal run takes the condition AS
+	// its prompt, so --prompt did not travel.
+	PromptDropped bool `json:"promptDropped,omitempty"`
 }
 
 // runSpawnLane implements `muxterm spawn-lane <workspace-name> --harness H
@@ -105,6 +114,16 @@ func runSpawnLane(args []string) error {
 	if err != nil {
 		return err
 	}
+	// And refuse a stop condition that cannot terminate, on the same side of
+	// the dial as the argv check and for the same reason: nothing should be
+	// created for a lane that was never going to be able to finish. The MCP
+	// tool applies this identically (internal/mcp/tools_lane.go), so a lane
+	// started from a shell and a lane started by an agent are held to one
+	// standard.
+	if err := sessiond.CheckGoal(*goal, sessiond.LaneAttended); err != nil {
+		return err
+	}
+	goalWarnings := sessiond.GoalLintWarnings(*goal, sessiond.LaneAttended)
 
 	return withDeadline(func() error {
 		c, err := dialDaemon()
@@ -146,6 +165,9 @@ func runSpawnLane(args []string) error {
 				PaneID:           paneID,
 				Harness:          *harness,
 				WorkspaceCreated: created,
+				GoalID:           sessiond.GoalID(*goal),
+				GoalLint:         goalWarnings,
+				PromptDropped:    *goal != "" && *prompt != "",
 			})
 		}
 		disposition := "existing"
@@ -154,6 +176,24 @@ func runSpawnLane(args []string) error {
 		}
 		fmt.Printf("spawned %s lane in pane %d of %s workspace %s (%q)\n  argv: %q\n",
 			*harness, paneID, disposition, wsID, workspace, argv)
+		if *goal != "" {
+			fmt.Printf("  goal: %s\n", sessiond.GoalID(*goal))
+			if *prompt != "" {
+				fmt.Fprintln(os.Stderr,
+					"note: --prompt was dropped. A /goal run takes the stop condition AS its prompt, "+
+						"so anything the lane needed to know belongs in --goal.")
+			}
+		}
+		// stderr, so a script piping stdout is unaffected and a human running
+		// this by hand still sees it. These do not refuse anything; they are
+		// the only place a warning-level finding is ever said out loud.
+		for _, f := range goalWarnings {
+			fmt.Fprintf(os.Stderr, "goal lint [%s]: %s", f.Rule, f.Reason)
+			if f.Quote != "" {
+				fmt.Fprintf(os.Stderr, " (fired on %q)", f.Quote)
+			}
+			fmt.Fprintln(os.Stderr)
+		}
 		return nil
 	})
 }

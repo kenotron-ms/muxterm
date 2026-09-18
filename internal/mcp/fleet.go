@@ -290,9 +290,18 @@ func fleetRowJSON(r sessiond.SessionState, machine string) map[string]any {
 		"waiting_for":  r.WaitingFor,
 		"doing":        r.Doing,
 		"done_means":   r.DoneMeans,
-		"knows":        knows,
-		"pr":           r.PR,
-		"updated_at":   r.UpdatedAt,
+		// goal_id and origin are the daemon's own launch record, not the
+		// session's declaration, which is why they answer questions done_means
+		// cannot. goal_id ties two lanes running one condition together and
+		// SURVIVES the human takeover that clears done_means; origin says
+		// which door the lane came through, so a lane an automation fired at
+		// 3am stops being indistinguishable from one somebody asked for.
+		// Emitted always, empty included, per this file's rule.
+		"goal_id":    r.GoalID,
+		"origin":     r.Origin,
+		"knows":      knows,
+		"pr":         r.PR,
+		"updated_at": r.UpdatedAt,
 	}
 	if todo != nil {
 		row["todo"] = todo

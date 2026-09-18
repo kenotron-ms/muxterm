@@ -71,6 +71,21 @@ func (s *Server) CreateTrigger(t Trigger) (TriggerView, error) {
 	if _, err := LaneArgv(t.Harness, t.Prompt, t.Goal); err != nil {
 		return TriggerView{}, err
 	}
+	// AND the stop condition has to be able to terminate. Argv validation
+	// answers "will this lane start"; this answers "can it ever stop", which
+	// for a trigger is the more expensive question by far -- a condition that
+	// cannot be satisfied does not fail, it runs, repeatedly, at hours nobody
+	// chose to be awake for.
+	//
+	// LaneUnattended is the whole reason this is stricter here than at
+	// spawn_lane: a trigger fires with nobody attached, so a condition that
+	// waits on a person is not a caution, it is a condition that can never be
+	// met. See goal_lint.go. Deliberately NOT applied at fire time -- a trigger
+	// authored before this check existed keeps firing exactly as it did, and
+	// 3am is not when to discover a wording problem.
+	if err := CheckGoal(t.Goal, LaneUnattended); err != nil {
+		return TriggerView{}, err
+	}
 	if t.MaxRuns < 0 {
 		return TriggerView{}, fmt.Errorf("max_runs cannot be negative (0 means unlimited)")
 	}
@@ -192,5 +207,7 @@ func (e *triggerEngine) view(t Trigger, now time.Time) TriggerView {
 		NextFireAt:    next,
 		ScheduleError: schedErr,
 		Running:       running,
+		GoalID:        GoalID(t.Goal),
+		GoalLint:      LintGoal(t.Goal, LaneUnattended),
 	}
 }
