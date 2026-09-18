@@ -690,10 +690,11 @@ func (m *filesUploadManager) clearConflict(key [sha256.Size]byte, name string) {
 }
 
 // commit makes a completed temporary file visible. `linkat` creates a new
-// pathname without an overwrite race. Explicit replacement uses Linux's atomic
-// rename-exchange only after the prior conflict inode is rechecked; a changed
-// target is exchanged back and returned as another conflict rather than being
-// replaced.
+// pathname without an overwrite race. Explicit replacement uses the atomic
+// rename-exchange primitive (Linux only -- see files_upload_linux.go) and only
+// after the prior conflict inode is rechecked; a changed target is exchanged
+// back and returned as another conflict rather than being replaced. Where the
+// platform has no exchange primitive, Replace reports `retry` instead.
 func (m *filesUploadManager) commit(dir *os.File, key [sha256.Size]byte, tmp, name, resolution string) (status, savedName string, err error) {
 	dirfd := int(dir.Fd())
 	switch resolution {
@@ -762,10 +763,10 @@ func (m *filesUploadManager) commit(dir *os.File, key [sha256.Size]byte, tmp, na
 			}
 			return "retry", name, nil
 		}
-		if runtime.GOOS != "linux" {
+		if !uploadExchangeSupported {
 			return "retry", name, nil
 		}
-		if err := unix.Renameat2(dirfd, tmp, dirfd, name, unix.RENAME_EXCHANGE); err != nil {
+		if err := exchangeUploadEntries(dirfd, tmp, name); err != nil {
 			if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.EEXIST) {
 				return "retry", name, nil
 			}
@@ -775,7 +776,7 @@ func (m *filesUploadManager) commit(dir *os.File, key [sha256.Size]byte, tmp, na
 		if err != nil || !exists || swapped != expected {
 			// The temporary name was freshly generated with O_EXCL and is not
 			// user-addressable. Exchange it back before reporting the race.
-			_ = unix.Renameat2(dirfd, tmp, dirfd, name, unix.RENAME_EXCHANGE)
+			_ = exchangeUploadEntries(dirfd, tmp, name)
 			if err != nil {
 				return "", "", err
 			}
