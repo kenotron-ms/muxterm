@@ -593,6 +593,27 @@ export class MuxCos extends LitElement {
       color: var(--ink-2);
     }
 
+    /* -- SYSTEM LIFECYCLE NOTICE ------------------------------------------ *
+     *
+     * Deliberately NOT a bubble in either voice. muxterm is reporting a fact
+     * it observed; the rail says the sentence below came from the machine
+     * watching the fleet, not from the person and not from the assistant
+     * answering them. Flat, quiet, and impossible to mistake for either.
+     */
+    .turn.sysnotice .who {
+      color: var(--ink-3);
+    }
+    .turn.sysnotice .bd {
+      border-left: 2px solid var(--ink-3);
+      padding-left: var(--s-4);
+      opacity: 0.85;
+    }
+    .turn.sysnotice .sysline {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--ink-3);
+    }
+
     /* -- MARKDOWN --------------------------------------------------------- *
      *
      * A rendered message is BLOCKS now, so pre-wrap is wrong for it: each
@@ -1850,12 +1871,26 @@ export class MuxCos extends LitElement {
     const asks = cosStore.approvals.filter((a) => a.turnId === t.id);
     const live = t.status === 'pending' || t.status === 'streaming';
     return html`
-      ${t.prompt
-        ? html`<div class="turn you">
-            <div class="who">YOU</div>
-            <div class="bd"><p class="say">${t.prompt}</p></div>
+      ${t.origin === 'lifecycle'
+        ? // A SYSTEM LIFECYCLE NOTICE, not something anybody typed. It gets a
+          // rail treatment of its own rather than the YOU bubble, because a
+          // turn attributed to the user that the user did not write is a lie
+          // the interface tells every time it is shown -- including on every
+          // replay, forever. The prompt text itself is deliberately NOT
+          // rendered: it is a machine envelope addressed to the model, and the
+          // Operator's reply below it is the part meant for a human.
+          html`<div class="turn sysnotice">
+            <div class="who">MUXTERM</div>
+            <div class="bd">
+              <p class="say sysline">Lane lifecycle update</p>
+            </div>
           </div>`
-        : nothing}
+        : t.prompt
+          ? html`<div class="turn you">
+              <div class="who">YOU</div>
+              <div class="bd"><p class="say">${t.prompt}</p></div>
+            </div>`
+          : nothing}
       <div class="turn cos">
         <div class="who">OPERATOR</div>
         <div class="bd">

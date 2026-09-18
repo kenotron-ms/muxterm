@@ -318,10 +318,37 @@ class HostDisplay:
 # ---------------------------------------------------------------------------
 # Turn bookkeeping
 # ---------------------------------------------------------------------------
+# Turn provenance.  A turn is not always something a human typed: Voice Mode
+# submits through the same FIFO, and so does the Operator lifecycle notice pump
+# (internal/server/lifecycle_notices.go), whose turns report that a lane
+# finished, failed, stopped, exited unverified, or needs someone.
+#
+# ORIGIN IS NEVER INFERRED.  It arrives explicitly on the `turn` op or it is
+# `human`.  The only value that renders as a system notice is `lifecycle`, so
+# the failure direction of an unknown or missing value is "treat it as a person
+# said it", which is the conservative one: a system turn misread as human is a
+# cosmetic error, a human turn misread as system is a forged message.
+ORIGIN_HUMAN = "human"
+ORIGIN_VOICE = "voice"
+ORIGIN_LIFECYCLE = "lifecycle"
+KNOWN_ORIGINS = (ORIGIN_HUMAN, ORIGIN_VOICE, ORIGIN_LIFECYCLE)
+
+# The metadata key that makes origin DURABLE.  Live `turn_start`/`turn_end`
+# events carry origin too, but events are not replayed: a browser that
+# reconnects after a restart rebuilds the conversation from the persisted
+# transcript through the `history` op.  If origin lived only on the event, the
+# same turn would render as a system notice before a refresh and as a human
+# message after one.  So it is stamped onto the persisted user message.
+ORIGIN_META_KEY = "muxterm_origin"
+CAUSATION_META_KEY = "muxterm_causation_id"
+
+
 @dataclass
 class Turn:
     id: str
     prompt: str
+    origin: str = ORIGIN_HUMAN
+    causation_id: str = ""
     started: float = 0.0
     task: "asyncio.Task | None" = None
     terminal_sent: bool = False
@@ -442,6 +469,38 @@ def _msg_iso(msg: Any) -> str:
     md = msg.get("metadata")
     raw = md.get("timestamp") if isinstance(md, dict) else None
     return raw if isinstance(raw, str) else ""
+
+
+def _turn_origin(members: list) -> str:
+    """The durable origin stamped on this turn's opening message, or "".
+
+    Absence means `human`.  That is the only safe direction: every turn written
+    before this field existed, and every turn a person actually typed, has no
+    stamp, and none of them may start rendering as a system notice.
+    """
+    for m in members:
+        if not _opens_turn(m):
+            continue
+        md = m.get("metadata")
+        if not isinstance(md, dict):
+            return ""
+        origin = md.get(ORIGIN_META_KEY)
+        if isinstance(origin, str) and origin in KNOWN_ORIGINS:
+            return origin
+        return ""
+    return ""
+
+
+def _newest_turn_origin(messages: list) -> str:
+    """The origin stamped on the LAST turn-opening message in a transcript.
+
+    _turn_origin answers the same question for one already-grouped turn; this
+    one is for verifying a stamp landed on the message that was just written.
+    """
+    for m in reversed(list(messages)):
+        if _opens_turn(m):
+            return _turn_origin([m])
+    return ""
 
 
 def _turn_prompt(members: list) -> str:
@@ -603,13 +662,19 @@ def _summarize_turn(index: int, members: list) -> "dict | None":
 
     if not prompt and not blocks:
         return None
-    return {
+    turn = {
         "id": f"h-{index}",
         "prompt": _trim(prompt, HISTORY_PROMPT_LIMIT),
         "ts": ts,
         "ms": elapsed_ms,
         "blocks": blocks,
     }
+    # Only ever present, never a default: a replayed turn with no stamp is a
+    # human turn, and the browser's own default has to agree.
+    origin = _turn_origin(members)
+    if origin and origin != ORIGIN_HUMAN:
+        turn["origin"] = origin
+    return turn
 
 
 # ---------------------------------------------------------------------------
@@ -1469,6 +1534,11 @@ class Sidecar:
             # of bounded live facts.
             prompt = await self._expand_mentions(turn.prompt)
             response = await self.session.execute(prompt)
+            # Stamp provenance BEFORE the finally block's _save_session, so the
+            # bytes that reach disk already carry it. Never after: a save that
+            # happened first would persist an unstamped message and a restart
+            # would replay a lifecycle notice as if a person had typed it.
+            await self._stamp_turn_origin(turn, prompt)
             if self.session.coordinator.cancellation.is_cancelled:
                 cancelled = True
         except asyncio.CancelledError:
@@ -1522,6 +1592,10 @@ class Sidecar:
         turn.terminal_sent = True
         payload = {"ev": ev, "turn_id": turn.id, "response": response or "", "ms": ms,
                    "persisted": bool(persisted)}
+        if turn.origin != ORIGIN_HUMAN:
+            payload["origin"] = turn.origin
+            if turn.causation_id:
+                payload["causation_id"] = turn.causation_id
         if turn_cost is not None:
             payload["cost_usd"] = turn_cost
         if session_cost is not None:
@@ -1529,6 +1603,64 @@ class Sidecar:
         if error is not None:
             payload["error"] = error
         self.proto.emit(**payload)
+
+    async def _stamp_turn_origin(self, turn: Turn, expanded_prompt: str) -> None:
+        """Record this turn's provenance on the message that opened it.
+
+        WHY IT IS DONE BY SEARCH RATHER THAN DECLARED UP FRONT: `execute` takes
+        a prompt string and nothing else, and muxterm does not get to change
+        that -- amplifier is a dependency here, not part of this repository.
+        So the message is located after the fact, and the match is made strict
+        so a miss degrades to "no durable stamp" rather than to "stamped the
+        wrong message". An unstamped turn replays as a human turn, which is the
+        safe direction; a mis-stamped one would put a system badge on something
+        a person said.
+
+        Only non-human origins are stamped. Writing `origin: human` onto every
+        message a person ever typed would double the metadata on the hot path
+        to record the default.
+        """
+        if turn.origin == ORIGIN_HUMAN:
+            return
+        try:
+            messages = await self._messages()
+        except Exception:
+            logger.debug("turn %s: transcript unavailable for origin stamp", turn.id, exc_info=True)
+            return
+        target = None
+        for m in reversed(list(messages)):
+            if not _opens_turn(m):
+                continue
+            # The newest turn-opening message must be the one this turn just
+            # submitted. Verify it rather than assume it: LAW 1 makes that true
+            # today, and this check is what keeps it from silently becoming a
+            # lie if it ever stops being.
+            if _turn_prompt([m]).strip() != expanded_prompt.strip():
+                logger.warning("turn %s: newest prompt does not match; origin not stamped", turn.id)
+                return
+            target = m
+            break
+        if target is None:
+            return
+        md = target.get("metadata")
+        if not isinstance(md, dict):
+            md = {}
+            target["metadata"] = md
+        md[ORIGIN_META_KEY] = turn.origin
+        if turn.causation_id:
+            md[CAUSATION_META_KEY] = turn.causation_id
+        # get_messages may hand back copies rather than the live dicts. Confirm
+        # the stamp is actually visible and write the list back if it is not,
+        # because a stamp that only exists in a local copy is exactly the
+        # live-only decorator this whole mechanism exists to avoid.
+        try:
+            if _newest_turn_origin(await self._messages()) == turn.origin:
+                return
+            context = self.session.coordinator.get("context")
+            if context is not None and hasattr(context, "set_messages"):
+                await context.set_messages(list(messages))
+        except Exception:
+            logger.warning("turn %s: origin stamp could not be persisted", turn.id, exc_info=True)
 
     async def _expand_mentions(self, prompt: str) -> str:
         try:
@@ -1897,9 +2029,19 @@ class Sidecar:
             self.proto.emit(ev="error", turn_id=turn_id, code="busy",
                             message=f"turn {self._turn.id} is still running", fatal=False)
             return
-        turn = Turn(id=turn_id, prompt=prompt, started=time.monotonic())
+        raw_origin = msg.get("origin")
+        origin = raw_origin if isinstance(raw_origin, str) and raw_origin in KNOWN_ORIGINS else ORIGIN_HUMAN
+        raw_causation = msg.get("causation_id")
+        causation = raw_causation if isinstance(raw_causation, str) else ""
+        turn = Turn(id=turn_id, prompt=prompt, origin=origin,
+                    causation_id=causation[:200], started=time.monotonic())
         self._turn = turn
-        self.proto.emit(ev="turn_start", turn_id=turn.id)
+        start = {"ev": "turn_start", "turn_id": turn.id}
+        if turn.origin != ORIGIN_HUMAN:
+            start["origin"] = turn.origin
+            if turn.causation_id:
+                start["causation_id"] = turn.causation_id
+        self.proto.emit(**start)
         turn.task = asyncio.create_task(self._run_turn(turn), name=f"cos-turn-{turn_id}")
         turn.task.add_done_callback(self._turn_done)
 

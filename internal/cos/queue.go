@@ -34,6 +34,16 @@ type Turn struct {
 	ID string
 	// Prompt is the text submitted.
 	Prompt string
+	// Origin says who submitted this turn: OriginHuman (the default, and what
+	// an empty string means on the wire), OriginVoice, or OriginLifecycle.
+	// It is carried to the sidecar on the dispatch op, so it reaches the
+	// persisted transcript rather than decorating only the live event stream.
+	Origin string
+	// CausationID links a non-human turn back to the durable fact that caused
+	// it -- for a lifecycle notice, the id of the completion or attention
+	// marker. It is the idempotency key the notice pump reconciles against,
+	// so it is never minted here.
+	CausationID string
 	// SubmittedAt is when Submit was called, which is not when the sidecar
 	// started work: a queued turn waits for its predecessor.
 	SubmittedAt time.Time
@@ -192,10 +202,36 @@ func (q *queue) submit(prompt string) *Turn {
 // threaded admission seam: no eligible queue/send exists before that ID is
 // durably associated with the request receipt.
 func (q *queue) submitWithID(prompt, id string) *Turn {
+	return q.submitRequest(turnRequest{Prompt: prompt, ID: id})
+}
+
+// turnRequest is one submission's full identity: the text, the reserved ID,
+// and where it came from.
+//
+// Origin exists because this queue is no longer fed only by a person typing.
+// Voice Mode submits through it, and so does the Operator lifecycle notice
+// pump. A turn that reports "lane w12 finished" has to be distinguishable from
+// one a human wrote, all the way down to the persisted transcript -- see
+// OriginLifecycle.
+type turnRequest struct {
+	Prompt      string
+	ID          string
+	Origin      string
+	CausationID string
+}
+
+// submitRequest is submitWithID with provenance attached.
+func (q *queue) submitRequest(req turnRequest) *Turn {
+	id := req.ID
+	if id == "" {
+		id = q.reserveTurnID()
+	}
 	q.mu.Lock()
 	t := &Turn{
 		ID:          id,
-		Prompt:      prompt,
+		Prompt:      req.Prompt,
+		Origin:      req.Origin,
+		CausationID: req.CausationID,
 		SubmittedAt: time.Now(),
 		done:        make(chan struct{}),
 	}
@@ -243,7 +279,8 @@ func (q *queue) pump() {
 			before()
 		}
 
-		err := send(op{Op: opTurn, TurnID: t.ID, Prompt: t.Prompt})
+		err := send(op{Op: opTurn, TurnID: t.ID, Prompt: t.Prompt,
+			Origin: t.Origin, CausationID: t.CausationID})
 		if err == nil {
 			return
 		}

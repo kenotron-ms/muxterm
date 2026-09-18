@@ -112,9 +112,23 @@ export interface CosApproval {
 
 export type CosTurnStatus = 'pending' | 'streaming' | 'done' | 'failed' | 'cancelled';
 
+/**
+ * Who submitted a turn.
+ *
+ * 'human' is the default and the meaning of an ABSENT origin, everywhere: on
+ * the live event, in the replayed transcript, and in every turn written before
+ * this field existed. Only 'lifecycle' renders as a system notice, so an
+ * unknown or missing value always falls back to "a person said this" — a
+ * system turn shown as human is cosmetic, a human turn shown as system is a
+ * forged message.
+ */
+export type CosTurnOrigin = 'human' | 'voice' | 'lifecycle';
+
 export interface CosTurn {
   id: string;
   prompt: string;
+  /** See CosTurnOrigin. Never inferred from anything but the explicit field. */
+  origin: CosTurnOrigin;
   clientRef: string;
   blocks: CosBlock[];
   status: CosTurnStatus;
@@ -188,6 +202,17 @@ function persistDraft(value: string): void {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Narrow an untrusted wire value to a CosTurnOrigin.
+ *
+ * Anything unrecognised — a newer server's origin, a malformed value, an
+ * absent field — is 'human'. That is the only safe direction; see
+ * CosTurnOrigin.
+ */
+function cosTurnOrigin(v: unknown): CosTurnOrigin {
+  return v === 'lifecycle' || v === 'voice' ? v : 'human';
+}
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
@@ -809,6 +834,11 @@ export class CosStore {
         // is what makes this additive rather than a second contract.
         t.prompt = str(ev.prompt) || t.prompt;
         t.clientRef = str(ev.client_ref) || t.clientRef;
+        // Provenance arrives on the sidecar's own turn_start, not from the
+        // relay's decoration, and only ever UPGRADES away from 'human': an
+        // event that omits it must not downgrade a turn already known to be a
+        // system notice.
+        if (ev.origin !== undefined) t.origin = cosTurnOrigin(ev.origin);
         // A replayed turn is already finished; do not re-open it.
         if (!replay && t.status === 'pending') t.status = 'streaming';
         this._setStatus('ready');
@@ -1190,6 +1220,10 @@ export class CosStore {
     return {
       id,
       prompt: str(rec.prompt),
+      // Origin is carried in the PERSISTED transcript (the sidecar stamps it
+      // onto the message that opened the turn), so a replayed lifecycle notice
+      // renders identically to the live one. Absent means human.
+      origin: cosTurnOrigin(rec.origin),
       clientRef: '',
       blocks,
       status:
@@ -1238,6 +1272,7 @@ export class CosStore {
     const t: CosTurn = {
       id,
       prompt: '',
+      origin: 'human',
       clientRef: '',
       blocks: [],
       status: 'pending',

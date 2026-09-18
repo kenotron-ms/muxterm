@@ -1,4 +1,4 @@
-.PHONY: build dev dev-local install-stable test clean web
+.PHONY: build dev dev-local verify-lifecycle install-stable test clean web
 
 # Path to the web source (relative to this Makefile)
 WEB_SRC := ./web
@@ -169,6 +169,19 @@ dev-local: web-public
 	echo "  cos session   $$MUXTERM_COS_SESSION_ID  (isolated chief-of-staff transcript)"; \
 	echo "  production    127.0.0.1:8311 -- untouched"; \
 	wait $$AIR_PID
+
+# Verify Operator lifecycle markers against a real, isolated sessiond.
+#
+# A dev TARGET rather than an ad-hoc shell invocation on purpose: this file's
+# rule is that every dev instance expands DEV_ISOLATE and no dev target sets
+# XDG_* by hand, and a verification run is a dev instance like any other. It
+# binds no port and touches no service, so it can run alongside `make dev-local`
+# without contending for 8313 or its runtime dir.
+verify-lifecycle:
+	@mkdir -p tmp
+	@go build -o tmp/muxterm-verify ./cmd/muxterm
+	@$(call DEV_ISOLATE,lifecycle-verify,muxterm-cos-lifecycle-verify) \
+	MUXTERM_BIN="$$PWD/tmp/muxterm-verify" bash tools/verify-lifecycle-notices.sh
 
 # Build the production binary from origin/main and install to the stable path.
 # This is what systemd runs — separate from ./bin/muxterm used by `make dev`.
