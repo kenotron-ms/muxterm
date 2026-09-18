@@ -55,7 +55,19 @@ type Pane struct {
 	// held and binds close tickets independently of the root-process generation.
 	targetGeneration uint64
 
-	mu   sync.Mutex // guards title/titleOrigin, cols/rows, and authorityConn/authorityAt
+	// launchOrigin records WHICH DOOR this pane came through -- a browser, an
+	// MCP agent, the CLI, or a named trigger (lane_provenance.go). Written once
+	// by whoever created the pane, before it is registered, and read only
+	// afterwards; it is guarded by mu anyway because "set before anyone could
+	// look" is an argument that stops being true the moment somebody adds a
+	// second writer.
+	//
+	// Empty is a real value and means the daemon has nothing honest to say: a
+	// pane restored from a snapshot after a restart did not come through any
+	// door in this process's lifetime.
+	launchOrigin string
+
+	mu   sync.Mutex // guards title/titleOrigin, launchOrigin, cols/rows, and authorityConn/authorityAt
 	cols int
 	rows int
 
@@ -559,6 +571,35 @@ func (p *Pane) setTitleDerived(name string) bool {
 	p.Title = name
 	p.titleOrigin = originDerived
 	return true
+}
+
+// setLaunchOrigin records which door this pane came through. Called by the
+// creator before the pane is registered; see Pane.launchOrigin.
+func (p *Pane) setLaunchOrigin(origin string) {
+	p.mu.Lock()
+	p.launchOrigin = origin
+	p.mu.Unlock()
+}
+
+// LaunchOrigin returns the door this pane came through, or "" when unknown.
+func (p *Pane) LaunchOrigin() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.launchOrigin
+}
+
+// LaunchArgv returns the argv this pane's process was started with.
+//
+// Read-only and write-once: cmd is built in NewPane and its Args slice is never
+// reassigned afterwards, so this needs no lock and callers must not mutate what
+// they get back. It exists so the daemon can answer questions about a lane from
+// the command it actually started -- which is the only record that survives the
+// session's own producer going quiet.
+func (p *Pane) LaunchArgv() []string {
+	if p == nil || p.cmd == nil {
+		return nil
+	}
+	return p.cmd.Args
 }
 
 // setTitle is the one place Title and its provenance are written, so they can

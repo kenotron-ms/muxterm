@@ -170,6 +170,11 @@ func (s *Server) spawnTriggerLane(t Trigger) (wsID string, paneID int, err error
 	if title := labelFromPrompt(promptFromArgv(argv)); title != "" {
 		p.setTitleDerived(title)
 	}
+	// Name the automation on every fleet row this lane produces. Without it a
+	// lane nobody asked for and a lane a human spawned are the same row, and
+	// the trigger id is the half of the answer that lets somebody go turn it
+	// off (lane_provenance.go).
+	p.setLaunchOrigin(LaneOriginForTrigger(t.ID))
 	s.reg.PutPane(wsID, p)
 	s.broadcast(wsID, &Message{
 		Type:        TypePaneAdded,

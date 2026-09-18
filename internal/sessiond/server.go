@@ -69,6 +69,17 @@ type Server struct {
 	// completion log this Server owns. See docs/designs/2026-09-09-triggers.md.
 	triggers *triggerStore
 	engine   *triggerEngine
+
+	// lifecycle is the live transition watcher, or nil when Operator
+	// lifecycle notices are switched off. Nil is the whole feature gate on
+	// this side: emitSessionState checks it, and with it nil the daemon reads
+	// the spool exactly as often as it does today -- which is to say, not at
+	// all when nobody has opened the home view.
+	lifecycle *lifecycleWatcher
+	// attention is the durable live-marker log backing the watcher. Held even
+	// when the watcher is off so a request handler can read history that an
+	// earlier, enabled run wrote.
+	attention *attentionStore
 }
 
 // NewServer returns a Server bound to socketPath with a fresh Registry. It
@@ -92,6 +103,10 @@ func NewServer(socketPath string) (*Server, error) {
 		sessions:          newSessionStore(),
 		completions:       newCompletionStore(CompletionsPath()),
 		triggers:          newTriggerStore(TriggersPath()),
+	}
+	s.attention = newAttentionStore(AttentionPath())
+	if LifecycleNoticesEnabled() {
+		s.lifecycle = newLifecycleWatcher(s.attention)
 	}
 	s.engine = newTriggerEngine(s, s.triggers)
 	return s, nil
@@ -206,10 +221,13 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	// connection opts in, stopped by the same ctx cancellation.
 	go s.sessionStateLoop(ctx)
 
-	// Claude Code sessions in the home view. OPT-IN: this is the only place the
-	// daemon executes another vendor's binary, so it happens because an
-	// operator asked for it, never because `claude` was on PATH. Not started at
-	// all when the switch is off, so the disabled cost is one getenv.
+	// Claude Code sessions in the home view. ON BY DEFAULT: a fleet that
+	// silently omits the Claude Code sessions running on this machine is worse
+	// than one that shows them, because it is believed. This is still the only
+	// place the daemon executes another vendor's binary, and it remains one
+	// documented read-only non-TTY command with a timeout -- see the header of
+	// claude_adapter.go. An operator who wants no subprocesses at all sets the
+	// explicit opt-out, and then the cost here is one getenv.
 	if claudeAdapterEnabled() {
 		go s.claudeAdapterLoop(ctx)
 	}
@@ -1011,6 +1029,11 @@ func (c *conn) createPane(msg Message) {
 	if title != "" {
 		p.setTitleDerived(title)
 	}
+	// Which door this pane came through, recorded before it is registered and
+	// read afterwards onto every fleet row for a session running in it
+	// (lane_provenance.go). Derived from the connection's declared kind, so
+	// there is nothing here for a caller to pass, get wrong, or forge.
+	p.setLaunchOrigin(LaneOriginForClientKind(c.kind))
 	c.srv.reg.PutPane(wsID, p)
 	c.reply(&Message{Type: TypePaneCreated, CID: msg.CID, PaneID: localID})
 	c.srv.broadcast(wsID, &Message{
@@ -1595,7 +1618,15 @@ func (s *Server) sessionStateLoop(ctx context.Context) {
 // the fan-out are three separate steps, so a slow disk can never stall an
 // attach, a broadcast, or another connection's request.
 func (s *Server) emitSessionState() {
-	if !s.sessionStateWanted() {
+	wanted := s.sessionStateWanted()
+	// The lifecycle watcher has to see EVERY transition, including the ones
+	// that happen while no browser is open -- a lane finishing at 3am is
+	// precisely the case a durable notice exists for. So when the feature is
+	// on, this tick does its work regardless of subscribers, and the "costs
+	// literally nothing when nobody opted in" bargain above is knowingly
+	// traded for one directory read and one ancestor walk per second. With
+	// the feature off (the default) nothing changes.
+	if !wanted && s.lifecycle == nil {
 		return // nobody subscribed: no directory read, no /proc walk, no bytes
 	}
 	// The owners map is resolved lazily by collect: on a machine with no
@@ -1609,6 +1640,16 @@ func (s *Server) emitSessionState() {
 		// empty set: every frame is a whole-state document, so asserting
 		// emptiness here would blank the home view over a transient stat error.
 		return
+	}
+	// Edge detection runs on the LIVE rows, before any completion row is
+	// folded in: a completion row is a projection of a marker that already
+	// exists, and feeding it back here would manufacture a transition out of
+	// the daemon's own memory.
+	if s.lifecycle != nil {
+		s.lifecycle.observe(rows)
+	}
+	if !wanted {
+		return // markers recorded; nobody to publish rows to
 	}
 	// Fold in the lanes that have finished but not been dismissed. This is
 	// what makes the fleet a fleet: without it, a lane's row vanishes the

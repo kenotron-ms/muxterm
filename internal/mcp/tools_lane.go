@@ -78,6 +78,28 @@ func checkPromptIsNotCommand(prompt string) error {
 	return sessiond.CheckPromptIsNotCommand(prompt)
 }
 
+// goalLintJSON projects stop-condition findings into the MCP reply shape.
+//
+// snake_case like every other key this server emits, and the QUOTE is carried
+// rather than dropped: "L4 fired" tells a caller it has a problem, "L4 fired on
+// `wait for approval`" tells it which four words to change. A finding a caller
+// cannot act on is noise that teaches it to ignore the next one.
+func goalLintJSON(findings []sessiond.GoalFinding) []map[string]any {
+	out := make([]map[string]any, 0, len(findings))
+	for _, f := range findings {
+		row := map[string]any{
+			"rule":     f.Rule,
+			"severity": f.Severity,
+			"reason":   f.Reason,
+		}
+		if f.Quote != "" {
+			row["quote"] = f.Quote
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
 // checkWorkspaceName rejects a name that is not a single short line of text.
 //
 // The argv built above is a SLICE, passed to the daemon and exec'd without a
@@ -200,6 +222,16 @@ func (lt *laneTools) spawnLane(args map[string]any) (string, error) {
 		return "", err
 	}
 
+	// A LANE THAT CANNOT STOP IS THE EXPENSIVE FAILURE, not a lane that will
+	// not start. Argv validation below catches the second; this catches the
+	// first, here, while the caller is present and one edit away from fixing
+	// it. LaneAttended, because a human asked for this lane just now -- the
+	// same condition authored into a TRIGGER is linted harder, and
+	// trigger_api.go says why. See sessiond/goal_lint.go.
+	if err := sessiond.CheckGoal(goal, sessiond.LaneAttended); err != nil {
+		return "", err
+	}
+
 	// Build argv FIRST: an unlaunchable harness, or a goal on a harness with no
 	// goal mode, must fail before a workspace is created for it, or a rejected
 	// delegation would still leave an empty workspace behind.
@@ -260,11 +292,36 @@ func (lt *laneTools) spawnLane(args map[string]any) (string, error) {
 		return abandon(fmt.Errorf("spawning %s lane in workspace %q: %w", harness, workspace, err))
 	}
 
-	return jsonText(map[string]any{
+	result := map[string]any{
 		"workspace_id":      wsID,
 		"pane_id":           paneID,
 		"harness":           harness,
 		"workspace_created": created,
 		"machine":           lt.c.Machine(),
-	}), nil
+	}
+	if goal != "" {
+		// The id the lane's own fleet rows will carry, returned so a caller
+		// that launches several lanes can recognise its own work coming back
+		// without re-deriving anything (sessiond/lane_provenance.go).
+		result["goal_id"] = sessiond.GoalID(goal)
+		if findings := sessiond.GoalLintWarnings(goal, sessiond.LaneAttended); len(findings) > 0 {
+			// Warnings do not refuse a launch and are not repeated anywhere
+			// else, so this reply is the ONE place they are ever said. A lane
+			// launched with a condition that has no second ending is a thing
+			// the caller should know it just did.
+			result["goal_lint"] = goalLintJSON(findings)
+		}
+		if prompt != "" {
+			// SAY WHAT WAS THROWN AWAY. A /goal run takes the stop condition
+			// AS its prompt, so the opening turn the caller wrote does not
+			// reach the lane at all -- it is documented in this tool's schema
+			// and it is still the single easiest way to lose the context a
+			// conversation spent turns establishing. Reported rather than
+			// refused: the schema requires prompt, so refusing would break
+			// every existing caller. Anything that had to travel belongs in
+			// the goal text.
+			result["prompt_dropped"] = true
+		}
+	}
+	return jsonText(result), nil
 }

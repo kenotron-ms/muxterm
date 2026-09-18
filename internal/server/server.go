@@ -454,6 +454,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// what the child's Pdeathsig is for (internal/cos/pdeathsig_linux.go).
 	defer s.hub.CloseCos()
 
+	// Operator lifecycle notices. Off unless the operator opted in, in which
+	// case this is the only thing that ever tells the conversation a lane
+	// finished. Started here rather than at Hub construction so it exists only
+	// for a server that is actually serving, and stopped by CloseCos above.
+	s.hub.StartLifecycleNotices(ctx)
+
 	// A voice sideband is a live outbound WebSocket to the realtime
 	// vendor. Left open it keeps billing a session nobody is listening to,
 	// so it goes down on every return path, exactly as the sidecar does.

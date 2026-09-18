@@ -247,6 +247,12 @@ type cosRelay struct {
 	subs     map[string]cosSubmission
 	refs     map[string]string
 	subOrder []string
+
+	// notices is the Operator lifecycle notice pump, or nil when the feature
+	// is switched off. It submits through this same relay and the same FIFO --
+	// it has no privileged path -- so it lives here rather than beside the
+	// Hub. See lifecycle_notices.go.
+	notices *lifecycleNoticer
 }
 
 func newCosRelay() *cosRelay {
@@ -631,6 +637,10 @@ func (r *cosRelay) close() {
 	if r == nil {
 		return
 	}
+	// Stop the notice pump BEFORE taking the relay locks: Stop waits briefly
+	// for an in-flight notice turn, and waiting while holding admissionMu
+	// would block every other shutdown path behind the model.
+	r.stopLifecycleNotices()
 	r.admissionMu.Lock()
 	r.mu.Lock()
 	if r.closed {

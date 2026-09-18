@@ -194,6 +194,37 @@ type SessionState struct {
 	// only when Mode == ModeAutonomous.
 	DoneMeans string `json:"doneMeans,omitempty"`
 
+	// GoalID and Origin are the two fields on this row that a producer does
+	// NOT declare. They are stamped by the daemon during the pane join
+	// (sessionstore.go stampPane) out of muxterm's own launch record, and
+	// anything a producer writes into them is discarded -- a session cannot be
+	// authoritative about the command line it was started with.
+	//
+	// GoalID identifies the stop condition this lane was LAUNCHED with, as a
+	// digest of the condition text (lane_provenance.go GoalID). It answers two
+	// questions DoneMeans cannot. First, correlation: two lanes running the
+	// same condition in two workspaces share an id, so a batch is recognisable
+	// as a batch. Second, survival: DoneMeans is declared by the session and
+	// goes away the moment a human takes over a finished goal lane and it
+	// stops calling itself autonomous -- GoalID is read from the pane's argv
+	// and does not, so "which goal was this lane for?" stays answerable after
+	// the conversation has moved on.
+	//
+	// It names the CONDITION, not the run: two runs of one condition share an
+	// id. Empty for any lane not launched as a goal lane.
+	GoalID string `json:"goalId,omitempty"`
+
+	// Origin is which door this lane came through: browser, agent, cli, or
+	// trigger:<trigger id> (the LaneOrigin* constants). Before this existed, a
+	// lane a human spawned and a lane an automation fired at 3am were the same
+	// row, and "which of these did I ask for?" could not be answered from the
+	// fleet at all.
+	//
+	// Empty is a real value: a pane restored after a daemon restart came
+	// through no door in this process's lifetime, and guessing would put a
+	// wrong answer on the one question the field exists for.
+	Origin string `json:"origin,omitempty"`
+
 	// Todo is structured progress through the session's own task list, when it
 	// keeps one. Nil means it does not, which is NOT the same as "no progress":
 	// consumers must fall back to Doing rather than render an empty 0/0, or a

@@ -698,7 +698,15 @@ func registerAllTools(
 	// closes a workspace it did not create -- not by the tool's absence.
 	srv.Register(
 		"spawn_lane",
-		"delegate work: launch a coding-agent session (amplifier|claude) in a pane of the named workspace, creating that workspace if it does not exist; prompt is the session's opening turn; goal (amplifier only) instead launches a /goal loop with that stop condition, and prompt is ignored; returns workspace_id, pane_id, harness, workspace_created",
+		"delegate work: launch a coding-agent session (amplifier|claude) in a pane of the named workspace, "+
+			"creating that workspace if it does not exist; prompt is the session's opening turn; goal "+
+			"(amplifier only) instead launches a /goal loop with that stop condition, and prompt is ignored; "+
+			"returns workspace_id, pane_id, harness, workspace_created. A goal is LINTED for known "+
+			"termination-failure patterns before anything is created: a condition that cannot terminate as "+
+			"written is REFUSED with the rule and the offending phrase named, and one that merely looks "+
+			"risky launches with those findings in goal_lint. A goal reply also carries goal_id -- the id "+
+			"the lane's fleet rows will carry -- and prompt_dropped, which is the honest admission that a "+
+			"/goal run takes the condition AS its prompt, so anything the lane needs to know belongs in goal",
 		map[string]any{
 			"type": "object",
 			"properties": withMachine(map[string]any{
@@ -759,7 +767,11 @@ func registerAllTools(
 			"Defaults to this machine; pass machine to report a connected remote instead. Every row carries a machine field. "+
 			"Returns full declared rows: session_id, pane_id, workspace_id, harness, project, name, label, mode "+
 			"(interactive|autonomous), state (working|blocked|done|failed|stopped), waiting_for, doing, done_means "+
-			"(an autonomous lane's own stop condition; empty for interactive ones), knows (files the session has read), "+
+			"(an autonomous lane's own stop condition; empty for interactive ones), goal_id (which stop condition "+
+			"this lane was LAUNCHED with -- shared by every lane running that condition, and unlike done_means it "+
+			"survives a human taking the lane over), origin (which door it came through: browser | agent | cli | "+
+			"trigger:<trigger id>, so a lane an automation fired is not mistaken for one somebody asked for), "+
+			"knows (files the session has read), "+
 			"pr, updated_at. done_means and knows are declared by the session and appear on no terminal screen, "+
 			"so this is the only way to see them. Optional state filters by exact lifecycle state; optional workspace "+
 			"filters by workspace NAME (an unknown name is an error, never a new workspace). An empty sessions list "+
@@ -904,7 +916,10 @@ func registerTriggerTools(
 			"startup, so a daemon that was off overnight does not owe you a stampede of lanes in the morning. "+
 			"Safety, all automatic: a fire is SKIPPED (and recorded) while this trigger's previous lane is "+
 			"still working, skipped past 3 concurrent trigger lanes machine-wide, and the trigger DISABLES "+
-			"ITSELF after 3 consecutive failed runs. Created enabled. Local machine only",
+			"ITSELF after 3 consecutive failed runs. A goal is LINTED HARDER here than at spawn_lane, because "+
+			"this is the one launch path with nobody attached: a stop condition that waits on a person can "+
+			"never be satisfied by a trigger, so it is refused outright, with the rule and the offending "+
+			"phrase named. Created enabled. Local machine only",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{

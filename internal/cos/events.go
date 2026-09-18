@@ -144,6 +144,12 @@ type Event struct {
 	// turn's transcript before emitting its terminal event.
 	Persisted bool `json:"persisted"`
 
+	// Origin and CausationID echo a non-human turn's provenance back on its
+	// turn_start and terminal events. Absent for an ordinary human turn; see
+	// OriginHuman.
+	Origin      string `json:"origin,omitempty"`
+	CausationID string `json:"causation_id,omitempty"`
+
 	// error
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
