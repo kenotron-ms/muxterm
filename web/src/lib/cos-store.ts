@@ -31,6 +31,19 @@
 
 import type { MuxSocket } from '../ws.js';
 import { ASSISTANT_NAME } from './assistant-identity.js';
+import {
+  COS_ATTACHMENTS_OFF,
+  acceptableName,
+  discardCosAttachment,
+  humanBytes,
+  isImageMedia,
+  parseCosAttachmentPolicy,
+  splitAttachmentBlock,
+  uploadCosAttachment,
+  type CosAttachmentPolicy,
+  type CosAttachmentRef,
+  type CosDraftAttachment,
+} from './cos-attachments';
 
 // ---------------------------------------------------------------------------
 // Model
@@ -114,7 +127,14 @@ export type CosTurnStatus = 'pending' | 'streaming' | 'done' | 'failed' | 'cance
 
 export interface CosTurn {
   id: string;
+  /**
+   * What the PERSON typed, with the server's attachment reference block
+   * already split off into `attachments`. Never the delivered prompt: the
+   * block is machinery the Operator reads, not something to show back.
+   */
   prompt: string;
+  /** Files carried by this turn, parsed from the delivered prompt. */
+  attachments: CosAttachmentRef[];
   clientRef: string;
   blocks: CosBlock[];
   status: CosTurnStatus;
@@ -156,6 +176,13 @@ interface PendingAdmission {
   readonly clientRef: string;
   readonly draftRevision: number;
   readonly prompt: string;
+  /**
+   * The staged attachment ids this send named, retained so a reconnect
+   * retries the SAME message rather than a text-only impostor of it.
+   */
+  readonly attachments: readonly string[];
+  /** What to render on the turn bubble the moment the receipt lands. */
+  readonly refs: readonly CosAttachmentRef[];
   /**
    * A first load can accept a turn before the asynchronous subscription
    * receipt has told this tab the conversation identity. It is still a real
@@ -254,6 +281,16 @@ export class CosStore {
    * the first receipt is still on the wire.
    */
   private _pendingAdmissions = new Map<string, PendingAdmission>();
+  /**
+   * Server-declared attachment policy, replaced on every subscribe receipt.
+   * Off until a server says otherwise, so a browser talking to an older
+   * muxterm never offers a control that route does not exist for.
+   */
+  private _attachmentPolicy: CosAttachmentPolicy = COS_ATTACHMENTS_OFF;
+  /** Files staged for the NEXT send. Draft-adjacent, never conversation data. */
+  private _attachments: CosDraftAttachment[] = [];
+  private _attachmentSeq = 0;
+  private _overflowNotice = '';
   private _turns: CosTurn[] = [];
   private _byId = new Map<string, CosTurn>();
   private _approvals: CosApproval[] = [];
@@ -309,14 +346,227 @@ export class CosStore {
   /** Prevent an unchanged draft from being admitted twice before its receipt. */
   get draftAdmissionPending(): boolean {
     const draft = this._draft.trim();
-    return draft !== '' && [...this._pendingAdmissions.values()].some(
-      (pending) => pending.draftRevision === this._draftRevision && pending.prompt === draft,
+    const staged = this.attachmentsReady.map((a) => a.id).join(',');
+    if (draft === '' && staged === '') return false;
+    return [...this._pendingAdmissions.values()].some(
+      (pending) =>
+        pending.draftRevision === this._draftRevision &&
+        pending.prompt === draft &&
+        // The second clause is what stops a double-click from queuing a
+        // TEXT-ONLY copy of a message that went out with files: sending
+        // empties the strip, so by the second click `staged` is '' while the
+        // pending admission still names its ids. Comparing the two sets alone
+        // reads that as "a different message" and admits a second turn under
+        // a fresh client_ref, which the server's dedupe can never catch.
+        (pending.attachments.join(',') === staged || staged === ''),
     );
+  }
+
+  /**
+   * Is there anything to send? Text OR a staged file is enough, never nothing.
+   *
+   * A row that FAILED blocks the send. All-or-nothing has to mean that on this
+   * side too: silently sending the two of four files that uploaded, while the
+   * other two sit on screen marked failed, is exactly the partial message the
+   * server's all-or-nothing resolve exists to prevent.
+   */
+  get sendable(): boolean {
+    return (this._draft.trim() !== '' || this.attachmentsReady.length > 0) &&
+      !this.attachmentsBusy && !this.attachmentsFailed;
   }
   setDraft(value: string): void {
     this._draft = value;
     this._draftRevision++;
     persistDraft(value);
+  }
+
+  // -- attachments ----------------------------------------------------------
+  //
+  // Staged files are DRAFT state: tab-local, never persisted, and dropped on
+  // reload exactly as an unsent screenshot should be. The ids they carry are
+  // the only thing that ever reaches the wire.
+
+  get attachmentPolicy(): CosAttachmentPolicy { return this._attachmentPolicy; }
+  get attachments(): readonly CosDraftAttachment[] { return this._attachments; }
+  get attachmentsReady(): readonly CosDraftAttachment[] {
+    return this._attachments.filter((a) => a.status === 'ready');
+  }
+  /** True while any row is still uploading: Send waits, it does not truncate. */
+  get attachmentsBusy(): boolean {
+    return this._attachments.some((a) => a.status === 'uploading');
+  }
+  get attachmentsFailed(): boolean {
+    return this._attachments.some((a) => a.status === 'failed');
+  }
+  get attachmentSlotsLeft(): number {
+    return Math.max(0, this._attachmentPolicy.maxFiles - this._attachments.length);
+  }
+
+  /**
+   * Stage files chosen, dropped, or pasted into the composer.
+   *
+   * Every refusal is a VISIBLE ROW, never a silent drop. A person who drags
+   * five files and gets three chips has no way to learn which two muxterm
+   * decided against, so an over-limit or wrong-type file becomes a failed row
+   * they can read and dismiss.
+   */
+  addAttachmentFiles(files: readonly File[]): void {
+    const policy = this._attachmentPolicy;
+    if (!policy.enabled || files.length === 0) return;
+    // Dropping a folder is one gesture and can be tens of thousands of files.
+    // Every refusal is a visible row by design, so the rows themselves have to
+    // be bounded, or that honesty rule becomes a way to freeze the tab. Past
+    // the cap the remainder is reported once, in the live region, instead.
+    const cap = policy.maxFiles + 4;
+    const considered = files.slice(0, cap);
+    const skipped = files.length - considered.length;
+    for (const file of considered) {
+      const localId = `att-local-${++this._attachmentSeq}`;
+      const row: CosDraftAttachment = {
+        localId,
+        id: '',
+        name: file.name,
+        size: file.size,
+        kind: '',
+        mediaType: file.type,
+        status: 'uploading',
+        message: '',
+        progress: 0,
+        previewUrl: '',
+        abort: null,
+      };
+      if (this._attachments.length >= policy.maxFiles) {
+        row.status = 'failed';
+        row.message = `Only ${policy.maxFiles} attachments fit in one message.`;
+        this._attachments = [...this._attachments, row];
+        continue;
+      }
+      if (!acceptableName(file.name, policy)) {
+        row.status = 'failed';
+        row.message = 'That file type cannot be attached. Images and text files are supported.';
+        this._attachments = [...this._attachments, row];
+        continue;
+      }
+      if (file.size > policy.maxFileBytes) {
+        row.status = 'failed';
+        row.message = `That file is larger than the ${humanBytes(policy.maxFileBytes)} limit.`;
+        this._attachments = [...this._attachments, row];
+        continue;
+      }
+      if (file.size === 0) {
+        row.status = 'failed';
+        row.message = 'That file is empty.';
+        this._attachments = [...this._attachments, row];
+        continue;
+      }
+      if (file.type.startsWith('image/')) {
+        try {
+          row.previewUrl = URL.createObjectURL(file);
+        } catch {
+          row.previewUrl = '';
+        }
+      }
+      this._attachments = [...this._attachments, row];
+      this._startAttachmentUpload(row, file);
+    }
+    this._overflowNotice = skipped > 0
+      ? `${skipped} more file${skipped === 1 ? ' was' : 's were'} ignored; only ${policy.maxFiles} fit in one message.`
+      : '';
+    this._notify();
+  }
+
+  /** Set when one gesture offered far more files than a message can hold. */
+  get attachmentOverflowNotice(): string { return this._overflowNotice; }
+
+  private _startAttachmentUpload(row: CosDraftAttachment, file: File): void {
+    const abort = new AbortController();
+    row.abort = abort;
+    void uploadCosAttachment(file, abort.signal, (loaded, total) => {
+      const live = this._attachments.find((a) => a.localId === row.localId);
+      if (!live || live.status !== 'uploading') return;
+      live.progress = total > 0 ? Math.min(1, loaded / total) : 0;
+      this._notify();
+    })
+      .then((result) => {
+        const live = this._attachments.find((a) => a.localId === row.localId);
+        if (!live) return;
+        live.id = result.id;
+        live.kind = result.kind;
+        live.mediaType = result.mediaType || live.mediaType;
+        live.status = 'ready';
+        live.progress = 1;
+        live.abort = null;
+        this._notify();
+      })
+      .catch((err: unknown) => {
+        const live = this._attachments.find((a) => a.localId === row.localId);
+        if (!live) return;
+        live.abort = null;
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          // The row was removed on purpose; nothing to report.
+          return;
+        }
+        live.status = 'failed';
+        live.message = err instanceof Error ? err.message : 'That file could not be attached.';
+        this._notify();
+      });
+  }
+
+  removeAttachment(localId: string): void {
+    const row = this._attachments.find((a) => a.localId === localId);
+    if (!row) return;
+    this._overflowNotice = '';
+    row.abort?.abort();
+    if (row.previewUrl) URL.revokeObjectURL(row.previewUrl);
+    // Taking a chip off the message takes the file off the server too.
+    // Without this the bytes would sit in the store for the whole staged
+    // hour, which is not what "remove" means to the person who clicked it.
+    if (row.id && row.status === 'ready') discardCosAttachment(row.id);
+    this._attachments = this._attachments.filter((a) => a.localId !== localId);
+    this._notify();
+  }
+
+  /**
+   * Hand the staged rows to a turn that was just admitted.
+   *
+   * Preview object URLs are TRANSFERRED, not revoked: the bubble is now the
+   * thing showing them. Revoking here is what would turn a just-sent
+   * screenshot into a broken image.
+   */
+  private _takeAttachments(): { ids: string[]; refs: CosAttachmentRef[] } {
+    const ready = this._attachments.filter((a) => a.status === 'ready' && a.id);
+    return {
+      ids: ready.map((a) => a.id),
+      refs: ready.map((a) => ({
+        name: a.name,
+        mediaType: a.mediaType,
+        size: humanBytes(a.size),
+        path: '',
+        previewUrl: isImageMedia(a.mediaType) ? a.previewUrl : '',
+      })),
+    };
+  }
+
+  /** Release preview object URLs an admission will never get to render. */
+  private _revokeRefs(refs: readonly CosAttachmentRef[]): void {
+    for (const ref of refs) {
+      if (ref.previewUrl) URL.revokeObjectURL(ref.previewUrl);
+    }
+  }
+
+  private _clearSentAttachments(ids: readonly string[]): void {
+    const sent = new Set(ids);
+    for (const row of this._attachments) {
+      if (sent.has(row.id)) continue;
+      // Anything left on the strip that did NOT go out -- a failed row, or a
+      // row that arrived mid-send -- is discarded with the draft it belonged
+      // to rather than being silently carried into the next message.
+      if (row.previewUrl) URL.revokeObjectURL(row.previewUrl);
+      row.abort?.abort();
+      if (row.id && row.status === 'ready') discardCosAttachment(row.id);
+    }
+    this._attachments = [];
+    this._overflowNotice = '';
   }
 
   get composerIdentity(): CosComposerIdentity {
@@ -436,7 +686,14 @@ export class CosStore {
    */
   send(prompt: string): boolean {
     const text = prompt.trim();
-    if (!text) return false;
+    // An attachment IS a message. Requiring words beside it would make the
+    // commonest real use -- paste a screenshot, press send -- impossible.
+    const { ids, refs } = this._takeAttachments();
+    if (!text && ids.length === 0) return false;
+    // Never send half of what is on screen. A row still uploading has no id
+    // yet, and a row that failed has none at all, so admitting now would
+    // deliver a message quietly missing a file the person can still see.
+    if (this.attachmentsBusy || this.attachmentsFailed) return false;
     const conversation = this._conversation;
     if (!this._socket) return false;
     if (this.draftAdmissionPending) return false;
@@ -445,9 +702,13 @@ export class CosStore {
       clientRef,
       draftRevision: this._draftRevision,
       prompt: text,
+      attachments: ids,
+      refs,
       conversation,
       timer: setTimeout(() => {
+        const stranded = this._pendingAdmissions.get(clientRef);
         if (!this._pendingAdmissions.delete(clientRef)) return;
+        if (stranded) this._revokeRefs(stranded.refs);
         this._fault = {
           code: 'turn_admission_timeout',
           message: 'Send was not confirmed; your draft was kept.',
@@ -458,17 +719,20 @@ export class CosStore {
     };
     this._pendingAdmissions.set(clientRef, pending);
     this._fault = null;
-    if (!this._socket.cosTurn(text, clientRef)) {
+    if (!this._socket.cosTurn(text, clientRef, ids)) {
       clearTimeout(pending.timer);
       this._pendingAdmissions.delete(clientRef);
       this._fault = {
         code: 'turn_admission_failed',
-        message: 'Send could not be sent; your draft was kept.',
+        message: 'Send could not be sent; your draft and attachments were kept.',
         fatal: false,
       };
       this._notify();
       return false;
     }
+    // Accepted locally: the composer strip empties now, and the rows' preview
+    // URLs move to the pending admission so the bubble can show them.
+    this._clearSentAttachments(ids);
     this._notify();
     return true;
   }
@@ -577,7 +841,7 @@ export class CosStore {
     // is retried with the same server-deduplicated reference. The retry is
     // safe whether the old frame was lost, queued, or already active.
     for (const pending of this._pendingAdmissions.values()) {
-      this._socket?.cosTurn(pending.prompt, pending.clientRef);
+      this._socket?.cosTurn(pending.prompt, pending.clientRef, pending.attachments);
     }
     this._notify();
   }
@@ -602,6 +866,12 @@ export class CosStore {
           ? { id, sessionId, generation, incarnation }
           : null,
       );
+      // The policy rides the frame the composer already waits for, so the
+      // attach control cannot appear before its limits are known. An older
+      // server omits the field entirely, which correctly reads as "off".
+      this._attachmentPolicy = ok
+        ? parseCosAttachmentPolicy(frame.attachments)
+        : COS_ATTACHMENTS_OFF;
       if (!ok) {
         this._setStatus('down');
         this._fault = { code: 'subscribe_failed', message: str(frame.error) || `${ASSISTANT_NAME} could not be reached`, fatal: true };
@@ -620,6 +890,8 @@ export class CosStore {
       this._pendingAdmissions.delete(clientRef);
       const current = this._conversation;
       if (frame.ok !== true || !str(frame.turn_id)) {
+        // No turn was created, so nothing will ever render these previews.
+        this._revokeRefs(admission.refs);
         this._fault = {
           code: 'turn_admission_refused',
           message: `${str(frame.error) || str(frame.code) || 'Send was refused.'}`.slice(0, 220),
@@ -645,6 +917,7 @@ export class CosStore {
           // A queue receipt is the real proof of acceptance. Its later
           // turn_start upgrades this same row to streaming.
           turn.prompt = admission.prompt;
+          turn.attachments = [...admission.refs];
           turn.clientRef = clientRef;
         }
         if (this._draftRevision === admission.draftRevision) {
@@ -669,7 +942,7 @@ export class CosStore {
         const turn = this._ensure(id);
         if (!turn) continue;
         seen.add(id);
-        turn.prompt = str(item.prompt) || turn.prompt;
+        this._applyDeliveredPrompt(turn, str(item.prompt));
         // A delayed snapshot must never reopen a terminal turn.
         if (turn.status === 'pending' || turn.status === 'streaming') {
           turn.status = status === 'active' ? 'streaming' : 'pending';
@@ -791,7 +1064,7 @@ export class CosStore {
       case 'turn_submitted': {
         const t = this._ensure(turnId);
         if (!t) return;
-        t.prompt = str(ev.prompt) || t.prompt;
+        this._applyDeliveredPrompt(t, str(ev.prompt));
         t.clientRef = str(ev.client_ref) || t.clientRef;
         return;
       }
@@ -807,7 +1080,7 @@ export class CosStore {
         // Adopted here rather than depended on: an undecorated turn_start
         // from a plain sidecar leaves whatever is already known intact, which
         // is what makes this additive rather than a second contract.
-        t.prompt = str(ev.prompt) || t.prompt;
+        this._applyDeliveredPrompt(t, str(ev.prompt));
         t.clientRef = str(ev.client_ref) || t.clientRef;
         // A replayed turn is already finished; do not re-open it.
         if (!replay && t.status === 'pending') t.status = 'streaming';
@@ -947,7 +1220,7 @@ export class CosStore {
           // this is the only frame that will ever carry its question. The
           // relay decorates it for exactly that case (decorateTurn); an
           // undecorated error leaves whatever is already known intact.
-          t.prompt = str(ev.prompt) || t.prompt;
+          this._applyDeliveredPrompt(t, str(ev.prompt));
           t.clientRef = str(ev.client_ref) || t.clientRef;
           t.notices.push(message);
           if (terminal) {
@@ -1187,9 +1460,14 @@ export class CosStore {
     // browser stamps it. That is strictly better -- it is when the turn
     // actually happened -- and it is only ever read for display.
     const stamped = Date.parse(str(rec.ts));
+    // A replayed prompt is the DELIVERED one, reference block and all. Split
+    // it back apart here so a conversation reloaded weeks later shows the
+    // same message the person sent, with its files named beside it.
+    const replayed = splitAttachmentBlock(str(rec.prompt));
     return {
       id,
-      prompt: str(rec.prompt),
+      prompt: replayed.text,
+      attachments: [...replayed.attachments],
       clientRef: '',
       blocks,
       status:
@@ -1230,6 +1508,37 @@ export class CosStore {
    * across every replay, its blocks growing without bound. Ignoring an event
    * that cannot be placed is what the file header promises anyway (2.4 law 5).
    */
+  /**
+   * Adopt a prompt that came off the wire.
+   *
+   * Every server-side path -- the queue projection, turn_submitted, turn_start
+   * and the decorated dispatch error -- carries the DELIVERED prompt, so all
+   * four split identically here rather than each learning the block format.
+   *
+   * An empty value leaves what is already known intact (the existing
+   * behaviour for an undecorated frame), and a parse that names the same files
+   * this tab already staged keeps the richer local rows, preview and all,
+   * instead of replacing them with pathless replay copies.
+   */
+  private _applyDeliveredPrompt(turn: CosTurn, delivered: string): void {
+    if (!delivered) return;
+    const split = splitAttachmentBlock(delivered);
+    turn.prompt = split.text || turn.prompt;
+    if (split.attachments.length === 0) return;
+    const sameSet =
+      turn.attachments.length === split.attachments.length &&
+      turn.attachments.every((a, i) => a.name === split.attachments[i].name);
+    if (sameSet) {
+      // Same files, better local copy: keep the previews, adopt the paths.
+      turn.attachments = turn.attachments.map((a, i) => ({
+        ...split.attachments[i],
+        previewUrl: a.previewUrl,
+      }));
+      return;
+    }
+    turn.attachments = [...split.attachments];
+  }
+
   private _ensure(turnId: string): CosTurn | null {
     const id = turnId;
     if (!id) return null;
@@ -1238,6 +1547,7 @@ export class CosStore {
     const t: CosTurn = {
       id,
       prompt: '',
+      attachments: [],
       clientRef: '',
       blocks: [],
       status: 'pending',

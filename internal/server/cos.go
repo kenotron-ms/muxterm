@@ -150,6 +150,12 @@ type cosClientMessage struct {
 	Reason        string `json:"reason"`
 	TurnID        string `json:"turn_id"`
 	OlderThanDays int    `json:"older_than_days"`
+	// Attachments names already-staged composer attachments by id. An
+	// ADDITIVE field: an older browser omits it and every existing frame
+	// keeps its exact meaning. The ids are opaque to everything here except
+	// the attachment store, which is the only thing that turns one into a
+	// path. See cos_attachments.go.
+	Attachments []string `json:"attachments"`
 }
 
 // --- relay -----------------------------------------------------------------
@@ -185,7 +191,14 @@ type cosConversationIdentity struct {
 type cosAdmission struct {
 	client *Client
 	msg    cosClientMessage
+	// prompt is the DELIVERED prompt: the person's text plus, when they
+	// attached files, the reference block naming them. Composed once, at
+	// ingress, so that text and attachments cross every later boundary --
+	// admission, queue, dispatch, history -- as one indivisible string.
 	prompt string
+	// refs is what that block names, retained only so the turn id can be
+	// recorded against each attachment after submission.
+	refs []cosAttachmentRef
 }
 
 // cosRelay owns the single, lazily-started supervisor. One per Hub, i.e. one
@@ -281,6 +294,16 @@ func (r *cosRelay) runAdmissions() {
 			continue
 		}
 		turn, duplicate := r.submit(sup, admission.prompt, fmt.Sprintf("%p", admission.client), admission.msg.ClientRef)
+		if len(admission.refs) > 0 && !duplicate {
+			// Audit only, and after the fact on purpose: the attachment's
+			// lifetime was already secured at ingress, so a failure here
+			// costs a log line, never the turn.
+			//
+			// Skipped for a duplicate client_ref: that turn's prompt was
+			// composed from an EARLIER frame and never named these files, so
+			// recording them against it would be a false attribution.
+			admission.client.hub.cosAttachments.note(admission.refs, turn.ID)
+		}
 		admission.client.sendCosTurnResult(admission.msg.ClientRef, true, turn.ID, "")
 		admission.client.hub.broadcastCosQueue(r, sup)
 		if duplicate {
@@ -1057,15 +1080,42 @@ func (c *Client) stopCos() {
 }
 
 // cosTurn submits one prompt through the queue, lazily starting the sidecar.
+//
+// Attachments are resolved HERE, before anything is admitted, and all or
+// nothing. A message whose attachments cannot all be honored is refused whole:
+// the person gets one clear error and their draft back, rather than a turn the
+// Operator answers while quietly missing the screenshot the question was about.
 func (c *Client) cosTurn(msg cosClientMessage) {
 	prompt := strings.TrimSpace(msg.Prompt)
-	if prompt == "" {
+
+	var (
+		refs  []cosAttachmentRef
+		store *cosAttachmentStore
+	)
+	if len(msg.Attachments) > 0 {
+		store = c.hub.cosAttachments
+		if store == nil || !store.policy.Enabled {
+			c.cosTurnFailure(msg, "attachments_disabled", errAttachDisabled.Error())
+			return
+		}
+		resolved, err := store.resolve(msg.Attachments)
+		if err != nil {
+			c.cosTurnFailure(msg, "attachment_unavailable", safeAttachMessage(err))
+			return
+		}
+		refs = resolved
+	}
+
+	// An attachment is a message. Requiring words alongside it would make
+	// the commonest real use -- paste a screenshot, press send -- impossible.
+	if prompt == "" && len(refs) == 0 {
 		c.cosTurnFailure(msg, "bad_request", "an empty prompt was ignored")
 		return
 	}
-	if len(prompt) > cosPromptMaxBytes {
+	delivered := cosComposePrompt(prompt, refs)
+	if len(delivered) > cosPromptMaxBytes {
 		c.cosTurnFailure(msg, "bad_request",
-			fmt.Sprintf("prompt is %d bytes; the limit is %d", len(prompt), cosPromptMaxBytes))
+			fmt.Sprintf("prompt is %d bytes; the limit is %d", len(delivered), cosPromptMaxBytes))
 		return
 	}
 	relay := c.hub.cos
@@ -1073,7 +1123,20 @@ func (c *Client) cosTurn(msg cosClientMessage) {
 		c.cosTurnFailure(msg, cos.CodeSidecarUnavailable, "Mission Control is not available on this server")
 		return
 	}
-	if !relay.enqueue(cosAdmission{client: c, msg: msg, prompt: prompt}) {
+	// EVERY rejection above this line happens before the attachments are
+	// committed, so a refused turn leaves them staged and still discardable
+	// rather than pinned for the whole retention window by a message that
+	// never existed. Retention starts HERE, immediately before admission, and
+	// never after it: binding afterwards would leave a window in which a
+	// queued turn names a path whose staged hour can expire under it.
+	if len(refs) > 0 {
+		if err := store.commit(refs); err != nil {
+			log.Printf("cos: attachment commit: %v", err)
+			c.cosTurnFailure(msg, "attachment_unavailable", safeAttachMessage(err))
+			return
+		}
+	}
+	if !relay.enqueue(cosAdmission{client: c, msg: msg, prompt: delivered, refs: refs}) {
 		c.cosTurnFailure(msg, "admission_full", "Mission Control is busy accepting messages. Try again.")
 	}
 }
@@ -1233,6 +1296,15 @@ func (c *Client) sendCosSubscribeResult(ok bool, errMsg, sessionID string, ready
 			conversation = &identity
 		}
 	}
+	// The attachment policy rides the frame the composer already waits for,
+	// so the control cannot appear before the browser knows the limits it
+	// must honor. Additive: an older browser drops the field and keeps
+	// today's behaviour, which is no attachments at all.
+	var attachments *cosAttachmentCapability
+	if ok {
+		capability := c.hub.cosAttachments.capability()
+		attachments = &capability
+	}
 	frame := struct {
 		Type         string                   `json:"type"`
 		OK           bool                     `json:"ok"`
@@ -1240,7 +1312,11 @@ func (c *Client) sendCosSubscribeResult(ok bool, errMsg, sessionID string, ready
 		Ready        bool                     `json:"ready"`
 		Error        string                   `json:"error,omitempty"`
 		Conversation *cosConversationIdentity `json:"conversation,omitempty"`
-	}{Type: cosTypeSubscribeResult, OK: ok, SessionID: sessionID, Ready: ready, Error: errMsg, Conversation: conversation}
+		Attachments  *cosAttachmentCapability `json:"attachments,omitempty"`
+	}{
+		Type: cosTypeSubscribeResult, OK: ok, SessionID: sessionID, Ready: ready,
+		Error: errMsg, Conversation: conversation, Attachments: attachments,
+	}
 	data, err := json.Marshal(frame)
 	if err != nil {
 		log.Printf("cos: encode subscribe result: %v", err)

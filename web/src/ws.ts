@@ -693,13 +693,24 @@ export class MuxSocket {
     this._sendCos({ type: 'cos-subscribe', on });
   }
 
-  /** Submit one turn. Returns whether it actually went out (see sendSessiond). */
-  cosTurn(prompt: string, clientRef?: string): boolean {
-    return this._sendCos({
+  /**
+   * Submit one turn. Returns whether it actually went out (see sendSessiond).
+   *
+   * `attachments` names already-staged composer attachments by id. It is
+   * written only when there are some, which keeps the frame byte-identical to
+   * the one every previous version sent for an ordinary typed message. Text
+   * and attachments travel in ONE frame on purpose: the server composes them
+   * into a single prompt, so there is no second message that can be dropped,
+   * reordered, or admitted on its own.
+   */
+  cosTurn(prompt: string, clientRef?: string, attachments?: readonly string[]): boolean {
+    const frame: Record<string, unknown> = {
       type: 'cos-turn',
       prompt,
       client_ref: clientRef ?? '',
-    });
+    };
+    if (attachments && attachments.length > 0) frame.attachments = [...attachments];
+    return this._sendCos(frame);
   }
 
   /**

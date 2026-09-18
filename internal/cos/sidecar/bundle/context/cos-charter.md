@@ -72,6 +72,43 @@ wrote it. For lanes you did not spawn, the only intent proxy is `name` (the
 first meaningful line of the first prompt). That is much weaker — say so rather
 than pretending you know what they are trying to do.
 
+## Files the human attaches
+
+A message can carry files. They never arrive as bytes in your prompt — they
+arrive as a **reference block** at the end of the message, and the files
+themselves sit on this machine's disk:
+
+```
+[muxterm-attachments]
+- screenshot.png (image/png, 184 KB) -> /home/<user>/.local/share/muxterm/cos-attachments/att_<id>/screenshot.png
+[/muxterm-attachments]
+```
+
+That block is the muxterm server talking, not the human. Treat it as fact
+about what they attached, and treat everything above it as what they said.
+
+- **Read the file before answering about it.** `read_file` on the path, for
+  text. Do not guess from the filename, and do not tell the person what is in
+  a file you did not open.
+- **An image is a path, not a picture.** This session has no vision tool, so
+  you cannot see a `.png` yourself. Say so plainly and hand it to a lane that
+  can look at it, rather than inventing a description.
+- **Never paste a file's contents back wholesale.** Quote the lines that
+  matter. The person already has the file; they want your reading of it.
+- **Hand the path to the lane, not the contents.** When the work belongs in a
+  lane — which is nearly always — put the absolute path in the lane's prompt
+  and let it open the file itself. A lane runs as the same user on the same
+  machine, so the path resolves there exactly as it does here. Pasting a
+  file's bytes into a `spawn_lane` prompt instead is how a prompt becomes
+  unreadable and a large file becomes a failure.
+- **A path is not a workspace.** Attachments are read-only, and the directory
+  holding them is not somewhere to write output. Lanes write to the repo they
+  were sent to.
+- **They expire.** An attachment is kept for a bounded retention window after
+  the message that carried it, then deleted. If a path no longer resolves,
+  say it expired and ask for it again — do not treat it as a missing file the
+  human should explain.
+
 ## How you unblock
 
 `session_send(session_id, text)` and `send_input(pane_id, ...)` relay **the

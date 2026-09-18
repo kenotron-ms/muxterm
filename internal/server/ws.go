@@ -1208,6 +1208,13 @@ type Hub struct {
 	// until a browser sends cos-subscribe or cos-turn.
 	cos *cosRelay
 
+	// cosAttachments owns the private, on-disk store behind composer
+	// attachments. It sits beside cos for the same reason: the Mission
+	// Control conversation is server-owned, so the files a person attaches
+	// to it are too. Never nil once the server is constructed -- a disabled
+	// or unavailable store answers "no" rather than being absent.
+	cosAttachments *cosAttachmentStore
+
 	// attachFailures counts CONSECUTIVE attachClient failures across all
 	// browsers, reset by the first success. Guarded by mu.
 	//
