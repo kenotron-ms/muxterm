@@ -38,8 +38,9 @@ package sessiond
 // desktop notification will not get one from a lane muxterm started. That is a
 // real loss, it has an off switch (codexNotifyEnv), and it is not hidden.
 //
-// VERIFIED, NOT INFERRED, against codex-cli 0.149.0 on this machine, by running
-// a real turn with a capture script in the notify slot:
+// VERIFIED against codex-cli 0.155.1 on this machine: the shipped binary
+// contains one agent-turn-complete event with the six fields below and no
+// sibling notify event. The original live capture on 0.149.0 was:
 //
 //	{"type":"agent-turn-complete",
 //	 "thread-id":"01a0b630-01a4-71b0-b9e3-c1cda6e4a713",
@@ -108,7 +109,7 @@ const codexNotifyEnv = "MUXTERM_CODEX_NOTIFY"
 const codexSnapshotPrefix = "codex-"
 
 // codexNotifyType is the only event Codex serializes into the legacy notify
-// slot on 0.149.0. It is checked rather than assumed, so that a future release
+// slot on 0.155.1. It is checked rather than assumed, so that a future release
 // adding a second event type does not get silently mapped as if it were a
 // completed turn -- an unknown event is dropped and said out loud, which is the
 // safe direction when the whole meaning of the row is "this turn ended".
@@ -281,7 +282,8 @@ func tomlBasicString(s string) string {
 // CodexRowFor maps one notify payload onto a muxterm session row.
 //
 // ok=false means the payload named nothing muxterm can publish -- an event type
-// this version does not understand, or a missing thread id. Dropping it is the
+// this version does not understand, a missing thread id, or an internal thread
+// with no persisted rollout. Dropping it is the
 // honest outcome: a row keyed on an id muxterm invented would be a row that
 // never updates again and never reconciles with the session it claims to be.
 func CodexRowFor(n CodexNotify) (SessionState, bool) {
@@ -289,7 +291,7 @@ func CodexRowFor(n CodexNotify) (SessionState, bool) {
 		return SessionState{}, false
 	}
 	id := codexSnapshotPrefix + n.ThreadID
-	if !ValidSessionID(id) {
+	if !ValidSessionID(id) || !codexHasRollout(n.ThreadID) {
 		return SessionState{}, false
 	}
 
@@ -318,6 +320,53 @@ func CodexRowFor(n CodexNotify) (SessionState, bool) {
 		UpdatedAt: time.Now().Unix(),
 	}
 	return row, true
+}
+
+// codexHasRollout admits persisted threads only. Codex's internal title thread
+// also fires notify in the same process, but has no rollout. Its prompt and
+// final JSON are not user activity and must never become a second fleet row.
+// Use the durable rollout rather than session_index.jsonl's title projection;
+// no prompt wording, assistant content, or shared pid is an identity test.
+func codexHasRollout(threadID string) bool {
+	root := os.Getenv("CODEX_HOME")
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		root = filepath.Join(home, ".codex")
+	}
+	// Enumerate the date directories, then match literal filenames so even a
+	// CODEX_HOME containing glob metacharacters works. Search all dates: a
+	// resumed thread can be older than the transcript reader's seven-day window.
+	// The hook runs at turn completion; allow one second for first-turn
+	// persistence to become visible before declining to publish.
+	for attempt := 0; attempt < 6; attempt++ {
+		if attempt > 0 {
+			time.Sleep(200 * time.Millisecond)
+		}
+		if codexRolloutIn(filepath.Join(root, "sessions"), "-"+threadID+".jsonl", 3) {
+			return true
+		}
+	}
+	return false
+}
+
+func codexRolloutIn(dir, suffix string, depth int) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if depth > 0 {
+			if entry.IsDir() && codexRolloutIn(filepath.Join(dir, entry.Name()), suffix, depth-1) {
+				return true
+			}
+		} else if entry.Type().IsRegular() && strings.HasPrefix(entry.Name(), "rollout-") && strings.HasSuffix(entry.Name(), suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // codexName picks the row title: the session's FIRST user message, which is
