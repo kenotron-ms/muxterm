@@ -135,7 +135,9 @@ install, and one log line forever on a machine without `claude` on PATH.
 
 ## Feature gate
 
-`MUXTERM_OPERATOR_LIFECYCLE_NOTICES` — off by default, read by both processes
+`MUXTERM_OPERATOR_LIFECYCLE_NOTICES` — on by default (corrected after the
+initial rollout left production notices disabled). Set `0`, `false`, `no`, or
+`off` to opt out. Read by both processes
 through one exported helper so the two halves cannot be half-enabled by a
 different spelling in one unit. An environment variable rather than a config
 key, for the reason the Claude switch already uses one: `config.toml` is the

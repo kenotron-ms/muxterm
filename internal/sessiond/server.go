@@ -471,6 +471,7 @@ func (s *Server) recordPaneCompletion(wsID string, pane *Pane, exitCode int, run
 		return false
 	}
 
+	declared = stampPane(declared, lanePaneRef(wsID, pane))
 	info := pane.Info()
 	screen, scanned := paneFinalOutput(pane)
 	record := CompletionRecord{
@@ -485,6 +486,8 @@ func (s *Server) recordPaneCompletion(wsID string, pane *Pane, exitCode int, run
 		Label:         declared.Label,
 		Mode:          declared.Mode,
 		DoneMeans:     declared.DoneMeans,
+		GoalID:        declared.GoalID,
+		Origin:        declared.Origin,
 		Doing:         declared.Doing,
 		DeclaredState: terminalDeclaration(declared.State),
 		ExitCode:      exitCode,
@@ -1621,11 +1624,10 @@ func (s *Server) emitSessionState() {
 	wanted := s.sessionStateWanted()
 	// The lifecycle watcher has to see EVERY transition, including the ones
 	// that happen while no browser is open -- a lane finishing at 3am is
-	// precisely the case a durable notice exists for. So when the feature is
-	// on, this tick does its work regardless of subscribers, and the "costs
-	// literally nothing when nobody opted in" bargain above is knowingly
-	// traded for one directory read and one ancestor walk per second. With
-	// the feature off (the default) nothing changes.
+	// precisely the case a durable notice exists for. By default this tick
+	// does its work regardless of subscribers, using the same collected rows
+	// as the fleet. Explicitly disabling notices restores the subscriber-only
+	// behavior.
 	if !wanted && s.lifecycle == nil {
 		return // nobody subscribed: no directory read, no /proc walk, no bytes
 	}

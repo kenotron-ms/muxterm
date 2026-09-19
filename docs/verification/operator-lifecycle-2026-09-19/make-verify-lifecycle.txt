@@ -1,0 +1,140 @@
+=== isolated environment ===
+  XDG_RUNTIME_DIR = /tmp/muxterm-lifecycle-verify
+  XDG_DATA_HOME   = /tmp/muxterm-lifecycle-verify/data
+  markers file    = /tmp/muxterm-lifecycle-verify/data/muxterm/attention.json
+
+=== starting sessiond (lifecycle notices ON) ===
+  sessiond pid 1113512
+PASS  claude fleet adapter is ON by default (no env var set)
+
+=== creating a real pane ===
+  workspace w5 pane 1
+
+=== 1. baseline observation must not announce anything ===
+PASS  first sighting of a working lane writes no marker
+
+=== 2. autonomous working -> done, pane still alive ===
+PASS  one finished marker
+PASS    attributed to the right session
+PASS    records the transition it saw
+PASS  one failed marker
+PASS  one stopped marker
+
+=== 3. autonomous working -> blocked ===
+PASS  one blocked marker
+PASS    carries the declared reason
+PASS    is unresolved while it is blocked
+
+=== 4. blocked -> working resolves it rather than leaving a stale ask ===
+PASS  blocked marker is now resolved
+
+=== 5. an INTERACTIVE lane is never an alarm ===
+PASS  interactive transitions produce no markers at all
+
+=== 6. no session-state subscriber was ever attached ===
+PASS  every marker above was recorded with no browser attached
+
+=== 7. delivery ledger: the one-time migration, and no backfill ===
+PASS  a delivery ledger was created
+PASS  every announceable pre-existing marker is recorded as already-announced
+PASS  a resolved marker is not announced, so it is not seeded either
+PASS  nothing was actually delivered
+PASS  the migration announced itself in the log
+PASS  a restart re-seeds nothing and re-announces nothing
+
+=== 8. feature gate: with the switch OFF, nothing observes and nothing is written ===
+PASS  no marker is written when the feature is off
+
+=== delivery ledger ===
+{
+  "v": 1,
+  "entries": [
+    {
+      "markerId": "verify-auto-finished-1789782174",
+      "key": "verify-auto|finished",
+      "kind": "finished",
+      "deliveredAt": 1789782203,
+      "seeded": true
+    },
+    {
+      "markerId": "verify-failed-failed-1789782179",
+      "key": "verify-failed|failed",
+      "kind": "failed",
+      "deliveredAt": 1789782203,
+      "seeded": true
+    },
+    {
+      "markerId": "verify-stopped-stopped-1789782184",
+      "key": "verify-stopped|stopped",
+      "kind": "stopped",
+      "deliveredAt": 1789782203,
+      "seeded": true
+    }
+  ]
+}
+
+=== markers written ===
+{
+  "v": 1,
+  "records": [
+    {
+      "v": 1,
+      "id": "verify-auto-finished-1789782174",
+      "sessionId": "verify-auto",
+      "kind": "finished",
+      "fromState": "working",
+      "workspaceId": "w3",
+      "paneId": 1,
+      "project": "/home/ken",
+      "name": "verify-auto",
+      "mode": "autonomous",
+      "doing": "all green",
+      "observedAt": 1789782174
+    },
+    {
+      "v": 1,
+      "id": "verify-failed-failed-1789782179",
+      "sessionId": "verify-failed",
+      "kind": "failed",
+      "fromState": "working",
+      "workspaceId": "w3",
+      "paneId": 1,
+      "project": "/home/ken",
+      "name": "verify-failed",
+      "mode": "autonomous",
+      "doing": "failed distinctly",
+      "observedAt": 1789782179
+    },
+    {
+      "v": 1,
+      "id": "verify-stopped-stopped-1789782184",
+      "sessionId": "verify-stopped",
+      "kind": "stopped",
+      "fromState": "working",
+      "workspaceId": "w3",
+      "paneId": 1,
+      "project": "/home/ken",
+      "name": "verify-stopped",
+      "mode": "autonomous",
+      "doing": "stopped distinctly",
+      "observedAt": 1789782184
+    },
+    {
+      "v": 1,
+      "id": "verify-auto-blocked-1789782189",
+      "sessionId": "verify-auto",
+      "kind": "blocked",
+      "fromState": "working",
+      "declaredWaitingFor": "permission prompt",
+      "workspaceId": "w3",
+      "paneId": 1,
+      "project": "/home/ken",
+      "name": "verify-auto",
+      "mode": "autonomous",
+      "observedAt": 1789782189,
+      "resolved": true
+    }
+  ]
+}
+
+RESULT: all checks passed

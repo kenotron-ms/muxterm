@@ -42,18 +42,17 @@ import (
 // the UI, and "may this system write turns into my Operator conversation" is
 // not a preference a web page should be able to flip.
 //
-// OFF BY DEFAULT. This writes into the one persistent Mission Control
-// conversation, which is the highest-consequence surface muxterm owns.
+// Enabled by default: the same terminal states that update fleet cards must
+// also reach Operator. An explicit false value disables both halves.
 const lifecycleNoticesEnv = "MUXTERM_OPERATOR_LIFECYCLE_NOTICES"
 
-// LifecycleNoticesEnabled reports the operator's opt-in. Exported because the
-// browser server gates its notice pump on the identical answer.
+// LifecycleNoticesEnabled is shared by the daemon and browser server.
 func LifecycleNoticesEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(lifecycleNoticesEnv))) {
-	case "1", "true", "yes", "on":
-		return true
+	case "0", "false", "no", "off":
+		return false
 	}
-	return false
+	return true
 }
 
 // lifecycleSeen is the previous observation of one session: the minimum needed
