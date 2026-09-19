@@ -19,6 +19,8 @@ import (
 
 // Config is the top-level configuration for muxterm.
 type Config struct {
+	// Owner-controlled, preserved on UI saves but not writable by browser PATCH.
+	Lanes          LanesConfig          `toml:"lanes" json:"lanes"`
 	Theme          ThemeConfig          `toml:"theme"      json:"theme"`
 	Font           FontConfig           `toml:"font"       json:"font"`
 	Terminal       TerminalConfig       `toml:"terminal"   json:"terminal"`
@@ -39,6 +41,11 @@ type Config struct {
 	// It is an owner-only outbound Azure scope allowlist; retaining it in the
 	// TOML model prevents an unrelated browser settings save from erasing it.
 	SandboxAzure SandboxAzureConfig `toml:"sandbox_azure" json:"-"`
+}
+
+// LanesConfig controls newly launched Codex and Claude lanes.
+type LanesConfig struct {
+	Approval string `toml:"approval" json:"approval"` // prompt (default) | never
 }
 
 // SandboxAzureConfig is retained only so config.Write preserves the owner-only
@@ -779,6 +786,7 @@ func Write(path string, cfg Config) error {
 // Defaults returns a Config populated with hardcoded default values.
 func Defaults() Config {
 	return Config{
+		Lanes: LanesConfig{Approval: "prompt"},
 		Theme: ThemeConfig{
 			Palette: "tokyo-night",
 		},

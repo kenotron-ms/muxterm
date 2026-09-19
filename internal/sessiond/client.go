@@ -634,7 +634,13 @@ func (c *Client) SaveLayout(workspaceID, breakpoint, layout string) error {
 // point and the broadcast is what every client -- including the one that
 // asked -- actually builds its pane from.
 func (c *Client) CreatePane(cmd []string, placement string, referencePaneID int, clientRef string) (int, error) {
+	return c.CreatePaneWithApproval(cmd, placement, referencePaneID, clientRef, "")
+}
+
+// CreatePaneWithApproval supplies an optional muxterm lane policy override.
+func (c *Client) CreatePaneWithApproval(cmd []string, placement string, referencePaneID int, clientRef, approval string) (int, error) {
 	reply, err := c.request(&Message{
+		LaneApproval:    approval,
 		Type:            TypeCreatePane,
 		Cmd:             cmd,
 		Placement:       placement,

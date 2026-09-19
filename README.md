@@ -148,6 +148,16 @@ Add to `opencode.json` in your project root:
 }
 ```
 
+## Lane approvals
+
+Codex and Claude lanes default to prompting. To opt in to unattended execution,
+set `[lanes] approval = "never"` in your muxterm `config.toml`. This disables
+approval prompts and Codex sandboxing. `spawn_lane` accepts an optional
+`approval: "prompt" | "never"` override; the CLI uses `--approval`.
+
+See [lane approval policy](docs/decisions/2026-09-19-lane-approval.md) for the
+config path, launch flags, verified versions, and fail-loud compatibility checks.
+
 ## Architecture
 
 | Component | Role |

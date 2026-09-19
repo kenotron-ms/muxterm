@@ -1,0 +1,92 @@
+[
+  {
+    "pid": 1128064,
+    "argv": [
+      "/home/ken/.local/bin/codex",
+      "-c",
+      "approval_policy=on-request",
+      "-c",
+      "sandbox_mode=workspace-write",
+      "-c",
+      "notify=[\"/home/ken/work/muxterm-approval/bin/muxterm-dev\",\"session\",\"codex-notify\"]",
+      "--",
+      "This is a muxterm launch integration check. Reply verification complete; do not use tools. Case: proof-default-codex"
+    ]
+  },
+  {
+    "pid": 1128238,
+    "argv": [
+      "/home/ken/.local/bin/claude",
+      "--permission-mode",
+      "default",
+      "This is a muxterm launch integration check. Reply verification complete; do not use tools. Case: proof-default-claude"
+    ]
+  },
+  {
+    "pid": 1128286,
+    "argv": [
+      "/home/ken/.local/bin/codex",
+      "-c",
+      "approval_policy=never",
+      "-c",
+      "sandbox_mode=danger-full-access",
+      "-c",
+      "notify=[\"/home/ken/work/muxterm-approval/bin/muxterm-dev\",\"session\",\"codex-notify\"]",
+      "--",
+      "This is a muxterm launch integration check. Reply verification complete; do not use tools. Case: proof-never-codex"
+    ]
+  },
+  {
+    "pid": 1128464,
+    "argv": [
+      "/home/ken/.local/bin/claude",
+      "--dangerously-skip-permissions",
+      "This is a muxterm launch integration check. Reply verification complete; do not use tools. Case: proof-never-claude"
+    ]
+  },
+  {
+    "pid": 1128495,
+    "argv": [
+      "/home/ken/.local/bin/codex",
+      "-c",
+      "approval_policy=on-request",
+      "-c",
+      "sandbox_mode=workspace-write",
+      "-c",
+      "notify=[\"/home/ken/work/muxterm-approval/bin/muxterm-dev\",\"session\",\"codex-notify\"]",
+      "--",
+      "This is a muxterm launch integration check. Reply verification complete; do not use tools. Case: proof-override-prompt-codex"
+    ]
+  },
+  {
+    "pid": 1128668,
+    "argv": [
+      "/home/ken/.local/bin/claude",
+      "--permission-mode",
+      "default",
+      "This is a muxterm launch integration check. Reply verification complete; do not use tools. Case: proof-override-prompt-claude"
+    ]
+  },
+  {
+    "pid": 1128711,
+    "argv": [
+      "/home/ken/.local/bin/codex",
+      "-c",
+      "approval_policy=never",
+      "-c",
+      "sandbox_mode=danger-full-access",
+      "-c",
+      "notify=[\"/home/ken/work/muxterm-approval/bin/muxterm-dev\",\"session\",\"codex-notify\"]",
+      "--",
+      "This is a muxterm launch integration check. Reply verification complete; do not use tools. Case: proof-override-never-codex"
+    ]
+  },
+  {
+    "pid": 1128963,
+    "argv": [
+      "/home/ken/.local/bin/claude",
+      "--dangerously-skip-permissions",
+      "This is a muxterm launch integration check. Reply verification complete; do not use tools. Case: proof-override-never-claude"
+    ]
+  }
+]
