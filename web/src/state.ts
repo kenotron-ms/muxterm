@@ -64,6 +64,7 @@ export class MuxStore {
   // Frozen wire state for the sessiond control protocol. A pure Composition is
   // projected from _panes for the layout engine.
   private _workspaces: SessiondWorkspaceInfo[] = [];
+  referenceInventoryReady = false;
   private _attached: string | null = null;
   private _panes: SessiondPaneInfo[] = [];
   private _activePaneId = 0;
@@ -244,6 +245,7 @@ export class MuxStore {
     switch (msg.type) {
       case SessiondType.WorkspaceList:
         this._workspaces = msg.workspaces ?? [];
+        this.referenceInventoryReady = true;
         this._ringNewCompletions();
         // Prune stale workspace bell entries for workspaces that no longer exist.
         for (const wsId of this._bellWorkspaces) {

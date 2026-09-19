@@ -143,6 +143,7 @@ func (s *Server) applyDerivedNames(rows []SessionState) {
 	// Pane titles. A pane belongs to the session running in it, so every
 	// labelled row gets to name its own pane.
 	named := make(map[paneRef]bool, len(rows))
+	renamed := false
 	for _, r := range rows {
 		if r.Label == "" {
 			continue
@@ -156,6 +157,7 @@ func (s *Server) applyDerivedNames(rows []SessionState) {
 			// The same event the public rename verb emits, and the same one
 			// the browser already repaints tabs from.
 			s.broadcast(ref.workspaceID, &Message{Type: TypePaneRenamed, PaneID: ref.paneID, Name: r.Label})
+			renamed = true
 		}
 	}
 
@@ -197,7 +199,6 @@ func (s *Server) applyDerivedNames(rows []SessionState) {
 	for _, r := range rows {
 		sessions[r.WorkspaceID]++
 	}
-	renamed := false
 	for _, r := range rows {
 		if r.Label == "" || sessions[r.WorkspaceID] != 1 {
 			continue

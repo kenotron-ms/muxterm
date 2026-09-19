@@ -27,10 +27,11 @@ func (wt *workspaceTools) listWorkspaces(_ map[string]any) (string, error) {
 	items := make([]map[string]any, 0, len(workspaces))
 	for _, ws := range workspaces {
 		items = append(items, map[string]any{
-			"id":         ws.WorkspaceID,
-			"name":       ws.Name,
-			"pane_count": ws.PaneCount,
-			"active":     ws.WorkspaceID == current,
+			"id":           ws.WorkspaceID,
+			"workspace_id": ws.WorkspaceID,
+			"name":         ws.Name,
+			"pane_count":   ws.PaneCount,
+			"active":       ws.WorkspaceID == current,
 			// Which machine this row came from. Present on EVERY row,
 			// including local ones, so a caller never has to infer the
 			// machine from the absence of a field -- and so a row can be fed
@@ -55,7 +56,7 @@ func (wt *workspaceTools) createWorkspace(args map[string]any) (string, error) {
 		return "", fmt.Errorf("creating workspace %q: %w", name, err)
 	}
 
-	return jsonText(map[string]any{"workspace_id": id, "machine": wt.c.Machine()}), nil
+	return jsonText(map[string]any{"workspace_id": id, "workspace_name": displayName(name, "Unnamed workspace"), "machine": wt.c.Machine()}), nil
 }
 
 // switchWorkspace attaches the MCP session to the workspace identified by
@@ -71,7 +72,7 @@ func (wt *workspaceTools) switchWorkspace(args map[string]any) (string, error) {
 		return "", fmt.Errorf("switching to workspace %q on machine %s: %w", id, wt.c.Machine(), err)
 	}
 
-	return jsonText(map[string]any{"ok": true, "machine": wt.c.Machine()}), nil
+	return jsonText(map[string]any{"ok": true, "workspace_id": id, "machine": wt.c.Machine()}), nil
 }
 
 // closeWorkspace closes the workspace identified by workspace_id, terminating
@@ -86,5 +87,5 @@ func (wt *workspaceTools) closeWorkspace(args map[string]any) (string, error) {
 		return "", fmt.Errorf("closing workspace %q: %w", id, err)
 	}
 
-	return jsonText(map[string]any{"ok": true, "machine": wt.c.Machine()}), nil
+	return jsonText(map[string]any{"ok": true, "workspace_id": id, "machine": wt.c.Machine()}), nil
 }

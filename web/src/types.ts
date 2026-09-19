@@ -190,6 +190,8 @@ export interface SessiondWorkspaceCompletion {
 
 export interface SessiondWorkspaceInfo {
   workspaceId: string;
+  workspaceUuid?: string;
+  panes?: SessiondPaneInfo[];
   name?: string;
   clientRef?: string;
   paneCount: number;

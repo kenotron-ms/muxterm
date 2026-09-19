@@ -67,6 +67,7 @@ export function isSafeHref(url: string): boolean {
 export interface MdLinkPolicy {
   /** Same-origin URL inside the publication, or null to refuse. */
   resolve(raw: string): string | null;
+  reference?(href: string, label: string): TemplateResult | null;
 }
 
 // marked's token shapes are structurally simple but its exported unions are
@@ -122,6 +123,8 @@ function renderInlineToken(t: AnyToken, policy?: MdLinkPolicy): unknown {
       return html`<br />`;
     case 'link': {
       const href = t.href ?? '';
+      const reference = policy?.reference?.(href, t.text ?? '');
+      if (reference) return reference;
       if (isSafeHref(href)) {
         return html`<a
           class="md-link"

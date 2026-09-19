@@ -643,6 +643,8 @@ type WorkspaceInfo struct {
 	Name          string `json:"name,omitempty"`
 	ClientRef     string `json:"clientRef,omitempty"`
 	PaneCount     int    `json:"paneCount"`
+	// Identity-only inventory for references; no screen reads or workspace attach.
+	Panes []PaneInfo `json:"panes"`
 
 	// Completion is present (ADDITIVE, post-v1) only on a workspace whose
 	// lane has finished and has not yet been dismissed. Its presence is what
