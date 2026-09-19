@@ -42,12 +42,26 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) applyConfigUpdate(partial muxcfg.Config) muxcfg.Config {
 	s.cfgMu.Lock()
 	newCfg := muxcfg.Merge(s.cfg, partial)
+	// Lane policy is owned on disk and read by sessiond at launch time. A
+	// preference save must not roll back an edit made since serve started.
+	// Refuse to overwrite an unreadable file: substituting defaults here
+	// would silently erase the owner's approval policy.
+	canPersist := true
+	if s.configPath != "" {
+		disk, malformed, err := muxcfg.LoadStrictServer(s.configPath)
+		if err != nil || malformed {
+			canPersist = false
+			log.Printf("config_handler: preserving unreadable config %s; preference update will not be persisted", s.configPath)
+		} else {
+			newCfg.Lanes = disk.Lanes
+		}
+	}
 	s.cfg = newCfg
 	s.cfgMu.Unlock()
 
 	// Persist to disk when a config path is configured. Log errors but do not
 	// fail — the optimistic in-memory update is already applied.
-	if s.configPath != "" {
+	if s.configPath != "" && canPersist {
 		if err := muxcfg.Write(s.configPath, newCfg); err != nil {
 			log.Printf("config_handler: write %s: %v", s.configPath, err)
 		}

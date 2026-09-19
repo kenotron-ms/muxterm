@@ -986,6 +986,11 @@ func (c *conn) attach(msg Message) {
 // actor with the assigned id, then broadcasts a pane-added event to all
 // subscribers (pane-added covers only panes created AFTER attach).
 func (c *conn) createPane(msg Message) {
+	argv, err := ApplyLaneApproval(msg.Cmd, msg.LaneApproval)
+	if err != nil {
+		c.replyError(msg.CID, CodePaneSpawnFailed, err.Error())
+		return
+	}
 	wsID := c.attached
 	if wsID == "" || !c.srv.reg.Has(wsID) {
 		c.replyError(msg.CID, CodeUnknownWorkspace, "not attached to a workspace")
@@ -1004,7 +1009,7 @@ func (c *conn) createPane(msg Message) {
 	}
 	p, err := NewPane(
 		localID,
-		msg.Cmd,
+		argv,
 		cols, rows,
 		nil, // nil → NewPane installs VTBuffer. get_screen / TypeScreenSnapshot requires VTBuffer.
 		// Emulator reply drain goroutine in NewPane forwards query responses back to the PTY

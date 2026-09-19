@@ -56,9 +56,10 @@ func runSpawnLane(args []string) error {
 	prompt := fs.String("prompt", "", "the lane's opening turn (required; ignored when --goal is given)")
 	goal := fs.String("goal", "", "stop condition: launches a /goal loop instead of a plain prompt (amplifier only)")
 	placement := fs.String("placement", "", "tab | split-right | split-left | split-above | split-below (advisory; the split is executed by the web UI)")
+	approval := fs.String("approval", "", "prompt | never (omit to inherit muxterm lanes.approval; Codex/Claude only)")
 	asJSON := fs.Bool("json", false, "print machine-readable JSON")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stdout, "Usage: muxterm spawn-lane <workspace-name> --harness H --prompt P [--goal G] [--placement P] [--json]")
+		fmt.Fprintln(os.Stdout, "Usage: muxterm spawn-lane <workspace-name> --harness H --prompt P [--goal G] [--placement P] [--approval prompt|never] [--json]")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Delegate work: launch a coding-agent session in a pane of the named")
 		fmt.Fprintln(os.Stdout, "workspace, creating that workspace if no workspace has that exact name.")
@@ -155,7 +156,7 @@ func runSpawnLane(args []string) error {
 		if _, err := c.Attach(wsID, "wide", sessiond.ClientKindCLI); err != nil {
 			return abandon(err)
 		}
-		paneID, err := c.CreatePane(argv, *placement, 0, "")
+		paneID, err := c.CreatePaneWithApproval(argv, *placement, 0, "", *approval)
 		if err != nil {
 			return abandon(err)
 		}
@@ -174,7 +175,7 @@ func runSpawnLane(args []string) error {
 		if created {
 			disposition = "new"
 		}
-		fmt.Printf("spawned %s lane in pane %d of %s workspace %s (%q)\n  argv: %q\n",
+		fmt.Printf("spawned %s lane in pane %d of %s workspace %s (%q)\n  requested argv (daemon adds lanes.approval): %q\n",
 			*harness, paneID, disposition, wsID, workspace, argv)
 		if *goal != "" {
 			fmt.Printf("  goal: %s\n", sessiond.GoalID(*goal))

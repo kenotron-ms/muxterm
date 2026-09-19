@@ -210,6 +210,10 @@ func (lt *laneTools) spawnLane(args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	approval, _, err := argStringOptional(args, "approval")
+	if err != nil {
+		return "", err
+	}
 	placement, _, err := argStringOptional(args, "placement")
 	if err != nil {
 		return "", err
@@ -288,7 +292,7 @@ func (lt *laneTools) spawnLane(args map[string]any) (string, error) {
 	// building a pane from the broadcast, which an agent is not. referencePane
 	// is 0 ("use the active pane"); placement is advisory and the split itself
 	// is executed browser-side.
-	paneID, err := lt.c.conn.CreatePane(argv, placement, 0, "")
+	paneID, err := lt.c.conn.CreatePaneWithApproval(argv, placement, 0, "", approval)
 	if err != nil {
 		return abandon(fmt.Errorf("spawning %s lane in workspace %q: %w", harness, workspace, err))
 	}

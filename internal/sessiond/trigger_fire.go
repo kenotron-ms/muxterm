@@ -128,6 +128,13 @@ func (s *Server) spawnTriggerLane(t Trigger) (wsID string, paneID int, err error
 		return "", 0, err
 	}
 
+	// Derive the label before approval options add positional option values.
+	title := labelFromPrompt(promptFromArgv(argv))
+	argv, err = ApplyLaneApproval(argv, "")
+	if err != nil {
+		return "", 0, err
+	}
+
 	wsID, created := s.resolveOrCreateWorkspace(t.Workspace)
 	if wsID == "" {
 		return "", 0, fmt.Errorf("could not resolve or create workspace %q", t.Workspace)
@@ -167,7 +174,7 @@ func (s *Server) spawnTriggerLane(t Trigger) (wsID string, paneID int, err error
 		return "", 0, fmt.Errorf("spawning %s lane in workspace %q: %w", t.Harness, t.Workspace, perr)
 	}
 
-	if title := labelFromPrompt(promptFromArgv(argv)); title != "" {
+	if title != "" {
 		p.setTitleDerived(title)
 	}
 	// Name the automation on every fleet row this lane produces. Without it a
@@ -182,7 +189,7 @@ func (s *Server) spawnTriggerLane(t Trigger) (wsID string, paneID int, err error
 		PaneID:      localID,
 		Cols:        cols,
 		Rows:        rows,
-		Title:       labelFromPrompt(promptFromArgv(argv)),
+		Title:       title,
 	})
 	// The dock has to learn about a workspace that appeared with nobody
 	// asking for it. Sent for an existing workspace too, because its pane

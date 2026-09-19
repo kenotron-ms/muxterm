@@ -38,8 +38,10 @@ import (
 var LaunchableHarnesses = []string{HarnessAmplifier, HarnessClaude, HarnessCodex}
 
 // LaneArgv returns the argv that starts harness with its opening turn already
-// in hand. See mcp.HarnessArgv for the full reasoning; the load-bearing facts
-// are repeated in short form at each branch below.
+// in hand. The launching daemon applies ApplyLaneApproval before exec so
+// browser and remote callers inherit the destination policy too. See
+// mcp.HarnessArgv for the full reasoning; the load-bearing facts are repeated
+// in short form at each branch below.
 func LaneArgv(harness, prompt, goal string) ([]string, error) {
 	// A PROMPT IS NOT A COMMAND. Both harnesses read a leading "/" as a slash
 	// command, so a prompt of "/clear" or "/goal ..." would not be delegated

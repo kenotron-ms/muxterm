@@ -735,6 +735,11 @@ func registerAllTools(
 						"finished by typing at it. Until a human types, the row reads mode=autonomous " +
 						"with the verdict in state and the condition in done_means",
 				},
+				"approval": map[string]any{
+					"type":        "string",
+					"enum":        []string{"prompt", "never"},
+					"description": "Override destination muxterm lanes.approval for this lane only; omit to inherit (default prompt). Codex/Claude only; 'never' disables approvals and Codex sandboxing.",
+				},
 				"placement": map[string]any{
 					"type": "string",
 					"enum": []string{"tab", "split-right", "split-left", "split-above", "split-below"},

@@ -366,6 +366,8 @@ type Message struct {
 	Code        string          `json:"code,omitempty"`        // error code
 	Error       string          `json:"error,omitempty"`       // human-readable error text
 
+	LaneApproval string `json:"laneApproval,omitempty"` // empty inherits destination muxterm config
+
 	// Activity-aware close fields (ADDITIVE). The pointer counts and risks
 	// preserve required zero and empty values on confirmation-required outcomes
 	// without adding these fields to unrelated messages.
