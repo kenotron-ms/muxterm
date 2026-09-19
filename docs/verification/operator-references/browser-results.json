@@ -1,0 +1,162 @@
+{
+  "desktop": [
+    {
+      "label": "Lifecycle fix",
+      "left": 462.171875,
+      "right": 550.9375,
+      "width": 88.765625
+    },
+    {
+      "label": "Lifecycle implementation \u00b7 Lifecycle fix",
+      "left": 248,
+      "right": 520.125,
+      "width": 272.125
+    },
+    {
+      "label": "Unnamed workspace",
+      "left": 248,
+      "right": 398.609375,
+      "width": 150.609375
+    },
+    {
+      "label": "Fleet row progress followups \u00b7 1",
+      "left": 248,
+      "right": 471.328125,
+      "width": 223.328125
+    },
+    {
+      "label": "Fleet row progress followups \u00b7 2",
+      "left": 248,
+      "right": 471.328125,
+      "width": 223.328125
+    },
+    {
+      "label": "Completed release \u00b7 closed",
+      "left": 248,
+      "right": 440.125,
+      "width": 192.125
+    }
+  ],
+  "mobile": [
+    {
+      "label": "Lifecycle fix",
+      "left": 230.171875,
+      "right": 318.9375,
+      "width": 88.765625
+    },
+    {
+      "label": "Lifecycle implementation \u00b7 Lifecycle fix",
+      "left": 16,
+      "right": 288.125,
+      "width": 272.125
+    },
+    {
+      "label": "Unnamed workspace",
+      "left": 16,
+      "right": 166.609375,
+      "width": 150.609375
+    },
+    {
+      "label": "Fleet row progress followups \u00b7 1",
+      "left": 16,
+      "right": 239.328125,
+      "width": 223.328125
+    },
+    {
+      "label": "Fleet row progress followups \u00b7 2",
+      "left": 16,
+      "right": 239.328125,
+      "width": 223.328125
+    },
+    {
+      "label": "Completed release \u00b7 closed",
+      "left": 16,
+      "right": 208.125,
+      "width": 192.125
+    }
+  ],
+  "narrow": [
+    {
+      "label": "Lifecycle fix",
+      "left": 16,
+      "right": 104.765625,
+      "width": 88.765625
+    },
+    {
+      "label": "Lifecycle implementation \u00b7 Lifecycle fix",
+      "left": 16,
+      "right": 288.125,
+      "width": 272.125
+    },
+    {
+      "label": "Unnamed workspace",
+      "left": 16,
+      "right": 166.609375,
+      "width": 150.609375
+    },
+    {
+      "label": "Fleet row progress followups \u00b7 1",
+      "left": 16,
+      "right": 239.328125,
+      "width": 223.328125
+    },
+    {
+      "label": "Fleet row progress followups \u00b7 2",
+      "left": 16,
+      "right": 239.328125,
+      "width": 223.328125
+    },
+    {
+      "label": "Completed release \u00b7 closed",
+      "left": 16,
+      "right": 208.125,
+      "width": 192.125
+    }
+  ],
+  "renamed": [
+    {
+      "label": "Lifecycle renamed",
+      "left": 16,
+      "right": 148.6875,
+      "width": 132.6875
+    },
+    {
+      "label": "A very long implementation pane title that must fit a narrow mobile chat message without overflowing \u00b7 Lifecycle renamed",
+      "left": 16,
+      "right": 304,
+      "width": 288
+    },
+    {
+      "label": "Unnamed workspace",
+      "left": 16,
+      "right": 166.609375,
+      "width": 150.609375
+    },
+    {
+      "label": "Fleet row progress followups \u00b7 1",
+      "left": 16,
+      "right": 239.328125,
+      "width": 223.328125
+    },
+    {
+      "label": "Fleet row progress followups \u00b7 2",
+      "left": 16,
+      "right": 239.328125,
+      "width": 223.328125
+    },
+    {
+      "label": "Completed release \u00b7 closed",
+      "left": 16,
+      "right": 208.125,
+      "width": 192.125
+    }
+  ],
+  "closedPane": [
+    "Lifecycle renamed",
+    "Lifecycle implementation \u00b7 Lifecycle fix \u00b7 closed",
+    "Unnamed workspace",
+    "Fleet row progress followups \u00b7 1",
+    "Fleet row progress followups \u00b7 2",
+    "Completed release \u00b7 closed"
+  ]
+}

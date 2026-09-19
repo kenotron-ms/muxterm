@@ -218,3 +218,8 @@ test-web:
 
 clean:
 	rm -rf bin/ web/dist
+
+# Uses the already-running dev-local daemon; never resolves the production socket.
+operator-reference-fixture:
+	@$(call DEV_ISOLATE,dev-local,muxterm-cos-dev) \
+	python3 tools/verify-operator-references.py

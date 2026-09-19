@@ -427,7 +427,7 @@ func (s *Server) handlePaneExit(wsID string, paneID int, exitCode int, runtimeMs
 	}
 	log.Printf("sessiond: pane %s/%d removed: process exited code=%d runtime=%dms remaining=%d",
 		wsID, paneID, exitCode, runtimeMs, remaining)
-	held := s.recordPaneCompletion(wsID, pane, exitCode, runtimeMs, remaining == 0)
+	s.recordPaneCompletion(wsID, pane, exitCode, runtimeMs, remaining == 0)
 	code := exitCode
 	s.broadcast(wsID, &Message{
 		Type: TypePaneClosed, WorkspaceID: wsID, PaneID: paneID,
@@ -440,13 +440,7 @@ func (s *Server) handlePaneExit(wsID string, paneID int, exitCode int, runtimeMs
 			return
 		}
 	}
-	if held {
-		// The workspace survived a reap it would previously have lost. Every
-		// client needs the replacement list to learn it is FINISHED rather
-		// than merely empty -- without this the sidebar would show a bare
-		// zero-pane workspace, which is the old silence with extra steps.
-		s.broadcastWorkspaceList()
-	}
+	s.broadcastWorkspaceList()
 }
 
 // recordPaneCompletion captures a finished lane and reports whether the
@@ -753,6 +747,7 @@ func (c *conn) handle(msg Message) {
 			c.reply(&Message{Type: TypeOK, CID: msg.CID})
 			// Tell other attached clients so they update live.
 			c.srv.broadcast(c.attached, &Message{Type: TypePaneRenamed, PaneID: msg.PaneID, Name: msg.Name})
+			c.srv.broadcastWorkspaceList()
 		}
 	case TypeSaveLayout:
 		wsID := msg.WorkspaceID
@@ -1053,6 +1048,7 @@ func (c *conn) createPane(msg Message) {
 		Placement:       msg.Placement,
 		ReferencePaneID: msg.ReferencePaneID,
 	})
+	c.srv.broadcastWorkspaceList()
 }
 
 // closePane kills the pane identified by msg.PaneID in the connection's
@@ -1083,6 +1079,7 @@ func (c *conn) closePane(msg Message) {
 	p.Close()
 	c.reply(&Message{Type: TypeOK, CID: msg.CID})
 	c.srv.broadcast(wsID, &Message{Type: TypePaneClosed, WorkspaceID: wsID, PaneID: msg.PaneID})
+	c.srv.broadcastWorkspaceList()
 }
 
 // closeWorkspace removes a workspace and kills its panes, then emits
@@ -1191,6 +1188,7 @@ func (s *Server) broadcastCloseMutation(outcome CloseOutcome) {
 			WorkspaceID: outcome.WorkspaceID,
 			PaneID:      outcome.PaneID,
 		})
+		s.broadcastWorkspaceList()
 	case CloseTargetWorkspace:
 		// This is the browser's close button, and therefore the dismissal
 		// gesture for a held finished workspace.

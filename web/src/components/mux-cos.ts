@@ -90,6 +90,8 @@ import './mux-voice-orb.js';
 import './mux-applets.js';
 import { MarkdownStream } from '../lib/markdown-stream.js';
 import { renderSegments } from '../lib/markdown-view.js';
+import { operatorReference } from '../lib/operator-reference.js';
+import { store } from '../state.js';
 
 /**
  * One markdown parser per text block, for as long as the block exists.
@@ -109,7 +111,7 @@ function renderMarkdown(block: object, text: string, streaming: boolean): Templa
     s = new MarkdownStream();
     parsers.set(block, s);
   }
-  return renderSegments(s.update(text, streaming));
+  return renderSegments(s.update(text, streaming), { resolve: () => null, reference: operatorReference });
 }
 
 /** mm:ss for the approval countdown. Clamped at zero, never negative. */
@@ -244,6 +246,7 @@ export class MuxCos extends LitElement {
   private _split = restoreDashboardSplit();
 
   private _unsub: (() => void) | null = null;
+  private _unsubReferences: (() => void) | null = null;
   private _unsubVoice: (() => void) | null = null;
   private _unsubVoiceSession: (() => void) | null = null;
   private _unsubTranscript: (() => void) | null = null;
@@ -267,6 +270,37 @@ export class MuxCos extends LitElement {
   private _activeApplet: AppletId | '' = '';
 
   static styles = css`
+    .operator-reference {
+      display: inline-flex;
+      max-width: 100%;
+      box-sizing: border-box;
+      vertical-align: bottom;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      border: 1px solid var(--border, #555);
+      border-radius: 3px;
+      padding: 0 0.25em;
+      font: inherit;
+      line-height: inherit;
+    }
+    .operator-reference-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .operator-reference-qualifier {
+      flex-shrink: 0;
+      max-width: 55%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: pre;
+    }
+    .operator-reference[data-status="closed"] {
+      border-style: dashed;
+      color: var(--text-muted, #999);
+    }
+
     *,
     *::before,
     *::after {
@@ -1618,6 +1652,7 @@ export class MuxCos extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener('mousedown', this._onOutsideClick);
+    this._unsubReferences = store.subscribe(() => this.requestUpdate());
     this._unsub = cosStore.subscribe(() => {
       this._syncTicker();
       this._version++;
@@ -1662,6 +1697,8 @@ export class MuxCos extends LitElement {
   override disconnectedCallback(): void {
     document.removeEventListener('mousedown', this._onOutsideClick);
     document.removeEventListener('keydown', this._onDocKey);
+    this._unsubReferences?.();
+    this._unsubReferences = null;
     this._unsub?.();
     this._unsub = null;
     this._unsubVoice?.();

@@ -1,6 +1,9 @@
 package mcp
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/kenotron-ms/muxterm/internal/sessiond"
+)
 
 // layoutTools groups the MCP pane-layout tool handlers and holds a reference
 // to the Client so handlers can invoke sessiond operations.
@@ -103,17 +106,39 @@ func (lt *layoutTools) listPanes(args map[string]any) (string, error) {
 		return "", fmt.Errorf("not attached to a workspace")
 	}
 
-	comp, err := lt.c.conn.Attach(ws, "wide", "agent")
+	workspaces, err := lt.c.conn.ListWorkspaces()
 	if err != nil {
-		return "", fmt.Errorf("attaching to workspace %q: %w", ws, err)
+		return "", fmt.Errorf("listing panes: %w", err)
+	}
+	var panes []sessiond.PaneInfo
+	found := false
+	for _, workspace := range workspaces {
+		if workspace.WorkspaceID == ws {
+			panes = workspace.Panes
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("unknown workspace %q", ws)
 	}
 
-	items := make([]map[string]any, 0, len(comp.Panes))
-	for _, p := range comp.Panes {
+	// Older remote daemons have no inventory field. Retain their previous
+	// attach-based path; current daemons never switch attachment to list names.
+	if panes == nil {
+		comp, err := lt.c.conn.Attach(ws, "wide", "agent")
+		if err != nil {
+			return "", fmt.Errorf("listing panes in workspace %q: %w", ws, err)
+		}
+		panes = comp.Panes
+	}
+	items := make([]map[string]any, 0, len(panes))
+	for _, p := range panes {
 		item := map[string]any{
-			"pane_id": p.PaneID,
-			"kind":    "terminal",
-			"name":    p.Title,
+			"pane_id":      p.PaneID,
+			"workspace_id": ws,
+			"kind":         "terminal",
+			"name":         p.Title,
 			// See tools_workspace.go: every row names its machine.
 			"machine": lt.c.Machine(),
 		}
@@ -125,5 +150,9 @@ func (lt *layoutTools) listPanes(args map[string]any) (string, error) {
 // getLayout returns the ASCII layout diagram for the currently-attached
 // workspace. Returns an empty string when no layout has been saved.
 func (lt *layoutTools) getLayout(_ map[string]any) (string, error) {
-	return lt.c.conn.GetLayout()
+	layout, err := lt.c.conn.GetLayout()
+	if err != nil {
+		return "", err
+	}
+	return jsonText(map[string]any{"layout": layout, "workspace_id": lt.c.Workspace(), "machine": lt.c.Machine()}), nil
 }

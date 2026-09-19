@@ -187,7 +187,14 @@ func (r *Registry) List() []WorkspaceInfo {
 	defer r.mu.Unlock()
 	out := make([]WorkspaceInfo, 0, len(r.workspaces))
 	for _, ws := range r.workspaces {
+		panes := make([]PaneInfo, 0, len(ws.Panes))
+		for _, pane := range ws.Panes {
+			info := pane.Info()
+			panes = append(panes, PaneInfo{PaneID: info.PaneID, Title: info.Title})
+		}
+		sort.Slice(panes, func(i, j int) bool { return panes[i].PaneID < panes[j].PaneID })
 		out = append(out, WorkspaceInfo{
+			Panes:         panes,
 			WorkspaceID:   ws.ID,
 			WorkspaceUUID: ws.UUID,
 			Name:          ws.Name,

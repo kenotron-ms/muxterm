@@ -175,6 +175,13 @@ with a working lane in it without naming that lane.
   see its verdict.
 - Invent a session id, pane id, or workspace name. List first.
 
+## Names in conversation
+
+Refer to workspaces and panes by name. Copy the tool’s `workspace_ref` or
+`pane_ref` badge form verbatim, without code formatting: `[Name](muxterm:…)`.
+Never print internal handles like `w16` or `pane 2` to the human. Keep ids in
+tool arguments. If a name is unavailable, say so; do not invent one.
+
 ## Tone
 
 Short. Concrete. Name the lane, the workspace, and the stop condition. When you

@@ -1,0 +1,379 @@
+[
+  {
+    "tool": "create_workspace",
+    "arguments": {
+      "name": "Lifecycle fix"
+    },
+    "result": {
+      "machine": "local",
+      "workspace_id": "w2",
+      "workspace_name": "Lifecycle fix",
+      "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "list_workspaces",
+    "arguments": {},
+    "result": [
+      {
+        "active": true,
+        "id": "w1",
+        "machine": "local",
+        "name": "",
+        "pane_count": 1,
+        "workspace_id": "w1",
+        "workspace_name": "Unnamed workspace",
+        "workspace_ref": "[Unnamed workspace](muxterm:workspace/981ed10a-3e49-4ad3-97c6-f931c059eb64?machine=local&status=live)",
+        "workspace_status": "live"
+      },
+      {
+        "active": false,
+        "id": "w2",
+        "machine": "local",
+        "name": "Lifecycle fix",
+        "pane_count": 0,
+        "workspace_id": "w2",
+        "workspace_name": "Lifecycle fix",
+        "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+        "workspace_status": "live"
+      }
+    ]
+  },
+  {
+    "tool": "create_workspace",
+    "arguments": {
+      "name": "Fleet row progress followups"
+    },
+    "result": {
+      "machine": "local",
+      "workspace_id": "w3",
+      "workspace_name": "Fleet row progress followups",
+      "workspace_ref": "[Fleet row progress followups](muxterm:workspace/8c8b5a50-f06e-47f6-9ad5-cc5d45fdce4c?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "create_workspace",
+    "arguments": {
+      "name": "Fleet row progress followups"
+    },
+    "result": {
+      "machine": "local",
+      "workspace_id": "w4",
+      "workspace_name": "Fleet row progress followups",
+      "workspace_ref": "[Fleet row progress followups \u00b7 2](muxterm:workspace/0c2ff1ed-b25c-49b4-ab02-e5faad682af1?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "create_workspace",
+    "arguments": {
+      "name": "Completed release"
+    },
+    "result": {
+      "machine": "local",
+      "workspace_id": "w5",
+      "workspace_name": "Completed release",
+      "workspace_ref": "[Completed release](muxterm:workspace/41673f23-baf7-4929-92c8-5c3a0d1340c6?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "switch_workspace",
+    "arguments": {
+      "workspace_id": "w2"
+    },
+    "result": {
+      "machine": "local",
+      "ok": true,
+      "workspace_id": "w2",
+      "workspace_name": "Lifecycle fix",
+      "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "create_pane",
+    "arguments": {},
+    "result": {
+      "machine": "local",
+      "pane_id": 1,
+      "pane_name": "Unnamed pane",
+      "pane_ref": "[Unnamed pane \u00b7 Lifecycle fix](muxterm:pane/bf1fa70d-5581-4fe4-800f-ace353f3714f/1?machine=local&status=live)",
+      "pane_status": "live",
+      "workspace_id": "w2",
+      "workspace_name": "Lifecycle fix",
+      "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "rename_pane",
+    "arguments": {
+      "pane_id": 1,
+      "name": "Lifecycle implementation"
+    },
+    "result": {
+      "machine": "local",
+      "ok": true
+    }
+  },
+  {
+    "tool": "list_panes",
+    "arguments": {},
+    "result": [
+      {
+        "kind": "terminal",
+        "machine": "local",
+        "name": "Lifecycle implementation",
+        "pane_id": 1,
+        "pane_name": "Lifecycle implementation",
+        "pane_ref": "[Lifecycle implementation \u00b7 Lifecycle fix](muxterm:pane/bf1fa70d-5581-4fe4-800f-ace353f3714f/1?machine=local&status=live)",
+        "pane_status": "live",
+        "workspace_id": "w2",
+        "workspace_name": "Lifecycle fix",
+        "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+        "workspace_status": "live"
+      }
+    ]
+  },
+  {
+    "tool": "get_layout",
+    "arguments": {},
+    "result": {
+      "layout": "",
+      "machine": "local",
+      "panes": [
+        {
+          "pane_id": 1,
+          "pane_name": "Lifecycle implementation",
+          "pane_ref": "[Lifecycle implementation \u00b7 Lifecycle fix](muxterm:pane/bf1fa70d-5581-4fe4-800f-ace353f3714f/1?machine=local&status=live)",
+          "pane_status": "live",
+          "workspace_id": "w2",
+          "workspace_name": "Lifecycle fix",
+          "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+          "workspace_status": "live"
+        }
+      ],
+      "workspace_id": "w2",
+      "workspace_name": "Lifecycle fix",
+      "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "send_input",
+    "arguments": {
+      "pane_id": 1,
+      "text": ""
+    },
+    "result": {
+      "machine": "local",
+      "ok": true,
+      "pane_id": 1,
+      "pane_name": "Lifecycle implementation",
+      "pane_ref": "[Lifecycle implementation \u00b7 Lifecycle fix](muxterm:pane/bf1fa70d-5581-4fe4-800f-ace353f3714f/1?machine=local&status=live)",
+      "pane_status": "live",
+      "workspace_id": "w2",
+      "workspace_name": "Lifecycle fix",
+      "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "list_workspaces",
+    "arguments": {},
+    "result": [
+      {
+        "active": false,
+        "id": "w1",
+        "machine": "local",
+        "name": "",
+        "pane_count": 1,
+        "workspace_id": "w1",
+        "workspace_name": "Unnamed workspace",
+        "workspace_ref": "[Unnamed workspace](muxterm:workspace/981ed10a-3e49-4ad3-97c6-f931c059eb64?machine=local&status=live)",
+        "workspace_status": "live"
+      },
+      {
+        "active": true,
+        "id": "w2",
+        "machine": "local",
+        "name": "Lifecycle fix",
+        "pane_count": 1,
+        "workspace_id": "w2",
+        "workspace_name": "Lifecycle fix",
+        "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+        "workspace_status": "live"
+      },
+      {
+        "active": false,
+        "id": "w3",
+        "machine": "local",
+        "name": "Fleet row progress followups",
+        "pane_count": 0,
+        "workspace_id": "w3",
+        "workspace_name": "Fleet row progress followups",
+        "workspace_ref": "[Fleet row progress followups \u00b7 1](muxterm:workspace/8c8b5a50-f06e-47f6-9ad5-cc5d45fdce4c?machine=local&status=live)",
+        "workspace_status": "live"
+      },
+      {
+        "active": false,
+        "id": "w4",
+        "machine": "local",
+        "name": "Fleet row progress followups",
+        "pane_count": 0,
+        "workspace_id": "w4",
+        "workspace_name": "Fleet row progress followups",
+        "workspace_ref": "[Fleet row progress followups \u00b7 2](muxterm:workspace/0c2ff1ed-b25c-49b4-ab02-e5faad682af1?machine=local&status=live)",
+        "workspace_status": "live"
+      },
+      {
+        "active": false,
+        "id": "w5",
+        "machine": "local",
+        "name": "Completed release",
+        "pane_count": 0,
+        "workspace_id": "w5",
+        "workspace_name": "Completed release",
+        "workspace_ref": "[Completed release](muxterm:workspace/41673f23-baf7-4929-92c8-5c3a0d1340c6?machine=local&status=live)",
+        "workspace_status": "live"
+      }
+    ]
+  },
+  {
+    "tool": "send_input",
+    "arguments": {
+      "pane_id": 1,
+      "text": "/home/ken/work/muxterm/bin/muxterm-dev session report --session-id reference-verification --mode interactive --state working --name verification\n"
+    },
+    "result": {
+      "machine": "local",
+      "ok": true,
+      "pane_id": 1,
+      "pane_name": "Lifecycle implementation",
+      "pane_ref": "[Lifecycle implementation \u00b7 Lifecycle fix](muxterm:pane/bf1fa70d-5581-4fe4-800f-ace353f3714f/1?machine=local&status=live)",
+      "pane_status": "live",
+      "workspace_id": "w2",
+      "workspace_name": "Lifecycle fix",
+      "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "fleet_status",
+    "arguments": {},
+    "result": {
+      "machine": "local",
+      "sessions": [
+        {
+          "doing": "",
+          "done_means": "",
+          "goal_id": "",
+          "harness": "",
+          "knows": [],
+          "label": "",
+          "machine": "local",
+          "mode": "interactive",
+          "name": "verification",
+          "origin": "agent",
+          "pane_id": 1,
+          "pane_name": "Lifecycle implementation",
+          "pane_ref": "[Lifecycle implementation \u00b7 Lifecycle fix](muxterm:pane/bf1fa70d-5581-4fe4-800f-ace353f3714f/1?machine=local&status=live)",
+          "pane_status": "live",
+          "pr": 0,
+          "project": "/home/ken",
+          "session_id": "reference-verification",
+          "state": "working",
+          "updated_at": 1789788537,
+          "waiting_for": "",
+          "workspace_id": "w2",
+          "workspace_name": "Lifecycle fix",
+          "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+          "workspace_status": "live"
+        }
+      ]
+    }
+  },
+  {
+    "tool": "session_send",
+    "arguments": {
+      "session_id": "reference-verification",
+      "text": "printf reference-steered"
+    },
+    "result": {
+      "machine": "local",
+      "pane_id": 1,
+      "pane_name": "Lifecycle implementation",
+      "pane_ref": "[Lifecycle implementation \u00b7 Lifecycle fix](muxterm:pane/bf1fa70d-5581-4fe4-800f-ace353f3714f/1?machine=local&status=live)",
+      "pane_status": "live",
+      "workspace_id": "w2",
+      "workspace_name": "Lifecycle fix",
+      "workspace_ref": "[Lifecycle fix](muxterm:workspace/bf1fa70d-5581-4fe4-800f-ace353f3714f?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "list_triggers",
+    "arguments": {},
+    "result": {
+      "limits": {
+        "disable_after_failures": 3,
+        "max_concurrent_trigger_lanes": 3,
+        "watch_debounce": "2s"
+      },
+      "machine": "local",
+      "triggers": []
+    }
+  },
+  {
+    "tool": "spawn_lane",
+    "arguments": {
+      "workspace": "Spawn badge verification",
+      "harness": "claude",
+      "prompt": "Reply only Ready. This is an isolated UI fixture. Do not use tools or change files."
+    },
+    "result": {
+      "harness": "claude",
+      "machine": "local",
+      "pane_id": 1,
+      "pane_name": "reply ready isolated",
+      "pane_ref": "[reply ready isolated \u00b7 Spawn badge verification](muxterm:pane/49710ad0-77c2-48a3-99b2-afabf28e4da8/1?machine=local&status=live)",
+      "pane_status": "live",
+      "workspace_created": true,
+      "workspace_id": "w6",
+      "workspace_name": "Spawn badge verification",
+      "workspace_ref": "[Spawn badge verification](muxterm:workspace/49710ad0-77c2-48a3-99b2-afabf28e4da8?machine=local&status=live)",
+      "workspace_status": "live"
+    }
+  },
+  {
+    "tool": "close_workspace",
+    "arguments": {
+      "workspace_id": "w6"
+    },
+    "result": {
+      "machine": "local",
+      "ok": true,
+      "workspace_id": "w6",
+      "workspace_name": "Spawn badge verification",
+      "workspace_ref": "[Spawn badge verification](muxterm:workspace/49710ad0-77c2-48a3-99b2-afabf28e4da8?machine=local&status=closed)",
+      "workspace_status": "closed"
+    }
+  },
+  {
+    "tool": "close_workspace",
+    "arguments": {
+      "workspace_id": "w5"
+    },
+    "result": {
+      "machine": "local",
+      "ok": true,
+      "workspace_id": "w5",
+      "workspace_name": "Completed release",
+      "workspace_ref": "[Completed release](muxterm:workspace/41673f23-baf7-4929-92c8-5c3a0d1340c6?machine=local&status=closed)",
+      "workspace_status": "closed"
+    }
+  }
+]

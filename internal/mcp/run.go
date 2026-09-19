@@ -292,10 +292,10 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 				return "", err
 			}
 			if !c.IsRemote() {
-				return fn(c, args)
+				return c.withReferenceNames(fn, args)
 			}
 			return callWithin(c.Machine(), callBound(args), func() (string, error) {
-				return fn(c, args)
+				return c.withReferenceNames(fn, args)
 			})
 		}
 	}
@@ -319,7 +319,7 @@ func registerWithLazy(srv *Server, pool *clientPool) {
 			if err != nil {
 				return "", err
 			}
-			return fn(c, args)
+			return c.withReferenceNames(fn, args)
 		}
 	}
 
@@ -653,7 +653,7 @@ func registerAllTools(
 
 	srv.Register(
 		"get_layout",
-		"get ASCII layout diagram of the current workspace; empty string when no layout saved",
+		"get current workspace layout as JSON: layout (ASCII diagram, empty when unsaved), workspace_name, workspace_ref, and named panes",
 		map[string]any{
 			"type": "object",
 			"properties": withMachine(map[string]any{
@@ -701,7 +701,7 @@ func registerAllTools(
 		"delegate work: launch a coding-agent session (amplifier|claude|codex) in a pane of the named workspace, "+
 			"creating that workspace if it does not exist; prompt is the session's opening turn; goal "+
 			"(amplifier only) instead launches a /goal loop with that stop condition, and prompt is ignored; "+
-			"returns workspace_id, pane_id, harness, workspace_created. A goal is LINTED for known "+
+			"returns workspace_id, workspace_name, workspace_ref, pane_id, pane_name, pane_ref, harness, workspace_created. A goal is LINTED for known "+
 			"termination-failure patterns before anything is created: a condition that cannot terminate as "+
 			"written is REFUSED with the rule and the offending phrase named, and one that merely looks "+
 			"risky launches with those findings in goal_lint. A goal reply also carries goal_id -- the id "+
@@ -829,7 +829,7 @@ func registerAllTools(
 			"or to steer one that has drifted. submit (default true) appends Enter. Switches the MCP session to that "+
 			"session's workspace if needed, which discards this connection's buffered pane output, so drain anything "+
 			"you care about first. REFUSES any session_id not in the current fleet_status snapshot: this addresses "+
-			"known sessions only and can never target an arbitrary pane id. Returns pane_id, workspace_id",
+			"known sessions only and can never target an arbitrary pane id. Returns pane_id, pane_name, pane_ref, workspace_id, workspace_name, workspace_ref",
 		map[string]any{
 			"type": "object",
 			"properties": withMachine(map[string]any{
