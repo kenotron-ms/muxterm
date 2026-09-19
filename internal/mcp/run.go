@@ -771,7 +771,7 @@ func registerAllTools(
 			"this lane was LAUNCHED with -- shared by every lane running that condition, and unlike done_means it "+
 			"survives a human taking the lane over), origin (which door it came through: browser | agent | cli | "+
 			"trigger:<trigger id>, so a lane an automation fired is not mistaken for one somebody asked for), "+
-			"knows (files the session has read), "+
+			"knows (files the session has read), todo (task-list progress; omitted when the session keeps no list), "+
 			"pr, updated_at. done_means and knows are declared by the session and appear on no terminal screen, "+
 			"so this is the only way to see them. Optional state filters by exact lifecycle state; optional workspace "+
 			"filters by workspace NAME (an unknown name is an error, never a new workspace). An empty sessions list "+

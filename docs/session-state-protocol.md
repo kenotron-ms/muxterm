@@ -226,6 +226,7 @@ silently never read, which is the most confusing possible outcome.
 | `label` | string | 1–3 words naming the work, for a pane tab. Not a shorter `name`; see below. |
 | `waitingFor` | enum | Why it is blocked. Only meaningful with `state: "blocked"`. |
 | `doing` | string | One short line of current activity. |
+| `todo` | object | Optional structured task-list progress: `{ "done": 2, "total": 6, "current": "Checking reconnects" }`. See below. |
 | `doneMeans` | string | This session's own definition of finished. |
 | `knows` | string[] | Distinct paths this session has read. |
 | `pr` | int | Pull-request number. Shown on the row; does not change its group. |
@@ -241,6 +242,19 @@ worse than one that was never labelled at all. Omit the field entirely if you
 have nothing to say; an absent `label` means "keep whatever muxterm already
 worked out from the pane's command line", while a label that appears and then
 churns actively costs the user something.
+
+### `todo` — progress through a task list
+
+`todo` is optional. `done` counts completed items and `total` counts all items.
+`total` is never `0` in a published record: a producer that would emit `0/0`
+omits the whole object.
+
+Absence means **"keeps no list"**, not "no progress". Consumers fall back to
+`doing` when `todo` is absent.
+
+`current` is the in-progress item in the producer's present-tense form. Empty
+is a real value for an all-pending or all-complete list; the empty `current`
+string may be omitted.
 
 ### Never write these
 
