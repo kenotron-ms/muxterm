@@ -1,0 +1,53 @@
+[
+  {
+    "ev": "turn_start",
+    "turn_id": "t-1",
+    "origin": "lifecycle",
+    "causation_id": "w3-p1-1789782210"
+  },
+  {
+    "ev": "turn_end",
+    "turn_id": "t-1",
+    "response": "The **browser-lifecycle-failed** lane failed after about 5 seconds \u2014 muxterm inferred this from the process exit (exit code -1), not from any declaration by the lane itself. It declared no stop condition, so there's no stated intent to measure the result against; its last activity was \"verifying real PTY lifecycle,\" and the output tail ends with \"Intentional verification crash while working.\" No pull request was found in this lane's output.",
+    "ms": 5445,
+    "persisted": true,
+    "origin": "lifecycle",
+    "causation_id": "w3-p1-1789782210",
+    "cost_usd": "0.1924875",
+    "session_cost_usd": "0.1924875"
+  },
+  {
+    "ev": "turn_start",
+    "turn_id": "t-2",
+    "origin": "lifecycle",
+    "causation_id": "browser-lifecycle-done-finished-1789782211"
+  },
+  {
+    "ev": "turn_end",
+    "turn_id": "t-2",
+    "response": "The **browser-lifecycle-done** lane finished \u2014 it declared itself done, with \"done distinctly\" as its last activity. It declared no stop condition, so there's no stated intent to check that result against, and no pull request was found in its output.",
+    "ms": 1778,
+    "persisted": true,
+    "origin": "lifecycle",
+    "causation_id": "browser-lifecycle-done-finished-1789782211",
+    "cost_usd": "0.02333925",
+    "session_cost_usd": "0.21582675"
+  },
+  {
+    "ev": "turn_start",
+    "turn_id": "t-3",
+    "origin": "lifecycle",
+    "causation_id": "browser-lifecycle-stopped-stopped-1789782211"
+  },
+  {
+    "ev": "turn_end",
+    "turn_id": "t-3",
+    "response": "The **browser-lifecycle-stopped** lane stopped \u2014 it declared that itself, ending deliberately without a verdict, with \"stopped distinctly\" as its last activity. It declared no stop condition, so there's no stated intent to compare the result against, and no pull request was found in its output.",
+    "ms": 1724,
+    "persisted": true,
+    "origin": "lifecycle",
+    "causation_id": "browser-lifecycle-stopped-stopped-1789782211",
+    "cost_usd": "0.02206450",
+    "session_cost_usd": "0.23789125"
+  }
+]

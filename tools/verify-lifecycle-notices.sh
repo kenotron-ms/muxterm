@@ -10,8 +10,8 @@
 #
 # ISOLATION. Every path is redirected by the caller (`make verify-lifecycle`),
 # which expands the Makefile's DEV_ISOLATE macro exactly as every other dev
-# target does. This script binds NO port, starts no server, and kills only the
-# single pid it started itself -- never a pattern, never a service.
+# target does. This script uses dev port 8399 for migration checks and kills only
+# explicit PIDs it started itself -- never a pattern, never a service.
 #
 # WHAT IT PROVES
 #   1. an autonomous lane going working -> done while its pane is still alive
@@ -70,7 +70,7 @@ rm -f "$MARKERS"
 
 echo
 echo "=== starting sessiond (lifecycle notices ON) ==="
-MUXTERM_OPERATOR_LIFECYCLE_NOTICES=1 "$BIN" sessiond >"$LOG" 2>&1 &
+env -u MUXTERM_OPERATOR_LIFECYCLE_NOTICES "$BIN" sessiond >"$LOG" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 40); do
   [ -S "$XDG_RUNTIME_DIR/muxterm/sessiond.sock" ] && break
@@ -131,6 +131,12 @@ check "one finished marker" "1" "$(markers "[.records[]|select(.kind==\"finished
 check "  attributed to the right session" "\"$AUTO\"" "$(markers "[.records[]|select(.kind==\"finished\")][0].sessionId")"
 check "  records the transition it saw" "\"working\"" "$(markers "[.records[]|select(.kind==\"finished\")][0].fromState")"
 
+for outcome in failed stopped; do
+  report "verify-$outcome" autonomous working -doing "starting"
+  report "verify-$outcome" autonomous "$outcome" -doing "$outcome distinctly"
+  check "one $outcome marker" "1" "$(markers "[.records[]|select(.kind==\"$outcome\")]|length")"
+done
+
 echo
 echo "=== 3. autonomous working -> blocked ==="
 report "$AUTO" autonomous working -doing "second pass"
@@ -173,7 +179,7 @@ echo "=== 7. delivery ledger: the one-time migration, and no backfill ==="
 LEDGER="${XDG_DATA_HOME}/muxterm/operator-notices.json"
 SERVE_LOG="${XDG_RUNTIME_DIR}/verify-serve.log"
 rm -f "$LEDGER"
-MUXTERM_OPERATOR_LIFECYCLE_NOTICES=1 "$BIN" serve --addr 127.0.0.1:8399 >"$SERVE_LOG" 2>&1 &
+env -u MUXTERM_OPERATOR_LIFECYCLE_NOTICES "$BIN" serve --addr 127.0.0.1:8399 >"$SERVE_LOG" 2>&1 &
 SERVE_PID=$!
 sleep 6
 kill "$SERVE_PID" 2>/dev/null; wait "$SERVE_PID" 2>/dev/null
@@ -200,7 +206,7 @@ else
 fi
 
 LEDGER_BEFORE=$(cat "$LEDGER")
-MUXTERM_OPERATOR_LIFECYCLE_NOTICES=1 "$BIN" serve --addr 127.0.0.1:8399 >>"$SERVE_LOG" 2>&1 &
+env -u MUXTERM_OPERATOR_LIFECYCLE_NOTICES "$BIN" serve --addr 127.0.0.1:8399 >>"$SERVE_LOG" 2>&1 &
 SERVE_PID=$!
 sleep 6
 kill "$SERVE_PID" 2>/dev/null; wait "$SERVE_PID" 2>/dev/null
@@ -211,8 +217,8 @@ echo "=== 8. feature gate: with the switch OFF, nothing observes and nothing is 
 kill "$DAEMON_PID" 2>/dev/null; wait "$DAEMON_PID" 2>/dev/null
 MARKERS_BEFORE=$(cat "$MARKERS" 2>/dev/null)
 OFF_LOG="${XDG_RUNTIME_DIR}/verify-sessiond-off.log"
-# No MUXTERM_OPERATOR_LIFECYCLE_NOTICES in this environment at all: the default.
-"$BIN" sessiond >"$OFF_LOG" 2>&1 &
+# Explicit opt-out disables notices; an unset switch now enables them.
+MUXTERM_OPERATOR_LIFECYCLE_NOTICES=0 "$BIN" sessiond >"$OFF_LOG" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 40); do
   [ -S "$XDG_RUNTIME_DIR/muxterm/sessiond.sock" ] && break

@@ -122,6 +122,8 @@ type CompletionRecord struct {
 	Label     string `json:"label,omitempty"`
 	Mode      string `json:"mode,omitempty"`
 	DoneMeans string `json:"doneMeans,omitempty"`
+	GoalID    string `json:"goalId,omitempty"`
+	Origin    string `json:"origin,omitempty"`
 	Doing     string `json:"doing,omitempty"`
 
 	// How it ended. Outcome is the daemon's assertion; DeclaredState is the
@@ -631,6 +633,8 @@ func completionRows(records []CompletionRecord) []SessionState {
 			State:       r.FleetState(),
 			Doing:       r.Summary(),
 			DoneMeans:   r.DoneMeans,
+			GoalID:      r.GoalID,
+			Origin:      r.Origin,
 			PR:          r.PR,
 			UpdatedAt:   r.EndedAt,
 		})

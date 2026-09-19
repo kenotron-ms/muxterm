@@ -576,21 +576,21 @@ func paneOwners(views []workspaceLiveView) map[int]paneRef {
 			if snap.exited || snap.pid <= 0 {
 				continue
 			}
-			ref := paneRef{workspaceID: ws.ID, paneID: p.LocalID, origin: p.LaunchOrigin()}
-			// Read from the argv the daemon itself started, not from anything
-			// the session declares. A goal lane's condition is right there in
-			// its command line (goallane.go), and it stays there after the
-			// session has finished, been resumed interactively, and stopped
-			// calling itself autonomous -- which is exactly when doneMeans
-			// disappears from the row and the question "which goal was this?"
-			// gets asked.
-			if goal, ok := goalLaneGoal(p.LaunchArgv()); ok {
-				ref.goalID = GoalID(goal)
-			}
+			ref := lanePaneRef(ws.ID, p)
 			owners[snap.pid] = ref
 		}
 	}
 	return owners
+}
+
+// lanePaneRef uses the daemon's launch record for both live fleet rows and
+// durable completions. It remains available after the root process exits.
+func lanePaneRef(workspaceID string, p *Pane) paneRef {
+	ref := paneRef{workspaceID: workspaceID, paneID: p.LocalID, origin: p.LaunchOrigin()}
+	if goal, ok := goalLaneGoal(p.LaunchArgv()); ok {
+		ref.goalID = GoalID(goal)
+	}
+	return ref
 }
 
 // resolvePaneForPID walks up the process tree from pid until it reaches a pane's

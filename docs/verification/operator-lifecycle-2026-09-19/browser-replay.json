@@ -1,0 +1,34 @@
+[
+  {
+    "type": "cos-history",
+    "turns": [
+      {
+        "origin": "lifecycle",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "The **browser-lifecycle-failed** lane failed after about 5 seconds \u2014 muxterm inferred this from the process exit (exit code -1), not from any declaration by the lane itself. It declared no stop condition, so there's no stated intent to measure the result against; its last activity was \"verifying real PTY lifecycle,\" and the output tail ends with \"Intentional verification crash while working.\" No pull request was found in this lane's output."
+          }
+        ]
+      },
+      {
+        "origin": "lifecycle",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "The **browser-lifecycle-done** lane finished \u2014 it declared itself done, with \"done distinctly\" as its last activity. It declared no stop condition, so there's no stated intent to check that result against, and no pull request was found in its output."
+          }
+        ]
+      },
+      {
+        "origin": "lifecycle",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "The **browser-lifecycle-stopped** lane stopped \u2014 it declared that itself, ending deliberately without a verdict, with \"stopped distinctly\" as its last activity. It declared no stop condition, so there's no stated intent to compare the result against, and no pull request was found in its output."
+          }
+        ]
+      }
+    ]
+  }
+]

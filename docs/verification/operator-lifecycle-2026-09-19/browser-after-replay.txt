@@ -1,0 +1,155 @@
+### Page
+- Page URL: http://127.0.0.1:8313/
+- Page Title: muxterm
+- Console: 2 errors, 0 warnings
+### Snapshot
+```yaml
+- generic [ref=f4e3]:
+  - generic [ref=f4e4]:
+    - generic [ref=f4e5]:
+      - generic "127.0.0.1" [ref=f4e6]: muxterm
+      - button "Open menu" [ref=f4e7] [cursor=pointer]
+    - generic [ref=f4e8]:
+      - button "Sessions need input. Mission Control, current view." [ref=f4e172] [cursor=pointer]:
+        - generic [ref=f4e11]:
+          - generic [ref=f4e12]: mission control
+          - generic [ref=f4e13]: "ctrl+`"
+        - generic [ref=f4e14]: Mission Control
+        - generic [ref=f4e15]: you are here
+      - generic [ref=f4e16]: workspaces
+      - generic [ref=f4e17]:
+        - button "▾ muxterm Local" [expanded] [ref=f4e18] [cursor=pointer]:
+          - generic [ref=f4e19]: ▾
+          - generic [ref=f4e21]: muxterm
+          - generic [ref=f4e22]: Local
+        - generic [ref=f4e23]:
+          - button "● workspace 1 1 pane Close workspace workspace 1" [ref=f4e24] [cursor=pointer]:
+            - generic [ref=f4e25]:
+              - generic [ref=f4e26]: ●
+              - generic [ref=f4e27]: workspace 1
+              - generic [ref=f4e28]: 1 pane
+              - button "Close workspace workspace 1" [ref=f4e29]: ×
+          - button "● browser-lifecycle-done Lane browser-lifecycle-done done Dismiss finished lane browser-lifecycle-done" [ref=f4e30] [cursor=pointer]:
+            - generic [ref=f4e31]:
+              - generic [ref=f4e32]: ●
+              - generic [ref=f4e33]: browser-lifecycle-done
+              - status "Lane browser-lifecycle-done done" [ref=f4e34]: done
+              - button "Dismiss finished lane browser-lifecycle-done" [ref=f4e35]: ×
+          - button "● browser-lifecycle-failed Lane browser-lifecycle-failed failed Dismiss finished lane browser-lifecycle-failed" [ref=f4e36] [cursor=pointer]:
+            - generic [ref=f4e37]:
+              - generic [ref=f4e38]: ●
+              - generic [ref=f4e39]: browser-lifecycle-failed
+              - status "Lane browser-lifecycle-failed failed" [ref=f4e40]: failed
+              - button "Dismiss finished lane browser-lifecycle-failed" [ref=f4e41]: ×
+          - button "● browser-lifecycle-stopped Lane browser-lifecycle-stopped stopped Dismiss finished lane browser-lifecycle-stopped" [ref=f4e42] [cursor=pointer]:
+            - generic [ref=f4e43]:
+              - generic [ref=f4e44]: ●
+              - generic [ref=f4e45]: browser-lifecycle-stopped
+              - status "Lane browser-lifecycle-stopped stopped" [ref=f4e46]: stopped
+              - button "Dismiss finished lane browser-lifecycle-stopped" [ref=f4e47]: ×
+          - button "+ New workspace" [ref=f4e48] [cursor=pointer]
+      - region "Azure Sandbox inventory" [ref=f4e49]:
+        - 'button "Azure Sandbox inventory: unavailable · authentication disabled. Open Sandboxes Settings" [ref=f4e50] [cursor=pointer]':
+          - generic [ref=f4e51]:
+            - generic [ref=f4e52]: Azure
+            - generic [ref=f4e53]: Sandbox inventory
+            - generic [ref=f4e54]: unavailable · authentication disabled
+        - generic [ref=f4e55]:
+          - generic [ref=f4e56]: Azure Sandbox lifecycle is unavailable when muxterm authentication is disabled.
+          - status [ref=f4e57]: Connection unavailable
+      - button "+ Connect machine" [ref=f4e58] [cursor=pointer]
+    - generic [ref=f4e59]:
+      - generic [ref=f4e60]: muxterm dev
+      - generic [ref=f4e61]: Development build — updates are managed by your build, not by releases.
+  - generic [ref=f4e63]:
+    - generic [ref=f4e65]:
+      - generic [ref=f4e66]:
+        - button "Settings" [ref=f4e67] [cursor=pointer]
+        - button "Keyboard Shortcuts" [ref=f4e68] [cursor=pointer]
+        - button "Reconnect" [ref=f4e69] [cursor=pointer]
+        - button "About" [ref=f4e71] [cursor=pointer]
+      - generic [ref=f4e89]:
+        - generic [ref=f4e90]:
+          - generic [ref=f4e94] [cursor=pointer]:
+            - generic [ref=f4e95]: Pane 1
+            - button "Close pane Pane 1" [ref=f4e96]
+          - button "New pane" [ref=f4e100] [cursor=pointer]
+          - button "Split pane" [ref=f4e105] [cursor=pointer]
+        - generic [ref=f4e176]:
+          - textbox "Terminal input" [ref=f4e177]
+          - generic [aria-hidden]:
+            - generic:
+              - generic: ken@vela0
+              - generic: ":"
+              - generic: ~
+              - generic: $
+    - generic [ref=f4e112]:
+      - generic [ref=f4e113]:
+        - heading "Mission Control" [level=1] [ref=f4e114]
+        - button "Conversation options" [ref=f4e116] [cursor=pointer]
+      - generic [ref=f4e117]:
+        - generic [ref=f4e118]:
+          - generic [ref=f4e119]:
+            - generic [ref=f4e120]: MUXTERM
+            - paragraph [ref=f4e122]: Lane lifecycle update
+          - generic [ref=f4e123]:
+            - generic [ref=f4e124]: OPERATOR
+            - paragraph [ref=f4e127]:
+              - text: The
+              - strong [ref=f4e128]: browser-lifecycle-failed
+              - text: lane failed after about 5 seconds — muxterm inferred this from the process exit (exit code -1), not from any declaration by the lane itself. It declared no stop condition, so there's no stated intent to measure the result against; its last activity was "verifying real PTY lifecycle," and the output tail ends with "Intentional verification crash while working." No pull request was found in this lane's output.
+          - generic [ref=f4e129]:
+            - generic [ref=f4e130]: MUXTERM
+            - paragraph [ref=f4e132]: Lane lifecycle update
+          - generic [ref=f4e133]:
+            - generic [ref=f4e134]: OPERATOR
+            - paragraph [ref=f4e137]:
+              - text: The
+              - strong [ref=f4e138]: browser-lifecycle-done
+              - text: lane finished — it declared itself done, with "done distinctly" as its last activity. It declared no stop condition, so there's no stated intent to check that result against, and no pull request was found in its output.
+          - generic [ref=f4e139]:
+            - generic [ref=f4e140]: MUXTERM
+            - paragraph [ref=f4e142]: Lane lifecycle update
+          - generic [ref=f4e143]:
+            - generic [ref=f4e144]: OPERATOR
+            - paragraph [ref=f4e147]:
+              - text: The
+              - strong [ref=f4e148]: browser-lifecycle-stopped
+              - text: lane stopped — it declared that itself, ending deliberately without a verdict, with "stopped distinctly" as its last activity. It declared no stop condition, so there's no stated intent to compare the result against, and no pull request was found in its output.
+        - generic [ref=f4e150]:
+          - textbox "Message Mission Control" [ref=f4e151]:
+            - /placeholder: Message Mission Control…
+          - generic [ref=f4e152]:
+            - button "Dictate" [ref=f4e153] [cursor=pointer]
+            - button "Talk to Operator" [ref=f4e154] [cursor=pointer]
+      - separator "Resize the conversation" [ref=f4e155]
+      - generic [ref=f4e157]:
+        - tablist "Applets" [ref=f4e159]:
+          - tab "Dashboard" [selected] [ref=f4e160] [cursor=pointer]
+          - tab "Files" [ref=f4e161] [cursor=pointer]
+          - tab "Viewer" [ref=f4e162] [cursor=pointer]
+          - tab "Pull Requests" [ref=f4e163] [cursor=pointer]
+        - tabpanel "Dashboard" [ref=f4e165]:
+          - generic [ref=f4e166]:
+            - group "Fleet view" [ref=f4e167]:
+              - button "cards" [pressed] [ref=f4e168] [cursor=pointer]
+              - button "tiles" [ref=f4e169] [cursor=pointer]
+            - heading "wants you" [level=2] [ref=f4e178]
+            - button "browser-lifecycle-stopped autonomous · w4 · 1s stopped without a verdict - term-dev-local/muxterm/session-state/browser-lifecycle-stopped.json" [ref=f4e180] [cursor=pointer]:
+              - generic [ref=f4e181]:
+                - generic [ref=f4e182]: browser-lifecycle-stopped
+                - generic [ref=f4e183]: autonomous · w4 · 1s
+                - generic [ref=f4e184]: stopped without a verdict - term-dev-local/muxterm/session-state/browser-lifecycle-stopped.json
+            - heading "done" [level=2] [ref=f4e185]
+            - generic [ref=f4e186]:
+              - button "browser-lifecycle-done autonomous · w2 · 1s finished - ev-local/muxterm/session-state/browser-lifecycle-done.json" [ref=f4e187] [cursor=pointer]:
+                - generic [ref=f4e188]:
+                  - generic [ref=f4e189]: browser-lifecycle-done
+                  - generic [ref=f4e190]: autonomous · w2 · 1s
+                  - generic [ref=f4e191]: finished - ev-local/muxterm/session-state/browser-lifecycle-done.json
+              - button "browser-lifecycle-failed autonomous · w3 · 30s failed (exit -1) - Intentional verification crash while working" [ref=f4e192] [cursor=pointer]:
+                - generic [ref=f4e193]:
+                  - generic [ref=f4e194]: browser-lifecycle-failed
+                  - generic [ref=f4e195]: autonomous · w3 · 30s
+                  - generic [ref=f4e196]: failed (exit -1) - Intentional verification crash while working
+```
