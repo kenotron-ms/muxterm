@@ -26,7 +26,7 @@ import (
 //     turn. bash, apply_patch and delegate are withheld the same way.
 //
 //  2. THE CONFIG API. mcp_muxterm_update_config PATCHes /api/config, which
-//     merges through config.Merge and writes config.toml. The tuning does not
+//     applies config.Patch and writes config.toml. The tuning does not
 //     live in config.Config -- it is files under the muxterm config dir -- so
 //     there is no field to merge and no key to filter. The capability does not
 //     exist rather than being denied.

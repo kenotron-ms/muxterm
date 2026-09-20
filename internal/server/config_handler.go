@@ -2,9 +2,13 @@ package server
 
 import (
 	"encoding/json"
-	"log"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"reflect"
 
+	"github.com/BurntSushi/toml"
 	muxcfg "github.com/kenotron-ms/muxterm/internal/config"
 )
 
@@ -18,71 +22,88 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(cfg) //nolint:errcheck
 }
 
-// handlePatchConfig accepts a partial config JSON body, merges it with the
-// current config, writes it to disk (if configPath is set), updates the hub's
-// stored config, and broadcasts the update to all connected WebSocket clients.
-//
-// AuthMiddleware protects this route at mux registration.
+// handlePatchConfig acknowledges only validated, persisted changes. The lock
+// orders merge, write, readback and broadcast so concurrent saves cannot publish
+// stale config or verify another request's write.
 func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
-	var partial muxcfg.Config
-	if err := json.NewDecoder(r.Body).Decode(&partial); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+	var changes map[string]json.RawMessage
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&changes); err != nil || changes == nil {
+		http.Error(w, "invalid config: expected a JSON object", http.StatusBadRequest)
 		return
 	}
-
-	newCfg := s.applyConfigUpdate(partial)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(newCfg) //nolint:errcheck
-}
-
-// applyConfigUpdate merges partial into the current config, persists to disk,
-// updates the hub, and broadcasts to all clients. Returns the merged config.
-// Extracted so tests and MCP tools can call it directly without HTTP overhead.
-func (s *Server) applyConfigUpdate(partial muxcfg.Config) muxcfg.Config {
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		http.Error(w, "invalid config: expected one JSON object", http.StatusBadRequest)
+		return
+	}
 	s.cfgMu.Lock()
-	newCfg := muxcfg.Merge(s.cfg, partial)
-	// Lane policy is owned on disk and read by sessiond at launch time. A
-	// preference save must not roll back an edit made since serve started.
-	// Refuse to overwrite an unreadable file: substituting defaults here
-	// would silently erase the owner's approval policy.
-	canPersist := true
-	if s.configPath != "" {
-		disk, malformed, err := muxcfg.LoadStrictServer(s.configPath)
-		if err != nil || malformed {
-			canPersist = false
-			log.Printf("config_handler: preserving unreadable config %s; preference update will not be persisted", s.configPath)
-		} else {
-			newCfg.Lanes = disk.Lanes
-		}
+	defer s.cfgMu.Unlock()
+	// Validate even when persistence is unavailable, to name offending keys.
+	if _, err := muxcfg.Patch(s.cfg, changes); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
-	s.cfg = newCfg
-	s.cfgMu.Unlock()
-
-	// Persist to disk when a config path is configured. Log errors but do not
-	// fail — the optimistic in-memory update is already applied.
-	if s.configPath != "" && canPersist {
-		if err := muxcfg.Write(s.configPath, newCfg); err != nil {
-			log.Printf("config_handler: write %s: %v", s.configPath, err)
-		}
+	if s.configPath == "" {
+		http.Error(w, "config persistence unavailable: no config path", http.StatusInternalServerError)
+		return
 	}
-
-	// Broadcast the update to all connected browser clients.
-	s.hub.BroadcastConfig(newCfg)
-
-	return newCfg
+	base := s.cfg
+	disk, err := readConfigForWrite(s.configPath, true)
+	if err != nil {
+		http.Error(w, "cannot read config before write: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Preserve owner edits when the request omits lanes, but let an explicit
+	// lanes patch override the current disk policy.
+	base.Lanes = disk.Lanes
+	next, err := muxcfg.Patch(base, changes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := muxcfg.VerifyPatch(next, changes); err != nil {
+		http.Error(w, "config merge failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := muxcfg.Write(s.configPath, next); err != nil {
+		http.Error(w, "config persistence failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	persisted, err := readConfigForWrite(s.configPath, false)
+	if err == nil {
+		err = muxcfg.VerifyPatch(persisted, changes)
+	}
+	if err == nil && !reflect.DeepEqual(next, persisted) {
+		err = fmt.Errorf("persisted config differs from merged config")
+	}
+	if err != nil {
+		http.Error(w, "config write verification failed (disk may have changed): "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.cfg = persisted
+	s.hub.BroadcastConfig(persisted)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(persisted) //nolint:errcheck
 }
 
-// GetCurrentConfig returns a copy of the server's current resolved config.
-// Used by MCP tools that need the full config without going through HTTP.
+// Unlike startup's forgiving loader, a write must not mistake a missing or
+// malformed readback for defaults and acknowledge it as persisted.
+func readConfigForWrite(path string, allowMissing bool) (muxcfg.Config, error) {
+	cfg := muxcfg.Defaults()
+	data, err := os.ReadFile(path)
+	if allowMissing && os.IsNotExist(err) {
+		return cfg, nil
+	}
+	if err != nil {
+		return cfg, err
+	}
+	_, err = toml.Decode(string(data), &cfg)
+	return cfg, err
+}
+
+// GetCurrentConfig returns the configuration served by get_config.
 func (s *Server) GetCurrentConfig() muxcfg.Config {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	return s.cfg
-}
-
-// ApplyConfigUpdate is the exported counterpart of applyConfigUpdate, allowing
-// the MCP server to trigger config changes without a real HTTP round-trip.
-func (s *Server) ApplyConfigUpdate(partial muxcfg.Config) muxcfg.Config {
-	return s.applyConfigUpdate(partial)
 }
