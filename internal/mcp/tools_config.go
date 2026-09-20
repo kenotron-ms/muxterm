@@ -113,7 +113,7 @@ func registerConfigTools(srv *Server) {
 			"properties": map[string]any{
 				"changes": map[string]any{
 					"type":        "object",
-					"description": "partial config object with fields to update (theme, font, terminal, keys)",
+					"description": "partial config object with writable sections (lanes, theme, font, terminal, sidebar); unknown, file-only, invalid, or unpersisted changes return an error",
 				},
 			},
 			"required": []string{"changes"},
