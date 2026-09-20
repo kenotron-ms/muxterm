@@ -44,6 +44,20 @@ same transport into the existing machine tool registry, including
 there is no new file proxy. The experiment exposes local plus one relay host;
 composing SSH and relay discovery in normal muxterm is deferred.
 
+## Sandbox browser runtime
+
+The sandbox image includes Node, npm, pinned Playwright CLI, matching Chromium,
+and browser system libraries. This is a settled, user-endorsed requirement from
+[the Hub image decision](https://github.com/sadlilas/hub-teamwork/blob/81c477a6472b85a601e7b64ba9402b1406976319/docs/decisions/2026-09-20-sandbox-browser-image.md).
+Validate the image as the session user and select it by digest. Session startup
+never installs browser tooling; missing dependencies fail loudly with an image
+configuration error.
+
+This lets sandbox work run real browser verification within the sandbox itself,
+without depending on a browser runtime on the client. It does not change the
+relay's outbound HTTPS topology or terminal input delivery contract. Verification
+of the muxterm client UI remains a separate integration check.
+
 ## Input safety contract
 
 Each process start gets a random 192-bit worker boot ID. Each client Dial gets
