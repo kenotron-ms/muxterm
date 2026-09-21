@@ -1,0 +1,93 @@
+### Page
+- Page URL: http://127.0.0.1:33984/
+- Page Title: muxterm
+- Console: 1 errors, 0 warnings
+### Snapshot
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic "127.0.0.1" [ref=e6]: muxterm
+    - generic [ref=e8]:
+      - 'button "Nothing needs input. Go to Mission Control. muxterm: nothing waiting. Live sandbox: nothing waiting." [ref=e98] [cursor=pointer]':
+        - generic [ref=e11]:
+          - generic [ref=e12]: mission control
+          - generic [ref=e13]: "ctrl+`"
+        - generic [ref=e14]: Mission Control
+        - generic [ref=e15]: nothing is waiting
+        - generic [ref=e16]:
+          - generic "muxterm" [ref=e18]
+          - generic "Live sandbox" [ref=e20]
+      - generic [ref=e21]: workspaces
+      - generic [ref=e22]:
+        - button "▾ muxterm Local" [expanded] [ref=e23] [cursor=pointer]:
+          - generic [ref=e24]: ▾
+          - generic [ref=e26]: muxterm
+          - generic [ref=e27]: Local
+        - generic [ref=e28]:
+          - button "● workspace 1 1 pane Close workspace workspace 1" [ref=e99] [cursor=pointer]:
+            - generic [ref=e30]:
+              - generic [ref=e31]: ●
+              - generic [ref=e32]: workspace 1
+              - generic [ref=e33]: 1 pane
+              - button "Close workspace workspace 1" [ref=e34]: ×
+          - button "+ New workspace" [ref=e35] [cursor=pointer]
+      - generic [ref=e36]:
+        - button "▾ Live sandbox Remote" [expanded] [ref=e37] [cursor=pointer]:
+          - generic [ref=e38]: ▾
+          - generic [ref=e40]: Live sandbox
+          - generic [ref=e41]: Remote
+        - generic [ref=e100]:
+          - button "● workspace 1 0 panes Close workspace workspace 1" [ref=e101] [cursor=pointer]:
+            - generic [ref=e102]:
+              - generic [ref=e103]: ●
+              - generic [ref=e104]: workspace 1
+              - generic [ref=e105]: 0 panes
+              - button "Close workspace workspace 1" [ref=e106]: ×
+          - button "● Sandbox ready 1 pane Close workspace Sandbox ready" [ref=e107] [cursor=pointer]:
+            - generic [ref=e108]:
+              - generic [ref=e109]: ●
+              - generic [ref=e110]: Sandbox ready
+              - generic [ref=e111]: 1 pane
+              - button "Close workspace Sandbox ready" [ref=e112]: ×
+          - button "+ New workspace" [ref=e113] [cursor=pointer]
+      - region "Azure Sandbox inventory" [ref=e42]:
+        - 'button "Azure Sandbox inventory: sign in required. Open Sandboxes Settings" [ref=e43] [cursor=pointer]':
+          - generic [ref=e44]:
+            - generic [ref=e45]: Azure
+            - generic [ref=e46]: Sandbox inventory
+            - generic [ref=e47]: sign in required
+        - generic [ref=e48]:
+          - text: Sign in to view the owner-local inventory.
+          - status [ref=e49]: Connection unavailable
+      - button "+ Connect machine" [ref=e50] [cursor=pointer]
+    - generic [ref=e51]:
+      - generic [ref=e52]: muxterm dev
+      - generic [ref=e53]: Development build — updates are managed by your build, not by releases.
+  - generic [ref=e115]:
+    - generic [ref=e116]:
+      - button "Settings" [ref=e117] [cursor=pointer]
+      - button "Keyboard Shortcuts" [ref=e118] [cursor=pointer]
+      - button "Reconnect" [ref=e119] [cursor=pointer]
+      - button "About" [ref=e121] [cursor=pointer]
+    - generic [ref=e139]:
+      - generic [ref=e140]:
+        - generic [ref=e144] [cursor=pointer]:
+          - generic [ref=e145]:
+            - generic "Live sandbox" [ref=e146]
+            - text: Pane 1
+          - button "Close pane Pane 1" [ref=e147]
+        - button "New pane" [ref=e151] [cursor=pointer]
+        - generic [ref=e155]:
+          - button "Split pane" [ref=e156] [cursor=pointer]
+          - button "Open menu" [ref=e161] [cursor=pointer]
+      - generic [ref=e171]:
+        - textbox "Terminal input" [ref=e172]
+        - generic [aria-hidden]:
+          - generic: "# printf 'FINAL_DIRECT_BROKER_OK\\n'; hostname; printf 'socket_mode='; stat -c %a /opt/relay/runtime/muxterm/sessiond.sock; test ! -e /opt/relay/clien"
+          - generic: t.json && echo NO_CLIENT_CREDENTIAL_FILE
+          - generic: FINAL_DIRECT_BROKER_OK
+          - generic: muxterm-sandbox-live-worker
+          - generic: socket_mode=600
+          - generic: NO_CLIENT_CREDENTIAL_FILE
+          - generic: "#"
+```

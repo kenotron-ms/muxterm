@@ -2,7 +2,7 @@ import subprocess,os,pathlib,json,base64
 r=pathlib.Path('/home/ken/artifacts/sandbox-live-private')
 source='/home/ken/work/sandbox-broker-live'
 path=r/'no-entra.json';path.write_text((r/'broker.json').read_text());path.chmod(0o600)
-env=dict(os.environ,HOME=str(r),SANDBOX_BROKER_RELAY_CONFIG=str(path))
+env=dict(os.environ,SANDBOX_BROKER_DATA_DIR=str(r/".amplifier-sandbox-broker"),SANDBOX_BROKER_RELAY_CONFIG=str(path))
 for k in ('AMPLIFIER_SANDBOX_BROKER_ENTRA_TENANT_ID','AMPLIFIER_SANDBOX_BROKER_ENTRA_AUDIENCE','SANDBOX_BROKER_LOCAL_RELAY_CONFIG'):env.pop(k,None)
 cmd=['/home/ken/workspace/sandboxes/.venv/bin/python','-m','uvicorn','broker.app:default_app','--host','127.0.0.1','--port','18088']
 p=subprocess.run(cmd,cwd=source,env=env,capture_output=True,text=True,timeout=15)

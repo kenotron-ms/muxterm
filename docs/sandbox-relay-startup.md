@@ -1,8 +1,8 @@
 # Owner-local sandbox relay
 
 Normal `muxterm`, `muxterm serve`, and `muxterm mcp` accepted an owner-enrolled
-relay through `MUXTERM_RELAY_CONFIG=/absolute/private-client.json`. SSH remained
-available through the same dispatcher. The configured sandbox appeared in the
+relay through `MUXTERM_RELAY_CONFIG=/absolute/private-client.json`. SSH calls retained
+the existing adapter; live SSH connections were not exercised. The configured sandbox appeared in the
 sidebar at startup; its existing New workspace action created a remote workspace.
 The live evidence is in [sandbox-live-build.md](sandbox-live-build.md).
 

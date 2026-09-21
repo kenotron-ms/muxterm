@@ -200,7 +200,7 @@ The local interactive proof was handed to Ken at `http://127.0.0.1:33984`.
 The two task-owned containers were `muxterm-sandbox-live-normal` and
 `muxterm-sandbox-live-worker`; Ken became their teardown owner for further local
 inspection. Their final process manifests appeared above. The worker lease
-expired one hour after its final enrollment, approximately 05:14 UTC on September
+expired one hour after its final enrollment, approximately 05:28 UTC on September
 21; the Entra token expired at 05:32 UTC. This was an interactive verification
 handoff, not an unattended service deployment. Private renewal/restart scripts
 were retained under `/home/ken/artifacts`; credentials were not committed.
@@ -212,7 +212,7 @@ amplifier-digital-twin destroy muxterm-sandbox-live-worker
 amplifier-digital-twin destroy muxterm-sandbox-live-normal
 ```
 
-The updated authorized broker remained PID 1881014 on 127.0.0.1:8088, with source
+The updated authorized broker remained PID 1890167 on 127.0.0.1:8088, with source
 in `/home/ken/work/sandbox-broker-live` and private runtime state under
 `/home/ken/artifacts/sandbox-live-private`. Destroying the verification containers
 ended the worker lease/connection; it did not stop that broker or any other lane.
@@ -220,3 +220,68 @@ ended the worker lease/connection; it did not stop that broker or any other lane
 Reproduction fixtures: `tools/https-relay/live/`. Full browser snapshots, network
 output, and fault records: `docs/evidence/sandbox-live/`. Host report:
 `/home/ken/artifacts/sandbox-live-build.md`.
+
+Muxterm PR: https://github.com/kenotron-ms/muxterm/pull/163 (stacked on #161).
+Broker PR: https://github.com/kenotron-ms/amplifier-sandboxes/pull/16 (stacked on #14).
+
+The fault proxy was subsequently removed from the active path. Its owned PID
+2121 was stopped and host loopback control forwarding 33985 was removed. Nginx
+then forwarded directly to the actual broker. A further browser keyboard run
+returned:
+
+```text
+DIRECT_BROKER_INPUT_OK
+```
+
+A repeated reload in that browser left the viewport without earlier terminal
+text. Clicking the visible terminal surface and typing still returned output;
+clicking its unfocused, off-screen xterm helper textbox timed out. The earlier
+successful screenshot and replay evidence were retained, and the additional
+result was recorded separately; general scrollback replay was not established.
+This did not change the verified input delivery/fencing results.
+
+Final handoff, after removing the fault proxy and adding explicit broker data-directory
+configuration: a fresh browser and fresh runtime created `Sandbox ready`. Browser
+keyboard input returned through the direct TLS-to-broker path:
+
+```text
+FINAL_DIRECT_BROKER_OK
+muxterm-sandbox-live-worker
+socket_mode=600
+NO_CLIENT_CREDENTIAL_FILE
+```
+
+The new final screenshot was `sandbox-live-handoff-browser.png` under the host
+artifacts directory, also committed as `docs/evidence/sandbox-live/handoff.png`.
+
+![Final direct-broker handoff](evidence/sandbox-live/handoff.png)
+
+The final process manifests were:
+
+```text
+$ incus exec muxterm-sandbox-live-normal -- ps -p 7704,7711 -o pid,args
+    PID COMMAND
+   7704 /opt/relay/bin/muxterm sessiond
+   7711 /opt/relay/bin/muxterm serve --addr 127.0.0.1:8313
+
+$ incus exec muxterm-sandbox-live-worker -- ps -p 2050,2058 -o pid,args
+    PID COMMAND
+   2050 /opt/relay/bin/muxterm sessiond
+   2058 /opt/relay/bin/agent --config /opt/relay/worker.json --socket /opt/relay/runtime/muxterm/sessiond.sock
+
+$ ps -p 1890167 -o pid,args
+    PID COMMAND
+1890167 /home/ken/workspace/sandboxes/.venv/bin/python -m uvicorn broker.app:default_app --host 127.0.0.1 --port 8088 --timeout-graceful-shutdown 5 --app-dir .
+```
+
+The broker used `SANDBOX_BROKER_DATA_DIR` for its private verification state.
+A restart initially waited too little for an active SSE stream to drain; the
+binding lock correctly rejected the overlapping process. The restart script
+was corrected to await process exit, and subsequent launches used a five-second
+graceful-shutdown limit. Startup admission checks then passed again. The final
+handoff did not contain the failed process.
+
+A broker restart while workspace creation was pending also left that browser's
+create dialog disabled. A fresh browser/runtime cleared that stale state; UI
+recovery for an interrupted create remained a recorded limitation. The final
+handoff above used the fresh runtime, without fault injection.
