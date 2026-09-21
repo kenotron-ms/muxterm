@@ -285,3 +285,18 @@ A broker restart while workspace creation was pending also left that browser's
 create dialog disabled. A fresh browser/runtime cleared that stale state; UI
 recovery for an interrupted create remained a recorded limitation. The final
 handoff above used the fresh runtime, without fault injection.
+
+
+## Subsequent real Azure verification — 2026-09-21 04:53 UTC
+
+A real Azure sandbox accepted browser keyboard input and returned output.
+The separate report at docs/azure-sandbox-live.md recorded the Azure resource ID,
+actual output, screenshot, manual CLI provisioning, and remaining controller limits.
+Artifact report: /home/ken/artifacts/azure-muxterm-live/report.md.
+
+```text
+REAL_AZURE_SANDBOX_OK
+adc-sandbox
+Linux adc-sandbox 6.12.8+ #1 SMP Thu Jul 30 23:01:31 UTC 2026 x86_64 GNU/Linux
+/root
+```
