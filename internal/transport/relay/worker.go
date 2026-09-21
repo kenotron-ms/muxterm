@@ -21,9 +21,30 @@ type workerChannel struct {
 // RunWorker only connects outward. Each invocation registers a fresh boot and
 // never restores input or sockets. Duplicate open cannot resurrect a channel.
 func RunWorker(ctx context.Context, c Config, socket string) error {
+	if c.EnrollmentToken != "" {
+		c.Token = c.EnrollmentToken
+	}
 	a, err := newAPI(c)
 	if err != nil {
 		return err
+	}
+	if c.EnrollmentToken != "" {
+		enrollCtx, done := context.WithTimeout(ctx, 10*time.Second)
+		resp, e := a.request(enrollCtx, "POST", "/worker/enroll", map[string]string{"token": c.EnrollmentToken})
+		if e != nil {
+			done()
+			return ErrReset
+		}
+		var credential struct {
+			Token string `json:"token"`
+		}
+		e = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&credential)
+		resp.Body.Close()
+		done()
+		if resp.StatusCode != 200 || e != nil || len(credential.Token) < 32 {
+			return ErrReset
+		}
+		a.token = credential.Token
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

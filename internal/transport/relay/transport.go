@@ -51,7 +51,11 @@ func (t *Transport) Discover(ctx context.Context) ([]transport.HostRef, error) {
 	if json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&v) != nil || v.Host != t.cfg.Host {
 		return nil, errProtocol
 	}
-	return []transport.HostRef{{ID: v.Host, DisplayName: "HTTPS sandbox"}}, nil
+	name := t.cfg.DisplayName
+	if name == "" {
+		name = "Sandbox"
+	}
+	return []transport.HostRef{{ID: v.Host, DisplayName: name}}, nil
 }
 func (t *Transport) Dial(ctx context.Context, h transport.HostRef) (net.Conn, error) {
 	if h.ID != t.cfg.Host {

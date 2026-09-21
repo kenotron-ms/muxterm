@@ -27,7 +27,6 @@ import (
 	"github.com/kenotron-ms/muxterm/internal/service"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
-	sshtransport "github.com/kenotron-ms/muxterm/internal/transport/ssh"
 	webstatic "github.com/kenotron-ms/muxterm/web"
 )
 
@@ -509,13 +508,19 @@ func runLocal(cfg Config) error {
 	// BehindReverseProxy is false, so webRedirectURIFor falls through to
 	// the pre-existing loopback derivation, byte-for-byte unchanged.
 	localServerCfg := config.ServerConfig{}
+	if err := admitRelayServer(cfg.Addr, false); err != nil {
+		return err
+	}
 
 	authSrv, err := newAuthServer(cfg.Addr, localServerCfg)
 	if err != nil {
 		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
 	}
 
-	rt := newSSHRemoteTransport()
+	rt, err := newRemoteTransport()
+	if err != nil {
+		return err
+	}
 
 	// Local mode keeps the loopback bypass, so the token is not strictly
 	// required here -- but publishing it anyway keeps the handoff file's
@@ -544,6 +549,9 @@ func runLocal(cfg Config) error {
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))
+	if err := addEnrolledRelay(srv, rt); err != nil {
+		return err
+	}
 
 	// Publish serve-layer URL + local token so the MCP server can discover
 	// and authenticate to the tunnel API.
@@ -647,6 +655,9 @@ func runServe(cfg Config) error {
 	// PATCH from the browser would then write that empty value back over
 	// the file.
 	resolved.Server = srvCfg
+	if err := admitRelayServer(addr, srvCfg.BehindReverseProxy); err != nil {
+		return err
+	}
 	sandboxes, sandboxAvailability, sandboxPresentation, err := newSandboxLifecycle(cfg.NoAuth)
 	if err != nil {
 		return err
@@ -657,7 +668,10 @@ func runServe(cfg Config) error {
 		log.Printf("muxterm: login backend unavailable (%v) — non-loopback access will be denied; local access is unaffected", err)
 	}
 
-	rt := newSSHRemoteTransport()
+	rt, err := newRemoteTransport()
+	if err != nil {
+		return err
+	}
 
 	// Mint the same-user helper-process credential before the server is
 	// built, so the middleware and the on-disk handoff file agree. Without
@@ -687,6 +701,9 @@ func runServe(cfg Config) error {
 	})
 	srv.Hub().SetResolvedConfig(resolved)
 	srv.Hub().SetDialer(newSessiondDialer(rt))
+	if err := addEnrolledRelay(srv, rt); err != nil {
+		return err
+	}
 
 	// Publish serve-layer URL + local token so the MCP server can discover
 	// and authenticate to the tunnel API.
@@ -945,7 +962,11 @@ func runMCPCommand(cfg Config) error {
 	// browser relay uses, injected here rather than imported there: the
 	// choice of transport belongs to the binary that assembles the process
 	// (see remote_transport.go and internal/server/remotes.go:42).
-	srv, closer := mcp.NewStdioServer(sshtransport.New())
+	rt, err := newRemoteTransport()
+	if err != nil {
+		return err
+	}
+	srv, closer := mcp.NewStdioServer(rt)
 	defer closer() //nolint:errcheck
 
 	log.Printf("mcp: stdio server ready")

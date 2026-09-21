@@ -32,11 +32,13 @@ var errProtocol = errors.New("relay protocol rejected")
 // The broker alone gets both tokens. Worker and client files get only their own.
 // This first increment has one pre-authorized owner/host, not tenant auth.
 type Config struct {
-	URL         string `json:"url"`
-	Host        string `json:"host"`
-	Token       string `json:"token,omitempty"`
-	ClientToken string `json:"clientToken,omitempty"`
-	WorkerToken string `json:"workerToken,omitempty"`
+	URL             string `json:"url"`
+	Host            string `json:"host"`
+	DisplayName     string `json:"displayName,omitempty"`
+	EnrollmentToken string `json:"enrollmentToken,omitempty"`
+	Token           string `json:"token,omitempty"`
+	ClientToken     string `json:"clientToken,omitempty"`
+	WorkerToken     string `json:"workerToken,omitempty"`
 }
 
 func LoadConfig(path string) (Config, error) {

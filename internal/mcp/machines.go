@@ -345,7 +345,7 @@ func (m *machines) list(probe bool) ([]machineRow, error) {
 		remote[i] = machineRow{
 			ID:          h.ID,
 			DisplayName: h.DisplayName,
-			Transport:   m.tr.Name(),
+			Transport:   machineTransportName(h.ID, m.tr.Name()),
 			Addr:        h.Addr,
 		}
 	}
@@ -440,4 +440,11 @@ func (m *machines) listMachines(args map[string]any) (string, error) {
 		return "", err
 	}
 	return jsonText(map[string]any{"machines": rows, "probed": probe}), nil
+}
+
+func machineTransportName(id, fallback string) string {
+	if i := strings.Index(id, ":"); i > 0 {
+		return id[:i]
+	}
+	return fallback
 }
