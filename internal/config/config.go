@@ -19,12 +19,12 @@ import (
 
 // Config is the top-level configuration for muxterm.
 type Config struct {
-	// Owner-controlled, preserved on UI saves but not writable by browser PATCH.
-	Lanes          LanesConfig          `toml:"lanes" json:"lanes"`
-	Theme          ThemeConfig          `toml:"theme"      json:"theme"`
-	Font           FontConfig           `toml:"font"       json:"font"`
-	Terminal       TerminalConfig       `toml:"terminal"   json:"terminal"`
-	Sidebar        SidebarConfig        `toml:"sidebar"    json:"sidebar"`
+	// Lane policy is writable explicitly and preserved when omitted from a PATCH.
+	Lanes          LanesConfig          `toml:"lanes" json:"lanes" patch:"true"`
+	Theme          ThemeConfig          `toml:"theme"      json:"theme" patch:"true"`
+	Font           FontConfig           `toml:"font"       json:"font" patch:"true"`
+	Terminal       TerminalConfig       `toml:"terminal"   json:"terminal" patch:"true"`
+	Sidebar        SidebarConfig        `toml:"sidebar"    json:"sidebar" patch:"true"`
 	Keys           KeysConfig           `toml:"keys"       json:"keys"`
 	Workspace      WorkspaceConfig      `toml:"workspace"  json:"workspace"`
 	Driver         DriverConfig         `toml:"driver"     json:"driver"`

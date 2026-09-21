@@ -107,13 +107,13 @@ func registerConfigTools(srv *Server) {
 
 	srv.Register(
 		"update_config",
-		"update muxterm configuration; accepts a partial config object, merges it, writes to disk, and broadcasts to all connected clients; example: {\"changes\": {\"theme\": {\"palette\": \"dracula\"}, \"font\": {\"size\": 15}}}",
+		"update muxterm configuration; accepts writable sections lanes, theme, font, terminal, sidebar; rejects unknown or unsettable keys and invalid values; verifies persistence before broadcasting and reporting success; example: {\"changes\": {\"theme\": {\"palette\": \"dracula\"}, \"font\": {\"size\": 15}}}",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"changes": map[string]any{
 					"type":        "object",
-					"description": "partial config object with fields to update (theme, font, terminal, keys)",
+					"description": "partial config object with fields to update (lanes, theme, font, terminal, sidebar)",
 				},
 			},
 			"required": []string{"changes"},
