@@ -184,6 +184,10 @@ class RemotesStore {
     // The local daemon is never a remote and never emits one of these. An
     // empty host is either that or corruption; either way it is not a host.
     if (id === '') return;
+    if (msg.removed === true) {
+      this.forget(id);
+      return;
+    }
     const state = hostConnState(msg.state);
     if (state === null) return;
 

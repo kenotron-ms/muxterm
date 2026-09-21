@@ -1,0 +1,8 @@
+Fresh worker enrollment and process: 1938
+PASS redeliver {'hits': 1, 'held': True, 'duplicates': 2}
+PASS lost-response {'hits': 2, 'held': True, 'duplicates': 0}
+PASS output SSE disconnect/reconnect with same live daemon connection
+PASS worker crash after Unix write: fresh epoch, no repeated shell side effect
+PASS role and binding authorization rejects invalid/cross-role/cross-host access
+PASS out-of-order input rejected; closed connection cannot receive input
+Secure broker mode used real Entra validation and fresh single-use enrollment after worker crash.

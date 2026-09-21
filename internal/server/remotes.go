@@ -819,6 +819,7 @@ const typeHostState = "host-state"
 // browser computes retryAt on receipt and counts down locally, so the server
 // never ticks a frame per second.
 type hostStateMessage struct {
+	Removed   bool      `json:"removed,omitempty"`
 	Type      string    `json:"type"`
 	Host      string    `json:"host"`
 	Name      string    `json:"name,omitempty"`
@@ -960,10 +961,11 @@ func (c *Client) stopHostSession(id string, generation uint64) {
 	c.emitSessionState()
 
 	m := hostStateMessage{
-		Type:  typeHostState,
-		Host:  id,
-		State: HostNeverConnected,
-		Since: time.Now().UnixMilli(),
+		Removed: true,
+		Type:    typeHostState,
+		Host:    id,
+		State:   HostNeverConnected,
+		Since:   time.Now().UnixMilli(),
 	}
 	m.Name = s.host.DisplayName
 	m.Target = s.host.Addr

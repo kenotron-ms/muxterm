@@ -100,6 +100,8 @@ type Config struct {
 
 // Server is the HTTP server for muxterm.
 type Server struct {
+	relaySettingsMu sync.Mutex
+
 	addr    string
 	noAuth  bool
 	mux     *http.ServeMux
@@ -320,6 +322,9 @@ func New(cfg Config) *Server {
 
 	// Protected routes: loopback bypass, else a valid session (cookie or
 	// bearer token) is required — see internal/server/authmiddleware.go.
+	for _, method := range []string{"GET", "PUT", "DELETE"} {
+		s.mux.Handle(method+" /api/relay", protect(http.HandlerFunc(s.handleRelaySettings)))
+	}
 	s.mux.Handle("GET /api/config", protect(http.HandlerFunc(s.handleGetConfig)))
 	s.mux.Handle("PATCH /api/config", protect(http.HandlerFunc(s.handlePatchConfig)))
 

@@ -1,0 +1,4 @@
+PASS persistent MCP read remote workspaces before disconnect
+PASS browser Disconnect removed sidebar host and private configuration
+PASS persistent MCP rejected removed relay (attempt 1)
+PASS persistent MCP rejected removed relay (attempt 2)

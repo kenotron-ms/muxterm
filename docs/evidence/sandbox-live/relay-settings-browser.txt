@@ -1,0 +1,4 @@
+PASS Settings saved and connected without environment configuration; GET and form omitted token
+PASS invalid token rejected; prior connection retained
+PASS blank token retained for unchanged broker and sandbox; live rename applied
+PASS browser-created remote workspace returned SETTINGS_RELAY_INPUT_OK and muxterm-sandbox-live-worker
