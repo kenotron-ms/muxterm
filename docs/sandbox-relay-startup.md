@@ -1,7 +1,26 @@
 # Owner-local sandbox relay
 
-Normal `muxterm`, `muxterm serve`, and `muxterm mcp` accepted an owner-enrolled
-relay through `MUXTERM_RELAY_CONFIG=/absolute/private-client.json`. SSH calls retained
+Open **Settings → Sandboxes → Sandbox relay** on a loopback muxterm instance.
+Enter the HTTPS broker URL, sandbox ID, display name, and an Entra access token,
+then select **Save and connect**. The broker must already have a running,
+owner-enrolled worker for that sandbox. Save validates the broker before changing
+the current connection, adds the host to the sidebar, and requires no server restart.
+
+The token is write-only in the Settings API. Successful saves clear the password
+field. Leaving it blank retains the existing token only for the same broker URL
+and sandbox ID; changing either requires a new token. **Disconnect relay** removes
+the saved connection and token without deleting the sandbox or its running shells.
+Existing streams are closed on replacement/removal, including the Operator MCP
+helper's streams. No terminal input is replayed onto a replacement connection.
+
+Settings persist atomically in the private mode-0600 file
+`$XDG_CONFIG_HOME/muxterm/relay.json` (default `~/.config/muxterm/relay.json`).
+Normal `muxterm`, `muxterm serve`, and `muxterm mcp` load that file automatically.
+`MUXTERM_RELAY_CONFIG=/absolute/private-client.json` remains an optional path
+override; Settings reads and writes that selected file. Credentials never enter
+`config.toml`, generic config reads, or config broadcasts.
+
+SSH calls retained
 the existing adapter; live SSH connections were not exercised. The configured sandbox appeared in the
 sidebar at startup; its existing New workspace action created a remote workspace.
 The live evidence is in [sandbox-live-build.md](sandbox-live-build.md).
@@ -48,8 +67,7 @@ experimental reference-broker executable remained available for historical
 verification but was absent from this live path.
 
 Limits: one binding per muxterm process, manually delivered enrollment, one-hour
-worker leases, and a client token renewed by updating its private config and
-restarting this isolated client. The broker remained single-process with bounded
+worker leases, and a client token renewed by pasting its replacement in Settings. The broker remained single-process with bounded
 volatile queues; restart reset connections. No multi-replica durability, unattended
 token renewal, Azure provisioning/attach integration, or production muxterm
 installation was completed by this change. The existing Azure inventory panel

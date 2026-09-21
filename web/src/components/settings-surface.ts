@@ -20,6 +20,7 @@ import {
   type AIStatus,
 } from '../lib/ai.js';
 import { apiPath } from '../lib/base-path.js';
+import './relay-settings.js';
 import { remotesStore, type HostConnState } from '../lib/remotes-store.js';
 import {
   DEFAULT_VOICE_STATUS,
@@ -2481,16 +2482,17 @@ export class MuxSettingsSurface extends LitElement {
       statusDetail = 'Refreshing owner-local Azure Sandbox lifecycle status…';
     }
     return html`
+      <mux-relay-settings></mux-relay-settings>
       <div class="section-title">Direct Azure Sandboxes</div>
       <p class="sandbox-note">
-        This screen shows owner-local lifecycle inventory only. It never displays Azure identities,
+        This inventory shows owner-local lifecycle records only. It never displays Azure identities,
         endpoints, credentials, runtime labels, or session transport details.
       </p>
       <div class="sandbox-status">
         <strong>${statusLabel}</strong>
         <span>${statusDetail}</span>
       </div>
-      <div class="sandbox-meta">Terminal/workspace connection unavailable.</div>
+      <div class="sandbox-meta">Direct Azure Attach is unavailable. Broker-enrolled workspaces connect through Sandbox relay above.</div>
       ${presentation && presentation.profiles.length > 0 && !canCreate ? html`
         <div class="sandbox-meta">Configured profile names: ${presentation.profiles.join(', ')}</div>
       ` : ''}
@@ -2537,7 +2539,7 @@ export class MuxSettingsSurface extends LitElement {
                 ? `${item.operation} ${item.operation_state}; desired ${item.desired_state}; generation ${record.generation}${item.reconcile_state === 'clean' ? '' : `; ${item.reconcile_state}`}`
                 : `Recorded lifecycle state; generation ${record.generation}`}
             </div>
-            <div class="sandbox-meta">Terminal/workspace connection unavailable.</div>
+            <div class="sandbox-meta">Direct Azure Attach is unavailable. Broker-enrolled workspaces connect through Sandbox relay above.</div>
             ${item?.reconcile_state === 'quarantined' ? html`
               <div class="sandbox-meta">Recovery is quarantined. An owner recovery procedure is required.</div>
             ` : ''}

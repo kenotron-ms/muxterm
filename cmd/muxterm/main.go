@@ -962,7 +962,7 @@ func runMCPCommand(cfg Config) error {
 	// browser relay uses, injected here rather than imported there: the
 	// choice of transport belongs to the binary that assembles the process
 	// (see remote_transport.go and internal/server/remotes.go:42).
-	rt, err := newRemoteTransport()
+	rt, err := newRemoteTransport(true)
 	if err != nil {
 		return err
 	}
