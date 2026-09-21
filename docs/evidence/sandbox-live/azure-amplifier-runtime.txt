@@ -1,0 +1,7 @@
+process 39 /opt/muxterm/bin/muxterm sessiond 
+process 57 /opt/muxterm/bin/agent --config /opt/muxterm/worker.json --socket /opt/muxterm/runtime/muxterm/sessiond.sock 
+process 125 /root/.local/share/uv/tools/amplifier/bin/python /root/.local/bin/amplifier run Reply with exactly AMPLIFIER_AZURE_LANE_OK. Do not use tools or change files. --mode chat 
+native session a09ecd5d-c019-4ffe-8025-df853c94335e {'session_id': 'a09ecd5d-c019-4ffe-8025-df853c94335e', 'created': '2026-09-21T05:17:51.475818+00:00'}
+tcp listeners []
+udp listeners []
+socket mode 0o600
