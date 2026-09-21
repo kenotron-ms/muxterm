@@ -67,10 +67,18 @@ Entra client credential expiry: 05:32 UTC. Worker lease: approximately 05:52 UTC
 Automatic renewal was not implemented. Outbound network access was limited to the
 broker, so arbitrary package downloads were not available.
 
-Azure resources created: one sandbox, one temporary broker Container App, and one
-ACR image repository/tag. Existing group, environment, identity and registry were
-reused. Cleanup status remained pending while the user tried the workspace and
-answered the explicit retention question. The exact cleanup script was
+Azure resources created and subsequently deleted at the user’s request: one
+sandbox, one temporary broker Container App, and one ACR image repository/tag.
+Existing group, environment, identity and registry were reused and retained.
+Post-deletion listing returned:
+
+```text
+Azure sandbox remaining: []
+Temporary broker remaining: []
+ACR repository remaining: []
+```
+
+The Azure demo was no longer available after cleanup. The exact cleanup script was
 /home/ken/artifacts/azure-muxterm-live/cleanup.sh. No existing sandbox was modified.
 
 Screenshot: [Azure workspace](evidence/sandbox-live/azure-browser.png).
