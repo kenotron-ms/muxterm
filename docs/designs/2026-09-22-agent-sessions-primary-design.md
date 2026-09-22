@@ -7,7 +7,7 @@
 **Short summary:** All harnesses report through one hook-report contract. A native
 session ID creates a durable fleet session even without a muxterm pane. Replace
 Claude polling entirely with Claude hooks; generalize Amplifier's existing event
-semantics; accept both Codex notify and richer Codex hooks through the same ingress.
+semantics; use Claude as the rich-hook reference; accept both Codex notify and richer Codex hooks through the same ingress.
 Make missing configuration and rejected delivery visible. Keep real terminals,
 durable transcripts, and the single existing Operator conversation.
 
@@ -49,10 +49,42 @@ runtime integration was executed. Runtime integration gates are marked ASSUMED
 and consolidated at the end. Everything specified as a contract below is a design
 requirement, not a claim that it already shipped.
 
-Research artifacts are outside git at
-`/home/ken/artifacts/muxterm-hooks-revision-20260922/`. No paid model turn was run.
+Research artifacts are outside git under `/home/ken/artifacts/`. No paid model turn was run.
 No live harness settings, Amplifier source, production services, or ports changed.
 The existing PR and its complete document were read before revising it.
+
+### Correction of the false premise and granularity verdict
+
+**VERIFIED: read `internal/sessiond/claude_adapter.go`, lines 18–23.** The
+historical rationale says:
+
+> Why a poller and not a hook: Amplifier has an in-process module system, so
+> its producer can be an event handler that declares state as it changes.
+> Claude Code has no equivalent extension point, but it does have a documented
+> scripting output -- `claude agents --json`, "Print active sessions
+> (interactive and background) as a JSON array and exit (for scripting; does
+> not require a TTY)". Polling that is the whole integration.
+
+**That rationale is false.** This design replaces it with the following rationale
+(the Go file and its runtime logic are unchanged in this documentation PR):
+
+> Claude Code exposes native lifecycle, prompt, permission, tool and stop hooks,
+> distributed through settings or plugins. Muxterm uses a Claude plugin to report
+> these events through the common session ingress. The legacy polling adapter is
+> removed in the Claude migration; unconfigured sessions are no longer discovered.
+
+**VERIFIED: [Claude hook reference](https://code.claude.com/docs/en/hooks),
+[Codex hook reference](https://learn.chatgpt.com/docs/hooks), installed enums/schemas
+below, and Amplifier `_register_state_publisher`.** Claude has the broadest verified
+native event vocabulary in this comparison and is the **reference implementation
+for rich hook reporting**. All three support tool-call granularity; a strict
+Claude > Amplifier > Codex resolution ranking is unsupported. Claude covers
+built-in WebSearch/WebFetch and MCP tools (excluding EndConversation), whereas
+Codex's documented tool hooks exclude hosted tools such as WebSearch and some
+specialized paths. Amplifier's existing module provides richer explicit goal,
+artifact-read and todo semantics. Codex **legacy notify** is the coarsest tier,
+limited to completed turns; that is not the ceiling of installed Codex 0.155.1.
+Do not replace the false Claude premise with a false Codex premise.
 
 ### Claude 2.1.280: hooks sufficient to replace polling
 
@@ -87,6 +119,30 @@ lags the binary; it is not a reason to deny the installed events. Embedded match
 and output switch statements also reference the events. Runtime dispatch through
 muxterm's future configuration remains **ASSUMED A1**.
 
+**VERIFIED: fetched both
+`https://docs.claude.com/en/docs/claude-code/hooks` and
+`https://docs.anthropic.com/en/docs/claude-code/hooks`; both redirect to the canonical
+hook reference above.** Read the full canonical reference, settings documentation
+and [plugin reference](https://code.claude.com/docs/en/plugins-reference).
+
+**VERIFIED: `claude plugin --help`; `claude plugin install --help`; read-only
+Python JSON selection of `enabledPlugins` and `extraKnownMarketplaces` from
+`~/.claude/settings.json`.** The CLI supplies plugin management and user/project/local
+installation scopes. The owner's settings contain
+`superpowers@superpowers-marketplace: false` and a marketplace sourced from GitHub
+`obra/superpowers-marketplace`: marketplace support is present; this plugin is
+currently disabled. Neither its presence nor its disabled state proves muxterm
+hooks were configured. `claude --help` lists no standalone hooks subcommand;
+[the documented interactive `/hooks` menu](https://code.claude.com/docs/en/hooks#the-hooks-menu)
+is the hook inspection interface. No interactive session was started for this audit.
+
+**VERIFIED: read-only Python extraction of the installed settings validator:**
+`hooks:vK().optional()` and `vK=p(()=>kot(V(qf),C(It())))` connect settings hooks to
+the 33-event enum, while plugin hooks use the same validator. The accepted shape
+is `hooks: { EventName: [{ matcher?, hooks: [{ type: "command", command, timeout? }] }] }`.
+The linked public schema independently documents this shape. This is schema/code
+inspection, not a claim that an actual new configuration was loaded; that remains A1.
+
 ### Codex 0.155.1: notify is not the hook ceiling
 
 **VERIFIED: `codex --version`; `codex --help`; read
@@ -116,7 +172,7 @@ Richer hook delivery, trust, and tool coverage in real muxterm sessions remain
 **ASSUMED A1**, even though their interfaces are verified. No app-server stream
 or SDK is needed to establish the existence of finer-grained hooks.
 
-### Amplifier: reference implementation, not a replacement engine
+### Amplifier: existing semantic translator, not a replacement engine
 
 **VERIFIED: read `modules/hooks-muxterm-session/amplifier_module_hooks_muxterm_session/`
 `__init__.py` (`mount`, `_register_state_publisher`), `state.py`
@@ -138,7 +194,8 @@ classification are fallible interpretations, distinct from structural state.
 `user:notification` is registered but the source explicitly says the current
 kernel has no emitter: do not promise notifications from it.
 
-This rich semantic model is the reference for all translators. A future muxterm
+Preserve this module's semantic enrichment; Claude is the native hook-reporting
+reference, without inventing Amplifier-specific goal fields for other harnesses. A future muxterm
 module update changes only its reporting sink to the common command. No Amplifier
 engine replacement, SDK migration, or Amplifier source edit belongs in this PR.
 
@@ -273,7 +330,7 @@ muxterm contract, not a claim these translators already exist.
 
 | Claude native events | Normalized event and fleet effect |
 |---|---|
-| SessionStart | `session.started`; bind identity, project/cwd, name if declared; initialize interactive/stopped until prompt evidence. |
+| SessionStart | `session.started`; bind identity, project/cwd, declared session_title; initialize mode/state only for a new execution. Compact/resume metadata must not reset an already active turn. |
 | UserPromptSubmit | `turn.started`; working, clear waiting, first prompt name, bounded doing. |
 | UserPromptExpansion | Metadata only; an expansion is not proof of executed work. |
 | PreToolUse | `tool.started`; doing/tool activity; do not invent permission outcome. |
@@ -295,6 +352,70 @@ muxterm contract, not a claim these translators already exist.
 | WorktreeCreate, WorktreeRemove | Do not register observation handlers that replace native worktree behavior; no required fleet mapping. |
 | PreModelSwitch, PostModelSwitch | Optional metadata; no fleet state change required. |
 | MessageDisplay | Optional display activity only; no guarantee of durable complete transcript or token percentage. |
+
+### Claude stdin payload and behavior-control reference
+
+**VERIFIED: [common input](https://code.claude.com/docs/en/hooks#common-input-fields),
+[decision control](https://code.claude.com/docs/en/hooks#decision-control), and each
+linked event section below; installed enum and settings validator in section 2.**
+All nine specifically requested names exist; none is refuted. The following table
+also covers the other 24 verified names so the larger event list has explicit
+payload and control evidence. Field lists summarize useful input, not a closed
+JSON schema: tolerate extra fields and event/version-dependent optional values.
+
+Every command receives a JSON object on **stdin** with common fields
+`session_id`, `transcript_path`, `cwd`, `hook_event_name`. `prompt_id` is absent
+before the first user input; `scratchpad_dir`, `permission_mode`, `effort`,
+`agent_id` and `agent_type` are conditional. Transcript writes can lag the event;
+use Stop's `last_assistant_message` for the final text. Permission mode is not
+muxterm's interactive/autonomous `mode`. No native pane/workspace ID is promised.
+
+Each row inherits the identity, harness, optional attachment and timestamp rules
+in the 18-field table below; its event-specific fleet effects are in the preceding
+map. Fields absent from those two maps remain unknown, never inferred from prose.
+Control capability belongs to Claude's hook protocol, **not** to muxterm's passive
+reporting bridge. Successful observer commands emit no JSON/context on stdout and
+exit 0; keep delivery receipts private so Claude never interprets them as feedback.
+On delivery failure, persist diagnostics and print stderr, but never propagate
+exit 2 or a control response from the sink into Claude. SessionEnd defaults to a
+1.5-second timeout (**VERIFIED: SessionEnd reference below**); enqueue locally within
+that budget, with acceptance processed later. Do not wait for daemon/UI acceptance.
+
+| Event (VERIFIED source) | When it fires; event-specific stdin fields | Can its response control Claude? |
+|---|---|---|
+| [PreToolUse](https://code.claude.com/docs/en/hooks#pretooluse) | Before execution after arguments exist; `tool_name`, `tool_input`, `tool_use_id`. | Yes: `hookSpecificOutput.permissionDecision` allow/deny/ask/defer, reason, `updatedInput`, context; deny prevents execution. |
+| [PostToolUse](https://code.claude.com/docs/en/hooks#posttooluse) | Successful tool completion; same tool identifiers, `tool_response`, `duration_ms`. | Yes: block/reason is feedback, context and `updatedToolOutput` alter what Claude sees; cannot undo executed effects. |
+| [Notification](https://code.claude.com/docs/en/hooks#notification) | Native notification; `message`, optional `title`, `notification_type`. | No notification blocking/modification; side effects only. |
+| [UserPromptSubmit](https://code.claude.com/docs/en/hooks#userpromptsubmit) | Before processing submitted input; `prompt`. | Yes: block prompt or add context; cannot replace prompt. |
+| [Stop](https://code.claude.com/docs/en/hooks#stop) | Main agent finishes responding, excluding user interruption/API error; `stop_hook_active`, `last_assistant_message`, available `background_tasks`, `session_crons`. | Yes: block/reason or additional context continues the conversation; guard against loops. |
+| [SubagentStop](https://code.claude.com/docs/en/hooks#subagentstop) | Child/internal agent finishes; Stop fields plus `agent_id`, `agent_type`, `agent_transcript_path`; task/cron arrays refer to parent. | Yes: Stop-style continuation of child, not parent completion. |
+| [PreCompact](https://code.claude.com/docs/en/hooks#precompact) | Before manual/automatic compaction; `trigger`, nullable `custom_instructions`. | Yes in this documented version: exit 2 or decision block cancels compaction; context-limit recovery can consequently fail. |
+| [SessionStart](https://code.claude.com/docs/en/hooks#sessionstart) | Start/resume and documented clear/compact/fork sources; `source`, optional `session_title`, `model`, `agent_type` and resume/cache metrics. | Context injection, `initialUserMessage` in print mode, `sessionTitle`, `watchPaths`, `reloadSkills`; no blocking decision. |
+| [SessionEnd](https://code.claude.com/docs/en/hooks#sessionend) | Session ends; `reason`. | No blocking; cleanup/observation. Not guaranteed after an abrupt process kill. |
+| [PostToolUseFailure](https://code.claude.com/docs/en/hooks#posttoolusefailure) | Executed tool fails; tool identifiers, `error`, `is_interrupt`, `duration_ms`. | Feedback/context; cannot reverse failure. Pre-execution validation rejection is outside this event. |
+| [PostToolBatch](https://code.claude.com/docs/en/hooks#posttoolbatch) | Entire tool batch resolves; `tool_calls` array of per-call identifiers/input/result or error. | Block/reason feedback and context before next model request. |
+| [UserPromptExpansion](https://code.claude.com/docs/en/hooks#userpromptexpansion) | Typed command expands; `expansion_type`, `command_name`, `command_args`, `command_source`, `prompt`. | Block expansion or add context. |
+| [StopFailure](https://code.claude.com/docs/en/hooks#stopfailure) | API error ends turn instead of Stop; `error`, optional `error_details`, `last_assistant_message`. | No decision; output/exit ignored except terminal notification sequence. |
+| [SubagentStart](https://code.claude.com/docs/en/hooks#subagentstart) | Spawn/resume child or in-process teammate message; `agent_id`, `agent_type`. | Inject child context; cannot block creation. |
+| [PostCompact](https://code.claude.com/docs/en/hooks#postcompact) | After compaction; `trigger`, `compact_summary`. | No decision control. |
+| [PreModelSwitch](https://code.claude.com/docs/en/hooks#premodelswitch) | Before requested switch; `from_model`, `to_model`, `requested_model`, `source`, context/cache/pricing metrics when available. | Allow/deny/ask or block; cancel/confirm switch. |
+| [PostModelSwitch](https://code.claude.com/docs/en/hooks#postmodelswitch) | After requested/automatic switch; same model-transition payload family. | Context only; cannot block completed switch. |
+| [PermissionRequest](https://code.claude.com/docs/en/hooks#permissionrequest) | Before permission prompt, including certain modes unable to display one; `tool_name`, `tool_input`, `permission_suggestions`. | Allow/deny through decision.behavior; allowed input/permission updates. |
+| [PermissionDenied](https://code.claude.com/docs/en/hooks#permissiondenied) | Auto-mode denial only; `tool_name`, `tool_input`, `tool_use_id`, `reason`, optional `mcp_server`. | Retry hint, ignored for no-verdict denials; not all permission denials emit this event. |
+| [Setup](https://code.claude.com/docs/en/hooks#setup) | Explicit init/maintenance flows, not ordinary startup; `trigger`. | No decision control. |
+| [TeammateIdle](https://code.claude.com/docs/en/hooks#teammateidle) | Before teammate rests; `teammate_name`, `team_name`. | Exit 2 keeps working; continue false can stop teammate. |
+| [TaskCreated](https://code.claude.com/docs/en/hooks#taskcreated) | Task created; `task_id`, `task_subject`, optional description/team/teammate metadata. | Exit 2 or block cancels task. |
+| [TaskCompleted](https://code.claude.com/docs/en/hooks#taskcompleted) | Before task completion; task/team/teammate metadata. | Exit 2 rejects completion; continue false has trigger-dependent behavior. |
+| [Elicitation](https://code.claude.com/docs/en/hooks#elicitation) | MCP server asks for input; `mcp_server_name`, `message`, optional `mode`, `url`, `elicitation_id`, `requested_schema`. | Accept/decline/cancel and form content. |
+| [ElicitationResult](https://code.claude.com/docs/en/hooks#elicitationresult) | Before elicitation response returns to server; server, `action`, optional mode/ID/content. | Override response action/content. |
+| [ConfigChange](https://code.claude.com/docs/en/hooks#configchange) | Watched settings/policy/skill file changes; `source`, `file_path`. | Can block applicable changes; managed policy cannot be blocked. |
+| [WorktreeCreate](https://code.claude.com/docs/en/hooks#worktreecreate) | Isolated worktree creation; `name`. | Replaces native creation; must return worktree path. Do not install an observer here. |
+| [WorktreeRemove](https://code.claude.com/docs/en/hooks#worktreeremove) | Worktree cleanup; `worktree_path`. | Performs cleanup; nonzero fails removal if directory remains; JSON discarded. Do not install here. |
+| [InstructionsLoaded](https://code.claude.com/docs/en/hooks#instructionsloaded) | Instruction file loaded; `file_path`, `memory_type`, `load_reason`, conditional load metadata. | No decision, asynchronous observation. |
+| [CwdChanged](https://code.claude.com/docs/en/hooks#cwdchanged) | Main conversation shell changes cwd; `old_cwd`, `new_cwd`. | No JSON decision; environment-file side effects supported. |
+| [FileChanged](https://code.claude.com/docs/en/hooks#filechanged) | Registered watched file changes; `file_path`, `event`. | No decision control. |
+| [DirectoryAdded](https://code.claude.com/docs/en/hooks#directoryadded) | Mid-session working-directory addition via supported command/client; `directory`, `source`. | No decision control. |
+| [MessageDisplay](https://code.claude.com/docs/en/hooks#messagedisplay) | Completed line batches stream to screen; `turn_id`, `message_id`, `index`, `final`, `delta`. | `displayContent` replaces display only, not model context/transcript. |
 
 Stop observers must never return a continuation/block response. Another user hook
 can continue a turn after Stop; subsequent start/tool events resume working.
@@ -385,9 +506,54 @@ event coverage, config location/hash, and last delivery/acceptance per harness.
 
 | Harness | Spawned lanes | Sessions the owner starts by hand |
 |---|---|---|
-| Claude | Generate invocation settings pointing command hooks at the selected muxterm instance; pass documented --settings; verify effective settings and first hook receipt. | Installer merges muxterm command entries into ~/.claude/settings.json, preserving unrelated hooks and settings; validate effective user/project/policy sources. A plain claude invocation then uses global hooks. |
+| Claude | Load the muxterm plugin using documented --plugin-dir for an isolated lane, or use the installed plugin with explicit instance routing; suppress duplicate owned registration and verify first receipt. | Install/enable the muxterm plugin at user scope through Claude plugin management. Inspect effective settings/policy; plain claude sessions then load the plugin unless overridden/disabled. |
 | Codex | Install invocation-scoped rich hooks using documented config layers and vetted trust; completion-only notify translator if richer setup is unavailable, visibly labeled. | Installer merges hooks into ~/.codex/config.toml (or references owned hook definitions); retain a compatible notify translator where needed. Preserve the existing notify command through an explicit dispatcher rather than overwriting it. |
 | Amplifier | Ensure the selected muxterm bundle mounts hooks-muxterm-session with reporting enabled and the correct instance destination. | Existing muxterm Amplifier installation/bundle configuration must include the module in the bundle actually selected by a manual invocation. Installing a module on disk alone is not activation. |
+
+### Claude distribution decision: ship a muxterm plugin
+
+**VERIFIED: [plugin hooks](https://code.claude.com/docs/en/plugins-reference#hooks),
+[plugin manifest](https://code.claude.com/docs/en/plugins-reference#plugin-manifest-schema),
+`claude --help`, `claude plugin --help`, `claude plugin install --help`.** A plugin
+ships `.claude-plugin/plugin.json`, `hooks/hooks.json` (or a manifest `hooks` path/
+inline object) and a bundled command script. Use `${CLAUDE_PLUGIN_ROOT}` for the
+script path; never assume the current directory is the plugin directory. Plugins
+use the same event-to-matcher-to-handler structure as settings. The installed
+validator also confirms this shared shape.
+
+| Approach | Benefit | Cost / detection |
+|---|---|---|
+| Hand-edit or installer-merge ~/.claude/settings.json | Small direct command entries; no marketplace dependency. | Own JSON merge/backup/uninstall and per-event upgrades; preserve unrelated hooks. Config existence alone does not prove execution. |
+| Muxterm Claude plugin (**recommended**) | Versioned event definitions and script together; native enable/disable/update/uninstall and user-scope distribution. | Plugin still needs installation/enablement and may be blocked by policy; plugin manager persists configuration. This does not mean zero settings writes in the future installer. |
+
+The future muxterm installer publishes an owned marketplace entry, adds that
+marketplace through `claude plugin marketplace add <source>`, and installs
+`muxterm@<marketplace> --scope user` through `claude plugin install`, then verifies
+explicit enabled state. These are future installation steps, not commands executed
+by this audit. For managed isolated lanes, `--plugin-dir <bundle>` supplies the same
+package without hand-editing global hook arrays. Do not activate both copies or
+retain legacy muxterm settings hooks in parallel. Version the bridge contract and
+record plugin identity/version; migrate only positively identified muxterm entries.
+
+Minimum reporting registration: SessionStart, UserPromptSubmit, PreToolUse,
+PostToolUse, PostToolUseFailure, PermissionRequest, Notification, Stop, StopFailure,
+SessionEnd, SubagentStart, SubagentStop, PreCompact, PostCompact. Optional metadata
+handlers follow the event map. No WorktreeCreate/WorktreeRemove handlers: these
+replace native behavior. Never return approval decisions, block Stop/compaction,
+rewrite tool output, or inject context from the observation plugin.
+
+**ASSUMED A1:** plugin loading, effective configuration composition, duplicate
+suppression and destination routing operate across actual manual and spawned
+sessions. Confirm with real event receipts in isolated integration verification,
+including disabled plugin, safe mode, policy denial, missing executable and failed
+queue delivery. Read-only diagnostics inspect marketplace/plugin enablement and
+owned hook definitions as well as settings. Display **Claude reporting: disabled**
+for a disabled muxterm plugin, **not configured** if absent, **configured—unverified**
+until receipt, and **delivery failed/rejected** on captured failures. Expose these
+in the persistent fleet panel even with zero sessions. A managed launch without its
+first receipt gets a visible launch diagnostic; no pane attachment is required.
+An arbitrary external invocation that disables all hooks is unknowable from hooks
+alone: never claim complete session discovery from installed-plugin status.
 
 **VERIFIED configuration capabilities:** Claude settings/help and Codex hooks/help
 cited in section 2; Amplifier module `mount` reads `publish_state` and registers
@@ -575,9 +741,13 @@ unverified SDK or symmetric event set for native evidence.
 
 | ID | ASSUMED: reason | What confirms it / release boundary |
 |---|---|---|
-| A1 | Native hook delivery, configuration composition/trust, native identity and correlation work through the future common bridge for each installed harness; no new bridge was executed in this research. | PRs 2–4 real manual/spawned event captures, config-disabled cases, retries and accepted fleet receipts. Expose unverified coverage until each passes; no Claude poller fallback. |
+| A1 | Native hook delivery, Claude plugin activation/observer neutrality, configuration composition/trust, native identity and correlation work through the future common bridge for each installed harness; no new bridge was executed in this research. | PRs 2–4 real manual/spawned event captures, config-disabled cases, retries and accepted fleet receipts. Expose unverified coverage until each passes; no Claude poller fallback. |
 | A2 | A selected chat execution mode exposes a usable permission/control round trip through its actual hooks; enum presence does not prove a broker can hold and answer the request. | PR 6 real allow/deny/expiry and reconnect per harness/mode. Keep that control disabled or require terminal intervention until verified; no guessed stdin protocol. |
 | A3 | Native transcript import and interrupted chat/terminal resume preserve completed context and release the former writer. Native history is not a stable cross-version guarantee. | PRs 5–6 two-turn import, interruption, explicit resume, missing-history and recovery verification. Preserve readable muxterm history; block takeover when ownership is uncertain. |
 | A4 | Same-user managed children can access the owner's normal CLI credentials and helpers under the service environment. Help output cannot establish authentication. | PR 6 real authenticated turn per harness with service-equivalent environment. Surface auth failure; never silently change account or billing route. |
 
-No amplifier-agent replacement or SDK compatibility assumption is retained.
+A1 is **updated** to include Claude plugin installation/activation and observer
+neutrality; A2–A4 are **retained** with their explicit confirmation gates. No
+assumption was silently retired. The claim that Claude lacks hooks is **refuted**,
+not retained as an assumption. No amplifier-agent replacement or SDK compatibility
+assumption is retained.
