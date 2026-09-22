@@ -207,6 +207,28 @@ will contend with the production sessiond socket.
 
 **You are not done until playwright-cli (or the muxterm-verify skill) confirms the feature works in a real browser.**
 
+### Verification evidence storage
+
+Write verification artifacts to `/home/ken/artifacts/` in a task-specific directory.
+Do not commit logs, JSON dumps, scans, machine-state listings (including branch and
+worktree inventories), intermediate screenshots, or other transient process residue.
+This applies even when an older plan or verification recipe names a repository path
+for those artifacts.
+
+Keep committed verification records short: a concise summary and only genuinely
+durable evidence needed to understand the change, such as a final screenshot that
+proves user-visible behavior. Put the detailed verification narrative, commands,
+results, limitations, and relevant output in the PR description. Do not rely on
+local artifact paths as evidence accessible to reviewers; paste the relevant output
+or attach durable evidence to the PR.
+
+Before committing, inspect the diff for verification residue and remove links to
+artifacts that are not committed. Leave existing `docs/verification/` history intact
+unless the owner explicitly requests its cleanup.
+
+These storage rules do not relax the unit-test ban or the requirement to verify
+features and fixes with real muxterm, a real browser, and real sessiond.
+
 ### Verification hygiene: fresh fixtures every time, especially when debugging
 
 Lesson learned the hard way (multi-client resize/focus-authority fix, 2026-07-31): a long debugging session hammered a single reused workspace/pane with dozens of resize/attach/detach/reconnect cycles over several hours. The pane accumulated state that produced flaky, non-reproducible failures indistinguishable from real bugs — several hours were burned chasing a "regression" that was actually just test fixture rot, not the code under test.
