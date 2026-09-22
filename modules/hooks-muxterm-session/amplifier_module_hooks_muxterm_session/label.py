@@ -55,17 +55,15 @@ authenticated provider -- an HTTP endpoint or an ``amplifier`` subprocess
 would work on the machine that happens to have one and silently do nothing
 everywhere else.
 
-And every failure path here returns ``None``: no provider, a timeout, a
-malformed answer, a model that replied with a sentence instead of a label.
+No provider, a timeout, or a malformed answer returns ``None``. Provider
+errors propagate to the hook boundary, which also keeps the existing label.
 ``None`` means "keep the label you had", which is the deterministic one. A
 session whose provider is down keeps a tab that reads ``auth redirect``, and
 nothing regresses to ``Pane 7``.
 
-The exception is the same one ``classify.py`` makes, via the same shared
-helper: a ``label_model`` the user's provider rejects is a permanent fault,
-not a transient one, so it is retried once without the override before the
-call gives up. Otherwise a model id chosen by somebody else would leave this
-whole tier switched off, invisibly, for everyone on a different provider.
+The shared helper retries an explicit unsupported-parameter rejection once,
+without that parameter. Other provider errors are logged at warning level and
+propagate to the hook boundary, which keeps the existing label.
 """
 
 from __future__ import annotations
@@ -75,8 +73,8 @@ import logging
 from typing import Any
 
 # Reused rather than re-implemented: two copies of "find the mounted provider",
-# "get the text out of a ChatResponse", or "drop a rejected model override and
-# try again" would drift, and the second copy would be the one that stops
+# "get the text out of a ChatResponse", or "retry without an unsupported
+# parameter" would drift, and the second copy would be the one that stops
 # working on a provider nobody tested it against.
 from .classify import _complete_with_model_fallback, _pick_provider, _response_text
 
@@ -227,8 +225,9 @@ async def label_session(
     """Name a session in 1-3 words, from the prompt that started it.
 
     Returns the label, or ``None`` when no usable one could be produced --
-    unreachable provider, timeout, malformed answer, or an answer that was not
-    a label at all. ``None`` always means "keep the label you already have";
+    no provider, timeout, malformed answer, or an answer that was not
+    a label at all. Provider rejections propagate after warning-level logging.
+    ``None`` always means "keep the label you already have";
     it never means "this session has no subject".
     """
     text = (prompt or "").strip()
@@ -252,7 +251,6 @@ async def label_session(
             Message(role="user", content=text),
         ],
         "response_format": ResponseFormatJsonSchema(json_schema=_SCHEMA, strict=True),
-        "temperature": 0.0,
         "max_output_tokens": 32,
         # metadata={"stream": False} marks this as a background utility call so
         # the provider does NOT take the streaming branch. The streaming branch

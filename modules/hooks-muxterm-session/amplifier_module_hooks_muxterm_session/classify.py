@@ -34,18 +34,16 @@ provider the user configured, so it cannot drift from the session it describes.
 Failure direction
 -----------------
 
-Every failure path returns ``None``, which the caller reads as "keep the
-structural verdict". That direction is deliberate and matches the rule stated
+Failures keep the structural verdict: unusable responses return ``None`` and
+provider errors propagate to the hook boundary, which leaves it unchanged. That direction is deliberate and matches the rule stated
 in ``muxterm session report``'s own help text: a false alarm teaches people to
 ignore the indicator, which costs more than a missed one. An unreachable
 provider, a timeout, a malformed answer, an unparseable payload -- all of them
 leave the session exactly as ``prompt:complete`` found it.
 
-The one failure that is *not* simply absorbed is a rejected ``classify_model``
-override, because that one is permanent rather than transient: a model id the
-user's provider does not accept would turn this whole path off forever, for
-them alone, without a word. See ``_complete_with_model_fallback`` -- it is
-spent once more without the override, and only then returns ``None``.
+A rejection naming an unsupported request parameter is retried once without
+that parameter. Other provider errors are logged at warning level and propagate
+to the hook boundary, which keeps the structural verdict.
 """
 
 from __future__ import annotations
@@ -53,6 +51,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -242,94 +241,55 @@ async def _complete_with_model_fallback(
     timeout_s: float,
     what: str,
 ) -> Any | None:
-    """Run one provider call, dropping a rejected model override and retrying.
+    """Retry only an explicit unsupported-parameter rejection, once.
 
-    Shared by this module and ``label.py``, for the reason those two already
-    share ``_pick_provider`` and ``_response_text``: two copies of a retry rule
-    become two different retry rules, and the divergence shows up as one of the
-    two calls quietly behaving differently from the other.
-
-    Why the retry exists
-    --------------------
-
-    ``classify_model`` / ``label_model`` let these calls be pointed at a cheap
-    model instead of the session's own. The id is a plain string against
-    whatever provider the user happens to have mounted, so it can simply be
-    wrong -- an Anthropic id on an OpenAI provider, a model retired last month,
-    a typo. The provider rejects it, and without this retry every failure path
-    already leads to ``None``, so the feature would be *permanently* and
-    *silently* off for exactly the users whose provider disagreed with a
-    default written by somebody else. That is the failure shape this module's
-    own docstring rejects: invisible, and only on other people's machines.
-
-    So a rejected override is spent once more without the override, which lands
-    on the provider's own default model. The feature degrades to costing more
-    than intended, never to doing nothing.
-
-    Why a timeout does NOT trigger the fallback
-    -------------------------------------------
-
-    A timeout is not evidence the model id was wrong. A provider that does not
-    recognise a model id says so promptly; a timeout means the call was
-    accepted and is simply slow, which is transient and says nothing about the
-    override. Retrying it would buy no new information and spend a second full
-    ``timeout_s`` budget at the worst possible moment -- the classifier runs as
-    the human gets their prompt back, the labeller runs in front of the turn
-    starting -- and it would do that for every user who ever times out, not
-    just for the misconfigured ones. Timeouts therefore keep today's behaviour
-    exactly: one attempt, then ``None``.
-
-    Returns the provider's response, or ``None``. Both attempts are bounded
-    individually by ``timeout_s``; ``model`` of ``None`` means no override was
-    in play, and then there is nothing to fall back from, so a failure is a
-    single attempt exactly as before.
+    The historical helper name is retained for the shared label import. Model,
+    auth, rate-limit and other failures propagate; changing models cannot fix
+    an invalid parameter. Each attempt retains the existing timeout bound.
     """
+    from amplifier_core.llm_errors import InvalidRequestError
 
-    async def attempt(use_model: str | None) -> Any:
-        # The override is applied here rather than by the caller so the retry
-        # is structurally incapable of carrying it: `request_kwargs` never
-        # holds a "model" key, so the second call cannot inherit the first
-        # call's mistake.
-        kwargs = dict(request_kwargs)
-        if use_model:
-            kwargs["model"] = use_model
-        return await asyncio.wait_for(
-            provider.complete(request_cls(**kwargs)), timeout=timeout_s
-        )
+    kwargs = dict(request_kwargs)
+    if model:
+        kwargs["model"] = model
 
-    try:
-        return await attempt(model)
-    except asyncio.TimeoutError:
-        logger.debug("muxterm %s: timed out after %.0fs", what, timeout_s)
-        return None
-    except Exception as exc:
-        if not model:
-            logger.debug("muxterm %s: provider call failed: %s", what, exc)
+    for attempt in range(2):
+        try:
+            return await asyncio.wait_for(
+                provider.complete(request_cls(**kwargs)), timeout=timeout_s
+            )
+        except asyncio.TimeoutError:
+            logger.warning("muxterm %s: timed out after %.0fs", what, timeout_s)
             return None
-        # WARNING, not debug, and deliberately every time it happens: a wrong
-        # model id is a standing misconfiguration rather than a transient
-        # blip, and the entire point of this path is that it should be
-        # findable in a log instead of showing up as a feature that never
-        # fires. Silencing this after the first occurrence would restore most
-        # of the invisibility the retry exists to remove.
-        logger.warning(
-            "muxterm %s: provider rejected model %r (%s); retrying once with "
-            "the provider's own default model",
-            what,
-            model,
-            exc,
-        )
-
-    try:
-        return await attempt(None)
-    except asyncio.TimeoutError:
-        logger.debug(
-            "muxterm %s: default-model retry timed out after %.0fs", what, timeout_s
-        )
-        return None
-    except Exception as exc:
-        logger.debug("muxterm %s: default-model retry failed: %s", what, exc)
-        return None
+        except Exception as exc:
+            # Accept the kernel taxonomy and native SDK HTTP 400/422 errors.
+            # Require an explicit unsupported *parameter* message, not merely
+            # an invalid request or unsupported model/value. Never remove
+            # request identity, messages, or background-streaming metadata.
+            status = getattr(exc, "status_code", None)
+            invalid = isinstance(exc, InvalidRequestError) or status in (400, 422)
+            match = re.search(
+                r"unsupported parameter:\s*['\"]([a-zA-Z_][a-zA-Z_0-9]*)['\"]"
+                r"|(?:parameter\s+)?['\"]([a-zA-Z_][a-zA-Z_0-9]*)['\"]"
+                r"\s+is not supported",
+                str(exc),
+                re.IGNORECASE,
+            ) if invalid else None
+            parameter = next((g for g in match.groups() if g), None) if match else None
+            if (
+                attempt == 0
+                and parameter in kwargs
+                and parameter not in {"model", "messages", "metadata"}
+            ):
+                logger.warning(
+                    "muxterm %s: provider rejected unsupported parameter %r; "
+                    "retrying once without it (model=%r)",
+                    what, parameter, model,
+                )
+                del kwargs[parameter]
+                continue
+            logger.warning("muxterm %s: provider call failed: %s", what, exc)
+            raise
 
 
 async def classify_turn(
@@ -341,7 +301,8 @@ async def classify_turn(
     """Decide whether a finished turn is actually waiting on the human.
 
     Returns ``(needs_input, ask)``, or ``None`` when no verdict could be
-    reached -- unreachable provider, timeout, malformed answer. ``None`` means
+    reached -- no provider, timeout, malformed answer. Provider rejections
+    propagate to the hook boundary after warning-level logging. ``None`` means
     "keep the structural verdict"; it never means "not blocked".
     """
     text = (response_text or "").strip()
@@ -365,7 +326,6 @@ async def classify_turn(
             Message(role="user", content=text),
         ],
         "response_format": ResponseFormatJsonSchema(json_schema=_SCHEMA, strict=True),
-        "temperature": 0.0,
         "max_output_tokens": 200,
         # metadata={"stream": False} marks this as a background utility call so
         # the provider does NOT take the streaming branch. The streaming branch
