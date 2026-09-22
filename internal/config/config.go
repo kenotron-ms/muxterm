@@ -19,25 +19,25 @@ import (
 
 // Config is the top-level configuration for muxterm.
 type Config struct {
-	// Owner-controlled, preserved on UI saves but not writable by browser PATCH.
+	// Global lane approval policy; omitted preferences preserve the on-disk value.
 	Lanes          LanesConfig          `toml:"lanes" json:"lanes"`
 	Theme          ThemeConfig          `toml:"theme"      json:"theme"`
 	Font           FontConfig           `toml:"font"       json:"font"`
 	Terminal       TerminalConfig       `toml:"terminal"   json:"terminal"`
 	Sidebar        SidebarConfig        `toml:"sidebar"    json:"sidebar"`
-	Keys           KeysConfig           `toml:"keys"       json:"keys"`
-	Workspace      WorkspaceConfig      `toml:"workspace"  json:"workspace"`
-	Driver         DriverConfig         `toml:"driver"     json:"driver"`
-	Server         ServerConfig         `toml:"server"     json:"server"`
-	Restore        RestoreConfig        `toml:"restore"    json:"restore"`
-	Voice          VoiceConfig          `toml:"voice"      json:"voice"`
-	MissionControl MissionControlConfig `toml:"missioncontrol" json:"missioncontrol"`
+	Keys           KeysConfig           `toml:"keys"       json:"keys" patch:"readonly"`
+	Workspace      WorkspaceConfig      `toml:"workspace"  json:"workspace" patch:"readonly"`
+	Driver         DriverConfig         `toml:"driver"     json:"driver" patch:"readonly"`
+	Server         ServerConfig         `toml:"server"     json:"server" patch:"readonly"`
+	Restore        RestoreConfig        `toml:"restore"    json:"restore" patch:"readonly"`
+	Voice          VoiceConfig          `toml:"voice"      json:"voice" patch:"readonly"`
+	MissionControl MissionControlConfig `toml:"missioncontrol" json:"missioncontrol" patch:"readonly"`
 	// Cos carries Mission Control capabilities that are operator decisions
 	// rather than browser preferences. It is deliberately absent from
-	// Merge(), so a browser PATCH /api/config can neither enable nor widen
+	// the settings API, so a browser PATCH /api/config can neither enable nor widen
 	// anything under it.
 	Cos CosConfig `toml:"cos" json:"-"`
-	// SandboxAzure is intentionally excluded from browser JSON and Merge().
+	// SandboxAzure is intentionally excluded from browser JSON and settings writes.
 	// It is an owner-only outbound Azure scope allowlist; retaining it in the
 	// TOML model prevents an unrelated browser settings save from erasing it.
 	SandboxAzure SandboxAzureConfig `toml:"sandbox_azure" json:"-"`
@@ -227,7 +227,7 @@ const (
 // microphone, so it is an operator decision, never a default anyone backs
 // into.
 //
-// Deliberately absent from Merge(), for the same reason ServerConfig is: this
+// File-only (patch:"readonly"), for the same reason ServerConfig is: this
 // section names an outbound endpoint and an authentication mode, and a
 // browser PATCH /api/config must not be able to repoint muxterm's credential
 // at a host of the caller's choosing.
@@ -390,7 +390,7 @@ const DefaultAddr = "127.0.0.1:8311"
 // X-Forwarded-Proto, or anything else): headers are spoofable, and the
 // design rejects trusting them for any trust-relevant value.
 //
-// These fields are deliberately absent from Merge(), which backs the
+// These fields are explicitly file-only (patch:"readonly") in the
 // browser-facing PATCH /api/config route -- a deployment-topology and
 // security setting must not be mutable from a web request.
 type ServerConfig struct {
@@ -641,7 +641,7 @@ type DriverConfig struct {
 // tmux-resurrect + tmux-continuum do together for a real tmux session.
 //
 // Config-file-only, like DriverConfig/ServerConfig above: deliberately absent
-// from Merge() (see its doc comment) since a browser PATCH must never toggle
+// from settings writes (patch:"readonly") since a browser PATCH must never toggle
 // disk-persistence behavior.
 type RestoreConfig struct {
 	// Enabled turns periodic snapshotting and boot-time restore on or off.
@@ -691,6 +691,8 @@ func LoadStrictServer(path string) (cfg Config, malformed bool, err error) {
 	return cfg, false, nil
 }
 
+// Merge is the legacy typed merge. HTTP settings writes use ParsePatch instead,
+// preserving field presence and rejecting unknown or file-only settings.
 // Merge returns a copy of base with non-zero fields from partial applied.
 // Rules:
 //   - string fields: applied if partial value is non-empty

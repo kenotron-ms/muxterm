@@ -97,7 +97,7 @@ func registerConfigTools(srv *Server) {
 
 	srv.Register(
 		"get_config",
-		"get the full resolved muxterm configuration (theme, font, terminal, keys, workspace, driver)",
+		"get the full resolved muxterm configuration, including lanes.approval",
 		map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -113,7 +113,7 @@ func registerConfigTools(srv *Server) {
 			"properties": map[string]any{
 				"changes": map[string]any{
 					"type":        "object",
-					"description": "partial config object with fields to update (theme, font, terminal, keys)",
+					"description": "partial config object with fields to update (lanes, theme, font, terminal, sidebar); unknown and file-only settings return errors",
 				},
 			},
 			"required": []string{"changes"},
