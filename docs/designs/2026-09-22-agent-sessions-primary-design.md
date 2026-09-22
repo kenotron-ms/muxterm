@@ -1,193 +1,456 @@
-# Sessions are the work; terminals are a way into it
+# Sessions report through hooks; terminals are optional attachments
 
-**Status:** design — no feature implementation in this PR
+**Status:** research and design only; revision of PR #176, not implementation.
+**Date:** 2026-09-22. **Source baseline:** v0.42.0, `7681ab4`.
+**Extends:** [Session-state protocol](../session-state-protocol.md).
 
-**Date:** 2026-09-22
+**Short summary:** All harnesses report through one hook-report contract. A native
+session ID creates a durable fleet session even without a muxterm pane. Replace
+Claude polling entirely with Claude hooks; generalize Amplifier's existing event
+semantics; accept both Codex notify and richer Codex hooks through the same ingress.
+Make missing configuration and rejected delivery visible. Keep real terminals,
+durable transcripts, and the single existing Operator conversation.
 
-**Base:** `7681ab4` (`origin/main`)
+## 1. The failure that determines the architecture
 
-**Extends:** [Session-state protocol](../session-state-protocol.md)
+**VERIFIED: owner-supplied end-to-end lane result, not rerun in this revision.**
+The lane configured `notify = ["muxterm","session","codex-notify"]`, started
+Codex outside muxterm, and completed a real turn. The hook fired, but the session
+was excluded because it had no muxterm pane. This disproves the premise that
+installing hooks alone fixes discovery. Successful delivery is not successful
+fleet admission under the current data model.
 
-**Summary:** Put durable agent sessions at the center of Mission Control. Drive
-Codex and Claude chat with structured CLI subprocesses from Go, retain terminal
-CLIs and hooks, and route every surface through the existing fleet contract.
+**VERIFIED: read `internal/sessiond/sessionstore.go`, `(*sessionStore).collect`.**
+For a live snapshot, it calls `placeSnapshot(snap, owners)` and executes `continue`
+when placement fails: the report remains on disk but has no fleet row. For an
+exited process with a terminal state, failed placement deletes the snapshot.
+The second phase groups by `paneRef` (`byPane`) and retains live rows or only the
+newest ending per pane. Thus persistence and visibility both depend on a pane.
+`placeSnapshot`, `resolvePaneForPID`, and `stampPane` are attachment helpers that
+currently act as admission gates. They must cease being session existence gates.
 
----
+**VERIFIED: read `cmd/muxterm/codex_notify_cmd.go`, `runCodexNotify`, and
+`internal/sessiond/codex_notify.go`, `CodexRowFor`.** The CLI translates the native
+thread ID and writes a snapshot through `WriteSessionSnapshot`; its own help says
+an outside-pane report is written and not shown. The exclusion is in the collector,
+not evidence that Codex failed to call its hook. The protocol's statement that
+omitting such a session is correct must be replaced in the implementation PR.
 
-## 1. The decision
+**Hard decision:** sessions are primary, regardless of who launched them. No pane,
+workspace, live PID, pre-registration, managed run, or browser subscription is
+required to admit a valid hook report. The Claude five-second poller is removed,
+not retained for unconfigured sessions. Hooks are the sole harness reporting
+mechanism. Different native hooks require translators, not different state paths.
 
-Use **Go-managed structured CLI processes**, without adding a Node or Python SDK
-service for Codex or Claude. For Codex chat, use `codex app-server` over private
-stdio JSON-RPC; for Claude chat, start with one `claude -p` streaming process per
-turn and resume by explicit native session ID. Keep interactive CLI launches in
-real PTYs. Keep the existing Amplifier Operator sidecar and native SessionStore;
-this decision does not replace the Operator engine or its conversation.
+## 2. Evidence and installed capability boundary
 
-The decisive distinction is between a vendor's executable and a second runtime
-wrapping that executable. Go still has to supervise children, parse events,
-persist history, and manage interruptions. An SDK wrapper adds packaging,
-versioning and another failure boundary without removing those obligations.
+“VERIFIED” means the cited command, source, or document was read, not that a new
+runtime integration was executed. Runtime integration gates are marked ASSUMED
+and consolidated at the end. Everything specified as a contract below is a design
+requirement, not a claim that it already shipped.
 
-**VERIFIED:** `codex exec --help` on `codex-cli 0.155.1` says `--json` prints events
-as JSONL; `claude --help` on `2.1.280` advertises streaming JSON output, input and
-partial messages. Both can stream from ordinary child processes. The official
-[Codex non-interactive guide](https://learn.chatgpt.com/docs/non-interactive-mode)
-and [Claude programmatic guide](https://code.claude.com/docs/en/headless) document
-those modes. Structured final-answer schemas alone are not progress streams.
+Research artifacts are outside git at
+`/home/ken/artifacts/muxterm-hooks-revision-20260922/`. No paid model turn was run.
+No live harness settings, Amplifier source, production services, or ports changed.
+The existing PR and its complete document were read before revising it.
 
-Why not simply use `codex exec --json` for every chat? It supplies progress for
-batch turns, but the chat needs a documented bidirectional approval and interrupt
-channel. **VERIFIED:** the [app-server reference](https://learn.chatgpt.com/docs/app-server)
-documents private stdio, initialization, thread resume, turn interruption,
-item events, plan updates and approval requests. The installed binary generated
-schemas for `ThreadResumeParams`, `TurnInterruptParams`,
-`TurnPlanUpdatedNotification` and `CommandExecutionRequestApprovalParams`.
-Its help labels app-server experimental: pin a verified executable/schema pair,
-feature-detect, and retain the terminal path on incompatible upgrades.
+### Claude 2.1.280: hooks sufficient to replace polling
 
-This is one integration strategy with harness-specific transports, not a claim
-that all vendors implement the same protocol. SDKs remain a fallback decision
-only if an actual missing capability defeats these public CLI interfaces.
+**VERIFIED: `claude --version`; `claude --help`; read
+[hooks](https://code.claude.com/docs/en/hooks) and
+[settings](https://code.claude.com/docs/en/settings).** Help exposes `--settings`,
+`--setting-sources`, `--include-hook-events`, `--safe-mode`, and `--resume`.
+Help explicitly warns that invalid settings can be silently ignored in print
+mode. That makes a written config insufficient proof of reporting health.
+The existing [delegation design](2026-09-06-cos-delegation-model.md) already names
+Stop and SessionEnd in `~/.claude/settings.json`.
 
-## 2. What was read, and what exists
+**VERIFIED: Python read-only extraction from
+`/home/ken/.local/share/claude/versions/2.1.280`: the embedded `var qf=[...]`
+hook-event enum contains the following 33 events.** This is an actual event enum,
+not a guess from a CLI version or isolated binary strings:
 
-**VERIFIED:** the full session-state protocol was read before this design. The
-house-style references were `2026-09-06-cos-delegation-model.md` and
-`2026-09-18-cos-composer-attachments-v1.md`. Older design statements are historical;
-the released source and current contract take precedence.
+```
+PreToolUse PostToolUse PostToolUseFailure PostToolBatch Notification
+UserPromptSubmit UserPromptExpansion SessionStart SessionEnd Stop StopFailure
+SubagentStart SubagentStop PreCompact PostCompact PreModelSwitch PostModelSwitch
+PermissionRequest PermissionDenied Setup TeammateIdle TaskCreated TaskCompleted
+Elicitation ElicitationResult ConfigChange WorktreeCreate WorktreeRemove
+InstructionsLoaded CwdChanged FileChanged DirectoryAdded MessageDisplay
+```
 
-**VERIFIED, source inspection at the base above:**
+**VERIFIED: fetched the settings schema linked by Claude's official settings
+page, `https://json.schemastore.org/claude-code-settings.json`.** Its hook properties
+contain 31 of those events; PreModelSwitch and PostModelSwitch are missing there
+but present in the installed enum and official hook reference. The public schema
+lags the binary; it is not a reason to deny the installed events. Embedded matcher
+and output switch statements also reference the events. Runtime dispatch through
+muxterm's future configuration remains **ASSUMED A1**.
 
-| Existing seam | What it actually does |
+### Codex 0.155.1: notify is not the hook ceiling
+
+**VERIFIED: `codex --version`; `codex --help`; read
+[Codex hooks](https://learn.chatgpt.com/docs/hooks).** Help exposes TOML `-c`
+overrides, strict config validation, and hook trust controls. Do not install a
+trust-bypass flag as the integration's normal behavior.
+
+**VERIFIED: read-only JSON decoding of embedded schemas from
+`/home/ken/.codex/packages/standalone/releases/0.155.1-x86_64-unknown-linux-musl/bin/codex`.**
+Twelve valid `*.command.input` schemas contain `hook_event_name` constants:
+
+```
+SessionStart SessionEnd UserPromptSubmit PreToolUse PermissionRequest PostToolUse
+PreCompact PostCompact SubagentStart SubagentStop Stop Interrupt
+```
+
+These independently corroborate the documented richer hooks on the installed
+build. Native `session_id`, `cwd`, nullable `transcript_path`, and turn-scoped
+`turn_id` are in these schemas. Subagent events carry `agent_id`; their session ID
+belongs to the parent. The capture is `codex-embedded-input-schemas.json`.
+
+**VERIFIED: `CodexNotify` and `CodexRowFor` in `internal/sessiond/codex_notify.go`.**
+Legacy `notify` supplies `agent-turn-complete`, `thread-id`, `turn-id`, `cwd`,
+input messages and final assistant message. It supplies no start, mid-turn wait,
+or failed-turn report. That integration remains an honest completion-only tier.
+Richer hook delivery, trust, and tool coverage in real muxterm sessions remain
+**ASSUMED A1**, even though their interfaces are verified. No app-server stream
+or SDK is needed to establish the existence of finer-grained hooks.
+
+### Amplifier: reference implementation, not a replacement engine
+
+**VERIFIED: read `modules/hooks-muxterm-session/amplifier_module_hooks_muxterm_session/`
+`__init__.py` (`mount`, `_register_state_publisher`), `state.py`
+(`SessionStateTracker`), `classify.py`, and `label.py`.** Its registered vocabulary:
+
+```
+session:start session:fork prompt:submit tool:pre tool:post tool:error
+provider:error artifact:read approval:required approval:granted approval:denied
+user:notification orchestrator:goal_progress orchestrator:complete
+prompt:complete session:end
+```
+
+The module translates those events into snapshots today. Root `todo` tool input
+supplies counts; artifact reads supply known paths; child work contributes parent
+activity without overwriting the parent's todo list. Goal progress supplies mode
+and condition. Intermediate `orchestrator:complete` with `goal_final=false` keeps
+working; root `prompt:complete` ends the turn. Optional label and closing-answer
+classification are fallible interpretations, distinct from structural state.
+`user:notification` is registered but the source explicitly says the current
+kernel has no emitter: do not promise notifications from it.
+
+This rich semantic model is the reference for all translators. A future muxterm
+module update changes only its reporting sink to the common command. No Amplifier
+engine replacement, SDK migration, or Amplifier source edit belongs in this PR.
+
+## 3. One ingest contract, including sessions started by hand
+
+Define one command: **`muxterm session hook-report`**, reading one bounded UTF-8
+JSON envelope from stdin. Native Claude/Codex wrappers translate native JSON into
+this schema; Codex's existing `codex-notify` becomes a compatibility translator
+into this same path. Amplifier's Python module sends the same schema to this
+command. There is no alternate native-stream-to-fleet writer.
+
+Example normalized report (illustrative contract, not an existing CLI feature):
+
+```json
+{
+  "v": 2,
+  "harness": "codex",
+  "native_session_id": "019-example-thread",
+  "native_event": "agent-turn-complete",
+  "event": "turn.completed",
+  "event_id": "codex:019-example-thread:turn-7:complete",
+  "turn_id": "turn-7",
+  "run_id": null,
+  "observed_at": "2026-09-22T12:00:00Z",
+  "process": {"pid": 1234, "pid_start": "98765"},
+  "parent_native_session_id": null,
+  "transcript": {"path": null},
+  "set": {"project": "/home/ken/work/project", "doing": "Updated the design"},
+  "clear": []
+}
+```
+
+Required: `v`, allowlisted harness adapter, nonempty `native_session_id`,
+`native_event`, normalized `event`, stable per-delivery `event_id`, `observed_at`.
+All other envelope members are optional. `set` is a partial semantic patch;
+omission preserves prior values, and `clear` explicitly removes optional values.
+Unknown schema versions and invalid fields are rejected with a diagnostic receipt.
+Bound each envelope to 64 KiB; no full tool output or transcript in fleet patches.
+Allowed events: `session.started`, `session.ended`, `turn.started`,
+`turn.completed`, `turn.failed`, `turn.interrupted`, `tool.started`,
+`tool.completed`, `tool.failed`, `attention.required`, `attention.resolved`,
+`progress.updated`, `context.read`, and `metadata.updated`.
+A normalized event does not imply every harness can produce it.
+
+**Identity:** the command obtains a persistent local muxterm installation UUID;
+it never trusts a producer-supplied machine ID. The unique registry key is
+`(installation_uuid, harness, native_session_id)`. Codex sends `thread-id` from
+notify or `session_id` from richer hooks; Claude sends hook `session_id`;
+Amplifier sends the coordinator event's root `session_id`. None comes from a pane.
+The first accepted event of ANY kind upserts a session and allocates a stable
+muxterm `session_id`. Repeat reports and native resumes resolve that same unique
+key. No SessionStart is necessary before a completion. Preserve existing adopted
+IDs (`codex-...`, `claude-...`, Amplifier native IDs) as aliases. Native forks get
+new identities and explicit parent links; cwd/title never deduplicate sessions.
+Missing native identity is a visible rejected report, never a guessed pane ID.
+
+Managed launch reserves a row and one-time correlation token before native
+identity exists. The launch hook binds the native ID to that reservation; external
+reports auto-register without such a token. `run_id` identifies execution, not the
+conversation; the command may derive an external process incarnation from
+PID/start time when available. Absent process metadata does not prevent admission.
+Resume retains conversation ID and creates a new execution generation.
+
+The command durably queues each report in a private installation-scoped inbox
+under the data directory, using temp-file/atomic rename plus fsync. It returns a
+receipt (`queued`, report ID) after durability, not a false claim of fleet display.
+A single daemon consumer journals accepted events, projects fields, and writes an
+`accepted` receipt with session ID or a `rejected` diagnostic. Watch/replay the
+inbox even without a browser. A directory reconciliation timer is delivery recovery,
+not polling a harness. Bound the outbox; disk-full returns nonzero and records an
+error when possible. Native observer wrappers keep the harness running and emit
+stderr diagnostics rather than changing its permission decision.
+
+Dedupe by installation/session/event ID. Prefer native turn/tool/request IDs plus
+event kind; where absent, the adapter durably assigns a delivery UUID before retry.
+Do not hash prompt text: repeated identical prompts are different turns. The
+consumer assigns journal sequence numbers. Keep native turn/request correlation;
+a late completion cannot overwrite an explicitly newer active turn. With missing
+causal ordering, preserve the event but mark current state uncertain instead of
+ordering by wall clock alone. Concurrent external executors sharing one native ID
+produce a visible conflict; muxterm does not kill them or invent separate sessions.
+
+Only the registry supplies `session_id`, `pane_id`, `workspace_id`, `goal_id`, and
+launch `origin`; reject producer patches to them. PID/start/SID are evidence for
+optional attachment only. Same-user private files and owner checks are sufficient
+for this single-human application; no multi-tenant identity service is introduced.
+
+## 4. Exact data-model changes and compatibility break
+
+**VERIFIED: read `SessionState` in `internal/sessiond/sessionstate.go`, its mirror
+`web/src/lib/session-state.ts`, `internal/mcp/fleet.go`, and the collector above.**
+Today `PaneID` is a required integer and session comments define a row as running
+in a muxterm pane. `GoalID` and `Origin` are stamped from pane launch metadata.
+
+Implementation changes required together:
+
+1. Add durable `SessionRecord` keyed by session ID, unique native aliases, current
+   execution generation, transcript references and reporting health. Add an
+   optional `TerminalAttachment` with pane/workspace and validated process binding.
+   Store launch provenance on the session, independent of that attachment.
+2. **`pane_id` becomes OPTIONAL**, represented as nullable `*int` in Go and
+   `number | null` on the versioned wire; `workspace_id` likewise becomes nullable.
+   Emit JSON null when absent, never `0` or a synthetic workspace. Retain the
+   snake_case MCP/camelCase browser spelling mirror. No consumer may treat null
+   as a usable terminal address.
+3. Project the durable registry by session ID. Remove `collect`'s placement gate,
+   pane-based ending supersession and pane-close deletion for adopted sessions.
+   `stampPane` enriches an optional attachment only. A dead process invalidates
+   attachment/liveness, never conversation existence or stored history.
+4. Update fleet MCP projection, sorting/hashing, home-session store, grouping,
+   row keys, navigation, lifecycle-notice dedupe, transcript resolution, and
+   send/close handlers. A pane-less row opens session detail; terminal-only actions
+   show unavailable. External reports grant observation, not control of a terminal
+   muxterm does not own. Never send to some other pane as fallback.
+5. Version the wire/protocol because null breaks integer-only clients. Negotiate
+   support; incompatible clients receive an upgrade message, not a silently
+   filtered fleet. Update the public protocol's placement and retention rules.
+   Legacy v1 files can pass through a compatibility importer into the same registry;
+   they cannot remain a second pane-keyed harness fleet. Import once with explicit
+   source/identity mapping. Do not delete unrelated script snapshots.
+
+Keep PID reuse protection for attachments. Keep sessiond's terminal activity and
+destructive-close authority unchanged. Closing a view or terminal detaches it;
+archiving/deleting a conversation is an explicit, different action. Default fleet
+filtering may hide archived rows but cannot discard their transcripts.
+
+## 5. Native event maps and honest progress
+
+Every event in the next Claude table is **VERIFIED: installed 2.1.280 event enum
+extraction and the official hook reference read in section 2**. Mapping is the
+muxterm contract, not a claim these translators already exist.
+
+| Claude native events | Normalized event and fleet effect |
 |---|---|
-| `cmd/muxterm/codex_notify_cmd.go`, `internal/sessiond/codex_notify.go`, `lane_argv.go` | Injects an external notify command into launched Codex lanes; translates only `agent-turn-complete` into an interactive, stopped row. It cannot report turn start, a mid-turn permission wait, or failed turns. The lane override replaces the user's notify value. |
-| `internal/sessiond/claude_adapter.go` | Polls `claude agents --json` every five seconds only while subscribed; enabled unless `MUXTERM_CLAUDE_ADAPTER` opts out. Missing binary, timeout, nonzero exit or malformed JSON logs once. Failed queries retain old snapshots. Records without a usable PID cannot be placed. |
-| `modules/hooks-muxterm-session/.../__init__.py`, `state.py` | Amplifier hooks report prompt, tool, artifact-read, approval, goal and end events. Root todo calls supply counts; child work is summarized on its parent. |
-| `classify.py`, `label.py` in that module | Optional model calls classify a closing answer and derive a stable initial label. These are fallible interpretation, not lifecycle authority; utility calls disable streaming. |
-| `internal/sessiond/sessionstate.go`, `sessionwriter.go`, `sessionstore.go` | One whole-state snapshot contract, atomic files, PID/start-time and SID attribution, daemon-owned pane/provenance join. Unplaced processes are omitted. Endings survive only under the documented pane/supersession rules. |
-| `internal/mcp/fleet.go`, `transcript.go`, `tools_fleet.go` | Fleet JSON uses snake_case; daemon/browser rows use camelCase. Transcript readers bound native harness tails; `session_send` is tied to present terminal behavior. |
-| `internal/cos/sidecar/main.py`, `internal/server/lifecycle_notices.go`, `internal/sessiond/lifecycle_watch.go` | One native Operator conversation, existing queue/approval infrastructure, durable lifecycle markers and a separate delivery ledger. Existing notice dedupe includes session and kind. |
+| SessionStart | `session.started`; bind identity, project/cwd, name if declared; initialize interactive/stopped until prompt evidence. |
+| UserPromptSubmit | `turn.started`; working, clear waiting, first prompt name, bounded doing. |
+| UserPromptExpansion | Metadata only; an expansion is not proof of executed work. |
+| PreToolUse | `tool.started`; doing/tool activity; do not invent permission outcome. |
+| PostToolUse | `tool.completed`; working; successful recognized Read adds knows; complete recognized task payload can update todo. |
+| PostToolUseFailure, PostToolBatch | `tool.failed` or progress; doing/error or batch milestone; recoverable tool failure is not session failure. |
+| PermissionRequest | `attention.required`; blocked/permission prompt when a request is exposed. |
+| PermissionDenied | Denial activity; no inference that every denial ends a turn or remains blocked. |
+| Notification | Map declared attention categories only; permission prompt can block, ordinary idle notification remains stopped. |
+| Elicitation, ElicitationResult | Input-needed wait and resolution, correlated by request; resume working only on matching resolution. |
+| Stop | `turn.completed`; stopped, clear waiting, bounded final summary when supplied; not proof that the owner's task is done. |
+| StopFailure | `turn.failed` for API-error termination; failed and error doing. |
+| SessionEnd | Execution ended; preserve explicit failed/done, otherwise stopped; retain session and transcript. |
+| SubagentStart, SubagentStop, TeammateIdle | Parent progress; never mark the root complete because a child stopped. |
+| TaskCreated, TaskCompleted | Declared task milestones; no total unless a complete known task set exists. |
+| PreCompact, PostCompact | Compaction activity; no success verdict. |
+| InstructionsLoaded | Explicit context-load evidence may add paths to knows. |
+| CwdChanged | Update project from declared cwd, preserving launch project separately. |
+| Setup, ConfigChange, DirectoryAdded, FileChanged | Metadata/health; added directories and file changes are not proof of reads. |
+| WorktreeCreate, WorktreeRemove | Do not register observation handlers that replace native worktree behavior; no required fleet mapping. |
+| PreModelSwitch, PostModelSwitch | Optional metadata; no fleet state change required. |
+| MessageDisplay | Optional display activity only; no guarantee of durable complete transcript or token percentage. |
 
-The comments claiming Claude has no hook extension point are stale.
-**VERIFIED:** [Claude's hook reference](https://code.claude.com/docs/en/hooks)
-documents command hooks for prompts, tools, permission requests and session ends.
-The poller is muxterm's current choice, not Claude's capability ceiling.
+Stop observers must never return a continuation/block response. Another user hook
+can continue a turn after Stop; subsequent start/tool events resume working.
+A hook receipt is an observation, not exclusive control over the harness.
+Permission behavior varies by execution mode: observe actual requests, never infer
+that a headless CLI supports a muxterm approval broker merely because the enum
+contains PermissionRequest. Chat permission intervention is **ASSUMED A2**.
 
-## 3. Capability ledger
+Every rich event in the Codex table is **VERIFIED: decoded installed 0.155.1 input
+schemas and official hooks reference read in section 2**. Legacy notify evidence
+is `CodexNotify`/`CodexRowFor` plus the owner-supplied run.
 
-Here, **VERIFIED** means the named documentation, installed help, generated
-schema or source was read. It does not mean a paid model turn or end-to-end
-muxterm integration was executed. **ASSUMED** marks the narrower runtime
-behaviors still requiring real integration verification. Design requirements
-below are decisions to implement, not claims of existing capability.
-
-| Surface | Evidence and usable boundary |
+| Codex native events | Normalized event and fleet effect |
 |---|---|
-| Codex SDK | **VERIFIED:** the owner's [exact SDK URL](https://learn.chatgpt.com/docs/codex-sdk) documents a server-side TypeScript library requiring Node 18+, thread continuation/resume, and a Python library controlling local app-server. Neither is an in-process Go dependency. A custom SDK bridge needs another runtime. |
-| Codex batch CLI | **VERIFIED:** installed `exec --help` and `exec resume --help`, plus the non-interactive guide: JSONL thread/turn/item/error events and ID-based resume. No claim that `exec` is a full chat approval transport. |
-| Codex chat CLI | **VERIFIED:** installed `app-server --help`, generated schemas, and app-server reference: stdio protocol, turn/item lifecycle, assistant deltas, command/file events, plan changes and request/response approvals. Use those declared events, not PTY scraping. |
-| Codex terminal hooks | **VERIFIED:** current [Codex hooks documentation](https://learn.chatgpt.com/docs/hooks) adds `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`, `Interrupt` and `SessionEnd`. Local function tools include `update_plan`; hosted tools are not universally covered. Hooks receive session identity and possibly a transcript path. Config layers/plugins can supply hooks. **ASSUMED A1:** the installed build delivers the required events with muxterm-owned hook configuration and correct process attribution; help alone does not establish this. Keep legacy notify until verified. |
-| Claude CLI | **VERIFIED:** installed help and programmatic guide: `-p --output-format stream-json --verbose --include-partial-messages`, explicit `--resume`, and persistence unless disabled. Initial metadata and final results identify the session. `--input-format stream-json` also exists; V1 does not depend on its undocumented control envelopes. |
-| Claude hooks | **VERIFIED:** hook reference: stdin JSON includes native session ID and transcript path; prompt/tool/permission/stop events provide progress. Successful Read tool results can provide file-read evidence. Task events exist, but a complete todo list cannot be inferred from task completion alone. Hook delivery under our launch configuration is **ASSUMED A1**. |
-| Claude Agent SDK | **VERIFIED:** [SDK overview](https://code.claude.com/docs/en/agent-sdk/overview) exposes Python/TypeScript and runs the Claude Code binary; it explicitly directs other languages toward a CLI subprocess. Its API-key setup is separate from proof that this service can reuse an existing CLI login. No SDK is required for the selected chat path. |
-| Amplifier CLI hooks | **VERIFIED:** muxterm's Python module registrations and `state.py` supply tool pre/post, artifact-read, approval and root todo progress. Keep that richer integration. `amplifier --help` lists run/resume; do not confuse this executable with `amplifier-agent`. |
-| amplifier-agent library/CLI | **VERIFIED:** [integration guide](https://github.com/microsoft/amplifier-agent/blob/main/docs/INTEGRATION.md) describes `amplifier_agent_lib`, one turn per engine invocation, session continuity by explicit scope/ID, stdout JSON result plus stderr NDJSON progress, and protocol-version checking. `command -v amplifier-agent` found no installed binary. **ASSUMED A5:** it can replace any existing Amplifier integration without changing bundles/hooks/storage semantics; this design explicitly does not rely on that assumption or perform that migration. |
+| agent-turn-complete (notify) | `turn.completed`; stopped, clear waiting, first input name, cwd project, final doing, native thread/turn identity. No start/wait/error coverage. |
+| SessionStart, SessionEnd | Session identity/project and execution boundaries; retain session after end. |
+| UserPromptSubmit | `turn.started`; working, name on first prompt, clear waiting. |
+| PreToolUse, PostToolUse | Tool activity/doing; matching completion resolves that tool's wait. Recognized successful update_plan can update todo; explicit successful read-tool payloads can update knows. |
+| PermissionRequest | `attention.required`; blocked/permission prompt; next correlated tool result or terminal turn event clears it. No separate generic approval-resolved hook is claimed. |
+| Stop, Interrupt | Completed or interrupted turn; stopped, clear waiting, final doing when supplied. Neither means goal achieved. |
+| PreCompact, PostCompact | Compaction progress only. |
+| SubagentStart, SubagentStop | Parent activity using agent_id; not independent root completion. |
 
-**Granularity limits:** Codex notify remains turn-complete only. Codex structured
-chat has tool/item/plan granularity, but shell commands are not an authoritative
-list of every file read. Claude streaming has message/token and tool-block
-granularity; hooks supply declared lifecycle details. Amplifier already has
-explicit artifact reads and todos. Never promise exhaustive filesystem auditing,
-a percentage without a declared list, or a completion verdict from a successful
-process exit. Reasoning text is not required for any fleet field.
+Rich Codex hooks cover local function tools including shell and plan tools; hosted
+tools are not universal hook sources (**VERIFIED: official hook tool-coverage table**).
+There is no verified generic Codex failure/notification hook in the twelve-event
+set. Notify-only sessions show “completion-only reporting”; rich sessions show
+prompt/tool/wait observations, not exhaustive reads or a guaranteed live token feed.
+Prefer rich hooks per configured execution; do not double-count Stop and notify
+for the same turn. Keep notify as a compatibility translator, never as a poller.
 
-## 4. Session identity and one fleet
+Every Amplifier event below is **VERIFIED: `_register_state_publisher` and the
+named `SessionStateTracker` handlers in section 2**.
 
-A session is a durable conversation with a harness, project, history and current
-execution attachment. A process run, browser connection, terminal pane, and
-project layout are attachments to it. None is its identity.
-
-Create a durable daemon-owned registry before launching work. Record a muxterm
-session ID, native harness ID once known, project, execution generation,
-launch provenance, permission profile, transcript location and current control
-owner. Preserve existing `codex-<id>`, `claude-<id>` and Amplifier identifiers for
-adopted sessions. New sessions get a stable muxterm ID before the first turn;
-map `(machine, harness, native_id)` to that ID after initialization. A retry,
-resume or terminal handoff must resolve the same mapping, not mint a second row.
-Never derive identity from a title, project path, workspace name or `--last`.
-
-### Extend the public contract in place
-
-Keep v1 file producers, field semantics, atomic rename, size bounds, no-heartbeat
-rule, and the existing PID/SID pane join unchanged. They continue to work even
-without a daemon. Do not ask old hooks to write daemon-owned fields.
-
-Add a **v2 managed snapshot variant** to `docs/session-state-protocol.md` in the
-implementation PR: same session fields, with a required daemon-registered run
-ID and generation for attribution outside a pane. This is breaking placement
-semantics, so it gets a version bump rather than pretending an optional field
-makes old collectors understand it. Existing readers already skip newer versions
-without deleting them. Only the daemon's registered adapter can publish that
-variant; arbitrary file producers do not gain authority to invent ownership.
-Validate child PID/start-time while a run is alive. Between runs and after exit,
-the durable session record supplies the projection; do not publish a fake child
-PID or keep a dummy terminal alive to satisfy the old join.
-
-Both variants feed **the existing SessionState collector, session-state broadcast,
-home-sessions store and fleet MCP projection**. There is no second session list.
-Use optional attachment/capability/reporting-health metadata on that same row.
-One projector owns each managed row; hook and stream events enter that projector
-with source/generation IDs. They must not race by independently replacing the
-same whole-state file. Unmanaged v1 producers retain their current behavior.
-
-`pane_id=0` and `workspace_id=""` explicitly mean no current terminal/layout
-attachment for a chat session. They are never actionable pane identifiers.
-This changes consumer assumptions: update Go, TypeScript, MCP resolution and
-browser navigation together, negotiate the new session capability, and do not
-enable chat creation for older clients. Clicking any row resolves session ID
-first, then opens its available Chat or Terminal surface. Older pane-addressed
-APIs keep their behavior; terminal actions on a pane-less row return a clear
-error or invoke the explicit Open terminal action, never select another pane.
-
-### Exact fleet mapping
-
-These are the existing MCP spellings; retain the camelCase mirror on daemon and
-browser wires. Every path uses the same meanings and empty-value rules.
-
-| Fleet field | Population for chat and terminals |
+| Amplifier native events | Common contract and fleet effect |
 |---|---|
-| `session_id` | Stable registry identity; native-ID aliases reconcile hooks, stream and resume. Existing adopted IDs remain valid. |
-| `pane_id` | Daemon's current real PTY attachment; `0` for none. Changes on terminal handoff, not on browser refresh. |
-| `workspace_id` | Daemon's actual layout container for the attachment; empty when unattached. No synthetic workspace masquerading as a session. |
-| `harness` | Actual `codex`, `claude`, `amplifier`, or the existing open-set value. |
-| `project` | Explicit absolute launch cwd, updated only by an authoritative cwd declaration. |
-| `name` | User title or first prompt; stable across turns and resumes. |
-| `label` | Stable short subject; preserve the existing label on absent updates. |
-| `mode` | `interactive` for attended chat/CLI, including Operator dispatch of an ordinary turn. `autonomous` only for an actual supervised goal loop. Headless does not mean autonomous. |
-| `state` | Turn/prompt start → `working`; unresolved declared human request → `blocked`; ordinary turn completion → `stopped`; terminal run failure → `failed`; explicit goal satisfaction → `done`. Individual recoverable tool errors only update activity. |
-| `waiting_for` | Existing exact enum, e.g. `permission prompt` or `input needed`, only while blocked. Clear on resolution. Ordinary prompt rest is stopped, not blocked. |
-| `doing` | Bounded summary of current tool/item/hook activity, then final turn summary. Keep source fidelity; no token-by-token fleet writes. |
-| `done_means` | Declared current goal condition, absent/empty for ordinary interactive work; clear on human takeover of goal work. |
-| `goal_id` | Daemon-stamped launch-condition digest, preserved across attachment changes. Never inferred from current prose. |
-| `origin` | Daemon launch provenance: `browser`, `agent`, `cli`, `trigger:<id>`, or genuinely unknown empty value. |
-| `knows` | Deduplicated confirmed file-read paths only. Amplifier artifact-read, successful Claude Read, or explicit Codex read-tool evidence; omit unobservable reads rather than parse arbitrary shell text as fact. |
-| `todo` | Codex plan updates; complete recognized Claude task/todo payloads; Amplifier root todo. Count completed/total and current item. Omit if no known list; never `0/0`. Partial task events do not fabricate a total. |
-| `pr` | Confirmed linked PR number from an explicit report or verified artifact linkage; otherwise existing zero/empty semantics. Tool completion alone does not identify a PR. |
-| `updated_at` | Unix seconds of the last accepted semantic observation, not a browser heartbeat or repaint. |
+| session:start, session:fork | Identity/project and explicit parent relationship; new fork gets new session. |
+| prompt:submit | Working, prompt name, clear waiting; optional derived label tagged as interpretation. |
+| tool:pre, tool:post | Tool doing; root todo input supplies declared counts/current; child activity cannot replace root todo. |
+| tool:error, provider:error | Error activity; preserve recoverability, no automatic failed verdict. |
+| artifact:read | `context.read`; knows paths. |
+| approval:required, approval:granted, approval:denied | Blocked/permission prompt and correlated resolution; denial is not by itself session failure. |
+| orchestrator:goal_progress | Declared autonomous mode, done_means, goal progress/state as explicitly reported. |
+| orchestrator:complete | Intermediate goal continuation remains working; ordinary/final boundary can stop. |
+| prompt:complete | Root turn completion; stopped unless explicit goal outcome overrides; optional closing-answer classification remains separately identified. |
+| session:end | Retained final execution state and transcript boundary. |
+| user:notification | Registered handler can map explicit waits; no existing emitter is promised. |
 
-Keep the existing `machine` field too. `lane_transcript(session_id)` resolves
-through the registry: native bounded reader for terminal history, durable muxterm
-journal for chat, and a segmented view after handoff. It reports truncation and
-missing segments explicitly. `session_send` resolves the same ID and control
-owner; it queues chat input or uses the existing terminal input mechanism.
+### All 18 fleet fields, including absent data
 
-Managed histories survive process exit and terminal closure until explicitly
-archived/deleted. The fleet can hide archived sessions, but history search still
-finds them. For legacy unmanaged rows, preserve today's terminal retention and
-24-hour spool cleanup; adoption imports identity and references without rewriting
-native history. Closing a terminal view is not deleting a managed conversation.
+“Absent” means unknown/unavailable, not an empty measurement. Every accepted
+semantic event updates `updated_at`; metadata-only diagnostics update reporting
+health separately. The following rules apply equally to spawned and external work.
 
-## 5. Chat storage is part of admission, not a UI cache
+| Field | Claude hooks | Codex hooks (notify limitation explicit) | Amplifier hooks |
+|---|---|---|---|
+| session_id | Registry alias of native session_id | Registry alias of session_id/thread-id | Registry alias of root session_id |
+| pane_id | Optional registry attachment, null outside muxterm | Same | Same |
+| workspace_id | Optional attachment layout, null outside muxterm | Same | Same |
+| harness | claude | codex | amplifier |
+| project | Declared cwd/CwdChanged | Hook cwd; notify cwd | Declared project/cwd |
+| name | Explicit title or first prompt | First prompt; notify input-messages[0] | First prompt or user title |
+| label | User label or separately identified derivation; no native guarantee | Same; notify does not supply label | Existing optional first-prompt classifier or user label |
+| mode | interactive unless an explicit supervising goal declaration exists | Same; notify defaults interactive | Goal loop declaration or interactive |
+| state | Prompt/tool working, actual wait blocked, Stop stopped, StopFailure failed | Rich start/tool/wait/stop; notify only stopped | Existing prompt/tool/approval/goal/end semantics |
+| waiting_for | Actual permission/input request only; absent otherwise | Rich permission request; unavailable from notify | Explicit approval/notification declaration |
+| doing | Bounded tool/prompt/final observation | Rich activity; notify final message only | Existing tool/child/goal/final summaries |
+| done_means | Absent without explicit goal declaration | Absent without explicit goal declaration; never inferred from notify | Explicit goal condition |
+| goal_id | Registry launch-condition digest; absent for unknown external provenance | Same | Same; not inferred from goal prose |
+| origin | Registry launch record; unknown for external launch, not guessed cli | Same | Same |
+| knows | Confirmed Read/instruction-load paths; no shell-read inference | Explicit recognized read results only; absent with notify | artifact:read paths |
+| todo | Complete recognized task list only; task events alone insufficient | Recognized complete update_plan only; absent with notify | Root todo counts/current |
+| pr | Explicit verified linkage/user metadata; absent by default | Same; no automatic notify extraction | Same |
+| updated_at | Daemon acceptance time in Unix seconds of semantic update | Same | Same |
+
+Preserve `machine` as installation metadata. User edits to name/label take
+precedence over defaults. `done` requires an explicit successful goal verdict;
+stopped is ordinary interactive rest. Never synthesize task percentages, known
+files, PR linkage, or success from quiet output, terminal titles, or process exit.
+Missing lifecycle delivery makes observation uncertain; it does not prove failure.
+
+## 6. Installation, visible reporting health, and poller removal
+
+Define `muxterm session hooks install` and `muxterm session hooks status` as future
+setup/diagnostic commands using the same installer manifest. They are not existing
+verified CLI commands and were not run. Store executable path, contract version,
+event coverage, config location/hash, and last delivery/acceptance per harness.
+
+| Harness | Spawned lanes | Sessions the owner starts by hand |
+|---|---|---|
+| Claude | Generate invocation settings pointing command hooks at the selected muxterm instance; pass documented --settings; verify effective settings and first hook receipt. | Installer merges muxterm command entries into ~/.claude/settings.json, preserving unrelated hooks and settings; validate effective user/project/policy sources. A plain claude invocation then uses global hooks. |
+| Codex | Install invocation-scoped rich hooks using documented config layers and vetted trust; completion-only notify translator if richer setup is unavailable, visibly labeled. | Installer merges hooks into ~/.codex/config.toml (or references owned hook definitions); retain a compatible notify translator where needed. Preserve the existing notify command through an explicit dispatcher rather than overwriting it. |
+| Amplifier | Ensure the selected muxterm bundle mounts hooks-muxterm-session with reporting enabled and the correct instance destination. | Existing muxterm Amplifier installation/bundle configuration must include the module in the bundle actually selected by a manual invocation. Installing a module on disk alone is not activation. |
+
+**VERIFIED configuration capabilities:** Claude settings/help and Codex hooks/help
+cited in section 2; Amplifier module `mount` reads `publish_state` and registers
+handlers. Configuration composition/trust across real launch modes is
+**ASSUMED A1**. Future installers use backups, parse/merge/atomic replacement,
+exact owned-entry markers and uninstall only their entries. They report policy
+blocks and conflicting notify dispatch explicitly. They never bypass hook trust
+or alter harness permissions to make reporting pass. None of these live config
+writes is authorized by this design task; this section specifies future product behavior.
+
+The command destination is the installation's private inbox; spawned dev lanes
+receive an explicit dev instance destination. Global manual-session configuration
+uses the owner's selected installation. An ambiguous destination fails visibly;
+no fallback from a dev hook to production. Schema validation and a local ingress
+self-check verify wiring only. Native event receipt proves execution; a synthetic
+check is never labeled proof that the harness invoked a hook.
+
+Show a persistent fleet-level reporting panel **even when there are zero rows**:
+`not installed`, `not configured`, `disabled`, `policy blocked`, `configured—unverified`,
+`reporting`, `completion-only`, `delivery failed`, `rejected`, or `unknown`.
+Include config source, supported events, last native receipt/accepted report,
+queued count, error and remediation. A launcher reports missing initial receipt
+within a bounded startup window as unverified, not success. Notify-only Codex
+cannot prove readiness before its first completed turn; label that limit.
+
+Recheck config on startup, before managed launch, on settings change, and on an
+explicit health refresh; this is configuration inspection, not session polling.
+Detect missing entries, disabled hooks/safe mode when visible, unreadable config,
+missing executable, trust problems and module deactivation. No process can prove
+that an arbitrary unseen manual invocation did not override global config: show
+coverage as unverified/unknown instead of “all sessions tracked”. A manual session
+with hooks disabled cannot report its own absence. This irreducible limit is
+exposed at harness level, not hidden by pretending an empty fleet is complete.
+
+Report command failures on stderr plus durable diagnostics; fleet consumes
+rejected receipts and stalled queues. Do not require heartbeats or declare a long
+quiet interactive session failed. Separate last state from freshness and declared
+coverage. Capture module mounting/registration failures visibly; Amplifier's
+current log-and-continue path is not an adequate success signal.
+
+**Poller migration is removal, not coexistence:**
+
+1. Land common session identity/ingress and reporting diagnostics first.
+2. Ship Claude global and lane hook setup with the native-event verification gate.
+3. In that same Claude migration PR, remove `claudeAdapterLoop`, `poll`,
+   `queryAgents`, the five-second ticker, subscription gating, and adapter startup
+   wiring in `internal/sessiond/claude_adapter.go`. No background discovery poller
+   remains for unconfigured sessions. Reuse native Claude IDs to adopt old rows;
+   freeze/import existing snapshots once, then retire the poller's producer path.
+4. Convert Amplifier and Codex translators to the same report contract. Preserve
+   rich semantics while eliminating independent snapshot writers for those harnesses.
+
+**VERIFIED lost capability: read `claudeAdapterLoop`, `poll`, `queryAgents`,
+`claudeRowFor`.** Polling can discover supported Claude records without muxterm
+hooks and repeatedly reconcile their state (subject to PID/pane placement and
+subscriber gating). Removing it loses that unconfigured discovery and recovery
+from hook omissions. Old running sessions may require a native resume/relaunch to
+load configuration; no historical event backfill is promised. Declare the gap in
+the fleet panel. Do not compensate with transcript watching, periodic agents
+queries, or PTY scraping. Rollback may disable a new bridge with visible degraded
+health; it must not silently restore polling as a second authority.
+
+## 7. Chat storage is part of admission, not a UI cache
 
 Store managed session data under `$XDG_DATA_HOME/muxterm/agent-sessions/`, with
 the normal user data-directory fallback, private directories/files (0700/0600).
@@ -239,221 +502,82 @@ The Operator's existing native SessionStore, exact storage scope, root lock,
 durable FIFO and history remain authoritative for Mission Control. Do not migrate,
 merge or repoint that conversation into the new worker-session journals.
 
-## 6. Human takeover has an explicit boundary
 
-For a terminal session, preserve today's real PTY: Open terminal focuses it and
-a human can type. Manual control suspends further Operator sends. sessiond remains
-authoritative for terminal activity and destructive closure.
+## 8. Sessions, chat, terminals and the Operator
 
-For a chat session, distinguish three actions:
+Sessions remain the product's primary object; terminals remain a first-class
+capability, including ordinary shells with no agent. The existing Operator
+conversation, SessionStore, exact storage scope, root lock, FIFO and approval
+infrastructure stay authoritative. No conversation router or multi-tenant service.
+No Azure sandbox feature, hosted design or mobile-specific scope.
 
-- **Answer in chat:** reply to the live approval/question card, or send a follow-up
-  at a turn boundary. Codex uses the documented request IDs. Claude V1 uses a
-  launch-scoped `PermissionRequest` hook backed by muxterm's approval broker;
-  ordinary questions can be answered in the next resumed turn. Do not implement
-  a guessed Claude stdin control protocol. **ASSUMED A2:** holding the hook while
-  the broker waits and returning the documented decision preserves the original
-  request on the installed build. Bound the wait and deny on expiry. If this
-  verification fails, route permission intervention to terminal and keep the
-  chat permission feature disabled until a verified transport exists.
-- **Stop:** stop accepting new sends for this generation. Codex requests
-  `turn/interrupt` and waits for acknowledgment/outcome. Claude V1 interrupts only
-  its owned child process group, waits, and escalates only against that still-
-  verified child if necessary. Never signal a shared vendor daemon. An interrupted
-  tool may already have changed files; preserve its outcome as unknown if unreported.
-- **Take over in terminal:** reserve exclusive human control; interrupt and drain
-  the run, flush history, and prove the old executor and its owned work have
-  stopped before starting another writer. Start `codex resume <native-id>` or
-  `claude --resume <native-id>` in a real muxterm PTY at the recorded cwd and
-  permission profile. Attach that pane to the SAME session row. Show the handoff
-  boundary in chat and make its composer read-only while the terminal owns control.
+Structured child-process streams may render chat and persist transcript content,
+but **all harness fleet state enters through hook-report**. A chat stream cannot
+quietly become a fourth reporting mechanism. Hooks trigger bounded native transcript
+imports for externally started sessions; those imports supply history, not inferred
+fleet state. Missing/unreadable/unsupported native transcripts produce an explicit
+history-unavailable indicator. Future import-format compatibility is **ASSUMED A3**.
+Do not promise a full transcript from notify's final message alone.
 
-**VERIFIED:** installed Codex and Claude help advertises resume by ID.
-**ASSUMED A3:** cross-surface resume after interruption preserves all completed
-context and releases ownership cleanly for these builds. Verify both directions
-with an interrupted tool and a two-turn conversation before enabling takeover.
-If the process cannot be proven stopped, leave takeover blocked with its actual
-status. If native resume fails, retain the transcript and open a project shell
-for repair; a new agent conversation requires a labeled new-session action.
-That is a usable human escape hatch, not a claim of seamless context transfer.
+**VERIFIED: installed `codex --help` and `claude --help` expose explicit native-ID
+resume.** Chat executor selection is deferred until hook coverage and persistence
+are verified; no SDK claim is necessary for the unified reporting design. A managed
+launch can reserve a visible session before its first report, with runtime state
+unknown until a hook arrives. Launch/process-exit errors are supervisor health
+facts, not fabricated harness goal verdicts.
 
-To return to chat, the person releases control, the terminal harness exits,
-muxterm imports the new bounded native transcript segment and resumes by the same
-ID. Do not inject Ctrl-C into a person's actively used terminal as an implicit
-side effect of selecting Chat. If a fork is requested, make it a new session with
-an explicit parent reference. Concurrent browsers share one control state; stale
-approval replies and sends with an old generation are rejected.
+Human takeover reserves exclusive control, interrupts only a proven owned child,
+drains/persists output, then resumes the same native session in a real PTY. Never
+attach to or signal a shared vendor daemon or an unowned external process.
+External sessions are observable first; takeover requires explicit ownership
+transfer and proof the former writer stopped. If proof fails, retain readable
+history and block takeover. Return to chat requires release by the human and
+native-history reconciliation. Cross-surface continuity is **ASSUMED A3**.
 
-The terminal is not the stdout pipe of a headless process. There is no hidden TUI
-to grab mid-token; the handoff is interrupt, persist, and resume with one writer.
+Extend existing spawn/send/transcript/fleet seams to resolve session ID first.
+Persist notices with `(session_id, execution, turn, kind)` dedupe so successive
+turns each report once. Coalesce activity for the fleet; deliver attention and
+completion promptly through the existing Operator queue. No LLM turn per tool
+call, fabricated progress, or browser-only history. Credentials stay in the
+harness's normal same-user environment; service access is **ASSUMED A4**.
 
-## 7. Hooks, progress and poller migration
+## 9. Ordered implementation PR plan
 
-Keep Amplifier's shipped module and v1 snapshots. Preserve declared tool/read/todo
-and approval signals, and keep the optional label/classifier separate from facts.
-No Amplifier source change or amplifier-agent replacement is needed here.
+This revision is PR 0 (#176), documentation only. **PR 1 comes first and is the
+smallest PR delivering real user-visible value:** an outside-pane Codex completion
+appears as a durable session row, with reporting health and honest completion-only
+coverage. A health badge alone does not repair the owner's reproduced failure.
 
-For Claude PTYs, add a muxterm command hook using launch-scoped `--settings` (or
-a muxterm-owned plugin loaded for that invocation). **VERIFIED:** installed help
-advertises both launch options. Report SessionStart, UserPromptSubmit, tool
-pre/post/failure, PermissionRequest, Stop and SessionEnd to the existing snapshot
-contract. Observer hooks return promptly without modifying policy; the optional
-chat approval hook is separate. Confirm successful hook loading visibly.
-Arbitrary manually launched CLIs keep poller discovery until explicitly integrated.
-
-For Codex PTYs, retain `codex-notify` as the compatibility floor; implement the
-richer documented hooks only behind a verified capability probe. Preserve existing
-user hooks and notify behavior rather than replacing configuration wholesale.
-Muxterm-owned configuration must compose with user config; no global rewrite.
-The concurrent Codex-hooks branch is not evidence of released behavior; reconcile
-with it before implementation instead of landing a competing hook installer.
-
-The Claude poller is **replaced as state authority for integrated sessions**, not
-abruptly removed for everybody. Migration order:
-
-1. Add visible adapter health: last successful observation, error category,
-   capability level and stale status. Missing binary and invalid JSON must be
-   visible even when no row was ever created. Preserve existing opt-out semantics.
-2. Add hooks for new PTY launches; let a confirmed hook registration claim its
-   native ID. Stop poller writes/deletions for claimed IDs. Merely missing a hook
-   event is not authority to overwrite a richer row with old polling data.
-3. Structured chat is always owned by its adapter. Disable polling for it. Keep
-   coarse discovery for uninstrumented existing PTYs, explicitly marked degraded.
-4. Remove browser-subscription gating from managed progress and result recording.
-   Hooks already run without a browser; managed child supervisors must too.
-   Remove the poller entirely only after unmanaged discovery has a verified
-   replacement or an explicit compatibility removal decision.
-
-Telemetry failure is not task failure. Keep the last declared state and mark its
-reporting health stale; do not invent `working`, `blocked` or `done`. Unknown
-protocol events are retained as bounded diagnostics and trigger a visible
-capability warning. Malformed required envelopes stop the adapter with a readable
-error, not a phantom successful result. Retry recoverable transport connections,
-never uncertain work submissions automatically.
-
-## 8. Operator as the usual entry point
-
-Mission Control opens to the single Operator conversation with its existing fleet
-rail. “Fix the refresh bug with Codex” admits a durable session, shows its row
-immediately, and links to its Chat/Terminal detail. Launch is explicit about
-harness, project and control surface; it does not require selecting a workspace
-or creating a terminal tab first. Direct New session and New terminal remain
-available for people who already know what they need.
-
-Reuse the existing `spawn_lane`, `fleet_status`, `lane_transcript` and
-`session_send` seams, extending spawn with a surface choice and stable session ID.
-Do not add a second Operator, conversation selector or project-to-chat router.
-The Operator manages and monitors; the worker session executes the work.
-
-Persist results/attention through the existing lifecycle marker and Operator
-notice infrastructure. Extend dedupe to `(session, run/turn, event kind)` so the
-second completed turn is not swallowed by the old session/kind key. Give every
-result a causal link back to its launch and durable transcript cursor. Retry
-notice delivery independently of task execution. Seed migration baselines so
-historic completions do not replay as new work.
-
-Progress is visible continuously in the fleet/detail without forcing an LLM turn
-for each tool event. Coalesce activity updates (target no more than one row update
-per second). Feed a bounded progress milestone to the Operator notice FIFO after
-a declared todo milestone or a sustained interval (initial target 30 seconds,
-only if activity changed), and send final/blocked notices promptly. Do not put
-synthetic notices ahead of already queued human input or narrate token streams.
-These are implementation targets, not measurements. Extend the existing notice
-envelope with structured progress facts; do not feed arbitrary full transcripts
-into automatic notices. An explicit `lane_transcript` request remains available.
-
-UI nouns become **Sessions**, **Projects**, **Chat**, **Terminal**, **Files** and
-**Changes**. Workspaces remain internal layout/project containers and tabs remain
-an optional terminal arrangement. Rename the entry points; do not delete PTYs,
-splits, layout restoration or existing API IDs. Closing a view detaches it;
-Stop session and Archive session are distinct actions. A plain shell remains a
-first-class terminal even when no agent session is attached to it.
-
-## 9. Credentials and process ownership
-
-This is a single-human-owned local application. Run children as that same OS user
-with an explicit executable, cwd and inherited credential environment. Let the
-CLI use its own existing login/config machinery; do not copy tokens into muxterm's
-journal, browser, settings UI or a new credential database. Keep the existing
-browser authentication/origin controls. No tenant identities, account brokerage,
-per-tenant token vaults or hosted-service architecture are needed.
-
-**VERIFIED:** Codex help describes its normal config location; Claude and Codex
-expose their own authentication commands. **ASSUMED A4:** the production service's
-user, HOME, PATH and credential helpers give the child the same authenticated
-access as an interactive shell. Verify with one real turn per harness in dev-local;
-help output cannot prove login works. An auth failure is a visible blocked/input
-condition or startup failure, with instructions to authenticate using the CLI.
-Do not silently switch to an API key or a differently billed account.
-
-The decision to use an SDK does not universally imply separate credentials, but
-neither SDK documentation nor a same-user process guarantees login compatibility.
-The selected path delegates authentication to the actual CLI. No global Codex,
-Claude or muxterm configuration edit is part of this design PR.
-
-sessiond owns worker process lifetimes so closing a browser or restarting the web
-server does not stop a task. Each managed session has a bounded active executor;
-Codex gets a private app-server child, Claude one child per turn. Neither attaches
-to or kills the owner's shared vendor daemon. Child concurrency, stream buffers
-and output sizes are bounded. Launch failures retain the admitted session and
-error transcript. Existing lane permission profiles remain explicit; chat must
-not enable permission bypass just to make a stream run unattended.
-
-## 10. PR plan
-
-This document is PR 0. Implementation starts with **PR 1**, because today's silent
-Claude reporting failure already misleads the owner and its visibility is needed
-throughout migration. **PR 1 is the smallest PR with real user-visible value:** a
-fleet reporting-health indicator and diagnostic details, without new executors.
-
-Each PR below has a narrow review boundary and can ship with later capabilities
-disabled. No PR adds unit tests. Feature verification uses real browser + real
-sessiond + actual harness processes through `make dev-local` on 8313, with fresh
-fixtures; service lifecycle scenarios use a DTU. Never exercise production 9090,
-8311, the broker at 8088, or global user config. Store research and verification
-artifacts outside git; put concise results and relevant evidence in each PR body.
-
-| Order | Independently reviewable scope | Verification and release gate |
+| Order | Scope | Real integration release gate |
 |---|---|---|
-| **1 — Make reporting failure visible** | Expose Claude adapter health/capability and last success in the existing fleet UI. Preserve opt-out and keep session state distinct from stale telemetry. | In dev-local, use an isolated executable path to exercise missing binary, nonzero exit and malformed output, then restore a real Claude CLI. Browser shows failure and recovery, including when there are zero Claude rows. Existing Amplifier/Codex rows stay intact. |
-| **2 — Terminal hooks into one authority** | Claude launch-scoped hooks; Codex richer hooks after capability proof, coordinated with existing hook work. Preserve v1, notify fallback and unmanaged poller discovery; prevent competing writers. | Real Claude/Codex PTYs: prompt start, tool, permission prompt, denial, completion, CLI exit, browser absent/reconnect. Confirm unchanged user config/hook behavior, one row per native ID and no stale poller overwrite. Resolve A1. |
-| **3 — Durable session identity and history** | Registry, alias map, event journal, admission/dedupe and recovery; v2 managed placement and pane-less row semantics across existing collector, MCP and UI. Native transcript references for existing sessions. Chat creation still disabled. | Real browser/sessiond adoption and history views: refresh, reconnect, title change, terminal close, data reload, duplicate sends, PID reuse/stale generation rejection. In isolated recovery verification, truncate only a fresh fixture journal and simulate unavailable storage. Existing v1 scripts still render identically. |
-| **4 — Codex chat vertical slice** | Go app-server adapter, durable chat renderer/composer, approval cards, stop and explicit resume; all exact fleet fields and native ID binding. | Two real turns, a command, plan update, approval allow/deny and failure; close browser mid-turn, refresh, reconnect to final answer with no missing/duplicate message. Kill only the isolated child, verify uncertain-turn behavior. Establish A4 for Codex and do not enable unverified takeover. |
-| **5 — Claude chat vertical slice** | Go print/stream adapter and per-turn resume using the shared journal/UI; launch-scoped approval bridge and visible stream errors. | Two real resumed turns, partial output, Read/tool success/failure, approval expiry/deny/allow, browser refresh during output, absent native transcript and child interruption. Resolve A2/A4; if broker semantics fail, release only the clearly labeled terminal intervention path, not a false chat approval button. |
-| **6 — Human takeover and return** | Exclusive control generation, interrupt/drain, real PTY resume, transcript boundary/import, return-to-chat and project-shell repair fallback for both harnesses. | For each harness, interrupt during a real tool and approval wait; take over, type a follow-up, release back to chat. Confirm one row/ID, one executor, preserved completed context, rejected stale browser sends and durable refresh history. Exercise native-resume failure. Resolve A3 before enabling seamless handoff controls. |
-| **7 — Operator entry and durable reporting** | Extend existing spawn/send/read tools and lifecycle markers; durable per-turn notice causality and bounded progress milestones; Sessions/Projects navigation and terminal capabilities. | Start both chat and PTY sessions from Operator; observe progress and blocked/final result with browser absent then refreshed. Two turns of one session each report once. Restart only isolated web server, verify FIFO and notice retry. Existing Mission Control history/scope and terminal keyboard workflows survive. |
-| **8 — Compatibility cleanup** | Make hooks primary for integrated PTYs, retain visibly degraded unmanaged discovery, document supported CLI versions and rollback. Remove obsolete UI workspace/tab entry language. | Mixed Amplifier, Claude, Codex and script fleet in one browser/MCP response; old v1 producer, CLI downgrade, disabled bridge, failed resume and archive/reopen. No disappearance or duplicated sessions. |
+| **1 — Admit hook sessions without panes** | Minimal durable registry/aliases, common hook-report inbox/consumer, Codex notify translator, optional attachment wire/UI/MCP changes, health receipts and detail view. No chat executor. | Real Codex session started outside muxterm completes twice: one stable row with null pane/workspace; close browser before completion, refresh and retain row; native resume maps to same ID. Existing pane session remains correctly attached. Reject invalid reports visibly. |
+| **2 — Claude hooks replace polling** | Global/lane installation and status; Claude translator, core prompt/tool/permission/Stop/SessionEnd coverage; delete poller and startup wiring in this PR; one-time legacy adoption. | Real manual and spawned Claude sessions, tool success/failure, wait/resolution, completion/API error where reproducible; missing config shown with zero rows; no repeated agents subprocesses. Verify A1 for Claude. |
+| **3 — Preserve Amplifier richness through common ingress** | Change muxterm's Python hook module reporting sink, preserving root/child, goal, todo, read and classification semantics; installation health. No upstream engine rewrite. | Real root and delegated work, todo, artifact read, approval resolution, goal continuation/final result; outside-pane report and duplicate delivery; zero parallel state writers. Verify A1 for Amplifier. |
+| **4 — Codex richer hook coverage** | Install/trust verified rich hooks for global/manual and spawned usage; retain completion-only compatibility, native turn dedupe, visible coverage. | Real prompt, command, update_plan, approval, Stop/Interrupt and exit; hosted-tool gap visible; old notify and rich Stop do not duplicate completion; missing trust visible. Verify A1 for Codex. |
+| **5 — Durable transcript/session detail** | Shared transcript journal, bounded native imports, replay cursor, storage errors, archive/detach semantics. | Browser refresh/reconnect and isolated restart retain readable history; missing native file and disk-full expose errors; no native-state polling. Resolve import portion of A3. |
+| **6 — Hook-reporting chat and takeover** | Select verified managed transports, durable admission, approval/control ownership, native-ID resume; streams only for transcript rendering. | Two turns per harness, approval allow/deny/expiry, interrupted tool, terminal takeover/return, stale-send rejection and uncertain dispatch recovery. Resolve A2–A4 before enabling their controls. |
+| **7 — Operator session-first entry and cleanup** | Session-based spawn/send/read, causal notices, navigation, retire compatibility writers after adoption. | Mixed harness fleet, manual and spawned sessions, no browser during work, two completion notices for two turns, retained Operator history and usable ordinary terminals. |
 
-PRs 4–5 are usable worker-chat slices. PR 6 is the release gate for cross-surface
-handoff, and PR 7 makes sessions the normal product entry. Do not hide the
-persistence foundation in a cosmetic navigation PR or claim the whole initiative
-finished after a launcher demo. No Amplifier engine replacement is in this plan.
+Every implementation PR uses actual harness processes and browser/sessiond
+verification in fresh `make dev-local` fixtures (8313); service/config installation
+scenarios belong in a DTU. Never mutate production 9090/8311 or the owner's global
+config during verification. No unit tests. Store all logs, captures and generated
+schemas under `/home/ken/artifacts/`, never commit them. This documentation revision
+uses source/doc/schema inspection and required static checks, not a claim of new
+browser behavior. Downgrades refuse newer writable stores; rollback retains
+journals and aliases and visibly disables unavailable features.
 
-Rollback disables new chat admission and selects terminal launch without deleting
-journals, aliases or native transcripts. Existing chat remains readable. Older
-binaries skip v2 runtime snapshots; they must not open a newer durable store for
-writing. Record a store schema version and refuse destructive downgrade. Data
-format conversion, if ever necessary, is an explicit separate migration.
+## 10. Consolidated ASSUMED list
 
-## 11. Verification record and remaining assumptions
+These are all remaining runtime capability assumptions. Verified event declarations
+are not evidence of completed integration; the design never substitutes an
+unverified SDK or symmetric event set for native evidence.
 
-**VERIFIED:** research inspected the full contract, named source paths, installed
-CLI help, official documentation and generated Codex protocol schemas. No model
-turn, new runtime feature or browser integration was executed for this design.
-The PR contains documentation only; it makes no claim of implemented chat or
-working takeover. Logs and schema dumps are research artifacts, not repository
-files. Static-check results belong in the PR description.
-
-All runtime assumptions relied on or considered above, consolidated:
-
-| ID | ASSUMED capability | Confirmation / safe limit |
+| ID | ASSUMED: reason | What confirms it / release boundary |
 |---|---|---|
-| **A1** | Rich Codex hooks and launch-scoped Claude hooks load, report the required events and attribute them correctly on the installed builds. | PR 2 real PTY/browser observations with unchanged global config. Keep notify/poller fallback plus visible degraded health until confirmed. |
-| **A2** | Claude's command permission hook can hold a print-mode request for muxterm's broker and return a decision without losing its identity or turn. | PR 5 real allow/deny/expiry and reconnect. If false, terminal intervention remains available; no guessed stdin control protocol or automatic permission bypass. |
-| **A3** | CLI chat→terminal→chat resume, ownership release and native tail reconciliation preserve completed context after interruptions. | PR 6 real tool-interruption and bidirectional handoff, plus isolated crash/recovery. Preserve history and offer a project shell when continuation cannot be established. |
-| **A4** | Same-user service children can use the owner's current CLI authentication and credential helpers. | A real dev-local turn per harness under the service-equivalent environment. Fail visibly; never switch credentials/accounts silently. |
-| **A5 — not relied on** | amplifier-agent is a drop-in replacement for muxterm's existing Amplifier CLI hooks, bundles and Operator SessionStore. | Requires a separate installed-engine compatibility study. Preserve the existing integration; this design makes no such migration. |
+| A1 | Native hook delivery, configuration composition/trust, native identity and correlation work through the future common bridge for each installed harness; no new bridge was executed in this research. | PRs 2–4 real manual/spawned event captures, config-disabled cases, retries and accepted fleet receipts. Expose unverified coverage until each passes; no Claude poller fallback. |
+| A2 | A selected chat execution mode exposes a usable permission/control round trip through its actual hooks; enum presence does not prove a broker can hold and answer the request. | PR 6 real allow/deny/expiry and reconnect per harness/mode. Keep that control disabled or require terminal intervention until verified; no guessed stdin protocol. |
+| A3 | Native transcript import and interrupted chat/terminal resume preserve completed context and release the former writer. Native history is not a stable cross-version guarantee. | PRs 5–6 two-turn import, interruption, explicit resume, missing-history and recovery verification. Preserve readable muxterm history; block takeover when ownership is uncertain. |
+| A4 | Same-user managed children can access the owner's normal CLI credentials and helpers under the service environment. Help output cannot establish authentication. | PR 6 real authenticated turn per harness with service-equivalent environment. Surface auth failure; never silently change account or billing route. |
 
-No additional SDK capability is presumed. No implementation, release, merge,
-hosted tenancy, mobile-specific work or new infrastructure provisioning is part
-of this document.
+No amplifier-agent replacement or SDK compatibility assumption is retained.
