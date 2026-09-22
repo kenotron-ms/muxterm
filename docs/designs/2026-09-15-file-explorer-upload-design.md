@@ -433,14 +433,6 @@ Required evidence, all through a real browser → local muxterm server → SSH
 | Collision/race | Cancel, remote-selected Keep both, confirmed Replace, and commit-time target races never silently overwrite. |
 | Local regression | Local upload still writes only local root; existing viewer/publication safety retains download-only HTML/SVG behavior. |
 
-The sandbox gate has a different evidence rule: a clearly labeled **synthetic
-protocol fixture** may prove only disabled/unsupported UI and host/expiry
-fencing. It cannot establish Azure or sandbox upload support. A later real
-sandbox acceptance run must verify the independently delivered bridge/runtime
-against the same byte-placement and lifecycle cases before the sandbox matrix
-row changes.
-
-
 ## Verification
 
 | Check | Result |
@@ -452,13 +444,12 @@ row changes.
 | Existing Files publish regression script | 5/7 assertions held; its two public-link assertions are blocked in dev because the inherited public origin points at the production hostname, not the isolated dev server. The upload change does not modify viewer or publication code. |
 | SSH/sessiond source trace | Completed against `transport/ssh`, `sessiond-connect`, `hostSession`, `HostRef`, the additive protocol precedent, and the structural read-only filesystem implementation. It establishes a safe future relay seam but also establishes that no upload capability exists today. |
 | Isolated SSH fixture | **Not run and not claimed.** No remote Explorer or Remote File Upload v1 implementation exists in this PR, so a mocked transfer would not prove remote support. The required real-fixture acceptance matrix is specified above. |
-| Sandbox synthetic fixture | **Not run and not claimed.** The present Files applet does not surface sandbox folders and no sandbox bridge/protocol exists. The required synthetic disabled/fencing fixture and later real bridge acceptance gate are specified above. |
 
 ## Out of scope
 
 Recursive directory upload, archive expansion, file preview changes, terminal
 panes, preview canvas behavior, Mission Control/Operator/voice, workspace
-sidebar, sandbox lifecycle or Azure work, sharing/ACL redesign, and a remote
+sidebar, sharing/ACL redesign, and a remote
 writer **implementation** are out of scope. The Remote File Upload v1 section
 is a follow-on contract only. Existing viewer and publication classification
 continue to treat uploaded HTML and SVG as downloads, never executable content
