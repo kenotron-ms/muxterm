@@ -8,7 +8,9 @@
 session ID creates a durable fleet session even without a muxterm pane. Replace
 Claude polling entirely with Claude hooks; generalize Amplifier's existing event
 semantics; use Claude as the rich-hook reference; accept both Codex notify and richer Codex hooks through the same ingress.
-Make missing configuration and rejected delivery visible. Keep real terminals,
+Muxterm-owned launchers inject and verify hooks for both interactive commands and
+Operator lanes; raw vendor CLI launches are outside guaranteed fleet coverage.
+Make missing launch instrumentation and rejected delivery visible. Keep real terminals,
 durable transcripts, and the single existing Operator conversation.
 
 ## 1. The failure that determines the architecture
@@ -36,11 +38,16 @@ an outside-pane report is written and not shown. The exclusion is in the collect
 not evidence that Codex failed to call its hook. The protocol's statement that
 omitting such a session is correct must be replaced in the implementation PR.
 
-**Hard decision:** sessions are primary, regardless of who launched them. No pane,
+**Hard decision:** sessions are primary once a valid hook report arrives. No pane,
 workspace, live PID, pre-registration, managed run, or browser subscription is
-required to admit a valid hook report. The Claude five-second poller is removed,
-not retained for unconfigured sessions. Hooks are the sole harness reporting
-mechanism. Different native hooks require translators, not different state paths.
+required to admit that report. Guaranteed reporting begins at muxterm-owned launch
+boundaries: `muxterm claude`, `muxterm codex`, `muxterm amplifier`, and Operator
+lane launch. Those paths inject hooks for that invocation and verify delivery.
+Direct `claude`, `codex`, or `amplifier` launches do not have guaranteed fleet
+coverage and do not require muxterm to modify global harness configuration. The
+Claude five-second poller is removed, not retained for raw vendor launches. Hooks
+are the sole harness reporting mechanism. Different native hooks require
+translators, not different state paths.
 
 ## 2. Evidence and installed capability boundary
 
@@ -69,9 +76,10 @@ historical rationale says:
 (the Go file and its runtime logic are unchanged in this documentation PR):
 
 > Claude Code exposes native lifecycle, prompt, permission, tool and stop hooks,
-> distributed through settings or plugins. Muxterm uses a Claude plugin to report
-> these events through the common session ingress. The legacy polling adapter is
-> removed in the Claude migration; unconfigured sessions are no longer discovered.
+> distributed through settings or plugins. Muxterm loads its Claude plugin on each
+> muxterm-owned invocation and reports these events through the common session
+> ingress. The legacy polling adapter is removed in the Claude migration; raw
+> `claude` invocations outside the muxterm launcher are no longer discovered.
 
 **VERIFIED: [Claude hook reference](https://code.claude.com/docs/en/hooks),
 [Codex hook reference](https://learn.chatgpt.com/docs/hooks), installed enums/schemas
@@ -199,7 +207,7 @@ reference, without inventing Amplifier-specific goal fields for other harnesses.
 module update changes only its reporting sink to the common command. No Amplifier
 engine replacement, SDK migration, or Amplifier source edit belongs in this PR.
 
-## 3. One ingest contract, including sessions started by hand
+## 3. One ingest contract for every muxterm-owned launch
 
 Define one command: **`muxterm session hook-report`**, reading one bounded UTF-8
 JSON envelope from stdin. Native Claude/Codex wrappers translate native JSON into
@@ -252,9 +260,12 @@ IDs (`codex-...`, `claude-...`, Amplifier native IDs) as aliases. Native forks g
 new identities and explicit parent links; cwd/title never deduplicate sessions.
 Missing native identity is a visible rejected report, never a guessed pane ID.
 
-Managed launch reserves a row and one-time correlation token before native
-identity exists. The launch hook binds the native ID to that reservation; external
-reports auto-register without such a token. `run_id` identifies execution, not the
+Every muxterm-owned launch reserves a row and one-time correlation token before
+native identity exists. This includes an interactive `muxterm <harness>` command,
+not only Operator lanes. The launch hook binds the native ID to that reservation;
+any valid report that arrives from optional user-installed hooks can still
+auto-register without such a token, but raw vendor launches are not a guaranteed
+discovery surface. `run_id` identifies execution, not the
 conversation; the command may derive an external process incarnation from
 PID/start time when available. Absent process metadata does not prevent admission.
 Resume retains conversation ID and creates a new execution generation.
@@ -497,18 +508,27 @@ stopped is ordinary interactive rest. Never synthesize task percentages, known
 files, PR linkage, or success from quiet output, terminal titles, or process exit.
 Missing lifecycle delivery makes observation uncertain; it does not prove failure.
 
-## 6. Installation, visible reporting health, and poller removal
+## 6. Launch-time configuration, visible reporting health, and poller removal
 
-Define `muxterm session hooks install` and `muxterm session hooks status` as future
-setup/diagnostic commands using the same installer manifest. They are not existing
-verified CLI commands and were not run. Store executable path, contract version,
-event coverage, config location/hash, and last delivery/acceptance per harness.
+Muxterm does not require a user-scope Claude plugin, edits to
+`~/.claude/settings.json`, edits to `~/.codex/config.toml`, or a globally selected
+Amplifier module. The three interactive launcher commands and Operator use one
+launcher manifest containing executable path, contract version, event coverage,
+ingress destination, and expected first event. They configure hooks only for the
+child invocation and record the first delivery/acceptance result.
 
-| Harness | Spawned lanes | Sessions the owner starts by hand |
-|---|---|---|
-| Claude | Load the muxterm plugin using documented --plugin-dir for an isolated lane, or use the installed plugin with explicit instance routing; suppress duplicate owned registration and verify first receipt. | Install/enable the muxterm plugin at user scope through Claude plugin management. Inspect effective settings/policy; plain claude sessions then load the plugin unless overridden/disabled. |
-| Codex | Install invocation-scoped rich hooks using documented config layers and vetted trust; completion-only notify translator if richer setup is unavailable, visibly labeled. | Installer merges hooks into ~/.codex/config.toml (or references owned hook definitions); retain a compatible notify translator where needed. Preserve the existing notify command through an explicit dispatcher rather than overwriting it. |
-| Amplifier | Ensure the selected muxterm bundle mounts hooks-muxterm-session with reporting enabled and the correct instance destination. | Existing muxterm Amplifier installation/bundle configuration must include the module in the bundle actually selected by a manual invocation. Installing a module on disk alone is not activation. |
+| Harness | Interactive muxterm launch and Operator lane |
+|---|---|
+| Claude | `muxterm claude` and Operator load the bundled muxterm plugin through documented `--plugin-dir`, route it to the selected muxterm instance, suppress duplicate owned registration, and verify the first receipt. No user-scope plugin installation is required. |
+| Codex | `muxterm codex` and Operator inject rich hook definitions through supported invocation config layers with vetted trust. If only legacy notify is usable, inject the completion translator and label coverage `completion-only`. Do not overwrite persistent user notify configuration. |
+| Amplifier | `muxterm amplifier` and Operator select a muxterm-owned bundle/configuration that mounts `hooks-muxterm-session`, points it at the selected instance, and verifies module registration and first receipt. Installing or selecting the module globally is unnecessary. |
+
+The wrappers preserve ordinary harness arguments, cwd, credentials, terminal
+behavior and resume IDs. They expose the underlying command for diagnosis. The
+wrapper is the supported manual entry point: a person typing `muxterm claude` in
+a muxterm pane gets reporting without pre-installation; a person typing raw
+`claude` does not receive a fleet guarantee merely because the terminal belongs
+to muxterm. Pane membership never substitutes for hook delivery.
 
 ### Claude distribution decision: ship a muxterm plugin
 
@@ -523,17 +543,16 @@ validator also confirms this shared shape.
 
 | Approach | Benefit | Cost / detection |
 |---|---|---|
-| Hand-edit or installer-merge ~/.claude/settings.json | Small direct command entries; no marketplace dependency. | Own JSON merge/backup/uninstall and per-event upgrades; preserve unrelated hooks. Config existence alone does not prove execution. |
-| Muxterm Claude plugin (**recommended**) | Versioned event definitions and script together; native enable/disable/update/uninstall and user-scope distribution. | Plugin still needs installation/enablement and may be blocked by policy; plugin manager persists configuration. This does not mean zero settings writes in the future installer. |
+| Invocation plugin through `--plugin-dir` (**required path**) | Versioned event definitions and script ship with muxterm; works for wrapper and Operator launches without persistent harness configuration. | Every muxterm launch must inject it, resolve conflicts and verify a native receipt. Policy or safe mode can still block loading. |
+| Optional user-scope plugin or settings entries | Raw vendor commands can opt into the same ingress. | Outside guaranteed coverage; persistent config ownership, upgrades and duplicate suppression add complexity. This is not required for the session design or initial PR sequence. |
 
-The future muxterm installer publishes an owned marketplace entry, adds that
-marketplace through `claude plugin marketplace add <source>`, and installs
-`muxterm@<marketplace> --scope user` through `claude plugin install`, then verifies
-explicit enabled state. These are future installation steps, not commands executed
-by this audit. For managed isolated lanes, `--plugin-dir <bundle>` supplies the same
-package without hand-editing global hook arrays. Do not activate both copies or
-retain legacy muxterm settings hooks in parallel. Version the bridge contract and
-record plugin identity/version; migrate only positively identified muxterm entries.
+Package the plugin with muxterm and pass `--plugin-dir <bundle>` from both
+`muxterm claude` and Operator launches. This supplies versioned hook definitions
+without a marketplace, user-scope plugin installation, or hand-edited global hook
+arrays. If a user independently installed the same muxterm plugin, suppress the
+duplicate for the wrapper invocation or fail with a visible configuration conflict;
+do not emit every event twice. Version the bridge contract and record plugin
+identity/version.
 
 Minimum reporting registration: SessionStart, UserPromptSubmit, PreToolUse,
 PostToolUse, PostToolUseFailure, PermissionRequest, Notification, Stop, StopFailure,
@@ -542,51 +561,45 @@ handlers follow the event map. No WorktreeCreate/WorktreeRemove handlers: these
 replace native behavior. Never return approval decisions, block Stop/compaction,
 rewrite tool output, or inject context from the observation plugin.
 
-**ASSUMED A1:** plugin loading, effective configuration composition, duplicate
-suppression and destination routing operate across actual manual and spawned
-sessions. Confirm with real event receipts in isolated integration verification,
-including disabled plugin, safe mode, policy denial, missing executable and failed
-queue delivery. Read-only diagnostics inspect marketplace/plugin enablement and
-owned hook definitions as well as settings. Display **Claude reporting: disabled**
-for a disabled muxterm plugin, **not configured** if absent, **configured—unverified**
-until receipt, and **delivery failed/rejected** on captured failures. Expose these
-in the persistent fleet panel even with zero sessions. A managed launch without its
-first receipt gets a visible launch diagnostic; no pane attachment is required.
-An arbitrary external invocation that disables all hooks is unknowable from hooks
-alone: never claim complete session discovery from installed-plugin status.
+**ASSUMED A1:** invocation plugin loading, effective configuration composition,
+duplicate suppression and destination routing operate across actual wrapper and
+Operator launches. Confirm with real event receipts in isolated integration
+verification, including safe mode, policy denial, missing executable, conflicting
+user plugin and failed queue delivery. Display **reporting injection failed**,
+**configured—unverified**, **reporting**, or **delivery failed/rejected** on the
+reserved session row. A muxterm-owned launch without its first receipt gets a
+visible launch diagnostic; no pane attachment is required. Muxterm makes no
+completeness claim for raw vendor invocations.
 
 **VERIFIED configuration capabilities:** Claude settings/help and Codex hooks/help
 cited in section 2; Amplifier module `mount` reads `publish_state` and registers
-handlers. Configuration composition/trust across real launch modes is
-**ASSUMED A1**. Future installers use backups, parse/merge/atomic replacement,
-exact owned-entry markers and uninstall only their entries. They report policy
-blocks and conflicting notify dispatch explicitly. They never bypass hook trust
-or alter harness permissions to make reporting pass. None of these live config
-writes is authorized by this design task; this section specifies future product behavior.
+handlers. Invocation configuration composition/trust across real launch modes is
+**ASSUMED A1**. The required launch path writes no persistent user configuration.
+It reports policy blocks and conflicting hook/notify dispatch explicitly. It never
+bypasses hook trust or alters harness permissions to make reporting pass. Optional
+future global installation is outside the required product contract.
 
-The command destination is the installation's private inbox; spawned dev lanes
-receive an explicit dev instance destination. Global manual-session configuration
-uses the owner's selected installation. An ambiguous destination fails visibly;
+The command destination is the selected installation's private inbox; wrapper and
+Operator dev launches receive an explicit dev instance destination. An ambiguous destination fails visibly;
 no fallback from a dev hook to production. Schema validation and a local ingress
 self-check verify wiring only. Native event receipt proves execution; a synthetic
 check is never labeled proof that the harness invoked a hook.
 
-Show a persistent fleet-level reporting panel **even when there are zero rows**:
-`not installed`, `not configured`, `disabled`, `policy blocked`, `configured—unverified`,
-`reporting`, `completion-only`, `delivery failed`, `rejected`, or `unknown`.
-Include config source, supported events, last native receipt/accepted report,
-queued count, error and remediation. A launcher reports missing initial receipt
-within a bounded startup window as unverified, not success. Notify-only Codex
-cannot prove readiness before its first completed turn; label that limit.
+Show reporting health on every reserved wrapper/Operator session row:
+`injecting`, `policy blocked`, `configured—unverified`, `reporting`,
+`completion-only`, `delivery failed`, `rejected`, or `unknown`. Include launch
+config source, supported events, last native receipt/accepted report, queued count,
+error and remediation. A launcher reports missing initial receipt within a bounded
+startup window as unverified, not success. Notify-only Codex cannot prove readiness
+before its first completed turn; label that limit. With zero muxterm-owned launches,
+there is no misleading machine-wide harness-health claim to display.
 
-Recheck config on startup, before managed launch, on settings change, and on an
-explicit health refresh; this is configuration inspection, not session polling.
-Detect missing entries, disabled hooks/safe mode when visible, unreadable config,
-missing executable, trust problems and module deactivation. No process can prove
-that an arbitrary unseen manual invocation did not override global config: show
-coverage as unverified/unknown instead of “all sessions tracked”. A manual session
-with hooks disabled cannot report its own absence. This irreducible limit is
-exposed at harness level, not hidden by pretending an empty fleet is complete.
+Validate instrumentation before each wrapper or Operator launch, then verify the
+first native receipt. Detect disabled hooks/safe mode when visible, unreadable
+invocation config, missing executable, trust problems and module deactivation.
+Do not show a machine-wide “all sessions tracked” claim: health is scoped to each
+muxterm-owned launch. The launcher can diagnose its own child; a raw vendor launch
+is outside that coverage boundary and does not create a silent degraded muxterm row.
 
 Report command failures on stderr plus durable diagnostics; fleet consumes
 rejected receipts and stalled queues. Do not require heartbeats or declare a long
@@ -597,11 +610,11 @@ current log-and-continue path is not an adequate success signal.
 **Poller migration is removal, not coexistence:**
 
 1. Land common session identity/ingress and reporting diagnostics first.
-2. Ship Claude global and lane hook setup with the native-event verification gate.
+2. Ship `muxterm claude` and Operator invocation hook setup with the native-event verification gate.
 3. In that same Claude migration PR, remove `claudeAdapterLoop`, `poll`,
    `queryAgents`, the five-second ticker, subscription gating, and adapter startup
    wiring in `internal/sessiond/claude_adapter.go`. No background discovery poller
-   remains for unconfigured sessions. Reuse native Claude IDs to adopt old rows;
+   remains for raw vendor sessions. Reuse native Claude IDs to adopt old rows;
    freeze/import existing snapshots once, then retire the poller's producer path.
 4. Convert Amplifier and Codex translators to the same report contract. Preserve
    rich semantics while eliminating independent snapshot writers for those harnesses.
@@ -609,10 +622,11 @@ current log-and-continue path is not an adequate success signal.
 **VERIFIED lost capability: read `claudeAdapterLoop`, `poll`, `queryAgents`,
 `claudeRowFor`.** Polling can discover supported Claude records without muxterm
 hooks and repeatedly reconcile their state (subject to PID/pane placement and
-subscriber gating). Removing it loses that unconfigured discovery and recovery
-from hook omissions. Old running sessions may require a native resume/relaunch to
-load configuration; no historical event backfill is promised. Declare the gap in
-the fleet panel. Do not compensate with transcript watching, periodic agents
+subscriber gating). Removing it loses discovery of raw `claude` invocations and
+recovery from hook omissions. Existing raw sessions remain outside guaranteed
+coverage; relaunch through `muxterm claude` to create a reported execution. No
+historical event backfill is promised. State this wrapper boundary in CLI help and
+fleet empty-state copy. Do not compensate with transcript watching, periodic agents
 queries, or PTY scraping. Rollback may disable a new bridge with visible degraded
 health; it must not silently restore polling as a second authority.
 
@@ -710,19 +724,20 @@ harness's normal same-user environment; service access is **ASSUMED A4**.
 ## 9. Ordered implementation PR plan
 
 This revision is PR 0 (#176), documentation only. **PR 1 comes first and is the
-smallest PR delivering real user-visible value:** an outside-pane Codex completion
-appears as a durable session row, with reporting health and honest completion-only
+smallest PR delivering real user-visible value:** `muxterm codex` injects the
+completion hook and its session appears as a durable row even when that wrapper is
+run outside a muxterm pane. It includes reporting health and honest completion-only
 coverage. A health badge alone does not repair the owner's reproduced failure.
 
 | Order | Scope | Real integration release gate |
 |---|---|---|
-| **1 — Admit hook sessions without panes** | Minimal durable registry/aliases, common hook-report inbox/consumer, Codex notify translator, optional attachment wire/UI/MCP changes, health receipts and detail view. No chat executor. | Real Codex session started outside muxterm completes twice: one stable row with null pane/workspace; close browser before completion, refresh and retain row; native resume maps to same ID. Existing pane session remains correctly attached. Reject invalid reports visibly. |
-| **2 — Claude hooks replace polling** | Global/lane installation and status; Claude translator, core prompt/tool/permission/Stop/SessionEnd coverage; delete poller and startup wiring in this PR; one-time legacy adoption. | Real manual and spawned Claude sessions, tool success/failure, wait/resolution, completion/API error where reproducible; missing config shown with zero rows; no repeated agents subprocesses. Verify A1 for Claude. |
-| **3 — Preserve Amplifier richness through common ingress** | Change muxterm's Python hook module reporting sink, preserving root/child, goal, todo, read and classification semantics; installation health. No upstream engine rewrite. | Real root and delegated work, todo, artifact read, approval resolution, goal continuation/final result; outside-pane report and duplicate delivery; zero parallel state writers. Verify A1 for Amplifier. |
-| **4 — Codex richer hook coverage** | Install/trust verified rich hooks for global/manual and spawned usage; retain completion-only compatibility, native turn dedupe, visible coverage. | Real prompt, command, update_plan, approval, Stop/Interrupt and exit; hosted-tool gap visible; old notify and rich Stop do not duplicate completion; missing trust visible. Verify A1 for Codex. |
+| **1 — `muxterm codex` admits sessions without panes** | Add the interactive wrapper with invocation-scoped notify, minimal durable registry/aliases, common hook-report inbox/consumer, Codex notify translator, optional attachment wire/UI/MCP changes, health receipts and detail view. No chat executor or global config edit. | Run a real `muxterm codex` once in a muxterm pane and once outside any pane; each completes twice and keeps one stable row, with null pane/workspace for the latter. Close browser before completion, refresh and retain rows; native resume maps to the same ID. Reject invalid reports visibly. |
+| **2 — Claude hooks replace polling** | Add `muxterm claude`; share its bundled invocation plugin and diagnostics with Operator launches; add the Claude translator and core prompt/tool/permission/Stop/SessionEnd coverage; delete poller and startup wiring in this PR; one-time legacy adoption. | Real wrapper and Operator Claude sessions, tool success/failure, wait/resolution, completion/API error where reproducible; raw `claude` is documented as outside coverage; no global settings edit and no repeated agents subprocesses. Verify A1 for Claude. |
+| **3 — Preserve Amplifier richness through common ingress** | Add/extend `muxterm amplifier`; make Operator use the same invocation bundle; change the Python hook module reporting sink while preserving root/child, goal, todo, read and classification semantics. No upstream engine rewrite. | Real wrapper and Operator root/delegated work, todo, artifact read, approval resolution, goal continuation/final result; outside-pane Operator report and duplicate delivery; no global bundle requirement and zero parallel state writers. Verify A1 for Amplifier. |
+| **4 — Codex richer hook coverage** | Add/extend `muxterm codex`; make Operator use the same invocation-scoped rich hooks; retain completion-only compatibility, native turn dedupe, visible coverage. | Real wrapper and Operator prompt, command, update_plan, approval, Stop/Interrupt and exit; hosted-tool gap visible; old notify and rich Stop do not duplicate completion; no persistent config overwrite and missing trust is visible. Verify A1 for Codex. |
 | **5 — Durable transcript/session detail** | Shared transcript journal, bounded native imports, replay cursor, storage errors, archive/detach semantics. | Browser refresh/reconnect and isolated restart retain readable history; missing native file and disk-full expose errors; no native-state polling. Resolve import portion of A3. |
 | **6 — Hook-reporting chat and takeover** | Select verified managed transports, durable admission, approval/control ownership, native-ID resume; streams only for transcript rendering. | Two turns per harness, approval allow/deny/expiry, interrupted tool, terminal takeover/return, stale-send rejection and uncertain dispatch recovery. Resolve A2–A4 before enabling their controls. |
-| **7 — Operator session-first entry and cleanup** | Session-based spawn/send/read, causal notices, navigation, retire compatibility writers after adoption. | Mixed harness fleet, manual and spawned sessions, no browser during work, two completion notices for two turns, retained Operator history and usable ordinary terminals. |
+| **7 — Operator session-first entry and cleanup** | Session-based spawn/send/read, causal notices, navigation, retire compatibility writers after adoption. | Mixed harness fleet from wrapper and Operator launches, no browser during work, two completion notices for two turns, retained Operator history and usable ordinary terminals. |
 
 Every implementation PR uses actual harness processes and browser/sessiond
 verification in fresh `make dev-local` fixtures (8313); service/config installation
@@ -741,12 +756,12 @@ unverified SDK or symmetric event set for native evidence.
 
 | ID | ASSUMED: reason | What confirms it / release boundary |
 |---|---|---|
-| A1 | Native hook delivery, Claude plugin activation/observer neutrality, configuration composition/trust, native identity and correlation work through the future common bridge for each installed harness; no new bridge was executed in this research. | PRs 2–4 real manual/spawned event captures, config-disabled cases, retries and accepted fleet receipts. Expose unverified coverage until each passes; no Claude poller fallback. |
+| A1 | Native hook delivery, invocation-scoped Claude plugin activation/observer neutrality, configuration composition/trust, native identity and correlation work through the future common bridge for each wrapper/Operator launch; no new bridge was executed in this research. | PRs 2–4 real wrapper/Operator event captures, policy/conflict cases, retries and accepted fleet receipts. Expose unverified launch health until each passes; no global-install requirement and no Claude poller fallback. |
 | A2 | A selected chat execution mode exposes a usable permission/control round trip through its actual hooks; enum presence does not prove a broker can hold and answer the request. | PR 6 real allow/deny/expiry and reconnect per harness/mode. Keep that control disabled or require terminal intervention until verified; no guessed stdin protocol. |
 | A3 | Native transcript import and interrupted chat/terminal resume preserve completed context and release the former writer. Native history is not a stable cross-version guarantee. | PRs 5–6 two-turn import, interruption, explicit resume, missing-history and recovery verification. Preserve readable muxterm history; block takeover when ownership is uncertain. |
 | A4 | Same-user managed children can access the owner's normal CLI credentials and helpers under the service environment. Help output cannot establish authentication. | PR 6 real authenticated turn per harness with service-equivalent environment. Surface auth failure; never silently change account or billing route. |
 
-A1 is **updated** to include Claude plugin installation/activation and observer
+A1 is **updated** to include invocation-scoped Claude plugin activation and observer
 neutrality; A2–A4 are **retained** with their explicit confirmation gates. No
 assumption was silently retired. The claim that Claude lacks hooks is **refuted**,
 not retained as an assumption. No amplifier-agent replacement or SDK compatibility
