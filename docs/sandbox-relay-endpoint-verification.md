@@ -10,7 +10,7 @@ Observed on this run:
 
 ```text
 $ date -u '+%Y-%m-%dT%H:%M:%SZ'
-2026-09-21T07:36:30Z
+2026-09-22T05:12:36Z
 $ ps -p 1782462 -o pid=,args=
 [no output]
 $ curl --noproxy '*' --retry 2 --retry-connrefused --retry-delay 1 --connect-timeout 3 -sS http://127.0.0.1:8088/discover
@@ -45,7 +45,7 @@ exec result was established by this run. The historical fault scripts were
 verification fixtures; no fixture, mock, reference implementation, or simulation
 was substituted for the unavailable broker.
 
-The task's PR state and failure-record description were stale. GitHub returned:
+The task's PR state and failure-record description were stale on September 22, 2026. GitHub returned:
 
 ```json
 {"headRefName":"feat/https-sandbox-relay","state":"MERGED","url":"https://github.com/kenotron-ms/muxterm/pull/161"}
@@ -56,7 +56,7 @@ No merge or release was performed in this run. The existing sandbox-live-build.m
 contained historical successful browser and fault records, including subsequent
 broker restarts. Those records were not counted as fresh verification. The prior
 sandbox-relay-integration.md was preserved at
-/home/ken/artifacts/sandbox-relay-integration-prior-20260921.md.
+/home/ken/artifacts/sandbox-relay-integration-prior-20260922.md.
 
 Delivery status: (b) existing relay implementation inspected; (c) no new runtime
 provisioned; (d) connection to 8088 failed; (e) no fresh browser typing proof or
@@ -69,3 +69,32 @@ Production muxterm, production configuration, existing containers, Amplifier
 source, and Azure resources received no mutations from this run. No unit tests
 were written or run. The only changes were this report and its documentation PR,
 based on feat/https-sandbox-relay at f036274.
+
+Documentation PR: https://github.com/kenotron-ms/muxterm/pull/164
+
+Additional source evidence from this run: relay activation remained opt-in.
+No live activation state was established because the endpoint refused connections.
+
+```python
+# broker/muxterm_relay.py: attach_relay
+path = os.environ.get("SANDBOX_BROKER_LOCAL_RELAY_CONFIG")
+if not path:
+    return
+```
+
+The requested relay-enable-faults.py and relay-reset-fixture.py were read, not
+executed. Both targeted an owned container fixture under /opt/relay/fixture;
+the reset script terminated that fixture's processes, including its reference
+broker. Running that reset supplied no proof about the unavailable 8088 service.
+Source excerpt:
+
+```python
+assert pathlib.Path('/run/systemd/container').exists()
+root=pathlib.Path('/opt/relay/fixture')
+for name in ('serve','worker','broker','remote','local'):
+```
+
+No fresh terminal contents or screenshot existed for this attempt. Historical
+screenshots were not reused. The concrete blocker was connection refusal at the
+required broker URL, with no process at the supplied PID; it was not a permission
+failure. The explicit prohibition on starting another broker remained in force.
