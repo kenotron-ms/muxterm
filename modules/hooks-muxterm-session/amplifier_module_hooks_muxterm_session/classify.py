@@ -266,11 +266,13 @@ async def _complete_with_model_fallback(
             # Require an explicit unsupported *parameter* message, not merely
             # an invalid request or unsupported model/value. Never remove
             # request identity, messages, or background-streaming metadata.
+            # A quoted name alone is ambiguous: e.g. "'response_format' is
+            # not supported as a value" does not reject that parameter.
             status = getattr(exc, "status_code", None)
             invalid = isinstance(exc, InvalidRequestError) or status in (400, 422)
             match = re.search(
                 r"unsupported parameter:\s*['\"]([a-zA-Z_][a-zA-Z_0-9]*)['\"]"
-                r"|(?:parameter\s+)?['\"]([a-zA-Z_][a-zA-Z_0-9]*)['\"]"
+                r"|parameter\s+['\"]([a-zA-Z_][a-zA-Z_0-9]*)['\"]"
                 r"\s+is not supported",
                 str(exc),
                 re.IGNORECASE,
