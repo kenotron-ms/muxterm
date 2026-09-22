@@ -1,6 +1,0 @@
-go build ./...: exit 0
-go vet ./...: exit 0
-/home/ken/workspace/sandboxes/.venv/bin/ruff check broker/muxterm_relay.py: exit 0
-All checks passed!
-python3 -m py_compile broker/muxterm_relay.py: exit 0
-Frontend check: npm run check:fast completed earlier in this run with exit 0, existing warnings. No frontend edits followed.

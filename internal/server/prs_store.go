@@ -207,7 +207,7 @@ type prCollector struct {
 //
 // The directory is taken from sessiond's own answer rather than re-derived, so
 // a dev server with its own XDG_DATA_HOME cannot end up reading the real
-// completion log while writing a sandbox store, or the reverse.
+// completion log while writing another store, or the reverse.
 func DefaultCollectedPRsPath() string {
 	if override := os.Getenv("MUXTERM_COLLECTED_PRS_PATH"); override != "" {
 		return override

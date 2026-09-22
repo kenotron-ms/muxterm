@@ -1,3 +1,0 @@
-PASS live broker startup rejected missing Entra configuration (exit 1)
-PASS second broker process rejected the active binding lock (exit 1)
-PASS normal muxterm rejected owner relay on a non-loopback listener (exit 1)

@@ -221,7 +221,7 @@ server reads. Same family as `MUXTERM_COS_SESSION_ID`.
 ## Deliberately not in V1
 
 - No read-back route for attachment bytes, and no public publishing.
-- No remote/SSH, sandbox, or URL sourcing — the store is local, like the Files
+- No remote/SSH or URL sourcing — the store is local, like the Files
   writer it sits beside.
 - No OCR or captioning. The Operator has no vision tool; it says so and hands
   the path to a lane that does.

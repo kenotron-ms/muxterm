@@ -78,22 +78,9 @@ their own pills; the header summary would be saying it twice.
 
 ### D7. Discovery sections are per-transport; the rest of the UI is not
 
-SSH is one transport. Amplifier Sandboxes is the next (see `…-design.md` D2/D2b), and its
-discovery is a REST list, not a config file.
-
-Only **one** part of the UI knows this: the settings pane renders one section per transport
-that reports candidates — `From ~/.ssh/config`, `Sandboxes`, and so on — plus a manual-entry
-field that always exists. Everything else — group headers, badges, fleet chips, drop states —
-takes a `HostRef` and does not know or care how the stream is obtained.
-
-Two consequences worth naming, both from Sandboxes:
-
-- **Display name is not identity.** SSH aliases happen to be both; sandbox ids are
-  server-assigned UUIDs whose human names are mutable labels. The UI shows the label and
-  keys on the id.
-- **Never-connected candidates may cost money to start.** An ssh host is either up or not;
-  a suspended sandbox resumes on contact. "Connect" is a heavier verb for some transports
-  than others, which is an argument for open question 3 resolving toward *settings only*.
+Settings lists candidates from `~/.ssh/config` and accepts manual host entry.
+Group headers, badges, fleet chips, and connection states use `HostRef`.
+The UI displays the human label and keys stored references on the stable id.
 
 ### D8. Disconnection is a state, not an error
 
@@ -174,12 +161,6 @@ Per AGENTS.md, real browser only.
 - **`instanceLabel()` already shows the local hostname** in the sidebar header
   (`instance-identity.ts:76-79`), so the local group header repeats it. Accepted for
   symmetry; the alternative is an asymmetric first section.
-- **"Reconnecting" is styled as a mild alarm, which is right for SSH and wrong for
-  Sandboxes.** Amplifier Sandboxes auto-suspend by design and resume on contact, so a
-  reconnect there is routine rather than a fault. Deliberately not designing a separate
-  `suspended` state yet — one visual state until a second transport actually exists — but
-  the amber treatment is the first thing that will need revisiting when it does.
-
 ## Open questions
 
 1. **Host pins on tabs** — every remote tab, or only when more than one host has tabs open?

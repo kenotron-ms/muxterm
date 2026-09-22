@@ -1,8 +1,0 @@
-Restarted owned broker PID 1871883 -> 1881014 port 8088
-Fresh worker enrollment and process: 1964
-PASS real Entra bearer accepted on live broker /discover: HTTP 200
-PASS consumed enrollment replay: HTTP 401
-PASS Entra client token rejected on worker route: HTTP 401
-PASS ownership revocation rejected previously valid Entra owner: HTTP 403
-PASS revoked connection stayed fenced after owner restored: HTTP 410
-PASS broker restart and fresh enrollment rejected old connection input: HTTP 410

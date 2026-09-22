@@ -1,0 +1,93 @@
+### Page
+- Page URL: http://127.0.0.1:8313/
+- Page Title: muxterm
+- Console: 1 errors, 0 warnings
+### Snapshot
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic "127.0.0.1" [ref=e6]: muxterm
+      - button "Open menu" [ref=e7] [cursor=pointer]
+    - generic [ref=e8]:
+      - 'button "Nothing needs input. Mission Control, current view. muxterm: nothing waiting. removal-fixture: nothing waiting." [ref=e79] [cursor=pointer]':
+        - generic [ref=e11]:
+          - generic [ref=e12]: mission control
+          - generic [ref=e13]: "ctrl+`"
+        - generic [ref=e80]: Mission Control
+        - generic [ref=e81]: you are here
+        - generic [ref=e82]:
+          - generic "muxterm" [ref=e84]
+          - generic "removal-fixture" [ref=e86]
+      - generic [ref=e16]: workspaces
+      - generic [ref=e17]:
+        - button "▾ muxterm Local" [expanded] [ref=e18] [cursor=pointer]:
+          - generic [ref=e19]: ▾
+          - generic [ref=e21]: muxterm
+          - generic [ref=e22]: Local
+        - generic [ref=e23]:
+          - button "● workspace 1 1 pane Close workspace workspace 1" [ref=e24] [cursor=pointer]:
+            - generic [ref=e25]:
+              - generic [ref=e26]: ●
+              - generic [ref=e27]: workspace 1
+              - generic [ref=e28]: 1 pane
+              - button "Close workspace workspace 1" [ref=e29]: ×
+          - button "+ New workspace" [ref=e30] [cursor=pointer]
+      - button "▾ removal-fixture SSH" [ref=e88] [cursor=pointer]:
+        - generic [ref=e89]: ▾
+        - generic [ref=e91]: removal-fixture
+        - generic [ref=e92]: SSH
+      - button "+ Connect machine" [ref=e31] [cursor=pointer]
+    - generic [ref=e32]:
+      - generic [ref=e33]: muxterm dev
+      - generic [ref=e34]: Development build — updates are managed by your build, not by releases.
+  - generic [ref=e36]:
+    - generic [ref=e94]:
+      - generic [ref=e95]:
+        - button "Settings" [ref=e96] [cursor=pointer]
+        - button "Keyboard Shortcuts" [ref=e97] [cursor=pointer]
+        - button "Reconnect" [ref=e98] [cursor=pointer]
+        - button "About" [ref=e100] [cursor=pointer]
+      - generic [ref=e118]:
+        - generic [ref=e119]:
+          - generic [ref=e123] [cursor=pointer]:
+            - generic [ref=e124]: Pane 1
+            - button "Close pane Pane 1" [ref=e125]
+          - button "New pane" [ref=e129] [cursor=pointer]
+          - button "Split pane" [ref=e134] [cursor=pointer]
+        - generic [ref=e143]:
+          - textbox "Terminal input" [ref=e144]
+          - generic [aria-hidden]:
+            - generic:
+              - generic: ken@vela0
+              - generic: ":"
+              - generic: ~
+              - generic: $
+    - generic [ref=e47]:
+      - generic [ref=e48]:
+        - heading "Mission Control" [level=1] [ref=e49]
+        - button "Conversation options" [ref=e51] [cursor=pointer]
+      - generic [ref=e52]:
+        - generic [ref=e54]:
+          - generic [ref=e55]: What needs you?
+          - paragraph [ref=e56]: Describe a problem and Operator will help.
+        - generic [ref=e58]:
+          - textbox "Message Mission Control" [ref=e59]:
+            - /placeholder: Message Mission Control…
+          - generic [ref=e60]:
+            - button "Dictate" [ref=e145] [cursor=pointer]
+            - button "Talk to Operator" [ref=e61] [cursor=pointer]
+      - separator "Resize the conversation" [ref=e62]
+      - generic [ref=e64]:
+        - tablist "Applets" [ref=e66]:
+          - tab "Dashboard" [selected] [ref=e67] [cursor=pointer]
+          - tab "Files" [ref=e68] [cursor=pointer]
+          - tab "Viewer" [ref=e69] [cursor=pointer]
+          - tab "Pull Requests" [ref=e70] [cursor=pointer]
+        - tabpanel "Dashboard" [ref=e72]:
+          - generic [ref=e73]:
+            - group "Fleet view" [ref=e74]:
+              - button "cards" [pressed] [ref=e75] [cursor=pointer]
+              - button "tiles" [ref=e76] [cursor=pointer]
+            - generic [ref=e146]: Nothing is running. Describe a problem on the left and the lanes it starts appear here.
+```

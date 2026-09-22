@@ -1,0 +1,46 @@
+
+> muxterm-web@0.0.1 build
+> tsc --noEmit && vite build && vite build --config vite.public-doc.config.ts
+
+vite v6.4.2 building for production...
+transforming...
+[esbuild css minify]
+▲ [WARNING] "@charset" must be the first rule in the file [invalid-@charset]
+
+    <stdin>:2839:0:
+      2839 │ @charset "UTF-8";
+           ╵ ~~~~~~~~
+
+  This rule cannot come before a "@charset" rule
+
+    <stdin>:1:0:
+      1 │ .dv-scrollable {
+        ╵ ^
+
+
+✓ 1832 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/manifest.webmanifest          0.48 kB
+dist/index.html                    2.24 kB │ gzip:   1.04 kB
+dist/assets/index-CDXeqK9k.js  1,342.41 kB │ gzip: 333.63 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 2.14s
+
+PWA v1.3.0
+mode      generateSW
+precache  9 entries (0.00 KiB)
+files generated
+  dist/sw.js
+  dist/workbox-0bb07689.js
+vite v6.4.2 building for production...
+transforming...
+✓ 14 modules transformed.
+rendering chunks...
+computing gzip size...
+dist-public/public-doc.js  70.25 kB │ gzip: 22.79 kB
+✓ built in 273ms

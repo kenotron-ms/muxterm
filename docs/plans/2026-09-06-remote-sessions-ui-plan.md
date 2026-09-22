@@ -25,7 +25,7 @@ D7) and `docs/designs/2026-09-05-remote-sessiond-ux-design.md` (D1–D8). Wirefr
 
 ## Out of scope (do not build)
 
-D4 flow control · D6 relay queue · sandbox transport · tunnels UI · narrow (<768px) breakpoint ·
+D4 flow control · D6 relay queue · tunnels UI · narrow (<768px) breakpoint ·
 tiles view · the fleet strip (ux open question 2 is unresolved; the sidebar already carries
 per-host needs counts) · everything in the ux doc's YAGNI table (`:113-128`) — no status rail, no
 rtt/uptime telemetry, no explanatory subtitles, no behaviour toggles, no "Add machine" chip on
@@ -44,7 +44,7 @@ Home.
 ```
 
 The qualifier is **`HostRef.ID`** (`internal/transport/transport.go:37`) — never `DisplayName`.
-`ssh:boxb`, `sandbox:cb997d3d-…`. Display names are mutable labels; a workspace reference that
+`ssh:boxb`. Display names are mutable labels; a workspace reference that
 breaks when a host is relabelled is a production-only bug.
 
 **Canonical parse/format rules** (identical in Go and TypeScript):

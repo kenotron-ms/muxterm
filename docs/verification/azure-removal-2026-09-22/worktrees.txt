@@ -1,0 +1,28 @@
+/home/ken/work/muxterm                                 fc0809f [feat/codex-owned-hooks]
+/home/ken/work/muxterm-approval                        72de73b [feat/lane-approval-owned]
+/home/ken/work/muxterm-azure-enable-20260922           6833a38 (detached HEAD)
+/home/ken/work/muxterm-config-write                    1f92352 [fix/config-write-contract]
+/home/ken/work/muxterm-config-write-20260922           6d42c9e [fix/config-write-20260922]
+/home/ken/work/muxterm-fleet-rows                      a9a329c [fix/codex-fleet-row-todo-docs]
+/home/ken/work/muxterm-lifecycle                       8f33c61 [fix/operator-terminal-lifecycle]
+/home/ken/work/muxterm-merge-verification              fc0809f (detached HEAD)
+/home/ken/work/muxterm-operator-name-badges            7308a71 [fix/operator-name-badges-20260921]
+/home/ken/work/muxterm-provider-20260922               ae2af03 [fix/provider-parameter-20260922]
+/home/ken/work/muxterm-provider-parameter              9447baf [fix/utility-unsupported-parameter]
+/home/ken/work/muxterm-provider-recovery-review        98718ed [fix/provider-parameter-evidence-20260922]
+/home/ken/work/muxterm-relay-current-proof             4496340 [docs/relay-broker-unavailable-20260922]
+/home/ken/work/muxterm-relay-endpoint-verification     0f0b0b8 [docs/relay-endpoint-verification-20260921]
+/home/ken/work/muxterm-release-039-verification        6833a38 (detached HEAD)
+/home/ken/work/muxterm-remove-sandbox                  6833a38 [remove/azure-sandbox-20260922]
+/home/ken/work/muxterm-sandbox-live                    7308a71 [feat/sandbox-relay-startup]
+/home/ken/work/muxterm-sandbox-live-0605               e24ef77 [verify/sandbox-live-0605]
+/home/ken/work/muxterm-sandbox-live-20260922           bee8f07 [verify/sandbox-live-20260922]
+/home/ken/work/muxterm-sandbox-live-blocker            48941c6 [docs/sandbox-live-blocker-20260920]
+/home/ken/work/muxterm-sandbox-recheck                 1b0503d [verify/sandbox-live-recheck]
+/home/ken/work/muxterm-settings-write-0921             f95f761 [fix/settings-write-0921]
+/home/ken/workspace/muxterm-cos-attachments-v1         06a54f1 [feat/cos-composer-attachments-v1]
+/home/ken/workspace/muxterm-darwin-upload-portability  4010f84 [fix/darwin-upload-portability]
+/home/ken/workspace/muxterm-https-relay                f036274 [feat/https-sandbox-relay]
+/tmp/muxterm-release-20260922                          ae2af03 (detached HEAD)
+/tmp/muxterm-release-v0.39.0                           ae2af03 (detached HEAD)
+/tmp/muxterm-release-v038                              fc0809f (detached HEAD)

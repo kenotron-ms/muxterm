@@ -37,45 +37,11 @@ type Config struct {
 	// the settings API, so a browser PATCH /api/config can neither enable nor widen
 	// anything under it.
 	Cos CosConfig `toml:"cos" json:"-"`
-	// SandboxAzure is intentionally excluded from browser JSON and settings writes.
-	// It is an owner-only outbound Azure scope allowlist; retaining it in the
-	// TOML model prevents an unrelated browser settings save from erasing it.
-	SandboxAzure SandboxAzureConfig `toml:"sandbox_azure" json:"-"`
 }
 
 // LanesConfig controls newly launched Codex and Claude lanes.
 type LanesConfig struct {
 	Approval string `toml:"approval" json:"approval"` // prompt (default) | never
-}
-
-// SandboxAzureConfig is retained only so config.Write preserves the owner-only
-// [sandbox_azure] TOML section. The direct lifecycle controller decodes and
-// validates the same section independently; browser/API callers cannot read or
-// write this type because its parent field is json:"-".
-type SandboxAzureConfig struct {
-	Enabled    bool                  `toml:"enabled"`
-	KillSwitch bool                  `toml:"kill_switch"`
-	StoreDir   string                `toml:"store_dir"`
-	Profiles   []SandboxAzureProfile `toml:"profile"`
-}
-
-type SandboxAzureProfile struct {
-	Name              string   `toml:"name"`
-	TenantID          string   `toml:"tenant_id"`
-	SubscriptionID    string   `toml:"subscription_id"`
-	ResourceGroup     string   `toml:"resource_group"`
-	SandboxGroup      string   `toml:"sandbox_group"`
-	Region            string   `toml:"region"`
-	DiskID            string   `toml:"disk_id"`
-	ImageDigest       string   `toml:"image_digest"`
-	ReleaseStatus     string   `toml:"release_status"`
-	Protocol          int      `toml:"protocol"`
-	CPU               string   `toml:"cpu"`
-	Memory            string   `toml:"memory"`
-	AutoSuspendSecond int      `toml:"auto_suspend_seconds"`
-	AutoDeleteSeconds int      `toml:"auto_delete_seconds"`
-	ControllerCIDRs   []string `toml:"controller_cidrs"`
-	EgressHosts       []string `toml:"egress_hosts"`
 }
 
 // CosConfig groups the Mission Control capabilities an operator turns on

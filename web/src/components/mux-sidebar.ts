@@ -26,12 +26,6 @@ import {
   UpdateEndpointMissingError,
   type UpdateStatus,
 } from '../lib/update.js';
-import {
-  sandboxAuthRequired,
-  sandboxUnavailable,
-  sandboxPresentationStore,
-  type SandboxPresentation,
-} from '../lib/sandboxes.js';
 
 // ---------------------------------------------------------------------------
 // Self-update footer
@@ -337,27 +331,6 @@ function ageLabel(ms: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m`;
   return `${Math.floor(m / 60)}h`;
-}
-
-function sandboxInventoryState(
-  presentation: SandboxPresentation | null,
-  loading: boolean,
-  error: unknown,
-): string {
-  if (sandboxUnavailable(error)) return 'unavailable · authentication disabled';
-  if (sandboxAuthRequired(error)) return 'sign in required';
-  if (error) return 'error';
-  if (loading || !presentation) return 'validation pending';
-  switch (presentation.configuration_state) {
-    case 'unconfigured':
-      return 'unconfigured';
-    case 'disabled':
-      return 'disabled';
-    case 'kill-switch':
-      return 'kill switch';
-    case 'lifecycle-only':
-      return presentation.records.length === 0 ? 'empty' : 'lifecycle-only';
-  }
 }
 
 function hostTypeLabel(host: string): 'Local' | 'SSH' | 'Remote' {
@@ -978,17 +951,13 @@ export class MuxSidebar extends LitElement {
       color: color-mix(in srgb, var(--remote) 55%, var(--chrome-text-dim));
     }
 
-    .hg-type,
-    .sandbox-badge {
+    .hg-type {
       flex-shrink: 0;
       border-radius: 3px;
       color: var(--chrome-text-dim);
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 8px;
       letter-spacing: 0.04em;
-    }
-
-    .hg-type {
       padding: 1px 4px;
       border: 1px solid var(--chrome-border);
       line-height: 1.2;
@@ -1111,104 +1080,6 @@ export class MuxSidebar extends LitElement {
 
     .ws-card.preview.remote.active .ws-chip-extra {
       color: var(--remote);
-    }
-
-    /* ---- Azure lifecycle inventory -------------------------------------- */
-    /* This is deliberately not a .hostgroup: it has no remote identity,
-       workspace list, close affordance, or create affordance. */
-    .sandbox-inventory {
-      margin: 12px 4px 4px;
-      border: 1px solid var(--chrome-border);
-      border-radius: 5px;
-      background: color-mix(in srgb, var(--chrome-bar) 82%, var(--chrome-body));
-      overflow: hidden;
-    }
-
-    .sandbox-inventory-trigger {
-      display: block;
-      width: 100%;
-      padding: 7px 9px;
-      border: 0;
-      background: transparent;
-      color: var(--chrome-text-bright);
-      font: inherit;
-      text-align: left;
-      cursor: pointer;
-    }
-
-    .sandbox-inventory-trigger:hover {
-      background: var(--chrome-hover);
-    }
-
-    .sandbox-inventory-trigger:focus-visible {
-      outline: 2px solid var(--chrome-accent);
-      outline-offset: -2px;
-    }
-
-    .sandbox-inventory-head {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      min-width: 0;
-    }
-
-    .sandbox-badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 20px;
-      width: auto;
-      height: 16px;
-      padding: 0 4px;
-      box-sizing: border-box;
-      border: 1px solid var(--chrome-text-dim);
-      color: var(--chrome-text-dim);
-    }
-
-    .sandbox-inventory-title {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 10px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-
-    .sandbox-inventory-state {
-      margin-left: auto;
-      color: var(--chrome-text-dim);
-      font-size: 10px;
-      white-space: nowrap;
-    }
-
-    .sandbox-inventory-body {
-      padding: 0 9px 8px 36px;
-      color: var(--chrome-text-dim);
-      font-size: 10px;
-      line-height: 1.45;
-    }
-
-    .sandbox-inventory-connection {
-      display: block;
-      margin-top: 4px;
-      color: var(--mux-warn);
-    }
-
-    .sandbox-inventory-record {
-      display: flex;
-      gap: 6px;
-      min-width: 0;
-      margin-top: 4px;
-    }
-
-    .sandbox-inventory-record::before {
-      content: '·';
-      color: var(--chrome-text-dim);
-      flex-shrink: 0;
-    }
-
-    .sandbox-inventory-record span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
 
     /* ---- update footer (pinned; never scrolls with .tab-content) ---- */
@@ -1359,7 +1230,6 @@ export class MuxSidebar extends LitElement {
 
   private _unsub: (() => void) | null = null;
   private _unsubRemotes: (() => void) | null = null;
-  private _unsubSandboxPresentation: (() => void) | null = null;
   /** 1 Hz clock, live ONLY while a `.stale-banner` age is on screen. */
   private _ageTimer: number | null = null;
   /** Set by the render that just ran: is any banner age displayed? */
@@ -1446,7 +1316,6 @@ export class MuxSidebar extends LitElement {
       this._seedCollapsed();
       this._version++;
     });
-    this._syncSandboxPresentationSubscription();
 
     // One probe per page, remembered. Until it resolves we render the preview
     // layout but draw nothing; if it resolves false every card falls back to
@@ -1475,8 +1344,6 @@ export class MuxSidebar extends LitElement {
     this._unsubSessions = null;
     this._unsubRemotes?.();
     this._unsubRemotes = null;
-    this._unsubSandboxPresentation?.();
-    this._unsubSandboxPresentation = null;
     window.removeEventListener('keydown', this._onPreviewKeyDown, true);
     window.removeEventListener('resize', this._onPreviewViewportChange);
     window.removeEventListener('scroll', this._onPreviewViewportChange, true);
@@ -1525,7 +1392,6 @@ export class MuxSidebar extends LitElement {
     this._collectCanvases();
     this._paintAll(this._cards);
     this._syncAgeTicker();
-    this._syncSandboxPresentationSubscription();
     if (this._previewState !== 'hidden') {
       void this.updateComplete.then(() => {
         if (this._previewState !== 'hidden') this._positionPreviewTooltip();
@@ -1591,21 +1457,6 @@ export class MuxSidebar extends LitElement {
     } else {
       this._unsubPreview?.();
       this._unsubPreview = null;
-    }
-  }
-
-  /** Match the Azure inventory subscription to the drawer's visible lifetime. */
-  private _syncSandboxPresentationSubscription(): void {
-    const want = this.previewsVisible;
-    if (want === (this._unsubSandboxPresentation !== null)) return;
-    if (want) {
-      this._unsubSandboxPresentation = sandboxPresentationStore.subscribe(() => {
-        this._version++;
-      });
-      void sandboxPresentationStore.refresh();
-    } else {
-      this._unsubSandboxPresentation?.();
-      this._unsubSandboxPresentation = null;
     }
   }
 
@@ -2143,16 +1994,6 @@ export class MuxSidebar extends LitElement {
     );
   }
 
-  private _onSandboxInventoryClick(): void {
-    this.dispatchEvent(
-      new CustomEvent('launcher-action', {
-        bubbles: true,
-        composed: true,
-        detail: { action: 'settings', section: 'sandboxes' },
-      }),
-    );
-  }
-
   /**
    * Retry a dropped host now instead of waiting out the backoff.
    *
@@ -2495,54 +2336,6 @@ export class MuxSidebar extends LitElement {
     `;
   }
 
-  private _renderSandboxInventory() {
-    const snapshot = sandboxPresentationStore.snapshot;
-    const presentation = snapshot.data;
-    const state = sandboxInventoryState(presentation, snapshot.loading, snapshot.error);
-    const buttonLabel = `Azure Sandbox inventory: ${state}. Open Sandboxes Settings`;
-    const errorText = snapshot.error instanceof Error
-      ? snapshot.error.message
-      : 'The owner-local Azure Sandbox inventory could not be read.';
-    return html`
-      <section class="sandbox-inventory" aria-label="Azure Sandbox inventory">
-        <button
-          class="sandbox-inventory-trigger"
-          type="button"
-          aria-label="${buttonLabel}"
-          @click="${() => this._onSandboxInventoryClick()}"
-        >
-          <span class="sandbox-inventory-head">
-            <span class="sandbox-badge">Azure</span>
-            <span class="sandbox-inventory-title">Sandbox inventory</span>
-            <span class="sandbox-inventory-state">${state}</span>
-          </span>
-        </button>
-        <div class="sandbox-inventory-body">
-          ${sandboxAuthRequired(snapshot.error)
-            ? html`<span>Sign in to view the owner-local inventory.</span>`
-            : snapshot.error
-              ? html`<span>${errorText}</span>`
-            : snapshot.loading || !presentation
-              ? html`<span>Validation pending…</span>`
-              : presentation.configuration_state === 'unconfigured'
-                ? html`<span>Not configured on this muxterm.</span>`
-                : presentation.configuration_state === 'disabled'
-                  ? html`<span>Disabled by the owner.</span>`
-                  : presentation.configuration_state === 'kill-switch'
-                    ? html`<span>Blocked by the owner kill switch.</span>`
-                    : presentation.records.length === 0
-                      ? html`<span>No recorded sandboxes.</span>`
-                      : presentation.records.map(record => html`
-                          <span class="sandbox-inventory-record">
-                            <span>${record.profile} · ${record.observed_state}</span>
-                          </span>
-                        `)}
-          <span class="sandbox-inventory-connection" role="status">Connection unavailable</span>
-        </div>
-      </section>
-    `;
-  }
-
   private _renderWorkspaces() {
     const cols = this._cols;
     // Recorded so the preview tick can tell a structural change from a mere
@@ -2565,7 +2358,6 @@ export class MuxSidebar extends LitElement {
       ${groups.map((group) =>
         this._renderHostGroup(group),
       )}
-      ${this._renderSandboxInventory()}
       <button class="new-ws-btn remote" @click="${() => this._onConnectMachine()}">
         + Connect machine
       </button>

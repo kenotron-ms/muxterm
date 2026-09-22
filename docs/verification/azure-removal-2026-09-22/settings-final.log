@@ -1,0 +1,113 @@
+### Page
+- Page URL: http://127.0.0.1:8313/
+- Page Title: muxterm
+- Console: 1 errors, 0 warnings
+### Snapshot
+```yaml
+- generic [active] [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - generic "127.0.0.1" [ref=e6]: muxterm
+        - button "Open menu" [ref=e7] [cursor=pointer]
+      - generic [ref=e8]:
+        - button "Nothing needs input. Mission Control, current view." [ref=e10] [cursor=pointer]:
+          - generic [ref=e11]:
+            - generic [ref=e12]: mission control
+            - generic [ref=e13]: "ctrl+`"
+          - generic [ref=e14]: Mission Control
+          - generic [ref=e15]: you are here
+        - generic [ref=e16]: workspaces
+        - generic [ref=e17]:
+          - button "▾ muxterm Local" [expanded] [ref=e18] [cursor=pointer]:
+            - generic [ref=e19]: ▾
+            - generic [ref=e21]: muxterm
+            - generic [ref=e22]: Local
+          - generic [ref=e23]:
+            - button "● workspace 1 1 pane Close workspace workspace 1" [ref=e24] [cursor=pointer]:
+              - generic [ref=e25]:
+                - generic [ref=e26]: ●
+                - generic [ref=e27]: workspace 1
+                - generic [ref=e28]: 1 pane
+                - button "Close workspace workspace 1" [ref=e29]: ×
+            - button "+ New workspace" [ref=e30] [cursor=pointer]
+        - button "+ Connect machine" [ref=e31] [cursor=pointer]
+      - generic [ref=e32]:
+        - generic [ref=e33]: muxterm dev
+        - generic [ref=e34]: Development build — updates are managed by your build, not by releases.
+    - generic [ref=e36]:
+      - generic [ref=e38]:
+        - generic [ref=e39]:
+          - button "Settings" [ref=e40] [cursor=pointer]
+          - button "Keyboard Shortcuts" [ref=e41] [cursor=pointer]
+          - button "Reconnect" [ref=e42] [cursor=pointer]
+          - button "About" [ref=e44] [cursor=pointer]
+        - generic [ref=e62]:
+          - generic [ref=e63]:
+            - generic [ref=e67] [cursor=pointer]:
+              - generic [ref=e68]: Pane 1
+              - button "Close pane Pane 1" [ref=e69]
+            - button "New pane" [ref=e73] [cursor=pointer]
+            - button "Split pane" [ref=e78] [cursor=pointer]
+          - generic [ref=e119]:
+            - textbox "Terminal input" [ref=e120]
+            - generic [aria-hidden]:
+              - generic:
+                - generic: ken@vela0
+                - generic: ":"
+                - generic: ~
+                - generic: $
+      - generic [ref=e85]:
+        - generic [ref=e86]:
+          - heading "Mission Control" [level=1] [ref=e87]
+          - button "Conversation options" [ref=e89] [cursor=pointer]
+        - generic [ref=e90]:
+          - generic [ref=e92]:
+            - generic [ref=e93]: What needs you?
+            - paragraph [ref=e94]: Describe a problem and Operator will help.
+          - generic [ref=e96]:
+            - textbox "Message Mission Control" [ref=e97]:
+              - /placeholder: Message Mission Control…
+            - generic [ref=e98]:
+              - button "Dictate" [ref=e121] [cursor=pointer]
+              - button "Talk to Operator" [ref=e99] [cursor=pointer]
+        - separator "Resize the conversation" [ref=e100]
+        - generic [ref=e102]:
+          - tablist "Applets" [ref=e104]:
+            - tab "Dashboard" [selected] [ref=e105] [cursor=pointer]
+            - tab "Files" [ref=e106] [cursor=pointer]
+            - tab "Viewer" [ref=e107] [cursor=pointer]
+            - tab "Pull Requests" [ref=e108] [cursor=pointer]
+          - tabpanel "Dashboard" [ref=e110]:
+            - generic [ref=e111]:
+              - group "Fleet view" [ref=e112]:
+                - button "cards" [pressed] [ref=e113] [cursor=pointer]
+                - button "tiles" [ref=e114] [cursor=pointer]
+              - generic [ref=e122]: Nothing is running. Describe a problem on the left and the lanes it starts appear here.
+  - generic [ref=e156]:
+    - generic [ref=e157]:
+      - heading "Settings" [level=2] [ref=e158]
+      - button "×" [ref=e159] [cursor=pointer]
+    - generic [ref=e160]:
+      - navigation [ref=e161]:
+        - button "Appearance" [ref=e162] [cursor=pointer]
+        - button "Notifications" [ref=e163] [cursor=pointer]
+        - button "AI" [ref=e164] [cursor=pointer]
+        - button "Voice" [ref=e165] [cursor=pointer]
+        - button "Remotes" [ref=e166] [cursor=pointer]
+      - generic [ref=e167]:
+        - generic [ref=e303]: From ~/.ssh/config
+        - generic [ref=e304]:
+          - generic [ref=e306]:
+            - generic [ref=e307]: amplifier-resolve-vm
+            - generic [ref=e308]: amplifier-resolve-vm
+          - button "Connect" [ref=e309] [cursor=pointer]
+        - generic [ref=e310]:
+          - generic [ref=e312]:
+            - generic [ref=e313]: res0
+            - generic [ref=e314]: ken@res0
+          - button "Connect" [ref=e315] [cursor=pointer]
+          - button "Remove" [ref=e316] [cursor=pointer]
+        - generic [ref=e318]: Add a host
+        - textbox "user@host" [ref=e319]
+```

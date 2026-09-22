@@ -1,6 +1,0 @@
-### Result
-{"workspace":"●\nAzure playground\n1 pane\n×","terminal":["# printf 'REAL_AZURE_SANDBOX_OK\\n'; hostname; uname -a; pwd","REAL_AZURE_SANDBOX_OK","adc-sandbox","Linux adc-sandbox 6.12.8+ #1 SMP Thu Jul 30 23:01:31 UTC 2026 x86_64 GNU/Linux","/root","#  ","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","",""]}
-### Ran Playwright code
-```js
-await (async page => { await page.screenshot({path:"/home/ken/artifacts/azure-muxterm-live/browser.png"}); return {workspace:await page.getByRole("button",{name:"● Azure playground 1 pane Close workspace Azure playground",exact:true}).innerText(),terminal:await page.locator(".xterm-rows > div").allTextContents()}; })(page);
-```

@@ -1,0 +1,2 @@
+rg -n "sandboxazure|sandboxingress|SandboxAvailability|SandboxPresentation|EMPTY_SANDBOXES|SandboxAzure|/api/sandboxes|/api/relay|MUXTERM_RELAY|MUXTERM_SANDBOX|internal/transport/relay|muxterm-sandbox|https-relay|_sandboxBusy|_sandboxProfile|sandbox-create|sandbox-profile-select|sandbox-actions|newRemoteTransport|WrapSandbox|sandbox_azure" cmd internal web/src
+exit=1; hits=0
