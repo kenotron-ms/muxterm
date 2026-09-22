@@ -1,0 +1,47 @@
+$ readlink /proc/2156056/cwd
+/home/ken/work/sandbox-broker-live
+$ ps -p 2156056,2147288,2147289 -o pid,comm
+    PID COMMAND
+2147288 muxterm
+2147289 muxterm
+2156056 python
+$ incus exec muxterm-sandbox-live-worker -- ss -lntup
+Netid State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+$ incus exec muxterm-sandbox-live-worker -- stat -c %a %n /opt/relay/runtime/muxterm/sessiond.sock
+600 /opt/relay/runtime/muxterm/sessiond.sock
+$ incus exec muxterm-sandbox-live-worker -- iptables -S
+-P INPUT DROP
+-P FORWARD ACCEPT
+-P OUTPUT DROP
+-A INPUT -i lo -j ACCEPT
+-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A OUTPUT -d 10.9.113.136/32 -p tcp -m tcp --dport 443 -j ACCEPT
+$ incus exec muxterm-sandbox-live-worker -- ps -eo pid,args
+    PID COMMAND
+      1 /sbin/init
+    132 /usr/lib/systemd/systemd-journald
+    193 /usr/lib/systemd/systemd-udevd
+    231 /usr/sbin/cron -f -P
+    232 @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+    236 /usr/lib/systemd/systemd-logind
+    240 /sbin/agetty -o -p -- \u --noclear --keep-baud - 115200,38400,9600 linux
+    241 /usr/sbin/rsyslogd -n -iNONE
+   2050 /opt/relay/bin/muxterm sessiond
+   2066 /bin/sh -l
+   2076 /bin/sh -l
+   2082 /bin/sh -l
+   2104 /bin/sh -l
+   2109 /bin/sh -l
+   2201 /bin/sh -l
+   2206 /bin/sh -l
+   2211 /bin/sh -l
+   2224 /bin/sh -l
+   2248 /bin/sh -l
+   2274 /bin/sh -l
+   2556 /bin/sh -l
+   2563 /bin/sh -l
+   2588 /bin/sh -l
+   2603 /opt/relay/bin/agent --config /opt/relay/worker.json --socket /opt/relay/runtime/muxterm/sessiond.sock
+   2611 /bin/sh -l
+   2620 ps -eo pid,args

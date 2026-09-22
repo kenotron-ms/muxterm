@@ -1,0 +1,4 @@
+# printf 'SETTINGS_RELAY_INPUT_OK\n'; hostname
+SETTINGS_RELAY_INPUT_OK
+muxterm-sandbox-live-worker
+#  

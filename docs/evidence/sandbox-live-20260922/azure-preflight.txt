@@ -1,0 +1,4 @@
+{
+  "id": "/subscriptions/8a673afb-d858-4a97-a490-2625396d1484/resourceGroups/rg-amplifier-sandboxes/providers/Microsoft.App/sandboxGroups/sg-amplifier-sandboxes",
+  "state": "Succeeded"
+}

@@ -1,0 +1,8 @@
+### Result
+[
+  "# echo LIVE_SEPTEMBER_22; hostnameLIVE_SEPTEMBER_22muxterm-sandbox-live-worker#  "
+]
+### Ran Playwright code
+```js
+await page.evaluate('() => { const result=[]; const walk=n=>{ for(const e of n.querySelectorAll("*")){ if(e.classList.contains("xterm-rows")) result.push(e.textContent); if(e.shadowRoot)walk(e.shadowRoot); }};walk(document);return result; }');
+```
