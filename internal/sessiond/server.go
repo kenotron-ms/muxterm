@@ -201,8 +201,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // would appear to work there and fail only on Linux.
 //
 // Serve is therefore correct only with a Unix listener until the per-listener
-// identity policy lands (see docs/designs/2026-09-05-remote-sessiond-design.md,
-// D2b). The listener parameter exists so that step is a change to auth policy
+// identity policy changes. The listener parameter keeps that change in auth policy
 // rather than another change to this function.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	// Cold-start: ensure the first attach always lands somewhere.

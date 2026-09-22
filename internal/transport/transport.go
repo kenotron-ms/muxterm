@@ -28,10 +28,10 @@ import (
 // ID and DisplayName are deliberately separate fields because they are only
 // the same string for SSH. Anything durable — a namespaced workspace id, a
 // stored preference — must key on ID; DisplayName is for humans and may change
-// underneath you (a sandbox label is user-editable, an ssh alias is not).
+// independently of a stored reference.
 type HostRef struct {
 	// ID is the stable, transport-qualified identity of this host, e.g.
-	// "ssh:boxb" or "sandbox:cb997d3d-…". It is never a mutable label: a
+	// "ssh:boxb". It is never a mutable label: a
 	// reference that breaks when someone renames a host is a bug that only
 	// shows up in production.
 	ID string

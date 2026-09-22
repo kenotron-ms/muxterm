@@ -122,7 +122,6 @@ and what was attempted. That is a valid terminal state. Teardown still applies.
 - No web UI work. The sidebar, Home, and settings mocks are design artifacts; do not implement them.
 - No MCP host-aware pane ids.
 - No flow-control work — the D4 control lane and D6 relay queue are a later rollout step.
-- No sandbox transport (design D2b).
 - No edge namespacing or web relay (design D3) beyond what CLI `--remote` requires.
 - No unit tests. AGENTS.md bans them; verification is running the thing.
 - No production soak, no monitoring over elapsed time.

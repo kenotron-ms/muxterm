@@ -10,8 +10,8 @@ import (
 )
 
 // runSessiondConnect pipes this process's stdin/stdout to the local sessiond
-// Unix socket, making a plain byte stream (an ssh subprocess's pipes, a
-// sandbox bridge, anything) a usable path to the daemon's frozen protocol.
+// Unix socket, making an SSH subprocess's pipes a usable path to the
+// daemon's frozen protocol.
 //
 // It is a plumbing primitive and deliberately knows nothing about what carried
 // its stdio. It is also deliberately BINARY-CLEAN: raw io.Copy in both

@@ -20,7 +20,7 @@ configured local Explorer root. A directory is uploadable only when its
 canonical, no-symlink path is that root or a descendant. The listing may still
 show other readable locations under the existing read contract, but its upload
 control states plainly that the location is outside the configured Explorer
-root. A remote/SSH or sandbox directory is not accepted or remapped to local;
+root. A remote/SSH directory is not accepted or remapped to local;
 the UI is unavailable until a scoped remote writer exists.
 
 The authenticated app shell gives each browser an HttpOnly, SameSite attachment
@@ -46,9 +46,7 @@ token.
 
 The binding is local-host-only. Remote sessiond intentionally exposes only
 read-file/list-dir operations today; adding a general writer would overturn its
-structural read-only boundary. Sandboxes have no verified binary-safe,
-long-lived sessiond path. Both are explicit unsupported states, not fallback
-paths.
+structural read-only boundary. Remote upload is an explicit unsupported state.
 
 ## File and path model
 
@@ -110,7 +108,6 @@ progress increment. Picker and drag/drop use exactly this same queue.
 | Local directory at/below configured Explorer root | Existing local `/api/files` | Supported when writable |
 | Other local readable directory | Existing local `/api/files` | Unavailable: outside configured Explorer root |
 | SSH/remote directory | Not rendered by the present Files applet; sessiond has separate MCP-only read operations | **Unavailable.** The current sessiond filesystem protocol is structurally read-only and no workspace-scoped remote Explorer capability exists. This PR must not fall back to the local filesystem. |
-| Sandbox directory | No verified Files transport | **Unavailable.** No source-authoritative, authenticated sandbox-to-sessiond bridge exists. This PR does not use a direct Azure, broker, or signed-URL path. |
 
 ## Remote host investigation and decision
 
@@ -149,7 +146,7 @@ the muxterm boundary that makes the existing remoting safe.
 
 **SSH uploads are feasible only as a separately implemented additive sessiond
 capability. They are not implemented in this PR.** The local upload feature
-ships unchanged and remote/sandbox uploads remain unavailable.
+ships unchanged and remote uploads remain unavailable.
 
 The missing work is not merely a byte-copy method:
 
@@ -413,44 +410,6 @@ Dragging over controls, the sidebar, a terminal, or outside the Files surface
 continues to use ordinary browser behavior. The availability check is a
 server-side answer for the active source; the UI does not infer support from a
 host label or cached prior connection.
-
-## Sandbox prerequisite and future acceptance gate
-
-Sandbox upload is intentionally not designed as an SSH variation. Current
-research records no proven binary-clean, long-lived, source-authoritative
-sandbox sessiond channel. Direct Azure shell execution, a generic broker
-transfer, a public ingress, or a signed bridge URL cannot be adopted as browser
-upload authority.
-
-Before a sandbox row may become uploadable, an independently implemented and
-verified muxterm sandbox transport must provide all of the following:
-
-1. A source-authoritative sandbox registry yields a stable, non-reused
-   `HostRef.ID`, mutable display label kept separate, and a machine/instance
-   incarnation that changes on replacement.
-2. An encrypted, bidirectional, binary-safe bridge connects the **local
-   muxterm server** to the sandbox sessiond socket. The bridge mutually
-   authenticates its exact source host and transport version; its credential is
-   server-held and never exposed to JavaScript.
-3. The bridge/sessiond handshake proves the browser owner/attachment scope,
-   remote File Upload capability/version, remote machine identity, and daemon
-   incarnation. A signed bridge URL or token alone is neither an attachment
-   proof nor upload authorization.
-4. A lifecycle signal for suspension, expiry, destruction, revocation, or
-   bridge replacement fences the matching source generation, aborts only
-   sessiond-owned temps, and prevents commit/replay through a replacement
-   sandbox.
-5. The sandbox sessiond implementation satisfies the same workspace Explorer
-   root, descriptor-relative write, limits, digest, collision, and cleanup
-   contract as SSH Remote File Upload v1.
-
-Sandbox volume ownership and persistence/retention policy remain separate
-decisions. They do not widen an upload destination and must not introduce a
-broker/object-storage fallback. Until all prerequisites are independently
-accepted, the UI remains explicitly disabled:
-
-> Uploads are unavailable for sandbox folders because a secure muxterm sandbox
-> file transport is not available.
 
 ### Follow-on verification contract
 

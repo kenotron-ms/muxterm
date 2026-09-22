@@ -81,8 +81,7 @@ var errNoTransport = errors.New("this muxterm build has no remote transport wire
 // connection per machine.
 //
 // One connection per MACHINE, keyed on transport.HostRef.ID and never on a
-// display name: an ssh alias is stable but a sandbox label is user-editable,
-// and a cache keyed on a mutable label silently serves the wrong machine the
+// display name: a cache keyed on a mutable label silently serves the wrong machine the
 // moment someone renames one. That is the exact class of bug HostRef's ID /
 // DisplayName split exists to prevent (internal/transport/transport.go:28).
 type machines struct {

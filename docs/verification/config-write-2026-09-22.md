@@ -22,7 +22,7 @@ disk configuration. This fixes the general hand-maintained merge omission class:
 JSON-visible fields are merged recursively without separate merge assignments;
 explicit `patch:"readonly"` annotations preserve the existing file-only boundaries
 for keys, workspace, driver, server, restore, voice, and missioncontrol. The
-JSON-hidden cos and sandbox_azure sections remain inaccessible. The only newly
+The JSON-hidden cos section remains inaccessible. The only newly
 writable section is lanes. Its default remains `prompt`, and its only accepted
 approval values remain `prompt` and `never`. Omitted fields remain unchanged;
 explicit zero/false/empty values are no longer silently discarded by sentinel
