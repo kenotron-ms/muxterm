@@ -1,6 +1,0 @@
-### Result
-{"text":"Local","fontSize":"8px","flexShrink":"0","borderRadius":"3px"}
-### Ran Playwright code
-```js
-await (async page => { const badge=page.locator("mux-sidebar .hg-type").first(); const styles=await badge.evaluate(e=>({text:e.textContent.trim(),fontSize:getComputedStyle(e).fontSize,flexShrink:getComputedStyle(e).flexShrink,borderRadius:getComputedStyle(e).borderRadius})); if(styles.fontSize!=="8px" || styles.flexShrink!=="0") throw new Error(JSON.stringify(styles)); return styles; })(page);
-```
