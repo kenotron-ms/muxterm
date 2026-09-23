@@ -125,7 +125,11 @@ func LaneArgv(harness, prompt, goal string) ([]string, error) {
 		// `--mode chat` is load-bearing HERE: without it an interactive lane is
 		// single-shot and the pane dies after its first turn. It is exactly
 		// wrong in the goal branch above.
-		return []string{"amplifier", "run", prompt, "--mode", "chat"}, nil
+		self, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("resolve muxterm wrapper: %w", err)
+		}
+		return []string{self, "amplifier", "run", prompt, "--mode", "chat"}, nil
 
 	case "":
 		return nil, fmt.Errorf("harness is required (launchable: %s)", strings.Join(LaunchableHarnesses, ", "))

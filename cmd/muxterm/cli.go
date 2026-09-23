@@ -237,18 +237,22 @@ func parseCommand(args []string) (Config, error) {
 }
 
 func parseAmplifier(args []string) (Config, error) {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(os.Stdout, "Usage: muxterm amplifier <command>")
+	if len(args) == 0 {
+		return Config{Mode: "amplifier", Args: []string{"run"}}, nil
+	}
+	if args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(os.Stdout, "Usage: muxterm amplifier [amplifier arguments...]")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Commands:")
-		fmt.Fprintln(os.Stdout, "  install    Add the muxterm bundle to Amplifier as an app bundle")
+		fmt.Fprintln(os.Stdout, "  install    Add the muxterm bundle to Amplifier as an app bundle (legacy)")
+		fmt.Fprintln(os.Stdout, "All other arguments run Amplifier with invocation-scoped muxterm reporting.")
 		return Config{Mode: "help"}, nil
 	}
 	switch args[0] {
 	case "install":
 		return Config{Mode: "amplifier-install"}, nil
 	default:
-		return Config{}, fmt.Errorf("unknown amplifier command %q\n\nRun 'muxterm amplifier --help' for usage.", args[0])
+		return Config{Mode: "amplifier", Args: args}, nil
 	}
 }
 

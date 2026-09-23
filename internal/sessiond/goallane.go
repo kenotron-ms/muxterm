@@ -1,5 +1,7 @@
 package sessiond
 
+import "os"
+
 // A goal lane's two phases, chained inside one pane.
 //
 // THE PROBLEM THIS SOLVES. A goal lane used to be launched as the single
@@ -15,8 +17,8 @@ package sessiond
 // THE FIX, AND WHY IT IS SHAPED LIKE THIS. The two phases are chained in the
 // pane's own command rather than in muxterm's pane lifecycle:
 //
-//	phase 1  amplifier run "/goal <condition>"   headless, loops, exits
-//	phase 2  amplifier resume <session-id>       interactive, same session
+//	phase 1  muxterm amplifier run "/goal <condition>"   headless, loops, exits
+//	phase 2  muxterm amplifier run --resume <session-id> interactive, same session
 //
 // Phase 2 is not a second lane and not a fresh session: `amplifier resume` (see
 // amplifier_app_cli/commands/session.py, `sessions_resume`) loads the stored
@@ -59,7 +61,7 @@ const GoalLaneArgv0 = "muxterm-goal-lane"
 // goalLaneGoalIndex is where the goal condition sits in it. Named so the
 // recogniser in autolabel.go cannot drift from the builder below.
 const (
-	goalLaneArgvLen   = 5
+	goalLaneArgvLen   = 6
 	goalLaneGoalIndex = 4
 )
 
@@ -81,7 +83,11 @@ func GoalLaneArgv(goal string) ([]string, error) {
 	if strings.TrimSpace(goal) == "" {
 		return nil, fmt.Errorf("goal is blank: a /goal loop needs a stop condition to declare")
 	}
-	return []string{"bash", "-c", goalLaneScript, GoalLaneArgv0, goal}, nil
+	self, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve muxterm wrapper: %w", err)
+	}
+	return []string{"bash", "-c", goalLaneScript, GoalLaneArgv0, goal, self}, nil
 }
 
 // goalLaneGoal returns the goal condition out of an argv built by
@@ -137,17 +143,17 @@ func goalLaneGoal(argv []string) (string, bool) {
 const goalLaneScript = `
 set -u
 goal=${1:-}
-if [ -z "$goal" ]; then
+wrapper=${2:-}
+if [ -z "$goal" ] || [ -z "$wrapper" ]; then
   echo "muxterm: goal lane started with no stop condition" >&2
   exec "${SHELL:-/bin/sh}"
 fi
 
-amplifier run "/goal $goal"
+"$wrapper" amplifier run "/goal $goal"
 rc=$?
 
-# The spool path is computed exactly as the hook computes it
-# (state.py spool_dir), which is exactly as the daemon computes it
-# (internal/sessiond/spawn.go socketDir). All three arms, in the same order:
+# The common ingress consumer materializes fleet snapshots under sessiond's
+# spool path. Resolve it exactly as internal/sessiond/spawn.go does:
 #
 #   MUXTERM_SESSION_STATE_DIR set -> that directory, verbatim
 #   XDG_RUNTIME_DIR set           -> $XDG_RUNTIME_DIR/muxterm/session-state
@@ -190,6 +196,7 @@ for f in "$spool"/*.json; do
 done
 if [ -n "$best" ]; then
   session=$(basename "$best" .json)
+  session=${session#amplifier-}
   verdict=$(sed -n 's/.*"state":"\([a-z]*\)".*/\1/p' "$best" | head -1)
 fi
 
@@ -201,8 +208,9 @@ fi
 # promising the run's full context, which is the one outcome worse than not
 # resuming, because it looks like a working session.
 #
-# The hook writes a TERMINAL state only from on_session_end, on a clean exit --
-# the same exit that saves the transcript. So "the snapshot carries a verdict"
+# The ingress consumer materializes a TERMINAL state only after the hook's
+# on_session_end report, on a clean exit -- the same exit that saves the
+# transcript. So "the snapshot carries a verdict"
 # and "there is a conversation to resume" are the same fact, and testing the
 # one that is cheap to read is exact rather than approximate. A run that ended
 # badly still has a verdict (failed/stopped) and is still resumed: that is the
@@ -241,5 +249,5 @@ printf 'Type to continue the work; Ctrl-D ends the lane and closes this pane.\n'
 printf '\033[2m--------------------------------------------------------------\033[0m\n'
 printf '\n'
 
-exec amplifier resume "$session"
+exec "$wrapper" amplifier run --resume "$session"
 `
