@@ -80,11 +80,19 @@ func codexReport(p codexHookPayload, raw []byte) (sessiond.HookReport, error) {
 	case "PermissionRequest":
 		event, state, waiting, doing = "attention.required", sessiond.SessionStateBlocked, sessiond.WaitingForPermission, "Permission requested for "+p.ToolName
 	case "Stop":
-		event, state, doing, anchor = "turn.completed", sessiond.SessionStateStopped, p.LastAssistantMessage, p.TurnID
+		// Stop is Codex's successful end-of-turn event, and carries the final
+		// assistant report. Treating it as muxterm's deliberate-without-a-verdict
+		// `stopped` state made every normally completed Codex lane claim that it
+		// had no result. Interrupt has its own event below; failures do not emit a
+		// successful Stop. This is therefore a declaration of completion, not an
+		// inference from process exit or prose in the report.
+		event, state, doing, anchor = "turn.completed", sessiond.SessionStateDone, p.LastAssistantMessage, p.TurnID
 	case "Interrupt":
 		event, state, doing, anchor = "turn.interrupted", sessiond.SessionStateStopped, "Codex turn interrupted", p.TurnID
 	case "SessionEnd":
-		event, state = "session.ended", sessiond.SessionStateStopped
+		// SessionEnd says only that the thread closed. Do not overwrite the
+		// stronger Stop/Interrupt declaration that immediately preceded it.
+		event, setState, setDoing = "session.ended", false, false
 	case "PreCompact":
 		event, doing = "progress.updated", "Compacting Codex context"
 	case "PostCompact":

@@ -150,6 +150,12 @@ type CompletionRecord struct {
 	// CompletionRecord's JSON names are a persisted format.
 	PRURLs []string `json:"prUrls,omitempty"`
 
+	// PRRefs is every pull-request reference found in the lane's own final
+	// summary. It includes full URLs and bare #NNN references. Bare numbers do
+	// not pretend to identify a repository, but they are still useful evidence
+	// and feed the Pull Requests applet as an explicitly unknown-repository row.
+	PRRefs []string `json:"prRefs,omitempty"`
+
 	Output string `json:"output,omitempty"`
 
 	// Acknowledged records that a human has dismissed this completion. The
@@ -253,6 +259,11 @@ func completionOutcome(declared string, exitCode int) string {
 // appears in prose constantly and would attach wrong numbers to lanes.
 var completionPRPattern = regexp.MustCompile(`https?://[A-Za-z0-9.-]*github[A-Za-z0-9.-]*/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/([0-9]+)`)
 
+// A bare reference is accepted only from the final assistant summary, never
+// arbitrary scrollback, where issue numbers and quoted historical PRs are far
+// too common. The non-word boundary keeps fragments such as abc#12 out.
+var completionBarePRPattern = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])#([0-9]+)\b`)
+
 // completionPRURLLimit bounds how many distinct pull-request URLs one record
 // keeps. A lane that opens two or three is the case this exists for; a pane
 // whose output happens to quote fifty links is not, and an unbounded slice on
@@ -309,6 +320,32 @@ func completionPRURLsFrom(text string) []string {
 		}
 		seen[u] = true
 		out = append(out, u)
+		if len(out) >= completionPRURLLimit {
+			break
+		}
+	}
+	return out
+}
+
+// completionPRRefsFrom extracts pull requests from the lane's final summary.
+// Full URLs retain their evidence; bare references are retained only when the
+// same number was not already named by a URL.
+func completionPRRefsFrom(summary string) []string {
+	urls := completionPRURLsFrom(summary)
+	out := append([]string(nil), urls...)
+	seenNumbers := make(map[int]bool, len(urls))
+	for _, u := range urls {
+		if n, _ := completionPRFrom(u); n > 0 {
+			seenNumbers[n] = true
+		}
+	}
+	for _, match := range completionBarePRPattern.FindAllStringSubmatch(summary, -1) {
+		n, err := strconv.Atoi(match[1])
+		if err != nil || n <= 0 || seenNumbers[n] {
+			continue
+		}
+		seenNumbers[n] = true
+		out = append(out, "#"+match[1])
 		if len(out) >= completionPRURLLimit {
 			break
 		}
