@@ -13,11 +13,11 @@ import (
 // `muxterm session report` -- the universal session-state producer.
 //
 // This is the escape hatch that makes "the home view is a fleet view for any
-// coding-agent CLI" actually true rather than aspirational. Amplifier has an
-// in-process hook and Claude Code has an adapter, but neither of those helps a
-// Makefile, a nightly shell script, a CI step, or somebody's Rust binary. This
-// verb is the answer for all of them: one command, no library, no language
-// binding, no daemon connection. It writes one snapshot to the spool and exits.
+// coding-agent CLI" actually true rather than aspirational. Managed Amplifier,
+// Claude and Codex launches use native hooks, but those do not help a Makefile,
+// a nightly shell script, a CI step, or somebody's Rust binary. This verb is the
+// answer for all of them: one command, no library, no language binding, no
+// daemon connection. It writes one snapshot to the spool and exits.
 //
 // It deliberately does NOT talk to sessiond. The spool is a directory of files;
 // writing one requires no socket, no protocol, and no running daemon, so a

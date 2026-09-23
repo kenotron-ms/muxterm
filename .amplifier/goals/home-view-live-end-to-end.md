@@ -134,7 +134,7 @@ for the user to inspect. Anything not named is treated as not torn down.
 - Deploying anywhere, or restarting the user's own muxterm, is NOT required.
 - Elapsed-time observation is NOT required. Every check completes in this run.
 - Waiting for a human reviewer is NOT required and must not be waited on.
-- Exercising the Claude Code adapter is NOT required. One Amplifier session is
+- Exercising Claude reporting is NOT required. One Amplifier session is
   the proof; a second harness is optional.
 - Unit tests are banned by `AGENTS.md`. Do not add `*_test.go` or `*.test.ts`.
   If an existing test breaks, fix it to match the new behaviour.

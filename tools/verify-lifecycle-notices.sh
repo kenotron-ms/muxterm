@@ -79,15 +79,6 @@ done
 [ -S "$XDG_RUNTIME_DIR/muxterm/sessiond.sock" ] || { echo "FAIL  sessiond did not start; see $LOG"; exit 1; }
 note "sessiond pid $DAEMON_PID"
 
-# The Claude adapter's default is visible in the daemon's own startup log.
-sleep 0.5
-if grep -q "claude adapter enabled (default on" "$LOG"; then
-  echo "PASS  claude fleet adapter is ON by default (no env var set)"
-else
-  echo "FAIL  claude fleet adapter did not report itself enabled by default"
-  fail=1
-fi
-
 echo
 echo "=== creating a real pane ==="
 WS=$("$BIN" workspace create lifecycle-verify --json 2>&1 | jq -r '.workspaceId // .workspace_id // empty' 2>/dev/null)

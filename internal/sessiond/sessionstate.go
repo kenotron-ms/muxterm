@@ -17,7 +17,7 @@ import "encoding/json"
 // write a JSON file can appear in the home view. The on-disk producer contract
 // is documented in docs/session-state-protocol.md, and the shipped producers
 // are the Amplifier hook (modules/hooks-muxterm-session), the `muxterm session
-// report` verb, and the opt-in Claude Code adapter.
+// report` verb, and the common native-hook ingress used by managed harnesses.
 //
 // Vocabulary note: the six nouns in play are workspace, pane, terminal,
 // session, project, and artifact. A "task" is not an object -- it is the

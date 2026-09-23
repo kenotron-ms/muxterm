@@ -1,4 +1,8 @@
-# Operator lifecycle notices, and a default-on Claude fleet adapter
+# Operator lifecycle notices, and the former Claude fleet adapter
+
+> **Current status (2026-09-22):** Native Claude hooks replaced the polling
+> adapter and its `MUXTERM_CLAUDE_ADAPTER` gate. The adapter discussion below
+> records the decision at the time; it no longer describes current behavior.
 
 **Base:** `origin/main` · **Status:** implemented behind an off-by-default switch, not merged, not released.
 
@@ -113,7 +117,7 @@ dependency here rather than part of this repository, so the stamp is applied by
 locating the message after execution. The match is strict and a miss degrades to
 *no stamp* (replays as human) rather than to *the wrong message stamped*.
 
-## Claude fleet adapter: on by default
+## Historical: Claude fleet adapter on by default
 
 The adapter was opt-in behind `MUXTERM_CLAUDE_ADAPTER=1`. The practical effect
 was that Claude Code sessions were absent from the fleet on every machine nobody
@@ -140,9 +144,9 @@ initial rollout left production notices disabled). Set `0`, `false`, `no`, or
 `off` to opt out. Read by both processes
 through one exported helper so the two halves cannot be half-enabled by a
 different spelling in one unit. An environment variable rather than a config
-key, for the reason the Claude switch already uses one: `config.toml` is the
-browser's config, editable from the UI, and "may this system write turns into my
-Operator conversation" is not a preference a web page should be able to flip.
+key keeps this system-level policy out of `config.toml`, which is the browser's
+live-editable preference file: "may this system write turns into my Operator
+conversation" is not a preference a web page should be able to flip.
 
 With the switch off, sessiond's tick behaves exactly as before — including
 costing nothing when no browser has subscribed. With it on, the tick runs
