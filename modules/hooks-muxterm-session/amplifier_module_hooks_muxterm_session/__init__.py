@@ -36,8 +36,8 @@ session id out of the pane's captured output instead (see snapshot.go) --
 strictly weaker, but the hook needs zero cooperation from anyone to exist.
 
 This module also publishes the session's DECLARED state -- what it is doing,
-and in particular whether it is working or waiting on a human -- to a spool
-directory the daemon reads. See state.py for why that channel has to exist:
+and in particular whether it is working or waiting on a human -- through the
+common durable hook-report ingress. See state.py for why that channel exists:
 sessiond's PTY-based activity classifier cannot tell thinking from waiting,
 because both own the terminal.
 """
@@ -117,7 +117,7 @@ async def mount(
       label_model (str): Model id for that labelling. Defaults to whatever the
         session's provider resolves on its own, and falls back to it the same
         way classify_model does when the id is rejected.
-      publish_state (bool): Publish session-state snapshots for muxterm's
+      publish_state (bool): Publish session state through muxterm's ingress for the
         home view (default: true). Turning it off leaves the title stamp,
         and therefore crash recovery, fully intact -- the two capabilities
         share a module but not a dependency.

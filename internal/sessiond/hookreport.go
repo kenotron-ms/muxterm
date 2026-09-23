@@ -29,13 +29,16 @@ type HookProcess struct {
 }
 
 type HookPatch struct {
-	Project    *string `json:"project,omitempty"`
-	Name       *string `json:"name,omitempty"`
-	Mode       *string `json:"mode,omitempty"`
-	State      *string `json:"state,omitempty"`
-	WaitingFor *string `json:"waiting_for,omitempty"`
-	Doing      *string `json:"doing,omitempty"`
-	DoneMeans  *string `json:"done_means,omitempty"`
+	Project    *string       `json:"project,omitempty"`
+	Name       *string       `json:"name,omitempty"`
+	Label      *string       `json:"label,omitempty"`
+	Mode       *string       `json:"mode,omitempty"`
+	State      *string       `json:"state,omitempty"`
+	WaitingFor *string       `json:"waiting_for,omitempty"`
+	Doing      *string       `json:"doing,omitempty"`
+	DoneMeans  *string       `json:"done_means,omitempty"`
+	Todo       *TodoProgress `json:"todo,omitempty"`
+	Knows      *[]string     `json:"knows,omitempty"`
 }
 
 type HookReport struct {
@@ -219,7 +222,7 @@ func decodeHookReport(body []byte) (HookReport, error) {
 	}
 	for _, field := range report.Clear {
 		switch field {
-		case "project", "waiting_for", "doing", "done_means":
+		case "project", "label", "waiting_for", "doing", "done_means", "todo", "knows":
 		default:
 			return report, fmt.Errorf("unsupported clear field %q", field)
 		}
@@ -292,6 +295,9 @@ func applyHookPatch(row *SessionState, set HookPatch, clear []string) {
 	if set.Name != nil {
 		row.Name = *set.Name
 	}
+	if set.Label != nil {
+		row.Label = *set.Label
+	}
 	if set.Mode != nil {
 		row.Mode = *set.Mode
 	}
@@ -307,16 +313,29 @@ func applyHookPatch(row *SessionState, set HookPatch, clear []string) {
 	if set.DoneMeans != nil {
 		row.DoneMeans = *set.DoneMeans
 	}
+	if set.Todo != nil {
+		todo := *set.Todo
+		row.Todo = &todo
+	}
+	if set.Knows != nil {
+		row.Knows = append([]string(nil), (*set.Knows)...)
+	}
 	for _, field := range clear {
 		switch field {
 		case "project":
 			row.Project = ""
+		case "label":
+			row.Label = ""
 		case "waiting_for":
 			row.WaitingFor = ""
 		case "doing":
 			row.Doing = ""
 		case "done_means":
 			row.DoneMeans = ""
+		case "todo":
+			row.Todo = nil
+		case "knows":
+			row.Knows = nil
 		}
 	}
 }
