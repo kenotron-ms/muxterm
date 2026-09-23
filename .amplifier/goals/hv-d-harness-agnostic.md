@@ -1,5 +1,10 @@
 # Lane D — Make session state harness-agnostic
 
+> **Historical goal:** This lane originally introduced the Claude polling
+> adapter. Native Claude hooks replaced that adapter on 2026-09-22; commands,
+> gates, and verification instructions below record the completed lane and are
+> not current operating guidance.
+
 ## Outcome
 
 muxterm's home view stops being an Amplifier feature and becomes a **fleet view

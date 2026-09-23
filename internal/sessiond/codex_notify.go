@@ -311,8 +311,8 @@ func CodexRowFor(n CodexNotify) (SessionState, bool) {
 		Mode: ModeInteractive,
 		// STOPPED, not done. The hook fires when a turn ENDS, which is the
 		// session arriving at its prompt with nothing further to do until
-		// somebody types -- exactly what the Claude adapter maps `idle` to, and
-		// exactly what the Amplifier hook publishes for the same condition.
+		// somebody types -- exactly what Claude's Stop hook and Amplifier's hook
+		// publish for the same condition.
 		// `done` would be a verdict, and no verdict was given: Codex does not
 		// tell muxterm whether the work is finished or merely paused.
 		State:     SessionStateStopped,

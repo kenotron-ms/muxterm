@@ -43,7 +43,11 @@ Pre-built binaries for each platform are attached to every [GitHub Release](http
 
 ## What is this?
 
-muxterm is a terminal multiplexer where the UI lives in a browser. Open splits, create workspaces, resize panes — all standard multiplexer behavior, except it's HTML and xterm.js instead of ncurses, and it runs as a web app you install once and connect to from anywhere.
+muxterm is a browser-based home for coding-agent sessions and their terminals.
+Its fleet view tracks durable Claude, Codex, and Amplifier sessions through one
+native-hook ingress, while workspaces, splits, and panes organize where those
+sessions run. The terminal UI uses HTML and xterm.js instead of ncurses, and it
+runs as a web app you install once and connect to from anywhere.
 
 The session daemon is a standalone Go process that owns your PTYs directly. It survives HTTP server restarts. When you reconnect, it replays a clean screen state — not a raw byte stream — so full-screen apps like vim and htop come back correctly at whatever size your window happens to be.
 
@@ -78,6 +82,7 @@ make build
 
 ## Features
 
+- **Agent sessions** — durable fleet state, transcript detail, and lifecycle notices for Claude, Codex, and Amplifier through one hook ingress
 - **Workspaces** — named groups of panes, switch between them from a bar at the top
 - **Split panes** — real DOM layout via dockview; drag to resize, arbitrary nesting
 - **Clean reconnects** — server-side VT emulation replays a live cell-grid snapshot, not raw bytes; full-screen apps restore correctly at any window size
