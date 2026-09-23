@@ -223,17 +223,6 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	// connection opts in, stopped by the same ctx cancellation.
 	go s.sessionStateLoop(ctx)
 
-	// Claude Code sessions in the home view. ON BY DEFAULT: a fleet that
-	// silently omits the Claude Code sessions running on this machine is worse
-	// than one that shows them, because it is believed. This is still the only
-	// place the daemon executes another vendor's binary, and it remains one
-	// documented read-only non-TTY command with a timeout -- see the header of
-	// claude_adapter.go. An operator who wants no subprocesses at all sets the
-	// explicit opt-out, and then the cost here is one getenv.
-	if claudeAdapterEnabled() {
-		go s.claudeAdapterLoop(ctx)
-	}
-
 	// Triggers. Unlike the two loops above this is NOT opt-in and does not
 	// wait for a connection: the entire point of a trigger is that it fires
 	// when nobody is watching. The cost with no triggers configured is one map

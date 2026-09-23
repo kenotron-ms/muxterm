@@ -77,6 +77,7 @@ type sessionRecord struct {
 	Harness        string       `json:"harness"`
 	NativeID       string       `json:"native_session_id"`
 	Row            SessionState `json:"row"`
+	LastObservedAt time.Time    `json:"last_observed_at,omitempty"`
 	PID            int          `json:"pid,omitempty"`
 	PIDStart       uint64       `json:"pid_start,omitempty"`
 	SID            int          `json:"sid,omitempty"`
@@ -245,7 +246,15 @@ func (s *hookReportStore) accept(reportID string, report HookReport) error {
 		record = sessionRecord{InstallationID: s.installationID, Harness: report.Harness, NativeID: report.NativeSessionID,
 			Row: SessionState{SessionID: sessionID, Harness: report.Harness, Name: report.NativeSessionID, Mode: ModeInteractive, State: SessionStateWorking}}
 	}
+	if !record.LastObservedAt.IsZero() && report.ObservedAt.Before(record.LastObservedAt) {
+		reg.Events[eventKey] = record.Row.SessionID
+		if err := s.saveRegistry(reg); err != nil {
+			return err
+		}
+		return s.writeReceipt(hookReceipt{Status: "accepted", ReportID: reportID, SessionID: record.Row.SessionID, At: time.Now().UTC()})
+	}
 	applyHookPatch(&record.Row, report.Set, report.Clear)
+	record.LastObservedAt = report.ObservedAt
 	record.Row.Harness = report.Harness
 	record.Row.Reporting = "reporting"
 	if report.Harness == HarnessCodex && report.NativeEvent == "agent-turn-complete" {

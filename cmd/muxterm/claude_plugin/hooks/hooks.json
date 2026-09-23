@@ -1,0 +1,19 @@
+{
+  "description": "Muxterm passive session reporting",
+  "hooks": {
+    "SessionStart": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh SessionStart"}]}],
+    "UserPromptSubmit": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh UserPromptSubmit"}]}],
+    "PreToolUse": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh PreToolUse"}]}],
+    "PostToolUse": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh PostToolUse"}]}],
+    "PostToolUseFailure": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh PostToolUseFailure"}]}],
+    "PermissionRequest": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh PermissionRequest"}]}],
+    "Notification": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh Notification"}]}],
+    "Stop": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh Stop"}]}],
+    "StopFailure": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh StopFailure"}]}],
+    "SessionEnd": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh SessionEnd"}]}],
+    "SubagentStart": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh SubagentStart"}]}],
+    "SubagentStop": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh SubagentStop"}]}],
+    "PreCompact": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh PreCompact"}]}],
+    "PostCompact": [{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/report.sh PostCompact"}]}]
+  }
+}
