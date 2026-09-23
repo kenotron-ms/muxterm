@@ -197,6 +197,11 @@ type SessionState struct {
 	// "editing cmd/muxterm/pane_cmd.go". Refreshed cheaply from recent events.
 	Doing string `json:"doing,omitempty"`
 
+	// Summary is the lane's own final assistant message, bounded by its
+	// producer. It is separate from Doing so a detailed result can survive
+	// without turning the fleet's one-line activity label into a transcript.
+	Summary string `json:"summary,omitempty"`
+
 	// DoneMeans is the session's own declared definition of finished -- the
 	// stop condition an autonomous loop is running toward. Normally present
 	// only when Mode == ModeAutonomous.

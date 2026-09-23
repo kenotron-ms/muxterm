@@ -53,6 +53,7 @@ func runClaudeHook(args []string) error {
 func claudeReport(p claudeHookPayload, raw []byte) sessiond.HookReport {
 	state, mode := sessiond.SessionStateWorking, sessiond.ModeInteractive
 	project, name, doing, waiting := p.CWD, p.SessionID, "", ""
+	summary := ""
 	event, clear := "metadata.updated", []string(nil)
 	setDoing := true
 	setState := true
@@ -75,11 +76,20 @@ func claudeReport(p claudeHookPayload, raw []byte) sessiond.HookReport {
 	case "Notification":
 		event, state, waiting, doing = "attention.required", sessiond.SessionStateBlocked, sessiond.WaitingForInput, "Claude requires attention"
 	case "Stop":
-		event, state, doing = "turn.completed", sessiond.SessionStateStopped, p.LastAssistantMessage
+		// Claude's Stop is the successful completion of an assistant turn and
+		// carries its final report. Interruptions and API failures have distinct
+		// events, so mapping this to verdict-less stopped discards a declaration.
+		event, state, doing, summary = "turn.completed", sessiond.SessionStateDone, p.LastAssistantMessage, p.LastAssistantMessage
 	case "StopFailure":
 		event, state, doing = "turn.failed", sessiond.SessionStateFailed, "Claude stopped with an API error"
+		summary = p.LastAssistantMessage
+		if summary == "" {
+			summary = doing
+		}
 	case "SessionEnd":
-		event, state, setDoing = "session.ended", sessiond.SessionStateStopped, false
+		// Closing the session must not overwrite the preceding Stop/StopFailure
+		// declaration or its final summary.
+		event, setState, setDoing = "session.ended", false, false
 	case "SubagentStart":
 		event, doing = "session.started", "Claude subagent started"
 	case "SubagentStop":
@@ -92,7 +102,7 @@ func claudeReport(p claudeHookPayload, raw []byte) sessiond.HookReport {
 		doing = "Claude event: " + p.HookEvent
 	}
 	if event == "turn.started" {
-		clear = []string{"waiting_for"}
+		clear = []string{"waiting_for", "summary"}
 	}
 	h := sha256.Sum256(raw)
 	anchor := p.ToolUseID
@@ -112,6 +122,9 @@ func claudeReport(p claudeHookPayload, raw []byte) sessiond.HookReport {
 	}
 	if setDoing {
 		patch.Doing = &doing
+	}
+	if p.HookEvent == "Stop" || p.HookEvent == "StopFailure" {
+		patch.Summary = &summary
 	}
 	return sessiond.HookReport{V: sessiond.HookReportVersion, Harness: sessiond.HarnessClaude,
 		NativeSessionID: p.SessionID, NativeEvent: p.HookEvent, Event: event, EventID: eventID,

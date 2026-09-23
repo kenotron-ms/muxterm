@@ -476,6 +476,7 @@ func (s *Server) recordPaneCompletion(wsID string, pane *Pane, exitCode int, run
 		GoalID:        declared.GoalID,
 		Origin:        declared.Origin,
 		Doing:         declared.Doing,
+		FinalSummary:  declared.Summary,
 		DeclaredState: terminalDeclaration(declared.State),
 		ExitCode:      exitCode,
 		RuntimeMs:     runtimeMs,
@@ -490,7 +491,7 @@ func (s *Server) recordPaneCompletion(wsID string, pane *Pane, exitCode int, run
 	// The final assistant report is first-hand output too, and is often the
 	// only durable copy after a TUI redraws its terminal. Scan it alongside the
 	// terminal history so a literal PR URL in Doing cannot be missed.
-	artifactText := scanned + "\n" + declared.Doing
+	artifactText := scanned + "\n" + declared.Doing + "\n" + declared.Summary
 	if record.PR == 0 {
 		record.PR, record.PRURL = completionPRFrom(artifactText)
 	}
@@ -499,7 +500,7 @@ func (s *Server) recordPaneCompletion(wsID string, pane *Pane, exitCode int, run
 	// here, permanently: this scan is the only place either was ever visible.
 	record.PRURLs = completionPRURLsFrom(artifactText)
 	record.PRRefs = append([]string(nil), record.PRURLs...)
-	for _, ref := range completionPRRefsFrom(declared.Doing) {
+	for _, ref := range completionPRRefsFrom(declared.Summary + "\n" + declared.Doing) {
 		duplicate := false
 		refNumber, _ := completionPRFrom(ref)
 		if strings.HasPrefix(ref, "#") {

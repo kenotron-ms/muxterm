@@ -153,6 +153,7 @@ type AttentionRecord struct {
 	Mode          string `json:"mode,omitempty"`
 	DoneMeans     string `json:"doneMeans,omitempty"`
 	Doing         string `json:"doing,omitempty"`
+	Summary       string `json:"summary,omitempty"`
 
 	ObservedAt int64 `json:"observedAt"`
 

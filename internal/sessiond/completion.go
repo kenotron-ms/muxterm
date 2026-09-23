@@ -115,16 +115,17 @@ type CompletionRecord struct {
 
 	// Who ran. All copied from the session's own declaration when it made
 	// one; all empty for a pane that never hosted a declaring session.
-	SessionID string `json:"sessionId,omitempty"`
-	Harness   string `json:"harness,omitempty"`
-	Project   string `json:"project,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Label     string `json:"label,omitempty"`
-	Mode      string `json:"mode,omitempty"`
-	DoneMeans string `json:"doneMeans,omitempty"`
-	GoalID    string `json:"goalId,omitempty"`
-	Origin    string `json:"origin,omitempty"`
-	Doing     string `json:"doing,omitempty"`
+	SessionID    string `json:"sessionId,omitempty"`
+	Harness      string `json:"harness,omitempty"`
+	Project      string `json:"project,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Label        string `json:"label,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	DoneMeans    string `json:"doneMeans,omitempty"`
+	GoalID       string `json:"goalId,omitempty"`
+	Origin       string `json:"origin,omitempty"`
+	Doing        string `json:"doing,omitempty"`
+	FinalSummary string `json:"summary,omitempty"`
 
 	// How it ended. Outcome is the daemon's assertion; DeclaredState is the
 	// raw thing the session said (empty when it said nothing), kept so the

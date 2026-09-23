@@ -136,6 +136,7 @@ func (w *lifecycleWatcher) observe(rows []SessionState) {
 			Mode:               row.Mode,
 			DoneMeans:          row.DoneMeans,
 			Doing:              row.Doing,
+			Summary:            row.Summary,
 			ObservedAt:         now,
 		})
 	}
