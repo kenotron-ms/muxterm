@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kenotron-ms/muxterm/internal/operator"
 )
 
 // Connection kinds carried by Message.ClientKind on attach and recorded in
@@ -1641,6 +1642,7 @@ func (s *Server) emitSessionState() {
 		// emptiness here would blank the home view over a transient stat error.
 		return
 	}
+	rows = excludeOperatorSession(rows)
 	// Edge detection runs on the LIVE rows, before any completion row is
 	// folded in: a completion row is a projection of a marker that already
 	// exists, and feeding it back here would manufacture a transition out of
@@ -1658,6 +1660,7 @@ func (s *Server) emitSessionState() {
 	// with it. The rows come from the durable log, so they survive a restart
 	// of this daemon.
 	rows = mergeCompletionRows(rows, s.completions.Pending())
+	rows = excludeOperatorSession(rows)
 	// The rows are already joined to their panes, which is the only thing
 	// naming a tab or a workspace after its session needs. Done before the
 	// publish, and outside every lock, so a tick that renames something emits
@@ -1669,6 +1672,21 @@ func (s *Server) emitSessionState() {
 	// notification saying "w7" and saying what actually completed.
 	s.applyDerivedNames(rows)
 	s.publishSessionState(rows)
+}
+
+// excludeOperatorSession removes muxterm's own persistent chat-driver session
+// at the daemon's single fleet source. Every consumer receives this same set:
+// browser cards, session-state subscribers, CLI/MCP fleet_status, and the
+// lifecycle edge watcher. Interactive lane sessions remain untouched.
+func excludeOperatorSession(rows []SessionState) []SessionState {
+	out := rows[:0]
+	for _, row := range rows {
+		if operator.IsFleetSession(row.SessionID, row.Harness, row.ExecutionID) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 // publishSessionState advances the shared change gate and fans the set out to

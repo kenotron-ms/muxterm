@@ -62,6 +62,7 @@ import (
 	"time"
 
 	"github.com/kenotron-ms/muxterm/internal/cos"
+	"github.com/kenotron-ms/muxterm/internal/operator"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 )
 
@@ -432,12 +433,18 @@ func (n *lifecycleNoticer) scan() ([]lifecycleMarker, bool) {
 	if records, ok := readCompletionRecords(n.completionsPath); ok {
 		readAny = true
 		for _, r := range records {
+			if operator.IsFleetSession(r.SessionID, r.Harness, "") {
+				continue
+			}
 			out = append(out, markerFromCompletion(r))
 		}
 	}
 	if records, ok := readAttentionRecords(n.attentionPath); ok {
 		readAny = true
 		for _, r := range records {
+			if operator.IsFleetSession(r.SessionID, r.Harness, r.ExecutionID) {
+				continue
+			}
 			if r.Resolved {
 				// The lane un-blocked itself before anyone acted. Telling a
 				// human they are needed when they are not is worse than
