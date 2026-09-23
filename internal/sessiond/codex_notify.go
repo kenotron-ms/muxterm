@@ -2,9 +2,9 @@ package sessiond
 
 // Codex adapter: a HOOK, not a poller.
 //
-// Why this is shaped differently from claude_adapter.go. Claude Code exposes no
-// extension point, so muxterm polls `claude agents --json` and lives with
-// whatever that snapshot happens to say. Codex is not in that position: it has
+// Why this is shaped differently from Claude's rich native hook translator.
+// Legacy Codex offered one completion notifier rather than Claude's lifecycle
+// and tool event surface. It still has
 // a real, documented, external-program hook. `~/.codex/config.toml` accepts
 //
 //	notify = ["/path/to/program", "arg", ...]
@@ -27,7 +27,7 @@ package sessiond
 // A lane therefore reports itself with NO user configuration whatsoever, on a
 // machine where ~/.codex/config.toml has never been edited. The alternative --
 // a README paragraph asking people to add a notify line by hand -- is the
-// default-off bridge claude_adapter.go already argues against at length: the
+// default-off bridge that silently omits every Codex session: the
 // practical effect is a fleet view that silently omits every Codex session on
 // every machine nobody remembered to configure, which reads as "muxterm cannot
 // see Codex" rather than "muxterm was not switched on".
@@ -89,20 +89,20 @@ import (
 )
 
 // codexNotifyEnv is the operator's OPT-OUT, in the same spelling and with the
-// same parser as claudeAdapterEnv. Leave it unset for the default (enabled);
+// same explicit opt-out spelling as the other integrations. Leave it unset for the default (enabled);
 // set it to 0/false/no/off in the environment the lane is built in to launch
 // Codex lanes with no notify override at all -- which keeps whatever notify
 // program the user configured for themselves, at the cost of the lane never
 // appearing as a fleet row.
 //
 // An environment variable rather than a config-file key for the reason
-// claudeAdapterEnv gives: config.toml is the BROWSER's config, reloaded live
+// integration contract gives: config.toml is the BROWSER's config, reloaded live
 // and editable from the UI, and "what argv may this daemon build" is not a
 // preference a web page should be able to flip.
 const codexNotifyEnv = "MUXTERM_CODEX_NOTIFY"
 
 // codexSnapshotPrefix namespaces every snapshot written from a Codex notify
-// payload, exactly as claudeSnapshotPrefix does and for the same reason: a
+// payload. The namespace ensures a
 // producer that can only ever touch files carrying its own prefix is
 // structurally incapable of overwriting another one's session, and two
 // harnesses cannot collide on an id.

@@ -20,7 +20,7 @@ import (
 // producer writes one atomically-replaced JSON snapshot per session into a
 // spool directory; this reads that directory. The shipped producers are the
 // Amplifier hook (modules/hooks-muxterm-session), the `muxterm session report`
-// verb, and the opt-in Claude Code adapter (claude_adapter.go), but the
+// verb, and the common durable hook-report ingress, but the
 // contract in docs/session-state-protocol.md is open to anything that can
 // write a file. See sessionstate.go for why a declared channel has to exist at
 // all (short version: TIOCGPGRP cannot tell an agent that is thinking from an

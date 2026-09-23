@@ -501,27 +501,29 @@ muxterm session report --session-id nightly-build --harness nightly-build \
 |----------|------|-------|
 | Amplifier | in-process hook | `modules/hooks-muxterm-session` |
 | any tool | one-shot CLI | `muxterm session report` |
-| Claude Code | poller, on by default | `internal/sessiond/claude_adapter.go` |
+| Claude Code | invocation-scoped native plugin hooks | `cmd/muxterm/claude_plugin` |
 | Codex | invocation-scoped turn-complete hook | `internal/sessiond/codex_notify.go` |
 
-Both third-party bridges are **on by default with an explicit opt-out**, because
-a fleet view that silently omits half the agents running on the machine is worse
-than one that shows them: it reads as "muxterm cannot see Codex" rather than
-"muxterm was not switched on", and it is believed.
+The supported manual entry points are `muxterm claude` and `muxterm codex`.
+They configure reporting for only the child invocation and do not edit global
+harness settings.
 
-Each opt-out is an environment variable read where the work happens, rather than
+The Codex opt-out is an environment variable read where the work happens, rather than
 a config key, because the config file is the *browser's* config, live-editable
 from the UI, and neither "may this daemon execute a subprocess" nor "what argv
 may this daemon build" is a preference a web page should be able to flip. Set
-either to `0`, `false`, `no`, or `off`; **any other value, including a typo,
+it to `0`, `false`, `no`, or `off`; **any other value, including a typo,
 means enabled**, so a misspelled opt-out cannot silently disable a feature the
 operator believes is running.
 
-### Claude Code — `MUXTERM_CLAUDE_ADAPTER`
+### Claude Code — invocation plugin
 
-Polls `claude agents --json` every five seconds while a browser is subscribed,
-and degrades silently: a missing `claude`, a non-zero exit, or unparseable
-output costs one log line and nothing else.
+`muxterm claude` loads the bundled `muxterm-session` plugin with `--plugin-dir`.
+Native prompt, tool, permission, notification, Stop and session lifecycle hooks
+translate into the common durable hook-report envelope. A muxterm-started Claude
+lane uses that same wrapper. Raw `claude` invocations are outside guaranteed
+coverage; muxterm performs no background `claude agents` polling and does not
+edit `~/.claude/settings.json`.
 
 ### Codex — `MUXTERM_CODEX_NOTIFY`
 

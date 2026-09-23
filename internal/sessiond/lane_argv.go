@@ -25,6 +25,7 @@ package sessiond
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -61,7 +62,11 @@ func LaneArgv(harness, prompt, goal string) ([]string, error) {
 		if prompt == "" {
 			return nil, fmt.Errorf("prompt is required for harness %q", HarnessClaude)
 		}
-		return []string{"claude", prompt}, nil
+		self, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("resolve muxterm wrapper: %w", err)
+		}
+		return []string{self, "claude", "--", prompt}, nil
 
 	case HarnessCodex:
 		// Codex has no goal mode either. It does carry a `thread_goals` table

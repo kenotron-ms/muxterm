@@ -213,8 +213,8 @@ func amplifierTranscriptPath(row sessiond.SessionState) string {
 // claudeTranscriptPath is ~/.claude/projects/<slug>/<session-uuid>.jsonl.
 //
 // The session id is un-prefixed first: the Claude adapter namespaces every
-// snapshot it writes as "claude-<uuid>" so it can only ever delete its own
-// files (claude_adapter.go), but the file on disk is named by the bare uuid.
+// muxterm session ID is "claude-<uuid>", but the native transcript file is
+// named by the bare UUID.
 //
 // The slug rule here is "every path separator and dot becomes -", which is what
 // the directories on disk actually show ("/tmp/tmp.zzZdvMf1Vb/repo" is filed as

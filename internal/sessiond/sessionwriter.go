@@ -14,7 +14,7 @@ import (
 // This exists as exported package API, rather than being inlined into the CLI
 // verb that uses it, because there are already two in-tree producers written in
 // Go -- `muxterm session report` (cmd/muxterm/session_report_cmd.go) and the
-// Claude Code adapter (claude_adapter.go) -- and the atomic-write discipline,
+// legacy Go producers -- and the atomic-write discipline,
 // the validation, and the schema version must have exactly ONE home. A second
 // copy is a second place to forget the .tmp rename.
 //

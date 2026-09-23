@@ -37,7 +37,7 @@ import (
 // operator cannot half-enable the feature by setting a different spelling in
 // one unit.
 //
-// An environment variable rather than a config-file key for claudeAdapterEnv's
+// An environment variable rather than a config-file key because
 // reason: config.toml is the BROWSER's config, reloaded live and editable from
 // the UI, and "may this system write turns into my Operator conversation" is
 // not a preference a web page should be able to flip.
