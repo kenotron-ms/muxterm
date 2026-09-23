@@ -994,18 +994,22 @@ func (c *Client) sessionTranscript(msg sessiond.Message, dc DaemonConn) {
 	}()
 	var j mcp.TranscriptJournal
 	var importErr error
+	timedOut := false
 	select {
 	case result := <-results:
 		j, importErr = result.journal, result.err
 	case <-time.After(5 * time.Second):
 		j, _ = mcp.LoadTranscriptJournal(row.SessionID)
 		importErr = errors.New("native transcript import timed out after 5 seconds; showing the last durable journal")
+		timedOut = true
 	}
-	if importErr != nil {
+	if importErr != nil && !timedOut {
 		replayed, loadErr := mcp.LoadTranscriptJournal(row.SessionID)
 		if loadErr == nil {
 			j = replayed
 		}
+	}
+	if importErr != nil {
 		reply.TranscriptError = importErr.Error()
 	}
 	reply.TranscriptCursor = j.Cursor
