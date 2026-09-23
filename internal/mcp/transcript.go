@@ -206,8 +206,9 @@ func amplifierProjectSlug(cwd string) string {
 // views of the same thing: events.jsonl is an internal firehose (276 MB for one
 // session on this machine) and transcript.jsonl is the conversation.
 func amplifierTranscriptPath(row sessiond.SessionState) string {
+	nativeID := strings.TrimPrefix(row.SessionID, sessiond.HarnessAmplifier+"-")
 	return path.Join("~", ".amplifier", "projects",
-		amplifierProjectSlug(row.Project), "sessions", row.SessionID, "transcript.jsonl")
+		amplifierProjectSlug(row.Project), "sessions", nativeID, "transcript.jsonl")
 }
 
 // claudeTranscriptPath is ~/.claude/projects/<slug>/<session-uuid>.jsonl.
