@@ -99,6 +99,22 @@ func HookReportRoot() string {
 	return filepath.Join(snapshotDir(), "agent-sessions")
 }
 
+// LookupHookSession resolves a muxterm session id to the durable row and the
+// native identity needed by an explicit managed resume.
+func LookupHookSession(sessionID string) (SessionState, string, error) {
+	store := newHookReportStore("")
+	reg, err := store.loadRegistry()
+	if err != nil {
+		return SessionState{}, "", err
+	}
+	for _, record := range reg.Sessions {
+		if record.Row.SessionID == sessionID {
+			return record.Row, record.NativeID, nil
+		}
+	}
+	return SessionState{}, "", fmt.Errorf("session %q was not found in the durable hook registry", sessionID)
+}
+
 func QueueHookReport(body []byte) (HookQueueReceipt, error) {
 	if len(body) == 0 {
 		return HookQueueReceipt{}, errors.New("hook report is empty")

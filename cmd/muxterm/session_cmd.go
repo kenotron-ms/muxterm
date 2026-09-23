@@ -24,6 +24,7 @@ func runSession(args []string) error {
 		fmt.Fprintln(os.Stdout, "  list                    Alias for 'muxterm workspace list'")
 		fmt.Fprintln(os.Stdout, "  attach <workspace-id>   Print a workspace's composition (panes + layout)")
 		fmt.Fprintln(os.Stdout, "  read <session-id>       Print the tail of an agent session's transcript")
+		fmt.Fprintln(os.Stdout, "  send <session-id>       Admit and run one managed native-resume turn")
 		fmt.Fprintln(os.Stdout, "  report [flags]          Publish a session-state snapshot to the home view")
 		fmt.Fprintln(os.Stdout, "  hook-report             Queue a versioned harness hook report from stdin")
 		fmt.Fprintln(os.Stdout, "  codex-notify <json>     Codex's turn-complete hook target (not run by hand)")
@@ -45,6 +46,8 @@ func runSession(args []string) error {
 		// a session's declared state, fleet lists it, read shows what the
 		// session actually said. See session_read_cmd.go.
 		return runSessionRead(args[1:])
+	case "send":
+		return runSessionSend(args[1:])
 	case "report":
 		// The universal producer; see session_report_cmd.go. Unlike list and
 		// attach it never dials the daemon -- it writes a file.
