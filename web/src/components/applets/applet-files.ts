@@ -1357,7 +1357,7 @@ export class AppletFiles extends LitElement implements AppletElement {
     const seen = new Set<string>();
     const out: FilesRoot[] = [];
     for (const s of homeSessions.sessions) {
-      if (isRemoteId(s.workspaceId)) continue;
+      if (s.workspaceId !== null && isRemoteId(s.workspaceId)) continue;
       const p = s.project?.trim() ?? '';
       if (p === '' || seen.has(p)) continue;
       seen.add(p);

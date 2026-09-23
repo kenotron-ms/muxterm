@@ -272,6 +272,14 @@ func fleetRowJSON(r sessiond.SessionState, machine string) map[string]any {
 			todo["current"] = r.Todo.Current
 		}
 	}
+	var paneID any
+	var workspaceID any
+	if r.PaneID != 0 {
+		paneID = r.PaneID
+	}
+	if r.WorkspaceID != "" {
+		workspaceID = r.WorkspaceID
+	}
 	row := map[string]any{
 		// machine is on EVERY row, not only remote ones. A field that appears
 		// conditionally teaches a caller to infer "local" from its absence,
@@ -279,8 +287,8 @@ func fleetRowJSON(r sessiond.SessionState, machine string) map[string]any {
 		// response is merged. Always present, always answerable.
 		"machine":      machine,
 		"session_id":   r.SessionID,
-		"pane_id":      r.PaneID,
-		"workspace_id": r.WorkspaceID,
+		"pane_id":      paneID,
+		"workspace_id": workspaceID,
 		"harness":      r.Harness,
 		"project":      r.Project,
 		"name":         r.Name,

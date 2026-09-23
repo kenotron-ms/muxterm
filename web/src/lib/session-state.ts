@@ -81,8 +81,7 @@ export function isKnownHarness(h: string | undefined): h is KnownHarness {
 }
 
 /**
- * One row of the home view: everything known about a single agent session
- * running in a muxterm pane.
+ * One row of the home view: everything known about a single agent session.
  *
  * Every field is DECLARED by that session's own producer. Nothing here is
  * inferred from PTY state -- the daemon's activity classifier cannot
@@ -111,10 +110,10 @@ export interface TodoProgress {
 export interface SessionState {
   /** The producer's own session id. */
   sessionId: string;
-  /** muxterm pane holding this session's terminal. */
-  paneId: number;
-  /** muxterm workspace containing that pane. */
-  workspaceId: string;
+  /** muxterm pane holding this session's terminal, or null when unattached. */
+  paneId: number | null;
+  /** muxterm workspace containing that pane, or null when unattached. */
+  workspaceId: string | null;
   /** Which agent CLI is running this. Absent means nothing was declared. */
   harness?: Harness;
   /** Working directory. Absolute path. */
@@ -274,6 +273,7 @@ export function needsInputByWorkspace(
   const out = new Map<string, number>();
   for (const s of sessions) {
     if (!needsInput(s)) continue;
+    if (s.workspaceId === null) continue;
     out.set(s.workspaceId, (out.get(s.workspaceId) ?? 0) + 1);
   }
   return out;

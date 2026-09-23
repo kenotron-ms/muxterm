@@ -78,6 +78,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  muxterm session read <id>   Print the tail of an agent session's transcript")
 	fmt.Fprintln(w, "  muxterm session report      Publish session state to the home view (any tool)")
 	fmt.Fprintln(w, "  muxterm fleet               What every agent session is doing, all workspaces")
+	fmt.Fprintln(w, "  muxterm codex [args...]     Run Codex with muxterm session reporting")
 	fmt.Fprintln(w, "  muxterm pane <cmd>          create | send | rename | close | resize")
 	fmt.Fprintln(w, "  muxterm spawn-lane <ws>     Delegate: launch an agent session in a workspace")
 	fmt.Fprintln(w, "  muxterm layout get          Print the workspace layout diagram")
@@ -205,6 +206,8 @@ func parseCommand(args []string) (Config, error) {
 		return parseMCP(args[1:])
 	case "amplifier":
 		return parseAmplifier(args[1:])
+	case "codex":
+		return Config{Mode: "codex", Args: args[1:]}, nil
 	case "read-screen":
 		return Config{Mode: "read-screen", Args: args[1:]}, nil
 	case "session":
