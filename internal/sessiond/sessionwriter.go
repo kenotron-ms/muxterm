@@ -12,13 +12,12 @@ import (
 // disk. sessionstore.go is the consumer half.
 //
 // This exists as exported package API, rather than being inlined into the CLI
-// verb that uses it, because there are already two in-tree producers written in
-// Go -- `muxterm session report` (cmd/muxterm/session_report_cmd.go) and the
-// legacy Go producers -- and the atomic-write discipline,
+// verb that uses it, because `muxterm session report` and the common hook
+// ingress both project snapshots through it. The atomic-write discipline,
 // the validation, and the schema version must have exactly ONE home. A second
 // copy is a second place to forget the .tmp rename.
 //
-// Producers in other languages reimplement this from
+// Third-party snapshot producers can implement the open contract from
 // docs/session-state-protocol.md; it is about twenty lines, which is the point
 // of choosing a file as the transport.
 
@@ -142,9 +141,8 @@ func writeSessionSnapshot(row SessionState, pid int, start uint64, sid int) (str
 // RemoveSessionSnapshot deletes a session's snapshot.
 //
 // Producers do not have to call this: the daemon reclaims any snapshot whose
-// process is gone. It exists for the producer that wants a row to disappear
-// while its process keeps running -- an adapter polling an upstream that has
-// stopped reporting a session, for instance.
+// process is gone. It remains for compatibility producers that explicitly own
+// a projected row and need to withdraw it while the attributed process lives.
 func RemoveSessionSnapshot(sessionID string) error {
 	if !ValidSessionID(sessionID) {
 		return fmt.Errorf("invalid session id %q", sessionID)

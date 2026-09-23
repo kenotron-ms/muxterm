@@ -1,6 +1,7 @@
 # Sessions report through hooks; terminals are optional attachments
 
-**Status:** research and design only; revision of PR #176, not implementation.
+**Status:** implemented by PRs #176–#186. Historical `VERIFIED` statements below
+describe the pre-implementation baseline unless a later paragraph says otherwise.
 **Date:** 2026-09-22. **Source baseline:** v0.42.0, `7681ab4`.
 **Extends:** [Session-state protocol](../session-state-protocol.md).
 
@@ -62,8 +63,8 @@ The existing PR and its complete document were read before revising it.
 
 ### Correction of the false premise and granularity verdict
 
-**VERIFIED: read `internal/sessiond/claude_adapter.go`, lines 18–23.** The
-historical rationale says:
+**VERIFIED on the pre-implementation baseline: read the since-deleted
+`internal/sessiond/claude_adapter.go`, lines 18–23.** The historical rationale said:
 
 > Why a poller and not a hook: Amplifier has an in-process module system, so
 > its producer can be an event handler that declares state as it changes.
@@ -72,8 +73,8 @@ historical rationale says:
 > (interactive and background) as a JSON array and exit (for scripting; does
 > not require a TTY)". Polling that is the whole integration.
 
-**That rationale is false.** This design replaces it with the following rationale
-(the Go file and its runtime logic are unchanged in this documentation PR):
+**That rationale was false.** The implementation replaced it with the following
+rationale:
 
 > Claude Code exposes native lifecycle, prompt, permission, tool and stop hooks,
 > distributed through settings or plugins. Muxterm loads its Claude plugin on each

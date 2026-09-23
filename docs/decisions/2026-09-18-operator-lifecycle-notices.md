@@ -1,4 +1,9 @@
-# Operator lifecycle notices, and a default-on Claude fleet adapter
+# Operator lifecycle notices, and the historical Claude fleet adapter
+
+> **Superseded in part (2026-09-22):** PR #178 removed the Claude polling
+> adapter and replaced it with invocation-scoped native hooks. The adapter
+> section below records the decision at the time; it is not current setup or
+> runtime guidance. Operator lifecycle notices remain current.
 
 **Base:** `origin/main` · **Status:** implemented behind an off-by-default switch, not merged, not released.
 
@@ -113,7 +118,7 @@ dependency here rather than part of this repository, so the stamp is applied by
 locating the message after execution. The match is strict and a miss degrades to
 *no stamp* (replays as human) rather than to *the wrong message stamped*.
 
-## Claude fleet adapter: on by default
+## Historical Claude fleet adapter: on by default at the time
 
 The adapter was opt-in behind `MUXTERM_CLAUDE_ADAPTER=1`. The practical effect
 was that Claude Code sessions were absent from the fleet on every machine nobody
@@ -121,7 +126,7 @@ remembered to configure, which reads as "muxterm cannot see Claude Code" rather
 than "muxterm was not switched on". A fleet view that silently omits half the
 agents on the machine is worse than one that shows them, because it is believed.
 
-It is now on by default with an explicit opt-out: `MUXTERM_CLAUDE_ADAPTER=0`
+It was then enabled by default with an explicit opt-out: `MUXTERM_CLAUDE_ADAPTER=0`
 (or `false`/`no`/`off`). Any other value — including a typo — means enabled,
 which is the right direction for an opt-out: a misspelling must not silently
 disable something an operator believes is running.
