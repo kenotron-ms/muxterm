@@ -293,6 +293,17 @@ func (s *hookReportStore) accept(reportID string, report HookReport) error {
 		report.Set.Name = nil // the first prompt names the session; later turns do not rename it
 	}
 	applyHookPatch(&record.Row, report.Set, report.Clear)
+	record.Row.ExecutionID = report.RunID
+	if record.Row.ExecutionID == "" {
+		record.Row.ExecutionID = report.NativeSessionID
+	}
+	if report.TurnID != "" {
+		record.Row.TurnID = report.TurnID
+	} else if report.Set.State != nil && sessionStateIsTerminal(*report.Set.State) {
+		// Amplifier currently reports whole-state transitions without a native
+		// turn id. Its ingress event id is still a durable per-transition anchor.
+		record.Row.TurnID = report.EventID
+	}
 	record.LastObservedAt = report.ObservedAt
 	record.Row.Harness = report.Harness
 	record.Row.Reporting = "reporting"

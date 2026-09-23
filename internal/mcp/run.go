@@ -830,11 +830,11 @@ func registerAllTools(
 
 	srv.Register(
 		"session_send",
-		"type text into a known session's pane, addressed by session_id -- to unblock one waiting at a prompt, "+
-			"or to steer one that has drifted. submit (default true) appends Enter. Switches the MCP session to that "+
-			"session's workspace if needed, which discards this connection's buffered pane output, so drain anything "+
-			"you care about first. REFUSES any session_id not in the current fleet_status snapshot: this addresses "+
-			"known sessions only and can never target an arbitrary pane id. Returns pane_id, pane_name, pane_ref, workspace_id, workspace_name, workspace_ref",
+		"durably admit and execute one native-resume turn for a known session_id. Works for sessions with or without panes. "+
+			"client_ref is the caller's stable idempotency key: reuse returns the original outcome and never executes twice. "+
+			"cursor optionally rejects a stale transcript view before admission. A dispatch whose native acceptance cannot be "+
+			"proved is returned as uncertain and is never retried automatically. Local machine only; terminal steering remains "+
+			"available explicitly through send_input",
 		map[string]any{
 			"type": "object",
 			"properties": withMachine(map[string]any{
@@ -843,12 +843,13 @@ func registerAllTools(
 					"description": "a session_id from fleet_status",
 				},
 				"text": map[string]any{"type": "string"},
-				"submit": map[string]any{
-					"type":        "boolean",
-					"description": "append Enter after the text (default true)",
+				"client_ref": map[string]any{
+					"type":        "string",
+					"description": "stable unique id for this user submission; reuse never dispatches twice",
 				},
+				"cursor": map[string]any{"type": "string", "description": "optional durable transcript cursor for stale-send rejection"},
 			}),
-			"required": []string{"session_id", "text"},
+			"required": []string{"session_id", "text", "client_ref"},
 		},
 		wrap(func(c *Client, args map[string]any) (string, error) {
 			return newFleetTools(c).sessionSend(args)

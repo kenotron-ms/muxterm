@@ -1,6 +1,13 @@
 package mcp
 
-import "fmt"
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+)
 
 // fleetTools groups the MCP fleet tool handlers and holds a reference to the
 // Client so handlers can reach the cached session-state snapshot and the
@@ -140,26 +147,9 @@ func (ft *fleetTools) laneTranscript(args map[string]any) (string, error) {
 	}), nil
 }
 
-// sessionSend types text into the pane of a known session, addressing it by
-// SESSION id rather than by pane id.
-//
-// ⛔ SAFETY, NON-NEGOTIABLE: a session id that is not in the current fleet
-// snapshot is REFUSED. This tool must never become a way to inject keystrokes
-// into an arbitrary pane -- it addresses known sessions only, and the snapshot
-// is the definition of "known". Resolving the pane id from the snapshot rather
-// than accepting one from the caller is what makes that structural instead of
-// merely intended: there is no argument here that names a pane.
-//
-// The pane is not otherwise privileged. send_input already exists and takes a
-// raw pane id; what this adds is that the target is a session the daemon is
-// reporting, so an agent steering a lane cannot typo its way into somebody
-// else's shell.
-//
-// KNOWN HAZARD (shared with spawn_lane and switch_workspace): sending to a
-// session in another workspace re-attaches this whole MCP connection, which
-// discards its accumulated output buffers and armed prompt channels and
-// replays the joined workspace's retained output. Drain anything you care
-// about before calling this.
+// sessionSend admits a durable native-resume turn by session identity. It does
+// not resolve or write a pane: pane-less sessions work, and ordinary terminal
+// input remains the separate, explicit send_input capability.
 func (ft *fleetTools) sessionSend(args map[string]any) (string, error) {
 	sessionID, err := argString(args, "session_id")
 	if err != nil {
@@ -169,57 +159,40 @@ func (ft *fleetTools) sessionSend(args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	submit := true
-	if v, present, boolErr := argBool(args, "submit"); boolErr != nil {
-		return "", boolErr
-	} else if present {
-		submit = v
-	}
-	// S1. session_send types into a live agent's pane, which is the same
-	// delegation route as spawn_lane with the lane already running.
-	if err := guardCosConfig(text); err != nil {
-		return "", err
-	}
-
-	rows, err := ft.c.Fleet()
+	clientRef, err := argString(args, "client_ref")
 	if err != nil {
 		return "", err
 	}
-	row, ok := FindSession(rows, sessionID)
-	if !ok {
-		return "", fmt.Errorf("%w -- session_send addresses known sessions only, "+
-			"never an arbitrary pane id", unknownSessionErr(sessionID, rows))
-	}
-	if row.PaneID == 0 || row.WorkspaceID == "" {
-		return "", fmt.Errorf("session %q is reported without a pane (pane %d, workspace %q), so there is nowhere to send to",
-			sessionID, row.PaneID, row.WorkspaceID)
-	}
-
-	// Pane input is resolved against the connection's ATTACHED workspace
-	// server-side, so this attach is not bookkeeping -- it is what decides
-	// which pane receives the bytes.
-	if ft.c.Workspace() != row.WorkspaceID {
-		if err := ft.c.AttachWorkspace(row.WorkspaceID); err != nil {
-			return "", fmt.Errorf("attaching to workspace %s to reach session %q: %w",
-				row.WorkspaceID, sessionID, err)
+	cursor := ""
+	if value, ok := args["cursor"]; ok {
+		cursor, ok = value.(string)
+		if !ok {
+			return "", fmt.Errorf("argument cursor: expected string, got %T", value)
 		}
 	}
-
-	// "\r", not "\n": a terminal's Enter key sends carriage return, which is
-	// what namedKeys["Enter"] in send_input already sends and what a TUI
-	// reading the pty expects. Sending "\n" instead works in a plain shell and
-	// silently does nothing in several agent REPLs.
-	payload := text
-	if submit {
-		payload += "\r"
+	if err := guardCosConfig(text); err != nil {
+		return "", err
 	}
-	if err := ft.c.conn.Input(uint32(row.PaneID), []byte(payload)); err != nil {
-		return "", fmt.Errorf("sending to session %q (pane %d): %w", sessionID, row.PaneID, err)
+	if ft.c.IsRemote() {
+		return "", errors.New("managed session turns are not available across a remote machine transport")
 	}
-
-	return jsonText(map[string]any{
-		"pane_id":      row.PaneID,
-		"workspace_id": row.WorkspaceID,
-		"machine":      ft.c.Machine(),
-	}), nil
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	argv := []string{"session", "send", sessionID, "--prompt", text, "--client-ref", clientRef, "--json"}
+	if strings.TrimSpace(cursor) != "" {
+		argv = append(argv, "--cursor", cursor)
+	}
+	cmd := exec.Command(self, argv...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return "", fmt.Errorf("managed session turn failed: %s", detail)
+	}
+	return strings.TrimSpace(stdout.String()), nil
 }

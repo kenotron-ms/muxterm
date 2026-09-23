@@ -305,18 +305,20 @@ func (l *lifecycleLedger) persistLocked() {
 // lifecycleMarker is one durable fact, normalised from either store so the
 // pump has a single shape to reason about.
 type lifecycleMarker struct {
-	ID         string
-	Kind       string
-	SessionID  string
-	At         int64
-	Live       bool // came from a still-running lane rather than a pane exit
-	LaneName   string
-	Project    string
-	Harness    string
-	Mode       string
-	DoneMeans  string
-	WaitingFor string
-	Doing      string
+	ID          string
+	Kind        string
+	SessionID   string
+	ExecutionID string
+	TurnID      string
+	At          int64
+	Live        bool // came from a still-running lane rather than a pane exit
+	LaneName    string
+	Project     string
+	Harness     string
+	Mode        string
+	DoneMeans   string
+	WaitingFor  string
+	Doing       string
 	// Declared says whether the outcome came from the session's own statement
 	// about itself or was inferred by the daemon from an exit code. It is
 	// carried all the way to the model so a notice can say which, rather than
@@ -328,12 +330,16 @@ type lifecycleMarker struct {
 	Output    string
 }
 
-// Key is the second idempotency axis: one announcement per session per kind.
+// Key is the second idempotency axis: one announcement per causal turn and
+// kind. Successive turns in one native session must each reach Operator.
 func (m lifecycleMarker) Key() string {
 	if m.SessionID == "" {
 		return ""
 	}
-	return m.SessionID + "|" + m.Kind
+	if m.ExecutionID == "" || m.TurnID == "" {
+		return m.SessionID + "|" + m.Kind
+	}
+	return m.SessionID + "|" + m.ExecutionID + "|" + m.TurnID + "|" + m.Kind
 }
 
 // lifecycleNoticer is the pump.
@@ -522,18 +528,20 @@ func completionArtifactURLs(r sessiond.CompletionRecord) []string {
 
 func markerFromAttention(r sessiond.AttentionRecord) lifecycleMarker {
 	return lifecycleMarker{
-		ID:         r.ID,
-		Kind:       r.Kind,
-		SessionID:  r.SessionID,
-		At:         r.ObservedAt,
-		Live:       true,
-		LaneName:   r.LaneName(),
-		Project:    r.Project,
-		Harness:    r.Harness,
-		Mode:       r.Mode,
-		DoneMeans:  r.DoneMeans,
-		WaitingFor: r.DeclaredWaitingFor,
-		Doing:      r.Doing,
+		ID:          r.ID,
+		Kind:        r.Kind,
+		SessionID:   r.SessionID,
+		ExecutionID: r.ExecutionID,
+		TurnID:      r.TurnID,
+		At:          r.ObservedAt,
+		Live:        true,
+		LaneName:    r.LaneName(),
+		Project:     r.Project,
+		Harness:     r.Harness,
+		Mode:        r.Mode,
+		DoneMeans:   r.DoneMeans,
+		WaitingFor:  r.DeclaredWaitingFor,
+		Doing:       r.Doing,
 		// A live marker exists only because a session declared a transition,
 		// so it is a declaration by construction. There is no exit code to
 		// infer anything from.

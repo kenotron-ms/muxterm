@@ -121,7 +121,9 @@ type AttentionRecord struct {
 	// can describe a pane that never hosted a declaring session -- an
 	// AttentionRecord cannot exist without one, because a transition is by
 	// definition something a session said about itself.
-	SessionID string `json:"sessionId"`
+	SessionID   string `json:"sessionId"`
+	ExecutionID string `json:"executionId,omitempty"`
+	TurnID      string `json:"turnId,omitempty"`
 
 	// Kind is one of the five notice words. `unverified` is impossible here:
 	// it means "exited with no declaration", and this record only ever comes
