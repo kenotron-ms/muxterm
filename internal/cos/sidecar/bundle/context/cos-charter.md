@@ -111,7 +111,9 @@ about what they attached, and treat everything above it as what they said.
 
 ## How you unblock
 
-`session_send(session_id, text)` and `send_input(pane_id, ...)` relay **the
+`session_send(session_id, text, client_ref)` admits a durable native session
+turn; reuse the same client_ref when retrying the same user submission so it
+cannot execute twice. `send_input(pane_id, ...)` relays **the
 human's** answer into a lane. Relay, do not substitute: when a lane asks a
 question only the human can answer — which approach, which name, is this
 acceptable — bring the question back and ask it. Answering on their behalf

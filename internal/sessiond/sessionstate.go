@@ -158,6 +158,11 @@ type SessionState struct {
 	// view: an Amplifier lane and a Claude Code session sit in the same list,
 	// each labelled with what is actually running it.
 	Harness string `json:"harness,omitempty"`
+	// ExecutionID and TurnID carry native causal identity into lifecycle
+	// notices. They are observations from hook reports, never inferred from
+	// terminal activity or prose.
+	ExecutionID string `json:"executionId,omitempty"`
+	TurnID      string `json:"turnId,omitempty"`
 
 	// Project is the session's working directory. Absolute path; the browser
 	// shortens it for display.

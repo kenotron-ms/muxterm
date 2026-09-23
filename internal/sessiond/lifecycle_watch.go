@@ -122,6 +122,8 @@ func (w *lifecycleWatcher) observe(rows []SessionState) {
 		}
 		w.store.Append(AttentionRecord{
 			SessionID:          row.SessionID,
+			ExecutionID:        row.ExecutionID,
+			TurnID:             row.TurnID,
 			Kind:               kind,
 			FromState:          prev.state,
 			DeclaredWaitingFor: row.WaitingFor,
@@ -154,21 +156,20 @@ func (w *lifecycleWatcher) observe(rows []SessionState) {
 // lifecycleKindFor decides which of the five words a row's new state earns, or
 // "" for a transition that must stay silent.
 //
-// AUTONOMOUS ONLY. This is the approved rollout decision and it matches the
-// alarm doctrine the fleet already ships (SessionState.NeedsInput): an
-// interactive session sitting at its own prompt is doing precisely what it is
-// for, and a chat notice for it would be pure noise. An autonomous lane going
-// quiet is the thing worth saying out loud.
+// Managed sessions are turn-oriented: each stopped/failed/blocked edge is a
+// causal event Operator must deliver even when the session is interactive.
+// `done` remains autonomous-only because interactive rest never proves a goal
+// verdict.
 //
 // `unverified` is deliberately absent: it means "exited having declared
 // nothing", which is a fact about an exit, not about a declaration, so it can
 // only ever come from a CompletionRecord.
 func lifecycleKindFor(row SessionState) string {
-	if row.Mode != ModeAutonomous {
-		return ""
-	}
 	switch row.State {
 	case SessionStateDone:
+		if row.Mode != ModeAutonomous {
+			return ""
+		}
 		return NoticeFinished
 	case SessionStateFailed:
 		return NoticeFailed
