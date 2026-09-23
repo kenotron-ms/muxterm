@@ -1,5 +1,13 @@
 # muxterm Design
 
+> **Historical document.** This describes muxterm's original tmux-based
+> architecture and is not the current product contract. The current terminal
+> architecture is documented in [the sessiond cutover release notes](RELEASE_NOTES_sessiond_cutover.md),
+> and coding-agent sessions are now the fleet's primary records as specified in
+> [the session-state protocol](session-state-protocol.md). In particular, tmux
+> sessions are no longer muxterm's source of truth, and Claude reporting uses
+> invocation-scoped native hooks rather than polling.
+
 ## Goal
 
 A web-native tmux client that surfaces tmux's power through a browser UI newcomers can use without learning tmux keybindings -- tabs, panes, and splits rendered as DOM elements, each backed by a ghostty-web terminal canvas, driven by tmux control mode.
