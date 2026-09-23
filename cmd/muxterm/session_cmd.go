@@ -27,6 +27,7 @@ func runSession(args []string) error {
 		fmt.Fprintln(os.Stdout, "  report [flags]          Publish a session-state snapshot to the home view")
 		fmt.Fprintln(os.Stdout, "  hook-report             Queue a versioned harness hook report from stdin")
 		fmt.Fprintln(os.Stdout, "  codex-notify <json>     Codex's turn-complete hook target (not run by hand)")
+		fmt.Fprintln(os.Stdout, "  codex-hook              Codex's rich native hook target (not run by hand)")
 		fmt.Fprintln(os.Stdout, "  claude-hook <event>     Claude's native plugin hook target (not run by hand)")
 		return nil
 	}
@@ -55,6 +56,8 @@ func runSession(args []string) error {
 		// its hook program one JSON argument of its own choosing. See
 		// codex_notify_cmd.go.
 		return runCodexNotify(args[1:])
+	case "codex-hook":
+		return runCodexHook(args[1:])
 	case "claude-hook":
 		return runClaudeHook(args[1:])
 	default:

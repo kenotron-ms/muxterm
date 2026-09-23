@@ -55,11 +55,15 @@ func claudeReport(p claudeHookPayload, raw []byte) sessiond.HookReport {
 	project, name, doing, waiting := p.CWD, p.SessionID, "", ""
 	event, clear := "metadata.updated", []string(nil)
 	setDoing := true
+	setState := true
+	setName := false
 	switch p.HookEvent {
 	case "SessionStart":
 		event, doing = "session.started", "Claude session started"
+		setName = true
 	case "UserPromptSubmit":
 		event, doing = "turn.started", p.Prompt
+		name, setName = firstCodexLine(p.Prompt, 120), true
 	case "PreToolUse":
 		event, doing = "tool.started", "Using "+p.ToolName
 	case "PostToolUse":
@@ -79,7 +83,7 @@ func claudeReport(p claudeHookPayload, raw []byte) sessiond.HookReport {
 	case "SubagentStart":
 		event, doing = "session.started", "Claude subagent started"
 	case "SubagentStop":
-		event, doing = "session.ended", "Claude subagent stopped"
+		event, setState, setDoing = "session.ended", false, false
 	case "PreCompact":
 		event, doing = "progress.updated", "Compacting context"
 	case "PostCompact":
@@ -99,7 +103,13 @@ func claudeReport(p claudeHookPayload, raw []byte) sessiond.HookReport {
 		anchor = hex.EncodeToString(h[:12])
 	}
 	eventID := strings.ToLower(p.HookEvent) + ":" + anchor
-	patch := sessiond.HookPatch{Project: &project, Name: &name, Mode: &mode, State: &state, WaitingFor: &waiting}
+	patch := sessiond.HookPatch{Project: &project, Mode: &mode, WaitingFor: &waiting}
+	if setName {
+		patch.Name = &name
+	}
+	if setState {
+		patch.State = &state
+	}
 	if setDoing {
 		patch.Doing = &doing
 	}

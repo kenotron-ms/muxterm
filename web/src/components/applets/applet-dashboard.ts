@@ -661,6 +661,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
         <dt>terminal</dt><dd>${s.paneId === null ? 'no terminal' : `${s.workspaceId} · p${s.paneId}`}</dd>
         ${s.project ? html`<dt>project</dt><dd>${s.project}</dd>` : nothing}
         ${s.reporting ? html`<dt>reporting</dt><dd>${s.reporting}${s.lastReportAt ? ` · ${age(s.lastReportAt, this._now)}` : ''}</dd>` : nothing}
+        ${s.reportingCoverage ? html`<dt>coverage</dt><dd>${s.reportingCoverage}</dd>` : nothing}
         ${s.reportingError ? html`<dt>reporting error</dt><dd>${s.reportingError}</dd>` : nothing}
       </dl>
     </section>`;

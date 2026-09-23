@@ -1608,6 +1608,9 @@ export class MuxHome extends LitElement {
           ? html`<dt>reporting</dt>
               <dd>${s.reporting}${s.lastReportAt ? ` · ${age(s.lastReportAt, this._now)}` : ''}</dd>`
           : ''}
+        ${s.reportingCoverage
+          ? html`<dt>coverage</dt><dd>${s.reportingCoverage}</dd>`
+          : ''}
         ${s.reportingError
           ? html`<dt>reporting error</dt>
               <dd>${s.reportingError}</dd>`

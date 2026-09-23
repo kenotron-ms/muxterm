@@ -32,6 +32,11 @@ import (
 // where Codex's own logging will keep it without putting it in front of anyone.
 // --verbose is for the person integrating this deliberately.
 func runCodexNotify(args []string) error {
+	// Rich Stop and legacy notify use the same canonical completion event ID.
+	// Suppress the compatibility writer entirely for muxterm-owned rich launches.
+	if os.Getenv(sessiond.CodexRichReportingEnv) != "" {
+		return nil
+	}
 	fs := flag.NewFlagSet("session codex-notify", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	verbose := fs.Bool("verbose", false, "print the snapshot path on success")

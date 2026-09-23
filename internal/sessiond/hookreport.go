@@ -37,6 +37,7 @@ type HookPatch struct {
 	WaitingFor *string       `json:"waiting_for,omitempty"`
 	Doing      *string       `json:"doing,omitempty"`
 	DoneMeans  *string       `json:"done_means,omitempty"`
+	Coverage   *string       `json:"coverage,omitempty"`
 	Todo       *TodoProgress `json:"todo,omitempty"`
 	Knows      *[]string     `json:"knows,omitempty"`
 }
@@ -170,7 +171,12 @@ func (s *hookReportStore) consume() {
 	if err != nil {
 		return
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	type queued struct {
+		reportID string
+		path     string
+		report   HookReport
+	}
+	queue := make([]queued, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -187,10 +193,21 @@ func (s *hookReportStore) consume() {
 			_ = os.Remove(path)
 			continue
 		}
-		if err := s.accept(reportID, report); err != nil {
-			s.reject(reportID, report, err)
+		queue = append(queue, queued{reportID: reportID, path: path, report: report})
+	}
+	// Producers publish through independent short-lived hook processes, and
+	// UUID filenames contain no causal order. Applying a randomly ordered batch
+	// can let SessionEnd make earlier tool/plan reports look stale. The native
+	// observation timestamp is required by the envelope, so order the complete
+	// durable batch before mutating the single-writer registry.
+	sort.SliceStable(queue, func(i, j int) bool {
+		return queue[i].report.ObservedAt.Before(queue[j].report.ObservedAt)
+	})
+	for _, item := range queue {
+		if err := s.accept(item.reportID, item.report); err != nil {
+			s.reject(item.reportID, item.report, err)
 		}
-		_ = os.Remove(path)
+		_ = os.Remove(item.path)
 	}
 }
 
@@ -256,6 +273,9 @@ func (s *hookReportStore) accept(reportID string, report HookReport) error {
 		}
 		return s.writeReceipt(hookReceipt{Status: "accepted", ReportID: reportID, SessionID: record.Row.SessionID, At: time.Now().UTC()})
 	}
+	if report.Set.Name != nil && report.NativeEvent == "UserPromptSubmit" && record.Row.Name != "" && record.Row.Name != report.NativeSessionID {
+		report.Set.Name = nil // the first prompt names the session; later turns do not rename it
+	}
 	applyHookPatch(&record.Row, report.Set, report.Clear)
 	record.LastObservedAt = report.ObservedAt
 	record.Row.Harness = report.Harness
@@ -312,6 +332,9 @@ func applyHookPatch(row *SessionState, set HookPatch, clear []string) {
 	}
 	if set.DoneMeans != nil {
 		row.DoneMeans = *set.DoneMeans
+	}
+	if set.Coverage != nil {
+		row.ReportingCoverage = *set.Coverage
 	}
 	if set.Todo != nil {
 		todo := *set.Todo

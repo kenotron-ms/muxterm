@@ -180,6 +180,8 @@ export interface SessionState {
   updatedAt: number;
   /** Delivery health for the muxterm-owned hook path, separate from run state. */
   reporting?: string;
+  /** Native events covered by this launch; hosted tools may be excluded. */
+  reportingCoverage?: string;
   /** Last rejected delivery or instrumentation diagnostic. */
   reportingError?: string;
   /** Unix timestamp of the last accepted native report. */
