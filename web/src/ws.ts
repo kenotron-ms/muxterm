@@ -664,6 +664,15 @@ export class MuxSocket {
     this.sendSessiond({ type: SessiondType.SessionStateSubscribe, ok: enabled });
   }
 
+  /** Import one bounded native tail and replay its durable journal. */
+  requestSessionTranscript(sessionId: string, transcriptCursor = ''): boolean {
+    return this.sendSessiond({ type: SessiondType.SessionTranscript, sessionId, transcriptCursor });
+  }
+
+  setSessionArchived(sessionId: string, archived: boolean): boolean {
+    return this.sendSessiond({ type: SessiondType.SessionArchive, sessionId, ok: archived });
+  }
+
   // --- chief-of-staff senders ----------------------------------------------
   // Serve-local frames. They never reach sessiond, so they bypass
   // sendSessiond's frozen SessiondMessage type and go out as plain objects.
@@ -1175,6 +1184,8 @@ export class MuxSocket {
             this.onSessionStateSubscribeResult?.(raw as unknown as SessiondMessage);
           } else if (raw.type === SessiondType.SessionState) {
             this.onSessionState?.(raw as unknown as SessiondMessage);
+          } else if (raw.type === SessiondType.SessionTranscriptResult) {
+            window.dispatchEvent(new CustomEvent('session-transcript-result', { detail: raw }));
           } else if (raw.type === HOST_STATE) {
             // Relay-only, and inert for the frozen store: state.ts's
             // applySessiond already ends in `default: return`, so this frame

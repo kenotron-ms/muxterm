@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/kenotron-ms/muxterm/internal/cos"
+	"github.com/kenotron-ms/muxterm/internal/mcp"
 	"github.com/kenotron-ms/muxterm/internal/sessiond"
 	"github.com/kenotron-ms/muxterm/internal/transport"
 )
@@ -692,6 +693,17 @@ func (c *Client) handleTextInput(data []byte) {
 		c.sendError(0, "", fmt.Errorf("invalid JSON: %w", err))
 		return
 	}
+	// Archive is journal metadata, not a daemon operation. Keep it available
+	// while sessiond is restarting so retained history remains manageable.
+	if msg.Type == sessiond.TypeSessionArchive {
+		j, err := mcp.SetTranscriptArchived(msg.SessionID, msg.OK)
+		reply := &sessiond.Message{Type: sessiond.TypeSessionTranscriptResult, CID: msg.CID, SessionID: msg.SessionID, TranscriptArchived: j.Archived, Unchanged: true}
+		if err != nil {
+			reply.TranscriptError = err.Error()
+		}
+		c.sendMessage(reply)
+		return
+	}
 
 	// One routing step before the switch: pick the session, strip the host
 	// qualifier off every id the message carries, and keep the browser's
@@ -710,6 +722,12 @@ func (c *Client) handleTextInput(data []byte) {
 	}
 
 	switch msg.Type {
+	case sessiond.TypeSessionTranscript:
+		// Native discovery can require several bounded filesystem RPCs. Never
+		// occupy readPump while they run: terminal input on this WebSocket must
+		// remain deliverable. sessionTranscript also bounds the response wait.
+		go c.sessionTranscript(msg, dc)
+
 	case sessiond.TypeWorkspaceScreen:
 		screenClient, ok := dc.(interface {
 			WorkspaceScreenWithin(string, time.Duration) (*sessiond.Message, error)
@@ -935,6 +953,75 @@ func (c *Client) handleTextInput(data []byte) {
 	default:
 		c.sendError(msg.CID, browserWSID, fmt.Errorf("unknown action: %s", msg.Type))
 	}
+}
+
+func (c *Client) sessionTranscript(msg sessiond.Message, dc DaemonConn) {
+	reply := &sessiond.Message{Type: sessiond.TypeSessionTranscriptResult, CID: msg.CID, SessionID: msg.SessionID}
+	var row sessiond.SessionState
+	found := false
+	c.mergeMu.Lock()
+	for _, rows := range c.ssByHost {
+		for _, candidate := range rows {
+			if candidate.SessionID == msg.SessionID {
+				row, found = candidate, true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	c.mergeMu.Unlock()
+	if !found {
+		reply.TranscriptError = fmt.Sprintf("session %q is not in the current fleet", msg.SessionID)
+		c.sendMessage(reply)
+		return
+	}
+	reader, ok := dc.(mcp.TranscriptReader)
+	if !ok {
+		reply.TranscriptError = "daemon does not support bounded transcript reads"
+		c.sendMessage(reply)
+		return
+	}
+	type importResult struct {
+		journal mcp.TranscriptJournal
+		err     error
+	}
+	results := make(chan importResult, 1)
+	go func() {
+		j, err := mcp.ImportTranscriptJournal(reader, row, 40)
+		results <- importResult{journal: j, err: err}
+	}()
+	var j mcp.TranscriptJournal
+	var importErr error
+	select {
+	case result := <-results:
+		j, importErr = result.journal, result.err
+	case <-time.After(5 * time.Second):
+		j, _ = mcp.LoadTranscriptJournal(row.SessionID)
+		importErr = errors.New("native transcript import timed out after 5 seconds; showing the last durable journal")
+	}
+	if importErr != nil {
+		replayed, loadErr := mcp.LoadTranscriptJournal(row.SessionID)
+		if loadErr == nil {
+			j = replayed
+		}
+		reply.TranscriptError = importErr.Error()
+	}
+	reply.TranscriptCursor = j.Cursor
+	reply.TranscriptPath = j.Path
+	reply.TranscriptTruncated = j.Truncated
+	reply.TranscriptArchived = j.Archived
+	reply.TranscriptDetached = j.Detached
+	if msg.TranscriptCursor != "" && msg.TranscriptCursor == j.Cursor {
+		reply.Unchanged = true
+	} else {
+		reply.TranscriptTurns = j.Turns
+		if reply.TranscriptTurns == nil {
+			reply.TranscriptTurns = []sessiond.SessionTranscriptTurn{}
+		}
+	}
+	c.sendMessage(reply)
 }
 
 // broadcastSubscribe forwards a browser subscription to every session EXCEPT

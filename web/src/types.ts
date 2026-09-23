@@ -89,7 +89,17 @@ export const SessiondType = {
   SessionStateSubscribe: 'session-state-subscribe',
   SessionStateSubscribeResult: 'session-state-subscribe-result',
   SessionState: 'session-state',
+  SessionTranscript: 'session-transcript',
+  SessionTranscriptResult: 'session-transcript-result',
+  SessionArchive: 'session-archive',
 } as const;
+
+export interface SessionTranscriptTurn {
+  role: string;
+  text?: string;
+  ts?: string;
+  tool?: string;
+}
 
 export type SessiondMessageType = (typeof SessiondType)[keyof typeof SessiondType];
 
@@ -266,6 +276,15 @@ export interface SessiondMessage {
   fg?: string[][];
   bg?: string[][];
   inverse?: boolean[][];
+  sessionId?: string;
+  transcriptCursor?: string;
+  transcriptPath?: string;
+  transcriptError?: string;
+  transcriptTurns?: SessionTranscriptTurn[];
+  transcriptTruncated?: boolean;
+  transcriptArchived?: boolean;
+  transcriptDetached?: boolean;
+  unchanged?: boolean;
 }
 
 // ---------------------------------------------------------------------------

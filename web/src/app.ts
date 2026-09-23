@@ -1615,6 +1615,8 @@ export class MuxApp extends LitElement {
                   @home-open="${this._onHomeOpen}"
                   @home-dismiss="${this._onDashboardHide}"
                   @fleet-state="${this._onFleetState}"
+                  @session-transcript-request="${this._onSessionTranscriptRequest}"
+                  @session-archive-request="${this._onSessionArchiveRequest}"
                 ></mux-cos>
               `
             : '',
@@ -2423,6 +2425,20 @@ export class MuxApp extends LitElement {
   /** The sheet reporting its own open state. Never set from the other side. */
   private _onFleetState = (e: Event): void => {
     this._fleetOpen = (e as CustomEvent<{ open: boolean }>).detail?.open === true;
+  };
+
+  private _onSessionTranscriptRequest = (e: Event): void => {
+    const detail = (e as CustomEvent<{ sessionId?: string; cursor?: string }>).detail;
+    if (!detail?.sessionId || !this._socket?.requestSessionTranscript(detail.sessionId, detail.cursor ?? '')) {
+      window.dispatchEvent(new CustomEvent('session-transcript-result', {
+        detail: { type: 'session-transcript-result', sessionId: detail?.sessionId ?? '', transcriptError: 'Transcript connection is unavailable.' },
+      }));
+    }
+  };
+
+  private _onSessionArchiveRequest = (e: Event): void => {
+    const detail = (e as CustomEvent<{ sessionId?: string; archived?: boolean }>).detail;
+    if (detail?.sessionId) this._socket?.setSessionArchived(detail.sessionId, detail.archived === true);
   };
 
   /**

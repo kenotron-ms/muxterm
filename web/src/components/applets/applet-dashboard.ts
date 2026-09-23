@@ -62,6 +62,7 @@ import {
   type SessionState,
 } from '../../lib/session-state.js';
 import { tileLinesFor } from '../../lib/home-tile.js';
+import type { SessiondMessage, SessionTranscriptTurn } from '../../types.js';
 
 /** Which way the fleet draws itself. Desktop only -- portrait is cards. */
 export type FleetView = 'cards' | 'tiles';
@@ -187,6 +188,14 @@ export class AppletDashboard extends LitElement implements AppletElement {
   /** Bumped by the homeSessions subscription, and only while active. */
   @state() private _fleetVersion = 0;
   @state() private _detailSessionId: string | null = null;
+  @state() private _transcriptTurns: SessionTranscriptTurn[] = [];
+  @state() private _transcriptCursor = '';
+  @state() private _transcriptError = '';
+  @state() private _transcriptLoading = false;
+  @state() private _transcriptMeta = '';
+  @state() private _transcriptArchived = false;
+  @state() private _transcriptDetached = false;
+  @state() private _transcriptTruncated = false;
 
   private _unsubFleet: (() => void) | null = null;
 
@@ -474,6 +483,13 @@ export class AppletDashboard extends LitElement implements AppletElement {
     .detail dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--s-2) var(--s-4); margin: var(--s-4) 0 0; }
     .detail dt { color: var(--ink-3); }
     .detail dd { margin: 0; overflow-wrap: anywhere; }
+    .transcript-head { display: flex; justify-content: space-between; align-items: center; margin-top: var(--s-5); color: var(--ink-1); font-weight: 600; }
+    .transcript-note, .transcript-error { margin: var(--s-3) 0 0; color: var(--ink-3); }
+    .transcript-error { color: var(--fail); }
+    .transcript { list-style: none; margin: var(--s-3) 0 0; padding: 0; display: grid; gap: var(--s-3); max-height: 18rem; overflow: auto; }
+    .transcript li { display: grid; gap: var(--s-1); border-left: 2px solid var(--edge); padding-left: var(--s-3); }
+    .transcript b { color: var(--ink-3); font-size: 10px; text-transform: uppercase; }
+    .transcript span { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-1); }
   `,
   ];
 
@@ -484,12 +500,14 @@ export class AppletDashboard extends LitElement implements AppletElement {
   override connectedCallback(): void {
     // This is where the fleet subscription starts, regardless of `active`.
     super.connectedCallback();
+    window.addEventListener('session-transcript-result', this._onTranscriptResult as EventListener);
     this._sync();
   }
 
   override disconnectedCallback(): void {
     // isConnected is already false here, so this is the unsubscribe branch.
     this._sync();
+    window.removeEventListener('session-transcript-result', this._onTranscriptResult as EventListener);
     super.disconnectedCallback();
   }
 
@@ -629,10 +647,25 @@ export class AppletDashboard extends LitElement implements AppletElement {
    * shadow boundaries to cross: this applet's and <mux-cos>'s.
    */
   private _openPane(s: SessionState): void {
-    if (s.paneId === null || s.workspaceId === null) {
-      this._detailSessionId = this._detailSessionId === s.sessionId ? null : s.sessionId;
-      return;
-    }
+    const opening = this._detailSessionId !== s.sessionId;
+    this._detailSessionId = this._detailSessionId === s.sessionId ? null : s.sessionId;
+    if (opening || this._detailSessionId === null) this._clearTranscriptDetail();
+    if (this._detailSessionId) this._requestTranscript(s.sessionId);
+  }
+
+  private _clearTranscriptDetail(): void {
+    this._transcriptTurns = [];
+    this._transcriptCursor = '';
+    this._transcriptError = '';
+    this._transcriptLoading = false;
+    this._transcriptMeta = '';
+    this._transcriptArchived = false;
+    this._transcriptDetached = false;
+    this._transcriptTruncated = false;
+  }
+
+  private _openTerminal(s: SessionState): void {
+    if (s.paneId === null || s.workspaceId === null) return;
     this.dispatchEvent(
       new CustomEvent('home-open', {
         detail: { sessionId: s.sessionId, paneId: s.paneId, workspaceId: s.workspaceId },
@@ -640,6 +673,37 @@ export class AppletDashboard extends LitElement implements AppletElement {
         composed: true,
       }),
     );
+  }
+
+  private _requestTranscript(sessionId: string): void {
+    this._transcriptLoading = true;
+    this.dispatchEvent(new CustomEvent('session-transcript-request', {
+      detail: { sessionId, cursor: this._transcriptCursor }, bubbles: true, composed: true,
+    }));
+  }
+
+  private _onTranscriptResult = (event: CustomEvent<SessiondMessage>): void => {
+    const msg = event.detail;
+    if (!this._detailSessionId || msg.sessionId !== this._detailSessionId) return;
+    this._transcriptLoading = false;
+    this._transcriptError = msg.transcriptError ?? '';
+    if (!msg.unchanged) this._transcriptTurns = msg.transcriptTurns ?? [];
+    this._transcriptCursor = msg.transcriptCursor ?? this._transcriptCursor;
+    this._transcriptArchived = msg.transcriptArchived === true;
+    if (!msg.unchanged) {
+      this._transcriptDetached = msg.transcriptDetached === true;
+      this._transcriptTruncated = msg.transcriptTruncated === true;
+    }
+    this._transcriptMeta = [
+      this._transcriptArchived ? 'archived' : '', this._transcriptDetached ? 'detached' : '',
+      this._transcriptTruncated ? 'bounded tail' : '',
+    ].filter(Boolean).join(' · ');
+  };
+
+  private _setArchived(sessionId: string): void {
+    this.dispatchEvent(new CustomEvent('session-archive-request', {
+      detail: { sessionId, archived: !this._transcriptArchived }, bubbles: true, composed: true,
+    }));
   }
 
   // -------------------------------------------------------------------------
@@ -655,7 +719,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
     const s = homeSessions.sessions.find((row) => row.sessionId === this._detailSessionId);
     if (!s) return nothing;
     return html`<section class="detail" aria-label="Session detail">
-      <div class="detail-head"><span>${s.name}</span><button type="button" aria-label="Close session detail" @click="${() => { this._detailSessionId = null; }}">×</button></div>
+      <div class="detail-head"><span>${s.name}</span><span>${s.paneId !== null && s.workspaceId !== null ? html`<button type="button" @click="${() => this._openTerminal(s)}">Open terminal</button>` : nothing}<button type="button" aria-label="Close session detail" @click="${() => { this._detailSessionId = null; }}">×</button></span></div>
       <dl>
         <dt>session</dt><dd>${s.sessionId}</dd>
         <dt>terminal</dt><dd>${s.paneId === null ? 'no terminal' : `${s.workspaceId} · p${s.paneId}`}</dd>
@@ -664,6 +728,11 @@ export class AppletDashboard extends LitElement implements AppletElement {
         ${s.reportingCoverage ? html`<dt>coverage</dt><dd>${s.reportingCoverage}</dd>` : nothing}
         ${s.reportingError ? html`<dt>reporting error</dt><dd>${s.reportingError}</dd>` : nothing}
       </dl>
+      <div class="transcript-head"><span>History${this._transcriptMeta ? ` · ${this._transcriptMeta}` : ''}</span><span><button type="button" @click="${() => this._setArchived(s.sessionId)}">${this._transcriptArchived ? 'Unarchive' : 'Archive'}</button><button type="button" @click="${() => this._requestTranscript(s.sessionId)}">Refresh</button></span></div>
+      ${this._transcriptLoading ? html`<p class="transcript-note">Importing bounded native history…</p>` : nothing}
+      ${this._transcriptError ? html`<p class="transcript-error">${this._transcriptError}</p>` : nothing}
+      ${!this._transcriptLoading && this._transcriptTurns.length === 0 ? html`<p class="transcript-note">No readable turns in the imported tail.</p>` : nothing}
+      <ol class="transcript">${this._transcriptTurns.map((turn) => html`<li><b>${turn.role}${turn.tool ? ` · ${turn.tool}` : ''}</b><span>${turn.text ?? ''}</span></li>`)}</ol>
     </section>`;
   }
 
