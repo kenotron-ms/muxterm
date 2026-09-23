@@ -19,6 +19,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/kenotron-ms/muxterm/internal/operator"
 )
 
 // Op names (spec 2.2). Anything else is an unknown op the sidecar must ignore
@@ -46,7 +48,7 @@ const (
 // DefaultSessionID is the amplifier session the chief of staff owns. It is an
 // ordinary session in the normal session store, so `amplifier resume
 // muxterm-cos` reaches the same conversation from a terminal.
-const DefaultSessionID = "muxterm-cos"
+const DefaultSessionID = operator.DefaultSessionID
 
 // Environment overrides. All three are escape hatches for a machine whose
 // layout this package cannot infer.
@@ -63,7 +65,7 @@ const (
 	// nor AMPLIFIER_HOME reaches it, so two servers whose cwd resolves to the
 	// same project slug would otherwise share one transcript. `make dev-local`
 	// sets this; see the note there.
-	EnvSessionID = "MUXTERM_COS_SESSION_ID"
+	EnvSessionID = operator.EnvSessionID
 )
 
 // ResolveSessionID returns the amplifier session id to use and where it came
@@ -73,13 +75,7 @@ const (
 // Order, first hit wins: an explicit override (a --session-id flag or a
 // Config field), then $MUXTERM_COS_SESSION_ID, then DefaultSessionID.
 func ResolveSessionID(override string) (id, source string) {
-	if override != "" {
-		return override, "explicit"
-	}
-	if env := os.Getenv(EnvSessionID); env != "" {
-		return env, "$" + EnvSessionID
-	}
-	return DefaultSessionID, "default"
+	return operator.ResolveSessionID(override)
 }
 
 // IsValidSessionID accepts the bounded opaque SessionStore identifiers that
