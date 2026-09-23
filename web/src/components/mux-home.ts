@@ -1604,11 +1604,19 @@ export class MuxHome extends LitElement {
           ? html`<dt>done means</dt>
               <dd>${s.doneMeans}</dd>`
           : ''}
+        ${s.reporting
+          ? html`<dt>reporting</dt>
+              <dd>${s.reporting}${s.lastReportAt ? ` · ${age(s.lastReportAt, this._now)}` : ''}</dd>`
+          : ''}
+        ${s.reportingError
+          ? html`<dt>reporting error</dt>
+              <dd>${s.reportingError}</dd>`
+          : ''}
         ${knows.length > 0
           ? html`<dt>knows (${knows.length})</dt>
               ${knows.map((k) => html`<dd class="path">${k}</dd>`)}`
           : ''}
-        ${!s.project && !s.doneMeans && knows.length === 0
+        ${!s.project && !s.doneMeans && knows.length === 0 && !s.reporting && !s.reportingError
           ? html`<dd>Nothing further declared.</dd>`
           : ''}
       </dl>

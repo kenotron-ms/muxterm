@@ -186,6 +186,7 @@ export class AppletDashboard extends LitElement implements AppletElement {
 
   /** Bumped by the homeSessions subscription, and only while active. */
   @state() private _fleetVersion = 0;
+  @state() private _detailSessionId: string | null = null;
 
   private _unsubFleet: (() => void) | null = null;
 
@@ -459,6 +460,20 @@ export class AppletDashboard extends LitElement implements AppletElement {
       color: var(--ink-3);
       padding: var(--s-4) var(--s-1);
     }
+    .detail {
+      margin-bottom: var(--s-5);
+      padding: var(--s-5);
+      border: 1px solid var(--chrome-border);
+      border-left: 3px solid var(--chrome-accent);
+      background: var(--chrome-raised);
+      color: var(--ink-2);
+      font-size: 11.5px;
+    }
+    .detail-head { display: flex; justify-content: space-between; gap: var(--s-4); color: var(--ink-1); font-weight: 600; }
+    .detail button { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; }
+    .detail dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--s-2) var(--s-4); margin: var(--s-4) 0 0; }
+    .detail dt { color: var(--ink-3); }
+    .detail dd { margin: 0; overflow-wrap: anywhere; }
   `,
   ];
 
@@ -614,6 +629,10 @@ export class AppletDashboard extends LitElement implements AppletElement {
    * shadow boundaries to cross: this applet's and <mux-cos>'s.
    */
   private _openPane(s: SessionState): void {
+    if (s.paneId === null || s.workspaceId === null) {
+      this._detailSessionId = this._detailSessionId === s.sessionId ? null : s.sessionId;
+      return;
+    }
     this.dispatchEvent(
       new CustomEvent('home-open', {
         detail: { sessionId: s.sessionId, paneId: s.paneId, workspaceId: s.workspaceId },
@@ -628,7 +647,23 @@ export class AppletDashboard extends LitElement implements AppletElement {
   // -------------------------------------------------------------------------
 
   override render(): TemplateResult {
-    return html`<div class="body">${this._renderControls()}${this._renderFleet()}</div>`;
+    return html`<div class="body">${this._renderControls()}${this._renderDetail()}${this._renderFleet()}</div>`;
+  }
+
+  private _renderDetail(): TemplateResult | typeof nothing {
+    if (!this._detailSessionId) return nothing;
+    const s = homeSessions.sessions.find((row) => row.sessionId === this._detailSessionId);
+    if (!s) return nothing;
+    return html`<section class="detail" aria-label="Session detail">
+      <div class="detail-head"><span>${s.name}</span><button type="button" aria-label="Close session detail" @click="${() => { this._detailSessionId = null; }}">×</button></div>
+      <dl>
+        <dt>session</dt><dd>${s.sessionId}</dd>
+        <dt>terminal</dt><dd>${s.paneId === null ? 'no terminal' : `${s.workspaceId} · p${s.paneId}`}</dd>
+        ${s.project ? html`<dt>project</dt><dd>${s.project}</dd>` : nothing}
+        ${s.reporting ? html`<dt>reporting</dt><dd>${s.reporting}${s.lastReportAt ? ` · ${age(s.lastReportAt, this._now)}` : ''}</dd>` : nothing}
+        ${s.reportingError ? html`<dt>reporting error</dt><dd>${s.reportingError}</dd>` : nothing}
+      </dl>
+    </section>`;
   }
 
   /**

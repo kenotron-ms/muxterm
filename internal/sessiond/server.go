@@ -49,7 +49,8 @@ type Server struct {
 	// sessions is the home view's session-state change gate. Guarded by mu
 	// (its only mutators, rearm and changed, are both called under it). See
 	// the session-state section at the end of this file.
-	sessions *sessionStore
+	sessions    *sessionStore
+	hookReports *hookReportStore
 
 	// completions is the durable log of lanes that have finished. It carries
 	// its own lock (completion.go) rather than living under mu: it is written
@@ -104,6 +105,8 @@ func NewServer(socketPath string) (*Server, error) {
 		completions:       newCompletionStore(CompletionsPath()),
 		triggers:          newTriggerStore(TriggersPath()),
 	}
+	s.hookReports = newHookReportStore(identity.MachineID)
+	s.hookReports.projectAll()
 	s.attention = newAttentionStore(AttentionPath())
 	if LifecycleNoticesEnabled() {
 		s.lifecycle = newLifecycleWatcher(s.attention)
@@ -1623,6 +1626,10 @@ func (s *Server) sessionStateLoop(ctx context.Context) {
 // the fan-out are three separate steps, so a slow disk can never stall an
 // attach, a broadcast, or another connection's request.
 func (s *Server) emitSessionState() {
+	// Hook reports are an installation-scoped durable ingress. Consume them
+	// even with no browser and no lifecycle subscriber; browser presence is
+	// never an admission requirement.
+	s.hookReports.consume()
 	wanted := s.sessionStateWanted()
 	// The lifecycle watcher has to see EVERY transition, including the ones
 	// that happen while no browser is open -- a lane finishing at 3am is

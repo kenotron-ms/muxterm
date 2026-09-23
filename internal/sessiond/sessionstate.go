@@ -254,6 +254,11 @@ type SessionState struct {
 
 	// UpdatedAt is a Unix timestamp (seconds) of the last state change.
 	UpdatedAt int64 `json:"updatedAt"`
+
+	// Reporting is launch/report delivery health, not harness run state.
+	Reporting      string `json:"reporting,omitempty"`
+	ReportingError string `json:"reportingError,omitempty"`
+	LastReportAt   int64  `json:"lastReportAt,omitempty"`
 }
 
 // MarshalJSON keeps the established internal scalar representation while
