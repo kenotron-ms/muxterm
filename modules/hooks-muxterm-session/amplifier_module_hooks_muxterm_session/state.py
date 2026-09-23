@@ -1,4 +1,4 @@
-"""Declare what this Amplifier session is doing, into a file muxterm reads.
+"""Declare what this Amplifier session is doing through muxterm's hook ingress.
 
 Why this exists at all
 ----------------------
@@ -10,15 +10,12 @@ waiting for a human ALSO owns the terminal. Identical PTY state, opposite
 meanings. The distinction is the entire product and it is not recoverable by
 inspection -- so the session declares it instead.
 
-Transport: a file, deliberately
--------------------------------
-One JSON snapshot per session, atomically replaced under a spool directory that
-mirrors sessiond's own socketDir() (internal/sessiond/spawn.go). Not the binary
-control protocol: speaking that from Python would couple this hook to a frame
-codec it has no business knowing, and would make every daemon restart a
-reconnect problem. Snapshots are idempotent whole-state documents, so a write
-that is lost, raced, or skipped is repaired by the next event rather than
-leaving the daemon holding a wrong delta forever.
+Transport: the common durable ingress
+-------------------------------------
+Every projection is sent to ``muxterm session hook-report``. The command owns
+the bounded durable inbox and sessiond owns validation, identity, deduplication,
+receipts, and registry persistence. This hook does not write a second snapshot:
+one harness state has one writer and the common registry is authoritative.
 
 The hook does NOT resolve its own pane or workspace. It records its pid; the
 daemon knows which pane owns which process and performs that join. Teaching this
@@ -27,8 +24,8 @@ hook about muxterm's internals would put the same knowledge in two places.
 Failure policy
 --------------
 Nothing here may block or break a session. Every handler body is wrapped, every
-exception is swallowed at the boundary, and a hook that cannot write its spool
-file simply stops contributing. The kernel also logs-and-skips a raising handler
+exception is swallowed at the boundary, and a hook that cannot reach the ingress
+simply stops contributing. The kernel also logs-and-skips a raising handler
 (crates/amplifier-core/src/hooks.rs), so this is belt and braces -- appropriate,
 because the cost of a bug here is a broken user session and the benefit is a
 sidebar decoration.
@@ -49,8 +46,10 @@ import json
 import logging
 import os
 import re
+import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -298,12 +297,12 @@ def _first_line(text: Any, limit: int) -> str:
 
 
 class SessionRecord:
-    """One session's live projection, and the writer for its snapshot file.
+    """One session's live projection and common-ingress reporter.
 
     Every mutation goes through a setter that marks the record dirty; `flush`
-    is a no-op when the rendered payload is byte-identical to what is already on
-    disk. That is what keeps a chatty tool:pre/tool:post stream from turning
-    into a write storm on a tmpfs.
+    is a no-op when the rendered payload is byte-identical to the last accepted
+    submission. That keeps a chatty tool stream from creating redundant inbox
+    reports.
     """
 
     __slots__ = (
@@ -452,12 +451,10 @@ class SessionRecord:
             self.doing = doing
 
     def to_payload(self) -> dict[str, Any]:
-        """Render the snapshot.
+        """Render the harness-neutral state projection.
 
-        Field names are the JSON tags of sessiond.SessionState. `v`, `pid`,
-        `pidStart` and `sid` are the on-disk additions -- the daemon consumes
-        them and forwards none of them -- and paneId/workspaceId are
-        deliberately absent because the daemon fills them during the pane join.
+        Field names mirror sessiond.SessionState. Pane and workspace are absent
+        because sessiond performs that process join after accepting the report.
 
         The full contract, including what a non-Amplifier producer must write,
         is docs/session-state-protocol.md.
@@ -503,55 +500,62 @@ class SessionRecord:
     # -- durability ---------------------------------------------------------
 
     def flush(self) -> None:
-        """Atomically replace this session's snapshot file.
-
-        Write-then-rename, so a reader mid-tick sees either the previous whole
-        document or the next one, never a half-written one. os.replace is atomic
-        within a filesystem and the temp file is created in the destination
-        directory to guarantee that.
-
-        updatedAt is excluded from the change comparison on purpose: a heartbeat
-        that rewrites an otherwise identical file every event would defeat the
-        coalescing entirely. Staleness is still visible to the daemon, which
-        stamps its own observation time and prunes on liveness.
-        """
+        """Submit the current whole projection to the durable hook ingress."""
         payload = self.to_payload()
         compare = dict(payload)
         compare.pop("updatedAt", None)
         rendered = json.dumps(compare, sort_keys=True)
-        # The content cache assumes the file it last wrote still exists. The
-        # daemon unilaterally removes snapshots it judges dead, and an operator
-        # may clear the spool, so a false negative there would erase a LIVE
-        # session from the home view permanently -- the hook would never re-emit,
-        # because its content is not changing. That is worst precisely for a
-        # session sitting blocked at a permission prompt, whose content is
-        # exactly what will not change. One stat is cheap next to the write it
-        # usually avoids.
-        if rendered == self._last_payload and self.path.exists():
+        if rendered == self._last_payload:
             return
 
-        body = json.dumps(payload, separators=(",", ":"))
-        # A deterministic sibling temp name, not mkstemp: hooks for one session
-        # run sequentially on a single event loop, so there is no writer to race
-        # with, and a plain open() avoids the file-descriptor ownership hazard
-        # of mkstemp + fdopen (a failure between the two either leaks the fd or
-        # double-closes a number the runtime may already have handed out again).
-        # It must be a sibling so os.replace stays within one filesystem, which
-        # is what makes it atomic.
-        tmp = self.path.with_name(f".{self.session_id}.tmp")
+        bridge = os.environ.get("MUXTERM_AMPLIFIER_BRIDGE", "muxterm")
+        fields = {
+            "project": payload.get("project"),
+            "name": payload.get("name"),
+            "label": payload.get("label"),
+            "mode": payload.get("mode"),
+            "state": payload.get("state"),
+            "waiting_for": payload.get("waitingFor"),
+            "doing": payload.get("doing"),
+            "done_means": payload.get("doneMeans"),
+            "todo": payload.get("todo"),
+            "knows": payload.get("knows"),
+        }
+        clearable = {
+            "project",
+            "label",
+            "waiting_for",
+            "doing",
+            "done_means",
+            "todo",
+            "knows",
+        }
+        report = {
+            "v": 2,
+            "harness": HARNESS,
+            "native_session_id": self.session_id,
+            "native_event": "amplifier:state",
+            "event": "progress.updated",
+            "event_id": str(uuid.uuid4()),
+            "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "process": {"pid": self.pid, "pid_start": self.pid_start, "sid": self.sid},
+            "set": {key: value for key, value in fields.items() if value is not None and value != ""},
+            "clear": [
+                key
+                for key, value in fields.items()
+                if key in clearable and (value is None or value == "")
+            ],
+        }
+        body = json.dumps(report, separators=(",", ":"))
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            with open(tmp, "w", encoding="utf-8") as handle:
-                handle.write(body)
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, self.path)
+            subprocess.run(
+                [bridge, "session", "hook-report"], input=body, text=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=2, check=True,
+            )
             self._last_payload = rendered
         except Exception as exc:
-            logger.debug("hooks-muxterm-session: snapshot write failed: %s", exc)
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
+            logger.debug("hooks-muxterm-session: hook report failed: %s", exc)
 
 def sweep_stale(spool: Path) -> None:
     """Reclaim snapshots that no longer describe anything.
