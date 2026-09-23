@@ -137,19 +137,3 @@ func writeSessionSnapshot(row SessionState, pid int, start uint64, sid int) (str
 	}
 	return path, nil
 }
-
-// RemoveSessionSnapshot deletes a session's snapshot.
-//
-// Producers do not have to call this: the daemon reclaims any snapshot whose
-// process is gone. It remains for compatibility producers that explicitly own
-// a projected row and need to withdraw it while the attributed process lives.
-func RemoveSessionSnapshot(sessionID string) error {
-	if !ValidSessionID(sessionID) {
-		return fmt.Errorf("invalid session id %q", sessionID)
-	}
-	err := os.Remove(filepath.Join(SessionStateDir(), sessionID+".json"))
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
-}
