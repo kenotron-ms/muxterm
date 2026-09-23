@@ -157,6 +157,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	case "amplifier":
+		if err := runAmplifier(cfg.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "version":
 		fmt.Printf("muxterm %s (MCP: stdio)\n", version)
 	}
